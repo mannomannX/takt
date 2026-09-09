@@ -1,0 +1,5 @@
+# Einheitliche Zeilenenden im Repo (Arbeitskopien folgen der Plattform).
+* text=auto eol=lf
+
+*.png binary
+*.pdf binary

@@ -1,0 +1,260 @@
+(* ======================================================================
+   Takt — Grammatik, Edition 1
+   Quelle fuer Parser, Formatter, Fuzzer und Abschnitt 2.3 der Referenz.
+   Pruefung: python grammar/check_grammar.py   (--sync schreibt 2.3)
+
+   Notation
+     name := alt | alt      Produktion; Folgezeilen beginnen mit Leerraum
+     "x"                    Terminal (Schluesselwort, Operator, Interpunktion)
+     NAME                   Token aus dem Tokenizer (siehe Abschnitt Tokens)
+     [ ]  { }  ( )          optional, Wiederholung, Gruppe
+     (* @stage vX *)        die ganze Produktion gehoert zu einer spaeteren Stufe;
+                            gemischte Produktionen nennen die Stufe an der Alternative
+     (* @start *)           zusaetzlicher Startsymbol (Teilsprachen in STRING)
+
+   Schluesselwoerter (2.2) sind die Woerter, die eine Aussage, Deklaration
+   oder Klausel am Zeilenanfang einleiten oder in Ausdruecken als Operator
+   oder Literal wirken. Alle anderen Terminale (Typnamen, Attributnamen,
+   Positionswoerter wie layout, offset, timeout, idle) sind kontextuell: sie
+   gelten nur an ihrer Stelle und bleiben andernorts als Bezeichner erlaubt.
+   ====================================================================== *)
+
+(* ---------------------------------------------------------------- Tokens *)
+
+NEWLINE     := (* Zeilenende ausserhalb offener Klammern *)
+INDENT      := (* Einrueckung um 4 Leerzeichen; Tabs sind Fehler (2.1) *)
+DEDENT      := (* Rueckkehr auf eine aeussere Einrueckungsstufe *)
+IDENT       := (* [a-z_][a-z0-9_]* — snake_case; eingebaute Groessen now, time_in_state, tick, last_fault sind IDENT (3.3) *)
+UPPER_IDENT := (* [A-Z][A-Z0-9_]* — Konstanten, Parameter, Zustaende, Varianten, Einheiten-/Typ-/Konstantenvariablen *)
+TYPE_IDENT  := (* [A-Z][A-Za-z0-9]* mit mindestens einem Kleinbuchstaben — PascalCase-Typnamen *)
+KEYWORD     := (* jedes Wort aus 2.2; nach "." ist es ein Membername (2.5) *)
+INT         := (* [0-9][0-9_]* *)
+HEX         := (* 0x[0-9a-fA-F_]+ *)
+BIN         := (* 0b[01_]+ *)
+OCT         := (* 0o[0-7_]+ *)
+FLOAT       := (* [0-9][0-9_]*\.[0-9_]+([eE][+-]?[0-9]+)? | [0-9]+[eE][+-]?[0-9]+ *)
+STRING      := (* "..." mit Escapes \" \\ \n \t; Inhalt nach format_text bzw. pattern_text *)
+TEXT_CHAR   := (* ein Zeichen innerhalb eines STRING, das nicht "{" oder "}" ist *)
+
+RESERVED    := "region" | "while" | "yield" | "await" | "async" | "spawn" | "select" | "where"
+             | "impl" | "trait" | "module" | "export" | "extern" | "unsafe" | "try" | "catch"
+             | "throw" | "class" | "struct" | "union" | "static" | "global" | "volatile" | "defer"
+             (* ohne Bedeutung, als Bezeichner verboten (2.5); "while" mit eigener Meldung *)
+
+(* ---------------------------------------------------------------- Datei *)
+
+file           := { NEWLINE | import | system_decl | type_decl | unitvec_decl | enum_decl | record_decl | unit_decl
+                  | stream_decl | port_decl | node_decl | property_decl
+                  | const_decl | param_decl | profile_decl | channel_decl | command_decl
+                  | fn_decl | native_decl | block_decl | machine_decl | instance_decl
+                  | scenario_decl | campaign_decl | trigger_decl }
+
+import         := "import" IDENT { "." IDENT } [ "as" IDENT ] NEWLINE
+                | "import" "channels" "from" STRING NEWLINE                                  (* 8.2 *)
+system_decl    := "system" ":" NEWLINE INDENT { system_item } DEDENT
+system_item    := "tick" "=" duration_lit NEWLINE
+                | "output_timing" "=" ( "asap" | "boundary" ) NEWLINE
+                | "fault_is_fail" "=" ( "true" | "false" ) NEWLINE
+                | "tick_source" "=" "hw" "(" STRING ")" NEWLINE
+                | "tick_tolerance" "=" const_expr [ "for" INT "ticks" ] NEWLINE
+                | "target" "=" IDENT NEWLINE                                              (* Laufzeitprofil, 12.8 *)
+                | "float" "=" ( "f32" | "f64" ) NEWLINE                                    (* Breite von float, 4.2; Default f64 *)
+                | "language" "=" INT NEWLINE                                                (* Edition, 2.5 *)
+
+(* ---------------------------------------------------------------- Typen und Einheiten *)
+
+type_decl      := "type" TYPE_IDENT "=" type NEWLINE
+unitvec_decl   := "unitvec" UPPER_IDENT "=" "(" unit_expr { "," unit_expr } ")" NEWLINE    (* @stage v1.1 — 3.11 *)
+enum_decl      := "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" variant { "," variant } NEWLINE   (* layout: 3.7; open: 2.5 *)
+                | "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" NEWLINE INDENT { variant NEWLINE } DEDENT
+variant        := UPPER_IDENT [ "=" INT ] [ "(" field { "," field } ")" ]                 (* explizite Diskriminante *)
+record_decl    := "record" TYPE_IDENT [ "layout" ( "little" | "big" ) [ "," "align" "=" INT ] ] ":" NEWLINE INDENT { record_field } DEDENT
+record_field   := field NEWLINE
+                | IDENT ":" int_type "with" "bits" ":" NEWLINE INDENT { bitfield NEWLINE } DEDENT   (* endet mit DEDENT, daher kein NEWLINE *)
+field          := ( IDENT | "_" ) ":" type [ "=" const_expr ] [ "offset" "=" INT ] [ "with" "len" "=" IDENT ]   (* "_": Padding; Konstantenfeld, Offset, len_field: 3.7 *)
+bitfield       := IDENT ":" ( "bool" | int_type ) "at" INT [ ".." INT ]
+unit_decl      := "unit" IDENT "=" number unit_expr NEWLINE
+                | "unit" IDENT "=" "affine" "(" unit_expr "," number ")" NEWLINE
+
+(* ---------------------------------------------------------------- Konstanten, Parameter, Channels *)
+
+const_decl     := "const" UPPER_IDENT [ ":" type ] "=" const_expr NEWLINE
+param_decl     := [ "tunable" ] "param" UPPER_IDENT ":" type "=" const_expr [ "with" attr { "," attr } ] NEWLINE   (* tunable: 8.4, v1.1; with: Metadaten 2.5 *)
+profile_decl   := "profile" UPPER_IDENT ":" NEWLINE INDENT { UPPER_IDENT "=" const_expr NEWLINE } DEDENT
+
+channel_decl   := ( "input" | "output" ) IDENT ":" type "@" binding [ "with" attr { "," attr } ] NEWLINE
+stream_decl    := "stream" "<" elem_type ">" IDENT "with" attr { "," attr } NEWLINE            (* interner Stream, 8.6 *)
+port_decl      := "port" IDENT ":" TYPE_IDENT "@" "mmio" "(" HEX ")" NEWLINE                    (* @stage v1.2 — Treiberstufe *)
+binding        := "hw" "(" STRING ")" | "sim" "(" STRING ")" | "none"
+attr           := "safe" "=" const_expr | "max_age" "=" duration_lit | "rate" "=" const_expr
+                | "max_rate" "=" const_expr | "capacity" "=" INT | "framing" "=" framing
+                | "overflow" "=" ( "fault" | "drop_oldest" | "drop" ) | "wake" "=" ( "true" | "false" )
+                | "jitter" "=" duration_lit | "max_slew" "=" const_expr | "debounce" "=" INT
+                | "capacity_bytes" "=" INT | "expect_len" "=" INT                              (* Byte-Ring, 8.6 *)
+                | "irreversible" "=" "true"                                                    (* 12.7 *)
+                | "label" "=" STRING | "display" "=" unit_expr | "group" "=" STRING | "doc" "=" STRING   (* Metadaten, 2.5; v1.1 *)
+framing        := "raw" | "lines" | "cobs" | "length_prefixed" "(" IDENT ")" | "fixed" "(" INT ")"
+command_decl   := "command" IDENT [ "with" attr { "," attr } ] NEWLINE                          (* wake: 5.10; Metadaten: 2.5 *)
+
+(* ---------------------------------------------------------------- Funktionen, Natives, Bloecke *)
+
+fn_decl        := "fn" IDENT [ generic_vars ] "(" [ params ] ")" "->" type ":" block
+native_decl    := "native" ( "fn" | "job" ) IDENT [ generic_vars ] "(" [ params ] ")" "->" type
+                  [ "from" STRING ]                                                          (* Projekt-Native, 4.5; v1.1 *)
+                  "with" "cost" "=" cost_spec "," "stack" "=" INT [ "," "duration" "=" duration_lit ] "," "total" NEWLINE   (* 4.5 *)
+cost_spec      := INT | "{" cost_class ":" INT { "," cost_class ":" INT } "}"            (* ein Wert zaehlt in i32 (4.5) *)
+cost_class     := "i32" | "i64" | "f32" | "f64" | "mem" | "call" | "native"               (* Operationsklassen, 9.4.3 *)
+block_decl     := "block" IDENT [ generic_vars ] "(" [ params ] ")" ":" NEWLINE INDENT { var_decl NEWLINE }
+                  ( step_decl { method_decl } | method_decl { method_decl } ) DEDENT
+step_decl      := "step" "(" [ params ] ")" "->" type ":" block                              (* hoechstens einmal je Instanz und Tick, 5.7 *)
+method_decl    := IDENT "(" [ params ] ")" [ "->" type ] ":" block                           (* weitere Methoden wie start/stop/elapsed, 11.4 *)
+generic_vars   := "[" gvar { "," gvar } "]"          (* 3.12: Einheiten- (v1), Typ- und Konstantenvariablen (v1.2) *)
+gvar           := UPPER_IDENT | "type" UPPER_IDENT [ ":" capability ] | "const" UPPER_IDENT [ "in" range ]
+capability     := "pod" | "eq" | "ord" | "numeric" | "integer" | "float"
+params         := param { "," param }
+param          := [ "inout" ] IDENT ":" [ "input" | "output" ] type [ "=" const_expr ]      (* inout nur in fn, 3.9; input/output nur in machine *)
+
+(* ---------------------------------------------------------------- Maschinen *)
+
+machine_decl   := [ "driver" ] "machine" IDENT [ "(" params ")" ] [ "follows" IDENT { "," IDENT } ] [ "node" IDENT ]   (* driver: v1.2; node: 12.9, v2 *)
+                  [ "every" duration_lit ] [ "phase" duration_lit ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT machine_body DEDENT   (* follows: 7.2, v1.1; with: Metadaten 2.5 *)
+machine_body   := { var_decl NEWLINE | persist_decl | signal_decl | fault_clause }
+                  "initial" UPPER_IDENT NEWLINE [ loop_block ] { on_handler } { state_decl }
+persist_decl   := "persist" "var" IDENT ":" type "=" const_expr [ "with" "min_interval" "=" duration_lit ] NEWLINE   (* @stage v1.1 — 5.9 *)
+signal_decl    := "signal" IDENT NEWLINE
+state_decl     := "state" UPPER_IDENT [ "idle" ] [ "resume" ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT state_body DEDENT   (* idle: 5.10, v1.1; resume: 5.12, v1.2; with: Metadaten 2.5 *)
+state_body     := { fault_clause | var_decl NEWLINE | instance_decl } [ "initial" UPPER_IDENT NEWLINE ]   (* instance_decl im Zustand: gescopte Instanz, 5.11 *)
+                  [ enter_block ] [ loop_block ] { on_handler } [ sequence_block ] { transition } [ exit_block ] { state_decl }
+fault_clause   := "fault" "->" UPPER_IDENT NEWLINE
+enter_block    := "enter" ":" action_block
+exit_block     := "exit" ":" action_block
+loop_block     := "loop" ":" block
+on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] ":" block
+transition     := ( "when" guard | "after" duration_expr ) ":" trans_block
+guard          := expr | postfix ( "matches" | "has" ) pattern [ "as" IDENT ] | postfix "as" IDENT   (* letzteres: naechstes Element, 8.7; postfix auch fuer m.fired, cells[i].done *)
+trans_block    := goto_stmt NEWLINE | NEWLINE INDENT { stmt } goto_stmt NEWLINE DEDENT
+
+sequence_block := "sequence" ":" NEWLINE INDENT { seq_item } DEDENT
+seq_item       := stmt
+                | "wait" duration_expr NEWLINE
+                | "until" guard [ "timeout" duration_expr [ "->" UPPER_IDENT | "else" ":" action_block ] ] NEWLINE
+                | "expect" expr [ "," STRING ] NEWLINE
+                | "repeat" const_expr ":" NEWLINE INDENT { seq_item } DEDENT
+                | "step" STRING ":" NEWLINE INDENT { seq_item } DEDENT
+
+instance_decl  := "instance" IDENT [ "[" IDENT "in" range "]" ] [ "resume" ] "=" IDENT "(" [ args ] ")" NEWLINE   (* resume: 5.11, v1.2 *)
+node_decl      := "node" IDENT "@" "hw" "(" STRING ")" [ "with" "tick" "=" duration_lit ] NEWLINE          (* @stage v2 — 12.9 *)
+property_decl  := "property" IDENT ":" tprop [ "with" "monitor" "=" "true" ] NEWLINE                     (* @stage v1.1 — 13.3 *)
+tprop          := tprop_implies                                                                          (* @stage v1.1 — beschraenkte Temporallogik, 13.3 *)
+tprop_implies  := tprop_or { "implies" tprop_or }
+tprop_or       := tprop_and { "or" tprop_and }
+tprop_and      := tprop_not { "and" tprop_not }
+tprop_not      := "not" tprop_not | tprop_atom
+tprop_atom     := "always" "(" tprop ")" | "never" "(" tprop ")"
+                | "eventually" "[" duration_lit "]" "(" tprop ")" | "stable" "[" duration_lit "]" "(" tprop ")"
+                | "once" "[" duration_lit "]" "(" tprop ")"
+                | "(" tprop ")" | expr
+scenario_decl  := "scenario" STRING [ "every" duration_lit ] ":" NEWLINE INDENT machine_body DEDENT      (* @stage v1.1 — 13.6 *)
+campaign_decl  := "campaign" IDENT ":" NEWLINE INDENT { campaign_item } DEDENT                            (* @stage v1.1 — 13.7 *)
+campaign_item  := "program" STRING NEWLINE | "profile" UPPER_IDENT NEWLINE
+                | "sweep" UPPER_IDENT "=" ( const_expr ".." const_expr "step" const_expr
+                                          | "[" const_expr { "," const_expr } "]" ) NEWLINE
+                | "repeat" INT NEWLINE | "stop_on" ( "fail" | "never" ) NEWLINE
+trigger_decl   := "trigger" IDENT [ "node" IDENT ] ":" NEWLINE INDENT "when" guard NEWLINE "then" at_stmt "bound" duration_lit NEWLINE DEDENT   (* @stage v1.2 — 7.5 *)
+
+(* ---------------------------------------------------------------- Statements *)
+
+block          := NEWLINE INDENT stmt { stmt } DEDENT | simple_stmt NEWLINE
+action_block   := block                       (* statisch eingeschraenkt: siehe 5.5 *)
+stmt           := simple_stmt NEWLINE | if_stmt | for_stmt | match_stmt | at_stmt | every_stmt
+simple_stmt    := assign | var_decl | job_stmt | arm_stmt | check_stmt | alert_stmt | log_stmt | goto_stmt
+                | abort_stmt | return_stmt | send_stmt | pulse_stmt | cancel_stmt
+                | measure_stmt | verify_stmt | verdict_stmt | raise_stmt | "break" | expr | "pass"
+assign         := lvalue ( "=" | "+=" | "-=" | "*=" | "/=" ) expr
+lvalue         := IDENT { "." member | "[" expr "]" | "[" expr "," expr "]" }              (* Variable, Output, Feld, Element *)
+var_decl       := [ "pub" ] "var" IDENT [ ":" type ] "=" expr
+if_stmt        := "if" expr ":" block { "elif" expr ":" block } [ "else" ":" block ]
+for_stmt       := "for" ( IDENT | "(" IDENT "," IDENT ")" ) "in" ( "range" "(" const_expr ")" | expr ) ":" block   (* expr: Array, Stream, samples, map (3.9) *)
+match_stmt     := "match" expr ":" NEWLINE INDENT { "case" case_pattern ":" block } DEDENT
+case_pattern   := UPPER_IDENT [ "(" IDENT { "," IDENT } ")" ] | "_"
+                | const_expr [ ".." const_expr ] { "," const_expr [ ".." const_expr ] }       (* Bereiche und Mehrfachwerte *)
+at_stmt        := "at" duration_expr ":" action_block
+every_stmt     := "every" duration_expr ":" block
+check_stmt     := "check" expr [ "," STRING ] [ "for" duration_expr ] [ "->" UPPER_IDENT ] [ "req" STRING ]   (* for: 5.6; req: v1.2 *)
+alert_stmt     := "alert" expr "," STRING [ "for" duration_expr ]
+log_stmt       := "log" STRING                                                               (* Inhalt nach format_text *)
+send_stmt      := "send" IDENT "," expr
+pulse_stmt     := "pulse" IDENT "=" expr "for" duration_expr
+cancel_stmt    := "cancel" IDENT
+measure_stmt   := "measure" IDENT "=" expr
+job_stmt       := "job" IDENT "=" IDENT "(" [ args ] ")"                                     (* 4.5 *)
+arm_stmt       := ( "arm" | "disarm" ) IDENT                                                 (* @stage v1.2 — 7.5 *)
+verify_stmt    := "verify" expr "," STRING [ "req" STRING ]
+verdict_stmt   := "verdict" ( "pass" | "fail" ) [ STRING ]
+raise_stmt     := "raise" IDENT
+goto_stmt      := "->" UPPER_IDENT
+abort_stmt     := "abort" [ STRING ]
+return_stmt    := "return" expr
+
+(* ---------------------------------------------------------------- Ausdruecke *)
+
+expr           := or_expr [ "if" or_expr "else" expr ]
+or_expr        := and_expr { "or" and_expr }
+and_expr       := not_expr { "and" not_expr }
+not_expr       := "not" not_expr | cmp_expr
+cmp_expr       := bitor_expr [ ( "<" | "<=" | ">" | ">=" | "==" | "!=" ) bitor_expr ]
+                | bitor_expr ( "matches" | "has" ) pattern [ "as" IDENT ]
+bitor_expr     := bitxor_expr { "|" bitxor_expr }
+bitxor_expr    := bitand_expr { "^" bitand_expr }
+bitand_expr    := shift_expr { "&" shift_expr }
+shift_expr     := add_expr { ( "<<" | ">>" ) add_expr }
+add_expr       := mul_expr { ( "+" | "-" ) mul_expr }
+mul_expr       := unary { ( "*" | "/" | "%" ) unary }
+unary          := "-" unary | "~" unary | cast_expr
+cast_expr      := postfix [ "as" scalar_type ]
+postfix        := primary { "." member [ "(" [ args ] ")" ] | "[" expr [ ".." expr ] "]" | "[" expr "," expr "]" }
+member         := IDENT | KEYWORD                    (* nach "." ist jedes Wort ein Membername: .as .or .len .state .step .bits .jitter (2.5) *)
+primary        := number [ unit_expr ] | duration_lit | STRING | "true" | "false" | "none" | "default"
+                | IDENT [ generic_args ] [ "(" [ args ] ")" ]                                (* Variable, eingebaute Groesse (now, tick), Aufruf, Instanziierung clamp[bar](...) *)
+                | "(" expr ")" | "(" expr "," expr ")"                                       (* Gruppe; Stuetzstelle einer table, 3.9 *)
+                | UPPER_IDENT [ "(" [ args ] ")" ]
+                | TYPE_IDENT [ "(" [ args ] ")" ]                                            (* Konstruktor oder Typ mit Methode: CanFrame.decode(b) *)
+                | "[" [ expr { "," expr } ] "]"
+                | "[" const_expr "]" IDENT "(" [ args ] ")"                                  (* Array von Block-Instanzen, 5.7 *)
+generic_args   := "[" generic_arg { "," generic_arg } "]"
+generic_arg    := unit_expr | type | const_expr                                              (* Einheit (v1); Typ oder Konstante (3.12, v1.2); Klasse nach Namensform *)
+args           := arg { "," arg }
+arg            := [ IDENT "=" ] expr
+number         := INT | HEX | BIN | OCT | FLOAT
+duration_lit   := number ( "ns" | "us" | "ms" | "s" | "min" | "h" | "d" )                  (* genau ein Zeitsuffix; sonst Einheitenliteral (3.3) *)
+duration_expr  := expr                          (* Typ Duration *)
+pattern        := STRING                        (* Musterliteral, Inhalt nach pattern_text (8.7) *)
+                | TYPE_IDENT "(" [ IDENT "=" const_expr { "," IDENT "=" const_expr } ] ")"   (* Record-Muster, 8.7 *)
+unit_expr      := unit_term { ( "*" | "/" ) unit_term }
+unit_term      := ( IDENT | UPPER_IDENT ) [ "^" INT ] | "1"            (* Einheitenname oder Einheitenvariable; "1" = dimensionslos, z. B. 1/s *)
+
+(* ---------------------------------------------------------------- Typausdruecke *)
+
+type           := scalar_type [ "in" range ] [ "?" | "!" TYPE_IDENT ] | "[" const_expr "]" type | TYPE_IDENT [ "?" | "!" TYPE_IDENT ]
+                | "bytes" "<" const_expr ">" | "vec" "<" type "," const_expr ">" | "line" "<" const_expr ">"
+                | "stream" "<" elem_type ">" | "samples" "<" type "," const_expr ">" | "table" "<" type "," type ">"
+                | "mat" "<" const_expr "," const_expr ">" [ "[" unit_expr "]" ]                   (* 3.11, uniform *)
+                | "mat" "[" unit_tuple "," unit_tuple "]" | "vec" "[" unit_tuple "]"               (* 3.11, dimensioniert; v1.1 *)
+                | "map" "<" type "," type "," const_expr ">"                                       (* 3.9, v1.1 *)
+                | "capture" "<" type "," const_expr ">"                                            (* 8.9, v1.2; nur als Stream-Element *)
+                | UPPER_IDENT                                                                      (* Typvariable, 3.12; v1.2 *)
+scalar_type    := "bool" | int_type [ "[" unit_expr "]" ]                                        (* Einheiten auf Integern: 3.2; v1.1 *)
+                | "float" [ "[" unit_expr "]" ] | "f32" [ "[" unit_expr "]" ] | "f64" [ "[" unit_expr "]" ]
+                | "Duration" | "str" "<" const_expr ">"
+int_type       := "int" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"      (* i64 ist gleichbedeutend mit int, 3.1 *)
+unit_tuple     := UPPER_IDENT | "1" "/" UPPER_IDENT | "(" unit_expr { "," unit_expr } ")"      (* unitvec-Name, sein Kehrwert, oder Literal *)
+elem_type      := "u8" | "bytes" "<" const_expr ">" | "line" "<" const_expr ">" | "Edge" | TYPE_IDENT
+range          := const_expr ".." const_expr
+const_expr     := expr                          (* nur Literale, const, param, fn-Aufrufe darauf *)
+
+(* ---------------------------------------------------------------- Teilsprachen in STRING *)
+
+pattern_text   := { TEXT_CHAR | "{{" | "}}" | "{" IDENT ":" pattern_kind "}" | "{" "_" "}" }   (* @start — Musterliteral, 8.7 *)
+pattern_kind   := "int" | "hex" | "float" | "word" | "str" [ "<" INT ">" ]
+format_text    := { TEXT_CHAR | "{{" | "}}" | "{" expr [ ":" format_spec ] "}" }                (* @start — Formatstring, 3.9 *)
+format_spec    := "hex" | "." INT | INT                                                          (* {x:hex} {x:.3} {x:08} *)

@@ -1,0 +1,1070 @@
+ID,Kategorie,Abschnitt,Bezeichnung,Stufe/Klasse,Meilenstein (Vorschlag),Status
+CH-0,Kapitel,0,Leitprinzipien und Kurzfassung,,Doku/Rationale,rationale
+CH-1,Kapitel,1,Programmiermodell,,Doku/Rationale,rationale
+CH-2,Kapitel,2,Lexik und Syntax,,Doku/Rationale,rationale
+CH-3,Kapitel,3,Typsystem,,Doku/Rationale,rationale
+CH-4,Kapitel,4,Ausdrücke und Arithmetik,,Doku/Rationale,rationale
+CH-5,Kapitel,5,"Maschinen: Zustände, Übergänge, Faults",,Doku/Rationale,rationale
+CH-6,Kapitel,6,Sequenzen als Zucker,,Doku/Rationale,rationale
+CH-7,Kapitel,7,Zeit und Scheduling,,Doku/Rationale,rationale
+CH-8,Kapitel,8,"Channels, Geräte, Simulation, Profile, Commands",,Doku/Rationale,rationale
+CH-9,Kapitel,9,Formale Semantik,,Doku/Rationale,rationale
+CH-10,Kapitel,10,Statische Analysen — das Compiler-Gate,,Doku/Rationale,rationale
+CH-11,Kapitel,11,Compiler-Architektur und Codegen,,Doku/Rationale,rationale
+CH-12,Kapitel,12,Runtime,,Doku/Rationale,rationale
+CH-13,Kapitel,13,"Verifikation, Test, Zertifizierung",,Doku/Rationale,rationale
+CH-14,Kapitel,14,Beispiele,,Doku/Rationale,rationale
+CH-15,Kapitel,15,Stufenplan und Erweiterungs-Roadmap,,Doku/Rationale,rationale
+CH-16,Kapitel,16,Entscheidungslog,,Doku/Rationale,rationale
+SEM-0.1,Semantik/Abschnitt,0.1,Was die Sprache verspricht (und wie das Versprechen eingelöst wird),,Doku/Rationale,offen
+SEM-0.2,Semantik/Abschnitt,0.2,Die vierundzwanzig tragenden Entscheidungen,,Doku/Rationale,offen
+SEM-0.3,Semantik/Abschnitt,0.3,Nicht-Ziele (bewusst),,Doku/Rationale,offen
+SEM-1.1,Semantik/Abschnitt,1.1,Das Bild in einem Absatz,,M0 (Parser/MIR-Entwurf),offen
+SEM-1.2,Semantik/Abschnitt,1.2,Die drei Ebenen,,M0 (Parser/MIR-Entwurf),offen
+SEM-1.3,Semantik/Abschnitt,1.3,"Tick, Perioden, Hyperperiode",,M0 (Parser/MIR-Entwurf),offen
+SEM-1.4,Semantik/Abschnitt,1.4,Datenfluss,,M0 (Parser/MIR-Entwurf),offen
+SEM-1.5,Semantik/Abschnitt,1.5,Lebenszyklus,,M0 (Parser/MIR-Entwurf),offen
+SEM-2.1,Semantik/Abschnitt,2.1,Lexik,,M0 (Parser/MIR-Entwurf),offen
+SEM-2.2,Semantik/Abschnitt,2.2,Schlüsselwörter,,M0 (Parser/MIR-Entwurf),definiert
+SEM-2.3,Semantik/Abschnitt,2.3,Grammatik (EBNF),,M0 (Parser/MIR-Entwurf),definiert
+SEM-2.4,Semantik/Abschnitt,2.4,Bedeutung der Kernkonstrukte (informell),,M0 (Parser/MIR-Entwurf),offen
+SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit",,M0 (Parser/MIR-Entwurf),offen
+SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),offen
+SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),offen
+SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),offen
+SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M1 (Kernsemantik),offen
+SEM-3.5,Semantik/Abschnitt,3.5,Qualität von Input-Channels,,M1 (Kernsemantik),offen
+SEM-3.6,Semantik/Abschnitt,3.6,Typinferenz,,M1 (Kernsemantik),offen
+SEM-3.7,Semantik/Abschnitt,3.7,Records und Summentypen,,M1 (Kernsemantik),offen
+SEM-3.8,Semantik/Abschnitt,3.8,Optionaltyp `T?`,,M1 (Kernsemantik),offen
+SEM-3.9,Semantik/Abschnitt,3.9,"Bytes, Vektoren, Strings, Tabellen",,M1 (Kernsemantik),offen
+SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernsemantik),offen
+SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M1 (Kernsemantik),offen
+SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,"M1 ([U]) / M8 (type, const)",offen
+SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),offen
+SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M1 (Kernsemantik),offen
+SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),offen
+SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),offen
+SEM-4.5,Semantik/Abschnitt,4.5,Native Funktionen mit Kostenvertrag,,M1 (Kernsemantik),offen
+SEM-5.1,Semantik/Abschnitt,5.1,Struktur,,M1 (Kernsemantik),offen
+SEM-5.2,Semantik/Abschnitt,5.2,"Ausführung eines Ticks (informell, exakt in 9.3)",,M1 (Kernsemantik),offen
+SEM-5.3,Semantik/Abschnitt,5.3,Fault-Wald,,M1 (Kernsemantik),offen
+SEM-5.4,Semantik/Abschnitt,5.4,`abort`,,M1 (Kernsemantik),offen
+SEM-5.5,Semantik/Abschnitt,5.5,Eingeschränkte Aktionsblöcke,,M1 (Kernsemantik),offen
+SEM-5.6,Semantik/Abschnitt,5.6,"Interlocks, Permissives, Alerts",,M1 (Kernsemantik),offen
+SEM-5.7,Semantik/Abschnitt,5.7,Blöcke innerhalb von Maschinen,,M1 (Kernsemantik),offen
+SEM-5.8,Semantik/Abschnitt,5.8,Ergonomie in Maschinen,,M1 (Kernsemantik),offen
+SEM-5.9,Semantik/Abschnitt,5.9,Persistente Variablen (v1.1),v1.1,M6,offen
+SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M6,offen
+SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,offen
+SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,offen
+SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),offen
+SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),offen
+SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),offen
+SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),offen
+SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),offen
+SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),offen
+SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M1 (Kernsemantik),offen
+SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),offen
+SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M2 (Ströme),offen
+SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M2 (Ströme),offen
+SEM-8.3,Semantik/Abschnitt,8.3,Simulation und HIL,,M2 (Ströme),offen
+SEM-8.4,Semantik/Abschnitt,8.4,Parameter und Profile,,M2 (Ströme),offen
+SEM-8.5,Semantik/Abschnitt,8.5,Commands und Operator-Interaktion,,M2 (Ströme),offen
+SEM-8.6,Semantik/Abschnitt,8.6,Ereignisströme (`stream<E>`),,M2 (Ströme),offen
+SEM-8.7,Semantik/Abschnitt,8.7,"Muster, Captures, Handler",,M2 (Ströme),offen
+SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),offen
+SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),offen
+SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M6,offen
+SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M2 (Ströme),offen
+SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),offen
+SEM-9.1,Semantik/Abschnitt,9.1,Objekte,,M1/M2 (Interpreter),offen
+SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),offen
+SEM-9.3,Semantik/Abschnitt,9.3,Schritt einer Maschine,,M1/M2 (Interpreter),offen
+SEM-9.4,Semantik/Abschnitt,9.4,System-Tick und Sätze,,M1/M2 (Interpreter),offen
+SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M1/M2 (Interpreter),offen
+SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),offen
+SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),offen
+SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),offen
+SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),offen
+SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M1/M2 (Interpreter),offen
+SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M3/M4,offen
+SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M3/M4,offen
+SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M3/M4,offen
+SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M3/M4,offen
+SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3/M4,offen
+SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),offen
+SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4/M5 (Runtime),offen
+SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M4/M5 (Runtime),offen
+SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M4/M5 (Runtime),offen
+SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4/M5 (Runtime),offen
+SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M4/M5 (Runtime),offen
+SEM-12.7,Semantik/Abschnitt,12.7,"Plattformschnittstelle (System-Channels, v1.1)",v1.1,M6,offen
+SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M6,offen
+SEM-12.9,Semantik/Abschnitt,12.9,"Verteilte Ausführung (v2): Regeln, die schon heute gelten",v2,M9 (v2),offen
+SEM-13.1,Semantik/Abschnitt,13.1,Referenzinterpreter und differentielles Testen,,M4–M7,offen
+SEM-13.2,Semantik/Abschnitt,13.2,Coverage aus der Simulation,,M4–M7,offen
+SEM-13.3,Semantik/Abschnitt,13.3,Eigenschaftsprüfung (v1.1),v1.1,M6,offen
+SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M4–M7,offen
+SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4–M7,offen
+SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,offen
+SEM-13.7,Semantik/Abschnitt,13.7,Kampagnen (v1.1),v1.1,M6,offen
+SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M4–M7,offen
+SEM-13.9,Semantik/Abschnitt,13.9,Migration aus C: `takt import-c` und Orakel-Modus (v1.1),v1.1,M6,offen
+SEM-14.1,Semantik/Abschnitt,14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,je Meilenstein,offen
+SEM-14.2,Semantik/Abschnitt,14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,je Meilenstein,offen
+SEM-14.3,Semantik/Abschnitt,14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,je Meilenstein,offen
+SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,je Meilenstein,offen
+SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,je Meilenstein,offen
+SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,je Meilenstein,offen
+SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,je Meilenstein,offen
+SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,je Meilenstein,offen
+G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),definiert
+G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),definiert
+G-system_decl,Grammatik,2.3,system_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-system_item,Grammatik,2.3,system_item,,M0 (Parser/MIR-Entwurf),definiert
+G-type_decl,Grammatik,2.3,type_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-unitvec_decl,Grammatik,2.3,unitvec_decl,v1.1,M0 (Parser) / M6,definiert
+G-enum_decl,Grammatik,2.3,enum_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-variant,Grammatik,2.3,variant,,M0 (Parser/MIR-Entwurf),definiert
+G-record_decl,Grammatik,2.3,record_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-field,Grammatik,2.3,field,,M0 (Parser/MIR-Entwurf),definiert
+G-bitfield,Grammatik,2.3,bitfield,,M0 (Parser/MIR-Entwurf),definiert
+G-unit_decl,Grammatik,2.3,unit_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-const_decl,Grammatik,2.3,const_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-param_decl,Grammatik,2.3,param_decl,v1.1,M0 (Parser) / M6,definiert
+G-profile_decl,Grammatik,2.3,profile_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-channel_decl,Grammatik,2.3,channel_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-stream_decl,Grammatik,2.3,stream_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-port_decl,Grammatik,2.3,port_decl,v1.2,M0 (Parser) / M8,definiert
+G-binding,Grammatik,2.3,binding,,M0 (Parser/MIR-Entwurf),definiert
+G-attr,Grammatik,2.3,attr,v1.1,M0 (Parser) / M6,definiert
+G-framing,Grammatik,2.3,framing,,M0 (Parser/MIR-Entwurf),definiert
+G-command_decl,Grammatik,2.3,command_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-fn_decl,Grammatik,2.3,fn_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-native_decl,Grammatik,2.3,native_decl,v1.1,M0 (Parser) / M6,definiert
+G-cost_spec,Grammatik,2.3,cost_spec,,M0 (Parser/MIR-Entwurf),definiert
+G-block_decl,Grammatik,2.3,block_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-step_decl,Grammatik,2.3,step_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-method_decl,Grammatik,2.3,method_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-generic_vars,Grammatik,2.3,generic_vars,v1.2,"M0 (Parser) / M8 (type, const)",definiert
+G-gvar,Grammatik,2.3,gvar,,"M0 (Parser) / M8 (type, const)",definiert
+G-capability,Grammatik,2.3,capability,,M0 (Parser/MIR-Entwurf),definiert
+G-params,Grammatik,2.3,params,,M0 (Parser/MIR-Entwurf),definiert
+G-param,Grammatik,2.3,param,,M0 (Parser/MIR-Entwurf),definiert
+G-machine_decl,Grammatik,2.3,machine_decl,v1.2,M0 (Parser) / M8,definiert
+G-machine_body,Grammatik,2.3,machine_body,,M0 (Parser/MIR-Entwurf),definiert
+G-persist_decl,Grammatik,2.3,persist_decl,v1.1,M0 (Parser) / M6,definiert
+G-signal_decl,Grammatik,2.3,signal_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-state_decl,Grammatik,2.3,state_decl,v1.1,M0 (Parser) / M6,definiert
+G-state_body,Grammatik,2.3,state_body,,M0 (Parser/MIR-Entwurf),definiert
+G-fault_clause,Grammatik,2.3,fault_clause,,M0 (Parser/MIR-Entwurf),definiert
+G-enter_block,Grammatik,2.3,enter_block,,M0 (Parser/MIR-Entwurf),definiert
+G-exit_block,Grammatik,2.3,exit_block,,M0 (Parser/MIR-Entwurf),definiert
+G-loop_block,Grammatik,2.3,loop_block,,M0 (Parser/MIR-Entwurf),definiert
+G-on_handler,Grammatik,2.3,on_handler,,M0 (Parser/MIR-Entwurf),definiert
+G-transition,Grammatik,2.3,transition,,M0 (Parser/MIR-Entwurf),definiert
+G-guard,Grammatik,2.3,guard,,M0 (Parser/MIR-Entwurf),definiert
+G-trans_block,Grammatik,2.3,trans_block,,M0 (Parser/MIR-Entwurf),definiert
+G-sequence_block,Grammatik,2.3,sequence_block,,M0 (Parser/MIR-Entwurf),definiert
+G-seq_item,Grammatik,2.3,seq_item,,M0 (Parser/MIR-Entwurf),definiert
+G-instance_decl,Grammatik,2.3,instance_decl,v1.2,M0 (Parser) / M8 (im Zustand),definiert
+G-node_decl,Grammatik,2.3,node_decl,v2,M0 (Parser) / M9 (v2),definiert
+G-property_decl,Grammatik,2.3,property_decl,v1.1,M0 (Parser) / M6,definiert
+G-tprop,Grammatik,2.3,tprop,v1.1,M0 (Parser) / M6,definiert
+G-tprop_implies,Grammatik,2.3,tprop_implies,,M0 (Parser/MIR-Entwurf),definiert
+G-tprop_or,Grammatik,2.3,tprop_or,,M0 (Parser/MIR-Entwurf),definiert
+G-tprop_and,Grammatik,2.3,tprop_and,,M0 (Parser/MIR-Entwurf),definiert
+G-tprop_not,Grammatik,2.3,tprop_not,,M0 (Parser/MIR-Entwurf),definiert
+G-tprop_atom,Grammatik,2.3,tprop_atom,,M0 (Parser/MIR-Entwurf),definiert
+G-scenario_decl,Grammatik,2.3,scenario_decl,v1.1,M0 (Parser) / M6,definiert
+G-campaign_decl,Grammatik,2.3,campaign_decl,v1.1,M0 (Parser) / M6,definiert
+G-campaign_item,Grammatik,2.3,campaign_item,,M0 (Parser/MIR-Entwurf),definiert
+G-trigger_decl,Grammatik,2.3,trigger_decl,v1.2,M0 (Parser) / M8,definiert
+G-block,Grammatik,2.3,block,,M0 (Parser/MIR-Entwurf),definiert
+G-action_block,Grammatik,2.3,action_block,,M0 (Parser/MIR-Entwurf),definiert
+G-stmt,Grammatik,2.3,stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-simple_stmt,Grammatik,2.3,simple_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-assign,Grammatik,2.3,assign,,M0 (Parser/MIR-Entwurf),definiert
+G-lvalue,Grammatik,2.3,lvalue,,M0 (Parser/MIR-Entwurf),definiert
+G-var_decl,Grammatik,2.3,var_decl,,M0 (Parser/MIR-Entwurf),definiert
+G-if_stmt,Grammatik,2.3,if_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-for_stmt,Grammatik,2.3,for_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-match_stmt,Grammatik,2.3,match_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-case_pattern,Grammatik,2.3,case_pattern,,M0 (Parser/MIR-Entwurf),definiert
+G-at_stmt,Grammatik,2.3,at_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-every_stmt,Grammatik,2.3,every_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-check_stmt,Grammatik,2.3,check_stmt,v1.2,M0 (Parser) / M8,definiert
+G-alert_stmt,Grammatik,2.3,alert_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-log_stmt,Grammatik,2.3,log_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-send_stmt,Grammatik,2.3,send_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-pulse_stmt,Grammatik,2.3,pulse_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-cancel_stmt,Grammatik,2.3,cancel_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-measure_stmt,Grammatik,2.3,measure_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-job_stmt,Grammatik,2.3,job_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-arm_stmt,Grammatik,2.3,arm_stmt,v1.2,M0 (Parser) / M8,definiert
+G-verify_stmt,Grammatik,2.3,verify_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-verdict_stmt,Grammatik,2.3,verdict_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-raise_stmt,Grammatik,2.3,raise_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-goto_stmt,Grammatik,2.3,goto_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-abort_stmt,Grammatik,2.3,abort_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-return_stmt,Grammatik,2.3,return_stmt,,M0 (Parser/MIR-Entwurf),definiert
+G-expr,Grammatik,2.3,expr,,M0 (Parser/MIR-Entwurf),definiert
+G-or_expr,Grammatik,2.3,or_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-and_expr,Grammatik,2.3,and_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-not_expr,Grammatik,2.3,not_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-cmp_expr,Grammatik,2.3,cmp_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-bitor_expr,Grammatik,2.3,bitor_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-bitxor_expr,Grammatik,2.3,bitxor_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-bitand_expr,Grammatik,2.3,bitand_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-shift_expr,Grammatik,2.3,shift_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-add_expr,Grammatik,2.3,add_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-mul_expr,Grammatik,2.3,mul_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-unary,Grammatik,2.3,unary,,M0 (Parser/MIR-Entwurf),definiert
+G-cast_expr,Grammatik,2.3,cast_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-postfix,Grammatik,2.3,postfix,,M0 (Parser/MIR-Entwurf),definiert
+G-member,Grammatik,2.3,member,,M0 (Parser/MIR-Entwurf),definiert
+G-primary,Grammatik,2.3,primary,,M0 (Parser/MIR-Entwurf),definiert
+G-generic_args,Grammatik,2.3,generic_args,,M0 (Parser/MIR-Entwurf),definiert
+G-generic_arg,Grammatik,2.3,generic_arg,v1.2,M0 (Parser) / M8,definiert
+G-args,Grammatik,2.3,args,,M0 (Parser/MIR-Entwurf),definiert
+G-arg,Grammatik,2.3,arg,,M0 (Parser/MIR-Entwurf),definiert
+G-number,Grammatik,2.3,number,,M0 (Parser/MIR-Entwurf),definiert
+G-duration_lit,Grammatik,2.3,duration_lit,,M0 (Parser/MIR-Entwurf),definiert
+G-duration_expr,Grammatik,2.3,duration_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-pattern,Grammatik,2.3,pattern,,M0 (Parser/MIR-Entwurf),definiert
+G-unit_expr,Grammatik,2.3,unit_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-unit_term,Grammatik,2.3,unit_term,,M0 (Parser/MIR-Entwurf),definiert
+G-type,Grammatik,2.3,type,v1.1,M0 (Parser) / M6,definiert
+G-scalar_type,Grammatik,2.3,scalar_type,v1.1,M0 (Parser) / M6,definiert
+G-int_type,Grammatik,2.3,int_type,,M0 (Parser/MIR-Entwurf),definiert
+G-unit_tuple,Grammatik,2.3,unit_tuple,,M0 (Parser/MIR-Entwurf),definiert
+G-elem_type,Grammatik,2.3,elem_type,,M0 (Parser/MIR-Entwurf),definiert
+G-range,Grammatik,2.3,range,,M0 (Parser/MIR-Entwurf),definiert
+G-const_expr,Grammatik,2.3,const_expr,,M0 (Parser/MIR-Entwurf),definiert
+G-pattern_text,Grammatik,2.3,pattern_text,,M0 (Parser/MIR-Entwurf),definiert
+G-pattern_kind,Grammatik,2.3,pattern_kind,,M0 (Parser/MIR-Entwurf),definiert
+G-format_text,Grammatik,2.3,format_text,,M0 (Parser/MIR-Entwurf),definiert
+G-format_spec,Grammatik,2.3,format_spec,,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-tick,system-Eintrag,2.3,"system_item: ""tick""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-output_timing,system-Eintrag,2.3,"system_item: ""output_timing""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-asap,system-Eintrag,2.3,"system_item: ""asap""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-boundary,system-Eintrag,2.3,"system_item: ""boundary""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-fault_is_fail,system-Eintrag,2.3,"system_item: ""fault_is_fail""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-true,system-Eintrag,2.3,"system_item: ""true""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-false,system-Eintrag,2.3,"system_item: ""false""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-tick_source,system-Eintrag,2.3,"system_item: ""tick_source""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-hw,system-Eintrag,2.3,"system_item: ""hw""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-tick_tolerance,system-Eintrag,2.3,"system_item: ""tick_tolerance""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-for,system-Eintrag,2.3,"system_item: ""for""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-ticks,system-Eintrag,2.3,"system_item: ""ticks""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-target,system-Eintrag,2.3,"system_item: ""target""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-float,system-Eintrag,2.3,"system_item: ""float""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-f32,system-Eintrag,2.3,"system_item: ""f32""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-f64,system-Eintrag,2.3,"system_item: ""f64""",,M0 (Parser/MIR-Entwurf),definiert
+system-Eintrag-language,system-Eintrag,2.3,"system_item: ""language""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-safe,Channel-Attribut,2.3,"attr: ""safe""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-max_age,Channel-Attribut,2.3,"attr: ""max_age""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-rate,Channel-Attribut,2.3,"attr: ""rate""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-max_rate,Channel-Attribut,2.3,"attr: ""max_rate""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-capacity,Channel-Attribut,2.3,"attr: ""capacity""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-framing,Channel-Attribut,2.3,"attr: ""framing""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-overflow,Channel-Attribut,2.3,"attr: ""overflow""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-fault,Channel-Attribut,2.3,"attr: ""fault""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-drop_oldest,Channel-Attribut,2.3,"attr: ""drop_oldest""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-drop,Channel-Attribut,2.3,"attr: ""drop""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-wake,Channel-Attribut,2.3,"attr: ""wake""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-true,Channel-Attribut,2.3,"attr: ""true""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-false,Channel-Attribut,2.3,"attr: ""false""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-jitter,Channel-Attribut,2.3,"attr: ""jitter""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-max_slew,Channel-Attribut,2.3,"attr: ""max_slew""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-debounce,Channel-Attribut,2.3,"attr: ""debounce""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-capacity_bytes,Channel-Attribut,2.3,"attr: ""capacity_bytes""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-expect_len,Channel-Attribut,2.3,"attr: ""expect_len""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-irreversible,Channel-Attribut,2.3,"attr: ""irreversible""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-label,Channel-Attribut,2.3,"attr: ""label""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-display,Channel-Attribut,2.3,"attr: ""display""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-group,Channel-Attribut,2.3,"attr: ""group""",,M0 (Parser/MIR-Entwurf),definiert
+Channel-Attribut-doc,Channel-Attribut,2.3,"attr: ""doc""",,M0 (Parser/MIR-Entwurf),definiert
+Skalartyp-bool,Skalartyp,2.3,"scalar_type: ""bool""",,M0 (Parser/MIR-Entwurf),definiert
+Skalartyp-float,Skalartyp,2.3,"scalar_type: ""float""",,M0 (Parser/MIR-Entwurf),definiert
+Skalartyp-f32,Skalartyp,2.3,"scalar_type: ""f32""",,M0 (Parser/MIR-Entwurf),definiert
+Skalartyp-f64,Skalartyp,2.3,"scalar_type: ""f64""",,M0 (Parser/MIR-Entwurf),definiert
+Skalartyp-str,Skalartyp,2.3,"scalar_type: ""str""",,M0 (Parser/MIR-Entwurf),definiert
+Typkonstruktor-bytes,Typkonstruktor,2.3,"type: ""bytes""",,M0 (Parser/MIR-Entwurf),definiert
+Typkonstruktor-vec,Typkonstruktor,2.3,"type: ""vec""",,M0 (Parser/MIR-Entwurf),definiert
+Typkonstruktor-line,Typkonstruktor,2.3,"type: ""line""",,M0 (Parser/MIR-Entwurf),definiert
+Typkonstruktor-stream,Typkonstruktor,2.3,"type: ""stream""",,M0 (Parser/MIR-Entwurf),definiert
+Typkonstruktor-samples,Typkonstruktor,2.3,"type: ""samples""",,M0 (Parser/MIR-Entwurf),definiert
+Typkonstruktor-table,Typkonstruktor,2.3,"type: ""table""",,M0 (Parser/MIR-Entwurf),definiert
+Typkonstruktor-mat,Typkonstruktor,2.3,"type: ""mat""",,M0 (Parser/MIR-Entwurf),definiert
+Typkonstruktor-map,Typkonstruktor,2.3,"type: ""map""",,M0 (Parser/MIR-Entwurf),definiert
+Typkonstruktor-capture,Typkonstruktor,2.3,"type: ""capture""",,M0 (Parser/MIR-Entwurf),definiert
+Stream-Elementtyp-u8,Stream-Elementtyp,2.3,"elem_type: ""u8""",,M0 (Parser/MIR-Entwurf),definiert
+Stream-Elementtyp-bytes,Stream-Elementtyp,2.3,"elem_type: ""bytes""",,M0 (Parser/MIR-Entwurf),definiert
+Stream-Elementtyp-line,Stream-Elementtyp,2.3,"elem_type: ""line""",,M0 (Parser/MIR-Entwurf),definiert
+Statement-break,Statement,2.3,"simple_stmt: ""break""",,M0 (Parser/MIR-Entwurf),definiert
+Statement-pass,Statement,2.3,"simple_stmt: ""pass""",,M0 (Parser/MIR-Entwurf),definiert
+Sequenz-Item-wait,Sequenz-Item,2.3,"seq_item: ""wait""",,M0 (Parser/MIR-Entwurf),definiert
+Sequenz-Item-until,Sequenz-Item,2.3,"seq_item: ""until""",,M0 (Parser/MIR-Entwurf),definiert
+Sequenz-Item-timeout,Sequenz-Item,2.3,"seq_item: ""timeout""",,M0 (Parser/MIR-Entwurf),definiert
+Sequenz-Item-else,Sequenz-Item,2.3,"seq_item: ""else""",,M0 (Parser/MIR-Entwurf),definiert
+Sequenz-Item-expect,Sequenz-Item,2.3,"seq_item: ""expect""",,M0 (Parser/MIR-Entwurf),definiert
+Sequenz-Item-repeat,Sequenz-Item,2.3,"seq_item: ""repeat""",,M0 (Parser/MIR-Entwurf),definiert
+Sequenz-Item-step,Sequenz-Item,2.3,"seq_item: ""step""",,M0 (Parser/MIR-Entwurf),definiert
+Temporaloperator-implies,Temporaloperator,2.3,"tprop: ""implies""",,M0 (Parser/MIR-Entwurf),definiert
+Temporaloperator-or,Temporaloperator,2.3,"tprop: ""or""",,M0 (Parser/MIR-Entwurf),definiert
+Temporaloperator-and,Temporaloperator,2.3,"tprop: ""and""",,M0 (Parser/MIR-Entwurf),definiert
+Temporaloperator-not,Temporaloperator,2.3,"tprop: ""not""",,M0 (Parser/MIR-Entwurf),definiert
+Temporaloperator-always,Temporaloperator,2.3,"tprop: ""always""",,M0 (Parser/MIR-Entwurf),definiert
+Temporaloperator-never,Temporaloperator,2.3,"tprop: ""never""",,M0 (Parser/MIR-Entwurf),definiert
+Temporaloperator-eventually,Temporaloperator,2.3,"tprop: ""eventually""",,M0 (Parser/MIR-Entwurf),definiert
+Temporaloperator-stable,Temporaloperator,2.3,"tprop: ""stable""",,M0 (Parser/MIR-Entwurf),definiert
+Temporaloperator-once,Temporaloperator,2.3,"tprop: ""once""",,M0 (Parser/MIR-Entwurf),definiert
+Generics-Fähigkeit-pod,Generics-Fähigkeit,2.3,"capability: ""pod""",,M0 (Parser/MIR-Entwurf),definiert
+Generics-Fähigkeit-eq,Generics-Fähigkeit,2.3,"capability: ""eq""",,M0 (Parser/MIR-Entwurf),definiert
+Generics-Fähigkeit-ord,Generics-Fähigkeit,2.3,"capability: ""ord""",,M0 (Parser/MIR-Entwurf),definiert
+Generics-Fähigkeit-numeric,Generics-Fähigkeit,2.3,"capability: ""numeric""",,M0 (Parser/MIR-Entwurf),definiert
+Generics-Fähigkeit-integer,Generics-Fähigkeit,2.3,"capability: ""integer""",,M0 (Parser/MIR-Entwurf),definiert
+Generics-Fähigkeit-float,Generics-Fähigkeit,2.3,"capability: ""float""",,M0 (Parser/MIR-Entwurf),definiert
+Rahmung-raw,Rahmung,2.3,"framing: ""raw""",,M0 (Parser/MIR-Entwurf),definiert
+Rahmung-lines,Rahmung,2.3,"framing: ""lines""",,M0 (Parser/MIR-Entwurf),definiert
+Rahmung-cobs,Rahmung,2.3,"framing: ""cobs""",,M0 (Parser/MIR-Entwurf),definiert
+Rahmung-length_prefixed,Rahmung,2.3,"framing: ""length_prefixed""",,M0 (Parser/MIR-Entwurf),definiert
+Rahmung-fixed,Rahmung,2.3,"framing: ""fixed""",,M0 (Parser/MIR-Entwurf),definiert
+Bindung-hw,Bindung,2.3,"binding: ""hw""",,M0 (Parser/MIR-Entwurf),definiert
+Bindung-sim,Bindung,2.3,"binding: ""sim""",,M0 (Parser/MIR-Entwurf),definiert
+Bindung-none,Bindung,2.3,"binding: ""none""",,M0 (Parser/MIR-Entwurf),definiert
+Kampagnen-Item-program,Kampagnen-Item,2.3,"campaign_item: ""program""",,M0 (Parser/MIR-Entwurf),definiert
+Kampagnen-Item-profile,Kampagnen-Item,2.3,"campaign_item: ""profile""",,M0 (Parser/MIR-Entwurf),definiert
+Kampagnen-Item-sweep,Kampagnen-Item,2.3,"campaign_item: ""sweep""",,M0 (Parser/MIR-Entwurf),definiert
+Kampagnen-Item-step,Kampagnen-Item,2.3,"campaign_item: ""step""",,M0 (Parser/MIR-Entwurf),definiert
+Kampagnen-Item-repeat,Kampagnen-Item,2.3,"campaign_item: ""repeat""",,M0 (Parser/MIR-Entwurf),definiert
+Kampagnen-Item-stop_on,Kampagnen-Item,2.3,"campaign_item: ""stop_on""",,M0 (Parser/MIR-Entwurf),definiert
+Kampagnen-Item-fail,Kampagnen-Item,2.3,"campaign_item: ""fail""",,M0 (Parser/MIR-Entwurf),definiert
+Kampagnen-Item-never,Kampagnen-Item,2.3,"campaign_item: ""never""",,M0 (Parser/MIR-Entwurf),definiert
+Generics-Klasse-type,Generics-Klasse,2.3,"gvar: ""type""",,M0 (Parser/MIR-Entwurf),definiert
+Generics-Klasse-const,Generics-Klasse,2.3,"gvar: ""const""",,M0 (Parser/MIR-Entwurf),definiert
+KW-system,Schlüsselwort,2.2,system,,M0 (Parser/MIR-Entwurf),definiert
+KW-tick,Schlüsselwort,2.2,tick,,M0 (Parser/MIR-Entwurf),definiert
+KW-import,Schlüsselwort,2.2,import,,M0 (Parser/MIR-Entwurf),definiert
+KW-from,Schlüsselwort,2.2,from,,M0 (Parser/MIR-Entwurf),definiert
+KW-as,Schlüsselwort,2.2,as,,M0 (Parser/MIR-Entwurf),definiert
+KW-type,Schlüsselwort,2.2,type,,M0 (Parser/MIR-Entwurf),definiert
+KW-enum,Schlüsselwort,2.2,enum,,M0 (Parser/MIR-Entwurf),definiert
+KW-record,Schlüsselwort,2.2,record,,M0 (Parser/MIR-Entwurf),definiert
+KW-layout,Schlüsselwort,2.2,layout,,M0 (Parser/MIR-Entwurf),definiert
+KW-unit,Schlüsselwort,2.2,unit,,M0 (Parser/MIR-Entwurf),definiert
+KW-const,Schlüsselwort,2.2,const,,M0 (Parser/MIR-Entwurf),definiert
+KW-param,Schlüsselwort,2.2,param,,M0 (Parser/MIR-Entwurf),definiert
+KW-profile,Schlüsselwort,2.2,profile,,M0 (Parser/MIR-Entwurf),definiert
+KW-input,Schlüsselwort,2.2,input,,M0 (Parser/MIR-Entwurf),definiert
+KW-output,Schlüsselwort,2.2,output,,M0 (Parser/MIR-Entwurf),definiert
+KW-command,Schlüsselwort,2.2,command,,M0 (Parser/MIR-Entwurf),definiert
+KW-with,Schlüsselwort,2.2,with,,M0 (Parser/MIR-Entwurf),definiert
+KW-hw,Schlüsselwort,2.2,hw,,M0 (Parser/MIR-Entwurf),definiert
+KW-sim,Schlüsselwort,2.2,sim,,M0 (Parser/MIR-Entwurf),definiert
+KW-safe,Schlüsselwort,2.2,safe,,M0 (Parser/MIR-Entwurf),definiert
+KW-max_age,Schlüsselwort,2.2,max_age,,M0 (Parser/MIR-Entwurf),definiert
+KW-rate,Schlüsselwort,2.2,rate,,M0 (Parser/MIR-Entwurf),definiert
+KW-max_rate,Schlüsselwort,2.2,max_rate,,M0 (Parser/MIR-Entwurf),definiert
+KW-capacity,Schlüsselwort,2.2,capacity,,M0 (Parser/MIR-Entwurf),definiert
+KW-framing,Schlüsselwort,2.2,framing,,M0 (Parser/MIR-Entwurf),definiert
+KW-overflow,Schlüsselwort,2.2,overflow,,M0 (Parser/MIR-Entwurf),definiert
+KW-wake,Schlüsselwort,2.2,wake,,M0 (Parser/MIR-Entwurf),definiert
+KW-fn,Schlüsselwort,2.2,fn,,M0 (Parser/MIR-Entwurf),definiert
+KW-block,Schlüsselwort,2.2,block,,M0 (Parser/MIR-Entwurf),definiert
+KW-step,Schlüsselwort,2.2,step,,M0 (Parser/MIR-Entwurf),definiert
+KW-return,Schlüsselwort,2.2,return,,M0 (Parser/MIR-Entwurf),definiert
+KW-var,Schlüsselwort,2.2,var,,M0 (Parser/MIR-Entwurf),definiert
+KW-pub,Schlüsselwort,2.2,pub,,M0 (Parser/MIR-Entwurf),definiert
+KW-persist,Schlüsselwort,2.2,persist,,M0 (Parser/MIR-Entwurf),definiert
+KW-signal,Schlüsselwort,2.2,signal,,M0 (Parser/MIR-Entwurf),definiert
+KW-machine,Schlüsselwort,2.2,machine,,M0 (Parser/MIR-Entwurf),definiert
+KW-every,Schlüsselwort,2.2,every,,M0 (Parser/MIR-Entwurf),definiert
+KW-phase,Schlüsselwort,2.2,phase,,M0 (Parser/MIR-Entwurf),definiert
+KW-instance,Schlüsselwort,2.2,instance,,M0 (Parser/MIR-Entwurf),definiert
+KW-initial,Schlüsselwort,2.2,initial,,M0 (Parser/MIR-Entwurf),definiert
+KW-state,Schlüsselwort,2.2,state,,M0 (Parser/MIR-Entwurf),definiert
+KW-idle,Schlüsselwort,2.2,idle,,M0 (Parser/MIR-Entwurf),definiert
+KW-enter,Schlüsselwort,2.2,enter,,M0 (Parser/MIR-Entwurf),definiert
+KW-loop,Schlüsselwort,2.2,loop,,M0 (Parser/MIR-Entwurf),definiert
+KW-exit,Schlüsselwort,2.2,exit,,M0 (Parser/MIR-Entwurf),definiert
+KW-on,Schlüsselwort,2.2,on,,M0 (Parser/MIR-Entwurf),definiert
+KW-when,Schlüsselwort,2.2,when,,M0 (Parser/MIR-Entwurf),definiert
+KW-after,Schlüsselwort,2.2,after,,M0 (Parser/MIR-Entwurf),definiert
+KW-fault,Schlüsselwort,2.2,fault,,M0 (Parser/MIR-Entwurf),definiert
+KW-sequence,Schlüsselwort,2.2,sequence,,M0 (Parser/MIR-Entwurf),definiert
+KW-wait,Schlüsselwort,2.2,wait,,M0 (Parser/MIR-Entwurf),definiert
+KW-until,Schlüsselwort,2.2,until,,M0 (Parser/MIR-Entwurf),definiert
+KW-timeout,Schlüsselwort,2.2,timeout,,M0 (Parser/MIR-Entwurf),definiert
+KW-expect,Schlüsselwort,2.2,expect,,M0 (Parser/MIR-Entwurf),definiert
+KW-repeat,Schlüsselwort,2.2,repeat,,M0 (Parser/MIR-Entwurf),definiert
+KW-check,Schlüsselwort,2.2,check,,M0 (Parser/MIR-Entwurf),definiert
+KW-alert,Schlüsselwort,2.2,alert,,M0 (Parser/MIR-Entwurf),definiert
+KW-log,Schlüsselwort,2.2,log,,M0 (Parser/MIR-Entwurf),definiert
+KW-abort,Schlüsselwort,2.2,abort,,M0 (Parser/MIR-Entwurf),definiert
+KW-measure,Schlüsselwort,2.2,measure,,M0 (Parser/MIR-Entwurf),definiert
+KW-verify,Schlüsselwort,2.2,verify,,M0 (Parser/MIR-Entwurf),definiert
+KW-verdict,Schlüsselwort,2.2,verdict,,M0 (Parser/MIR-Entwurf),definiert
+KW-pass,Schlüsselwort,2.2,pass,,M0 (Parser/MIR-Entwurf),definiert
+KW-fail,Schlüsselwort,2.2,fail,,M0 (Parser/MIR-Entwurf),definiert
+KW-send,Schlüsselwort,2.2,send,,M0 (Parser/MIR-Entwurf),definiert
+KW-at,Schlüsselwort,2.2,at,,M0 (Parser/MIR-Entwurf),definiert
+KW-pulse,Schlüsselwort,2.2,pulse,,M0 (Parser/MIR-Entwurf),definiert
+KW-cancel,Schlüsselwort,2.2,cancel,,M0 (Parser/MIR-Entwurf),definiert
+KW-raise,Schlüsselwort,2.2,raise,,M0 (Parser/MIR-Entwurf),definiert
+KW-match,Schlüsselwort,2.2,match,,M0 (Parser/MIR-Entwurf),definiert
+KW-case,Schlüsselwort,2.2,case,,M0 (Parser/MIR-Entwurf),definiert
+KW-matches,Schlüsselwort,2.2,matches,,M0 (Parser/MIR-Entwurf),definiert
+KW-has,Schlüsselwort,2.2,has,,M0 (Parser/MIR-Entwurf),definiert
+KW-if,Schlüsselwort,2.2,if,,M0 (Parser/MIR-Entwurf),definiert
+KW-elif,Schlüsselwort,2.2,elif,,M0 (Parser/MIR-Entwurf),definiert
+KW-else,Schlüsselwort,2.2,else,,M0 (Parser/MIR-Entwurf),definiert
+KW-for,Schlüsselwort,2.2,for,,M0 (Parser/MIR-Entwurf),definiert
+KW-in,Schlüsselwort,2.2,in,,M0 (Parser/MIR-Entwurf),definiert
+KW-range,Schlüsselwort,2.2,range,,M0 (Parser/MIR-Entwurf),definiert
+KW-break,Schlüsselwort,2.2,break,,M0 (Parser/MIR-Entwurf),definiert
+KW-and,Schlüsselwort,2.2,and,,M0 (Parser/MIR-Entwurf),definiert
+KW-or,Schlüsselwort,2.2,or,,M0 (Parser/MIR-Entwurf),definiert
+KW-not,Schlüsselwort,2.2,not,,M0 (Parser/MIR-Entwurf),definiert
+KW-true,Schlüsselwort,2.2,true,,M0 (Parser/MIR-Entwurf),definiert
+KW-false,Schlüsselwort,2.2,false,,M0 (Parser/MIR-Entwurf),definiert
+KW-none,Schlüsselwort,2.2,none,,M0 (Parser/MIR-Entwurf),definiert
+KW-scenario,Schlüsselwort,2.2,scenario,,M0 (Parser/MIR-Entwurf),definiert
+KW-campaign,Schlüsselwort,2.2,campaign,,M0 (Parser/MIR-Entwurf),definiert
+KW-program,Schlüsselwort,2.2,program,,M0 (Parser/MIR-Entwurf),definiert
+KW-sweep,Schlüsselwort,2.2,sweep,,M0 (Parser/MIR-Entwurf),definiert
+KW-stop_on,Schlüsselwort,2.2,stop_on,,M0 (Parser/MIR-Entwurf),definiert
+KW-trigger,Schlüsselwort,2.2,trigger,,M0 (Parser/MIR-Entwurf),definiert
+KW-arm,Schlüsselwort,2.2,arm,,M0 (Parser/MIR-Entwurf),definiert
+KW-disarm,Schlüsselwort,2.2,disarm,,M0 (Parser/MIR-Entwurf),definiert
+KW-bound,Schlüsselwort,2.2,bound,,M0 (Parser/MIR-Entwurf),definiert
+KW-req,Schlüsselwort,2.2,req,,M0 (Parser/MIR-Entwurf),definiert
+KW-native,Schlüsselwort,2.2,native,,M0 (Parser/MIR-Entwurf),definiert
+KW-cost,Schlüsselwort,2.2,cost,,M0 (Parser/MIR-Entwurf),definiert
+KW-total,Schlüsselwort,2.2,total,,M0 (Parser/MIR-Entwurf),definiert
+KW-mat,Schlüsselwort,2.2,mat,,M0 (Parser/MIR-Entwurf),definiert
+KW-tick_source,Schlüsselwort,2.2,tick_source,,M0 (Parser/MIR-Entwurf),definiert
+KW-tick_tolerance,Schlüsselwort,2.2,tick_tolerance,,M0 (Parser/MIR-Entwurf),definiert
+KW-jitter,Schlüsselwort,2.2,jitter,,M0 (Parser/MIR-Entwurf),definiert
+KW-max_slew,Schlüsselwort,2.2,max_slew,,M0 (Parser/MIR-Entwurf),definiert
+KW-unitvec,Schlüsselwort,2.2,unitvec,,M0 (Parser/MIR-Entwurf),definiert
+KW-vec,Schlüsselwort,2.2,vec,,M0 (Parser/MIR-Entwurf),definiert
+KW-tunable,Schlüsselwort,2.2,tunable,,M0 (Parser/MIR-Entwurf),definiert
+KW-follows,Schlüsselwort,2.2,follows,,M0 (Parser/MIR-Entwurf),definiert
+KW-debounce,Schlüsselwort,2.2,debounce,,M0 (Parser/MIR-Entwurf),definiert
+KW-ticks,Schlüsselwort,2.2,ticks,,M0 (Parser/MIR-Entwurf),definiert
+KW-len,Schlüsselwort,2.2,len,,M0 (Parser/MIR-Entwurf),definiert
+KW-target,Schlüsselwort,2.2,target,,M0 (Parser/MIR-Entwurf),definiert
+KW-f64,Schlüsselwort,2.2,f64,,M0 (Parser/MIR-Entwurf),definiert
+KW-job,Schlüsselwort,2.2,job,,M0 (Parser/MIR-Entwurf),definiert
+KW-inout,Schlüsselwort,2.2,inout,,M0 (Parser/MIR-Entwurf),definiert
+KW-irreversible,Schlüsselwort,2.2,irreversible,,M0 (Parser/MIR-Entwurf),definiert
+KW-bits,Schlüsselwort,2.2,bits,,M0 (Parser/MIR-Entwurf),definiert
+KW-offset,Schlüsselwort,2.2,offset,,M0 (Parser/MIR-Entwurf),definiert
+KW-align,Schlüsselwort,2.2,align,,M0 (Parser/MIR-Entwurf),definiert
+KW-duration,Schlüsselwort,2.2,duration,,M0 (Parser/MIR-Entwurf),definiert
+KW-default,Schlüsselwort,2.2,default,,M0 (Parser/MIR-Entwurf),definiert
+KW-driver,Schlüsselwort,2.2,driver,,M0 (Parser/MIR-Entwurf),definiert
+KW-port,Schlüsselwort,2.2,port,,M0 (Parser/MIR-Entwurf),definiert
+KW-mmio,Schlüsselwort,2.2,mmio,,M0 (Parser/MIR-Entwurf),definiert
+KW-language,Schlüsselwort,2.2,language,,M0 (Parser/MIR-Entwurf),definiert
+KW-open,Schlüsselwort,2.2,open,,M0 (Parser/MIR-Entwurf),definiert
+KW-node,Schlüsselwort,2.2,node,,M0 (Parser/MIR-Entwurf),definiert
+KW-resume,Schlüsselwort,2.2,resume,,M0 (Parser/MIR-Entwurf),definiert
+KW-capture,Schlüsselwort,2.2,capture,,M0 (Parser/MIR-Entwurf),definiert
+KW-property,Schlüsselwort,2.2,property,,M0 (Parser/MIR-Entwurf),definiert
+KW-always,Schlüsselwort,2.2,always,,M0 (Parser/MIR-Entwurf),definiert
+KW-never,Schlüsselwort,2.2,never,,M0 (Parser/MIR-Entwurf),definiert
+KW-eventually,Schlüsselwort,2.2,eventually,,M0 (Parser/MIR-Entwurf),definiert
+KW-stable,Schlüsselwort,2.2,stable,,M0 (Parser/MIR-Entwurf),definiert
+KW-once,Schlüsselwort,2.2,once,,M0 (Parser/MIR-Entwurf),definiert
+KW-implies,Schlüsselwort,2.2,implies,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-region,Reserviertes Wort,2.2/2.5,region,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-while,Reserviertes Wort,2.2/2.5,while,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-yield,Reserviertes Wort,2.2/2.5,yield,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-await,Reserviertes Wort,2.2/2.5,await,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-async,Reserviertes Wort,2.2/2.5,async,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-spawn,Reserviertes Wort,2.2/2.5,spawn,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-select,Reserviertes Wort,2.2/2.5,select,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-where,Reserviertes Wort,2.2/2.5,where,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-impl,Reserviertes Wort,2.2/2.5,impl,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-trait,Reserviertes Wort,2.2/2.5,trait,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-module,Reserviertes Wort,2.2/2.5,module,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-export,Reserviertes Wort,2.2/2.5,export,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-extern,Reserviertes Wort,2.2/2.5,extern,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-unsafe,Reserviertes Wort,2.2/2.5,unsafe,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-try,Reserviertes Wort,2.2/2.5,try,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-catch,Reserviertes Wort,2.2/2.5,catch,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-throw,Reserviertes Wort,2.2/2.5,throw,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-class,Reserviertes Wort,2.2/2.5,class,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-struct,Reserviertes Wort,2.2/2.5,struct,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-union,Reserviertes Wort,2.2/2.5,union,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-static,Reserviertes Wort,2.2/2.5,static,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-global,Reserviertes Wort,2.2/2.5,global,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-volatile,Reserviertes Wort,2.2/2.5,volatile,,M0 (Parser/MIR-Entwurf),definiert
+KW-reserviert-defer,Reserviertes Wort,2.2/2.5,defer,,M0 (Parser/MIR-Entwurf),definiert
+MEM-valid,Reservierter Membername,2.5,valid,,M0 (Parser/MIR-Entwurf),offen
+MEM-suspect,Reservierter Membername,2.5,suspect,,M0 (Parser/MIR-Entwurf),offen
+MEM-stale,Reservierter Membername,2.5,stale,,M0 (Parser/MIR-Entwurf),offen
+MEM-age,Reservierter Membername,2.5,age,,M0 (Parser/MIR-Entwurf),offen
+MEM-reason,Reservierter Membername,2.5,reason,,M0 (Parser/MIR-Entwurf),offen
+MEM-or,Reservierter Membername,2.5,or,,M0 (Parser/MIR-Entwurf),offen
+MEM-ok,Reservierter Membername,2.5,ok,,M0 (Parser/MIR-Entwurf),offen
+MEM-err,Reservierter Membername,2.5,err,,M0 (Parser/MIR-Entwurf),offen
+MEM-t,Reservierter Membername,2.5,t,,M0 (Parser/MIR-Entwurf),offen
+MEM-seq,Reservierter Membername,2.5,seq,,M0 (Parser/MIR-Entwurf),offen
+MEM-text,Reservierter Membername,2.5,text,,M0 (Parser/MIR-Entwurf),offen
+MEM-data,Reservierter Membername,2.5,data,,M0 (Parser/MIR-Entwurf),offen
+MEM-len,Reservierter Membername,2.5,len,,M0 (Parser/MIR-Entwurf),offen
+MEM-count,Reservierter Membername,2.5,count,,M0 (Parser/MIR-Entwurf),offen
+MEM-dropped,Reservierter Membername,2.5,dropped,,M0 (Parser/MIR-Entwurf),offen
+MEM-malformed,Reservierter Membername,2.5,malformed,,M0 (Parser/MIR-Entwurf),offen
+MEM-overflowed,Reservierter Membername,2.5,overflowed,,M0 (Parser/MIR-Entwurf),offen
+MEM-free,Reservierter Membername,2.5,free,,M0 (Parser/MIR-Entwurf),offen
+MEM-jitter,Reservierter Membername,2.5,jitter,,M0 (Parser/MIR-Entwurf),offen
+MEM-time_warped,Reservierter Membername,2.5,time_warped,,M0 (Parser/MIR-Entwurf),offen
+MEM-done,Reservierter Membername,2.5,done,,M0 (Parser/MIR-Entwurf),offen
+MEM-result,Reservierter Membername,2.5,result,,M0 (Parser/MIR-Entwurf),offen
+MEM-state,Reservierter Membername,2.5,state,,M0 (Parser/MIR-Entwurf),offen
+MEM-to,Reservierter Membername,2.5,to,,M0 (Parser/MIR-Entwurf),offen
+MEM-to_float,Reservierter Membername,2.5,to_float,,M0 (Parser/MIR-Entwurf),offen
+MEM-as,Reservierter Membername,2.5,as,,M0 (Parser/MIR-Entwurf),offen
+MEM-bit,Reservierter Membername,2.5,bit,,M0 (Parser/MIR-Entwurf),offen
+MEM-bits,Reservierter Membername,2.5,bits,,M0 (Parser/MIR-Entwurf),offen
+MEM-with_bit,Reservierter Membername,2.5,with_bit,,M0 (Parser/MIR-Entwurf),offen
+MEM-wrap_*,Reservierter Membername,2.5,wrap_*,,M0 (Parser/MIR-Entwurf),offen
+MEM-min,Reservierter Membername,2.5,min,,M0 (Parser/MIR-Entwurf),offen
+MEM-max,Reservierter Membername,2.5,max,,M0 (Parser/MIR-Entwurf),offen
+MEM-mean,Reservierter Membername,2.5,mean,,M0 (Parser/MIR-Entwurf),offen
+MEM-rms,Reservierter Membername,2.5,rms,,M0 (Parser/MIR-Entwurf),offen
+MEM-last,Reservierter Membername,2.5,last,,M0 (Parser/MIR-Entwurf),offen
+MEM-transpose,Reservierter Membername,2.5,transpose,,M0 (Parser/MIR-Entwurf),offen
+MEM-inv,Reservierter Membername,2.5,inv,,M0 (Parser/MIR-Entwurf),offen
+MEM-det,Reservierter Membername,2.5,det,,M0 (Parser/MIR-Entwurf),offen
+MEM-solve,Reservierter Membername,2.5,solve,,M0 (Parser/MIR-Entwurf),offen
+MEM-cholesky,Reservierter Membername,2.5,cholesky,,M0 (Parser/MIR-Entwurf),offen
+MEM-decode,Reservierter Membername,2.5,decode,,M0 (Parser/MIR-Entwurf),offen
+MEM-encode,Reservierter Membername,2.5,encode,,M0 (Parser/MIR-Entwurf),offen
+MEM-default,Reservierter Membername,2.5,default,,M0 (Parser/MIR-Entwurf),offen
+MEM-push,Reservierter Membername,2.5,push,,M0 (Parser/MIR-Entwurf),offen
+MEM-get,Reservierter Membername,2.5,get,,M0 (Parser/MIR-Entwurf),offen
+MEM-insert,Reservierter Membername,2.5,insert,,M0 (Parser/MIR-Entwurf),offen
+MEM-remove,Reservierter Membername,2.5,remove,,M0 (Parser/MIR-Entwurf),offen
+MEM-clear,Reservierter Membername,2.5,clear,,M0 (Parser/MIR-Entwurf),offen
+MEM-skip,Reservierter Membername,2.5,skip,,M0 (Parser/MIR-Entwurf),offen
+MEM-starts_with,Reservierter Membername,2.5,starts_with,,M0 (Parser/MIR-Entwurf),offen
+MEM-contains,Reservierter Membername,2.5,contains,,M0 (Parser/MIR-Entwurf),offen
+MEM-armed,Reservierter Membername,2.5,armed,,M0 (Parser/MIR-Entwurf),offen
+MEM-fired,Reservierter Membername,2.5,fired,,M0 (Parser/MIR-Entwurf),offen
+MEM-pre,Reservierter Membername,2.5,pre,,M0 (Parser/MIR-Entwurf),offen
+MEM-post,Reservierter Membername,2.5,post,,M0 (Parser/MIR-Entwurf),offen
+MEM-samples,Reservierter Membername,2.5,samples,,M0 (Parser/MIR-Entwurf),offen
+SC-1,Statische Prüfung,10,"Tokenizer/Parser (Einrückung, Grammatik)",F,M3 (Gate),offen
+SC-2,Statische Prüfung,10,"Namensauflösung, Modul-Linking, Namenskonventionen",F / W,M3 (Gate),offen
+SC-3,Statische Prüfung,10,"Typ- und Einheiteninferenz, affine Regeln, Duration-Regeln",F,M3 (Gate),offen
+SC-4,Statische Prüfung,10,"Intervallanalyse: Ranges, Division, Overflow, Index; implizite Prüfungen",W bei jeder eingefügten Laufzeitprüfung (außer i64-Overflow),M3 (Gate),offen
+SC-5,Statische Prüfung,10,Validitäts-Dominanz für Channel-Lesen,— (impliziter Check ist Default),M3 (Gate),offen
+SC-6,Statische Prüfung,10,Definite Assignment,F,M3 (Gate),offen
+SC-7,Statische Prüfung,10,Single-Writer für Outputs und `pub var`; Channel-Richtung; jede `hw`-Adresse höchstens einmal gebunden,F,M3 (Gate),offen
+SC-8,Statische Prüfung,10,"Maschinen: eindeutige Zustandsnamen, `initial` vorhanden, Ziele existieren, Transitionsblöcke enden mit `->`, Aktionsblock-Einschränkungen (5.5)",F,M3 (Gate),offen
+SC-9,Statische Prüfung,10,Fault-Wald azyklisch; `FAULTED` erreichbar; Guards der Transitionen aus `FAULTED` ohne implizite Prüfungen,F,M3 (Gate),offen
+SC-10,Statische Prüfung,10,Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige,W,M3 (Gate),offen
+SC-11,Statische Prüfung,10,Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick,F,M3 (Gate),offen
+SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M3 (Gate),offen
+SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle,F,M3 (Gate),offen
+SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),offen
+SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden",W,M3 (Gate),offen
+SC-16,Statische Prüfung,10,"Format-Strings: Platzhalter existieren, Typen formatierbar, Puffergröße",F,M3 (Gate),offen
+SC-17,Statische Prüfung,10,Streams: `MAXPT * n_m <= CAP` je Konsument; Konsumentenmenge statisch; Elementtyp zulässig; `wake`-Attribute,F,M3 (Gate),offen
+SC-18,Statische Prüfung,10,"Muster: Wohlgeformtheit, Mehrdeutigkeitsregel (8.7), Capture-Typen; Record-Muster nur mit konstanten Feldwerten",F,M3 (Gate),offen
+SC-19,Statische Prüfung,10,`match` erschöpfend; Variantenfelder vollständig gebunden,F,M3 (Gate),offen
+SC-20,Statische Prüfung,10,`send`: statische Summe der Höchstlängen je Aktivierung ≤ `capacity`,F,M3 (Gate),offen
+SC-21,Statische Prüfung,10,`at`/`pulse`: Block enthält nur Zuweisungen an skalare Outputs; `T` vom Typ Duration; K_o,F,M3 (Gate),offen
+SC-22,Statische Prüfung,10,"`idle`: keine `loop:`/Handler in Zustand und Vorfahren; Guards nur über Wake-Quellen, Konstanten, Params, Maschinenvariablen",F,M3 (Gate),offen
+SC-23,Statische Prüfung,10,"`persist`: POD-Typ, Maschinenebene, nicht in Szenarien; Typ-Hash stabil",F,M3 (Gate),offen
+SC-24,Statische Prüfung,10,"Shift-Beträge, `as`-Konversionen, `vec`-Indizes, Slices: Range beweisbar oder impliziter Check",W,M3 (Gate),offen
+SC-25,Statische Prüfung,10,"Zustandslokale und gehobene Variablen (Sequenz-`var`, Captures): Definite Assignment je Eintritt",F,M3 (Gate),offen
+SC-26,Statische Prüfung,10,Szenarien schreiben nur `sim`-Outputs; Single-Writer gegenüber Modellmaschinen,F,M3 (Gate),offen
+SC-27,Statische Prüfung,10,`every d:` nur in `loop:`; `on`-Handler nur auf deklarierten Streams,F,M3 (Gate),offen
+SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0` („tick-granular"", 7.5); deklarierte `jitter`-Anforderung größer als gemessener Wert erfüllt, sonst Fehler (8.1)",W / F,M3 (Gate),offen
+SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M3 (Gate),offen
+SC-30,Statische Prüfung,10,"`mat`: Formprüfung bei `+ - *`, `inv`/`solve` nur quadratisch, R, C ≤ 16, Indizes in Range (3.11)",F,M3 (Gate),offen
+SC-31,Statische Prüfung,10,"Native Funktionen: nur die kuratierte Menge (v1), `cost`, `stack` und `total` deklariert, Argumente fester Größe (4.5)",F,M3 (Gate),offen
+SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration",F,M3 (Gate),offen
+SC-33,Statische Prüfung,10,`follows`: Kanten azyklisch; Follower liest nur gefolgte Maschinen frisch; keine frischen Lesevorgänge in Aktionsblöcken der Abort-Phase (7.2),F,M3 (Gate),offen
+SC-34,Statische Prüfung,10,"Dimensionierte Matrizen: Einheitentupel passen (Produkt, Addition, Inverse), Literale bilden ein äußeres Produkt, variable Indizes nur bei gleichen Einheiten (3.11)",F,M3 (Gate),offen
+SC-35,Statische Prüfung,10,"`tunable param` nicht in Compile-Zeit-Konstanten (Array-Größen, Kapazitäten, `repeat`) (8.4)",F,M3 (Gate),offen
+SC-36,Statische Prüfung,10,`check … for d` / `alert … for d`: `d >= P_m`; Rundung auf Perioden mit effektivem Wert (5.6),W,M3 (Gate),offen
+SC-37,Statische Prüfung,10,`len_field`: verweist auf ein vorangehendes Integer-Feld; statische Obergrenze des Feldes (3.7),F,M3 (Gate),offen
+SC-38,Statische Prüfung,10,"Einheiten auf Integern: `.to()` nur bei ganzzahligem Faktor, sonst `.to_float()` (3.2)",F,M3 (Gate),offen
+SC-39,Statische Prüfung,10,"Speicherbudget aller `baremetal`- und `rtos`-Profile: `takt size` (11.5) ≤ `ram`/`flash`/`iram` der Hardware-Konfiguration, aufgeschlüsselt; auf Targets mit XIP-Flash zusätzlich RAM-Residenz von Code und tick-gelesenen Konstanten (12.3); `debounce`-Haltedauer im Report",F,M3 (Gate),offen
+SC-40,Statische Prüfung,10,"Performance-Lint: `int` ohne Range in Schleifen und Regelpfaden auf 32-Bit-Zielen, mit Kostenanteil (3.4)",W,M3 (Gate),offen
+SC-41,Statische Prüfung,10,"Performance-Lint: `float = f64` auf Zielen ohne f64-Hardware, mit Kostenanteil der f64-Operationen; Vorschlag `system: float = f32` (4.2)",W,M3 (Gate),offen
+SC-42,Statische Prüfung,10,"Lint: Matrizen über 16×16 (Kosten n³, Scratch n²·8 Byte) (3.11); `expect_len < N` schwächt Lemma 9.6.1 zur deklarierten Annahme (8.6)",W,M3 (Gate),offen
+SC-43,Statische Prüfung,10,Interne Streams: genau ein Schreiber; `send` nur aus dessen Maschine; Kapazitäten wie 17 mit MAXPT = statische Höchstzahl von `send` je Aktivierung des Schreibers (8.6),F,M3 (Gate),offen
+SC-44,Statische Prüfung,10,"Jobs: höchstens K_j je Maschine, Argumente fester Größe, Handle zustandslokal oder Maschinenvariable; `duration` deklariert (4.5)",F,M3 (Gate),offen
+SC-45,Statische Prüfung,10,`T!E`: Dominanz durch `.ok` oder `check r.ok`; `match` über `OK`/`ERR` erschöpfend (3.8),F,M3 (Gate),offen
+SC-46,Statische Prüfung,10,"`layout`: Offsets überlappen nicht, Bitfelder innerhalb ihres Trägerfelds, Konstantenfelder passen zur Breite, Diskriminanten eindeutig (3.7)",F,M3 (Gate),offen
+SC-47,Statische Prüfung,10,"`inout`: kein Aliasing (ein Argument höchstens einmal, nicht zugleich als weiteres Argument) (3.9)",F,M3 (Gate),offen
+SC-48,Statische Prüfung,10,`irreversible`-Outputs: Zuweisung nur in Sequenzen unmittelbar nach `expect`; Szenario-Abdeckung Pflicht (12.7),F,M3 (Gate),offen
+SC-49,Statische Prüfung,10,Edition fehlt (2.5),W (Zertifizierungsmodus: F),M3 (Gate),offen
+SC-50,Statische Prüfung,10,Reservierte Wörter als Bezeichner; reservierte Membernamen als Feld- oder Variantennamen (2.5),F,M3 (Gate),offen
+SC-51,Statische Prüfung,10,`match` über offene Enums ohne `case _` (2.5),F,M3 (Gate),offen
+SC-52,Statische Prüfung,10,Generics: genau eine Fähigkeit je Typvariable; Instanziierungsgraph azyklisch; `const`-Variablen nur in Typen und `range` (3.12),F,M3 (Gate),offen
+SC-53,Statische Prüfung,10,Gescopte Instanzen: Single-Writer global; keine Instanzen in `idle`-Zuständen; kein (mittelbares) Selbst-Scoping (5.11),F,M3 (Gate),offen
+SC-54,Statische Prüfung,10,`resume` nur an Zuständen mit Kindern; Fault-Ziele werden über `initial` betreten (5.12),F,M3 (Gate),offen
+SC-55,Statische Prüfung,10,Trigger: Guard und Outputs knotenlokal; `arm`/`disarm` nur aus der deklarierenden Maschine (7.5),F,M3 (Gate),offen
+SC-56,Statische Prüfung,10,"`property`: nur lesend, alle Zeitoperatoren beschränkt (13.3)",F,M3 (Gate),offen
+SC-57,Statische Prüfung,10,`map`: Schlüssel POD mit Gleichheit (3.9),F,M3 (Gate),offen
+SC-58,Statische Prüfung,10,Knoten (12.9): `follows` knotenlokal; `hops` aus der Topologie berechenbar; Knotentick Vielfaches von `system.tick`,F,M3 (Gate),offen
+OBL-T1,Beweisverpflichtung,9.4.2,T1,,M1/M2 (Interpreter),offen
+OBL-T2,Beweisverpflichtung,9.4.2,T2,,M1/M2 (Interpreter),offen
+OBL-T3,Beweisverpflichtung,9.4.2,T3,,M1/M2 (Interpreter),offen
+OBL-T4,Beweisverpflichtung,9.4.2,T4,,M1/M2 (Interpreter),offen
+OBL-T5,Beweisverpflichtung,9.4.2,T5,,M1/M2 (Interpreter),offen
+OBL-T6,Beweisverpflichtung,9.4.2,T6,,M1/M2 (Interpreter),offen
+OBL-T7,Beweisverpflichtung,9.4.2,T7,,M1/M2 (Interpreter),offen
+OBL-T8,Beweisverpflichtung,9.4.2,T8,,M1/M2 (Interpreter),offen
+OBL-T9,Beweisverpflichtung,9.4.2,T9,,M1/M2 (Interpreter),offen
+OBL-T10,Beweisverpflichtung,9.4.2,T10,,M1/M2 (Interpreter),offen
+OBL-T11,Beweisverpflichtung,9.4.2,T11,,M1/M2 (Interpreter),offen
+OBL-T12,Beweisverpflichtung,9.4.2,T12,,M1/M2 (Interpreter),offen
+OBL-T13,Beweisverpflichtung,9.4.2,T13,,M1/M2 (Interpreter),offen
+OBL-T14,Beweisverpflichtung,9.4.2,T14,,M1/M2 (Interpreter),offen
+OBL-T15,Beweisverpflichtung,9.4.2,T15,,M1/M2 (Interpreter),offen
+OBL-T16,Beweisverpflichtung,9.4.2,T16,,M1/M2 (Interpreter),offen
+PAR-1.4-Inputs,Absatz/Regel,1.4,Inputs,,M0 (Parser/MIR-Entwurf),offen
+PAR-1.4-Outputs,Absatz/Regel,1.4,Outputs,,M0 (Parser/MIR-Entwurf),offen
+PAR-1.4-Veröffentlichte_Variablen,Absatz/Regel,1.4,Veröffentlichte Variablen,,M0 (Parser/MIR-Entwurf),offen
+PAR-1.4-Commands,Absatz/Regel,1.4,Commands,,M0 (Parser/MIR-Entwurf),offen
+PAR-1.4-Ereignisströme,Absatz/Regel,1.4,Ereignisströme,,M0 (Parser/MIR-Entwurf),offen
+PAR-1.4-Geplante_Ausgaben,Absatz/Regel,1.4,Geplante Ausgaben,,M0 (Parser/MIR-Entwurf),offen
+PAR-1.4-Abort_Phase,Absatz/Regel,1.4,Abort-Phase,,M0 (Parser/MIR-Entwurf),offen
+PAR-1.4-Defensiver_Treiberrand,Absatz/Regel,1.4,Defensiver Treiberrand,,M0 (Parser/MIR-Entwurf),offen
+PAR-1.4-follows,Absatz/Regel,1.4,`follows`,,M0 (Parser/MIR-Entwurf),offen
+PAR-1.4-Tunables,Absatz/Regel,1.4,Tunables,,M0 (Parser/MIR-Entwurf),offen
+PAR-2.5-Edition,Absatz/Regel,2.5,Edition,,M0 (Parser/MIR-Entwurf),offen
+PAR-2.5-Reservierte_Wörter,Absatz/Regel,2.5,Reservierte Wörter,,M0 (Parser/MIR-Entwurf),definiert
+PAR-2.5-Reservierte_Membernamen,Absatz/Regel,2.5,Reservierte Membernamen,,M0 (Parser/MIR-Entwurf),offen
+PAR-2.5-Offene_Enums,Absatz/Regel,2.5,Offene Enums,,M0 (Parser/MIR-Entwurf),offen
+PAR-2.5-Verdeckung_und_Additivität,Absatz/Regel,2.5,Verdeckung und Additivität,,M0 (Parser/MIR-Entwurf),offen
+PAR-2.5-Operator_Metadaten_v1.1,Absatz/Regel,2.5,Operator-Metadaten (v1.1),v1.1,M6,offen
+PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M1 (Kernsemantik),offen
+PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M1 (Kernsemantik),offen
+PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M1 (Kernsemantik),offen
+PAR-3.2-Einheiten_auf_Integern_v1.1,Absatz/Regel,3.2,Einheiten auf Integern (v1.1),v1.1,M6,offen
+PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymorphie in Funktionen und Blöcken,,M1 (Kernsemantik),offen
+PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M1 (Kernsemantik),offen
+PAR-3.3-Lexikalische_Regel,Absatz/Regel,3.3,Lexikalische Regel,,M1 (Kernsemantik),offen
+PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M1 (Kernsemantik),offen
+PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M1 (Kernsemantik),offen
+PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M6,offen
+PAR-3.4-Darstellungsverengung,Absatz/Regel,3.4,Darstellungsverengung,,M1 (Kernsemantik),offen
+PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Absatz/Regel,3.5,Implizite Validitätsprüfung (Entscheidung),,M1 (Kernsemantik),offen
+PAR-3.5-Rand_Durchsetzung,Absatz/Regel,3.5,Rand-Durchsetzung,,M1 (Kernsemantik),offen
+PAR-3.5-Entprellte_Qualität,Absatz/Regel,3.5,Entprellte Qualität,,M1 (Kernsemantik),offen
+PAR-3.7-Drahtformat_Details,Absatz/Regel,3.7,Drahtformat-Details,,M1 (Kernsemantik),offen
+PAR-3.7-default,Absatz/Regel,3.7,`default`,,M1 (Kernsemantik),offen
+PAR-3.8-Ergebnis_mit_Fehlercode_T_E,Absatz/Regel,3.8,Ergebnis mit Fehlercode `T!E`,,M1 (Kernsemantik),offen
+PAR-3.9-inout_Parameter,Absatz/Regel,3.9,`inout`-Parameter,,M1 (Kernsemantik),offen
+PAR-3.11-Uniforme_Form_v1,Absatz/Regel,3.11,Uniforme Form (v1),,M1 (Kernsemantik),offen
+PAR-3.11-Dimensionierte_Form_v1.1,Absatz/Regel,3.11,Dimensionierte Form (v1.1),v1.1,M6,offen
+PAR-4.2-Breite_von_float,Absatz/Regel,4.2,Breite von `float`,,M1 (Kernsemantik),offen
+PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M1 (Kernsemantik),offen
+PAR-4.2-fma,Absatz/Regel,4.2,`fma`,,M1 (Kernsemantik),offen
+PAR-4.2-Reduktionen,Absatz/Regel,4.2,Reduktionen,,M1 (Kernsemantik),offen
+PAR-4.2-Subnormale_in_Zuständen,Absatz/Regel,4.2,Subnormale in Zuständen,,M1 (Kernsemantik),offen
+PAR-4.5-Chunk_Natives,Absatz/Regel,4.5,Chunk-Natives,,M1 (Kernsemantik),offen
+PAR-4.5-Jobs,Absatz/Regel,4.5,Jobs,,M1 (Kernsemantik),offen
+PAR-5.1-Richtlinie_für_Regelkreise,Absatz/Regel,5.1,Richtlinie für Regelkreise,,M1 (Kernsemantik),offen
+PAR-5.3-Statische_Regel,Absatz/Regel,5.3,Statische Regel:,,M1 (Kernsemantik),offen
+PAR-5.6-Interlock,Absatz/Regel,5.6,Interlock,,M1 (Kernsemantik),offen
+PAR-5.6-Permissive,Absatz/Regel,5.6,Permissive,,M1 (Kernsemantik),offen
+PAR-5.6-Alert,Absatz/Regel,5.6,Alert,,M1 (Kernsemantik),offen
+PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),offen
+PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),offen
+PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M1 (Kernsemantik),offen
+PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M1 (Kernsemantik),offen
+PAR-5.10-Nicht_Wake_Streams_in_idle,Absatz/Regel,5.10,Nicht-Wake-Streams in `idle`,,M1 (Kernsemantik),offen
+PAR-5.10-Systemschlaf,Absatz/Regel,5.10,Systemschlaf,,M1 (Kernsemantik),offen
+PAR-7.1-Tick_Quelle,Absatz/Regel,7.1,Tick-Quelle,,M1 (Kernsemantik),offen
+PAR-7.2-follows_v1.1,Absatz/Regel,7.2,`follows` (v1.1),v1.1,M6,offen
+PAR-7.5-Zeitgestempelte_Eingaben,Absatz/Regel,7.5,Zeitgestempelte Eingaben,,M1 (Kernsemantik),offen
+PAR-7.5-Geplante_Ausgaben,Absatz/Regel,7.5,Geplante Ausgaben,,M1 (Kernsemantik),offen
+PAR-7.5-Latenzformel,Absatz/Regel,7.5,Latenzformel,,M1 (Kernsemantik),offen
+PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M1 (Kernsemantik),offen
+PAR-7.5-Trigger_v1.2_Regeln_auf_dem_I_O_Knoten,Absatz/Regel,7.5,Trigger (v1.2): Regeln auf dem I/O-Knoten,v1.2,M8,offen
+PAR-8.3-Sim_Build,Absatz/Regel,8.3,Sim-Build:,,M2 (Ströme),offen
+PAR-8.3-Plant_Modelle,Absatz/Regel,8.3,Plant-Modelle,,M2 (Ströme),offen
+PAR-8.3-HIL_Umschaltung,Absatz/Regel,8.3,HIL-Umschaltung:,,M2 (Ströme),offen
+PAR-8.3-Sim_Ausführung,Absatz/Regel,8.3,Sim-Ausführung,,M2 (Ströme),offen
+PAR-8.4-Tunables_v1.1,Absatz/Regel,8.4,Tunables (v1.1),v1.1,M6,offen
+PAR-8.6-Motivation,Absatz/Regel,8.6,Motivation,,M2 (Ströme),offen
+PAR-8.6-Deklaration,Absatz/Regel,8.6,Deklaration,,M2 (Ströme),offen
+PAR-8.6-Semantik_ASCII_formal_in_9.6,Absatz/Regel,8.6,"Semantik (ASCII, formal in 9.6)",,M2 (Ströme),offen
+PAR-8.6-Statische_Prüfung,Absatz/Regel,8.6,Statische Prüfung,,M2 (Ströme),offen
+PAR-8.6-Byte_Ring_für_Elemente_variabler_Länge,Absatz/Regel,8.6,Byte-Ring für Elemente variabler Länge,,M2 (Ströme),offen
+PAR-8.6-Garantien,Absatz/Regel,8.6,Garantien,,M2 (Ströme),offen
+PAR-8.6-Interne_Streams_Warteschlangen_zwischen_Maschinen,Absatz/Regel,8.6,Interne Streams (Warteschlangen zwischen Maschinen),,M2 (Ströme),offen
+PAR-8.7-Motivation,Absatz/Regel,8.7,Motivation,,M2 (Ströme),offen
+PAR-8.7-Musterliterale,Absatz/Regel,8.7,Musterliterale,,M2 (Ströme),offen
+PAR-8.7-Record_Muster,Absatz/Regel,8.7,Record-Muster,,M2 (Ströme),offen
+PAR-8.7-Operatoren,Absatz/Regel,8.7,Operatoren,,M2 (Ströme),offen
+PAR-8.7-Handler,Absatz/Regel,8.7,Handler,,M2 (Ströme),offen
+PAR-8.7-Sequenzen_und_Übergänge,Absatz/Regel,8.7,Sequenzen und Übergänge,,M2 (Ströme),offen
+PAR-8.7-Garantien_und_Budget,Absatz/Regel,8.7,Garantien und Budget,,M2 (Ströme),offen
+THM-Lemma-9.3.1,Satz/Lemma,9.3.1,Lemma 9.3.1,,M1/M2 (Interpreter),offen
+THM-Satz-9.4.1,Satz/Lemma,9.4.1,Satz 9.4.1,,M1/M2 (Interpreter),offen
+THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),offen
+THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),offen
+PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 (Interpreter),offen
+THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M1/M2 (Interpreter),offen
+THM-Lemma-9.6.1.,Satz/Lemma,9.6.1,Lemma 9.6.1.,,M1/M2 (Interpreter),offen
+THM-Satz-9.9.1,Satz/Lemma,9.9.1,Satz 9.9.1,,M1/M2 (Interpreter),offen
+PAR-11.2-Große_Werte,Absatz/Regel,11.2,Große Werte,,M3/M4,offen
+PAR-11.2-Statischer_Scratch,Absatz/Regel,11.2,Statischer Scratch,,M3/M4,offen
+PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Absatz/Regel,11.2,Overlay exklusiver Zustandsspeicher,,M3/M4,offen
+PAR-11.2-DFA_Tabellen,Absatz/Regel,11.2,DFA-Tabellen,,M3/M4,offen
+PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M3/M4,offen
+PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M3/M4,offen
+PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M3/M4,offen
+PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M4/M5 (Runtime),offen
+PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M4/M5 (Runtime),offen
+PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M4/M5 (Runtime),offen
+PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M4/M5 (Runtime),offen
+PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M4/M5 (Runtime),offen
+PAR-12.7-Start_Channels,Absatz/Regel,12.7,Start-Channels,,M4/M5 (Runtime),offen
+PAR-12.7-Irreversible_Outputs,Absatz/Regel,12.7,Irreversible Outputs,,M4/M5 (Runtime),offen
+PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M4/M5 (Runtime),offen
+PAR-13.3-Sprache,Absatz/Regel,13.3,Sprache,,M4–M7,offen
+PAR-13.3-Semantik,Absatz/Regel,13.3,Semantik,,M4–M7,offen
+PAR-13.3-Verwendung,Absatz/Regel,13.3,Verwendung,,M4–M7,offen
+PAR-13.5-Lauf_Verdikt,Absatz/Regel,13.5,Lauf-Verdikt,,M4–M7,offen
+PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M4–M7,offen
+PAR-13.9-Klassifikation,Absatz/Regel,13.9,Klassifikation,,M4–M7,offen
+PAR-13.9-Abbildungsregeln,Absatz/Regel,13.9,Abbildungsregeln,,M4–M7,offen
+PAR-13.9-Grundregel_des_Importers,Absatz/Regel,13.9,Grundregel des Importers,,M4–M7,offen
+PAR-13.9-Orakel_Modus,Absatz/Regel,13.9,Orakel-Modus,,M4–M7,offen
+PAR-13.9-Vorgehen,Absatz/Regel,13.9,Vorgehen,,M4–M7,offen
+FN-9-advance_cursors,Semantikfunktion,9,advance_cursors,,M1/M2 (Interpreter),offen
+FN-9-apply_scheduled,Semantikfunktion,9,apply_scheduled,,M1/M2 (Interpreter),offen
+FN-9-cancel_all_scheduled,Semantikfunktion,9,cancel_all_scheduled,,M1/M2 (Interpreter),offen
+FN-9-deliver,Semantikfunktion,9,deliver,,M1/M2 (Interpreter),offen
+FN-9-deliverable,Semantikfunktion,9,deliverable,,M1/M2 (Interpreter),offen
+FN-9-dispatch,Semantikfunktion,9,dispatch,,M1/M2 (Interpreter),offen
+FN-9-exec,Semantikfunktion,9,exec,,M1/M2 (Interpreter),offen
+FN-9-exec_chain,Semantikfunktion,9,exec_chain,,M1/M2 (Interpreter),offen
+FN-9-resolve_m,Semantikfunktion,9,resolve_m,,M1/M2 (Interpreter),offen
+FN-9-sleep,Semantikfunktion,9,sleep,,M1/M2 (Interpreter),offen
+FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M1/M2 (Interpreter),offen
+FN-9-step_m,Semantikfunktion,9,step_m,,M1/M2 (Interpreter),offen
+FN-9-tick,Semantikfunktion,9,tick,,M1/M2 (Interpreter),offen
+FN-9-windows,Semantikfunktion,9,windows,,M1/M2 (Interpreter),offen
+RULE-9.2-stmt,exec-Regel,9.2,exec(stmt),,M1/M2 (Interpreter),offen
+RULE-9.2-x_=_e,exec-Regel,9.2,exec(x = e),,M1/M2 (Interpreter),offen
+RULE-9.2-check_e,exec-Regel,9.2,exec(check e),,M1/M2 (Interpreter),offen
+RULE-9.2-check_e_for_d,exec-Regel,9.2,exec(check e for d),,M1/M2 (Interpreter),offen
+RULE-9.2-->_q,exec-Regel,9.2,exec(-> q),,M1/M2 (Interpreter),offen
+RULE-9.2-abort,exec-Regel,9.2,exec(abort),,M1/M2 (Interpreter),offen
+RULE-9.2-s1;_s2,exec-Regel,9.2,exec(s1; s2),,M1/M2 (Interpreter),offen
+RULE-9.2-if_e:_b1_else:_b2,exec-Regel,9.2,exec(if e: b1 else: b2),,M1/M2 (Interpreter),offen
+RULE-9.2-for_i_in_range(n):_b,exec-Regel,9.2,exec(for i in range(n): b),,M1/M2 (Interpreter),offen
+RULE-9.2-for_x_in_W:_b,exec-Regel,9.2,exec(for x in W: b),,M1/M2 (Interpreter),offen
+RULE-9.2-match_e:_cases,exec-Regel,9.2,exec(match e: cases),,M1/M2 (Interpreter),offen
+"RULE-9.2-send_o,_e",exec-Regel,9.2,"exec(send o, e)",,M1/M2 (Interpreter),offen
+RULE-9.2-at_T:_b,exec-Regel,9.2,exec(at T: b),,M1/M2 (Interpreter),offen
+RULE-9.2-pulse_o_=_v_for_d,exec-Regel,9.2,exec(pulse o = v for d),,M1/M2 (Interpreter),offen
+RULE-9.2-cancel_o,exec-Regel,9.2,exec(cancel o),,M1/M2 (Interpreter),offen
+RULE-9.2-raise_sig,exec-Regel,9.2,exec(raise sig),,M1/M2 (Interpreter),offen
+RULE-9.2-job_v_=_f(args),exec-Regel,9.2,exec(job v = f(args)),,M1/M2 (Interpreter),offen
+RULE-9.2-every_d:_b,exec-Regel,9.2,exec(every d: b),,M1/M2 (Interpreter),offen
+RULE-9.2-break,exec-Regel,9.2,exec(break),,M1/M2 (Interpreter),offen
+RULE-9.2-alert_|_log_|_measure_|_verify_|_verdict_...,exec-Regel,9.2,exec(alert | log | measure | verify | verdict ...),,M1/M2 (Interpreter),offen
+DESUGAR-Statement_vor_der_ersten_Zeitgrenze_des_Segments,Desugaring-Regel,6.2,Statement vor der ersten Zeitgrenze des Segments,,M1 (Kernsemantik),offen
+DESUGAR-check_e_msg_an_Position_p,Desugaring-Regel,6.2,"`check e [, msg]` an Position p",,M1 (Kernsemantik),offen
+DESUGAR-expect_e_msg,Desugaring-Regel,6.2,"`expect e [, msg]`",,M1 (Kernsemantik),offen
+DESUGAR-wait_d,Desugaring-Regel,6.2,`wait d`,,M1 (Kernsemantik),offen
+DESUGAR-until_c_timeout_d,Desugaring-Regel,6.2,`until c [timeout d]`,,M1 (Kernsemantik),offen
+DESUGAR-repeat_n,Desugaring-Regel,6.2,`repeat n:`,,M1 (Kernsemantik),offen
+DESUGAR-step_name,Desugaring-Regel,6.2,"`step ""name"":`",,M1 (Kernsemantik),offen
+DESUGAR-Statement_mit_auch_in_if_elif_else,Desugaring-Regel,6.2,Statement mit `->` (auch in `if`/`elif`/`else`),,M1 (Kernsemantik),offen
+DESUGAR-Ende_ohne,Desugaring-Regel,6.2,Ende ohne `->`,,M1 (Kernsemantik),offen
+DESUGAR-var_x_e_in_der_Sequenz,Desugaring-Regel,6.2,`var x = e` in der Sequenz,,M1 (Kernsemantik),offen
+DESUGAR-until_g_as_m,Desugaring-Regel,6.2,`until g as m`,,M1 (Kernsemantik),offen
+DESUGAR-until_c_timeout_d_X,Desugaring-Regel,6.2,`until c timeout d -> X`,,M1 (Kernsemantik),offen
+DESUGAR-until_c_timeout_d_else,Desugaring-Regel,6.2,`until c timeout d else:`,,M1 (Kernsemantik),offen
+DESUGAR-measure_verify_verdict_send_at_job,Desugaring-Regel,6.2,"`measure`, `verify`, `verdict`, `send`, `at`, `job`",,M1 (Kernsemantik),offen
+DIST-rule1,Regel,12.9,Eine logische Zeitbasis.,v2,M9 (v2),offen
+DIST-rule2,Regel,12.9,Verzögerung = Hops.,v2,M9 (v2),offen
+DIST-rule3,Regel,12.9,Outputs auf fremden Knoten,v2,M9 (v2),offen
+DIST-rule4,Regel,12.9,`follows`,v2,M9 (v2),offen
+DIST-rule5,Regel,12.9,Abort und Runtime-Faults,v2,M9 (v2),offen
+DIST-rule6,Regel,12.9,Verbindungsverlust.,v2,M9 (v2),offen
+DIST-rule7,Regel,12.9,Jobs,v2,M9 (v2),offen
+DIST-rule8,Regel,12.9,Aufzeichnung,v2,M9 (v2),offen
+DIST-rule9,Regel,12.9,Simulation.,v2,M9 (v2),offen
+RAND-1,Regel/Prüfung,12.6,"Zeitstempel innerhalb `(t_(k-1), t_k]`",,M4/M5 (Runtime),offen
+RAND-2,Regel/Prüfung,12.6,"Zeitstempel und `seq` streng steigend, `seq` lückenlos, `len(D) <= MAXPT` je Stream, Qualitätsflags konsistent (`Bad` ohne Wert, Alter monoton)",,M4/M5 (Runtime),offen
+RAND-3,Regel/Prüfung,12.6,Werte innerhalb deklarierter Ranges (3.5),,M4/M5 (Runtime),offen
+RAND-4,Regel/Prüfung,12.6,`max_slew` (3.5),,M4/M5 (Runtime),offen
+RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M4/M5 (Runtime),offen
+RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M4/M5 (Runtime),offen
+RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M4/M5 (Runtime),offen
+PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4/M5 (Runtime),offen
+PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M4/M5 (Runtime),offen
+PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M4/M5 (Runtime),offen
+PROFIL-boot,Profil/Eintrag,12.8,boot,,M4/M5 (Runtime),offen
+FAULT-CheckFailed,Fault-Art,5.3,CheckFailed,,M1 (Kernsemantik),offen
+FAULT-Expect,Fault-Art,5.3,Expect,,M1 (Kernsemantik),offen
+FAULT-Timeout,Fault-Art,5.3,Timeout,,M1 (Kernsemantik),offen
+FAULT-SensorFault,Fault-Art,5.3,SensorFault,,M1 (Kernsemantik),offen
+FAULT-MissingValue,Fault-Art,5.3,MissingValue,,M1 (Kernsemantik),offen
+FAULT-ArithmeticFault_Overflow_DivZero_NonFinite_Domain_Singular,Fault-Art,5.3,ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular),,M1 (Kernsemantik),offen
+FAULT-RangeFault,Fault-Art,5.3,RangeFault,,M1 (Kernsemantik),offen
+FAULT-StreamOverflow,Fault-Art,5.3,StreamOverflow,,M1 (Kernsemantik),offen
+FAULT-TimingFault,Fault-Art,5.3,TimingFault,,M1 (Kernsemantik),offen
+FAULT-ScheduleOverflow,Fault-Art,5.3,ScheduleOverflow,,M1 (Kernsemantik),offen
+FAULT-Abort,Fault-Art,5.3,Abort,,M1 (Kernsemantik),offen
+FAULT-Runtime_Overrun_Driver_Watchdog_Hardware_Node,Fault-Art,5.3,Runtime(Overrun | Driver | Watchdog | Hardware | Node),,M1 (Kernsemantik),offen
+FAULT-Node,Fault-Art,5.3,Node,,M1 (Kernsemantik),offen
+QUAL-Good,Qualität,3.5,Good,,M1 (Kernsemantik),offen
+QUAL-Suspect,Qualität,3.5,Suspect,,M1 (Kernsemantik),offen
+QUAL-Stale,Qualität,3.5,Stale,,M1 (Kernsemantik),offen
+QUAL-Bad,Qualität,3.5,Bad,,M1 (Kernsemantik),offen
+LIB-clamp,Standardbibliothek,11.4,fn clamp[U],,M3/M4,offen
+LIB-map_range,Standardbibliothek,11.4,"fn map_range[U, V]",,M3/M4,offen
+LIB-interp,Standardbibliothek,11.4,"fn interp[U, V]",,M3/M4,offen
+LIB-lowpass,Standardbibliothek,11.4,block lowpass[U],,M3/M4,offen
+LIB-hysteresis,Standardbibliothek,11.4,block hysteresis[U],,M3/M4,offen
+LIB-debounce,Standardbibliothek,11.4,block debounce,,M3/M4,offen
+LIB-rising,Standardbibliothek,11.4,block rising,,M3/M4,offen
+LIB-integrate,Standardbibliothek,11.4,block integrate[U],,M3/M4,offen
+LIB-rate,Standardbibliothek,11.4,block rate[U],,M3/M4,offen
+LIB-window_min,Standardbibliothek,11.4,"block window_min[U, N]",,M3/M4,offen
+LIB-rate_limiter,Standardbibliothek,11.4,block rate_limiter[U],,M3/M4,offen
+LIB-pid,Standardbibliothek,11.4,"block pid[O, E]",,M3/M4,offen
+LIB-stopwatch,Standardbibliothek,11.4,block stopwatch,,M3/M4,offen
+LIB-pulse_counter,Standardbibliothek,11.4,block pulse_counter,,M3/M4,offen
+LIB-cross_check,Standardbibliothek,11.4,block cross_check[U],,M3/M4,offen
+LIB-vote2oo3,Standardbibliothek,11.4,block vote2oo3[U],,M3/M4,offen
+LIB-hold_last,Standardbibliothek,11.4,block hold_last[U],,M3/M4,offen
+LIB-reader,Standardbibliothek,11.4,block reader,,M3/M4,offen
+LIB-writer,Standardbibliothek,11.4,block writer,,M3/M4,offen
+LIB-pid_i,Standardbibliothek,11.4,"block pid_i[O, E]",,M3/M4,offen
+LIB-sha256_init,Standardbibliothek,11.4,native fn sha256_init / sha256_update,,M3/M4,offen
+LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M3/M4,offen
+LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M3/M4,offen
+LIB-solve,Standardbibliothek,11.4,fn solve,,M3/M4,offen
+LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M3/M4,offen
+LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M3/M4,offen
+CLI-check,Werkzeug,11.1,takt check,,M3/M4,offen
+CLI-sim,Werkzeug,11.1,takt sim,,M3/M4,offen
+CLI-run,Werkzeug,11.1,takt run,,M3/M4,offen
+CLI-replay,Werkzeug,11.1,takt replay,,M3/M4,offen
+CLI-test,Werkzeug,11.1,takt test,,M3/M4,offen
+CLI-campaign,Werkzeug,11.1,takt campaign,,M3/M4,offen
+CLI-driver-test,Werkzeug,11.1,takt driver-test,,M3/M4,offen
+CLI-prove,Werkzeug,11.1,takt prove,,M3/M4,offen
+CLI-fmt,Werkzeug,11.1,takt fmt,,M3/M4,offen
+CLI-size,Werkzeug,11.1,takt size,,M3/M4,offen
+CLI-graph,Werkzeug,11.1,takt graph,,M3/M4,offen
+CLI-bench,Werkzeug,11.1,takt bench,,M3/M4,offen
+CLI-tune,Werkzeug,11.1,takt tune,,M3/M4,offen
+CLI-migrate,Werkzeug,11.1,takt migrate,,M3/M4,offen
+CLI-import-c,Werkzeug,11.1,takt import-c,,M3/M4,offen
+EX-14.1,Beispiel (Golden-Test),14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,je Meilenstein,offen
+EX-14.2,Beispiel (Golden-Test),14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,je Meilenstein,offen
+EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,je Meilenstein,offen
+EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,je Meilenstein,offen
+EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,je Meilenstein,offen
+EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,je Meilenstein,offen
+EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,je Meilenstein,offen
+EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,je Meilenstein,offen
+PRINC-1,Leitentscheidung,0.2,Synchron-zyklische Multirate-Ausführung.,,Doku/Rationale,rationale
+PRINC-2,Leitentscheidung,0.2,Drei Konstruktebenen.,,Doku/Rationale,rationale
+PRINC-3,Leitentscheidung,0.2,"Hierarchische Zustände, Parallelität nur zwischen Maschinen.",,Doku/Rationale,rationale
+PRINC-4,Leitentscheidung,0.2,"Schwache Transitionen, starke Faults, Entry-Tick-Regel.",,Doku/Rationale,rationale
+PRINC-5,Leitentscheidung,0.2,Fault-Wald.,,Doku/Rationale,rationale
+PRINC-6,Leitentscheidung,0.2,Kommunikation zwischen Maschinen ausschließlich mit Unit-Delay.,,Doku/Rationale,rationale
+PRINC-7,Leitentscheidung,0.2,Zeit ist logisch und ganzzahlig.,,Doku/Rationale,rationale
+PRINC-8,Leitentscheidung,0.2,Totale Arithmetik.,,Doku/Rationale,rationale
+PRINC-9,Leitentscheidung,0.2,"Typsystem mit physikalischen Einheiten (nominal, explizite Konversion), affinen Temperaturen, Range-Typen (Intervallanalyse) und Qualitätsflags mit implizitem Validitäts-Check.",,Doku/Rationale,rationale
+PRINC-10,Leitentscheidung,0.2,Sequenzen sind Zucker,,Doku/Rationale,rationale
+PRINC-11,Leitentscheidung,0.2,Ereignisströme sind beschränkte FIFOs mit Konsumenten-Cursor.,,Doku/Rationale,rationale
+PRINC-12,Leitentscheidung,0.2,Muster sind typisierte reguläre Muster.,,Doku/Rationale,rationale
+PRINC-13,Leitentscheidung,0.2,Zeit unterhalb des Ticks kommt aus Zeitstempeln und geplanten Ausgaben.,,Doku/Rationale,rationale
+PRINC-14,Leitentscheidung,0.2,Beobachtung ist von Steuerung getrennt.,,Doku/Rationale,rationale
+PRINC-15,Leitentscheidung,0.2,Feldbetrieb ohne Sonderpfade.,,Doku/Rationale,rationale
+PRINC-16,Leitentscheidung,0.2,Abort wirkt im selben Tick für alle Maschinen.,,Doku/Rationale,rationale
+PRINC-17,Leitentscheidung,0.2,Der Treiberrand ist defensiv.,,Doku/Rationale,rationale
+PRINC-18,Leitentscheidung,0.2,Entschärfung ist immer explizit.,,Doku/Rationale,rationale
+PRINC-19,Leitentscheidung,0.2,Kosten sind typisiert.,,Doku/Rationale,rationale
+PRINC-20,Leitentscheidung,0.2,"Breite als Darstellung ist vom Compiler, Breite als Semantik vom Programm.",,Doku/Rationale,rationale
+PRINC-21,Leitentscheidung,0.2,Genauigkeit und Rundung sind deklarierte Eigenschaften.,,Doku/Rationale,rationale
+PRINC-22,Leitentscheidung,0.2,"Speicher kennt der Compiler, nicht der Entwickler.",,Doku/Rationale,rationale
+PRINC-23,Leitentscheidung,0.2,"Logik in Takt, Hardware und Kryptographie in der TCB.",,Doku/Rationale,rationale
+PRINC-24,Leitentscheidung,0.2,Die Sprache entwickelt sich nur mit Editionen weiter.,,Doku/Rationale,rationale
+DEC-Ausführungsmodell,Entscheidung,16,Ausführungsmodell → Multirate synchron,,Doku/Rationale,rationale
+DEC-Zustandsmaschinen,Entscheidung,16,"Zustandsmaschinen → hierarchisch, ohne AND/History",,Doku/Rationale,rationale
+DEC-Transitionssemantik,Entscheidung,16,Transitionssemantik → schwach + starke Faults + Entry-Tick-Regel,,Doku/Rationale,rationale
+DEC-Transitionspriorität,Entscheidung,16,Transitionspriorität → outer-first,,Doku/Rationale,rationale
+DEC-Fault-Behandlung,Entscheidung,16,Fault-Behandlung → Zustandsübergänge im Fault-Wald,,Doku/Rationale,rationale
+DEC-Kommunikation_zwischen_Maschinen,Entscheidung,16,Kommunikation zwischen Maschinen → Unit-Delay,,Doku/Rationale,rationale
+DEC-Output-Timing,Entscheidung,16,"Output-Timing → ASAP, boundary optional",,Doku/Rationale,rationale
+DEC-Zeit,Entscheidung,16,"Zeit → Integer-ns, Timer als Tick-Zähler",,Doku/Rationale,rationale
+DEC-Integer,Entscheidung,16,"Integer → i64, schmale Typen explizit",,Doku/Rationale,rationale
+DEC-Overflow,Entscheidung,16,Overflow → checked → Fault,,Doku/Rationale,rationale
+DEC-Float-Sondwerte,Entscheidung,16,Float-Sondwerte → Fault bei nicht-endlichem Ergebnis,,Doku/Rationale,rationale
+DEC-Cross-Target-Reproduzierbarkeit,Entscheidung,16,Cross-Target-Reproduzierbarkeit → eigene korrekt gerundete libm,,Doku/Rationale,rationale
+DEC-Einheiten,Entscheidung,16,"Einheiten → nominal, explizit `to()`",,Doku/Rationale,rationale
+DEC-Temperaturen,Entscheidung,16,Temperaturen → affin (Punkt/Vektor),,Doku/Rationale,rationale
+DEC-Ranges,Entscheidung,16,Ranges → Intervallanalyse mit impliziten Prüfungen + Warnung,,Doku/Rationale,rationale
+DEC-Sensorqualität,Entscheidung,16,Sensorqualität → impliziter `valid`-Check mit Dominanzanalyse,,Doku/Rationale,rationale
+DEC-Strings,Entscheidung,16,"Strings → feste Puffer, geprüfte Formatierung",,Doku/Rationale,rationale
+DEC-Zustandsbehaftete_Bausteine,Entscheidung,16,Zustandsbehaftete Bausteine → `block`,,Doku/Rationale,rationale
+DEC-Sequenzen,Entscheidung,16,Sequenzen → Zucker mit formalem Desugaring,,Doku/Rationale,rationale
+DEC-Profile,Entscheidung,16,"Profile → `param` + `profile`, ladezeitvalidiert",,Doku/Rationale,rationale
+DEC-Simulation,Entscheidung,16,"Simulation → Plant-Modelle als Maschinen, `sim`-Bindung",,Doku/Rationale,rationale
+DEC-Backend,Entscheidung,16,"Backend → AOT/LLVM, VM als spätere Option",,Doku/Rationale,rationale
+DEC-MCU-Strategie,Entscheidung,16,"MCU-Strategie → gleiche Sprache, `no_std`-Runtime",,Doku/Rationale,rationale
+DEC-Hot-Reload,Entscheidung,16,Hot-Reload → nur zwischen Läufen,,Doku/Rationale,rationale
+DEC-Einrückung,Entscheidung,16,"Einrückung → 4, Formatter-kanonisch",,Doku/Rationale,rationale
+DEC-Ereignisströme,Entscheidung,16,"Ereignisströme → FIFO + Cursor, „untersucht heißt konsumiert""",,Doku/Rationale,rationale
+DEC-Überlauf-Default,Entscheidung,16,"Überlauf-Default → fault (Input), `drop_oldest` opt-in",,Doku/Rationale,rationale
+DEC-Mustersprache,Entscheidung,16,Mustersprache → typisierte Muster → DFA,,Doku/Rationale,rationale
+DEC-Handler_im_Entry-Tick,Entscheidung,16,Handler im Entry-Tick → nicht ausführen,,Doku/Rationale,rationale
+DEC-`FAULTED`_und_Vorfahren-Blöcke,Entscheidung,16,`FAULTED` und Vorfahren-Blöcke → nicht ausführen,,Doku/Rationale,rationale
+DEC-Implizite_Prüfungen_in_Aktionsblöcken,Entscheidung,16,"Implizite Prüfungen in Aktionsblöcken → erlauben, mit Warnung",,Doku/Rationale,rationale
+DEC-Sub-Tick-Zeit,Entscheidung,16,Sub-Tick-Zeit → geplante Ausgaben (`at`) + Trigger in v1.2,,Doku/Rationale,rationale
+DEC-Geplante_Ausgaben_bei_Fault,Entscheidung,16,Geplante Ausgaben bei Fault → verwerfen,,Doku/Rationale,rationale
+DEC-Optionalwerte,Entscheidung,16,Optionalwerte → `T?` einheitlich; Channels sind `T?` mit Alter,,Doku/Rationale,rationale
+DEC-Fehlende_Nachricht_im_Test,Entscheidung,16,"Fehlende Nachricht im Test → `verify`/`verdict` als Beobachtung, `check`/`expect` als Fault",,Doku/Rationale,rationale
+DEC-Verdikt,Entscheidung,16,"Verdikt → FAIL > INCONCLUSIVE, PASS nur explizit",,Doku/Rationale,rationale
+DEC-Szenarien,Entscheidung,16,Szenarien → Maschinen,,Doku/Rationale,rationale
+DEC-Schlafen,Entscheidung,16,Schlafen → `idle`-Zustände,,Doku/Rationale,rationale
+DEC-Nicht-Wake-Streams_im_Schlaf,Entscheidung,16,Nicht-Wake-Streams im Schlaf → verwerfen mit Alert,,Doku/Rationale,rationale
+DEC-Persistenz,Entscheidung,16,Persistenz → `persist var`,,Doku/Rationale,rationale
+DEC-Ausgabestrom,Entscheidung,16,Ausgabestrom → Puffer mit `free`-Input,,Doku/Rationale,rationale
+DEC-Timer-Breite,Entscheidung,16,Timer-Breite → u64,,Doku/Rationale,rationale
+DEC-Notation_der_Semantik,Entscheidung,16,Notation der Semantik → ASCII,,Doku/Rationale,rationale
+DEC-Abort_bei_langsamen_Maschinen,Entscheidung,16,Abort bei langsamen Maschinen → Abort-Phase,,Doku/Rationale,rationale
+DEC-Werte_außerhalb_der_Channel-Range,Entscheidung,16,Werte außerhalb der Channel-Range → `Bad` mit Grund,,Doku/Rationale,rationale
+DEC-Multirate-Scheduling,Entscheidung,16,Multirate-Scheduling → Zähler,,Doku/Rationale,rationale
+DEC-Schedulability,Entscheidung,16,Schedulability → Spitze; exakt nur bei kleinem H mit Phasen,,Doku/Rationale,rationale
+DEC-Algorithmische_Tiefe,Entscheidung,16,Algorithmische Tiefe → Matrizen fester Größe + kuratierte Natives mit Kostenvertrag,,Doku/Rationale,rationale
+DEC-Plausibilität_am_Rand,Entscheidung,16,"Plausibilität am Rand → `max_slew` als Attribut, Rest Blöcke",,Doku/Rationale,rationale
+DEC-Präzision_von_`at`,Entscheidung,16,"Präzision von `at` → `jitter` aus Konformitätsmessung, statisch geprüft",,Doku/Rationale,rationale
+DEC-Tick-Quelle,Entscheidung,16,Tick-Quelle → wählbar (`tick_source`),,Doku/Rationale,rationale
+DEC-Einheiten_in_Matrizen,Entscheidung,16,"Einheiten in Matrizen → `mat[R, C]` mit `unitvec`",,Doku/Rationale,rationale
+DEC-Live-Tuning,Entscheidung,16,Live-Tuning → `tunable param` als Zucker,,Doku/Rationale,rationale
+DEC-Bus-Mappings,Entscheidung,16,Bus-Mappings → Konfigurationsschicht + Bibliothek (8.10),,Doku/Rationale,rationale
+DEC-Firmware-Lebenszyklus,Entscheidung,16,Firmware-Lebenszyklus → System-Channels (12.7),,Doku/Rationale,rationale
+DEC-Rand-Empfindlichkeit,Entscheidung,16,"Rand-Empfindlichkeit → Inputs degradieren, Outputs faulten; Entschärfung nur explizit (`debounce`, `for d`)",,Doku/Rationale,rationale
+DEC-Relationale_Analyse,Entscheidung,16,Relationale Analyse → Oktagone (v1.1),,Doku/Rationale,rationale
+DEC-Variable_Nutzlastlängen,Entscheidung,16,Variable Nutzlastlängen → `reader`/`writer` + `len_field`,,Doku/Rationale,rationale
+DEC-Kostenmodell,Entscheidung,16,Kostenmodell → Klassen mit kalibrierter Tabelle,,Doku/Rationale,rationale
+DEC-Numerik_ohne_FPU,Entscheidung,16,Numerik ohne FPU → `int[U]`,,Doku/Rationale,rationale
+DEC-Funk_auf_Ein-Chip-Systemen,Entscheidung,16,"Funk auf Ein-Chip-Systemen → RTOS-Profil unterstützt, Zwei-Chip empfohlen",,Doku/Rationale,rationale
+DEC-Integer-Breite_auf_32-Bit-Kernen,Entscheidung,16,Integer-Breite auf 32-Bit-Kernen → Verengung aus bewiesenen Intervallen (Lemma 3.4),,Doku/Rationale,rationale
+DEC-Fließkommabreite,Entscheidung,16,Fließkommabreite → `system: float = f32 | f64`,,Doku/Rationale,rationale
+DEC-FMA,Entscheidung,16,"FMA → explizites `fma`, korrekt gerundet",,Doku/Rationale,rationale
+DEC-Schnelle_Mathematik,Entscheidung,16,Schnelle Mathematik → Näherungen mit deklarierter Fehlerschranke,,Doku/Rationale,rationale
+DEC-Subnormale,Entscheidung,16,"Subnormale → IEEE-Modus erzwingen, Totband in Filtern",,Doku/Rationale,rationale
+DEC-Performance-Aussagen,Entscheidung,16,Performance-Aussagen → `takt bench` je Zielklasse,,Doku/Rationale,rationale
+DEC-Speicher_variabler_Stream-Elemente,Entscheidung,16,"Speicher variabler Stream-Elemente → Byte-Ring mit Deskriptoren, sicherer Default, `expect_len` als Opt-in",,Doku/Rationale,rationale
+DEC-Große_Wertetypen,Entscheidung,16,Große Wertetypen → compilergeführt,,Doku/Rationale,rationale
+DEC-`sched`-Warteschlangen,Entscheidung,16,`sched`-Warteschlangen → nur bei Verwendung,,Doku/Rationale,rationale
+DEC-Matrizengrenze,Entscheidung,16,Matrizengrenze → keine; Lint ab 16,,Doku/Rationale,rationale
+DEC-Stack-Gesamtbedarf,Entscheidung,16,Stack-Gesamtbedarf → Zusammensetzung + Schutzbereich,,Doku/Rationale,rationale
+DEC-Tick-gelesene_Konstanten_auf_XIP-Flash,Entscheidung,16,Tick-gelesene Konstanten auf XIP-Flash → in RAM,,Doku/Rationale,rationale
+DEC-DFA-Tabellen,Entscheidung,16,DFA-Tabellen → Alphabetklassen + ein DFA je Zustand,,Doku/Rationale,rationale
+DEC-Zustandslokaler_Speicher,Entscheidung,16,Zustandslokaler Speicher → Overlay,,Doku/Rationale,rationale
+DEC-Speicherbudget,Entscheidung,16,"Speicherbudget → alle Profile, aufgeschlüsselt (`takt size`)",,Doku/Rationale,rationale
+DEC-Speicherschutz,Entscheidung,16,Speicherschutz → MPU-Regionen gegen TCB-Fehler,,Doku/Rationale,rationale
+DEC-Kommunikation_als_Warteschlange,Entscheidung,16,Kommunikation als Warteschlange → interne Streams mit Stream-Semantik,,Doku/Rationale,rationale
+DEC-Berechnungen_länger_als_ein_Tick,Entscheidung,16,Berechnungen länger als ein Tick → Jobs (Fertigstellung als Input) + Chunk-Natives,,Doku/Rationale,rationale
+DEC-Fehlercodes,Entscheidung,16,Fehlercodes → `T!E`,,Doku/Rationale,rationale
+DEC-Tick-Modus_für_Startprogramme,Entscheidung,16,"Tick-Modus für Startprogramme → periodisch, 1 ms",,Doku/Rationale,rationale
+DEC-Flash-Operationen,Entscheidung,16,"Flash-Operationen → Kommando + Status, Modell mit Stromausfall-Injektion",,Doku/Rationale,rationale
+DEC-Register_in_Takt,Entscheidung,16,"Register in Takt → Treiberstufe `port` (v1.2), sofortige geordnete Semantik, nur in `driver`-Maschinen, Gerätemodell Pflicht",,Doku/Rationale,rationale
+DEC-Nachweis_der_Migration,Entscheidung,16,Nachweis der Migration → Orakel-Modus in der Simulation,,Doku/Rationale,rationale
+DEC-Unbeweisbare_C-Annahmen,Entscheidung,16,Unbeweisbare C-Annahmen → `check` einfügen; Anzahl als Qualitätsmaß,,Doku/Rationale,rationale
+DEC-Irreversible_Ausgaben,Entscheidung,16,Irreversible Ausgaben → `irreversible` mit `expect` und Szenario-Abdeckung,,Doku/Rationale,rationale
+DEC-Sprachentwicklung_ohne_Bruch,Entscheidung,16,Sprachentwicklung ohne Bruch → Editionen,,Doku/Rationale,rationale
+DEC-Zukünftige_Bezeichner,Entscheidung,16,"Zukünftige Bezeichner → reservieren, versioniert je Edition",,Doku/Rationale,rationale
+DEC-Wachsende_Enums,Entscheidung,16,Wachsende Enums → offen für System-Enums und per `open`,,Doku/Rationale,rationale
+DEC-Generics,Entscheidung,16,"Generics → Monomorphisierung, sechs feste Fähigkeiten",,Doku/Rationale,rationale
+DEC-Parallelität_in_einer_Maschine,Entscheidung,16,Parallelität in einer Maschine → gescopte Instanzen,,Doku/Rationale,rationale
+DEC-History,Entscheidung,16,"History → tief, ein Wort `resume`",,Doku/Rationale,rationale
+DEC-Verteilte_Zeitbasis,Entscheidung,16,"Verteilte Zeitbasis → eine Zeitbasis, Knotenticks als Vielfache",,Doku/Rationale,rationale
+DEC-Lesen_über_Knoten,Entscheidung,16,Lesen über Knoten → Verzögerung = Hops,,Doku/Rationale,rationale
+DEC-Knotenausfall,Entscheidung,16,Knotenausfall → wie 12.6 auf Knoten angewandt,,Doku/Rationale,rationale
+DEC-Capture,Entscheidung,16,Capture → Stream-Element mit Armierung als Kommando,,Doku/Rationale,rationale
+DEC-Trigger,Entscheidung,16,"Trigger → Regel auf dem Knoten, im Programm Input und Armierung",,Doku/Rationale,rationale
+DEC-Eigenschaften,Entscheidung,16,"Eigenschaften → beschränkt, endlicher Speicher",,Doku/Rationale,rationale
+DEC-`map`,Entscheidung,16,"`map` → offene Adressierung, deterministischer Hash, Rückwärtsverschiebung",,Doku/Rationale,rationale
+DEC-Formate,Entscheidung,16,Formate → versioniert mit Aufwärtskompatibilität,,Doku/Rationale,rationale
+DEC-Schnell_gekoppelte_Regelkreise,Entscheidung,16,Schnell gekoppelte Regelkreise → eine Maschine (Blöcke); `follows` in v1.1 für Same-Rate-Aufteilungen,,Doku/Rationale,rationale
+CON-const,Konstrukt (2.4),2.4,`const`,,M0 (Parser/MIR-Entwurf),definiert
+CON-param,Konstrukt (2.4),2.4,`param`,,M0 (Parser/MIR-Entwurf),definiert
+CON-input/output,Konstrukt (2.4),2.4,`input`/`output`,,M0 (Parser/MIR-Entwurf),definiert
+CON-command,Konstrukt (2.4),2.4,`command`,,M0 (Parser/MIR-Entwurf),definiert
+CON-machine,Konstrukt (2.4),2.4,`machine`,,M0 (Parser/MIR-Entwurf),definiert
+CON-state,Konstrukt (2.4),2.4,`state`,,M0 (Parser/MIR-Entwurf),definiert
+CON-enter/exit,Konstrukt (2.4),2.4,`enter`/`exit`,,M0 (Parser/MIR-Entwurf),definiert
+CON-loop,Konstrukt (2.4),2.4,`loop`,,M0 (Parser/MIR-Entwurf),definiert
+CON-when/after,Konstrukt (2.4),2.4,`when`/`after`,,M0 (Parser/MIR-Entwurf),definiert
+CON-->_ZIEL,Konstrukt (2.4),2.4,`-> ZIEL`,,M0 (Parser/MIR-Entwurf),definiert
+CON-check,Konstrukt (2.4),2.4,`check`,,M0 (Parser/MIR-Entwurf),definiert
+CON-expect,Konstrukt (2.4),2.4,`expect`,,M0 (Parser/MIR-Entwurf),definiert
+CON-alert,Konstrukt (2.4),2.4,`alert`,,M0 (Parser/MIR-Entwurf),definiert
+CON-abort,Konstrukt (2.4),2.4,`abort`,,M0 (Parser/MIR-Entwurf),definiert
+CON-fault_->_ZIEL,Konstrukt (2.4),2.4,`fault -> ZIEL`,,M0 (Parser/MIR-Entwurf),definiert
+CON-sequence,Konstrukt (2.4),2.4,`sequence`,,M0 (Parser/MIR-Entwurf),definiert
+CON-fn/block,Konstrukt (2.4),2.4,`fn`/`block`,,M0 (Parser/MIR-Entwurf),definiert
+CON-pub_var,Konstrukt (2.4),2.4,`pub var`,,M0 (Parser/MIR-Entwurf),definiert
+"CON-record,_enum_mit_Varianten,_match",Konstrukt (2.4),2.4,"`record`, `enum` mit Varianten, `match`",,M0 (Parser/MIR-Entwurf),definiert
+CON-T?,Konstrukt (2.4),2.4,`T?`,,M0 (Parser/MIR-Entwurf),definiert
+CON-stream<E>,Konstrukt (2.4),2.4,`stream<E>`,,M0 (Parser/MIR-Entwurf),definiert
+CON-on,Konstrukt (2.4),2.4,`on`,,M0 (Parser/MIR-Entwurf),definiert
+CON-matches_/_has,Konstrukt (2.4),2.4,`matches` / `has`,,M0 (Parser/MIR-Entwurf),definiert
+CON-send,Konstrukt (2.4),2.4,`send`,,M0 (Parser/MIR-Entwurf),definiert
+CON-at_/_pulse_/_cancel,Konstrukt (2.4),2.4,`at` / `pulse` / `cancel`,,M0 (Parser/MIR-Entwurf),definiert
+CON-measure_/_verify_/_verdict,Konstrukt (2.4),2.4,`measure` / `verify` / `verdict`,,M0 (Parser/MIR-Entwurf),definiert
+CON-scenario_/_campaign,Konstrukt (2.4),2.4,`scenario` / `campaign`,,M0 (Parser/MIR-Entwurf),definiert
+CON-persist_var,Konstrukt (2.4),2.4,`persist var`,,M0 (Parser/MIR-Entwurf),definiert
+CON-idle,Konstrukt (2.4),2.4,`idle`,,M0 (Parser/MIR-Entwurf),definiert
+CON-signal_/_raise,Konstrukt (2.4),2.4,`signal` / `raise`,,M0 (Parser/MIR-Entwurf),definiert
+CON-every_d:,Konstrukt (2.4),2.4,`every d:`,,M0 (Parser/MIR-Entwurf),definiert
+CON-trigger,Konstrukt (2.4),2.4,`trigger`,,M0 (Parser/MIR-Entwurf),definiert
+"CON-mat<R,_C>,_mat[R,_C],_vec[R],_unitvec",Konstrukt (2.4),2.4,"`mat<R, C>`, `mat[R, C]`, `vec[R]`, `unitvec`",,M0 (Parser/MIR-Entwurf),definiert
+CON-interner_stream<E>_name,Konstrukt (2.4),2.4,interner `stream<E> name`,,M0 (Parser/MIR-Entwurf),definiert
+CON-job,Konstrukt (2.4),2.4,`job`,,M0 (Parser/MIR-Entwurf),definiert
+CON-T!E,Konstrukt (2.4),2.4,`T!E`,,M0 (Parser/MIR-Entwurf),definiert
+CON-default,Konstrukt (2.4),2.4,`default`,,M0 (Parser/MIR-Entwurf),definiert
+CON-inout,Konstrukt (2.4),2.4,`inout`,,M0 (Parser/MIR-Entwurf),definiert
+CON-irreversible,Konstrukt (2.4),2.4,`irreversible`,,M0 (Parser/MIR-Entwurf),definiert
+"CON-driver_machine,_port",Konstrukt (2.4),2.4,"`driver machine`, `port`",,M0 (Parser/MIR-Entwurf),definiert
+CON-tunable_param,Konstrukt (2.4),2.4,`tunable param`,,M0 (Parser/MIR-Entwurf),definiert
+CON-follows,Konstrukt (2.4),2.4,`follows`,,M0 (Parser/MIR-Entwurf),definiert
+"CON-debounce,_Suspect",Konstrukt (2.4),2.4,"`debounce`, `Suspect`",,M0 (Parser/MIR-Entwurf),offen
+"CON-check_…_for_d,_alert_…_for_d",Konstrukt (2.4),2.4,"`check … for d`, `alert … for d`",,M0 (Parser/MIR-Entwurf),definiert
+"CON-reader,_writer",Konstrukt (2.4),2.4,"`reader`, `writer`",,M0 (Parser/MIR-Entwurf),offen
+CON-len_field,Konstrukt (2.4),2.4,`len_field`,,M0 (Parser/MIR-Entwurf),definiert
+CON-System-Channels_sys/…,Konstrukt (2.4),2.4,System-Channels `sys/…`,,M0 (Parser/MIR-Entwurf),offen
+CON-native_fn,Konstrukt (2.4),2.4,`native fn`,,M0 (Parser/MIR-Entwurf),definiert
+CON-tick_source,Konstrukt (2.4),2.4,`tick_source`,,M0 (Parser/MIR-Entwurf),definiert
+"CON-jitter,_max_slew",Konstrukt (2.4),2.4,"`jitter`, `max_slew`",,M0 (Parser/MIR-Entwurf),definiert
+FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M0 (Parser/MIR-Entwurf),offen
+FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M0 (Parser/MIR-Entwurf),offen
+FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M0 (Parser/MIR-Entwurf),offen
+FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M0 (Parser/MIR-Entwurf),offen
+FMT-Lauf-Header,Versioniertes Format,11.3,Lauf-Header,,M0 (Parser/MIR-Entwurf),offen
+STUFE-v1_(Kern),Stufe (Roadmap),15,v1 (Kern),,Doku/Rationale,rationale
+STUFE-v1.1,Stufe (Roadmap),15,v1.1,,Doku/Rationale,rationale
+STUFE-v1.2,Stufe (Roadmap),15,v1.2,,Doku/Rationale,rationale
+STUFE-v2,Stufe (Roadmap),15,v2,,Doku/Rationale,rationale
+STUFE-v3,Stufe (Roadmap),15,v3,,Doku/Rationale,rationale
+"STUFE-entschieden_(früher_„offen"")",Stufe (Roadmap),15,"entschieden (früher „offen"")",,Doku/Rationale,rationale
