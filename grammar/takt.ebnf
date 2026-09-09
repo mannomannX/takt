@@ -11,6 +11,8 @@
      (* @stage vX *)        die ganze Produktion gehoert zu einer spaeteren Stufe;
                             gemischte Produktionen nennen die Stufe an der Alternative
      (* @start *)           zusaetzlicher Startsymbol (Teilsprachen in STRING)
+     (* @check 8, 25 *)     statische Pruefungen aus Abschnitt 10, die an dieser
+                            Produktion ansetzen, aber vom Compiler-Gate erzwungen werden
 
    Schluesselwoerter (2.2) sind die Woerter, die eine Aussage, Deklaration
    oder Klausel am Zeilenanfang einleiten oder in Ausdruecken als Operator
@@ -33,8 +35,10 @@ HEX         := (* 0x[0-9a-fA-F_]+ *)
 BIN         := (* 0b[01_]+ *)
 OCT         := (* 0o[0-7_]+ *)
 FLOAT       := (* [0-9][0-9_]*\.[0-9_]+([eE][+-]?[0-9]+)? | [0-9]+[eE][+-]?[0-9]+ *)
+DURATION    := (* Zahl, Leerraum, genau ein Zeitsuffix ns us ms s min h d; Wert exakt in ns (3.3, lexer.md L4.4) *)
 STRING      := (* "..." mit Escapes \" \\ \n \t; Inhalt nach format_text bzw. pattern_text *)
 TEXT_CHAR   := (* ein Zeichen innerhalb eines STRING, das nicht "{" oder "}" ist *)
+ADDR_WORD   := (* [A-Za-z0-9_][A-Za-z0-9_.-]* — Segment einer Hardware-Adresse, z. B. daq1, ai0, 0x36 *)
 
 RESERVED    := "region" | "while" | "yield" | "await" | "async" | "spawn" | "select" | "where"
              | "impl" | "trait" | "module" | "export" | "extern" | "unsafe" | "try" | "catch"
@@ -43,7 +47,7 @@ RESERVED    := "region" | "while" | "yield" | "await" | "async" | "spawn" | "sel
 
 (* ---------------------------------------------------------------- Datei *)
 
-file           := { NEWLINE | import | system_decl | type_decl | unitvec_decl | enum_decl | record_decl | unit_decl
+file           := { NEWLINE | import | system_decl | type_decl | unitvec_decl | enum_decl | record_decl | unit_decl   (* @check 1 *)
                   | stream_decl | port_decl | node_decl | property_decl
                   | const_decl | param_decl | profile_decl | channel_decl | command_decl
                   | fn_decl | native_decl | block_decl | machine_decl | instance_decl
@@ -55,42 +59,42 @@ system_decl    := "system" ":" NEWLINE INDENT { system_item } DEDENT
 system_item    := "tick" "=" duration_lit NEWLINE
                 | "output_timing" "=" ( "asap" | "boundary" ) NEWLINE
                 | "fault_is_fail" "=" ( "true" | "false" ) NEWLINE
-                | "tick_source" "=" "hw" "(" STRING ")" NEWLINE
-                | "tick_tolerance" "=" const_expr [ "for" INT "ticks" ] NEWLINE
+                | "tick_source" "=" "hw" "(" STRING ")" NEWLINE                              (* STRING nach address_text *)
+                | "tick_tolerance" "=" const_expr [ "for" int_lit "ticks" ] NEWLINE
                 | "target" "=" IDENT NEWLINE                                              (* Laufzeitprofil, 12.8 *)
                 | "float" "=" ( "f32" | "f64" ) NEWLINE                                    (* Breite von float, 4.2; Default f64 *)
-                | "language" "=" INT NEWLINE                                                (* Edition, 2.5 *)
+                | "language" "=" INT NEWLINE                                                (* Edition, 2.5 *)   (* @check 49 *)
 
 (* ---------------------------------------------------------------- Typen und Einheiten *)
 
 type_decl      := "type" TYPE_IDENT "=" type NEWLINE
 unitvec_decl   := "unitvec" UPPER_IDENT "=" "(" unit_expr { "," unit_expr } ")" NEWLINE    (* @stage v1.1 — 3.11 *)
-enum_decl      := "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" variant { "," variant } NEWLINE   (* layout: 3.7; open: 2.5 *)
+enum_decl      := "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" variant { "," variant } NEWLINE   (* layout: 3.7; open: 2.5 *)   (* @check 51 *)
                 | "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" NEWLINE INDENT { variant NEWLINE } DEDENT
-variant        := UPPER_IDENT [ "=" INT ] [ "(" field { "," field } ")" ]                 (* explizite Diskriminante *)
-record_decl    := "record" TYPE_IDENT [ "layout" ( "little" | "big" ) [ "," "align" "=" INT ] ] ":" NEWLINE INDENT { record_field } DEDENT
+variant        := UPPER_IDENT [ "=" int_lit ] [ "(" field { "," field } ")" ]             (* explizite Diskriminante, auch 0x00 *)
+record_decl    := "record" TYPE_IDENT [ "layout" ( "little" | "big" ) [ "," "align" "=" int_lit ] ] ":" NEWLINE INDENT { record_field } DEDENT   (* @check 46 *)
 record_field   := field NEWLINE
                 | IDENT ":" int_type "with" "bits" ":" NEWLINE INDENT { bitfield NEWLINE } DEDENT   (* endet mit DEDENT, daher kein NEWLINE *)
-field          := ( IDENT | "_" ) ":" type [ "=" const_expr ] [ "offset" "=" INT ] [ "with" "len" "=" IDENT ]   (* "_": Padding; Konstantenfeld, Offset, len_field: 3.7 *)
-bitfield       := IDENT ":" ( "bool" | int_type ) "at" INT [ ".." INT ]
-unit_decl      := "unit" IDENT "=" number unit_expr NEWLINE
+field          := ( IDENT | "_" ) ":" type [ "=" const_expr ] [ "offset" "=" int_lit ] [ "with" "len" "=" IDENT ]   (* "_": Padding; Konstantenfeld, Offset, len_field: 3.7 *)   (* @check 37, 50 *)
+bitfield       := IDENT ":" ( "bool" | int_type ) "at" int_lit [ ".." int_lit ]   (* @check 46 *)
+unit_decl      := "unit" IDENT "=" number [ unit_expr ] NEWLINE                              (* ohne unit_expr: dimensionslos wie pct, 3.2 *)
                 | "unit" IDENT "=" "affine" "(" unit_expr "," number ")" NEWLINE
 
 (* ---------------------------------------------------------------- Konstanten, Parameter, Channels *)
 
 const_decl     := "const" UPPER_IDENT [ ":" type ] "=" const_expr NEWLINE
-param_decl     := [ "tunable" ] "param" UPPER_IDENT ":" type "=" const_expr [ "with" attr { "," attr } ] NEWLINE   (* tunable: 8.4, v1.1; with: Metadaten 2.5 *)
+param_decl     := [ "tunable" ] "param" UPPER_IDENT ":" type "=" const_expr [ "with" attr { "," attr } ] NEWLINE   (* tunable: 8.4, v1.1; with: Metadaten 2.5 *)   (* @check 35 *)
 profile_decl   := "profile" UPPER_IDENT ":" NEWLINE INDENT { UPPER_IDENT "=" const_expr NEWLINE } DEDENT
 
-channel_decl   := ( "input" | "output" ) IDENT ":" type "@" binding [ "with" attr { "," attr } ] NEWLINE
-stream_decl    := "stream" "<" elem_type ">" IDENT "with" attr { "," attr } NEWLINE            (* interner Stream, 8.6 *)
+channel_decl   := ( "input" | "output" ) IDENT ":" type "@" binding [ "with" attr { "," attr } ] NEWLINE   (* @check 7, 17 *)
+stream_decl    := "stream" "<" elem_type ">" IDENT "with" attr { "," attr } NEWLINE            (* interner Stream, 8.6 *)   (* @check 43 *)
 port_decl      := "port" IDENT ":" TYPE_IDENT "@" "mmio" "(" HEX ")" NEWLINE                    (* @stage v1.2 — Treiberstufe *)
-binding        := "hw" "(" STRING ")" | "sim" "(" STRING ")" | "none"
-attr           := "safe" "=" const_expr | "max_age" "=" duration_lit | "rate" "=" const_expr
-                | "max_rate" "=" const_expr | "capacity" "=" INT | "framing" "=" framing
+binding        := "hw" "(" STRING ")" | "sim" "(" STRING ")" | "none"                       (* STRING nach address_text *)   (* @check 7, 13 *)
+attr           := "safe" "=" const_expr | "max_age" "=" duration_lit | "rate" "=" const_expr   (* @check 17, 28, 48 *)
+                | "max_rate" "=" const_expr | "capacity" "=" int_lit | "framing" "=" framing
                 | "overflow" "=" ( "fault" | "drop_oldest" | "drop" ) | "wake" "=" ( "true" | "false" )
-                | "jitter" "=" duration_lit | "max_slew" "=" const_expr | "debounce" "=" INT
-                | "capacity_bytes" "=" INT | "expect_len" "=" INT                              (* Byte-Ring, 8.6 *)
+                | "jitter" "=" duration_lit | "max_slew" "=" const_expr | "debounce" "=" int_lit
+                | "capacity_bytes" "=" int_lit | "expect_len" "=" int_lit                      (* Byte-Ring, 8.6 *)
                 | "irreversible" "=" "true"                                                    (* 12.7 *)
                 | "label" "=" STRING | "display" "=" unit_expr | "group" "=" STRING | "doc" "=" STRING   (* Metadaten, 2.5; v1.1 *)
 framing        := "raw" | "lines" | "cobs" | "length_prefixed" "(" IDENT ")" | "fixed" "(" INT ")"
@@ -98,53 +102,54 @@ command_decl   := "command" IDENT [ "with" attr { "," attr } ] NEWLINE          
 
 (* ---------------------------------------------------------------- Funktionen, Natives, Bloecke *)
 
-fn_decl        := "fn" IDENT [ generic_vars ] "(" [ params ] ")" "->" type ":" block
-native_decl    := "native" ( "fn" | "job" ) IDENT [ generic_vars ] "(" [ params ] ")" "->" type
+fn_decl        := "fn" IDENT [ generic_vars ] "(" [ params ] ")" [ "->" type ] ":" block   (* ohne Rueckgabetyp nur mit inout-Parameter, 3.9 *)   (* @check 11, 47 *)
+native_decl    := "native" ( "fn" | "job" ) IDENT [ generic_vars ] "(" [ params ] ")" "->" type   (* @check 31 *)
                   [ "from" STRING ]                                                          (* Projekt-Native, 4.5; v1.1 *)
                   "with" "cost" "=" cost_spec "," "stack" "=" INT [ "," "duration" "=" duration_lit ] "," "total" NEWLINE   (* 4.5 *)
-cost_spec      := INT | "{" cost_class ":" INT { "," cost_class ":" INT } "}"            (* ein Wert zaehlt in i32 (4.5) *)
+cost_spec      := int_lit | "{" cost_class ":" int_lit { "," cost_class ":" int_lit } "}"   (* ein Wert zaehlt in i32 (4.5) *)
 cost_class     := "i32" | "i64" | "f32" | "f64" | "mem" | "call" | "native"               (* Operationsklassen, 9.4.3 *)
 block_decl     := "block" IDENT [ generic_vars ] "(" [ params ] ")" ":" NEWLINE INDENT { var_decl NEWLINE }
                   ( step_decl { method_decl } | method_decl { method_decl } ) DEDENT
-step_decl      := "step" "(" [ params ] ")" "->" type ":" block                              (* hoechstens einmal je Instanz und Tick, 5.7 *)
+step_decl      := "step" "(" [ params ] ")" "->" type ":" block                              (* hoechstens einmal je Instanz und Tick, 5.7 *)   (* @check 11 *)
 method_decl    := IDENT "(" [ params ] ")" [ "->" type ] ":" block                           (* weitere Methoden wie start/stop/elapsed, 11.4 *)
-generic_vars   := "[" gvar { "," gvar } "]"          (* 3.12: Einheiten- (v1), Typ- und Konstantenvariablen (v1.2) *)
-gvar           := UPPER_IDENT | "type" UPPER_IDENT [ ":" capability ] | "const" UPPER_IDENT [ "in" range ]
+generic_vars   := "[" gvar { "," gvar } "]"          (* 3.12: Einheiten- (v1), Typ- und Konstantenvariablen (v1.2) *)   (* @check 52 *)
+gvar           := UPPER_IDENT | "type" UPPER_IDENT [ ":" capability ] | "const" UPPER_IDENT [ "in" range ]   (* @check 52 *)
 capability     := "pod" | "eq" | "ord" | "numeric" | "integer" | "float"
 params         := param { "," param }
-param          := [ "inout" ] IDENT ":" [ "input" | "output" ] type [ "=" const_expr ]      (* inout nur in fn, 3.9; input/output nur in machine *)
+param          := [ "inout" ] IDENT ":" [ "input" | "output" ] type [ "=" const_expr ]      (* inout nur in fn, 3.9; input/output nur in machine *)   (* @check 47 *)
 
 (* ---------------------------------------------------------------- Maschinen *)
 
-machine_decl   := [ "driver" ] "machine" IDENT [ "(" params ")" ] [ "follows" IDENT { "," IDENT } ] [ "node" IDENT ]   (* driver: v1.2; node: 12.9, v2 *)
+machine_decl   := [ "driver" ] "machine" IDENT [ "(" params ")" ] [ "follows" IDENT { "," IDENT } ] [ "node" IDENT ]   (* driver: v1.2; node: 12.9, v2 *)   (* @check 33 *)
                   [ "every" duration_lit ] [ "phase" duration_lit ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT machine_body DEDENT   (* follows: 7.2, v1.1; with: Metadaten 2.5 *)
-machine_body   := { var_decl NEWLINE | persist_decl | signal_decl | fault_clause }
+machine_body   := { var_decl NEWLINE | persist_decl | signal_decl | fault_clause }   (* @check 8 *)
                   "initial" UPPER_IDENT NEWLINE [ loop_block ] { on_handler } { state_decl }
-persist_decl   := "persist" "var" IDENT ":" type "=" const_expr [ "with" "min_interval" "=" duration_lit ] NEWLINE   (* @stage v1.1 — 5.9 *)
+persist_decl   := "persist" "var" IDENT ":" type "=" const_expr [ "with" "min_interval" "=" duration_lit ] NEWLINE   (* @stage v1.1 — 5.9 *)   (* @check 23 *)
 signal_decl    := "signal" IDENT NEWLINE
-state_decl     := "state" UPPER_IDENT [ "idle" ] [ "resume" ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT state_body DEDENT   (* idle: 5.10, v1.1; resume: 5.12, v1.2; with: Metadaten 2.5 *)
-state_body     := { fault_clause | var_decl NEWLINE | instance_decl } [ "initial" UPPER_IDENT NEWLINE ]   (* instance_decl im Zustand: gescopte Instanz, 5.11 *)
+state_decl     := "state" UPPER_IDENT [ "idle" ] [ "resume" ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT state_body DEDENT   (* idle: 5.10, v1.1; resume: 5.12, v1.2; with: Metadaten 2.5 *)   (* @check 8, 22, 54 *)
+state_body     := { fault_clause | var_decl NEWLINE | instance_decl } [ "initial" UPPER_IDENT NEWLINE ]   (* instance_decl im Zustand: gescopte Instanz, 5.11 *)   (* @check 25, 53 *)
                   [ enter_block ] [ loop_block ] { on_handler } [ sequence_block ] { transition } [ exit_block ] { state_decl }
-fault_clause   := "fault" "->" UPPER_IDENT NEWLINE
+fault_clause   := "fault" "->" UPPER_IDENT NEWLINE   (* @check 9 *)
 enter_block    := "enter" ":" action_block
 exit_block     := "exit" ":" action_block
 loop_block     := "loop" ":" block
-on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] ":" block
-transition     := ( "when" guard | "after" duration_expr ) ":" trans_block
-guard          := expr | postfix ( "matches" | "has" ) pattern [ "as" IDENT ] | postfix "as" IDENT   (* letzteres: naechstes Element, 8.7; postfix auch fuer m.fired, cells[i].done *)
-trans_block    := goto_stmt NEWLINE | NEWLINE INDENT { stmt } goto_stmt NEWLINE DEDENT
+on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] ":" block   (* @check 27 *)
+transition     := ( "when" guard | "after" duration_expr ) ":" trans_block   (* @check 14 *)
+guard          := expr | postfix ( "matches" | "has" ) pattern [ "as" IDENT ] | postfix "as" IDENT   (* letzteres: naechstes Element, 8.7; postfix auch fuer m.fired, cells[i].done. "as" IDENT ist Bindung, ausser IDENT ist ein Skalartypname: dann Cast *)
+trans_block    := goto_stmt NEWLINE | NEWLINE INDENT { stmt } goto_stmt NEWLINE DEDENT   (* @check 8 *)
 
 sequence_block := "sequence" ":" NEWLINE INDENT { seq_item } DEDENT
-seq_item       := stmt
+seq_item       := stmt   (* @check 14 *)
                 | "wait" duration_expr NEWLINE
-                | "until" guard [ "timeout" duration_expr [ "->" UPPER_IDENT | "else" ":" action_block ] ] NEWLINE
+                | "until" guard [ "timeout" duration_expr [ "->" UPPER_IDENT ] ] NEWLINE
+                | "until" guard "timeout" duration_expr "else" ":" action_block           (* weicher Timeout, 6.2; der Block traegt sein Zeilenende *)
                 | "expect" expr [ "," STRING ] NEWLINE
                 | "repeat" const_expr ":" NEWLINE INDENT { seq_item } DEDENT
                 | "step" STRING ":" NEWLINE INDENT { seq_item } DEDENT
 
-instance_decl  := "instance" IDENT [ "[" IDENT "in" range "]" ] [ "resume" ] "=" IDENT "(" [ args ] ")" NEWLINE   (* resume: 5.11, v1.2 *)
-node_decl      := "node" IDENT "@" "hw" "(" STRING ")" [ "with" "tick" "=" duration_lit ] NEWLINE          (* @stage v2 — 12.9 *)
-property_decl  := "property" IDENT ":" tprop [ "with" "monitor" "=" "true" ] NEWLINE                     (* @stage v1.1 — 13.3 *)
+instance_decl  := "instance" IDENT [ "[" IDENT "in" range "]" ] [ "resume" ] "=" IDENT "(" [ args ] ")" NEWLINE   (* resume: 5.11, v1.2 *)   (* @check 53 *)
+node_decl      := "node" IDENT "@" "hw" "(" STRING ")" [ "with" "tick" "=" duration_lit ] NEWLINE          (* @stage v2 — 12.9 *)   (* @check 58 *)
+property_decl  := "property" IDENT ":" tprop [ "with" "monitor" "=" "true" ] NEWLINE                     (* @stage v1.1 — 13.3 *)   (* @check 56 *)
 tprop          := tprop_implies                                                                          (* @stage v1.1 — beschraenkte Temporallogik, 13.3 *)
 tprop_implies  := tprop_or { "implies" tprop_or }
 tprop_or       := tprop_and { "or" tprop_and }
@@ -154,18 +159,18 @@ tprop_atom     := "always" "(" tprop ")" | "never" "(" tprop ")"
                 | "eventually" "[" duration_lit "]" "(" tprop ")" | "stable" "[" duration_lit "]" "(" tprop ")"
                 | "once" "[" duration_lit "]" "(" tprop ")"
                 | "(" tprop ")" | expr
-scenario_decl  := "scenario" STRING [ "every" duration_lit ] ":" NEWLINE INDENT machine_body DEDENT      (* @stage v1.1 — 13.6 *)
+scenario_decl  := "scenario" STRING [ "every" duration_lit ] ":" NEWLINE INDENT machine_body DEDENT      (* @stage v1.1 — 13.6 *)   (* @check 26 *)
 campaign_decl  := "campaign" IDENT ":" NEWLINE INDENT { campaign_item } DEDENT                            (* @stage v1.1 — 13.7 *)
-campaign_item  := "program" STRING NEWLINE | "profile" UPPER_IDENT NEWLINE
+campaign_item  := "program" STRING NEWLINE | "profile" UPPER_IDENT NEWLINE   (* @check 29 *)
                 | "sweep" UPPER_IDENT "=" ( const_expr ".." const_expr "step" const_expr
                                           | "[" const_expr { "," const_expr } "]" ) NEWLINE
-                | "repeat" INT NEWLINE | "stop_on" ( "fail" | "never" ) NEWLINE
-trigger_decl   := "trigger" IDENT [ "node" IDENT ] ":" NEWLINE INDENT "when" guard NEWLINE "then" at_stmt "bound" duration_lit NEWLINE DEDENT   (* @stage v1.2 — 7.5 *)
+                | "repeat" int_lit NEWLINE | "stop_on" ( "fail" | "never" ) NEWLINE
+trigger_decl   := "trigger" IDENT [ "node" IDENT ] ":" NEWLINE INDENT "when" guard NEWLINE "then" at_stmt "bound" duration_lit NEWLINE DEDENT   (* @stage v1.2 — 7.5 *)   (* @check 55 *)
 
 (* ---------------------------------------------------------------- Statements *)
 
 block          := NEWLINE INDENT stmt { stmt } DEDENT | simple_stmt NEWLINE
-action_block   := block                       (* statisch eingeschraenkt: siehe 5.5 *)
+action_block   := block                       (* statisch eingeschraenkt: siehe 5.5 *)   (* @check 8 *)
 stmt           := simple_stmt NEWLINE | if_stmt | for_stmt | match_stmt | at_stmt | every_stmt
 simple_stmt    := assign | var_decl | job_stmt | arm_stmt | check_stmt | alert_stmt | log_stmt | goto_stmt
                 | abort_stmt | return_stmt | send_stmt | pulse_stmt | cancel_stmt
@@ -174,25 +179,25 @@ assign         := lvalue ( "=" | "+=" | "-=" | "*=" | "/=" ) expr
 lvalue         := IDENT { "." member | "[" expr "]" | "[" expr "," expr "]" }              (* Variable, Output, Feld, Element *)
 var_decl       := [ "pub" ] "var" IDENT [ ":" type ] "=" expr
 if_stmt        := "if" expr ":" block { "elif" expr ":" block } [ "else" ":" block ]
-for_stmt       := "for" ( IDENT | "(" IDENT "," IDENT ")" ) "in" ( "range" "(" const_expr ")" | expr ) ":" block   (* expr: Array, Stream, samples, map (3.9) *)
-match_stmt     := "match" expr ":" NEWLINE INDENT { "case" case_pattern ":" block } DEDENT
+for_stmt       := "for" ( IDENT | "(" IDENT "," IDENT ")" ) "in" ( "range" "(" const_expr ")" | expr ) ":" block   (* expr: Array, Stream, samples, map (3.9) *)   (* @check 11 *)
+match_stmt     := "match" expr ":" NEWLINE INDENT { "case" case_pattern ":" block } DEDENT   (* @check 19, 51 *)
 case_pattern   := UPPER_IDENT [ "(" IDENT { "," IDENT } ")" ] | "_"
                 | const_expr [ ".." const_expr ] { "," const_expr [ ".." const_expr ] }       (* Bereiche und Mehrfachwerte *)
-at_stmt        := "at" duration_expr ":" action_block
-every_stmt     := "every" duration_expr ":" block
-check_stmt     := "check" expr [ "," STRING ] [ "for" duration_expr ] [ "->" UPPER_IDENT ] [ "req" STRING ]   (* for: 5.6; req: v1.2 *)
-alert_stmt     := "alert" expr "," STRING [ "for" duration_expr ]
+at_stmt        := "at" duration_expr ":" action_block   (* @check 21, 28 *)
+every_stmt     := "every" duration_expr ":" block   (* @check 27 *)
+check_stmt     := "check" expr [ "," STRING ] [ "for" duration_expr ] [ "->" UPPER_IDENT ] [ "req" STRING ]   (* for: 5.6; req: v1.2 *)   (* @check 9, 36 *)
+alert_stmt     := "alert" expr "," STRING [ "for" duration_expr ]   (* @check 36 *)
 log_stmt       := "log" STRING                                                               (* Inhalt nach format_text *)
-send_stmt      := "send" IDENT "," expr
-pulse_stmt     := "pulse" IDENT "=" expr "for" duration_expr
+send_stmt      := "send" IDENT "," expr   (* @check 20 *)
+pulse_stmt     := "pulse" IDENT "=" expr "for" duration_expr   (* @check 21 *)
 cancel_stmt    := "cancel" IDENT
 measure_stmt   := "measure" IDENT "=" expr
-job_stmt       := "job" IDENT "=" IDENT "(" [ args ] ")"                                     (* 4.5 *)
-arm_stmt       := ( "arm" | "disarm" ) IDENT                                                 (* @stage v1.2 — 7.5 *)
+job_stmt       := "job" IDENT "=" IDENT "(" [ args ] ")"                                     (* 4.5 *)   (* @check 44 *)
+arm_stmt       := ( "arm" | "disarm" ) IDENT                                                 (* @stage v1.2 — 7.5 *)   (* @check 55 *)
 verify_stmt    := "verify" expr "," STRING [ "req" STRING ]
 verdict_stmt   := "verdict" ( "pass" | "fail" ) [ STRING ]
 raise_stmt     := "raise" IDENT
-goto_stmt      := "->" UPPER_IDENT
+goto_stmt      := "->" UPPER_IDENT   (* @check 8 *)
 abort_stmt     := "abort" [ STRING ]
 return_stmt    := "return" expr
 
@@ -207,15 +212,15 @@ cmp_expr       := bitor_expr [ ( "<" | "<=" | ">" | ">=" | "==" | "!=" ) bitor_e
 bitor_expr     := bitxor_expr { "|" bitxor_expr }
 bitxor_expr    := bitand_expr { "^" bitand_expr }
 bitand_expr    := shift_expr { "&" shift_expr }
-shift_expr     := add_expr { ( "<<" | ">>" ) add_expr }
+shift_expr     := add_expr { ( "<<" | ">>" ) add_expr }   (* @check 24 *)
 add_expr       := mul_expr { ( "+" | "-" ) mul_expr }
 mul_expr       := unary { ( "*" | "/" | "%" ) unary }
 unary          := "-" unary | "~" unary | cast_expr
-cast_expr      := postfix [ "as" scalar_type ]
-postfix        := primary { "." member [ "(" [ args ] ")" ] | "[" expr [ ".." expr ] "]" | "[" expr "," expr "]" }
-member         := IDENT | KEYWORD                    (* nach "." ist jedes Wort ein Membername: .as .or .len .state .step .bits .jitter (2.5) *)
-primary        := number [ unit_expr ] | duration_lit | STRING | "true" | "false" | "none" | "default"
-                | IDENT [ generic_args ] [ "(" [ args ] ")" ]                                (* Variable, eingebaute Groesse (now, tick), Aufruf, Instanziierung clamp[bar](...) *)
+cast_expr      := postfix [ "as" scalar_type ]   (* @check 24 *)
+postfix        := primary { "." member [ "(" [ args ] ")" ] | "[" expr [ ".." expr ] "]" | "[" expr "," expr "]" }   (* @check 24 *)
+member         := IDENT | KEYWORD                    (* nach "." ist jedes Wort ein Membername: .as .or .len .state .step .bits .jitter (2.5) *)   (* @check 50 *)
+primary        := number [ unit_expr ] | duration_lit | STRING | "true" | "false" | "none" | "default"   (* unit_expr kompakt ohne Leerraum, lexer.md L4.3 *)
+                | IDENT [ generic_args ] [ "(" [ args ] ")" ]                                (* Variable, eingebaute Groesse (now, tick, event), Aufruf, Instanziierung clamp[bar](...): IDENT "[" ... "]" "(" ist Instanziierung, sonst Index in postfix *)
                 | "(" expr ")" | "(" expr "," expr ")"                                       (* Gruppe; Stuetzstelle einer table, 3.9 *)
                 | UPPER_IDENT [ "(" [ args ] ")" ]
                 | TYPE_IDENT [ "(" [ args ] ")" ]                                            (* Konstruktor oder Typ mit Methode: CanFrame.decode(b) *)
@@ -225,36 +230,39 @@ generic_args   := "[" generic_arg { "," generic_arg } "]"
 generic_arg    := unit_expr | type | const_expr                                              (* Einheit (v1); Typ oder Konstante (3.12, v1.2); Klasse nach Namensform *)
 args           := arg { "," arg }
 arg            := [ IDENT "=" ] expr
-number         := INT | HEX | BIN | OCT | FLOAT
-duration_lit   := number ( "ns" | "us" | "ms" | "s" | "min" | "h" | "d" )                  (* genau ein Zeitsuffix; sonst Einheitenliteral (3.3) *)
+number         := int_lit | FLOAT
+int_lit        := INT | HEX | BIN | OCT                 (* ganze Zahl in jeder Schreibweise (3.1); INT allein nur, wo die Form Bedeutung hat: Edition, Exponent, Formatbreite *)
+duration_lit   := DURATION                      (* Zahl mit genau einem Zeitsuffix ns us ms s min h d; sonst Einheitenliteral (3.3, lexer.md L4.4) *)
 duration_expr  := expr                          (* Typ Duration *)
-pattern        := STRING                        (* Musterliteral, Inhalt nach pattern_text (8.7) *)
+pattern        := STRING                        (* Musterliteral, Inhalt nach pattern_text (8.7) *)   (* @check 18 *)
                 | TYPE_IDENT "(" [ IDENT "=" const_expr { "," IDENT "=" const_expr } ] ")"   (* Record-Muster, 8.7 *)
 unit_expr      := unit_term { ( "*" | "/" ) unit_term }
-unit_term      := ( IDENT | UPPER_IDENT ) [ "^" INT ] | "1"            (* Einheitenname oder Einheitenvariable; "1" = dimensionslos, z. B. 1/s *)
+unit_term      := ( IDENT | UPPER_IDENT | TYPE_IDENT ) [ "^" INT ] | "1"   (* Einheitenname jeder Form (bar, mV, V, Hz, KiB) oder Einheitenvariable; "1" = dimensionslos, z. B. 1/s *)
 
 (* ---------------------------------------------------------------- Typausdruecke *)
 
-type           := scalar_type [ "in" range ] [ "?" | "!" TYPE_IDENT ] | "[" const_expr "]" type | TYPE_IDENT [ "?" | "!" TYPE_IDENT ]
+type           := scalar_type [ "in" range ] [ "?" | "!" TYPE_IDENT ] | "[" const_expr "]" type | TYPE_IDENT [ "?" | "!" TYPE_IDENT ]   (* @check 30, 45, 57 *)
                 | "bytes" "<" const_expr ">" | "vec" "<" type "," const_expr ">" | "line" "<" const_expr ">"
                 | "stream" "<" elem_type ">" | "samples" "<" type "," const_expr ">" | "table" "<" type "," type ">"
                 | "mat" "<" const_expr "," const_expr ">" [ "[" unit_expr "]" ]                   (* 3.11, uniform *)
                 | "mat" "[" unit_tuple "," unit_tuple "]" | "vec" "[" unit_tuple "]"               (* 3.11, dimensioniert; v1.1 *)
                 | "map" "<" type "," type "," const_expr ">"                                       (* 3.9, v1.1 *)
-                | "capture" "<" type "," const_expr ">"                                            (* 8.9, v1.2; nur als Stream-Element *)
-                | UPPER_IDENT                                                                      (* Typvariable, 3.12; v1.2 *)
-scalar_type    := "bool" | int_type [ "[" unit_expr "]" ]                                        (* Einheiten auf Integern: 3.2; v1.1 *)
+                | UPPER_IDENT [ "?" | "!" TYPE_IDENT ]                                             (* Typvariable, 3.12; v1.2 *)
+scalar_type    := "bool" | int_type [ "[" unit_expr "]" ]                                        (* Einheiten auf Integern: 3.2; v1.1 *)   (* @check 38 *)
                 | "float" [ "[" unit_expr "]" ] | "f32" [ "[" unit_expr "]" ] | "f64" [ "[" unit_expr "]" ]
                 | "Duration" | "str" "<" const_expr ">"
 int_type       := "int" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"      (* i64 ist gleichbedeutend mit int, 3.1 *)
-unit_tuple     := UPPER_IDENT | "1" "/" UPPER_IDENT | "(" unit_expr { "," unit_expr } ")"      (* unitvec-Name, sein Kehrwert, oder Literal *)
+unit_tuple     := UPPER_IDENT | "1" "/" UPPER_IDENT | "(" unit_expr { "," unit_expr } ")"      (* unitvec-Name, sein Kehrwert, oder Literal *)   (* @check 34 *)
 elem_type      := "u8" | "bytes" "<" const_expr ">" | "line" "<" const_expr ">" | "Edge" | TYPE_IDENT
+                | "capture" "<" type "," const_expr ">"                                            (* 8.9, v1.2; nur hier, nicht als allgemeiner Typ *)
 range          := const_expr ".." const_expr
-const_expr     := expr                          (* nur Literale, const, param, fn-Aufrufe darauf *)
+const_expr     := expr                          (* nur Literale, const, param, eingebaute Konstanten wie tick, fn-Aufrufe darauf (11.3) *)   (* @check 35 *)
 
 (* ---------------------------------------------------------------- Teilsprachen in STRING *)
 
-pattern_text   := { TEXT_CHAR | "{{" | "}}" | "{" IDENT ":" pattern_kind "}" | "{" "_" "}" }   (* @start — Musterliteral, 8.7 *)
+pattern_text   := { TEXT_CHAR | "{{" | "}}" | "{" IDENT ":" pattern_kind "}" | "{" "_" "}" }   (* @start — Musterliteral, 8.7 *)   (* @check 18 *)
 pattern_kind   := "int" | "hex" | "float" | "word" | "str" [ "<" INT ">" ]
-format_text    := { TEXT_CHAR | "{{" | "}}" | "{" expr [ ":" format_spec ] "}" }                (* @start — Formatstring, 3.9 *)
+format_text    := { TEXT_CHAR | "{{" | "}}" | "{" expr [ ":" format_spec ] "}" }                (* @start — Formatstring, 3.9 *)   (* @check 16 *)
 format_spec    := "hex" | "." INT | INT                                                          (* {x:hex} {x:.3} {x:08} *)
+address_text   := address_segment { "/" address_segment }                                        (* @start — hw()/sim()-Adresse (8.1, 12.9); Bedeutung: Hardware-Konfiguration 8.10 *)
+address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                                              (* [a:b] halboffen, bindet ein Channel-Array: tc[0:16] sind 16 Kanaele *)

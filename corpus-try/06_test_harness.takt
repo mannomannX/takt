@@ -1,0 +1,99 @@
+# 06 — Testbetrieb: Messwerte, Verdikte, Simulationsbindung mit Streckenmodell,
+#      Szenario, Kampagne, Eigenschaften, Tunables.
+
+system:
+    language = 1
+    tick = 5 ms
+    fault_is_fail = true
+
+input  press   : float[bar] in 0..40 bar @ hw("rig/ai0") with max_age = 20 ms
+output pump    : bool @ hw("rig/do0") with safe = false
+output press_sim : float[bar] @ sim("rig/ai0")
+
+command start
+command reset
+
+tunable param KP        : float[pct/bar] in 0..10 pct/bar = 0.5 pct/bar
+param TARGET   : float[bar] in 5..30 bar = 20 bar
+param TIMEOUT  : Duration = 30 s
+
+profile QUAL:
+    TARGET = 25 bar
+    TIMEOUT = 60 s
+
+property pump_off_when_high: always (press > TARGET + 5 bar implies not pump)
+property reaches_target: always (start implies eventually[45 s] (press > TARGET))
+
+machine rig:
+    fault -> SAFE
+    pub var settled : bool = false
+    var t_start : Duration = 0 s
+    initial IDLE
+
+    state IDLE:
+        enter:
+            pump = false
+            settled = false
+        when start:
+            t_start = now
+            -> FILL
+
+    state FILL:
+        loop:
+            check press < 35 bar, "overpressure during fill"
+            pump = press < TARGET
+        when press >= TARGET:
+            measure fill_time = now - t_start
+            verify press < TARGET + 2 bar, "overshoot too large"
+            settled = true
+            -> HOLD
+        after TIMEOUT:
+            verdict fail "target not reached within timeout"
+            -> SAFE
+
+    state HOLD:
+        loop:
+            alert press < TARGET - 3 bar, "pressure sagging" for 1 s
+        after 10 s:
+            verdict pass "fill and hold completed"
+            -> IDLE
+
+    state SAFE:
+        enter:
+            pump = false
+        when reset: -> IDLE
+
+machine rig_model every 5 ms:
+    var p : float[bar] = 0 bar
+    initial RUN
+
+    state RUN:
+        loop:
+            if pump:
+                p = p + 0.05 bar
+            else:
+                p = p - 0.01 bar
+            press_sim = p
+
+scenario "fill reaches target" every 5 ms:
+    initial RUN
+
+    state RUN:
+        sequence:
+            until rig.settled timeout 40 s else:
+                verdict fail "rig never settled"
+                -> DONE
+            verify rig.settled, "expected settled state"
+            verdict pass "scenario complete"
+            -> DONE
+
+    state DONE:
+        loop:
+            pass
+
+campaign gain_sweep:
+    program "06_test_harness.takt"
+    profile QUAL
+    sweep TARGET = 10 bar .. 30 bar step 5 bar
+    repeat 2
+    stop_on fail

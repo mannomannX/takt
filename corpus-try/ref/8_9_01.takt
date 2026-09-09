@@ -1,0 +1,4 @@
+input i_dut : samples<float[A], 100> @ hw("daq1/ai2") with rate = 100 kHz     # 100 Samples je 1-ms-Tick
+check i_dut.max() < 2 A
+for x in i_dut:                        # beschraenkt durch 100
+    alert x > 1.5 A, "current spike {x}"

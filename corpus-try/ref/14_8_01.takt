@@ -1,0 +1,122 @@
+system:
+    tick = 1 ms
+    target = boot
+    float = f32
+
+unit sector = 4 KiB
+
+enum FlashCmd: NONE, ERASE(sector: u32), PROGRAM(addr: u32[B], len: u32[B] in 1 B..4096 B), READ(addr: u32[B], len: u32[B] in 1 B..4096 B)
+enum FlashStatus: IDLE, BUSY, DONE, ERROR(code: u8)
+enum HeaderErr: MAGIC, SIZE, VERSION
+
+record ImageHeader layout little:
+    magic   : u8 = 0xE9
+    version : u32
+    size    : u32[B]
+    entry   : u32[B]
+    hash    : bytes<32>
+    sig     : bytes<64>
+
+input  flash_status    : FlashStatus         @ hw("flash/status")        with max_age = 10 ms
+input  flash_rx        : stream<bytes<4096>> @ hw("flash/rx")            with max_rate = 200 Hz, capacity = 2
+output flash_cmd       : FlashCmd            @ hw("flash/cmd")           with safe = NONE
+input  efuse           : EfuseBlock          @ hw("sys/efuse")           # pubkey: bytes<64>, min_version: u32, ... (12.7)
+input  image_confirmed : [2] bool            @ hw("sys/image_confirmed")
+output boot_jump       : u8                  @ hw("sys/jump")            with safe = NONE
+# log geht im Startprofil an die UART der Runtime (12.8)
+
+const SLOT_BASE  : [2] u32[B] = [0x10000 B, 0x110000 B]
+const HEADER_LEN : u32[B] = 109 B
+param MAX_TRIALS : int in 1..5 = 3
+
+fn parse_header(b: bytes<4096>, min_version: u32) -> ImageHeader!HeaderErr:
+    var h = ImageHeader.decode(b)
+    if not h.valid: return ERR(MAGIC)
+    if h.size > 1 MiB: return ERR(SIZE)
+    if h.version < min_version: return ERR(VERSION)
+    return OK(h)
+
+machine bootloader:
+    fault -> HALT
+    persist var trials : [2] int in 0..5 = [0, 0]
+    persist var active : int in 0..1 = 0
+    var idx  : int in 0..1 = 0
+    var hdr  : ImageHeader!HeaderErr = ERR(MAGIC)
+    var img  : ImageHeader = default
+    var ctx  : Sha256Ctx = sha256_init()
+    var done : u32[B] = 0 B
+    initial SELECT
+
+    state SELECT:
+        enter:
+            idx = active
+            for i in range(2):
+                if image_confirmed[i].or(false):                    # bestaetigte Images setzen ihren Zaehler zurueck
+                    trials[i] = 0
+            if trials[idx] >= MAX_TRIALS and trials[1 - idx] < MAX_TRIALS:
+                idx = 1 - idx                                        # Fallback auf den anderen Slot
+            if trials[idx] < 5:
+                trials[idx] += 1                                     # Versuch zaehlt vor dem Sprung; persist wird vor boot_jump geschrieben
+        when trials[idx] <= MAX_TRIALS: -> READ_HEADER
+        when true: -> HALT
+
+    state READ_HEADER:
+        enter:
+            flash_cmd = READ(addr = SLOT_BASE[idx], len = 4096 B)
+        when flash_rx as c:
+            hdr = parse_header(c.data, efuse.min_version)
+            flash_cmd = NONE
+            -> CHECK_HEADER
+        after 50 ms: -> SLOT_FAILED
+
+    state CHECK_HEADER:
+        when hdr.ok:
+            img = hdr                                                # durch hdr.ok dominiert: implizites Auspacken
+            ctx = sha256_init()
+            done = 0 B
+            -> HASHING
+        when true:
+            log "slot {idx}: bad header ({hdr.err})"
+            -> SLOT_FAILED
+
+    state HASHING:                                                   # ein Chunk je Tick; Budget statisch
+        loop:
+            if flash_status == IDLE and done < img.size:
+                flash_cmd = READ(addr = SLOT_BASE[idx] + HEADER_LEN + done, len = min(4096 B, img.size - done))
+        on flash_rx as c:
+            ctx = sha256_update(ctx, c.data)
+            done += (c.data.len as u32) * (1 B)
+            flash_cmd = NONE
+        when done >= img.size: -> VERIFY
+        after 5 s: -> SLOT_FAILED
+
+    state VERIFY:
+        fault -> SLOT_FAILED
+        sequence:
+            var digest = sha256_final(ctx)
+            expect digest == img.hash, "hash mismatch in slot {idx}"
+            job v = ecdsa_p256_verify(key = efuse.pubkey, digest = digest, sig = img.sig)
+            until v.done timeout 500 ms -> SLOT_FAILED
+            expect v.result.or(false), "signature invalid in slot {idx}"
+            -> JUMP
+
+    state JUMP:
+        enter:
+            active = idx
+            log "booting slot {idx}, version {img.version}"
+            boot_jump = idx as u8                                    # beendet den Lauf nach dem Commit; persist zuvor synchron geschrieben
+
+    state SLOT_FAILED:
+        enter:
+            flash_cmd = NONE
+            log "slot {idx} unusable"
+        when trials[1 - idx] < MAX_TRIALS:
+            idx = 1 - idx
+            if trials[idx] < 5:
+                trials[idx] += 1
+            -> READ_HEADER
+        when true: -> HALT
+
+    state HALT:
+        enter:
+            log "no bootable image"                                  # Watchdog der Plattform loest den Neustart aus

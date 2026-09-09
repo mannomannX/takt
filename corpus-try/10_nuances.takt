@@ -1,0 +1,152 @@
+# 10 — Nuancen ohne anderes Beispiel. Jede Schreibweise, die coverage.py in
+#      keiner anderen Datei findet, kommt hier einmal vor. Muss parsen; die
+#      Semantik ist zweitrangig, aber nicht absichtlich falsch.
+
+system:
+    language = 1
+    tick = 1 ms
+    output_timing = boundary
+
+import takt.filters as filt
+import channels from "site1.hw"
+
+type Pressure = float[bar] in 0..400 bar
+unit degR = affine(K, 0)
+unit knot = 0.514444 m/s
+
+record Trailer layout big, align = 4:
+    crc : u32 offset = 12
+    tag : [4] u8
+    _   : [2] u8
+
+const PAYLOAD_MAX = 64
+param SCALE : float in 0..10 = 1.5
+
+input  spare   : bool @ none
+input  raw_rx  : stream<u8>        @ hw("uart1/rx") with max_rate = 1 kHz, framing = raw, overflow = drop_oldest, capacity_bytes = 512
+input  cobs_rx : stream<bytes<64>> @ hw("uart2/rx") with max_rate = 500 Hz, framing = cobs, overflow = drop
+input  lp_rx   : stream<bytes<64>> @ hw("uart3/rx") with max_rate = 500 Hz, framing = length_prefixed(u16_le)
+input  fix_rx  : stream<bytes<8>>  @ hw("uart4/rx") with max_rate = 500 Hz, framing = fixed(8)
+input  vals    : [4] float[V] in 0..5 V @ hw("daq1/ai[0:4]") with max_age = 10 ms, display = mV, doc = "vier Kanaele"
+input  age_src : float[K] in 0..500 K @ hw("daq1/tc0") with max_age = 100 ms
+output burn    : u8 @ hw("sys/efuse_burn") with safe = 0, irreversible = true
+output tx_raw  : stream<u8> @ hw("uart1/tx") with max_rate = 1 kHz, capacity = 64
+output pulse_o : bool @ hw("gpio/pulse") with safe = false, jitter = 1 us
+
+command reset
+
+enum Shape: CIRCLE(r: float[m]), RECT(w: float[m], h: float[m]), EMPTY
+enum ParseErr: SHORT, BAD
+
+fn fill[const N](inout b: bytes<N>, x: u8):
+    b.push(x)
+
+fn parse(b: bytes<8>) -> u16!ParseErr:
+    var r = reader(b)
+    var v = r.u16_le()
+    if not v.valid:
+        return ERR(SHORT)
+    return OK(v)
+
+native fn crc_custom(b: bytes<64>) -> u32 from "crypto.rs" with cost = 5000, stack = 128, total
+
+block ticker():
+    var n : int in 0..1000 = 0
+    step(x: bool) -> int:
+        if x:
+            n += 1
+        return n
+    zero():
+        n = 0
+
+machine nuances with label = "Nuancen", group = "test":
+    fault -> SAFE
+    var filters = [4] lowpass(tau = 50 ms)
+    var t = ticker()
+    var buf : bytes<64> = default
+    var small : bytes<8> = default
+    var word : u16 = 0
+    var big : u64 = 0
+    var wide : f64 = 0
+    var name : str<16> = "abc"
+    var g : mat<2, 2>[K] = [[1 K, 0 K], [0 K, 1 K]]
+    var m : map<u16, int, 8> = default
+    var vel : float[m/s^2] = 9.81 m/s^2
+    initial RUN
+
+    state RUN with label = "laeuft":
+        loop:
+            check age_src.valid -> SAFE
+            check word != 0xFFFF, "word saturated" req "SR-7"
+            verify big < 10, "big small" req "SR-8"
+            if age_src.stale or age_src.suspect or age_src.age > 50 ms:
+                log "reason {age_src.reason}"
+            var opt : int? = none
+            var cast = wide as int
+            var wrapped = word.wrap_u8()
+            var sat = cast.saturating_add(1)
+            var w2 = cast.wrapping_add(1)
+            var f = fma(1.0, 2.0, 3.0)
+            var hi = word.bits(15, 8)
+            var w3 = word.with_bit(0, true)
+            var rl = rotl(word, 3)
+            var mv = word.to_float(mV)
+            var mins = time_in_state.as(min)
+            word -= 1
+            word *= 2
+            word /= 2
+            word = word << 1 >> 1
+            word = ~word & 0b1010 | 0o17
+            var rem = cast % 3
+            var sl = buf[0..4]
+            var sol = solve(g, [1 K, 2 K])
+            var ch = g.cholesky()
+            buf.clear()
+            m.insert(1, 2)
+            m.remove(1)
+            for x in vals:
+                alert x > 4.5 V, "high {x:.3}"
+            for e in raw_rx:
+                log "byte {e.seq} {{raw}}"
+            if name matches "{s:str<8>}" as cap:
+                log "cap {cap.s}"
+            if name has "b":
+                log "has b"
+            t.reset()
+            var tb = t.step(true)
+            log "count {tb:08}"
+            match cast:
+                case 0..3, 7:
+                    log "small"
+                case _:
+                    log "other"
+            match parse(small):
+                case OK(v):
+                    word = v
+                case ERR(e):
+                    log "err"
+            verify tx_raw.free > 0, "tx space"
+            verify pulse_o.jitter < 5 us, "jitter ok"
+            if last_fault.tick > 0:
+                pass
+        when reset: -> SAFE
+
+    state SAFE:
+        loop:
+            abort
+        when reset: -> RUN
+
+    state FAULTED:
+        when reset: -> RUN
+
+campaign never_stop:
+    program "10_nuances.takt"
+    sweep SCALE = [1.0, 2.0]
+    stop_on never
+
+instance twins[i in 0..2] = pair(idx = i)
+
+machine pair(idx: int in 0..1) every 10 ms:
+    initial RUN
+    state RUN:
+        loop: pass

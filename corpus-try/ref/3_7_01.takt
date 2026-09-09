@@ -1,0 +1,14 @@
+record CanFrame layout little:
+    id: u32 in 0..0x1FFFFFFF
+    dlc: u8 in 0..8
+    data: bytes<8>
+
+record BootStatus:
+    version: int
+    sectors_erased: int in 0..255
+
+enum BootMsg:
+    BOOT(version: int)
+    ERASE(sector: int in 0..255)
+    WRITE(addr: int, len: int in 0..4096)
+    OTHER

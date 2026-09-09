@@ -1,0 +1,20 @@
+# N02 — Transitionsblock endet nicht mit einem Uebergang.
+# Erwartet: Parserfehler (trans_block muss mit "-> ZIEL" enden, 2.3).
+
+system:
+    language = 1
+    tick = 10 ms
+
+input  go  : bool @ hw("gpio/di0") with max_age = 100 ms
+output led : bool @ hw("gpio/led") with safe = false
+
+machine no_goto:
+    initial IDLE
+
+    state IDLE:
+        when go:
+            led = true
+
+    state RUN:
+        loop:
+            pass

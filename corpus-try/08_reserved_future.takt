@@ -1,0 +1,101 @@
+# 08 — Konstrukte spaeterer Stufen. Muss heute PARSEN und von der
+#      semantischen Analyse mit "ab v1.1/v1.2/v2" abgelehnt werden.
+#      Deckt ab: Generics mit type/const, gescopte Instanzen, resume,
+#      Trigger mit arm/disarm, Knoten und Platzierung, property mit monitor,
+#      Treiberstufe (port, driver machine), map, offene Enums, Metadaten.
+
+system:
+    language = 1
+    tick = 1 ms
+
+node io1 @ hw("ethercat/1") with tick = 1 ms
+
+enum Cmd open: NOP, GO, STOP
+enum Level: LOW, MID, HIGH
+
+record Uart0Regs layout little:
+    status : u32 with bits:
+        tx_ready : bool at 0
+        rx_ready : bool at 1
+        errors : u8 at 4..7
+    fifo : u32
+
+port uart0 : Uart0Regs @ mmio(0x60000000)
+
+input  trip_in : bool @ hw("io1/di0") with label = "Trip input", group = "safety"
+input  raw_log : stream<line<128>> @ hw("io1/uart0") with max_rate = 1000 Hz, framing = lines
+output vbus_en : bool @ hw("io1/do0") with safe = false, jitter = 2 us
+output beacon  : bool @ hw("io1/do1") with safe = false
+
+param TAB_SIZE : int in 1..64 = 16
+
+fn scale[type T: numeric](x: T, k: T) -> T:
+    return x * k
+
+fn pick[type T: ord](a: T, b: T) -> T:
+    return a if a > b else b
+
+property never_both: always (not (vbus_en and beacon)) with monitor = true
+property settles: always (trip_in implies stable[100 ms] (not vbus_en))
+
+trigger cut_on_sector node io1:
+    when raw_log matches "SECTOR {n:int}"
+    then at event.t + 250 us: vbus_en = false
+    bound 20 us
+
+machine motor_ctrl node io1 every 250 us:
+    initial RUN
+
+    state RUN:
+        loop:
+            beacon = trip_in
+
+machine supervisor node io1 every 10 ms:
+    fault -> HALTED
+    initial STARTING
+
+    state STARTING:
+        when trip_in: -> RUNNING
+
+    state RUNNING resume:
+        instance guard = leak_guard(sensor = trip_in)
+        instance lamps[i in 0..4] = lamp(index = i)
+        initial COARSE
+
+        enter:
+            arm cut_on_sector
+
+        exit:
+            disarm cut_on_sector
+
+        state COARSE:
+            when trip_in: -> FINE
+
+        state FINE:
+            when not trip_in: -> COARSE
+
+    state HALTED:
+        enter:
+            vbus_en = false
+
+machine leak_guard(sensor: input bool) every 10 ms:
+    initial WATCH
+
+    state WATCH:
+        loop:
+            check not sensor, "leak detected"
+
+machine lamp(index: int in 0..7) every 100 ms:
+    initial ON
+
+    state ON:
+        loop:
+            pass
+
+driver machine uart_tx node io1 every 50 us:
+    initial SEND
+
+    state SEND:
+        loop:
+            if uart0.status.tx_ready:
+                uart0.fifo = 0x41

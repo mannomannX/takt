@@ -1,0 +1,10 @@
+state IGNITION:
+    sequence:
+        fuel_main = OPEN
+        wait 150 ms
+        igniter = true
+        until chamber_p > IGNITION_P timeout 500 ms
+        lox_main = OPEN
+        check chamber_p > IGNITION_P, "flameout"
+        wait BURN_DURATION
+        -> SHUTDOWN

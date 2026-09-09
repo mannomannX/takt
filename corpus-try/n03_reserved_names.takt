@@ -1,0 +1,19 @@
+# N03 — Reserviertes Wort als Bezeichner und reservierter Membername als Feld.
+# Erwartet: zwei Fehler aus 2.5 (Pruefung 50).
+
+system:
+    language = 1
+    tick = 10 ms
+
+record Reading:
+    valid : bool
+    state : int in 0..3
+
+output region : bool @ hw("gpio/do0") with safe = false
+
+machine names:
+    initial RUN
+
+    state RUN:
+        loop:
+            region = true

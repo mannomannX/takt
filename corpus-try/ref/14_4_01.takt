@@ -1,0 +1,23 @@
+fn clamp[U](x: float[U], lo: float[U], hi: float[U]) -> float[U]:
+    return lo if x < lo else (hi if x > hi else x)
+
+block lowpass[U](tau: Duration):
+    var y : float[U] = 0
+    var init : bool = false
+    step(x: float[U], dt: Duration in tick..1 h) -> float[U]:
+        if not init:
+            y = x
+            init = true
+        var a : float = dt.as(s) / (tau.as(s) + dt.as(s))
+        y = y + a * (x - y)
+        return y
+
+block pid[O, E](kp: float[O/E], ki: float[O/E/s], kd: float[O*s/E], out_lo: float[O], out_hi: float[O]):
+    var integral : float[O] = 0
+    var prev_err : float[E] = 0
+    step(err: float[E], dt: Duration in tick..1 h) -> float[O]:
+        var dts : float[s] = dt.as(s)
+        integral = clamp(integral + ki * err * dts, out_lo, out_hi)      # Anti-Windup
+        var deriv : float[O] = kd * (err - prev_err) / dts
+        prev_err = err
+        return clamp(kp * err + integral + deriv, out_lo, out_hi)

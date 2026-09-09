@@ -1,0 +1,7 @@
+campaign brownout_scan:
+    program "supply_interruption.takt"
+    profile QUAL
+    sweep BROWNOUT_DELAY = 2 ms .. 500 ms step 250 us
+    sweep IMAGE = [IMG_A, IMG_B]
+    repeat 2
+    stop_on fail

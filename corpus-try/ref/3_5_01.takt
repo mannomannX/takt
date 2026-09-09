@@ -1,0 +1,5 @@
+loop:
+    check tank_p < LIMIT            # implizit: check tank_p.valid
+    if lox_temp.valid:
+        alert lox_temp > 100 K, "LOX warm"      # explizit abgesichert
+    var t = lox_temp.or(90 K)                    # Fallback, keine Prüfung

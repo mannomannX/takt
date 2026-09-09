@@ -1,0 +1,4 @@
+property no_ignition_without_fuel: always (igniter implies fuel_main == OPEN)
+property abort_recovers:           always (hotfire.state == SAFE implies eventually[10 s] (hotfire.state == IDLE))
+property no_chatter:               always (valve == OPEN implies stable[50 ms] (valve == OPEN))
+property armed_before_fire:        always (igniter implies once[1 s] (armed))

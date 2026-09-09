@@ -1,0 +1,29 @@
+enum ValveCmd: CLOSED, OPEN
+
+machine valve_ctrl(cmd: input bool, pos: input float[pct], out: output ValveCmd,
+                   travel: Duration) every 10 ms:
+    fault -> STUCK
+    initial CLOSED_ST
+
+    state CLOSED_ST:
+        enter: out = CLOSED
+        when cmd: -> OPENING
+    state OPENING:
+        enter: out = OPEN
+        when pos > 95 pct: -> OPEN_ST
+        after travel: -> STUCK
+    state OPEN_ST:
+        when not cmd: -> CLOSING
+    state CLOSING:
+        enter: out = CLOSED
+        when pos < 5 pct: -> CLOSED_ST
+        after travel: -> STUCK
+    state STUCK:
+        enter: out = CLOSED
+        when cmd == false and pos < 5 pct: -> CLOSED_ST
+
+input  open_v1 : bool     @ hw("ui/open_v1")
+input  pos_v1  : float[pct] @ hw("daq1/ai4") with max_age = 20 ms
+output valve_1 : ValveCmd @ hw("plc1/do4") with safe = CLOSED
+
+instance v1 = valve_ctrl(cmd = open_v1, pos = pos_v1, out = valve_1, travel = 2 s)

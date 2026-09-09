@@ -1,0 +1,110 @@
+system:
+    tick = 10 ms
+
+input  cell_v     : [4] float[V] in 2.0..4.5 V @ hw("afe/cell[0:4]")  with max_age = 50 ms
+input  pack_i     : float[A] in -10..10 A       @ hw("afe/current")    with max_age = 50 ms
+input  temp       : [2] float[degC]             @ hw("afe/ntc[0:2]")   with max_age = 200 ms
+input  charger    : bool                        @ hw("gpio/vbus_det")  with wake = true
+input  button     : stream<Edge>                @ hw("gpio/btn")       with max_rate = 50 Hz, wake = true
+input  chg_status : u8                          @ hw("i2c1/0x6B/0x0B") with max_age = 500 ms
+input  image_state : ImageState                 @ hw("sys/image_state")                        # 12.7
+output image_confirm : bool @ hw("sys/image_confirm") with safe = false
+output fet_chg    : bool @ hw("gpio/fet_chg")   with safe = false
+output fet_dis    : bool @ hw("gpio/fet_dis")   with safe = false
+output load_test  : bool @ hw("gpio/test_load") with safe = false
+output led        : u8   @ hw("pwm/led")        with safe = 0
+
+param V_MAX     : float[V] in 4.0..4.3 V = 4.2 V
+param V_MIN     : float[V] in 2.5..3.2 V = 3.0 V
+param I_MAX     : float[A] in 1..10 A = 6 A
+param T_MAX     : float[degC] in 40..70 degC = 60 degC
+param R_INT_MAX : float[mohm] in 20..500 mohm = 150 mohm
+
+const OCV : table<float[V], float[pct]> = [(3.0 V, 0 pct), (3.4 V, 10 pct), (3.6 V, 30 pct),
+                                          (3.8 V, 60 pct), (4.0 V, 85 pct), (4.2 V, 100 pct)]
+
+record SelftestResult:
+    passed: bool
+    code: int in 0..255
+    r_int: float[mohm] in 0..1000 mohm
+
+machine bms every 100 ms:
+    fault -> PROTECT
+    persist var cycle_count : int in 0..100000 = 0 with min_interval = 10 s
+    persist var fault_count : int in 0..100000 = 0 with min_interval = 10 s
+    persist var last_test   : SelftestResult = SelftestResult(passed = false, code = 0, r_int = 0 mohm)
+    pub var soc       : float[pct] = 0 pct
+    pub var charge_as : float[A*s] = 0 A*s
+    var coulomb = integrate[A](limit = 72000 A*s)
+    initial SELFTEST
+
+    state ACTIVE:                                          # Interlocks fuer alle Betriebszustaende
+        loop:
+            for i in range(4):
+                check cell_v[i] < V_MAX + 0.05 V, "cell {i} overvoltage {cell_v[i]}"
+                check cell_v[i] > V_MIN - 0.10 V, "cell {i} undervoltage {cell_v[i]}"
+            check abs(pack_i) < I_MAX, "overcurrent {pack_i}"
+            for i in range(2):
+                check temp[i] < T_MAX, "overtemperature {temp[i]}"
+            check not chg_status.bit(7), "charger IC fault flag"
+            soc = interp(OCV, cell_v.min())
+            charge_as = coulomb.step(pack_i, 100 ms)
+
+        state SELFTEST:
+            sequence:
+                led = 128
+                if cell_v.max() - cell_v.min() > 0.1 V:
+                    last_test = SelftestResult(passed = false, code = 2, r_int = 0 mohm)
+                    -> DEGRADED
+                var v0 = cell_v.mean()
+                load_test = true
+                wait 200 ms
+                var v1 = cell_v.mean()
+                var i1 = pack_i
+                load_test = false
+                var r_int = ((v0 - v1) / max(i1, 0.1 A)).to(mohm)
+                if r_int > R_INT_MAX:
+                    last_test = SelftestResult(passed = false, code = 1, r_int = r_int)
+                    -> DEGRADED
+                last_test = SelftestResult(passed = true, code = 0, r_int = r_int)
+                if image_state.or(CONFIRMED) == TRIAL:        # neues Image nur nach bestandenem Selbsttest bestaetigen; ohne Plattformangabe: bestaetigt
+                    image_confirm = true
+                -> RUN
+
+        state RUN:
+            loop:
+                fet_dis = true
+                fet_chg = charger and cell_v.max() < V_MAX
+                led = round(soc / (100 pct) * 255) as u8
+                if rising(charger):
+                    cycle_count += 1
+            when not charger and abs(pack_i) < 0.05 A: -> IDLE_WAIT
+
+        state IDLE_WAIT:
+            when charger or abs(pack_i) >= 0.05 A: -> RUN
+            after 2 min: -> STANDBY
+
+        state DEGRADED:
+            loop:
+                fet_chg = false
+                fet_dis = true
+                led = 8
+            after 24 h: -> SELFTEST
+
+    state STANDBY idle:                                    # kein loop in Zustand und Vorfahren; nur Wake-Quellen
+        enter:
+            fet_chg = false
+            fet_dis = false
+            led = 0
+        when button matches Edge(rising = true) as e: -> SELFTEST
+        when charger: -> SELFTEST
+        after 7 d: -> SELFTEST
+
+    state PROTECT:                                         # Fault-Ziel; phi(PROTECT) = FAULTED
+        enter:
+            fet_chg = false
+            fet_dis = false
+            led = 255
+            fault_count += 1
+        when fault_count > 20: -> FAULTED
+        after 10 s: -> SELFTEST

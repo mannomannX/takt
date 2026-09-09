@@ -1,0 +1,5 @@
+input  boot_reason   : BootReason  @ hw("sys/boot_reason")      # POWER_ON, WATCHDOG, SOFTWARE, DEEP_SLEEP_WAKE, TRIAL
+input  image_state   : ImageState  @ hw("sys/image_state")      # CONFIRMED, TRIAL
+input  reset_count   : int         @ hw("sys/reset_count")
+output image_confirm : bool        @ hw("sys/image_confirm") with safe = false
+output reboot        : RebootCmd   @ hw("sys/reboot")        with safe = NONE     # NONE, RESTART, DEEP_SLEEP

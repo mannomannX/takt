@@ -1,0 +1,9 @@
+scenario "erase interrupted at sector 3" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            until dut_model.state == ERASING and dut_model.sector == 3 timeout 5 s
+            expect brownout_test.state == CUTTING
+            until brownout_test.state == DONE timeout 10 s
+            verify brownout_test.result == RECOVERED, "expected recovery"
+            verdict pass

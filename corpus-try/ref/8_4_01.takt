@@ -1,0 +1,5 @@
+param PEAK_TEMP   : float[degC] in 20..150 degC = 85 degC
+param CYCLE_COUNT : int in 1..1000 = 20
+profile QUAL:
+    PEAK_TEMP = 120 degC
+    CYCLE_COUNT = 50

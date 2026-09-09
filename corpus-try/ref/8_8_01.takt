@@ -1,0 +1,3 @@
+output dut_tx : stream<u8> @ hw("uart0/tx") with max_rate = 11520 Hz, capacity = 256
+send dut_tx, "UPDATE {size} {crc:hex}\n"      # formatiert in festen Puffer (Hoechstlaenge statisch bekannt)
+send dut_tx, frame.encode()                   # bytes<N>

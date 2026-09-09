@@ -1,0 +1,12 @@
+input  charger : bool          @ hw("gpio/vbus_det") with wake = true
+input  button  : stream<Edge>  @ hw("gpio/btn")      with max_rate = 50 Hz, wake = true
+command wake_up with wake = true
+
+machine field_device:
+    initial STANDBY
+
+    state STANDBY idle:
+        enter: led = 0
+        when button matches Edge(rising = true) as e: -> SELFTEST
+        when charger: -> SELFTEST
+        after 7 d: -> SELFTEST

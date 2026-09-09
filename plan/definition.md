@@ -159,10 +159,14 @@ reserviert (ohne Bedeutung, als Bezeichner verboten): region while yield await a
      (* @stage vX *)        die ganze Produktion gehoert zu einer spaeteren Stufe;
                             gemischte Produktionen nennen die Stufe an der Alternative
      (* @start *)           zusaetzlicher Startsymbol (Teilsprachen in STRING)
+     (* @check 8, 25 *)     statische Pruefungen aus Abschnitt 10, die an dieser
+                            Produktion ansetzen, aber vom Compiler-Gate erzwungen werden
 
-   Terminale, die nicht in der Schluesselwortliste (2.2) stehen (z. B. bool,
-   int, channels, then, little, asap), sind kontextuell: sie gelten nur an
-   ihrer Stelle und bleiben andernorts als Bezeichner erlaubt.
+   Schluesselwoerter (2.2) sind die Woerter, die eine Aussage, Deklaration
+   oder Klausel am Zeilenanfang einleiten oder in Ausdruecken als Operator
+   oder Literal wirken. Alle anderen Terminale (Typnamen, Attributnamen,
+   Positionswoerter wie layout, offset, timeout, idle) sind kontextuell: sie
+   gelten nur an ihrer Stelle und bleiben andernorts als Bezeichner erlaubt.
    ====================================================================== *)
 
 (* ---------------------------------------------------------------- Tokens *)
@@ -170,7 +174,7 @@ reserviert (ohne Bedeutung, als Bezeichner verboten): region while yield await a
 NEWLINE     := (* Zeilenende ausserhalb offener Klammern *)
 INDENT      := (* Einrueckung um 4 Leerzeichen; Tabs sind Fehler (2.1) *)
 DEDENT      := (* Rueckkehr auf eine aeussere Einrueckungsstufe *)
-IDENT       := (* [a-z_][a-z0-9_]* — snake_case; auch now, time_in_state, last_fault *)
+IDENT       := (* [a-z_][a-z0-9_]* — snake_case; eingebaute Groessen now, time_in_state, tick, last_fault sind IDENT (3.3) *)
 UPPER_IDENT := (* [A-Z][A-Z0-9_]* — Konstanten, Parameter, Zustaende, Varianten, Einheiten-/Typ-/Konstantenvariablen *)
 TYPE_IDENT  := (* [A-Z][A-Za-z0-9]* mit mindestens einem Kleinbuchstaben — PascalCase-Typnamen *)
 KEYWORD     := (* jedes Wort aus 2.2; nach "." ist es ein Membername (2.5) *)
@@ -179,8 +183,10 @@ HEX         := (* 0x[0-9a-fA-F_]+ *)
 BIN         := (* 0b[01_]+ *)
 OCT         := (* 0o[0-7_]+ *)
 FLOAT       := (* [0-9][0-9_]*\.[0-9_]+([eE][+-]?[0-9]+)? | [0-9]+[eE][+-]?[0-9]+ *)
+DURATION    := (* Zahl, Leerraum, genau ein Zeitsuffix ns us ms s min h d; Wert exakt in ns (3.3, lexer.md L4.4) *)
 STRING      := (* "..." mit Escapes \" \\ \n \t; Inhalt nach format_text bzw. pattern_text *)
 TEXT_CHAR   := (* ein Zeichen innerhalb eines STRING, das nicht "{" oder "}" ist *)
+ADDR_WORD   := (* [A-Za-z0-9_][A-Za-z0-9_.-]* — Segment einer Hardware-Adresse, z. B. daq1, ai0, 0x36 *)
 
 RESERVED    := "region" | "while" | "yield" | "await" | "async" | "spawn" | "select" | "where"
              | "impl" | "trait" | "module" | "export" | "extern" | "unsafe" | "try" | "catch"
@@ -189,7 +195,7 @@ RESERVED    := "region" | "while" | "yield" | "await" | "async" | "spawn" | "sel
 
 (* ---------------------------------------------------------------- Datei *)
 
-file           := { NEWLINE | import | system_decl | type_decl | unitvec_decl | enum_decl | record_decl | unit_decl
+file           := { NEWLINE | import | system_decl | type_decl | unitvec_decl | enum_decl | record_decl | unit_decl   (* @check 1 *)
                   | stream_decl | port_decl | node_decl | property_decl
                   | const_decl | param_decl | profile_decl | channel_decl | command_decl
                   | fn_decl | native_decl | block_decl | machine_decl | instance_decl
@@ -201,41 +207,42 @@ system_decl    := "system" ":" NEWLINE INDENT { system_item } DEDENT
 system_item    := "tick" "=" duration_lit NEWLINE
                 | "output_timing" "=" ( "asap" | "boundary" ) NEWLINE
                 | "fault_is_fail" "=" ( "true" | "false" ) NEWLINE
-                | "tick_source" "=" "hw" "(" STRING ")" NEWLINE
-                | "tick_tolerance" "=" const_expr [ "for" INT "ticks" ] NEWLINE
+                | "tick_source" "=" "hw" "(" STRING ")" NEWLINE                              (* STRING nach address_text *)
+                | "tick_tolerance" "=" const_expr [ "for" int_lit "ticks" ] NEWLINE
                 | "target" "=" IDENT NEWLINE                                              (* Laufzeitprofil, 12.8 *)
                 | "float" "=" ( "f32" | "f64" ) NEWLINE                                    (* Breite von float, 4.2; Default f64 *)
-                | "language" "=" INT NEWLINE                                                (* Edition, 2.5 *)
+                | "language" "=" INT NEWLINE                                                (* Edition, 2.5 *)   (* @check 49 *)
 
 (* ---------------------------------------------------------------- Typen und Einheiten *)
 
 type_decl      := "type" TYPE_IDENT "=" type NEWLINE
 unitvec_decl   := "unitvec" UPPER_IDENT "=" "(" unit_expr { "," unit_expr } ")" NEWLINE    (* @stage v1.1 — 3.11 *)
-enum_decl      := "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" variant { "," variant } NEWLINE   (* layout: 3.7; open: 2.5 *)
+enum_decl      := "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" variant { "," variant } NEWLINE   (* layout: 3.7; open: 2.5 *)   (* @check 51 *)
                 | "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" NEWLINE INDENT { variant NEWLINE } DEDENT
-variant        := UPPER_IDENT [ "=" INT ] [ "(" field { "," field } ")" ]                 (* explizite Diskriminante *)
-record_decl    := "record" TYPE_IDENT [ "layout" ( "little" | "big" ) [ "," "align" "=" INT ] ] ":" NEWLINE INDENT { field NEWLINE } DEDENT
-field          := ( IDENT | "_" ) ":" type [ "=" const_expr ] [ "offset" "=" INT ] [ "with" "len" "=" IDENT ]   (* "_": Padding; Konstantenfeld, Offset, len_field: 3.7 *)
-                | IDENT ":" int_type "with" "bits" ":" NEWLINE INDENT { bitfield NEWLINE } DEDENT
-bitfield       := IDENT ":" ( "bool" | int_type ) "at" INT [ ".." INT ]
-unit_decl      := "unit" IDENT "=" number unit_expr NEWLINE
+variant        := UPPER_IDENT [ "=" int_lit ] [ "(" field { "," field } ")" ]             (* explizite Diskriminante, auch 0x00 *)
+record_decl    := "record" TYPE_IDENT [ "layout" ( "little" | "big" ) [ "," "align" "=" int_lit ] ] ":" NEWLINE INDENT { record_field } DEDENT   (* @check 46 *)
+record_field   := field NEWLINE
+                | IDENT ":" int_type "with" "bits" ":" NEWLINE INDENT { bitfield NEWLINE } DEDENT   (* endet mit DEDENT, daher kein NEWLINE *)
+field          := ( IDENT | "_" ) ":" type [ "=" const_expr ] [ "offset" "=" int_lit ] [ "with" "len" "=" IDENT ]   (* "_": Padding; Konstantenfeld, Offset, len_field: 3.7 *)   (* @check 37, 50 *)
+bitfield       := IDENT ":" ( "bool" | int_type ) "at" int_lit [ ".." int_lit ]   (* @check 46 *)
+unit_decl      := "unit" IDENT "=" number [ unit_expr ] NEWLINE                              (* ohne unit_expr: dimensionslos wie pct, 3.2 *)
                 | "unit" IDENT "=" "affine" "(" unit_expr "," number ")" NEWLINE
 
 (* ---------------------------------------------------------------- Konstanten, Parameter, Channels *)
 
 const_decl     := "const" UPPER_IDENT [ ":" type ] "=" const_expr NEWLINE
-param_decl     := [ "tunable" ] "param" UPPER_IDENT ":" type "=" const_expr [ "with" attr { "," attr } ] NEWLINE   (* tunable: 8.4, v1.1; with: Metadaten 2.5 *)
+param_decl     := [ "tunable" ] "param" UPPER_IDENT ":" type "=" const_expr [ "with" attr { "," attr } ] NEWLINE   (* tunable: 8.4, v1.1; with: Metadaten 2.5 *)   (* @check 35 *)
 profile_decl   := "profile" UPPER_IDENT ":" NEWLINE INDENT { UPPER_IDENT "=" const_expr NEWLINE } DEDENT
 
-channel_decl   := ( "input" | "output" ) IDENT ":" type "@" binding [ "with" attr { "," attr } ] NEWLINE
-stream_decl    := "stream" "<" elem_type ">" IDENT "with" attr { "," attr } NEWLINE            (* interner Stream, 8.6 *)
+channel_decl   := ( "input" | "output" ) IDENT ":" type "@" binding [ "with" attr { "," attr } ] NEWLINE   (* @check 7, 17 *)
+stream_decl    := "stream" "<" elem_type ">" IDENT "with" attr { "," attr } NEWLINE            (* interner Stream, 8.6 *)   (* @check 43 *)
 port_decl      := "port" IDENT ":" TYPE_IDENT "@" "mmio" "(" HEX ")" NEWLINE                    (* @stage v1.2 — Treiberstufe *)
-binding        := "hw" "(" STRING ")" | "sim" "(" STRING ")" | "none"
-attr           := "safe" "=" const_expr | "max_age" "=" duration_lit | "rate" "=" const_expr
-                | "max_rate" "=" const_expr | "capacity" "=" INT | "framing" "=" framing
+binding        := "hw" "(" STRING ")" | "sim" "(" STRING ")" | "none"                       (* STRING nach address_text *)   (* @check 7, 13 *)
+attr           := "safe" "=" const_expr | "max_age" "=" duration_lit | "rate" "=" const_expr   (* @check 17, 28, 48 *)
+                | "max_rate" "=" const_expr | "capacity" "=" int_lit | "framing" "=" framing
                 | "overflow" "=" ( "fault" | "drop_oldest" | "drop" ) | "wake" "=" ( "true" | "false" )
-                | "jitter" "=" duration_lit | "max_slew" "=" const_expr | "debounce" "=" INT
-                | "capacity_bytes" "=" INT | "expect_len" "=" INT                              (* Byte-Ring, 8.6 *)
+                | "jitter" "=" duration_lit | "max_slew" "=" const_expr | "debounce" "=" int_lit
+                | "capacity_bytes" "=" int_lit | "expect_len" "=" int_lit                      (* Byte-Ring, 8.6 *)
                 | "irreversible" "=" "true"                                                    (* 12.7 *)
                 | "label" "=" STRING | "display" "=" unit_expr | "group" "=" STRING | "doc" "=" STRING   (* Metadaten, 2.5; v1.1 *)
 framing        := "raw" | "lines" | "cobs" | "length_prefixed" "(" IDENT ")" | "fixed" "(" INT ")"
@@ -243,52 +250,54 @@ command_decl   := "command" IDENT [ "with" attr { "," attr } ] NEWLINE          
 
 (* ---------------------------------------------------------------- Funktionen, Natives, Bloecke *)
 
-fn_decl        := "fn" IDENT [ generic_vars ] "(" [ params ] ")" "->" type ":" block
-native_decl    := "native" ( "fn" | "job" ) IDENT [ generic_vars ] "(" [ params ] ")" "->" type
+fn_decl        := "fn" IDENT [ generic_vars ] "(" [ params ] ")" [ "->" type ] ":" block   (* ohne Rueckgabetyp nur mit inout-Parameter, 3.9 *)   (* @check 11, 47 *)
+native_decl    := "native" ( "fn" | "job" ) IDENT [ generic_vars ] "(" [ params ] ")" "->" type   (* @check 31 *)
                   [ "from" STRING ]                                                          (* Projekt-Native, 4.5; v1.1 *)
                   "with" "cost" "=" cost_spec "," "stack" "=" INT [ "," "duration" "=" duration_lit ] "," "total" NEWLINE   (* 4.5 *)
-cost_spec      := INT | "{" IDENT ":" INT { "," IDENT ":" INT } "}"                      (* Klassen i32 i64 f32 f64 mem call native *)
+cost_spec      := int_lit | "{" cost_class ":" int_lit { "," cost_class ":" int_lit } "}"   (* ein Wert zaehlt in i32 (4.5) *)
+cost_class     := "i32" | "i64" | "f32" | "f64" | "mem" | "call" | "native"               (* Operationsklassen, 9.4.3 *)
 block_decl     := "block" IDENT [ generic_vars ] "(" [ params ] ")" ":" NEWLINE INDENT { var_decl NEWLINE }
                   ( step_decl { method_decl } | method_decl { method_decl } ) DEDENT
-step_decl      := "step" "(" [ params ] ")" "->" type ":" block                              (* hoechstens einmal je Instanz und Tick, 5.7 *)
+step_decl      := "step" "(" [ params ] ")" "->" type ":" block                              (* hoechstens einmal je Instanz und Tick, 5.7 *)   (* @check 11 *)
 method_decl    := IDENT "(" [ params ] ")" [ "->" type ] ":" block                           (* weitere Methoden wie start/stop/elapsed, 11.4 *)
-generic_vars   := "[" gvar { "," gvar } "]"          (* 3.12: Einheiten- (v1), Typ- und Konstantenvariablen (v1.2) *)
-gvar           := UPPER_IDENT | "type" UPPER_IDENT [ ":" capability ] | "const" UPPER_IDENT [ "in" range ]
+generic_vars   := "[" gvar { "," gvar } "]"          (* 3.12: Einheiten- (v1), Typ- und Konstantenvariablen (v1.2) *)   (* @check 52 *)
+gvar           := UPPER_IDENT | "type" UPPER_IDENT [ ":" capability ] | "const" UPPER_IDENT [ "in" range ]   (* @check 52 *)
 capability     := "pod" | "eq" | "ord" | "numeric" | "integer" | "float"
 params         := param { "," param }
-param          := [ "inout" ] IDENT ":" [ "input" | "output" ] type [ "=" const_expr ]      (* inout nur in fn, 3.9; input/output nur in machine *)
+param          := [ "inout" ] IDENT ":" [ "input" | "output" ] type [ "=" const_expr ]      (* inout nur in fn, 3.9; input/output nur in machine *)   (* @check 47 *)
 
 (* ---------------------------------------------------------------- Maschinen *)
 
-machine_decl   := [ "driver" ] "machine" IDENT [ "(" params ")" ] [ "follows" IDENT { "," IDENT } ] [ "node" IDENT ]   (* driver: v1.2; node: 12.9, v2 *)
+machine_decl   := [ "driver" ] "machine" IDENT [ "(" params ")" ] [ "follows" IDENT { "," IDENT } ] [ "node" IDENT ]   (* driver: v1.2; node: 12.9, v2 *)   (* @check 33 *)
                   [ "every" duration_lit ] [ "phase" duration_lit ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT machine_body DEDENT   (* follows: 7.2, v1.1; with: Metadaten 2.5 *)
-machine_body   := { var_decl NEWLINE | persist_decl | signal_decl | fault_clause }
+machine_body   := { var_decl NEWLINE | persist_decl | signal_decl | fault_clause }   (* @check 8 *)
                   "initial" UPPER_IDENT NEWLINE [ loop_block ] { on_handler } { state_decl }
-persist_decl   := "persist" "var" IDENT ":" type "=" const_expr [ "with" "min_interval" "=" duration_lit ] NEWLINE   (* @stage v1.1 — 5.9 *)
+persist_decl   := "persist" "var" IDENT ":" type "=" const_expr [ "with" "min_interval" "=" duration_lit ] NEWLINE   (* @stage v1.1 — 5.9 *)   (* @check 23 *)
 signal_decl    := "signal" IDENT NEWLINE
-state_decl     := "state" UPPER_IDENT [ "idle" ] [ "resume" ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT state_body DEDENT   (* idle: 5.10, v1.1; resume: 5.12, v1.2; with: Metadaten 2.5 *)
-state_body     := { fault_clause | var_decl NEWLINE | instance_decl } [ "initial" UPPER_IDENT NEWLINE ]   (* instance_decl im Zustand: gescopte Instanz, 5.11 *)
+state_decl     := "state" UPPER_IDENT [ "idle" ] [ "resume" ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT state_body DEDENT   (* idle: 5.10, v1.1; resume: 5.12, v1.2; with: Metadaten 2.5 *)   (* @check 8, 22, 54 *)
+state_body     := { fault_clause | var_decl NEWLINE | instance_decl } [ "initial" UPPER_IDENT NEWLINE ]   (* instance_decl im Zustand: gescopte Instanz, 5.11 *)   (* @check 25, 53 *)
                   [ enter_block ] [ loop_block ] { on_handler } [ sequence_block ] { transition } [ exit_block ] { state_decl }
-fault_clause   := "fault" "->" UPPER_IDENT NEWLINE
+fault_clause   := "fault" "->" UPPER_IDENT NEWLINE   (* @check 9 *)
 enter_block    := "enter" ":" action_block
 exit_block     := "exit" ":" action_block
 loop_block     := "loop" ":" block
-on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] ":" block
-transition     := ( "when" guard | "after" duration_expr ) ":" trans_block
-guard          := expr | postfix ( "matches" | "has" ) pattern [ "as" IDENT ] | postfix "as" IDENT   (* letzteres: naechstes Element, 8.7; postfix auch fuer m.fired, cells[i].done *)
-trans_block    := goto_stmt NEWLINE | NEWLINE INDENT { stmt } goto_stmt NEWLINE DEDENT
+on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] ":" block   (* @check 27 *)
+transition     := ( "when" guard | "after" duration_expr ) ":" trans_block   (* @check 14 *)
+guard          := expr | postfix ( "matches" | "has" ) pattern [ "as" IDENT ] | postfix "as" IDENT   (* letzteres: naechstes Element, 8.7; postfix auch fuer m.fired, cells[i].done. "as" IDENT ist Bindung, ausser IDENT ist ein Skalartypname: dann Cast *)
+trans_block    := goto_stmt NEWLINE | NEWLINE INDENT { stmt } goto_stmt NEWLINE DEDENT   (* @check 8 *)
 
 sequence_block := "sequence" ":" NEWLINE INDENT { seq_item } DEDENT
-seq_item       := stmt
+seq_item       := stmt   (* @check 14 *)
                 | "wait" duration_expr NEWLINE
-                | "until" guard [ "timeout" duration_expr [ "->" UPPER_IDENT | "else" ":" action_block ] ] NEWLINE
+                | "until" guard [ "timeout" duration_expr [ "->" UPPER_IDENT ] ] NEWLINE
+                | "until" guard "timeout" duration_expr "else" ":" action_block           (* weicher Timeout, 6.2; der Block traegt sein Zeilenende *)
                 | "expect" expr [ "," STRING ] NEWLINE
                 | "repeat" const_expr ":" NEWLINE INDENT { seq_item } DEDENT
                 | "step" STRING ":" NEWLINE INDENT { seq_item } DEDENT
 
-instance_decl  := "instance" IDENT [ "[" IDENT "in" range "]" ] [ "resume" ] "=" IDENT "(" [ args ] ")" NEWLINE   (* resume: 5.11, v1.2 *)
-node_decl      := "node" IDENT "@" "hw" "(" STRING ")" [ "with" "tick" "=" duration_lit ] NEWLINE          (* @stage v2 — 12.9 *)
-property_decl  := "property" IDENT ":" tprop [ "with" "monitor" "=" "true" ] NEWLINE                     (* @stage v1.1 — 13.3 *)
+instance_decl  := "instance" IDENT [ "[" IDENT "in" range "]" ] [ "resume" ] "=" IDENT "(" [ args ] ")" NEWLINE   (* resume: 5.11, v1.2 *)   (* @check 53 *)
+node_decl      := "node" IDENT "@" "hw" "(" STRING ")" [ "with" "tick" "=" duration_lit ] NEWLINE          (* @stage v2 — 12.9 *)   (* @check 58 *)
+property_decl  := "property" IDENT ":" tprop [ "with" "monitor" "=" "true" ] NEWLINE                     (* @stage v1.1 — 13.3 *)   (* @check 56 *)
 tprop          := tprop_implies                                                                          (* @stage v1.1 — beschraenkte Temporallogik, 13.3 *)
 tprop_implies  := tprop_or { "implies" tprop_or }
 tprop_or       := tprop_and { "or" tprop_and }
@@ -298,18 +307,18 @@ tprop_atom     := "always" "(" tprop ")" | "never" "(" tprop ")"
                 | "eventually" "[" duration_lit "]" "(" tprop ")" | "stable" "[" duration_lit "]" "(" tprop ")"
                 | "once" "[" duration_lit "]" "(" tprop ")"
                 | "(" tprop ")" | expr
-scenario_decl  := "scenario" STRING [ "every" duration_lit ] ":" NEWLINE INDENT machine_body DEDENT      (* @stage v1.1 — 13.6 *)
+scenario_decl  := "scenario" STRING [ "every" duration_lit ] ":" NEWLINE INDENT machine_body DEDENT      (* @stage v1.1 — 13.6 *)   (* @check 26 *)
 campaign_decl  := "campaign" IDENT ":" NEWLINE INDENT { campaign_item } DEDENT                            (* @stage v1.1 — 13.7 *)
-campaign_item  := "program" STRING NEWLINE | "profile" UPPER_IDENT NEWLINE
+campaign_item  := "program" STRING NEWLINE | "profile" UPPER_IDENT NEWLINE   (* @check 29 *)
                 | "sweep" UPPER_IDENT "=" ( const_expr ".." const_expr "step" const_expr
                                           | "[" const_expr { "," const_expr } "]" ) NEWLINE
-                | "repeat" INT NEWLINE | "stop_on" ( "fail" | "never" ) NEWLINE
-trigger_decl   := "trigger" IDENT [ "node" IDENT ] ":" NEWLINE INDENT "when" guard NEWLINE "then" at_stmt "bound" duration_lit NEWLINE DEDENT   (* @stage v1.2 — 7.5 *)
+                | "repeat" int_lit NEWLINE | "stop_on" ( "fail" | "never" ) NEWLINE
+trigger_decl   := "trigger" IDENT [ "node" IDENT ] ":" NEWLINE INDENT "when" guard NEWLINE "then" at_stmt "bound" duration_lit NEWLINE DEDENT   (* @stage v1.2 — 7.5 *)   (* @check 55 *)
 
 (* ---------------------------------------------------------------- Statements *)
 
 block          := NEWLINE INDENT stmt { stmt } DEDENT | simple_stmt NEWLINE
-action_block   := block                       (* statisch eingeschraenkt: siehe 5.5 *)
+action_block   := block                       (* statisch eingeschraenkt: siehe 5.5 *)   (* @check 8 *)
 stmt           := simple_stmt NEWLINE | if_stmt | for_stmt | match_stmt | at_stmt | every_stmt
 simple_stmt    := assign | var_decl | job_stmt | arm_stmt | check_stmt | alert_stmt | log_stmt | goto_stmt
                 | abort_stmt | return_stmt | send_stmt | pulse_stmt | cancel_stmt
@@ -318,25 +327,25 @@ assign         := lvalue ( "=" | "+=" | "-=" | "*=" | "/=" ) expr
 lvalue         := IDENT { "." member | "[" expr "]" | "[" expr "," expr "]" }              (* Variable, Output, Feld, Element *)
 var_decl       := [ "pub" ] "var" IDENT [ ":" type ] "=" expr
 if_stmt        := "if" expr ":" block { "elif" expr ":" block } [ "else" ":" block ]
-for_stmt       := "for" ( IDENT | "(" IDENT "," IDENT ")" ) "in" ( "range" "(" const_expr ")" | expr ) ":" block   (* expr: Array, Stream, samples, map (3.9) *)
-match_stmt     := "match" expr ":" NEWLINE INDENT { "case" case_pattern ":" block } DEDENT
+for_stmt       := "for" ( IDENT | "(" IDENT "," IDENT ")" ) "in" ( "range" "(" const_expr ")" | expr ) ":" block   (* expr: Array, Stream, samples, map (3.9) *)   (* @check 11 *)
+match_stmt     := "match" expr ":" NEWLINE INDENT { "case" case_pattern ":" block } DEDENT   (* @check 19, 51 *)
 case_pattern   := UPPER_IDENT [ "(" IDENT { "," IDENT } ")" ] | "_"
                 | const_expr [ ".." const_expr ] { "," const_expr [ ".." const_expr ] }       (* Bereiche und Mehrfachwerte *)
-at_stmt        := "at" duration_expr ":" action_block
-every_stmt     := "every" duration_expr ":" block
-check_stmt     := "check" expr [ "," STRING ] [ "for" duration_expr ] [ "->" UPPER_IDENT ] [ "req" STRING ]   (* for: 5.6; req: v1.2 *)
-alert_stmt     := "alert" expr "," STRING [ "for" duration_expr ]
+at_stmt        := "at" duration_expr ":" action_block   (* @check 21, 28 *)
+every_stmt     := "every" duration_expr ":" block   (* @check 27 *)
+check_stmt     := "check" expr [ "," STRING ] [ "for" duration_expr ] [ "->" UPPER_IDENT ] [ "req" STRING ]   (* for: 5.6; req: v1.2 *)   (* @check 9, 36 *)
+alert_stmt     := "alert" expr "," STRING [ "for" duration_expr ]   (* @check 36 *)
 log_stmt       := "log" STRING                                                               (* Inhalt nach format_text *)
-send_stmt      := "send" IDENT "," expr
-pulse_stmt     := "pulse" IDENT "=" expr "for" duration_expr
+send_stmt      := "send" IDENT "," expr   (* @check 20 *)
+pulse_stmt     := "pulse" IDENT "=" expr "for" duration_expr   (* @check 21 *)
 cancel_stmt    := "cancel" IDENT
 measure_stmt   := "measure" IDENT "=" expr
-job_stmt       := "job" IDENT "=" IDENT "(" [ args ] ")"                                     (* 4.5 *)
-arm_stmt       := ( "arm" | "disarm" ) IDENT                                                 (* @stage v1.2 — 7.5 *)
+job_stmt       := "job" IDENT "=" IDENT "(" [ args ] ")"                                     (* 4.5 *)   (* @check 44 *)
+arm_stmt       := ( "arm" | "disarm" ) IDENT                                                 (* @stage v1.2 — 7.5 *)   (* @check 55 *)
 verify_stmt    := "verify" expr "," STRING [ "req" STRING ]
 verdict_stmt   := "verdict" ( "pass" | "fail" ) [ STRING ]
 raise_stmt     := "raise" IDENT
-goto_stmt      := "->" UPPER_IDENT
+goto_stmt      := "->" UPPER_IDENT   (* @check 8 *)
 abort_stmt     := "abort" [ STRING ]
 return_stmt    := "return" expr
 
@@ -351,16 +360,15 @@ cmp_expr       := bitor_expr [ ( "<" | "<=" | ">" | ">=" | "==" | "!=" ) bitor_e
 bitor_expr     := bitxor_expr { "|" bitxor_expr }
 bitxor_expr    := bitand_expr { "^" bitand_expr }
 bitand_expr    := shift_expr { "&" shift_expr }
-shift_expr     := add_expr { ( "<<" | ">>" ) add_expr }
+shift_expr     := add_expr { ( "<<" | ">>" ) add_expr }   (* @check 24 *)
 add_expr       := mul_expr { ( "+" | "-" ) mul_expr }
 mul_expr       := unary { ( "*" | "/" | "%" ) unary }
 unary          := "-" unary | "~" unary | cast_expr
-cast_expr      := postfix [ "as" scalar_type ]
-postfix        := primary { "." member [ "(" [ args ] ")" ] | "[" expr [ ".." expr ] "]" | "[" expr "," expr "]" }
-member         := IDENT | KEYWORD                    (* nach "." ist jedes Wort ein Membername: .as .or .len .state .step .bits .jitter (2.5) *)
-primary        := number [ unit_expr ] | duration_lit | STRING | "true" | "false" | "none" | "default"
-                | "tick"                                                                     (* Basis-Tick als Duration, 3.3 *)
-                | IDENT [ generic_args ] [ "(" [ args ] ")" ]                                (* Variable, Aufruf, explizite Instanziierung clamp[bar](...) *)
+cast_expr      := postfix [ "as" scalar_type ]   (* @check 24 *)
+postfix        := primary { "." member [ "(" [ args ] ")" ] | "[" expr [ ".." expr ] "]" | "[" expr "," expr "]" }   (* @check 24 *)
+member         := IDENT | KEYWORD                    (* nach "." ist jedes Wort ein Membername: .as .or .len .state .step .bits .jitter (2.5) *)   (* @check 50 *)
+primary        := number [ unit_expr ] | duration_lit | STRING | "true" | "false" | "none" | "default"   (* unit_expr kompakt ohne Leerraum, lexer.md L4.3 *)
+                | IDENT [ generic_args ] [ "(" [ args ] ")" ]                                (* Variable, eingebaute Groesse (now, tick, event), Aufruf, Instanziierung clamp[bar](...): IDENT "[" ... "]" "(" ist Instanziierung, sonst Index in postfix *)
                 | "(" expr ")" | "(" expr "," expr ")"                                       (* Gruppe; Stuetzstelle einer table, 3.9 *)
                 | UPPER_IDENT [ "(" [ args ] ")" ]
                 | TYPE_IDENT [ "(" [ args ] ")" ]                                            (* Konstruktor oder Typ mit Methode: CanFrame.decode(b) *)
@@ -370,39 +378,42 @@ generic_args   := "[" generic_arg { "," generic_arg } "]"
 generic_arg    := unit_expr | type | const_expr                                              (* Einheit (v1); Typ oder Konstante (3.12, v1.2); Klasse nach Namensform *)
 args           := arg { "," arg }
 arg            := [ IDENT "=" ] expr
-number         := INT | HEX | BIN | OCT | FLOAT
-duration_lit   := number ( "ns" | "us" | "ms" | "s" | "min" | "h" | "d" )                  (* genau ein Zeitsuffix; sonst Einheitenliteral (3.3) *)
+number         := int_lit | FLOAT
+int_lit        := INT | HEX | BIN | OCT                 (* ganze Zahl in jeder Schreibweise (3.1); INT allein nur, wo die Form Bedeutung hat: Edition, Exponent, Formatbreite *)
+duration_lit   := DURATION                      (* Zahl mit genau einem Zeitsuffix ns us ms s min h d; sonst Einheitenliteral (3.3, lexer.md L4.4) *)
 duration_expr  := expr                          (* Typ Duration *)
-pattern        := STRING                        (* Musterliteral, Inhalt nach pattern_text (8.7) *)
+pattern        := STRING                        (* Musterliteral, Inhalt nach pattern_text (8.7) *)   (* @check 18 *)
                 | TYPE_IDENT "(" [ IDENT "=" const_expr { "," IDENT "=" const_expr } ] ")"   (* Record-Muster, 8.7 *)
 unit_expr      := unit_term { ( "*" | "/" ) unit_term }
-unit_term      := ( IDENT | UPPER_IDENT ) [ "^" INT ] | "1"            (* Einheitenname oder Einheitenvariable; "1" = dimensionslos, z. B. 1/s *)
+unit_term      := ( IDENT | UPPER_IDENT | TYPE_IDENT ) [ "^" INT ] | "1"   (* Einheitenname jeder Form (bar, mV, V, Hz, KiB) oder Einheitenvariable; "1" = dimensionslos, z. B. 1/s *)
 
 (* ---------------------------------------------------------------- Typausdruecke *)
 
-type           := scalar_type [ "in" range ] [ "?" | "!" TYPE_IDENT ] | "[" const_expr "]" type | TYPE_IDENT [ "?" | "!" TYPE_IDENT ]
+type           := scalar_type [ "in" range ] [ "?" | "!" TYPE_IDENT ] | "[" const_expr "]" type | TYPE_IDENT [ "?" | "!" TYPE_IDENT ]   (* @check 30, 45, 57 *)
                 | "bytes" "<" const_expr ">" | "vec" "<" type "," const_expr ">" | "line" "<" const_expr ">"
                 | "stream" "<" elem_type ">" | "samples" "<" type "," const_expr ">" | "table" "<" type "," type ">"
                 | "mat" "<" const_expr "," const_expr ">" [ "[" unit_expr "]" ]                   (* 3.11, uniform *)
                 | "mat" "[" unit_tuple "," unit_tuple "]" | "vec" "[" unit_tuple "]"               (* 3.11, dimensioniert; v1.1 *)
                 | "map" "<" type "," type "," const_expr ">"                                       (* 3.9, v1.1 *)
-                | "capture" "<" type "," const_expr ">"                                            (* 8.9, v1.2; nur als Stream-Element *)
-                | UPPER_IDENT                                                                      (* Typvariable, 3.12; v1.2 *)
-scalar_type    := "bool" | int_type [ "[" unit_expr "]" ]                                        (* Einheiten auf Integern: 3.2; v1.1 *)
+                | UPPER_IDENT [ "?" | "!" TYPE_IDENT ]                                             (* Typvariable, 3.12; v1.2 *)
+scalar_type    := "bool" | int_type [ "[" unit_expr "]" ]                                        (* Einheiten auf Integern: 3.2; v1.1 *)   (* @check 38 *)
                 | "float" [ "[" unit_expr "]" ] | "f32" [ "[" unit_expr "]" ] | "f64" [ "[" unit_expr "]" ]
                 | "Duration" | "str" "<" const_expr ">"
-int_type       := "int" | "i8" | "i16" | "i32" | "u8" | "u16" | "u32" | "u64"
-unit_tuple     := UPPER_IDENT | "1" "/" UPPER_IDENT | "(" unit_expr { "," unit_expr } ")"      (* unitvec-Name, sein Kehrwert, oder Literal *)
+int_type       := "int" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"      (* i64 ist gleichbedeutend mit int, 3.1 *)
+unit_tuple     := UPPER_IDENT | "1" "/" UPPER_IDENT | "(" unit_expr { "," unit_expr } ")"      (* unitvec-Name, sein Kehrwert, oder Literal *)   (* @check 34 *)
 elem_type      := "u8" | "bytes" "<" const_expr ">" | "line" "<" const_expr ">" | "Edge" | TYPE_IDENT
+                | "capture" "<" type "," const_expr ">"                                            (* 8.9, v1.2; nur hier, nicht als allgemeiner Typ *)
 range          := const_expr ".." const_expr
-const_expr     := expr                          (* nur Literale, const, param, fn-Aufrufe darauf *)
+const_expr     := expr                          (* nur Literale, const, param, eingebaute Konstanten wie tick, fn-Aufrufe darauf (11.3) *)   (* @check 35 *)
 
 (* ---------------------------------------------------------------- Teilsprachen in STRING *)
 
-pattern_text   := { TEXT_CHAR | "{{" | "}}" | "{" IDENT ":" pattern_kind "}" | "{" "_" "}" }   (* @start — Musterliteral, 8.7 *)
+pattern_text   := { TEXT_CHAR | "{{" | "}}" | "{" IDENT ":" pattern_kind "}" | "{" "_" "}" }   (* @start — Musterliteral, 8.7 *)   (* @check 18 *)
 pattern_kind   := "int" | "hex" | "float" | "word" | "str" [ "<" INT ">" ]
-format_text    := { TEXT_CHAR | "{{" | "}}" | "{" expr [ ":" format_spec ] "}" }                (* @start — Formatstring, 3.9 *)
+format_text    := { TEXT_CHAR | "{{" | "}}" | "{" expr [ ":" format_spec ] "}" }                (* @start — Formatstring, 3.9 *)   (* @check 16 *)
 format_spec    := "hex" | "." INT | INT                                                          (* {x:hex} {x:.3} {x:08} *)
+address_text   := address_segment { "/" address_segment }                                        (* @start — hw()/sim()-Adresse (8.1, 12.9); Bedeutung: Hardware-Konfiguration 8.10 *)
+address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                                              (* [a:b] halboffen, bindet ein Channel-Array: tc[0:16] sind 16 Kanaele *)
 ```
 
 ### 2.4 Bedeutung der Kernkonstrukte (informell)
@@ -467,7 +478,7 @@ format_spec    := "hex" | "." INT | INT                                         
 
 **Reservierte Wörter.** Neben den Schlüsselwörtern (2.2) sind Wörter reserviert, die heute keine Bedeutung haben, als Bezeichner aber verboten sind (Liste in 2.2). `while` erhält eine eigene Meldung („nicht erlaubt: `for` mit Schranke oder `sequence` mit `until`"). Neue Wörter kommen nur mit einer Edition.
 
-**Reservierte Membernamen.** Die eingebauten Zugriffe — `valid suspect stale age reason or ok err t seq text data len count dropped malformed overflowed free jitter time_warped done result state to to_float as bit bits with_bit wrap_* min max mean rms last transpose inv det solve cholesky decode encode default push get insert remove clear skip starts_with contains armed fired pre post samples` — sind als Feldnamen von Records und als Variantennamen (`OK ERR NONE`) verboten. Regel: Auf einem Wrapper (`T?`, `T!E`, Channel, Job-Handle, Trigger-Handle) meint `x.name` immer den Wrapper; Felder des Inhalts sind erst nach dem Auspacken (Dominanz, 3.8) erreichbar. Capture-Namen in Mustern (8.7) sind Feldnamen der Bindung und unterliegen derselben Regel. Schlüsselwörter sind als Feldnamen ebenfalls verboten. Neue eingebaute Zugriffe kommen nur mit einer Edition.
+**Reservierte Membernamen.** Die eingebauten Zugriffe — `valid suspect stale age reason or ok err t seq text data len count dropped malformed overflowed free jitter time_warped done result state to to_float as bit bits with_bit wrap_* min max mean rms last transpose inv det solve cholesky decode encode default push get insert remove clear skip starts_with contains armed fired pre post samples rate remaining truncated reset` — gehören zu den eingebauten Typen (Wrapper, Channels, Streams, Sammlungen, Blöcke, Matrizen, Captures). Records und Enums haben einen eigenen Namensraum: Verboten als Feldnamen sind nur die Zugriffe der Wrapper `valid suspect stale age reason or ok err`, weil auf einem Wrapper (`T?`, `T!E`, Channel, Job-Handle, Trigger-Handle) `x.name` immer den Wrapper meint und Felder des Inhalts erst nach dem Auspacken (Dominanz, 3.8) erreichbar sind. Alle anderen Namen der Liste dürfen Records tragen (`CanFrame.data`, 3.7); Variantennamen sind frei, auch `NONE`, `OK` und `ERR`, weil `match` typgeführt ist. Capture-Namen in Mustern (8.7) sind Feldnamen der Bindung, die zusätzlich `t`, `seq`, `text` und `data` trägt; diese vier sind als Capture-Namen verboten. Schlüsselwörter sind als Feldnamen verboten. Neue eingebaute Zugriffe kommen nur mit einer Edition.
 
 **Offene Enums.** `FaultKind`, `BootReason`, `ImageState`, `RebootCmd`, `Quality`, der Wertebereich von `x.reason` und `JobErr` sind *offen*: `match` über sie verlangt `case _`, damit neue Varianten (z. B. `Runtime(Node)`, 12.9) keine erschöpfenden Matches brechen. Nutzer dürfen eigene Enums mit `enum Msg open: …` als offen deklarieren (Nachrichtentypen, die über Firmware-Versionen wachsen); geschlossene Enums bleiben erschöpfend prüfbar (3.7).
 
@@ -525,12 +536,13 @@ Deltas werden in `K` geschrieben (`PEAK_TEMP - 3 K`), was für Ingenieure lesbar
 
 Lesbare Zeitgrößen in Maschinen: `now` (Duration seit Start), `time_in_state` (Duration seit Eintritt in den aktuellen Blattzustand), `tick` (T₀).
 
-**Lexikalische Regel.** Eine Zahl, auf die genau ein Zeit-Suffix folgt (`3 s`, `200 ms`, `7 d`), ist ein `Duration`-Literal. Folgt ein zusammengesetzter Einheitenausdruck (`5 K/min`, `9.81 m/s^2`, `0.0005 1/s`), ist es ein Float-Literal mit Einheit. `s`, `min`, `h` sind in `float[…]` und in `.as(…)` gewöhnliche Einheitennamen.
+**Lexikalische Regel.** Eine Zahl, auf die genau ein Zeit-Suffix folgt (`3 s`, `200 ms`, `7 d`), ist ein `Duration`-Literal. Folgt ein zusammengesetzter Einheitenausdruck (`5 K/min`, `9.81 m/s^2`, `0.0005 1/s`), ist es ein Float-Literal mit Einheit. `s`, `min`, `h` sind in `float[…]` und in `.as(…)` gewöhnliche Einheitennamen. Ein Fließkommaliteral in einer reinen Zeiteinheit gibt es deshalb nicht; ein `float[s]` entsteht aus einer Dauer per `(10 ms).as(s)`. Zwischen Zahl und Einheit steht ein Leerzeichen, und der Einheitenausdruck selbst ist ohne Leerraum geschrieben (`K/min`, `m/s^2`), sodass `200 ms * 2` eine Dauer mal zwei ist und `3 s/m` ein Einheitenliteral (Lexer-Spezifikation `grammar/lexer.md`).
 
 ### 3.4 Range-Typen und Intervallanalyse
 `int in 0..N-1`, `float[bar] in 0..400 bar`. Der Compiler führt eine Intervallabstraktion über alle Ausdrücke:
 
 - Literale, Konstanten, Params (deklarierte Range) und Channels (deklarierte Range) liefern Startintervalle.
+- In einer Range `lo..hi U` mit einheitenlosem Literal `lo` gilt die Einheit `U` für beide Grenzen (`0..100 bar`, `-60..200 degC`, `2.0..4.5 V`); ein einheitenloses Literal als Obergrenze oder verschiedene Einheiten an den Grenzen sind Fehler. Das ist die einzige Ausnahme von 3.6.
 - Arithmetik propagiert Intervalle (Standard-Intervallarithmetik; Division mit Nullausschluss).
 - Zuweisung an eine Variable mit Range: Ist das Intervall des Ausdrucks enthalten → keine Prüfung. Sonst fügt der Compiler einen impliziten Check ein (Scheitern → `RangeFault`) **und warnt** mit Vorschlag (`clamp`, weitere Range, `check` davor).
 - Array-Index: Typ `int in 0..N-1` verlangt; ein Index aus `range(N)` erfüllt das trivial; sonst implizite Prüfung mit Warnung.
@@ -574,7 +586,7 @@ Channel-Werte sind damit Optionalwerte `T?` (3.8) mit zusätzlichem Alter; es gi
 **Entprellte Qualität.** `with debounce = 3`: Ein Wert außerhalb der Range oder jenseits `max_slew` wird für bis zu drei aufeinanderfolgende Lieferungen als `Suspect` geführt — der letzte gute Wert wird gehalten, `x.suspect` ist lesbar, `.valid` bleibt `true` —, erst danach `Bad` mit dem jeweiligen Grund. Die Haltedauer ist beschränkt (`debounce · Lieferperiode`) und im Programm sichtbar; ein Sicherheitsargument kann sie einrechnen. Ohne `debounce` ist eine Verletzung sofort `Bad` (Entscheidung 18). `Driver` als Grund bedeutet, dass der Treiber selbst degradiert ist (12.6): alle seine Channels sind `Bad`, bis er wieder vertragsgemäß liefert.
 
 ### 3.6 Typinferenz
-Lokale Inferenz (Hindley-Milner-artig für Einheitenvariablen, sonst bidirektional): Variablen erhalten den Typ ihres Initialisierers; Funktions- und Block-Signaturen sind annotiert (Dokumentationswert für Techniker); Literale ohne Einheit in Einheitenkontext sind Fehler (`p < 300` bei `p: float[bar]` → „meinst du `300 bar`?").
+Lokale Inferenz (Hindley-Milner-artig für Einheitenvariablen, sonst bidirektional): Variablen erhalten den Typ ihres Initialisierers; Funktions- und Block-Signaturen sind annotiert (Dokumentationswert für Techniker); Literale ohne Einheit in Einheitenkontext sind Fehler (`p < 300` bei `p: float[bar]` → „meinst du `300 bar`?"). Einzige Ausnahme ist die Untergrenze einer Range (3.4).
 
 
 ### 3.7 Records und Summentypen
@@ -647,7 +659,7 @@ fn parse_header(b: bytes<4096>, min_version: u32) -> ImageHeader!HeaderErr:
 - `vec<T, N>`: beschränkter Vektor mit denselben Operationen; `v.get(i) -> T?` ohne Fault, `v[i]` mit implizitem Range-Check.
 - `map<K, V, N>` (v1.1): beschränkte assoziative Struktur mit offener Adressierung über ein festes Array. `insert(k, v) -> bool` (`false` bei voll, kein Fault), `get(k) -> V?`, `remove(k) -> bool`, `len`, `for (k, v) in m:` in Slot-Reihenfolge. Schlüssel sind POD mit Gleichheit; der Hash ist FNV-1a über die kanonische Byte-Kodierung des Schlüssels und je Edition festgelegt, Sondierung linear, Entfernen per Rückwärtsverschiebung (keine Grabsteine) — Ergebnisse und Iterationsreihenfolge sind auf allen Zielen identisch (Satz 9.4.4). Kosten O(N) je Operation im Worst Case und so im Budget; Speicher `N · (K + V + 1 Byte)`; in `persist var` erlaubt, wenn K und V POD sind.
 - `reader`/`writer` (Standardbibliothek, 11.4): Cursor-Bausteine über `bytes<N>` — `var r = reader(frame.data)`; `r.u8() -> u8?`, `r.u16_le() -> u16?`, `r.take(n) -> bytes<M>?` (M aus dem Zieltyp, `none` bei Unterlauf oder `n > M`), `r.remaining`; `var w = writer(buf)` schreibt in einen deklarierten Puffer `buf : bytes<N>`: `w.u8(x) -> bool`, `w.bytes(b) -> bool`, `w.fmt("… {x} …") -> bool` (`false` bei Überlauf), danach `send tx, buf`; `r.str(n) -> str<M>?` liest Text.
-- **`inout`-Parameter** reiner Funktionen: `fn fill(inout b: bytes<N>, x: u8)` ist Zucker für eine Rückgabe (`b = fill(b, x)` an der Aufrufstelle); die Funktion bleibt rein, die Zeigerübergabe übernimmt der Compiler (11.2). Ein Argument darf pro Aufruf nur einmal als `inout` gebunden werden und nicht zugleich als weiteres Argument erscheinen (kein Aliasing, statisch geprüft). Das ist die Zielform für C-Funktionen, die Puffer in place ändern. Sie machen Parsen und Zusammensetzen variabler Nutzlasten total und lesbar, ohne dynamischen Speicher: jede reale Nutzlast hat eine feste Obergrenze (Modbus 253 Byte, CAN-FD 64 Byte).
+- **`inout`-Parameter** reiner Funktionen: `fn fill[const N](inout b: bytes<N>, x: u8)` ohne Rückgabetyp ist Zucker für eine Rückgabe (`b = fill(b, x)` an der Aufrufstelle); die Funktion bleibt rein, die Zeigerübergabe übernimmt der Compiler (11.2). Ein Argument darf pro Aufruf nur einmal als `inout` gebunden werden und nicht zugleich als weiteres Argument erscheinen (kein Aliasing, statisch geprüft). Das ist die Zielform für C-Funktionen, die Puffer in place ändern. Sie machen Parsen und Zusammensetzen variabler Nutzlasten total und lesbar, ohne dynamischen Speicher: jede reale Nutzlast hat eine feste Obergrenze (Modbus 253 Byte, CAN-FD 64 Byte).
 - `line<N>`: Textzeile bis N Bytes mit `.truncated`-Flag (Elementtyp für zeilengerahmte Streams, 8.6); verhält sich sonst wie `str<N>`.
 - `str<N>`: `==`, `!=`, `<` (bytewise), `.len`, `.starts_with(lit)`, `.contains(lit)`, `matches`/`has` (8.7); Formatierung `{x}`, `{x:hex}`, `{x:.3}`, `{x:08}` mit statisch bekannter Höchstlänge und definierter Trunkierung.
 - `table<A, B>`: Stützstellenliste `[(x0, y0), (x1, y1), ...]`, statisch auf streng steigende `x` geprüft; `interp(t, x)` ist stückweise linear, an den Rändern geklemmt, total, mit statisch beschränkten Kosten.
@@ -667,12 +679,14 @@ Arrays und `samples` bieten `.min() .max() .mean() .rms() .count .last` (Redukti
 
 **Uniforme Form (v1).** `mat<R, C>` hat Elemente vom Typ `float`; `mat<R, C>[U]` trägt eine einheitliche Einheit `U`. Zeilen- und Spaltenzahl sind Compile-Zeit-Konstanten; eine harte Obergrenze gibt es nicht — ab 16 warnt ein Lint (Kosten n³, Scratch n²·8 Byte), und das Zeitbudget (9.4.3) sowie das Speicherbudget (11.5) entscheiden. Temporärwerte von Matrixausdrücken liegen im statischen Scratch der Maschine, nicht auf dem Stack (11.2).
 ```
-var P : mat<2, 2> = [[1, 0], [0, 1]]
+var p : mat<2, 2> = [[1, 0], [0, 1]]
 const I2 : mat<2, 2> = [[1, 0], [0, 1]]
 const F : mat<2, 2> = [[1, 0.01], [0, 1]]
-var K = P * H.transpose() * S.inv()
-P = (I2 - K * H) * P
-var e = P[0, 1]
+const H : mat<1, 2> = [[1, 0]]
+var s : mat<1, 1> = H * p * H.transpose()
+var k = p * H.transpose() * s.inv()
+p = (I2 - k * H) * p
+var e = p[0, 1]
 ```
 - Operatoren: `+`, `-` (gleiche Form), `*` (Matrix·Matrix mit Formprüfung, Matrix·Skalar, Skalar·Matrix), `transpose()`, `det()`, `inv()` (LU mit Spaltenpivotisierung, R = C; singulär → `ArithmeticFault(Singular)`), `solve(A, b)`, `cholesky()` → `mat<R, R>?` (`none`, wenn nicht positiv definit), Elementzugriff `A[i, j]` mit Indizes vom Typ `int in 0..R-1` bzw. `0..C-1`.
 - Totalität und Kosten: alle Operationen sind total (nicht-endliche Ergebnisse → `ArithmeticFault(NonFinite)` wie 4.1); Kosten sind statisch O(R·C·K) bzw. O(n³) und gehen klassifiziert in das Budget ein (9.4.3). Determinismus über `libtaktm` (4.2).
@@ -697,17 +711,17 @@ Syntax und Beispiel (ein linearer Kalman-Filter, jede Zeile einheitengeprüft):
 unitvec X = (m, m/s)                          # Zustand: Position, Geschwindigkeit
 unitvec Z = (m)                               # Messung
 var   x : vec[X]        = [0 m, 0 m/s]
-var   P : mat[X, X]     = [[1 m^2, 0 m^2/s], [0 m^2/s, 1 m^2/s^2]]
-const F : mat[X, 1/X]   = [[1, 0.01 s], [0 1/s, 1]]          # F_12 = m / (m/s) = s
-const H : mat[Z, 1/X]   = [[1, 0 s]]
-const I : mat[X, 1/X]   = [[1, 0 s], [0 1/s, 1]]
+var   p : mat[X, X]     = [[1 m^2, 0 m^2/s], [0 m^2/s, 1 m^2/s^2]]
+const F : mat[X, 1/X]   = [[1, (10 ms).as(s)], [0 1/s, 1]]   # F_12 = m / (m/s) = s; float[s] aus einer Dauer (3.3)
+const H : mat[Z, 1/X]   = [[1, (0 s).as(s)]]
+const I : mat[X, 1/X]   = [[1, (0 s).as(s)], [0 1/s, 1]]
 loop:
     x = F * x
-    P = F * P * F.transpose() + Q             # Q : mat[X, X]
-    var S = H * P * H.transpose() + R         # R : mat[Z, Z]
-    var K = P * H.transpose() * S.inv()       # mat[X, 1/Z]
-    x = x + K * (z - H * x)                   # z : vec[Z]
-    P = (I - K * H) * P
+    p = F * p * F.transpose() + Q             # Q : mat[X, X]
+    var s = H * p * H.transpose() + R         # R : mat[Z, Z]
+    var k = p * H.transpose() * s.inv()       # mat[X, 1/Z]
+    x = x + k * (z - H * x)                   # z : vec[Z]
+    p = (I - k * H) * p
 ```
 Ein vertauschtes `H` oder ein `F` mit falscher Zeiteinheit ist ein Compile-Fehler. `1/X` bezeichnet das elementweise Kehrwert-Tupel. Matrizen haben die Breite von `float` (4.2); ihre Skalarprodukte werden als `fma`-Ketten fester Reihenfolge ausgewertet. Die uniforme Form bleibt der Normalfall für Rotationen, Filterkoeffizienten und Geometrie; die dimensionierte Form ist der Normalfall für Zustandsschätzer.
 
@@ -806,7 +820,7 @@ Minimale Verweildauer eines Zustands: ein Tick (außer bei Fault). Das ist beabs
 - `check e -> X` überschreibt φ für genau diesen Check.
 - φ(s) ≠ s ist Pflicht. Der als Fault-Ziel der Maschine deklarierte Zustand (z. B. `SAFE`) erbt φ daher nicht von der Maschine, sondern hat φ = `FAULTED`, sofern er nichts anderes deklariert. Praktische Folge: Interlocks, die im sicheren Zustand nicht mehr gelten sollen, gehören in einen übergeordneten Betriebszustand (Beispiel 14.1, `ARMED`), nicht auf Maschinenebene.
 - **Statische Regel:** Der gerichtete Graph {s → φ(s)} ∪ {s → X für `check … -> X` in s} muss azyklisch sein (funktionaler Graph plus Zusatzkanten: Zyklen werden per Tiefensuche gefunden; Fehlermeldung nennt den Zyklus).
-- `FAULTED` ist implizit, hat keinen Nutzercode außer der Zuweisung aller von der Maschine besessenen Outputs auf ihre `safe`-Werte, und kann nicht scheitern. Aus `FAULTED` führen nur explizite Transitionen, die der Nutzer auf Maschinenebene deklariert (`state FAULTED: when reset: -> IDLE` ist erlaubt und erweitert den impliziten Zustand um Übergänge). Damit `FAULTED` nie scheitern kann, dürfen die Guards dieser Transitionen keine impliziten Prüfungen enthalten (Channel-Lesen nur unter `.valid` oder mit `.or()`, keine Range-/Arithmetik-Prüfungen); der Compiler erzwingt das (10, Zeile 9).
+- `FAULTED` ist implizit, hat keinen Nutzercode außer der Zuweisung aller von der Maschine besessenen Outputs auf ihre `safe`-Werte, und kann nicht scheitern. Aus `FAULTED` führen nur explizite Transitionen, die der Nutzer auf Maschinenebene deklariert (ein `state FAULTED:` mit `when reset: -> IDLE` ist erlaubt und erweitert den impliziten Zustand um Übergänge). Damit `FAULTED` nie scheitern kann, dürfen die Guards dieser Transitionen keine impliziten Prüfungen enthalten (Channel-Lesen nur unter `.valid` oder mit `.or()`, keine Range-/Arithmetik-Prüfungen); der Compiler erzwingt das (10, Zeile 9).
 - `last_fault` (Kind, Nachricht, Quellposition, Tick) ist in jedem Zustand lesbar.
 - Ein Fault-Übergang bricht laufende Jobs der Maschine ab (4.5), disarmt ihre Trigger (7.5) und leert die Warteschlangen geplanter Ausgaben (`sched`, 7.5) aller Outputs der Maschine: Ein Safe-Wert darf nie von einem veralteten geplanten Schreibvorgang überschrieben werden.
 - Ein explizites `-> FAULTED` ist als Übergangsziel erlaubt (z. B. nach zu vielen Neustartversuchen, Beispiel 14.7).
@@ -850,7 +864,10 @@ Ein `block`-Aufruf an einer Stelle des Codes ist eine Instanz (wie ein Operator 
 ```
 machine bms:
     persist var cycle_count : int in 0..100000 = 0 with min_interval = 10 s
-    persist var last_test   : SelftestResult = SelftestResult(ok = false, code = 0, r_int = 0 mohm)
+    persist var last_test   : SelftestResult = SelftestResult(passed = false, code = 0, r_int = 0 mohm)
+    initial RUN
+    state RUN:
+        loop: pass
 ```
 - Semantik: Der Anfangszustand s0 enthält die aus dem nichtflüchtigen Speicher geladenen Werte (Schlüssel = Maschine.Variable plus Typ-Hash). Fehlende oder ungültige Werte (Typ-Hash, Range) ergeben den Default plus Alert `PersistReset`. Die Runtime schreibt geänderte Werte asynchron, atomar (Journal) und höchstens alle `min_interval`; das Schreiben ist Beobachtung und liegt außerhalb der Semantik.
 - Nur POD-Typen (Skalare, Records, Arrays, Enums); keine Streams, Blöcke oder Optionale. Nur auf Maschinenebene, nicht in Szenarien.
@@ -862,6 +879,9 @@ machine bms:
 input  charger : bool          @ hw("gpio/vbus_det") with wake = true
 input  button  : stream<Edge>  @ hw("gpio/btn")      with max_rate = 50 Hz, wake = true
 command wake_up with wake = true
+
+machine field_device:
+    initial STANDBY
 
     state STANDBY idle:
         enter: led = 0
@@ -882,7 +902,7 @@ Parallele Regionen (AND-Zustände) innerhalb einer Maschine bräuchten eine Konf
 state RUNNING:
     instance pump = pump_ctrl(cmd = pump_cmd, out = pump_valve)
     instance fans[i in 0..4] = fan_ctrl(setpoint = fan_sp[i], out = fan_pwm[i])
-    instance pid resume = loop_ctrl(...)           # behaelt seine Konfiguration ueber Deaktivierungen (5.12)
+    instance pid resume = loop_ctrl(setpoint = loop_sp, out = loop_out)   # behaelt seine Konfiguration ueber Deaktivierungen (5.12)
 ```
 Semantik (ASCII):
 ```
@@ -909,8 +929,10 @@ Wechselwirkungen: Determinismus (9.4.1) bleibt, weil Instanzen Maschinen sind, U
 ```
 state MANUAL resume:                    # bei Wiedereintritt wird der zuletzt aktive Kindpfad betreten
     initial COARSE
-    state COARSE: ...
-    state FINE:   ...
+    state COARSE:
+        when refine: -> FINE
+    state FINE:
+        when coarsen: -> COARSE
 ```
 Semantik (ASCII):
 ```
@@ -1039,14 +1061,14 @@ Für die Linux-Box mit P_m = 1 ms, W_m = 100 µs, guard = 50 µs ist D_min ≈ 1
 **Trigger (v1.2): Regeln auf dem I/O-Knoten.**
 ```
 trigger cut_on_erase:
-    when log matches "Erasing sector {n:int}"
+    when dut_log matches "Erasing sector {n:int}"
     then at event.t + 250 us: vbus_en = false
     bound 20 us
 ```
 Ein Trigger ist eine deklarative Reaktionsregel, die der Compiler auf den I/O-Knoten (MCU, FPGA, Ereignismatrix der Peripherie) verlagert:
 ```
 trigger cut_on_erase node io1:
-    when log matches "Erasing sector {n:int}"                 # nur knotenlokale Inputs/Streams, Muster, Konstanten
+    when dut_log matches "Erasing sector {n:int}"                 # nur knotenlokale Inputs/Streams, Muster, Konstanten
     then at event.t + 250 us: vbus_en = false                  # nur Output-Zuweisungen auf demselben Knoten
     bound 20 us                                                # vom Knoten garantierte Reaktionszeit
 
@@ -1055,7 +1077,7 @@ disarm cut_on_erase
 until cut_on_erase.fired as f timeout 2 s       # fired : Eingabestrom mit .t des Feuerns und den Captures (f.n)
 check cut_on_erase.armed
 ```
-Semantik: Ein Trigger ist eine Funktion des Ereignisstroms seines Knotens ohne eigenen Zustand außer `armed`; er wird mit Ereignisrate ausgewertet, nicht mit dem Tick; seine Ausgabe ist eine geplante Ausgabe mit `guard = bound`. Im Hauptprogramm ist `fired` ein Eingabestrom (Determinismus wie jeder Input; Satz 9.4.4 für das Ergebnis, der Zeitpunkt ist Datum), `armed` ist Zustand der armierenden Maschine, `arm`/`disarm` sind Statements. Ein Fault-Übergang der armierenden Maschine disarmt ihre Trigger (5.3). Kosten: Das Hauptprogramm zahlt `arm`/`disarm` und die Stream-Verarbeitung; der Knoten trägt die deklarierte Auswertungszeit, die in seine Konformität eingeht (13.8). Simulation: der Trigger wird mit `bound` als Latenz emuliert. Statisch geprüft: Guard und Outputs sind knotenlokal (12.9); ein Trigger ohne `node` liegt auf dem Hauptknoten. Grammatik: `trigger_decl`, `arm_stmt`.
+Semantik: `event` bezeichnet im `then`-Teil das Element, das den `when`-Guard erfüllt hat (mit `.t` und den Captures). Ein Trigger ist eine Funktion des Ereignisstroms seines Knotens ohne eigenen Zustand außer `armed`; er wird mit Ereignisrate ausgewertet, nicht mit dem Tick; seine Ausgabe ist eine geplante Ausgabe mit `guard = bound`. Im Hauptprogramm ist `fired` ein Eingabestrom (Determinismus wie jeder Input; Satz 9.4.4 für das Ergebnis, der Zeitpunkt ist Datum), `armed` ist Zustand der armierenden Maschine, `arm`/`disarm` sind Statements. Ein Fault-Übergang der armierenden Maschine disarmt ihre Trigger (5.3). Kosten: Das Hauptprogramm zahlt `arm`/`disarm` und die Stream-Verarbeitung; der Knoten trägt die deklarierte Auswertungszeit, die in seine Konformität eingeht (13.8). Simulation: der Trigger wird mit `bound` als Latenz emuliert. Statisch geprüft: Guard und Outputs sind knotenlokal (12.9); ein Trigger ohne `node` liegt auf dem Hauptknoten. Grammatik: `trigger_decl`, `arm_stmt`.
 
 ---
 
@@ -1110,7 +1132,7 @@ Setpoints vom Operator sind Inputs (`input setpoint: float[bar] @ hw("ui/setpoin
 
 **Deklaration.**
 ```
-input  log    : stream<line<256>> @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines, overflow = fault
+input  dut_log : stream<line<256>> @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines, overflow = fault
 input  can_rx : stream<CanFrame>  @ hw("can0/rx")  with max_rate = 5000 Hz
 input  edges  : stream<Edge>      @ hw("gpio/cap0") with max_rate = 1 kHz
 ```
@@ -1151,8 +1173,18 @@ Elemente, die der Rand nicht dekodieren kann (Record-Streams mit `layout`: zu ku
 **Interne Streams (Warteschlangen zwischen Maschinen).** Ein Stream ohne Hardware-Bindung ist eine Warteschlange mit denselben Regeln:
 ```
 stream<UpdateMsg> update_q with capacity = 16          # Dateiebene; genau ein Schreiber (Single-Writer, statisch)
-machine receiver:  ...  send update_q, UpdateMsg(...)  # Schreiber
-machine flasher:   ...  on update_q as m: ...          # Leser, Cursor je Konsument
+
+machine receiver:                                      # Schreiber
+    initial RUN
+    state RUN:
+        on can_rx as f:
+            send update_q, UpdateMsg(kind = CHUNK, data = f.data)
+
+machine flasher:                                       # Leser, Cursor je Konsument
+    initial RUN
+    state RUN:
+        on update_q as m:
+            log "update chunk {m.seq}"
 ```
 Elemente, die in Tick k gesendet werden, sind für Leser ab Tick k+1 sichtbar (Unit-Delay wie Ψ; die Ordnungsunabhängigkeit aus Satz 9.4.1 bleibt); `.t` ist die logische Sendezeit, `seq` läuft je Stream; ein `follows`-Leser (7.2) sieht die Elemente desselben Ticks frisch. Überlauf trifft den Schreiber (`send` → `StreamOverflow`, wie bei Ausgabeströmen 8.8). Budget und Speicher wie oben (Byte-Ring bei variabler Länge). Damit wird „Task → Maschine, Queue → interner Stream" zur mechanischen Übersetzungsregel (13.9).
 
@@ -1194,11 +1226,11 @@ line matches P as m       # Bindung: m.n, m.outcome, ... nur im dominierten Zwei
 **Handler.**
 ```
 state UPDATING:
-    on log matches "Erasing sector {n:int}" as m:
+    on dut_log matches "Erasing sector {n:int}" as m:
         measure erase_sector = m.n
-    on log has "CRC mismatch" as ev:
+    on dut_log has "CRC mismatch" as ev:
         verdict fail "CRC error during update: {ev.text}"
-    on log as ev:                                # Catch-all
+    on dut_log as ev:                                # Catch-all
         log "{ev.t}: {ev.text}"
 ```
 Dispatch pro Aktivierung im Modus Run (formal in 9.7):
@@ -1219,8 +1251,8 @@ Handler laufen unmittelbar nach dem `loop:`-Block ihrer Ebene, Vorfahren vor Nac
 **Sequenzen und Übergänge.**
 `until s as e timeout d` und `when s as e:` (ohne Muster) treffen das *nächste* Element des Fensters — für Streams ohne Textmuster (Rohbytes, Chunks, Records ohne Feldbedingung).
 ```
-until log matches "Boot v{major:int}.{minor:int}" as m timeout 2 s
-until log has "Update complete" timeout 30 s else:
+until dut_log matches "Boot v{major:int}.{minor:int}" as m timeout 2 s
+until dut_log has "Update complete" timeout 30 s else:
     verdict fail "no completion message"
     -> RECOVER
 when can_rx matches CanFrame(id = 0x7E8) as f: -> GOT_RESPONSE
@@ -1241,7 +1273,8 @@ Ein Ausgabestrom hat einen Sendepuffer (`capacity`, Default 256 Bytes), den der 
 ```
 input i_dut : samples<float[A], 100> @ hw("daq1/ai2") with rate = 100 kHz     # 100 Samples je 1-ms-Tick
 check i_dut.max() < 2 A
-for x in i_dut: ...                    # beschraenkt durch 100
+for x in i_dut:                        # beschraenkt durch 100
+    alert x > 1.5 A, "current spike {x}"
 ```
 `samples<T, N>` liefert pro Basis-Tick ein beschränktes Array; Reduktionen `.min() .max() .mean() .rms() .count .last`; fehlende Samples ergeben Qualität `Stale`, ein Sample außerhalb der deklarierten Range macht das ganze Tick-Array `Bad` (Grund `OutOfRange`, konservativ). Die Abtastung ist auf das Tick-Ereignis ausgerichtet (7.1). Budget O(N).
 
@@ -1642,14 +1675,14 @@ Gleiche MIR für die Logik; Bindungstabelle und Linkmenge (Plant-Modelle) unters
 ```
 fn clamp[U](x, lo, hi) -> float[U]          fn lerp[U](a, b, t) -> float[U]
 fn map_range[U, V](x, x0, x1, y0, y1) -> float[V]      fn deadband[U](x, w) -> float[U]
-fn interp[U, V](t: table<U, V>, x) -> float[V]         fn crc16(b: bytes<N>) -> u16 / crc32 / sum8
+fn interp[U, V](t: table<U, V>, x) -> float[V]         fn crc16[const N](b: bytes<N>) -> u16 / crc32 / sum8
 block lowpass[U](tau)               step(x, dt) -> float[U]
 block hysteresis[U](lo, hi)         step(x) -> bool
 block debounce(d)                   step(x: bool, dt) -> bool
 block rising() / falling()          step(x: bool) -> bool
 block integrate[U](limit)           step(x: float[U], dt) -> float[U*s]      # Coulomb-Zaehlung: A*s -> .to(mAh)
 block rate[U]()                     step(x, dt) -> float[U/s]
-block window_min[U, N]() / window_max / window_mean / window_rms
+block window_min[U, const N]() / window_max / window_mean / window_rms
 block rate_limiter[U](max_rate)     step(target, dt) -> float[U]
 block pid[O, E](kp, ki, kd, lo, hi) step(err, dt) -> float[O]
 block stopwatch()                   start() / stop() / elapsed -> Duration
@@ -1657,8 +1690,8 @@ block pulse_counter()               step(edges: stream) -> int
 block cross_check[U](tol)           step(a, b) -> float[U]?                    # none bei |a - b| > tol
 block vote2oo3[U](tol)              step(a, b, c) -> float[U]?                 # Median, wenn zwei Werte innerhalb tol liegen
 block hold_last[U](max_hold)        step(x: float[U]?, dt) -> float[U]?        # letzten guten Wert begrenzt halten
-block reader(b: bytes<N>)           u8() -> u8? / u16_le() / u32_le() / take(n) -> bytes<M>? / remaining   (3.9)
-block writer(buf: bytes<N>)         u8(x) -> bool / u16_le(x) / bytes(b) -> bool   (schreibt in buf; 3.9)
+block reader[const N](b: bytes<N>)  u8() -> u8? / u16_le() / u32_le() / take(n) -> bytes<M>? / remaining   (3.9)
+block writer[const N](buf: bytes<N>) u8(x) -> bool / u16_le(x) / bytes(b) -> bool   (schreibt in buf; 3.9)
 block pid_i[O, E](...) / lowpass_i[U](tau)   Integer-Varianten fuer Kerne ohne FPU (3.2; v1.1)
 native fn sha256_init / sha256_update(ctx, chunk) / sha256_final      Chunk-Natives mit opakem Sha256Ctx (4.5)
 native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration (4.5)
@@ -1792,7 +1825,10 @@ Instrumentierungs-Defaults (11.2): `statements` in `linux_rt`, `states` in `bare
 ### 12.9 Verteilte Ausführung (v2): Regeln, die schon heute gelten
 ```
 node io1 @ hw("ethercat/1") with tick = 1 ms                 # Knotentick = Vielfaches von system.tick
-machine current_ctrl node io1 every 50 us: ...              # Platzierung; ohne Angabe: Hauptknoten
+machine current_ctrl node io1 every 50 us:                  # Platzierung; ohne Angabe: Hauptknoten
+    initial RUN
+    state RUN:
+        loop: pass
 input  i_u : float[A] @ hw("io1/ai0")                        # Adresse nennt den Knoten (wie heute)
 ```
 1. **Eine logische Zeitbasis.** Jeder Knoten hat einen Tick, der ein Vielfaches von `system.tick` ist; die Uhren sind synchronisiert (PTP, Feldbus-Distributed-Clocks), die Abweichung ist gegen `tick_tolerance` geprüft; Verletzung → `Runtime(Node)` für die Maschinen des Knotens. Alternative unabhängiger Uhren je Knoten wurde verworfen, weil sie den globalen Tick und mit ihm Satz 9.4.1 zerstört.
@@ -2157,7 +2193,7 @@ output vbus_set : float[V] in 0..6 V @ hw("psu/vset")    with safe = 0 V
 output vbus_en  : bool               @ hw("psu/enable")  with safe = false
 output reset_n  : bool               @ hw("gpio/dut_rst") with safe = false      # low = Reset aktiv
 input  i_dut    : samples<float[A], 100> @ hw("daq1/ai2") with rate = 100 kHz
-input  log      : stream<line<256>>  @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines, overflow = fault
+input  dut_log  : stream<line<256>>  @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines, overflow = fault
 output dut_tx   : stream<u8>         @ hw("uart0/tx") with max_rate = 11520 Hz, capacity = 256
 
 command start
@@ -2187,7 +2223,7 @@ machine brownout_test:
         initial POWER_ON
         loop:
             check i_dut.max() < 1.5 A, "DUT overcurrent {i_dut.max()}"
-        on log has "PANIC" as ev:
+        on dut_log has "PANIC" as ev:
             verdict fail "bootloader panic: {ev.text}"
 
         state POWER_ON:
@@ -2197,7 +2233,7 @@ machine brownout_test:
                 t_power_on = now
                 wait 50 ms
                 reset_n = true
-                until log matches "Boot v{major:int}.{minor:int}" as m timeout BOOT_TIMEOUT
+                until dut_log matches "Boot v{major:int}.{minor:int}" as m timeout BOOT_TIMEOUT
                 measure boot_time = m.t - t_power_on
                 verify m.major >= 2, "bootloader too old: {m.major}.{m.minor}"
                 -> HANDSHAKE
@@ -2205,18 +2241,18 @@ machine brownout_test:
         state HANDSHAKE:
             sequence:
                 send dut_tx, "UPDATE {IMAGE_SIZE} {IMAGE_CRC:hex}\n"
-                until log matches "READY" timeout 500 ms
+                until dut_log matches "READY" timeout 500 ms
                 -> UPDATING
 
         state UPDATING:
             var erased : int in 0..255 = 0                       # zustandslokal, bei Eintritt 0
-            on log matches "Erasing sector {n:int}" as m:
+            on dut_log matches "Erasing sector {n:int}" as m:
                 erased = m.n
                 measure erase_seen_at = m.t - t_power_on
                 at m.t + BROWNOUT_DELAY:                          # Hardware-genauer Zeitpunkt relativ zur Logzeile
                     vbus_en = false
                 -> CUTTING
-            on log has "CRC mismatch" as ev:
+            on dut_log has "CRC mismatch" as ev:
                 verdict fail "CRC mismatch during update: {ev.text}"
             after 10 s:
                 verdict fail "no erase observed within 10 s"
@@ -2235,11 +2271,11 @@ machine brownout_test:
 
         state RECOVERY:
             sequence:
-                until log matches "Boot v{major:int}.{minor:int}" as m timeout BOOT_TIMEOUT else:
+                until dut_log matches "Boot v{major:int}.{minor:int}" as m timeout BOOT_TIMEOUT else:
                     result = BRICKED
                     verdict fail "no boot after brownout"
                     -> DONE
-                until log matches "Recovery: {outcome:word}" as r timeout 5 s else:
+                until dut_log matches "Recovery: {outcome:word}" as r timeout 5 s else:
                     result = CORRUPT
                     verdict fail "no recovery message"
                     -> DONE
@@ -2298,7 +2334,7 @@ const OCV : table<float[V], float[pct]> = [(3.0 V, 0 pct), (3.4 V, 10 pct), (3.6
                                           (3.8 V, 60 pct), (4.0 V, 85 pct), (4.2 V, 100 pct)]
 
 record SelftestResult:
-    ok: bool
+    passed: bool
     code: int in 0..255
     r_int: float[mohm] in 0..1000 mohm
 
@@ -2306,7 +2342,7 @@ machine bms every 100 ms:
     fault -> PROTECT
     persist var cycle_count : int in 0..100000 = 0 with min_interval = 10 s
     persist var fault_count : int in 0..100000 = 0 with min_interval = 10 s
-    persist var last_test   : SelftestResult = SelftestResult(ok = false, code = 0, r_int = 0 mohm)
+    persist var last_test   : SelftestResult = SelftestResult(passed = false, code = 0, r_int = 0 mohm)
     pub var soc       : float[pct] = 0 pct
     pub var charge_as : float[A*s] = 0 A*s
     var coulomb = integrate[A](limit = 72000 A*s)
@@ -2328,7 +2364,7 @@ machine bms every 100 ms:
             sequence:
                 led = 128
                 if cell_v.max() - cell_v.min() > 0.1 V:
-                    last_test = SelftestResult(ok = false, code = 2, r_int = 0 mohm)
+                    last_test = SelftestResult(passed = false, code = 2, r_int = 0 mohm)
                     -> DEGRADED
                 var v0 = cell_v.mean()
                 load_test = true
@@ -2338,9 +2374,9 @@ machine bms every 100 ms:
                 load_test = false
                 var r_int = ((v0 - v1) / max(i1, 0.1 A)).to(mohm)
                 if r_int > R_INT_MAX:
-                    last_test = SelftestResult(ok = false, code = 1, r_int = r_int)
+                    last_test = SelftestResult(passed = false, code = 1, r_int = r_int)
                     -> DEGRADED
-                last_test = SelftestResult(ok = true, code = 0, r_int = r_int)
+                last_test = SelftestResult(passed = true, code = 0, r_int = r_int)
                 if image_state.or(CONFIRMED) == TRIAL:        # neues Image nur nach bestandenem Selbsttest bestaetigen; ohne Plattformangabe: bestaetigt
                     image_confirm = true
                 -> RUN
@@ -2654,4 +2690,4 @@ v0.2.8 = v0.2.7 plus das Reservierungspaket für Vorwärtskompatibilität: Editi
 
 **Redaktionelle Präzisierung der Komponentenliste (11.1).** Die Liste des Rust-Workspace nennt jetzt jede Komponente, die an anderer Stelle der Referenz gefordert wird, aber bisher keinen eigenen Ort hatte: den Treiberrand als `takt-hal` (Traits für Skalare, Streams, geplante Ausgaben und Flash-Geräte, 12.6, 13.8 — die Sim/HW-Umschaltung nach 8.3 ist ein Treiberwechsel, kein zweiter Programmpfad), die Standardbibliothek `takt-stdlib` in Takt selbst (11.4), die Konformitätssuite `takt-conformance` mit `takt bench` und der Kalibrierung von `c_target`, `guard` und `jitter` (13.8, gelesen von 7.2 und 7.5) sowie das C-Frontend `takt-import-c` (13.9). Die beiden Runtimes `takt-rt-std` und `takt-rt-nostd` werden zu einem gemeinsamen `takt-rt-core` mit vier Profilaufsätzen, weil 12.8 vier Laufzeitprofile definiert (`linux_rt`, `baremetal`, `rtos`, `boot`) und drei davon `no_std` sind, sich aber in Tick-Quelle, Aufgabenmodell und Recorder unterscheiden; die Aussage aus 0.1, dass zwei Runtime-Arten hinter derselben MIR stehen, bleibt unberührt. `takt-cli` nennt zusätzlich die in 2.5, 8.4, 13.8 und 13.9 beschriebenen Kommandos `bench`, `tune`, `migrate` und `import-c`. Die Sprache selbst ändert sich dadurch nicht: keine neue Edition, keine Bedeutungsänderung für bestehende Programme.
 
-**Verschlankung der Schlüsselwortliste (2.2) und Grammatikkorrekturen (2.3).** Die Liste enthielt Attribut-, Positions- und Typwörter, die nie am Zeilenanfang stehen; zwei davon (`debounce`, `rate`) waren zugleich Namen von Bibliotheksblöcken (11.4), und das Beispiel in 3.7 benutzte `offset` als Feldname. Die Liste folgt jetzt der in 2.2 genannten Regel; entfernt wurden `tick from layout hw sim safe max_age rate max_rate capacity framing overflow wake phase idle timeout fail cost total mat tick_source tick_tolerance jitter max_slew vec follows debounce ticks len target f64 inout irreversible bits offset align duration mmio language open resume capture` sowie die doppelten Einträge `arm disarm`; neu sind `stream` (leitet interne Streams ein) und `then` (Trigger). Ein Programm, das eines der entfernten Wörter als Bezeichner nutzt, war bisher ein Fehler und ist jetzt gültig; ein Programm mit den Bezeichnern `stream` oder `then` gab es nicht. In der Grammatik sind die Kostenklassen aufgezählt (`cost_class`), Record-Felder mit Bitfeldern verlangen kein `NEWLINE` nach dem `DEDENT` mehr (`record_field`), und `i64` ist als Name erlaubt (3.1). Die Sprache bleibt Edition 1.
+**Verschlankung der Schlüsselwortliste (2.2) und Grammatikkorrekturen (2.3).** Die Liste enthielt Attribut-, Positions- und Typwörter, die nie am Zeilenanfang stehen; zwei davon (`debounce`, `rate`) waren zugleich Namen von Bibliotheksblöcken (11.4), und das Beispiel in 3.7 benutzte `offset` als Feldname. Die Liste folgt jetzt der in 2.2 genannten Regel; entfernt wurden `tick from layout hw sim safe max_age rate max_rate capacity framing overflow wake phase idle timeout fail cost total mat tick_source tick_tolerance jitter max_slew vec follows debounce ticks len target f64 inout irreversible bits offset align duration mmio language open req resume capture` sowie die doppelten Einträge `arm disarm`; neu sind `stream` (leitet interne Streams ein) und `then` (Trigger). Ein Programm, das eines der entfernten Wörter als Bezeichner nutzt, war bisher ein Fehler und ist jetzt gültig; ein Programm mit den Bezeichnern `stream` oder `then` gab es nicht. In der Grammatik sind die Kostenklassen aufgezählt (`cost_class`), Record-Felder mit Bitfeldern verlangen kein `NEWLINE` nach dem `DEDENT` mehr (`record_field`), und `i64` ist als Name erlaubt (3.1). Die Lexer-Spezifikation (`grammar/lexer.md`) präzisiert 3.3 um die Leerraumregel für Einheitenausdrücke; die Matrixbeispiele in 3.11 schreiben `float[s]`-Elemente jetzt als `(10 ms).as(s)`, weil `0.01 s` nach 3.3 eine Dauer ist. Zwei weitere Grammatikkorrekturen nach externem Review: ganze Zahlen in Diskriminanten, Offsets, Bitpositionen, Attributen und Kostenverträgen sind in jeder Schreibweise erlaubt (`int_lit`, wie die Beispiele in 3.7 mit `0x00` voraussetzen), und der weiche Timeout `until … timeout d else:` ist eine eigene Alternative von `seq_item`, weil sein Block das Zeilenende selbst trägt. Nach einem zweiten Review: `capture<T, N>` ist Stream-Elementtyp, nicht allgemeiner Typ (8.9); `fn` ohne Rückgabetyp ist mit `inout` erlaubt (3.9); Größenparameter in Signaturen sind als `[const N]` deklariert (3.12); die Reservierung der Membernamen (2.5) gilt nur noch für Wrapper-Zugriffe, weil Records und Enums einen eigenen Namensraum haben — die Beispiele mit `NONE`-Varianten und dem Feld `data` sind damit gültig, das Feld `ok` in `SelftestResult` heißt `passed`; die Einheit an der Obergrenze einer Range gilt für beide Grenzen (3.4, 3.6); `event` im `then`-Teil eines Triggers ist benannt (7.5). Aus dem ersten Korpus-Durchlauf (`grammar/parse_corpus.py`): `unit` darf eine dimensionslose Einheit ohne Einheitenausdruck definieren (3.2), und eine Typvariable darf wie ein Typname `?` und `!E` tragen (3.12, `-> T?`). Aus dem Schnipsel-Korpus aller Codeblöcke: der Beispiel-Channel `log` heißt `dut_log`, weil `log` ein Schlüsselwort ist; Matrizenvariablen in 3.11 sind klein geschrieben; Auslassungen `...` in Codeblöcken sind durch Code ersetzt, damit jeder Block parst. Die Sprache bleibt Edition 1.

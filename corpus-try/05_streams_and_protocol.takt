@@ -1,0 +1,111 @@
+# 05 — Ereignisstroeme und Protokolle: Muster mit Captures, Handler,
+#      Ein- und Ausgabestroeme, interner Stream, Drahtformate mit Bitfeldern,
+#      T!E, match mit Bereichen, geplante Ausgaben.
+
+system:
+    language = 1
+    tick = 1 ms
+
+enum FrameKind layout u8: PING = 0x01, DATA = 0x02, ACK = 0x03
+enum ParseErr: SHORT, BAD_MAGIC, BAD_LEN
+
+record Header layout little, align = 2:
+    magic : u16 = 0xA55A
+    kind  : FrameKind
+    seq_no : u16
+    flags : u8 with bits:
+        retry : bool at 0
+        urgent : bool at 1
+        prio : u8 at 4..7
+
+record Frame layout little:
+    head : Header
+    payload_len : u8
+    payload : bytes<64> with len = payload_len
+
+stream<Frame> tx_queue with capacity = 8
+
+input  rx_log  : stream<line<256>> @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines, overflow = fault, expect_len = 80
+input  rx_bus  : stream<bytes<72>> @ hw("can0/rx")  with max_rate = 5000 Hz, capacity = 64
+input  edges   : stream<Edge>      @ hw("gpio/cap0") with max_rate = 1 kHz
+output tx_uart : stream<u8>        @ hw("uart0/tx") with max_rate = 11520 Hz, capacity = 256
+output dut_pwr : bool              @ hw("psu/enable") with safe = false, jitter = 5 us
+
+command start
+
+param CUT_DELAY : Duration in 1 ms..2 s = 25 ms
+
+fn parse_header(b: bytes<72>) -> Header!ParseErr:
+    if b.len < 6:
+        return ERR(SHORT)
+    var h = Header.decode(b)
+    if not h.valid:
+        return ERR(BAD_MAGIC)
+    return OK(h)
+
+machine link:
+    fault -> RESET_LINK
+    var seen : int in 0..65535 = 0
+    initial IDLE
+
+    on rx_log has "PANIC" as ev:
+        log "device panic: {ev.text}"
+
+    state IDLE:
+        enter:
+            dut_pwr = true
+        when start: -> HANDSHAKE
+
+    state HANDSHAKE:
+        sequence:
+            send tx_uart, "HELLO 1\n"
+            until rx_log matches "READY v{major:int}.{minor:int}" as m timeout 2 s else:
+                log "no handshake"
+                -> RESET_LINK
+            log "device ready"
+            -> RUNNING
+
+    state RUNNING:
+        loop:
+            check rx_log.dropped == 0, "log stream dropped elements"
+
+        on rx_log matches "SECTOR {n:int} of {total:int}" as m:
+            seen = m.n
+            if m.n >= m.total:
+                log "last sector reached"
+
+        on rx_bus as f:
+            var h = parse_header(f.data)
+            if h.ok:
+                match h.kind:
+                    case PING:
+                        send tx_queue, Frame(head = h, payload_len = 0, payload = default)
+                    case DATA:
+                        seen = seen + 1
+                    case ACK:
+                        pass
+                    case _:
+                        pass
+
+        on edges as e:
+            at e.t + CUT_DELAY:
+                dut_pwr = false
+
+        after 30 s: -> DONE
+
+    state DONE:
+        enter:
+            cancel dut_pwr
+            pulse dut_pwr = false for 20 ms
+
+    state RESET_LINK:
+        enter:
+            dut_pwr = false
+        after 500 ms: -> IDLE
+
+machine sender follows link every 5 ms:
+    initial RUN
+
+    state RUN:
+        on tx_queue as fr:
+            send tx_uart, fr.head.encode()

@@ -1,0 +1,15 @@
+# N04 — Maschine ohne initial-Zustand.
+# Erwartet: Parser-/Semantikfehler (machine_body verlangt "initial", 2.3 / Pruefung 8).
+
+system:
+    language = 1
+    tick = 10 ms
+
+output led : bool @ hw("gpio/led") with safe = false
+
+machine no_initial:
+    var counter : int in 0..10 = 0
+
+    state RUN:
+        loop:
+            led = true

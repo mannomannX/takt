@@ -1,0 +1,2 @@
+const OCV : table<float[V], float[pct]> = [(3.0 V, 0 pct), (3.4 V, 10 pct), (3.7 V, 50 pct), (4.2 V, 100 pct)]
+var soc = interp(OCV, cell_v.min())

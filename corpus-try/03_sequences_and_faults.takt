@@ -1,0 +1,86 @@
+# 03 — Ablaufsteuerung: hierarchische Zustaende, Sequenzen mit wait/until/expect/
+#      repeat/step, Bestaetigungszeiten, Fault-Wald, weiche Timeouts.
+
+system:
+    language = 1
+    tick = 1 ms
+    output_timing = asap
+
+enum ValveCmd: CLOSED, OPEN
+
+input  chamber_p : float[bar] in 0..300 bar @ hw("daq1/ai1") with max_age = 5 ms
+input  supply_p  : float[bar] in 0..100 bar @ hw("daq1/ai2") with max_age = 5 ms
+output fuel_main : ValveCmd @ hw("plc1/do0") with safe = CLOSED
+output ox_main   : ValveCmd @ hw("plc1/do1") with safe = CLOSED
+output igniter   : bool     @ hw("plc1/do2") with safe = false
+
+command start
+command reset
+command abort_run
+
+param CHAMBER_LIMIT : float[bar] in 100..300 bar = 250 bar
+param IGNITION_P    : float[bar] in 5..100 bar   = 20 bar
+param BURN          : Duration = 3 s
+param PURGE_CYCLES  : int in 1..10 = 3
+
+machine hotfire:
+    fault -> SAFE
+    initial ARMED
+
+    loop:
+        if abort_run:
+            abort "operator abort"
+
+    state ARMED:
+        initial IDLE
+
+        loop:
+            check chamber_p < CHAMBER_LIMIT, "chamber overpressure {chamber_p}" for 5 ms
+            alert supply_p < 30 bar, "supply pressure low" for 200 ms
+
+        state IDLE:
+            when start and supply_p > 30 bar:
+                log "starting run"
+                -> PURGE
+
+        state PURGE:
+            sequence:
+                repeat PURGE_CYCLES:
+                    fuel_main = OPEN
+                    wait 200 ms
+                    fuel_main = CLOSED
+                    wait 300 ms
+                -> IGNITION
+
+        state IGNITION:
+            sequence:
+                step "open fuel":
+                    fuel_main = OPEN
+                    wait 150 ms
+                step "ignite":
+                    igniter = true
+                    until chamber_p > IGNITION_P timeout 500 ms -> SAFE
+                    expect chamber_p > IGNITION_P, "no chamber pressure after ignition"
+                step "burn":
+                    ox_main = OPEN
+                    check chamber_p > IGNITION_P, "flameout"
+                    wait BURN
+                -> SHUTDOWN
+
+        state SHUTDOWN:
+            enter:
+                ox_main = CLOSED
+                igniter = false
+            after 200 ms:
+                fuel_main = CLOSED
+                -> DONE
+
+        state DONE:
+            when reset: -> IDLE
+
+    state SAFE:
+        enter:
+            fuel_main = CLOSED
+            ox_main = CLOSED
+            igniter = false
+        when reset and chamber_p < 2 bar: -> IDLE

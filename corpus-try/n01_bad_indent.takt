@@ -1,0 +1,15 @@
+# N01 — Tabulator statt Leerzeichen und krumme Einrueckung.
+# Erwartet: Fehler im Tokenizer (2.1: 4 Leerzeichen, Tabs sind Fehler).
+
+system:
+    language = 1
+    tick = 10 ms
+
+output led : bool @ hw("gpio/led") with safe = false
+
+machine bad_indent:
+    initial RUN
+
+    state RUN:
+      loop:
+	led = true

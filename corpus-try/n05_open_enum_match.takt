@@ -1,0 +1,32 @@
+# N05 — match ueber ein offenes Enum ohne case _ und nicht erschoepfendes
+#       match ueber ein geschlossenes Enum.
+# Erwartet: zwei Fehler (Pruefungen 19 und 51).
+
+system:
+    language = 1
+    tick = 10 ms
+
+enum Cmd open: NOP, GO, STOP
+enum Level: LOW, MID, HIGH
+
+input  cmd_in : Cmd @ hw("ui/cmd") with max_age = 100 ms
+input  lvl_in : Level @ hw("ui/level") with max_age = 100 ms
+output led    : bool @ hw("gpio/led") with safe = false
+
+machine dispatch:
+    initial RUN
+
+    state RUN:
+        loop:
+            match cmd_in:
+                case NOP:
+                    led = false
+                case GO:
+                    led = true
+                case STOP:
+                    led = false
+            match lvl_in:
+                case LOW:
+                    led = false
+                case MID:
+                    led = true

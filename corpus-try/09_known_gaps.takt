@@ -1,0 +1,43 @@
+# 09 — Regressionstest fuer geschlossene Grammatikluecken (G2 bis G7).
+#      Muss parsen: explizite Instanziierung, Tupel in for, Schluesselwoerter
+#      als Membernamen, const-Variablen in Typen, capture als Stream-Element,
+#      TYPE_IDENT mit Methode, Typvariable mit ?.
+
+system:
+    language = 1
+    tick = 10 ms
+
+record Header layout little:
+    magic : u16 = 0xA55A
+    seq_no : u16
+
+input  cell_v : float[V] in 2.0..4.5 V @ hw("bms/cell0") with max_age = 100 ms
+input  wave   : stream<capture<float[V], 4096>> @ hw("daq/cap0") with max_rate = 10 Hz   # G6
+output dummy  : bool @ hw("gpio/do0") with safe = false
+
+block integrate[U](limit: float[U]):
+    var acc : float[U] = 0
+    step(x: float[U], dt: Duration in tick..1 h) -> float[U]:
+        acc = acc + x * dt.as(s)
+        return acc
+
+fn first[type T: pod, const N in 1..64](v: vec<T, N>) -> T?:      # G5: const-Variable im Typkonstruktor
+    return v.get(0)
+
+machine gaps every 100 ms:
+    var coulomb = integrate[A](limit = 72000 A*s)                 # G2: explizite Instanziierung am Aufrufort
+    var table : map<u16, int, 8> = default
+    initial RUN
+
+    state RUN:
+        loop:
+            var charge = coulomb.step(cell_v, 100 ms)             # G4: step als Membername (Schluesselwort)
+            var seconds = (100 ms).as(s)                          # G4: as als Membername
+            var safe_v = cell_v.or(3.7 V)                         # G4: or als Membername
+            var mode = gaps.state                                 # G4: state als Membername
+            var hdr = Header.decode(raw_bytes())                  # G7: TYPE_IDENT ohne Klammern vor '.'
+            for (k, v) in table:                                  # G3: Tupel-Destrukturierung in for
+                dummy = v > 0
+
+fn raw_bytes() -> bytes<8>:
+    return default

@@ -1,0 +1,5 @@
+until dut_log matches "Boot v{major:int}.{minor:int}" as m timeout 2 s
+until dut_log has "Update complete" timeout 30 s else:
+    verdict fail "no completion message"
+    -> RECOVER
+when can_rx matches CanFrame(id = 0x7E8) as f: -> GOT_RESPONSE

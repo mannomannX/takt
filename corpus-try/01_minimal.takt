@@ -1,0 +1,34 @@
+# 01 — Kleinstes vollstaendiges Programm.
+# Deckt ab: system, Kanaele, command, param, Maschine mit Fault-Ziel,
+#           flache Zustaende, loop mit check, Uebergaenge in einer Zeile.
+
+system:
+    language = 1
+    tick = 10 ms
+
+input  tank_p : float[bar] in 0..100 bar @ hw("daq1/ai0") with max_age = 50 ms
+output vent   : bool                     @ hw("plc1/do0") with safe = false
+
+command start
+command reset
+
+param LIMIT : float[bar] in 10..90 bar = 60 bar
+
+machine tank_guard:
+    fault -> SAFE
+    initial IDLE
+
+    state IDLE:
+        enter:
+            vent = false
+        when start: -> WATCH
+
+    state WATCH:
+        loop:
+            check tank_p < LIMIT, "tank overpressure {tank_p}"
+        when reset: -> IDLE
+
+    state SAFE:
+        enter:
+            vent = true
+        when reset: -> IDLE

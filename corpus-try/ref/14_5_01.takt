@@ -1,0 +1,12 @@
+input tcs : [16] float[degC] @ hw("daq1/tc[0:16]") with max_age = 200 ms
+param TC_LIMIT : float[degC] in 0..1200 degC = 900 degC
+
+machine tc_guard every 100 ms:
+    initial WATCH
+    state WATCH:
+        loop:
+            for i in range(16):
+                if tcs[i].valid:
+                    check tcs[i] < TC_LIMIT, "TC {i} over limit: {tcs[i]}"
+                else:
+                    alert true, "TC {i} invalid"

@@ -1,0 +1,4 @@
+trigger cut_on_erase:
+    when dut_log matches "Erasing sector {n:int}"
+    then at event.t + 250 us: vbus_en = false
+    bound 20 us

@@ -1,0 +1,6 @@
+machine bms:
+    persist var cycle_count : int in 0..100000 = 0 with min_interval = 10 s
+    persist var last_test   : SelftestResult = SelftestResult(passed = false, code = 0, r_int = 0 mohm)
+    initial RUN
+    state RUN:
+        loop: pass
