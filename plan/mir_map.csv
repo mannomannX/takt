@@ -1,0 +1,452 @@
+ID,Ziel,Name,Bemerkung
+SEM-0.1,Rationale,,Versprechen; eingelöst durch die Sätze in 9.4
+SEM-0.2,Rationale,,Entscheidungen
+SEM-0.3,Rationale,,Nicht-Ziele
+SEM-1.1,Rationale,,Bild
+SEM-1.2,Knoten,Program,"Programm, Maschinen, Blöcke als Tabellen"
+SEM-1.3,Knoten,Config,"tick; Perioden in Machine::period, Hyperperiode nur in Prüfung 32"
+SEM-1.4,Knoten,Channel,"Datenfluss: Channel, ExprKind::Published, Stream, StmtKind::At"
+SEM-1.5,Runtime,takt-rt-core,Lebenszyklus
+SEM-2.1,Frontend,takt-syntax,Lexik
+SEM-2.2,Frontend,takt-syntax,Schlüsselwörter
+SEM-2.3,Frontend,takt-syntax,Grammatik; je Produktion eine G-Zeile
+SEM-2.4,Knoten,Program,Kernkonstrukte
+SEM-2.5,Knoten,Config,edition im Logik-Hash; Membernamen als Accessor; open in EnumDef
+SEM-3.1,Knoten,Type,
+SEM-3.2,Knoten,UnitDef,nominal über UnitId; Dimension und Faktor für to()
+SEM-3.3,Knoten,Type::Duration,ConvertKind::As für .as(U)
+SEM-3.4,Knoten,Range,Herkunft Declared/Proven; implizite Prüfungen als ExprKind::Checked
+SEM-3.5,Knoten,CheckedKind::Valid,Dominanz als Input.dominated
+SEM-3.6,Frontend,takt-sema,Typinferenz füllt Expr::ty
+SEM-3.7,Knoten,RecordDef,"EnumDef, WireLayout, ExprKind::Decode, Accessor::Encode"
+SEM-3.8,Knoten,Type::Optional,"Type::Result, CheckedKind::Missing"
+SEM-3.9,Knoten,Type::Bytes,"Vec, Map, Str, Line, Table; Methoden als StmtKind::MethodCall"
+SEM-3.10,Knoten,BinaryOp::Shl,Bit-Operatoren; Accessor::Bit/Bits/WithBit/Wrap; ExprKind::Cast
+SEM-3.11,Knoten,Type::Mat,"MatOp, ExprKind::Index2"
+SEM-3.12,Knoten,GenericOrigin,monomorphisierte Fn/BlockDef/Native mit GenericArgVal
+SEM-4.1,Knoten,CheckedKind,jede Fault-Quelle ein Knoten
+SEM-4.2,Knoten,Config,float_width im Logik-Hash; libtaktm in der Runtime
+SEM-4.3,Knoten,ExprKind::Cond,and/or als BinaryOp
+SEM-4.4,Knoten,StmtKind::MethodCall,Seiteneffekte nur in Anweisungen; Ausdrücke rein
+SEM-4.5,Knoten,Native,"StmtKind::Job, Type::Handle"
+SEM-5.1,Knoten,Machine,State-Baum mit parent/children
+SEM-5.2,Runtime,takt-interp,step_m über Machine/State; Entry-Modus
+SEM-5.3,Knoten,FaultTarget,FaultKind; Target::Fault; FaultedState
+SEM-5.4,Knoten,StmtKind::Abort,Abort-Phase in der Runtime
+SEM-5.5,Prüfung,SC-21,"Aktionsblöcke sind Block; Einschränkung prüft Sema (21 für at, Rest in 8)"
+SEM-5.6,Knoten,Observe,Confirm für for d; Check als StmtKind::Check
+SEM-5.7,Knoten,BlockInstance,"ExprKind::BlockInit, Method::Step"
+SEM-5.8,Knoten,VarScope::State,"StmtKind::Every, SignalDef, StmtKind::Break, InstanceInfo"
+SEM-5.9,Knoten,PersistVar,
+SEM-5.10,Knoten,State,idle; Schlaf in der Runtime
+SEM-5.11,Knoten,ScopedInstance,
+SEM-5.12,Knoten,Layout,saved_paths; State::resume
+SEM-6.1,Rationale,,Motivation
+SEM-6.2,Regel,desugar::desugar_machine,"je Item eine Funktion, siehe DESUGAR-Zeilen"
+SEM-6.3,Regel,desugar::desugar,Test tests/desugar.rs example_6_3
+SEM-7.1,Knoten,Timer,Tick-Zähler je Zustand; Breite nach längster Frist
+SEM-7.2,Knoten,Machine,"period, phase, follows; Aktivierung in der Runtime"
+SEM-7.3,Knoten,RuntimeKind::Overrun,
+SEM-7.4,Knoten,Channel,Wall-Clock nur als Input
+SEM-7.5,Knoten,StmtKind::At,"Accessor::T, Trigger, StmtKind::Arm"
+SEM-8.1,Knoten,Channel,"Binding, ChannelAttrs, Meta"
+SEM-8.2,Frontend,takt-syntax,import channels erzeugt Channel-Einträge
+SEM-8.3,Knoten,Binding::Sim,Sim-/HW-Build unterscheiden sich nur in Binding; Logik-Hash gleich
+SEM-8.4,Knoten,Param,Profile; tunable
+SEM-8.5,Knoten,Command,ExprKind::Command
+SEM-8.6,Knoten,Stream,"Type::Stream, Layout::cursors, ChannelAttrs"
+SEM-8.7,Knoten,Pattern,"Handler, Guard::Match, ExprKind::Matches, Dfa"
+SEM-8.8,Knoten,StmtKind::Send,len_max statisch; Layout::output_queues
+SEM-8.9,Knoten,Type::Samples,Type::Capture; Accessor::Pre/Post/Samples/Rate
+SEM-8.10,Runtime,takt-hal,Hardware-Konfiguration liefert Bindung und guard/jitter
+SEM-8.11,Rationale,,Konvention aus vorhandenen Konstrukten
+SEM-9.0,Rationale,,Notation
+SEM-9.1,Knoten,Layout,Σ je Maschine
+SEM-9.2,Knoten,StmtKind,je Regel eine RULE-Zeile
+SEM-9.3,Runtime,takt-interp,"step_m, resolve_m, exec_chain"
+SEM-9.4,Runtime,takt-interp,tick; Sätze als Tests
+SEM-9.5,Rationale,,TCB
+SEM-9.6,Runtime,takt-interp,deliver/windows/advance_cursors über Layout::cursors
+SEM-9.7,Knoten,Handler,dispatch in der Runtime
+SEM-9.8,Knoten,StmtKind::At,sched über Layout::output_queues
+SEM-9.9,Knoten,State,idle; sleep/sleep_allowed in der Runtime
+SEM-9.10,Knoten,PersistVar,
+SEM-11.1,Rationale,,Komponenten
+SEM-11.2,Knoten,Layout,Overlay über VarScope::State/Lifted; Scratch; DFA-Tabellen
+SEM-11.3,Regel,format::write_program,TAKT-MIR; hash::logic_hash
+SEM-11.4,Runtime,takt-stdlib,
+SEM-11.5,Knoten,Layout,takt size liest nur die Beschreibung
+SEM-12.1,Runtime,takt-rt-core,
+SEM-12.2,Runtime,takt-rt-linux,
+SEM-12.3,Runtime,takt-rt-baremetal,
+SEM-12.4,Runtime,takt-hal,
+SEM-12.5,Runtime,takt-rt-core,Recording; Logik-Hash im Lauf-Header
+SEM-12.6,Runtime,takt-hal,
+SEM-12.7,Runtime,takt-rt-boot,
+SEM-12.8,Runtime,takt-rt-rtos,
+SEM-12.9,Knoten,Node,Machine::node; RuntimeKind::Node
+SEM-13.1,Runtime,takt-interp,
+SEM-13.2,Runtime,takt-interp,Coverage über State/Transition/Check-Positionen
+SEM-13.3,Knoten,Property,TProp
+SEM-13.4,Rationale,,Zertifizierung; req in StmtKind::Check
+SEM-13.5,Knoten,Observe,"Measure, Verify, Verdict"
+SEM-13.6,Knoten,MachineKind::Scenario,
+SEM-13.7,Knoten,Campaign,Sweep
+SEM-13.8,Runtime,takt-conformance,
+SEM-13.9,Runtime,takt-import-c,
+SEM-14.1,Rationale,,Beispiel; Golden-Trace je Meilenstein
+SEM-14.2,Rationale,,Beispiel; Golden-Trace je Meilenstein
+SEM-14.3,Rationale,,Beispiel; Golden-Trace je Meilenstein
+SEM-14.4,Rationale,,Beispiel; Golden-Trace je Meilenstein
+SEM-14.5,Rationale,,Beispiel; Golden-Trace je Meilenstein
+SEM-14.6,Rationale,,Beispiel; Golden-Trace je Meilenstein
+SEM-14.7,Rationale,,Beispiel; Golden-Trace je Meilenstein
+SEM-14.8,Rationale,,Beispiel; Golden-Trace je Meilenstein
+G-file,Knoten,Program,
+G-import,Frontend,takt-sema,Modulauflösung vor dem Lowering
+G-system_decl,Knoten,Config,
+G-system_item,Knoten,Config,
+G-type_decl,Lowering,TypeTable,Alias wird aufgelöst
+G-unitvec_decl,Knoten,MatUnits::Dimensioned,
+G-enum_decl,Knoten,EnumDef,
+G-variant,Knoten,VariantDef,
+G-record_decl,Knoten,RecordDef,
+G-record_field,Knoten,FieldDef,
+G-field,Knoten,FieldDef,
+G-bitfield,Knoten,BitfieldDef,
+G-unit_decl,Knoten,UnitDef,
+G-const_decl,Lowering,Expr,Konstanten werden gefaltet (11.3)
+G-param_decl,Knoten,Param,
+G-profile_decl,Knoten,Profile,
+G-channel_decl,Knoten,Channel,
+G-stream_decl,Knoten,Stream,
+G-port_decl,Lowering,Channel,Registerport als Channel-Paar (v1.2)
+G-binding,Knoten,Binding,
+G-attr,Knoten,ChannelAttrs,
+G-framing,Knoten,Framing,
+G-command_decl,Knoten,Command,
+G-fn_decl,Knoten,Fn,
+G-native_decl,Knoten,Native,
+G-cost_spec,Knoten,CostVec,
+G-cost_class,Knoten,CostVec,
+G-block_decl,Knoten,BlockDef,
+G-step_decl,Knoten,BlockDef,step: FnId
+G-method_decl,Knoten,Fn,
+G-generic_vars,Knoten,GenericOrigin,
+G-gvar,Knoten,GenericArgVal,
+G-capability,Lowering,GenericArgVal::Type,"Fähigkeit prüft Sema (52), Instanz ist monomorph"
+G-params,Knoten,FnParam,
+G-param,Knoten,FnParam,
+G-machine_decl,Knoten,Machine,
+G-machine_body,Knoten,Machine,
+G-persist_decl,Knoten,PersistVar,
+G-signal_decl,Knoten,SignalDef,
+G-state_decl,Knoten,State,
+G-state_body,Knoten,State,
+G-fault_clause,Knoten,FaultTarget,
+G-enter_block,Knoten,State,enter
+G-exit_block,Knoten,State,exit
+G-loop_block,Knoten,State,loop_block
+G-on_handler,Knoten,Handler,
+G-transition,Knoten,Transition,
+G-guard,Knoten,Guard,
+G-trans_block,Knoten,Transition,actions
+G-sequence_block,Knoten,Sequence,
+G-seq_item,Knoten,SeqItem,
+G-instance_decl,Knoten,MachineKind::Instance,gescopt: ScopedInstance
+G-node_decl,Knoten,Node,
+G-property_decl,Knoten,Property,
+G-tprop,Knoten,TProp,
+G-tprop_implies,Knoten,TProp::Implies,
+G-tprop_or,Knoten,TProp::Or,
+G-tprop_and,Knoten,TProp::And,
+G-tprop_not,Knoten,TProp::Not,
+G-tprop_atom,Knoten,TProp::Atom,
+G-scenario_decl,Knoten,MachineKind::Scenario,
+G-campaign_decl,Knoten,Campaign,
+G-campaign_item,Knoten,Sweep,
+G-trigger_decl,Knoten,Trigger,
+G-block,Knoten,Block,
+G-action_block,Knoten,Block,Einschränkung 5.5 prüft Sema
+G-stmt,Knoten,Stmt,
+G-simple_stmt,Knoten,StmtKind,
+G-assign,Knoten,StmtKind::Assign,
+G-lvalue,Knoten,Place,
+G-var_decl,Knoten,VarDef,
+G-if_stmt,Knoten,StmtKind::If,
+G-for_stmt,Knoten,StmtKind::ForRange,"ForEach für Fenster, Arrays, Maps"
+G-match_stmt,Knoten,StmtKind::Match,
+G-case_pattern,Knoten,ArmPattern,
+G-at_stmt,Knoten,StmtKind::At,
+G-every_stmt,Knoten,StmtKind::Every,
+G-check_stmt,Knoten,StmtKind::Check,
+G-alert_stmt,Knoten,Observe::Alert,
+G-log_stmt,Knoten,Observe::Log,
+G-send_stmt,Knoten,StmtKind::Send,
+G-pulse_stmt,Lowering,StmtKind::At,"Assign; At{now + d, Assign(latch)} (9.2)"
+G-cancel_stmt,Knoten,StmtKind::Cancel,
+G-measure_stmt,Knoten,Observe::Measure,
+G-job_stmt,Knoten,StmtKind::Job,
+G-arm_stmt,Knoten,StmtKind::Arm,
+G-verify_stmt,Knoten,Observe::Verify,
+G-verdict_stmt,Knoten,Observe::Verdict,
+G-raise_stmt,Knoten,StmtKind::Raise,
+G-goto_stmt,Knoten,StmtKind::Goto,
+G-abort_stmt,Knoten,StmtKind::Abort,
+G-return_stmt,Knoten,StmtKind::Return,
+G-expr,Knoten,Expr,
+G-or_expr,Knoten,BinaryOp::Or,
+G-and_expr,Knoten,BinaryOp::And,
+G-not_expr,Knoten,UnaryOp::Not,
+G-cmp_expr,Knoten,BinaryOp::Lt,Lt Le Gt Ge Eq Ne
+G-bitor_expr,Knoten,BinaryOp::BitOr,
+G-bitxor_expr,Knoten,BinaryOp::BitXor,
+G-bitand_expr,Knoten,BinaryOp::BitAnd,
+G-shift_expr,Knoten,BinaryOp::Shl,
+G-add_expr,Knoten,BinaryOp::Add,
+G-mul_expr,Knoten,BinaryOp::Mul,
+G-unary,Knoten,UnaryOp,
+G-cast_expr,Knoten,ExprKind::Cast,
+G-postfix,Knoten,ExprKind::Index,"Index, Index2, Slice"
+G-member,Knoten,ExprKind::Accessor,"Field, Convert, MatOp, Decode; mutierend: StmtKind::MethodCall"
+G-primary,Knoten,ExprKind,
+G-generic_args,Knoten,GenericOrigin,
+G-generic_arg,Knoten,GenericArgVal,
+G-args,Lowering,Expr,benannte Argumente in Parameterreihenfolge
+G-arg,Knoten,Expr,
+G-number,Knoten,ExprKind::Int,oder ExprKind::Float
+G-int_lit,Knoten,ExprKind::Int,
+G-duration_lit,Knoten,ExprKind::Duration,
+G-duration_expr,Knoten,ExprKind::Duration,
+G-pattern,Knoten,Pattern,
+G-unit_lit,Knoten,ExprKind::Float,Einheit im Typ
+G-unit_expr,Knoten,UnitDef,
+G-unit_term,Knoten,UnitDef,
+G-type,Knoten,Type,
+G-scalar_type,Knoten,Type::Int,"Bool, Int, Float, Duration, Str"
+G-int_type,Knoten,IntWidth,
+G-unit_tuple,Knoten,MatUnits::Dimensioned,
+G-elem_type,Knoten,Type::Stream,
+G-range,Knoten,Range,
+G-const_expr,Lowering,Const,gefaltet
+G-pattern_text,Knoten,PatternPiece,
+G-pattern_kind,Knoten,CaptureKind,
+G-format_text,Knoten,Format,
+G-format_spec,Knoten,FormatPiece::Expr,
+G-address_text,Knoten,Address,
+G-address_segment,Knoten,AddressSegment,
+MEM-valid,Knoten,Accessor::Valid,
+MEM-suspect,Knoten,Accessor::Suspect,
+MEM-stale,Knoten,Accessor::Stale,
+MEM-age,Knoten,Accessor::Age,
+MEM-reason,Knoten,Accessor::Reason,
+MEM-or,Knoten,Accessor::Or,
+MEM-ok,Knoten,Accessor::Ok,
+MEM-err,Knoten,Accessor::Err,
+MEM-t,Knoten,Accessor::T,
+MEM-seq,Knoten,Accessor::Seq,
+MEM-text,Knoten,Accessor::Text,
+MEM-data,Knoten,Accessor::Data,
+MEM-len,Knoten,Accessor::Len,
+MEM-count,Knoten,Accessor::Count,
+MEM-dropped,Knoten,Accessor::Dropped,
+MEM-malformed,Knoten,Accessor::Malformed,
+MEM-overflowed,Knoten,Accessor::Overflowed,
+MEM-free,Knoten,Accessor::Free,
+MEM-jitter,Knoten,Accessor::Jitter,
+MEM-time_warped,Knoten,Accessor::TimeWarped,
+MEM-done,Knoten,Accessor::Done,Job-Handle; <state>.done ist die gehobene Variable Sequence::done
+MEM-result,Knoten,Accessor::Result,
+MEM-state,Knoten,ExprKind::StateOf,
+MEM-to,Knoten,ConvertKind::To,
+MEM-to_float,Knoten,ConvertKind::ToFloat,
+MEM-as,Knoten,ConvertKind::As,
+MEM-bit,Knoten,Accessor::Bit,
+MEM-bits,Knoten,Accessor::Bits,
+MEM-with_bit,Knoten,Accessor::WithBit,
+MEM-wrap_*,Knoten,Accessor::Wrap,
+MEM-min,Knoten,Accessor::Min,
+MEM-max,Knoten,Accessor::Max,
+MEM-mean,Knoten,Accessor::Mean,
+MEM-rms,Knoten,Accessor::Rms,
+MEM-last,Knoten,Accessor::Last,
+MEM-transpose,Knoten,MatOp::Transpose,
+MEM-inv,Knoten,MatOp::Inv,
+MEM-det,Knoten,MatOp::Det,
+MEM-solve,Knoten,MatOp::Solve,
+MEM-cholesky,Knoten,MatOp::Cholesky,
+MEM-decode,Knoten,ExprKind::Decode,
+MEM-encode,Knoten,Accessor::Encode,
+MEM-default,Knoten,ExprKind::Default,als Literal
+MEM-push,Knoten,Method::Push,
+MEM-get,Knoten,Accessor::Get,
+MEM-insert,Knoten,Method::Insert,
+MEM-remove,Knoten,Method::Remove,
+MEM-clear,Knoten,Method::Clear,
+MEM-skip,Knoten,Method::Skip,
+MEM-starts_with,Knoten,Accessor::StartsWith,
+MEM-contains,Knoten,Accessor::Contains,
+MEM-armed,Knoten,Accessor::Armed,
+MEM-fired,Knoten,StreamRef::Fired,Eingabestrom eines Triggers
+MEM-pre,Knoten,Accessor::Pre,
+MEM-post,Knoten,Accessor::Post,
+MEM-samples,Knoten,Accessor::Samples,
+MEM-rate,Knoten,Accessor::Rate,
+MEM-remaining,Knoten,Accessor::Remaining,
+MEM-truncated,Knoten,Accessor::Truncated,
+MEM-reset,Knoten,Method::Reset,
+PAR-1.4-Inputs,Knoten,Channel,
+PAR-1.4-Outputs,Knoten,Channel,
+PAR-1.4-Veröffentlichte_Variablen,Knoten,ExprKind::Published,
+PAR-1.4-Commands,Knoten,Command,
+PAR-1.4-Ereignisströme,Knoten,Type::Stream,
+PAR-1.4-Geplante_Ausgaben,Knoten,StmtKind::At,
+PAR-1.4-Abort_Phase,Runtime,takt-interp,
+PAR-1.4-Defensiver_Treiberrand,Runtime,takt-hal,
+PAR-1.4-follows,Knoten,Machine,follows
+PAR-1.4-Tunables,Knoten,Param,tunable
+PAR-2.2-Regel,Frontend,takt-syntax,
+PAR-2.5-Edition,Knoten,Config,edition
+PAR-2.5-Reservierte_Wörter,Frontend,takt-syntax,
+PAR-2.5-Reservierte_Membernamen,Knoten,Accessor,Prüfung 50
+PAR-2.5-Offene_Enums,Knoten,EnumDef,open; Prüfung 51
+PAR-2.5-Verdeckung_und_Additivität,Frontend,takt-sema,
+PAR-2.5-Operator_Metadaten_v1.1,Knoten,Meta,
+PAR-3.2-Modell,Knoten,UnitDef,
+PAR-3.2-Nominale_Semantik_Entscheidung,Knoten,UnitDef,UnitId nominal; ConvertKind::To explizit
+PAR-3.2-Vordefinierte_Einheiten,Knoten,UnitDef,predefined
+PAR-3.2-Einheiten_auf_Integern_v1.1,Knoten,Type::Int,unit
+PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Knoten,GenericOrigin,
+PAR-3.2-Affine_Einheiten,Knoten,UnitDef,affine_offset
+PAR-3.3-Lexikalische_Regel,Frontend,takt-syntax,
+PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Knoten,CheckedKind::Range,
+PAR-3.4-Warnpolitik_und_Idiom,Prüfung,SC-4,Kennzahl impliziter Prüfungen = Zahl der ExprKind::Checked
+PAR-3.4-Oktagone_v1.1,Knoten,Range,origin Proven
+PAR-3.4-Darstellungsverengung,Knoten,Range,Expr::range steuert die Breite
+PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Knoten,CheckedKind::Valid,
+PAR-3.5-Rand_Durchsetzung,Runtime,takt-hal,
+PAR-3.5-Entprellte_Qualität,Knoten,ChannelAttrs,debounce
+PAR-3.7-Drahtformat_Details,Knoten,WireLayout,
+PAR-3.7-default,Knoten,ExprKind::Default,
+PAR-3.8-Ergebnis_mit_Fehlercode_T_E,Knoten,Type::Result,
+PAR-3.9-inout_Parameter,Knoten,FnParam,inout
+PAR-3.11-Uniforme_Form_v1,Knoten,MatUnits::Uniform,
+PAR-3.11-Dimensionierte_Form_v1.1,Knoten,MatUnits::Dimensioned,
+PAR-4.2-Breite_von_float,Knoten,Config,float_width
+PAR-4.2-FPU_im_IEEE_Modus,Runtime,takt-rt-core,
+PAR-4.2-fma,Knoten,ExprKind::Call,Primitive aus libtaktm
+PAR-4.2-Reduktionen,Runtime,libtaktm,
+PAR-4.2-Subnormale_in_Zuständen,Runtime,takt-stdlib,
+PAR-4.5-Chunk_Natives,Knoten,Native,
+PAR-4.5-Jobs,Knoten,StmtKind::Job,
+PAR-5.1-Richtlinie_für_Regelkreise,Rationale,,
+PAR-5.3-Statische_Regel,Prüfung,SC-9,
+PAR-5.6-Interlock,Knoten,StmtKind::Check,
+PAR-5.6-Permissive,Knoten,Guard,
+PAR-5.6-Alert,Knoten,Observe::Alert,
+PAR-5.6-Bestätigungszeit,Knoten,Confirm,
+PAR-5.6-Beobachtung_und_Steuerung,Knoten,Observe,
+PAR-5.9-Journal_Anforderungen,Runtime,takt-rt-baremetal,
+PAR-5.10-Statische_Regeln,Prüfung,SC-22,
+PAR-5.10-Nicht_Wake_Streams_in_idle,Runtime,takt-interp,
+PAR-5.10-Systemschlaf,Runtime,takt-interp,
+PAR-7.1-Tick_Quelle,Knoten,Config,"tick_source, tick_tolerance"
+PAR-7.2-follows_v1.1,Knoten,Machine,follows
+PAR-7.5-Zeitgestempelte_Eingaben,Knoten,Accessor::T,
+PAR-7.5-Geplante_Ausgaben,Knoten,StmtKind::At,
+PAR-7.5-Latenzformel,Rationale,,
+PAR-7.5-Präzision,Knoten,ChannelAttrs,jitter; Prüfung 28
+PAR-7.5-Trigger_v1.2_Regeln_auf_dem_I_O_Knoten,Knoten,Trigger,
+PAR-8.3-Sim_Build,Knoten,Binding::Sim,Prüfung 13
+PAR-8.3-Plant_Modelle,Knoten,Machine,
+PAR-8.3-HIL_Umschaltung,Knoten,Binding,Logik-Hash ohne Bindungen
+PAR-8.3-Sim_Ausführung,Runtime,takt-interp,
+PAR-8.4-Tunables_v1.1,Knoten,Param,tunable
+PAR-8.6-Motivation,Rationale,,
+PAR-8.6-Deklaration,Knoten,Channel,
+PAR-8.6-Semantik_ASCII_formal_in_9.6,Runtime,takt-interp,
+PAR-8.6-Statische_Prüfung,Prüfung,SC-17,
+PAR-8.6-Byte_Ring_für_Elemente_variabler_Länge,Knoten,ChannelAttrs,"capacity_bytes, expect_len"
+PAR-8.6-Garantien,Rationale,,
+PAR-8.6-Interne_Streams_Warteschlangen_zwischen_Maschinen,Knoten,Stream,
+PAR-8.7-Motivation,Rationale,,
+PAR-8.7-Musterliterale,Knoten,PatternPiece,
+PAR-8.7-Record_Muster,Knoten,Pattern::Record,
+PAR-8.7-Operatoren,Knoten,ExprKind::Matches,
+PAR-8.7-Handler,Knoten,Handler,
+PAR-8.7-Sequenzen_und_Übergänge,Knoten,Guard::Match,
+PAR-8.7-Garantien_und_Budget,Rationale,,
+PAR-9.4-Bemerkung_Loop_Sprache,Rationale,,
+PAR-11.2-Große_Werte,Runtime,takt-llvm,
+PAR-11.2-Statischer_Scratch,Knoten,Layout,scratch_bytes
+PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Knoten,VarScope::State,Lifted ebenso
+PAR-11.2-DFA_Tabellen,Knoten,Dfa,
+PAR-11.3-Compile_Zeit_Auswertung,Runtime,takt-interp,
+PAR-11.3-Versionierte_Formate,Regel,format::write_program,
+PAR-11.3-Reproduzierbare_Builds,Regel,hash::logic_hash,
+PAR-12.3-Speicherschutz,Runtime,takt-rt-baremetal,
+PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Runtime,takt-rt-baremetal,
+PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Runtime,takt-rt-boot,
+PAR-12.7-Neustart_aus_sicherem_Zustand,Runtime,takt-rt-boot,
+PAR-12.7-Tiefschlaf,Runtime,takt-rt-boot,
+PAR-12.7-Start_Channels,Runtime,takt-rt-boot,
+PAR-12.7-Irreversible_Outputs,Knoten,ChannelAttrs,irreversible; Prüfung 48
+PAR-12.8-Zielklassen,Runtime,takt-rt-rtos,
+PAR-13.3-Sprache,Knoten,TProp,
+PAR-13.3-Semantik,Knoten,TProp::Temporal,
+PAR-13.3-Verwendung,Knoten,Property,monitor
+PAR-13.5-Lauf_Verdikt,Knoten,Observe::Verdict,
+PAR-13.8-takt_bench,Runtime,takt-conformance,
+PAR-13.9-Klassifikation,Runtime,takt-import-c,
+PAR-13.9-Abbildungsregeln,Runtime,takt-import-c,
+PAR-13.9-Grundregel_des_Importers,Runtime,takt-import-c,
+PAR-13.9-Orakel_Modus,Runtime,takt-import-c,
+PAR-13.9-Vorgehen,Runtime,takt-import-c,
+FN-9-advance_cursors,Runtime,takt-interp,liest Layout::cursors
+FN-9-apply_scheduled,Runtime,takt-interp,liest Layout::output_queues
+FN-9-cancel_all_scheduled,Runtime,takt-interp,liest Layout::output_queues
+FN-9-deliver,Runtime,takt-interp,liest Stream
+FN-9-deliverable,Runtime,takt-interp,liest FaultKind
+FN-9-dispatch,Runtime,takt-interp,liest Handler
+FN-9-exec,Runtime,takt-interp,liest StmtKind
+FN-9-exec_chain,Runtime,takt-interp,liest State
+FN-9-resolve_m,Runtime,takt-interp,liest FaultTarget
+FN-9-sleep,Runtime,takt-interp,liest State
+FN-9-sleep_allowed,Runtime,takt-interp,liest Layout
+FN-9-step_m,Runtime,takt-interp,liest Machine
+FN-9-tick,Runtime,takt-interp,liest Program
+FN-9-windows,Runtime,takt-interp,liest Layout::cursors
+RULE-9.2-stmt,Knoten,Stmt,
+RULE-9.2-x_=_e,Knoten,StmtKind::Assign,
+RULE-9.2-check_e,Knoten,StmtKind::Check,
+RULE-9.2-check_e_for_d,Knoten,Confirm,viol[site] in Layout::viol_sites
+RULE-9.2-->_q,Knoten,StmtKind::Goto,
+RULE-9.2-abort,Knoten,StmtKind::Abort,
+RULE-9.2-s1;_s2,Knoten,Block,
+RULE-9.2-if_e:_b1_else:_b2,Knoten,StmtKind::If,
+RULE-9.2-for_i_in_range(n):_b,Knoten,StmtKind::ForRange,
+RULE-9.2-for_x_in_W:_b,Knoten,StmtKind::ForEach,
+RULE-9.2-match_e:_cases,Knoten,StmtKind::Match,
+"RULE-9.2-send_o,_e",Knoten,StmtKind::Send,
+RULE-9.2-at_T:_b,Knoten,StmtKind::At,
+RULE-9.2-pulse_o_=_v_for_d,Lowering,StmtKind::At,kein eigener Knoten (9.2)
+RULE-9.2-cancel_o,Knoten,StmtKind::Cancel,
+RULE-9.2-raise_sig,Knoten,StmtKind::Raise,
+RULE-9.2-job_v_=_f(args),Knoten,StmtKind::Job,
+RULE-9.2-every_d:_b,Knoten,StmtKind::Every,
+RULE-9.2-break,Knoten,StmtKind::Break,
+RULE-9.2-alert_|_log_|_measure_|_verify_|_verdict_...,Knoten,Observe,
+DESUGAR-Statement_vor_der_ersten_Zeitgrenze_des_Segments,Regel,desugar::stmt,enter: des Segments
+DESUGAR-check_e_msg_an_Position_p,Regel,desugar::stmt,loop: aller Segmente ab i
+DESUGAR-expect_e_msg,Regel,desugar::expect,Flagvariable je expect
+DESUGAR-wait_d,Regel,desugar::wait,
+DESUGAR-until_c_timeout_d,Regel,desugar::until,
+DESUGAR-repeat_n,Regel,desugar::repeat,Zähler gehoben; Rücksprung schwach
+DESUGAR-step_name,Regel,desugar::step,State::step_name
+DESUGAR-Statement_mit_auch_in_if_elif_else,Regel,desugar::branches,Bedingung des Zweigs als Guard
+DESUGAR-Ende_ohne,Regel,desugar::finish,"letztes Segment hält, setzt done"
+DESUGAR-var_x_e_in_der_Sequenz,Regel,desugar::desugar_machine,Hebung im Lowering: VarScope::Lifted; die Sequenz enthält Assign
+DESUGAR-until_g_as_m,Regel,desugar::until,Captures gehoben (VarScope::Lifted)
+DESUGAR-until_c_timeout_d_X,Regel,desugar::until,TimeoutAction::Goto
+DESUGAR-until_c_timeout_d_else,Regel,desugar::until,TimeoutAction::Else
+DESUGAR-measure_verify_verdict_send_at_job,Regel,desugar::stmt,enter: des Segments

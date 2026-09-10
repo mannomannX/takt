@@ -59,8 +59,8 @@ SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M6,offen
 SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,offen
 SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,offen
 SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),offen
-SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),offen
-SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),offen
+SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),teilweise
+SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),teilweise
 SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),offen
 SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),offen
 SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),offen
@@ -90,7 +90,7 @@ SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),offen
 SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M1/M2 (Interpreter),offen
 SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M3/M4,offen
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M3/M4,offen
-SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M3/M4,offen
+SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M3/M4,teilweise
 SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M3/M4,offen
 SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3/M4,offen
 SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),offen
@@ -668,7 +668,7 @@ PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M1 (Kernsemantik),offen
 PAR-7.5-Trigger_v1.2_Regeln_auf_dem_I_O_Knoten,Absatz/Regel,7.5,Trigger (v1.2): Regeln auf dem I/O-Knoten,v1.2,M8,offen
 PAR-8.3-Sim_Build,Absatz/Regel,8.3,Sim-Build:,,M2 (Ströme),offen
 PAR-8.3-Plant_Modelle,Absatz/Regel,8.3,Plant-Modelle,,M2 (Ströme),offen
-PAR-8.3-HIL_Umschaltung,Absatz/Regel,8.3,HIL-Umschaltung:,,M2 (Ströme),offen
+PAR-8.3-HIL_Umschaltung,Absatz/Regel,8.3,HIL-Umschaltung:,,M2 (Ströme),teilweise
 PAR-8.3-Sim_Ausführung,Absatz/Regel,8.3,Sim-Ausführung,,M2 (Ströme),offen
 PAR-8.4-Tunables_v1.1,Absatz/Regel,8.4,Tunables (v1.1),v1.1,M6,offen
 PAR-8.6-Motivation,Absatz/Regel,8.6,Motivation,,M2 (Ströme),offen
@@ -698,8 +698,8 @@ PAR-11.2-Statischer_Scratch,Absatz/Regel,11.2,Statischer Scratch,,M3/M4,offen
 PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Absatz/Regel,11.2,Overlay exklusiver Zustandsspeicher,,M3/M4,offen
 PAR-11.2-DFA_Tabellen,Absatz/Regel,11.2,DFA-Tabellen,,M3/M4,offen
 PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M3/M4,offen
-PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M3/M4,offen
-PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M3/M4,offen
+PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M3/M4,teilweise
+PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M3/M4,teilweise
 PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M4/M5 (Runtime),offen
 PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M4/M5 (Runtime),offen
 PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M4/M5 (Runtime),offen
@@ -752,20 +752,20 @@ RULE-9.2-job_v_=_f(args),exec-Regel,9.2,exec(job v = f(args)),,M1/M2 (Interprete
 RULE-9.2-every_d:_b,exec-Regel,9.2,exec(every d: b),,M1/M2 (Interpreter),offen
 RULE-9.2-break,exec-Regel,9.2,exec(break),,M1/M2 (Interpreter),offen
 RULE-9.2-alert_|_log_|_measure_|_verify_|_verdict_...,exec-Regel,9.2,exec(alert | log | measure | verify | verdict ...),,M1/M2 (Interpreter),offen
-DESUGAR-Statement_vor_der_ersten_Zeitgrenze_des_Segments,Desugaring-Regel,6.2,Statement vor der ersten Zeitgrenze des Segments,,M1 (Kernsemantik),offen
-DESUGAR-check_e_msg_an_Position_p,Desugaring-Regel,6.2,"`check e [, msg]` an Position p",,M1 (Kernsemantik),offen
-DESUGAR-expect_e_msg,Desugaring-Regel,6.2,"`expect e [, msg]`",,M1 (Kernsemantik),offen
-DESUGAR-wait_d,Desugaring-Regel,6.2,`wait d`,,M1 (Kernsemantik),offen
-DESUGAR-until_c_timeout_d,Desugaring-Regel,6.2,`until c [timeout d]`,,M1 (Kernsemantik),offen
-DESUGAR-repeat_n,Desugaring-Regel,6.2,`repeat n:`,,M1 (Kernsemantik),offen
-DESUGAR-step_name,Desugaring-Regel,6.2,"`step ""name"":`",,M1 (Kernsemantik),offen
-DESUGAR-Statement_mit_auch_in_if_elif_else,Desugaring-Regel,6.2,Statement mit `->` (auch in `if`/`elif`/`else`),,M1 (Kernsemantik),offen
-DESUGAR-Ende_ohne,Desugaring-Regel,6.2,Ende ohne `->`,,M1 (Kernsemantik),offen
-DESUGAR-var_x_e_in_der_Sequenz,Desugaring-Regel,6.2,`var x = e` in der Sequenz,,M1 (Kernsemantik),offen
-DESUGAR-until_g_as_m,Desugaring-Regel,6.2,`until g as m`,,M1 (Kernsemantik),offen
-DESUGAR-until_c_timeout_d_X,Desugaring-Regel,6.2,`until c timeout d -> X`,,M1 (Kernsemantik),offen
-DESUGAR-until_c_timeout_d_else,Desugaring-Regel,6.2,`until c timeout d else:`,,M1 (Kernsemantik),offen
-DESUGAR-measure_verify_verdict_send_at_job,Desugaring-Regel,6.2,"`measure`, `verify`, `verdict`, `send`, `at`, `job`",,M1 (Kernsemantik),offen
+DESUGAR-Statement_vor_der_ersten_Zeitgrenze_des_Segments,Desugaring-Regel,6.2,Statement vor der ersten Zeitgrenze des Segments,,M1 (Kernsemantik),fertig
+DESUGAR-check_e_msg_an_Position_p,Desugaring-Regel,6.2,"`check e [, msg]` an Position p",,M1 (Kernsemantik),fertig
+DESUGAR-expect_e_msg,Desugaring-Regel,6.2,"`expect e [, msg]`",,M1 (Kernsemantik),fertig
+DESUGAR-wait_d,Desugaring-Regel,6.2,`wait d`,,M1 (Kernsemantik),fertig
+DESUGAR-until_c_timeout_d,Desugaring-Regel,6.2,`until c [timeout d]`,,M1 (Kernsemantik),fertig
+DESUGAR-repeat_n,Desugaring-Regel,6.2,`repeat n:`,,M1 (Kernsemantik),fertig
+DESUGAR-step_name,Desugaring-Regel,6.2,"`step ""name"":`",,M1 (Kernsemantik),fertig
+DESUGAR-Statement_mit_auch_in_if_elif_else,Desugaring-Regel,6.2,Statement mit `->` (auch in `if`/`elif`/`else`),,M1 (Kernsemantik),fertig
+DESUGAR-Ende_ohne,Desugaring-Regel,6.2,Ende ohne `->`,,M1 (Kernsemantik),fertig
+DESUGAR-var_x_e_in_der_Sequenz,Desugaring-Regel,6.2,`var x = e` in der Sequenz,,M1 (Kernsemantik),teilweise
+DESUGAR-until_g_as_m,Desugaring-Regel,6.2,`until g as m`,,M1 (Kernsemantik),teilweise
+DESUGAR-until_c_timeout_d_X,Desugaring-Regel,6.2,`until c timeout d -> X`,,M1 (Kernsemantik),fertig
+DESUGAR-until_c_timeout_d_else,Desugaring-Regel,6.2,`until c timeout d else:`,,M1 (Kernsemantik),fertig
+DESUGAR-measure_verify_verdict_send_at_job,Desugaring-Regel,6.2,"`measure`, `verify`, `verdict`, `send`, `at`, `job`",,M1 (Kernsemantik),fertig
 DIST-rule1,Regel,12.9,Eine logische Zeitbasis.,v2,M9 (v2),offen
 DIST-rule2,Regel,12.9,Verzögerung = Hops.,v2,M9 (v2),offen
 DIST-rule3,Regel,12.9,Outputs auf fremden Knoten,v2,M9 (v2),offen
@@ -1027,7 +1027,7 @@ CON-System-Channels_sys/…,Konstrukt (2.4),2.4,System-Channels `sys/…`,,M0 (P
 CON-native_fn,Konstrukt (2.4),2.4,`native fn`,,M0 (Parser/MIR-Entwurf),definiert
 CON-tick_source,Konstrukt (2.4),2.4,`tick_source`,,M0 (Parser/MIR-Entwurf),definiert
 "CON-jitter,_max_slew",Konstrukt (2.4),2.4,"`jitter`, `max_slew`",,M0 (Parser/MIR-Entwurf),definiert
-FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M0 (Parser/MIR-Entwurf),offen
+FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M0 (Parser/MIR-Entwurf),teilweise
 FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M0 (Parser/MIR-Entwurf),offen
 FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M0 (Parser/MIR-Entwurf),offen
 FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M0 (Parser/MIR-Entwurf),offen

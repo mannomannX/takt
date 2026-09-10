@@ -261,7 +261,7 @@ impl SourceMap {
         let offset = (span.start as usize).min(f.text.len());
         let line = f.line_starts.partition_point(|&s| s as usize <= offset);
         let line_start = f.line_starts[line - 1] as usize;
-        let col = f.text[line_start..offset].chars().count() + 1;
+        let col = f.text.get(line_start..offset).map_or(offset - line_start, |s| s.chars().count()) + 1;
         (line as u32, col as u32)
     }
 
@@ -302,9 +302,13 @@ impl SourceMap {
         let width = line.to_string().len();
         let pad = " ".repeat(width);
         out.push_str(&format!("{pad}--> {name}:{line}:{col}\n{pad} |\n{line} | {text}\n"));
-        let len =
-            self.text(span.file).get(span.start as usize..span.end as usize).map_or(1, |s| s.chars().count().max(1));
-        let underline = format!("{}{}", " ".repeat(col.saturating_sub(1) as usize), "^".repeat(len));
+        let len = self
+            .text(span.file)
+            .get(span.start as usize..span.end as usize)
+            .map_or(1, |s| s.split('\n').next().unwrap_or("").chars().count().max(1));
+        let prefix: String =
+            text.chars().take(col.saturating_sub(1) as usize).map(|c| if c == '\t' { c } else { ' ' }).collect();
+        let underline = format!("{prefix}{}", "^".repeat(len));
         match label {
             Some(l) => out.push_str(&format!("{pad} | {underline} {l}\n")),
             None => out.push_str(&format!("{pad} | {underline}\n")),
@@ -339,6 +343,23 @@ mod tests {
             map.render_line(&d),
             "ctrl.takt:2:5: error[SC-50]: `valid` ist als Feldname verboten (Feld umbenennen, etwa `is_valid`)"
         );
+    }
+
+    #[test]
+    fn odd_spans_do_not_panic_and_underline_one_line() {
+        let map = SourceMap::single("a.takt", "\tvar näme = 1\nnext\n");
+        let inside_char = Span::new(6, 7);
+        assert_eq!(map.line_col(inside_char), (1, 7), "Offset in einem Mehrbytezeichen");
+        assert!(!map.render(&Diagnostic::error("P", inside_char, "x")).is_empty());
+        let multi = Span::new(1, 18);
+        let text = map.render(&Diagnostic::error("P", multi, "x"));
+        assert!(text.contains("1 | \tvar näme = 1\n  | \t^^^^^^^^^^^^\n"), "{text}");
+        let beyond = Span::new(100, 200);
+        assert_eq!(map.line_col(beyond), (3, 1));
+        assert!(map.render(&Diagnostic::error("P", beyond, "x")).contains("3 | \n"));
+        assert_eq!(map.line_col(Span::new(0, 0)), (1, 1));
+        assert_eq!(SourceMap::new().line_col(Span::new(3, 4)), (0, 0));
+        assert_eq!(SourceMap::new().line_text(FileId(7), 1), "");
     }
 
     #[test]

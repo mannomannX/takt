@@ -1,0 +1,13 @@
+[package]
+name = "takt-mir"
+version = "0.1.0"
+description = "Takt: mittlere IR (typisiert, entzuckert), Desugaring 6.2, Format TAKT-MIR, Logik-Hash"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+takt-diag = { path = "../takt-diag" }
+
+[lints]
+workspace = true

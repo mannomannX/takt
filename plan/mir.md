@@ -1,6 +1,7 @@
 # MIR — Entwurf gegen die volle Referenz
 
-Stand: Entwurf (M0). Die MIR ist das eine Werkstück für Interpreter, Analysen, Codegen,
+Stand: umgesetzt und eingefroren (`crates/takt-mir`, Formatversion 1; Abschnitte 6 und 7).
+Die MIR ist das eine Werkstück für Interpreter, Analysen, Codegen,
 `takt size`, Orakel und Importer (plan.md, Prinzip 1). Sie wird hier gegen die *volle*
 Referenz entworfen — mit Knoten für alles, was erst in v1.1, v1.2 oder v2 ausgeführt wird —,
 dann als Rust-Typen in `crates/takt-mir` gebaut, gegen die Inventur geprüft und eingefroren.
@@ -205,4 +206,45 @@ Checker 150 plus die CSV mit rund 450 Zeilen.
 
 ## 6. Änderungsgeschichte der MIR
 
-(leer bis zum Freeze)
+| Datum | Formatversion | Änderung |
+|---|---|---|
+| 2026-09-10 | 1 | Freeze: Knoten aus Abschnitt 2 als Rust-Typen, `desugar` nach 6.2, Format `TAKT-MIR` (grammar/mir-format.md), Logik-Hash, Abbildung `plan/mir_map.csv` (Prüfer leer). Änderungen ab hier nur mit Zeile in dieser Tabelle; Feldnummern werden nie umvergeben, neue Felder sind `opt` oder `rep`, ein neues Pflichtfeld verlangt einen Versionssprung. |
+
+## 7. Stand nach der Umsetzung
+
+Abweichungen vom Entwurf in Abschnitt 2, jeweils mit Grund:
+
+- **`BlockStep`/`BlockMethod` sind keine Ausdrücke**, sondern `StmtKind::MethodCall`
+  (`target = receiver.method(args)`), ebenso `push`, `insert`, `remove`, `clear`, `skip`,
+  `reset`. Ausdrücke bleiben damit seiteneffektfrei (4.4); `Accessor` enthält nur die reinen
+  Zugriffe, `ConvertKind` die Konversionen, `MatOp` die Matrixoperationen.
+- **`Tunable` ist kein eigener Knoten**: `Param.tunable` (8.4); `ExprKind::Param` liest beides,
+  der Interpreter behandelt Tunables als Input mit Halte-Semantik.
+- **`Input` trägt `dominated`** (statisch unter `.valid`, 3.5); die implizite Validitätsprüfung
+  ist sonst ein `Checked{Valid}`.
+- **Eigenschaften** sind ein eigener Typ `TProp` mit `Atom(Expr)`, nicht Teil von `ExprKind`,
+  damit Monitore (13.3) ihre Zähler je Operator anlegen können.
+- **Maschinenrollen** über `MachineKind` (Regular, Template, Instance, Scenario); Instanzen
+  sind eigene Maschineneinträge, `MachineRef` adressiert Instanz-Arrays mit Indexausdruck.
+- **`Layout`** beschreibt Σ ohne Slot-Tabelle: der Overlay folgt aus `VarScope::State`/`Lifted`;
+  Timer, `every`-Zähler, `viol`-Stellen, Blockinstanzen, `resume`-Pfade, Trigger-Flags,
+  Ausgabewarteschlangen und Cursor sind Tabellen.
+- **Der Logik-Hash ist kein Feld** von `Program`, sondern `hash::logic_hash(&Program)`; er
+  läuft über die Serialisierung ohne `meta`-Felder (Positionen, Bindungen, Metadaten).
+  Analyse-Annotationen (bewiesene Ranges, Kosten, Budget, Timer-Breite) sind Teil des Hashs;
+  ein Programm hat damit je Toolchain-Version einen Hash (11.3 „Reproduzierbare Builds").
+- **Desugaring** (`desugar.rs`): Segmente heißen `ELTERN.Si`; `repeat` beginnt ein neues
+  Segment (`when true`, ein Tick), sofern das aktuelle nicht leer ist, und setzt den Zähler
+  beim Verlassen zurück, damit verschachtelte `repeat`s ohne Zusatzzustand korrekt sind;
+  `expect` bekommt eine zustandslokale Flagvariable; Zweige einer `if`-Kette erhalten ihre
+  exakte Bedingung als Guard (statt `when true` am Ende); `->` ist nur als letzte Anweisung
+  eines Zweigs erlaubt, sonst Fehler `MIR`; ein Zustand mit Sequenz und Kindern ist ein Fehler.
+  Voraussetzung aus dem Lowering (M1): `var`, Captures und `repeat`-Zähler sind gehoben.
+- **Abbildung der Inventur**: `plan/mir_map.csv` kennt neben Knoten, Regel, Prüfung, Runtime
+  und Rationale die Ziele *Lowering* (Konstrukt wird auf einen bestehenden Knoten abgebildet,
+  etwa `pulse` → `At`) und *Frontend* (vor der MIR erledigt, etwa `import`). Der Prüfer
+  `plan/check_mir_map.py` verlangt, dass jeder Knoten im Code existiert, jede Regel eine
+  Funktion ist, jede Prüfung eine SC-Zeile und jede Komponente in 11.1 steht.
+- **Tests**: `tests/desugar.rs` (6.3 und je eine Regel der Tabelle), `tests/roundtrip.rs`
+  (Beispielprogramm mit jeder Knotenart, Kopf, unbekannte Felder, Hashes, Membernamen gegen
+  2.5), `tests/format_vectors.rs` (Vektoren aus `grammar/mir-format.md`).
