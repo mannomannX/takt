@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-47: dasselbe Argument steht als `inout` und als weiteres Argument.
+
+fn copy(inout dst: bytes<8>, src: bytes<8>):
+    var ok = dst.push(src.len as u8)
+
+output n : int in 0..64 @ hw("o/n") with safe = 0
+
+machine m:
+    var buf : bytes<8> = default
+    initial RUN
+
+    state RUN:
+        loop:
+            buf = copy(buf, buf)  # ~ SC-47
+            n = buf.len

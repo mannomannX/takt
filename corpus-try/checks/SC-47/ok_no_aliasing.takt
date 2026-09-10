@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-47: jedes Argument steht hoechstens einmal.
+
+fn fill(inout b: bytes<8>, x: u8):
+    var ok = b.push(x)
+
+output n : int in 0..64 @ hw("o/n") with safe = 0
+
+machine m:
+    var buf   : bytes<8> = default
+    var other : bytes<8> = default
+    initial RUN
+
+    state RUN:
+        loop:
+            buf = fill(buf, 1)
+            other = fill(other, 2)
+            n = buf.len

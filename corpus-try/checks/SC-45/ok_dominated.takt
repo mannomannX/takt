@@ -1,0 +1,29 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-45: das Ergebnis wird unter `.ok` benutzt, `match` ist erschoepfend.
+
+enum JobFail: BUSY, GONE
+
+fn attempt(x: int in 0..10) -> int!JobFail:
+    if x > 5:
+        return ERR(BUSY)
+    return OK(x * 2)
+
+output n : int in 0..64 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            var r = attempt(3)
+            if r.ok:
+                n = r
+            var s = attempt(9)
+            match s:
+                case OK(v):
+                    n = v
+                case ERR(e):
+                    n = 0

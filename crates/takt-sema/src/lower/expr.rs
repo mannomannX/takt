@@ -11,7 +11,7 @@ use takt_syntax::ast;
 use takt_mir::pattern::Pattern;
 
 use super::{Lowerer, SC2, SC3, is_literal};
-use crate::checks::SC18;
+use crate::checks::{SC18, SC45, SC47};
 use crate::symbols::Entity;
 use crate::units::Unit;
 
@@ -43,6 +43,20 @@ impl Lowerer<'_> {
         match self.ty(x.ty).clone() {
             Type::Optional(inner) | Type::Result { ok: inner, .. } if self.same_base(inner, ty) => {
                 let span = x.span;
+                // 3.8: die unbewachte Verwendung bekommt `check x.valid` und
+                // eine Warnung, damit `if x.valid:` oder `.or(…)` der
+                // Normalfall bleibt. Unter Dominanz entfaellt beides.
+                let key = Self::dom_key(&x);
+                if !key.as_deref().is_some_and(|k| self.dominated(k)) {
+                    let result = matches!(self.ty(x.ty), Type::Result { .. });
+                    let (guard, alt) = if result { (".ok", "`check r.ok`") } else { (".valid", "`check x.valid`") };
+                    self.warn_hint(
+                        SC45,
+                        span,
+                        format!("Wert wird ohne `{guard}` benutzt; ein fehlender Wert faultet"),
+                        format!("mit `{guard}` absichern, {alt} davorsetzen oder `.or(…)` benutzen (3.8)"),
+                    );
+                }
                 return Some(Expr::new(
                     ExprKind::Checked { expr: Box::new(x), kind: CheckedKind::Missing },
                     inner,
@@ -611,7 +625,9 @@ impl Lowerer<'_> {
                 let params: Vec<(String, TypeId, Option<Expr>)> =
                     f.params.iter().map(|p| (p.name.clone(), p.ty, p.default.clone())).collect();
                 let ret = f.ret.unwrap_or(self.tys.bool);
+                let inout: Vec<bool> = f.params.iter().map(|p| p.inout).collect();
                 let args = self.args(&params, args, span)?;
+                self.check_no_aliasing(&inout, &args);
                 Some(Expr::new(ExprKind::Call { callee: id, args }, ret, span))
             }
             Entity::FnTemplate(idx) => self.call_fn_template(idx, generics, args, span),
@@ -1234,6 +1250,36 @@ impl Lowerer<'_> {
             ty,
             span,
         ))
+    }
+
+    /// Pruefung 47 (3.9): ein Argument darf pro Aufruf nur einmal als `inout`
+    /// gebunden werden und nicht zugleich als weiteres Argument erscheinen.
+    /// Sonst schriebe die Zeigeruebergabe in eine Stelle, die der Aufruf
+    /// zugleich liest, und die Funktion waere nicht mehr rein.
+    fn check_no_aliasing(&mut self, inout: &[bool], args: &[Expr]) {
+        let keys: Vec<Option<String>> = args.iter().map(Self::dom_key).collect();
+        for (i, marked) in inout.iter().enumerate() {
+            if !marked {
+                continue;
+            }
+            let Some(key) = keys.get(i).and_then(Option::as_deref) else { continue };
+            for (j, other) in keys.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                if other.as_deref() == Some(key) {
+                    // `dom_key` ist ein interner Schluessel; die Meldung nennt
+                    // die Stelle, nicht den Schluessel.
+                    self.error_hint(
+                        SC47,
+                        args[i].span,
+                        format!("dasselbe Argument steht als `inout` und als Argument {}", j + 1),
+                        "jedes Argument nur einmal uebergeben; `inout` schreibt in die Stelle (3.9)",
+                    );
+                    return;
+                }
+            }
+        }
     }
 
     /// `R.decode(b) -> R?` (3.7): der Record braucht ein `layout`, das
