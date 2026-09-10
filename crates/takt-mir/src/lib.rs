@@ -2,6 +2,7 @@
 //! entzuckert, mit Knoten fuer die volle Referenz.
 //!
 //! - `program`, `types`, `fns`, `machine`, `stmt`, `expr`, `pattern`: die Knoten.
+//! - `analysis`: das statische Gate aus M3 (Intervalle, Verengung, Kosten, Groesse).
 //! - `desugar`: Sequenzen nach 6.2 in Zustaende (Oberflaeche → Kern-MIR).
 //! - `format`: das Dateiformat `TAKT-MIR` (grammar/mir-format.md).
 //! - `hash`: SHA-256 und Logik-Hash (11.3, 2.5).
@@ -12,6 +13,7 @@
 //! gewollt (Zugriff ohne Indirektion).
 #![allow(clippy::large_enum_variant)]
 
+pub mod analysis;
 pub mod desugar;
 pub mod dump;
 pub mod expr;

@@ -10,6 +10,17 @@ use crate::ids::*;
 use crate::pattern::Pattern;
 use crate::types::{IntWidth, Range};
 
+/// Gewaehlte Darstellung eines `int` (3.4, Lemma 3.4). Die Annotation
+/// aendert die Semantik nicht — der Interpreter liest sie nicht —, sondern
+/// sagt dem Codegen, in welcher Breite er rechnen darf.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Repr {
+    /// 32 Bit: das Intervall ist bewiesen und passt.
+    I32,
+    /// 64 Bit: die Semantik von `int` (3.2).
+    I64,
+}
+
 /// Ein Ausdruck mit Typ und, wenn bewiesen, Intervall.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Expr {
@@ -19,14 +30,49 @@ pub struct Expr {
     pub ty: TypeId,
     /// Bewiesenes Intervall (3.4).
     pub range: Option<Range>,
+    /// Gewaehlte Darstellung (3.4); erst die Analyse aus M3 setzt sie.
+    pub repr: Option<Repr>,
     /// Position.
     pub span: Span,
 }
 
 impl Expr {
-    /// Ausdruck ohne Intervall.
+    /// Ausdruck ohne Intervall und ohne Darstellung.
     pub fn new(kind: ExprKind, ty: TypeId, span: Span) -> Self {
-        Expr { kind, ty, range: None, span }
+        Expr { kind, ty, range: None, repr: None, span }
+    }
+
+    /// Die unmittelbaren Teilausdruecke, veraenderbar.
+    pub fn children_mut(&mut self) -> Vec<&mut Expr> {
+        match &mut self.kind {
+            ExprKind::Variant { fields, .. } | ExprKind::Record { fields, .. } => fields.iter_mut().collect(),
+            ExprKind::Array(items) => items.iter_mut().collect(),
+            ExprKind::Tuple(a, b) => vec![a, b],
+            ExprKind::BlockInit { args, .. }
+            | ExprKind::Call { args, .. }
+            | ExprKind::NativeCall { args, .. }
+            | ExprKind::MatOp { args, .. }
+            | ExprKind::Intrinsic { args, .. } => args.iter_mut().collect(),
+            ExprKind::Field { base, .. } => vec![base],
+            ExprKind::Index { base, index } => vec![base, index],
+            ExprKind::Index2 { base, row, col } => vec![base, row, col],
+            ExprKind::Slice { base, from, to } => vec![base, from, to],
+            ExprKind::Accessor { base, args, .. } => {
+                let mut v: Vec<&mut Expr> = vec![base];
+                v.extend(args.iter_mut());
+                v
+            }
+            ExprKind::Unary { expr, .. }
+            | ExprKind::Cast { expr, .. }
+            | ExprKind::Convert { expr, .. }
+            | ExprKind::Checked { expr, .. } => vec![expr],
+            ExprKind::Lift(e) | ExprKind::Ok(e) | ExprKind::Err(e) => vec![e],
+            ExprKind::Binary { lhs, rhs, .. } => vec![lhs, rhs],
+            ExprKind::Cond { cond, then, otherwise } => vec![cond, then, otherwise],
+            ExprKind::Matches { subject, .. } => vec![subject],
+            ExprKind::Decode { bytes, .. } => vec![bytes],
+            _ => Vec::new(),
+        }
     }
 }
 

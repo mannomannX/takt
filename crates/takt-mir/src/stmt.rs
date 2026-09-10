@@ -110,6 +110,26 @@ pub enum ArmPattern {
     Wild,
 }
 
+impl ForVars {
+    /// Die gebundenen Variablen in Deklarationsreihenfolge.
+    pub fn ids(&self) -> Vec<VarId> {
+        match self {
+            ForVars::One(v) => vec![*v],
+            ForVars::Pair(k, v) => vec![*k, *v],
+        }
+    }
+}
+
+impl ArmPattern {
+    /// Die Variablen, die dieser Zweig bindet (leer ausser bei `Variant`).
+    pub fn bound(&self) -> Vec<VarId> {
+        match self {
+            ArmPattern::Variant { fields, .. } => fields.clone(),
+            _ => Vec::new(),
+        }
+    }
+}
+
 /// Zweig eines `match`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Arm {

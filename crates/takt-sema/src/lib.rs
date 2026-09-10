@@ -17,6 +17,7 @@ pub mod units;
 pub mod visit;
 
 use takt_diag::{Diagnostic, Policy, Sink};
+use takt_mir::analysis::Report;
 use takt_mir::program::Program;
 use takt_syntax::Edition;
 use takt_syntax::ast::File;
@@ -83,6 +84,8 @@ pub struct Compiled {
     pub edition: Edition,
     /// Alle Diagnosen.
     pub diagnostics: Vec<Diagnostic>,
+    /// Kennzahlen des statischen Gates (3.4; M3). Ohne Programm leer.
+    pub report: Report,
 }
 
 impl Compiled {
@@ -111,13 +114,33 @@ pub fn compile(src: &str, options: &Options) -> Compiled {
     let mut sink = Sink::new(options.policy);
     let (edition, file) = match syntax(src, &mut sink) {
         Some(pair) => pair,
-        None => return Compiled { program: None, edition: Edition::LATEST, diagnostics: sink.sorted() },
+        None => {
+            return Compiled {
+                program: None,
+                edition: Edition::LATEST,
+                diagnostics: sink.sorted(),
+                report: Report::default(),
+            };
+        }
     };
     sink.extend(names::check(&file, edition));
     let (program, diags) = lower::run(&file, edition, options);
     sink.extend(diags);
+    let mut program = program.filter(|_| !sink.has_errors());
+    // Das statische Gate laeuft nach dem Lowering auf der fertigen MIR
+    // (3.4, 9.4.3, 11.5; plan/m3.md 1.1): Es braucht Kontrollfluss, und
+    // Codegen und `takt size` benutzen dieselben Intervalle.
+    let report = match &mut program {
+        Some(p) => {
+            let (d, r) = takt_mir::analysis::analyze(p);
+            sink.extend(d);
+            takt_mir::analysis::cost::budgets(p);
+            r
+        }
+        None => Report::default(),
+    };
     let program = program.filter(|_| !sink.has_errors());
-    Compiled { program, edition, diagnostics: sink.sorted() }
+    Compiled { program, edition, diagnostics: sink.sorted(), report }
 }
 
 /// Edition, Tokenizer, Parser; `None`, wenn die Syntax Fehler hat.

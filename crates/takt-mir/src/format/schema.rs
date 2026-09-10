@@ -73,7 +73,8 @@ codec_struct!(Address { 1 rep segments });
 
 // ---------------------------------------------------------------- Ausdruecke
 
-codec_struct!(Expr { 1 one kind, 2 one ty, 3 opt range, 4 meta span });
+codec_struct!(Expr { 1 one kind, 2 one ty, 3 opt range, 4 meta span, 5 opt repr });
+codec_unit_enum!(Repr { 0 I32, 1 I64 });
 codec_struct!(MachineRef { 1 one machine, 2 opt index });
 codec_enum!(StreamRef { 0 Channel(1 one c), 1 Internal(1 one s), 2 Fired(1 one t), 3 Var(1 one v) });
 codec_unit_enum!(Builtin { 0 Now, 1 Tick, 2 TimeInState, 3 LastFault, 4 Event });
