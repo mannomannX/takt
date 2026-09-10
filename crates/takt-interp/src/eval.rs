@@ -843,6 +843,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
         })
     }
 
+    /// Loest eine Stelle zu einem veraenderbaren Wert auf (9.2).
     pub fn place_mut(&mut self, place: &Place, span: Span) -> EvalResult<&mut Value> {
         enum Step {
             Field(u32),

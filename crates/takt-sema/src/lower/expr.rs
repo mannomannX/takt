@@ -1176,6 +1176,33 @@ impl Lowerer<'_> {
                 let unwrapped = self.coerce(b, inner)?;
                 Some(Expr::new(ExprKind::Field { base: Box::new(unwrapped), field: index }, ty, span))
             }
+            // 3.7: ein benanntes Bitfeld ist eine Sicht auf sein Traegerfeld,
+            // kein eigener Speicher. Der Zugriff wird zu `bit`/`bits` auf dem
+            // Traeger; die Positionen stehen in der Deklaration.
+            (field, Type::Int { .. }) if bitfield_of(self, &b, field).is_some() => {
+                if !no_args(self) {
+                    return None;
+                }
+                let (lo, hi, ty) = bitfield_of(self, &b, field).expect("gerade geprueft");
+                let int = self.tys.int;
+                let pos = |v: u8| Expr::new(ExprKind::Int(i64::from(v)), int, span);
+                // `bit` liefert `bool`, `bits` einen `int`; das Bitfeld traegt
+                // seinen deklarierten Typ.
+                let is_bool = matches!(self.ty(ty), Type::Bool);
+                let (accessor, args, raw) = if is_bool {
+                    (Accessor::Bit, vec![pos(lo)], self.tys.bool)
+                } else {
+                    (Accessor::Bits, vec![pos(hi), pos(lo)], int)
+                };
+                let value = Expr::new(ExprKind::Accessor { base: Box::new(b), accessor, args }, raw, span);
+                // Die Breite des Bitfelds passt in seinen Typ (Pruefung 46),
+                // die Verengung ist also nachweislich verlustfrei.
+                if is_bool {
+                    Some(value)
+                } else {
+                    Some(Expr::new(ExprKind::Cast { expr: Box::new(value), to: ty }, ty, span))
+                }
+            }
             (field, Type::Record(r)) => {
                 let found = self.program.records[r.index()].fields.iter().position(|f| f.name == field);
                 match found {
@@ -1255,6 +1282,16 @@ impl Lowerer<'_> {
             _ => {
                 let _ = hint;
                 let n = self.type_name(b.ty);
+                // Traegt der Ausdruck Bitfelder, nennt der Hinweis sie (3.7).
+                if let Some(names) = bitfield_names(self, &b) {
+                    self.error_hint(
+                        SC3,
+                        name.span,
+                        format!("kein Zugriff `{member}` auf `{n}`"),
+                        format!("Bitfelder: {}", names.join(", ")),
+                    );
+                    return None;
+                }
                 self.error(SC3, name.span, format!("kein Zugriff `{member}` auf `{n}`"));
                 None
             }
@@ -2171,6 +2208,27 @@ fn is_channel_read(e: &Expr) -> bool {
 
 /// Index und Typ eines Recordfelds; `None`, wenn der Typ kein Record ist
 /// oder das Feld fehlt.
+/// Die Namen der Bitfelder eines Traegerfelds, falls es welche hat (3.7).
+fn bitfield_names(lo: &Lowerer<'_>, base: &Expr) -> Option<Vec<String>> {
+    let ExprKind::Field { base: owner, field } = &base.kind else { return None };
+    let Type::Record(r) = lo.program.types.list.get(owner.ty.index())? else { return None };
+    let def = lo.program.records[r.index()].fields.get(*field as usize)?;
+    if def.bits.is_empty() {
+        return None;
+    }
+    Some(def.bits.iter().map(|b| b.name.clone()).collect())
+}
+
+/// Positionen und Typ eines benannten Bitfelds (3.7), wenn `base` das
+/// Traegerfeld eines Records ist und dieses ein Bitfeld `name` deklariert.
+fn bitfield_of(lo: &Lowerer<'_>, base: &Expr, name: &str) -> Option<(u8, u8, TypeId)> {
+    let ExprKind::Field { base: owner, field } = &base.kind else { return None };
+    let Type::Record(r) = lo.program.types.list.get(owner.ty.index())? else { return None };
+    let def = lo.program.records[r.index()].fields.get(*field as usize)?;
+    let b = def.bits.iter().find(|b| b.name == name)?;
+    Some((b.lo, b.hi, b.ty))
+}
+
 fn record_field(lo: &Lowerer<'_>, ty: TypeId, name: &str) -> Option<(u32, TypeId)> {
     let Type::Record(r) = lo.program.types.list.get(ty.index())? else { return None };
     let f = lo.program.records[r.index()].fields.iter().position(|f| f.name == name)?;

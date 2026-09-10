@@ -341,6 +341,12 @@ impl Lowerer<'_> {
         kind: BlockKind,
         span: Span,
     ) -> Option<Stmt> {
+        // 3.7: ein benanntes Bitfeld ist eine Sicht auf sein Traegerfeld und
+        // damit keine eigene Stelle. Die Zuweisung wird zum Lesen, Einsetzen
+        // und Zurueckschreiben des Traegers.
+        if let Some(stmt) = self.bitfield_assign(target, op, value, kind, span) {
+            return stmt;
+        }
         let place = self.place(target)?;
         let ty = self.place_type(&place, target.span)?;
         if kind == BlockKind::At && !matches!(place, Place::Output(_)) {
@@ -447,7 +453,18 @@ impl Lowerer<'_> {
                 let bty = self.place_type(&b, base.span)?;
                 let Type::Record(r) = self.ty(bty).clone() else {
                     let n = self.type_name(bty);
-                    self.error(SC3, e.span, format!("Feld `{}` auf `{n}`", name.name));
+                    // 3.7: ein Traegerfeld mit Bitfeldern nennt sie im Hinweis.
+                    match self.bitfield_names_at(base) {
+                        Some(names) => self.error_hint(
+                            SC3,
+                            name.span,
+                            format!("`{n}` hat kein Bitfeld `{}`", name.name),
+                            format!("Bitfelder: {}", names.join(", ")),
+                        ),
+                        None => {
+                            self.error(SC3, e.span, format!("Feld `{}` auf `{n}`", name.name));
+                        }
+                    }
                     return None;
                 };
                 let def = &self.program.records[r.index()];
@@ -468,6 +485,100 @@ impl Lowerer<'_> {
                 None
             }
         }
+    }
+
+    /// `rec.traeger.feld = wert` (3.7): Zuweisung an ein benanntes Bitfeld.
+    /// Liefert `None`, wenn das Ziel keins ist; sonst das Ergebnis der
+    /// Uebersetzung (auch ein Fehlschlag, damit der Aufrufer nicht erneut
+    /// senkt).
+    fn bitfield_assign(
+        &mut self,
+        target: &ast::Expr,
+        op: ast::AssignOp,
+        value: &ast::Expr,
+        kind: BlockKind,
+        span: Span,
+    ) -> Option<Option<Stmt>> {
+        let ast::ExprKind::Member { base: carrier, name, args: None } = &target.kind else { return None };
+        let (lo, hi, bty) = self.bitfield_at(carrier, &name.name)?;
+        Some((|| {
+            if op != ast::AssignOp::Set {
+                self.error(SC3, span, "Bitfelder nehmen nur `=`, kein `+=` und Verwandte");
+                return None;
+            }
+            let place = self.place(carrier)?;
+            let cty = self.place_type(&place, carrier.span)?;
+            if kind == BlockKind::At && !matches!(place, Place::Output(_)) {
+                self.error(SC8, span, "`at`-Bloecke enthalten nur Zuweisungen an Outputs (5.5)");
+                return None;
+            }
+            let old = self.place_expr(&place, cty, target.span);
+            let rhs = self.check(value, bty)?;
+            let new = self.insert_bits(old, rhs, lo, hi, cty, span)?;
+            Some(Stmt::new(StmtKind::Assign { target: place, value: new }, span))
+        })())
+    }
+
+    /// Die Namen der Bitfelder eines Traegerfelds (3.7), falls es welche hat.
+    fn bitfield_names_at(&mut self, carrier: &ast::Expr) -> Option<Vec<String>> {
+        let ast::ExprKind::Member { base, name, args: None } = &carrier.kind else { return None };
+        let b = self.place(base)?;
+        let bty = self.place_type(&b, base.span)?;
+        let Type::Record(r) = self.ty(bty).clone() else { return None };
+        let def = self.program.records[r.index()].fields.iter().find(|f| f.name == name.name)?;
+        if def.bits.is_empty() {
+            return None;
+        }
+        Some(def.bits.iter().map(|x| x.name.clone()).collect())
+    }
+
+    /// Positionen und Typ eines Bitfelds, wenn `carrier` das Traegerfeld
+    /// eines Records ist.
+    fn bitfield_at(&mut self, carrier: &ast::Expr, name: &str) -> Option<(u8, u8, TypeId)> {
+        let ast::ExprKind::Member { base, name: field, args: None } = &carrier.kind else { return None };
+        let b = self.place(base).or_else(|| {
+            self.diags.pop();
+            None
+        })?;
+        let bty = self.place_type(&b, base.span)?;
+        let Type::Record(r) = self.ty(bty).clone() else { return None };
+        let def = self.program.records[r.index()].fields.iter().find(|f| f.name == field.name)?;
+        let bits = def.bits.iter().find(|x| x.name == name)?;
+        Some((bits.lo, bits.hi, bits.ty))
+    }
+
+    /// `(traeger & !maske) | ((wert << lo) & maske)` — das Einsetzen eines
+    /// Bitfelds mit den vorhandenen Bitoperatoren (3.10).
+    fn insert_bits(&mut self, carrier: Expr, value: Expr, lo: u8, hi: u8, cty: TypeId, span: Span) -> Option<Expr> {
+        // Ein einzelnes Bit setzt `with_bit` (3.10); es nimmt den `bool`
+        // direkt und braucht keine Verengung.
+        if lo == hi && matches!(self.ty(value.ty), Type::Bool) {
+            let int = self.tys.int;
+            let pos = Expr::new(ExprKind::Int(i64::from(lo)), int, span);
+            return Some(Expr::new(
+                ExprKind::Accessor {
+                    base: Box::new(carrier),
+                    accessor: takt_mir::expr::Accessor::WithBit,
+                    args: vec![pos, value],
+                },
+                cty,
+                span,
+            ));
+        }
+        let width = u32::from(hi - lo) + 1;
+        let mask = if width >= 64 { !0u64 } else { ((1u64 << width) - 1) << lo };
+        let lit = |v: i64| Expr::new(ExprKind::Int(v), cty, span);
+        let bin = |op: BinaryOp, a: Expr, b: Expr, ty: TypeId| {
+            Expr::new(ExprKind::Binary { op, lhs: Box::new(a), rhs: Box::new(b) }, ty, span)
+        };
+        // Der Wert wird auf die Traegerbreite gebracht, dann verschoben.
+        let raw = Expr::new(ExprKind::Cast { expr: Box::new(value), to: cty }, cty, span);
+        let shifted = if lo == 0 { raw } else { bin(BinaryOp::Shl, raw, lit(i64::from(lo)), cty) };
+        let keep_mask = lit(!(mask as i64));
+        let put_mask = lit(mask as i64);
+        let kept = bin(BinaryOp::BitAnd, carrier, keep_mask, cty);
+        let put = bin(BinaryOp::BitAnd, shifted, put_mask, cty);
+        Some(bin(BinaryOp::BitOr, kept, put, cty))
     }
 
     /// Deklarierter Typ einer Stelle.
