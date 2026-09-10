@@ -106,9 +106,10 @@ impl Image {
         &self.inputs[c.index()]
     }
 
-    /// Setzt eine Abtastung (Stimulus).
-    pub fn set_input(&mut self, c: ChannelId, sample: Sample) {
-        self.inputs[c.index()] = sample;
+    /// Setzt eine Abtastung (Stimulus). Der Wert durchlaeuft die
+    /// Rand-Durchsetzung: die Simulation ist der Treiberrand (12.6).
+    pub fn set_input(&mut self, c: ChannelId, sample: Sample, p: &Program) {
+        self.inputs[c.index()] = enforce_range(sample, c, p);
         self.driven[c.index()] = true;
     }
 
@@ -186,7 +187,7 @@ impl Image {
     /// Speist `sim`-Outputs in die zugehoerigen `hw`-Inputs (8.3, Unit-Delay).
     /// Ein Input, den der Stimulus in diesem Tick gesetzt hat, behaelt seinen
     /// Wert; ohne Stimuluszeile fuehrt die Bindung ihn im naechsten Tick fort.
-    pub fn apply_sim_bindings(&mut self) {
+    pub fn apply_sim_bindings(&mut self, p: &Program) {
         let pairs: Vec<(ChannelId, ChannelId)> = self
             .sim_sources
             .iter()
@@ -197,7 +198,7 @@ impl Image {
                 continue;
             }
             let value = self.committed[out.index()].clone();
-            self.inputs[inp.index()] = Sample::good(value);
+            self.inputs[inp.index()] = enforce_range(Sample::good(value), inp, p);
         }
         self.driven.iter_mut().for_each(|d| *d = false);
     }
@@ -219,6 +220,29 @@ impl Image {
             }
         }
     }
+}
+
+/// Rand-Durchsetzung (3.5, 12.6): ein Wert ausserhalb der deklarierten Range
+/// des Channels wird `Bad` mit Grund `OutOfRange`, nicht geklemmt und nicht
+/// zu einem Fault. Ohne sie waeren die deklarierten Ranges keine gueltigen
+/// Annahmen der Intervallanalyse (3.4).
+fn enforce_range(sample: Sample, c: ChannelId, p: &Program) -> Sample {
+    let Some(value) = &sample.value else { return sample };
+    if sample.quality == Quality::Bad {
+        return sample;
+    }
+    let ty = &p.types.list[p.channels[c.index()].ty.index()];
+    let range = match ty {
+        takt_mir::types::Type::Int { range, .. }
+        | takt_mir::types::Type::Float { range, .. }
+        | takt_mir::types::Type::Duration { range } => *range,
+        _ => None,
+    };
+    let Some(range) = range else { return sample };
+    if crate::eval::in_range(value, &range) {
+        return sample;
+    }
+    Sample { value: None, quality: Quality::Bad, age: sample.age, reason: Some(Reason::OutOfRange) }
 }
 
 /// Adresse als Schluessel (`daq1/ai0`).

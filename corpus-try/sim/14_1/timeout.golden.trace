@@ -1,5 +1,4 @@
-t=0 alert hotfire on "LOX warming"
-t=0 alert hotfire on "start refused: tank pressure 0.0"
+t=0 alert hotfire on "LOX warming (sensor invalid)"
 t=0 state hotfire ARMED.IDLE
 t=0 state pad_model RUN
 t=0 out fuel_main CLOSED
@@ -8,6 +7,7 @@ t=0 out igniter false
 t=0 out tank_p_sim 50.0 bar
 t=0 out chamber_p_sim 1.0 bar
 t=0 out lox_temp_sim 90.0 K
+t=1 alert hotfire off "LOX warming"
 t=52 log hotfire "starting hotfire"
 t=52 state hotfire ARMED.IGNITION.S0
 t=52 out fuel_main OPEN

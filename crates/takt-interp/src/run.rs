@@ -98,7 +98,7 @@ fn apply_stimulus(sim: &mut Sim<'_>, stimulus: &Trace, tick: u64) -> Result<(), 
                 }
                 let ty = program.channels[id.index()].ty;
                 let s = sample_from_text(sample, ty, program).map_err(Trap::Bug)?;
-                sim.image.set_input(id, s);
+                sim.image.set_input(id, s, program);
             }
             LineKind::Command { name } => {
                 let Some(i) = program.commands.iter().position(|c| c.name == *name) else {
@@ -138,11 +138,13 @@ fn collect(writer: &mut Writer, sim: &Sim<'_>, tick: u64, verdict: &mut Verdict,
         let machine = program.machines[id.index()].name.clone();
         let kind = match obs {
             Observation::Log(text) => LineKind::Log { machine, text: text.clone() },
-            Observation::Alert { span, violated, message } => {
-                if !writer.alert_edge(id, *span, *violated) {
+            Observation::Alert { span, index, active, message, invalid } => {
+                if !writer.alert_edge(id, *span, index, *active) {
                     continue;
                 }
-                LineKind::Alert { machine, on: *violated, text: message.clone() }
+                // Ein ungueltiger Input laesst den Alert mit Zusatz feuern (3.5).
+                let text = if *invalid { format!("{message} (sensor invalid)") } else { message.clone() };
+                LineKind::Alert { machine, on: *active, text }
             }
             Observation::Measure { name, value, ty } => {
                 let text = match value {
@@ -205,7 +207,7 @@ struct Writer<'p> {
     outputs: Vec<Option<String>>,
     states: HashMap<MachineId, String>,
     published: HashMap<(MachineId, VarId), String>,
-    alerts: HashMap<(MachineId, Span), bool>,
+    alerts: HashMap<(MachineId, Span, Vec<i64>), bool>,
 }
 
 impl<'p> Writer<'p> {
@@ -221,12 +223,15 @@ impl<'p> Writer<'p> {
     }
 
     /// Nur die Flanken eines Alerts melden (5.6). Der Schluessel ist die
-    /// Stelle, nicht der Text: eine Meldung mit Platzhaltern aendert sich mit
-    /// jedem Wert, die Flanke tut es nicht. Der Anfangszustand jeder Stelle
-    /// ist unverletzt, eine erste unverletzte Auswertung also keine Flanke.
-    fn alert_edge(&mut self, m: MachineId, span: Span, violated: bool) -> bool {
-        let previous = self.alerts.insert((m, span), violated).unwrap_or(false);
-        previous != violated
+    /// Stelle samt den Indizes der umgebenden `for`-Schleifen: eine Stelle in
+    /// einer Schleife hat je Durchlauf eine eigene Flanke, und der Text taugt
+    /// nicht als Schluessel, weil Platzhalter ihn mit jedem Wert aendern. Der
+    /// Anfangszustand jeder Stelle ist inaktiv, eine erste inaktive
+    /// Auswertung also keine Flanke.
+    fn alert_edge(&mut self, m: MachineId, span: Span, index: &[i64], active: bool) -> bool {
+        let key = (m, span, index.to_vec());
+        let previous = self.alerts.insert(key, active).unwrap_or(false);
+        previous != active
     }
 
     /// Tick 0: alle Anfangswerte.
@@ -323,7 +328,7 @@ fn permute(order: &mut [MachineId], seed: u64) {
 pub fn value_untyped(v: &Value) -> String {
     match v {
         Value::Duration(d) => takt_mir::dump::duration(*d),
-        Value::F32(f) => crate::trace::float_text(f64::from(*f)),
+        Value::F32(f) => crate::trace::float32_text(*f),
         Value::F64(f) => crate::trace::float_text(*f),
         Value::Int(i) => i.to_string(),
         Value::UInt(u) => u.to_string(),

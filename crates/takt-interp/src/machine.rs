@@ -2,6 +2,8 @@
 //! `entered`, `exec_chain`. Die Namen folgen der Referenz, damit die
 //! Inventurzeilen `FN-9-*` eine Entsprechung im Code haben.
 
+use std::collections::HashMap;
+
 use takt_diag::Span;
 use takt_mir::expr::Builtin;
 use takt_mir::machine::*;
@@ -22,10 +24,13 @@ pub struct MachineState {
     pub vars: Vec<Value>,
     /// `time_in_state` je Zustand in Ticks der Maschine.
     pub timers: Vec<u64>,
-    /// `next`-Zaehler je `every` in Nanosekunden.
-    pub every_next: Vec<i64>,
-    /// Bestaetigungszaehler `viol[site]` in Nanosekunden.
-    pub viol: Vec<i64>,
+    /// `next`-Zaehler je `every` in Nanosekunden, geschluesselt nach Stelle
+    /// und den Indizes der umgebenden `for`-Schleifen (5.6).
+    pub every_next: Counters,
+    /// Bestaetigungszaehler `viol[site, index]` in Nanosekunden (5.6): eine
+    /// Stelle in einer Schleife zaehlt je Durchlauf getrennt, sonst setzten
+    /// die erfuellten Durchlaeufe den Zaehler der verletzten zurueck.
+    pub viol: Counters,
     /// Vorgemerkter Fault (Operator-Abort, Runtime, Stream-Ueberlauf).
     pub pending: Option<Fault>,
     /// Von einer anderen Maschine erhobener Fault (`abort`, 5.4).
@@ -42,6 +47,28 @@ pub struct MachineState {
     pub faulted: bool,
 }
 
+/// Zaehler einer Maschine, geschluesselt nach Stelle und den Indizes der
+/// umgebenden `for`-Schleifen. Eine Stelle in einer Schleife hat je Durchlauf
+/// einen eigenen Zaehler (5.6); die Zahl bleibt statisch beschraenkt, weil
+/// jede Schleifenschranke statisch ist (4.3).
+#[derive(Clone, Debug, Default)]
+pub struct Counters {
+    /// (Stelle, Schleifenindizes) -> Zaehlerstand in Nanosekunden.
+    slots: HashMap<(u32, Vec<i64>), i64>,
+}
+
+impl Counters {
+    /// Zaehler einer Stelle, schreibend; unbekannte Schluessel beginnen bei 0.
+    pub fn at(&mut self, site: u32, index: &[i64]) -> &mut i64 {
+        self.slots.entry((site, index.to_vec())).or_insert(0)
+    }
+
+    /// Setzt alle Zaehler der genannten Stellen zurueck (Zustandseintritt).
+    pub fn reset(&mut self, sites: &[usize]) {
+        self.slots.retain(|(site, _), _| !sites.contains(&(*site as usize)));
+    }
+}
+
 impl MachineState {
     /// Anfangszustand: leere Konfiguration; `init` betritt sie im Tick 0.
     pub fn new(m: &Machine) -> MachineState {
@@ -49,8 +76,8 @@ impl MachineState {
             conf: Vec::new(),
             vars: Vec::new(),
             timers: vec![0; m.states.len()],
-            every_next: vec![0; m.layout.every_counters.len()],
-            viol: vec![0; m.layout.viol_sites.len()],
+            every_next: Counters::default(),
+            viol: Counters::default(),
             pending: None,
             raised: None,
             abort_latched: false,

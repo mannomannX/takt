@@ -65,7 +65,8 @@ impl Ctx<'_, '_> {
                     Some(c) => {
                         let d = self.eval_duration(&c.duration)?;
                         let period = self.outer.period()?;
-                        let viol = self.outer.viol(c.site)?;
+                        let index = self.loops.clone();
+                        let viol = self.outer.viol(c.site, &index)?;
                         if ok {
                             *viol = 0;
                             false
@@ -107,17 +108,23 @@ impl Ctx<'_, '_> {
             }
             StmtKind::ForRange { var, count, body } => {
                 let n = self.eval_int(count)?;
-                let mut i: i128 = 0;
-                while i < n {
-                    *self.var_mut(*var)? = Value::Int(i as i64);
-                    match self.exec_block(body, mode)? {
-                        Out::Normal => {}
-                        Out::Break => break,
-                        out => return Ok(out),
+                self.loops.push(0);
+                let result = (|| {
+                    let mut i: i128 = 0;
+                    while i < n {
+                        *self.var_mut(*var)? = Value::Int(i as i64);
+                        *self.loops.last_mut().expect("Schleife offen") = i as i64;
+                        match self.exec_block(body, mode)? {
+                            Out::Normal => {}
+                            Out::Break => break,
+                            out => return Ok(out),
+                        }
+                        i += 1;
                     }
-                    i += 1;
-                }
-                Ok(Out::Normal)
+                    Ok(Out::Normal)
+                })();
+                self.loops.pop();
+                result
             }
             StmtKind::ForEach { vars, iter, body } => {
                 let items: Vec<Value> = match self.eval(iter)? {
@@ -126,26 +133,32 @@ impl Ctx<'_, '_> {
                     Value::Bytes(b) => b.into_iter().map(|x| Value::UInt(u64::from(x))).collect(),
                     other => return bug(format!("for ueber {}", other.kind_name())),
                 };
-                for item in items {
-                    match vars {
-                        ForVars::One(v) => *self.var_mut(*v)? = item,
-                        ForVars::Pair(k, v) => match item {
-                            Value::Array(mut pair) if pair.len() == 2 => {
-                                let value = pair.pop().expect("Paar");
-                                let key = pair.pop().expect("Paar");
-                                *self.var_mut(*k)? = key;
-                                *self.var_mut(*v)? = value;
-                            }
-                            other => return bug(format!("Paar erwartet, {} gefunden", other.kind_name())),
-                        },
+                self.loops.push(0);
+                let result = (|| {
+                    for (index, item) in items.into_iter().enumerate() {
+                        *self.loops.last_mut().expect("Schleife offen") = index as i64;
+                        match vars {
+                            ForVars::One(v) => *self.var_mut(*v)? = item,
+                            ForVars::Pair(k, v) => match item {
+                                Value::Array(mut pair) if pair.len() == 2 => {
+                                    let value = pair.pop().expect("Paar");
+                                    let key = pair.pop().expect("Paar");
+                                    *self.var_mut(*k)? = key;
+                                    *self.var_mut(*v)? = value;
+                                }
+                                other => return bug(format!("Paar erwartet, {} gefunden", other.kind_name())),
+                            },
+                        }
+                        match self.exec_block(body, mode)? {
+                            Out::Normal => {}
+                            Out::Break => break,
+                            out => return Ok(out),
+                        }
                     }
-                    match self.exec_block(body, mode)? {
-                        Out::Normal => {}
-                        Out::Break => break,
-                        out => return Ok(out),
-                    }
-                }
-                Ok(Out::Normal)
+                    Ok(Out::Normal)
+                })();
+                self.loops.pop();
+                result
             }
             StmtKind::Match { subject, arms } => {
                 let v = self.eval(subject)?;
@@ -210,7 +223,8 @@ impl Ctx<'_, '_> {
                     Value::Duration(t) => t,
                     other => return bug(format!("time_in_state ist {}", other.kind_name())),
                 };
-                let next = self.outer.every(*counter)?;
+                let index = self.loops.clone();
+                let next = self.outer.every(*counter, &index)?;
                 if t >= *next {
                     *next += d;
                     self.exec_block(body, mode)
@@ -241,24 +255,34 @@ impl Ctx<'_, '_> {
         let event = match o {
             Observe::Log(f) => Observation::Log(render(f, self)),
             Observe::Alert { cond, message, confirm } => {
-                let ok = matches!(self.eval(cond), Ok(Value::Bool(true)));
-                let violated = match confirm {
-                    None => !ok,
+                // Die Bedingung eines Alerts nennt das zu meldende Ereignis
+                // (5.6); anders als bei `check` ist sie keine Invariante. Ein
+                // ungueltiger Input laesst den Alert feuern, statt die
+                // Steuerung zu beeinflussen (3.5).
+                let (raw, invalid) = match self.eval(cond) {
+                    Ok(Value::Bool(b)) => (b, false),
+                    Ok(other) => return bug(format!("Alert-Bedingung ist {}", other.kind_name())),
+                    Err(Trap::Bug(msg)) => return Err(Trap::Bug(msg)),
+                    Err(Trap::Fault(_)) => (true, true),
+                };
+                let active = match confirm {
+                    None => raw,
                     Some(c) => {
                         let d = self.eval_duration(&c.duration)?;
                         let period = self.outer.period()?;
-                        let viol = self.outer.viol(c.site)?;
-                        if ok {
-                            *viol = 0;
-                            false
-                        } else {
+                        let index = self.loops.clone();
+                        let viol = self.outer.viol(c.site, &index)?;
+                        if raw {
                             *viol = (*viol + period).min(d);
                             *viol >= d
+                        } else {
+                            *viol = 0;
+                            false
                         }
                     }
                 };
                 let message = render(message, self);
-                Observation::Alert { span, violated, message }
+                Observation::Alert { span, index: self.loops.clone(), active, message, invalid }
             }
             Observe::Measure { name, value } => {
                 Observation::Measure { name: name.clone(), value: self.eval(value).ok(), ty: value.ty }

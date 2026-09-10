@@ -19,14 +19,22 @@ use crate::value::{EvalResult, Sample, Value, bug};
 pub enum Observation {
     /// `log "…"`
     Log(String),
-    /// `alert cond, "…"`: Zustand der Verletzung an dieser Stelle.
+    /// `alert cond, "…"`: Zustand der Meldung an dieser Stelle. Anders als
+    /// `check` nennt die Bedingung eines Alerts das zu meldende *Ereignis*
+    /// (5.6); der Alert ist aktiv, wenn sie zutrifft.
     Alert {
-        /// Stelle des Alerts (Schluessel fuer Flanken).
+        /// Stelle des Alerts.
         span: Span,
-        /// Bedingung verletzt (nach Bestaetigungszeit).
-        violated: bool,
+        /// Werte der umgebenden Schleifenvariablen: eine Stelle in einer
+        /// `for`-Schleife hat je Durchlauf eine eigene Flanke (5.6).
+        index: Vec<i64>,
+        /// Alert aktiv (nach Bestaetigungszeit).
+        active: bool,
         /// Meldung.
         message: String,
+        /// Ein Input der Bedingung war ungueltig: der Alert feuert mit
+        /// Zusatz, statt die Steuerung zu beeinflussen (3.5).
+        invalid: bool,
     },
     /// `measure name = e`; `None`, wenn der Wert ungueltig war.
     Measure {
@@ -122,12 +130,14 @@ pub trait Outer {
     fn builtin(&self, _b: Builtin) -> EvalResult<Value> {
         bug("eingebaute Groesse ausserhalb eines Laufs")
     }
-    /// Bestaetigungszaehler `viol[site]` in Nanosekunden (5.6).
-    fn viol(&mut self, _site: SiteId) -> EvalResult<&mut i64> {
+    /// Bestaetigungszaehler `viol[site, index]` in Nanosekunden (5.6);
+    /// `index` sind die Indizes der umgebenden `for`-Schleifen.
+    fn viol(&mut self, _site: SiteId, _index: &[i64]) -> EvalResult<&mut i64> {
         bug("Bestaetigungszaehler ausserhalb einer Maschine")
     }
-    /// `next`-Zaehler eines `every` in Nanosekunden (5.8).
-    fn every(&mut self, _counter: CounterId) -> EvalResult<&mut i64> {
+    /// `next`-Zaehler eines `every` in Nanosekunden (5.8), ebenfalls je
+    /// Stelle und Schleifenindex.
+    fn every(&mut self, _counter: CounterId, _index: &[i64]) -> EvalResult<&mut i64> {
         bug("every ausserhalb einer Maschine")
     }
     /// Periode der Maschine in Nanosekunden (`P_m`).

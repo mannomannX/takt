@@ -320,7 +320,7 @@ pub fn value_text(v: &Value, ty: TypeId, p: &Program) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Int(i) => format!("{i}{unit_suffix}"),
         Value::UInt(u) => format!("{u}{unit_suffix}"),
-        Value::F32(f) => format!("{}{unit_suffix}", float_text(f64::from(*f))),
+        Value::F32(f) => format!("{}{unit_suffix}", float32_text(*f)),
         Value::F64(f) => format!("{}{unit_suffix}", float_text(*f)),
         Value::Duration(d) => takt_mir::dump::duration(*d),
         Value::Str(s) => format!("{s:?}"),
@@ -403,6 +403,14 @@ pub fn value_text(v: &Value, ty: TypeId, p: &Program) -> String {
 
 /// Fliesskomma stets mit Dezimalpunkt (T2).
 pub fn float_text(x: f64) -> String {
+    if x == x.trunc() && x.abs() < 1e15 { format!("{x:.1}") } else { format!("{x}") }
+}
+
+/// Ein `f32` als Text. Die Erweiterung nach f64 vor dem Drucken zeigte die
+/// Ziffern der f64-Darstellung (`0.1f32` wurde `0.10000000149011612`); Rust
+/// druckt einen `f32` als kuerzeste Ziffernfolge, die ihn eindeutig
+/// bestimmt, und genau die gehoert in Trace und Ausgabe (4.1).
+pub fn float32_text(x: f32) -> String {
     if x == x.trunc() && x.abs() < 1e15 { format!("{x:.1}") } else { format!("{x}") }
 }
 

@@ -23,7 +23,7 @@ pub fn display(v: &Value, spec: Option<&str>, ty: TypeId, ctx: &Ctx<'_, '_>) -> 
             Some(s) if s.starts_with('0') => format!("{:0width$}", u, width = s.parse().unwrap_or(0)),
             _ => u.to_string(),
         },
-        Value::F32(f) => float(f64::from(*f), spec),
+        Value::F32(f) => float32(*f, spec),
         Value::F64(f) => float(*f, spec),
         Value::Duration(d) => takt_mir::dump::duration(*d),
         Value::Enum { variant, fields } => {
@@ -118,6 +118,21 @@ pub fn display(v: &Value, spec: Option<&str>, ty: TypeId, ctx: &Ctx<'_, '_>) -> 
         }
         Value::Block(_) => "<block>".into(),
         Value::Handle => "<handle>".into(),
+    }
+}
+
+/// Ein `f32` mit derselben Regel wie `float`, aber ohne Erweiterung nach
+/// f64: sonst erschienen die Ziffern der f64-Darstellung (4.1).
+fn float32(x: f32, spec: Option<&str>) -> String {
+    match spec {
+        Some(s) if s.starts_with('.') => format!("{:.prec$}", x, prec = s[1..].parse().unwrap_or(0)),
+        _ => {
+            if x == x.trunc() && x.abs() < 1e15 {
+                format!("{x:.1}")
+            } else {
+                format!("{x}")
+            }
+        }
     }
 }
 

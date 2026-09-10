@@ -40,13 +40,17 @@ pub struct Ctx<'p, 'o> {
     pub tick: u64,
     /// Funktionsrahmen, innerster zuletzt.
     pub frames: Vec<Frame>,
+    /// Laufende `for`-Schleifen, aeusserste zuerst: ihr aktueller Index.
+    /// Eine Beobachtungsstelle in einer Schleife hat je Durchlauf eine
+    /// eigene Flanke (5.6).
+    pub loops: Vec<i64>,
     pub(crate) depth: u32,
 }
 
 impl<'p, 'o> Ctx<'p, 'o> {
     /// Neuer Kontext ohne Rahmen.
     pub fn new(loaded: &'o Loaded<'p>, outer: &'o mut dyn Outer, tick: u64) -> Self {
-        Ctx { loaded, outer, tick, frames: Vec::new(), depth: 0 }
+        Ctx { loaded, outer, tick, frames: Vec::new(), loops: Vec::new(), depth: 0 }
     }
 
     /// Fault an einer Stelle.
@@ -777,8 +781,17 @@ pub fn in_range(v: &Value, r: &Range) -> bool {
             let x = v.as_int().expect("int");
             x >= lo.as_int().expect("int") && x <= hi.as_int().expect("int")
         }
-        (Value::F32(_) | Value::F64(_), _, _) => {
-            let x = v.as_f64().expect("float");
+        // Bei `float32` wird in f32 verglichen: die Grenzen der Range stehen
+        // als f64 in der MIR, und `0.1f32` ist als f64 groesser als `0.1f64`.
+        // Ohne die Rundung waere die deklarierte Obergrenze in f32 nie
+        // erreichbar, und ein Wert genau auf der Grenze faultete (3.4).
+        (Value::F32(x), _, _) => {
+            let x = f64::from(*x);
+            lo.as_f64().is_some_and(|l| x >= f64::from(l as f32))
+                && hi.as_f64().is_some_and(|h| x <= f64::from(h as f32))
+        }
+        (Value::F64(x), _, _) => {
+            let x = *x;
             lo.as_f64().is_some_and(|l| x >= l) && hi.as_f64().is_some_and(|h| x <= h)
         }
         (Value::Duration(d), Value::Duration(l), Value::Duration(h)) => d >= l && d <= h,

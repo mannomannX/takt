@@ -12,10 +12,7 @@ machine tc_guard every 100 ms:
                 if tcs[i].valid:
                     check tcs[i] < TC_LIMIT, "TC {i} over limit: {tcs[i]}"
                 else:
-                    # 14.5 der Referenz schreibt `alert true`; ein Alert meldet
-                    # aber die Verletzung seiner Bedingung (5.6), und `true`
-                    # ist nie verletzt. Siehe Befund in plan/m1.md.
-                    alert false, "TC {i} invalid"
+                    alert true, "TC {i} invalid"
 
 # Plant-Modell fuer die Simulation: nur im Sim-Build gelinkt (8.3).
 output tcs_sim : [16] float[degC] @ sim("daq1/tc[0:16]")

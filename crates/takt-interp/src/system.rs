@@ -70,12 +70,8 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
         let sites: Vec<usize> =
             m.layout.viol_sites.iter().enumerate().filter(|(_, c)| c.state == Some(s)).map(|(i, _)| i).collect();
         self.state.timers[s.index()] = 0;
-        for i in counters {
-            self.state.every_next[i] = 0;
-        }
-        for i in sites {
-            self.state.viol[i] = 0;
-        }
+        self.state.every_next.reset(&counters);
+        self.state.viol.reset(&sites);
         for v in vars {
             let def = self.machine(loaded).vars[v.index()].clone();
             let value = match &def.init {
@@ -229,15 +225,12 @@ impl Outer for MachineEnv<'_, '_> {
         Ok(self.image.published_signal(m, s))
     }
 
-    fn viol(&mut self, site: SiteId) -> EvalResult<&mut i64> {
-        self.state.viol.get_mut(site.index()).ok_or_else(|| Trap::Bug(format!("Bestaetigungsstelle {} fehlt", site.0)))
+    fn viol(&mut self, site: SiteId, index: &[i64]) -> EvalResult<&mut i64> {
+        Ok(self.state.viol.at(site.0, index))
     }
 
-    fn every(&mut self, counter: CounterId) -> EvalResult<&mut i64> {
-        self.state
-            .every_next
-            .get_mut(counter.index())
-            .ok_or_else(|| Trap::Bug(format!("every-Zaehler {} fehlt", counter.0)))
+    fn every(&mut self, counter: CounterId, index: &[i64]) -> EvalResult<&mut i64> {
+        Ok(self.state.every_next.at(counter.0, index))
     }
 
     fn builtin(&self, b: Builtin) -> EvalResult<Value> {
@@ -319,7 +312,7 @@ impl<'p> Sim<'p> {
         let program = self.loaded.program;
         let tick_ns = program.config.tick;
         self.observations.clear();
-        self.image.apply_sim_bindings();
+        self.image.apply_sim_bindings(program);
         // Ψ traegt im Tick 0 die Anfangswerte der Variablen, damit die
         // `enter`- und Entry-`loop`-Bloecke sie schon lesen koennen (1.4).
         for id in self.order.clone() {
@@ -376,7 +369,7 @@ impl<'p> Sim<'p> {
         self.tick += 1;
         // sample(): Alterung, sim-Bindungen (8.3)
         self.image.age_inputs(program, tick_ns);
-        self.image.apply_sim_bindings();
+        self.image.apply_sim_bindings(program);
         // active(k): countdown == 0 (7.2)
         let active: Vec<MachineId> =
             self.order.iter().copied().filter(|id| self.states[id.index()].countdown == 0).collect();

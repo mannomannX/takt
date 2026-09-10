@@ -367,19 +367,74 @@ machine m:
     initial RUN
     state RUN:
         loop:
-            alert p < 50 bar, \"hoch\"
+            alert p > 50 bar, \"hoch\"
 ";
     // Der `sim`-Output speist den Input in jedem Tick, in dem der Stimulus
     // schweigt (8.3); der Stimulus setzt ihn darum in jedem Tick.
     let stim = "t=0 in p 10 bar\nt=1 in p 10 bar\nt=2 in p 80 bar\nt=3 in p 80 bar\n\
                 t=4 in p 20 bar\nt=5 in p 20 bar\n";
     let trace = simulate(body, stim, 5);
-    // `alert cond` meldet die Verletzung von `cond` (5.6), nicht ihr Zutreffen.
+    // Die Bedingung eines Alerts nennt das Ereignis (5.6): er meldet, waehrend
+    // der Druck hoch ist.
     assert!(trace.contains("t=2 alert m on \"hoch\"\n"), "steigende Flanke: {trace}");
     assert!(trace.contains("t=4 alert m off \"hoch\"\n"), "fallende Flanke: {trace}");
     assert_eq!(trace.matches("alert m on \"hoch\"").count(), 1, "genau eine steigende Flanke: {trace}");
     assert_eq!(trace.matches("alert m off \"hoch\"").count(), 1, "genau eine fallende Flanke: {trace}");
     assert!(!trace.contains("fault"), "ein Alert faultet nie (5.6): {trace}");
+}
+
+#[test]
+fn an_invalid_input_makes_an_alert_fire_with_a_note() {
+    // 3.5: Beobachtung schweigt nicht, wenn ihr die Grundlage fehlt; der
+    // Alert feuert mit Zusatz, ohne die Steuerung zu beeinflussen.
+    let body = "\
+input  p     : float[bar] in 0..100 bar @ hw(\"d/p\")
+output p_sim : float[bar]               @ sim(\"d/p\")
+output x     : int                      @ hw(\"o/x\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            alert p > 50 bar, \"hoch\"
+";
+    let stim = "t=0 in p 10 bar\nt=1 in p 10 bar\nt=2 in p bad reason=Driver\n\
+                t=3 in p bad reason=Driver\n";
+    let trace = simulate(body, stim, 3);
+    assert!(trace.contains("t=2 alert m on \"hoch (sensor invalid)\"\n"), "{trace}");
+    assert!(!trace.contains("fault"), "ein Alert faultet nie (5.6): {trace}");
+}
+
+#[test]
+fn an_alert_in_a_loop_reports_every_element() {
+    // 5.6: eine Alert-Stelle in einer Schleife hat je Durchlauf eine eigene
+    // Flanke; sonst meldete nur das erste betroffene Element.
+    let body = "\
+output n : int @ hw(\"o/n\") with safe = 0
+command quiet
+
+machine m:
+    var limit : int in 0..8 = 8
+    initial RUN
+    state RUN:
+        loop:
+            if quiet:
+                limit = 0
+            for i in range(4):
+                alert i < limit, \"element {i}\"
+";
+    let trace = simulate(body, "t=2 cmd quiet\n", 4);
+    // In den ersten Ticks trifft die Bedingung fuer alle vier Durchlaeufe zu:
+    // vier steigende Flanken an derselben Stelle, je Schleifenindex eine.
+    for i in 0..4 {
+        assert!(trace.contains(&format!("t=0 alert m on \"element {i}\"\n")), "Element {i} fehlt: {trace}");
+    }
+    // Danach trifft sie fuer keinen mehr zu: vier fallende Flanken.
+    for i in 0..4 {
+        assert!(trace.contains(&format!("t=2 alert m off \"element {i}\"\n")), "Element {i} ohne Flanke: {trace}");
+    }
+    assert_eq!(trace.matches("alert m on").count(), 4, "genau vier steigende Flanken: {trace}");
+    assert_eq!(trace.matches("alert m off").count(), 4, "genau vier fallende Flanken: {trace}");
 }
 
 #[test]
@@ -407,6 +462,127 @@ machine m:
     assert!(!trace.contains("t=2 fault"), "nicht sofort: {trace}");
     assert!(!trace.contains("t=3 fault"), "nicht nach 1 ms: {trace}");
     assert!(trace.contains("t=4 fault m CheckFailed"), "nach 3 ms: {trace}");
+}
+
+#[test]
+fn a_confirmation_counter_in_a_loop_counts_per_element() {
+    // 5.6: eine Stelle in einer Schleife zaehlt je Durchlauf getrennt. Mit
+    // einem gemeinsamen Zaehler setzten die erfuellten Durchlaeufe den der
+    // verletzten zurueck, und die Auslesever\u00f6gerung entschaerfte den Check
+    // dauerhaft.
+    let body = "\
+input  tcs     : [4] float[degC] in 0..1000 degC @ hw(\"d/tc[0:4]\")
+output tcs_sim : [4] float[degC]                 @ sim(\"d/tc[0:4]\")
+output x       : int                             @ hw(\"o/x\") with safe = 0
+
+machine guard:
+    fault -> SAFE
+    initial WATCH
+    state WATCH:
+        loop:
+            for i in range(4):
+                check tcs[i] < 500 degC, \"TC {i} heiss\" for 5 ms
+    state SAFE:
+        loop: pass
+
+machine model:
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(4):
+                tcs_sim[i] = 900 degC if i == 2 else 20 degC
+";
+    let trace = simulate(body, "", 12);
+    // Genau ein Element verletzt dauerhaft: der Fault kommt nach 5 ms.
+    assert!(!trace.contains("t=4 fault"), "nicht vor der Bestaetigungszeit: {trace}");
+    assert!(trace.contains("t=5 fault guard CheckFailed \"TC 2 heiss\""), "{trace}");
+}
+
+#[test]
+fn an_every_block_in_a_loop_runs_for_each_element() {
+    // Derselbe Schluessel gilt fuer `every` (5.8): ohne Trennung liefe nur
+    // der erste Durchlauf je Periode.
+    let body = "\
+output n : int in 0..1000 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    var count : int in 0..1000 = 0
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(4):
+                every 2 ms:
+                    count = count + 1
+            n = count
+";
+    let trace = simulate(body, "", 4);
+    // Vier Durchlaeufe je Periode, Perioden bei 0 und 2 und 4.
+    assert!(trace.contains("t=0 out n 4\n"), "erste Periode: {trace}");
+    assert!(trace.contains("t=2 out n 8\n"), "zweite Periode: {trace}");
+    assert!(trace.contains("t=4 out n 12\n"), "dritte Periode: {trace}");
+}
+
+#[test]
+fn a_value_on_the_declared_boundary_stays_in_range_with_float32() {
+    // 3.4: die Range ist eine Invariante ueber dem deklarierten Typ. Die
+    // Grenzen stehen als f64 in der MIR; ohne Rundung auf f32 waere die
+    // Obergrenze in `float = f32` nie erreichbar und ein Wert genau darauf
+    // faultete.
+    let src = "\
+system:
+    language = 1
+    tick = 1 ms
+    float = f32
+
+output y : float[bar] in 0..0.1 bar @ hw(\"o/y\") with safe = 0 bar
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            y = 0.1 bar
+";
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(src, &options);
+    let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(errors.is_empty(), "unerwartete Fehler:\n{}", errors.join("\n"));
+    let program = out.program.expect("Programm");
+    let stim = Trace::parse("").expect("leer");
+    let result = run(&program, &stim, &RunOptions { ticks: 3, ..Default::default() }).expect("Lauf");
+    let trace = result.trace.render();
+    assert!(!trace.contains("fault"), "Wert auf der Grenze faultet: {trace}");
+    assert!(trace.contains("out y 0.1 bar\n"), "{trace}");
+}
+
+#[test]
+fn the_driver_edge_enforces_declared_channel_ranges() {
+    // 3.5 und 12.6: ein Wert ausserhalb der deklarierten Range wird `Bad` mit
+    // Grund `OutOfRange`, nicht geklemmt und nicht zu einem Fault. Ohne diese
+    // Durchsetzung waeren die deklarierten Ranges keine gueltigen Annahmen
+    // der Intervallanalyse (3.4). Die Simulation ist der Treiberrand.
+    let body = "\
+input  p     : float[bar] in 0..100 bar @ hw(\"d/p\")
+output p_sim : float[bar]               @ sim(\"d/p\")
+output used  : float[bar]               @ hw(\"o/used\") with safe = 0 bar
+output ok    : bool                     @ hw(\"o/ok\")   with safe = false
+output grund : Reason?                  @ hw(\"o/g\")    with safe = none
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            used = p.or(7 bar)
+            ok = p.valid
+            grund = p.reason
+";
+    let stim = "t=1 in p 30 bar\nt=2 in p 250 bar\nt=3 in p 40 bar\n";
+    let trace = simulate(body, stim, 4);
+    assert!(trace.contains("t=1 out used 30.0 bar\n"), "gueltiger Wert: {trace}");
+    assert!(trace.contains("t=2 out used 7.0 bar\n"), "Wert ausserhalb wird Bad: {trace}");
+    assert!(trace.contains("t=2 out ok false\n"), "Abtastung ungueltig: {trace}");
+    assert!(trace.contains("t=2 out grund OUT_OF_RANGE\n"), "Grund OutOfRange: {trace}");
+    assert!(trace.contains("t=3 out used 40.0 bar\n"), "danach wieder gueltig: {trace}");
+    assert!(!trace.contains("fault"), "kein Fault am Rand (3.5): {trace}");
 }
 
 #[test]
