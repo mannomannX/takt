@@ -276,3 +276,46 @@ machine m:
     );
     assert!(diags.contains("kein `layout`"), "{diags}");
 }
+
+#[test]
+fn a_frame_is_assembled_from_layout_and_push() {
+    // 3.9: `reader`/`writer` sind v1.1 (Konstantenvariablen in Generics,
+    // 3.12). Bis dahin traegt `layout` dieselbe Aufgabe — dieser Test haelt
+    // fest, dass der Weg wirklich reicht: Kopf kodieren, Nutzlast anhaengen,
+    // wieder dekodieren.
+    let trace = simulate(
+        "\
+record LinkHeader layout little:
+    magic : u8 = 0xA5
+    kind  : u8
+    seq   : u8
+    len   : u16
+
+output frame_len : int in 0..99 @ hw(\"o/len\") with safe = 0
+output kind_ok   : bool @ hw(\"o/ok\") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var h = LinkHeader(kind = 0x02, seq = 7, len = 3)
+            var buf : bytes<64> = default
+            var wire = h.encode()
+            for i in range(64):
+                if i >= wire.len:
+                    break
+                var put = buf.push(wire[i])
+            var p1 = buf.push(0x11)
+            var p2 = buf.push(0x22)
+            var p3 = buf.push(0x33)
+            frame_len = buf.len as int
+            var back = LinkHeader.decode(buf)
+            if back.valid:
+                kind_ok = back.kind == 0x02
+",
+        2,
+    );
+    // Kopf sind 5 Byte (magic, kind, seq, len als u16), dazu drei Nutzbytes.
+    assert!(trace.contains("t=0 out frame_len 8\n"), "Kopf plus Nutzlast: {trace}");
+    assert!(trace.contains("t=0 out kind_ok true\n"), "der Rahmen liest sich zurueck: {trace}");
+}

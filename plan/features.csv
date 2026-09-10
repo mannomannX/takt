@@ -806,16 +806,16 @@ QUAL-Good,Qualität,3.5,Good,,M1 (Kernsemantik),offen
 QUAL-Suspect,Qualität,3.5,Suspect,,M1 (Kernsemantik),offen
 QUAL-Stale,Qualität,3.5,Stale,,M1 (Kernsemantik),offen
 QUAL-Bad,Qualität,3.5,Bad,,M1 (Kernsemantik),offen
-LIB-clamp,Standardbibliothek,11.4,fn clamp[U],,M3/M4,offen
+LIB-clamp,Standardbibliothek,11.4,fn clamp[U],,M3/M4,fertig
 LIB-map_range,Standardbibliothek,11.4,"fn map_range[U, V]",,M3/M4,offen
-LIB-interp,Standardbibliothek,11.4,"fn interp[U, V]",,M3/M4,offen
+LIB-interp,Standardbibliothek,11.4,"fn interp[U, V]",,M3/M4,fertig
 LIB-lowpass,Standardbibliothek,11.4,block lowpass[U],,M3/M4,offen
 LIB-hysteresis,Standardbibliothek,11.4,block hysteresis[U],,M3/M4,offen
 LIB-debounce,Standardbibliothek,11.4,block debounce,,M3/M4,offen
 LIB-rising,Standardbibliothek,11.4,block rising,,M3/M4,offen
 LIB-integrate,Standardbibliothek,11.4,block integrate[U],,M3/M4,offen
 LIB-rate,Standardbibliothek,11.4,block rate[U],,M3/M4,offen
-LIB-window_min,Standardbibliothek,11.4,"block window_min[U, const N]",,M3/M4,offen
+LIB-window_min,Standardbibliothek,11.4,"block window_min[U, const N]",,v1.1,offen
 LIB-rate_limiter,Standardbibliothek,11.4,block rate_limiter[U],,M3/M4,offen
 LIB-pid,Standardbibliothek,11.4,"block pid[O, E]",,M3/M4,offen
 LIB-stopwatch,Standardbibliothek,11.4,block stopwatch,,M3/M4,offen
@@ -823,9 +823,9 @@ LIB-pulse_counter,Standardbibliothek,11.4,block pulse_counter,,M3/M4,offen
 LIB-cross_check,Standardbibliothek,11.4,block cross_check[U],,M3/M4,offen
 LIB-vote2oo3,Standardbibliothek,11.4,block vote2oo3[U],,M3/M4,offen
 LIB-hold_last,Standardbibliothek,11.4,block hold_last[U],,M3/M4,offen
-LIB-reader,Standardbibliothek,11.4,block reader[const N],,M3/M4,offen
-LIB-writer,Standardbibliothek,11.4,block writer[const N],,M3/M4,offen
-LIB-pid_i,Standardbibliothek,11.4,"block pid_i[O, E]",,M3/M4,offen
+LIB-reader,Standardbibliothek,11.4,block reader[const N],,v1.1,offen
+LIB-writer,Standardbibliothek,11.4,block writer[const N],,v1.1,offen
+LIB-pid_i,Standardbibliothek,11.4,"block pid_i[O, E]",,v1.1,offen
 LIB-sha256_init,Standardbibliothek,11.4,native fn sha256_init / sha256_update,,M3/M4,offen
 LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M3/M4,offen
 LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M3/M4,offen
