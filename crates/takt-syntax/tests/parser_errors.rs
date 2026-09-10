@@ -191,3 +191,87 @@ fn errors_carry_a_suggestion() {
     );
     assert!(errors[0].suggestion.as_deref().is_some_and(|s| s.contains("Reihenfolge")), "{:?}", errors[0]);
 }
+
+/// L2.2a: Fortsetzung ohne Klammern. Der Korpus kann diese Faelle nicht
+/// tragen, weil er kanonisch ist und der Formatter Fortsetzungen
+/// zusammenzieht — geprueft wird darum hier, am Quelltext.
+#[test]
+fn a_line_continues_after_a_hanging_comma() {
+    let wrapped = "\
+input rx : stream<u8> @ hw(\"u/rx\") with max_rate = 1000 Hz,
+                                         capacity = 8
+";
+    let joined = "input rx : stream<u8> @ hw(\"u/rx\") with max_rate = 1000 Hz, capacity = 8\n";
+    assert!(file_errors(wrapped).is_empty(), "umgebrochen: {:?}", file_errors(wrapped));
+    assert_eq!(sexpr_of(wrapped), sexpr_of(joined), "Umbruch aendert den Baum nicht");
+}
+
+#[test]
+fn a_line_continues_before_a_joining_token() {
+    for (wrapped, joined) in [
+        ("x = a\n    + b\n", "x = a + b\n"),
+        ("x = a\n    == b\n", "x = a == b\n"),
+        ("x = a\n    and b\n", "x = a and b\n"),
+        ("x = a\n    .f\n", "x = a.f\n"),
+    ] {
+        assert_eq!(sexpr_of_snippet(wrapped), sexpr_of_snippet(joined), "{wrapped:?}");
+    }
+}
+
+#[test]
+fn a_sign_and_an_arrow_still_open_a_line() {
+    // `-` ist auch Vorzeichen, `->` leitet einen Uebergang ein: beide duerfen
+    // die vorige Zeile nicht fortsetzen.
+    let stmts = "x = 1\ny = -1\n";
+    let (items, errors) = snippet(stmts);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(items.len(), 2, "zwei Anweisungen, keine Fortsetzung");
+
+    let machine = "\
+machine m:
+    initial RUN
+    state RUN:
+        sequence:
+            wait 1 ms
+            -> DONE
+    state DONE:
+        loop:
+            pass
+";
+    assert!(file_errors(machine).is_empty(), "{:?}", file_errors(machine));
+}
+
+/// S-Expression einer ganzen Datei, als Vergleichsform des Baums.
+fn sexpr_of(src: &str) -> String {
+    let toks = tokenize(src);
+    assert!(toks.errors.is_empty(), "Tokenizer: {:?}", toks.errors);
+    let (file, errors) = parse_file(&toks);
+    assert!(errors.is_empty(), "Parser: {errors:?}");
+    takt_syntax::sexpr::file(&file)
+}
+
+/// Baum eines Schnipsels ohne Spannen: der Umbruch verschiebt Positionen,
+/// die Struktur darf sich nicht aendern.
+fn sexpr_of_snippet(src: &str) -> String {
+    let (items, errors) = snippet(src);
+    assert!(errors.is_empty(), "{errors:?}");
+    without_spans(&format!("{items:?}"))
+}
+
+/// Entfernt `Span { … }`-Bloecke aus einer Debug-Ausgabe.
+fn without_spans(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("Span { ") {
+        out.push_str(&rest[..i]);
+        match rest[i..].find('}') {
+            Some(j) => rest = &rest[i + j + 1..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}

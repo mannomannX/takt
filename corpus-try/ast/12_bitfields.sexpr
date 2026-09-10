@@ -1,0 +1,41 @@
+(system
+  (language 1)
+  (tick 1ms))
+(record Status layout=little
+  (bits flags: u16
+    (ready: bool at 0)
+    (busy: bool at 3)
+    (level: u8 at 4..7)))
+(input can_rx :stream<u8> @hw("can0/rx") max_rate=8000[Hz] capacity=32 overflow=fault)
+(output word :int in 0..65535 @hw("o/word") safe=0)
+(output armed :bool @hw("o/armed") safe=false)
+(output steps :int in 0..99 @hw("o/steps") safe=0)
+(enum Phase
+  (IDLE)
+  (RUN)
+  (HOLD))
+(machine port_ctl
+  (var st :Status default)
+  (var count :int in 0..99 0)
+  (initial SETUP)
+  (state SETUP
+    (enter
+      (= st (Status flags=0))
+      (= (.ready (.flags st)) true)
+      (= (.level (.flags st)) 5))
+    (when (.ready (.flags st)) -> ACTIVE))
+  (state ACTIVE
+    (loop
+      (= armed (and (.ready (.flags st)) (> (.level (.flags st)) 3)))
+      (= word (as (.flags st) int))
+      (check (> (.level (.flags st)) 0) "Pegel auf null gefallen (busy={st.flags.busy})" for=5ms)
+      (= steps count))
+    (on can_rx as e
+      (= count (+ count 1))
+      (= (.busy (.flags st)) true))
+    (when (> count 50) -> DONE))
+  (state DONE
+    (enter
+      (= (.busy (.flags st)) false))
+    (loop
+      (= armed false))))

@@ -65,6 +65,42 @@ def classify(word, keywords, reserved):
     return "TYPE"
 
 
+# L2.2a: Zeichen, die eine Zeile nur fortsetzen koennen. `-` und `~` fehlen,
+# weil sie auch Vorzeichen sind; `->` und `..` fehlen, weil `-> ZIEL` und
+# Bereichsmuster eigene Zeilen bilden.
+_INFIX1 = set(".+*/%<>|&^")
+_INFIX2 = {"==", "!=", "<=", ">=", "<<", ">>"}
+_INFIX_WORDS = {"and", "or", "with"}
+
+
+def _after_comma(tokens):
+    """Endet die bisherige Tokenfolge auf einem haengenden Komma?"""
+    return (
+        len(tokens) >= 2
+        and tokens[-1].kind == "NEWLINE"
+        and tokens[-2].kind == "OP"
+        and tokens[-2].text == ","
+    )
+
+
+def _starts_continuation(rest, tokens):
+    """Beginnt die Zeile mit einem verbindenden Zeichen?"""
+    if not any(t.kind not in ("NEWLINE", "INDENT", "DEDENT") for t in tokens):
+        return False
+    if rest[:2] in _INFIX2:
+        return True
+    if rest[:1] and rest[0] in _INFIX1:
+        # `.` vor einer Ziffer ist ein Zahlfehler, keine Fortsetzung.
+        return rest[0] != "." or len(rest) < 2 or not rest[1].isdigit()
+    word = ""
+    for ch in rest:
+        if ch.isalnum() or ch == "_":
+            word += ch
+        else:
+            break
+    return word in _INFIX_WORDS
+
+
 def tokenize(text, keywords, reserved):
     if text.startswith("﻿"):
         raise LexError("E_BOM", 1, 1)
@@ -78,7 +114,12 @@ def tokenize(text, keywords, reserved):
         pos = len(line) - len(line.lstrip(" "))
         if "\t" in line[:pos]:
             raise LexError("E_TAB", lineno, line.index("\t") + 1)
-        if depth == 0:
+        # L2.2a: haengendes Komma oder verbindendes Zeichen setzen die
+        # logische Zeile fort; dann entfallen NEWLINE, INDENT und DEDENT.
+        continued = depth == 0 and (_after_comma(tokens) or _starts_continuation(line[pos:], tokens))
+        if continued:
+            tokens.pop()  # das verfruehte NEWLINE der vorigen Zeile
+        if depth == 0 and not continued:
             if pos % 4:
                 raise LexError("E_INDENT", lineno, 1, f"Einrueckung {pos}")
             if pos > stack[-1]:

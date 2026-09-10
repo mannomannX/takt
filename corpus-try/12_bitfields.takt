@@ -1,0 +1,61 @@
+# Benannte Bitfelder (3.7): Lesen, Schreiben und die Sicht auf den Traeger.
+#
+# Die Fortsetzungsregel L2.2a steht im Quelltext dieser Datei nicht mehr, weil
+# der Korpus kanonisch ist und der Formatter Fortsetzungen zusammenzieht; ihre
+# Vektoren liegen in grammar/lexer.md.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+# Ein Statusregister, wie es ein Treiber deklariert: die Bitfelder sind eine
+# Sicht auf ihr Traegerfeld, kein eigener Speicher.
+record Status layout little:
+    flags : u16 with bits:
+        ready : bool at 0
+        busy  : bool at 3
+        level : u8 at 4..7
+
+input  can_rx : stream<u8>      @ hw("can0/rx") with max_rate = 8000 Hz, capacity = 32, overflow = fault
+output word   : int in 0..65535 @ hw("o/word")  with safe = 0
+output armed  : bool            @ hw("o/armed") with safe = false
+output steps  : int in 0..99    @ hw("o/steps") with safe = 0
+
+enum Phase: IDLE, RUN, HOLD
+
+machine port_ctl:
+    var st    : Status = default
+    var count : int in 0..99 = 0
+
+    initial SETUP
+
+    state SETUP:
+        enter:
+            st = Status(flags = 0)
+            st.flags.ready = true
+            st.flags.level = 5
+        when st.flags.ready: -> ACTIVE
+
+    state ACTIVE:
+        loop:
+            armed = st.flags.ready and st.flags.level > 3
+
+            word = st.flags as int
+
+            # Die Bestaetigungszeit steht hinter der Meldung (5.6).
+            check st.flags.level > 0, "Pegel auf null gefallen (busy={st.flags.busy})" for 5 ms
+
+            steps = count
+
+        on can_rx as e:
+            count = count + 1
+            st.flags.busy = true
+
+        when count > 50:
+            -> DONE
+
+    state DONE:
+        enter:
+            st.flags.busy = false
+        loop:
+            armed = false
