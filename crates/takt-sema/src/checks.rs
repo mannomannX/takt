@@ -36,6 +36,7 @@ pub const SC6: &str = "SC-6";
 impl Lowerer<'_> {
     /// Fuehrt alle MIR-Pruefungen aus.
     pub fn run_mir_checks(&mut self) {
+        self.default_max_age();
         self.check_writers();
         self.check_fault_forest();
         self.check_reachability();
@@ -43,6 +44,36 @@ impl Lowerer<'_> {
         self.check_simulation();
         self.check_unused();
         self.check_definite_assignment();
+    }
+
+    /// Traegt den Default fuer `max_age` ein (3.5): das Doppelte der
+    /// kuerzesten Periode unter den Maschinen, die den Channel lesen. Die
+    /// Zusicherung „dieser Wert ist frisch genug" gilt damit fuer jeden
+    /// Leser, auch den schnellsten; ohne Default wurde ein toter Sensor nie
+    /// `Stale`, und der implizite Validitaets-Check griff nie.
+    fn default_max_age(&mut self) {
+        let mut fastest: HashMap<ChannelId, u32> = HashMap::new();
+        for m in &self.program.machines {
+            if matches!(m.kind, MachineKind::Template) || m.states.is_empty() {
+                continue;
+            }
+            let period = m.period.max(1);
+            for_each_expr_machine(m, &mut |e| {
+                if let ExprKind::Input { channel, .. } = &e.kind {
+                    let slot = fastest.entry(*channel).or_insert(period);
+                    *slot = (*slot).min(period);
+                }
+            });
+        }
+        let tick = self.program.config.tick;
+        for (i, c) in self.program.channels.iter_mut().enumerate() {
+            if c.dir != Direction::Input || c.attrs.max_age.is_some() {
+                continue;
+            }
+            if let Some(period) = fastest.get(&ChannelId(i as u32)) {
+                c.attrs.max_age = Some(2 * i64::from(*period) * tick);
+            }
+        }
     }
 
     /// Pruefung 7 und 15 (Teil): Besitzer je Output, `pub var` nur vom
@@ -88,6 +119,25 @@ impl Lowerer<'_> {
         for m in &self.program.machines {
             if matches!(m.kind, MachineKind::Template) || m.states.is_empty() {
                 continue;
+            }
+            // 5.3: damit `FAULTED` nie scheitern kann, duerfen die Guards
+            // seiner Transitionen keine impliziten Pruefungen enthalten.
+            for t in &m.faulted.transitions {
+                if let TransTrigger::When(Guard::Expr(e)) = &t.trigger {
+                    if has_checked(e) {
+                        diags.push(
+                            Diagnostic::error(
+                                SC9,
+                                t.span,
+                                format!("Guard aus `FAULTED` von `{}` enthaelt eine implizite Pruefung", m.name),
+                            )
+                            .with_suggestion(
+                                "Channel nur unter `.valid` oder mit `.or(...)` lesen; keine Range- oder \
+                                 Arithmetik-Pruefung (5.3)",
+                            ),
+                        );
+                    }
+                }
             }
             for (i, s) in m.states.iter().enumerate() {
                 let id = StateId(i as u32);
@@ -761,4 +811,15 @@ pub fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
         _ => {}
     }
     let _ = SC8;
+}
+
+/// Enthaelt der Ausdruck eine implizite Pruefung (5.3, Pruefung 9)?
+fn has_checked(e: &Expr) -> bool {
+    let mut found = false;
+    walk_expr(e, &mut |x| {
+        if matches!(x.kind, ExprKind::Checked { .. }) {
+            found = true;
+        }
+    });
+    found
 }

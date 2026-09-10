@@ -225,7 +225,9 @@ impl Lowerer<'_> {
                     format!("Bestaetigungszeit kuerzer als die Periode ({})", takt_mir::dump::duration(period)),
                 );
             } else if ns % period != 0 {
-                let eff = div_ceil(ns, period) * period;
+                // Saettigend: das Produkt aus Quotient und Periode laeuft fuer
+                // Dauern nahe `i64::MAX` ueber und brach den Compiler ab.
+                let eff = div_ceil(ns, period).saturating_mul(period);
                 self.warn(
                     SC36,
                     d.span,
@@ -248,7 +250,9 @@ impl Lowerer<'_> {
         if let ExprKind::Duration(ns) = d.kind {
             let period = self.machine_period_ns();
             if period > 0 && ns % period != 0 {
-                let eff = div_ceil(ns, period) * period;
+                // Saettigend: das Produkt aus Quotient und Periode laeuft fuer
+                // Dauern nahe `i64::MAX` ueber und brach den Compiler ab.
+                let eff = div_ceil(ns, period).saturating_mul(period);
                 self.warn(
                     SC14,
                     span,
@@ -936,9 +940,15 @@ impl Lowerer<'_> {
     }
 }
 
-/// Aufrundende Division fuer positive Nenner (stabil auf Rust 1.85).
+/// Aufrundende Division fuer positive Nenner (stabil auf Rust 1.85). Rechnet
+/// in i128, weil `a + b - 1` fuer Dauern nahe `i64::MAX` sonst ueberlaeuft und
+/// den Compiler abbricht; das Ergebnis passt immer in i64, weil `b >= 1`.
 pub fn div_ceil(a: i64, b: i64) -> i64 {
-    if b <= 0 { a } else { (a + b - 1) / b }
+    if b <= 0 {
+        return a;
+    }
+    let (a, b) = (i128::from(a), i128::from(b));
+    i64::try_from((a + b - 1).div_euclid(b)).unwrap_or(i64::MAX)
 }
 
 fn literal_in_range(e: &Expr, r: &takt_mir::types::Range) -> bool {

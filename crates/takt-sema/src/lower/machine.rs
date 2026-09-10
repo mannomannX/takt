@@ -53,10 +53,13 @@ impl Lowerer<'_> {
     fn state_enum(&mut self, machine: &str, body: &ast::MachineBody) -> EnumId {
         let mut names = Vec::new();
         collect_state_names(&body.states, &mut names);
+        // Erst filtern, dann zaehlen: mit einem ausdruecklichen `state FAULTED:`
+        // (5.3 erlaubt ihn) verschoben sich sonst die Indizes, und die
+        // angehaengte Variante `FAULTED` traf einen schon vergebenen Wert.
         let mut variants: Vec<VariantDef> = names
             .iter()
+            .filter(|(n, _)| n != "FAULTED")
             .enumerate()
-            .filter(|(_, (n, _))| n != "FAULTED")
             .map(|(i, (n, span))| VariantDef {
                 name: n.clone(),
                 discriminant: i as i64,
@@ -115,11 +118,43 @@ impl Lowerer<'_> {
                         ),
                     );
                 }
-                m.period = super::stmt::div_ceil(every.ns, tick).max(1) as u32;
+                // `as u32` wickelte den Quotienten um: `every 10 s` bei
+                // `tick = 1 ns` ergab 1410065408 statt 10^10, ohne Diagnose.
+                let ticks = super::stmt::div_ceil(every.ns, tick).max(1);
+                match u32::try_from(ticks) {
+                    Ok(n) => m.period = n,
+                    Err(_) => {
+                        self.error_hint(
+                            SC3,
+                            every.span,
+                            format!(
+                                "Periode {} sind {ticks} Ticks, mehr als ein Aktivierungszaehler fasst",
+                                takt_mir::dump::duration(every.ns)
+                            ),
+                            "Basis-Tick vergroessern oder Periode verkleinern (7.2)",
+                        );
+                        m.period = 1;
+                    }
+                }
             }
         }
         if let Some(phase) = &decl.phase {
-            m.phase = (phase.ns / tick).max(0) as u32;
+            let ticks = (phase.ns / tick).max(0);
+            match u32::try_from(ticks) {
+                Ok(n) => m.phase = n,
+                Err(_) => {
+                    self.error_hint(
+                        SC3,
+                        phase.span,
+                        format!(
+                            "Phase {} sind {ticks} Ticks, mehr als ein Aktivierungszaehler fasst",
+                            takt_mir::dump::duration(phase.ns)
+                        ),
+                        "Basis-Tick vergroessern oder Phase verkleinern (7.2)",
+                    );
+                    m.phase = 0;
+                }
+            }
         }
         if !decl.follows.is_empty() {
             self.stage(decl.follows[0].span, "`follows`", Stage::V1_1);

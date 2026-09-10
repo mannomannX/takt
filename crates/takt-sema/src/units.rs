@@ -24,10 +24,29 @@ pub enum Atom {
 }
 
 /// Einheit in Normalform: Atome aufsteigend, Exponenten ungleich null.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
+/// Gleichheit vergleicht nur die Faktoren; `overflow` ist eine Diagnose ueber
+/// die Herkunft, kein Teil der Einheit.
+#[derive(Clone, Debug, Default)]
 pub struct Unit {
     /// Atome mit Exponenten.
     pub factors: Vec<(Atom, i8)>,
+    /// Ein Exponent hat die Breite der MIR gesprengt und wurde geklemmt; der
+    /// Elaborator meldet das, statt zwei Einheiten gleichzusetzen.
+    pub overflow: bool,
+}
+
+impl PartialEq for Unit {
+    fn eq(&self, other: &Unit) -> bool {
+        self.factors == other.factors
+    }
+}
+
+impl Eq for Unit {}
+
+impl std::hash::Hash for Unit {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.factors.hash(state);
+    }
 }
 
 impl Unit {
@@ -38,12 +57,12 @@ impl Unit {
 
     /// Eine benannte Einheit.
     pub fn named(id: UnitId) -> Unit {
-        Unit { factors: vec![(Atom::Named(id), 1)] }
+        Unit { factors: vec![(Atom::Named(id), 1)], overflow: false }
     }
 
     /// Eine Einheitenvariable.
     pub fn var(i: u32) -> Unit {
-        Unit { factors: vec![(Atom::Var(i), 1)] }
+        Unit { factors: vec![(Atom::Var(i), 1)], overflow: false }
     }
 
     /// Dimensionslos?
@@ -66,11 +85,24 @@ impl Unit {
         self.factors.iter().filter_map(|(a, _)| if let Atom::Var(v) = a { Some(*v) } else { None }).collect()
     }
 
+    /// Hoechster Exponent eines Atoms. Die MIR speichert ihn als `i8`
+    /// (`UnitDef::dimension`), also ist die Grenze eine Formatentscheidung.
+    pub const MAX_EXPONENT: i32 = 127;
+
     fn from_map(map: Vec<(Atom, i32)>) -> Unit {
-        let mut factors: Vec<(Atom, i8)> =
-            map.into_iter().filter(|(_, e)| *e != 0).map(|(a, e)| (a, e.clamp(-127, 127) as i8)).collect();
+        let mut overflow = false;
+        let mut factors: Vec<(Atom, i8)> = map
+            .into_iter()
+            .filter(|(_, e)| *e != 0)
+            .map(|(a, e)| {
+                overflow |= e.abs() > Unit::MAX_EXPONENT;
+                (a, e.clamp(-Unit::MAX_EXPONENT, Unit::MAX_EXPONENT) as i8)
+            })
+            .collect();
         factors.sort_by_key(|(a, _)| *a);
-        Unit { factors }
+        // Stilles Klemmen machte nominal verschiedene Einheiten identisch:
+        // `m^160` und `m^168` galten als derselbe Typ (3.2).
+        Unit { factors, overflow }
     }
 
     /// Produkt.
@@ -82,7 +114,9 @@ impl Unit {
                 None => map.push((*a, i32::from(*e))),
             }
         }
-        Unit::from_map(map)
+        let mut out = Unit::from_map(map);
+        out.overflow |= self.overflow || o.overflow;
+        out
     }
 
     /// Quotient.
@@ -97,7 +131,9 @@ impl Unit {
 
     /// Potenz mit ganzem Exponenten.
     pub fn pow(&self, k: i32) -> Unit {
-        Unit::from_map(self.factors.iter().map(|(a, e)| (*a, i32::from(*e) * k)).collect())
+        let mut out = Unit::from_map(self.factors.iter().map(|(a, e)| (*a, i32::from(*e) * k)).collect());
+        out.overflow |= self.overflow;
+        out
     }
 
     /// Ersetzt gebundene Variablen; ungebundene bleiben.
@@ -107,9 +143,9 @@ impl Unit {
             let term = match a {
                 Atom::Var(v) => match env.get(*v as usize) {
                     Some(Some(u)) => u.pow(i32::from(*e)),
-                    _ => Unit { factors: vec![(*a, *e)] },
+                    _ => Unit { factors: vec![(*a, *e)], overflow: false },
                 },
-                Atom::Named(_) => Unit { factors: vec![(*a, *e)] },
+                Atom::Named(_) => Unit { factors: vec![(*a, *e)], overflow: false },
             };
             out = out.mul(&term);
         }

@@ -288,10 +288,31 @@ impl Checker<'_> {
     }
 }
 
+/// Hoechste Elementzahl einer Matrix, die der Referenzinterpreter anlegt.
+/// 3.11 setzt der Sprache keine Obergrenze; darueber entscheidet das
+/// Speicherbudget (11.5, ab M3). Bis dahin zieht der Interpreter eine Linie,
+/// damit ein Programm den Prozess nicht mit einer Allokation abbricht, statt
+/// eine Diagnose zu liefern (Satz 9.4.2), wie bei der Aufruftiefe (9.2).
+pub const MAX_MAT_ELEMS: u64 = 1 << 20;
+
 /// Prueft ein Programm; die erste Verletzung ist das Ergebnis.
 pub fn check(p: &Program) -> Result<(), Diagnostic> {
     if !p.is_core() {
         return Err(err(Span::default(), "Sequenz-Oberflaeche nicht entzuckert (desugar fehlt)"));
+    }
+    for t in &p.types.list {
+        if let Type::Mat { rows, cols, .. } = t {
+            let elems = u64::from(*rows) * u64::from(*cols);
+            if elems > MAX_MAT_ELEMS {
+                return Err(err(
+                    Span::default(),
+                    format!(
+                        "`mat<{rows}, {cols}>` hat {elems} Elemente; der Referenzinterpreter legt hoechstens \
+                         {MAX_MAT_ELEMS} an (das Speicherbudget entscheidet ab M3, 11.5)"
+                    ),
+                ));
+            }
+        }
     }
     // Rahmengroesse je Funktion: Lokale (die Parameter zaehlen mit); bei einer
     // Blockmethode stehen davor die Instanzvariablen (plan/mir.md Abschnitt 7).

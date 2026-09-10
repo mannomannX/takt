@@ -436,7 +436,9 @@ RULE-9.2-raise_sig,Knoten,StmtKind::Raise,
 RULE-9.2-job_v_=_f(args),Knoten,StmtKind::Job,
 RULE-9.2-every_d:_b,Knoten,StmtKind::Every,
 RULE-9.2-break,Knoten,StmtKind::Break,
-RULE-9.2-alert_|_log_|_measure_|_verify_|_verdict_...,Knoten,Observe,
+"RULE-9.2-alert_e,_msg",Knoten,Observe,"Alert: Bedingung nennt das Ereignis; FAULT -> aktiv mit Zusatz (5.6, 3.5)"
+RULE-9.2-log_|_measure_|_verify_|_verdict_...,Knoten,Observe,
+PAR-5.6-Alerts_in_Schleifen,Runtime,takt-interp,"Flanke je Stelle und Schleifenindex (5.6)"
 DESUGAR-Statement_vor_der_ersten_Zeitgrenze_des_Segments,Regel,desugar::stmt,enter: des Segments
 DESUGAR-check_e_msg_an_Position_p,Regel,desugar::stmt,loop: aller Segmente ab i
 DESUGAR-expect_e_msg,Regel,desugar::expect,Flagvariable je expect

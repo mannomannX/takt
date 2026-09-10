@@ -218,3 +218,95 @@ fn shadowing_rules_follow_2_5() {
     ));
     assert!(errors(&out).contains(&"SC-2"), "{}", messages(&out));
 }
+
+#[test]
+fn state_discriminants_stay_unique_with_an_explicit_faulted_state() {
+    // 5.3 erlaubt einen ausdruecklichen `state FAULTED:`. Wurde er aus der
+    // Variantenliste gefiltert, nachdem die Indizes vergeben waren, trafen
+    // zwei Zustaende denselben Wert und wurden fuer Codegen, Wire-Layout und
+    // Telemetrie ununterscheidbar.
+    let program = compile(&format!(
+        "{HEAD}\
+output v : bool @ hw(\"o/v\") with safe = false
+command reset
+
+machine mm:
+    initial S
+    state FAULTED:
+        when reset: -> S
+    state S:
+        enter:
+            v = true
+        loop: pass
+"
+    ));
+    let e = program.enums.iter().find(|e| e.name == "mm.State").expect("Zustandstyp");
+    let mut seen: Vec<i64> = e.variants.iter().map(|v| v.discriminant).collect();
+    seen.sort_unstable();
+    let before = seen.len();
+    seen.dedup();
+    assert_eq!(seen.len(), before, "doppelte Diskriminante in {:?}", e.variants);
+}
+
+#[test]
+fn quality_accessors_need_an_input_channel() {
+    // 3.5: Qualitaet und Alter gibt es nur an einem Channel. Ein `T?` kennt
+    // nach 3.8 allein `.valid` und `.or(d)`; vorher nahm der Elaborator die
+    // Zugriffe auch fuer ein Element eines gewoehnlichen Optional-Arrays an,
+    // und der Interpreter meldete dann einen internen Fehler.
+    let out = diagnose(&format!(
+        "{HEAD}\
+output d : Duration @ hw(\"o/d\") with safe = 0 ms
+
+machine mm:
+    var a : [2] bool? = [none, none]
+    initial S
+    state S:
+        loop:
+            d = a[1].age
+"
+    ));
+    assert!(messages(&out).contains("kein Zugriff `age`"), "{}", messages(&out));
+}
+
+#[test]
+fn an_overlong_period_is_an_error_not_a_wrapped_counter() {
+    // 7.2: der Aktivierungszaehler ist 32 Bit breit. `as u32` wickelte den
+    // Quotienten um, sodass `every 10 s` bei `tick = 1 ns` als 1410065408
+    // Ticks lief, ohne jede Diagnose.
+    let out = diagnose(
+        "system:
+    language = 1
+    tick = 1 ns
+
+output v : bool @ hw(\"o/v\") with safe = false
+
+machine mm every 10 s:
+    initial S
+    state S:
+        loop: pass
+",
+    );
+    assert!(messages(&out).contains("Aktivierungszaehler"), "{}", messages(&out));
+}
+
+#[test]
+fn extreme_literals_do_not_break_the_compiler() {
+    // Der Compiler darf bei keinem Eingabeprogramm abstuerzen: die
+    // aufrundende Division lief fuer Dauern nahe `i64::MAX` ueber, und die
+    // Fortzaehlung der Enum-Diskriminanten ebenso.
+    let out = diagnose(&format!(
+        "{HEAD}\
+output v : bool @ hw(\"o/v\") with safe = false
+
+machine m:
+    initial S
+    state S:
+        after 9223372036854775807 ns: -> S
+"
+    ));
+    let _ = messages(&out);
+
+    let out = diagnose(&format!("{HEAD}enum Ee: A = 9223372036854775807, B\n"));
+    assert!(messages(&out).contains("i64::MAX"), "{}", messages(&out));
+}

@@ -257,6 +257,7 @@ impl Lowerer<'_> {
                                 .filter(|(a, _)| !matches!(a, Atom::Var(_)))
                                 .cloned()
                                 .collect(),
+                            overflow: current.overflow,
                         };
                         let solved = if *e == 1 { arg.div(&rest) } else { rest.div(arg) };
                         bound[*v as usize] = Some(solved);

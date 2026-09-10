@@ -63,6 +63,13 @@ impl Counters {
         self.slots.entry((site, index.to_vec())).or_insert(0)
     }
 
+    /// Zaehler einer Stelle, schreibend, mit einem Anfangswert fuer den
+    /// ersten Zugriff. `every` beginnt bei `d` statt bei 0 (5.8); `d` ist ein
+    /// Ausdruck und beim Zustandseintritt noch nicht bekannt.
+    pub fn at_or(&mut self, site: u32, index: &[i64], start: i64) -> &mut i64 {
+        self.slots.entry((site, index.to_vec())).or_insert(start)
+    }
+
     /// Setzt alle Zaehler der genannten Stellen zurueck (Zustandseintritt).
     pub fn reset(&mut self, sites: &[usize]) {
         self.slots.retain(|(site, _), _| !sites.contains(&(*site as usize)));
@@ -184,10 +191,11 @@ pub fn step_m(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) -> R
     if !env.state.faulted {
         // Vorgemerkte Faults zustellen (Operator-Abort, Runtime, 9.6)
         if let Some(f) = env.state.pending.take() {
+            // Ein unterdrueckter Abort wird verworfen, nicht aufbewahrt: 5.4
+            // sagt „ignoriert weitere Aborts". Bewahrt man ihn auf, feuert er
+            // nach der naechsten normalen Transition ohne neue Eingabe erneut.
             if deliverable(&f, env) {
                 out = Err(Trap::Fault(f));
-            } else {
-                env.state.pending = Some(f);
             }
         }
         if matches!(out, Ok(Out::Normal)) {
@@ -393,13 +401,24 @@ pub fn switch(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, target: Target,
         other => other,
     };
     let old = env.state.conf.clone();
-    let new = match target {
-        Target::Faulted => Vec::new(),
-        Target::State(s) => descend(env.machine(loaded), s),
+    let goal = match target {
+        Target::Faulted => None,
+        Target::State(s) => Some(s),
         Target::Fault(_) => return bug("verschachtelter Fault-Pfad"),
     };
-    // (1) neue Konfiguration setzen
-    let common = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    let new = match goal {
+        None => Vec::new(),
+        Some(s) => descend(env.machine(loaded), s),
+    };
+    // (1) neue Konfiguration setzen. Der kleinste gemeinsame Vorfahr liegt
+    // echt oberhalb des Zielzustands (9.3): eine Selbsttransition `-> S` aus
+    // `S` verlaesst `S` und betritt ihn neu, mit `exit`, `enter`, frischen
+    // zustandslokalen Variablen und zurueckgesetzten Timern.
+    let mut common = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    if let Some(s) = goal {
+        let depth = chain_to(env.machine(loaded), s).len();
+        common = common.min(depth - 1);
+    }
     env.state.conf = new.clone();
     env.state.faulted = matches!(target, Target::Faulted);
     // (2) exit-Bloecke der verlassenen Zustaende, innen nach aussen

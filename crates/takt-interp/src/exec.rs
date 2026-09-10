@@ -219,12 +219,15 @@ impl Ctx<'_, '_> {
             StmtKind::Job { .. } => bug("job ab M6"),
             StmtKind::Every { period, counter, body } => {
                 let d = self.eval_duration(period)?;
-                let t = match self.outer.builtin(takt_mir::expr::Builtin::TimeInState)? {
+                let t = match self.outer.every_clock(*counter)? {
                     Value::Duration(t) => t,
-                    other => return bug(format!("time_in_state ist {}", other.kind_name())),
+                    other => return bug(format!("Uhr eines `every` ist {}", other.kind_name())),
                 };
                 let index = self.loops.clone();
-                let next = self.outer.every(*counter, &index)?;
+                // Der Zaehler beginnt bei `d` (5.8): mit 0 lief der Block
+                // schon im Eintritts-Tick, und ein Zustand, der kuerzer als
+                // `d` aktiv ist, fuehrte ihn bei jedem Eintritt aus statt nie.
+                let next = self.outer.every(*counter, &index, d)?;
                 if t >= *next {
                     *next += d;
                     self.exec_block(body, mode)

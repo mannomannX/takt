@@ -213,7 +213,12 @@ impl Image {
             let s = &mut self.inputs[i];
             s.age = s.age.saturating_add(tick_ns);
             if let Some(max) = c.attrs.max_age {
-                if s.age > max && s.quality == Quality::Good {
+                // 3.5 formuliert Stale unbedingt ueber das Alter. Ein
+                // entprellter Kanal (`Suspect`), dessen Treiber danach
+                // ausfaellt, blieb sonst dauerhaft gueltig und hielt den
+                // letzten Wert unbegrenzt. Nur `Bad` bleibt `Bad`, weil das
+                // die schlechtere Qualitaet ist.
+                if s.age > max && s.quality != Quality::Bad {
                     s.quality = Quality::Stale;
                     s.reason = Some(Reason::Stale);
                 }

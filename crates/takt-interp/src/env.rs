@@ -135,9 +135,17 @@ pub trait Outer {
     fn viol(&mut self, _site: SiteId, _index: &[i64]) -> EvalResult<&mut i64> {
         bug("Bestaetigungszaehler ausserhalb einer Maschine")
     }
-    /// `next`-Zaehler eines `every` in Nanosekunden (5.8), ebenfalls je
-    /// Stelle und Schleifenindex.
-    fn every(&mut self, _counter: CounterId, _index: &[i64]) -> EvalResult<&mut i64> {
+    /// `next`-Zaehler eines `every` in Nanosekunden (5.8), je Stelle und
+    /// Schleifenindex; beim ersten Zugriff nach einem Zustandseintritt
+    /// beginnt er bei der Periode `start`.
+    fn every(&mut self, _counter: CounterId, _index: &[i64], _start: i64) -> EvalResult<&mut i64> {
+        bug("every ausserhalb einer Maschine")
+    }
+    /// Uhr, gegen die ein `every` misst (5.8): `time_in_state` fuer eine
+    /// Stelle in einem Zustand, `now` fuer eine auf Maschinenebene. Ein
+    /// maschinenweiter Block gehoert keinem Zustand, dessen Eintritt ihn neu
+    /// startete; mit `time_in_state` verstummte er nach dem ersten Wechsel.
+    fn every_clock(&self, _counter: CounterId) -> EvalResult<Value> {
         bug("every ausserhalb einer Maschine")
     }
     /// Periode der Maschine in Nanosekunden (`P_m`).

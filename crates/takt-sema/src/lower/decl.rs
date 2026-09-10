@@ -154,16 +154,24 @@ impl Lowerer<'_> {
         let mut variants = Vec::new();
         for v in &decl.variants {
             let discriminant = match &v.discriminant {
-                Some(d) => match super::expr::parse_int(&d.text) {
-                    Some(x) => x as i64,
+                Some(d) => match super::expr::parse_int(&d.text).and_then(|x| i64::try_from(x).ok()) {
+                    Some(x) => x,
                     None => {
-                        self.error(SC3, d.span, "Diskriminante nicht darstellbar");
+                        // `as i64` schnitt vorher stillschweigend ab, und die
+                        // Fortzaehlung ab `i64::MAX` brach den Compiler ab.
+                        self.error(SC3, d.span, "Diskriminante nicht als i64 darstellbar");
                         continue;
                     }
                 },
                 None => next,
             };
-            next = discriminant + 1;
+            next = match discriminant.checked_add(1) {
+                Some(n) => n,
+                None => {
+                    self.error(SC3, v.name.span, "Diskriminante laeuft ueber `i64::MAX` hinaus");
+                    continue;
+                }
+            };
             if variants.iter().any(|x: &VariantDef| x.name == v.name.name) {
                 self.error(SC2, v.name.span, format!("Variante `{}` doppelt", v.name.name));
                 continue;
@@ -284,6 +292,18 @@ impl Lowerer<'_> {
                     self.error(SC3, span, "Faktor nicht exakt darstellbar");
                     return;
                 };
+                // 3.2 verlangt einen rationalen Skalierungsfaktor. Mit null
+                // verlor `.to(...)` in der einen Richtung stillschweigend den
+                // Wert und faultete in der anderen mit `NonFinite`.
+                if scale.num == 0 {
+                    self.error_hint(
+                        SC3,
+                        span,
+                        format!("Einheit `{}` haette den Faktor null (3.2)", name.name),
+                        "einen Faktor ungleich null angeben",
+                    );
+                    return;
+                }
                 let base = match unit {
                     Some(u) => match self.unit_expr(u) {
                         Some(b) => b,

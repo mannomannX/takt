@@ -732,6 +732,17 @@ impl Lowerer<'_> {
                     self.error(SC3, span, format!("`{}` auf `{n}`", op.name()));
                     return None;
                 }
+                // Ein Betrag setzt einen Nullpunkt voraus; ein affiner Wert
+                // ist ein Punkt, kein Vektor (3.2).
+                if self.affine_type(ty0) {
+                    self.error_hint(
+                        SC3,
+                        span,
+                        format!("`{}` auf einer affinen Einheit (3.2)", op.name()),
+                        "Differenzen in `K` rechnen",
+                    );
+                    return None;
+                }
                 self.base(ty0)
             }
             Intrinsic::Sqrt => {
@@ -746,7 +757,7 @@ impl Lowerer<'_> {
                     self.error(SC3, span, format!("`sqrt` von `{name}`: Exponenten nicht durch 2 teilbar"));
                     return None;
                 }
-                let half = Unit { factors: unit.factors.iter().map(|(a, e)| (*a, e / 2)).collect() };
+                let half = Unit { factors: unit.factors.iter().map(|(a, e)| (*a, e / 2)).collect(), overflow: false };
                 let Type::Float { width, .. } = self.ty(ty0).clone() else { unreachable!() };
                 self.float_type(width, &half, None, span)?
             }
@@ -780,7 +791,20 @@ impl Lowerer<'_> {
                 self.without_unit(ty0)
             }
             Intrinsic::Pow => {
+                // Wie `sin` und `exp`: einheitenlos verlangt, nicht still
+                // verworfen (3.2). Ein Exponent ist zur Uebersetzungszeit
+                // nicht bekannt, also gibt es keinen Einheitenausgang.
                 let t = float_dimless(self, ty0)?;
+                if t != self.base(ty0) {
+                    let n = self.type_name(ty0);
+                    self.error_hint(
+                        SC3,
+                        span,
+                        format!("`pow` verlangt einen einheitenlosen Wert, gefunden `{n}`"),
+                        "Einheit vorher herausrechnen, etwa `pow(x / (1 bar), 2.0)`",
+                    );
+                    return None;
+                }
                 let b = self.check(&args[1].value, t)?;
                 out.push(b);
                 t
@@ -801,7 +825,21 @@ impl Lowerer<'_> {
                 t
             }
             Intrinsic::Round | Intrinsic::Floor | Intrinsic::Ceil => {
-                float_dimless(self, ty0)?;
+                // Das Ergebnis ist eine Ganzzahl ohne Einheit; sie einfach zu
+                // verwerfen waere eine implizite Konversion (3.2). Die
+                // Referenz schreibt das Muster in 14.7:
+                // `round(soc / (100 pct) * 255)`.
+                let t = float_dimless(self, ty0)?;
+                if t != self.base(ty0) {
+                    let n = self.type_name(ty0);
+                    self.error_hint(
+                        SC3,
+                        span,
+                        format!("`{}` verlangt einen einheitenlosen Wert, gefunden `{n}`", op.name()),
+                        "Einheit vorher herausrechnen, etwa `round(x / (1 bar))`",
+                    );
+                    return None;
+                }
                 self.tys.int
             }
             Intrinsic::Rotl | Intrinsic::Rotr => {
@@ -1135,7 +1173,11 @@ impl Lowerer<'_> {
     /// `.valid .suspect .stale .age .reason .or .ok .err` auf Abtastung, `T?`, `T!E`.
     fn wrapper_access(&mut self, base: Expr, name: &ast::Ident, args: Option<&[ast::Arg]>, span: Span) -> Option<Expr> {
         let member = name.name.as_str();
-        let is_input = matches!(base.kind, ExprKind::Input { .. } | ExprKind::Index { .. });
+        // Qualitaet und Alter gibt es nur an einem Input-Channel (3.5); ein
+        // `T?` kennt allein `.valid` und `.or(d)` (3.8). Ein Index zaehlt nur
+        // dann, wenn seine Basis ein Channel-Array ist, sonst galten die
+        // Zugriffe auch fuer ein gewoehnliches Array von Optionalwerten.
+        let is_input = is_channel_read(&base);
         let inner_ty = match self.ty(base.ty).clone() {
             Type::Optional(t) => t,
             Type::Result { ok, .. } => ok,
@@ -1495,6 +1537,14 @@ impl Lowerer<'_> {
         }
     }
 
+    /// Traegt der Typ eine affine Einheit (`degC`, `degF`, 3.2)?
+    fn affine_type(&self, ty: TypeId) -> bool {
+        match self.unit_of_type(ty) {
+            Some(u) => self.units.is_affine(&self.program, &u),
+            None => false,
+        }
+    }
+
     fn unary(&mut self, op: ast::UnaryOp, expr: &ast::Expr, hint: Option<TypeId>, span: Span) -> Option<Expr> {
         match op {
             ast::UnaryOp::Not => {
@@ -1507,6 +1557,15 @@ impl Lowerer<'_> {
                 if !(self.is_numeric(x.ty) || self.is_duration(x.ty)) {
                     let n = self.type_name(x.ty);
                     self.error(SC3, span, format!("`-` auf `{n}`"));
+                    return None;
+                }
+                // Unaeres Minus ist die Multiplikation mit -1; auf einem
+                // affinen Punkt ist sie ein Typfehler wie jedes Produkt
+                // (3.2). `-(20 degC)` waere -293.15 K. Ein negatives Literal
+                // wie `-60 degC` bezeichnet dagegen einen Punkt und ist
+                // erlaubt (14.2 schreibt `in -60..200 degC`).
+                if self.affine_type(x.ty) && !is_literal(&x) {
+                    self.error_hint(SC3, span, "`-` auf einer affinen Einheit (3.2)", "Differenzen in `K` rechnen");
                     return None;
                 }
                 if let Type::Int { width, .. } = self.ty(x.ty) {
@@ -1883,3 +1942,14 @@ pub fn const_expr(c: takt_mir::types::Const, ty: TypeId, span: Span) -> Expr {
 /// Einheitenliteral-Vorschlag ist in `coerce` und `binary` erklaert; hier
 /// bleibt nur der Bezug auf den Namen der Pruefung fuer Leser.
 pub const NAME_CHECK: &str = SC2;
+
+/// Liest der Ausdruck einen Input-Channel, gegebenenfalls ein Element eines
+/// Channel-Arrays (8.1)? Nur dann tragen `.suspect`, `.stale`, `.age` und
+/// `.reason` eine Bedeutung (3.5).
+fn is_channel_read(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Input { .. } => true,
+        ExprKind::Index { base, .. } => is_channel_read(base),
+        _ => false,
+    }
+}

@@ -107,7 +107,7 @@ impl Lowerer<'_> {
                     };
                     Unit::named(id).pow(i32::from(*e))
                 }
-                Atom::Named(_) => Unit { factors: vec![(*atom, *e)] },
+                Atom::Named(_) => Unit { factors: vec![(*atom, *e)], overflow: false },
             };
             out = out.mul(&term);
         }
@@ -127,11 +127,19 @@ impl Lowerer<'_> {
 
     /// Typ mit Einheit und Range in Normalform interniert.
     pub fn float_type(&mut self, width: FloatWidth, unit: &Unit, range: Option<Range>, span: Span) -> Option<TypeId> {
-        let unit = self.unit_id(unit, span);
-        if !unit.is_none() || true {
-            return Some(self.intern(Type::Float { width, unit, range }));
+        // Ein geklemmter Exponent machte zwei nominal verschiedene Einheiten
+        // identisch (3.2); die MIR traegt ihn als `i8`.
+        if unit.overflow {
+            self.error_hint(
+                SC3,
+                span,
+                format!("Einheitenexponent ueberschreitet {}", Unit::MAX_EXPONENT),
+                "Einheit mit kleineren Exponenten waehlen",
+            );
+            return None;
         }
-        None
+        let unit = self.unit_id(unit, span);
+        Some(self.intern(Type::Float { width, unit, range }))
     }
 
     /// `ast::Type` → `TypeId`.

@@ -33,7 +33,7 @@ SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),teilweise
 SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),teilweise
 SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),teilweise
 SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M1 (Kernsemantik),offen
-SEM-3.5,Semantik/Abschnitt,3.5,Qualität von Input-Channels,,M1 (Kernsemantik),offen
+SEM-3.5,Semantik/Abschnitt,3.5,Qualität von Input-Channels,,M1 (Kernsemantik),fertig
 SEM-3.6,Semantik/Abschnitt,3.6,Typinferenz,,M1 (Kernsemantik),teilweise
 SEM-3.7,Semantik/Abschnitt,3.7,Records und Summentypen,,M1 (Kernsemantik),teilweise
 SEM-3.8,Semantik/Abschnitt,3.8,Optionaltyp `T?`,,M1 (Kernsemantik),teilweise
@@ -653,8 +653,9 @@ PAR-5.1-Richtlinie_für_Regelkreise,Absatz/Regel,5.1,Richtlinie für Regelkreise
 PAR-5.3-Statische_Regel,Absatz/Regel,5.3,Statische Regel:,,M1 (Kernsemantik),offen
 PAR-5.6-Interlock,Absatz/Regel,5.6,Interlock,,M1 (Kernsemantik),offen
 PAR-5.6-Permissive,Absatz/Regel,5.6,Permissive,,M1 (Kernsemantik),offen
-PAR-5.6-Alert,Absatz/Regel,5.6,Alert,,M1 (Kernsemantik),offen
-PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),offen
+PAR-5.6-Alert,Absatz/Regel,5.6,Alert,,M1 (Kernsemantik),fertig
+PAR-5.6-Alerts_in_Schleifen,Absatz/Regel,5.6,Alerts in Schleifen,,M1 (Kernsemantik),fertig
+PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),fertig
 PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),offen
 PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M1 (Kernsemantik),offen
 PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M1 (Kernsemantik),offen
@@ -752,7 +753,8 @@ RULE-9.2-raise_sig,exec-Regel,9.2,exec(raise sig),,M1/M2 (Interpreter),fertig
 RULE-9.2-job_v_=_f(args),exec-Regel,9.2,exec(job v = f(args)),,M1/M2 (Interpreter),offen
 RULE-9.2-every_d:_b,exec-Regel,9.2,exec(every d: b),,M1/M2 (Interpreter),fertig
 RULE-9.2-break,exec-Regel,9.2,exec(break),,M1/M2 (Interpreter),fertig
-RULE-9.2-alert_|_log_|_measure_|_verify_|_verdict_...,exec-Regel,9.2,exec(alert | log | measure | verify | verdict ...),,M1/M2 (Interpreter),fertig
+"RULE-9.2-alert_e,_msg",exec-Regel,9.2,"exec(alert e, msg)",,M1/M2 (Interpreter),fertig
+RULE-9.2-log_|_measure_|_verify_|_verdict_...,exec-Regel,9.2,exec(log | measure | verify | verdict ...),,M1/M2 (Interpreter),offen
 DESUGAR-Statement_vor_der_ersten_Zeitgrenze_des_Segments,Desugaring-Regel,6.2,Statement vor der ersten Zeitgrenze des Segments,,M1 (Kernsemantik),fertig
 DESUGAR-check_e_msg_an_Position_p,Desugaring-Regel,6.2,"`check e [, msg]` an Position p",,M1 (Kernsemantik),fertig
 DESUGAR-expect_e_msg,Desugaring-Regel,6.2,"`expect e [, msg]`",,M1 (Kernsemantik),fertig

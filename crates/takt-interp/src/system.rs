@@ -229,8 +229,21 @@ impl Outer for MachineEnv<'_, '_> {
         Ok(self.state.viol.at(site.0, index))
     }
 
-    fn every(&mut self, counter: CounterId, index: &[i64]) -> EvalResult<&mut i64> {
-        Ok(self.state.every_next.at(counter.0, index))
+    fn every(&mut self, counter: CounterId, index: &[i64], start: i64) -> EvalResult<&mut i64> {
+        Ok(self.state.every_next.at_or(counter.0, index, start))
+    }
+
+    fn every_clock(&self, counter: CounterId) -> EvalResult<Value> {
+        let m = &self.loaded.program.machines[self.id.index()];
+        let site = m
+            .layout
+            .every_counters
+            .get(counter.index())
+            .ok_or_else(|| Trap::Bug(format!("every-Zaehler {} fehlt", counter.0)))?;
+        match site.state {
+            Some(_) => Ok(machine::time_in_state(m, self.state, self.tick_ns)),
+            None => self.builtin(Builtin::Now),
+        }
     }
 
     fn builtin(&self, b: Builtin) -> EvalResult<Value> {
@@ -361,14 +374,23 @@ impl<'p> Sim<'p> {
         }
     }
 
+    /// Laesst die Abtastungen um einen Tick altern (3.5). Getrennt von
+    /// `step`, weil der Stimulus des Ticks dazwischen liegt: eine frische
+    /// Lieferung hat das Alter ihres Treibers, nicht schon einen Tick.
+    pub fn age(&mut self) {
+        let program = self.loaded.program;
+        self.image.age_inputs(program, program.config.tick);
+    }
+
     /// Ein System-Tick (9.4).
     pub fn step(&mut self) -> Result<(), Trap> {
         let program = self.loaded.program;
         let tick_ns = program.config.tick;
         self.observations.clear();
         self.tick += 1;
-        // sample(): Alterung, sim-Bindungen (8.3)
-        self.image.age_inputs(program, tick_ns);
+        // sample(): sim-Bindungen (8.3). Die Alterung liegt in `age()` und
+        // laeuft vor dem Stimulus dieses Ticks, damit eine frische Lieferung
+        // mit dem Alter 0 gelesen wird (9.4: `I_k = sample()`).
         self.image.apply_sim_bindings(program);
         // active(k): countdown == 0 (7.2)
         let active: Vec<MachineId> =
@@ -384,10 +406,12 @@ impl<'p> Sim<'p> {
             self.observations.extend(out.into_iter().map(|o| (*id, o)));
             result?;
         }
-        // abort_phase(): Abort und Runtime-Faults wirken im selben Tick (5.4)
+        // abort_phase(): Abort und Runtime-Faults wirken im selben Tick fuer
+        // alle Maschinen, ob aktiv oder nicht (5.4, 9.4).
         if aborted {
-            self.abort_phase(tick_ns)?;
+            self.raise_all();
         }
+        self.abort_phase(tick_ns, &active)?;
         // Zaehler fortschreiben (7.2)
         self.advance_counters(&active);
         // Erhobene Signale als Beobachtung (5.8), bevor sie zurueckgesetzt werden
@@ -410,13 +434,38 @@ impl<'p> Sim<'p> {
         Ok(())
     }
 
-    /// Abort-Phase (5.4, 9.4): jede Maschine nimmt ihren Fault-Pfad.
-    fn abort_phase(&mut self, tick_ns: i64) -> Result<(), Trap> {
+    /// Eine `abort`-Anweisung merkt den Fault fuer alle anderen Maschinen vor
+    /// (`raised[m']`, 5.4). Gelesen wird erst nach allen Schritten, damit die
+    /// Ausfuehrungsreihenfolge irrelevant bleibt (Satz 9.4.1).
+    fn raise_all(&mut self) {
         for id in self.order.clone() {
-            if self.states[id.index()].faulted {
+            let state = &mut self.states[id.index()];
+            if !state.faulted && state.raised.is_none() {
+                state.raised = Some(Fault::new(FaultKind::Abort, "abort", takt_diag::Span::default(), self.tick));
+            }
+        }
+    }
+
+    /// Abort-Phase (5.4, 9.4): jede Maschine mit einem erhobenen Fault, und
+    /// jede inaktive mit einem vorgemerkten Abort- oder Runtime-Fault, nimmt
+    /// ihren Fault-Pfad — im selben Tick, unabhaengig von ihrer Periode.
+    fn abort_phase(&mut self, tick_ns: i64, active: &[MachineId]) -> Result<(), Trap> {
+        for id in self.order.clone() {
+            let state = &mut self.states[id.index()];
+            if state.faulted {
+                state.raised = None;
                 continue;
             }
-            let f = Fault::new(FaultKind::Abort, "abort", takt_diag::Span::default(), self.tick);
+            let raised = state.raised.take();
+            let pending = match (&raised, active.contains(&id), &state.pending) {
+                // Eine aktive Maschine hat ihren vorgemerkten Fault schon im
+                // Schritt zugestellt bekommen (9.6).
+                (None, false, Some(f)) if matches!(f.kind, FaultKind::Abort | FaultKind::Runtime(_)) => {
+                    state.pending.take()
+                }
+                _ => None,
+            };
+            let Some(f) = raised.or(pending) else { continue };
             let mut out = Vec::new();
             let mut env =
                 MachineEnv::new(&self.loaded, id, &mut self.states[id.index()], &mut self.image, &mut out, tick_ns);

@@ -164,7 +164,7 @@ impl Value {
                     FloatWidth::F32 => Value::F32(0.0),
                     FloatWidth::F64 => Value::F64(0.0),
                 };
-                Value::Mat { rows: *rows, cols: *cols, data: vec![zero; (*rows * *cols) as usize] }
+                Value::Mat { rows: *rows, cols: *cols, data: vec![zero; mat_len(*rows, *cols)] }
             }
             Type::Map { .. } => Value::Map(Vec::new()),
             Type::Optional(_) => Value::Optional(None),
@@ -213,6 +213,17 @@ impl Value {
         match width {
             FloatWidth::F32 => Value::F32(x as f32),
             FloatWidth::F64 => Value::F64(x),
+        }
+    }
+
+    /// Ganzzahl in eine Fliesskommabreite, mit genau einer Rundung (4.1).
+    /// Der Umweg ueber f64 rundete zweimal: `9007199791611905 as f64 as f32`
+    /// ergibt 9007199254740992, `as f32` dagegen 9007200328482816. Ein Ziel
+    /// emittiert `sitofp`, also eine Rundung.
+    pub fn float_from_int(width: FloatWidth, x: i128) -> Value {
+        match width {
+            FloatWidth::F32 => Value::F32(x as f32),
+            FloatWidth::F64 => Value::F64(x as f64),
         }
     }
 
@@ -310,4 +321,11 @@ pub type EvalResult<T> = Result<T, Trap>;
 /// Interner Fehler.
 pub fn bug<T>(msg: impl Into<String>) -> EvalResult<T> {
     Err(Trap::Bug(msg.into()))
+}
+
+/// Elementzahl einer Matrix. `rows * cols` als `u32` wickelte um und lieferte
+/// eine falsch dimensionierte Matrix, deren Indizierung dann ausserhalb der
+/// Daten lag; das Speicherbudget begrenzt die Groesse erst ab M3 (3.11).
+pub fn mat_len(rows: u32, cols: u32) -> usize {
+    usize::try_from(u64::from(rows) * u64::from(cols)).unwrap_or(usize::MAX)
 }

@@ -167,7 +167,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
                     ),
                     Type::Vec { .. } => Value::Vec(values),
                     Type::Mat { rows, cols, .. } => {
-                        let mut data = Vec::with_capacity((*rows * *cols) as usize);
+                        let mut data = Vec::with_capacity(crate::value::mat_len(*rows, *cols));
                         for row in values {
                             match row {
                                 Value::Array(items) => data.extend(items),
@@ -540,7 +540,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
                     };
                     acc_v = arith::float_binary(BinaryOp::Add, &acc_v, &term, span, self.tick)?;
                 }
-                let n = Value::float(width, items.len() as f64);
+                let n = Value::float_from_int(width, items.len() as i128);
                 let mean = arith::float_binary(BinaryOp::Div, &acc_v, &n, span, self.tick)?;
                 if acc == Accessor::Rms {
                     arith::finite(width, mean.as_f64().expect("float").sqrt(), span, self.tick)
@@ -569,7 +569,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 Ok(Value::int(*width, x))
             }
             Type::Float { width, .. } => match v {
-                Value::Int(_) | Value::UInt(_) => Ok(Value::float(*width, v.as_int().expect("int") as f64)),
+                Value::Int(_) | Value::UInt(_) => Ok(Value::float_from_int(*width, v.as_int().expect("int"))),
                 Value::F32(_) | Value::F64(_) => arith::finite(*width, v.as_f64().expect("float"), span, self.tick),
                 other => bug(format!("as float auf {}", other.kind_name())),
             },
@@ -595,8 +595,8 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 let width = self.float_width(to_ty);
                 // ns je Einheit = Faktor(U) * 1e9, fuer Zeiteinheiten ganzzahlig.
                 let per = i128::from(dst.factor.num) * 1_000_000_000 / i128::from(dst.factor.den);
-                let a = Value::float(width, ns as f64);
-                let b = Value::float(width, per as f64);
+                let a = Value::float_from_int(width, i128::from(ns));
+                let b = Value::float_from_int(width, per);
                 arith::float_binary(BinaryOp::Div, &a, &b, span, self.tick)
             }
             ConvertKind::To => {
@@ -617,8 +617,8 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 }
                 let num = i128::from(src_unit.factor.num) * i128::from(dst.factor.den);
                 let den = i128::from(src_unit.factor.den) * i128::from(dst.factor.num);
-                let p = Value::float(width, num as f64);
-                let q = Value::float(width, den as f64);
+                let p = Value::float_from_int(width, num);
+                let q = Value::float_from_int(width, den);
                 x = arith::float_binary(BinaryOp::Mul, &x, &p, span, self.tick)?;
                 x = arith::float_binary(BinaryOp::Div, &x, &q, span, self.tick)?;
                 if let Some(off) = dst.affine_offset {

@@ -72,6 +72,7 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
     writer.initial(&sim);
 
     for tick in 1..=options.ticks {
+        sim.age();
         apply_stimulus(&mut sim, stimulus, tick)?;
         sim.step()?;
         collect(&mut writer, &sim, tick, &mut verdict, &mut fail);

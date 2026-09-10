@@ -515,11 +515,13 @@ machine m:
                     count = count + 1
             n = count
 ";
-    let trace = simulate(body, "", 4);
-    // Vier Durchlaeufe je Periode, Perioden bei 0 und 2 und 4.
-    assert!(trace.contains("t=0 out n 4\n"), "erste Periode: {trace}");
-    assert!(trace.contains("t=2 out n 8\n"), "zweite Periode: {trace}");
-    assert!(trace.contains("t=4 out n 12\n"), "dritte Periode: {trace}");
+    let trace = simulate(body, "", 6);
+    // Der Zaehler beginnt bei `d` (5.8), also laeuft der Block erstmals nach
+    // einer vollen Periode: vier Durchlaeufe bei t=2, t=4 und t=6.
+    assert!(!trace.contains("t=0 out n 4"), "nicht im Eintritts-Tick: {trace}");
+    assert!(trace.contains("t=2 out n 4\n"), "erste Periode: {trace}");
+    assert!(trace.contains("t=4 out n 8\n"), "zweite Periode: {trace}");
+    assert!(trace.contains("t=6 out n 12\n"), "dritte Periode: {trace}");
 }
 
 #[test]
@@ -583,6 +585,235 @@ machine m:
     assert!(trace.contains("t=2 out grund OUT_OF_RANGE\n"), "Grund OutOfRange: {trace}");
     assert!(trace.contains("t=3 out used 40.0 bar\n"), "danach wieder gueltig: {trace}");
     assert!(!trace.contains("fault"), "kein Fault am Rand (3.5): {trace}");
+}
+
+#[test]
+fn a_self_transition_leaves_and_reenters_the_state() {
+    // 9.3: der kleinste gemeinsame Vorfahr liegt echt oberhalb des Ziels.
+    // Ohne das war `-> S` aus `S` wirkungslos: kein exit, kein enter, keine
+    // frischen zustandslokalen Variablen, und der Timer lief weiter, sodass
+    // der ausloesende `after`-Trigger danach nie wieder feuerte.
+    let body = "\
+output n : int in 0..100 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        var count : int in 0..100 = 0
+        enter:
+            log \"enter\"
+        loop:
+            count = count + 1
+            n = count
+        after 3 ms: -> RUN
+        exit:
+            log \"exit\"
+";
+    let trace = simulate(body, "", 7);
+    assert!(trace.contains("t=3 log m \"exit\"\n"), "exit beim Wechsel: {trace}");
+    assert!(trace.contains("t=3 log m \"enter\"\n"), "enter beim Wechsel: {trace}");
+    assert!(trace.contains("t=3 out n 1\n"), "zustandslokale Variable neu: {trace}");
+    // Der Timer ist zurueckgesetzt, der Trigger feuert periodisch.
+    assert!(trace.contains("t=6 log m \"enter\"\n"), "zweiter Wechsel: {trace}");
+}
+
+#[test]
+fn an_operator_abort_reaches_an_inactive_machine_in_the_same_tick() {
+    // 5.4: „ob in diesem Tick aktiv oder nicht"; die Latenz ist unabhaengig
+    // von den Maschinenperioden. Vorher wartete der Abort auf die naechste
+    // Aktivierung der Maschine.
+    let body = "\
+output v : bool @ hw(\"o/v\") with safe = false
+
+machine slow every 10 ms:
+    initial RUN
+    state RUN:
+        enter:
+            v = true
+        loop: pass
+";
+    let trace = simulate(body, "t=3 abort\n", 14);
+    assert!(trace.contains("t=3 fault slow Abort"), "im Tick des Aborts: {trace}");
+    assert!(trace.contains("t=3 out v false\n"), "Output beim Commit sicher: {trace}");
+}
+
+#[test]
+fn a_suppressed_abort_is_discarded_not_stored() {
+    // 5.4: „ignoriert weitere Aborts". Wurde der unterdrueckte Abort
+    // aufbewahrt, feuerte er nach der naechsten normalen Transition ohne
+    // neue Operator-Eingabe erneut.
+    let body = "\
+output v : bool @ hw(\"o/v\") with safe = false
+command reset
+
+machine m:
+    fault -> SAFE
+    initial RUN
+    state RUN:
+        enter:
+            v = true
+        loop: pass
+    state SAFE:
+        when reset: -> RUN
+";
+    let trace = simulate(body, "t=1 abort\nt=2 abort\nt=5 cmd reset\n", 9);
+    assert!(trace.contains("t=1 fault m Abort"), "erster Abort: {trace}");
+    assert_eq!(trace.matches("fault m Abort").count(), 1, "genau ein Abort: {trace}");
+    assert!(trace.contains("t=5 state m RUN\n"), "Rueckkehr nach RUN: {trace}");
+    // Nach der Rueckkehr bleibt die Maschine dort; kein alter Abort feuert.
+    let after = trace.split("t=5 state m RUN").nth(1).unwrap_or_default();
+    assert!(!after.contains("Abort"), "alter Abort feuert erneut: {trace}");
+}
+
+#[test]
+fn an_every_in_a_state_never_runs_in_the_entry_tick() {
+    // 5.8: der Zaehler beginnt bei `d`. Mit 0 lief der Block schon im
+    // Eintritts-Tick, und ein Zustand, der kuerzer als `d` aktiv ist, fuehrte
+    // ihn bei jedem Eintritt aus statt nie.
+    let body = "\
+output v : bool @ hw(\"o/v\") with safe = false
+
+machine m:
+    initial A
+    state A:
+        loop:
+            every 4 ms:
+                log \"beat\"
+        after 2 ms: -> B
+    state B:
+        after 2 ms: -> A
+";
+    let trace = simulate(body, "", 16);
+    // A ist nie laenger als 2 ms aktiv, also darf `every 4 ms` nie feuern.
+    assert!(!trace.contains("beat"), "feuert bei jedem Eintritt: {trace}");
+}
+
+#[test]
+fn a_machine_wide_every_keeps_its_period_across_state_changes() {
+    // 5.8: eine Stelle im maschinenweiten `loop:` misst gegen `now`. Mit
+    // `time_in_state` verstummte sie, sobald die Maschine oefter wechselte
+    // als die Periode lang ist.
+    let body = "\
+output v : bool @ hw(\"o/v\") with safe = false
+
+machine m:
+    initial A
+    loop:
+        every 2 ms:
+            log \"mbeat\"
+    state A:
+        enter:
+            v = true
+        after 3 ms: -> B
+    state B:
+        enter:
+            v = false
+        after 3 ms: -> A
+";
+    let trace = simulate(body, "", 14);
+    for t in [2, 4, 6, 8, 10, 12, 14] {
+        assert!(trace.contains(&format!("t={t} log m \"mbeat\"\n")), "Tick {t} fehlt: {trace}");
+    }
+}
+
+#[test]
+fn a_fresh_sample_is_read_with_age_zero() {
+    // 9.4: `I_k = sample()` steht am Tick-Anfang, das Alter einer frischen
+    // Lieferung ist das ihres Treibers. Lag die Alterung hinter dem Stimulus,
+    // war jede Abtastung beim ersten Lesen schon einen Tick alt, und
+    // `max_age` wirkte um einen Tick kuerzer als deklariert.
+    let body = "\
+input  p  : float[bar] in 0..100 bar @ hw(\"d/p\") with max_age = 2 ms
+output a  : Duration                 @ hw(\"o/a\")  with safe = 0 ms
+output st : bool                     @ hw(\"o/st\") with safe = false
+
+machine m:
+    initial S
+    state S:
+        loop:
+            a = p.age
+            st = p.stale
+";
+    let trace = simulate(body, "t=0 in p 1 bar\n", 5);
+    assert!(trace.contains("t=0 out a 0 ns\n"), "frische Abtastung: {trace}");
+    assert!(trace.contains("t=1 out a 1 ms\n"), "{trace}");
+    // Stale, sobald das Alter `max_age` ueberschreitet.
+    assert!(trace.contains("t=3 out st true\n"), "{trace}");
+}
+
+#[test]
+fn a_suspect_sample_also_becomes_stale() {
+    // 3.5 formuliert Stale unbedingt ueber das Alter. Ein entprellter Kanal,
+    // dessen Treiber danach ausfaellt, blieb sonst dauerhaft gueltig und
+    // hielt seinen letzten Wert unbegrenzt.
+    let body = "\
+input  p  : float[bar] in 0..100 bar @ hw(\"d/p\") with max_age = 2 ms
+output st : bool                     @ hw(\"o/st\") with safe = false
+output ok : bool                     @ hw(\"o/ok\") with safe = false
+
+machine m:
+    initial S
+    state S:
+        loop:
+            st = p.stale
+            ok = p.valid
+";
+    let trace = simulate(body, "t=0 in p suspect 5 bar\n", 5);
+    assert!(trace.contains("t=3 out st true\n"), "Suspect altert ebenfalls: {trace}");
+    assert!(trace.contains("t=3 out ok false\n"), "danach ungueltig: {trace}");
+}
+
+#[test]
+fn max_age_defaults_to_twice_the_fastest_reader_period() {
+    // 3.5: ohne Angabe ist der Default das Doppelte der kuerzesten Periode
+    // unter den Lesern. Ohne Default wurde ein toter Sensor nie `Stale`.
+    let body = "\
+input  p  : float[bar] in 0..100 bar @ hw(\"d/p\")
+output st : bool                     @ hw(\"o/st\") with safe = false
+
+machine m every 3 ms:
+    initial S
+    state S:
+        loop:
+            st = p.stale
+";
+    let trace = simulate(body, "t=0 in p 1 bar\n", 12);
+    // Default 6 ms: bei t=9 ist das Alter 9 ms und damit darueber.
+    assert!(!trace.contains("t=6 out st true"), "nicht vor der Grenze: {trace}");
+    assert!(trace.contains("t=9 out st true\n"), "{trace}");
+}
+
+#[test]
+fn an_int_to_float32_conversion_rounds_exactly_once() {
+    // 4.1 und Satz 9.4.4: das Ziel emittiert `sitofp`, also eine Rundung.
+    // Der Umweg ueber f64 rundete zweimal und lieferte fuer Werte ueber 2^53
+    // ein anderes Ergebnis als die uebersetzte Fassung.
+    let src = "\
+system:
+    language = 1
+    tick = 1 ms
+    float = f32
+
+output v : bool @ hw(\"o/v\") with safe = false
+
+machine m:
+    var a : int = 9007199791611905
+    initial S
+    state S:
+        loop:
+            log \"{a as float}\"
+";
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(src, &options);
+    let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(errors.is_empty(), "unerwartete Fehler:\n{}", errors.join("\n"));
+    let program = out.program.expect("Programm");
+    let stim = Trace::parse("").expect("leer");
+    let result = run(&program, &stim, &RunOptions { ticks: 1, ..Default::default() }).expect("Lauf");
+    let trace = result.trace.render();
+    // 9007199791611905 as f32 == 9007200328482816, kuerzeste Darstellung
+    // 9007200000000000; doppelt gerundet waere es 9007199254740992.
+    assert!(trace.contains("\"9007200000000000\""), "{trace}");
 }
 
 #[test]
