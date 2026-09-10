@@ -529,7 +529,7 @@ impl<'p> Sim<'p> {
         let program = self.loaded.program;
         let tick_ns = program.config.tick;
         self.observations.clear();
-        self.image.apply_sim_bindings(program);
+        self.image.apply_sim_bindings(program, 0);
         // Ψ traegt im Tick 0 die Anfangswerte der Variablen, damit die
         // `enter`- und Entry-`loop`-Bloecke sie schon lesen koennen (1.4).
         for id in self.order.clone() {
@@ -717,7 +717,8 @@ impl<'p> Sim<'p> {
         // sample(): sim-Bindungen (8.3). Die Alterung liegt in `age()` und
         // laeuft vor dem Stimulus dieses Ticks, damit eine frische Lieferung
         // mit dem Alter 0 gelesen wird (9.4: `I_k = sample()`).
-        self.image.apply_sim_bindings(program);
+        let now = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(tick_ns);
+        self.image.apply_sim_bindings(program, now);
         // deliver(D_k): interne Streams werden sichtbar, Ueberlauf merkt den
         // Fault fuer jeden Konsumenten vor (9.6).
         self.deliver()?;
@@ -765,6 +766,20 @@ impl<'p> Sim<'p> {
         // Der Treiber holt die gesendeten Bytes ab (8.8).
         for tx in self.image.tx.values_mut() {
             tx.drain();
+        }
+        // Ein Modell liest den Ausgabestrom mit Unit-Delay (8.3): was der
+        // Treiber jetzt abgeholt hat, steht im naechsten Tick im Fenster.
+        let taken: Vec<(ChannelId, Vec<u8>)> = self
+            .image
+            .tx
+            .iter()
+            .filter(|(c, t)| !t.sent.is_empty() && self.image.channel_bufs.contains_key(c))
+            .map(|(c, t)| (*c, t.sent.clone()))
+            .collect();
+        for (c, bytes) in taken {
+            let value = crate::image::element_of(&bytes, program.channels[c.index()].ty, program);
+            let drop_oldest = matches!(program.channels[c.index()].attrs.overflow, Some(Overflow::DropOldest));
+            self.image.push_element(c, now, value, drop_oldest);
         }
         self.image.commit_outputs();
         self.image.clear_commands();

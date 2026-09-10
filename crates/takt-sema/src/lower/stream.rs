@@ -284,18 +284,41 @@ impl Lowerer<'_> {
         // Hoechstlaenge ist statisch bekannt.
         let byte_stream = matches!(self.ty(elem), Type::Int { width, .. } if width.bits() == 8);
         let v = if byte_stream && is_textual(value) {
-            self.expr(value, None)?
+            self.text(value, None)?
         } else if byte_stream {
             let e = self.expr(value, Some(elem))?;
             match self.ty(e.ty) {
                 Type::Bytes { .. } | Type::Str { .. } | Type::Line { .. } => e,
                 _ => self.coerce(e, elem)?,
             }
+        } else if is_textual(value) {
+            // Auch ein Zeilenstrom formatiert in einen festen Puffer (8.8).
+            self.text(value, Some(elem))?
         } else {
             self.check(value, elem)?
         };
         let len_max = self.max_len(&v);
         Some(takt_mir::stmt::StmtKind::Send { stream, value: v, len_max })
+    }
+
+    /// Ein Textliteral als Sendewert (8.8): „formatiert in festen Puffer".
+    /// Ohne Platzhalter bleibt es ein gewoehnliches Literal; mit ihnen wird
+    /// es ein `Format`, dessen Hoechstlaenge statisch feststeht.
+    fn text(&mut self, value: &ast::Expr, want: Option<TypeId>) -> Option<takt_mir::expr::Expr> {
+        let ast::ExprKind::Str(lit) = &value.kind else { return self.expr(value, None) };
+        let f = self.format(lit)?;
+        // Ein Zeilenstrom will `line<N>`, ein Bytestrom nimmt `str<N>`.
+        let ty = |this: &mut Self, len: u32| match want.map(|w| this.ty(w).clone()) {
+            Some(Type::Line { cap }) if cap >= len => want.expect("Ziel"),
+            _ => this.intern(Type::Str { cap: len }),
+        };
+        if let [takt_mir::pattern::FormatPiece::Text(t)] = f.pieces.as_slice() {
+            let (t, len) = (t.clone(), t.len() as u32);
+            let ty = ty(self, len);
+            return Some(takt_mir::expr::Expr::new(ExprKind::Str(t), ty, value.span));
+        }
+        let ty = ty(self, f.len_max);
+        Some(takt_mir::expr::Expr::new(ExprKind::Format(f), ty, value.span))
     }
 
     /// Hoechstlaenge eines Werts in Bytes (8.8): die deklarierte Kapazitaet

@@ -166,6 +166,9 @@ impl<'p, 'o> Ctx<'p, 'o> {
                             .collect::<EvalResult<Vec<_>>>()?,
                     ),
                     Type::Vec { .. } => Value::Vec(values),
+                    // 8.3: ein Modell speist einen oversampelten Kanal mit
+                    // dem Tick-Array (8.9).
+                    Type::Samples { .. } => Value::Samples(values),
                     Type::Mat { rows, cols, .. } => {
                         let mut data = Vec::with_capacity(crate::value::mat_len(*rows, *cols));
                         for row in values {
@@ -285,6 +288,15 @@ impl<'p, 'o> Ctx<'p, 'o> {
             ExprKind::Convert { expr, kind, unit } => {
                 let v = self.eval(expr)?;
                 self.convert(v, *kind, *unit, expr.ty, e.ty, span)
+            }
+            ExprKind::Format(f) => {
+                // 8.8: der Text entsteht in einem festen Puffer; die
+                // Hoechstlaenge steht im Knoten.
+                let text = crate::format::render(f, self);
+                Ok(match self.loaded.ty(e.ty) {
+                    Type::Line { .. } => Value::Line { text, truncated: false },
+                    _ => Value::Str(text),
+                })
             }
             ExprKind::Stream(_) => {
                 // Ein Strom hat keinen Wert; nur seine Zaehler sind lesbar

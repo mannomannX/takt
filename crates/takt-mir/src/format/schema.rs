@@ -138,6 +138,7 @@ codec_enum!(ExprKind {
     39 Err(1 one e),
     40 Intrinsic { 1 one op, 2 rep args },
     41 Stream(1 one s),
+    42 Format(1 one f),
 });
 codec_unit_enum!(Intrinsic {
     0 Abs, 1 Min, 2 Max, 3 Sqrt, 4 Sin, 5 Cos, 6 Tan, 7 Asin, 8 Acos, 9 Atan, 10 Atan2, 11 Exp, 12 Log, 13 Pow,

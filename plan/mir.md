@@ -208,6 +208,7 @@ Checker 150 plus die CSV mit rund 450 Zeilen.
 
 | Datum | Formatversion | Änderung |
 |---|---|---|
+| 2026-09-10 | 3 | `ExprKind::Format(Format)`: ein String mit Platzhaltern als Wert (8.8). Bisher formatierten nur `log`, `check` und `verify`; `send tx, "UPDATE {n}"` sendete den Text mitsamt Klammern. Ein Literal ohne Platzhalter bleibt `Str`. Tag 42. |
 | 2026-09-10 | 3 | `StmtKind::Skip(StreamRef)`: `s.skip()` verwirft das Fenster (8.6). Es war als `Method::Skip` vorgesehen, aber eine Methode braucht eine `Place` als Empfaenger, und ein Strom ist keine Stelle; `Method::Skip` entfaellt darum ersatzlos. Tag 20. |
 | 2026-09-10 | 3 | `ExprKind::Stream(StreamId)`: ein interner Strom als Wert — Subjekt eines Guards und Traeger der Zaehler `.count`, `.dropped`, `.overflowed`, `.malformed` (8.6). Ein Stream-Channel steht als `Input` da; dem internen Strom fehlt die `ChannelId`. Tag 41. |
 | 2026-09-10 | 3 | `Guard::Match::kind`: `MatchKind` unterscheidet `until s matches P` von `until s has P` (8.7); ohne das Feld waeren beide Guards derselbe Knoten. Feld 4, `one`. |

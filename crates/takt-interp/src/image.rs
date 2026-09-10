@@ -11,6 +11,7 @@ use takt_mir::types::Type;
 
 use crate::stream::{Buffer, Delivery};
 use crate::value::{Quality, Reason, Sample, Value};
+use takt_mir::expr::StreamRef;
 
 /// Veroeffentlichte Groessen einer Maschine (Ψ, 9.1).
 #[derive(Clone, Debug, Default)]
@@ -146,6 +147,12 @@ impl Image {
                     channel_bufs.insert(id, Buffer::new(cap, cap_bytes));
                 }
                 Direction::Output => {
+                    // Ein Ausgabestrom, den eine Maschine liest, hat ein
+                    // Fenster wie ein Eingabestrom (8.3, Plant-Modelle).
+                    if p.machines.iter().any(|m| m.layout.cursors.contains(&StreamRef::Channel(id))) {
+                        let cap = c.attrs.capacity.unwrap_or(16);
+                        channel_bufs.insert(id, Buffer::new(cap, cap.saturating_mul(256)));
+                    }
                     // 8.8: „die Simulation leert exakt `max_rate * T0` Bytes
                     // pro Tick". Ohne `max_rate` holt der Treiber alles ab.
                     let per_tick = match rate_hz(c) {
@@ -310,7 +317,7 @@ impl Image {
     /// Speist `sim`-Outputs in die zugehoerigen `hw`-Inputs (8.3, Unit-Delay).
     /// Ein Input, den der Stimulus in diesem Tick gesetzt hat, behaelt seinen
     /// Wert; ohne Stimuluszeile fuehrt die Bindung ihn im naechsten Tick fort.
-    pub fn apply_sim_bindings(&mut self, p: &Program) {
+    pub fn apply_sim_bindings(&mut self, p: &Program, now: i64) {
         let pairs: Vec<(ChannelId, ChannelId)> = self
             .sim_sources
             .iter()
@@ -320,8 +327,28 @@ impl Image {
             if self.driven[inp.index()] {
                 continue;
             }
+            // 8.3: ein simulierter Stream-Input wird per `send` gespeist, nicht
+            // aus einem Latch. Was der Treiber dem `sim`-Ausgabestrom in
+            // diesem Tick abgenommen hat, wird zum Element des `hw`-Inputs;
+            // seine `.t` ist die Commit-Zeit.
+            if matches!(p.types.list.get(p.channels[inp.index()].ty.index()), Some(Type::Stream(_))) {
+                let sent = self.tx.get_mut(&out).map(|t| std::mem::take(&mut t.sent)).unwrap_or_default();
+                if !sent.is_empty() {
+                    let value = element_of(&sent, p.channels[inp.index()].ty, p);
+                    let drop_oldest =
+                        matches!(p.channels[inp.index()].attrs.overflow, Some(takt_mir::program::Overflow::DropOldest));
+                    self.push_element(inp, now, value, drop_oldest);
+                }
+                continue;
+            }
             let value = self.committed[out.index()].clone();
-            self.inputs[inp.index()] = enforce_range(Sample::good(value), inp, p);
+            // 8.9: „fehlende Samples ergeben Qualitaet `Stale`". Ein leeres
+            // Tick-Array heisst, dass der Treiber nichts geliefert hat.
+            let sample = match &value {
+                Value::Samples(items) if items.is_empty() => Sample::bad(Reason::Stale),
+                _ => Sample::good(value),
+            };
+            self.inputs[inp.index()] = enforce_range(sample, inp, p);
         }
         self.driven.iter_mut().for_each(|d| *d = false);
     }
@@ -377,6 +404,22 @@ fn enforce_range(sample: Sample, c: ChannelId, p: &Program) -> Sample {
         return sample;
     }
     Sample { value: None, quality: Quality::Bad, age: sample.age, reason: Some(Reason::OutOfRange) }
+}
+
+/// Deutet die gesendeten Bytes als Element des Zieltyps (8.3). Ein
+/// `line`-Strom traegt Text, jeder andere die Bytes selbst.
+pub fn element_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Value {
+    let elem = match p.types.list.get(ty.index()) {
+        Some(Type::Stream(e)) => *e,
+        _ => return Value::Bytes(bytes.to_vec()),
+    };
+    match p.types.list.get(elem.index()) {
+        Some(Type::Line { .. }) => {
+            Value::Line { text: String::from_utf8_lossy(bytes).trim_end().to_string(), truncated: false }
+        }
+        Some(Type::Str { .. }) => Value::Str(String::from_utf8_lossy(bytes).to_string()),
+        _ => Value::Bytes(bytes.to_vec()),
+    }
 }
 
 /// `max_rate` eines Streams in Hz; nur ein Literal, wie im Sema (8.6).

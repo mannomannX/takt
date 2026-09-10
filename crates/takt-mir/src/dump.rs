@@ -564,6 +564,7 @@ impl Dumper<'_> {
             ExprKind::Ok(e) => format!("OK({})", self.expr(e)),
             ExprKind::Err(e) => format!("ERR({})", self.expr(e)),
             ExprKind::Stream(s) => self.p.streams[s.index()].name.clone(),
+            ExprKind::Format(f) => format!("format({})", self.format(f)),
             ExprKind::Intrinsic { op, args } => format!("{}({})", op.name(), self.args(args)),
         }
     }

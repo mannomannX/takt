@@ -34,6 +34,18 @@ impl Lowerer<'_> {
         if self.same_base(x.ty, ty) {
             return Some(x);
         }
+        // 8.3, 8.9: ein Modell speist einen oversampelten Kanal mit dem
+        // Tick-Array, das der Treiber sonst liefert. Es hat dieselben
+        // Elemente und dieselbe Laenge; nur der Name des Typs unterscheidet
+        // sich, weil `samples` seine Herkunft nennt.
+        if let (Type::Array { elem: a, len: n }, Type::Samples { elem: b, len: m }) =
+            (self.ty(x.ty).clone(), self.ty(ty).clone())
+        {
+            if n == m && self.same_base(a, b) {
+                let span = x.span;
+                return Some(Expr::new(x.kind, ty, span));
+            }
+        }
         if let Type::Optional(inner) = self.ty(ty).clone() {
             if self.same_base(x.ty, inner) {
                 let span = x.span;
@@ -1231,11 +1243,12 @@ impl Lowerer<'_> {
                     span,
                 ))
             }
-            (
-                "t" | "seq" | "text" | "data" | "dropped" | "malformed" | "overflowed" | "free" | "pre" | "post"
-                | "samples" | "rate" | "remaining" | "jitter" | "time_warped",
-                _,
-            ) => {
+            // `capture<T, N>` (8.9, v1.2), gemessener Jitter aus der
+            // Hardware-Konfiguration und `time_warped` (7.5, 8.10) haengen an
+            // Konstrukten, die es noch nicht gibt. Die uebrigen Zugriffe
+            // dieser Liste kennt M2; sie landen hier nur auf einem falschen
+            // Traeger und sind dann ein Typfehler, kein Stufenproblem.
+            ("pre" | "post" | "samples" | "remaining" | "jitter" | "time_warped", _) => {
                 self.stage(span, format!("`.{member}`").as_str(), Stage::V1_1);
                 None
             }
@@ -2077,8 +2090,22 @@ fn unit_hint(this: &Lowerer<'_>, a: TypeId, b: TypeId, rhs: &Expr) -> String {
             };
             format!("meinst du `{text} {}`?", this.program.units[u.index()].name)
         }
+        // 3.2: „Es gibt keine implizite Konversion" — bei gleicher Dimension
+        // ist `.to(U)` die Umrechnung, die der Techniker sehen soll.
+        (Type::Float { unit: Some(x), .. }, Type::Float { unit: Some(y), .. }) if same_dimension(this, *x, *y) => {
+            format!("`.to({})` umrechnen (3.2)", this.program.units[x.index()].name)
+        }
         _ => "beide Seiten muessen denselben Typ haben".into(),
     }
+}
+
+/// Haben zwei Einheiten dieselbe Dimension? Dann trennt sie nur ein Faktor.
+fn same_dimension(this: &Lowerer<'_>, a: takt_mir::UnitId, b: takt_mir::UnitId) -> bool {
+    if a == b {
+        return false;
+    }
+    let (ua, ub) = (this.units.unit_of(a), this.units.unit_of(b));
+    this.units.dimension(&this.program, &ua) == this.units.dimension(&this.program, &ub)
 }
 
 /// Ganzzahltext in jeder Schreibweise.

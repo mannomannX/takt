@@ -179,6 +179,10 @@ impl Checker<'_> {
                 self.expr(expr)
             }
             ExprKind::Stream(s) => self.index(&self.p.streams, s.index(), "Stream", span),
+            ExprKind::Format(f) => {
+                let _ = span;
+                self.format(f)
+            }
             ExprKind::Matches { subject, pattern, binding, .. } => {
                 if let takt_mir::pattern::Pattern::Record { record, fields } = pattern {
                     self.index(&self.p.records, record.index(), "Record", span)?;

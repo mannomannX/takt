@@ -418,6 +418,10 @@ pub enum ExprKind {
         kind: ConvertKind,
         unit: UnitId,
     },
+    /// Ein String mit Platzhaltern (8.8, 2.5): `send tx, "UPDATE {n}"`.
+    /// Ein Literal ohne Platzhalter bleibt `Str`; erst die Interpolation
+    /// braucht die Teilausdruecke.
+    Format(crate::pattern::Format),
     /// Ein interner Stream als Wert (8.6): Subjekt eines Guards und Traeger
     /// der Zaehler `.count`, `.dropped`, `.overflowed`, `.malformed`. Ein
     /// Stream-Channel steht als `Input` da; hier fehlt die `ChannelId`.

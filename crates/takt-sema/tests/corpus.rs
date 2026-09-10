@@ -15,6 +15,19 @@ fn options() -> Options {
     Options { policy: Policy::default(), build: Build::Sim, profile: None }
 }
 
+/// Alle `.takt`-Dateien des Korpus, in stabiler Reihenfolge.
+fn corpus_files() -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for dir in [root(), root().join("ref")] {
+        let entries = std::fs::read_dir(&dir).expect("Korpus lesbar");
+        files.extend(
+            entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "takt")),
+        );
+    }
+    files.sort();
+    files
+}
+
 /// Fehlermeldungen einer Datei.
 fn errors_of(path: &Path) -> Vec<String> {
     let src = std::fs::read_to_string(path).expect("lesbar");
@@ -50,14 +63,7 @@ fn core_corpus_lowers_without_errors() {
 /// erscheinen als Diagnose mit Stufe, nicht als Absturz.
 #[test]
 fn every_corpus_file_lowers_without_panic() {
-    let mut files: Vec<PathBuf> = Vec::new();
-    for dir in [root(), root().join("ref")] {
-        let entries = std::fs::read_dir(&dir).expect("Korpus lesbar");
-        files.extend(
-            entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "takt")),
-        );
-    }
-    files.sort();
+    let files = corpus_files();
     assert!(files.len() > 40, "Korpus gefunden: {}", files.len());
     for path in files {
         let src = std::fs::read_to_string(&path).expect("lesbar");
@@ -81,4 +87,42 @@ fn later_stages_are_reported_with_their_stage() {
         "kein Konstrukt mit Stufe gemeldet:\n{}",
         out.diagnostics.iter().map(|d| format!("{d}")).collect::<Vec<_>>().join("\n")
     );
+}
+
+/// Ende M2 (plan/m2.md, Abschnitt 7): kein M2-Konstrukt meldet noch eine
+/// Stufe. Die Meldungen nannten „v1.1" fuer Konstrukte, die die Grammatik
+/// ohne `@stage` fuehrt — das war eine Umsetzungsschuld, keine Sprachstufe.
+#[test]
+fn no_m2_construct_is_reported_as_a_later_stage() {
+    let m2 = [
+        "Streams",
+        "Fenster ueber Streams",
+        "Muster",
+        "layout",
+        "`send`",
+        "`at`",
+        "`pulse`",
+        "`cancel`",
+        "samples",
+        "`.t`",
+        "`.seq`",
+        "`.text`",
+        "`.data`",
+        "`.count`",
+        "`.dropped`",
+        "`.overflowed`",
+        "`.malformed`",
+        "`.free`",
+    ];
+    let mut found: Vec<String> = Vec::new();
+    for path in corpus_files() {
+        let src = std::fs::read_to_string(&path).expect("lesbar");
+        let out = takt_sema::compile(&src, &options());
+        for d in out.diagnostics.iter().filter(|d| d.stage.is_some()) {
+            if m2.iter().any(|m| d.message.contains(m)) {
+                found.push(format!("{}: {}", path.display(), d.message));
+            }
+        }
+    }
+    assert!(found.is_empty(), "M2-Konstrukte mit Stufenmeldung:\n{}", found.join("\n"));
 }

@@ -1,0 +1,191 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+output vbus_set : float[V] in 0..6 V     @ hw("psu/vset")     with safe = 0 V
+output vbus_en  : bool                   @ hw("psu/enable")   with safe = false
+output reset_n  : bool                   @ hw("gpio/dut_rst") with safe = false  # low = Reset aktiv
+input  i_dut    : samples<float[A], 4>   @ hw("daq1/ai2")     with rate = 4 kHz
+input  dut_log  : stream<line<256>>      @ hw("uart0/rx")     with max_rate = 2000 Hz, framing = lines, overflow = fault
+output dut_tx   : stream<u8>             @ hw("uart0/tx")     with max_rate = 11520 Hz, capacity = 256
+
+command start
+command reset
+
+param VBUS           : float[V] in 3..5.5 V = 5 V
+param BROWNOUT_DELAY : Duration in 2 ms..2 s = 20 ms
+param IMAGE_SIZE     : int in 1..1_000_000 = 65536
+param IMAGE_CRC      : int in 0..0xFFFF_FFFF = 0x1234_5678
+param BOOT_TIMEOUT   : Duration = 2 s
+
+enum Result: NONE, RECOVERED, BRICKED, CORRUPT
+
+machine brownout_test:
+    fault -> SAFE
+    pub var result : Result = NONE
+    var t_power_on : Duration = 0 s
+    initial IDLE
+
+    state IDLE:
+        enter:
+            vbus_en = false
+            reset_n = false
+        when start: -> POWER_ON
+
+    state RUNNING:
+        initial POWER_ON
+        loop:
+            check i_dut.max() < 1.5 A, "DUT overcurrent {i_dut.max()}"
+        on dut_log has "PANIC" as ev:
+            verdict fail "bootloader panic: {ev.text}"
+
+        state POWER_ON:
+            sequence:
+                vbus_set = VBUS
+                vbus_en = true
+                t_power_on = now
+                wait 50 ms
+                reset_n = true
+                until dut_log matches "Boot v{major:int}.{minor:int}" as m timeout BOOT_TIMEOUT
+                measure boot_time = m.t - t_power_on
+                verify m.major >= 2, "bootloader too old: {m.major}.{m.minor}"
+                -> HANDSHAKE
+
+        state HANDSHAKE:
+            sequence:
+                send dut_tx, "UPDATE {IMAGE_SIZE} {IMAGE_CRC:hex}\n"
+                until dut_log matches "READY" timeout 500 ms
+                -> UPDATING
+
+        state UPDATING:
+            var erased : int in 0..255 = 0  # zustandslokal, bei Eintritt 0
+            on dut_log matches "Erasing sector {n:int}" as m:
+                erased = m.n
+                measure erase_seen_at = m.t - t_power_on
+                at m.t + BROWNOUT_DELAY:  # Hardware-genauer Zeitpunkt relativ zur Logzeile
+                    vbus_en = false
+                -> CUTTING
+            on dut_log has "CRC mismatch" as ev:
+                verdict fail "CRC mismatch during update: {ev.text}"
+            after 10 s:
+                verdict fail "no erase observed within 10 s"
+                -> DONE
+
+        state CUTTING:
+            sequence:
+                wait BROWNOUT_DELAY + 20 ms
+                verify i_dut.max() < (10 mA).to(A), "supply still present during brownout: {i_dut.max()}"
+                wait 500 ms
+                reset_n = false
+                vbus_en = true
+                wait 50 ms
+                reset_n = true
+                -> RECOVERY
+
+        state RECOVERY:
+            sequence:
+                until dut_log matches "Boot v{major:int}.{minor:int}" as m timeout BOOT_TIMEOUT else:
+                    result = BRICKED
+                    verdict fail "no boot after brownout"
+                    -> DONE
+                until dut_log matches "Recovery: {outcome:word}" as r timeout 5 s else:
+                    result = CORRUPT
+                    verdict fail "no recovery message"
+                    -> DONE
+                if r.outcome == "OK":
+                    result = RECOVERED
+                    verdict pass "recovered after brownout at {BROWNOUT_DELAY}"
+                else:
+                    result = CORRUPT
+                    verdict fail "recovery state {r.outcome}"
+                -> DONE
+
+    state DONE:
+        enter:
+            vbus_en = false
+        when reset: -> IDLE
+
+    state SAFE:
+        enter:
+            vbus_en = false
+            reset_n = false
+        when reset: -> IDLE
+
+
+# --- Simulationsmodell (8.3) -------------------------------------------
+# Plant-Modelle sind gewoehnliche Maschinen: sie schreiben `sim`-Outputs und
+# lesen die `hw`-Outputs des Steuerprogramms mit Unit-Delay. Das UART-Modell
+# liest darum `dut_tx`, erkennt das `UPDATE`-Kommando und antwortet als
+# Zeilen auf `dut_log` (plan/m2.md 1.10). Damit prueft der Lauf beide
+# Richtungen des Stroms und bleibt in der Sprache.
+
+output dut_log_sim : stream<line<256>>      @ sim("uart0/rx")
+output i_dut_sim   : samples<float[A], 4>   @ sim("daq1/ai2")
+
+# Der Treiber liefert je Tick ein Sample-Fenster (8.9); das Modell liefert
+# einen konstanten Strom je Betriebszustand.
+const IDLE_CURRENT  : [4] float[A] = [0.2 A, 0.2 A, 0.2 A, 0.2 A]
+const ERASE_CURRENT : [4] float[A] = [0.4 A, 0.4 A, 0.4 A, 0.4 A]
+const NO_CURRENT    : [4] float[A] = [0.0 A, 0.0 A, 0.0 A, 0.0 A]
+
+# Der Treiber holt `max_rate * T0` Bytes je Tick ab (8.8); das Kommando aus
+# 8.8 braucht damit zwei Chunks.
+const CMD_CHUNKS : int in 1..255 = 2
+
+machine dut_model:
+    var sector : int in 0..255 = 0
+    var got    : int in 0..255 = 0
+    initial OFF
+
+    # Der Strom haengt am Zustand des Modells: ohne Versorgung fliesst
+    # keiner, im Betrieb der Ruhestrom, beim Loeschen mehr.
+    loop:
+        i_dut_sim = NO_CURRENT if not vbus_en else IDLE_CURRENT
+
+    state OFF:
+        when vbus_en and reset_n: -> BOOTING
+
+    state BOOTING:
+        after 30 ms:
+            send dut_log_sim, "Boot v2.1"
+            -> READY
+        when not vbus_en: -> OFF
+
+    state READY:
+        # `dut_tx` traegt kein `framing`, seine Elemente sind Byte-Chunks
+        # (8.6). Das Modell zaehlt sie und antwortet, sobald das Kommando
+        # vollstaendig angekommen ist.
+        on dut_tx as chunk:
+            got = got + 1
+        when got >= CMD_CHUNKS:
+            send dut_log_sim, "READY"
+            -> ERASING
+        when not vbus_en: -> OFF
+
+    state ERASING:
+        enter:
+            sector = 0
+            got = 0
+        loop:
+            i_dut_sim = ERASE_CURRENT
+            every 20 ms:
+                send dut_log_sim, "Erasing sector {sector}"
+                sector = sector + 1
+        on dut_tx as ignored:
+            pass
+        when not vbus_en: -> DEAD
+
+    # Nach dem Spannungseinbruch bootet das Modell neu und meldet die
+    # Wiederherstellung.
+    state DEAD:
+        when vbus_en and reset_n: -> RECOVERING
+
+    state RECOVERING:
+        after 30 ms:
+            send dut_log_sim, "Boot v2.1"
+            -> RECOVERED
+
+    state RECOVERED:
+        after 10 ms:
+            send dut_log_sim, "Recovery: OK"
+            -> READY

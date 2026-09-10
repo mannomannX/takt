@@ -751,6 +751,11 @@ pub fn for_each_stmt(m: &Machine, f: &mut impl FnMut(&Stmt)) {
 pub fn for_each_stmt_ctx(m: &Machine, f: &mut impl FnMut(&Stmt, u32)) {
     let visit_block = |b: &Block, f: &mut dyn FnMut(&Stmt, u32)| walk_stmts(&b.stmts, 0, f);
     visit_block(&m.loop_block, f);
+    // Ein Handler-Rumpf ist gewoehnlicher Code (8.7): er schreibt Outputs und
+    // liest Channels wie jeder andere Block.
+    for h in &m.handlers {
+        visit_block(&h.body, f);
+    }
     for t in &m.faulted.transitions {
         visit_block(&t.actions, f);
     }
@@ -758,6 +763,9 @@ pub fn for_each_stmt_ctx(m: &Machine, f: &mut impl FnMut(&Stmt, u32)) {
         visit_block(&s.enter, f);
         visit_block(&s.exit, f);
         visit_block(&s.loop_block, f);
+        for h in &s.handlers {
+            visit_block(&h.body, f);
+        }
         for t in &s.transitions {
             visit_block(&t.actions, f);
         }
