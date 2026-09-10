@@ -801,6 +801,48 @@ impl<'p, 'o> Ctx<'p, 'o> {
 
     /// Ort einer Zuweisung als veraenderliche Referenz; Indizes werden vor dem
     /// Zugriff ausgewertet und geprueft (RangeFault).
+    /// Schreibt an eine Stelle (9.2). Ein Byte in `bytes<N>` ist kein
+    /// `Value` und braucht darum einen eigenen Weg; alles andere laeuft
+    /// ueber `place_mut`.
+    pub fn assign(&mut self, place: &Place, value: Value, span: Span) -> EvalResult<()> {
+        if let Place::Index(base, index) = place {
+            let i = self.eval_int(index)?;
+            if matches!(self.place_kind(base, span)?, Some(PlaceKind::Bytes)) {
+                let byte = match value {
+                    Value::UInt(x) => u8::try_from(x).unwrap_or(0),
+                    Value::Int(x) => u8::try_from(x).unwrap_or(0),
+                    other => return bug(format!("Byte erwartet, {} gefunden", other.kind_name())),
+                };
+                let tick = self.tick;
+                let Value::Bytes(b) = self.place_mut(base, span)? else { return bug("Bytes erwartet") };
+                let len = b.len();
+                let Ok(i) = usize::try_from(i) else {
+                    return Err(Trap::Fault(Fault::new(FaultKind::Range, format!("Index {i} negativ"), span, tick)));
+                };
+                let Some(slot) = b.get_mut(i) else {
+                    return Err(Trap::Fault(Fault::new(
+                        FaultKind::Range,
+                        format!("Index {i} ausserhalb 0..{}", len.saturating_sub(1)),
+                        span,
+                        tick,
+                    )));
+                };
+                *slot = byte;
+                return Ok(());
+            }
+        }
+        *self.place_mut(place, span)? = value;
+        Ok(())
+    }
+
+    /// Grobform des Werts an einer Stelle, ohne ihn auszuleihen.
+    fn place_kind(&mut self, place: &Place, span: Span) -> EvalResult<Option<PlaceKind>> {
+        Ok(match self.place_mut(place, span)? {
+            Value::Bytes(_) => Some(PlaceKind::Bytes),
+            _ => None,
+        })
+    }
+
     pub fn place_mut(&mut self, place: &Place, span: Span) -> EvalResult<&mut Value> {
         enum Step {
             Field(u32),
@@ -926,4 +968,10 @@ fn const_value(c: &Const) -> Value {
 
 fn rational(width: FloatWidth, num: i64, den: u64) -> Value {
     Value::float(width, num as f64 / den as f64)
+}
+
+/// Grobform eines Zuweisungsorts, soweit `assign` sie unterscheiden muss.
+enum PlaceKind {
+    /// `bytes<N>`: die Elemente sind Bytes, keine `Value`.
+    Bytes,
 }

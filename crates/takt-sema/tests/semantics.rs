@@ -930,3 +930,54 @@ fn trace_vectors_from_the_specification() {
     }
     assert!(blocks >= 3, "Vektoren gefunden: {blocks}");
 }
+
+#[test]
+fn a_byte_can_be_written_through_its_index() {
+    // 3.9: `b[i] = x` schreibt an eine belegte Stelle, ohne die Laenge zu
+    // aendern. Backpatching (Laengenpraefix, CRC am Ende) braucht genau das.
+    let trace = simulate(
+        "\
+output n : int in 0..99 @ hw(\"o/n\") with safe = 0
+output l : int in 0..99 @ hw(\"o/l\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var b : bytes<8> = default
+            b.push(1)
+            b.push(2)
+            b[0] = 7
+            n = b[0] as int
+            l = b.len as int
+",
+        "",
+        2,
+    );
+    assert!(trace.contains("t=0 out n 7\n"), "das Byte ist geschrieben: {trace}");
+    assert!(trace.contains("t=0 out l 2\n"), "die Laenge bleibt: {trace}");
+}
+
+#[test]
+fn writing_a_byte_beyond_the_length_faults() {
+    // 3.9: derselbe Range-Check wie beim Lesen — ein Index jenseits von `len`
+    // ist ein `RangeFault`, kein stiller Anhang.
+    let trace = simulate(
+        "\
+output n : int in 0..99 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var b : bytes<8> = default
+            b.push(1)
+            b[5] = 7
+            n = 1
+",
+        "",
+        2,
+    );
+    assert!(trace.contains("fault m RangeFault"), "Index jenseits der Laenge: {trace}");
+}
+

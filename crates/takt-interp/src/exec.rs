@@ -54,7 +54,7 @@ impl Ctx<'_, '_> {
         match &s.kind {
             StmtKind::Assign { target, value } => {
                 let v = self.eval(value)?;
-                *self.place_mut(target, span)? = v;
+                self.assign(target, v, span)?;
                 Ok(Out::Normal)
             }
             StmtKind::Check { cond, message, confirm, target, kind, .. } => {
