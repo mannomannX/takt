@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-13: der `hw`-Input hat eine `sim`-Quelle an derselben Adresse.
+
+input  p     : float[bar] in 0..100 bar @ hw("daq1/ai0")
+output p_sim : float[bar]               @ sim("daq1/ai0")
+output v     : bool                     @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = p > 1 bar

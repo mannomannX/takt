@@ -144,7 +144,10 @@ Meldung aus 2.5 („nicht erlaubt: `for` mit Schranke oder `sequence` mit `until
 
 Jede Prüfung SC-n bekommt ein Verzeichnis `corpus-try/checks/SC-n/` mit `ok_*.takt`
 (müssen ohne Diagnose dieses Codes durchlaufen) und `bad_*.takt` mit Zeilenanmerkungen im
-Quelltext, wie die UI-Tests von rustc:
+Quelltext, wie die UI-Tests von rustc. Die Dateien laufen durch `compile`, nicht durch
+`check`: die Prüfungen der MIR-Phase (6 bis 16) entstehen erst mit der MIR, und `compile`
+schließt die Syntax- und Namensprüfungen ein. Mit M1 sind die Verzeichnisse für 7 bis 11
+und 13 bis 16 angelegt (Stand in `plan/m1.md` Abschnitt 9.0):
 
 ```
 record Header:

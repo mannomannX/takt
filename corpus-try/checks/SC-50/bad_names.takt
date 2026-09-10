@@ -6,21 +6,21 @@ system:
     tick     = 10 ms
 
 record Reading:
-    valid : bool  #~ SC-50
+    valid : bool  # ~ SC-50
     flags : u16 with bits:
-        age   : bool at 0  #~ SC-50
+        age   : bool at 0  # ~ SC-50
         ready : bool at 1
 
 enum Msg:
     PING
-    PONG(ok: bool)  #~ SC-50
+    PONG(ok: bool)  # ~ SC-50
 
-input  rx     : stream<line<64>> @ hw("uart0/rx") with max_rate = 100 Hz
-output led : bool @ hw("gpio/do0") with safe = false
+input  rx  : stream<line<64>> @ hw("uart0/rx") with max_rate = 100 Hz
+output led : bool             @ hw("gpio/do0") with safe = false
 
 machine names:
     initial RUN
 
     state RUN:
-        on rx matches "OK {t:int}":  #~ SC-50
+        on rx matches "OK {t:int}":  # ~ SC-50
             led = true

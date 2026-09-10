@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-9: der Guard aus FAULTED liest einen Channel ohne `.valid` (5.3).
+
+input  p     : float[bar] in 0..100 bar @ hw("d/p")
+output p_sim : float[bar]               @ sim("d/p")
+output v     : bool                     @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = true
+
+    state FAULTED:
+        when p < 2 bar: -> RUN  # ~ SC-9

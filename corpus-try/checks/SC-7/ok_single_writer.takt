@@ -1,0 +1,22 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-7: jeder Output hat genau eine schreibende Maschine, jede Adresse eine Bindung.
+
+output a : bool @ hw("o/a") with safe = false
+output b : bool @ hw("o/b") with safe = false
+
+machine one:
+    initial RUN
+
+    state RUN:
+        loop:
+            a = true
+
+machine two:
+    initial RUN2
+
+    state RUN2:
+        loop:
+            b = true

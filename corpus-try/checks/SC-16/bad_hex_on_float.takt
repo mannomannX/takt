@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-16: `hex` gilt nur fuer Ganzzahlen.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    var f : float[bar] = 2.5 bar
+    initial RUN
+
+    state RUN:
+        loop:
+            log "Druck {f:hex}"  # ~ SC-16
+            v = true

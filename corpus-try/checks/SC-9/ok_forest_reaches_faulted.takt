@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-9: jeder Fault-Pfad endet bei FAULTED, die Guards aus FAULTED sind rein.
+
+output v : bool @ hw("o/v") with safe = false
+command reset
+
+machine m:
+    fault -> SAFE
+    initial RUN
+
+    state RUN:
+        loop:
+            check true, "immer erfuellt"
+
+    state SAFE:
+        loop:
+            pass
+
+    state FAULTED:
+        when reset: -> RUN

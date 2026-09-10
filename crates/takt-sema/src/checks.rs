@@ -18,6 +18,11 @@ use crate::lower::Lowerer;
 
 /// Single-Writer, Richtung, Bindungen.
 pub const SC7: &str = "SC-7";
+/// Pruefung 25: Definite Assignment zustandslokaler und gehobener Variablen
+/// je Eintritt. Pruefung 6 ist die allgemeine Regel; in M1 ist keine von
+/// beiden ausloesbar, weil jedes `var` einen Initialisierer traegt und die
+/// einzige uninitialisierte Bindung aus `until … matches` (M2) stammt.
+pub const SC25: &str = "SC-25";
 /// Maschinenregeln.
 pub const SC8: &str = "SC-8";
 /// Fault-Wald.
@@ -30,7 +35,10 @@ pub const SC11: &str = "SC-11";
 pub const SC13: &str = "SC-13";
 /// Ungenutzte Channels.
 pub const SC15: &str = "SC-15";
-/// Definite Assignment.
+/// Definite Assignment (allgemeine Regel). Noch ohne Fundstelle: jedes `var`
+/// traegt einen Initialisierer (2.3, `var_decl`), und die einzige
+/// uninitialisierte Bindung kommt aus `until … matches` (M2). Der Fall der
+/// gehobenen Sequenzvariablen laeuft unter [`SC25`].
 pub const SC6: &str = "SC-6";
 
 impl Lowerer<'_> {
@@ -363,8 +371,9 @@ impl Lowerer<'_> {
         self.diags.extend(diags);
     }
 
-    /// Pruefungen 6 und 25: eine gehobene Variable wird in einem Segment
-    /// gelesen, bevor ein frueheres sie zuweist.
+    /// Pruefung 25: eine gehobene Variable wird in einem Segment gelesen,
+    /// bevor ein frueheres sie zuweist. Pruefung 6 ist die allgemeine Regel
+    /// derselben Flussanalyse (10, Zeilen 6 und 25).
     fn check_definite_assignment(&mut self) {
         let mut diags = Vec::new();
         for m in &self.program.machines {
@@ -403,7 +412,7 @@ fn check_seq_items(
                         if lifted.contains(v) && !assigned.contains(v) {
                             diags.push(
                                 Diagnostic::error(
-                                    SC6,
+                                    SC25,
                                     e.span,
                                     format!("`{}` wird gelesen, bevor sie zugewiesen ist", m.vars[v.index()].name),
                                 )

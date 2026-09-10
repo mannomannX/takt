@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-14: `5 ms` ist kein Vielfaches der Periode von 2 ms.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m every 2 ms:
+    initial A
+
+    state A:
+        after 5 ms: -> B  # ~ SC-14
+
+    state B:
+        enter:
+            v = true
+        after 4 ms: -> A

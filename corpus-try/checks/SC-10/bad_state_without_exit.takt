@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-10: `RUN` hat keinen Ausgang und ist nicht endgueltig gemeint.
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial IDLE
+
+    state IDLE:
+        when go: -> RUN
+
+    state RUN:  # ~ SC-10
+        loop:
+            v = true

@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-10: jeder Zustand ist erreichbar, jeder hat einen Ausgang oder ist endgueltig.
+
+output v : bool @ hw("o/v") with safe = false
+command go
+command back
+
+machine m:
+    initial IDLE
+
+    state IDLE:
+        when go: -> RUN
+
+    state RUN:
+        enter:
+            v = true
+        when back: -> IDLE

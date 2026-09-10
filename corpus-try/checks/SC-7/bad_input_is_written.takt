@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-7: ein Input ist nicht beschreibbar (Channel-Richtung).
+
+input  p     : float[bar] in 0..100 bar @ hw("d/p")
+output p_sim : float[bar]               @ sim("d/p")
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            p = 1 bar  # ~ SC-7

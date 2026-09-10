@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: das Transitionsziel gibt es nicht.
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial IDLE
+
+    state IDLE:
+        when go: -> NOWHERE  # ~ SC-8
+
+    state RUN:
+        loop:
+            v = true

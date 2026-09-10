@@ -1,7 +1,7 @@
 # SC-49: unbekannte Edition.
 
 system:
-    language = 9  #~ SC-49
+    language = 9  # ~ SC-49
     tick     = 10 ms
 
 output led : bool @ hw("gpio/led") with safe = false

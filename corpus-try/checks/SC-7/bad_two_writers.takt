@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-7: zwei Maschinen schreiben denselben Output.
+
+output a : bool @ hw("o/a") with safe = false
+
+machine one:
+    initial RUN
+
+    state RUN:
+        loop:
+            a = true
+
+machine two:
+    initial RUN2
+
+    state RUN2:
+        loop:
+            a = false  # ~ SC-7

@@ -1,0 +1,25 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-9: die Fault-Ziele bilden einen Zyklus, FAULTED ist unerreichbar.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        fault -> A
+        loop:
+            check true, "x"
+
+    state A:  # ~ SC-9
+        fault -> B
+        loop:
+            v = true
+
+    state B:  # ~ SC-9
+        fault -> A
+        loop:
+            v = false

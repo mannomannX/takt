@@ -12,13 +12,13 @@ machine boot:
 
     state RUN:
         loop:
-            match boot_reason:  #~ SC-51
+            match boot_reason:  # ~ SC-51
                 case POWER_ON:
                     led = true
                 case WATCHDOG:
                     led = false
-            match last_fault.kind:  #~ SC-51
-                case Timeout:
+            match last_fault.kind:  # ~ SC-51
+                case TIMEOUT:
                     led = false
-                case Abort:
+                case ABORT:
                     led = true

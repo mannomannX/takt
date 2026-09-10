@@ -2,11 +2,19 @@
 //! Verzeichnis `corpus-try/checks/SC-n/` mit `ok_*.takt` (keine Diagnose dieses
 //! Codes) und `bad_*.takt` mit Zeilenanmerkungen `#~ SC-n` (dieselbe Zeile) oder
 //! `#~^ SC-n` (die Zeile davor). Andere Codes werden nicht bewertet.
+//!
+//! Der Formatter normiert `#Text` zu `# Text` (F7), aus `#~` wird also `# ~`;
+//! beide Schreibweisen gelten, damit die Korpusdateien kanonisch bleiben.
+//!
+//! Die Dateien laufen durch `compile`, nicht durch `check`: die Pruefungen 6
+//! bis 16 entstehen erst mit der MIR, und `compile` schliesst die Syntax- und
+//! Namenspruefungen ein.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use takt_diag::{Policy, SourceMap};
+use takt_sema::{Build, Options};
 
 fn root() -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/checks"))
@@ -16,8 +24,13 @@ fn root() -> PathBuf {
 fn expectations(src: &str, code: &str) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
     for (i, line) in src.lines().enumerate() {
-        let Some(pos) = line.find("#~") else { continue };
-        let rest = line[pos + 2..].trim();
+        let (pos, skip) = match (line.find("#~"), line.find("# ~")) {
+            (Some(a), Some(b)) if b < a => (b, 3),
+            (Some(a), _) => (a, 2),
+            (None, Some(b)) => (b, 3),
+            (None, None) => continue,
+        };
+        let rest = line[pos + skip..].trim();
         let (up, rest) = match rest.strip_prefix('^') {
             Some(r) => (true, r.trim()),
             None => (false, rest),
@@ -44,7 +57,8 @@ fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>) {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
         let src = std::fs::read_to_string(&path).expect("lesbar");
         let map = SourceMap::single(name.as_str(), src.as_str());
-        let checked = takt_sema::check(&src, Policy::default());
+        let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+        let checked = takt_sema::compile(&src, &options);
         let actual: BTreeSet<u32> =
             checked.diagnostics.iter().filter(|d| d.code == code).map(|d| map.line_col(d.span).0).collect();
         if name.starts_with("ok_") {
@@ -80,7 +94,7 @@ fn every_check_directory_passes() {
         .filter(|p| p.is_dir())
         .collect();
     dirs.sort();
-    assert!(dirs.len() >= 3, "zu wenige Pruefverzeichnisse");
+    assert!(dirs.len() >= 12, "zu wenige Pruefverzeichnisse: {}", dirs.len());
     let mut failures = Vec::new();
     for dir in dirs {
         let code = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();

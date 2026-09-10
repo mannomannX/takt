@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-16: eine Nachkommastelle gilt nur fuer Fliesskommazahlen.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    var k : int in 0..100 = 3
+    initial RUN
+
+    state RUN:
+        loop:
+            log "Zaehler {k:.2}"  # ~ SC-16
+            v = true

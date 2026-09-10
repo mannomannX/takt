@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: ein Aktionsblock darf kein `check` enthalten (5.5).
+
+input  p     : float[bar] in 0..100 bar @ hw("d/p")
+output p_sim : float[bar]               @ sim("d/p")
+output v     : bool                     @ hw("o/v") with safe = false
+
+machine m:
+    initial IDLE
+
+    state IDLE:
+        enter:
+            check p < 50 bar, "zu hoch"  # ~ SC-8
+        loop:
+            v = true

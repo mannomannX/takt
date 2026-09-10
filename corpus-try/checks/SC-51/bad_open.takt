@@ -19,14 +19,14 @@ machine dispatch:
 
     state RUN:
         loop:
-            match cmd_in:  #~ SC-51
+            match cmd_in:  # ~ SC-51
                 case NOP:
                     led = false
                 case GO:
                     led = true
                 case STOP:
                     led = false
-            match last:  #~ SC-51
+            match last:  # ~ SC-51
                 case GO:
                     led = true
                 case STOP:

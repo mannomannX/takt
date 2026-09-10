@@ -18,7 +18,7 @@ enum Result:
     ERR(code: u8)
 
 input  rx  : stream<line<64>> @ hw("uart0/rx") with max_rate = 100 Hz
-output led : bool @ hw("gpio/led") with safe = false
+output led : bool             @ hw("gpio/led") with safe = false
 
 machine names:
     initial RUN

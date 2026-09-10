@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-16: jeder Platzhalter ist formatierbar, jede Formatangabe passt zum Typ.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    var k : int in 0..100 = 3
+    var f : float[bar] = 2.5 bar
+    initial RUN
+
+    state RUN:
+        loop:
+            log "Zaehler {k}, Maske {k:hex}, Druck {f:.2}"
+            v = true

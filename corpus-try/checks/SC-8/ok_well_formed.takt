@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: eindeutige Namen, `initial` vorhanden, Ziele existieren, Transitionsblock endet mit `->`.
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial IDLE
+
+    state IDLE:
+        when go:
+            v = true
+            -> RUN
+
+    state RUN:
+        loop:
+            pass

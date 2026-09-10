@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-7: dieselbe `hw`-Adresse ist zweimal gebunden.
+
+output a : bool @ hw("o/a") with safe = false
+output b : bool @ hw("o/a") with safe = false  # ~ SC-7
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            a = true
+            b = true

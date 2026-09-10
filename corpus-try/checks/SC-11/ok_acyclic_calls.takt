@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-11: der Aufrufgraph ist azyklisch, `step` laeuft einmal je Aktivierung.
+
+fn double(x: int in 0..100) -> int in 0..200:
+    return x * 2
+
+output n : int in 0..200 @ hw("o/n") with safe = 0
+
+machine m:
+    var k : int in 0..100 = 3
+    initial RUN
+
+    state RUN:
+        loop:
+            n = double(k)

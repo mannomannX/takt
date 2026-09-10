@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-15: der Input wird nie gelesen, der Output nie geschrieben.
+
+input  p     : float[bar] in 0..100 bar @ hw("d/p")  # ~ SC-15
+output p_sim : float[bar]               @ sim("d/p")
+output idle  : bool                     @ hw("o/idle") with safe = false  # ~ SC-15
+output v     : bool                     @ hw("o/v")    with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = true

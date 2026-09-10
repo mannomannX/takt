@@ -11,6 +11,7 @@ use takt_mir::*;
 use takt_syntax::ast;
 
 use super::{BlockKind, Lowerer, SC3, SC8, is_literal};
+use crate::checks::SC7;
 
 /// Methoden, die ihren Empfaenger veraendern: sie sind Anweisungen, nie Teil
 /// eines Ausdrucks (4.4, 5.7).
@@ -386,8 +387,9 @@ impl Lowerer<'_> {
                 Entity::Channel(c) => {
                     let ch = &self.program.channels[c.index()];
                     if ch.dir == takt_mir::program::Direction::Input {
+                        // Die Channel-Richtung gehoert zu Pruefung 7 (10).
                         self.error_hint(
-                            SC3,
+                            SC7,
                             e.span,
                             format!("Input `{}` ist nicht beschreibbar", name.name),
                             "Inputs kommen von der Hardware oder einem `sim`-Output",

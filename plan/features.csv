@@ -59,18 +59,18 @@ SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M6,offen
 SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,offen
 SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,offen
 SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),teilweise
-SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),teilweise
+SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),fertig
 SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),teilweise
 SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),fertig
 SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig
 SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),offen
 SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M1 (Kernsemantik),offen
 SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),offen
-SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M2 (Ströme),offen
+SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M2 (Ströme),teilweise
 SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M2 (Ströme),offen
-SEM-8.3,Semantik/Abschnitt,8.3,Simulation und HIL,,M2 (Ströme),offen
-SEM-8.4,Semantik/Abschnitt,8.4,Parameter und Profile,,M2 (Ströme),offen
-SEM-8.5,Semantik/Abschnitt,8.5,Commands und Operator-Interaktion,,M2 (Ströme),offen
+SEM-8.3,Semantik/Abschnitt,8.3,Simulation und HIL,,M2 (Ströme),fertig
+SEM-8.4,Semantik/Abschnitt,8.4,Parameter und Profile,,M2 (Ströme),fertig
+SEM-8.5,Semantik/Abschnitt,8.5,Commands und Operator-Interaktion,,M2 (Ströme),fertig
 SEM-8.6,Semantik/Abschnitt,8.6,Ereignisströme (`stream<E>`),,M2 (Ströme),offen
 SEM-8.7,Semantik/Abschnitt,8.7,"Muster, Captures, Handler",,M2 (Ströme),offen
 SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),offen
@@ -536,17 +536,17 @@ SC-2,Statische Prüfung,10,"Namensauflösung, Modul-Linking, Namenskonventionen"
 SC-3,Statische Prüfung,10,"Typ- und Einheiteninferenz, affine Regeln, Duration-Regeln",F,M3 (Gate),teilweise
 SC-4,Statische Prüfung,10,"Intervallanalyse: Ranges, Division, Overflow, Index; implizite Prüfungen",W bei jeder eingefügten Laufzeitprüfung (außer i64-Overflow),M3 (Gate),offen
 SC-5,Statische Prüfung,10,Validitäts-Dominanz für Channel-Lesen,— (impliziter Check ist Default),M3 (Gate),teilweise
-SC-6,Statische Prüfung,10,Definite Assignment,F,M3 (Gate),teilweise
-SC-7,Statische Prüfung,10,Single-Writer für Outputs und `pub var`; Channel-Richtung; jede `hw`-Adresse höchstens einmal gebunden,F,M3 (Gate),teilweise
-SC-8,Statische Prüfung,10,"Maschinen: eindeutige Zustandsnamen, `initial` vorhanden, Ziele existieren, Transitionsblöcke enden mit `->`, Aktionsblock-Einschränkungen (5.5)",F,M3 (Gate),teilweise
-SC-9,Statische Prüfung,10,Fault-Wald azyklisch; `FAULTED` erreichbar; Guards der Transitionen aus `FAULTED` ohne implizite Prüfungen,F,M3 (Gate),teilweise
-SC-10,Statische Prüfung,10,Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige,W,M3 (Gate),teilweise
-SC-11,Statische Prüfung,10,Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick,F,M3 (Gate),teilweise
+SC-6,Statische Prüfung,10,Definite Assignment,F,M3 (Gate),offen
+SC-7,Statische Prüfung,10,Single-Writer für Outputs und `pub var`; Channel-Richtung; jede `hw`-Adresse höchstens einmal gebunden,F,M3 (Gate),fertig
+SC-8,Statische Prüfung,10,"Maschinen: eindeutige Zustandsnamen, `initial` vorhanden, Ziele existieren, Transitionsblöcke enden mit `->`, Aktionsblock-Einschränkungen (5.5)",F,M3 (Gate),fertig
+SC-9,Statische Prüfung,10,Fault-Wald azyklisch; `FAULTED` erreichbar; Guards der Transitionen aus `FAULTED` ohne implizite Prüfungen,F,M3 (Gate),fertig
+SC-10,Statische Prüfung,10,Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige,W,M3 (Gate),fertig
+SC-11,Statische Prüfung,10,Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick,F,M3 (Gate),fertig
 SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M3 (Gate),offen
-SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle,F,M3 (Gate),teilweise
-SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),teilweise
-SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden",W,M3 (Gate),teilweise
-SC-16,Statische Prüfung,10,"Format-Strings: Platzhalter existieren, Typen formatierbar, Puffergröße",F,M3 (Gate),teilweise
+SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle,F,M3 (Gate),fertig
+SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),fertig
+SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden",W,M3 (Gate),fertig
+SC-16,Statische Prüfung,10,"Format-Strings: Platzhalter existieren, Typen formatierbar, Puffergröße",F,M3 (Gate),fertig
 SC-17,Statische Prüfung,10,Streams: `MAXPT * n_m <= CAP` je Konsument; Konsumentenmenge statisch; Elementtyp zulässig; `wake`-Attribute,F,M3 (Gate),offen
 SC-18,Statische Prüfung,10,"Muster: Wohlgeformtheit, Mehrdeutigkeitsregel (8.7), Capture-Typen; Record-Muster nur mit konstanten Feldwerten",F,M3 (Gate),offen
 SC-19,Statische Prüfung,10,`match` erschöpfend; Variantenfelder vollständig gebunden,F,M3 (Gate),teilweise
@@ -687,9 +687,9 @@ PAR-8.7-Operatoren,Absatz/Regel,8.7,Operatoren,,M2 (Ströme),offen
 PAR-8.7-Handler,Absatz/Regel,8.7,Handler,,M2 (Ströme),offen
 PAR-8.7-Sequenzen_und_Übergänge,Absatz/Regel,8.7,Sequenzen und Übergänge,,M2 (Ströme),offen
 PAR-8.7-Garantien_und_Budget,Absatz/Regel,8.7,Garantien und Budget,,M2 (Ströme),offen
-THM-Lemma-9.3.1,Satz/Lemma,9.3.1,Lemma 9.3.1,,M1/M2 (Interpreter),offen
-THM-Satz-9.4.1,Satz/Lemma,9.4.1,Satz 9.4.1,,M1/M2 (Interpreter),offen
-THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),offen
+THM-Lemma-9.3.1,Satz/Lemma,9.3.1,Lemma 9.3.1,,M1/M2 (Interpreter),fertig
+THM-Satz-9.4.1,Satz/Lemma,9.4.1,Satz 9.4.1,,M1/M2 (Interpreter),fertig
+THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),offen
 PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 (Interpreter),offen
 THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M1/M2 (Interpreter),offen
@@ -754,7 +754,7 @@ RULE-9.2-job_v_=_f(args),exec-Regel,9.2,exec(job v = f(args)),,M1/M2 (Interprete
 RULE-9.2-every_d:_b,exec-Regel,9.2,exec(every d: b),,M1/M2 (Interpreter),fertig
 RULE-9.2-break,exec-Regel,9.2,exec(break),,M1/M2 (Interpreter),fertig
 "RULE-9.2-alert_e,_msg",exec-Regel,9.2,"exec(alert e, msg)",,M1/M2 (Interpreter),fertig
-RULE-9.2-log_|_measure_|_verify_|_verdict_...,exec-Regel,9.2,exec(log | measure | verify | verdict ...),,M1/M2 (Interpreter),offen
+RULE-9.2-log_|_measure_|_verify_|_verdict_...,exec-Regel,9.2,exec(log | measure | verify | verdict ...),,M1/M2 (Interpreter),fertig
 DESUGAR-Statement_vor_der_ersten_Zeitgrenze_des_Segments,Desugaring-Regel,6.2,Statement vor der ersten Zeitgrenze des Segments,,M1 (Kernsemantik),fertig
 DESUGAR-check_e_msg_an_Position_p,Desugaring-Regel,6.2,"`check e [, msg]` an Position p",,M1 (Kernsemantik),fertig
 DESUGAR-expect_e_msg,Desugaring-Regel,6.2,"`expect e [, msg]`",,M1 (Kernsemantik),fertig
@@ -847,11 +847,11 @@ CLI-bench,Werkzeug,11.1,takt bench,,M3/M4,offen
 CLI-tune,Werkzeug,11.1,takt tune,,M3/M4,offen
 CLI-migrate,Werkzeug,11.1,takt migrate,,M3/M4,offen
 CLI-import-c,Werkzeug,11.1,takt import-c,,M3/M4,offen
-EX-14.1,Beispiel (Golden-Test),14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,je Meilenstein,offen
-EX-14.2,Beispiel (Golden-Test),14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,je Meilenstein,offen
-EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,je Meilenstein,offen
-EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,je Meilenstein,offen
-EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,je Meilenstein,offen
+EX-14.1,Beispiel (Golden-Test),14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,je Meilenstein,teilweise
+EX-14.2,Beispiel (Golden-Test),14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,je Meilenstein,teilweise
+EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,je Meilenstein,teilweise
+EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,je Meilenstein,teilweise
+EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,je Meilenstein,teilweise
 EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,je Meilenstein,offen
 EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,je Meilenstein,offen
 EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,je Meilenstein,offen

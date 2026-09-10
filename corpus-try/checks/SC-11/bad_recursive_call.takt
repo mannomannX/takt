@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-11: die Funktion ruft sich selbst auf.
+
+fn countdown(x: int in 0..100) -> int in 0..100:  # ~ SC-11
+    if x == 0:
+        return 0
+    return countdown(x - 1)
+
+output n : int in 0..100 @ hw("o/n") with safe = 0
+
+machine m:
+    var k : int in 0..100 = 3
+    initial RUN
+
+    state RUN:
+        loop:
+            n = countdown(k)

@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-10: `ORPHAN` ist von keinem Zustand aus erreichbar.
+
+output v : bool @ hw("o/v") with safe = false
+command go
+command back
+
+machine m:
+    initial IDLE
+
+    state IDLE:
+        when go: -> RUN
+
+    state RUN:
+        enter:
+            v = true
+        when back: -> IDLE
+
+    state ORPHAN:  # ~ SC-10
+        when go: -> IDLE
