@@ -14,3 +14,4 @@ n03_reserved_names.takt,2,Semantikfehler (Pruefung 50),"2.5 reservierte Woerter 
 n04_missing_initial.takt,1,Parser-/Semantikfehler (Pruefung 8),"2.3 machine_body","strukturell erkennbar"
 n05_open_enum_match.takt,3,Semantikfehler (Pruefungen 19 und 51),"2.5 offene Enums, 3.7 erschoepfendes match","braucht Sema; der Rauchtest meldet ok"
 10_nuances.takt,4,parse ok,"alle Schreibweisen aus coverage.py, die in keiner anderen Datei vorkommen","Abdeckungsdatei; Semantik zweitrangig"
+11_foc_drive.takt,5,parse ok + sema ok,"tick_source, float = f32, output_timing = boundary, block mit zwei Einheitenvariablen, explizite Instanziierung pi_reg[A, 1/s], Tunables als Instanzargumente, every in loop (Kaskade), check ... for, persist var in Aktionsblock","aus einer KI-generierten Datei; einzige Abweichung war Enum.VARIANTE"

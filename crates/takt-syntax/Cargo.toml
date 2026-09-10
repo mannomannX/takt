@@ -1,0 +1,12 @@
+[package]
+name = "takt-syntax"
+version = "0.1.0"
+description = "Takt: Tokenizer, Parser, AST und Formatter (Referenz 2.1 bis 2.3, grammar/)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -311,7 +311,13 @@ def main(argv):
             failures += 1
             continue
         if show_tokens:
-            print(" ".join(repr(t) for t in tokens))
+            # ART<TAB>Text<TAB>~ wie crates/takt-syntax/examples/tokens.rs, fuer den Differenzvergleich
+            for t in tokens:
+                text = "" if t.kind in ("NEWLINE", "INDENT", "DEDENT") else t.text
+                kind = {"OP>": "Op", "OP": "Op", "UPPER": "UpperIdent", "TYPE": "TypeIdent", "KW": "Keyword",
+                        "STRING": "Str", "DURATION": "Duration"}.get(t.kind, t.kind.capitalize())
+                print(f"{kind}	{text}")
+            print("Eof	")
         bad = [t for t in tokens if t.kind == "RESERVED"]
         if bad:
             t = bad[0]

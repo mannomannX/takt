@@ -1,0 +1,308 @@
+# ==============================================================================
+# 11 — Feldorientierte Regelung (FOC) fuer PMSM/BLDC: Kaskade aus Drehzahl- und
+#      Stromregler, Blockinstanzen mit expliziter Einheiteninstanziierung, Tunables
+#      in Instanzargumenten, every in loop, thermische Bestaetigungszeiten.
+# ==============================================================================
+# Modell: 3-Phasen-Synchronmotor mit Space-Vector-PWM (SVPWM), Strom- und
+# Drehzahlkaskade, Phasenstromüberwachung, thermischer Entprellung und Safe-State.
+# ==============================================================================
+
+system:
+    language = 1
+    tick = 50 us
+    float = f32
+    output_timing = boundary
+    tick_source = hw("tim1/update")
+
+# ------------------------------------------------------------------------------
+# Einheiten & Typdefinitionen
+# ------------------------------------------------------------------------------
+
+unit rad = 1
+unit rpm = 0.104719755 1/s
+
+enum MotorState:
+    STANDBY
+    ALIGNMENT
+    CLOSED_LOOP
+    BRAKING
+    SAFE_FAULT
+
+record AlphaBetaCurrent:
+    alpha: float[A]
+    beta: float[A]
+
+record DqCurrent:
+    d: float[A]
+    q: float[A]
+
+record AlphaBetaVoltage:
+    alpha: float[V]
+    beta: float[V]
+
+record PhaseDuties:
+    u: float in 0..1
+    v: float in 0..1
+    w: float in 0..1
+
+# ------------------------------------------------------------------------------
+# Hardware-Channels
+# ------------------------------------------------------------------------------
+
+# Analoge Messgroessen (ADC / Stromsensoren, DC-Link, Encoder, NTC)
+input i_u           : float[A] in -45..45 A       @ hw("adc1/i_u")     with max_age = 100 us
+input i_v           : float[A] in -45..45 A       @ hw("adc1/i_v")     with max_age = 100 us
+input v_dc          : float[V] in 0..60 V         @ hw("adc1/v_dc")    with max_age = 200 us
+input theta_elec    : float in 0..6.2831853       @ hw("enc0/theta_e") with max_age = 100 us
+input omega_mech    : float[1/s] in -1200..1200 1/s @ hw("enc0/omega") with max_age = 200 us
+input temp_inverter : float[degC] in -40..150 degC @ hw("ntc0/temp")   with max_age = 100 ms
+input temp_motor    : float[degC] in -40..180 degC @ hw("ntc1/temp")   with max_age = 100 ms
+
+# Digitale Aktuatorausgaenge & PWM-Halbbrücken
+output gate_en      : bool                        @ hw("drv/gate_en")  with safe = false
+output pwm_u        : float in 0..1               @ hw("tim1/ch1_duty") with safe = 0
+output pwm_v        : float in 0..1               @ hw("tim1/ch2_duty") with safe = 0
+output pwm_w        : float in 0..1               @ hw("tim1/ch3_duty") with safe = 0
+output brake_relay  : bool                        @ hw("gpio/brake")   with safe = false
+
+# Operator-Kommandos
+command cmd_start
+command cmd_stop
+command cmd_clear_fault
+
+# ------------------------------------------------------------------------------
+# Parameter & Live-Tunables
+# ------------------------------------------------------------------------------
+
+param V_DC_MIN           : float[V] in 12..30 V = 18 V
+param V_DC_MAX           : float[V] in 30..58 V = 52 V
+param I_PEAK_MAX         : float[A] in 1..45 A  = 35 A
+param T_MAX_INV          : float[degC] in 50..125 degC = 105 degC
+param T_MAX_MOT          : float[degC] in 50..160 degC = 125 degC
+param CALIBRATION_VOLT   : float[V] in 0.5..5 V = 2.0 V
+param CALIBRATION_TIME   : Duration = 300 ms
+
+tunable param KP_CURRENT_D : float[V/A] in 0..50 V/A = 3.8 V/A
+tunable param KI_CURRENT_D : float[V/A/s] in 0..5000 V/A/s = 950 V/A/s
+tunable param KP_CURRENT_Q : float[V/A] in 0..50 V/A = 3.8 V/A
+tunable param KI_CURRENT_Q : float[V/A/s] in 0..5000 V/A/s = 950 V/A/s
+
+tunable param KP_SPEED     : float[A*s] in 0..10 A*s = 0.12 A*s
+tunable param KI_SPEED     : float[A] in 0..100 A    = 1.5 A
+tunable param TARGET_SPEED : float[1/s] in -800..800 1/s = 200 1/s
+tunable param MAX_IQ       : float[A] in 1..35 A     = 25 A
+
+# ------------------------------------------------------------------------------
+# Reine Berechnungsfunktionen (Mathematische Transformationen)
+# ------------------------------------------------------------------------------
+
+fn clamp[U](x: float[U], lo: float[U], hi: float[U]) -> float[U]:
+    return lo if x < lo else (hi if x > hi else x)
+
+fn clamp_scalar(x: float, lo: float, hi: float) -> float:
+    return lo if x < lo else (hi if x > hi else x)
+
+fn clarke(iu: float[A], iv: float[A]) -> AlphaBetaCurrent:
+    var ialpha = iu
+    var ibeta = (iu + 2.0 * iv) * 0.577350269
+    return AlphaBetaCurrent(alpha = ialpha, beta = ibeta)
+
+fn park(ab: AlphaBetaCurrent, theta: float) -> DqCurrent:
+    var s = sin(theta)
+    var c = cos(theta)
+    var id = ab.alpha * c + ab.beta * s
+    var iq = -ab.alpha * s + ab.beta * c
+    return DqCurrent(d = id, q = iq)
+
+fn inv_park(v_d: float[V], v_q: float[V], theta: float) -> AlphaBetaVoltage:
+    var s = sin(theta)
+    var c = cos(theta)
+    var valpha = v_d * c - v_q * s
+    var vbeta = v_d * s + v_q * c
+    return AlphaBetaVoltage(alpha = valpha, beta = vbeta)
+
+fn svpwm(valpha: float[V], vbeta: float[V], vbus: float[V]) -> PhaseDuties:
+    var va = valpha
+    var vb = -0.5 * valpha + 0.8660254 * vbeta
+    var vc = -0.5 * valpha - 0.8660254 * vbeta
+
+    # Neutralpunktverschiebung (Min-Max-Verfahren zur linearen DC-Ausnutzung)
+    var vmax = va if va > vb else vb
+    vmax = vmax if vmax > vc else vc
+    var vmin = va if va < vb else vb
+    vmin = vmin if vmin < vc else vc
+    var vmid = 0.5 * (vmax + vmin)
+
+    # Relative Modulationsgrade zentriert um 50 % Tastverhaeltnis
+    var du_raw = 0.5 + ((va - vmid) / vbus)
+    var dv_raw = 0.5 + ((vb - vmid) / vbus)
+    var dw_raw = 0.5 + ((vc - vmid) / vbus)
+
+    var du = clamp_scalar(du_raw, 0.0, 1.0)
+    var dv = clamp_scalar(dv_raw, 0.0, 1.0)
+    var dw = clamp_scalar(dw_raw, 0.0, 1.0)
+
+    return PhaseDuties(u = du, v = dv, w = dw)
+
+# ------------------------------------------------------------------------------
+# Regelungsbaustein: PI-Regler mit Anti-Windup
+# ------------------------------------------------------------------------------
+
+block pi_reg[O, E](kp: float[O/E], ki: float[O/E/s], out_lo: float[O], out_hi: float[O]):
+    var integral : float[O] = 0
+    step(err: float[E], dt: Duration in tick..1 h) -> float[O]:
+        var dts : float[s] = dt.as(s)
+        integral = clamp(integral + ki * err * dts, out_lo, out_hi)
+        return clamp(kp * err + integral, out_lo, out_hi)
+
+# ------------------------------------------------------------------------------
+# Motor-Treiber-Zustandsmaschine
+# ------------------------------------------------------------------------------
+
+machine bldc_foc_controller every 50 us:
+    fault -> SAFE
+
+    # Persistente Betriebsdaten
+    persist var operating_seconds : int in 0..2000000000 = 0 with min_interval = 10 s
+    persist var fault_events      : int in 0..100000     = 0 with min_interval = 1 s
+
+    # Veroeffentlichte Telemetriegroessen
+    pub var driver_state : MotorState = STANDBY
+    pub var act_id       : float[A] in -45..45 A = 0 A
+    pub var act_iq       : float[A] in -45..45 A = 0 A
+
+    # Zustandsbehaftete Reglerinstanzen
+    var pi_d     = pi_reg[V, A](kp = KP_CURRENT_D, ki = KI_CURRENT_D, out_lo = -30.0 V, out_hi = 30.0 V)
+    var pi_q     = pi_reg[V, A](kp = KP_CURRENT_Q, ki = KI_CURRENT_Q, out_lo = -30.0 V, out_hi = 30.0 V)
+    var pi_speed = pi_reg[A, 1/s](kp = KP_SPEED, ki = KI_SPEED, out_lo = -MAX_IQ, out_hi = MAX_IQ)
+
+    # Interne Reglersollwerte
+    var target_iq_internal : float[A] in -35..35 A = 0 A
+
+    initial ACTIVE
+
+    # --------------------------------------------------------------------------
+    # Uebergeordneter aktiver Betriebsraum: Sicherheits-Interlocks
+    # --------------------------------------------------------------------------
+    state ACTIVE:
+        initial IDLE
+
+        loop:
+            # Spannungs- und Stromgrenzen
+            check v_dc < V_DC_MAX, "DC bus overvoltage"
+            check v_dc > V_DC_MIN, "DC bus undervoltage"
+            check abs(i_u) < I_PEAK_MAX, "Phase U overcurrent"
+            check abs(i_v) < I_PEAK_MAX, "Phase V overcurrent"
+            check abs(i_u + i_v) < I_PEAK_MAX, "Phase W overcurrent"
+
+            # Entprellte thermische Schwellen (Ausloeseverzoegerung)
+            check temp_inverter < T_MAX_INV, "Inverter overtemperature" for 20 ms
+            check temp_motor < T_MAX_MOT, "Motor overtemperature" for 100 ms
+
+            # Warnschwellen fuer Telemetrie/Log
+            alert temp_inverter > T_MAX_INV - 10 K, "Inverter temperature high"
+            alert temp_motor > T_MAX_MOT - 15 K, "Motor temperature high"
+
+        # Ruhezustand: Treiber inaktiv
+        state IDLE:
+            enter:
+                driver_state = STANDBY
+                gate_en = false
+                pwm_u = 0
+                pwm_v = 0
+                pwm_w = 0
+                brake_relay = false
+
+            when cmd_start and v_dc >= V_DC_MIN: -> ALIGN
+
+        # Rotor-Ausrichtung: Statischer Spannungsvektor bei theta = 0
+        state ALIGN:
+            enter:
+                driver_state = ALIGNMENT
+                gate_en = true
+                brake_relay = true
+
+            loop:
+                var align_duties = svpwm(CALIBRATION_VOLT, 0.0 V, v_dc)
+                pwm_u = align_duties.u
+                pwm_v = align_duties.v
+                pwm_w = align_duties.w
+
+            after CALIBRATION_TIME: -> RUNNING
+
+        # Geregelter FOC-Betrieb (Geschwindigkeits- und Stromkaskade)
+        state RUNNING:
+            enter:
+                driver_state = CLOSED_LOOP
+                pi_d.reset()
+                pi_q.reset()
+                pi_speed.reset()
+                target_iq_internal = 0 A
+
+            loop:
+                # Aeussere Drehzahlregelkaskade (1 kHz Abtastrate)
+                every 1 ms:
+                    target_iq_internal = pi_speed.step(TARGET_SPEED - omega_mech, 1 ms)
+                every 1 s:
+                    operating_seconds += 1
+
+                # Innere Stromregelung bei vollem Rechentakt (20 kHz / 50 us)
+                var i_ab = clarke(i_u, i_v)
+                var i_dq = park(i_ab, theta_elec)
+                act_id = i_dq.d
+                act_iq = i_dq.q
+
+                # Entkoppelte d/q-Spannungsstellwerte
+                var v_d_cmd = pi_d.step(0 A - i_dq.d, 50 us)
+                var v_q_cmd = pi_q.step(target_iq_internal - i_dq.q, 50 us)
+
+                # Ruecktransformation und Tastverhaeltnisberechnung
+                var v_ab_cmd = inv_park(v_d_cmd, v_q_cmd, theta_elec)
+                var duties = svpwm(v_ab_cmd.alpha, v_ab_cmd.beta, v_dc)
+
+                pwm_u = duties.u
+                pwm_v = duties.v
+                pwm_w = duties.w
+
+            when cmd_stop: -> BRAKING
+
+        # Kontrolliertes generatorisches Abbremsen vor Stillstand
+        state BRAKING:
+            enter:
+                driver_state = BRAKING
+                target_iq_internal = 0 A
+
+            loop:
+                var i_ab = clarke(i_u, i_v)
+                var i_dq = park(i_ab, theta_elec)
+                act_id = i_dq.d
+                act_iq = i_dq.q
+
+                # Aktive Momentenausregelung auf 0 A
+                var v_d_cmd = pi_d.step(0 A - i_dq.d, 50 us)
+                var v_q_cmd = pi_q.step(0 A - i_dq.q, 50 us)
+
+                var v_ab_cmd = inv_park(v_d_cmd, v_q_cmd, theta_elec)
+                var duties = svpwm(v_ab_cmd.alpha, v_ab_cmd.beta, v_dc)
+
+                pwm_u = duties.u
+                pwm_v = duties.v
+                pwm_w = duties.w
+
+            when abs(omega_mech) < 5 1/s: -> IDLE
+            after 3 s: -> IDLE
+
+    # --------------------------------------------------------------------------
+    # Fail-Safe-Zustand: Sichere Abschaltung
+    # --------------------------------------------------------------------------
+    state SAFE:
+        enter:
+            driver_state = SAFE_FAULT
+            gate_en = false
+            pwm_u = 0
+            pwm_v = 0
+            pwm_w = 0
+            brake_relay = false
+            fault_events += 1
+
+        when cmd_clear_fault and not cmd_start: -> IDLE

@@ -16,13 +16,25 @@ vectors
 Die Eingabe steht in doppelten Anführungszeichen mit den Escapes `\n` (Zeilenende),
 `\t` (Tabulator), `\"` und `\\`. Tokens werden als `ART(text)` geschrieben; Interpunktion
 und Operatoren stehen nackt. `!` vor einem Vektor bedeutet: die Eingabe ist ein Fehler,
-und der Text nach `=>` ist der Fehlercode aus Abschnitt L9. Ein Tokenizer gilt als
-konform, wenn er alle Vektoren dieses Dokuments erfüllt (`takt-conformance`, 13.8).
+und der Text nach `=>` ist der Fehlercode aus Abschnitt L9. Endet die Eingabe nicht mit
+einem Zeilenende, darf das `NEWLINE` aus L1.3 in der Erwartung entfallen. Ein Tokenizer
+gilt als konform, wenn er alle Vektoren dieses Dokuments erfüllt (`takt-conformance`, 13.8).
 
 Tokenarten: `NEWLINE INDENT DEDENT IDENT UPPER TYPE KW RESERVED INT HEX BIN OCT FLOAT DUR
 STRING WILD` sowie die Operatoren und Interpunktion aus L6. `UPPER`, `TYPE` und `KW`
 entsprechen `UPPER_IDENT`, `TYPE_IDENT` und `KEYWORD` der Grammatik; `DUR` entspricht
 `DURATION`; `WILD` ist das Terminal `"_"`.
+
+**Anliegen.** Jedes Token trägt ein Flag *anliegend*: wahr, wenn das nächste Token ohne
+Leerraum direkt folgt. In den Vektoren schreibt `~` zwischen zwei Tokens diese
+Eigenschaft vor (`>~>`); ohne `~` wird sie nicht geprüft. Drei Regeln stützen sich
+darauf: der Shift-Operator (L6.1), Einheitenausdrücke nach Zahlen (L4.3) und der
+Abstand zwischen Zahl und Einheit (L4.3).
+
+**Beiwerk.** Kommentare und Leerzeilen erzeugen kein Token, gehen aber nicht verloren:
+Der Tokenizer legt sie als Beiwerk dem nächsten Token bei (am Dateiende dem
+`DEDENT`- oder Endtoken). Der Parser übergeht Beiwerk, der Formatter gibt es wieder
+aus (L7).
 
 ---
 
@@ -37,7 +49,8 @@ entsprechen `UPPER_IDENT`, `TYPE_IDENT` und `KEYWORD` der Grammatik; `DUR` entsp
 - **L1.3 Dateiende.** Endet die letzte Zeile ohne Zeilenende, erzeugt der Tokenizer
   trotzdem `NEWLINE`. Danach folgen so viele `DEDENT`, wie Einrückungsstufen offen sind.
 - **L1.4 Kommentare.** `#` beginnt einen Kommentar bis zum Zeilenende, außer innerhalb
-  eines Stringliterals. Kommentare erzeugen kein Token. Es gibt keine Blockkommentare.
+  eines Stringliterals. Kommentare erzeugen kein Token, sondern Beiwerk des nächsten
+  Tokens. Es gibt keine Blockkommentare.
 - **L1.5 Leerraum.** Leerzeichen trennen Tokens und sind sonst bedeutungslos, mit zwei
   Ausnahmen: der Einrückung am Zeilenanfang (L2) und der Bindung von Einheiten an
   Zahlen (L4.3). Ein Tabulator ist überall außerhalb von Strings und Kommentaren ein
@@ -196,25 +209,28 @@ Ein Einheitenausdruck darf nur direkt auf ein Zahlenliteral folgen (Grammatik
   `E_UNIT_SPACE`; dadurch bleiben `1e3` und `0x1F` eindeutig.
 - **Kompakte Schreibweise.** Der Einheitenausdruck ist die maximale Folge aus
   Einheitennamen, `*`, `/`, `^` und Ziffern nach `^` **ohne Leerraum**: `K/min`, `m/s^2`,
-  `A*s`, `1/s`, `pct/bar`. Ein Leerzeichen beendet den Einheitenausdruck. So ist
-  `200 ms * 2` eine Dauer mal zwei, und `5 K/min` ist ein Literal in `K/min`.
+  `A*s`, `1/s`, `pct/bar`. Der Parser liest `unit_expr` genau so weit, wie die Tokens
+  anliegen; das erste Leerzeichen beendet ihn. So ist `200 ms * 2` eine Dauer mal zwei,
+  `5 K/min` ein Literal in `K/min` und `5 K / min` ein Literal in `K`, geteilt durch die
+  Variable `min`.
 - **Einheitennamen** sind Wörter beliebiger Form (`bar`, `mV`, `V`, `K`, `B`, `Hz`, `Pa`,
   `KiB`, `degC`) oder die Ziffer `1` für dimensionslos (`1/s`). Der Tokenizer prüft nicht,
   ob die Einheit existiert; das tut die Semantik (3.2).
 - Der Tokenizer erzeugt für den Einheitenausdruck gewöhnliche Tokens (`IDENT`, `UPPER`,
-  `TYPE`, `INT`, `*`, `/`, `^`) und markiert das erste davon als *an die Zahl gebunden*.
-  Der Parser liest dann `unit_expr` nach der Grammatik. Ein Einheitenname, der zugleich
-  Schlüsselwort ist, kommt nicht vor (2.2 enthält keine Einheiten).
+  `TYPE`, `INT`, `*`, `/`, `^`); die Bindung ergibt sich aus dem Anliegen. Ein
+  Einheitenname, der zugleich Schlüsselwort ist, kommt nicht vor (2.2 enthält keine
+  Einheiten).
 
 ```
 vectors
 "85 degC"                 => INT(85) IDENT(degC)
 "4.25 V"                  => FLOAT(4.25) UPPER(V)
-"5 K/min"                 => INT(5) UPPER(K) / IDENT(min)
-"9.81 m/s^2"              => FLOAT(9.81) IDENT(m) / IDENT(s) ^ INT(2)
-"0.0005 1/s"              => FLOAT(0.0005) INT(1) / IDENT(s)
-"72000 A*s"               => INT(72000) UPPER(A) * IDENT(s)
-"0.5 pct/bar"             => FLOAT(0.5) IDENT(pct) / IDENT(bar)
+"5 K/min"                 => INT(5) UPPER(K)~/~IDENT(min)
+"5 K / min"               => INT(5) UPPER(K) / IDENT(min)
+"9.81 m/s^2"              => FLOAT(9.81) IDENT(m)~/~IDENT(s)~^~INT(2)
+"0.0005 1/s"              => FLOAT(0.0005) INT(1)~/~IDENT(s)
+"72000 A*s"               => INT(72000) UPPER(A)~*~IDENT(s)
+"0.5 pct/bar"             => FLOAT(0.5) IDENT(pct)~/~IDENT(bar)
 "4 KiB"                   => INT(4) TYPE(KiB)
 "1 B..4096 B"             => INT(1) UPPER(B) .. INT(4096) UPPER(B)
 "5 * n"                   => INT(5) * IDENT(n)
@@ -349,15 +365,17 @@ Die Tokens sind genau die nicht-wörtlichen Terminale der Grammatik. Es gilt die
 Übereinstimmung.
 
 ```
-->  ..  +=  -=  *=  /=  ==  !=  <=  >=  <<  >>
+->  ..  +=  -=  *=  /=  ==  !=  <=  >=  <<
 +  -  *  /  %  &  |  ^  ~  <  >  =  .  ,  :  (  )  [  ]  {  }  @  ?  !
 ```
 
 - **L6.1 Spitze Klammern.** `<` und `>` sind sowohl Vergleich als auch Typklammern
-  (`vec<u8, 4>`). Der Tokenizer unterscheidet das nicht. Ein `>>` ist ein Token; wenn
-  der Parser in einem Typausdruck ein einzelnes `>` erwartet, teilt er `>>` in zwei `>`
-  (`vec<vec<u8, 4>, 2>`). Dasselbe gilt für `>=` und `>>`-Kombinationen nicht, weil sie
-  in Typen nicht vorkommen.
+  (`vec<u8, 4>`). Der Tokenizer unterscheidet das nicht, und er erzeugt nie ein Token
+  `>>`: Zwei `>` werden immer einzeln geliefert, mit dem Flag *anliegend* am ersten. Der
+  Parser erkennt den Shift-Operator `>>` als zwei anliegende `>` und liest in einem
+  Typausdruck (`vec<vec<u8, 4>, 2>`) einfach ein `>` nach dem anderen. `<<` ist ein
+  Token, weil `<` in Typen nie doppelt schließt. `>=` bleibt ein Token, weil es in Typen
+  nicht vorkommt.
 - **L6.2 Ausrufezeichen.** `!` steht in `T!E`; `!=` ist ein eigenes Token. `x!=y` ist
   Vergleich, `ImageHeader!HeaderErr` ist ein Ergebnistyp. Da nach `!` in einem Typ nie
   `=` folgt, gibt es keinen Konflikt.
@@ -369,8 +387,10 @@ vectors
 "a -> B"                  => IDENT(a) -> UPPER(B)
 "x += 1"                  => IDENT(x) += INT(1)
 "a <= b != c"             => IDENT(a) <= IDENT(b) != IDENT(c)
-"x >> 2 << 1"             => IDENT(x) >> INT(2) << INT(1)
-"vec<vec<u8, 4>, 2>"      => IDENT(vec) < IDENT(vec) < IDENT(u8) , INT(4) >> , INT(2) >
+"x >> 2 << 1"             => IDENT(x) >~> INT(2) << INT(1)
+"x > > 2"                 => IDENT(x) > > INT(2)
+"vec<vec<u8, 4>>"         => IDENT(vec) < IDENT(vec) < IDENT(u8) , INT(4) >~>
+"vec<vec<u8, 4>, 2>"      => IDENT(vec) < IDENT(vec) < IDENT(u8) , INT(4) > , INT(2) >
 "T!E T?"                  => UPPER(T) ! UPPER(E) UPPER(T) ?
 "x != y"                  => IDENT(x) != IDENT(y)
 "@ hw(\"a/b\")"           => @ IDENT(hw) ( STRING(a/b) )
@@ -398,7 +418,8 @@ Lexikalisch gilt:
   ein Leerzeichen zwischen Zahl und Einheit oder Zeitsuffix.
 - Zahlenliterale bleiben, wie geschrieben (Unterstriche, Hex-Groß-/Kleinschreibung,
   Dezimaltext). Der Formatter ändert nie einen Wert.
-- Kommentare bleiben an ihrer Zeile; ein Leerzeichen nach `#` wird ergänzt.
+- Kommentare bleiben an ihrer Zeile; ein Leerzeichen nach `#` wird ergänzt. Der Formatter
+  liest sie aus dem Beiwerk der Tokens; mehr als eine Leerzeile wird zu einer.
 
 Ein Programm, das der Formatter unverändert lässt, heißt kanonisch. Der Roundtrip
 Parse → Format → Parse muss denselben Tokenstrom ergeben; das ist der Test der

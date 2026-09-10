@@ -24,8 +24,8 @@ SEM-1.2,Semantik/Abschnitt,1.2,Die drei Ebenen,,M0 (Parser/MIR-Entwurf),offen
 SEM-1.3,Semantik/Abschnitt,1.3,"Tick, Perioden, Hyperperiode",,M0 (Parser/MIR-Entwurf),offen
 SEM-1.4,Semantik/Abschnitt,1.4,Datenfluss,,M0 (Parser/MIR-Entwurf),offen
 SEM-1.5,Semantik/Abschnitt,1.5,Lebenszyklus,,M0 (Parser/MIR-Entwurf),offen
-SEM-2.1,Semantik/Abschnitt,2.1,Lexik,,M0 (Parser/MIR-Entwurf),definiert
-SEM-2.2,Semantik/Abschnitt,2.2,Schlüsselwörter,,M0 (Parser/MIR-Entwurf),definiert
+SEM-2.1,Semantik/Abschnitt,2.1,Lexik,,M0 (Parser/MIR-Entwurf),fertig
+SEM-2.2,Semantik/Abschnitt,2.2,Schlüsselwörter,,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.3,Semantik/Abschnitt,2.3,Grammatik (EBNF),,M0 (Parser/MIR-Entwurf),definiert
 SEM-2.4,Semantik/Abschnitt,2.4,Bedeutung der Kernkonstrukte (informell),,M0 (Parser/MIR-Entwurf),offen
 SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit",,M0 (Parser/MIR-Entwurf),offen
@@ -40,7 +40,7 @@ SEM-3.8,Semantik/Abschnitt,3.8,Optionaltyp `T?`,,M1 (Kernsemantik),offen
 SEM-3.9,Semantik/Abschnitt,3.9,"Bytes, Vektoren, Strings, Tabellen",,M1 (Kernsemantik),offen
 SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernsemantik),offen
 SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M1 (Kernsemantik),offen
-SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,"M1 ([U]) / M8 (type, const)",offen
+SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),offen
 SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),offen
 SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M1 (Kernsemantik),offen
 SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),offen
@@ -149,8 +149,8 @@ G-cost_class,Grammatik,2.3,cost_class,,M0 (Parser/MIR-Entwurf),definiert
 G-block_decl,Grammatik,2.3,block_decl,,M0 (Parser/MIR-Entwurf),definiert
 G-step_decl,Grammatik,2.3,step_decl,,M0 (Parser/MIR-Entwurf),definiert
 G-method_decl,Grammatik,2.3,method_decl,,M0 (Parser/MIR-Entwurf),definiert
-G-generic_vars,Grammatik,2.3,generic_vars,v1.2,"M0 (Parser) / M8 (type, const)",definiert
-G-gvar,Grammatik,2.3,gvar,,"M0 (Parser) / M8 (type, const)",definiert
+G-generic_vars,Grammatik,2.3,generic_vars,v1.1,M0 (Parser) / M6 (const) / M8 (type),definiert
+G-gvar,Grammatik,2.3,gvar,,M0 (Parser) / M6 (const) / M8 (type),definiert
 G-capability,Grammatik,2.3,capability,,M0 (Parser/MIR-Entwurf),definiert
 G-params,Grammatik,2.3,params,,M0 (Parser/MIR-Entwurf),definiert
 G-param,Grammatik,2.3,param,,M0 (Parser/MIR-Entwurf),definiert
@@ -228,7 +228,7 @@ G-postfix,Grammatik,2.3,postfix,,M0 (Parser/MIR-Entwurf),definiert
 G-member,Grammatik,2.3,member,,M0 (Parser/MIR-Entwurf),definiert
 G-primary,Grammatik,2.3,primary,,M0 (Parser/MIR-Entwurf),definiert
 G-generic_args,Grammatik,2.3,generic_args,,M0 (Parser/MIR-Entwurf),definiert
-G-generic_arg,Grammatik,2.3,generic_arg,v1.2,M0 (Parser) / M8,definiert
+G-generic_arg,Grammatik,2.3,generic_arg,v1.1,M0 (Parser) / M6,definiert
 G-args,Grammatik,2.3,args,,M0 (Parser/MIR-Entwurf),definiert
 G-arg,Grammatik,2.3,arg,,M0 (Parser/MIR-Entwurf),definiert
 G-number,Grammatik,2.3,number,,M0 (Parser/MIR-Entwurf),definiert
@@ -350,125 +350,125 @@ Kampagnen-Item-fail,Kampagnen-Item,2.3,"campaign_item: ""fail""",,M0 (Parser/MIR
 Kampagnen-Item-never,Kampagnen-Item,2.3,"campaign_item: ""never""",,M0 (Parser/MIR-Entwurf),definiert
 Generics-Klasse-type,Generics-Klasse,2.3,"gvar: ""type""",,M0 (Parser/MIR-Entwurf),definiert
 Generics-Klasse-const,Generics-Klasse,2.3,"gvar: ""const""",,M0 (Parser/MIR-Entwurf),definiert
-KW-system,Schlüsselwort,2.2,system,,M0 (Parser/MIR-Entwurf),definiert
-KW-import,Schlüsselwort,2.2,import,,M0 (Parser/MIR-Entwurf),definiert
-KW-type,Schlüsselwort,2.2,type,,M0 (Parser/MIR-Entwurf),definiert
-KW-enum,Schlüsselwort,2.2,enum,,M0 (Parser/MIR-Entwurf),definiert
-KW-record,Schlüsselwort,2.2,record,,M0 (Parser/MIR-Entwurf),definiert
-KW-unit,Schlüsselwort,2.2,unit,,M0 (Parser/MIR-Entwurf),definiert
-KW-const,Schlüsselwort,2.2,const,,M0 (Parser/MIR-Entwurf),definiert
-KW-param,Schlüsselwort,2.2,param,,M0 (Parser/MIR-Entwurf),definiert
-KW-profile,Schlüsselwort,2.2,profile,,M0 (Parser/MIR-Entwurf),definiert
-KW-stream,Schlüsselwort,2.2,stream,,M0 (Parser/MIR-Entwurf),definiert
-KW-port,Schlüsselwort,2.2,port,,M0 (Parser/MIR-Entwurf),definiert
-KW-node,Schlüsselwort,2.2,node,,M0 (Parser/MIR-Entwurf),definiert
-KW-unitvec,Schlüsselwort,2.2,unitvec,,M0 (Parser/MIR-Entwurf),definiert
-KW-property,Schlüsselwort,2.2,property,,M0 (Parser/MIR-Entwurf),definiert
-KW-input,Schlüsselwort,2.2,input,,M0 (Parser/MIR-Entwurf),definiert
-KW-output,Schlüsselwort,2.2,output,,M0 (Parser/MIR-Entwurf),definiert
-KW-command,Schlüsselwort,2.2,command,,M0 (Parser/MIR-Entwurf),definiert
-KW-fn,Schlüsselwort,2.2,fn,,M0 (Parser/MIR-Entwurf),definiert
-KW-native,Schlüsselwort,2.2,native,,M0 (Parser/MIR-Entwurf),definiert
-KW-block,Schlüsselwort,2.2,block,,M0 (Parser/MIR-Entwurf),definiert
-KW-machine,Schlüsselwort,2.2,machine,,M0 (Parser/MIR-Entwurf),definiert
-KW-instance,Schlüsselwort,2.2,instance,,M0 (Parser/MIR-Entwurf),definiert
-KW-scenario,Schlüsselwort,2.2,scenario,,M0 (Parser/MIR-Entwurf),definiert
-KW-campaign,Schlüsselwort,2.2,campaign,,M0 (Parser/MIR-Entwurf),definiert
-KW-trigger,Schlüsselwort,2.2,trigger,,M0 (Parser/MIR-Entwurf),definiert
-KW-var,Schlüsselwort,2.2,var,,M0 (Parser/MIR-Entwurf),definiert
-KW-pub,Schlüsselwort,2.2,pub,,M0 (Parser/MIR-Entwurf),definiert
-KW-persist,Schlüsselwort,2.2,persist,,M0 (Parser/MIR-Entwurf),definiert
-KW-signal,Schlüsselwort,2.2,signal,,M0 (Parser/MIR-Entwurf),definiert
-KW-tunable,Schlüsselwort,2.2,tunable,,M0 (Parser/MIR-Entwurf),definiert
-KW-driver,Schlüsselwort,2.2,driver,,M0 (Parser/MIR-Entwurf),definiert
-KW-initial,Schlüsselwort,2.2,initial,,M0 (Parser/MIR-Entwurf),definiert
-KW-state,Schlüsselwort,2.2,state,,M0 (Parser/MIR-Entwurf),definiert
-KW-enter,Schlüsselwort,2.2,enter,,M0 (Parser/MIR-Entwurf),definiert
-KW-loop,Schlüsselwort,2.2,loop,,M0 (Parser/MIR-Entwurf),definiert
-KW-exit,Schlüsselwort,2.2,exit,,M0 (Parser/MIR-Entwurf),definiert
-KW-on,Schlüsselwort,2.2,on,,M0 (Parser/MIR-Entwurf),definiert
-KW-when,Schlüsselwort,2.2,when,,M0 (Parser/MIR-Entwurf),definiert
-KW-after,Schlüsselwort,2.2,after,,M0 (Parser/MIR-Entwurf),definiert
-KW-fault,Schlüsselwort,2.2,fault,,M0 (Parser/MIR-Entwurf),definiert
-KW-sequence,Schlüsselwort,2.2,sequence,,M0 (Parser/MIR-Entwurf),definiert
-KW-wait,Schlüsselwort,2.2,wait,,M0 (Parser/MIR-Entwurf),definiert
-KW-until,Schlüsselwort,2.2,until,,M0 (Parser/MIR-Entwurf),definiert
-KW-expect,Schlüsselwort,2.2,expect,,M0 (Parser/MIR-Entwurf),definiert
-KW-repeat,Schlüsselwort,2.2,repeat,,M0 (Parser/MIR-Entwurf),definiert
-KW-step,Schlüsselwort,2.2,step,,M0 (Parser/MIR-Entwurf),definiert
-KW-every,Schlüsselwort,2.2,every,,M0 (Parser/MIR-Entwurf),definiert
-KW-check,Schlüsselwort,2.2,check,,M0 (Parser/MIR-Entwurf),definiert
-KW-alert,Schlüsselwort,2.2,alert,,M0 (Parser/MIR-Entwurf),definiert
-KW-log,Schlüsselwort,2.2,log,,M0 (Parser/MIR-Entwurf),definiert
-KW-abort,Schlüsselwort,2.2,abort,,M0 (Parser/MIR-Entwurf),definiert
-KW-measure,Schlüsselwort,2.2,measure,,M0 (Parser/MIR-Entwurf),definiert
-KW-verify,Schlüsselwort,2.2,verify,,M0 (Parser/MIR-Entwurf),definiert
-KW-verdict,Schlüsselwort,2.2,verdict,,M0 (Parser/MIR-Entwurf),definiert
-KW-send,Schlüsselwort,2.2,send,,M0 (Parser/MIR-Entwurf),definiert
-KW-at,Schlüsselwort,2.2,at,,M0 (Parser/MIR-Entwurf),definiert
-KW-pulse,Schlüsselwort,2.2,pulse,,M0 (Parser/MIR-Entwurf),definiert
-KW-cancel,Schlüsselwort,2.2,cancel,,M0 (Parser/MIR-Entwurf),definiert
-KW-raise,Schlüsselwort,2.2,raise,,M0 (Parser/MIR-Entwurf),definiert
-KW-job,Schlüsselwort,2.2,job,,M0 (Parser/MIR-Entwurf),definiert
-KW-arm,Schlüsselwort,2.2,arm,,M0 (Parser/MIR-Entwurf),definiert
-KW-disarm,Schlüsselwort,2.2,disarm,,M0 (Parser/MIR-Entwurf),definiert
-KW-then,Schlüsselwort,2.2,then,,M0 (Parser/MIR-Entwurf),definiert
-KW-bound,Schlüsselwort,2.2,bound,,M0 (Parser/MIR-Entwurf),definiert
-KW-program,Schlüsselwort,2.2,program,,M0 (Parser/MIR-Entwurf),definiert
-KW-sweep,Schlüsselwort,2.2,sweep,,M0 (Parser/MIR-Entwurf),definiert
-KW-stop_on,Schlüsselwort,2.2,stop_on,,M0 (Parser/MIR-Entwurf),definiert
-KW-match,Schlüsselwort,2.2,match,,M0 (Parser/MIR-Entwurf),definiert
-KW-case,Schlüsselwort,2.2,case,,M0 (Parser/MIR-Entwurf),definiert
-KW-if,Schlüsselwort,2.2,if,,M0 (Parser/MIR-Entwurf),definiert
-KW-elif,Schlüsselwort,2.2,elif,,M0 (Parser/MIR-Entwurf),definiert
-KW-else,Schlüsselwort,2.2,else,,M0 (Parser/MIR-Entwurf),definiert
-KW-for,Schlüsselwort,2.2,for,,M0 (Parser/MIR-Entwurf),definiert
-KW-in,Schlüsselwort,2.2,in,,M0 (Parser/MIR-Entwurf),definiert
-KW-range,Schlüsselwort,2.2,range,,M0 (Parser/MIR-Entwurf),definiert
-KW-break,Schlüsselwort,2.2,break,,M0 (Parser/MIR-Entwurf),definiert
-KW-return,Schlüsselwort,2.2,return,,M0 (Parser/MIR-Entwurf),definiert
-KW-pass,Schlüsselwort,2.2,pass,,M0 (Parser/MIR-Entwurf),definiert
-KW-and,Schlüsselwort,2.2,and,,M0 (Parser/MIR-Entwurf),definiert
-KW-or,Schlüsselwort,2.2,or,,M0 (Parser/MIR-Entwurf),definiert
-KW-not,Schlüsselwort,2.2,not,,M0 (Parser/MIR-Entwurf),definiert
-KW-as,Schlüsselwort,2.2,as,,M0 (Parser/MIR-Entwurf),definiert
-KW-matches,Schlüsselwort,2.2,matches,,M0 (Parser/MIR-Entwurf),definiert
-KW-has,Schlüsselwort,2.2,has,,M0 (Parser/MIR-Entwurf),definiert
-KW-implies,Schlüsselwort,2.2,implies,,M0 (Parser/MIR-Entwurf),definiert
-KW-always,Schlüsselwort,2.2,always,,M0 (Parser/MIR-Entwurf),definiert
-KW-never,Schlüsselwort,2.2,never,,M0 (Parser/MIR-Entwurf),definiert
-KW-eventually,Schlüsselwort,2.2,eventually,,M0 (Parser/MIR-Entwurf),definiert
-KW-stable,Schlüsselwort,2.2,stable,,M0 (Parser/MIR-Entwurf),definiert
-KW-once,Schlüsselwort,2.2,once,,M0 (Parser/MIR-Entwurf),definiert
-KW-true,Schlüsselwort,2.2,true,,M0 (Parser/MIR-Entwurf),definiert
-KW-false,Schlüsselwort,2.2,false,,M0 (Parser/MIR-Entwurf),definiert
-KW-none,Schlüsselwort,2.2,none,,M0 (Parser/MIR-Entwurf),definiert
-KW-default,Schlüsselwort,2.2,default,,M0 (Parser/MIR-Entwurf),definiert
-KW-with,Schlüsselwort,2.2,with,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-region,Reserviertes Wort,2.2/2.5,region,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-while,Reserviertes Wort,2.2/2.5,while,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-yield,Reserviertes Wort,2.2/2.5,yield,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-await,Reserviertes Wort,2.2/2.5,await,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-async,Reserviertes Wort,2.2/2.5,async,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-spawn,Reserviertes Wort,2.2/2.5,spawn,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-select,Reserviertes Wort,2.2/2.5,select,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-where,Reserviertes Wort,2.2/2.5,where,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-impl,Reserviertes Wort,2.2/2.5,impl,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-trait,Reserviertes Wort,2.2/2.5,trait,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-module,Reserviertes Wort,2.2/2.5,module,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-export,Reserviertes Wort,2.2/2.5,export,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-extern,Reserviertes Wort,2.2/2.5,extern,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-unsafe,Reserviertes Wort,2.2/2.5,unsafe,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-try,Reserviertes Wort,2.2/2.5,try,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-catch,Reserviertes Wort,2.2/2.5,catch,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-throw,Reserviertes Wort,2.2/2.5,throw,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-class,Reserviertes Wort,2.2/2.5,class,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-struct,Reserviertes Wort,2.2/2.5,struct,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-union,Reserviertes Wort,2.2/2.5,union,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-static,Reserviertes Wort,2.2/2.5,static,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-global,Reserviertes Wort,2.2/2.5,global,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-volatile,Reserviertes Wort,2.2/2.5,volatile,,M0 (Parser/MIR-Entwurf),definiert
-KW-reserviert-defer,Reserviertes Wort,2.2/2.5,defer,,M0 (Parser/MIR-Entwurf),definiert
+KW-system,Schlüsselwort,2.2,system,,M0 (Parser/MIR-Entwurf),fertig
+KW-import,Schlüsselwort,2.2,import,,M0 (Parser/MIR-Entwurf),fertig
+KW-type,Schlüsselwort,2.2,type,,M0 (Parser/MIR-Entwurf),fertig
+KW-enum,Schlüsselwort,2.2,enum,,M0 (Parser/MIR-Entwurf),fertig
+KW-record,Schlüsselwort,2.2,record,,M0 (Parser/MIR-Entwurf),fertig
+KW-unit,Schlüsselwort,2.2,unit,,M0 (Parser/MIR-Entwurf),fertig
+KW-const,Schlüsselwort,2.2,const,,M0 (Parser/MIR-Entwurf),fertig
+KW-param,Schlüsselwort,2.2,param,,M0 (Parser/MIR-Entwurf),fertig
+KW-profile,Schlüsselwort,2.2,profile,,M0 (Parser/MIR-Entwurf),fertig
+KW-stream,Schlüsselwort,2.2,stream,,M0 (Parser/MIR-Entwurf),fertig
+KW-port,Schlüsselwort,2.2,port,,M0 (Parser/MIR-Entwurf),fertig
+KW-node,Schlüsselwort,2.2,node,,M0 (Parser/MIR-Entwurf),fertig
+KW-unitvec,Schlüsselwort,2.2,unitvec,,M0 (Parser/MIR-Entwurf),fertig
+KW-property,Schlüsselwort,2.2,property,,M0 (Parser/MIR-Entwurf),fertig
+KW-input,Schlüsselwort,2.2,input,,M0 (Parser/MIR-Entwurf),fertig
+KW-output,Schlüsselwort,2.2,output,,M0 (Parser/MIR-Entwurf),fertig
+KW-command,Schlüsselwort,2.2,command,,M0 (Parser/MIR-Entwurf),fertig
+KW-fn,Schlüsselwort,2.2,fn,,M0 (Parser/MIR-Entwurf),fertig
+KW-native,Schlüsselwort,2.2,native,,M0 (Parser/MIR-Entwurf),fertig
+KW-block,Schlüsselwort,2.2,block,,M0 (Parser/MIR-Entwurf),fertig
+KW-machine,Schlüsselwort,2.2,machine,,M0 (Parser/MIR-Entwurf),fertig
+KW-instance,Schlüsselwort,2.2,instance,,M0 (Parser/MIR-Entwurf),fertig
+KW-scenario,Schlüsselwort,2.2,scenario,,M0 (Parser/MIR-Entwurf),fertig
+KW-campaign,Schlüsselwort,2.2,campaign,,M0 (Parser/MIR-Entwurf),fertig
+KW-trigger,Schlüsselwort,2.2,trigger,,M0 (Parser/MIR-Entwurf),fertig
+KW-var,Schlüsselwort,2.2,var,,M0 (Parser/MIR-Entwurf),fertig
+KW-pub,Schlüsselwort,2.2,pub,,M0 (Parser/MIR-Entwurf),fertig
+KW-persist,Schlüsselwort,2.2,persist,,M0 (Parser/MIR-Entwurf),fertig
+KW-signal,Schlüsselwort,2.2,signal,,M0 (Parser/MIR-Entwurf),fertig
+KW-tunable,Schlüsselwort,2.2,tunable,,M0 (Parser/MIR-Entwurf),fertig
+KW-driver,Schlüsselwort,2.2,driver,,M0 (Parser/MIR-Entwurf),fertig
+KW-initial,Schlüsselwort,2.2,initial,,M0 (Parser/MIR-Entwurf),fertig
+KW-state,Schlüsselwort,2.2,state,,M0 (Parser/MIR-Entwurf),fertig
+KW-enter,Schlüsselwort,2.2,enter,,M0 (Parser/MIR-Entwurf),fertig
+KW-loop,Schlüsselwort,2.2,loop,,M0 (Parser/MIR-Entwurf),fertig
+KW-exit,Schlüsselwort,2.2,exit,,M0 (Parser/MIR-Entwurf),fertig
+KW-on,Schlüsselwort,2.2,on,,M0 (Parser/MIR-Entwurf),fertig
+KW-when,Schlüsselwort,2.2,when,,M0 (Parser/MIR-Entwurf),fertig
+KW-after,Schlüsselwort,2.2,after,,M0 (Parser/MIR-Entwurf),fertig
+KW-fault,Schlüsselwort,2.2,fault,,M0 (Parser/MIR-Entwurf),fertig
+KW-sequence,Schlüsselwort,2.2,sequence,,M0 (Parser/MIR-Entwurf),fertig
+KW-wait,Schlüsselwort,2.2,wait,,M0 (Parser/MIR-Entwurf),fertig
+KW-until,Schlüsselwort,2.2,until,,M0 (Parser/MIR-Entwurf),fertig
+KW-expect,Schlüsselwort,2.2,expect,,M0 (Parser/MIR-Entwurf),fertig
+KW-repeat,Schlüsselwort,2.2,repeat,,M0 (Parser/MIR-Entwurf),fertig
+KW-step,Schlüsselwort,2.2,step,,M0 (Parser/MIR-Entwurf),fertig
+KW-every,Schlüsselwort,2.2,every,,M0 (Parser/MIR-Entwurf),fertig
+KW-check,Schlüsselwort,2.2,check,,M0 (Parser/MIR-Entwurf),fertig
+KW-alert,Schlüsselwort,2.2,alert,,M0 (Parser/MIR-Entwurf),fertig
+KW-log,Schlüsselwort,2.2,log,,M0 (Parser/MIR-Entwurf),fertig
+KW-abort,Schlüsselwort,2.2,abort,,M0 (Parser/MIR-Entwurf),fertig
+KW-measure,Schlüsselwort,2.2,measure,,M0 (Parser/MIR-Entwurf),fertig
+KW-verify,Schlüsselwort,2.2,verify,,M0 (Parser/MIR-Entwurf),fertig
+KW-verdict,Schlüsselwort,2.2,verdict,,M0 (Parser/MIR-Entwurf),fertig
+KW-send,Schlüsselwort,2.2,send,,M0 (Parser/MIR-Entwurf),fertig
+KW-at,Schlüsselwort,2.2,at,,M0 (Parser/MIR-Entwurf),fertig
+KW-pulse,Schlüsselwort,2.2,pulse,,M0 (Parser/MIR-Entwurf),fertig
+KW-cancel,Schlüsselwort,2.2,cancel,,M0 (Parser/MIR-Entwurf),fertig
+KW-raise,Schlüsselwort,2.2,raise,,M0 (Parser/MIR-Entwurf),fertig
+KW-job,Schlüsselwort,2.2,job,,M0 (Parser/MIR-Entwurf),fertig
+KW-arm,Schlüsselwort,2.2,arm,,M0 (Parser/MIR-Entwurf),fertig
+KW-disarm,Schlüsselwort,2.2,disarm,,M0 (Parser/MIR-Entwurf),fertig
+KW-then,Schlüsselwort,2.2,then,,M0 (Parser/MIR-Entwurf),fertig
+KW-bound,Schlüsselwort,2.2,bound,,M0 (Parser/MIR-Entwurf),fertig
+KW-program,Schlüsselwort,2.2,program,,M0 (Parser/MIR-Entwurf),fertig
+KW-sweep,Schlüsselwort,2.2,sweep,,M0 (Parser/MIR-Entwurf),fertig
+KW-stop_on,Schlüsselwort,2.2,stop_on,,M0 (Parser/MIR-Entwurf),fertig
+KW-match,Schlüsselwort,2.2,match,,M0 (Parser/MIR-Entwurf),fertig
+KW-case,Schlüsselwort,2.2,case,,M0 (Parser/MIR-Entwurf),fertig
+KW-if,Schlüsselwort,2.2,if,,M0 (Parser/MIR-Entwurf),fertig
+KW-elif,Schlüsselwort,2.2,elif,,M0 (Parser/MIR-Entwurf),fertig
+KW-else,Schlüsselwort,2.2,else,,M0 (Parser/MIR-Entwurf),fertig
+KW-for,Schlüsselwort,2.2,for,,M0 (Parser/MIR-Entwurf),fertig
+KW-in,Schlüsselwort,2.2,in,,M0 (Parser/MIR-Entwurf),fertig
+KW-range,Schlüsselwort,2.2,range,,M0 (Parser/MIR-Entwurf),fertig
+KW-break,Schlüsselwort,2.2,break,,M0 (Parser/MIR-Entwurf),fertig
+KW-return,Schlüsselwort,2.2,return,,M0 (Parser/MIR-Entwurf),fertig
+KW-pass,Schlüsselwort,2.2,pass,,M0 (Parser/MIR-Entwurf),fertig
+KW-and,Schlüsselwort,2.2,and,,M0 (Parser/MIR-Entwurf),fertig
+KW-or,Schlüsselwort,2.2,or,,M0 (Parser/MIR-Entwurf),fertig
+KW-not,Schlüsselwort,2.2,not,,M0 (Parser/MIR-Entwurf),fertig
+KW-as,Schlüsselwort,2.2,as,,M0 (Parser/MIR-Entwurf),fertig
+KW-matches,Schlüsselwort,2.2,matches,,M0 (Parser/MIR-Entwurf),fertig
+KW-has,Schlüsselwort,2.2,has,,M0 (Parser/MIR-Entwurf),fertig
+KW-implies,Schlüsselwort,2.2,implies,,M0 (Parser/MIR-Entwurf),fertig
+KW-always,Schlüsselwort,2.2,always,,M0 (Parser/MIR-Entwurf),fertig
+KW-never,Schlüsselwort,2.2,never,,M0 (Parser/MIR-Entwurf),fertig
+KW-eventually,Schlüsselwort,2.2,eventually,,M0 (Parser/MIR-Entwurf),fertig
+KW-stable,Schlüsselwort,2.2,stable,,M0 (Parser/MIR-Entwurf),fertig
+KW-once,Schlüsselwort,2.2,once,,M0 (Parser/MIR-Entwurf),fertig
+KW-true,Schlüsselwort,2.2,true,,M0 (Parser/MIR-Entwurf),fertig
+KW-false,Schlüsselwort,2.2,false,,M0 (Parser/MIR-Entwurf),fertig
+KW-none,Schlüsselwort,2.2,none,,M0 (Parser/MIR-Entwurf),fertig
+KW-default,Schlüsselwort,2.2,default,,M0 (Parser/MIR-Entwurf),fertig
+KW-with,Schlüsselwort,2.2,with,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-region,Reserviertes Wort,2.2/2.5,region,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-while,Reserviertes Wort,2.2/2.5,while,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-yield,Reserviertes Wort,2.2/2.5,yield,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-await,Reserviertes Wort,2.2/2.5,await,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-async,Reserviertes Wort,2.2/2.5,async,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-spawn,Reserviertes Wort,2.2/2.5,spawn,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-select,Reserviertes Wort,2.2/2.5,select,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-where,Reserviertes Wort,2.2/2.5,where,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-impl,Reserviertes Wort,2.2/2.5,impl,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-trait,Reserviertes Wort,2.2/2.5,trait,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-module,Reserviertes Wort,2.2/2.5,module,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-export,Reserviertes Wort,2.2/2.5,export,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-extern,Reserviertes Wort,2.2/2.5,extern,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-unsafe,Reserviertes Wort,2.2/2.5,unsafe,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-try,Reserviertes Wort,2.2/2.5,try,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-catch,Reserviertes Wort,2.2/2.5,catch,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-throw,Reserviertes Wort,2.2/2.5,throw,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-class,Reserviertes Wort,2.2/2.5,class,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-struct,Reserviertes Wort,2.2/2.5,struct,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-union,Reserviertes Wort,2.2/2.5,union,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-static,Reserviertes Wort,2.2/2.5,static,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-global,Reserviertes Wort,2.2/2.5,global,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-volatile,Reserviertes Wort,2.2/2.5,volatile,,M0 (Parser/MIR-Entwurf),fertig
+KW-reserviert-defer,Reserviertes Wort,2.2/2.5,defer,,M0 (Parser/MIR-Entwurf),fertig
 MEM-valid,Reservierter Membername,2.5,valid,,M0 (Parser/MIR-Entwurf),offen
 MEM-suspect,Reservierter Membername,2.5,suspect,,M0 (Parser/MIR-Entwurf),offen
 MEM-stale,Reservierter Membername,2.5,stale,,M0 (Parser/MIR-Entwurf),offen
@@ -613,9 +613,9 @@ PAR-1.4-Abort_Phase,Absatz/Regel,1.4,Abort-Phase,,M0 (Parser/MIR-Entwurf),offen
 PAR-1.4-Defensiver_Treiberrand,Absatz/Regel,1.4,Defensiver Treiberrand,,M0 (Parser/MIR-Entwurf),offen
 PAR-1.4-follows,Absatz/Regel,1.4,`follows`,,M0 (Parser/MIR-Entwurf),offen
 PAR-1.4-Tunables,Absatz/Regel,1.4,Tunables,,M0 (Parser/MIR-Entwurf),offen
-PAR-2.2-Regel,Absatz/Regel,2.2,Regel,,M0 (Parser/MIR-Entwurf),definiert
+PAR-2.2-Regel,Absatz/Regel,2.2,Regel,,M0 (Parser/MIR-Entwurf),fertig
 PAR-2.5-Edition,Absatz/Regel,2.5,Edition,,M0 (Parser/MIR-Entwurf),offen
-PAR-2.5-Reservierte_Wörter,Absatz/Regel,2.5,Reservierte Wörter,,M0 (Parser/MIR-Entwurf),definiert
+PAR-2.5-Reservierte_Wörter,Absatz/Regel,2.5,Reservierte Wörter,,M0 (Parser/MIR-Entwurf),fertig
 PAR-2.5-Reservierte_Membernamen,Absatz/Regel,2.5,Reservierte Membernamen,,M0 (Parser/MIR-Entwurf),offen
 PAR-2.5-Offene_Enums,Absatz/Regel,2.5,Offene Enums,,M0 (Parser/MIR-Entwurf),offen
 PAR-2.5-Verdeckung_und_Additivität,Absatz/Regel,2.5,Verdeckung und Additivität,,M0 (Parser/MIR-Entwurf),offen
@@ -626,7 +626,7 @@ PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M1 (Ke
 PAR-3.2-Einheiten_auf_Integern_v1.1,Absatz/Regel,3.2,Einheiten auf Integern (v1.1),v1.1,M6,offen
 PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymorphie in Funktionen und Blöcken,,M1 (Kernsemantik),offen
 PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M1 (Kernsemantik),offen
-PAR-3.3-Lexikalische_Regel,Absatz/Regel,3.3,Lexikalische Regel,,M1 (Kernsemantik),definiert
+PAR-3.3-Lexikalische_Regel,Absatz/Regel,3.3,Lexikalische Regel,,M1 (Kernsemantik),fertig
 PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M1 (Kernsemantik),offen
 PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M1 (Kernsemantik),offen
 PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M6,offen

@@ -60,9 +60,9 @@ STAGE_SPLIT_PARSER = "Grammatik"
 
 # Einzelfaelle, die weder aus Abschnitt noch Stufe folgen (plan.md, Abschnitt 4).
 MILESTONE_OVERRIDE = {
-    "SEM-3.12": "M1 ([U]) / M8 (type, const)",
-    "G-generic_vars": "M0 (Parser) / M8 (type, const)",
-    "G-gvar": "M0 (Parser) / M8 (type, const)",
+    "SEM-3.12": "M1 ([U]) / M6 (const) / M8 (type)",
+    "G-generic_vars": "M0 (Parser) / M6 (const) / M8 (type)",
+    "G-gvar": "M0 (Parser) / M6 (const) / M8 (type)",
     "G-instance_decl": "M0 (Parser) / M8 (im Zustand)",
 }
 

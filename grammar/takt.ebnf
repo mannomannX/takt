@@ -112,7 +112,7 @@ block_decl     := "block" IDENT [ generic_vars ] "(" [ params ] ")" ":" NEWLINE 
                   ( step_decl { method_decl } | method_decl { method_decl } ) DEDENT
 step_decl      := "step" "(" [ params ] ")" "->" type ":" block                              (* hoechstens einmal je Instanz und Tick, 5.7 *)   (* @check 11 *)
 method_decl    := IDENT "(" [ params ] ")" [ "->" type ] ":" block                           (* weitere Methoden wie start/stop/elapsed, 11.4 *)
-generic_vars   := "[" gvar { "," gvar } "]"          (* 3.12: Einheiten- (v1), Typ- und Konstantenvariablen (v1.2) *)   (* @check 52 *)
+generic_vars   := "[" gvar { "," gvar } "]"          (* 3.12: Einheiten- (v1), Konstanten- (v1.1), Typvariablen (v1.2) *)   (* @check 52 *)
 gvar           := UPPER_IDENT | "type" UPPER_IDENT [ ":" capability ] | "const" UPPER_IDENT [ "in" range ]   (* @check 52 *)
 capability     := "pod" | "eq" | "ord" | "numeric" | "integer" | "float"
 params         := param { "," param }
@@ -227,7 +227,7 @@ primary        := number [ unit_expr ] | duration_lit | STRING | "true" | "false
                 | "[" [ expr { "," expr } ] "]"
                 | "[" const_expr "]" IDENT "(" [ args ] ")"                                  (* Array von Block-Instanzen, 5.7 *)
 generic_args   := "[" generic_arg { "," generic_arg } "]"
-generic_arg    := unit_expr | type | const_expr                                              (* Einheit (v1); Typ oder Konstante (3.12, v1.2); Klasse nach Namensform *)
+generic_arg    := unit_expr | type | const_expr                                              (* Einheit (v1); Konstante (v1.1); Typ (v1.2), 3.12; Klasse nach Namensform *)
 args           := arg { "," arg }
 arg            := [ IDENT "=" ] expr
 number         := int_lit | FLOAT
