@@ -10,6 +10,7 @@ pub mod layout;
 pub mod machine;
 pub mod pattern;
 pub mod stmt;
+pub mod stream;
 pub mod types;
 
 use std::collections::HashMap;

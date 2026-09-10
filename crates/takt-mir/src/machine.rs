@@ -134,6 +134,8 @@ pub enum Guard {
     Match {
         /// Subjekt (Stream oder Wert).
         subject: Expr,
+        /// `matches` oder `has` (8.7).
+        kind: MatchKind,
         /// Muster.
         pattern: Pattern,
         /// Bindung (gehobene Variable).

@@ -231,7 +231,7 @@ codec_enum!(FaultTarget { 0 State(1 one s), 1 Faulted });
 codec_enum!(Target { 0 State(1 one s), 1 Faulted, 2 Fault(1 one k) });
 codec_enum!(Guard {
     0 Expr(1 one e),
-    1 Match { 1 one subject, 2 one pattern, 3 opt binding },
+    1 Match { 1 one subject, 2 one pattern, 3 opt binding, 4 one kind },
     2 Next { 1 one stream, 2 one binding },
 });
 codec_enum!(TransTrigger { 0 When(1 one g), 1 After(1 one d) });

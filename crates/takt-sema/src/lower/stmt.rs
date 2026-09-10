@@ -38,6 +38,14 @@ impl Lowerer<'_> {
     pub fn stmts(&mut self, stmts: &[ast::Stmt], kind: BlockKind) -> Vec<Stmt> {
         let mut out = Vec::new();
         for s in stmts {
+            // `pulse o = v for d` ist Zucker fuer zwei Anweisungen (7.5,
+            // 6.2): setzen und die Wiederherstellung planen.
+            if let ast::StmtKind::Pulse { output, value, duration } = &s.kind {
+                if let Some(pair) = self.pulse(output, value, duration, s.span) {
+                    out.extend(pair);
+                }
+                continue;
+            }
             if let Some(m) = self.stmt(s, kind) {
                 out.push(m);
             }
@@ -141,13 +149,20 @@ impl Lowerer<'_> {
                 };
                 StmtKind::Return(self.check(value, ret)?)
             }
-            ast::StmtKind::Send { .. } => {
-                self.stage(span, "`send`", Stage::V1_1);
+            ast::StmtKind::Send { stream, value } => self.send(stream, value)?,
+            ast::StmtKind::At(at) => self.at_stmt(at)?,
+            // `pulse` wird in `stmts` zu zwei Anweisungen (7.5).
+            ast::StmtKind::Pulse { .. } => {
+                self.error(SC3, span, "`pulse` nur als eigenstaendige Anweisung");
                 return None;
             }
-            ast::StmtKind::Pulse { .. } | ast::StmtKind::Cancel(_) | ast::StmtKind::At(_) => {
-                self.stage(span, "geplante Ausgaben", Stage::V1_1);
-                return None;
+            ast::StmtKind::Cancel(name) => {
+                let Some(Entity::Channel(c)) = self.lookup(name) else {
+                    self.error(SC3, name.span, format!("`{}` ist kein Output", name.name));
+                    return None;
+                };
+                self.add_output_queue(c);
+                StmtKind::Cancel(c)
             }
             ast::StmtKind::Measure { name, value } => {
                 let v = self.observe_expr(value)?;

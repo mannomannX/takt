@@ -5,7 +5,7 @@
 //! weil das Sema Konstanten vorher auf Konstanz prueft.
 
 use takt_diag::Span;
-use takt_mir::expr::Builtin;
+use takt_mir::expr::{Builtin, StreamRef};
 use takt_mir::machine::FaultKind;
 use takt_mir::{ChannelId, CommandId, CounterId, MachineId, ParamId, SignalId, SiteId, TypeId, VarId};
 
@@ -163,6 +163,19 @@ pub trait Outer {
     /// `raise sig` (5.8).
     fn raise(&mut self, _s: SignalId) -> EvalResult<()> {
         bug("raise ausserhalb einer Maschine")
+    }
+    /// `send s, wert` (8.6, 8.8): in einen Ausgabestrom oder einen internen
+    /// Stream. Ueberlauf trifft den Schreiber.
+    fn send(&mut self, _s: StreamRef, _v: Value, _len_max: u32, _span: Span) -> EvalResult<()> {
+        bug("send ausserhalb einer Maschine")
+    }
+    /// `at T: o = v` (9.8): plant einen Schreibvorgang ein.
+    fn schedule(&mut self, _o: ChannelId, _t: i64, _v: Value, _span: Span) -> EvalResult<()> {
+        bug("at ausserhalb einer Maschine")
+    }
+    /// `cancel o` (7.5): verwirft die ausstehenden Schreibvorgaenge.
+    fn cancel(&mut self, _o: ChannelId) -> EvalResult<()> {
+        bug("cancel ausserhalb einer Maschine")
     }
 }
 

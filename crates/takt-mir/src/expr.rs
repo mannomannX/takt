@@ -41,7 +41,7 @@ pub struct MachineRef {
 }
 
 /// Bezug auf einen Stream (8.6, 7.5).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StreamRef {
     /// Channel mit Stream-Typ.
     Channel(ChannelId),

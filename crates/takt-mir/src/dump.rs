@@ -371,8 +371,12 @@ impl Dumper<'_> {
     fn guard(&self, g: &Guard) -> String {
         match g {
             Guard::Expr(e) => self.expr(e),
-            Guard::Match { subject, pattern, binding } => {
-                let mut t = format!("{} matches {}", self.expr(subject), self.pattern(pattern));
+            Guard::Match { subject, pattern, binding, kind } => {
+                let op = match kind {
+                    MatchKind::Matches => "matches",
+                    MatchKind::Has => "has",
+                };
+                let mut t = format!("{} {op} {}", self.expr(subject), self.pattern(pattern));
                 if let Some(b) = binding {
                     write!(t, " as {}", self.var_name(*b)).expect("String");
                 }

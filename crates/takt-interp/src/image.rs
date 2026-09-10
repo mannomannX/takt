@@ -57,6 +57,9 @@ pub struct Image {
     pub stream_next: Vec<Vec<(i64, Value, u32)>>,
     /// Sendepuffer je Ausgabestrom: freier Platz und Warteschlange (8.8).
     pub tx: HashMap<ChannelId, TxBuffer>,
+    /// `sched[o]`: geplante Schreibvorgaenge, nach `T` sortiert (9.8). Nur
+    /// fuer Outputs, die in einem `at` oder `pulse` vorkommen.
+    pub sched: HashMap<ChannelId, Vec<(i64, Value)>>,
 }
 
 /// Sendepuffer eines Ausgabestroms (8.8): der Treiber leert ihn mit
@@ -165,6 +168,7 @@ impl Image {
             stream_bufs,
             stream_next,
             tx,
+            sched: HashMap::new(),
         }
     }
 
@@ -244,6 +248,35 @@ impl Image {
         }
         entry.state = Some(state);
         entry.signals = signals.to_vec();
+    }
+
+    /// `apply_scheduled(k)` (9.8): faellige Schreibvorgaenge in den Latch.
+    /// Die Simulation wendet einen Zeitpunkt `T` im Tick `ceil(T / T0)` an.
+    pub fn apply_scheduled(&mut self, now: i64) {
+        for (o, queue) in &mut self.sched {
+            let mut due: Vec<(i64, Value)> = Vec::new();
+            queue.retain(|(t, v)| {
+                if *t <= now {
+                    due.push((*t, v.clone()));
+                    false
+                } else {
+                    true
+                }
+            });
+            // Nach `T` sortiert; der spaeteste faellige Wert gewinnt.
+            if let Some((_, v)) = due.into_iter().max_by_key(|(t, _)| *t) {
+                self.outputs[o.index()] = v;
+            }
+        }
+        self.sched.retain(|_, q| !q.is_empty());
+    }
+
+    /// Leert `sched` aller Outputs einer Maschine (5.3: ein Fault-Uebergang
+    /// verwirft die geplanten Schreibvorgaenge).
+    pub fn cancel_all_scheduled(&mut self, outputs: &[ChannelId]) {
+        for o in outputs {
+            self.sched.remove(o);
+        }
     }
 
     /// Tauscht Ψ (Doppelpuffer, 11.2).

@@ -50,6 +50,21 @@ impl Checker<'_> {
         Ok(())
     }
 
+    /// Handler: Stream, Bindung, Muster und Rumpf (8.7).
+    fn handler(&self, h: &takt_mir::machine::Handler) -> Result<(), Diagnostic> {
+        self.stream(h.stream, h.span)?;
+        if let Some(v) = h.binding {
+            self.var(v, h.span)?;
+        }
+        if let Some((_, takt_mir::pattern::Pattern::Record { record, fields })) = &h.pattern {
+            self.index(&self.p.records, record.index(), "Record", h.span)?;
+            for (_, e) in fields {
+                self.expr(e)?;
+            }
+        }
+        self.block(&h.body)
+    }
+
     fn stream(&self, s: StreamRef, span: Span) -> Result<(), Diagnostic> {
         match s {
             StreamRef::Channel(c) => self.index(&self.p.channels, c.index(), "Channel", span),
@@ -238,9 +253,15 @@ impl Checker<'_> {
                 arms.iter().try_for_each(|a| self.block(&a.body))
             }
             StmtKind::Return(e) => self.expr(e),
-            StmtKind::Send { .. } => Err(stage(span, "send", Stage::V1_1)),
-            StmtKind::At { .. } => Err(stage(span, "at", Stage::V1_1)),
-            StmtKind::Cancel(_) => Err(stage(span, "cancel", Stage::V1_1)),
+            StmtKind::Send { stream, value, .. } => {
+                self.stream(*stream, span)?;
+                self.expr(value)
+            }
+            StmtKind::At { time, body } => {
+                self.expr(time)?;
+                self.block(body)
+            }
+            StmtKind::Cancel(c) => self.index(&self.p.channels, c.index(), "Channel", span),
             StmtKind::Raise(sig) => {
                 let m = self.machine.ok_or_else(|| err(span, "raise ausserhalb einer Maschine"))?;
                 self.index(&m.signals, sig.index(), "Signal", span)
@@ -295,10 +316,21 @@ impl Checker<'_> {
     fn guard(&self, g: &Guard, span: Span) -> Result<(), Diagnostic> {
         match g {
             Guard::Expr(e) => self.expr(e),
-            Guard::Match { .. } => Err(stage(span, "Musterguard", Stage::V1_1)),
-            Guard::Next { stream, .. } => {
+            Guard::Match { subject, pattern, binding, .. } => {
+                if let takt_mir::pattern::Pattern::Record { record, fields } = pattern {
+                    self.index(&self.p.records, record.index(), "Record", span)?;
+                    for (_, e) in fields {
+                        self.expr(e)?;
+                    }
+                }
+                if let Some(v) = binding {
+                    self.var(*v, span)?;
+                }
+                self.expr(subject)
+            }
+            Guard::Next { stream, binding } => {
                 self.stream(*stream, span)?;
-                Err(stage(span, "Stream-Guard", Stage::V1_1))
+                self.var(*binding, span)
             }
         }
     }
@@ -389,8 +421,8 @@ pub fn check(p: &Program) -> Result<(), Diagnostic> {
             return Err(stage(m.span, "Knotenplatzierung", Stage::V2));
         }
         c.block(&m.loop_block)?;
-        if !m.handlers.is_empty() {
-            return Err(stage(m.span, "Handler", Stage::V1_1));
+        for h in &m.handlers {
+            c.handler(h)?;
         }
         for t in &m.faulted.transitions {
             self_transition(&c, t)?;
@@ -419,8 +451,8 @@ pub fn check(p: &Program) -> Result<(), Diagnostic> {
             if !s.instances.is_empty() {
                 return Err(stage(s.span, "gescopte Instanzen", Stage::V1_2));
             }
-            if !s.handlers.is_empty() {
-                return Err(stage(s.span, "Handler", Stage::V1_1));
+            for h in &s.handlers {
+                c.handler(h)?;
             }
             for &v in &s.vars {
                 c.index(&m.vars, v.index(), "Variable", s.span)?;

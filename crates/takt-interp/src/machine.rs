@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use takt_diag::Span;
-use takt_mir::expr::Builtin;
+use takt_mir::expr::{Builtin, StreamRef};
 use takt_mir::machine::*;
 use takt_mir::stmt::Block;
 use takt_mir::*;
@@ -13,6 +13,7 @@ use takt_mir::*;
 use crate::env::{MachineEnv, Observation};
 use crate::exec::{Mode, Out};
 use crate::loaded::Loaded;
+use crate::stream::Element;
 use crate::value::{EvalResult, Fault, Trap, Value, bug};
 
 /// Laufzeitzustand einer Maschine (Σ_m, 9.1).
@@ -312,6 +313,14 @@ pub fn exec_chain(
             other => return Ok(other),
         }
     }
+    // Handler der Maschinenebene laufen nach ihrem `loop:` (8.7).
+    if mode == Mode::Run {
+        let handlers = env.machine(loaded).handlers.clone();
+        match dispatch(loaded, env, &handlers, tick)? {
+            Out::Normal => {}
+            other => return Ok(other),
+        }
+    }
     for s in states {
         let block = env.machine(loaded).states[s.index()].loop_block.clone();
         let mut ctx = env.ctx(loaded, tick);
@@ -319,9 +328,93 @@ pub fn exec_chain(
             Out::Normal => {}
             other => return Ok(other),
         }
-        // Handler laufen unmittelbar nach dem loop: ihrer Ebene (8.7, M2).
+        // Handler laufen unmittelbar nach dem `loop:` ihrer Ebene, Vorfahren
+        // vor Nachfahren (8.7); im Entry-Modus ist das Fenster leer (9.6).
+        if mode == Mode::Run {
+            let handlers = env.machine(loaded).states[s.index()].handlers.clone();
+            match dispatch(loaded, env, &handlers, tick)? {
+                Out::Normal => {}
+                other => return Ok(other),
+            }
+        }
     }
     Ok(Out::Normal)
+}
+
+/// Handler-Dispatch (9.7): fuer jeden Stream in Deklarationsreihenfolge, je
+/// Element in seq-Reihenfolge, je Handler in Quelltextreihenfolge. Der erste
+/// passende gewinnt; ein Uebergang stoppt die Verarbeitung und laesst den
+/// Rest des Fensters fuer den Folgezustand stehen. Auch ein Element, auf das
+/// kein Handler passt, gilt als untersucht.
+pub fn dispatch(
+    loaded: &Loaded<'_>,
+    env: &mut MachineEnv<'_, '_>,
+    handlers: &[Handler],
+    tick: u64,
+) -> Result<Out, Trap> {
+    if handlers.is_empty() {
+        return Ok(Out::Normal);
+    }
+    // Streams in Deklarationsreihenfolge; jede Ebene sieht dasselbe Fenster.
+    let mut streams: Vec<StreamRef> = Vec::new();
+    for h in handlers {
+        if !streams.contains(&h.stream) {
+            streams.push(h.stream);
+        }
+    }
+    for stream in streams {
+        let window = env.window(loaded, stream);
+        for element in window {
+            let mut hit = false;
+            for h in handlers.iter().filter(|h| h.stream == stream) {
+                let Some(caps) = match_handler(loaded, env, h, &element)? else { continue };
+                if let Some(var) = h.binding {
+                    let value = env.element_record(loaded, var, &element, caps)?;
+                    *env.state.vars.get_mut(var.index()).ok_or_else(|| Trap::Bug("Bindung fehlt".into()))? = value;
+                }
+                env.mark_examined(loaded, stream, element.seq);
+                let body = h.body.clone();
+                let mut ctx = env.ctx(loaded, tick);
+                let out = ctx.exec_block(&body, Mode::Run)?;
+                hit = true;
+                if out != Out::Normal {
+                    // Der Rest des Fensters bleibt im Puffer (8.7).
+                    return Ok(out);
+                }
+                break;
+            }
+            if !hit {
+                env.mark_examined(loaded, stream, element.seq);
+            }
+        }
+    }
+    Ok(Out::Normal)
+}
+
+/// Gleicht das Muster eines Handlers gegen ein Element ab; `None` heisst
+/// „passt nicht", `Some(caps)` die Werte seiner Captures.
+fn match_handler(
+    loaded: &Loaded<'_>,
+    env: &mut MachineEnv<'_, '_>,
+    h: &Handler,
+    element: &Element,
+) -> Result<Option<Vec<Value>>, Trap> {
+    let Some((kind, pattern)) = &h.pattern else {
+        // Catch-all: jedes Element trifft (8.7).
+        return Ok(Some(Vec::new()));
+    };
+    let consts = match pattern {
+        takt_mir::pattern::Pattern::Record { fields, .. } => {
+            let mut out = Vec::new();
+            for (_, e) in fields {
+                let mut ctx = env.ctx(loaded, env.tick);
+                out.push(ctx.eval(e)?);
+            }
+            out
+        }
+        takt_mir::pattern::Pattern::Text { .. } => Vec::new(),
+    };
+    Ok(crate::pattern::match_value(pattern, *kind, &element.value, &consts))
 }
 
 /// Uebergaenge und Fault-Wald aufloesen (9.3, `resolve_m`).

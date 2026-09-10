@@ -509,6 +509,7 @@ pub fn full_program() -> Program {
         name: "cut_on_erase".into(),
         node: Some(node_io1),
         guard: Guard::Match {
+            kind: MatchKind::Matches,
             subject: e(ExprKind::Input { channel: ch_log, dominated: false }, t_stream_line),
             pattern: Pattern::Text {
                 pieces: vec![
@@ -1296,6 +1297,7 @@ pub fn full_program() -> Program {
             },
             SeqItem::Until {
                 guard: Guard::Match {
+                    kind: MatchKind::Matches,
                     subject: e(ExprKind::Input { channel: ch_log, dominated: true }, t_stream_line),
                     pattern: Pattern::Text { pieces: vec![PatternPiece::Text("Boot".into())], dfa: None },
                     binding: Some(v_m),

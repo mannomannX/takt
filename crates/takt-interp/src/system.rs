@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use takt_diag::Span;
+
 use takt_mir::expr::{Builtin, StreamRef};
 use takt_mir::machine::{FaultKind, Machine, MachineKind, VarScope};
 use takt_mir::program::{OutputTiming, Overflow, Program};
@@ -15,7 +17,7 @@ use crate::eval::Ctx;
 use crate::image::Image;
 use crate::loaded::Loaded;
 use crate::machine::{self, MachineState};
-use crate::stream::Delivery;
+use crate::stream::{Delivery, Element};
 use crate::value::{EvalResult, Fault, Sample, Trap, Value, bug};
 
 impl<'a, 'p> MachineEnv<'a, 'p> {
@@ -112,6 +114,69 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
             };
             *self.image.output_mut(c) = value;
         }
+    }
+
+    /// Fenster eines Stroms fuer diese Aktivierung (9.6, `windows`). Im
+    /// Entry-Modus ist es leer — dort laufen keine Handler (8.7).
+    pub fn window(&self, loaded: &Loaded<'_>, stream: StreamRef) -> Vec<Element> {
+        let cursor = self.cursor_of(loaded, stream);
+        match stream {
+            StreamRef::Channel(c) => self.image.channel_bufs.get(&c).map(|b| b.window(cursor)).unwrap_or_default(),
+            StreamRef::Internal(s) => {
+                self.image.stream_bufs.get(s.index()).map(|b| b.window(cursor)).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Cursor dieser Maschine auf einem Strom (`cur[s, m]`, 9.6).
+    pub fn cursor_of(&self, loaded: &Loaded<'_>, stream: StreamRef) -> i64 {
+        let m = &loaded.program.machines[self.id.index()];
+        match m.layout.cursors.iter().position(|r| *r == stream) {
+            Some(i) => self.state.cursors.get(i).copied().unwrap_or(0),
+            None => 0,
+        }
+    }
+
+    /// Merkt ein Element als untersucht (9.6, „untersucht heisst
+    /// konsumiert"): `examined` ist das Maximum ueber alle Konstrukte der
+    /// Aktivierung.
+    pub fn mark_examined(&mut self, loaded: &Loaded<'_>, stream: StreamRef, seq: i64) {
+        let m = &loaded.program.machines[self.id.index()];
+        if let Some(i) = m.layout.cursors.iter().position(|r| *r == stream) {
+            if let Some(e) = self.state.examined.get_mut(i) {
+                *e = (*e).max(seq);
+            }
+        }
+    }
+
+    /// Baut den Bindungsrecord eines Elements: die Captures, gefolgt von
+    /// `.t`, `.seq` und `.text`/`.data` (8.7).
+    pub fn element_record(
+        &mut self,
+        loaded: &Loaded<'_>,
+        var: VarId,
+        element: &Element,
+        caps: Vec<Value>,
+    ) -> Result<Value, Trap> {
+        let m = &loaded.program.machines[self.id.index()];
+        let ty = m.vars.get(var.index()).map(|v| v.ty).ok_or_else(|| Trap::Bug("Bindung fehlt".into()))?;
+        let Type::Record(r) = loaded.ty(ty) else {
+            return bug(format!("Bindung {} ist kein Record", var.0));
+        };
+        let defs = loaded.program.records[r.index()].fields.clone();
+        let mut fields = caps;
+        for def in defs.iter().skip(fields.len()) {
+            let v = match def.name.as_str() {
+                "t" => Value::Duration(element.t),
+                "seq" => Value::Int(element.seq),
+                "text" | "data" => element.value.clone(),
+                _ => Value::default_for(def.ty, loaded.program),
+            };
+            fields.push(v);
+        }
+        fields.truncate(defs.len());
+        Ok(Value::Record(fields))
     }
 
     /// Meldet einen Fault als Beobachtung.
@@ -271,6 +336,88 @@ impl Outer for MachineEnv<'_, '_> {
 
     fn abort(&mut self) -> EvalResult<()> {
         self.aborted = true;
+        Ok(())
+    }
+
+    fn send(&mut self, stream: StreamRef, v: Value, len_max: u32, span: Span) -> EvalResult<()> {
+        match stream {
+            // Ausgabestrom: die Bytes gehen in den Sendepuffer; reicht der
+            // freie Platz nicht, ist das ein `StreamOverflow` (8.8).
+            StreamRef::Channel(c) => {
+                let bytes = to_bytes(&v);
+                let Some(tx) = self.image.tx.get_mut(&c) else {
+                    return bug(format!("Channel {} ist kein Ausgabestrom", c.0));
+                };
+                if bytes.len() as u32 > tx.free() {
+                    let name = self.loaded.program.channels[c.index()].name.clone();
+                    let drop = matches!(self.loaded.program.channels[c.index()].attrs.overflow, Some(Overflow::Drop));
+                    if drop {
+                        self.out.push(Observation::Alert {
+                            span,
+                            index: Vec::new(),
+                            active: true,
+                            message: format!("Sendepuffer `{name}` voll, {} Byte verworfen", bytes.len()),
+                            invalid: false,
+                        });
+                        return Ok(());
+                    }
+                    return Err(Trap::Fault(Fault::new(
+                        FaultKind::StreamOverflow,
+                        format!("Sendepuffer `{name}` hat {} Byte frei, {} verlangt", tx.free(), bytes.len()),
+                        span,
+                        self.tick,
+                    )));
+                }
+                tx.queued.extend(bytes);
+                Ok(())
+            }
+            // Interner Stream: das Element wird im naechsten Tick sichtbar
+            // (8.6, Unit-Delay).
+            StreamRef::Internal(sid) => {
+                let t = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(self.tick_ns);
+                let bytes = crate::stream::byte_len(&v).max(len_max.min(crate::stream::byte_len(&v)));
+                let Some(slot) = self.image.stream_next.get_mut(sid.index()) else {
+                    return bug(format!("interner Stream {} fehlt", sid.0));
+                };
+                slot.push((t, v, bytes));
+                Ok(())
+            }
+            _ => bug("`send` auf einem Nicht-Stream"),
+        }
+    }
+
+    fn schedule(&mut self, o: ChannelId, t: i64, v: Value, span: Span) -> EvalResult<()> {
+        let now = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(self.tick_ns);
+        // 9.8: `T <= now + guard(o)` ist ein `TimingFault`; in der Simulation
+        // ist `guard` null.
+        if t <= now {
+            let name = self.loaded.program.channels[o.index()].name.clone();
+            return Err(Trap::Fault(Fault::new(
+                FaultKind::Timing,
+                format!("`at` fuer `{name}` liegt nicht in der Zukunft"),
+                span,
+                self.tick,
+            )));
+        }
+        let queue = self.image.sched.entry(o).or_default();
+        if queue.len() as u32 >= MAX_SCHED {
+            let name = self.loaded.program.channels[o.index()].name.clone();
+            return Err(Trap::Fault(Fault::new(
+                FaultKind::ScheduleOverflow,
+                format!("`sched` von `{name}` ist voll ({MAX_SCHED})"),
+                span,
+                self.tick,
+            )));
+        }
+        // Sortiert nach T; gleiche T: die spaetere Anweisung gewinnt (9.8).
+        queue.retain(|(at, _)| *at != t);
+        queue.push((t, v));
+        queue.sort_by_key(|(at, _)| *at);
+        Ok(())
+    }
+
+    fn cancel(&mut self, o: ChannelId) -> EvalResult<()> {
+        self.image.sched.remove(&o);
         Ok(())
     }
 
@@ -542,6 +689,14 @@ impl<'p> Sim<'p> {
         // publish(sigma), commit(L)
         self.publish_all();
         self.image.commit_published();
+        // apply_scheduled(k): faellige geplante Schreibvorgaenge vor dem
+        // Commit (9.4, 9.8).
+        let now = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(tick_ns);
+        self.image.apply_scheduled(now);
+        // Der Treiber holt die gesendeten Bytes ab (8.8).
+        for tx in self.image.tx.values_mut() {
+            tx.drain();
+        }
         self.image.commit_outputs();
         self.image.clear_commands();
         for state in &mut self.states {
@@ -696,5 +851,23 @@ impl Outer for ParamEnv {
             Builtin::Tick => Ok(Value::Duration(self.tick)),
             other => bug(format!("`{other:?}` ist im Anfangswert nicht lesbar")),
         }
+    }
+}
+
+/// `K_o` (7.5): hoechstens so viele geplante Schreibvorgaenge je Output.
+/// Der Default aus 7.5 ist vier.
+pub const MAX_SCHED: u32 = 4;
+
+/// Bytes eines Werts fuer einen Ausgabestrom (8.8): Text und Bytes gehen
+/// als Inhalt, eine Zahl als ein Byte.
+fn to_bytes(v: &Value) -> Vec<u8> {
+    match v {
+        Value::Bytes(b) => b.clone(),
+        Value::Str(s) => s.as_bytes().to_vec(),
+        Value::Line { text, .. } => text.as_bytes().to_vec(),
+        Value::Int(i) => vec![*i as u8],
+        Value::UInt(u) => vec![*u as u8],
+        Value::Array(items) => items.iter().flat_map(to_bytes).collect(),
+        _ => Vec::new(),
     }
 }

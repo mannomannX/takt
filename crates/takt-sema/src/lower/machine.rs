@@ -245,8 +245,10 @@ impl Lowerer<'_> {
             let block = self.block(l, BlockKind::Loop);
             self.mctx.as_mut().expect("Maschine").machine.loop_block = block;
         }
-        if let Some(h) = decl.body.handlers.first() {
-            self.stage(h.span, "Handler", Stage::V1_1);
+        for h in &decl.body.handlers {
+            if let Some(handler) = self.handler(h) {
+                self.mctx.as_mut().expect("Maschine").machine.states[id.index()].handlers.push(handler);
+            }
         }
         // Zustaende
         for s in &decl.body.states {
@@ -395,8 +397,10 @@ impl Lowerer<'_> {
             let b = self.block(l, BlockKind::Loop);
             self.mctx.as_mut().expect("Maschine").machine.states[id.index()].loop_block = b;
         }
-        if let Some(h) = decl.body.handlers.first() {
-            self.stage(h.span, "Handler", Stage::V1_1);
+        for h in &decl.body.handlers {
+            if let Some(handler) = self.handler(h) {
+                self.mctx.as_mut().expect("Maschine").machine.states[id.index()].handlers.push(handler);
+            }
         }
         if let Some(seq) = &decl.body.sequence {
             if !decl.body.states.is_empty() {
@@ -482,20 +486,16 @@ impl Lowerer<'_> {
         result
     }
 
-    /// Guard: Bool-Ausdruck; Muster- und Stream-Guards ab M2.
+    /// Guard: Bool-Ausdruck, Musterguard oder Stream-Guard (5.2, 8.7).
     pub fn guard(&mut self, g: &ast::Guard) -> Option<Guard> {
         match g {
             ast::Guard::Expr(e) => {
-                if let ast::ExprKind::Match { .. } = &e.kind {
-                    self.stage(e.span, "Musterguards", Stage::V1_1);
-                    return None;
+                if let ast::ExprKind::Match { subject, kind, pattern, binding } = &e.kind {
+                    return self.match_guard(subject, *kind, pattern, binding.as_ref(), e.span);
                 }
                 Some(Guard::Expr(self.check_bool(e)?))
             }
-            ast::Guard::Next { subject, .. } => {
-                self.stage(subject.span, "Stream-Guards", Stage::V1_1);
-                None
-            }
+            ast::Guard::Next { subject, binding } => self.stream_guard(subject, Some(binding)),
         }
     }
 

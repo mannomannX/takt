@@ -8,10 +8,11 @@
 use std::collections::{HashMap, HashSet};
 
 use takt_diag::{Diagnostic, Span};
-use takt_mir::expr::{Expr, ExprKind};
+use takt_mir::expr::{Expr, ExprKind, StreamRef};
 use takt_mir::machine::*;
 use takt_mir::program::{Binding, Direction};
 use takt_mir::stmt::*;
+use takt_mir::types::Type;
 use takt_mir::*;
 
 use crate::lower::Lowerer;
@@ -61,6 +62,7 @@ impl Lowerer<'_> {
     /// Fuehrt alle MIR-Pruefungen aus.
     pub fn run_mir_checks(&mut self) {
         self.default_max_age();
+        self.stream_capacities();
         self.check_writers();
         self.check_fault_forest();
         self.check_reachability();
@@ -97,6 +99,182 @@ impl Lowerer<'_> {
             if let Some(period) = fastest.get(&ChannelId(i as u32)) {
                 c.attrs.max_age = Some(2 * i64::from(*period) * tick);
             }
+        }
+    }
+
+    /// Kapazitaeten der Stroeme und Pruefung 17 (8.6, Lemma 9.6.1).
+    ///
+    /// Der Default fuer `capacity` haengt an der groessten Periode unter den
+    /// Konsumenten, die Pruefung an der Periode jedes einzelnen — beides ist
+    /// erst bekannt, wenn alle Maschinen gelowert sind, also ein Nachlauf.
+    fn stream_capacities(&mut self) {
+        let tick = self.program.config.tick;
+        let readers = self.stream_readers();
+
+        // --- Channels mit Stream-Typ ------------------------------------
+        for i in 0..self.program.channels.len() {
+            let id = ChannelId(i as u32);
+            let c = &self.program.channels[i];
+            if !matches!(self.program.types.list.get(c.ty.index()), Some(Type::Stream(_))) {
+                continue;
+            }
+            if c.dir != Direction::Input {
+                continue;
+            }
+            let (name, span, elem) = (c.name.clone(), c.span, stream_elem(&self.program, c.ty));
+            let periods: Vec<u32> = readers.get(&StreamRef::Channel(id)).cloned().unwrap_or_default();
+            // 8.6: `max_rate` ist Pflicht an einem `hw`-Stream.
+            let Some(max_rate) = self.rate_hz(i) else {
+                self.error_hint(
+                    SC17,
+                    span,
+                    format!("Stream `{name}` braucht `max_rate`"),
+                    "`with max_rate = 2000 Hz` ergaenzen (8.6)",
+                );
+                continue;
+            };
+            // MAXPT = ceil(max_rate * T0): so viele Elemente treffen je
+            // Basis-Tick hoechstens ein.
+            let maxpt = ceil_div(max_rate.saturating_mul(tick as u64), 1_000_000_000).max(1);
+            let p_max = periods.iter().copied().max().unwrap_or(1);
+            let default_cap = (2 * maxpt.saturating_mul(u64::from(p_max))).clamp(1, u64::from(u32::MAX));
+            let cap = match self.program.channels[i].attrs.capacity {
+                Some(n) => u64::from(n),
+                None => {
+                    let n = default_cap as u32;
+                    self.program.channels[i].attrs.capacity = Some(n);
+                    u64::from(n)
+                }
+            };
+            let elem_bytes = elem.and_then(|t| self.elem_bytes(t)).unwrap_or(1);
+            let cap_bytes = match self.program.channels[i].attrs.capacity_bytes {
+                Some(n) => u64::from(n),
+                None => {
+                    // 8.6: Default `capacity * N`, mit `expect_len` statt N,
+                    // wenn deklariert — dann warnt der Compiler einmal.
+                    let per = match self.program.channels[i].attrs.expect_len {
+                        Some(n) => {
+                            self.warn_hint(
+                                SC17,
+                                span,
+                                format!("`expect_len = {n}` an `{name}`: Lemma 9.6.1 gilt nur unter dieser Annahme"),
+                                "mittlere Laenge ueber `capacity` Elemente hoechstens `expect_len` (8.6)",
+                            );
+                            u64::from(n)
+                        }
+                        None => u64::from(elem_bytes),
+                    };
+                    let n = (cap.saturating_mul(per)).clamp(1, u64::from(u32::MAX)) as u32;
+                    self.program.channels[i].attrs.capacity_bytes = Some(n);
+                    u64::from(n)
+                }
+            };
+            self.check_maxpt(&name, span, maxpt, &periods, Caps { cap, cap_bytes, elem_bytes: u64::from(elem_bytes) });
+        }
+
+        // --- interne Streams --------------------------------------------
+        for i in 0..self.program.streams.len() {
+            let def = &self.program.streams[i];
+            let (name, span, elem) = (def.name.clone(), def.span, def.elem);
+            let cap = u64::from(def.capacity);
+            let periods: Vec<u32> = readers.get(&StreamRef::Internal(StreamId(i as u32))).cloned().unwrap_or_default();
+            let elem_bytes = u64::from(self.elem_bytes(elem).unwrap_or(1));
+            let cap_bytes = match self.program.streams[i].capacity_bytes {
+                Some(n) => u64::from(n),
+                None => {
+                    let per = self.program.streams[i].expect_len.map_or(elem_bytes, u64::from);
+                    let n = (cap.saturating_mul(per)).clamp(1, u64::from(u32::MAX)) as u32;
+                    self.program.streams[i].capacity_bytes = Some(n);
+                    u64::from(n)
+                }
+            };
+            // 8.6: MAXPT eines internen Stroms ist die statische Hoechstzahl
+            // von `send` je Aktivierung des Schreibers.
+            let maxpt = self.max_sends(StreamRef::Internal(StreamId(i as u32)));
+            self.check_maxpt(&name, span, maxpt, &periods, Caps { cap, cap_bytes, elem_bytes });
+        }
+    }
+
+    /// Pruefung 17: `MAXPT * n_m <= CAP` je Konsument, dazu die Byte-Variante
+    /// aus Lemma 9.6.1.
+    fn check_maxpt(&mut self, name: &str, span: Span, maxpt: u64, periods: &[u32], caps: Caps) {
+        let Caps { cap, cap_bytes, elem_bytes } = caps;
+        for n_m in periods {
+            let need = maxpt.saturating_mul(u64::from(*n_m));
+            if need > cap {
+                self.error_hint(
+                    SC17,
+                    span,
+                    format!("Stream `{name}`: {need} Elemente je Aktivierung, `capacity` ist {cap}"),
+                    format!("`with capacity = {need}` setzen oder die Periode des Konsumenten senken (8.6)"),
+                );
+                return;
+            }
+            let need_bytes = need.saturating_mul(elem_bytes);
+            if need_bytes > cap_bytes {
+                self.error_hint(
+                    SC17,
+                    span,
+                    format!("Stream `{name}`: {need_bytes} Byte je Aktivierung, `capacity_bytes` ist {cap_bytes}"),
+                    format!("`with capacity_bytes = {need_bytes}` setzen (8.6, Lemma 9.6.1)"),
+                );
+                return;
+            }
+        }
+    }
+
+    /// Perioden der Konsumenten je Stream, aus `Layout::cursors`.
+    fn stream_readers(&self) -> HashMap<StreamRef, Vec<u32>> {
+        let mut out: HashMap<StreamRef, Vec<u32>> = HashMap::new();
+        for m in &self.program.machines {
+            if matches!(m.kind, MachineKind::Template) || m.states.is_empty() {
+                continue;
+            }
+            for r in &m.layout.cursors {
+                out.entry(*r).or_default().push(m.period.max(1));
+            }
+        }
+        out
+    }
+
+    /// Statische Hoechstzahl von `send` auf einen Stream je Aktivierung des
+    /// Schreibers (8.6, Pruefung 43).
+    fn max_sends(&self, target: StreamRef) -> u64 {
+        let mut worst = 0u64;
+        for m in &self.program.machines {
+            if matches!(m.kind, MachineKind::Template) {
+                continue;
+            }
+            let mut n = 0u64;
+            for_each_stmt(m, &mut |s| {
+                if let StmtKind::Send { stream, .. } = &s.kind {
+                    if *stream == target {
+                        n += 1;
+                    }
+                }
+            });
+            worst = worst.max(n);
+        }
+        worst.max(1)
+    }
+
+    /// `max_rate` eines Channels in Hz, als ganze Zahl.
+    fn rate_hz(&self, index: usize) -> Option<u64> {
+        let e = self.program.channels[index].attrs.max_rate.as_ref()?;
+        match &e.kind {
+            ExprKind::Int(n) => u64::try_from(*n).ok(),
+            ExprKind::Float(f) if *f >= 0.0 => Some(*f as u64),
+            _ => None,
+        }
+    }
+
+    /// Bytelast eines Elementtyps: die deklarierte Hoechstlaenge (8.6).
+    fn elem_bytes(&self, ty: TypeId) -> Option<u32> {
+        match self.program.types.list.get(ty.index())? {
+            Type::Bytes { cap } | Type::Line { cap } | Type::Str { cap } => Some(*cap),
+            Type::Int { width, .. } => Some(width.bits() / 8),
+            Type::Record(r) => self.program.records[r.index()].wire_size.or(Some(1)),
+            _ => Some(1),
         }
     }
 
@@ -847,4 +1025,27 @@ fn has_checked(e: &Expr) -> bool {
         }
     });
     found
+}
+
+/// Elementtyp eines `stream<E>`.
+fn stream_elem(p: &takt_mir::Program, ty: TypeId) -> Option<TypeId> {
+    match p.types.list.get(ty.index()) {
+        Some(Type::Stream(e)) => Some(*e),
+        _ => None,
+    }
+}
+
+/// Aufrundende Division fuer positive Nenner.
+fn ceil_div(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { a.div_ceil(b) }
+}
+
+/// Schranken eines Stroms fuer Pruefung 17.
+struct Caps {
+    /// `CAP` in Elementen.
+    cap: u64,
+    /// `CAPB` in Bytes.
+    cap_bytes: u64,
+    /// Bytelast eines Elements.
+    elem_bytes: u64,
 }

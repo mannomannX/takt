@@ -209,9 +209,28 @@ impl Ctx<'_, '_> {
                 bug("match ohne passenden Zweig (nicht erschoepfend)")
             }
             StmtKind::Return(e) => Ok(Out::Return(self.eval(e)?)),
-            StmtKind::Send { .. } => bug("send ab M2"),
-            StmtKind::At { .. } => bug("at ab M2"),
-            StmtKind::Cancel(_) => bug("cancel ab M2"),
+            StmtKind::Send { stream, value, len_max } => {
+                let v = self.eval(value)?;
+                self.outer.send(*stream, v, *len_max, span)?;
+                Ok(Out::Normal)
+            }
+            StmtKind::At { time, body } => {
+                // 9.8: die rechten Seiten werden jetzt ausgewertet, die
+                // Schreibvorgaenge gesammelt und nach `T` eingeplant.
+                let t = self.eval_duration(time)?;
+                for stmt in &body.stmts {
+                    let StmtKind::Assign { target: Place::Output(c), value } = &stmt.kind else {
+                        return bug("`at`-Block enthaelt mehr als Output-Zuweisungen");
+                    };
+                    let v = self.eval(value)?;
+                    self.outer.schedule(*c, t, v, stmt.span)?;
+                }
+                Ok(Out::Normal)
+            }
+            StmtKind::Cancel(c) => {
+                self.outer.cancel(*c)?;
+                Ok(Out::Normal)
+            }
             StmtKind::Raise(sig) => {
                 self.outer.raise(*sig)?;
                 Ok(Out::Normal)
@@ -372,7 +391,12 @@ impl Ctx<'_, '_> {
                 other => bug(format!("clear auf {}", other.kind_name())),
             },
             Method::Insert | Method::Remove => bug("map ab M6"),
-            Method::Skip => bug("Streams ab M2"),
+            Method::Skip => {
+                // 8.6: `s.skip()` untersucht alles und verwirft das Fenster.
+                let Place::Var(v) = receiver else { return bug("`skip` auf einer Nicht-Variablen") };
+                let _ = v;
+                bug("`skip` nur auf einem Stream")
+            }
         }
     }
 
