@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use takt_syntax::{tokenize, ErrorCode, TokenKind};
+use takt_syntax::{ErrorCode, TokenKind, tokenize};
 
 fn takt_files(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)

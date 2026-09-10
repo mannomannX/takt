@@ -1,0 +1,69 @@
+(system
+  (language 1)
+  (tick 1ms)
+  (output_timing asap))
+(enum ValveCmd
+  (CLOSED)
+  (OPEN))
+(input chamber_p :float[bar] in 0..300[bar] @hw("daq1/ai1") max_age=5ms)
+(input supply_p :float[bar] in 0..100[bar] @hw("daq1/ai2") max_age=5ms)
+(output fuel_main :ValveCmd @hw("plc1/do0") safe=CLOSED)
+(output ox_main :ValveCmd @hw("plc1/do1") safe=CLOSED)
+(output igniter :bool @hw("plc1/do2") safe=false)
+(command start)
+(command reset)
+(command abort_run)
+(param CHAMBER_LIMIT :float[bar] in 100..300[bar] 250[bar])
+(param IGNITION_P :float[bar] in 5..100[bar] 20[bar])
+(param BURN :Duration 3s)
+(param PURGE_CYCLES :int in 1..10 3)
+(machine hotfire
+  (fault -> SAFE)
+  (initial ARMED)
+  (loop
+    (if abort_run
+      (abort "operator abort")))
+  (state ARMED
+    (initial IDLE)
+    (loop
+      (check (< chamber_p CHAMBER_LIMIT) "chamber overpressure {chamber_p}" for=5ms)
+      (alert (< supply_p 30[bar]) "supply pressure low" for=200ms))
+    (state IDLE
+      (when (and start (> supply_p 30[bar])) -> PURGE
+        (log "starting run")))
+    (state PURGE
+      (sequence
+        (repeat PURGE_CYCLES
+          (= fuel_main OPEN)
+          (wait 200ms)
+          (= fuel_main CLOSED)
+          (wait 300ms))
+        (-> IGNITION)))
+    (state IGNITION
+      (sequence
+        (step "open fuel"
+          (= fuel_main OPEN)
+          (wait 150ms))
+        (step "ignite"
+          (= igniter true)
+          (until (> chamber_p IGNITION_P) timeout=500ms -> SAFE)
+          (expect (> chamber_p IGNITION_P) "no chamber pressure after ignition"))
+        (step "burn"
+          (= ox_main OPEN)
+          (check (> chamber_p IGNITION_P) "flameout")
+          (wait BURN))
+        (-> SHUTDOWN)))
+    (state SHUTDOWN
+      (enter
+        (= ox_main CLOSED)
+        (= igniter false))
+      (after 200ms -> DONE
+        (= fuel_main CLOSED)))
+    (state DONE
+      (when reset -> IDLE)))
+  (state SAFE
+    (enter
+      (= fuel_main CLOSED)
+      (= ox_main CLOSED)
+      (= igniter false))
+    (when (and reset (< chamber_p 2[bar])) -> IDLE)))

@@ -1,0 +1,69 @@
+(system
+  (language 1)
+  (tick 100ms)
+  (float f64))
+(unit torr 133.322 Pa)
+(unit rpm 1 1/min)
+(enum Mode
+  (OFF)
+  (HEATING)
+  (HOLDING)
+  (COOLING))
+(enum Severity layout=u8
+  (INFO =0)
+  (WARN =1)
+  (ALARM =2))
+(record Sample
+  (value: float[degC])
+  (valid_count: u16)
+  (severity: Severity))
+(const OCV :table<float[V], float[pct]> (array (tuple 3.0[V] 0[pct]) (tuple 3.4[V] 10[pct]) (tuple 3.7[V] 50[pct]) (tuple 4.2[V] 100[pct])))
+(const R_SHUNT :float[mohm] 5[mohm])
+(const MAX_STEP :float[K] 3[K])
+(param SETPOINT :float[degC] in 20..200[degC] 120[degC])
+(param BAND :float[K] in 1..20[K] 5[K])
+(profile QUAL
+  (SETPOINT 180[degC])
+  (BAND 2[K]))
+(fn clamp [U] (x:float[U] lo:float[U] hi:float[U]) -> float[U]
+  (return (if (< x lo) lo (if (> x hi) hi x))))
+(fn shunt_current (u:float[V]) -> float[A]
+  (return (/ u (.to R_SHUNT ohm))))
+(fn severity_of (delta:float[K]) -> Severity
+  (if (> delta (* 3 MAX_STEP))
+    (return ALARM))
+  (if (> delta MAX_STEP)
+    (return WARN))
+  (return INFO))
+(input oven_t :float[degC] in (- 50)..400[degC] @hw("oven/pv") max_age=500ms debounce=2)
+(input cell_v :float[V] in 2.0..4.5[V] @hw("bms/cell0") max_age=200ms)
+(output heater :bool @hw("oven/heat") safe=false)
+(output cooler :bool @hw("oven/cool") safe=false)
+(machine oven
+  (fault -> SAFE)
+  (pub-var mode :Mode OFF)
+  (pub-var soc :float[pct] 0[pct])
+  (initial REGULATE)
+  (state REGULATE
+    (loop
+      (check (< oven_t (+ SETPOINT 20[K])) "oven overtemperature {oven_t}")
+      (= soc (call interp OCV cell_v))
+      (var delta :float[K] (- SETPOINT oven_t))
+      (alert (== (call severity_of delta) ALARM) "temperature far from setpoint")
+      (if (> delta BAND)
+        (= heater true)
+        (= cooler false)
+        (= mode HEATING))
+      (elif (< delta (- BAND))
+        (= heater false)
+        (= cooler true)
+        (= mode COOLING))
+      (else
+        (= heater false)
+        (= cooler false)
+        (= mode HOLDING))))
+  (state SAFE
+    (enter
+      (= heater false)
+      (= cooler false)
+      (= mode OFF))))

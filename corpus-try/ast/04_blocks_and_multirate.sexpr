@@ -1,0 +1,76 @@
+(system
+  (language 1)
+  (tick 50us))
+(unit pct2 0.01)
+(block lowpass [U] (tau:Duration)
+  (var y :float[U] 0)
+  (var seeded :bool false)
+  (step (x:float[U] dt:Duration in tick..1h) -> float[U]
+    (if (not seeded)
+      (= y x)
+      (= seeded true))
+    (var a :float (/ (.as dt s) (+ (.as tau s) (.as dt s))))
+    (= y (+ y (* a (- x y))))
+    (return y)))
+(block limiter [U] (max_rate:float[U/s])
+  (var last :float[U] 0)
+  (step (target:float[U] dt:Duration in tick..1h) -> float[U]
+    (var step_max :float[U] (* max_rate (.as dt s)))
+    (if (> target (+ last step_max))
+      (= last (+ last step_max)))
+    (elif (< target (- last step_max))
+      (= last (- last step_max)))
+    (else
+      (= last target))
+    (return last)))
+(input i_phase :samples<float[A], 16> @hw("adc/ia") rate=320[kHz])
+(input speed :float[1/min] in 0..12000[1/min] @hw("enc/rpm") max_age=1ms)
+(output duty :float in 0..1 @hw("pwm/ch0") safe=0 label="PWM duty")
+(output fault_led :bool @hw("gpio/led") safe=false)
+(param I_MAX :float[A] in 1..60[A] 40[A])
+(param KP :float in 0..10 0.8)
+(machine current_ctrl every=50us
+  (fault -> TRIP)
+  (pub-var i_meas :float[A] 0[A])
+  (signal tripped)
+  (initial RUN)
+  (state RUN
+    (loop
+      (check (< (.max i_phase) I_MAX) "phase overcurrent" for=200us)
+      (= i_meas (.mean i_phase))
+      (var err :float[A] (- (call speed_setpoint_current) i_meas))
+      (= duty (call clamp01 (/ (* KP err) I_MAX))))
+    (when (>= (.max i_phase) I_MAX) -> TRIP
+      (raise tripped)))
+  (state TRIP
+    (enter
+      (= duty 0)
+      (= fault_led true))))
+(fn clamp01 (x:float) -> float
+  (return (if (< x 0) 0 (if (> x 1) 1 x))))
+(fn speed_setpoint_current () -> float[A]
+  (return 10[A]))
+(machine speed_ctrl follows=current_ctrl every=1ms phase=100us
+  (initial RUN)
+  (state RUN
+    (loop
+      (every 100ms
+        (log "speed loop alive"))
+      (for i in (range 4)
+        (if (== (.count i_phase) 0)
+          (break))
+        (pass)))
+    (when (.tripped current_ctrl) -> HOLD))
+  (state HOLD
+    (when (< speed 10[1/min]) -> RUN)))
+(machine fan_ctrl (setpoint:input float[pct2] out:output float tau:Duration=500ms) every=10ms
+  (initial RUN)
+  (state RUN
+    (loop
+      (= out (/ setpoint 100[pct2])))))
+(input fan_sp_a :float[pct2] in 0..100[pct2] @hw("ui/fan_a"))
+(input fan_sp_b :float[pct2] in 0..100[pct2] @hw("ui/fan_b"))
+(output fan_a :float in 0..1 @hw("pwm/fan_a") safe=0)
+(output fan_b :float in 0..1 @hw("pwm/fan_b") safe=0)
+(instance fan_one fan_ctrl setpoint=fan_sp_a out=fan_a)
+(instance fan_two fan_ctrl setpoint=fan_sp_b out=fan_b tau=1s)

@@ -1,0 +1,77 @@
+(system
+  (language 1)
+  (tick 5ms)
+  (fault_is_fail true))
+(input press :float[bar] in 0..40[bar] @hw("rig/ai0") max_age=20ms)
+(output pump :bool @hw("rig/do0") safe=false)
+(output press_sim :float[bar] @sim("rig/ai0"))
+(command start)
+(command reset)
+(tunable-param KP :float[pct/bar] in 0..10[pct/bar] 0.5[pct/bar])
+(param TARGET :float[bar] in 5..30[bar] 20[bar])
+(param TIMEOUT :Duration 30s)
+(profile QUAL
+  (TARGET 25[bar])
+  (TIMEOUT 1min))
+(property pump_off_when_high (always (implies (> press (+ TARGET 5[bar])) (not pump))))
+(property reaches_target (always (implies start (eventually[45s] (> press TARGET)))))
+(machine rig
+  (fault -> SAFE)
+  (pub-var settled :bool false)
+  (var t_start :Duration 0s)
+  (initial IDLE)
+  (state IDLE
+    (enter
+      (= pump false)
+      (= settled false))
+    (when start -> FILL
+      (= t_start now)))
+  (state FILL
+    (loop
+      (check (< press 35[bar]) "overpressure during fill")
+      (= pump (< press TARGET)))
+    (when (>= press TARGET) -> HOLD
+      (measure fill_time (- now t_start))
+      (verify (< press (+ TARGET 2[bar])) "overshoot too large")
+      (= settled true))
+    (after TIMEOUT -> SAFE
+      (verdict fail "target not reached within timeout")))
+  (state HOLD
+    (loop
+      (alert (< press (- TARGET 3[bar])) "pressure sagging" for=1s))
+    (after 10s -> IDLE
+      (verdict pass "fill and hold completed")))
+  (state SAFE
+    (enter
+      (= pump false))
+    (when reset -> IDLE)))
+(machine rig_model every=5ms
+  (var p :float[bar] 0[bar])
+  (initial RUN)
+  (state RUN
+    (loop
+      (if pump
+        (= p (+ p 0.05[bar])))
+      (else
+        (= p (- p 0.01[bar])))
+      (= press_sim p))))
+(scenario "fill reaches target" every=5ms
+  (initial RUN)
+  (state RUN
+    (sequence
+      (until (.settled rig) timeout=40s
+        (else
+          (verdict fail "rig never settled")
+          (-> DONE)))
+      (verify (.settled rig) "expected settled state")
+      (verdict pass "scenario complete")
+      (-> DONE)))
+  (state DONE
+    (loop
+      (pass))))
+(campaign gain_sweep
+  (program "06_test_harness.takt")
+  (profile QUAL)
+  (sweep TARGET 10[bar]..30[bar] step=5[bar])
+  (repeat 2)
+  (stop_on fail))

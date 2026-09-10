@@ -1,0 +1,31 @@
+(system
+  (language 1)
+  (tick 10ms))
+(record Header layout=little
+  (magic: u16 = 0xA55A)
+  (seq_no: u16))
+(input cell_v :float[V] in 2.0..4.5[V] @hw("bms/cell0") max_age=100ms)
+(input wave :stream<capture<float[V], 4096>> @hw("daq/cap0") max_rate=10[Hz])
+(output dummy :bool @hw("gpio/do0") safe=false)
+(block integrate [U] (limit:float[U])
+  (var acc :float[U] 0)
+  (step (x:float[U] dt:Duration in tick..1h) -> float[U]
+    (= acc (+ acc (* x (.as dt s))))
+    (return acc)))
+(fn first [type T:pod, const N in 1..64] (v:vec<T, N>) -> T?
+  (return (.get v 0)))
+(machine gaps every=100ms
+  (var coulomb (call integrate [A] limit=72000[A*s]))
+  (var table :map<u16, int, 8> default)
+  (initial RUN)
+  (state RUN
+    (loop
+      (var charge (.step coulomb cell_v 100ms))
+      (var seconds (.as 100ms s))
+      (var safe_v (.or cell_v 3.7[V]))
+      (var mode (.state gaps))
+      (var hdr (.decode Header (call raw_bytes)))
+      (for (k v) in table
+        (= dummy (> v 0))))))
+(fn raw_bytes () -> bytes<8>
+  (return default))

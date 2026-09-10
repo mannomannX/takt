@@ -3,8 +3,8 @@
 //! Notation (siehe lexer.md, Einleitung): `"eingabe" => TOKENS`, `!` markiert
 //! Fehlervektoren, `~` zwischen Tokens verlangt das Flag *anliegend*.
 
-use takt_syntax::subtext::{address_text, format_text, pattern_text, FormatPiece, PatternPiece};
-use takt_syntax::{tokenize, ErrorCode, TokenKind};
+use takt_syntax::subtext::{FormatPiece, PatternPiece, address_text, format_text, pattern_text};
+use takt_syntax::{ErrorCode, TokenKind, tokenize};
 
 struct Vector {
     block: String,
@@ -174,7 +174,9 @@ fn parse_items(expected: &str) -> Vec<Item> {
                 Some(p) if piece.ends_with(')') && piece[..p].bytes().all(|b| b.is_ascii_uppercase() || b == b'_') => {
                     (piece[..p].to_string(), Some(piece[p + 1..piece.len() - 1].to_string()))
                 }
-                _ if matches!(piece.as_str(), "NEWLINE" | "INDENT" | "DEDENT" | "WILD" | "ANY") => (piece.clone(), None),
+                _ if matches!(piece.as_str(), "NEWLINE" | "INDENT" | "DEDENT" | "WILD" | "ANY") => {
+                    (piece.clone(), None)
+                }
                 _ => ("OP".to_string(), Some(piece.clone())),
             };
             items.push(Item { kind, text, joint_next: k + 1 < n });
@@ -245,7 +247,9 @@ fn check_main(v: &Vector) -> Result<(), String> {
         actual
             .iter()
             .map(|t| match t.kind {
-                TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent | TokenKind::Wild => kind_name(t.kind).to_string(),
+                TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent | TokenKind::Wild => {
+                    kind_name(t.kind).to_string()
+                }
                 TokenKind::Op => toks.text(t).to_string(),
                 TokenKind::Duration => format!("DUR({})", t.value),
                 TokenKind::Str => format!("STRING({})", toks.unescape(t).escape_debug()),

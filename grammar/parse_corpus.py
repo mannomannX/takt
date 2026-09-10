@@ -5,9 +5,11 @@
     python grammar/parse_corpus.py --tokens DATEI    zeigt den Tokenstrom
 
 Der Tokenizer folgt grammar/lexer.md; der Parser ist ein memoisierter
-Backtracking-Interpreter ueber die EBNF, der jede Ableitung zulaesst. Er ist
-kein Ersatz fuer den Parser in takt-syntax, sondern das Orakel dafuer: Was er
-akzeptiert, akzeptiert die Grammatik; was er ablehnt, lehnt sie ab.
+Backtracking-Interpreter ueber die EBNF, der jede Ableitung zulaesst, plus die
+zwei Festlegungen aus den Grammatikkommentaren (kontextuelle Woerter sind keine
+Einheiten; in "<…>" eines Typs schliesst ">"). Er ist kein Ersatz fuer den Parser
+in takt-syntax, sondern das Orakel dafuer: Was er akzeptiert, akzeptiert die
+Grammatik; was er ablehnt, lehnt sie ab. grammar/diff_parse.py vergleicht beide.
 """
 from __future__ import annotations
 
@@ -197,10 +199,24 @@ def terminal_matches(term, tok):
     return False
 
 
+# Produktionen, deren "<" … ">" einen Typ klammert: darin schliesst ">" und
+# vergleicht nicht (Kommentar zu cmp_expr in takt.ebnf).
+ANGLE_PRODS = {"type", "scalar_type", "elem_type", "stream_decl"}
+
+
+def contextual_words(prods, keywords, reserved):
+    """Wortterminale der Grammatik ohne Schluesselwoerter: nie Einheitenname (lexer.md L4.3)."""
+    words = set()
+    for p in prods.values():
+        words |= set(re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"', p["rhs"]))
+    return words - set(keywords) - set(reserved)
+
+
 class Parser:
-    def __init__(self, prods, tokens):
+    def __init__(self, prods, tokens, contextual=frozenset()):
         self.trees = {name: cg.parse_rhs(cg.TOKEN_RE.findall(p["rhs"])) for name, p in prods.items()}
         self.tokens = tokens
+        self.contextual = contextual
         self.memo = {}
         self.far, self.expected = 0, set()
 
@@ -210,36 +226,59 @@ class Parser:
         elif i == self.far:
             self.expected.add(what)
 
-    def nt(self, name, i):
-        key = (name, i)
+    def nt(self, name, i, angle=0):
+        key = (name, i, angle)
         if key in self.memo:
             return self.memo[key]
         self.memo[key] = ()
         result = set()
+        if name == "unit_term" and i < len(self.tokens) and self.tokens[i].kind in WORD_KINDS \
+                and self.tokens[i].text in self.contextual:
+            self.fail(i, "Einheitenname")
+            return ()
         for seq in self.trees[name]:
-            result |= self.seq(seq, i)
+            result |= self.seq(name, seq, i, angle)
+        if name == "unit_lit":
+            # kompakt: alle Tokens nach dem ersten liegen an; maximal: nur das laengste Ende
+            ends = [e for e in result if all(self.joint(k) for k in range(i + 1, e))]
+            result = {max(ends)} if ends else set()
         self.memo[key] = tuple(sorted(result))
         return self.memo[key]
 
-    def seq(self, seq, i):
+    def joint(self, k):
+        """Liegt Token k ohne Leerraum am vorigen an?"""
+        a, b = self.tokens[k - 1], self.tokens[k]
+        return a.line == b.line and b.col == a.col + len(a.text)
+
+    def seq(self, name, seq, i, angle):
         positions = {i}
         for f in seq:
             nxt = set()
             for p in positions:
-                nxt |= self.factor(f, p)
+                nxt |= self.factor(name, f, p, angle)
             positions = nxt
             if not positions:
                 break
+            if f[0] == "term":
+                if f[1] in ("(", "[", "{"):
+                    angle = 0          # in Klammern vergleicht ">" wieder
+                elif name in ANGLE_PRODS and f[1] == "<":
+                    angle += 1
+                elif name in ANGLE_PRODS and f[1] == ">":
+                    angle -= 1
         return positions
 
-    def factor(self, f, i):
+    def factor(self, name, f, i, angle):
         kind = f[0]
         if kind == "term":
             if f[1] == ">>":
-                if (i + 1 < len(self.tokens) and self.tokens[i].kind == "OP"
+                if (angle == 0 and i + 1 < len(self.tokens) and self.tokens[i].kind == "OP"
                         and self.tokens[i].text == ">" and self.tokens[i + 1].kind == "OP>"):
                     return {i + 2}
                 self.fail(i, '">>"')
+                return set()
+            if f[1] == ">" and angle > 0 and name not in ANGLE_PRODS:
+                self.fail(i, '">" (schliesst hier den Typ)')
                 return set()
             if i < len(self.tokens) and terminal_matches(f[1], self.tokens[i]):
                 return {i + 1}
@@ -251,24 +290,24 @@ class Parser:
             self.fail(i, f[1])
             return set()
         if kind == "nt":
-            return set(self.nt(f[1], i))
+            return set(self.nt(f[1], i, angle))
         bracket, alts = f[1], f[2]
         if bracket == "(":
             out = set()
             for alt in alts:
-                out |= self.seq(alt, i)
+                out |= self.seq(name, alt, i, angle)
             return out
         if bracket == "[":
             out = {i}
             for alt in alts:
-                out |= self.seq(alt, i)
+                out |= self.seq(name, alt, i, angle)
             return out
         result, frontier = {i}, {i}
         while frontier:
             new = set()
             for p in frontier:
                 for alt in alts:
-                    new |= self.seq(alt, p)
+                    new |= self.seq(name, alt, p, angle)
             new -= result
             result |= new
             frontier = new
@@ -301,6 +340,7 @@ def main(argv):
     if snippet:
         prods["snippet"] = {"rhs": SNIPPET_RHS, "stage": "", "start": True, "checks": []}
     start = "snippet" if snippet else "file"
+    contextual = contextual_words(prods, keywords, reserved)
     failures = 0
     for path in files:
         text = io.open(path, encoding="utf-8").read()
@@ -324,7 +364,7 @@ def main(argv):
             print(f"[LEXFEHLER] {path}: E_RESERVED '{t.text}' in Zeile {t.line}, Spalte {t.col}")
             failures += 1
             continue
-        parser = Parser(prods, tokens)
+        parser = Parser(prods, tokens, contextual)
         if parser.parse(start):
             print(f"[OK      ] {path}  ({len(tokens)} Tokens)")
         else:

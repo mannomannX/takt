@@ -77,7 +77,7 @@ record_field   := field NEWLINE
                 | IDENT ":" int_type "with" "bits" ":" NEWLINE INDENT { bitfield NEWLINE } DEDENT   (* endet mit DEDENT, daher kein NEWLINE *)
 field          := ( IDENT | "_" ) ":" type [ "=" const_expr ] [ "offset" "=" int_lit ] [ "with" "len" "=" IDENT ]   (* "_": Padding; Konstantenfeld, Offset, len_field: 3.7 *)   (* @check 37, 50 *)
 bitfield       := IDENT ":" ( "bool" | int_type ) "at" int_lit [ ".." int_lit ]   (* @check 46 *)
-unit_decl      := "unit" IDENT "=" number [ unit_expr ] NEWLINE                              (* ohne unit_expr: dimensionslos wie pct, 3.2 *)
+unit_decl      := "unit" IDENT "=" number [ unit_lit ] NEWLINE                              (* ohne unit_expr: dimensionslos wie pct, 3.2 *)
                 | "unit" IDENT "=" "affine" "(" unit_expr "," number ")" NEWLINE
 
 (* ---------------------------------------------------------------- Konstanten, Parameter, Channels *)
@@ -207,7 +207,7 @@ expr           := or_expr [ "if" or_expr "else" expr ]
 or_expr        := and_expr { "or" and_expr }
 and_expr       := not_expr { "and" not_expr }
 not_expr       := "not" not_expr | cmp_expr
-cmp_expr       := bitor_expr [ ( "<" | "<=" | ">" | ">=" | "==" | "!=" ) bitor_expr ]
+cmp_expr       := bitor_expr [ ( "<" | "<=" | ">" | ">=" | "==" | "!=" ) bitor_expr ]   (* in "<" … ">" eines Typs ist ">" kein Vergleich, sondern schliesst den Typ; ein Vergleich dort steht in Klammern *)
                 | bitor_expr ( "matches" | "has" ) pattern [ "as" IDENT ]
 bitor_expr     := bitxor_expr { "|" bitxor_expr }
 bitxor_expr    := bitand_expr { "^" bitand_expr }
@@ -219,7 +219,7 @@ unary          := "-" unary | "~" unary | cast_expr
 cast_expr      := postfix [ "as" scalar_type ]   (* @check 24 *)
 postfix        := primary { "." member [ "(" [ args ] ")" ] | "[" expr [ ".." expr ] "]" | "[" expr "," expr "]" }   (* @check 24 *)
 member         := IDENT | KEYWORD                    (* nach "." ist jedes Wort ein Membername: .as .or .len .state .step .bits .jitter (2.5) *)   (* @check 50 *)
-primary        := number [ unit_expr ] | duration_lit | STRING | "true" | "false" | "none" | "default"   (* unit_expr kompakt ohne Leerraum, lexer.md L4.3 *)
+primary        := number [ unit_lit ] | duration_lit | STRING | "true" | "false" | "none" | "default"
                 | IDENT [ generic_args ] [ "(" [ args ] ")" ]                                (* Variable, eingebaute Groesse (now, tick, event), Aufruf, Instanziierung clamp[bar](...): IDENT "[" ... "]" "(" ist Instanziierung, sonst Index in postfix *)
                 | "(" expr ")" | "(" expr "," expr ")"                                       (* Gruppe; Stuetzstelle einer table, 3.9 *)
                 | UPPER_IDENT [ "(" [ args ] ")" ]
@@ -236,12 +236,13 @@ duration_lit   := DURATION                      (* Zahl mit genau einem Zeitsuff
 duration_expr  := expr                          (* Typ Duration *)
 pattern        := STRING                        (* Musterliteral, Inhalt nach pattern_text (8.7) *)   (* @check 18 *)
                 | TYPE_IDENT "(" [ IDENT "=" const_expr { "," IDENT "=" const_expr } ] ")"   (* Record-Muster, 8.7 *)
-unit_expr      := unit_term { ( "*" | "/" ) unit_term }
-unit_term      := ( IDENT | UPPER_IDENT | TYPE_IDENT ) [ "^" INT ] | "1"   (* Einheitenname jeder Form (bar, mV, V, Hz, KiB) oder Einheitenvariable; "1" = dimensionslos, z. B. 1/s *)
+unit_lit       := unit_expr   (* Einheit nach einer Zahl: ohne Leerraum geschrieben und so weit gelesen, wie die Tokens anliegen (lexer.md L4.3); "5 K/min" ist ein Literal, "5 K / min" eine Division *)
+unit_expr      := ( unit_term | "1" "/" unit_term ) { ( "*" | "/" ) unit_term }   (* die "1" (dimensionslos) steht nur als Zaehler: 1/s, 1/X *)
+unit_term      := ( IDENT | UPPER_IDENT | TYPE_IDENT ) [ "^" INT ]   (* Einheitenname jeder Form (bar, mV, V, Hz, KiB) oder Einheitenvariable, nie ein kontextuelles Terminal (lexer.md L4.3) *)
 
 (* ---------------------------------------------------------------- Typausdruecke *)
 
-type           := scalar_type [ "in" range ] [ "?" | "!" TYPE_IDENT ] | "[" const_expr "]" type | TYPE_IDENT [ "?" | "!" TYPE_IDENT ]   (* @check 30, 45, 57 *)
+type           := scalar_type [ "in" range ] [ "?" | "!" TYPE_IDENT ] | "[" const_expr "]" type | TYPE_IDENT [ "?" | "!" TYPE_IDENT ]   (* nach "<" schliesst das naechste ">" derselben Klammerebene den Typ, siehe cmp_expr *)   (* @check 30, 45, 57 *)
                 | "bytes" "<" const_expr ">" | "vec" "<" type "," const_expr ">" | "line" "<" const_expr ">"
                 | "stream" "<" elem_type ">" | "samples" "<" type "," const_expr ">" | "table" "<" type "," type ">"
                 | "mat" "<" const_expr "," const_expr ">" [ "[" unit_expr "]" ]                   (* 3.11, uniform *)

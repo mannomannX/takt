@@ -19,9 +19,7 @@ const TIME: &[(&str, i128)] = &[
 ];
 
 /// Zweizeichen-Operatoren; `>>` fehlt absichtlich (L6.1).
-const OPS2: &[[u8; 2]] = &[
-    *b"->", *b"..", *b"+=", *b"-=", *b"*=", *b"/=", *b"==", *b"!=", *b"<=", *b">=", *b"<<",
-];
+const OPS2: &[[u8; 2]] = &[*b"->", *b"..", *b"+=", *b"-=", *b"*=", *b"/=", *b"==", *b"!=", *b"<=", *b">=", *b"<<"];
 const OPS1: &[u8] = b"+-*/%&|^~<>=.,:()[]{}@?!";
 
 /// Zerlegt Quelltext in Tokens. Fehler stehen in `Tokens::errors`; das letzte

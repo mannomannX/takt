@@ -1,0 +1,134 @@
+(system
+  (language 1)
+  (tick 10ms)
+  (target baremetal)
+  (float f32)
+  (tick_source "gptimer0")
+  (tick_tolerance 2[pct] for=10))
+(unit sector 4096 B)
+(enum FlashCmd
+  (NONE)
+  (ERASE (sector_no: u32))
+  (PROGRAM (addr: u32[B]) (size: u32[B]))
+  (READ (addr: u32[B]) (size: u32[B])))
+(enum FlashStatus
+  (IDLE)
+  (BUSY)
+  (DONE)
+  (ERROR (code: u8)))
+(record SelftestResult
+  (passed: bool)
+  (code: int in 0..255))
+(native-fn crc32c (b:bytes<256>) -> u32 cost={i32:4000} stack=64)
+(native-fn sha256_init () -> Sha256Ctx cost=200 stack=64)
+(native-fn sha256_update (ctx:Sha256Ctx chunk:bytes<256>) -> Sha256Ctx cost={i32:90000} stack=256)
+(native-fn sha256_final (ctx:Sha256Ctx) -> bytes<32> cost=3000 stack=256)
+(native-job verify_sig (key:bytes<64> digest:bytes<32> sig:bytes<64>) -> bool cost=300 stack=2048 duration=120ms)
+(input cell_mv :u16[mV] in 2000[mV]..4500[mV] @hw("afe/cell0") max_age=100ms max_slew=200[mV/s])
+(input charger :bool @hw("gpio/vbus") wake=true)
+(input button :stream<Edge> @hw("gpio/btn") max_rate=50[Hz] wake=true)
+(input chg_status :u8 @hw("i2c1/0x6B/0x0B") max_age=500ms)
+(input flash_status :FlashStatus @hw("flash/status") max_age=10ms)
+(input flash_rx :stream<bytes<256>> @hw("flash/rx") max_rate=200[Hz] capacity=2)
+(input image_state :ImageState @hw("sys/image_state") max_age=1s)
+(output flash_cmd :FlashCmd @hw("flash/cmd") safe=NONE)
+(output fet_chg :bool @hw("gpio/fet_chg") safe=false)
+(output led :u8 @hw("pwm/led") safe=0)
+(output image_confirm :bool @hw("sys/image_confirm") safe=false)
+(command wake_up wake=true)
+(param V_MAX :u16[mV] in 4000[mV]..4300[mV] 4200[mV])
+(param IMAGE_SIZE :u32[B] in 1024[B]..1048576[B] 65536[B])
+(param PUBKEY_SLOT :int in 0..3 0)
+(machine bms every=100ms
+  (fault -> PROTECT)
+  (persist cycle_count :int in 0..100000 0 min_interval=10s)
+  (persist fault_count :int in 0..1000 0 min_interval=10s)
+  (persist last_test :SelftestResult (SelftestResult passed=false code=0))
+  (pub-var healthy :bool false)
+  (initial ACTIVE)
+  (state ACTIVE
+    (initial SELFTEST)
+    (loop
+      (check (< cell_mv (+ V_MAX 50[mV])) "cell overvoltage {cell_mv}")
+      (check (not (.bit chg_status 7)) "charger fault flag")
+      (var masked :u8 (& chg_status 0x0F))
+      (alert (> masked 0x08) "charger status unusual"))
+    (state SELFTEST
+      (enter
+        (= led 128))
+      (loop
+        (= healthy (> cell_mv 3000[mV])))
+      (when healthy -> RUN
+        (= last_test (SelftestResult passed=true code=0)))
+      (after 2s -> DEGRADED
+        (= last_test (SelftestResult passed=false code=1))))
+    (state RUN
+      (loop
+        (= fet_chg (and charger (< cell_mv V_MAX)))
+        (= led 255)
+        (if (and (== image_state TRIAL) (.passed last_test))
+          (= image_confirm true)))
+      (when (not charger) -> IDLE_WAIT))
+    (state IDLE_WAIT
+      (when charger -> RUN)
+      (after 2min -> STANDBY))
+    (state DEGRADED
+      (enter
+        (= fet_chg false)
+        (= led 8))
+      (after 24h -> SELFTEST)))
+  (state STANDBY idle
+    (enter
+      (= fet_chg false)
+      (= led 0))
+    (when (as button e) -> ACTIVE)
+    (when charger -> ACTIVE)
+    (when wake_up -> ACTIVE)
+    (after 168h -> ACTIVE))
+  (state PROTECT
+    (enter
+      (= fet_chg false)
+      (= led 255)
+      (+= fault_count 1))
+    (when (> fault_count 20) -> FAULTED)
+    (after 10s -> ACTIVE)))
+(machine updater every=100ms
+  (fault -> UPD_FAILED)
+  (var ctx :Sha256Ctx (call sha256_init))
+  (var done_bytes :u32[B] 0[B])
+  (var digest :bytes<32> default)
+  (initial UPD_IDLE)
+  (state UPD_IDLE
+    (when (== image_state TRIAL) -> HASHING))
+  (state HASHING
+    (enter
+      (= ctx (call sha256_init))
+      (= done_bytes 0[B])
+      (= flash_cmd NONE))
+    (loop
+      (if (and (== flash_status IDLE) (< done_bytes IMAGE_SIZE))
+        (= flash_cmd (READ addr=done_bytes size=256[B]))))
+    (on flash_rx as chunk
+      (= ctx (call sha256_update ctx (.data chunk)))
+      (+= done_bytes 256[B])
+      (= flash_cmd NONE))
+    (when (>= done_bytes IMAGE_SIZE) -> VERIFYING)
+    (after 30s -> UPD_FAILED))
+  (state VERIFYING
+    (sequence
+      (= digest (call sha256_final ctx))
+      (job sig verify_sig key=(call pubkey_bytes) digest=digest sig=(call signature_bytes))
+      (until (.done sig) timeout=500ms -> UPD_FAILED)
+      (expect (.result sig) "signature invalid")
+      (-> UPD_OK)))
+  (state UPD_OK
+    (enter
+      (log "image verified")))
+  (state UPD_FAILED
+    (enter
+      (= flash_cmd NONE)
+      (log "image verification failed"))))
+(fn pubkey_bytes () -> bytes<64>
+  (return default))
+(fn signature_bytes () -> bytes<64>
+  (return default))

@@ -215,7 +215,9 @@ Ein Einheitenausdruck darf nur direkt auf ein Zahlenliteral folgen (Grammatik
   Variable `min`.
 - **Einheitennamen** sind Wörter beliebiger Form (`bar`, `mV`, `V`, `K`, `B`, `Hz`, `Pa`,
   `KiB`, `degC`) oder die Ziffer `1` für dimensionslos (`1/s`). Der Tokenizer prüft nicht,
-  ob die Einheit existiert; das tut die Semantik (3.2).
+  ob die Einheit existiert; das tut die Semantik (3.2). Ein kontextuelles Terminal der
+  Grammatik (2.2: `timeout`, `offset`, `raw`, …) ist nie Einheitenname: in
+  `until x == 3 timeout 5 s` gehört `timeout` zur Klausel, nicht zur Zahl.
 - Der Tokenizer erzeugt für den Einheitenausdruck gewöhnliche Tokens (`IDENT`, `UPPER`,
   `TYPE`, `INT`, `*`, `/`, `^`); die Bindung ergibt sich aus dem Anliegen. Ein
   Einheitenname, der zugleich Schlüsselwort ist, kommt nicht vor (2.2 enthält keine

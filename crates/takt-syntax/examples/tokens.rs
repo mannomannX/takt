@@ -1,7 +1,7 @@
 //! Gibt den Tokenstrom einer Datei aus, ein Token je Zeile: `ART<TAB>Text`.
 //! Dient dem Vergleich mit `grammar/parse_corpus.py --tokens`.
 
-use takt_syntax::{tokenize, TokenKind};
+use takt_syntax::{TokenKind, tokenize};
 
 fn main() {
     let path = std::env::args().nth(1).expect("Aufruf: tokens DATEI");
