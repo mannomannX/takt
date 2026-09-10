@@ -1240,7 +1240,10 @@ impl Lowerer<'_> {
             return None;
         };
         match &arg.value.kind {
-            ast::ExprKind::Ident(name) => self.unit_name(name),
+            // Einheitennamen tragen jede Namensform (3.2): `bar`, `A`, `Hz`.
+            ast::ExprKind::Ident(name)
+            | ast::ExprKind::Upper { name, args: None }
+            | ast::ExprKind::TypeName { name, args: None } => self.unit_name(name),
             ast::ExprKind::Number { value: ast::Number::Int(one), unit: Some(u) } if one.text == "1" => {
                 self.unit_expr(u)
             }

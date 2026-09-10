@@ -6,8 +6,12 @@
 
 use takt_diag::Span;
 use takt_mir::expr::Builtin;
+use takt_mir::machine::FaultKind;
 use takt_mir::{ChannelId, CommandId, CounterId, MachineId, ParamId, SignalId, SiteId, TypeId, VarId};
 
+use crate::image::Image;
+use crate::loaded::Loaded;
+use crate::machine::MachineState;
 use crate::value::{EvalResult, Sample, Value, bug};
 
 /// Beobachtung (5.6, 13.5): nie ein Fault.
@@ -30,6 +34,8 @@ pub enum Observation {
         name: String,
         /// Wert.
         value: Option<Value>,
+        /// Typ des Werts (Einheit in der Ausgabe).
+        ty: TypeId,
     },
     /// `verify cond, "…"`
     Verify {
@@ -48,6 +54,21 @@ pub enum Observation {
         pass: bool,
         /// Meldung.
         message: Option<String>,
+    },
+    /// Ein Fault hat sein Ziel erreicht (5.3); keine Anweisung, sondern
+    /// Beobachtung des Laufs fuer Trace und Verdikt (13.5).
+    Fault {
+        /// Art.
+        kind: FaultKind,
+        /// Meldung.
+        message: String,
+        /// Name des Ziels.
+        target: String,
+    },
+    /// `raise sig` (5.8).
+    Signal {
+        /// Name des Signals.
+        name: String,
     },
 }
 
@@ -125,6 +146,27 @@ pub trait Outer {
     fn raise(&mut self, _s: SignalId) -> EvalResult<()> {
         bug("raise ausserhalb einer Maschine")
     }
+}
+
+/// Umgebung einer Maschine ueber dem Prozessabbild (9.1): was `eval` und
+/// `exec` ausserhalb ihrer Rahmen lesen und schreiben.
+pub struct MachineEnv<'a, 'p> {
+    /// Geladenes Programm.
+    pub loaded: &'a Loaded<'p>,
+    /// Die Maschine.
+    pub id: MachineId,
+    /// Ihr Zustand.
+    pub state: &'a mut MachineState,
+    /// Prozessabbild und Ψ.
+    pub image: &'a mut Image,
+    /// Beobachtungen dieses Ticks.
+    pub out: &'a mut Vec<Observation>,
+    /// Basis-Tick in Nanosekunden.
+    pub tick_ns: i64,
+    /// Aktueller Tick.
+    pub tick: u64,
+    /// `abort` wurde in diesem Schritt ausgefuehrt (5.4).
+    pub aborted: bool,
 }
 
 /// Umgebung der Konstantenauswertung: nur programmweite Konstanten sind

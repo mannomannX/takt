@@ -32,7 +32,7 @@ fn clamp[U](x: float[U], lo: float[U], hi: float[U]) -> float[U]:
     return lo if x < lo else (hi if x > hi else x)
 
 fn shunt_current(u: float[V]) -> float[A]:
-    return u / R_SHUNT.to(ohm)
+    return (u / R_SHUNT.to(ohm)).to(A)  # V/ohm und A sind nominal verschieden (3.2)
 
 fn severity_of(delta: float[K]) -> Severity:
     if delta > 3 * MAX_STEP:

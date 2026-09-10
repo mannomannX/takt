@@ -28,7 +28,7 @@
 (fn clamp [U] (x:float[U] lo:float[U] hi:float[U]) -> float[U]
   (return (if (< x lo) lo (if (> x hi) hi x))))
 (fn shunt_current (u:float[V]) -> float[A]
-  (return (/ u (.to R_SHUNT ohm))))
+  (return (.to (/ u (.to R_SHUNT ohm)) A)))
 (fn severity_of (delta:float[K]) -> Severity
   (if (> delta (* 3 MAX_STEP))
     (return ALARM))

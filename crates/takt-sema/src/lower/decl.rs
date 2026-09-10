@@ -474,15 +474,27 @@ impl Lowerer<'_> {
                 }
                 ast::AttrKind::MaxAge(d) => out.max_age = Some(d.ns),
                 ast::AttrKind::Rate(e) | ast::AttrKind::MaxRate(e) => {
-                    let hz = self.units.lookup(&mut self.program, "Hz").map(Unit::named).unwrap_or_else(Unit::one);
-                    let w = self.float_width();
-                    let Some(t) = self.float_type(w, &hz, None, a.span) else { continue };
-                    if let Some(v) = self.check(e, t).and_then(|v| self.fold(v)) {
-                        if matches!(a.kind, ast::AttrKind::Rate(_)) {
-                            out.rate = Some(v);
-                        } else {
-                            out.max_rate = Some(v);
-                        }
+                    // Raten tragen die Dimension 1/s (8.6, „Elemente pro
+                    // Sekunde, Einheit Hz"); jede Einheit dieser Dimension ist
+                    // erlaubt, also auch `kHz` und `1/min`.
+                    let Some(v) = self.expr(e, None).and_then(|v| self.fold(v)) else { continue };
+                    let ok = self
+                        .unit_of_type(v.ty)
+                        .is_some_and(|u| self.units.dimension(&self.program, &u) == [0, 0, -1, 0, 0, 0, 0]);
+                    if !ok {
+                        let n = self.type_name(v.ty);
+                        self.error_hint(
+                            SC3,
+                            a.span,
+                            format!("Rate hat den Typ `{n}`"),
+                            "eine Frequenz erwartet, etwa `2000 Hz` oder `320 kHz` (8.6)",
+                        );
+                        continue;
+                    }
+                    if matches!(a.kind, ast::AttrKind::Rate(_)) {
+                        out.rate = Some(v);
+                    } else {
+                        out.max_rate = Some(v);
                     }
                 }
                 ast::AttrKind::Capacity(n) => out.capacity = self.int_attr(n),
@@ -699,14 +711,18 @@ impl Lowerer<'_> {
                 let ident = ast::Ident { name: p.name.clone(), span: p.span };
                 this.declare(&ident, Entity::Var(VarId(base + i as u32), p.ty));
             }
+            let before = this.diags.iter().filter(|d| d.is_error()).count();
             let mut stmts = this.stmts(&body.stmts, BlockKind::Fn);
+            let body_ok = this.diags.iter().filter(|d| d.is_error()).count() == before;
             if let Some(inout) = params.iter().position(|p| p.inout) {
                 let ty = params[inout].ty;
                 stmts.push(Stmt::new(
                     StmtKind::Return(Expr::new(ExprKind::Var(VarId(base + inout as u32)), ty, span)),
                     span,
                 ));
-            } else if ret.is_some() && !ends_with_return(&stmts) {
+            } else if ret.is_some() && body_ok && !ends_with_return(&stmts) {
+                // Nur bei fehlerfreiem Rumpf: sonst waere es eine Folgemeldung
+                // der Anweisung, die schon gemeldet wurde.
                 this.error_hint(SC3, span, "nicht jeder Pfad endet mit `return`", "`return` am Ende ergaenzen");
             }
             Block { stmts, span: body.span }

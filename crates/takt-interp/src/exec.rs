@@ -261,7 +261,7 @@ impl Ctx<'_, '_> {
                 Observation::Alert { span, violated, message }
             }
             Observe::Measure { name, value } => {
-                Observation::Measure { name: name.clone(), value: self.eval(value).ok() }
+                Observation::Measure { name: name.clone(), value: self.eval(value).ok(), ty: value.ty }
             }
             Observe::Verify { cond, message, req } => {
                 let ok = matches!(self.eval(cond), Ok(Value::Bool(true)));

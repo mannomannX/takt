@@ -55,7 +55,6 @@ const FMT_ALIASES: &[(&str, &str)] = &[
     ("tprop_and", "tprop"),
     ("tprop_not", "tprop"),
     ("tprop_atom", "tprop"),
-    // Einheitennamen schreibt der Formatter als Teil der Deklaration (3.2).
     ("unit_name", "unit_decl"),
 ];
 
