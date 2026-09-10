@@ -370,9 +370,12 @@ impl Lowerer<'_> {
             Entity::Command(c) => Some(Expr::new(ExprKind::Command(c), self.tys.bool, span)),
             Entity::Channel(c) => {
                 let ch = &self.program.channels[c.index()];
-                if matches!(self.ty(ch.ty), Type::Stream(_) | Type::Samples { .. }) {
-                    self.stage(span, "Streams und Abtastfenster", Stage::V1_1);
-                    return None;
+                // Ein Stream als Ausdruck ist der Strom selbst: Subjekt eines
+                // Guards, Traeger von `.count`, `.dropped` und Verwandten
+                // (8.6). Ein Abtastfenster ist ein gewoehnlicher Wert (8.9).
+                if matches!(self.ty(ch.ty), Type::Stream(_)) {
+                    let ty = ch.ty;
+                    return Some(Expr::new(ExprKind::Input { channel: c, dominated: true }, ty, span));
                 }
                 match ch.dir {
                     takt_mir::program::Direction::Input => Some(self.input_read(c, span, false)),
@@ -1147,6 +1150,17 @@ impl Lowerer<'_> {
                     span,
                 ))
             }
+            // 3.8: unter `.valid` oder `.ok` ist der Wert dominiert und sein
+            // Inhalt direkt erreichbar. Der Feldzugriff packt ihn aus; der
+            // implizite Check bleibt, die Warnung entfaellt bei Dominanz.
+            (field, Type::Optional(inner) | Type::Result { ok: inner, .. })
+                if record_field(self, *inner, field).is_some() =>
+            {
+                let inner = *inner;
+                let (index, ty) = record_field(self, inner, field)?;
+                let unwrapped = self.coerce(b, inner)?;
+                Some(Expr::new(ExprKind::Field { base: Box::new(unwrapped), field: index }, ty, span))
+            }
             (field, Type::Record(r)) => {
                 let found = self.program.records[r.index()].fields.iter().position(|f| f.name == field);
                 match found {
@@ -1187,6 +1201,32 @@ impl Lowerer<'_> {
             ("done" | "result" | "armed" | "fired", _) => {
                 self.stage(span, "Jobs und Trigger", Stage::V1_1);
                 None
+            }
+            // Zaehler und freier Platz eines Stroms (8.6, 8.8): lesen, ohne
+            // zu untersuchen, also ohne den Cursor zu bewegen.
+            ("count" | "dropped" | "overflowed" | "malformed", Type::Stream(_)) => {
+                if !no_args(self) {
+                    return None;
+                }
+                let acc = match member {
+                    "count" => Accessor::Count,
+                    "dropped" => Accessor::Dropped,
+                    "overflowed" => Accessor::Overflowed,
+                    _ => Accessor::Malformed,
+                };
+                let ty = self.tys.int;
+                Some(Expr::new(ExprKind::Accessor { base: Box::new(b), accessor: acc, args: vec![] }, ty, span))
+            }
+            ("free", Type::Stream(_)) => {
+                if !no_args(self) {
+                    return None;
+                }
+                let ty = self.tys.int;
+                Some(Expr::new(
+                    ExprKind::Accessor { base: Box::new(b), accessor: Accessor::Free, args: vec![] },
+                    ty,
+                    span,
+                ))
             }
             (
                 "t" | "seq" | "text" | "data" | "dropped" | "malformed" | "overflowed" | "free" | "pre" | "post"
@@ -2097,4 +2137,12 @@ fn is_channel_read(e: &Expr) -> bool {
         ExprKind::Index { base, .. } => is_channel_read(base),
         _ => false,
     }
+}
+
+/// Index und Typ eines Recordfelds; `None`, wenn der Typ kein Record ist
+/// oder das Feld fehlt.
+fn record_field(lo: &Lowerer<'_>, ty: TypeId, name: &str) -> Option<(u32, TypeId)> {
+    let Type::Record(r) = lo.program.types.list.get(ty.index())? else { return None };
+    let f = lo.program.records[r.index()].fields.iter().position(|f| f.name == name)?;
+    Some((f as u32, lo.program.records[r.index()].fields[f].ty))
 }

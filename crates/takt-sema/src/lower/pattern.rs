@@ -218,10 +218,20 @@ impl Lowerer<'_> {
             let int = self.tys.int;
             fields.push(field("t", duration, span));
             fields.push(field("seq", int, span));
-            // `line<N>` traegt `.text`, `bytes<N>` traegt `.data` (8.6).
-            match self.ty(elem) {
+            // `line<N>` traegt `.text`, `bytes<N>` traegt `.data` (8.6); bei
+            // einem Record-Strom traegt die Bindung dessen Felder (8.7).
+            match self.ty(elem).clone() {
                 Type::Line { .. } => fields.push(field("text", elem, span)),
                 Type::Bytes { .. } => fields.push(field("data", elem, span)),
+                Type::Record(r) => {
+                    let inner = self.program.records[r.index()].fields.clone();
+                    for f in inner {
+                        // Ein Capture gleichen Namens hat Vorrang.
+                        if !fields.iter().any(|x| x.name == f.name) {
+                            fields.push(field(&f.name, f.ty, span));
+                        }
+                    }
+                }
                 _ => {}
             }
         }

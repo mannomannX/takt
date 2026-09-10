@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use takt_diag::Span;
 
-use takt_mir::expr::{Builtin, StreamRef};
+use takt_mir::expr::{Accessor, Builtin, StreamRef};
 use takt_mir::machine::{FaultKind, Machine, MachineKind, VarScope};
 use takt_mir::program::{OutputTiming, Overflow, Program};
 use takt_mir::types::Type;
@@ -165,13 +165,25 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
             return bug(format!("Bindung {} ist kein Record", var.0));
         };
         let defs = loaded.program.records[r.index()].fields.clone();
+        // Bei einem Record-Strom traegt die Bindung die Felder des Elements
+        // (8.7). Sie stehen im Bindungstyp hinter `t` und `seq` und in
+        // derselben Reihenfolge wie im Element.
+        let inner: &[Value] = match &element.value {
+            Value::Record(f) => f,
+            _ => &[],
+        };
         let mut fields = caps;
+        let mut taken = 0;
         for def in defs.iter().skip(fields.len()) {
             let v = match def.name.as_str() {
                 "t" => Value::Duration(element.t),
                 "seq" => Value::Int(element.seq),
                 "text" | "data" => element.value.clone(),
-                _ => Value::default_for(def.ty, loaded.program),
+                _ => {
+                    let v = inner.get(taken).cloned();
+                    taken += 1;
+                    v.unwrap_or_else(|| Value::default_for(def.ty, loaded.program))
+                }
             };
             fields.push(v);
         }
@@ -419,6 +431,27 @@ impl Outer for MachineEnv<'_, '_> {
     fn cancel(&mut self, o: ChannelId) -> EvalResult<()> {
         self.image.sched.remove(&o);
         Ok(())
+    }
+
+    fn stream_stat(&self, c: ChannelId, acc: Accessor) -> EvalResult<Option<Value>> {
+        // `count` zaehlt das Fenster dieser Maschine, die uebrigen Zaehler
+        // gehoeren dem Strom (8.6).
+        if acc == Accessor::Free {
+            let free = self.image.tx.get(&c).map_or(0, |t| t.free());
+            return Ok(Some(Value::Int(i64::from(free))));
+        }
+        let Some(buf) = self.image.channel_bufs.get(&c) else { return Ok(None) };
+        let v = match acc {
+            Accessor::Count => {
+                let cursor = self.cursor_of(self.loaded, StreamRef::Channel(c));
+                Value::Int(buf.count(cursor) as i64)
+            }
+            Accessor::Dropped => Value::Int(i64::from(buf.dropped)),
+            Accessor::Overflowed => Value::Int(i64::from(buf.overflowed)),
+            Accessor::Malformed => Value::Int(i64::from(buf.malformed)),
+            _ => return Ok(None),
+        };
+        Ok(Some(v))
     }
 
     fn raise(&mut self, s: SignalId) -> EvalResult<()> {

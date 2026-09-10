@@ -5,7 +5,7 @@
 //! weil das Sema Konstanten vorher auf Konstanz prueft.
 
 use takt_diag::Span;
-use takt_mir::expr::{Builtin, StreamRef};
+use takt_mir::expr::{Accessor, Builtin, StreamRef};
 use takt_mir::machine::FaultKind;
 use takt_mir::{ChannelId, CommandId, CounterId, MachineId, ParamId, SignalId, SiteId, TypeId, VarId};
 
@@ -176,6 +176,12 @@ pub trait Outer {
     /// `cancel o` (7.5): verwirft die ausstehenden Schreibvorgaenge.
     fn cancel(&mut self, _o: ChannelId) -> EvalResult<()> {
         bug("cancel ausserhalb einer Maschine")
+    }
+    /// Zaehler eines Stroms (`s.count`, `.dropped`, `.overflowed`,
+    /// `.malformed`, `.free`, 8.6/8.8); `None`, wenn der Zugriff kein
+    /// Stream-Zaehler ist.
+    fn stream_stat(&self, _c: ChannelId, _acc: Accessor) -> EvalResult<Option<Value>> {
+        Ok(None)
     }
 }
 

@@ -263,7 +263,21 @@ impl Lowerer<'_> {
     /// in den Knoten; Pruefung 20 summiert sie spaeter je Aktivierung.
     pub fn send(&mut self, name: &ast::Ident, value: &ast::Expr) -> Option<takt_mir::stmt::StmtKind> {
         let (stream, elem) = self.send_target(name)?;
-        let v = self.check(value, elem)?;
+        // 8.8: `send tx, "UPDATE {size}\n"` formatiert in einen festen
+        // Puffer. Ein Bytestrom nimmt darum auch Text und `bytes<N>`; die
+        // Hoechstlaenge ist statisch bekannt.
+        let byte_stream = matches!(self.ty(elem), Type::Int { width, .. } if width.bits() == 8);
+        let v = if byte_stream && is_textual(value) {
+            self.expr(value, None)?
+        } else if byte_stream {
+            let e = self.expr(value, Some(elem))?;
+            match self.ty(e.ty) {
+                Type::Bytes { .. } | Type::Str { .. } | Type::Line { .. } => e,
+                _ => self.coerce(e, elem)?,
+            }
+        } else {
+            self.check(value, elem)?
+        };
         let len_max = self.max_len(&v);
         Some(takt_mir::stmt::StmtKind::Send { stream, value: v, len_max })
     }
@@ -359,4 +373,9 @@ impl Lowerer<'_> {
             }
         }
     }
+}
+
+/// Ist der Ausdruck ein Textliteral oder ein Formatstring (8.8)?
+fn is_textual(e: &ast::Expr) -> bool {
+    matches!(&e.kind, ast::ExprKind::Str(_))
 }

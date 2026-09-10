@@ -480,6 +480,13 @@ impl<'p, 'o> Ctx<'p, 'o> {
     }
 
     fn accessor(&mut self, base: &Expr, acc: Accessor, args: &[Expr], span: Span) -> EvalResult<Value> {
+        // Zaehler und freier Platz eines Stroms lesen den Puffer, nicht den
+        // Wert des Ausdrucks (8.6, 8.8).
+        if let (ExprKind::Input { channel, .. }, Type::Stream(_)) = (&base.kind, self.loaded.ty(base.ty)) {
+            if let Some(v) = self.outer.stream_stat(*channel, acc)? {
+                return Ok(v);
+            }
+        }
         // Wrapper-Zugriffe auf Inputs lesen die Abtastung, nicht den Wert (3.5).
         if let Some(sample) = self.sample_of(base)? {
             match acc {
