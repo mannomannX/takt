@@ -980,3 +980,103 @@ machine m:
     );
     assert!(trace.contains("fault m RangeFault"), "Index jenseits der Laenge: {trace}");
 }
+
+#[test]
+fn a_declaration_can_take_the_result_of_a_mutating_method() {
+    // 3.9, 4.4: `push` steht als Statement, sein Ergebnis nimmt eine Stelle
+    // entgegen — auch die gerade deklarierte Variable.
+    let trace = simulate(
+        "\
+output a : bool @ hw(\"o/a\") with safe = true
+output b : bool @ hw(\"o/b\") with safe = true
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var buf : bytes<2> = default
+            var fits = buf.push(1)
+            var also = buf.push(2)
+            var full = buf.push(3)
+            a = also
+            b = full
+",
+        "",
+        2,
+    );
+    assert!(trace.contains("t=0 out a true\n"), "der zweite passt: {trace}");
+    assert!(trace.contains("t=0 out b false\n"), "der dritte nicht mehr: {trace}");
+}
+
+#[test]
+fn a_declaration_takes_the_result_of_a_block_step() {
+    // 5.7: dasselbe fuer `step` einer Blockinstanz.
+    let trace = simulate(
+        "\
+block acc():
+    var s : int in 0..99 = 0
+    step(x: int in 0..9) -> int:
+        s = s + x
+        return s
+
+output n : int in 0..99 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    var inst = acc()
+    initial RUN
+    state RUN:
+        loop:
+            var total = inst.step(3)
+            n = total
+",
+        "",
+        3,
+    );
+    assert!(trace.contains("t=0 out n 3\n"), "erster Schritt: {trace}");
+    assert!(trace.contains("t=1 out n 6\n"), "der Block behaelt seinen Zustand: {trace}");
+}
+
+#[test]
+fn a_mutating_method_stays_out_of_expressions() {
+    // 4.4: verschachtelt waere die Auswertungsreihenfolge sichtbar.
+    let out = errors_of(
+        "\
+output n : int in 0..99 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var b : bytes<4> = default
+            if b.push(1):
+                n = 1
+",
+    );
+    assert!(out.contains("nur als Anweisung"), "verschachtelt abgelehnt: {out}");
+}
+
+#[test]
+fn a_declaration_rejects_a_method_without_a_result() {
+    let out = errors_of(
+        "\
+output n : int in 0..99 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var b : bytes<4> = default
+            var x = b.clear()
+            n = 1
+",
+    );
+    assert!(out.contains("liefert keinen Wert"), "`clear` hat kein Ergebnis: {out}");
+}
+
+/// Fehlermeldungen eines Programms als Text.
+fn errors_of(body: &str) -> String {
+    let src = format!("{HEAD}{body}");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(&src, &options);
+    out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect::<Vec<_>>().join("\n")
+}

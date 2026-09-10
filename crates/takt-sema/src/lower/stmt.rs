@@ -645,19 +645,13 @@ impl Lowerer<'_> {
             self.error(SC8, decl.span, "`var` in einem Aktionsblock (5.5)");
             return None;
         }
-        let (ty, value) = self.var_init(decl)?;
-        let scope = self.var_scope(kind);
-        let id = self.new_var(VarDef {
-            name: decl.name.name.clone(),
-            ty,
-            init: None,
-            scope,
-            public: decl.public,
-            span: decl.span,
-        });
-        if !self.declare(&decl.name, Entity::Var(id, ty)) {
-            return None;
+        if let ast::ExprKind::Member { base, name, args: Some(args) } = &decl.value.kind {
+            if MUTATING.contains(&name.name.as_str()) {
+                return self.var_from_method(decl, kind, base, name, args);
+            }
         }
+        let (ty, value) = self.var_init(decl)?;
+        let id = self.declare_var(decl, kind, ty)?;
         let value = self.range_checked(value, ty, decl.span);
         Some(StmtKind::Assign { target: Place::Var(id), value })
     }
@@ -717,6 +711,19 @@ impl Lowerer<'_> {
         args: &[ast::Arg],
         span: Span,
     ) -> Option<StmtKind> {
+        self.method_call_typed(target, base, name, args, span).map(|(stmt, _)| stmt)
+    }
+
+    /// Wie `method_call`, liefert zusaetzlich den Ergebnistyp — `None`, wenn
+    /// die Methode keinen Wert hat (`clear`, `reset`).
+    fn method_call_typed(
+        &mut self,
+        target: Option<Place>,
+        base: &ast::Expr,
+        name: &ast::Ident,
+        args: &[ast::Arg],
+        span: Span,
+    ) -> Option<(StmtKind, Option<TypeId>)> {
         // 8.6: `s.skip()` untersucht das ganze Fenster. Ein Strom ist keine
         // Stelle, darum vor `place` abgefangen.
         if name.name == "skip" {
@@ -728,7 +735,7 @@ impl Lowerer<'_> {
                     }
                     self.method_args(args, &[], span)?;
                     let (stream, _) = self.stream_ref(id)?;
-                    return Some(StmtKind::Skip(stream));
+                    return Some((StmtKind::Skip(stream), None));
                 }
             }
         }
@@ -805,7 +812,60 @@ impl Lowerer<'_> {
                 return None;
             }
         }
-        Some(StmtKind::MethodCall { target, receiver, method, args: arg_exprs })
+        Some((StmtKind::MethodCall { target, receiver, method, args: arg_exprs }, result_ty))
+    }
+
+    /// `var x = empfaenger.methode(...)` (3.9, 5.7): eine Deklaration, deren
+    /// Initialisierer ein Methodenaufruf mit Ergebnis ist. Der Aufruf bleibt
+    /// ein Statement — Ausdruecke sind seiteneffektfrei (4.4) —, nur ist sein
+    /// Ziel die gerade deklarierte Variable.
+    fn var_from_method(
+        &mut self,
+        decl: &ast::VarDecl,
+        kind: BlockKind,
+        base: &ast::Expr,
+        name: &ast::Ident,
+        args: &[ast::Arg],
+    ) -> Option<StmtKind> {
+        // Ohne Ziel gesenkt: das nennt den Ergebnistyp und meldet zugleich
+        // jeden Fehler des Aufrufs.
+        let (stmt, result) = self.method_call_typed(None, base, name, args, decl.span)?;
+        let Some(result) = result else {
+            self.error(SC3, decl.span, format!("`{}` liefert keinen Wert", name.name));
+            return None;
+        };
+        let ty = match &decl.ty {
+            Some(t) => {
+                let want = self.resolve_type(t)?;
+                if !self.same_base(result, want) {
+                    let (w, g) = (self.type_name(want), self.type_name(result));
+                    self.error(SC3, decl.span, format!("erwartet `{w}`, `{}` liefert `{g}`", name.name));
+                    return None;
+                }
+                want
+            }
+            None => result,
+        };
+        let id = self.declare_var(decl, kind, ty)?;
+        let StmtKind::MethodCall { receiver, method, args, .. } = stmt else { return None };
+        Some(StmtKind::MethodCall { target: Some(Place::Var(id)), receiver, method, args })
+    }
+
+    /// Legt die Variable einer Deklaration an und macht sie sichtbar.
+    fn declare_var(&mut self, decl: &ast::VarDecl, kind: BlockKind, ty: TypeId) -> Option<VarId> {
+        let scope = self.var_scope(kind);
+        let id = self.new_var(VarDef {
+            name: decl.name.name.clone(),
+            ty,
+            init: None,
+            scope,
+            public: decl.public,
+            span: decl.span,
+        });
+        if !self.declare(&decl.name, Entity::Var(id, ty)) {
+            return None;
+        }
+        Some(id)
     }
 
     fn method_args(&mut self, args: &[ast::Arg], tys: &[TypeId], span: Span) -> Option<Vec<Expr>> {

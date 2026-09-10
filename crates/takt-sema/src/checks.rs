@@ -338,6 +338,9 @@ impl Lowerer<'_> {
                 let target = match &s.kind {
                     StmtKind::Assign { target, .. } => output_of(target),
                     StmtKind::Send { stream: StreamRef::Channel(c), .. } => Some(*c),
+                    // `o = b.push(x)` und `o = inst.step(x)` schreiben `o`
+                    // genauso wie eine gewoehnliche Zuweisung (5.7, 3.9).
+                    StmtKind::MethodCall { target: Some(t), .. } => output_of(t),
                     _ => None,
                 };
                 if let Some(c) = target {
