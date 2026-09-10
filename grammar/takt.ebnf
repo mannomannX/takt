@@ -158,7 +158,7 @@ tprop_not      := "not" tprop_not | tprop_atom
 tprop_atom     := "always" "(" tprop ")" | "never" "(" tprop ")"
                 | "eventually" "[" duration_lit "]" "(" tprop ")" | "stable" "[" duration_lit "]" "(" tprop ")"
                 | "once" "[" duration_lit "]" "(" tprop ")"
-                | "(" tprop ")" | expr
+                | "(" tprop ")" | cmp_expr   (* Atom: Vergleich, Musterpruefung oder Wert; not/and/or gehoeren zur Eigenschaft, die Bedingungsform a if c else b steht nur in Argumenten *)
 scenario_decl  := "scenario" STRING [ "every" duration_lit ] ":" NEWLINE INDENT machine_body DEDENT      (* @stage v1.1 — 13.6 *)   (* @check 26 *)
 campaign_decl  := "campaign" IDENT ":" NEWLINE INDENT { campaign_item } DEDENT                            (* @stage v1.1 — 13.7 *)
 campaign_item  := "program" STRING NEWLINE | "profile" UPPER_IDENT NEWLINE   (* @check 29 *)

@@ -239,8 +239,10 @@ class Parser:
         for seq in self.trees[name]:
             result |= self.seq(name, seq, i, angle)
         if name == "unit_lit":
-            # kompakt: alle Tokens nach dem ersten liegen an; maximal: nur das laengste Ende
-            ends = [e for e in result if all(self.joint(k) for k in range(i + 1, e))]
+            # kompakt: alle Tokens nach dem ersten liegen an; maximal: nur das laengste Ende;
+            # ein anliegendes * / ^ hinter dem Ende gehoert noch zur Einheit (und macht sie ungueltig)
+            ends = [e for e in result if all(self.joint(k) for k in range(i + 1, e))
+                    and not (e < len(self.tokens) and self.joint(e) and self.tokens[e].text in ("*", "/", "^"))]
             result = {max(ends)} if ends else set()
         self.memo[key] = tuple(sorted(result))
         return self.memo[key]
@@ -252,6 +254,7 @@ class Parser:
 
     def seq(self, name, seq, i, angle):
         positions = {i}
+        saved = []
         for f in seq:
             nxt = set()
             for p in positions:
@@ -261,7 +264,10 @@ class Parser:
                 break
             if f[0] == "term":
                 if f[1] in ("(", "[", "{"):
+                    saved.append(angle)
                     angle = 0          # in Klammern vergleicht ">" wieder
+                elif f[1] in (")", "]", "}") and saved:
+                    angle = saved.pop()
                 elif name in ANGLE_PRODS and f[1] == "<":
                     angle += 1
                 elif name in ANGLE_PRODS and f[1] == ">":

@@ -43,6 +43,47 @@ fn greater_sign_closes_type_arguments() {
 }
 
 #[test]
+fn greater_sign_compares_again_inside_square_brackets() {
+    let (_, errors) = snippet("var b : bytes<[8 >> 1, 2][0]> = default\n");
+    assert!(errors.is_empty(), "{errors:?}");
+    let (_, errors) = snippet("var c : bytes<x[1 > 0]> = default\n");
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn property_atoms_are_comparisons() {
+    let ok = "property p: not a and b < 3 implies always(f(x if c else y) == 1)\n";
+    let (_, errors) = snippet(ok);
+    assert!(errors.is_empty(), "{errors:?}");
+    let (_, errors) = snippet("property q: x if a else b\n");
+    assert!(errors[0].message.contains("Bedingungsform"), "{}", errors[0]);
+    let (_, errors) = snippet("x = always(y)\n");
+    assert!(!errors.is_empty(), "Temporaloperator ausserhalb einer Eigenschaft");
+    let (_, errors) = snippet("property r: g(always(x))\n");
+    assert!(!errors.is_empty(), "Temporaloperator in einem Argument");
+}
+
+#[test]
+fn generic_arguments_are_classified_by_name_and_next_token() {
+    let src = "x = f[U, 1/s, KiB/s, T?, N + 1, n * 2, (a > b), 3 K, bytes<4>, [4] u8](1)\n";
+    let (items, errors) = snippet(src);
+    assert!(errors.is_empty(), "{errors:?}");
+    let sexpr = takt_syntax::sexpr::snippet(&items);
+    assert!(sexpr.contains("[U 1/s KiB/s T? (+ N 1) (* n 2) (> a b) 3[K] bytes<4> [4]u8]"), "{sexpr}");
+}
+
+#[test]
+fn nesting_is_bounded() {
+    let deep = |n: usize| format!("x = {}1{}\n", "(".repeat(n), ")".repeat(n));
+    assert!(snippet(&deep(30)).1.is_empty());
+    let (_, errors) = snippet(&deep(80));
+    assert!(errors[0].message.contains("verschachtelt"), "{}", errors[0]);
+    let blocks =
+        (0..80).map(|i| format!("{}if x:\n", "    ".repeat(i))).collect::<String>() + &"    ".repeat(80) + "pass\n";
+    assert!(snippet(&blocks).1[0].message.contains("verschachtelt"));
+}
+
+#[test]
 fn contextual_word_after_number_is_not_a_unit() {
     let (items, errors) = snippet("until x == 3 timeout 5 s -> FAULT\n");
     assert!(errors.is_empty(), "{errors:?}");
@@ -65,6 +106,14 @@ fn unit_literal_ends_at_the_first_space() {
     assert!(matches!(v.value.kind, ExprKind::Binary { op: BinaryOp::Div, .. }), "`5 K / min` ist eine Division");
     let (_, errors) = snippet("var b = 9.81 m/s^2 m/s^2\n");
     assert_eq!(errors.len(), 1, "{errors:?}");
+}
+
+#[test]
+fn joint_operator_after_a_unit_literal_is_an_error() {
+    assert!(snippet("x = 3 K^2 ^ y\n").1.is_empty());
+    let (_, errors) = snippet("x = 3 K^2^y\n");
+    assert!(errors[0].message.contains("Einheitenausdruck"), "{}", errors[0]);
+    assert!(!snippet("x = 3 s*2\n").1.is_empty());
 }
 
 #[test]

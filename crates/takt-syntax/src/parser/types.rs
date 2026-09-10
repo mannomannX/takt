@@ -7,10 +7,17 @@ use crate::token::TokenKind;
 impl<'t, 's> Parser<'t, 's> {
     /// `type`
     pub(super) fn parse_type(&mut self) -> PResult<Type> {
+        self.enter()?;
+        let result = self.parse_type_inner();
+        self.leave();
+        result
+    }
+
+    fn parse_type_inner(&mut self) -> PResult<Type> {
         let start = self.pos;
         let kind = if self.at_op("[") {
             self.bump();
-            let len = self.parse_const_expr()?;
+            let len = self.plain(Self::parse_const_expr)?;
             self.expect_op("]")?;
             let elem = self.parse_type()?;
             TypeKind::Array { len: Box::new(len), elem: Box::new(elem) }
@@ -173,10 +180,9 @@ impl<'t, 's> Parser<'t, 's> {
         Ok(scalar)
     }
 
-    /// `[ "[" unit_expr "]" ]` hinter einem Zahlentyp; nur, wenn die Klammer anliegt.
+    /// `[ "[" unit_expr "]" ]` hinter einem Zahlentyp.
     fn parse_bracket_unit(&mut self) -> PResult<Option<UnitExpr>> {
-        let prev_joint = self.toks.tokens[self.pos - 1].joint;
-        if prev_joint && self.eat_op("[") {
+        if self.eat_op("[") {
             let unit = self.parse_unit_expr(false)?;
             self.expect_op("]")?;
             Ok(Some(unit))

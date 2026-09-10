@@ -1,14 +1,14 @@
-unitvec X = (m, m/s)                          # Zustand: Position, Geschwindigkeit
-unitvec Z = (m)                               # Messung
-var   x : vec[X]        = [0 m, 0 m/s]
-var   p : mat[X, X]     = [[1 m^2, 0 m^2/s], [0 m^2/s, 1 m^2/s^2]]
-const F : mat[X, 1/X]   = [[1, (10 ms).as(s)], [0 1/s, 1]]   # F_12 = m / (m/s) = s; float[s] aus einer Dauer (3.3)
-const H : mat[Z, 1/X]   = [[1, (0 s).as(s)]]
-const I : mat[X, 1/X]   = [[1, (0 s).as(s)], [0 1/s, 1]]
+unitvec X = (m, m/s)  # Zustand: Position, Geschwindigkeit
+unitvec Z = (m)       # Messung
+var x : vec[X] = [0 m, 0 m/s]
+var p : mat[X, X] = [[1 m^2, 0 m^2/s], [0 m^2/s, 1 m^2/s^2]]
+const F : mat[X, 1/X] = [[1, (10 ms).as(s)], [0 1/s, 1]]  # F_12 = m / (m/s) = s; float[s] aus einer Dauer (3.3)
+const H : mat[Z, 1/X] = [[1, (0 s).as(s)]]
+const I : mat[X, 1/X] = [[1, (0 s).as(s)], [0 1/s, 1]]
 loop:
     x = F * x
-    p = F * p * F.transpose() + Q             # Q : mat[X, X]
-    var s = H * p * H.transpose() + R         # R : mat[Z, Z]
-    var k = p * H.transpose() * s.inv()       # mat[X, 1/Z]
-    x = x + k * (z - H * x)                   # z : vec[Z]
+    p = F * p * F.transpose() + Q        # Q : mat[X, X]
+    var s = H * p * H.transpose() + R    # R : mat[Z, Z]
+    var k = p * H.transpose() * s.inv()  # mat[X, 1/Z]
+    x = x + k * (z - H * x)              # z : vec[Z]
     p = (I - k * H) * p

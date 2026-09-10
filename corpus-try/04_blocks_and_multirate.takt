@@ -3,12 +3,12 @@
 
 system:
     language = 1
-    tick = 50 us
+    tick     = 50 us
 
 unit pct2 = 0.01
 
 block lowpass[U](tau: Duration):
-    var y : float[U] = 0
+    var y      : float[U] = 0
     var seeded : bool = false
     step(x: float[U], dt: Duration in tick..1 h) -> float[U]:
         if not seeded:
@@ -30,13 +30,13 @@ block limiter[U](max_rate: float[U/s]):
             last = target
         return last
 
-input  i_phase : samples<float[A], 16> @ hw("adc/ia") with rate = 320 kHz
-input  speed   : float[1/min] in 0..12000 1/min @ hw("enc/rpm") with max_age = 1 ms
-output duty    : float in 0..1 @ hw("pwm/ch0") with safe = 0, label = "PWM duty"
-output fault_led : bool @ hw("gpio/led") with safe = false
+input  i_phase   : samples<float[A], 16>          @ hw("adc/ia")   with rate = 320 kHz
+input  speed     : float[1/min] in 0..12000 1/min @ hw("enc/rpm")  with max_age = 1 ms
+output duty      : float in 0..1                  @ hw("pwm/ch0")  with safe = 0, label = "PWM duty"
+output fault_led : bool                           @ hw("gpio/led") with safe = false
 
-param I_MAX  : float[A] in 1..60 A = 40 A
-param KP     : float in 0..10 = 0.8
+param I_MAX : float[A] in 1..60 A = 40 A
+param KP    : float in 0..10 = 0.8
 
 machine current_ctrl every 50 us:
     fault -> TRIP
@@ -90,8 +90,8 @@ machine fan_ctrl(setpoint: input float[pct2], out: output float, tau: Duration =
 
 input  fan_sp_a : float[pct2] in 0..100 pct2 @ hw("ui/fan_a")
 input  fan_sp_b : float[pct2] in 0..100 pct2 @ hw("ui/fan_b")
-output fan_a    : float in 0..1 @ hw("pwm/fan_a") with safe = 0
-output fan_b    : float in 0..1 @ hw("pwm/fan_b") with safe = 0
+output fan_a    : float in 0..1              @ hw("pwm/fan_a") with safe = 0
+output fan_b    : float in 0..1              @ hw("pwm/fan_b") with safe = 0
 
 instance fan_one = fan_ctrl(setpoint = fan_sp_a, out = fan_a)
 instance fan_two = fan_ctrl(setpoint = fan_sp_b, out = fan_b, tau = 1 s)

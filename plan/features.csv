@@ -26,7 +26,7 @@ SEM-1.4,Semantik/Abschnitt,1.4,Datenfluss,,M0 (Parser/MIR-Entwurf),offen
 SEM-1.5,Semantik/Abschnitt,1.5,Lebenszyklus,,M0 (Parser/MIR-Entwurf),offen
 SEM-2.1,Semantik/Abschnitt,2.1,Lexik,,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.2,Semantik/Abschnitt,2.2,Schlüsselwörter,,M0 (Parser/MIR-Entwurf),fertig
-SEM-2.3,Semantik/Abschnitt,2.3,Grammatik (EBNF),,M0 (Parser/MIR-Entwurf),teilweise
+SEM-2.3,Semantik/Abschnitt,2.3,Grammatik (EBNF),,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.4,Semantik/Abschnitt,2.4,Bedeutung der Kernkonstrukte (informell),,M0 (Parser/MIR-Entwurf),offen
 SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit",,M0 (Parser/MIR-Entwurf),offen
 SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),offen
@@ -119,238 +119,238 @@ SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,je Mei
 SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,je Meilenstein,offen
 SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,je Meilenstein,offen
 SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,je Meilenstein,offen
-G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),teilweise
-G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),teilweise
-G-system_decl,Grammatik,2.3,system_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-system_item,Grammatik,2.3,system_item,,M0 (Parser/MIR-Entwurf),teilweise
-G-type_decl,Grammatik,2.3,type_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-unitvec_decl,Grammatik,2.3,unitvec_decl,v1.1,M0 (Parser) / M6,teilweise
-G-enum_decl,Grammatik,2.3,enum_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-variant,Grammatik,2.3,variant,,M0 (Parser/MIR-Entwurf),teilweise
-G-record_decl,Grammatik,2.3,record_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-record_field,Grammatik,2.3,record_field,,M0 (Parser/MIR-Entwurf),teilweise
-G-field,Grammatik,2.3,field,,M0 (Parser/MIR-Entwurf),teilweise
-G-bitfield,Grammatik,2.3,bitfield,,M0 (Parser/MIR-Entwurf),teilweise
-G-unit_decl,Grammatik,2.3,unit_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-const_decl,Grammatik,2.3,const_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-param_decl,Grammatik,2.3,param_decl,v1.1,M0 (Parser) / M6,teilweise
-G-profile_decl,Grammatik,2.3,profile_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-channel_decl,Grammatik,2.3,channel_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-stream_decl,Grammatik,2.3,stream_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-port_decl,Grammatik,2.3,port_decl,v1.2,M0 (Parser) / M8,teilweise
-G-binding,Grammatik,2.3,binding,,M0 (Parser/MIR-Entwurf),teilweise
-G-attr,Grammatik,2.3,attr,v1.1,M0 (Parser) / M6,teilweise
-G-framing,Grammatik,2.3,framing,,M0 (Parser/MIR-Entwurf),teilweise
-G-command_decl,Grammatik,2.3,command_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-fn_decl,Grammatik,2.3,fn_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-native_decl,Grammatik,2.3,native_decl,v1.1,M0 (Parser) / M6,teilweise
-G-cost_spec,Grammatik,2.3,cost_spec,,M0 (Parser/MIR-Entwurf),teilweise
-G-cost_class,Grammatik,2.3,cost_class,,M0 (Parser/MIR-Entwurf),teilweise
-G-block_decl,Grammatik,2.3,block_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-step_decl,Grammatik,2.3,step_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-method_decl,Grammatik,2.3,method_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-generic_vars,Grammatik,2.3,generic_vars,v1.1,M0 (Parser) / M6 (const) / M8 (type),teilweise
-G-gvar,Grammatik,2.3,gvar,,M0 (Parser) / M6 (const) / M8 (type),teilweise
-G-capability,Grammatik,2.3,capability,,M0 (Parser/MIR-Entwurf),teilweise
-G-params,Grammatik,2.3,params,,M0 (Parser/MIR-Entwurf),teilweise
-G-param,Grammatik,2.3,param,,M0 (Parser/MIR-Entwurf),teilweise
-G-machine_decl,Grammatik,2.3,machine_decl,v1.2,M0 (Parser) / M8,teilweise
-G-machine_body,Grammatik,2.3,machine_body,,M0 (Parser/MIR-Entwurf),teilweise
-G-persist_decl,Grammatik,2.3,persist_decl,v1.1,M0 (Parser) / M6,teilweise
-G-signal_decl,Grammatik,2.3,signal_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-state_decl,Grammatik,2.3,state_decl,v1.1,M0 (Parser) / M6,teilweise
-G-state_body,Grammatik,2.3,state_body,,M0 (Parser/MIR-Entwurf),teilweise
-G-fault_clause,Grammatik,2.3,fault_clause,,M0 (Parser/MIR-Entwurf),teilweise
-G-enter_block,Grammatik,2.3,enter_block,,M0 (Parser/MIR-Entwurf),teilweise
-G-exit_block,Grammatik,2.3,exit_block,,M0 (Parser/MIR-Entwurf),teilweise
-G-loop_block,Grammatik,2.3,loop_block,,M0 (Parser/MIR-Entwurf),teilweise
-G-on_handler,Grammatik,2.3,on_handler,,M0 (Parser/MIR-Entwurf),teilweise
-G-transition,Grammatik,2.3,transition,,M0 (Parser/MIR-Entwurf),teilweise
-G-guard,Grammatik,2.3,guard,,M0 (Parser/MIR-Entwurf),teilweise
-G-trans_block,Grammatik,2.3,trans_block,,M0 (Parser/MIR-Entwurf),teilweise
-G-sequence_block,Grammatik,2.3,sequence_block,,M0 (Parser/MIR-Entwurf),teilweise
-G-seq_item,Grammatik,2.3,seq_item,,M0 (Parser/MIR-Entwurf),teilweise
-G-instance_decl,Grammatik,2.3,instance_decl,v1.2,M0 (Parser) / M8 (im Zustand),teilweise
-G-node_decl,Grammatik,2.3,node_decl,v2,M0 (Parser) / M9 (v2),teilweise
-G-property_decl,Grammatik,2.3,property_decl,v1.1,M0 (Parser) / M6,teilweise
-G-tprop,Grammatik,2.3,tprop,v1.1,M0 (Parser) / M6,teilweise
-G-tprop_implies,Grammatik,2.3,tprop_implies,,M0 (Parser/MIR-Entwurf),teilweise
-G-tprop_or,Grammatik,2.3,tprop_or,,M0 (Parser/MIR-Entwurf),teilweise
-G-tprop_and,Grammatik,2.3,tprop_and,,M0 (Parser/MIR-Entwurf),teilweise
-G-tprop_not,Grammatik,2.3,tprop_not,,M0 (Parser/MIR-Entwurf),teilweise
-G-tprop_atom,Grammatik,2.3,tprop_atom,,M0 (Parser/MIR-Entwurf),teilweise
-G-scenario_decl,Grammatik,2.3,scenario_decl,v1.1,M0 (Parser) / M6,teilweise
-G-campaign_decl,Grammatik,2.3,campaign_decl,v1.1,M0 (Parser) / M6,teilweise
-G-campaign_item,Grammatik,2.3,campaign_item,,M0 (Parser/MIR-Entwurf),teilweise
-G-trigger_decl,Grammatik,2.3,trigger_decl,v1.2,M0 (Parser) / M8,teilweise
-G-block,Grammatik,2.3,block,,M0 (Parser/MIR-Entwurf),teilweise
-G-action_block,Grammatik,2.3,action_block,,M0 (Parser/MIR-Entwurf),teilweise
-G-stmt,Grammatik,2.3,stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-simple_stmt,Grammatik,2.3,simple_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-assign,Grammatik,2.3,assign,,M0 (Parser/MIR-Entwurf),teilweise
-G-lvalue,Grammatik,2.3,lvalue,,M0 (Parser/MIR-Entwurf),teilweise
-G-var_decl,Grammatik,2.3,var_decl,,M0 (Parser/MIR-Entwurf),teilweise
-G-if_stmt,Grammatik,2.3,if_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-for_stmt,Grammatik,2.3,for_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-match_stmt,Grammatik,2.3,match_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-case_pattern,Grammatik,2.3,case_pattern,,M0 (Parser/MIR-Entwurf),teilweise
-G-at_stmt,Grammatik,2.3,at_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-every_stmt,Grammatik,2.3,every_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-check_stmt,Grammatik,2.3,check_stmt,v1.2,M0 (Parser) / M8,teilweise
-G-alert_stmt,Grammatik,2.3,alert_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-log_stmt,Grammatik,2.3,log_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-send_stmt,Grammatik,2.3,send_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-pulse_stmt,Grammatik,2.3,pulse_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-cancel_stmt,Grammatik,2.3,cancel_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-measure_stmt,Grammatik,2.3,measure_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-job_stmt,Grammatik,2.3,job_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-arm_stmt,Grammatik,2.3,arm_stmt,v1.2,M0 (Parser) / M8,teilweise
-G-verify_stmt,Grammatik,2.3,verify_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-verdict_stmt,Grammatik,2.3,verdict_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-raise_stmt,Grammatik,2.3,raise_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-goto_stmt,Grammatik,2.3,goto_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-abort_stmt,Grammatik,2.3,abort_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-return_stmt,Grammatik,2.3,return_stmt,,M0 (Parser/MIR-Entwurf),teilweise
-G-expr,Grammatik,2.3,expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-or_expr,Grammatik,2.3,or_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-and_expr,Grammatik,2.3,and_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-not_expr,Grammatik,2.3,not_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-cmp_expr,Grammatik,2.3,cmp_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-bitor_expr,Grammatik,2.3,bitor_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-bitxor_expr,Grammatik,2.3,bitxor_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-bitand_expr,Grammatik,2.3,bitand_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-shift_expr,Grammatik,2.3,shift_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-add_expr,Grammatik,2.3,add_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-mul_expr,Grammatik,2.3,mul_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-unary,Grammatik,2.3,unary,,M0 (Parser/MIR-Entwurf),teilweise
-G-cast_expr,Grammatik,2.3,cast_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-postfix,Grammatik,2.3,postfix,,M0 (Parser/MIR-Entwurf),teilweise
-G-member,Grammatik,2.3,member,,M0 (Parser/MIR-Entwurf),teilweise
-G-primary,Grammatik,2.3,primary,,M0 (Parser/MIR-Entwurf),teilweise
-G-generic_args,Grammatik,2.3,generic_args,,M0 (Parser/MIR-Entwurf),teilweise
-G-generic_arg,Grammatik,2.3,generic_arg,v1.1,M0 (Parser) / M6,teilweise
-G-args,Grammatik,2.3,args,,M0 (Parser/MIR-Entwurf),teilweise
-G-arg,Grammatik,2.3,arg,,M0 (Parser/MIR-Entwurf),teilweise
-G-number,Grammatik,2.3,number,,M0 (Parser/MIR-Entwurf),teilweise
-G-int_lit,Grammatik,2.3,int_lit,,M0 (Parser/MIR-Entwurf),teilweise
-G-duration_lit,Grammatik,2.3,duration_lit,,M0 (Parser/MIR-Entwurf),teilweise
-G-duration_expr,Grammatik,2.3,duration_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-pattern,Grammatik,2.3,pattern,,M0 (Parser/MIR-Entwurf),teilweise
-G-unit_lit,Grammatik,2.3,unit_lit,,M0 (Parser/MIR-Entwurf),teilweise
-G-unit_expr,Grammatik,2.3,unit_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-unit_term,Grammatik,2.3,unit_term,,M0 (Parser/MIR-Entwurf),teilweise
-G-type,Grammatik,2.3,type,v1.1,M0 (Parser) / M6,teilweise
-G-scalar_type,Grammatik,2.3,scalar_type,v1.1,M0 (Parser) / M6,teilweise
-G-int_type,Grammatik,2.3,int_type,,M0 (Parser/MIR-Entwurf),teilweise
-G-unit_tuple,Grammatik,2.3,unit_tuple,,M0 (Parser/MIR-Entwurf),teilweise
-G-elem_type,Grammatik,2.3,elem_type,v1.2,M0 (Parser) / M8,teilweise
-G-range,Grammatik,2.3,range,,M0 (Parser/MIR-Entwurf),teilweise
-G-const_expr,Grammatik,2.3,const_expr,,M0 (Parser/MIR-Entwurf),teilweise
-G-pattern_text,Grammatik,2.3,pattern_text,,M0 (Parser/MIR-Entwurf),teilweise
-G-pattern_kind,Grammatik,2.3,pattern_kind,,M0 (Parser/MIR-Entwurf),teilweise
-G-format_text,Grammatik,2.3,format_text,,M0 (Parser/MIR-Entwurf),teilweise
-G-format_spec,Grammatik,2.3,format_spec,,M0 (Parser/MIR-Entwurf),teilweise
-G-address_text,Grammatik,2.3,address_text,,M0 (Parser/MIR-Entwurf),teilweise
-G-address_segment,Grammatik,2.3,address_segment,,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-tick,system-Eintrag,2.3,"system_item: ""tick""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-output_timing,system-Eintrag,2.3,"system_item: ""output_timing""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-asap,system-Eintrag,2.3,"system_item: ""asap""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-boundary,system-Eintrag,2.3,"system_item: ""boundary""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-fault_is_fail,system-Eintrag,2.3,"system_item: ""fault_is_fail""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-true,system-Eintrag,2.3,"system_item: ""true""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-false,system-Eintrag,2.3,"system_item: ""false""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-tick_source,system-Eintrag,2.3,"system_item: ""tick_source""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-hw,system-Eintrag,2.3,"system_item: ""hw""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-tick_tolerance,system-Eintrag,2.3,"system_item: ""tick_tolerance""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-for,system-Eintrag,2.3,"system_item: ""for""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-ticks,system-Eintrag,2.3,"system_item: ""ticks""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-target,system-Eintrag,2.3,"system_item: ""target""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-float,system-Eintrag,2.3,"system_item: ""float""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-f32,system-Eintrag,2.3,"system_item: ""f32""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-f64,system-Eintrag,2.3,"system_item: ""f64""",,M0 (Parser/MIR-Entwurf),teilweise
-system-Eintrag-language,system-Eintrag,2.3,"system_item: ""language""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-safe,Channel-Attribut,2.3,"attr: ""safe""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-max_age,Channel-Attribut,2.3,"attr: ""max_age""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-rate,Channel-Attribut,2.3,"attr: ""rate""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-max_rate,Channel-Attribut,2.3,"attr: ""max_rate""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-capacity,Channel-Attribut,2.3,"attr: ""capacity""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-framing,Channel-Attribut,2.3,"attr: ""framing""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-overflow,Channel-Attribut,2.3,"attr: ""overflow""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-fault,Channel-Attribut,2.3,"attr: ""fault""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-drop_oldest,Channel-Attribut,2.3,"attr: ""drop_oldest""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-drop,Channel-Attribut,2.3,"attr: ""drop""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-wake,Channel-Attribut,2.3,"attr: ""wake""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-true,Channel-Attribut,2.3,"attr: ""true""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-false,Channel-Attribut,2.3,"attr: ""false""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-jitter,Channel-Attribut,2.3,"attr: ""jitter""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-max_slew,Channel-Attribut,2.3,"attr: ""max_slew""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-debounce,Channel-Attribut,2.3,"attr: ""debounce""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-capacity_bytes,Channel-Attribut,2.3,"attr: ""capacity_bytes""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-expect_len,Channel-Attribut,2.3,"attr: ""expect_len""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-irreversible,Channel-Attribut,2.3,"attr: ""irreversible""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-label,Channel-Attribut,2.3,"attr: ""label""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-display,Channel-Attribut,2.3,"attr: ""display""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-group,Channel-Attribut,2.3,"attr: ""group""",,M0 (Parser/MIR-Entwurf),teilweise
-Channel-Attribut-doc,Channel-Attribut,2.3,"attr: ""doc""",,M0 (Parser/MIR-Entwurf),teilweise
-Skalartyp-bool,Skalartyp,2.3,"scalar_type: ""bool""",,M0 (Parser/MIR-Entwurf),teilweise
-Skalartyp-float,Skalartyp,2.3,"scalar_type: ""float""",,M0 (Parser/MIR-Entwurf),teilweise
-Skalartyp-f32,Skalartyp,2.3,"scalar_type: ""f32""",,M0 (Parser/MIR-Entwurf),teilweise
-Skalartyp-f64,Skalartyp,2.3,"scalar_type: ""f64""",,M0 (Parser/MIR-Entwurf),teilweise
-Skalartyp-str,Skalartyp,2.3,"scalar_type: ""str""",,M0 (Parser/MIR-Entwurf),teilweise
-Typkonstruktor-bytes,Typkonstruktor,2.3,"type: ""bytes""",,M0 (Parser/MIR-Entwurf),teilweise
-Typkonstruktor-vec,Typkonstruktor,2.3,"type: ""vec""",,M0 (Parser/MIR-Entwurf),teilweise
-Typkonstruktor-line,Typkonstruktor,2.3,"type: ""line""",,M0 (Parser/MIR-Entwurf),teilweise
-Typkonstruktor-stream,Typkonstruktor,2.3,"type: ""stream""",,M0 (Parser/MIR-Entwurf),teilweise
-Typkonstruktor-samples,Typkonstruktor,2.3,"type: ""samples""",,M0 (Parser/MIR-Entwurf),teilweise
-Typkonstruktor-table,Typkonstruktor,2.3,"type: ""table""",,M0 (Parser/MIR-Entwurf),teilweise
-Typkonstruktor-mat,Typkonstruktor,2.3,"type: ""mat""",,M0 (Parser/MIR-Entwurf),teilweise
-Typkonstruktor-map,Typkonstruktor,2.3,"type: ""map""",,M0 (Parser/MIR-Entwurf),teilweise
-Stream-Elementtyp-u8,Stream-Elementtyp,2.3,"elem_type: ""u8""",,M0 (Parser/MIR-Entwurf),teilweise
-Stream-Elementtyp-bytes,Stream-Elementtyp,2.3,"elem_type: ""bytes""",,M0 (Parser/MIR-Entwurf),teilweise
-Stream-Elementtyp-line,Stream-Elementtyp,2.3,"elem_type: ""line""",,M0 (Parser/MIR-Entwurf),teilweise
-Stream-Elementtyp-capture,Stream-Elementtyp,2.3,"elem_type: ""capture""",,M0 (Parser/MIR-Entwurf),teilweise
-Statement-break,Statement,2.3,"simple_stmt: ""break""",,M0 (Parser/MIR-Entwurf),teilweise
-Statement-pass,Statement,2.3,"simple_stmt: ""pass""",,M0 (Parser/MIR-Entwurf),teilweise
-Sequenz-Item-wait,Sequenz-Item,2.3,"seq_item: ""wait""",,M0 (Parser/MIR-Entwurf),teilweise
-Sequenz-Item-until,Sequenz-Item,2.3,"seq_item: ""until""",,M0 (Parser/MIR-Entwurf),teilweise
-Sequenz-Item-timeout,Sequenz-Item,2.3,"seq_item: ""timeout""",,M0 (Parser/MIR-Entwurf),teilweise
-Sequenz-Item-else,Sequenz-Item,2.3,"seq_item: ""else""",,M0 (Parser/MIR-Entwurf),teilweise
-Sequenz-Item-expect,Sequenz-Item,2.3,"seq_item: ""expect""",,M0 (Parser/MIR-Entwurf),teilweise
-Sequenz-Item-repeat,Sequenz-Item,2.3,"seq_item: ""repeat""",,M0 (Parser/MIR-Entwurf),teilweise
-Sequenz-Item-step,Sequenz-Item,2.3,"seq_item: ""step""",,M0 (Parser/MIR-Entwurf),teilweise
-Temporaloperator-implies,Temporaloperator,2.3,"tprop: ""implies""",,M0 (Parser/MIR-Entwurf),teilweise
-Temporaloperator-or,Temporaloperator,2.3,"tprop: ""or""",,M0 (Parser/MIR-Entwurf),teilweise
-Temporaloperator-and,Temporaloperator,2.3,"tprop: ""and""",,M0 (Parser/MIR-Entwurf),teilweise
-Temporaloperator-not,Temporaloperator,2.3,"tprop: ""not""",,M0 (Parser/MIR-Entwurf),teilweise
-Temporaloperator-always,Temporaloperator,2.3,"tprop: ""always""",,M0 (Parser/MIR-Entwurf),teilweise
-Temporaloperator-never,Temporaloperator,2.3,"tprop: ""never""",,M0 (Parser/MIR-Entwurf),teilweise
-Temporaloperator-eventually,Temporaloperator,2.3,"tprop: ""eventually""",,M0 (Parser/MIR-Entwurf),teilweise
-Temporaloperator-stable,Temporaloperator,2.3,"tprop: ""stable""",,M0 (Parser/MIR-Entwurf),teilweise
-Temporaloperator-once,Temporaloperator,2.3,"tprop: ""once""",,M0 (Parser/MIR-Entwurf),teilweise
-Generics-Fähigkeit-pod,Generics-Fähigkeit,2.3,"capability: ""pod""",,M0 (Parser/MIR-Entwurf),teilweise
-Generics-Fähigkeit-eq,Generics-Fähigkeit,2.3,"capability: ""eq""",,M0 (Parser/MIR-Entwurf),teilweise
-Generics-Fähigkeit-ord,Generics-Fähigkeit,2.3,"capability: ""ord""",,M0 (Parser/MIR-Entwurf),teilweise
-Generics-Fähigkeit-numeric,Generics-Fähigkeit,2.3,"capability: ""numeric""",,M0 (Parser/MIR-Entwurf),teilweise
-Generics-Fähigkeit-integer,Generics-Fähigkeit,2.3,"capability: ""integer""",,M0 (Parser/MIR-Entwurf),teilweise
-Generics-Fähigkeit-float,Generics-Fähigkeit,2.3,"capability: ""float""",,M0 (Parser/MIR-Entwurf),teilweise
-Rahmung-raw,Rahmung,2.3,"framing: ""raw""",,M0 (Parser/MIR-Entwurf),teilweise
-Rahmung-lines,Rahmung,2.3,"framing: ""lines""",,M0 (Parser/MIR-Entwurf),teilweise
-Rahmung-cobs,Rahmung,2.3,"framing: ""cobs""",,M0 (Parser/MIR-Entwurf),teilweise
-Rahmung-length_prefixed,Rahmung,2.3,"framing: ""length_prefixed""",,M0 (Parser/MIR-Entwurf),teilweise
-Rahmung-fixed,Rahmung,2.3,"framing: ""fixed""",,M0 (Parser/MIR-Entwurf),teilweise
-Bindung-hw,Bindung,2.3,"binding: ""hw""",,M0 (Parser/MIR-Entwurf),teilweise
-Bindung-sim,Bindung,2.3,"binding: ""sim""",,M0 (Parser/MIR-Entwurf),teilweise
-Bindung-none,Bindung,2.3,"binding: ""none""",,M0 (Parser/MIR-Entwurf),teilweise
-Kampagnen-Item-program,Kampagnen-Item,2.3,"campaign_item: ""program""",,M0 (Parser/MIR-Entwurf),teilweise
-Kampagnen-Item-profile,Kampagnen-Item,2.3,"campaign_item: ""profile""",,M0 (Parser/MIR-Entwurf),teilweise
-Kampagnen-Item-sweep,Kampagnen-Item,2.3,"campaign_item: ""sweep""",,M0 (Parser/MIR-Entwurf),teilweise
-Kampagnen-Item-step,Kampagnen-Item,2.3,"campaign_item: ""step""",,M0 (Parser/MIR-Entwurf),teilweise
-Kampagnen-Item-repeat,Kampagnen-Item,2.3,"campaign_item: ""repeat""",,M0 (Parser/MIR-Entwurf),teilweise
-Kampagnen-Item-stop_on,Kampagnen-Item,2.3,"campaign_item: ""stop_on""",,M0 (Parser/MIR-Entwurf),teilweise
-Kampagnen-Item-fail,Kampagnen-Item,2.3,"campaign_item: ""fail""",,M0 (Parser/MIR-Entwurf),teilweise
-Kampagnen-Item-never,Kampagnen-Item,2.3,"campaign_item: ""never""",,M0 (Parser/MIR-Entwurf),teilweise
-Generics-Klasse-type,Generics-Klasse,2.3,"gvar: ""type""",,M0 (Parser/MIR-Entwurf),teilweise
-Generics-Klasse-const,Generics-Klasse,2.3,"gvar: ""const""",,M0 (Parser/MIR-Entwurf),teilweise
+G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),fertig
+G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),fertig
+G-system_decl,Grammatik,2.3,system_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-system_item,Grammatik,2.3,system_item,,M0 (Parser/MIR-Entwurf),fertig
+G-type_decl,Grammatik,2.3,type_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-unitvec_decl,Grammatik,2.3,unitvec_decl,v1.1,M0 (Parser) / M6,fertig
+G-enum_decl,Grammatik,2.3,enum_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-variant,Grammatik,2.3,variant,,M0 (Parser/MIR-Entwurf),fertig
+G-record_decl,Grammatik,2.3,record_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-record_field,Grammatik,2.3,record_field,,M0 (Parser/MIR-Entwurf),fertig
+G-field,Grammatik,2.3,field,,M0 (Parser/MIR-Entwurf),fertig
+G-bitfield,Grammatik,2.3,bitfield,,M0 (Parser/MIR-Entwurf),fertig
+G-unit_decl,Grammatik,2.3,unit_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-const_decl,Grammatik,2.3,const_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-param_decl,Grammatik,2.3,param_decl,v1.1,M0 (Parser) / M6,fertig
+G-profile_decl,Grammatik,2.3,profile_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-channel_decl,Grammatik,2.3,channel_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-stream_decl,Grammatik,2.3,stream_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-port_decl,Grammatik,2.3,port_decl,v1.2,M0 (Parser) / M8,fertig
+G-binding,Grammatik,2.3,binding,,M0 (Parser/MIR-Entwurf),fertig
+G-attr,Grammatik,2.3,attr,v1.1,M0 (Parser) / M6,fertig
+G-framing,Grammatik,2.3,framing,,M0 (Parser/MIR-Entwurf),fertig
+G-command_decl,Grammatik,2.3,command_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-fn_decl,Grammatik,2.3,fn_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-native_decl,Grammatik,2.3,native_decl,v1.1,M0 (Parser) / M6,fertig
+G-cost_spec,Grammatik,2.3,cost_spec,,M0 (Parser/MIR-Entwurf),fertig
+G-cost_class,Grammatik,2.3,cost_class,,M0 (Parser/MIR-Entwurf),fertig
+G-block_decl,Grammatik,2.3,block_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-step_decl,Grammatik,2.3,step_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-method_decl,Grammatik,2.3,method_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-generic_vars,Grammatik,2.3,generic_vars,v1.1,M0 (Parser) / M6 (const) / M8 (type),fertig
+G-gvar,Grammatik,2.3,gvar,,M0 (Parser) / M6 (const) / M8 (type),fertig
+G-capability,Grammatik,2.3,capability,,M0 (Parser/MIR-Entwurf),fertig
+G-params,Grammatik,2.3,params,,M0 (Parser/MIR-Entwurf),fertig
+G-param,Grammatik,2.3,param,,M0 (Parser/MIR-Entwurf),fertig
+G-machine_decl,Grammatik,2.3,machine_decl,v1.2,M0 (Parser) / M8,fertig
+G-machine_body,Grammatik,2.3,machine_body,,M0 (Parser/MIR-Entwurf),fertig
+G-persist_decl,Grammatik,2.3,persist_decl,v1.1,M0 (Parser) / M6,fertig
+G-signal_decl,Grammatik,2.3,signal_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-state_decl,Grammatik,2.3,state_decl,v1.1,M0 (Parser) / M6,fertig
+G-state_body,Grammatik,2.3,state_body,,M0 (Parser/MIR-Entwurf),fertig
+G-fault_clause,Grammatik,2.3,fault_clause,,M0 (Parser/MIR-Entwurf),fertig
+G-enter_block,Grammatik,2.3,enter_block,,M0 (Parser/MIR-Entwurf),fertig
+G-exit_block,Grammatik,2.3,exit_block,,M0 (Parser/MIR-Entwurf),fertig
+G-loop_block,Grammatik,2.3,loop_block,,M0 (Parser/MIR-Entwurf),fertig
+G-on_handler,Grammatik,2.3,on_handler,,M0 (Parser/MIR-Entwurf),fertig
+G-transition,Grammatik,2.3,transition,,M0 (Parser/MIR-Entwurf),fertig
+G-guard,Grammatik,2.3,guard,,M0 (Parser/MIR-Entwurf),fertig
+G-trans_block,Grammatik,2.3,trans_block,,M0 (Parser/MIR-Entwurf),fertig
+G-sequence_block,Grammatik,2.3,sequence_block,,M0 (Parser/MIR-Entwurf),fertig
+G-seq_item,Grammatik,2.3,seq_item,,M0 (Parser/MIR-Entwurf),fertig
+G-instance_decl,Grammatik,2.3,instance_decl,v1.2,M0 (Parser) / M8 (im Zustand),fertig
+G-node_decl,Grammatik,2.3,node_decl,v2,M0 (Parser) / M9 (v2),fertig
+G-property_decl,Grammatik,2.3,property_decl,v1.1,M0 (Parser) / M6,fertig
+G-tprop,Grammatik,2.3,tprop,v1.1,M0 (Parser) / M6,fertig
+G-tprop_implies,Grammatik,2.3,tprop_implies,,M0 (Parser/MIR-Entwurf),fertig
+G-tprop_or,Grammatik,2.3,tprop_or,,M0 (Parser/MIR-Entwurf),fertig
+G-tprop_and,Grammatik,2.3,tprop_and,,M0 (Parser/MIR-Entwurf),fertig
+G-tprop_not,Grammatik,2.3,tprop_not,,M0 (Parser/MIR-Entwurf),fertig
+G-tprop_atom,Grammatik,2.3,tprop_atom,,M0 (Parser/MIR-Entwurf),fertig
+G-scenario_decl,Grammatik,2.3,scenario_decl,v1.1,M0 (Parser) / M6,fertig
+G-campaign_decl,Grammatik,2.3,campaign_decl,v1.1,M0 (Parser) / M6,fertig
+G-campaign_item,Grammatik,2.3,campaign_item,,M0 (Parser/MIR-Entwurf),fertig
+G-trigger_decl,Grammatik,2.3,trigger_decl,v1.2,M0 (Parser) / M8,fertig
+G-block,Grammatik,2.3,block,,M0 (Parser/MIR-Entwurf),fertig
+G-action_block,Grammatik,2.3,action_block,,M0 (Parser/MIR-Entwurf),fertig
+G-stmt,Grammatik,2.3,stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-simple_stmt,Grammatik,2.3,simple_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-assign,Grammatik,2.3,assign,,M0 (Parser/MIR-Entwurf),fertig
+G-lvalue,Grammatik,2.3,lvalue,,M0 (Parser/MIR-Entwurf),fertig
+G-var_decl,Grammatik,2.3,var_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-if_stmt,Grammatik,2.3,if_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-for_stmt,Grammatik,2.3,for_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-match_stmt,Grammatik,2.3,match_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-case_pattern,Grammatik,2.3,case_pattern,,M0 (Parser/MIR-Entwurf),fertig
+G-at_stmt,Grammatik,2.3,at_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-every_stmt,Grammatik,2.3,every_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-check_stmt,Grammatik,2.3,check_stmt,v1.2,M0 (Parser) / M8,fertig
+G-alert_stmt,Grammatik,2.3,alert_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-log_stmt,Grammatik,2.3,log_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-send_stmt,Grammatik,2.3,send_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-pulse_stmt,Grammatik,2.3,pulse_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-cancel_stmt,Grammatik,2.3,cancel_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-measure_stmt,Grammatik,2.3,measure_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-job_stmt,Grammatik,2.3,job_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-arm_stmt,Grammatik,2.3,arm_stmt,v1.2,M0 (Parser) / M8,fertig
+G-verify_stmt,Grammatik,2.3,verify_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-verdict_stmt,Grammatik,2.3,verdict_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-raise_stmt,Grammatik,2.3,raise_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-goto_stmt,Grammatik,2.3,goto_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-abort_stmt,Grammatik,2.3,abort_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-return_stmt,Grammatik,2.3,return_stmt,,M0 (Parser/MIR-Entwurf),fertig
+G-expr,Grammatik,2.3,expr,,M0 (Parser/MIR-Entwurf),fertig
+G-or_expr,Grammatik,2.3,or_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-and_expr,Grammatik,2.3,and_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-not_expr,Grammatik,2.3,not_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-cmp_expr,Grammatik,2.3,cmp_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-bitor_expr,Grammatik,2.3,bitor_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-bitxor_expr,Grammatik,2.3,bitxor_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-bitand_expr,Grammatik,2.3,bitand_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-shift_expr,Grammatik,2.3,shift_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-add_expr,Grammatik,2.3,add_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-mul_expr,Grammatik,2.3,mul_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-unary,Grammatik,2.3,unary,,M0 (Parser/MIR-Entwurf),fertig
+G-cast_expr,Grammatik,2.3,cast_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-postfix,Grammatik,2.3,postfix,,M0 (Parser/MIR-Entwurf),fertig
+G-member,Grammatik,2.3,member,,M0 (Parser/MIR-Entwurf),fertig
+G-primary,Grammatik,2.3,primary,,M0 (Parser/MIR-Entwurf),fertig
+G-generic_args,Grammatik,2.3,generic_args,,M0 (Parser/MIR-Entwurf),fertig
+G-generic_arg,Grammatik,2.3,generic_arg,v1.1,M0 (Parser) / M6,fertig
+G-args,Grammatik,2.3,args,,M0 (Parser/MIR-Entwurf),fertig
+G-arg,Grammatik,2.3,arg,,M0 (Parser/MIR-Entwurf),fertig
+G-number,Grammatik,2.3,number,,M0 (Parser/MIR-Entwurf),fertig
+G-int_lit,Grammatik,2.3,int_lit,,M0 (Parser/MIR-Entwurf),fertig
+G-duration_lit,Grammatik,2.3,duration_lit,,M0 (Parser/MIR-Entwurf),fertig
+G-duration_expr,Grammatik,2.3,duration_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-pattern,Grammatik,2.3,pattern,,M0 (Parser/MIR-Entwurf),fertig
+G-unit_lit,Grammatik,2.3,unit_lit,,M0 (Parser/MIR-Entwurf),fertig
+G-unit_expr,Grammatik,2.3,unit_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-unit_term,Grammatik,2.3,unit_term,,M0 (Parser/MIR-Entwurf),fertig
+G-type,Grammatik,2.3,type,v1.1,M0 (Parser) / M6,fertig
+G-scalar_type,Grammatik,2.3,scalar_type,v1.1,M0 (Parser) / M6,fertig
+G-int_type,Grammatik,2.3,int_type,,M0 (Parser/MIR-Entwurf),fertig
+G-unit_tuple,Grammatik,2.3,unit_tuple,,M0 (Parser/MIR-Entwurf),fertig
+G-elem_type,Grammatik,2.3,elem_type,v1.2,M0 (Parser) / M8,fertig
+G-range,Grammatik,2.3,range,,M0 (Parser/MIR-Entwurf),fertig
+G-const_expr,Grammatik,2.3,const_expr,,M0 (Parser/MIR-Entwurf),fertig
+G-pattern_text,Grammatik,2.3,pattern_text,,M0 (Parser/MIR-Entwurf),fertig
+G-pattern_kind,Grammatik,2.3,pattern_kind,,M0 (Parser/MIR-Entwurf),fertig
+G-format_text,Grammatik,2.3,format_text,,M0 (Parser/MIR-Entwurf),fertig
+G-format_spec,Grammatik,2.3,format_spec,,M0 (Parser/MIR-Entwurf),fertig
+G-address_text,Grammatik,2.3,address_text,,M0 (Parser/MIR-Entwurf),fertig
+G-address_segment,Grammatik,2.3,address_segment,,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-tick,system-Eintrag,2.3,"system_item: ""tick""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-output_timing,system-Eintrag,2.3,"system_item: ""output_timing""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-asap,system-Eintrag,2.3,"system_item: ""asap""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-boundary,system-Eintrag,2.3,"system_item: ""boundary""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-fault_is_fail,system-Eintrag,2.3,"system_item: ""fault_is_fail""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-true,system-Eintrag,2.3,"system_item: ""true""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-false,system-Eintrag,2.3,"system_item: ""false""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-tick_source,system-Eintrag,2.3,"system_item: ""tick_source""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-hw,system-Eintrag,2.3,"system_item: ""hw""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-tick_tolerance,system-Eintrag,2.3,"system_item: ""tick_tolerance""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-for,system-Eintrag,2.3,"system_item: ""for""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-ticks,system-Eintrag,2.3,"system_item: ""ticks""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-target,system-Eintrag,2.3,"system_item: ""target""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-float,system-Eintrag,2.3,"system_item: ""float""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-f32,system-Eintrag,2.3,"system_item: ""f32""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-f64,system-Eintrag,2.3,"system_item: ""f64""",,M0 (Parser/MIR-Entwurf),fertig
+system-Eintrag-language,system-Eintrag,2.3,"system_item: ""language""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-safe,Channel-Attribut,2.3,"attr: ""safe""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-max_age,Channel-Attribut,2.3,"attr: ""max_age""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-rate,Channel-Attribut,2.3,"attr: ""rate""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-max_rate,Channel-Attribut,2.3,"attr: ""max_rate""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-capacity,Channel-Attribut,2.3,"attr: ""capacity""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-framing,Channel-Attribut,2.3,"attr: ""framing""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-overflow,Channel-Attribut,2.3,"attr: ""overflow""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-fault,Channel-Attribut,2.3,"attr: ""fault""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-drop_oldest,Channel-Attribut,2.3,"attr: ""drop_oldest""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-drop,Channel-Attribut,2.3,"attr: ""drop""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-wake,Channel-Attribut,2.3,"attr: ""wake""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-true,Channel-Attribut,2.3,"attr: ""true""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-false,Channel-Attribut,2.3,"attr: ""false""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-jitter,Channel-Attribut,2.3,"attr: ""jitter""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-max_slew,Channel-Attribut,2.3,"attr: ""max_slew""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-debounce,Channel-Attribut,2.3,"attr: ""debounce""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-capacity_bytes,Channel-Attribut,2.3,"attr: ""capacity_bytes""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-expect_len,Channel-Attribut,2.3,"attr: ""expect_len""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-irreversible,Channel-Attribut,2.3,"attr: ""irreversible""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-label,Channel-Attribut,2.3,"attr: ""label""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-display,Channel-Attribut,2.3,"attr: ""display""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-group,Channel-Attribut,2.3,"attr: ""group""",,M0 (Parser/MIR-Entwurf),fertig
+Channel-Attribut-doc,Channel-Attribut,2.3,"attr: ""doc""",,M0 (Parser/MIR-Entwurf),fertig
+Skalartyp-bool,Skalartyp,2.3,"scalar_type: ""bool""",,M0 (Parser/MIR-Entwurf),fertig
+Skalartyp-float,Skalartyp,2.3,"scalar_type: ""float""",,M0 (Parser/MIR-Entwurf),fertig
+Skalartyp-f32,Skalartyp,2.3,"scalar_type: ""f32""",,M0 (Parser/MIR-Entwurf),fertig
+Skalartyp-f64,Skalartyp,2.3,"scalar_type: ""f64""",,M0 (Parser/MIR-Entwurf),fertig
+Skalartyp-str,Skalartyp,2.3,"scalar_type: ""str""",,M0 (Parser/MIR-Entwurf),fertig
+Typkonstruktor-bytes,Typkonstruktor,2.3,"type: ""bytes""",,M0 (Parser/MIR-Entwurf),fertig
+Typkonstruktor-vec,Typkonstruktor,2.3,"type: ""vec""",,M0 (Parser/MIR-Entwurf),fertig
+Typkonstruktor-line,Typkonstruktor,2.3,"type: ""line""",,M0 (Parser/MIR-Entwurf),fertig
+Typkonstruktor-stream,Typkonstruktor,2.3,"type: ""stream""",,M0 (Parser/MIR-Entwurf),fertig
+Typkonstruktor-samples,Typkonstruktor,2.3,"type: ""samples""",,M0 (Parser/MIR-Entwurf),fertig
+Typkonstruktor-table,Typkonstruktor,2.3,"type: ""table""",,M0 (Parser/MIR-Entwurf),fertig
+Typkonstruktor-mat,Typkonstruktor,2.3,"type: ""mat""",,M0 (Parser/MIR-Entwurf),fertig
+Typkonstruktor-map,Typkonstruktor,2.3,"type: ""map""",,M0 (Parser/MIR-Entwurf),fertig
+Stream-Elementtyp-u8,Stream-Elementtyp,2.3,"elem_type: ""u8""",,M0 (Parser/MIR-Entwurf),fertig
+Stream-Elementtyp-bytes,Stream-Elementtyp,2.3,"elem_type: ""bytes""",,M0 (Parser/MIR-Entwurf),fertig
+Stream-Elementtyp-line,Stream-Elementtyp,2.3,"elem_type: ""line""",,M0 (Parser/MIR-Entwurf),fertig
+Stream-Elementtyp-capture,Stream-Elementtyp,2.3,"elem_type: ""capture""",,M0 (Parser/MIR-Entwurf),fertig
+Statement-break,Statement,2.3,"simple_stmt: ""break""",,M0 (Parser/MIR-Entwurf),fertig
+Statement-pass,Statement,2.3,"simple_stmt: ""pass""",,M0 (Parser/MIR-Entwurf),fertig
+Sequenz-Item-wait,Sequenz-Item,2.3,"seq_item: ""wait""",,M0 (Parser/MIR-Entwurf),fertig
+Sequenz-Item-until,Sequenz-Item,2.3,"seq_item: ""until""",,M0 (Parser/MIR-Entwurf),fertig
+Sequenz-Item-timeout,Sequenz-Item,2.3,"seq_item: ""timeout""",,M0 (Parser/MIR-Entwurf),fertig
+Sequenz-Item-else,Sequenz-Item,2.3,"seq_item: ""else""",,M0 (Parser/MIR-Entwurf),fertig
+Sequenz-Item-expect,Sequenz-Item,2.3,"seq_item: ""expect""",,M0 (Parser/MIR-Entwurf),fertig
+Sequenz-Item-repeat,Sequenz-Item,2.3,"seq_item: ""repeat""",,M0 (Parser/MIR-Entwurf),fertig
+Sequenz-Item-step,Sequenz-Item,2.3,"seq_item: ""step""",,M0 (Parser/MIR-Entwurf),fertig
+Temporaloperator-implies,Temporaloperator,2.3,"tprop: ""implies""",,M0 (Parser/MIR-Entwurf),fertig
+Temporaloperator-or,Temporaloperator,2.3,"tprop: ""or""",,M0 (Parser/MIR-Entwurf),fertig
+Temporaloperator-and,Temporaloperator,2.3,"tprop: ""and""",,M0 (Parser/MIR-Entwurf),fertig
+Temporaloperator-not,Temporaloperator,2.3,"tprop: ""not""",,M0 (Parser/MIR-Entwurf),fertig
+Temporaloperator-always,Temporaloperator,2.3,"tprop: ""always""",,M0 (Parser/MIR-Entwurf),fertig
+Temporaloperator-never,Temporaloperator,2.3,"tprop: ""never""",,M0 (Parser/MIR-Entwurf),fertig
+Temporaloperator-eventually,Temporaloperator,2.3,"tprop: ""eventually""",,M0 (Parser/MIR-Entwurf),fertig
+Temporaloperator-stable,Temporaloperator,2.3,"tprop: ""stable""",,M0 (Parser/MIR-Entwurf),fertig
+Temporaloperator-once,Temporaloperator,2.3,"tprop: ""once""",,M0 (Parser/MIR-Entwurf),fertig
+Generics-Fähigkeit-pod,Generics-Fähigkeit,2.3,"capability: ""pod""",,M0 (Parser/MIR-Entwurf),fertig
+Generics-Fähigkeit-eq,Generics-Fähigkeit,2.3,"capability: ""eq""",,M0 (Parser/MIR-Entwurf),fertig
+Generics-Fähigkeit-ord,Generics-Fähigkeit,2.3,"capability: ""ord""",,M0 (Parser/MIR-Entwurf),fertig
+Generics-Fähigkeit-numeric,Generics-Fähigkeit,2.3,"capability: ""numeric""",,M0 (Parser/MIR-Entwurf),fertig
+Generics-Fähigkeit-integer,Generics-Fähigkeit,2.3,"capability: ""integer""",,M0 (Parser/MIR-Entwurf),fertig
+Generics-Fähigkeit-float,Generics-Fähigkeit,2.3,"capability: ""float""",,M0 (Parser/MIR-Entwurf),fertig
+Rahmung-raw,Rahmung,2.3,"framing: ""raw""",,M0 (Parser/MIR-Entwurf),fertig
+Rahmung-lines,Rahmung,2.3,"framing: ""lines""",,M0 (Parser/MIR-Entwurf),fertig
+Rahmung-cobs,Rahmung,2.3,"framing: ""cobs""",,M0 (Parser/MIR-Entwurf),fertig
+Rahmung-length_prefixed,Rahmung,2.3,"framing: ""length_prefixed""",,M0 (Parser/MIR-Entwurf),fertig
+Rahmung-fixed,Rahmung,2.3,"framing: ""fixed""",,M0 (Parser/MIR-Entwurf),fertig
+Bindung-hw,Bindung,2.3,"binding: ""hw""",,M0 (Parser/MIR-Entwurf),fertig
+Bindung-sim,Bindung,2.3,"binding: ""sim""",,M0 (Parser/MIR-Entwurf),fertig
+Bindung-none,Bindung,2.3,"binding: ""none""",,M0 (Parser/MIR-Entwurf),fertig
+Kampagnen-Item-program,Kampagnen-Item,2.3,"campaign_item: ""program""",,M0 (Parser/MIR-Entwurf),fertig
+Kampagnen-Item-profile,Kampagnen-Item,2.3,"campaign_item: ""profile""",,M0 (Parser/MIR-Entwurf),fertig
+Kampagnen-Item-sweep,Kampagnen-Item,2.3,"campaign_item: ""sweep""",,M0 (Parser/MIR-Entwurf),fertig
+Kampagnen-Item-step,Kampagnen-Item,2.3,"campaign_item: ""step""",,M0 (Parser/MIR-Entwurf),fertig
+Kampagnen-Item-repeat,Kampagnen-Item,2.3,"campaign_item: ""repeat""",,M0 (Parser/MIR-Entwurf),fertig
+Kampagnen-Item-stop_on,Kampagnen-Item,2.3,"campaign_item: ""stop_on""",,M0 (Parser/MIR-Entwurf),fertig
+Kampagnen-Item-fail,Kampagnen-Item,2.3,"campaign_item: ""fail""",,M0 (Parser/MIR-Entwurf),fertig
+Kampagnen-Item-never,Kampagnen-Item,2.3,"campaign_item: ""never""",,M0 (Parser/MIR-Entwurf),fertig
+Generics-Klasse-type,Generics-Klasse,2.3,"gvar: ""type""",,M0 (Parser/MIR-Entwurf),fertig
+Generics-Klasse-const,Generics-Klasse,2.3,"gvar: ""const""",,M0 (Parser/MIR-Entwurf),fertig
 KW-system,Schlüsselwort,2.2,system,,M0 (Parser/MIR-Entwurf),fertig
 KW-import,Schlüsselwort,2.2,import,,M0 (Parser/MIR-Entwurf),fertig
 KW-type,Schlüsselwort,2.2,type,,M0 (Parser/MIR-Entwurf),fertig

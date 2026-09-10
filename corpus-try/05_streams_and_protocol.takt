@@ -4,31 +4,31 @@
 
 system:
     language = 1
-    tick = 1 ms
+    tick     = 1 ms
 
 enum FrameKind layout u8: PING = 0x01, DATA = 0x02, ACK = 0x03
 enum ParseErr: SHORT, BAD_MAGIC, BAD_LEN
 
 record Header layout little, align = 2:
-    magic : u16 = 0xA55A
-    kind  : FrameKind
+    magic  : u16 = 0xA55A
+    kind   : FrameKind
     seq_no : u16
-    flags : u8 with bits:
-        retry : bool at 0
+    flags  : u8 with bits:
+        retry  : bool at 0
         urgent : bool at 1
-        prio : u8 at 4..7
+        prio   : u8 at 4..7
 
 record Frame layout little:
-    head : Header
+    head        : Header
     payload_len : u8
-    payload : bytes<64> with len = payload_len
+    payload     : bytes<64> with len = payload_len
 
 stream<Frame> tx_queue with capacity = 8
 
-input  rx_log  : stream<line<256>> @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines, overflow = fault, expect_len = 80
-input  rx_bus  : stream<bytes<72>> @ hw("can0/rx")  with max_rate = 5000 Hz, capacity = 64
-input  edges   : stream<Edge>      @ hw("gpio/cap0") with max_rate = 1 kHz
-output tx_uart : stream<u8>        @ hw("uart0/tx") with max_rate = 11520 Hz, capacity = 256
+input  rx_log  : stream<line<256>> @ hw("uart0/rx")   with max_rate = 2000 Hz, framing = lines, overflow = fault, expect_len = 80
+input  rx_bus  : stream<bytes<72>> @ hw("can0/rx")    with max_rate = 5000 Hz, capacity = 64
+input  edges   : stream<Edge>      @ hw("gpio/cap0")  with max_rate = 1 kHz
+output tx_uart : stream<u8>        @ hw("uart0/tx")   with max_rate = 11520 Hz, capacity = 256
 output dut_pwr : bool              @ hw("psu/enable") with safe = false, jitter = 5 us
 
 command start

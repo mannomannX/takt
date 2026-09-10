@@ -1,4 +1,4 @@
 "Erasing sector {n:int}"
 "Boot v{major:int}.{minor:int} ({build:word})"
 "Recovery: {outcome:word} after {dt:float} ms"
-"{_}CRC mismatch{_}"                   # {_} = beliebiger Text, wird verworfen
+"{_}CRC mismatch{_}"  # {_} = beliebiger Text, wird verworfen

@@ -3,22 +3,22 @@
 
 system:
     language = 1
-    tick = 100 ms
-    float = f64
+    tick     = 100 ms
+    float    = f64
 
-unit torr = 133.322 Pa        # abgeleitete Einheit; ohm, mohm, psi sind vordefiniert (3.2)
+unit torr = 133.322 Pa  # abgeleitete Einheit; ohm, mohm, psi sind vordefiniert (3.2)
 unit rpm  = 1 1/min
 
 enum Mode: OFF, HEATING, HOLDING, COOLING
 enum Severity layout u8: INFO = 0, WARN = 1, ALARM = 2
 
 record Sample:
-    value : float[degC]
+    value       : float[degC]
     valid_count : u16
-    severity : Severity
+    severity    : Severity
 
-const OCV : table<float[V], float[pct]> = [(3.0 V, 0 pct), (3.4 V, 10 pct), (3.7 V, 50 pct), (4.2 V, 100 pct)]
-const R_SHUNT : float[mohm] = 5 mohm
+const OCV      : table<float[V], float[pct]> = [(3.0 V, 0 pct), (3.4 V, 10 pct), (3.7 V, 50 pct), (4.2 V, 100 pct)]
+const R_SHUNT  : float[mohm] = 5 mohm
 const MAX_STEP : float[K] = 3 K
 
 param SETPOINT : float[degC] in 20..200 degC = 120 degC
@@ -26,7 +26,7 @@ param BAND     : float[K] in 1..20 K = 5 K
 
 profile QUAL:
     SETPOINT = 180 degC
-    BAND = 2 K
+    BAND     = 2 K
 
 fn clamp[U](x: float[U], lo: float[U], hi: float[U]) -> float[U]:
     return lo if x < lo else (hi if x > hi else x)
@@ -41,10 +41,10 @@ fn severity_of(delta: float[K]) -> Severity:
         return WARN
     return INFO
 
-input  oven_t  : float[degC] in -50..400 degC @ hw("oven/pv")   with max_age = 500 ms, debounce = 2
-input  cell_v  : float[V] in 2.0..4.5 V       @ hw("bms/cell0") with max_age = 200 ms
-output heater  : bool                         @ hw("oven/heat") with safe = false
-output cooler  : bool                         @ hw("oven/cool") with safe = false
+input  oven_t : float[degC] in -50..400 degC @ hw("oven/pv")   with max_age = 500 ms, debounce = 2
+input  cell_v : float[V] in 2.0..4.5 V       @ hw("bms/cell0") with max_age = 200 ms
+output heater : bool                         @ hw("oven/heat") with safe = false
+output cooler : bool                         @ hw("oven/cool") with safe = false
 
 machine oven:
     fault -> SAFE

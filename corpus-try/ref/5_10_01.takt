@@ -1,5 +1,5 @@
-input  charger : bool          @ hw("gpio/vbus_det") with wake = true
-input  button  : stream<Edge>  @ hw("gpio/btn")      with max_rate = 50 Hz, wake = true
+input  charger : bool         @ hw("gpio/vbus_det") with wake = true
+input  button  : stream<Edge> @ hw("gpio/btn")      with max_rate = 50 Hz, wake = true
 command wake_up with wake = true
 
 machine field_device:

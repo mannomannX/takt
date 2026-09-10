@@ -4,14 +4,14 @@
 
 system:
     language = 1
-    tick = 10 ms
+    tick     = 10 ms
 
 enum Cmd open: NOP, GO, STOP
 enum Level: LOW, MID, HIGH
 
-input  cmd_in : Cmd @ hw("ui/cmd") with max_age = 100 ms
+input  cmd_in : Cmd   @ hw("ui/cmd")   with max_age = 100 ms
 input  lvl_in : Level @ hw("ui/level") with max_age = 100 ms
-output led    : bool @ hw("gpio/led") with safe = false
+output led    : bool  @ hw("gpio/led") with safe = false
 
 machine dispatch:
     initial RUN

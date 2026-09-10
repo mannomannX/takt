@@ -1,5 +1,5 @@
-input  vbus_wave : stream<capture<float[V], 4096>> @ hw("daq1/cap0") with max_rate = 10 Hz, capacity = 2
-output cap_arm   : CaptureCmd @ hw("daq1/cap0/arm") with safe = NONE     # NONE, ARM(pre = 1024, level = 3.0 V, edge = FALLING)
+input  vbus_wave : stream<capture<float[V], 4096>> @ hw("daq1/cap0")     with max_rate = 10 Hz, capacity = 2
+output cap_arm   : CaptureCmd                      @ hw("daq1/cap0/arm") with safe = NONE  # NONE, ARM(pre = 1024, level = 3.0 V, edge = FALLING)
 on vbus_wave as w:
     measure dip_min = w.samples.min()
-    measure dip_at  = w.t
+    measure dip_at = w.t

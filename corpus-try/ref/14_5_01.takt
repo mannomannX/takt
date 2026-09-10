@@ -1,4 +1,4 @@
-input tcs : [16] float[degC] @ hw("daq1/tc[0:16]") with max_age = 200 ms
+input  tcs : [16] float[degC] @ hw("daq1/tc[0:16]") with max_age = 200 ms
 param TC_LIMIT : float[degC] in 0..1200 degC = 900 degC
 
 machine tc_guard every 100 ms:

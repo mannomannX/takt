@@ -1,3 +1,3 @@
-input  dut_log : stream<line<256>> @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines, overflow = fault
-input  can_rx : stream<CanFrame>  @ hw("can0/rx")  with max_rate = 5000 Hz
-input  edges  : stream<Edge>      @ hw("gpio/cap0") with max_rate = 1 kHz
+input  dut_log : stream<line<256>> @ hw("uart0/rx")  with max_rate = 2000 Hz, framing = lines, overflow = fault
+input  can_rx  : stream<CanFrame>  @ hw("can0/rx")   with max_rate = 5000 Hz
+input  edges   : stream<Edge>      @ hw("gpio/cap0") with max_rate = 1 kHz

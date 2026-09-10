@@ -8,7 +8,9 @@ Ohne --mutate wird jede Datei von beiden gelesen; sie muessen dasselbe Urteil
 eine Familie von Varianten erzeugt (je Zeile ein Wort geloescht oder verdoppelt);
 die Urteile muessen ebenfalls uebereinstimmen. Jede Abweichung ist ein Fehler im
 Parser, im Orakel oder eine Luecke der Grammatik und wird mit der veraenderten
-Zeile ausgegeben. --snippet reicht an beide Werkzeuge durch.
+Zeile ausgegeben. --snippet reicht an beide Werkzeuge durch. Mit --fmt laeuft
+jeder von beiden angenommene Fall zusaetzlich durch den Formatter (Garantien
+aus grammar/format.md, `fmt --verify`).
 """
 import io, os, subprocess, sys, tempfile
 
@@ -55,6 +57,21 @@ def python(paths, snippet):
     return ok, errors
 
 
+def verify_format(paths, snippet):
+    """Formatter-Garantien je Datei; liefert die Fehlermeldungen."""
+    problems = []
+    for chunk in batches(paths):
+        cmd = ["cargo", "run", "-q", "-p", "takt-syntax", "--example", "fmt", "--", "--verify"]
+        if snippet:
+            cmd.append("--snippet")
+        r = subprocess.run(cmd + chunk, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+        for line in r.stdout.splitlines():
+            path, _, rest = line.partition(": ")
+            if rest != "ok":
+                problems.append((path, rest))
+    return problems
+
+
 def mutants(path, out_dir):
     """Je Zeile und Wort eine Variante: Wort geloescht, Wort verdoppelt."""
     text = io.open(path, encoding="utf-8").read()
@@ -82,6 +99,7 @@ def mutants(path, out_dir):
 def main(argv):
     snippet = "--snippet" in argv
     mutate = "--mutate" in argv
+    check_fmt = "--fmt" in argv
     files = [a for a in argv if not a.startswith("--")]
     work = tempfile.mkdtemp(prefix="takt-mutants-")
     cases = [(os.path.relpath(f, ROOT).replace("\\", "/"), None, None) for f in files]
@@ -107,7 +125,17 @@ def main(argv):
     agree_ok = sum(1 for c in cases if c[0] in r_ok and c[0] in p_ok)
     print(f"\n{len(cases)} Faelle, {agree_ok} beide angenommen, {len(cases) - agree_ok - disagreements} beide abgelehnt, "
           f"{disagreements} Abweichungen")
-    return 1 if disagreements else 0
+    fmt_problems = []
+    if check_fmt:
+        accepted = [c for c in cases if c[0] in r_ok and c[0] in p_ok]
+        by_path = {c[0]: c for c in accepted}
+        fmt_problems = verify_format([c[0] for c in accepted], snippet)
+        for path, problem in fmt_problems:
+            _, line_no, line = by_path.get(path, (path, None, None))
+            where = os.path.basename(path) if line_no is None else f"{os.path.basename(path)} Zeile {line_no}: {line}"
+            print(f"[FORMATTER] {where}\n    {problem}")
+        print(f"Formatter: {len(accepted)} Faelle geprueft, {len(fmt_problems)} Verstoesse")
+    return 1 if disagreements or fmt_problems else 0
 
 
 if __name__ == "__main__":

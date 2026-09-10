@@ -1,4 +1,4 @@
-state MANUAL resume:                    # bei Wiedereintritt wird der zuletzt aktive Kindpfad betreten
+state MANUAL resume:  # bei Wiedereintritt wird der zuletzt aktive Kindpfad betreten
     initial COARSE
     state COARSE:
         when refine: -> FINE

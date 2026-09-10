@@ -118,7 +118,7 @@ Vor dem ersten Commit stehen alle Outputs auf ihren `safe`-Werten (Runtime und I
 ## 2. Lexik und Syntax
 
 ### 2.1 Lexik
-- UTF-8; Blockstruktur durch `:` und Einrückung (4 Leerzeichen, Tabs sind Fehler; der Formatter ist kanonisch).
+- UTF-8; Blockstruktur durch `:` und Einrückung (4 Leerzeichen, Tabs sind Fehler; der Formatter ist kanonisch). Ausdrücke, Typen und Blöcke sind höchstens 64 Ebenen tief verschachtelt; tiefer ist ein Syntaxfehler mit Vorschlag, damit kein Werkzeug an pathologischen Eingaben scheitert.
 - Kommentare `# …`. Zeilenfortsetzung innerhalb offener Klammern.
 - Namenskonventionen (vom Compiler geprüft, Warnung bei Verstoß): `snake_case` für Variablen, Channels, Funktionen, Blöcke, Maschinen; `UPPER_SNAKE_CASE` für Konstanten, Parameter, Zustände, Enum-Varianten; `PascalCase` für Typen.
 - Literale: `42`, `0x1F`, `0b1010`, `0o17`, `1_000_000`, `4.25`, `1e-3`, `true`, `false`, `none`, `"text"`, Einheitenliterale `85 degC`, `4.25 V`, `5 K/min`, `0.0005 1/s`, Dauern `200 ms`, `1.5 s`, `30 min`, `7 d`.
@@ -306,7 +306,7 @@ tprop_not      := "not" tprop_not | tprop_atom
 tprop_atom     := "always" "(" tprop ")" | "never" "(" tprop ")"
                 | "eventually" "[" duration_lit "]" "(" tprop ")" | "stable" "[" duration_lit "]" "(" tprop ")"
                 | "once" "[" duration_lit "]" "(" tprop ")"
-                | "(" tprop ")" | expr
+                | "(" tprop ")" | cmp_expr   (* Atom: Vergleich, Musterpruefung oder Wert; not/and/or gehoeren zur Eigenschaft, die Bedingungsform a if c else b steht nur in Argumenten *)
 scenario_decl  := "scenario" STRING [ "every" duration_lit ] ":" NEWLINE INDENT machine_body DEDENT      (* @stage v1.1 — 13.6 *)   (* @check 26 *)
 campaign_decl  := "campaign" IDENT ":" NEWLINE INDENT { campaign_item } DEDENT                            (* @stage v1.1 — 13.7 *)
 campaign_item  := "program" STRING NEWLINE | "profile" UPPER_IDENT NEWLINE   (* @check 29 *)
@@ -571,10 +571,10 @@ Jeder Input trägt pro Tick Qualität ∈ {Good, Suspect, Stale, Bad} und Alter.
 
 ```
 loop:
-    check tank_p < LIMIT            # implizit: check tank_p.valid
+    check tank_p < LIMIT  # implizit: check tank_p.valid
     if lox_temp.valid:
-        alert lox_temp > 100 K, "LOX warm"      # explizit abgesichert
-    var t = lox_temp.or(90 K)                    # Fallback, keine Prüfung
+        alert lox_temp > 100 K, "LOX warm"  # explizit abgesichert
+    var t = lox_temp.or(90 K)  # Fallback, keine Prüfung
 ```
 Ergebnis: Ohne Mehrarbeit ist der sichere Fall der Default („expected state: sensor valid"); wer Sensorausfälle tolerieren will, sagt es ausdrücklich. Verfügbar: `x.valid`, `x.suspect`, `x.stale`, `x.age`, `x.reason`, `x.or(v)`.
 
@@ -593,13 +593,13 @@ Lokale Inferenz (Hindley-Milner-artig für Einheitenvariablen, sonst bidirektion
 ### 3.7 Records und Summentypen
 ```
 record CanFrame layout little:
-    id: u32 in 0..0x1FFFFFFF
-    dlc: u8 in 0..8
-    data: bytes<8>
+    id   : u32 in 0..0x1FFFFFFF
+    dlc  : u8 in 0..8
+    data : bytes<8>
 
 record BootStatus:
-    version: int
-    sectors_erased: int in 0..255
+    version        : int
+    sectors_erased : int in 0..255
 
 enum BootMsg:
     BOOT(version: int)
@@ -632,10 +632,10 @@ enum BootMsg:
 - `match` ist **erschöpfend**: Fehlt eine Variante ohne `case _:`, ist das ein Compile-Fehler — die konstruktive Form der Totalität für Summentypen. Speicherbedarf = größte Variante plus Diskriminante.
 ```
 match classify(ev):
-    case ERASE(s):    measure erase_sector = s
+    case ERASE(s): measure erase_sector = s
     case WRITE(a, n): measure write_addr = a
-    case BOOT(v):     verify v >= 3, "bootloader too old: {v}"
-    case OTHER:       pass
+    case BOOT(v): verify v >= 3, "bootloader too old: {v}"
+    case OTHER: pass
 ```
 
 ### 3.8 Optionaltyp `T?`
@@ -682,8 +682,8 @@ Arrays und `samples` bieten `.min() .max() .mean() .rms() .count .last` (Redukti
 ```
 var p : mat<2, 2> = [[1, 0], [0, 1]]
 const I2 : mat<2, 2> = [[1, 0], [0, 1]]
-const F : mat<2, 2> = [[1, 0.01], [0, 1]]
-const H : mat<1, 2> = [[1, 0]]
+const F  : mat<2, 2> = [[1, 0.01], [0, 1]]
+const H  : mat<1, 2> = [[1, 0]]
 var s : mat<1, 1> = H * p * H.transpose()
 var k = p * H.transpose() * s.inv()
 p = (I2 - k * H) * p
@@ -709,19 +709,19 @@ Literal:      [[e_11, ..], ..] ist typisierbar, wenn die Elementeinheiten ein ae
 ```
 Syntax und Beispiel (ein linearer Kalman-Filter, jede Zeile einheitengeprüft):
 ```
-unitvec X = (m, m/s)                          # Zustand: Position, Geschwindigkeit
-unitvec Z = (m)                               # Messung
-var   x : vec[X]        = [0 m, 0 m/s]
-var   p : mat[X, X]     = [[1 m^2, 0 m^2/s], [0 m^2/s, 1 m^2/s^2]]
-const F : mat[X, 1/X]   = [[1, (10 ms).as(s)], [0 1/s, 1]]   # F_12 = m / (m/s) = s; float[s] aus einer Dauer (3.3)
-const H : mat[Z, 1/X]   = [[1, (0 s).as(s)]]
-const I : mat[X, 1/X]   = [[1, (0 s).as(s)], [0 1/s, 1]]
+unitvec X = (m, m/s)  # Zustand: Position, Geschwindigkeit
+unitvec Z = (m)       # Messung
+var x : vec[X] = [0 m, 0 m/s]
+var p : mat[X, X] = [[1 m^2, 0 m^2/s], [0 m^2/s, 1 m^2/s^2]]
+const F : mat[X, 1/X] = [[1, (10 ms).as(s)], [0 1/s, 1]]  # F_12 = m / (m/s) = s; float[s] aus einer Dauer (3.3)
+const H : mat[Z, 1/X] = [[1, (0 s).as(s)]]
+const I : mat[X, 1/X] = [[1, (0 s).as(s)], [0 1/s, 1]]
 loop:
     x = F * x
-    p = F * p * F.transpose() + Q             # Q : mat[X, X]
-    var s = H * p * H.transpose() + R         # R : mat[Z, Z]
-    var k = p * H.transpose() * s.inv()       # mat[X, 1/Z]
-    x = x + k * (z - H * x)                   # z : vec[Z]
+    p = F * p * F.transpose() + Q        # Q : mat[X, X]
+    var s = H * p * H.transpose() + R    # R : mat[Z, Z]
+    var k = p * H.transpose() * s.inv()  # mat[X, 1/Z]
+    x = x + k * (z - H * x)              # z : vec[Z]
     p = (I - k * H) * p
 ```
 Ein vertauschtes `H` oder ein `F` mit falscher Zeiteinheit ist ein Compile-Fehler. `1/X` bezeichnet das elementweise Kehrwert-Tupel. Matrizen haben die Breite von `float` (4.2); ihre Skalarprodukte werden als `fma`-Ketten fester Reihenfolge ausgewertet. Die uniforme Form bleibt der Normalfall für Rotationen, Filterkoeffizienten und Geometrie; die dimensionierte Form ist der Normalfall für Zustandsschätzer.
@@ -877,8 +877,8 @@ machine bms:
 
 ### 5.10 Schlafzustände (`idle`, v1.1)
 ```
-input  charger : bool          @ hw("gpio/vbus_det") with wake = true
-input  button  : stream<Edge>  @ hw("gpio/btn")      with max_rate = 50 Hz, wake = true
+input  charger : bool         @ hw("gpio/vbus_det") with wake = true
+input  button  : stream<Edge> @ hw("gpio/btn")      with max_rate = 50 Hz, wake = true
 command wake_up with wake = true
 
 machine field_device:
@@ -903,7 +903,7 @@ Parallele Regionen (AND-Zustände) innerhalb einer Maschine bräuchten eine Konf
 state RUNNING:
     instance pump = pump_ctrl(cmd = pump_cmd, out = pump_valve)
     instance fans[i in 0..4] = fan_ctrl(setpoint = fan_sp[i], out = fan_pwm[i])
-    instance pid resume = loop_ctrl(setpoint = loop_sp, out = loop_out)   # behaelt seine Konfiguration ueber Deaktivierungen (5.12)
+    instance pid resume = loop_ctrl(setpoint = loop_sp, out = loop_out)  # behaelt seine Konfiguration ueber Deaktivierungen (5.12)
 ```
 Semantik (ASCII):
 ```
@@ -928,7 +928,7 @@ Wechselwirkungen: Determinismus (9.4.1) bleibt, weil Instanzen Maschinen sind, U
 
 ### 5.12 History-Zustände: `resume` (v1.2)
 ```
-state MANUAL resume:                    # bei Wiedereintritt wird der zuletzt aktive Kindpfad betreten
+state MANUAL resume:  # bei Wiedereintritt wird der zuletzt aktive Kindpfad betreten
     initial COARSE
     state COARSE:
         when refine: -> FINE
@@ -1034,10 +1034,10 @@ Nur als Input-Channel (`input wall_time: Duration @ hw("sys/clock")`), damit die
 
 **Geplante Ausgaben.**
 ```
-at m.t + BROWNOUT_DELAY:            # absoluter logischer Zeitpunkt; Block: nur Output-Zuweisungen (5.5)
+at m.t + BROWNOUT_DELAY:  # absoluter logischer Zeitpunkt; Block: nur Output-Zuweisungen (5.5)
     vbus_en = false
-pulse reset_n = false for 20 us      # jetzt setzen, nach 20 us den vorherigen Latch-Wert wiederherstellen
-cancel vbus_en                       # ausstehende geplante Schreibvorgaenge dieses Outputs verwerfen
+pulse reset_n = false for 20 us  # jetzt setzen, nach 20 us den vorherigen Latch-Wert wiederherstellen
+cancel vbus_en                   # ausstehende geplante Schreibvorgaenge dieses Outputs verwerfen
 ```
 Semantik (ASCII, Details in 9.8):
 ```
@@ -1069,13 +1069,13 @@ trigger cut_on_erase:
 Ein Trigger ist eine deklarative Reaktionsregel, die der Compiler auf den I/O-Knoten (MCU, FPGA, Ereignismatrix der Peripherie) verlagert:
 ```
 trigger cut_on_erase node io1:
-    when dut_log matches "Erasing sector {n:int}"                 # nur knotenlokale Inputs/Streams, Muster, Konstanten
-    then at event.t + 250 us: vbus_en = false                  # nur Output-Zuweisungen auf demselben Knoten
-    bound 20 us                                                # vom Knoten garantierte Reaktionszeit
+    when dut_log matches "Erasing sector {n:int}"  # nur knotenlokale Inputs/Streams, Muster, Konstanten
+    then at event.t + 250 us: vbus_en = false      # nur Output-Zuweisungen auf demselben Knoten
+    bound 20 us                                    # vom Knoten garantierte Reaktionszeit
 
-arm cut_on_erase                                # Statement, auch in Aktionsbloecken
+arm cut_on_erase  # Statement, auch in Aktionsbloecken
 disarm cut_on_erase
-until cut_on_erase.fired as f timeout 2 s       # fired : Eingabestrom mit .t des Feuerns und den Captures (f.n)
+until cut_on_erase.fired as f timeout 2 s  # fired : Eingabestrom mit .t des Feuerns und den Captures (f.n)
 check cut_on_erase.armed
 ```
 Semantik: `event` bezeichnet im `then`-Teil das Element, das den `when`-Guard erfüllt hat (mit `.t` und den Captures). Ein Trigger ist eine Funktion des Ereignisstroms seines Knotens ohne eigenen Zustand außer `armed`; er wird mit Ereignisrate ausgewertet, nicht mit dem Tick; seine Ausgabe ist eine geplante Ausgabe mit `guard = bound`. Im Hauptprogramm ist `fired` ein Eingabestrom (Determinismus wie jeder Input; Satz 9.4.4 für das Ergebnis, der Zeitpunkt ist Datum), `armed` ist Zustand der armierenden Maschine, `arm`/`disarm` sind Statements. Ein Fault-Übergang der armierenden Maschine disarmt ihre Trigger (5.3). Kosten: Das Hauptprogramm zahlt `arm`/`disarm` und die Stream-Verarbeitung; der Knoten trägt die deklarierte Auswertungszeit, die in seine Konformität eingeht (13.8). Simulation: der Trigger wird mit `bound` als Latenz emuliert. Statisch geprüft: Guard und Outputs sind knotenlokal (12.9); ein Trigger ohne `node` liegt auf dem Hauptknoten. Grammatik: `trigger_decl`, `arm_stmt`.
@@ -1086,10 +1086,10 @@ Semantik: `event` bezeichnet im `then`-Teil das Element, das den `when`-Guard er
 
 ### 8.1 Deklaration
 ```
-input  tank_p    : float[bar] in 0..100 bar @ hw("daq1/ai0") with max_age = 5 ms
-input  tcs       : [16] float[degC]         @ hw("daq1/tc[0:16]") with max_age = 100 ms
-output fuel_main : ValveCmd                 @ hw("plc1/do0")  with safe = CLOSED
-output heater_pwm: float in 0..1            @ hw("ctrl/pwm0") with safe = 0
+input  tank_p     : float[bar] in 0..100 bar @ hw("daq1/ai0")      with max_age = 5 ms
+input  tcs        : [16] float[degC]         @ hw("daq1/tc[0:16]") with max_age = 100 ms
+output fuel_main  : ValveCmd                 @ hw("plc1/do0")      with safe = CLOSED
+output heater_pwm : float in 0..1            @ hw("ctrl/pwm0")     with safe = 0
 ```
 - `hw("adresse")` bindet an einen Kanal der Hardware-Konfiguration (Gerät/Kanal; Kalibrierung, Rohtyp und Enum-Abbildung stehen dort, nicht im Programm).
 - `sim("adresse")` an einem **Output** speist im Simulations-Build den Input, der an derselben Adresse mit `hw` gebunden ist.
@@ -1112,7 +1112,7 @@ output heater_pwm: float in 0..1            @ hw("ctrl/pwm0") with safe = 0
 param PEAK_TEMP   : float[degC] in 20..150 degC = 85 degC
 param CYCLE_COUNT : int in 1..1000 = 20
 profile QUAL:
-    PEAK_TEMP = 120 degC
+    PEAK_TEMP   = 120 degC
     CYCLE_COUNT = 50
 ```
 - `param` ist zur Compile-Zeit unbekannt, aber typ- und range-geprüft; die Intervallanalyse nutzt die Range.
@@ -1133,9 +1133,9 @@ Setpoints vom Operator sind Inputs (`input setpoint: float[bar] @ hw("ui/setpoin
 
 **Deklaration.**
 ```
-input  dut_log : stream<line<256>> @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines, overflow = fault
-input  can_rx : stream<CanFrame>  @ hw("can0/rx")  with max_rate = 5000 Hz
-input  edges  : stream<Edge>      @ hw("gpio/cap0") with max_rate = 1 kHz
+input  dut_log : stream<line<256>> @ hw("uart0/rx")  with max_rate = 2000 Hz, framing = lines, overflow = fault
+input  can_rx  : stream<CanFrame>  @ hw("can0/rx")   with max_rate = 5000 Hz
+input  edges   : stream<Edge>      @ hw("gpio/cap0") with max_rate = 1 kHz
 ```
 Elementtypen: `u8`, `bytes<N>` (Frames fester Höchstlänge), `line<N>` (3.9), Records mit `layout` (3.7), das eingebaute Record `Edge` (`rising: bool`). Jedes Element trägt `.t: Duration` (Hardware-Zeitstempel) und `.seq: int`; bei `line`/`bytes` ist `.text` bzw. `.data` der Inhalt.
 
@@ -1173,15 +1173,15 @@ Elemente, die der Rand nicht dekodieren kann (Record-Streams mit `layout`: zu ku
 
 **Interne Streams (Warteschlangen zwischen Maschinen).** Ein Stream ohne Hardware-Bindung ist eine Warteschlange mit denselben Regeln:
 ```
-stream<UpdateMsg> update_q with capacity = 16          # Dateiebene; genau ein Schreiber (Single-Writer, statisch)
+stream<UpdateMsg> update_q with capacity = 16  # Dateiebene; genau ein Schreiber (Single-Writer, statisch)
 
-machine receiver:                                      # Schreiber
+machine receiver:  # Schreiber
     initial RUN
     state RUN:
         on can_rx as f:
             send update_q, UpdateMsg(kind = CHUNK, data = f.data)
 
-machine flasher:                                       # Leser, Cursor je Konsument
+machine flasher:  # Leser, Cursor je Konsument
     initial RUN
     state RUN:
         on update_q as m:
@@ -1198,7 +1198,7 @@ Elemente, die in Tick k gesendet werden, sind für Leser ab Tick k+1 sichtbar (U
 "Erasing sector {n:int}"
 "Boot v{major:int}.{minor:int} ({build:word})"
 "Recovery: {outcome:word} after {dt:float} ms"
-"{_}CRC mismatch{_}"                   # {_} = beliebiger Text, wird verworfen
+"{_}CRC mismatch{_}"  # {_} = beliebiger Text, wird verworfen
 ```
 
 | Art | Zeichenklasse | Ergebnistyp |
@@ -1231,7 +1231,7 @@ state UPDATING:
         measure erase_sector = m.n
     on dut_log has "CRC mismatch" as ev:
         verdict fail "CRC error during update: {ev.text}"
-    on dut_log as ev:                                # Catch-all
+    on dut_log as ev:  # Catch-all
         log "{ev.t}: {ev.text}"
 ```
 Dispatch pro Aktivierung im Modus Run (formal in 9.7):
@@ -1265,16 +1265,16 @@ Ein Stream-Guard sucht das erste passende Element in W und setzt `examined` auf 
 ### 8.8 Ausgabeströme
 ```
 output dut_tx : stream<u8> @ hw("uart0/tx") with max_rate = 11520 Hz, capacity = 256
-send dut_tx, "UPDATE {size} {crc:hex}\n"      # formatiert in festen Puffer (Hoechstlaenge statisch bekannt)
-send dut_tx, frame.encode()                   # bytes<N>
+send dut_tx, "UPDATE {size} {crc:hex}\n"  # formatiert in festen Puffer (Hoechstlaenge statisch bekannt)
+send dut_tx, frame.encode()               # bytes<N>
 ```
 Ein Ausgabestrom hat einen Sendepuffer (`capacity`, Default 256 Bytes), den der Treiber mit `max_rate` leert. Der freie Platz `tx.free` wird zu Tick-Beginn als Input gesampelt (Determinismus über den Input, wie bei jedem Sensor; die Simulation leert exakt `max_rate * T0` Bytes pro Tick). Statisch prüft der Compiler, dass die Summe der Höchstlängen aller in einer Aktivierung erreichbaren `send`-Statements `capacity` nicht übersteigt; zur Laufzeit ist `send` mit `len > tx.free` ein `FAULT StreamOverflow(tx)` (oder Alert bei `overflow = drop`). Gesendet wird beim Commit des Ticks in Sendereihenfolge.
 
 ### 8.9 Oversampelte Kanäle, Register, Capture-Fenster
 ```
-input i_dut : samples<float[A], 100> @ hw("daq1/ai2") with rate = 100 kHz     # 100 Samples je 1-ms-Tick
+input  i_dut : samples<float[A], 100> @ hw("daq1/ai2") with rate = 100 kHz  # 100 Samples je 1-ms-Tick
 check i_dut.max() < 2 A
-for x in i_dut:                        # beschraenkt durch 100
+for x in i_dut:  # beschraenkt durch 100
     alert x > 1.5 A, "current spike {x}"
 ```
 `samples<T, N>` liefert pro Basis-Tick ein beschränktes Array; Reduktionen `.min() .max() .mean() .rms() .count .last`; fehlende Samples ergeben Qualität `Stale`, ein Sample außerhalb der deklarierten Range macht das ganze Tick-Array `Bad` (Grund `OutOfRange`, konservativ). Die Abtastung ist auf das Tick-Ereignis ausgerichtet (7.1). Budget O(N).
@@ -1283,11 +1283,11 @@ Einfache Register sind Skalarkanäle, die der Treiber pollt (`input reg_status :
 
 `capture<T, N>` (v1.2): vom Treiber um ein Ereignis herum aufgezeichnetes Fenster (Pre-/Post-Trigger), geliefert als Element eines Streams — für Einschalt- und Einbruchskurven der Versorgung. Die Armierung folgt dem Kommando+Status-Muster (8.11), es gibt keine neue Semantik:
 ```
-input  vbus_wave : stream<capture<float[V], 4096>> @ hw("daq1/cap0") with max_rate = 10 Hz, capacity = 2
-output cap_arm   : CaptureCmd @ hw("daq1/cap0/arm") with safe = NONE     # NONE, ARM(pre = 1024, level = 3.0 V, edge = FALLING)
+input  vbus_wave : stream<capture<float[V], 4096>> @ hw("daq1/cap0")     with max_rate = 10 Hz, capacity = 2
+output cap_arm   : CaptureCmd                      @ hw("daq1/cap0/arm") with safe = NONE  # NONE, ARM(pre = 1024, level = 3.0 V, edge = FALLING)
 on vbus_wave as w:
     measure dip_min = w.samples.min()
-    measure dip_at  = w.t
+    measure dip_at = w.t
 ```
 Ein Capture-Element trägt `.t` (Triggerzeitpunkt), `.pre` und `.post` (Anzahl Samples vor und nach dem Trigger, `pre + post <= N`), `.samples : [N] T` (gültig `0..pre+post-1`), `.rate` und die Reduktionen aus 3.9. Speicher: Byte-Ring nach 8.6 mit Elementgröße `N · sizeof(T)`; Budget O(N) je Verarbeitung.
 
@@ -1311,10 +1311,10 @@ Das Programm sieht nur logische Channels: `import channels from "site1.hw"` (8.2
 ### 8.11 Geräte mit Kommando und Status
 Sektorlöschung, Programmierung, DMA-Transfers, Kalibrierungen sind Transaktionen, keine Werte. Das Muster braucht keine neue Semantik, aber eine Konvention und ein Simulationsmodell:
 ```
-output flash_cmd    : FlashCmd    @ hw("flash/cmd")    with safe = NONE     # NONE, ERASE(sector), PROGRAM(addr, len), READ(addr, len)
-output flash_data   : stream<u8>  @ hw("flash/tx")     with max_rate = 4 MHz, capacity = 4096
-input  flash_status : FlashStatus @ hw("flash/status") with max_age = 10 ms  # IDLE, BUSY, DONE, ERROR(code)
-input  flash_rx     : stream<bytes<4096>> @ hw("flash/rx") with max_rate = 200 Hz, capacity = 2
+output flash_cmd    : FlashCmd            @ hw("flash/cmd")    with safe = NONE  # NONE, ERASE(sector), PROGRAM(addr, len), READ(addr, len)
+output flash_data   : stream<u8>          @ hw("flash/tx")     with max_rate = 4 MHz, capacity = 4096
+input  flash_status : FlashStatus         @ hw("flash/status") with max_age = 10 ms  # IDLE, BUSY, DONE, ERROR(code)
+input  flash_rx     : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
 sequence:
     flash_cmd = ERASE(sector = n)
     until flash_status == DONE timeout 200 ms -> FLASH_FAULT
@@ -1779,11 +1779,11 @@ Vor dem Bilden des Prozessabbilds I_k prüft die Runtime jede Lieferung eines Tr
 ### 12.7 Plattformschnittstelle (System-Channels, v1.1)
 Firmware-Validierung, Golden-Image-Fallback und koordinierte Neustarts sind Aufgaben der Plattform (Startstufe, Runtime). Die Sprache braucht dafür nur Sichtbarkeit und Hebel — beides sind gewöhnliche Channels:
 ```
-input  boot_reason   : BootReason  @ hw("sys/boot_reason")      # POWER_ON, WATCHDOG, SOFTWARE, DEEP_SLEEP_WAKE, TRIAL
-input  image_state   : ImageState  @ hw("sys/image_state")      # CONFIRMED, TRIAL
-input  reset_count   : int         @ hw("sys/reset_count")
-output image_confirm : bool        @ hw("sys/image_confirm") with safe = false
-output reboot        : RebootCmd   @ hw("sys/reboot")        with safe = NONE     # NONE, RESTART, DEEP_SLEEP
+input  boot_reason   : BootReason @ hw("sys/boot_reason")  # POWER_ON, WATCHDOG, SOFTWARE, DEEP_SLEEP_WAKE, TRIAL
+input  image_state   : ImageState @ hw("sys/image_state")  # CONFIRMED, TRIAL
+input  reset_count   : int        @ hw("sys/reset_count")
+output image_confirm : bool       @ hw("sys/image_confirm") with safe = false
+output reboot        : RebootCmd  @ hw("sys/reboot")        with safe = NONE  # NONE, RESTART, DEEP_SLEEP
 ```
 Die Enums `BootReason`, `ImageState` und `RebootCmd` sind vordefiniert; welche Channels eine Plattform anbietet, steht in ihrer Hardware-Konfiguration (8.10).
 - **Muster TRIAL → SELFTEST → CONFIRM.** Nach einem Update startet die Plattform das neue Image im Zustand TRIAL; das Programm läuft seinen Selbsttest; erreicht er PASS, setzt es `image_confirm = true`, und die Plattform markiert das Image als gut. Erreicht das Programm vorher `FAULTED` oder greift der Watchdog, bootet die Plattform das vorherige Image (Beispiel 14.7).
@@ -1825,12 +1825,12 @@ Instrumentierungs-Defaults (11.2): `statements` in `linux_rt`, `states` in `bare
 
 ### 12.9 Verteilte Ausführung (v2): Regeln, die schon heute gelten
 ```
-node io1 @ hw("ethercat/1") with tick = 1 ms                 # Knotentick = Vielfaches von system.tick
-machine current_ctrl node io1 every 50 us:                  # Platzierung; ohne Angabe: Hauptknoten
+node io1 @ hw("ethercat/1") with tick = 1 ms  # Knotentick = Vielfaches von system.tick
+machine current_ctrl node io1 every 50 us:    # Platzierung; ohne Angabe: Hauptknoten
     initial RUN
     state RUN:
         loop: pass
-input  i_u : float[A] @ hw("io1/ai0")                        # Adresse nennt den Knoten (wie heute)
+input  i_u : float[A] @ hw("io1/ai0")  # Adresse nennt den Knoten (wie heute)
 ```
 1. **Eine logische Zeitbasis.** Jeder Knoten hat einen Tick, der ein Vielfaches von `system.tick` ist; die Uhren sind synchronisiert (PTP, Feldbus-Distributed-Clocks), die Abweichung ist gegen `tick_tolerance` geprüft; Verletzung → `Runtime(Node)` für die Maschinen des Knotens. Alternative unabhängiger Uhren je Knoten wurde verworfen, weil sie den globalen Tick und mit ihm Satz 9.4.1 zerstört.
 2. **Verzögerung = Hops.** `hops(a, b)` ist die statische Pfadlänge zwischen Knoten in der Topologie der Hardware-Konfiguration (0 für denselben Knoten, sonst ≥ 1). Jeder Lesevorgang über Knotengrenzen — `pub var`, Zustand, Signal, Channel, Stream-Element — sieht den Wert von vor `hops` Basis-Ticks: Ψ wird zu einem Verlauf der Tiefe `max_hops` (Speicher: `max_hops` × Größe der knotenübergreifend gelesenen Größen, statisch). Das ist die Verallgemeinerung des Unit-Delays (Entscheidung 6); eine Kausalitätsanalyse über das Netz bleibt ausgeschlossen.
@@ -1857,10 +1857,10 @@ Zustands-, Transitions- und Check-Auslöse-Coverage werden pro Sim-Lauf gesammel
 ### 13.3 Eigenschaftsprüfung (v1.1)
 
 ```
-property no_ignition_without_fuel: always (igniter implies fuel_main == OPEN)
-property abort_recovers:           always (hotfire.state == SAFE implies eventually[10 s] (hotfire.state == IDLE))
-property no_chatter:               always (valve == OPEN implies stable[50 ms] (valve == OPEN))
-property armed_before_fire:        always (igniter implies once[1 s] (armed))
+property no_ignition_without_fuel: always(igniter implies fuel_main == OPEN)
+property abort_recovers: always(hotfire.state == SAFE implies eventually[10 s](hotfire.state == IDLE))
+property no_chatter: always(valve == OPEN implies stable[50 ms](valve == OPEN))
+property armed_before_fire: always(igniter implies once[1 s](armed))
 ```
 **Sprache.** Eine beschränkte Temporallogik über endlichen Traces: `always(φ)`, `never(φ)`, `eventually[d](φ)`, `stable[d](φ)`, `once[d](φ)`, `implies`, `and`, `or`, `not`. Unbeschränktes `eventually` gibt es nicht — es wäre auf endlichen Traces nicht überwachbar und für k-Induktion unhandlich; reine Invarianten (`always` allein) reichten nicht für Reaktionseigenschaften.
 
@@ -1879,7 +1879,7 @@ property armed_before_fire:        always (igniter implies once[1 s] (armed))
 ```
 measure boot_time = m.t - t_power_on          # (Name, Wert mit Einheit, Tick, Zustandspfad) -> Report; mehrfach = Zeitreihe
 verify i_dut.max() < 10 mA, "supply not off"  # bei false: FAIL-Befund (Nachricht, Tick, Position); Ausfuehrung geht weiter
-verdict pass "recovery ok"                     # explizites Ergebnis
+verdict pass "recovery ok"                    # explizites Ergebnis
 verdict fail "image corrupted"
 ```
 Alle drei sind Beobachtung (5.6): nie ein Fault; ungültige Werte werden als `<invalid>` protokolliert und zählen bei `verify` als Verletzung. Sie sind auch in Produktprogrammen erlaubt (dort landen sie im Betriebslog).
@@ -1913,7 +1913,7 @@ scenario "erase interrupted at sector 3" every 1 ms:
 campaign brownout_scan:
     program "supply_interruption.takt"
     profile QUAL
-    sweep BROWNOUT_DELAY = 2 ms .. 500 ms step 250 us
+    sweep BROWNOUT_DELAY = 2 ms..500 ms step 250 us
     sweep IMAGE = [IMG_A, IMG_B]
     repeat 2
     stop_on fail
@@ -1966,31 +1966,31 @@ system:
 
 enum ValveCmd: CLOSED, OPEN
 
-input  tank_p     : float[bar] in 0..100 bar @ hw("daq1/ai0") with max_age = 5 ms
-input  chamber_p  : float[bar] in 0..300 bar @ hw("daq1/ai1") with max_age = 5 ms
-input  lox_temp   : float[K]   in 50..400 K  @ hw("daq1/tc0") with max_age = 100 ms
-output fuel_main  : ValveCmd @ hw("plc1/do0") with safe = CLOSED
-output lox_main   : ValveCmd @ hw("plc1/do1") with safe = CLOSED
-output igniter    : bool     @ hw("plc1/do2") with safe = false
+input  tank_p    : float[bar] in 0..100 bar @ hw("daq1/ai0") with max_age = 5 ms
+input  chamber_p : float[bar] in 0..300 bar @ hw("daq1/ai1") with max_age = 5 ms
+input  lox_temp  : float[K] in 50..400 K    @ hw("daq1/tc0") with max_age = 100 ms
+output fuel_main : ValveCmd                 @ hw("plc1/do0") with safe = CLOSED
+output lox_main  : ValveCmd                 @ hw("plc1/do1") with safe = CLOSED
+output igniter   : bool                     @ hw("plc1/do2") with safe = false
 
 command start
 command abort_test
 command reset
 
 param CHAMBER_LIMIT : float[bar] in 100..300 bar = 250 bar
-param IGNITION_P    : float[bar] in 5..100 bar   = 20 bar
+param IGNITION_P    : float[bar] in 5..100 bar = 20 bar
 param BURN_DURATION : Duration = 3 s
-param MIN_TANK_P    : float[bar] in 10..90 bar   = 30 bar
+param MIN_TANK_P    : float[bar] in 10..90 bar = 30 bar
 
 machine hotfire:
     fault -> SAFE
     initial ARMED
 
-    loop:                                              # gilt in jedem Zustand, auch in SAFE
+    loop:  # gilt in jedem Zustand, auch in SAFE
         if abort_test:
             abort "operator abort"
 
-    state ARMED:                                       # alle Betriebszustände; Interlocks gelten hier
+    state ARMED:  # alle Betriebszustände; Interlocks gelten hier
         initial IDLE
         loop:
             check chamber_p < CHAMBER_LIMIT, "chamber overpressure {chamber_p}"
@@ -2025,7 +2025,7 @@ machine hotfire:
         state DONE:
             when reset: -> IDLE
 
-    state SAFE:                                        # φ(SAFE) = FAULTED (5.3)
+    state SAFE:  # φ(SAFE) = FAULTED (5.3)
         enter:
             fuel_main = CLOSED
             lox_main = CLOSED
@@ -2039,11 +2039,11 @@ Was hier garantiert ist: Überdruck führt in jedem Betriebszustand innerhalb de
 system:
     tick = 10 ms
 
-input  cell_v    : float[V]    in 2.0..4.5 V   @ hw("daq2/ai0") with max_age = 50 ms
-input  chamber_t : float[degC] in -60..200 degC @ hw("chamber/pv") with max_age = 1 s
-output heater    : bool @ hw("chamber/heat") with safe = false
-output cooler    : bool @ hw("chamber/cool") with safe = false
-output charger   : bool @ hw("psu1/enable") with safe = false
+input  cell_v    : float[V] in 2.0..4.5 V       @ hw("daq2/ai0")     with max_age = 50 ms
+input  chamber_t : float[degC] in -60..200 degC @ hw("chamber/pv")   with max_age = 1 s
+output heater    : bool                         @ hw("chamber/heat") with safe = false
+output cooler    : bool                         @ hw("chamber/cool") with safe = false
+output charger   : bool                         @ hw("psu1/enable")  with safe = false
 
 param CYCLE_COUNT : int in 1..1000 = 20
 param PEAK_TEMP   : float[degC] in 20..150 degC = 85 degC
@@ -2053,8 +2053,8 @@ param MAX_CELL_V  : float[V] in 3.0..4.4 V = 4.25 V
 
 profile QUAL:
     CYCLE_COUNT = 50
-    PEAK_TEMP = 120 degC
-    SOAK = 2 h
+    PEAK_TEMP   = 120 degC
+    SOAK        = 2 h
 
 machine battery_cycle every 100 ms:
     initial VERIFY
@@ -2131,9 +2131,9 @@ machine valve_ctrl(cmd: input bool, pos: input float[pct], out: output ValveCmd,
         enter: out = CLOSED
         when cmd == false and pos < 5 pct: -> CLOSED_ST
 
-input  open_v1 : bool     @ hw("ui/open_v1")
+input  open_v1 : bool       @ hw("ui/open_v1")
 input  pos_v1  : float[pct] @ hw("daq1/ai4") with max_age = 20 ms
-output valve_1 : ValveCmd @ hw("plc1/do4") with safe = CLOSED
+output valve_1 : ValveCmd   @ hw("plc1/do4") with safe = CLOSED
 
 instance v1 = valve_ctrl(cmd = open_v1, pos = pos_v1, out = valve_1, travel = 2 s)
 ```
@@ -2145,7 +2145,7 @@ fn clamp[U](x: float[U], lo: float[U], hi: float[U]) -> float[U]:
     return lo if x < lo else (hi if x > hi else x)
 
 block lowpass[U](tau: Duration):
-    var y : float[U] = 0
+    var y    : float[U] = 0
     var init : bool = false
     step(x: float[U], dt: Duration in tick..1 h) -> float[U]:
         if not init:
@@ -2160,7 +2160,7 @@ block pid[O, E](kp: float[O/E], ki: float[O/E/s], kd: float[O*s/E], out_lo: floa
     var prev_err : float[E] = 0
     step(err: float[E], dt: Duration in tick..1 h) -> float[O]:
         var dts : float[s] = dt.as(s)
-        integral = clamp(integral + ki * err * dts, out_lo, out_hi)      # Anti-Windup
+        integral = clamp(integral + ki * err * dts, out_lo, out_hi)  # Anti-Windup
         var deriv : float[O] = kd * (err - prev_err) / dts
         prev_err = err
         return clamp(kp * err + integral + deriv, out_lo, out_hi)
@@ -2169,7 +2169,7 @@ block pid[O, E](kp: float[O/E], ki: float[O/E/s], kd: float[O*s/E], out_lo: floa
 
 ### 14.5 Überwachung eines Thermoelement-Feldes
 ```
-input tcs : [16] float[degC] @ hw("daq1/tc[0:16]") with max_age = 200 ms
+input  tcs : [16] float[degC] @ hw("daq1/tc[0:16]") with max_age = 200 ms
 param TC_LIMIT : float[degC] in 0..1200 degC = 900 degC
 
 machine tc_guard every 100 ms:
@@ -2190,12 +2190,12 @@ Der Index `i` hat Typ `int in 0..15`, der Zugriff ist ohne Laufzeitprüfung; die
 system:
     tick = 1 ms
 
-output vbus_set : float[V] in 0..6 V @ hw("psu/vset")    with safe = 0 V
-output vbus_en  : bool               @ hw("psu/enable")  with safe = false
-output reset_n  : bool               @ hw("gpio/dut_rst") with safe = false      # low = Reset aktiv
-input  i_dut    : samples<float[A], 100> @ hw("daq1/ai2") with rate = 100 kHz
-input  dut_log  : stream<line<256>>  @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines, overflow = fault
-output dut_tx   : stream<u8>         @ hw("uart0/tx") with max_rate = 11520 Hz, capacity = 256
+output vbus_set : float[V] in 0..6 V     @ hw("psu/vset")     with safe = 0 V
+output vbus_en  : bool                   @ hw("psu/enable")   with safe = false
+output reset_n  : bool                   @ hw("gpio/dut_rst") with safe = false  # low = Reset aktiv
+input  i_dut    : samples<float[A], 100> @ hw("daq1/ai2")     with rate = 100 kHz
+input  dut_log  : stream<line<256>>      @ hw("uart0/rx")     with max_rate = 2000 Hz, framing = lines, overflow = fault
+output dut_tx   : stream<u8>             @ hw("uart0/tx")     with max_rate = 11520 Hz, capacity = 256
 
 command start
 command reset
@@ -2210,8 +2210,8 @@ enum Result: NONE, RECOVERED, BRICKED, CORRUPT
 
 machine brownout_test:
     fault -> SAFE
-    pub var result     : Result = NONE
-    var t_power_on     : Duration = 0 s
+    pub var result : Result = NONE
+    var t_power_on : Duration = 0 s
     initial IDLE
 
     state IDLE:
@@ -2246,11 +2246,11 @@ machine brownout_test:
                 -> UPDATING
 
         state UPDATING:
-            var erased : int in 0..255 = 0                       # zustandslokal, bei Eintritt 0
+            var erased : int in 0..255 = 0  # zustandslokal, bei Eintritt 0
             on dut_log matches "Erasing sector {n:int}" as m:
                 erased = m.n
                 measure erase_seen_at = m.t - t_power_on
-                at m.t + BROWNOUT_DELAY:                          # Hardware-genauer Zeitpunkt relativ zur Logzeile
+                at m.t + BROWNOUT_DELAY:  # Hardware-genauer Zeitpunkt relativ zur Logzeile
                     vbus_en = false
                 -> CUTTING
             on dut_log has "CRC mismatch" as ev:
@@ -2301,7 +2301,7 @@ machine brownout_test:
 
 campaign brownout_scan:
     program "supply_interruption.takt"
-    sweep BROWNOUT_DELAY = 2 ms .. 400 ms step 250 us
+    sweep BROWNOUT_DELAY = 2 ms..400 ms step 250 us
     repeat 2
     stop_on fail
 ```
@@ -2312,18 +2312,18 @@ Der Überstrom-Interlock und der Panic-Handler gelten in allen Unterzuständen v
 system:
     tick = 10 ms
 
-input  cell_v     : [4] float[V] in 2.0..4.5 V @ hw("afe/cell[0:4]")  with max_age = 50 ms
-input  pack_i     : float[A] in -10..10 A       @ hw("afe/current")    with max_age = 50 ms
-input  temp       : [2] float[degC]             @ hw("afe/ntc[0:2]")   with max_age = 200 ms
-input  charger    : bool                        @ hw("gpio/vbus_det")  with wake = true
-input  button     : stream<Edge>                @ hw("gpio/btn")       with max_rate = 50 Hz, wake = true
-input  chg_status : u8                          @ hw("i2c1/0x6B/0x0B") with max_age = 500 ms
-input  image_state : ImageState                 @ hw("sys/image_state")                        # 12.7
-output image_confirm : bool @ hw("sys/image_confirm") with safe = false
-output fet_chg    : bool @ hw("gpio/fet_chg")   with safe = false
-output fet_dis    : bool @ hw("gpio/fet_dis")   with safe = false
-output load_test  : bool @ hw("gpio/test_load") with safe = false
-output led        : u8   @ hw("pwm/led")        with safe = 0
+input  cell_v        : [4] float[V] in 2.0..4.5 V @ hw("afe/cell[0:4]")     with max_age = 50 ms
+input  pack_i        : float[A] in -10..10 A      @ hw("afe/current")       with max_age = 50 ms
+input  temp          : [2] float[degC]            @ hw("afe/ntc[0:2]")      with max_age = 200 ms
+input  charger       : bool                       @ hw("gpio/vbus_det")     with wake = true
+input  button        : stream<Edge>               @ hw("gpio/btn")          with max_rate = 50 Hz, wake = true
+input  chg_status    : u8                         @ hw("i2c1/0x6B/0x0B")    with max_age = 500 ms
+input  image_state   : ImageState                 @ hw("sys/image_state")  # 12.7
+output image_confirm : bool                       @ hw("sys/image_confirm") with safe = false
+output fet_chg       : bool                       @ hw("gpio/fet_chg")      with safe = false
+output fet_dis       : bool                       @ hw("gpio/fet_dis")      with safe = false
+output load_test     : bool                       @ hw("gpio/test_load")    with safe = false
+output led           : u8                         @ hw("pwm/led")           with safe = 0
 
 param V_MAX     : float[V] in 4.0..4.3 V = 4.2 V
 param V_MIN     : float[V] in 2.5..3.2 V = 3.0 V
@@ -2332,24 +2332,24 @@ param T_MAX     : float[degC] in 40..70 degC = 60 degC
 param R_INT_MAX : float[mohm] in 20..500 mohm = 150 mohm
 
 const OCV : table<float[V], float[pct]> = [(3.0 V, 0 pct), (3.4 V, 10 pct), (3.6 V, 30 pct),
-                                          (3.8 V, 60 pct), (4.0 V, 85 pct), (4.2 V, 100 pct)]
+                                           (3.8 V, 60 pct), (4.0 V, 85 pct), (4.2 V, 100 pct)]
 
 record SelftestResult:
-    passed: bool
-    code: int in 0..255
-    r_int: float[mohm] in 0..1000 mohm
+    passed : bool
+    code   : int in 0..255
+    r_int  : float[mohm] in 0..1000 mohm
 
 machine bms every 100 ms:
     fault -> PROTECT
     persist var cycle_count : int in 0..100000 = 0 with min_interval = 10 s
     persist var fault_count : int in 0..100000 = 0 with min_interval = 10 s
     persist var last_test   : SelftestResult = SelftestResult(passed = false, code = 0, r_int = 0 mohm)
-    pub var soc       : float[pct] = 0 pct
-    pub var charge_as : float[A*s] = 0 A*s
-    var coulomb = integrate[A](limit = 72000 A*s)
+    pub var soc             : float[pct] = 0 pct
+    pub var charge_as       : float[A*s] = 0 A*s
+    var coulomb             = integrate[A](limit = 72000 A*s)
     initial SELFTEST
 
-    state ACTIVE:                                          # Interlocks fuer alle Betriebszustaende
+    state ACTIVE:  # Interlocks fuer alle Betriebszustaende
         loop:
             for i in range(4):
                 check cell_v[i] < V_MAX + 0.05 V, "cell {i} overvoltage {cell_v[i]}"
@@ -2378,7 +2378,7 @@ machine bms every 100 ms:
                     last_test = SelftestResult(passed = false, code = 1, r_int = r_int)
                     -> DEGRADED
                 last_test = SelftestResult(passed = true, code = 0, r_int = r_int)
-                if image_state.or(CONFIRMED) == TRIAL:        # neues Image nur nach bestandenem Selbsttest bestaetigen; ohne Plattformangabe: bestaetigt
+                if image_state.or(CONFIRMED) == TRIAL:  # neues Image nur nach bestandenem Selbsttest bestaetigen; ohne Plattformangabe: bestaetigt
                     image_confirm = true
                 -> RUN
 
@@ -2402,7 +2402,7 @@ machine bms every 100 ms:
                 led = 8
             after 24 h: -> SELFTEST
 
-    state STANDBY idle:                                    # kein loop in Zustand und Vorfahren; nur Wake-Quellen
+    state STANDBY idle:  # kein loop in Zustand und Vorfahren; nur Wake-Quellen
         enter:
             fet_chg = false
             fet_dis = false
@@ -2411,7 +2411,7 @@ machine bms every 100 ms:
         when charger: -> SELFTEST
         after 7 d: -> SELFTEST
 
-    state PROTECT:                                         # Fault-Ziel; phi(PROTECT) = FAULTED
+    state PROTECT:  # Fault-Ziel; phi(PROTECT) = FAULTED
         enter:
             fet_chg = false
             fet_dis = false
@@ -2426,9 +2426,9 @@ machine bms every 100 ms:
 ### 14.8 Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)
 ```
 system:
-    tick = 1 ms
+    tick   = 1 ms
     target = boot
-    float = f32
+    float  = f32
 
 unit sector = 4 KiB
 
@@ -2444,12 +2444,12 @@ record ImageHeader layout little:
     hash    : bytes<32>
     sig     : bytes<64>
 
-input  flash_status    : FlashStatus         @ hw("flash/status")        with max_age = 10 ms
-input  flash_rx        : stream<bytes<4096>> @ hw("flash/rx")            with max_rate = 200 Hz, capacity = 2
-output flash_cmd       : FlashCmd            @ hw("flash/cmd")           with safe = NONE
-input  efuse           : EfuseBlock          @ hw("sys/efuse")           # pubkey: bytes<64>, min_version: u32, ... (12.7)
+input  flash_status    : FlashStatus         @ hw("flash/status") with max_age = 10 ms
+input  flash_rx        : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
+output flash_cmd       : FlashCmd            @ hw("flash/cmd")    with safe = NONE
+input  efuse           : EfuseBlock          @ hw("sys/efuse")  # pubkey: bytes<64>, min_version: u32, ... (12.7)
 input  image_confirmed : [2] bool            @ hw("sys/image_confirmed")
-output boot_jump       : u8                  @ hw("sys/jump")            with safe = NONE
+output boot_jump       : u8                  @ hw("sys/jump")     with safe = NONE
 # log geht im Startprofil an die UART der Runtime (12.8)
 
 const SLOT_BASE  : [2] u32[B] = [0x10000 B, 0x110000 B]
@@ -2467,23 +2467,23 @@ machine bootloader:
     fault -> HALT
     persist var trials : [2] int in 0..5 = [0, 0]
     persist var active : int in 0..1 = 0
-    var idx  : int in 0..1 = 0
-    var hdr  : ImageHeader!HeaderErr = ERR(MAGIC)
-    var img  : ImageHeader = default
-    var ctx  : Sha256Ctx = sha256_init()
-    var done : u32[B] = 0 B
+    var idx            : int in 0..1 = 0
+    var hdr            : ImageHeader!HeaderErr = ERR(MAGIC)
+    var img            : ImageHeader = default
+    var ctx            : Sha256Ctx = sha256_init()
+    var done           : u32[B] = 0 B
     initial SELECT
 
     state SELECT:
         enter:
             idx = active
             for i in range(2):
-                if image_confirmed[i].or(false):                    # bestaetigte Images setzen ihren Zaehler zurueck
+                if image_confirmed[i].or(false):  # bestaetigte Images setzen ihren Zaehler zurueck
                     trials[i] = 0
             if trials[idx] >= MAX_TRIALS and trials[1 - idx] < MAX_TRIALS:
-                idx = 1 - idx                                        # Fallback auf den anderen Slot
+                idx = 1 - idx  # Fallback auf den anderen Slot
             if trials[idx] < 5:
-                trials[idx] += 1                                     # Versuch zaehlt vor dem Sprung; persist wird vor boot_jump geschrieben
+                trials[idx] += 1  # Versuch zaehlt vor dem Sprung; persist wird vor boot_jump geschrieben
         when trials[idx] <= MAX_TRIALS: -> READ_HEADER
         when true: -> HALT
 
@@ -2498,7 +2498,7 @@ machine bootloader:
 
     state CHECK_HEADER:
         when hdr.ok:
-            img = hdr                                                # durch hdr.ok dominiert: implizites Auspacken
+            img = hdr  # durch hdr.ok dominiert: implizites Auspacken
             ctx = sha256_init()
             done = 0 B
             -> HASHING
@@ -2506,7 +2506,7 @@ machine bootloader:
             log "slot {idx}: bad header ({hdr.err})"
             -> SLOT_FAILED
 
-    state HASHING:                                                   # ein Chunk je Tick; Budget statisch
+    state HASHING:  # ein Chunk je Tick; Budget statisch
         loop:
             if flash_status == IDLE and done < img.size:
                 flash_cmd = READ(addr = SLOT_BASE[idx] + HEADER_LEN + done, len = min(4096 B, img.size - done))
@@ -2531,7 +2531,7 @@ machine bootloader:
         enter:
             active = idx
             log "booting slot {idx}, version {img.version}"
-            boot_jump = idx as u8                                    # beendet den Lauf nach dem Commit; persist zuvor synchron geschrieben
+            boot_jump = idx as u8  # beendet den Lauf nach dem Commit; persist zuvor synchron geschrieben
 
     state SLOT_FAILED:
         enter:
@@ -2546,7 +2546,7 @@ machine bootloader:
 
     state HALT:
         enter:
-            log "no bootable image"                                  # Watchdog der Plattform loest den Neustart aus
+            log "no bootable image"  # Watchdog der Plattform loest den Neustart aus
 ```
 Was hier zusammenkommt: Der Header ist ein Drahtformat mit Konstantenfeld und Byte-Einheiten (3.7, 3.2); `parse_header` liefert `T!E` (3.8); Flash ist ein Gerät mit Kommando und Status (8.11); der Hash läuft als Chunk-Native mit einem Chunk je Tick, die Signaturprüfung als Job, dessen Fertigstellung ein Input ist (4.5); Versuchszähler und aktiver Slot überleben Neustarts (5.9) und werden vor dem Sprung synchron geschrieben (12.7); jeder Fehlerpfad endet in `SLOT_FAILED` oder `HALT`, nie in einem undefinierten Zustand. Die Stromausfallsicherheit des Schreibpfads (hier nicht gezeigt: Update über UART mit `PROGRAM`) prüft eine Kampagne über `CUT_AT_BYTE` des Flash-Modells (8.11).
 
@@ -2694,3 +2694,5 @@ v0.2.8 = v0.2.7 plus das Reservierungspaket für Vorwärtskompatibilität: Editi
 **Verschlankung der Schlüsselwortliste (2.2) und Grammatikkorrekturen (2.3).** Die Liste enthielt Attribut-, Positions- und Typwörter, die nie am Zeilenanfang stehen; zwei davon (`debounce`, `rate`) waren zugleich Namen von Bibliotheksblöcken (11.4), und das Beispiel in 3.7 benutzte `offset` als Feldname. Die Liste folgt jetzt der in 2.2 genannten Regel; entfernt wurden `tick from layout hw sim safe max_age rate max_rate capacity framing overflow wake phase idle timeout fail cost total mat tick_source tick_tolerance jitter max_slew vec follows debounce ticks len target f64 inout irreversible bits offset align duration mmio language open req resume capture` sowie die doppelten Einträge `arm disarm`; neu sind `stream` (leitet interne Streams ein) und `then` (Trigger). Ein Programm, das eines der entfernten Wörter als Bezeichner nutzt, war bisher ein Fehler und ist jetzt gültig; ein Programm mit den Bezeichnern `stream` oder `then` gab es nicht. In der Grammatik sind die Kostenklassen aufgezählt (`cost_class`), Record-Felder mit Bitfeldern verlangen kein `NEWLINE` nach dem `DEDENT` mehr (`record_field`), und `i64` ist als Name erlaubt (3.1). Die Lexer-Spezifikation (`grammar/lexer.md`) präzisiert 3.3 um die Leerraumregel für Einheitenausdrücke; die Matrixbeispiele in 3.11 schreiben `float[s]`-Elemente jetzt als `(10 ms).as(s)`, weil `0.01 s` nach 3.3 eine Dauer ist. Zwei weitere Grammatikkorrekturen nach externem Review: ganze Zahlen in Diskriminanten, Offsets, Bitpositionen, Attributen und Kostenverträgen sind in jeder Schreibweise erlaubt (`int_lit`, wie die Beispiele in 3.7 mit `0x00` voraussetzen), und der weiche Timeout `until … timeout d else:` ist eine eigene Alternative von `seq_item`, weil sein Block das Zeilenende selbst trägt. Nach einem zweiten Review: `capture<T, N>` ist Stream-Elementtyp, nicht allgemeiner Typ (8.9); `fn` ohne Rückgabetyp ist mit `inout` erlaubt (3.9); Größenparameter in Signaturen sind als `[const N]` deklariert (3.12); die Reservierung der Membernamen (2.5) gilt nur noch für Wrapper-Zugriffe, weil Records und Enums einen eigenen Namensraum haben — die Beispiele mit `NONE`-Varianten und dem Feld `data` sind damit gültig, das Feld `ok` in `SelftestResult` heißt `passed`; die Einheit an der Obergrenze einer Range gilt für beide Grenzen (3.4, 3.6); `event` im `then`-Teil eines Triggers ist benannt (7.5). Aus dem ersten Korpus-Durchlauf (`grammar/parse_corpus.py`): `unit` darf eine dimensionslose Einheit ohne Einheitenausdruck definieren (3.2), und eine Typvariable darf wie ein Typname `?` und `!E` tragen (3.12, `-> T?`). Aus dem Schnipsel-Korpus aller Codeblöcke: der Beispiel-Channel `log` heißt `dut_log`, weil `log` ein Schlüsselwort ist; Matrizenvariablen in 3.11 sind klein geschrieben; Auslassungen `...` in Codeblöcken sind durch Code ersetzt, damit jeder Block parst. Konstantenvariablen in Generics (3.12) gehören zu v1.1 statt v1.2, weil die Standardbibliothek (11.4) sie braucht; die Grammatik parst sie ohnehin ab M0. Die Sprache bleibt Edition 1.
 
 **Festlegungen aus dem differenziellen Mutationstest (`grammar/diff_parse.py`).** Der Vergleich des Parsers mit dem Grammatik-Orakel auf veränderten Referenzschnipseln zeigte drei Stellen, an denen die EBNF mehr zuließ als beabsichtigt; sie sind jetzt in der Grammatik (2.3) und der Lexer-Spezifikation festgehalten: ein kontextuelles Wort ist nie Einheitenname (`3 timeout` ist die Zahl 3 vor der Klausel, 2.2); die dimensionslose `1` eines Einheitenausdrucks steht nur als Zähler (`1/s`, `1/X`), sodass `1 1` kein Literal ist; in `<…>` eines Typs schließt `>` den Typ, ein Vergleich darin steht in Klammern (`bytes<(a > b)>`); und die Einheit nach einer Zahl ist eine eigene Produktion `unit_lit`, die genau so weit reicht, wie die Tokens anliegen (3.3), sodass `9.81 m/s^2 m/s^2` kein Ausdruck ist. Kein gültiges Programm ändert seine Bedeutung.
+
+**Festlegungen aus dem Grammatik-Fuzzer (`grammar/fuzz_grammar.py`, `plan/fuzzer.md`).** Erzeugte Programme aus der EBNF in fünf Fassungen deckten Lücken des Parsers auf, die ohne Bedeutungsänderung geschlossen sind: `>` vergleicht auch in eckigen Klammern innerhalb von Typklammern (`bytes<[8 >> 1][0]>`); die Atome einer Eigenschaft sind Vergleiche, Musterprüfungen und Werte (`tprop_atom := … | cmp_expr`), weil `a or b if c else d` sonst zwei Ableitungen mit verschiedener Bedeutung hätte — die Bedingungsform steht in einer Eigenschaft nur innerhalb eines Aufrufs; ein Exponent und die Einheitenklammer eines Zahlentyps brauchen kein Anliegen (`float[K ^ 2]`, `u16 [mV]`), nur das Einheitenliteral nach einer Zahl (3.3); eine Einheit in Typnamenform mit anliegendem Operator (`f[KiB/s]`) ist ein Generik-Argument der Klasse Einheit; und die Verschachtelungstiefe ist auf 64 Ebenen begrenzt (2.1).

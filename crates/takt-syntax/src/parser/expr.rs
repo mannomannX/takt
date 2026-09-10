@@ -8,6 +8,13 @@ use crate::token::TokenKind;
 impl<'t, 's> Parser<'t, 's> {
     /// `expr := or_expr [ "if" or_expr "else" expr ]`
     pub(super) fn parse_expr(&mut self) -> PResult<Expr> {
+        self.enter()?;
+        let result = self.parse_expr_inner();
+        self.leave();
+        result
+    }
+
+    fn parse_expr_inner(&mut self) -> PResult<Expr> {
         let start = self.pos;
         let then = self.parse_or_expr()?;
         if self.at_kw("if") {
@@ -254,12 +261,12 @@ impl<'t, 's> Parser<'t, 's> {
                     Expr { kind: ExprKind::Member { base: Box::new(expr), name, args }, span: self.span_from(start) };
             } else if self.at_op("[") {
                 self.bump();
-                let first = self.parse_expr()?;
+                let first = self.plain(Self::parse_expr)?;
                 let kind = if self.eat_op("..") {
-                    let to = self.parse_expr()?;
+                    let to = self.plain(Self::parse_expr)?;
                     ExprKind::Slice { base: Box::new(expr), from: Box::new(first), to: Box::new(to) }
                 } else if self.eat_op(",") {
-                    let col = self.parse_expr()?;
+                    let col = self.plain(Self::parse_expr)?;
                     ExprKind::Index2 { base: Box::new(expr), row: Box::new(first), col: Box::new(col) }
                 } else {
                     ExprKind::Index { base: Box::new(expr), index: Box::new(first) }
@@ -360,7 +367,7 @@ impl<'t, 's> Parser<'t, 's> {
                 self.bump();
                 let mut elems = Vec::new();
                 if !self.at_op("]") {
-                    let first = self.parse_expr()?;
+                    let first = self.plain(Self::parse_expr)?;
                     // `[N] block(args)`: Array von Blockinstanzen (5.7)
                     if self.at_op("]") && self.tok_at(1).kind == TokenKind::Ident && self.at_op_at(2, "(") {
                         self.bump();
@@ -373,7 +380,7 @@ impl<'t, 's> Parser<'t, 's> {
                     }
                     elems.push(first);
                     while self.eat_op(",") {
-                        elems.push(self.parse_expr()?);
+                        elems.push(self.plain(Self::parse_expr)?);
                     }
                 }
                 self.expect_op("]")?;
@@ -408,26 +415,49 @@ impl<'t, 's> Parser<'t, 's> {
     /// `generic_args := "[" generic_arg { "," generic_arg } "]"`
     fn parse_generic_args(&mut self) -> PResult<Vec<GenericArg>> {
         self.expect_op("[")?;
-        let mut args = vec![self.parse_generic_arg()?];
-        while self.eat_op(",") {
-            args.push(self.parse_generic_arg()?);
-        }
+        let args = self.plain(|p| {
+            let mut args = vec![p.parse_generic_arg()?];
+            while p.eat_op(",") {
+                args.push(p.parse_generic_arg()?);
+            }
+            Ok(args)
+        })?;
         self.expect_op("]")?;
         Ok(args)
     }
 
-    /// `generic_arg := unit_expr | type | const_expr`; die Klasse folgt der Namensform.
+    /// `generic_arg := unit_expr | type | const_expr`; die Klasse folgt der Namensform
+    /// und dem Folgetoken: ein Name vor `,`, `]`, `*`, `/`, `^` wird als Einheit versucht
+    /// (was Einheiten-, Typ- oder Konstantenvariable ist, entscheidet die Semantik) und
+    /// faellt auf einen Konstantenausdruck zurueck (`n * 2`); ein Typname vor `,` oder `]`
+    /// ist ein Typ, vor `*`, `/`, `^` eine Einheit (`KiB/s`); ein Name vor `?` oder `!`
+    /// eine Typvariable mit Huelle.
     fn parse_generic_arg(&mut self) -> PResult<GenericArg> {
         let type_words = ["bytes", "vec", "line", "stream", "samples", "table", "mat", "map"];
-        if self.at(TokenKind::TypeIdent)
+        let next_is = |p: &Self, ops: &[&str]| ops.iter().any(|op| p.at_op_at(1, op));
+        let unit_candidate = match self.kind() {
+            TokenKind::Ident | TokenKind::UpperIdent => next_is(self, &[",", "]", "*", "/", "^"]),
+            TokenKind::TypeIdent => next_is(self, &["*", "/", "^"]),
+            TokenKind::Int => self.text() == "1" && self.tok().joint && self.at_op_at(1, "/"),
+            _ => false,
+        };
+        if unit_candidate {
+            let start = self.pos;
+            if let Ok(unit) = self.parse_unit_expr(false) {
+                if self.at_op(",") || self.at_op("]") {
+                    return Ok(GenericArg::Unit(unit));
+                }
+            }
+            self.pos = start;
+        }
+        let wrapped_type_var = self.at(TokenKind::UpperIdent) && (self.at_op_at(1, "?") || self.at_op_at(1, "!"));
+        if wrapped_type_var
+            || self.at(TokenKind::TypeIdent)
             || self.at_op("[")
             || self.is_scalar_word()
             || (Self::is_word(self.kind()) && type_words.contains(&self.text()))
         {
             return Ok(GenericArg::Type(self.parse_type()?));
-        }
-        if self.at_unit_start() {
-            return Ok(GenericArg::Unit(self.parse_unit_expr(false)?));
         }
         Ok(GenericArg::Const(self.parse_const_expr()?))
     }
@@ -458,7 +488,8 @@ impl<'t, 's> Parser<'t, 's> {
     }
 
     /// `tprop_or`, `tprop_and`, `tprop_not`: mit gesetztem `temporal` sind Temporal-
-    /// operatoren Primaerausdruecke, also uebernimmt die gewoehnliche Vorrangkette.
+    /// operatoren Primaerausdruecke, also uebernimmt die gewoehnliche Vorrangkette bis
+    /// `cmp_expr` (`tprop_atom`); die Bedingungsform gibt es in Eigenschaften nicht.
     fn parse_tprop_or(&mut self) -> PResult<Expr> {
         self.parse_or_expr()
     }

@@ -1,18 +1,18 @@
 system:
     tick = 10 ms
 
-input  cell_v     : [4] float[V] in 2.0..4.5 V @ hw("afe/cell[0:4]")  with max_age = 50 ms
-input  pack_i     : float[A] in -10..10 A       @ hw("afe/current")    with max_age = 50 ms
-input  temp       : [2] float[degC]             @ hw("afe/ntc[0:2]")   with max_age = 200 ms
-input  charger    : bool                        @ hw("gpio/vbus_det")  with wake = true
-input  button     : stream<Edge>                @ hw("gpio/btn")       with max_rate = 50 Hz, wake = true
-input  chg_status : u8                          @ hw("i2c1/0x6B/0x0B") with max_age = 500 ms
-input  image_state : ImageState                 @ hw("sys/image_state")                        # 12.7
-output image_confirm : bool @ hw("sys/image_confirm") with safe = false
-output fet_chg    : bool @ hw("gpio/fet_chg")   with safe = false
-output fet_dis    : bool @ hw("gpio/fet_dis")   with safe = false
-output load_test  : bool @ hw("gpio/test_load") with safe = false
-output led        : u8   @ hw("pwm/led")        with safe = 0
+input  cell_v        : [4] float[V] in 2.0..4.5 V @ hw("afe/cell[0:4]")     with max_age = 50 ms
+input  pack_i        : float[A] in -10..10 A      @ hw("afe/current")       with max_age = 50 ms
+input  temp          : [2] float[degC]            @ hw("afe/ntc[0:2]")      with max_age = 200 ms
+input  charger       : bool                       @ hw("gpio/vbus_det")     with wake = true
+input  button        : stream<Edge>               @ hw("gpio/btn")          with max_rate = 50 Hz, wake = true
+input  chg_status    : u8                         @ hw("i2c1/0x6B/0x0B")    with max_age = 500 ms
+input  image_state   : ImageState                 @ hw("sys/image_state")  # 12.7
+output image_confirm : bool                       @ hw("sys/image_confirm") with safe = false
+output fet_chg       : bool                       @ hw("gpio/fet_chg")      with safe = false
+output fet_dis       : bool                       @ hw("gpio/fet_dis")      with safe = false
+output load_test     : bool                       @ hw("gpio/test_load")    with safe = false
+output led           : u8                         @ hw("pwm/led")           with safe = 0
 
 param V_MAX     : float[V] in 4.0..4.3 V = 4.2 V
 param V_MIN     : float[V] in 2.5..3.2 V = 3.0 V
@@ -21,24 +21,24 @@ param T_MAX     : float[degC] in 40..70 degC = 60 degC
 param R_INT_MAX : float[mohm] in 20..500 mohm = 150 mohm
 
 const OCV : table<float[V], float[pct]> = [(3.0 V, 0 pct), (3.4 V, 10 pct), (3.6 V, 30 pct),
-                                          (3.8 V, 60 pct), (4.0 V, 85 pct), (4.2 V, 100 pct)]
+                                           (3.8 V, 60 pct), (4.0 V, 85 pct), (4.2 V, 100 pct)]
 
 record SelftestResult:
-    passed: bool
-    code: int in 0..255
-    r_int: float[mohm] in 0..1000 mohm
+    passed : bool
+    code   : int in 0..255
+    r_int  : float[mohm] in 0..1000 mohm
 
 machine bms every 100 ms:
     fault -> PROTECT
     persist var cycle_count : int in 0..100000 = 0 with min_interval = 10 s
     persist var fault_count : int in 0..100000 = 0 with min_interval = 10 s
     persist var last_test   : SelftestResult = SelftestResult(passed = false, code = 0, r_int = 0 mohm)
-    pub var soc       : float[pct] = 0 pct
-    pub var charge_as : float[A*s] = 0 A*s
-    var coulomb = integrate[A](limit = 72000 A*s)
+    pub var soc             : float[pct] = 0 pct
+    pub var charge_as       : float[A*s] = 0 A*s
+    var coulomb             = integrate[A](limit = 72000 A*s)
     initial SELFTEST
 
-    state ACTIVE:                                          # Interlocks fuer alle Betriebszustaende
+    state ACTIVE:  # Interlocks fuer alle Betriebszustaende
         loop:
             for i in range(4):
                 check cell_v[i] < V_MAX + 0.05 V, "cell {i} overvoltage {cell_v[i]}"
@@ -67,7 +67,7 @@ machine bms every 100 ms:
                     last_test = SelftestResult(passed = false, code = 1, r_int = r_int)
                     -> DEGRADED
                 last_test = SelftestResult(passed = true, code = 0, r_int = r_int)
-                if image_state.or(CONFIRMED) == TRIAL:        # neues Image nur nach bestandenem Selbsttest bestaetigen; ohne Plattformangabe: bestaetigt
+                if image_state.or(CONFIRMED) == TRIAL:  # neues Image nur nach bestandenem Selbsttest bestaetigen; ohne Plattformangabe: bestaetigt
                     image_confirm = true
                 -> RUN
 
@@ -91,7 +91,7 @@ machine bms every 100 ms:
                 led = 8
             after 24 h: -> SELFTEST
 
-    state STANDBY idle:                                    # kein loop in Zustand und Vorfahren; nur Wake-Quellen
+    state STANDBY idle:  # kein loop in Zustand und Vorfahren; nur Wake-Quellen
         enter:
             fet_chg = false
             fet_dis = false
@@ -100,7 +100,7 @@ machine bms every 100 ms:
         when charger: -> SELFTEST
         after 7 d: -> SELFTEST
 
-    state PROTECT:                                         # Fault-Ziel; phi(PROTECT) = FAULTED
+    state PROTECT:  # Fault-Ziel; phi(PROTECT) = FAULTED
         enter:
             fet_chg = false
             fet_dis = false

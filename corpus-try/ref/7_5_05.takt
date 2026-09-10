@@ -1,9 +1,9 @@
 trigger cut_on_erase node io1:
-    when dut_log matches "Erasing sector {n:int}"                 # nur knotenlokale Inputs/Streams, Muster, Konstanten
-    then at event.t + 250 us: vbus_en = false                  # nur Output-Zuweisungen auf demselben Knoten
-    bound 20 us                                                # vom Knoten garantierte Reaktionszeit
+    when dut_log matches "Erasing sector {n:int}"  # nur knotenlokale Inputs/Streams, Muster, Konstanten
+    then at event.t + 250 us: vbus_en = false      # nur Output-Zuweisungen auf demselben Knoten
+    bound 20 us                                    # vom Knoten garantierte Reaktionszeit
 
-arm cut_on_erase                                # Statement, auch in Aktionsbloecken
+arm cut_on_erase  # Statement, auch in Aktionsbloecken
 disarm cut_on_erase
-until cut_on_erase.fired as f timeout 2 s       # fired : Eingabestrom mit .t des Feuerns und den Captures (f.n)
+until cut_on_erase.fired as f timeout 2 s  # fired : Eingabestrom mit .t des Feuerns und den Captures (f.n)
 check cut_on_erase.armed

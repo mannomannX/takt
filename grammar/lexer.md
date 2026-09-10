@@ -212,7 +212,8 @@ Ein Einheitenausdruck darf nur direkt auf ein Zahlenliteral folgen (Grammatik
   `A*s`, `1/s`, `pct/bar`. Der Parser liest `unit_expr` genau so weit, wie die Tokens
   anliegen; das erste Leerzeichen beendet ihn. So ist `200 ms * 2` eine Dauer mal zwei,
   `5 K/min` ein Literal in `K/min` und `5 K / min` ein Literal in `K`, geteilt durch die
-  Variable `min`.
+  Variable `min`. Die anliegende Folge muss ganz ein Einheitenausdruck sein: `3 s*2` ist
+  weder Dauer (L4.4) noch Literal, sondern ein Fehler; `3 s * 2` ist eine Dauer mal zwei.
 - **Einheitennamen** sind Wörter beliebiger Form (`bar`, `mV`, `V`, `K`, `B`, `Hz`, `Pa`,
   `KiB`, `degC`) oder die Ziffer `1` für dimensionslos (`1/s`). Der Tokenizer prüft nicht,
   ob die Einheit existiert; das tut die Semantik (3.2). Ein kontextuelles Terminal der
@@ -408,24 +409,17 @@ vectors
 
 ## L7 Kanonische Form (`takt fmt`)
 
-Der Formatter erzeugt aus einem Tokenstrom mit Positionen den kanonischen Text (2.1).
-Lexikalisch gilt:
-
-- Zeilenenden `\n`, keine BOM, keine Tabulatoren, kein Leerraum am Zeilenende, genau ein
-  Zeilenende am Dateiende.
-- Einrückung mit 4 Leerzeichen je Stufe; Fortsetzungszeilen in Klammern werden auf die
-  öffnende Klammer ausgerichtet.
-- Ein Leerzeichen um binäre Operatoren und nach `,` und `:` in Typen und Argumenten;
-  kein Leerzeichen innerhalb von Einheitenausdrücken (`K/min`, nicht `K / min`); genau
-  ein Leerzeichen zwischen Zahl und Einheit oder Zeitsuffix.
-- Zahlenliterale bleiben, wie geschrieben (Unterstriche, Hex-Groß-/Kleinschreibung,
-  Dezimaltext). Der Formatter ändert nie einen Wert.
-- Kommentare bleiben an ihrer Zeile; ein Leerzeichen nach `#` wird ergänzt. Der Formatter
-  liest sie aus dem Beiwerk der Tokens; mehr als eine Leerzeile wird zu einer.
+Die kanonische Form ist in `grammar/format.md` spezifiziert (mit Testvektoren); der
+Formatter liegt in `crates/takt-syntax/src/fmt/`. Lexikalisch gilt dort: Zeilenenden `\n`,
+keine BOM, keine Tabulatoren, kein Leerraum am Zeilenende, genau ein Zeilenende am
+Dateiende; Einrückung mit 4 Leerzeichen je Stufe; genau ein Leerzeichen zwischen Zahl und
+Einheit oder Zeitsuffix und keiner innerhalb eines Einheitenausdrucks; Zahlen- und
+Stringliterale bleiben, wie geschrieben; Kommentare bleiben an ihrer Zeile mit einem
+Leerzeichen nach `#`. Der Formatter bricht keine Zeile um und ändert nie einen Wert.
 
 Ein Programm, das der Formatter unverändert lässt, heißt kanonisch. Der Roundtrip
-Parse → Format → Parse muss denselben Tokenstrom ergeben; das ist der Test der
-Grammatikzeilen der Inventur (plan.md, Abschnitt 6).
+Parse → Format → Parse muss denselben Tokenstrom und denselben Baum ergeben; das ist der
+Test der Grammatikzeilen der Inventur (plan.md, Abschnitt 6).
 
 ---
 

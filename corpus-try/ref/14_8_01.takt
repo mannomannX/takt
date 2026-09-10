@@ -1,7 +1,7 @@
 system:
-    tick = 1 ms
+    tick   = 1 ms
     target = boot
-    float = f32
+    float  = f32
 
 unit sector = 4 KiB
 
@@ -17,12 +17,12 @@ record ImageHeader layout little:
     hash    : bytes<32>
     sig     : bytes<64>
 
-input  flash_status    : FlashStatus         @ hw("flash/status")        with max_age = 10 ms
-input  flash_rx        : stream<bytes<4096>> @ hw("flash/rx")            with max_rate = 200 Hz, capacity = 2
-output flash_cmd       : FlashCmd            @ hw("flash/cmd")           with safe = NONE
-input  efuse           : EfuseBlock          @ hw("sys/efuse")           # pubkey: bytes<64>, min_version: u32, ... (12.7)
+input  flash_status    : FlashStatus         @ hw("flash/status") with max_age = 10 ms
+input  flash_rx        : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
+output flash_cmd       : FlashCmd            @ hw("flash/cmd")    with safe = NONE
+input  efuse           : EfuseBlock          @ hw("sys/efuse")  # pubkey: bytes<64>, min_version: u32, ... (12.7)
 input  image_confirmed : [2] bool            @ hw("sys/image_confirmed")
-output boot_jump       : u8                  @ hw("sys/jump")            with safe = NONE
+output boot_jump       : u8                  @ hw("sys/jump")     with safe = NONE
 # log geht im Startprofil an die UART der Runtime (12.8)
 
 const SLOT_BASE  : [2] u32[B] = [0x10000 B, 0x110000 B]
@@ -40,23 +40,23 @@ machine bootloader:
     fault -> HALT
     persist var trials : [2] int in 0..5 = [0, 0]
     persist var active : int in 0..1 = 0
-    var idx  : int in 0..1 = 0
-    var hdr  : ImageHeader!HeaderErr = ERR(MAGIC)
-    var img  : ImageHeader = default
-    var ctx  : Sha256Ctx = sha256_init()
-    var done : u32[B] = 0 B
+    var idx            : int in 0..1 = 0
+    var hdr            : ImageHeader!HeaderErr = ERR(MAGIC)
+    var img            : ImageHeader = default
+    var ctx            : Sha256Ctx = sha256_init()
+    var done           : u32[B] = 0 B
     initial SELECT
 
     state SELECT:
         enter:
             idx = active
             for i in range(2):
-                if image_confirmed[i].or(false):                    # bestaetigte Images setzen ihren Zaehler zurueck
+                if image_confirmed[i].or(false):  # bestaetigte Images setzen ihren Zaehler zurueck
                     trials[i] = 0
             if trials[idx] >= MAX_TRIALS and trials[1 - idx] < MAX_TRIALS:
-                idx = 1 - idx                                        # Fallback auf den anderen Slot
+                idx = 1 - idx  # Fallback auf den anderen Slot
             if trials[idx] < 5:
-                trials[idx] += 1                                     # Versuch zaehlt vor dem Sprung; persist wird vor boot_jump geschrieben
+                trials[idx] += 1  # Versuch zaehlt vor dem Sprung; persist wird vor boot_jump geschrieben
         when trials[idx] <= MAX_TRIALS: -> READ_HEADER
         when true: -> HALT
 
@@ -71,7 +71,7 @@ machine bootloader:
 
     state CHECK_HEADER:
         when hdr.ok:
-            img = hdr                                                # durch hdr.ok dominiert: implizites Auspacken
+            img = hdr  # durch hdr.ok dominiert: implizites Auspacken
             ctx = sha256_init()
             done = 0 B
             -> HASHING
@@ -79,7 +79,7 @@ machine bootloader:
             log "slot {idx}: bad header ({hdr.err})"
             -> SLOT_FAILED
 
-    state HASHING:                                                   # ein Chunk je Tick; Budget statisch
+    state HASHING:  # ein Chunk je Tick; Budget statisch
         loop:
             if flash_status == IDLE and done < img.size:
                 flash_cmd = READ(addr = SLOT_BASE[idx] + HEADER_LEN + done, len = min(4096 B, img.size - done))
@@ -104,7 +104,7 @@ machine bootloader:
         enter:
             active = idx
             log "booting slot {idx}, version {img.version}"
-            boot_jump = idx as u8                                    # beendet den Lauf nach dem Commit; persist zuvor synchron geschrieben
+            boot_jump = idx as u8  # beendet den Lauf nach dem Commit; persist zuvor synchron geschrieben
 
     state SLOT_FAILED:
         enter:
@@ -119,4 +119,4 @@ machine bootloader:
 
     state HALT:
         enter:
-            log "no bootable image"                                  # Watchdog der Plattform loest den Neustart aus
+            log "no bootable image"  # Watchdog der Plattform loest den Neustart aus

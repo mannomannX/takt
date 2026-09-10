@@ -1,7 +1,7 @@
-output flash_cmd    : FlashCmd    @ hw("flash/cmd")    with safe = NONE     # NONE, ERASE(sector), PROGRAM(addr, len), READ(addr, len)
-output flash_data   : stream<u8>  @ hw("flash/tx")     with max_rate = 4 MHz, capacity = 4096
-input  flash_status : FlashStatus @ hw("flash/status") with max_age = 10 ms  # IDLE, BUSY, DONE, ERROR(code)
-input  flash_rx     : stream<bytes<4096>> @ hw("flash/rx") with max_rate = 200 Hz, capacity = 2
+output flash_cmd    : FlashCmd            @ hw("flash/cmd")    with safe = NONE  # NONE, ERASE(sector), PROGRAM(addr, len), READ(addr, len)
+output flash_data   : stream<u8>          @ hw("flash/tx")     with max_rate = 4 MHz, capacity = 4096
+input  flash_status : FlashStatus         @ hw("flash/status") with max_age = 10 ms  # IDLE, BUSY, DONE, ERROR(code)
+input  flash_rx     : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
 sequence:
     flash_cmd = ERASE(sector = n)
     until flash_status == DONE timeout 200 ms -> FLASH_FAULT

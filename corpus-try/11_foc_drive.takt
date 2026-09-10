@@ -8,11 +8,11 @@
 # ==============================================================================
 
 system:
-    language = 1
-    tick = 50 us
-    float = f32
+    language      = 1
+    tick          = 50 us
+    float         = f32
     output_timing = boundary
-    tick_source = hw("tim1/update")
+    tick_source   = hw("tim1/update")
 
 # ------------------------------------------------------------------------------
 # Einheiten & Typdefinitionen
@@ -29,41 +29,41 @@ enum MotorState:
     SAFE_FAULT
 
 record AlphaBetaCurrent:
-    alpha: float[A]
-    beta: float[A]
+    alpha : float[A]
+    beta  : float[A]
 
 record DqCurrent:
-    d: float[A]
-    q: float[A]
+    d : float[A]
+    q : float[A]
 
 record AlphaBetaVoltage:
-    alpha: float[V]
-    beta: float[V]
+    alpha : float[V]
+    beta  : float[V]
 
 record PhaseDuties:
-    u: float in 0..1
-    v: float in 0..1
-    w: float in 0..1
+    u : float in 0..1
+    v : float in 0..1
+    w : float in 0..1
 
 # ------------------------------------------------------------------------------
 # Hardware-Channels
 # ------------------------------------------------------------------------------
 
 # Analoge Messgroessen (ADC / Stromsensoren, DC-Link, Encoder, NTC)
-input i_u           : float[A] in -45..45 A       @ hw("adc1/i_u")     with max_age = 100 us
-input i_v           : float[A] in -45..45 A       @ hw("adc1/i_v")     with max_age = 100 us
-input v_dc          : float[V] in 0..60 V         @ hw("adc1/v_dc")    with max_age = 200 us
-input theta_elec    : float in 0..6.2831853       @ hw("enc0/theta_e") with max_age = 100 us
-input omega_mech    : float[1/s] in -1200..1200 1/s @ hw("enc0/omega") with max_age = 200 us
-input temp_inverter : float[degC] in -40..150 degC @ hw("ntc0/temp")   with max_age = 100 ms
-input temp_motor    : float[degC] in -40..180 degC @ hw("ntc1/temp")   with max_age = 100 ms
+input  i_u           : float[A] in -45..45 A         @ hw("adc1/i_u")     with max_age = 100 us
+input  i_v           : float[A] in -45..45 A         @ hw("adc1/i_v")     with max_age = 100 us
+input  v_dc          : float[V] in 0..60 V           @ hw("adc1/v_dc")    with max_age = 200 us
+input  theta_elec    : float in 0..6.2831853         @ hw("enc0/theta_e") with max_age = 100 us
+input  omega_mech    : float[1/s] in -1200..1200 1/s @ hw("enc0/omega")   with max_age = 200 us
+input  temp_inverter : float[degC] in -40..150 degC  @ hw("ntc0/temp")    with max_age = 100 ms
+input  temp_motor    : float[degC] in -40..180 degC  @ hw("ntc1/temp")    with max_age = 100 ms
 
 # Digitale Aktuatorausgaenge & PWM-Halbbrücken
-output gate_en      : bool                        @ hw("drv/gate_en")  with safe = false
-output pwm_u        : float in 0..1               @ hw("tim1/ch1_duty") with safe = 0
-output pwm_v        : float in 0..1               @ hw("tim1/ch2_duty") with safe = 0
-output pwm_w        : float in 0..1               @ hw("tim1/ch3_duty") with safe = 0
-output brake_relay  : bool                        @ hw("gpio/brake")   with safe = false
+output gate_en     : bool          @ hw("drv/gate_en")   with safe = false
+output pwm_u       : float in 0..1 @ hw("tim1/ch1_duty") with safe = 0
+output pwm_v       : float in 0..1 @ hw("tim1/ch2_duty") with safe = 0
+output pwm_w       : float in 0..1 @ hw("tim1/ch3_duty") with safe = 0
+output brake_relay : bool          @ hw("gpio/brake")    with safe = false
 
 # Operator-Kommandos
 command cmd_start
@@ -74,13 +74,13 @@ command cmd_clear_fault
 # Parameter & Live-Tunables
 # ------------------------------------------------------------------------------
 
-param V_DC_MIN           : float[V] in 12..30 V = 18 V
-param V_DC_MAX           : float[V] in 30..58 V = 52 V
-param I_PEAK_MAX         : float[A] in 1..45 A  = 35 A
-param T_MAX_INV          : float[degC] in 50..125 degC = 105 degC
-param T_MAX_MOT          : float[degC] in 50..160 degC = 125 degC
-param CALIBRATION_VOLT   : float[V] in 0.5..5 V = 2.0 V
-param CALIBRATION_TIME   : Duration = 300 ms
+param V_DC_MIN         : float[V] in 12..30 V = 18 V
+param V_DC_MAX         : float[V] in 30..58 V = 52 V
+param I_PEAK_MAX       : float[A] in 1..45 A = 35 A
+param T_MAX_INV        : float[degC] in 50..125 degC = 105 degC
+param T_MAX_MOT        : float[degC] in 50..160 degC = 125 degC
+param CALIBRATION_VOLT : float[V] in 0.5..5 V = 2.0 V
+param CALIBRATION_TIME : Duration = 300 ms
 
 tunable param KP_CURRENT_D : float[V/A] in 0..50 V/A = 3.8 V/A
 tunable param KI_CURRENT_D : float[V/A/s] in 0..5000 V/A/s = 950 V/A/s
@@ -88,9 +88,9 @@ tunable param KP_CURRENT_Q : float[V/A] in 0..50 V/A = 3.8 V/A
 tunable param KI_CURRENT_Q : float[V/A/s] in 0..5000 V/A/s = 950 V/A/s
 
 tunable param KP_SPEED     : float[A*s] in 0..10 A*s = 0.12 A*s
-tunable param KI_SPEED     : float[A] in 0..100 A    = 1.5 A
+tunable param KI_SPEED     : float[A] in 0..100 A = 1.5 A
 tunable param TARGET_SPEED : float[1/s] in -800..800 1/s = 200 1/s
-tunable param MAX_IQ       : float[A] in 1..35 A     = 25 A
+tunable param MAX_IQ       : float[A] in 1..35 A = 25 A
 
 # ------------------------------------------------------------------------------
 # Reine Berechnungsfunktionen (Mathematische Transformationen)
@@ -104,21 +104,21 @@ fn clamp_scalar(x: float, lo: float, hi: float) -> float:
 
 fn clarke(iu: float[A], iv: float[A]) -> AlphaBetaCurrent:
     var ialpha = iu
-    var ibeta = (iu + 2.0 * iv) * 0.577350269
+    var ibeta  = (iu + 2.0 * iv) * 0.577350269
     return AlphaBetaCurrent(alpha = ialpha, beta = ibeta)
 
 fn park(ab: AlphaBetaCurrent, theta: float) -> DqCurrent:
-    var s = sin(theta)
-    var c = cos(theta)
+    var s  = sin(theta)
+    var c  = cos(theta)
     var id = ab.alpha * c + ab.beta * s
     var iq = -ab.alpha * s + ab.beta * c
     return DqCurrent(d = id, q = iq)
 
 fn inv_park(v_d: float[V], v_q: float[V], theta: float) -> AlphaBetaVoltage:
-    var s = sin(theta)
-    var c = cos(theta)
+    var s      = sin(theta)
+    var c      = cos(theta)
     var valpha = v_d * c - v_q * s
-    var vbeta = v_d * s + v_q * c
+    var vbeta  = v_d * s + v_q * c
     return AlphaBetaVoltage(alpha = valpha, beta = vbeta)
 
 fn svpwm(valpha: float[V], vbeta: float[V], vbus: float[V]) -> PhaseDuties:
@@ -164,7 +164,7 @@ machine bldc_foc_controller every 50 us:
 
     # Persistente Betriebsdaten
     persist var operating_seconds : int in 0..2000000000 = 0 with min_interval = 10 s
-    persist var fault_events      : int in 0..100000     = 0 with min_interval = 1 s
+    persist var fault_events      : int in 0..100000 = 0 with min_interval = 1 s
 
     # Veroeffentlichte Telemetriegroessen
     pub var driver_state : MotorState = STANDBY
@@ -258,7 +258,7 @@ machine bldc_foc_controller every 50 us:
 
                 # Ruecktransformation und Tastverhaeltnisberechnung
                 var v_ab_cmd = inv_park(v_d_cmd, v_q_cmd, theta_elec)
-                var duties = svpwm(v_ab_cmd.alpha, v_ab_cmd.beta, v_dc)
+                var duties   = svpwm(v_ab_cmd.alpha, v_ab_cmd.beta, v_dc)
 
                 pwm_u = duties.u
                 pwm_v = duties.v
@@ -283,7 +283,7 @@ machine bldc_foc_controller every 50 us:
                 var v_q_cmd = pi_q.step(0 A - i_dq.q, 50 us)
 
                 var v_ab_cmd = inv_park(v_d_cmd, v_q_cmd, theta_elec)
-                var duties = svpwm(v_ab_cmd.alpha, v_ab_cmd.beta, v_dc)
+                var duties   = svpwm(v_ab_cmd.alpha, v_ab_cmd.beta, v_dc)
 
                 pwm_u = duties.u
                 pwm_v = duties.v

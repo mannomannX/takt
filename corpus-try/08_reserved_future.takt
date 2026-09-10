@@ -6,7 +6,7 @@
 
 system:
     language = 1
-    tick = 1 ms
+    tick     = 1 ms
 
 node io1 @ hw("ethercat/1") with tick = 1 ms
 
@@ -17,15 +17,15 @@ record Uart0Regs layout little:
     status : u32 with bits:
         tx_ready : bool at 0
         rx_ready : bool at 1
-        errors : u8 at 4..7
+        errors   : u8 at 4..7
     fifo : u32
 
 port uart0 : Uart0Regs @ mmio(0x60000000)
 
-input  trip_in : bool @ hw("io1/di0") with label = "Trip input", group = "safety"
+input  trip_in : bool              @ hw("io1/di0")   with label = "Trip input", group = "safety"
 input  raw_log : stream<line<128>> @ hw("io1/uart0") with max_rate = 1000 Hz, framing = lines
-output vbus_en : bool @ hw("io1/do0") with safe = false, jitter = 2 us
-output beacon  : bool @ hw("io1/do1") with safe = false
+output vbus_en : bool              @ hw("io1/do0")   with safe = false, jitter = 2 us
+output beacon  : bool              @ hw("io1/do1")   with safe = false
 
 param TAB_SIZE : int in 1..64 = 16
 
@@ -35,8 +35,8 @@ fn scale[type T: numeric](x: T, k: T) -> T:
 fn pick[type T: ord](a: T, b: T) -> T:
     return a if a > b else b
 
-property never_both: always (not (vbus_en and beacon)) with monitor = true
-property settles: always (trip_in implies stable[100 ms] (not vbus_en))
+property never_both: always(not (vbus_en and beacon)) with monitor = true
+property settles: always(trip_in implies stable[100 ms](not vbus_en))
 
 trigger cut_on_sector node io1:
     when raw_log matches "SECTOR {n:int}"

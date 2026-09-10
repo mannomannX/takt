@@ -1,12 +1,12 @@
 system:
     tick = 1 ms
 
-output vbus_set : float[V] in 0..6 V @ hw("psu/vset")    with safe = 0 V
-output vbus_en  : bool               @ hw("psu/enable")  with safe = false
-output reset_n  : bool               @ hw("gpio/dut_rst") with safe = false      # low = Reset aktiv
-input  i_dut    : samples<float[A], 100> @ hw("daq1/ai2") with rate = 100 kHz
-input  dut_log  : stream<line<256>>  @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines, overflow = fault
-output dut_tx   : stream<u8>         @ hw("uart0/tx") with max_rate = 11520 Hz, capacity = 256
+output vbus_set : float[V] in 0..6 V     @ hw("psu/vset")     with safe = 0 V
+output vbus_en  : bool                   @ hw("psu/enable")   with safe = false
+output reset_n  : bool                   @ hw("gpio/dut_rst") with safe = false  # low = Reset aktiv
+input  i_dut    : samples<float[A], 100> @ hw("daq1/ai2")     with rate = 100 kHz
+input  dut_log  : stream<line<256>>      @ hw("uart0/rx")     with max_rate = 2000 Hz, framing = lines, overflow = fault
+output dut_tx   : stream<u8>             @ hw("uart0/tx")     with max_rate = 11520 Hz, capacity = 256
 
 command start
 command reset
@@ -21,8 +21,8 @@ enum Result: NONE, RECOVERED, BRICKED, CORRUPT
 
 machine brownout_test:
     fault -> SAFE
-    pub var result     : Result = NONE
-    var t_power_on     : Duration = 0 s
+    pub var result : Result = NONE
+    var t_power_on : Duration = 0 s
     initial IDLE
 
     state IDLE:
@@ -57,11 +57,11 @@ machine brownout_test:
                 -> UPDATING
 
         state UPDATING:
-            var erased : int in 0..255 = 0                       # zustandslokal, bei Eintritt 0
+            var erased : int in 0..255 = 0  # zustandslokal, bei Eintritt 0
             on dut_log matches "Erasing sector {n:int}" as m:
                 erased = m.n
                 measure erase_seen_at = m.t - t_power_on
-                at m.t + BROWNOUT_DELAY:                          # Hardware-genauer Zeitpunkt relativ zur Logzeile
+                at m.t + BROWNOUT_DELAY:  # Hardware-genauer Zeitpunkt relativ zur Logzeile
                     vbus_en = false
                 -> CUTTING
             on dut_log has "CRC mismatch" as ev:
@@ -112,6 +112,6 @@ machine brownout_test:
 
 campaign brownout_scan:
     program "supply_interruption.takt"
-    sweep BROWNOUT_DELAY = 2 ms .. 400 ms step 250 us
+    sweep BROWNOUT_DELAY = 2 ms..400 ms step 250 us
     repeat 2
     stop_on fail

@@ -1,4 +1,4 @@
 measure boot_time = m.t - t_power_on          # (Name, Wert mit Einheit, Tick, Zustandspfad) -> Report; mehrfach = Zeitreihe
 verify i_dut.max() < 10 mA, "supply not off"  # bei false: FAIL-Befund (Nachricht, Tick, Position); Ausfuehrung geht weiter
-verdict pass "recovery ok"                     # explizites Ergebnis
+verdict pass "recovery ok"                    # explizites Ergebnis
 verdict fail "image corrupted"

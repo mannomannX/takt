@@ -1,12 +1,12 @@
-stream<UpdateMsg> update_q with capacity = 16          # Dateiebene; genau ein Schreiber (Single-Writer, statisch)
+stream<UpdateMsg> update_q with capacity = 16  # Dateiebene; genau ein Schreiber (Single-Writer, statisch)
 
-machine receiver:                                      # Schreiber
+machine receiver:  # Schreiber
     initial RUN
     state RUN:
         on can_rx as f:
             send update_q, UpdateMsg(kind = CHUNK, data = f.data)
 
-machine flasher:                                       # Leser, Cursor je Konsument
+machine flasher:  # Leser, Cursor je Konsument
     initial RUN
     state RUN:
         on update_q as m:

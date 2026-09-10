@@ -7,6 +7,13 @@ use crate::token::TokenKind;
 impl<'t, 's> Parser<'t, 's> {
     /// `block := NEWLINE INDENT stmt { stmt } DEDENT | simple_stmt NEWLINE`
     pub(super) fn parse_block(&mut self) -> PResult<Block> {
+        self.enter()?;
+        let result = self.parse_block_inner();
+        self.leave();
+        result
+    }
+
+    fn parse_block_inner(&mut self) -> PResult<Block> {
         let start = self.pos;
         if self.eat(TokenKind::Newline) {
             self.expect_indent()?;

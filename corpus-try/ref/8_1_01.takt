@@ -1,4 +1,4 @@
-input  tank_p    : float[bar] in 0..100 bar @ hw("daq1/ai0") with max_age = 5 ms
-input  tcs       : [16] float[degC]         @ hw("daq1/tc[0:16]") with max_age = 100 ms
-output fuel_main : ValveCmd                 @ hw("plc1/do0")  with safe = CLOSED
-output heater_pwm: float in 0..1            @ hw("ctrl/pwm0") with safe = 0
+input  tank_p     : float[bar] in 0..100 bar @ hw("daq1/ai0")      with max_age = 5 ms
+input  tcs        : [16] float[degC]         @ hw("daq1/tc[0:16]") with max_age = 100 ms
+output fuel_main  : ValveCmd                 @ hw("plc1/do0")      with safe = CLOSED
+output heater_pwm : float in 0..1            @ hw("ctrl/pwm0")     with safe = 0

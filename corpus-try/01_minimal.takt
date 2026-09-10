@@ -4,7 +4,7 @@
 
 system:
     language = 1
-    tick = 10 ms
+    tick     = 10 ms
 
 input  tank_p : float[bar] in 0..100 bar @ hw("daq1/ai0") with max_age = 50 ms
 output vent   : bool                     @ hw("plc1/do0") with safe = false

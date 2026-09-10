@@ -1,4 +1,4 @@
 state RUNNING:
     instance pump = pump_ctrl(cmd = pump_cmd, out = pump_valve)
     instance fans[i in 0..4] = fan_ctrl(setpoint = fan_sp[i], out = fan_pwm[i])
-    instance pid resume = loop_ctrl(setpoint = loop_sp, out = loop_out)   # behaelt seine Konfiguration ueber Deaktivierungen (5.12)
+    instance pid resume = loop_ctrl(setpoint = loop_sp, out = loop_out)  # behaelt seine Konfiguration ueber Deaktivierungen (5.12)

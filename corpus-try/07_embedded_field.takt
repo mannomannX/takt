@@ -3,14 +3,14 @@
 #      Chunk-Natives, Geraet mit Kommando und Status, System-Channels.
 
 system:
-    language = 1
-    tick = 10 ms
-    target = baremetal
-    float = f32
-    tick_source = hw("gptimer0")
+    language       = 1
+    tick           = 10 ms
+    target         = baremetal
+    float          = f32
+    tick_source    = hw("gptimer0")
     tick_tolerance = 2 pct for 10 ticks
 
-unit sector = 4096 B          # B, KiB, MiB sind vordefiniert (3.2)
+unit sector = 4096 B  # B, KiB, MiB sind vordefiniert (3.2)
 
 enum FlashCmd: NONE, ERASE(sector_no: u32), PROGRAM(addr: u32[B], size: u32[B]), READ(addr: u32[B], size: u32[B])
 enum FlashStatus: IDLE, BUSY, DONE, ERROR(code: u8)
@@ -18,7 +18,7 @@ enum FlashStatus: IDLE, BUSY, DONE, ERROR(code: u8)
 
 record SelftestResult:
     passed : bool
-    code : int in 0..255
+    code   : int in 0..255
 
 native fn crc32c(b: bytes<256>) -> u32 with cost = {i32: 4000}, stack = 64, total
 native fn sha256_init() -> Sha256Ctx with cost = 200, stack = 64, total
@@ -26,30 +26,30 @@ native fn sha256_update(ctx: Sha256Ctx, chunk: bytes<256>) -> Sha256Ctx with cos
 native fn sha256_final(ctx: Sha256Ctx) -> bytes<32> with cost = 3000, stack = 256, total
 native job verify_sig(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 2048, duration = 120 ms, total
 
-input  cell_mv      : u16[mV] in 2000 mV..4500 mV @ hw("afe/cell0") with max_age = 100 ms, max_slew = 200 mV/s
-input  charger      : bool @ hw("gpio/vbus") with wake = true
-input  button       : stream<Edge> @ hw("gpio/btn") with max_rate = 50 Hz, wake = true
-input  chg_status   : u8 @ hw("i2c1/0x6B/0x0B") with max_age = 500 ms
-input  flash_status : FlashStatus @ hw("flash/status") with max_age = 10 ms
-input  flash_rx     : stream<bytes<256>> @ hw("flash/rx") with max_rate = 200 Hz, capacity = 2
-input  image_state  : ImageState @ hw("sys/image_state") with max_age = 1 s
-output flash_cmd    : FlashCmd @ hw("flash/cmd") with safe = NONE
-output fet_chg      : bool @ hw("gpio/fet_chg") with safe = false
-output led          : u8 @ hw("pwm/led") with safe = 0
-output image_confirm : bool @ hw("sys/image_confirm") with safe = false
+input  cell_mv       : u16[mV] in 2000 mV..4500 mV @ hw("afe/cell0")         with max_age = 100 ms, max_slew = 200 mV/s
+input  charger       : bool                        @ hw("gpio/vbus")         with wake = true
+input  button        : stream<Edge>                @ hw("gpio/btn")          with max_rate = 50 Hz, wake = true
+input  chg_status    : u8                          @ hw("i2c1/0x6B/0x0B")    with max_age = 500 ms
+input  flash_status  : FlashStatus                 @ hw("flash/status")      with max_age = 10 ms
+input  flash_rx      : stream<bytes<256>>          @ hw("flash/rx")          with max_rate = 200 Hz, capacity = 2
+input  image_state   : ImageState                  @ hw("sys/image_state")   with max_age = 1 s
+output flash_cmd     : FlashCmd                    @ hw("flash/cmd")         with safe = NONE
+output fet_chg       : bool                        @ hw("gpio/fet_chg")      with safe = false
+output led           : u8                          @ hw("pwm/led")           with safe = 0
+output image_confirm : bool                        @ hw("sys/image_confirm") with safe = false
 
 command wake_up with wake = true
 
-param V_MAX      : u16[mV] in 4000 mV..4300 mV = 4200 mV
-param IMAGE_SIZE : u32[B] in 1024 B..1048576 B = 65536 B
+param V_MAX       : u16[mV] in 4000 mV..4300 mV = 4200 mV
+param IMAGE_SIZE  : u32[B] in 1024 B..1048576 B = 65536 B
 param PUBKEY_SLOT : int in 0..3 = 0
 
 machine bms every 100 ms:
     fault -> PROTECT
     persist var cycle_count : int in 0..100000 = 0 with min_interval = 10 s
     persist var fault_count : int in 0..1000 = 0 with min_interval = 10 s
-    persist var last_test : SelftestResult = SelftestResult(passed = false, code = 0)
-    pub var healthy : bool = false
+    persist var last_test   : SelftestResult = SelftestResult(passed = false, code = 0)
+    pub var healthy         : bool = false
     initial ACTIVE
 
     state ACTIVE:
@@ -110,9 +110,9 @@ machine bms every 100 ms:
 
 machine updater every 100 ms:
     fault -> UPD_FAILED
-    var ctx : Sha256Ctx = sha256_init()
+    var ctx        : Sha256Ctx = sha256_init()
     var done_bytes : u32[B] = 0 B
-    var digest : bytes<32> = default
+    var digest     : bytes<32> = default
     initial UPD_IDLE
 
     state UPD_IDLE:

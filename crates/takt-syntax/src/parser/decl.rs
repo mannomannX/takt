@@ -729,6 +729,13 @@ impl<'t, 's> Parser<'t, 's> {
         let name = self.ident()?;
         self.expect_op(":")?;
         let prop = self.parse_tprop()?;
+        if self.at_kw("if") {
+            return Err(self.error_at(
+                self.tok(),
+                "in einer Eigenschaft gibt es keine Bedingungsform",
+                Some("Bedingung als Vergleich oder in einem Aufruf schreiben (2.3: tprop_atom)"),
+            ));
+        }
         let monitor = if self.eat_kw("with") {
             self.expect_word("monitor")?;
             self.expect_op("=")?;

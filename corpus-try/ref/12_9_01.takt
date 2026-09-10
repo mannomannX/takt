@@ -1,6 +1,6 @@
-node io1 @ hw("ethercat/1") with tick = 1 ms                 # Knotentick = Vielfaches von system.tick
-machine current_ctrl node io1 every 50 us:                  # Platzierung; ohne Angabe: Hauptknoten
+node io1 @ hw("ethercat/1") with tick = 1 ms  # Knotentick = Vielfaches von system.tick
+machine current_ctrl node io1 every 50 us:    # Platzierung; ohne Angabe: Hauptknoten
     initial RUN
     state RUN:
         loop: pass
-input  i_u : float[A] @ hw("io1/ai0")                        # Adresse nennt den Knoten (wie heute)
+input  i_u : float[A] @ hw("io1/ai0")  # Adresse nennt den Knoten (wie heute)

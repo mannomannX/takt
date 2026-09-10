@@ -34,6 +34,54 @@ fn strip_comments(text: &str) -> String {
     out
 }
 
+/// Produktionen, die der Formatter ueber den Baum druckt statt je Stufe.
+const FMT_ALIASES: &[(&str, &str)] = &[
+    ("or_expr", "expr"),
+    ("and_expr", "expr"),
+    ("not_expr", "expr"),
+    ("cmp_expr", "expr"),
+    ("bitor_expr", "expr"),
+    ("bitxor_expr", "expr"),
+    ("bitand_expr", "expr"),
+    ("shift_expr", "expr"),
+    ("add_expr", "expr"),
+    ("mul_expr", "expr"),
+    ("unary", "expr"),
+    ("cast_expr", "expr"),
+    ("postfix", "expr"),
+    ("primary", "expr"),
+    ("tprop_implies", "tprop"),
+    ("tprop_or", "tprop"),
+    ("tprop_and", "tprop"),
+    ("tprop_not", "tprop"),
+    ("tprop_atom", "tprop"),
+];
+
+fn production_names(grammar: &str) -> Vec<String> {
+    strip_comments(grammar)
+        .lines()
+        .filter_map(|l| l.split_once(":=").map(|(n, _)| n.trim().to_string()))
+        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
+        .collect()
+}
+
+#[test]
+fn every_production_has_a_formatter_function() {
+    let grammar =
+        fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../grammar/takt.ebnf")).expect("Grammatik lesbar");
+    let mut source = String::new();
+    read_all(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/fmt")), &mut source);
+    let missing: Vec<String> = production_names(&grammar)
+        .into_iter()
+        .filter(|name| !SUBTEXT.contains(&name.as_str()))
+        .filter(|name| {
+            let target = FMT_ALIASES.iter().find(|(n, _)| n == name).map_or(name.as_str(), |(_, t)| t);
+            !source.contains(&format!("fn fmt_{target}("))
+        })
+        .collect();
+    assert!(missing.is_empty(), "Produktionen ohne Formatter-Funktion: {}", missing.join(", "));
+}
+
 #[test]
 fn every_production_has_a_parser_function() {
     let grammar =

@@ -3,31 +3,31 @@ system:
 
 enum ValveCmd: CLOSED, OPEN
 
-input  tank_p     : float[bar] in 0..100 bar @ hw("daq1/ai0") with max_age = 5 ms
-input  chamber_p  : float[bar] in 0..300 bar @ hw("daq1/ai1") with max_age = 5 ms
-input  lox_temp   : float[K]   in 50..400 K  @ hw("daq1/tc0") with max_age = 100 ms
-output fuel_main  : ValveCmd @ hw("plc1/do0") with safe = CLOSED
-output lox_main   : ValveCmd @ hw("plc1/do1") with safe = CLOSED
-output igniter    : bool     @ hw("plc1/do2") with safe = false
+input  tank_p    : float[bar] in 0..100 bar @ hw("daq1/ai0") with max_age = 5 ms
+input  chamber_p : float[bar] in 0..300 bar @ hw("daq1/ai1") with max_age = 5 ms
+input  lox_temp  : float[K] in 50..400 K    @ hw("daq1/tc0") with max_age = 100 ms
+output fuel_main : ValveCmd                 @ hw("plc1/do0") with safe = CLOSED
+output lox_main  : ValveCmd                 @ hw("plc1/do1") with safe = CLOSED
+output igniter   : bool                     @ hw("plc1/do2") with safe = false
 
 command start
 command abort_test
 command reset
 
 param CHAMBER_LIMIT : float[bar] in 100..300 bar = 250 bar
-param IGNITION_P    : float[bar] in 5..100 bar   = 20 bar
+param IGNITION_P    : float[bar] in 5..100 bar = 20 bar
 param BURN_DURATION : Duration = 3 s
-param MIN_TANK_P    : float[bar] in 10..90 bar   = 30 bar
+param MIN_TANK_P    : float[bar] in 10..90 bar = 30 bar
 
 machine hotfire:
     fault -> SAFE
     initial ARMED
 
-    loop:                                              # gilt in jedem Zustand, auch in SAFE
+    loop:  # gilt in jedem Zustand, auch in SAFE
         if abort_test:
             abort "operator abort"
 
-    state ARMED:                                       # alle Betriebszustände; Interlocks gelten hier
+    state ARMED:  # alle Betriebszustände; Interlocks gelten hier
         initial IDLE
         loop:
             check chamber_p < CHAMBER_LIMIT, "chamber overpressure {chamber_p}"
@@ -62,7 +62,7 @@ machine hotfire:
         state DONE:
             when reset: -> IDLE
 
-    state SAFE:                                        # φ(SAFE) = FAULTED (5.3)
+    state SAFE:  # φ(SAFE) = FAULTED (5.3)
         enter:
             fuel_main = CLOSED
             lox_main = CLOSED

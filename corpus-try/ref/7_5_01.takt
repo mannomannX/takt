@@ -1,4 +1,4 @@
-at m.t + BROWNOUT_DELAY:            # absoluter logischer Zeitpunkt; Block: nur Output-Zuweisungen (5.5)
+at m.t + BROWNOUT_DELAY:  # absoluter logischer Zeitpunkt; Block: nur Output-Zuweisungen (5.5)
     vbus_en = false
-pulse reset_n = false for 20 us      # jetzt setzen, nach 20 us den vorherigen Latch-Wert wiederherstellen
-cancel vbus_en                       # ausstehende geplante Schreibvorgaenge dieses Outputs verwerfen
+pulse reset_n = false for 20 us  # jetzt setzen, nach 20 us den vorherigen Latch-Wert wiederherstellen
+cancel vbus_en                   # ausstehende geplante Schreibvorgaenge dieses Outputs verwerfen

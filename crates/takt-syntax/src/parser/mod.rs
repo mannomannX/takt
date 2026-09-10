@@ -47,17 +47,44 @@ pub type PResult<T> = Result<T, ParseError>;
 /// Parst eine Datei (`file`). Fehler werden gesammelt; der Baum enthaelt alles,
 /// was sich parsen liess.
 pub fn parse_file(toks: &Tokens<'_>) -> (File, Vec<ParseError>) {
-    let mut p = Parser::new(toks);
-    let file = p.parse_file();
-    (file, p.errors)
+    with_deep_stack(|| parse_file_here(toks))
 }
 
 /// Parst einen Schnipsel: Deklarationen, Zustandsinhalte, Sequenzschritte und
 /// Anweisungen in beliebiger Folge (Testeinstieg fuer die Codebloecke der Referenz).
 pub fn parse_snippet(toks: &Tokens<'_>) -> (Vec<SnippetItem>, Vec<ParseError>) {
+    with_deep_stack(|| parse_snippet_here(toks))
+}
+
+/// `parse_file` auf dem aktuellen Thread (fuer Aufrufer, die schon unter
+/// `with_deep_stack` laufen).
+pub(crate) fn parse_file_here(toks: &Tokens<'_>) -> (File, Vec<ParseError>) {
+    let mut p = Parser::new(toks);
+    let file = p.parse_file();
+    (file, p.errors)
+}
+
+pub(crate) fn parse_snippet_here(toks: &Tokens<'_>) -> (Vec<SnippetItem>, Vec<ParseError>) {
     let mut p = Parser::new(toks);
     let items = p.parse_snippet_items();
     (items, p.errors)
+}
+
+/// Stapel fuer den rekursiven Abstieg: `MAX_DEPTH` Ebenen brauchen in einem
+/// Debug-Build mehrere Megabyte, mehr als ein Hauptthread hat.
+const DEEP_STACK: usize = 64 << 20;
+
+/// Fuehrt `f` auf einem Thread mit grossem Stapel aus, damit die Tiefengrenze
+/// `MAX_DEPTH` und nicht der Stapel entscheidet, was der Parser annimmt.
+pub(crate) fn with_deep_stack<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(DEEP_STACK)
+            .spawn_scoped(scope, f)
+            .expect("Parser-Thread")
+            .join()
+            .expect("Parser-Thread ohne Panik")
+    })
 }
 
 /// Zustand des Parsers.
@@ -69,14 +96,20 @@ pub struct Parser<'t, 's> {
     temporal: bool,
     /// Tiefe offener `<` in Typen: dort schliesst `>` und vergleicht nicht.
     angle: u32,
+    /// Verschachtelung von Ausdruecken, Typen und Bloecken (Grenze `MAX_DEPTH`).
+    depth: u32,
 }
+
+/// Tiefer verschachtelt darf kein Programm sein: schuetzt den Stapel des Parsers
+/// (und jedes spaeteren Durchlaufs ueber den Baum) vor pathologischen Eingaben.
+pub const MAX_DEPTH: u32 = 64;
 
 const SCALAR_WORDS: &[&str] =
     &["bool", "int", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "float", "f32", "f64", "Duration", "str"];
 
 impl<'t, 's> Parser<'t, 's> {
     fn new(toks: &'t Tokens<'s>) -> Self {
-        Parser { toks, pos: 0, errors: Vec::new(), temporal: false, angle: 0 }
+        Parser { toks, pos: 0, errors: Vec::new(), temporal: false, angle: 0, depth: 0 }
     }
 
     // ------------------------------------------------------------ Cursor
@@ -172,6 +205,23 @@ impl<'t, 's> Parser<'t, 's> {
         }
     }
 
+    /// Betritt eine Verschachtelungsebene (Ausdruck, Typ, Block).
+    fn enter(&mut self) -> PResult<()> {
+        if self.depth >= MAX_DEPTH {
+            return Err(self.error_at(
+                self.tok(),
+                format!("zu tief verschachtelt (mehr als {MAX_DEPTH} Ebenen)"),
+                Some("Ausdruck oder Block aufteilen"),
+            ));
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    fn leave(&mut self) {
+        self.depth -= 1;
+    }
+
     /// `"<" … ">"` eines Typs; innen ist `>` kein Vergleich.
     fn in_angles<T>(&mut self, inner: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
         self.expect_op("<")?;
@@ -188,6 +238,15 @@ impl<'t, 's> Parser<'t, 's> {
         let saved = std::mem::replace(&mut self.angle, 0);
         let result = inner(self);
         self.angle = saved;
+        result
+    }
+
+    /// Argumente, Indizes, Array-Literale, Generik: gewoehnliche Ausdruecke, auch in
+    /// einer Eigenschaft (dort gibt es Temporaloperatoren nur auf Formelebene).
+    fn plain<T>(&mut self, inner: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
+        let saved = (std::mem::replace(&mut self.angle, 0), std::mem::replace(&mut self.temporal, false));
+        let result = inner(self);
+        (self.angle, self.temporal) = saved;
         result
     }
 
@@ -587,7 +646,7 @@ impl<'t, 's> Parser<'t, 's> {
     /// `"(" [ args ] ")"`
     fn parse_arg_list(&mut self) -> PResult<Vec<Arg>> {
         self.expect_op("(")?;
-        let args = self.nested(Self::parse_args)?;
+        let args = self.plain(Self::parse_args)?;
         self.expect_op(")")?;
         Ok(args)
     }
@@ -666,7 +725,16 @@ impl<'t, 's> Parser<'t, 's> {
     /// `unit_lit := unit_expr`, kompakt: nach einem Zahlenliteral reicht der
     /// Ausdruck genau so weit, wie die Tokens anliegen (lexer.md L4.3).
     fn parse_unit_lit(&mut self) -> PResult<UnitExpr> {
-        self.parse_unit_expr(true)
+        let unit = self.parse_unit_expr(true)?;
+        let prev_joint = self.toks.tokens[self.pos - 1].joint;
+        if prev_joint && (self.at_op("*") || self.at_op("/") || self.at_op("^")) {
+            return Err(self.error_at(
+                self.tok(),
+                "die anliegende Folge hinter der Zahl ist kein Einheitenausdruck",
+                Some("Einheit ohne Leerraum schreiben (`5 K/min`), Operatoren mit Leerraum (`5 K / 2`)"),
+            ));
+        }
+        Ok(unit)
     }
 
     /// `unit_expr := ( unit_term | "1" "/" unit_term ) { ("*" | "/") unit_term }`
@@ -681,9 +749,9 @@ impl<'t, 's> Parser<'t, 's> {
                 return Err(self.error_here("`/` nach der `1` eines Einheitenausdrucks (dimensionslos ist `1/s`)"));
             }
             self.bump();
-            (one_term, vec![(UnitOp::Div, self.parse_unit_term()?)])
+            (one_term, vec![(UnitOp::Div, self.parse_unit_term(compact)?)])
         } else {
-            (self.parse_unit_term()?, Vec::new())
+            (self.parse_unit_term(compact)?, Vec::new())
         };
         loop {
             let prev_joint = self.toks.tokens[self.pos - 1].joint;
@@ -697,13 +765,14 @@ impl<'t, 's> Parser<'t, 's> {
                 self.bump();
                 UnitOp::Div
             };
-            rest.push((op, self.parse_unit_term()?));
+            rest.push((op, self.parse_unit_term(compact)?));
         }
         Ok(UnitExpr { first, rest, span: self.span_from(start) })
     }
 
-    /// `unit_term := ( IDENT | UPPER_IDENT | TYPE_IDENT ) [ "^" INT ]`
-    fn parse_unit_term(&mut self) -> PResult<UnitTerm> {
+    /// `unit_term := ( IDENT | UPPER_IDENT | TYPE_IDENT ) [ "^" INT ]`; in einem
+    /// `unit_lit` gehoert der Exponent nur anliegend dazu.
+    fn parse_unit_term(&mut self, compact: bool) -> PResult<UnitTerm> {
         let start = self.pos;
         let name = if matches!(self.kind(), TokenKind::Ident | TokenKind::UpperIdent | TokenKind::TypeIdent) {
             let t = self.bump();
@@ -711,7 +780,8 @@ impl<'t, 's> Parser<'t, 's> {
         } else {
             return Err(self.error_here("einen Einheitennamen wie `bar`, `K/min` oder `1/s`"));
         };
-        let exponent = if self.at_op("^") && self.tok().joint {
+        let prev_joint = self.toks.tokens[self.pos - 1].joint;
+        let exponent = if self.at_op("^") && (!compact || (prev_joint && self.tok().joint)) {
             self.bump();
             Some(self.int_token()?)
         } else {
