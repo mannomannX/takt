@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-18: eine Bindung traegt `t`, `seq`, `text` und `data` bereits (2.5).
+
+output hit : bool @ hw("o/hit") with safe = false
+
+machine m:
+    var line : line<128> = ""
+    initial RUN
+
+    state RUN:
+        loop:
+            if line matches "at {t:int}" as e:  # ~ SC-18
+                hit = true

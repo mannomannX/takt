@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-18: zwei Platzhalter direkt hintereinander haben keine bestimmte Grenze.
+
+output hit : bool @ hw("o/hit") with safe = false
+
+machine m:
+    var text : line<128> = ""
+    initial RUN
+
+    state RUN:
+        loop:
+            hit = text matches "v{a:int}{b:int}"  # ~ SC-18

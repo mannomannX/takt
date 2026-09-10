@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-18: wohlgeformte Muster; auf jeden klassengebundenen Platzhalter folgt
+# ein Literal ausserhalb seiner Klasse.
+
+output hit   : bool          @ hw("o/hit") with safe = false
+output major : int in 0..999 @ hw("o/maj") with safe = 0
+
+machine m:
+    var text : line<128> = ""
+    initial RUN
+
+    state RUN:
+        loop:
+            if text matches "Boot v{maj:int}.{min:int}" as b:
+                major = b.maj
+            hit = text has "CRC mismatch"

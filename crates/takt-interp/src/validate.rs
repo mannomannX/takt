@@ -163,7 +163,20 @@ impl Checker<'_> {
                 self.index(&self.p.units, unit.index(), "Einheit", span)?;
                 self.expr(expr)
             }
-            ExprKind::Matches { .. } => Err(stage(span, "Musterabgleich", Stage::V1_1)),
+            ExprKind::Matches { subject, pattern, binding, .. } => {
+                if let takt_mir::pattern::Pattern::Record { record, fields } = pattern {
+                    self.index(&self.p.records, record.index(), "Record", span)?;
+                    let defs = &self.p.records[record.index()].fields;
+                    for (i, e) in fields {
+                        self.index(defs, *i as usize, "Feld", span)?;
+                        self.expr(e)?;
+                    }
+                }
+                if let Some(v) = binding {
+                    self.var(*v, span)?;
+                }
+                self.expr(subject)
+            }
             ExprKind::Call { callee, args } => {
                 self.index(&self.p.fns, callee.index(), "Funktion", span)?;
                 self.exprs(args)

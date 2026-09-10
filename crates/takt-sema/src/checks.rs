@@ -18,6 +18,22 @@ use crate::lower::Lowerer;
 
 /// Single-Writer, Richtung, Bindungen.
 pub const SC7: &str = "SC-7";
+/// Stroeme: Kapazitaeten, Konsumentenmenge, Elementtyp (8.6).
+pub const SC17: &str = "SC-17";
+/// Muster: Wohlgeformtheit, Mehrdeutigkeit, Capture-Typen (8.7).
+pub const SC18: &str = "SC-18";
+/// `send`: Summe der Hoechstlaengen je Aktivierung (8.8).
+pub const SC20: &str = "SC-20";
+/// `at`/`pulse`: nur Zuweisungen an skalare Outputs, `T` ist Duration (7.5).
+pub const SC21: &str = "SC-21";
+/// Interne Streams: genau ein Schreiber (8.6).
+pub const SC43: &str = "SC-43";
+/// `T!E`: Dominanz durch `.ok`, `match` erschoepfend (3.8).
+pub const SC45: &str = "SC-45";
+/// `layout`: Offsets, Bitfelder, Konstantenfelder, Diskriminanten (3.7).
+pub const SC46: &str = "SC-46";
+/// `inout`: kein Aliasing (3.9).
+pub const SC47: &str = "SC-47";
 /// Pruefung 25: Definite Assignment zustandslokaler und gehobener Variablen
 /// je Eintritt. Pruefung 6 ist die allgemeine Regel; in M1 ist keine von
 /// beiden ausloesbar, weil jedes `var` einen Initialisierer traegt und die

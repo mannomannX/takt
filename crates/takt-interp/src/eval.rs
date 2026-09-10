@@ -286,7 +286,9 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 let v = self.eval(expr)?;
                 self.convert(v, *kind, *unit, expr.ty, e.ty, span)
             }
-            ExprKind::Matches { .. } => bug("Musterabgleich ab M2"),
+            ExprKind::Matches { subject, kind, pattern, binding } => {
+                self.matches(subject, *kind, pattern, *binding, span)
+            }
             ExprKind::Call { callee, args } => {
                 let args = args.iter().map(|a| self.eval(a)).collect::<EvalResult<Vec<_>>>()?;
                 self.call_fn(*callee, args, span)
@@ -402,6 +404,71 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 }))
             }
             _ => Ok(None),
+        }
+    }
+
+    /// `x matches P [as m]` und `x has P` (8.7). Ein Muster faultet nie; ein
+    /// Wert, der nicht passt, ergibt `false`. Trifft das Muster und traegt es
+    /// eine Bindung, entsteht der Bindungsrecord aus den Captures; sichtbar
+    /// ist er nur im dominierten Zweig (8.7, 4.4).
+    fn matches(
+        &mut self,
+        subject: &Expr,
+        kind: MatchKind,
+        pattern: &takt_mir::pattern::Pattern,
+        binding: Option<VarId>,
+        span: Span,
+    ) -> EvalResult<Value> {
+        let value = self.eval(subject)?;
+        // Konstante Feldwerte eines Record-Musters vorab auswerten.
+        let consts = match pattern {
+            takt_mir::pattern::Pattern::Record { fields, .. } => {
+                fields.iter().map(|(_, e)| self.eval(e)).collect::<EvalResult<Vec<_>>>()?
+            }
+            takt_mir::pattern::Pattern::Text { .. } => Vec::new(),
+        };
+        let Some(caps) = crate::pattern::match_value(pattern, kind, &value, &consts) else {
+            return Ok(Value::Bool(false));
+        };
+        if let Some(var) = binding {
+            let record = self.binding_record(&value, caps, var, span)?;
+            *self.var_mut(var)? = record;
+        }
+        Ok(Value::Bool(true))
+    }
+
+    /// Baut den Bindungsrecord: die Captures in Musterreihenfolge, gefolgt
+    /// von den Feldern eines Stream-Elements, soweit der Typ sie fuehrt.
+    fn binding_record(&mut self, subject: &Value, caps: Vec<Value>, var: VarId, span: Span) -> EvalResult<Value> {
+        let ty = self.outer.var_type(var).or_else(|_| self.local_type(var, span))?;
+        let Type::Record(r) = self.loaded.ty(ty) else {
+            return bug(format!("Bindung {} ist kein Record", var.0));
+        };
+        let defs = self.loaded.program.records[r.index()].fields.clone();
+        let mut fields = caps;
+        for def in defs.iter().skip(fields.len()) {
+            // Ausserhalb eines Streams gibt es weder `.t` noch `.seq`; die
+            // Felder bekommen ihren Standardwert (8.7).
+            let v = match def.name.as_str() {
+                "text" | "data" => subject.clone(),
+                _ => Value::default_for(def.ty, self.loaded.program),
+            };
+            fields.push(v);
+        }
+        fields.truncate(defs.len());
+        Ok(Value::Record(fields))
+    }
+
+    /// Typ einer lokalen Variablen aus dem Rahmen.
+    fn local_type(&self, var: VarId, span: Span) -> EvalResult<TypeId> {
+        let func = self.frames.last().and_then(|f| f.func);
+        match func {
+            Some(f) => self.loaded.program.fns[f.index()]
+                .locals
+                .get(var.index())
+                .map(|v| v.ty)
+                .ok_or_else(|| Trap::Bug(format!("Variable {} an {span:?}", var.0))),
+            None => bug(format!("Typ der Variable {} unbekannt", var.0)),
         }
     }
 

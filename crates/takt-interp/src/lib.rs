@@ -23,6 +23,7 @@ pub mod format;
 pub mod image;
 pub mod loaded;
 pub mod machine;
+pub mod pattern;
 pub mod run;
 pub mod system;
 pub mod trace;

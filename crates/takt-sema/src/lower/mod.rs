@@ -7,6 +7,7 @@ pub mod expr;
 pub mod format;
 pub mod generics;
 pub mod machine;
+pub mod pattern;
 pub mod stmt;
 pub mod types;
 

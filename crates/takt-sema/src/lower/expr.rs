@@ -8,7 +8,10 @@ use takt_mir::types::{FloatWidth, IntWidth, Type};
 use takt_mir::*;
 use takt_syntax::ast;
 
+use takt_mir::pattern::Pattern;
+
 use super::{Lowerer, SC2, SC3, is_literal};
+use crate::checks::SC18;
 use crate::symbols::Entity;
 use crate::units::Unit;
 
@@ -198,9 +201,8 @@ impl Lowerer<'_> {
             ast::ExprKind::Cast { expr, ty } => self.cast(expr, ty, span),
             ast::ExprKind::Unary { op, expr } => self.unary(*op, expr, hint, span),
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(*op, lhs, rhs, hint, span),
-            ast::ExprKind::Match { .. } => {
-                self.stage(span, "Musterabgleich", Stage::V1_1);
-                None
+            ast::ExprKind::Match { subject, kind, pattern, binding } => {
+                self.matches(subject, *kind, pattern, binding.as_ref(), span)
             }
             ast::ExprKind::Conditional { then, cond, otherwise } => {
                 let c = self.check_bool(cond)?;
@@ -1171,6 +1173,52 @@ impl Lowerer<'_> {
     }
 
     /// `.valid .suspect .stale .age .reason .or .ok .err` auf Abtastung, `T?`, `T!E`.
+    /// `x matches P [as m]` und `x has P` (8.7). Das Ergebnis ist ein Bool;
+    /// die Bindung ist eine gehobene Variable, die der Abgleich schreibt.
+    fn matches(
+        &mut self,
+        subject: &ast::Expr,
+        kind: ast::MatchKind,
+        pattern: &ast::Pattern,
+        binding: Option<&ast::Ident>,
+        span: Span,
+    ) -> Option<Expr> {
+        let subject = self.expr(subject, None)?;
+        // `matches`/`has` gelten auf `str<N>`, `line<N>` und Recordwerten (8.7).
+        let textual = matches!(self.ty(subject.ty), Type::Str { .. } | Type::Line { .. });
+        let record = matches!(self.ty(subject.ty), Type::Record(_));
+        if !(textual || record) {
+            let n = self.type_name(subject.ty);
+            self.error_hint(
+                SC3,
+                span,
+                format!("`matches` verlangt Text oder einen Record, gefunden `{n}`"),
+                "`matches` gilt auf `str<N>`, `line<N>` und Recordwerten (8.7)",
+            );
+            return None;
+        }
+        let lowered = self.pattern(pattern, Some(subject.ty), span)?;
+        if matches!(lowered.pattern, Pattern::Text { .. }) && !textual {
+            let n = self.type_name(subject.ty);
+            self.error(SC18, span, format!("Textmuster auf `{n}`"));
+            return None;
+        }
+        let var = match binding {
+            Some(name) => Some(self.binding_var(name, &lowered.captures, None, span)?),
+            None => None,
+        };
+        let ty = self.tys.bool;
+        let kind = match kind {
+            ast::MatchKind::Matches => MatchKind::Matches,
+            ast::MatchKind::Has => MatchKind::Has,
+        };
+        Some(Expr::new(
+            ExprKind::Matches { subject: Box::new(subject), kind, pattern: lowered.pattern, binding: var },
+            ty,
+            span,
+        ))
+    }
+
     fn wrapper_access(&mut self, base: Expr, name: &ast::Ident, args: Option<&[ast::Arg]>, span: Span) -> Option<Expr> {
         let member = name.name.as_str();
         // Qualitaet und Alter gibt es nur an einem Input-Channel (3.5); ein
