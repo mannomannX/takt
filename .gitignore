@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 out/
+
+# Eigene Probierdateien im Wurzelverzeichnis (nicht Teil des Korpus).
+/test.takt
+/scratch*.takt
