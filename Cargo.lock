@@ -7,6 +7,8 @@ name = "takt-cli"
 version = "0.1.0"
 dependencies = [
  "takt-diag",
+ "takt-interp",
+ "takt-mir",
  "takt-sema",
  "takt-syntax",
 ]

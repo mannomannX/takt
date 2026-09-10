@@ -369,7 +369,10 @@ machine m:
         loop:
             alert p < 50 bar, \"hoch\"
 ";
-    let stim = "t=0 in p 10 bar\nt=2 in p 80 bar\nt=4 in p 20 bar\n";
+    // Der `sim`-Output speist den Input in jedem Tick, in dem der Stimulus
+    // schweigt (8.3); der Stimulus setzt ihn darum in jedem Tick.
+    let stim = "t=0 in p 10 bar\nt=1 in p 10 bar\nt=2 in p 80 bar\nt=3 in p 80 bar\n\
+                t=4 in p 20 bar\nt=5 in p 20 bar\n";
     let trace = simulate(body, stim, 5);
     // `alert cond` meldet die Verletzung von `cond` (5.6), nicht ihr Zutreffen.
     assert!(trace.contains("t=2 alert m on \"hoch\"\n"), "steigende Flanke: {trace}");
@@ -395,7 +398,10 @@ machine m:
     state SAFE:
         loop: pass
 ";
-    let stim = "t=0 in p 10 bar\nt=2 in p 80 bar\n";
+    // Wie oben: ohne Stimuluszeile uebernimmt die `sim`-Bindung (8.3).
+    let stim = "t=0 in p 10 bar\nt=1 in p 10 bar\nt=2 in p 80 bar\nt=3 in p 80 bar\n\
+                t=4 in p 80 bar\nt=5 in p 80 bar\nt=6 in p 80 bar\nt=7 in p 80 bar\n\
+                t=8 in p 80 bar\n";
     let trace = simulate(body, stim, 8);
     // Erst nach 3 ms ununterbrochener Verletzung (5.6).
     assert!(!trace.contains("t=2 fault"), "nicht sofort: {trace}");

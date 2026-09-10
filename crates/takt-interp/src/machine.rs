@@ -71,7 +71,16 @@ impl MachineState {
         if self.faulted {
             return "FAULTED".to_string();
         }
-        self.conf.iter().map(|s| m.states[s.index()].name.as_str()).collect::<Vec<_>>().join(".")
+        // Segmente einer Sequenz tragen im MIR den qualifizierten Namen
+        // (`IGNITION.S0`, plan/mir.md); der Pfad haengt nur das Blatt an.
+        self.conf
+            .iter()
+            .map(|s| {
+                let name = m.states[s.index()].name.as_str();
+                name.rsplit('.').next().unwrap_or(name)
+            })
+            .collect::<Vec<_>>()
+            .join(".")
     }
 }
 
@@ -89,7 +98,9 @@ pub fn chain_to(m: &Machine, s: StateId) -> Vec<StateId> {
 
 /// Blattpfad ab einem Zustand ueber `initial` (9.3, `switch`).
 pub fn descend(m: &Machine, s: StateId) -> Vec<StateId> {
-    let mut out = vec![s];
+    // Die Konfiguration ist die volle Kette von der Wurzel (9.1); ein Ziel in
+    // einem zusammengesetzten Zustand behaelt dessen Vorfahren.
+    let mut out = chain_to(m, s);
     let mut cur = s;
     while let Some(init) = m.states[cur.index()].initial {
         out.push(init);
@@ -140,6 +151,8 @@ pub fn fault_depth(m: &Machine) -> u32 {
 /// Ein Schritt der Maschine (9.3, `step_m`).
 pub fn step_m(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) -> Result<(), Trap> {
     let m = env.machine(loaded);
+    // Jede Blockinstanz darf je Aktivierung einmal `step` ausfuehren (5.1).
+    clear_stepped(&mut env.state.vars);
     let mut out = Ok(Out::Normal);
     if !env.state.faulted {
         // Vorgemerkte Faults zustellen (Operator-Abort, Runtime, 9.6)
@@ -311,6 +324,19 @@ pub fn resolve_m(
     }
 }
 
+/// Meldung eines Faults ohne eigenen Text: die Art und, wenn vorhanden, der
+/// Name des Sequenzschritts, in dem sie entstand (6.2).
+fn fault_message(m: &Machine, leaf: Option<StateId>, kind: FaultKind) -> String {
+    let step = leaf.and_then(|s| m.states[s.index()].step_name.clone());
+    match step {
+        Some(name) => format!("{kind:?} in Schritt `{name}`"),
+        None => match leaf {
+            Some(s) => format!("{kind:?} in `{}`", m.states[s.index()].name),
+            None => format!("{kind:?}"),
+        },
+    }
+}
+
 fn target_name(loaded: &Loaded<'_>, env: &MachineEnv<'_, '_>, t: Target) -> String {
     match t {
         Target::Faulted => "FAULTED".to_string(),
@@ -328,7 +354,7 @@ pub fn switch(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, target: Target,
         Target::Fault(kind) => {
             // Ein Timeout einer Sequenz nimmt den Fault-Pfad des Zustands (6.2)
             let leaf = env.state.leaf();
-            let f = Fault::new(kind, format!("{kind:?}"), Span::default(), tick);
+            let f = Fault::new(kind, fault_message(m, leaf, kind), Span::default(), tick);
             env.state.last_fault = Some(f.clone());
             let t = match fault_target(m, leaf) {
                 FaultTarget::State(s) => Target::State(s),
@@ -381,6 +407,15 @@ pub fn switch(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, target: Target,
     }
     // Entry-Tick-Regel: `loop:` der neu betretenen Zustaende im Modus ENTRY (5.2)
     exec_chain(loaded, env, &entered, Mode::Entry, tick)
+}
+
+/// Setzt das `step`-Flag jeder Blockinstanz zurueck (5.1).
+fn clear_stepped(vars: &mut [Value]) {
+    for v in vars {
+        if let Value::Block(b) = v {
+            b.stepped = false;
+        }
+    }
 }
 
 /// Tick 0: Anfangskonfiguration betreten (`initial`, 1.5). Die

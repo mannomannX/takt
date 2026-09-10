@@ -1,0 +1,13 @@
+beispiel,szenario,ticks,profil,verdikt,beschreibung
+14_1,nominal,4200,,INCONCLUSIVE,"Zuendung mit Druckaufbau, Brenndauer, Abstellen und Reset"
+14_1,timeout,1200,,FAIL,"Zuendung ohne Druckaufbau: Timeout der Zeitgrenze nach SAFE"
+14_1,sensor,1200,,FAIL,"chamber_p faellt aus: SensorFault nach SAFE"
+14_1,overpressure,1200,,FAIL,"Ueberdruck loest den Interlock von ARMED aus"
+14_1,abort,1200,,FAIL,"abort_test wirkt im selben Tick auf alle Maschinen (5.4)"
+14_1,reset,1200,,FAIL,"Reset aus SAFE erst bei chamber_p unter 2 bar"
+14_2,cycles,4400,SIM,INCONCLUSIVE,"Zwei Temperaturzyklen mit Plant-Modell und Profil (8.3, 8.4)"
+14_3,travel,400,,INCONCLUSIVE,"Instanz mit Rueckmeldung: Oeffnen und Schliessen"
+14_3,stuck,2200,,INCONCLUSIVE,"Antrieb klemmt: Zeitgrenze der Instanz fuehrt nach STUCK"
+14_4,bump,200,,INCONCLUSIVE,"Bloecke lowpass und pid in einer Testmaschine (11.4)"
+14_5,over,300,,FAIL,"Ein Element des Channel-Arrays ueberschreitet die Grenze"
+14_5,invalid,300,,INCONCLUSIVE,"Das Channel-Array wird ungueltig, der Alert meldet die Flanke"

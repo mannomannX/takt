@@ -316,23 +316,27 @@ impl<'a> Lowerer<'a> {
             Ok(None) => true,
             Ok(Some(shadowed)) => {
                 if !self.prelude {
-                    self.diags.push(
-                        Diagnostic::warning(
-                            SC2,
-                            name.span,
-                            format!("`{}` verdeckt einen Namen der Standardbibliothek", name.name),
-                        )
-                        .with_note(shadowed.span, "hier definiert"),
+                    // Der verdeckte Name steht im Prelude, einer anderen
+                    // Datei; sein Span zeigt nicht in die Quelle des Nutzers.
+                    let mut d = Diagnostic::warning(
+                        SC2,
+                        name.span,
+                        format!("`{}` verdeckt einen Namen der Standardbibliothek", name.name),
                     );
+                    if !shadowed.prelude {
+                        d = d.with_note(shadowed.span, "hier definiert");
+                    }
+                    self.diags.push(d);
                 }
                 true
             }
             Err(shadowed) => {
-                self.diags.push(
-                    Diagnostic::error(SC2, name.span, format!("`{}` ist schon definiert", name.name))
-                        .with_note(shadowed.span, "hier definiert")
-                        .with_suggestion("anderen Namen waehlen; innere Bereiche verdecken keine sichtbaren Namen"),
-                );
+                let mut d = Diagnostic::error(SC2, name.span, format!("`{}` ist schon definiert", name.name))
+                    .with_suggestion("anderen Namen waehlen; innere Bereiche verdecken keine sichtbaren Namen");
+                if !shadowed.prelude {
+                    d = d.with_note(shadowed.span, "hier definiert");
+                }
+                self.diags.push(d);
                 false
             }
         }
@@ -515,16 +519,25 @@ pub fn run(file: &ast::File, edition: Edition, options: &Options) -> (Option<Pro
     let mut lo = Lowerer::new(config, edition, options);
     lo.diags = diags;
     lo.declare_builtins();
+    // Fehler aus dem `system:`-Block der Nutzerdatei stehen schon in `diags`
+    // und zaehlen nicht zum Prelude.
+    let before = lo.diags.len();
     lo.prelude = true;
     lo.collect(&prelude_ast);
     lo.lower_bodies(&prelude_ast);
-    let prelude_errors = lo.diags.iter().filter(|d| d.is_error()).count();
-    assert_eq!(
-        prelude_errors,
-        0,
-        "Prelude fehlerhaft: {:?}",
-        lo.diags.iter().filter(|d| d.is_error()).collect::<Vec<_>>()
-    );
+    let broken: Vec<&Diagnostic> = lo.diags[before..].iter().filter(|d| d.is_error()).collect();
+    if !broken.is_empty() {
+        // Ein fehlerhaftes Prelude ist ein Fehler des Compilers, kein Fehler
+        // des Nutzers; er wird gemeldet, statt den Prozess zu beenden.
+        let first = broken[0].message.clone();
+        let mut diags = std::mem::take(&mut lo.diags);
+        diags.push(Diagnostic::error(
+            SC3,
+            Span::default(),
+            format!("interner Fehler: das Prelude uebersetzt nicht (`{first}`)"),
+        ));
+        return (None, diags);
+    }
     lo.prelude = false;
     lo.collect(file);
     lo.lower_bodies(file);

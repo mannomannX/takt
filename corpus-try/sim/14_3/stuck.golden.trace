@@ -1,0 +1,11 @@
+t=0 state valve_model RUN
+t=0 state v1 CLOSED_ST
+t=0 out valve_1 CLOSED
+t=0 out open_v1_sim false
+t=0 out pos_v1_sim 0.0 pct
+t=20 out open_v1_sim true
+t=30 state v1 OPENING
+t=30 out valve_1 OPEN
+t=2030 state v1 STUCK
+t=2030 out valve_1 CLOSED
+t=2200 verdict-final INCONCLUSIVE

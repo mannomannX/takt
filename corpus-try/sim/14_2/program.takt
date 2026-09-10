@@ -1,0 +1,75 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+input  cell_v    : float[V] in 2.0..4.5 V       @ hw("daq2/ai0")     with max_age = 50 ms
+input  chamber_t : float[degC] in -60..200 degC @ hw("chamber/pv")   with max_age = 1 s
+output heater    : bool                         @ hw("chamber/heat") with safe = false
+output cooler    : bool                         @ hw("chamber/cool") with safe = false
+output charger   : bool                         @ hw("psu1/enable")  with safe = false
+
+param CYCLE_COUNT : int in 1..1000 = 20
+param PEAK_TEMP   : float[degC] in 20..150 degC = 85 degC
+param LOW_TEMP    : float[degC] in -50..20 degC = -20 degC
+param SOAK        : Duration = 30 min
+param MAX_CELL_V  : float[V] in 3.0..4.4 V = 4.25 V
+
+profile QUAL:
+    CYCLE_COUNT = 50
+    PEAK_TEMP   = 120 degC
+    SOAK        = 2 h
+
+machine battery_cycle every 100 ms:
+    initial VERIFY
+
+    loop:
+        check cell_v < MAX_CELL_V, "cell overvoltage {cell_v}"
+        check chamber_t < PEAK_TEMP + 10 K, "chamber overtemperature"
+
+    state VERIFY:
+        when cell_v.valid and chamber_t.valid: -> CYCLING
+
+    state CYCLING:
+        sequence:
+            repeat CYCLE_COUNT:
+                step "heat":
+                    heater = true
+                    cooler = false
+                    until chamber_t >= PEAK_TEMP timeout 45 min
+                    heater = false
+                    wait SOAK
+                step "cool":
+                    cooler = true
+                    until chamber_t <= LOW_TEMP timeout 45 min
+                    cooler = false
+                    wait SOAK
+            -> DONE
+
+    state DONE:
+        enter:
+            charger = false
+
+# Plant-Modell für die Simulation: nur im Sim-Build gelinkt
+output chamber_t_sim : float[degC] @ sim("chamber/pv")
+output cell_v_sim    : float[V]    @ sim("daq2/ai0")
+
+const LEAK_COEF : float[1/s] = 0.0005 1/s
+
+machine chamber_model every 1 s:
+    var t : float[degC] = 22 degC
+    initial RUN
+    state RUN:
+        loop:
+            var drive : float[K/s] = (1 K/s if heater else 0 K/s) - (1 K/s if cooler else 0 K/s)
+            var leak  : float[K/s] = (t - 22 degC) * LEAK_COEF
+            t = t + (drive - leak) * (1 s).as(s)
+            chamber_t_sim = t
+            cell_v_sim = 3.9 V
+
+# Profil fuer die Simulation: kurze Zyklen, damit der Golden-Trace
+# ueberschaubar bleibt (8.4).
+profile SIM:
+    CYCLE_COUNT = 2
+    PEAK_TEMP   = 25 degC
+    LOW_TEMP    = 15 degC
+    SOAK        = 1 s

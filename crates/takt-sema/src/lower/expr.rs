@@ -1098,7 +1098,7 @@ impl Lowerer<'_> {
                     }
                 }
             }
-            ("push" | "insert" | "remove" | "clear" | "skip" | "step" | "reset", _) => {
+            (m, _) if crate::lower::stmt::MUTATING.contains(&m) => {
                 self.error_hint(
                     SC3,
                     span,

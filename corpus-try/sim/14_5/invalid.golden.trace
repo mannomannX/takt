@@ -1,0 +1,5 @@
+t=0 state tc_guard WATCH
+t=0 state tc_model RUN
+t=0 out tcs_sim [20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC, 20.0 degC]
+t=100 alert tc_guard on "TC 0 invalid"
+t=300 verdict-final INCONCLUSIVE

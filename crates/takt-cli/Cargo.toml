@@ -1,7 +1,7 @@
 [package]
 name = "takt-cli"
 version = "0.1.0"
-description = "Takt: Kommandozeile (check, fmt, parse, tokens)"
+description = "Takt: Kommandozeile (check, sim, mir, fmt, parse, tokens)"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,8 @@ path = "src/main.rs"
 [dependencies]
 takt-diag = { path = "../takt-diag" }
 takt-syntax = { path = "../takt-syntax" }
+takt-mir = { path = "../takt-mir" }
+takt-interp = { path = "../takt-interp" }
 takt-sema = { path = "../takt-sema" }
 
 [lints]

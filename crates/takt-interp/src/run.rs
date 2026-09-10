@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use takt_diag::Span;
 use takt_mir::program::{Direction, Program};
 use takt_mir::{ChannelId, MachineId, VarId};
 
@@ -137,8 +138,8 @@ fn collect(writer: &mut Writer, sim: &Sim<'_>, tick: u64, verdict: &mut Verdict,
         let machine = program.machines[id.index()].name.clone();
         let kind = match obs {
             Observation::Log(text) => LineKind::Log { machine, text: text.clone() },
-            Observation::Alert { violated, message, .. } => {
-                if !writer.alert_edge(id, message, *violated) {
+            Observation::Alert { span, violated, message } => {
+                if !writer.alert_edge(id, *span, *violated) {
                     continue;
                 }
                 LineKind::Alert { machine, on: *violated, text: message.clone() }
@@ -204,7 +205,7 @@ struct Writer<'p> {
     outputs: Vec<Option<String>>,
     states: HashMap<MachineId, String>,
     published: HashMap<(MachineId, VarId), String>,
-    alerts: HashMap<(MachineId, String), bool>,
+    alerts: HashMap<(MachineId, Span), bool>,
 }
 
 impl<'p> Writer<'p> {
@@ -219,11 +220,12 @@ impl<'p> Writer<'p> {
         }
     }
 
-    /// Nur die Flanken eines Alerts melden (5.6); der Anfangszustand jeder
-    /// Stelle ist unverletzt, eine erste -Meldung ist keine Flanke.
-    fn alert_edge(&mut self, m: MachineId, message: &str, violated: bool) -> bool {
-        let key = (m, message.to_string());
-        let previous = self.alerts.insert(key, violated).unwrap_or(false);
+    /// Nur die Flanken eines Alerts melden (5.6). Der Schluessel ist die
+    /// Stelle, nicht der Text: eine Meldung mit Platzhaltern aendert sich mit
+    /// jedem Wert, die Flanke tut es nicht. Der Anfangszustand jeder Stelle
+    /// ist unverletzt, eine erste unverletzte Auswertung also keine Flanke.
+    fn alert_edge(&mut self, m: MachineId, span: Span, violated: bool) -> bool {
+        let previous = self.alerts.insert((m, span), violated).unwrap_or(false);
         previous != violated
     }
 

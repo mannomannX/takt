@@ -207,7 +207,10 @@ impl Outer for MachineEnv<'_, '_> {
     }
 
     fn output(&self, c: ChannelId) -> EvalResult<&Value> {
-        Ok(self.image.output(c))
+        // Die besitzende Maschine liest ihren Latch, jede andere den
+        // committeten Wert des vorigen Ticks (Unit-Delay, 8.3).
+        let owner = self.loaded.program.channels[c.index()].owner;
+        if owner == Some(self.id) { Ok(self.image.output(c)) } else { Ok(self.image.committed_output(c)) }
     }
 
     fn output_mut(&mut self, c: ChannelId) -> EvalResult<&mut Value> {
@@ -342,6 +345,7 @@ impl<'p> Sim<'p> {
         self.advance_counters(&active);
         self.publish_all();
         self.image.commit_published();
+        self.image.commit_outputs();
         Ok(())
     }
 
@@ -405,6 +409,7 @@ impl<'p> Sim<'p> {
         // publish(sigma), commit(L)
         self.publish_all();
         self.image.commit_published();
+        self.image.commit_outputs();
         self.image.clear_commands();
         for state in &mut self.states {
             state.raised_signals.iter_mut().for_each(|s| *s = false);

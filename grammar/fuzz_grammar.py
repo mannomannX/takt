@@ -687,6 +687,38 @@ def parse_chunk(chunk, snippet, result):
         result[p] = (False, "Parser abgestuerzt: " + (crash[-1] if crash else "keine Ausgabe"))
 
 
+def run_check(paths):
+    """`takt check` je Datei: Pfad -> (ok, Meldungen). Ein Absturz ist ein
+    Fehlschlag, eine abgelehnte Datei nur ein Ergebnis (Satz 9.4.2 verlangt
+    Diagnosen ohne Panik)."""
+    result = {}
+    for path in paths:
+        cmd = ["cargo", "run", "-q", "-p", "takt-cli", "--", "check", "--format", "line", path]
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+        if r.returncode not in (0, 1):
+            result[path] = (False, "check abgestuerzt: " + (r.stderr.strip().splitlines() or ["keine Ausgabe"])[-1])
+            continue
+        errors = [l for l in r.stdout.splitlines() if l.startswith("error")]
+        result[path] = (not errors, "\n".join(errors))
+    return result
+
+
+def run_sim(paths, ticks):
+    """`takt sim` je Datei, die `check` bestanden hat. Ein Lauf darf ein
+    Verdikt FAIL liefern (Exit 1), aber nie abstuerzen oder einen internen
+    Fehler melden (Satz 9.4.2)."""
+    problems = {}
+    for path in paths:
+        cmd = ["cargo", "run", "-q", "-p", "takt-cli", "--", "sim", path, "--ticks", str(ticks)]
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+        if r.returncode not in (0, 1):
+            last = (r.stderr.strip().splitlines() or ["keine Ausgabe"])[-1]
+            problems[path] = "sim abgestuerzt: " + last
+        elif "Bug(" in r.stdout or "Bug(" in r.stderr:
+            problems[path] = "interner Fehler des Interpreters (Satz 9.4.2)"
+    return problems
+
+
 def run_oracle(paths, snippet):
     ok = set()
     for chunk in batches(paths):
@@ -767,6 +799,8 @@ def main(argv):
     ap.add_argument("--no-oracle", action="store_true")
     ap.add_argument("--cover", type=int, default=2, help="Staerke der Abdeckungssteuerung")
     ap.add_argument("--keep", default=str(ROOT / "out" / "fuzz"), help="Ablage fuer Fehlschlaege")
+    ap.add_argument("--sim", action="store_true", help="erzeugte Programme zusaetzlich pruefen und ausfuehren (Satz 9.4.2)")
+    ap.add_argument("--sim-ticks", type=int, default=200, help="Ticks je Lauf mit --sim")
     args = ap.parse_args(argv)
 
     grammar = Grammar(args.start)
@@ -793,6 +827,17 @@ def main(argv):
 
     all_paths = [p for _, _, paths in programs for p in paths.values()]
     parsed = run_parse(all_paths, snippet)
+    sim_problems = {}
+    if args.sim:
+        # Nur die kanonische Fassung: die Varianten unterscheiden sich im
+        # Leerraum, nicht in der Bedeutung (Formatinvarianz).
+        canon = [paths["c"] for _, _, paths in programs]
+        checked = run_check(canon)
+        for path, (ok, info) in checked.items():
+            if not ok and info.startswith("check abgestuerzt"):
+                sim_problems[path] = info
+        runnable = [p for p, (ok, _) in checked.items() if ok and p not in sim_problems]
+        sim_problems.update(run_sim(runnable, args.sim_ticks))
     oracle_ok = set() if args.no_oracle else run_oracle(all_paths, snippet)
     fmt_problems = run_fmt(all_paths, snippet, True)
     # Formatterausgabe der Leerraumfassungen vergleichen: Kopien in place formatieren
@@ -818,6 +863,8 @@ def main(argv):
                 problems.append(f"Orakel lehnt Fassung {v} ab")
             if paths[v] in fmt_problems:
                 problems.append(f"Formatter, Fassung {v}: {fmt_problems[paths[v]]}")
+            if paths[v] in sim_problems:
+                problems.append(f"Lauf, Fassung {v}: {sim_problems[paths[v]]}")
         if len(set(trees.values())) > 1:
             # einzeln nachpruefen, damit kein Stapelartefakt gemeldet wird
             single = {v: run_parse([paths[v]], snippet)[paths[v]][1] for v in trees}

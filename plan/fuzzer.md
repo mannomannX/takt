@@ -19,10 +19,21 @@ Ableitung aus takt.ebnf ──▶ Programmtext ──▶ Parser (Rust)       mus
 ```
 
 „Inhaltlich das Gleiche" heißt hier: derselbe Tokenstrom und derselbe Syntaxbaum
-(S-Expression), nicht dieselbe Bedeutung — eine Bedeutung gibt es erst mit dem Interpreter
-(M1). Die erzeugten Programme sind syntaktisch korrekt und semantisch Unsinn (Variablen ohne
-Deklaration, Einheiten ohne Definition); das ist gewollt, denn geprüft werden Parser,
-Formatter und Grammatik, nicht die Semantik.
+(S-Expression), nicht dieselbe Bedeutung. Die erzeugten Programme sind syntaktisch korrekt
+und meist semantisch Unsinn (Variablen ohne Deklaration, Einheiten ohne Definition); das ist
+gewollt, denn geprüft werden Parser, Formatter und Grammatik.
+
+**Sim-Modus (seit M1).** Mit `--sim` durchläuft jede kanonische Fassung zusätzlich `takt
+check`, und jedes Programm, das dabei fehlerfrei bleibt, läuft `--sim-ticks` Ticks unter
+`takt sim`. Der Maßstab ist Satz 9.4.2: ein abgelehntes Programm liefert Diagnosen, ein
+angenommenes läuft ohne Absturz und ohne internen Fehler. Ein Verdikt `FAIL` ist kein
+Fehlschlag, ein Abbruch des Prozesses oder ein `Bug(…)` in der Ausgabe schon. Nur die
+kanonische Fassung wird geprüft, weil sich die Leerraumfassungen nach der Formatinvarianz
+nicht in der Bedeutung unterscheiden.
+
+```
+python -X utf8 grammar/fuzz_grammar.py --count 40 --seed 31 --sim --sim-ticks 50
+```
 
 Zusätzlich zur Annahme wird die *Struktur* geprüft, ohne den Baum in Python nachzubauen:
 
@@ -212,3 +223,10 @@ der Generator setzt sie deshalb nicht als Bezeichner ein, und `x as int` ist ein
 Gruppen bis auf wenige, die im jeweils anderen Modus liegen (Sequenzen und Übergänge nur
 in `snippet`, weil `file` das Budget in Deklarationen ausgibt). Ein CI-Lauf sollte deshalb
 beide Modi mit festem Seed fahren; die Ausgabe nennt, was fehlt.
+
+**Funde des Sim-Modus (M1).** Der erste Lauf mit `--sim` fand einen Absturz von `takt check`:
+enthielt der `system:`-Block der Nutzerdatei einen Fehler (etwa ein `tick_tolerance` ohne
+`pct`), zählte die Prüfung „Prelude fehlerfrei" diese Diagnose dem Prelude zu und beendete
+den Prozess mit einer Assertion. Die Zählung betrachtet jetzt nur die Diagnosen des Preludes,
+und ein fehlerhaftes Prelude wird als interner Fehler gemeldet statt als Absturz. Die Läufe
+mit den Seeds 31, 101 und 202 (100 Programme) sind seitdem ohne Fund.

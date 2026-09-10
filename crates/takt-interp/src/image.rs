@@ -25,8 +25,11 @@ pub struct Published {
 pub struct Image {
     /// Abtastung je Input.
     pub inputs: Vec<Sample>,
-    /// Latch je Output.
+    /// Latch je Output: was die besitzende Maschine in diesem Tick schreibt.
     pub outputs: Vec<Value>,
+    /// Committete Outputs des vorigen Ticks: was fremde Maschinen lesen
+    /// (Unit-Delay, 8.3).
+    pub committed: Vec<Value>,
     /// Commands dieses Ticks.
     pub commands: Vec<bool>,
     /// Ψ: Snapshot vom Tick-Anfang.
@@ -39,7 +42,8 @@ pub struct Image {
     sim_sources: HashMap<String, ChannelId>,
     /// Adresse → `hw`-Input.
     hw_inputs: HashMap<String, ChannelId>,
-    /// Inputs, die der Stimulus treibt; ihre `sim`-Bindung ruht (8.3).
+    /// Inputs, die der Stimulus in diesem Tick gesetzt hat; ihre
+    /// `sim`-Bindung ruht so lange (8.3).
     driven: Vec<bool>,
 }
 
@@ -82,9 +86,11 @@ impl Image {
             .map(|m| Published { signals: vec![false; m.signals.len()], ..Default::default() })
             .collect();
         let driven = vec![false; p.channels.len()];
+        let committed = outputs.clone();
         Image {
             inputs,
             outputs,
+            committed,
             commands: vec![false; p.commands.len()],
             published,
             next,
@@ -124,6 +130,17 @@ impl Image {
     /// Latch eines Outputs.
     pub fn output(&self, c: ChannelId) -> &Value {
         &self.outputs[c.index()]
+    }
+
+    /// Committeter Wert eines Outputs: was eine fremde Maschine liest
+    /// (Unit-Delay, 8.3).
+    pub fn committed_output(&self, c: ChannelId) -> &Value {
+        &self.committed[c.index()]
+    }
+
+    /// Uebernimmt die Latches als committete Werte (Ende des Ticks, 9.4).
+    pub fn commit_outputs(&mut self) {
+        self.committed.clone_from(&self.outputs);
     }
 
     /// Latch eines Outputs, schreibend.
@@ -167,6 +184,8 @@ impl Image {
     }
 
     /// Speist `sim`-Outputs in die zugehoerigen `hw`-Inputs (8.3, Unit-Delay).
+    /// Ein Input, den der Stimulus in diesem Tick gesetzt hat, behaelt seinen
+    /// Wert; ohne Stimuluszeile fuehrt die Bindung ihn im naechsten Tick fort.
     pub fn apply_sim_bindings(&mut self) {
         let pairs: Vec<(ChannelId, ChannelId)> = self
             .sim_sources
@@ -177,9 +196,10 @@ impl Image {
             if self.driven[inp.index()] {
                 continue;
             }
-            let value = self.outputs[out.index()].clone();
+            let value = self.committed[out.index()].clone();
             self.inputs[inp.index()] = Sample::good(value);
         }
+        self.driven.iter_mut().for_each(|d| *d = false);
     }
 
     /// Laesst alle Inputs um einen Tick altern; ueberschreitet das Alter

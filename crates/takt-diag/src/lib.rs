@@ -54,7 +54,7 @@ impl Stage {
 pub struct FileId(pub u32);
 
 /// Byte-Bereich in einer Datei.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Span {
     /// Datei.
     pub file: FileId,

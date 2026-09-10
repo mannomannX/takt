@@ -1,0 +1,33 @@
+system:
+    language = 1
+
+input  tcs : [16] float[degC] @ hw("daq1/tc[0:16]") with max_age = 200 ms
+param TC_LIMIT : float[degC] in 0..1200 degC = 900 degC
+
+machine tc_guard every 100 ms:
+    initial WATCH
+    state WATCH:
+        loop:
+            for i in range(16):
+                if tcs[i].valid:
+                    check tcs[i] < TC_LIMIT, "TC {i} over limit: {tcs[i]}"
+                else:
+                    # 14.5 der Referenz schreibt `alert true`; ein Alert meldet
+                    # aber die Verletzung seiner Bedingung (5.6), und `true`
+                    # ist nie verletzt. Siehe Befund in plan/m1.md.
+                    alert false, "TC {i} invalid"
+
+# Plant-Modell fuer die Simulation: nur im Sim-Build gelinkt (8.3).
+output tcs_sim : [16] float[degC] @ sim("daq1/tc[0:16]")
+
+command heat_up  # treibt TC 7 ueber die Grenze (Szenario `over`)
+
+machine tc_model every 100 ms:
+    var hot : bool = false
+    initial RUN
+    state RUN:
+        loop:
+            if heat_up:
+                hot = true
+            for i in range(16):
+                tcs_sim[i] = 950 degC if hot and i == 7 else 20 degC

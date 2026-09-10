@@ -1,0 +1,2 @@
+t=10 cmd open_valve
+t=200 cmd close_valve

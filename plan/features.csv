@@ -47,12 +47,12 @@ SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemant
 SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),teilweise
 SEM-4.5,Semantik/Abschnitt,4.5,Native Funktionen mit Kostenvertrag,,M1 (Kernsemantik),offen
 SEM-5.1,Semantik/Abschnitt,5.1,Struktur,,M1 (Kernsemantik),teilweise
-SEM-5.2,Semantik/Abschnitt,5.2,"Ausführung eines Ticks (informell, exakt in 9.3)",,M1 (Kernsemantik),offen
-SEM-5.3,Semantik/Abschnitt,5.3,Fault-Wald,,M1 (Kernsemantik),teilweise
-SEM-5.4,Semantik/Abschnitt,5.4,`abort`,,M1 (Kernsemantik),offen
+SEM-5.2,Semantik/Abschnitt,5.2,"Ausführung eines Ticks (informell, exakt in 9.3)",,M1 (Kernsemantik),fertig
+SEM-5.3,Semantik/Abschnitt,5.3,Fault-Wald,,M1 (Kernsemantik),fertig
+SEM-5.4,Semantik/Abschnitt,5.4,`abort`,,M1 (Kernsemantik),fertig
 SEM-5.5,Semantik/Abschnitt,5.5,Eingeschränkte Aktionsblöcke,,M1 (Kernsemantik),teilweise
-SEM-5.6,Semantik/Abschnitt,5.6,"Interlocks, Permissives, Alerts",,M1 (Kernsemantik),teilweise
-SEM-5.7,Semantik/Abschnitt,5.7,Blöcke innerhalb von Maschinen,,M1 (Kernsemantik),teilweise
+SEM-5.6,Semantik/Abschnitt,5.6,"Interlocks, Permissives, Alerts",,M1 (Kernsemantik),fertig
+SEM-5.7,Semantik/Abschnitt,5.7,Blöcke innerhalb von Maschinen,,M1 (Kernsemantik),fertig
 SEM-5.8,Semantik/Abschnitt,5.8,Ergonomie in Maschinen,,M1 (Kernsemantik),teilweise
 SEM-5.9,Semantik/Abschnitt,5.9,Persistente Variablen (v1.1),v1.1,M6,offen
 SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M6,offen
@@ -61,8 +61,8 @@ SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,offe
 SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),teilweise
 SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),teilweise
 SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),teilweise
-SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),offen
-SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),offen
+SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),fertig
+SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig
 SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),offen
 SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M1 (Kernsemantik),offen
 SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),offen
@@ -77,11 +77,11 @@ SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),offen
 SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),offen
 SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M6,offen
 SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M2 (Ströme),offen
-SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),teilweise
-SEM-9.1,Semantik/Abschnitt,9.1,Objekte,,M1/M2 (Interpreter),offen
-SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),teilweise
-SEM-9.3,Semantik/Abschnitt,9.3,Schritt einer Maschine,,M1/M2 (Interpreter),offen
-SEM-9.4,Semantik/Abschnitt,9.4,System-Tick und Sätze,,M1/M2 (Interpreter),offen
+SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),fertig
+SEM-9.1,Semantik/Abschnitt,9.1,Objekte,,M1/M2 (Interpreter),fertig
+SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),fertig
+SEM-9.3,Semantik/Abschnitt,9.3,Schritt einer Maschine,,M1/M2 (Interpreter),fertig
+SEM-9.4,Semantik/Abschnitt,9.4,System-Tick und Sätze,,M1/M2 (Interpreter),fertig
 SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M1/M2 (Interpreter),offen
 SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),offen
 SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),offen
@@ -723,36 +723,36 @@ FN-9-advance_cursors,Semantikfunktion,9,advance_cursors,,M1/M2 (Interpreter),off
 FN-9-apply_scheduled,Semantikfunktion,9,apply_scheduled,,M1/M2 (Interpreter),offen
 FN-9-cancel_all_scheduled,Semantikfunktion,9,cancel_all_scheduled,,M1/M2 (Interpreter),offen
 FN-9-deliver,Semantikfunktion,9,deliver,,M1/M2 (Interpreter),offen
-FN-9-deliverable,Semantikfunktion,9,deliverable,,M1/M2 (Interpreter),offen
+FN-9-deliverable,Semantikfunktion,9,deliverable,,M1/M2 (Interpreter),fertig
 FN-9-dispatch,Semantikfunktion,9,dispatch,,M1/M2 (Interpreter),offen
-FN-9-exec,Semantikfunktion,9,exec,,M1/M2 (Interpreter),offen
-FN-9-exec_chain,Semantikfunktion,9,exec_chain,,M1/M2 (Interpreter),offen
-FN-9-resolve_m,Semantikfunktion,9,resolve_m,,M1/M2 (Interpreter),offen
+FN-9-exec,Semantikfunktion,9,exec,,M1/M2 (Interpreter),fertig
+FN-9-exec_chain,Semantikfunktion,9,exec_chain,,M1/M2 (Interpreter),fertig
+FN-9-resolve_m,Semantikfunktion,9,resolve_m,,M1/M2 (Interpreter),fertig
 FN-9-sleep,Semantikfunktion,9,sleep,,M1/M2 (Interpreter),offen
 FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M1/M2 (Interpreter),offen
-FN-9-step_m,Semantikfunktion,9,step_m,,M1/M2 (Interpreter),offen
-FN-9-tick,Semantikfunktion,9,tick,,M1/M2 (Interpreter),offen
+FN-9-step_m,Semantikfunktion,9,step_m,,M1/M2 (Interpreter),fertig
+FN-9-tick,Semantikfunktion,9,tick,,M1/M2 (Interpreter),fertig
 FN-9-windows,Semantikfunktion,9,windows,,M1/M2 (Interpreter),offen
-RULE-9.2-stmt,exec-Regel,9.2,exec(stmt),,M1/M2 (Interpreter),offen
-RULE-9.2-x_=_e,exec-Regel,9.2,exec(x = e),,M1/M2 (Interpreter),offen
-RULE-9.2-check_e,exec-Regel,9.2,exec(check e),,M1/M2 (Interpreter),offen
-RULE-9.2-check_e_for_d,exec-Regel,9.2,exec(check e for d),,M1/M2 (Interpreter),offen
-RULE-9.2-->_q,exec-Regel,9.2,exec(-> q),,M1/M2 (Interpreter),offen
-RULE-9.2-abort,exec-Regel,9.2,exec(abort),,M1/M2 (Interpreter),offen
-RULE-9.2-s1;_s2,exec-Regel,9.2,exec(s1; s2),,M1/M2 (Interpreter),offen
-RULE-9.2-if_e:_b1_else:_b2,exec-Regel,9.2,exec(if e: b1 else: b2),,M1/M2 (Interpreter),offen
-RULE-9.2-for_i_in_range(n):_b,exec-Regel,9.2,exec(for i in range(n): b),,M1/M2 (Interpreter),offen
+RULE-9.2-stmt,exec-Regel,9.2,exec(stmt),,M1/M2 (Interpreter),fertig
+RULE-9.2-x_=_e,exec-Regel,9.2,exec(x = e),,M1/M2 (Interpreter),fertig
+RULE-9.2-check_e,exec-Regel,9.2,exec(check e),,M1/M2 (Interpreter),fertig
+RULE-9.2-check_e_for_d,exec-Regel,9.2,exec(check e for d),,M1/M2 (Interpreter),fertig
+RULE-9.2-->_q,exec-Regel,9.2,exec(-> q),,M1/M2 (Interpreter),fertig
+RULE-9.2-abort,exec-Regel,9.2,exec(abort),,M1/M2 (Interpreter),fertig
+RULE-9.2-s1;_s2,exec-Regel,9.2,exec(s1; s2),,M1/M2 (Interpreter),fertig
+RULE-9.2-if_e:_b1_else:_b2,exec-Regel,9.2,exec(if e: b1 else: b2),,M1/M2 (Interpreter),fertig
+RULE-9.2-for_i_in_range(n):_b,exec-Regel,9.2,exec(for i in range(n): b),,M1/M2 (Interpreter),fertig
 RULE-9.2-for_x_in_W:_b,exec-Regel,9.2,exec(for x in W: b),,M1/M2 (Interpreter),offen
-RULE-9.2-match_e:_cases,exec-Regel,9.2,exec(match e: cases),,M1/M2 (Interpreter),offen
+RULE-9.2-match_e:_cases,exec-Regel,9.2,exec(match e: cases),,M1/M2 (Interpreter),fertig
 "RULE-9.2-send_o,_e",exec-Regel,9.2,"exec(send o, e)",,M1/M2 (Interpreter),offen
 RULE-9.2-at_T:_b,exec-Regel,9.2,exec(at T: b),,M1/M2 (Interpreter),offen
 RULE-9.2-pulse_o_=_v_for_d,exec-Regel,9.2,exec(pulse o = v for d),,M1/M2 (Interpreter),offen
 RULE-9.2-cancel_o,exec-Regel,9.2,exec(cancel o),,M1/M2 (Interpreter),offen
-RULE-9.2-raise_sig,exec-Regel,9.2,exec(raise sig),,M1/M2 (Interpreter),offen
+RULE-9.2-raise_sig,exec-Regel,9.2,exec(raise sig),,M1/M2 (Interpreter),fertig
 RULE-9.2-job_v_=_f(args),exec-Regel,9.2,exec(job v = f(args)),,M1/M2 (Interpreter),offen
-RULE-9.2-every_d:_b,exec-Regel,9.2,exec(every d: b),,M1/M2 (Interpreter),offen
-RULE-9.2-break,exec-Regel,9.2,exec(break),,M1/M2 (Interpreter),offen
-RULE-9.2-alert_|_log_|_measure_|_verify_|_verdict_...,exec-Regel,9.2,exec(alert | log | measure | verify | verdict ...),,M1/M2 (Interpreter),offen
+RULE-9.2-every_d:_b,exec-Regel,9.2,exec(every d: b),,M1/M2 (Interpreter),fertig
+RULE-9.2-break,exec-Regel,9.2,exec(break),,M1/M2 (Interpreter),fertig
+RULE-9.2-alert_|_log_|_measure_|_verify_|_verdict_...,exec-Regel,9.2,exec(alert | log | measure | verify | verdict ...),,M1/M2 (Interpreter),fertig
 DESUGAR-Statement_vor_der_ersten_Zeitgrenze_des_Segments,Desugaring-Regel,6.2,Statement vor der ersten Zeitgrenze des Segments,,M1 (Kernsemantik),fertig
 DESUGAR-check_e_msg_an_Position_p,Desugaring-Regel,6.2,"`check e [, msg]` an Position p",,M1 (Kernsemantik),fertig
 DESUGAR-expect_e_msg,Desugaring-Regel,6.2,"`expect e [, msg]`",,M1 (Kernsemantik),fertig

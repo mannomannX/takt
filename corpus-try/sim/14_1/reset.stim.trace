@@ -1,0 +1,4 @@
+t=2 cmd start
+t=250 in chamber_p 260 bar
+t=400 in chamber_p 1 bar
+t=500 cmd reset

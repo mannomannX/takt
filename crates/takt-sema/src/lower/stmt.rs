@@ -11,6 +11,10 @@ use takt_mir::*;
 use takt_syntax::ast;
 
 use super::{BlockKind, Lowerer, SC3, SC8, is_literal};
+
+/// Methoden, die ihren Empfaenger veraendern: sie sind Anweisungen, nie Teil
+/// eines Ausdrucks (4.4, 5.7).
+pub(crate) const MUTATING: &[&str] = &["push", "insert", "remove", "clear", "skip", "step", "reset"];
 use crate::symbols::Entity;
 
 /// Code der `every`/Handler-Regel.
@@ -326,6 +330,16 @@ impl Lowerer<'_> {
         if kind == BlockKind::Fn && matches!(place, Place::Output(_)) {
             self.error(SC8, span, "Funktionen schreiben keine Outputs (4.4)");
             return None;
+        }
+        // `x = inst.step(...)` ist ein Statement mit Ziel (5.7, 14.7); eine
+        // mutierende Methode steht nie in einem Ausdruck (4.4).
+        if op == ast::AssignOp::Set {
+            if let ast::ExprKind::Member { base, name, args: Some(args) } = &value.kind {
+                if MUTATING.contains(&name.name.as_str()) {
+                    let kind = self.method_call(Some(place), base, name, args, span)?;
+                    return Some(Stmt::new(kind, span));
+                }
+            }
         }
         let rhs = match op {
             ast::AssignOp::Set => self.check(value, ty)?,

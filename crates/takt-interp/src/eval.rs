@@ -375,17 +375,24 @@ impl<'p, 'o> Ctx<'p, 'o> {
     }
 
     /// Abtastung, wenn der Ausdruck ein Input-Lesen ist (auch unter `Checked`).
-    fn sample_of(&self, e: &Expr) -> EvalResult<Option<Sample>> {
+    fn sample_of(&mut self, e: &Expr) -> EvalResult<Option<Sample>> {
         match &e.kind {
             ExprKind::Input { channel, .. } => Ok(Some(self.outer.input(*channel)?.clone())),
             ExprKind::Checked { expr, .. } => self.sample_of(expr),
             ExprKind::Index { base, index } if matches!(base.kind, ExprKind::Input { .. }) => {
+                // Ein Channel-Array traegt eine Abtastung je Element (8.1);
+                // der Index ist ein beliebiger Ausdruck (Schleifenvariable).
                 let ExprKind::Input { channel, .. } = base.kind else { unreachable!() };
-                let ExprKind::Int(i) = index.kind else { return Ok(None) };
+                let i = match self.eval(index)? {
+                    Value::Int(i) => i,
+                    Value::UInt(u) => i64::try_from(u).unwrap_or(-1),
+                    _ => return Ok(None),
+                };
                 let sample = self.outer.input(channel)?;
-                Ok(Some(match &sample.value {
-                    Some(Value::Array(items)) if (i as usize) < items.len() => {
-                        Sample { value: Some(items[i as usize].clone()), ..sample.clone() }
+                let at = usize::try_from(i).ok();
+                Ok(Some(match (&sample.value, at) {
+                    (Some(Value::Array(items)), Some(i)) if i < items.len() => {
+                        Sample { value: Some(items[i].clone()), ..sample.clone() }
                     }
                     _ => sample.clone(),
                 }))

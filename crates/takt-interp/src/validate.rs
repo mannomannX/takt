@@ -293,8 +293,19 @@ pub fn check(p: &Program) -> Result<(), Diagnostic> {
     if !p.is_core() {
         return Err(err(Span::default(), "Sequenz-Oberflaeche nicht entzuckert (desugar fehlt)"));
     }
-    for f in &p.fns {
-        let c = Checker { p, machine: None, locals: Some(f.locals.len()) };
+    // Rahmengroesse je Funktion: Lokale (die Parameter zaehlen mit); bei einer
+    // Blockmethode stehen davor die Instanzvariablen (plan/mir.md Abschnitt 7).
+    let mut frame: Vec<usize> = p.fns.iter().map(|f| f.locals.len()).collect();
+    for b in &p.blocks {
+        let instance = b.params.len() + b.state_vars.len();
+        for f in b.step.iter().chain(&b.methods) {
+            if let Some(n) = frame.get_mut(f.index()) {
+                *n += instance;
+            }
+        }
+    }
+    for (i, f) in p.fns.iter().enumerate() {
+        let c = Checker { p, machine: None, locals: Some(frame[i]) };
         c.block(&f.body)?;
         for v in &f.locals {
             if let Some(init) = &v.init {
