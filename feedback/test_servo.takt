@@ -1,0 +1,1276 @@
+# =====================================================================
+#  cia402_servo.takt  —  CANopen CiA 402 Servo-Controller (Node-Treiber)
+#  Takt Edition 1, v0.2.8
+#
+#  Steuert einen Motor-Inverter nach CiA 402 (Drive and Motion Control)
+#  ueber CANopen (CiA 301 NMT/SDO/PDO, CiA 402 Statusmaschine).
+#
+#  Aufbau
+#    Abschnitt 1  System, Einheiten, Konstanten
+#    Abschnitt 2  Drahtformate (CAN-Frames, SDO, PDO, NMT, EMCY, SYNC)
+#    Abschnitt 3  Channels (CAN, Kommandoschnittstelle, Telemetrie)
+#    Abschnitt 4  Reine Funktionen (Kodierung, Dekodierung, Klassifikation)
+#    Abschnitt 5  Bloecke (Rampen, Watchdog, Retry, Skalierung)
+#    Abschnitt 6  machine can_router      — Demultiplexer der Rx-Frames
+#    Abschnitt 7  machine sdo_client      — SDO-Expedited-Transaktionen
+#    Abschnitt 8  machine nmt_master      — Netz- und Heartbeat-Aufsicht
+#    Abschnitt 9  machine cia402_drive    — CiA-402-Statusmaschine (Kern)
+#    Abschnitt 10 machine motion_profile  — Sollwertaufbereitung + Limits
+#    Abschnitt 11 machine sync_producer    — SYNC / PDO-Takt
+#    Abschnitt 12 Eigenschaften, Szenarien, Kampagne
+#    Abschnitt 13 Plant-Modell (nur Sim-Build)
+# =====================================================================
+
+system:
+    language        = 1
+    tick            = 1 ms
+    float           = f32              # Cortex-M4F/M7-Klasse; f64 nur in Software (4.2, 12.8)
+    output_timing   = boundary         # LET: jitterfreies Senden am Tick-Rand (1.4)
+    tick_source     = hw("tim2/update")
+    tick_tolerance  = 2 pct for 10 ticks
+    target          = baremetal
+    fault_is_fail   = true
+
+
+# =====================================================================
+#  1. Einheiten und Konstanten
+# =====================================================================
+
+unit inc      = 1                      # Inkremente des Gebers (dimensionslos, nominal getrennt)
+unit rpm      = 0.016666666666666666 Hz
+unit permille = 0.001                  # Drehmoment in Promille des Nennmoments (CiA 402: 0.1 pct)
+
+# --- CiA 301: Function Codes (COB-ID = fc | node_id) --------------------
+const FC_NMT       : u32 = 0x000
+const FC_SYNC      : u32 = 0x080
+const FC_EMCY      : u32 = 0x080
+const FC_TPDO1     : u32 = 0x180
+const FC_RPDO1     : u32 = 0x200
+const FC_TPDO2     : u32 = 0x280
+const FC_RPDO2     : u32 = 0x300
+const FC_TPDO3     : u32 = 0x380
+const FC_RPDO3     : u32 = 0x400
+const FC_SDO_TX    : u32 = 0x580       # Server -> Client
+const FC_SDO_RX    : u32 = 0x600       # Client -> Server
+const FC_HEARTBEAT : u32 = 0x700
+
+# --- CiA 402: Objektverzeichnis ---------------------------------------
+const OD_ERROR_REGISTER   : u16 = 0x1001
+const OD_HEARTBEAT_PROD   : u16 = 0x1017
+const OD_ABORT_CONN_OPT   : u16 = 0x6007
+const OD_CONTROLWORD      : u16 = 0x6040
+const OD_STATUSWORD       : u16 = 0x6041
+const OD_QUICKSTOP_OPT    : u16 = 0x605A
+const OD_SHUTDOWN_OPT     : u16 = 0x605B
+const OD_DISABLE_OPT      : u16 = 0x605C
+const OD_HALT_OPT         : u16 = 0x605D
+const OD_FAULT_OPT        : u16 = 0x605E
+const OD_MODES_OF_OP      : u16 = 0x6060
+const OD_MODES_DISPLAY    : u16 = 0x6061
+const OD_POSITION_ACTUAL  : u16 = 0x6064
+const OD_FOLLOW_ERR_WIN   : u16 = 0x6065
+const OD_VELOCITY_ACTUAL  : u16 = 0x606C
+const OD_TARGET_TORQUE    : u16 = 0x6071
+const OD_MAX_TORQUE       : u16 = 0x6072
+const OD_TORQUE_ACTUAL    : u16 = 0x6077
+const OD_TARGET_POSITION  : u16 = 0x607A
+const OD_SW_POS_LIMIT     : u16 = 0x607D
+const OD_MAX_MOTOR_SPEED  : u16 = 0x6080
+const OD_PROFILE_VELOCITY : u16 = 0x6081
+const OD_PROFILE_ACCEL    : u16 = 0x6083
+const OD_PROFILE_DECEL    : u16 = 0x6084
+const OD_QUICKSTOP_DECEL  : u16 = 0x6085
+const OD_TARGET_VELOCITY  : u16 = 0x60FF
+const OD_SUPPORTED_MODES  : u16 = 0x6502
+
+# --- Controlword-Bits (CiA 402, 0x6040) --------------------------------
+const CW_SWITCH_ON        : u16 = 0x0001
+const CW_ENABLE_VOLTAGE   : u16 = 0x0002
+const CW_QUICK_STOP_N     : u16 = 0x0004   # 0 = Quick Stop aktiv (aktiv-low!)
+const CW_ENABLE_OPERATION : u16 = 0x0008
+const CW_NEW_SETPOINT     : u16 = 0x0010   # pp: Bit 4
+const CW_CHANGE_SET_IMM   : u16 = 0x0020   # pp: Bit 5
+const CW_RELATIVE         : u16 = 0x0040   # pp: Bit 6
+const CW_FAULT_RESET      : u16 = 0x0080
+const CW_HALT             : u16 = 0x0100
+
+const CW_SHUTDOWN         : u16 = 0x0006   # ---0 0110
+const CW_SWITCH_ON_CMD    : u16 = 0x0007   # ---0 0111
+const CW_ENABLE_OP_CMD    : u16 = 0x000F   # ---0 1111
+const CW_DISABLE_VOLTAGE  : u16 = 0x0000   # ---0 --0-
+const CW_QUICK_STOP_CMD   : u16 = 0x0002   # ---0 --10
+const CW_DISABLE_OP_CMD   : u16 = 0x0007
+
+# --- Statusword-Bits (CiA 402, 0x6041) ---------------------------------
+const SW_READY_TO_SWITCH_ON : u16 = 0x0001
+const SW_SWITCHED_ON        : u16 = 0x0002
+const SW_OPERATION_ENABLED  : u16 = 0x0004
+const SW_FAULT              : u16 = 0x0008
+const SW_VOLTAGE_ENABLED    : u16 = 0x0010
+const SW_QUICK_STOP_N       : u16 = 0x0020
+const SW_SWITCH_ON_DISABLED : u16 = 0x0040
+const SW_WARNING            : u16 = 0x0080
+const SW_REMOTE             : u16 = 0x0200
+const SW_TARGET_REACHED     : u16 = 0x0400
+const SW_INTERNAL_LIMIT     : u16 = 0x0800
+const SW_SETPOINT_ACK       : u16 = 0x1000   # pp: Bit 12
+const SW_FOLLOWING_ERROR    : u16 = 0x2000   # pp: Bit 13
+
+# Maske und Muster der Statusmaschine (CiA 402 Tabelle "State coding")
+const SWM_A : u16 = 0x004F   # Bits 0,1,2,3,6
+const SWM_B : u16 = 0x006F   # Bits 0,1,2,3,5,6
+
+const SWP_NOT_READY        : u16 = 0x0000   # xxxx xxxx x0xx 0000  (Maske 0x004F)
+const SWP_SWITCH_ON_DISBL  : u16 = 0x0040   #                      (Maske 0x004F)
+const SWP_READY_TO_SW_ON   : u16 = 0x0021   #                      (Maske 0x006F)
+const SWP_SWITCHED_ON      : u16 = 0x0023   #                      (Maske 0x006F)
+const SWP_OPERATION_ENABL  : u16 = 0x0027   #                      (Maske 0x006F)
+const SWP_QUICK_STOP_ACT   : u16 = 0x0007   #                      (Maske 0x006F)
+const SWP_FAULT_REACT_ACT  : u16 = 0x000F   #                      (Maske 0x004F)
+const SWP_FAULT            : u16 = 0x0008   #                      (Maske 0x004F)
+
+# --- SDO ---------------------------------------------------------------
+const SDO_DL_EXP_4 : u8 = 0x23   # download expedited, 4 Byte
+const SDO_DL_EXP_2 : u8 = 0x2B   # download expedited, 2 Byte
+const SDO_DL_EXP_1 : u8 = 0x2F   # download expedited, 1 Byte
+const SDO_DL_RESP  : u8 = 0x60
+const SDO_UL_REQ   : u8 = 0x40
+const SDO_ABORT    : u8 = 0x80
+
+const SDO_ABORT_TIMEOUT : u32 = 0x0504_0000
+
+# --- Sonstiges ----------------------------------------------------------
+const HB_TOGGLE_MASK : u8 = 0x7F
+
+
+# =====================================================================
+#  2. Drahtformate
+# =====================================================================
+
+enum NmtCmd layout u8:
+    START_REMOTE   = 0x01
+    STOP_REMOTE    = 0x02
+    ENTER_PREOP    = 0x80
+    RESET_NODE     = 0x81
+    RESET_COMM     = 0x82
+
+enum NmtState layout u8 open:
+    BOOTUP         = 0x00
+    STOPPED        = 0x04
+    OPERATIONAL    = 0x05
+    PRE_OPERATIONAL = 0x7F
+
+enum OpMode layout i8:
+    NO_MODE        = 0
+    PROFILE_POS    = 1     # pp
+    PROFILE_VEL    = 3     # pv
+    PROFILE_TORQUE = 4     # tq
+    HOMING         = 6     # hm
+    CYCLIC_POS     = 8     # csp
+    CYCLIC_VEL     = 9     # csv
+    CYCLIC_TORQUE  = 10    # cst
+
+# Die logische CiA-402-Statusmaschine als Enum; abgeleitet aus dem Statusword.
+enum DriveState layout u8 open:
+    NOT_READY          = 0
+    SWITCH_ON_DISABLED = 1
+    READY_TO_SWITCH_ON = 2
+    SWITCHED_ON        = 3
+    OPERATION_ENABLED  = 4
+    QUICK_STOP_ACTIVE  = 5
+    FAULT_REACTION     = 6
+    FAULT              = 7
+    UNKNOWN            = 255
+
+enum SdoResult layout u8:
+    SDO_OK      = 0
+    SDO_ABORTED = 1
+    SDO_TIMEOUT = 2
+    SDO_MISMATCH = 3
+
+enum DriveCmd layout u8:
+    CMD_NONE     = 0
+    CMD_ENABLE   = 1
+    CMD_DISABLE  = 2
+    CMD_QUICKSTOP = 3
+    CMD_HALT     = 4
+    CMD_RESET    = 5
+
+record CanFrame layout little:
+    id   : u32 in 0..0x7FF          # 11-Bit-Identifier; ausgefiltert am Treiberrand
+    dlc  : u8 in 0..8
+    data : bytes<8>
+
+record SdoFrame layout little:
+    cs    : u8                       # Command Specifier
+    index : u16
+    sub   : u8
+    data  : u32
+
+record HeartbeatFrame layout little:
+    raw : u8 with bits:
+        state  : u8 at 0..6
+        toggle : bool at 7
+
+record EmcyFrame layout little:
+    code     : u16                   # Emergency Error Code (CiA 301, Tabelle 22)
+    err_reg  : u8 with bits:
+        generic       : bool at 0
+        current       : bool at 1
+        voltage       : bool at 2
+        temperature   : bool at 3
+        communication : bool at 4
+        device_prof   : bool at 5
+        reserved      : bool at 6
+        manufacturer  : bool at 7
+    vendor   : [5] u8
+
+# TPDO1 (Standard-Mapping CiA 402): Statusword + Modes-of-Operation-Display
+record Tpdo1 layout little:
+    statusword : u16
+    mode_disp  : OpMode
+
+# TPDO2: Position und Geschwindigkeit (Ist)
+record Tpdo2 layout little:
+    position_actual : i32[inc]
+    velocity_actual : i32[inc/s]
+
+# TPDO3: Drehmoment (Ist) + interner Status
+record Tpdo3 layout little:
+    torque_actual   : i16[permille]
+    _               : [2] u8
+    di_status       : u32 with bits:
+        limit_pos   : bool at 0
+        limit_neg   : bool at 1
+        home_switch : bool at 2
+        stop_input  : bool at 3
+        reserved    : u32 at 4..31
+
+# RPDO1: Controlword + Modes of Operation
+record Rpdo1 layout little:
+    controlword : u16
+    mode        : OpMode
+
+# RPDO2: Zielposition + Profilgeschwindigkeit
+record Rpdo2 layout little:
+    target_position : i32[inc]
+    profile_velocity : u32[inc/s]
+
+# RPDO3: Zielgeschwindigkeit + Zieldrehmoment
+record Rpdo3 layout little:
+    target_velocity : i32[inc/s]
+    target_torque   : i16[permille]
+    _               : [2] u8
+
+enum SdoErr: ABORTED, TIMEOUT, BAD_ECHO, WRONG_INDEX
+
+
+# =====================================================================
+#  3. Channels
+# =====================================================================
+
+# --- CAN-Bus ------------------------------------------------------------
+input  can_rx      : stream<CanFrame> @ hw("can0/rx")    with max_rate = 8000 Hz,
+                                                              capacity = 32,
+                                                              overflow = fault
+output can_tx      : stream<u8>       @ hw("can0/tx")    with max_rate = 8000 Hz,
+                                                              capacity = 512
+input  can_state   : u8               @ hw("can0/state") with max_age = 20 ms   # 0=ok 1=warn 2=passive 3=busoff
+output can_recover : bool             @ hw("can0/recover") with safe = false
+
+# --- Operator- und Feldschnittstelle -----------------------------------
+input  cmd_in          : DriveCmd     @ hw("host/cmd")        with max_age = 100 ms
+input  target_vel_host : float[rpm] in -6000..6000 rpm @ hw("host/target_vel") with max_age = 50 ms,
+                                                                                    max_slew = 60000 rpm/s,
+                                                                                    debounce = 2
+input  target_pos_host : float[inc] in -100_000_000..100_000_000 inc @ hw("host/target_pos")
+                                                              with max_age = 50 ms
+input  mode_host       : OpMode       @ hw("host/mode")       with max_age = 100 ms
+input  estop_n         : bool         @ hw("gpio/estop_n")    with max_age = 5 ms   # aktiv-low, verdrahteter Nothalt
+
+command enable_drive
+command disable_drive
+command quick_stop
+command fault_reset
+command rearm
+
+# --- Diagnose / lokale Reaktion ----------------------------------------
+output ready_led   : bool             @ hw("gpio/led_ready") with safe = false
+output fault_led   : bool             @ hw("gpio/led_fault") with safe = true
+output stO_request : bool             @ hw("gpio/sto_req")   with safe = true     # STO anfordern = sicher
+
+# --- Interne Warteschlangen (Maschine -> Maschine) ---------------------
+stream<SdoFrame>       sdo_req_q   with capacity = 8
+stream<CanFrame>       tx_q        with capacity = 32
+stream<EmcyFrame>      emcy_q      with capacity = 8
+
+
+# =====================================================================
+#  4. Parameter und Profile
+# =====================================================================
+
+param NODE_ID          : int in 1..127 = 3
+param SDO_TIMEOUT      : Duration in 20 ms..2 s = 200 ms
+param SDO_RETRIES      : int in 0..5 = 2
+param BOOT_TIMEOUT     : Duration in 100 ms..30 s = 5 s
+param HB_PERIOD        : Duration in 20 ms..5 s = 200 ms
+param HB_FACTOR        : int in 2..5 = 3            # Ausfall nach HB_FACTOR * HB_PERIOD
+param SYNC_PERIOD      : Duration in 1 ms..100 ms = 2 ms
+param STATE_TIMEOUT    : Duration in 20 ms..5 s = 500 ms
+param FAULT_RESET_HOLD : Duration in 5 ms..500 ms = 50 ms
+param MAX_FAULT_RESETS : int in 0..10 = 3
+
+param ENC_INC_PER_REV  : float[inc] in 1..1_048_576 inc = 65536 inc
+param MAX_SPEED        : float[rpm] in 1..12000 rpm = 3000 rpm
+param MAX_TORQUE       : float[permille] in 1..3000 permille = 1000 permille
+param MAX_ACCEL        : float[rpm/s] in 1..100000 rpm/s = 6000 rpm/s
+param QS_DECEL         : float[rpm/s] in 1..200000 rpm/s = 30000 rpm/s
+param FOLLOW_ERR_WIN   : float[inc] in 1..1_000_000 inc = 5000 inc
+param POS_LIMIT_LO     : float[inc] in -100_000_000..0 inc = -20_000_000 inc
+param POS_LIMIT_HI     : float[inc] in 0..100_000_000 inc = 20_000_000 inc
+
+tunable param VEL_RAMP : float[rpm/s] in 10..100000 rpm/s = 2000 rpm/s
+
+profile COMMISSIONING:
+    MAX_SPEED     = 300 rpm
+    MAX_TORQUE    = 200 permille
+    VEL_RAMP      = 300 rpm/s
+    SYNC_PERIOD   = 10 ms
+    MAX_FAULT_RESETS = 0
+
+profile PRODUCTION:
+    MAX_SPEED     = 3000 rpm
+    MAX_TORQUE    = 1000 permille
+    VEL_RAMP      = 6000 rpm/s
+    SYNC_PERIOD   = 2 ms
+
+
+# =====================================================================
+#  5. Reine Funktionen
+# =====================================================================
+
+fn cob(fc: u32, node: int) -> u32:
+    return fc + (node as u32)
+
+# --- Klassifikation des Statusword nach CiA 402 -------------------------
+fn decode_state(sw: u16) -> DriveState:
+    if (sw & SWM_A) == SWP_NOT_READY:       return NOT_READY
+    if (sw & SWM_A) == SWP_SWITCH_ON_DISBL: return SWITCH_ON_DISABLED
+    if (sw & SWM_A) == SWP_FAULT_REACT_ACT: return FAULT_REACTION
+    if (sw & SWM_A) == SWP_FAULT:           return FAULT
+    if (sw & SWM_B) == SWP_READY_TO_SW_ON:  return READY_TO_SWITCH_ON
+    if (sw & SWM_B) == SWP_SWITCHED_ON:     return SWITCHED_ON
+    if (sw & SWM_B) == SWP_OPERATION_ENABL: return OPERATION_ENABLED
+    if (sw & SWM_B) == SWP_QUICK_STOP_ACT:  return QUICK_STOP_ACTIVE
+    return UNKNOWN
+
+# Das Controlword, das aus dem Ist-Zustand in Richtung OPERATION_ENABLED fuehrt.
+# Eine reine Funktion des Ist-Zustands: das ist die gesamte Anlaufstrategie.
+fn cw_toward_enabled(st: DriveState, base: u16) -> u16:
+    match st:
+        case SWITCH_ON_DISABLED: return base | CW_SHUTDOWN
+        case READY_TO_SWITCH_ON: return base | CW_SWITCH_ON_CMD
+        case SWITCHED_ON:        return base | CW_ENABLE_OP_CMD
+        case OPERATION_ENABLED:  return base | CW_ENABLE_OP_CMD
+        case QUICK_STOP_ACTIVE:  return base | CW_DISABLE_VOLTAGE
+        case _:                  return base | CW_DISABLE_VOLTAGE
+
+fn is_faulted(st: DriveState) -> bool:
+    return st == FAULT or st == FAULT_REACTION
+
+fn is_powered(st: DriveState) -> bool:
+    return st == SWITCHED_ON or st == OPERATION_ENABLED or st == QUICK_STOP_ACTIVE
+
+# --- Skalierung: physikalische Groessen <-> Geberinkremente -------------
+fn rpm_to_inc_s(v: float[rpm], inc_per_rev: float[inc]) -> float[inc/s]:
+    return v.to(Hz) * inc_per_rev
+
+fn inc_s_to_rpm(v: float[inc/s], inc_per_rev: float[inc]) -> float[rpm]:
+    return (v / inc_per_rev).to(rpm)
+
+# --- Frame-Erzeugung ----------------------------------------------------
+fn nmt_frame(cmd: NmtCmd, node: int) -> CanFrame:
+    var d : bytes<8> = default
+    var w = writer(d)
+    var ok1 = w.u8(cmd as u8)
+    var ok2 = w.u8(node as u8)
+    return CanFrame(id = FC_NMT, dlc = 2, data = d)
+
+fn sdo_download(index: u16, sub: u8, value: u32, size: int in 1..4, node: int) -> CanFrame:
+    var cs : u8 = SDO_DL_EXP_4
+    if size == 1: cs = SDO_DL_EXP_1
+    if size == 2: cs = SDO_DL_EXP_2
+    var f = SdoFrame(cs = cs, index = index, sub = sub, data = value)
+    return CanFrame(id = cob(FC_SDO_RX, node), dlc = 8, data = f.encode())
+
+fn sdo_upload(index: u16, sub: u8, node: int) -> CanFrame:
+    var f = SdoFrame(cs = SDO_UL_REQ, index = index, sub = sub, data = 0)
+    return CanFrame(id = cob(FC_SDO_RX, node), dlc = 8, data = f.encode())
+
+fn rpdo1_frame(cw: u16, mode: OpMode, node: int) -> CanFrame:
+    return CanFrame(id = cob(FC_RPDO1, node), dlc = 3,
+                    data = Rpdo1(controlword = cw, mode = mode).encode())
+
+fn rpdo2_frame(pos: i32[inc], vel: u32[inc/s], node: int) -> CanFrame:
+    return CanFrame(id = cob(FC_RPDO2, node), dlc = 8,
+                    data = Rpdo2(target_position = pos, profile_velocity = vel).encode())
+
+fn rpdo3_frame(vel: i32[inc/s], trq: i16[permille], node: int) -> CanFrame:
+    return CanFrame(id = cob(FC_RPDO3, node), dlc = 8,
+                    data = Rpdo3(target_velocity = vel, target_torque = trq).encode())
+
+fn sync_frame() -> CanFrame:
+    return CanFrame(id = FC_SYNC, dlc = 0, data = default)
+
+# --- Emergency-Auswertung ----------------------------------------------
+fn emcy_is_fatal(e: EmcyFrame) -> bool:
+    # Strom-, Spannungs-, Temperatur- und Geraeteprofilfehler sind fatal;
+    # Kommunikationswarnungen behandelt die Heartbeat-Aufsicht.
+    return e.err_reg.current or e.err_reg.voltage
+        or e.err_reg.temperature or e.err_reg.device_prof
+
+
+# =====================================================================
+#  6. Bloecke
+# =====================================================================
+
+# Rampenbegrenzer mit getrennter Beschleunigungs- und Bremsrate.
+# Bremsen darf immer schneller sein als Beschleunigen — sonst waere
+# Quick Stop durch die Rampe entschaerft.
+block slew2[U](accel: float[U/s], decel: float[U/s]):
+    var y    : float[U] = 0
+    var init : bool = false
+    step(target: float[U], dt: Duration in tick..1 h) -> float[U]:
+        if not init:
+            y = target
+            init = true
+            return y
+        var dts : float[s] = dt.as(s)
+        var toward_zero : bool = abs(target) < abs(y) or (target * y) < 0
+        var rate : float[U/s] = decel if toward_zero else accel
+        var d : float[U] = rate * dts
+        y = clamp(target, y - d, y + d)
+        return y
+
+# Fortschrittswaechter: meldet, wenn ein erwarteter Zustand ausbleibt.
+block progress_guard(limit: Duration):
+    var t : Duration = 0 s
+    step(reached: bool, dt: Duration in tick..1 h) -> bool:
+        if reached:
+            t = 0 s
+        else:
+            t = t + dt
+        return t >= limit
+    reset():
+        t = 0 s
+
+# Heartbeat-Aufsicht mit Toggle-Pruefung (CiA 301: Bit 7 alterniert).
+block hb_monitor(timeout: Duration):
+    var since   : Duration = 0 s
+    var seen    : bool = false
+    var last_tg : bool = false
+    step(got: bool, toggle: bool, dt: Duration in tick..1 h) -> bool:
+        if got and (not seen or toggle != last_tg):
+            since = 0 s
+            seen = true
+            last_tg = toggle
+        else:
+            since = since + dt
+        return seen and since < timeout
+
+
+# =====================================================================
+#  7. machine can_router — Demultiplexer
+#
+#  Einzige Maschine, die can_rx konsumiert. Sie zerlegt den Rohstrom in
+#  typisierte Groessen und veroeffentlicht sie; alle anderen Maschinen
+#  lesen die Felder mit Unit-Delay bzw. frisch per `follows`.
+#  Grund: „untersucht heisst konsumiert" (8.6) erlaubt genau einen
+#  natuerlichen Konsumenten pro Interpretation; ein Router ist billiger
+#  und klarer als vier Konsumenten mit eigenen Cursorn.
+# =====================================================================
+
+machine can_router:
+    fault -> ROUTER_FAULT
+
+    pub var statusword     : u16 = 0
+    pub var mode_display   : OpMode = NO_MODE
+    pub var pos_actual     : i32[inc] = 0
+    pub var vel_actual     : i32[inc/s] = 0
+    pub var trq_actual     : i16[permille] = 0
+    pub var di_limit_pos   : bool = false
+    pub var di_limit_neg   : bool = false
+    pub var di_stop        : bool = false
+
+    pub var nmt_state      : NmtState = BOOTUP
+    pub var hb_toggle      : bool = false
+    pub var hb_seen_tick   : bool = false     # ein Tick lang true bei Heartbeat-Empfang
+    pub var bootup_seen    : bool = false
+
+    pub var sdo_rx         : SdoFrame = default
+    pub var sdo_rx_valid   : bool = false
+
+    pub var tpdo1_age      : Duration = 0 s
+    pub var rx_frames      : int in 0..1_000_000_000 = 0
+    pub var rx_unknown     : int in 0..1_000_000_000 = 0
+
+    signal emcy_received
+
+    initial ROUTING
+
+    state ROUTING:
+        loop:
+            # Flags, die genau einen Tick gelten, am Anfang zuruecksetzen.
+            hb_seen_tick = false
+            sdo_rx_valid = false
+            tpdo1_age = tpdo1_age + tick
+
+            check can_state.or(0) != 3, "CAN bus-off"
+
+        on can_rx as f:
+            rx_frames += 1
+            var id : u32 = f.id
+            var mine : bool = (id & 0x7F) == (NODE_ID as u32)
+
+            if id == cob(FC_TPDO1, NODE_ID):
+                var p = Tpdo1.decode(f.data)
+                if p.valid:
+                    statusword = p.statusword
+                    mode_display = p.mode_disp
+                    tpdo1_age = 0 s
+            elif id == cob(FC_TPDO2, NODE_ID):
+                var q = Tpdo2.decode(f.data)
+                if q.valid:
+                    pos_actual = q.position_actual
+                    vel_actual = q.velocity_actual
+            elif id == cob(FC_TPDO3, NODE_ID):
+                var r = Tpdo3.decode(f.data)
+                if r.valid:
+                    trq_actual = r.torque_actual
+                    di_limit_pos = r.di_status.limit_pos
+                    di_limit_neg = r.di_status.limit_neg
+                    di_stop = r.di_status.stop_input
+            elif id == cob(FC_SDO_TX, NODE_ID):
+                var s = SdoFrame.decode(f.data)
+                if s.valid:
+                    sdo_rx = s
+                    sdo_rx_valid = true
+            elif id == cob(FC_HEARTBEAT, NODE_ID):
+                var h = HeartbeatFrame.decode(f.data)
+                if h.valid:
+                    hb_seen_tick = true
+                    hb_toggle = h.raw.toggle
+                    nmt_state = (h.raw.state as u8) as NmtState
+                    if (h.raw.state & HB_TOGGLE_MASK) == 0:
+                        bootup_seen = true
+            elif id == cob(FC_EMCY, NODE_ID) and f.dlc == 8:
+                var e = EmcyFrame.decode(f.data)
+                if e.valid:
+                    send emcy_q, e
+                    raise emcy_received
+            else:
+                if not mine:
+                    rx_unknown += 1
+
+    state ROUTER_FAULT:
+        # Der Router selbst kann nur an einem Stream-Ueberlauf oder Bus-Off
+        # scheitern; beides ist ein Systemereignis, kein lokales.
+        enter:
+            log "can_router fault: {last_fault.message}"
+        loop:
+            abort "CAN receive path failed"
+
+
+# =====================================================================
+#  8. machine sdo_client — Expedited-SDO-Transaktionen
+#
+#  Serialisiert Anfragen aus sdo_req_q, wartet auf die Antwort des
+#  Servers und meldet das Ergebnis. Genau eine Transaktion gleichzeitig
+#  (CiA 301: ein Default-SDO-Kanal je Node).
+# =====================================================================
+
+machine sdo_client follows can_router:
+    fault -> SDO_IDLE
+
+    pub var last_result  : SdoResult = SDO_OK
+    pub var last_index   : u16 = 0
+    pub var last_value   : u32 = 0
+    pub var busy         : bool = false
+    pub var done_count   : int in 0..1_000_000 = 0
+    pub var abort_count  : int in 0..1_000_000 = 0
+
+    var req      : SdoFrame = default
+    var tries    : int in 0..6 = 0
+
+    signal sdo_done
+    signal sdo_failed
+
+    initial SDO_IDLE
+
+    state SDO_IDLE:
+        enter:
+            busy = false
+        when sdo_req_q as r:
+            req = r
+            tries = 0
+            -> SDO_SEND
+
+    state SDO_SEND:
+        enter:
+            busy = true
+            tries += 1
+            send tx_q, CanFrame(id = cob(FC_SDO_RX, NODE_ID), dlc = 8, data = req.encode())
+        when can_router.sdo_rx_valid and can_router.sdo_rx.index == req.index
+                                     and can_router.sdo_rx.sub == req.sub:
+            -> SDO_EVAL
+        after SDO_TIMEOUT:
+            if tries <= SDO_RETRIES:
+                -> SDO_SEND
+            else:
+                last_result = SDO_TIMEOUT
+                last_index = req.index
+                abort_count += 1
+                raise sdo_failed
+                -> SDO_IDLE
+
+    state SDO_EVAL:
+        enter:
+            var resp = can_router.sdo_rx
+            last_index = resp.index
+            last_value = resp.data
+            if (resp.cs & 0xE0) == SDO_ABORT:
+                last_result = SDO_ABORTED
+                abort_count += 1
+                log "SDO abort {resp.index:hex}.{resp.sub}: {resp.data:hex}"
+                raise sdo_failed
+            elif req.cs == SDO_UL_REQ:
+                last_result = SDO_OK
+                done_count += 1
+                raise sdo_done
+            elif (resp.cs & 0xE0) == 0x60:
+                last_result = SDO_OK
+                done_count += 1
+                raise sdo_done
+            else:
+                last_result = SDO_MISMATCH
+                abort_count += 1
+                raise sdo_failed
+        when true: -> SDO_IDLE
+
+
+# =====================================================================
+#  9. machine nmt_master — Netzaufsicht
+#
+#  Bringt den Node nach dem Boot in OPERATIONAL, ueberwacht den
+#  Heartbeat und behandelt Bus-Off. Sie besitzt keine Antriebs-Outputs:
+#  ihr Ergebnis ist `net_ok`, das die Antriebsmaschine als Interlock liest.
+# =====================================================================
+
+machine nmt_master follows can_router:
+    fault -> NET_DOWN
+
+    pub var net_ok      : bool = false
+    pub var boot_done   : bool = false
+    pub var busoff_count : int in 0..1000 = 0
+
+    var hb = hb_monitor(timeout = 600 ms)     # HB_PERIOD * HB_FACTOR, s. Prüfung unten
+    var alive : bool = false
+
+    initial NET_RESET
+
+    loop:
+        # Heartbeat-Aufsicht laeuft in jedem Zustand mit, auch waehrend
+        # der Konfiguration — ein Node, der waehrend des SDO-Dialogs
+        # ausfaellt, darf nicht in einen Timeout laufen.
+        alive = hb.step(can_router.hb_seen_tick, can_router.hb_toggle, tick)
+        check can_state.or(0) != 3 for 20 ms, "CAN bus-off persists"
+
+    state NET_RESET:
+        enter:
+            net_ok = false
+            boot_done = false
+            can_recover = true
+            send tx_q, nmt_frame(RESET_COMM, NODE_ID)
+        after 100 ms:
+            can_recover = false
+            -> WAIT_BOOTUP
+
+    state WAIT_BOOTUP:
+        when can_router.bootup_seen: -> CONFIGURE
+        after BOOT_TIMEOUT:
+            log "no bootup message from node {NODE_ID}"
+            -> NET_DOWN
+
+    # --- Konfiguration ueber SDO: alle sicherheitsrelevanten Grenzen
+    #     werden vor dem ersten Freigeben in den Antrieb geschrieben.
+    state CONFIGURE:
+        var step_i : int in 0..12 = 0
+        sequence:
+            step "limits":
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_4, index = OD_MAX_MOTOR_SPEED, sub = 0,
+                                         data = round(rpm_to_inc_s(MAX_SPEED, ENC_INC_PER_REV) / (1 inc/s)) as u32)
+                until sdo_client.sdo_done timeout 2 s -> NET_DOWN
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_2, index = OD_MAX_TORQUE, sub = 0,
+                                         data = round(MAX_TORQUE / (1 permille)) as u32)
+                until sdo_client.sdo_done timeout 2 s -> NET_DOWN
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_4, index = OD_FOLLOW_ERR_WIN, sub = 0,
+                                         data = round(FOLLOW_ERR_WIN / (1 inc)) as u32)
+                until sdo_client.sdo_done timeout 2 s -> NET_DOWN
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_4, index = OD_SW_POS_LIMIT, sub = 1,
+                                         data = (round(POS_LIMIT_LO / (1 inc)) as i32).wrap_u32())
+                until sdo_client.sdo_done timeout 2 s -> NET_DOWN
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_4, index = OD_SW_POS_LIMIT, sub = 2,
+                                         data = (round(POS_LIMIT_HI / (1 inc)) as i32).wrap_u32())
+                until sdo_client.sdo_done timeout 2 s -> NET_DOWN
+            step "reactions":
+                # Quick Stop: Rampe mit Verbleib in QUICK_STOP_ACTIVE (Option 6)
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_2, index = OD_QUICKSTOP_OPT, sub = 0, data = 6)
+                until sdo_client.sdo_done timeout 2 s -> NET_DOWN
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_4, index = OD_QUICKSTOP_DECEL, sub = 0,
+                                         data = round(rpm_to_inc_s(QS_DECEL * (1 s), ENC_INC_PER_REV) / (1 inc/s)) as u32)
+                until sdo_client.sdo_done timeout 2 s -> NET_DOWN
+                # Fehlerreaktion: Rampe, dann Momentenfreiheit (Option 2)
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_2, index = OD_FAULT_OPT, sub = 0, data = 2)
+                until sdo_client.sdo_done timeout 2 s -> NET_DOWN
+                # Verbindungsabbruch (0x6007) -> Quick Stop
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_2, index = OD_ABORT_CONN_OPT, sub = 0, data = 3)
+                until sdo_client.sdo_done timeout 2 s -> NET_DOWN
+            step "heartbeat":
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_2, index = OD_HEARTBEAT_PROD, sub = 0,
+                                         data = (HB_PERIOD / 1 ms) as u32)
+                until sdo_client.sdo_done timeout 2 s -> NET_DOWN
+            step "operational":
+                send tx_q, nmt_frame(START_REMOTE, NODE_ID)
+                until can_router.nmt_state == OPERATIONAL timeout 1 s -> NET_DOWN
+                boot_done = true
+                -> NET_UP
+
+    state NET_UP:
+        enter:
+            net_ok = true
+        loop:
+            check alive, "heartbeat lost from node {NODE_ID}"
+        when can_router.nmt_state != OPERATIONAL: -> NET_DOWN
+
+    state NET_DOWN:
+        enter:
+            net_ok = false
+            log "network down (nmt = {can_router.nmt_state}, alive = {alive})"
+        when rearm and can_state.or(3) == 0:
+            busoff_count += 1
+            hb.reset()
+            -> NET_RESET
+
+
+# =====================================================================
+#  10. machine cia402_drive — die CiA-402-Statusmaschine
+#
+#  Kern des Treibers. Sie besitzt als einzige Maschine das Controlword
+#  (Single-Writer) und faehrt den Antrieb entlang der genormten
+#  Zustandsuebergaenge. Die Zuordnung zwischen der Ist-Statusmaschine
+#  des Antriebs (aus dem Statusword) und der Soll-Absicht dieser
+#  Maschine ist in `cw_toward_enabled` als reine Funktion isoliert.
+# =====================================================================
+
+machine cia402_drive follows can_router, nmt_master:
+    fault -> DRV_FAULT
+
+    pub var cw            : u16 = 0
+    pub var drive_state   : DriveState = NOT_READY
+    pub var enabled       : bool = false
+    pub var op_mode       : OpMode = NO_MODE
+    pub var fault_resets  : int in 0..10 = 0
+    pub var last_emcy     : u16 = 0
+
+    var want_enable : bool = false
+    var guard = progress_guard(limit = STATE_TIMEOUT)
+    var stalled : bool = false
+
+    signal drive_enabled
+    signal drive_disabled
+
+    initial DRV_INIT
+
+    # --- Interlocks, die in jedem Betriebszustand gelten -----------------
+    loop:
+        drive_state = decode_state(can_router.statusword)
+
+        # Verdrahteter Nothalt hat Vorrang vor jeder Buslogik.
+        if not estop_n.or(false):
+            abort "emergency stop asserted"
+
+        # Der Bus muss leben, sobald wir Leistung freigeben wollen.
+        alert can_router.tpdo1_age > 100 ms, "TPDO1 stale ({can_router.tpdo1_age})"
+
+        # Emergency-Nachrichten werden hier zentral bewertet.
+        stO_request = not enabled
+
+    on emcy_q as e:
+        last_emcy = e.code
+        log "EMCY {e.code:hex} reg={e.err_reg:hex}"
+        if emcy_is_fatal(e):
+            abort "fatal emergency {e.code:hex}"
+
+    # =====================================================================
+    state DRV_INIT:
+        enter:
+            cw = CW_DISABLE_VOLTAGE
+            enabled = false
+        when nmt_master.net_ok: -> DRV_READY
+
+    # --- Betriebszweig: alles unterhalb setzt ein lebendes Netz voraus ---
+    state DRV_ONLINE:
+        initial DRV_READY
+        loop:
+            check nmt_master.net_ok, "network lost"
+            check can_router.tpdo1_age < 200 ms, "statusword stale"
+            check drive_state != UNKNOWN for 10 ms, "unknown statusword {can_router.statusword:hex}"
+
+        state DRV_READY:
+            enter:
+                cw = CW_DISABLE_VOLTAGE
+                enabled = false
+                op_mode = NO_MODE
+                raise drive_disabled
+            loop:
+                # Fehlerzustand des Antriebs erkennen, bevor jemand freigeben will
+                pass
+            when is_faulted(drive_state): -> DRV_FAULT_RESET
+            when (enable_drive or cmd_in.or(CMD_NONE) == CMD_ENABLE)
+                 and mode_host.valid and mode_host != NO_MODE:
+                want_enable = true
+                op_mode = mode_host
+                -> DRV_SET_MODE
+
+        # Betriebsart vor der Freigabe setzen (CiA 402: 0x6060 wirkt
+        # in jedem Zustand, aber ein Wechsel unter Last ist unzulaessig).
+        state DRV_SET_MODE:
+            enter:
+                send sdo_req_q, SdoFrame(cs = SDO_DL_EXP_1, index = OD_MODES_OF_OP, sub = 0,
+                                         data = (op_mode as i8).wrap_u32())
+            when can_router.mode_display == op_mode: -> DRV_ENABLING
+            when sdo_client.sdo_failed: -> DRV_READY
+            after STATE_TIMEOUT:
+                log "mode {op_mode} not accepted (display = {can_router.mode_display})"
+                -> DRV_READY
+
+        # --- Anlauf entlang der genormten Kette:
+        #     SWITCH_ON_DISABLED -> READY -> SWITCHED_ON -> OPERATION_ENABLED
+        state DRV_ENABLING:
+            enter:
+                guard.reset()
+                stalled = false
+            loop:
+                cw = cw_toward_enabled(drive_state, 0)
+                stalled = guard.step(drive_state != decode_state(can_router.statusword)
+                                     or drive_state == OPERATION_ENABLED, tick)
+                check not stalled, "enable stalled in state {drive_state}"
+            when drive_state == OPERATION_ENABLED:
+                enabled = true
+                raise drive_enabled
+                -> DRV_OPERATIONAL
+            when is_faulted(drive_state): -> DRV_FAULT_RESET
+            after 2 s:
+                log "enable timeout in {drive_state}"
+                -> DRV_READY
+
+        # --- Betrieb: Controlword haelt OPERATION_ENABLED, die
+        #     Sollwerte kommen von motion_profile ueber RPDO2/RPDO3.
+        state DRV_OPERATIONAL:
+            loop:
+                cw = CW_ENABLE_OP_CMD | (CW_HALT if motion_profile.halt_req else 0)
+                check drive_state == OPERATION_ENABLED for 5 ms,
+                      "drive left OPERATION_ENABLED ({drive_state})"
+                check not (can_router.statusword & SW_FOLLOWING_ERROR) != 0,
+                      "following error"
+                alert (can_router.statusword & SW_INTERNAL_LIMIT) != 0, "internal limit active"
+                alert (can_router.statusword & SW_WARNING) != 0, "drive warning"
+
+            when quick_stop or cmd_in.or(CMD_NONE) == CMD_QUICKSTOP or can_router.di_stop:
+                -> DRV_QUICKSTOP
+            when disable_drive or cmd_in.or(CMD_NONE) == CMD_DISABLE:
+                -> DRV_STOPPING
+            when mode_host.valid and mode_host != op_mode:
+                # Betriebsartwechsel nur ueber einen definierten Halt
+                -> DRV_STOPPING
+
+        # --- Geordnetes Abschalten: erst Halt, dann Spannung weg ---------
+        state DRV_STOPPING:
+            enter:
+                cw = CW_ENABLE_OP_CMD | CW_HALT
+            loop:
+                check drive_state == OPERATION_ENABLED or drive_state == SWITCHED_ON
+                      or drive_state == SWITCH_ON_DISABLED,
+                      "unexpected state during stop: {drive_state}"
+            when abs(inc_s_to_rpm(can_router.vel_actual, ENC_INC_PER_REV)) < 5 rpm
+                 or (can_router.statusword & SW_TARGET_REACHED) != 0:
+                -> DRV_DISABLING
+            after 3 s:
+                log "stop timeout, forcing disable"
+                -> DRV_DISABLING
+
+        state DRV_DISABLING:
+            enter:
+                cw = CW_SHUTDOWN
+                enabled = false
+                raise drive_disabled
+            when drive_state == READY_TO_SWITCH_ON or drive_state == SWITCH_ON_DISABLED:
+                -> DRV_READY
+            after STATE_TIMEOUT:
+                cw = CW_DISABLE_VOLTAGE
+                -> DRV_READY
+
+        # --- Quick Stop: normgerecht ueber Bit 2 des Controlwords ---------
+        state DRV_QUICKSTOP:
+            enter:
+                # Bit 2 auf 0 = Quick Stop; alle uebrigen Bits wie im Betrieb
+                cw = CW_ENABLE_VOLTAGE | CW_ENABLE_OPERATION
+                enabled = false
+                log "quick stop requested"
+            loop:
+                check drive_state != FAULT, "fault during quick stop"
+            when drive_state == QUICK_STOP_ACTIVE
+                 and abs(inc_s_to_rpm(can_router.vel_actual, ENC_INC_PER_REV)) < 5 rpm:
+                -> DRV_QS_HOLD
+            when drive_state == SWITCH_ON_DISABLED: -> DRV_READY
+            after 5 s:
+                abort "quick stop did not complete"
+
+        state DRV_QS_HOLD:
+            enter:
+                cw = CW_DISABLE_VOLTAGE
+                raise drive_disabled
+            when drive_state == SWITCH_ON_DISABLED: -> DRV_READY
+            after STATE_TIMEOUT: -> DRV_READY
+
+        # --- Fehlerquittierung: begrenzt, sichtbar, mit Haltezeit --------
+        state DRV_FAULT_RESET:
+            enter:
+                enabled = false
+                cw = CW_DISABLE_VOLTAGE
+                log "drive fault, statusword {can_router.statusword:hex}, emcy {last_emcy:hex}"
+            when fault_resets >= MAX_FAULT_RESETS:
+                log "fault reset budget exhausted"
+                -> DRV_FAULT
+            when (fault_reset or cmd_in.or(CMD_NONE) == CMD_RESET) and drive_state == FAULT:
+                fault_resets += 1
+                -> DRV_FAULT_PULSE
+
+        state DRV_FAULT_PULSE:
+            sequence:
+                # CiA 402: Quittierung mit steigender Flanke an Bit 7
+                cw = CW_FAULT_RESET
+                wait FAULT_RESET_HOLD
+                cw = CW_DISABLE_VOLTAGE
+                until drive_state == SWITCH_ON_DISABLED timeout 1 s else:
+                    log "fault reset ineffective"
+                    -> DRV_FAULT_RESET
+                -> DRV_READY
+
+    # --- Fault-Ziel der Maschine: hart, sicher, ohne Rueckweg ohne Mensch
+    state DRV_FAULT:
+        enter:
+            cw = CW_DISABLE_VOLTAGE
+            enabled = false
+            stO_request = true
+            raise drive_disabled
+            log "DRIVE FAULT: {last_fault.message} @ tick {last_fault.tick}"
+        loop:
+            # Auch hier wird das Controlword gesendet, damit der Antrieb
+            # die Spannungsfreigabe wirklich sieht (der Bus kann ja leben).
+            cw = CW_DISABLE_VOLTAGE
+        when rearm and can_router.statusword != 0 and not is_faulted(drive_state):
+            fault_resets = 0
+            -> DRV_INIT
+
+
+# =====================================================================
+#  11. machine motion_profile — Sollwertaufbereitung
+#
+#  Trennt Bewegungslogik von Zustandslogik: hier stehen Rampen, Limits
+#  und die Umrechnung in Geberinkremente, dort die Statusmaschine.
+#  Diese Maschine schreibt keine Outputs, sondern veroeffentlicht die
+#  fertigen PDO-Nutzlasten.
+# =====================================================================
+
+machine motion_profile follows can_router, cia402_drive:
+    fault -> MP_SAFE
+
+    pub var target_vel_inc : i32[inc/s] = 0
+    pub var target_pos_inc : i32[inc] = 0
+    pub var target_trq     : i16[permille] = 0
+    pub var profile_vel    : u32[inc/s] = 0
+    pub var halt_req       : bool = false
+    pub var new_setpoint   : bool = false
+
+    var ramp = slew2[rpm](accel = MAX_ACCEL, decel = QS_DECEL)
+    var v_cmd : float[rpm] = 0 rpm
+    var v_lim : float[rpm] = 0 rpm
+
+    initial MP_IDLE
+
+    loop:
+        # Grenzwerte gelten unabhaengig vom Zustand — auch im Leerlauf,
+        # damit der erste freigegebene Tick bereits gueltige Sollwerte hat.
+        profile_vel = round(rpm_to_inc_s(MAX_SPEED, ENC_INC_PER_REV) / (1 inc/s)) as u32
+
+    state MP_IDLE:
+        enter:
+            v_cmd = 0 rpm
+            target_vel_inc = 0
+            target_trq = 0
+            halt_req = true
+        when cia402_drive.enabled: -> MP_RUN
+
+    state MP_RUN:
+        enter:
+            halt_req = false
+        loop:
+            # 1) Sollwert holen, mit definiertem Verhalten bei Sensorausfall
+            v_lim = clamp(target_vel_host.or(0 rpm), -MAX_SPEED, MAX_SPEED)
+
+            # 2) Endschalter: Fahrt in die verriegelte Richtung sperren
+            if can_router.di_limit_pos and v_lim > 0 rpm:
+                v_lim = 0 rpm
+            if can_router.di_limit_neg and v_lim < 0 rpm:
+                v_lim = 0 rpm
+
+            # 3) Software-Positionsgrenzen bei Geschwindigkeitsbetrieb
+            var p : float[inc] = can_router.pos_actual * (1 inc)
+            if p >= POS_LIMIT_HI and v_lim > 0 rpm:
+                v_lim = 0 rpm
+            if p <= POS_LIMIT_LO and v_lim < 0 rpm:
+                v_lim = 0 rpm
+
+            # 4) Rampe (Bremsen darf schneller als Beschleunigen)
+            v_cmd = ramp.step(v_lim, tick)
+
+            # 5) In Geberinkremente wandeln
+            target_vel_inc = round(rpm_to_inc_s(v_cmd, ENC_INC_PER_REV) / (1 inc/s)) as i32
+
+            # 6) Position (nur relevant in pp/csp)
+            target_pos_inc = round(clamp(target_pos_host.or(p), POS_LIMIT_LO, POS_LIMIT_HI)
+                                   / (1 inc)) as i32
+
+            # 7) Momentgrenze
+            target_trq = round(MAX_TORQUE / (1 permille)) as i16
+
+            alert abs(v_lim - v_cmd) > 100 rpm, "velocity ramp limiting ({v_cmd} of {v_lim})"
+
+        when not cia402_drive.enabled: -> MP_IDLE
+
+    state MP_SAFE:
+        enter:
+            target_vel_inc = 0
+            target_trq = 0
+            halt_req = true
+        when cia402_drive.enabled: -> MP_RUN
+
+
+# =====================================================================
+#  12. machine bus_tx — SYNC-Produzent und PDO-Sender
+#
+#  Einzige Maschine, die can_tx besitzt. Sie folgt allen Datenquellen,
+#  liest deren Groessen frisch im selben Tick und sendet in fester
+#  Reihenfolge: SYNC, RPDO1 (Controlword), RPDO2/3 (Sollwerte),
+#  danach die aufgestauten Einzelframes aus tx_q.
+#
+#  Damit ist die Sendeordnung auf dem Bus eine Programmeigenschaft,
+#  nicht ein Nebeneffekt der Maschinenreihenfolge.
+# =====================================================================
+
+machine bus_tx follows cia402_drive, motion_profile, sdo_client, nmt_master:
+    fault -> TX_SAFE
+
+    pub var sync_count : int in 0..1_000_000_000 = 0
+    pub var tx_bytes   : int in 0..1_000_000_000 = 0
+
+    var sync_due : Duration = 0 s
+
+    initial TX_RUN
+
+    state TX_RUN:
+        loop:
+            # --- SYNC im konfigurierten Raster ---------------------------
+            every SYNC_PERIOD:
+                send can_tx, sync_frame().encode()
+                sync_count += 1
+
+            # --- RPDO1: Controlword + Betriebsart, jeden Tick ------------
+            send can_tx, rpdo1_frame(cia402_drive.cw, cia402_drive.op_mode, NODE_ID).encode()
+
+            # --- RPDO2/3: Sollwerte nur bei aktiver Leistung -------------
+            if cia402_drive.enabled:
+                send can_tx, rpdo3_frame(motion_profile.target_vel_inc,
+                                         motion_profile.target_trq, NODE_ID).encode()
+                if cia402_drive.op_mode == PROFILE_POS or cia402_drive.op_mode == CYCLIC_POS:
+                    send can_tx, rpdo2_frame(motion_profile.target_pos_inc,
+                                             motion_profile.profile_vel, NODE_ID).encode()
+
+            # --- Diagnose-LEDs -------------------------------------------
+            ready_led = cia402_drive.enabled
+            fault_led = not nmt_master.net_ok or is_faulted(cia402_drive.drive_state)
+
+        # --- Einzelframes (SDO, NMT) haben Vorrang vor nichts, aber
+        #     sie duerfen den zyklischen Verkehr nicht verdraengen:
+        #     ein Frame pro Tick genuegt fuer jeden Handshake.
+        on tx_q as f:
+            send can_tx, f.encode()
+            tx_bytes += (f.dlc as int) + 5
+            break
+
+    state TX_SAFE:
+        enter:
+            ready_led = false
+            fault_led = true
+        loop:
+            # Auch im Fehlerfall wird das (sichere) Controlword gesendet,
+            # solange der Bus lebt: der Antrieb soll die Freigabe verlieren.
+            send can_tx, rpdo1_frame(CW_DISABLE_VOLTAGE, NO_MODE, NODE_ID).encode()
+
+
+# =====================================================================
+#  13. Eigenschaften (Monitor in der Simulation, Beweisziel fuer prove)
+# =====================================================================
+
+property no_enable_without_network:
+    always(cia402_drive.enabled implies nmt_master.net_ok)
+
+property no_setpoint_without_enable:
+    always(motion_profile.target_vel_inc != 0 implies cia402_drive.enabled)
+
+property estop_disables:
+    always(not estop_n implies eventually[3 ms](cia402_drive.cw == CW_DISABLE_VOLTAGE))
+
+property quickstop_terminates:
+    always(cia402_drive.state == DRV_QUICKSTOP
+           implies eventually[5 s](not cia402_drive.enabled))
+
+property fault_is_latched:
+    always(cia402_drive.state == DRV_FAULT implies stable[100 ms](not cia402_drive.enabled))
+
+property controlword_monotone_enable:
+    always(cia402_drive.drive_state == SWITCH_ON_DISABLED and cia402_drive.enabled
+           implies never(true))
+
+property sto_when_disabled:
+    always(not cia402_drive.enabled implies stO_request)
+
+property heartbeat_loss_stops:
+    always(not nmt_master.net_ok implies eventually[10 ms](not cia402_drive.enabled))
+
+
+# =====================================================================
+#  14. Plant-Modell (nur Sim-Build): CiA-402-Antrieb als Maschine
+# =====================================================================
+
+output can_rx_sim   : stream<CanFrame> @ sim("can0/rx")
+output can_state_sim : u8              @ sim("can0/state")
+output estop_sim    : bool             @ sim("gpio/estop_n")
+
+machine drive_model:
+    var sw       : u16 = SWP_SWITCH_ON_DISBL
+    var st       : DriveState = SWITCH_ON_DISABLED
+    var mode     : OpMode = NO_MODE
+    var v        : float[rpm] = 0 rpm
+    var v_set    : float[rpm] = 0 rpm
+    var pos      : float[inc] = 0 inc
+    var hb_tg    : bool = false
+    var operational : bool = false
+    var boot_sent : bool = false
+
+    initial MODEL_BOOT
+
+    state MODEL_BOOT:
+        enter:
+            can_state_sim = 0
+            estop_sim = true
+        after 50 ms:
+            send can_rx_sim, CanFrame(id = cob(FC_HEARTBEAT, NODE_ID), dlc = 1,
+                                      data = HeartbeatFrame(raw = 0x00).encode())
+            boot_sent = true
+            -> MODEL_RUN
+
+    state MODEL_RUN:
+        loop:
+            # --- Antriebsdynamik erster Ordnung --------------------------
+            if st == OPERATION_ENABLED:
+                var d : float[rpm] = MAX_ACCEL * (1 ms).as(s)
+                v = clamp(v_set, v - d, v + d)
+            elif st == QUICK_STOP_ACTIVE:
+                var dq : float[rpm] = QS_DECEL * (1 ms).as(s)
+                v = clamp(0 rpm, v - dq, v + dq)
+                if abs(v) < 1 rpm:
+                    st = SWITCH_ON_DISABLED
+                    sw = SWP_SWITCH_ON_DISBL | SW_VOLTAGE_ENABLED
+            else:
+                v = 0 rpm
+            pos = pos + (v.to(Hz) * ENC_INC_PER_REV) * (1 ms).as(s)
+
+            # --- Statusword veroeffentlichen ------------------------------
+            var tr : u16 = SW_TARGET_REACHED if abs(v - v_set) < 1 rpm else 0
+            send can_rx_sim, CanFrame(id = cob(FC_TPDO1, NODE_ID), dlc = 3,
+                                      data = Tpdo1(statusword = sw | SW_REMOTE | tr,
+                                                   mode_disp = mode).encode())
+            send can_rx_sim, CanFrame(id = cob(FC_TPDO2, NODE_ID), dlc = 8,
+                                      data = Tpdo2(position_actual = round(pos / (1 inc)) as i32,
+                                                   velocity_actual = round(rpm_to_inc_s(v, ENC_INC_PER_REV)
+                                                                           / (1 inc/s)) as i32).encode())
+            every HB_PERIOD:
+                hb_tg = not hb_tg
+                var s : u8 = 0x05 if operational else 0x7F
+                send can_rx_sim, CanFrame(id = cob(FC_HEARTBEAT, NODE_ID), dlc = 1,
+                                          data = HeartbeatFrame(raw = s | (0x80 if hb_tg else 0)).encode())
+
+        # --- Kommandos des Treibers auswerten -----------------------------
+        on can_rx_model as f:
+            pass
+
+    state MODEL_DEAD:
+        loop: pass
+
+
+# --- Szenarien -------------------------------------------------------
+
+scenario "cold start reaches operation enabled" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            until nmt_master.net_ok timeout 10 s
+            verify cia402_drive.drive_state == SWITCH_ON_DISABLED, "not in switch-on-disabled after boot"
+            until cia402_drive.enabled timeout 5 s
+            verify can_router.mode_display == PROFILE_VEL, "wrong mode of operation"
+            measure enable_time = now
+            verdict pass "enable sequence complete"
+
+scenario "quick stop brings velocity to zero" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            until cia402_drive.enabled timeout 10 s
+            wait 500 ms
+            expect abs(inc_s_to_rpm(can_router.vel_actual, ENC_INC_PER_REV)) > 50 rpm,
+                   "drive did not spin up"
+            until cia402_drive.state == DRV_QUICKSTOP timeout 5 s
+            until not cia402_drive.enabled timeout 5 s
+            verify abs(inc_s_to_rpm(can_router.vel_actual, ENC_INC_PER_REV)) < 5 rpm,
+                   "still moving after quick stop"
+            verdict pass "quick stop complete"
+
+scenario "heartbeat loss disables drive" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            until cia402_drive.enabled timeout 10 s
+            until drive_model.state == MODEL_DEAD timeout 5 s
+            until not cia402_drive.enabled timeout 1 s
+            verify cia402_drive.cw == CW_DISABLE_VOLTAGE, "voltage not disabled"
+            verdict pass "heartbeat supervision works"
+
+campaign servo_qualification:
+    program "cia402_servo.takt"
+    profile PRODUCTION
+    sweep MAX_SPEED = [300 rpm, 1500 rpm, 3000 rpm]
+    sweep SDO_TIMEOUT = 50 ms..400 ms step 50 ms
+    repeat 2
+    stop_on fail
