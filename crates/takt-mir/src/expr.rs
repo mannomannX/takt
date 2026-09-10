@@ -447,6 +447,124 @@ pub enum ExprKind {
         expr: Box<Expr>,
         kind: CheckedKind,
     },
+    /// `T` nach `T?` gehoben (3.8).
+    Lift(Box<Expr>),
+    /// `OK(v)` eines `T!E` (3.8).
+    Ok(Box<Expr>),
+    /// `ERR(e)` eines `T!E` (3.8).
+    Err(Box<Expr>),
+    /// Primitive mit eigener Fault-Semantik und Kostenklasse (4.1, 3.9, 3.10).
+    Intrinsic {
+        op: Intrinsic,
+        args: Vec<Expr>,
+    },
+}
+
+/// Eingebaute Primitive: total oder mit definiertem Fault (`Domain`, `RangeFault`,
+/// `NonFinite`); anders als Natives ohne Kostenvertrag, ihre Kosten zaehlt das
+/// Kostenmodell nach Klasse. Polymorph ueber Breiten und Einheiten
+/// (`sqrt`: `U^2 → U`; `min`, `max`, `abs`: Einheit bleibt).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum Intrinsic {
+    Abs,
+    Min,
+    Max,
+    Sqrt,
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Atan2,
+    Exp,
+    Log,
+    Pow,
+    /// Korrekt gerundetes `a * b + c` (4.2).
+    Fma,
+    /// `float → int` mit Range-Pruefung (4.1).
+    Round,
+    Floor,
+    Ceil,
+    Rotl,
+    Rotr,
+    WrappingAdd,
+    WrappingSub,
+    WrappingMul,
+    SaturatingAdd,
+    SaturatingSub,
+    /// Stueckweise lineare Interpolation in einer Tabelle (3.9).
+    Interp,
+}
+
+impl Intrinsic {
+    /// Name im Quelltext.
+    pub fn name(self) -> &'static str {
+        match self {
+            Intrinsic::Abs => "abs",
+            Intrinsic::Min => "min",
+            Intrinsic::Max => "max",
+            Intrinsic::Sqrt => "sqrt",
+            Intrinsic::Sin => "sin",
+            Intrinsic::Cos => "cos",
+            Intrinsic::Tan => "tan",
+            Intrinsic::Asin => "asin",
+            Intrinsic::Acos => "acos",
+            Intrinsic::Atan => "atan",
+            Intrinsic::Atan2 => "atan2",
+            Intrinsic::Exp => "exp",
+            Intrinsic::Log => "log",
+            Intrinsic::Pow => "pow",
+            Intrinsic::Fma => "fma",
+            Intrinsic::Round => "round",
+            Intrinsic::Floor => "floor",
+            Intrinsic::Ceil => "ceil",
+            Intrinsic::Rotl => "rotl",
+            Intrinsic::Rotr => "rotr",
+            Intrinsic::WrappingAdd => "wrapping_add",
+            Intrinsic::WrappingSub => "wrapping_sub",
+            Intrinsic::WrappingMul => "wrapping_mul",
+            Intrinsic::SaturatingAdd => "saturating_add",
+            Intrinsic::SaturatingSub => "saturating_sub",
+            Intrinsic::Interp => "interp",
+        }
+    }
+
+    /// Alle Primitive.
+    pub const ALL: [Intrinsic; 26] = [
+        Intrinsic::Abs,
+        Intrinsic::Min,
+        Intrinsic::Max,
+        Intrinsic::Sqrt,
+        Intrinsic::Sin,
+        Intrinsic::Cos,
+        Intrinsic::Tan,
+        Intrinsic::Asin,
+        Intrinsic::Acos,
+        Intrinsic::Atan,
+        Intrinsic::Atan2,
+        Intrinsic::Exp,
+        Intrinsic::Log,
+        Intrinsic::Pow,
+        Intrinsic::Fma,
+        Intrinsic::Round,
+        Intrinsic::Floor,
+        Intrinsic::Ceil,
+        Intrinsic::Rotl,
+        Intrinsic::Rotr,
+        Intrinsic::WrappingAdd,
+        Intrinsic::WrappingSub,
+        Intrinsic::WrappingMul,
+        Intrinsic::SaturatingAdd,
+        Intrinsic::SaturatingSub,
+        Intrinsic::Interp,
+    ];
+
+    /// Primitive zu einem Namen.
+    pub fn from_name(name: &str) -> Option<Intrinsic> {
+        Intrinsic::ALL.into_iter().find(|i| i.name() == name)
+    }
 }
 
 /// Temporaloperator einer Eigenschaft (13.3).

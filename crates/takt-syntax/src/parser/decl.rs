@@ -375,7 +375,7 @@ impl<'t, 's> Parser<'t, 's> {
     fn parse_unit_decl(&mut self) -> PResult<UnitDecl> {
         let start = self.pos;
         self.expect_kw("unit")?;
-        let name = self.ident()?;
+        let name = self.parse_unit_name()?;
         self.expect_op("=")?;
         if self.eat_word("affine") {
             self.expect_op("(")?;

@@ -19,12 +19,12 @@ SEM-3.4,Knoten,Range,Herkunft Declared/Proven; implizite Prüfungen als ExprKind
 SEM-3.5,Knoten,CheckedKind::Valid,Dominanz als Input.dominated
 SEM-3.6,Frontend,takt-sema,Typinferenz füllt Expr::ty
 SEM-3.7,Knoten,RecordDef,"EnumDef, WireLayout, ExprKind::Decode, Accessor::Encode"
-SEM-3.8,Knoten,Type::Optional,"Type::Result, CheckedKind::Missing"
+SEM-3.8,Knoten,Type::Optional,"Type::Result, CheckedKind::Missing, ExprKind::Lift/Ok/Err"
 SEM-3.9,Knoten,Type::Bytes,"Vec, Map, Str, Line, Table; Methoden als StmtKind::MethodCall"
-SEM-3.10,Knoten,BinaryOp::Shl,Bit-Operatoren; Accessor::Bit/Bits/WithBit/Wrap; ExprKind::Cast
+SEM-3.10,Knoten,BinaryOp::Shl,Bit-Operatoren; Accessor::Bit/Bits/WithBit/Wrap; ExprKind::Cast; Intrinsic::Rotl/Rotr/WrappingAdd
 SEM-3.11,Knoten,Type::Mat,"MatOp, ExprKind::Index2"
 SEM-3.12,Knoten,GenericOrigin,monomorphisierte Fn/BlockDef/Native mit GenericArgVal
-SEM-4.1,Knoten,CheckedKind,jede Fault-Quelle ein Knoten
+SEM-4.1,Knoten,CheckedKind,jede Fault-Quelle ein Knoten; Primitive als ExprKind::Intrinsic
 SEM-4.2,Knoten,Config,float_width im Logik-Hash; libtaktm in der Runtime
 SEM-4.3,Knoten,ExprKind::Cond,and/or als BinaryOp
 SEM-4.4,Knoten,StmtKind::MethodCall,Seiteneffekte nur in Anweisungen; Ausdrücke rein
@@ -115,6 +115,7 @@ G-record_field,Knoten,FieldDef,
 G-field,Knoten,FieldDef,
 G-bitfield,Knoten,BitfieldDef,
 G-unit_decl,Knoten,UnitDef,
+G-unit_name,Knoten,UnitDef,Einheitenname jeder Form (3.2)
 G-const_decl,Lowering,Expr,Konstanten werden gefaltet (11.3)
 G-param_decl,Knoten,Param,
 G-profile_decl,Knoten,Profile,
@@ -328,13 +329,13 @@ PAR-3.5-Rand_Durchsetzung,Runtime,takt-hal,
 PAR-3.5-Entprellte_Qualität,Knoten,ChannelAttrs,debounce
 PAR-3.7-Drahtformat_Details,Knoten,WireLayout,
 PAR-3.7-default,Knoten,ExprKind::Default,
-PAR-3.8-Ergebnis_mit_Fehlercode_T_E,Knoten,Type::Result,
+PAR-3.8-Ergebnis_mit_Fehlercode_T_E,Knoten,Type::Result,ExprKind::Ok/Err als Konstruktoren
 PAR-3.9-inout_Parameter,Knoten,FnParam,inout
 PAR-3.11-Uniforme_Form_v1,Knoten,MatUnits::Uniform,
 PAR-3.11-Dimensionierte_Form_v1.1,Knoten,MatUnits::Dimensioned,
 PAR-4.2-Breite_von_float,Knoten,Config,float_width
 PAR-4.2-FPU_im_IEEE_Modus,Runtime,takt-rt-core,
-PAR-4.2-fma,Knoten,ExprKind::Call,Primitive aus libtaktm
+PAR-4.2-fma,Knoten,ExprKind::Intrinsic,"Intrinsic::Fma, korrekt gerundet über libtaktm"
 PAR-4.2-Reduktionen,Runtime,libtaktm,
 PAR-4.2-Subnormale_in_Zuständen,Runtime,takt-stdlib,
 PAR-4.5-Chunk_Natives,Knoten,Native,

@@ -20,7 +20,7 @@ use crate::program::Program;
 pub const MAGIC: &[u8; 8] = b"TAKT-MIR";
 
 /// Formatversion dieses Schreibers; Leser akzeptieren alle Versionen bis hier.
-pub const FORMAT_VERSION: u16 = 1;
+pub const FORMAT_VERSION: u16 = 2;
 
 /// Kopf einer Datei.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -29,36 +29,36 @@ SEM-2.2,Semantik/Abschnitt,2.2,Schlüsselwörter,,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.3,Semantik/Abschnitt,2.3,Grammatik (EBNF),,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.4,Semantik/Abschnitt,2.4,Bedeutung der Kernkonstrukte (informell),,M0 (Parser/MIR-Entwurf),offen
 SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit",,M0 (Parser/MIR-Entwurf),offen
-SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),offen
-SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),offen
-SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),offen
+SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),teilweise
+SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),teilweise
+SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),teilweise
 SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M1 (Kernsemantik),offen
 SEM-3.5,Semantik/Abschnitt,3.5,Qualität von Input-Channels,,M1 (Kernsemantik),offen
-SEM-3.6,Semantik/Abschnitt,3.6,Typinferenz,,M1 (Kernsemantik),offen
-SEM-3.7,Semantik/Abschnitt,3.7,Records und Summentypen,,M1 (Kernsemantik),offen
-SEM-3.8,Semantik/Abschnitt,3.8,Optionaltyp `T?`,,M1 (Kernsemantik),offen
+SEM-3.6,Semantik/Abschnitt,3.6,Typinferenz,,M1 (Kernsemantik),teilweise
+SEM-3.7,Semantik/Abschnitt,3.7,Records und Summentypen,,M1 (Kernsemantik),teilweise
+SEM-3.8,Semantik/Abschnitt,3.8,Optionaltyp `T?`,,M1 (Kernsemantik),teilweise
 SEM-3.9,Semantik/Abschnitt,3.9,"Bytes, Vektoren, Strings, Tabellen",,M1 (Kernsemantik),offen
 SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernsemantik),offen
 SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M1 (Kernsemantik),offen
-SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),offen
-SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),offen
-SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M1 (Kernsemantik),offen
-SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),offen
-SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),offen
+SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),teilweise
+SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),teilweise
+SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M1 (Kernsemantik),teilweise
+SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),teilweise
+SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),teilweise
 SEM-4.5,Semantik/Abschnitt,4.5,Native Funktionen mit Kostenvertrag,,M1 (Kernsemantik),offen
-SEM-5.1,Semantik/Abschnitt,5.1,Struktur,,M1 (Kernsemantik),offen
+SEM-5.1,Semantik/Abschnitt,5.1,Struktur,,M1 (Kernsemantik),teilweise
 SEM-5.2,Semantik/Abschnitt,5.2,"Ausführung eines Ticks (informell, exakt in 9.3)",,M1 (Kernsemantik),offen
-SEM-5.3,Semantik/Abschnitt,5.3,Fault-Wald,,M1 (Kernsemantik),offen
+SEM-5.3,Semantik/Abschnitt,5.3,Fault-Wald,,M1 (Kernsemantik),teilweise
 SEM-5.4,Semantik/Abschnitt,5.4,`abort`,,M1 (Kernsemantik),offen
-SEM-5.5,Semantik/Abschnitt,5.5,Eingeschränkte Aktionsblöcke,,M1 (Kernsemantik),offen
-SEM-5.6,Semantik/Abschnitt,5.6,"Interlocks, Permissives, Alerts",,M1 (Kernsemantik),offen
-SEM-5.7,Semantik/Abschnitt,5.7,Blöcke innerhalb von Maschinen,,M1 (Kernsemantik),offen
-SEM-5.8,Semantik/Abschnitt,5.8,Ergonomie in Maschinen,,M1 (Kernsemantik),offen
+SEM-5.5,Semantik/Abschnitt,5.5,Eingeschränkte Aktionsblöcke,,M1 (Kernsemantik),teilweise
+SEM-5.6,Semantik/Abschnitt,5.6,"Interlocks, Permissives, Alerts",,M1 (Kernsemantik),teilweise
+SEM-5.7,Semantik/Abschnitt,5.7,Blöcke innerhalb von Maschinen,,M1 (Kernsemantik),teilweise
+SEM-5.8,Semantik/Abschnitt,5.8,Ergonomie in Maschinen,,M1 (Kernsemantik),teilweise
 SEM-5.9,Semantik/Abschnitt,5.9,Persistente Variablen (v1.1),v1.1,M6,offen
 SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M6,offen
 SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,offen
 SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,offen
-SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),offen
+SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),teilweise
 SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),teilweise
 SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),teilweise
 SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),offen
@@ -77,9 +77,9 @@ SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),offen
 SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),offen
 SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M6,offen
 SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M2 (Ströme),offen
-SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),offen
+SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),teilweise
 SEM-9.1,Semantik/Abschnitt,9.1,Objekte,,M1/M2 (Interpreter),offen
-SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),offen
+SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),teilweise
 SEM-9.3,Semantik/Abschnitt,9.3,Schritt einer Maschine,,M1/M2 (Interpreter),offen
 SEM-9.4,Semantik/Abschnitt,9.4,System-Tick und Sätze,,M1/M2 (Interpreter),offen
 SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M1/M2 (Interpreter),offen
@@ -132,6 +132,7 @@ G-record_field,Grammatik,2.3,record_field,,M0 (Parser/MIR-Entwurf),fertig
 G-field,Grammatik,2.3,field,,M0 (Parser/MIR-Entwurf),fertig
 G-bitfield,Grammatik,2.3,bitfield,,M0 (Parser/MIR-Entwurf),fertig
 G-unit_decl,Grammatik,2.3,unit_decl,,M0 (Parser/MIR-Entwurf),fertig
+G-unit_name,Grammatik,2.3,unit_name,,M0 (Parser/MIR-Entwurf),offen
 G-const_decl,Grammatik,2.3,const_decl,,M0 (Parser/MIR-Entwurf),fertig
 G-param_decl,Grammatik,2.3,param_decl,v1.1,M0 (Parser) / M6,fertig
 G-profile_decl,Grammatik,2.3,profile_decl,,M0 (Parser/MIR-Entwurf),fertig
@@ -531,32 +532,32 @@ MEM-remaining,Reservierter Membername,2.5,remaining,,M0 (Parser/MIR-Entwurf),tei
 MEM-truncated,Reservierter Membername,2.5,truncated,,M0 (Parser/MIR-Entwurf),teilweise
 MEM-reset,Reservierter Membername,2.5,reset,,M0 (Parser/MIR-Entwurf),teilweise
 SC-1,Statische Prüfung,10,"Tokenizer/Parser (Einrückung, Grammatik)",F,M3 (Gate),offen
-SC-2,Statische Prüfung,10,"Namensauflösung, Modul-Linking, Namenskonventionen",F / W,M3 (Gate),offen
-SC-3,Statische Prüfung,10,"Typ- und Einheiteninferenz, affine Regeln, Duration-Regeln",F,M3 (Gate),offen
+SC-2,Statische Prüfung,10,"Namensauflösung, Modul-Linking, Namenskonventionen",F / W,M3 (Gate),teilweise
+SC-3,Statische Prüfung,10,"Typ- und Einheiteninferenz, affine Regeln, Duration-Regeln",F,M3 (Gate),teilweise
 SC-4,Statische Prüfung,10,"Intervallanalyse: Ranges, Division, Overflow, Index; implizite Prüfungen",W bei jeder eingefügten Laufzeitprüfung (außer i64-Overflow),M3 (Gate),offen
-SC-5,Statische Prüfung,10,Validitäts-Dominanz für Channel-Lesen,— (impliziter Check ist Default),M3 (Gate),offen
-SC-6,Statische Prüfung,10,Definite Assignment,F,M3 (Gate),offen
-SC-7,Statische Prüfung,10,Single-Writer für Outputs und `pub var`; Channel-Richtung; jede `hw`-Adresse höchstens einmal gebunden,F,M3 (Gate),offen
-SC-8,Statische Prüfung,10,"Maschinen: eindeutige Zustandsnamen, `initial` vorhanden, Ziele existieren, Transitionsblöcke enden mit `->`, Aktionsblock-Einschränkungen (5.5)",F,M3 (Gate),offen
-SC-9,Statische Prüfung,10,Fault-Wald azyklisch; `FAULTED` erreichbar; Guards der Transitionen aus `FAULTED` ohne implizite Prüfungen,F,M3 (Gate),offen
-SC-10,Statische Prüfung,10,Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige,W,M3 (Gate),offen
-SC-11,Statische Prüfung,10,Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick,F,M3 (Gate),offen
+SC-5,Statische Prüfung,10,Validitäts-Dominanz für Channel-Lesen,— (impliziter Check ist Default),M3 (Gate),teilweise
+SC-6,Statische Prüfung,10,Definite Assignment,F,M3 (Gate),teilweise
+SC-7,Statische Prüfung,10,Single-Writer für Outputs und `pub var`; Channel-Richtung; jede `hw`-Adresse höchstens einmal gebunden,F,M3 (Gate),teilweise
+SC-8,Statische Prüfung,10,"Maschinen: eindeutige Zustandsnamen, `initial` vorhanden, Ziele existieren, Transitionsblöcke enden mit `->`, Aktionsblock-Einschränkungen (5.5)",F,M3 (Gate),teilweise
+SC-9,Statische Prüfung,10,Fault-Wald azyklisch; `FAULTED` erreichbar; Guards der Transitionen aus `FAULTED` ohne implizite Prüfungen,F,M3 (Gate),teilweise
+SC-10,Statische Prüfung,10,Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige,W,M3 (Gate),teilweise
+SC-11,Statische Prüfung,10,Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick,F,M3 (Gate),teilweise
 SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M3 (Gate),offen
-SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle,F,M3 (Gate),offen
-SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),offen
-SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden",W,M3 (Gate),offen
-SC-16,Statische Prüfung,10,"Format-Strings: Platzhalter existieren, Typen formatierbar, Puffergröße",F,M3 (Gate),offen
+SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle,F,M3 (Gate),teilweise
+SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),teilweise
+SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden",W,M3 (Gate),teilweise
+SC-16,Statische Prüfung,10,"Format-Strings: Platzhalter existieren, Typen formatierbar, Puffergröße",F,M3 (Gate),teilweise
 SC-17,Statische Prüfung,10,Streams: `MAXPT * n_m <= CAP` je Konsument; Konsumentenmenge statisch; Elementtyp zulässig; `wake`-Attribute,F,M3 (Gate),offen
 SC-18,Statische Prüfung,10,"Muster: Wohlgeformtheit, Mehrdeutigkeitsregel (8.7), Capture-Typen; Record-Muster nur mit konstanten Feldwerten",F,M3 (Gate),offen
-SC-19,Statische Prüfung,10,`match` erschöpfend; Variantenfelder vollständig gebunden,F,M3 (Gate),offen
+SC-19,Statische Prüfung,10,`match` erschöpfend; Variantenfelder vollständig gebunden,F,M3 (Gate),teilweise
 SC-20,Statische Prüfung,10,`send`: statische Summe der Höchstlängen je Aktivierung ≤ `capacity`,F,M3 (Gate),offen
 SC-21,Statische Prüfung,10,`at`/`pulse`: Block enthält nur Zuweisungen an skalare Outputs; `T` vom Typ Duration; K_o,F,M3 (Gate),offen
 SC-22,Statische Prüfung,10,"`idle`: keine `loop:`/Handler in Zustand und Vorfahren; Guards nur über Wake-Quellen, Konstanten, Params, Maschinenvariablen",F,M3 (Gate),offen
 SC-23,Statische Prüfung,10,"`persist`: POD-Typ, Maschinenebene, nicht in Szenarien; Typ-Hash stabil",F,M3 (Gate),offen
 SC-24,Statische Prüfung,10,"Shift-Beträge, `as`-Konversionen, `vec`-Indizes, Slices: Range beweisbar oder impliziter Check",W,M3 (Gate),offen
-SC-25,Statische Prüfung,10,"Zustandslokale und gehobene Variablen (Sequenz-`var`, Captures): Definite Assignment je Eintritt",F,M3 (Gate),offen
+SC-25,Statische Prüfung,10,"Zustandslokale und gehobene Variablen (Sequenz-`var`, Captures): Definite Assignment je Eintritt",F,M3 (Gate),teilweise
 SC-26,Statische Prüfung,10,Szenarien schreiben nur `sim`-Outputs; Single-Writer gegenüber Modellmaschinen,F,M3 (Gate),offen
-SC-27,Statische Prüfung,10,`every d:` nur in `loop:`; `on`-Handler nur auf deklarierten Streams,F,M3 (Gate),offen
+SC-27,Statische Prüfung,10,`every d:` nur in `loop:`; `on`-Handler nur auf deklarierten Streams,F,M3 (Gate),teilweise
 SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0` („tick-granular"", 7.5); deklarierte `jitter`-Anforderung größer als gemessener Wert erfüllt, sonst Fehler (8.1)",W / F,M3 (Gate),offen
 SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M3 (Gate),offen
 SC-30,Statische Prüfung,10,"`mat`: Formprüfung bei `+ - *`, `inv`/`solve` nur quadratisch, R, C ≤ 16, Indizes in Range (3.11)",F,M3 (Gate),offen
@@ -565,7 +566,7 @@ SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c
 SC-33,Statische Prüfung,10,`follows`: Kanten azyklisch; Follower liest nur gefolgte Maschinen frisch; keine frischen Lesevorgänge in Aktionsblöcken der Abort-Phase (7.2),F,M3 (Gate),offen
 SC-34,Statische Prüfung,10,"Dimensionierte Matrizen: Einheitentupel passen (Produkt, Addition, Inverse), Literale bilden ein äußeres Produkt, variable Indizes nur bei gleichen Einheiten (3.11)",F,M3 (Gate),offen
 SC-35,Statische Prüfung,10,"`tunable param` nicht in Compile-Zeit-Konstanten (Array-Größen, Kapazitäten, `repeat`) (8.4)",F,M3 (Gate),offen
-SC-36,Statische Prüfung,10,`check … for d` / `alert … for d`: `d >= P_m`; Rundung auf Perioden mit effektivem Wert (5.6),W,M3 (Gate),offen
+SC-36,Statische Prüfung,10,`check … for d` / `alert … for d`: `d >= P_m`; Rundung auf Perioden mit effektivem Wert (5.6),W,M3 (Gate),teilweise
 SC-37,Statische Prüfung,10,`len_field`: verweist auf ein vorangehendes Integer-Feld; statische Obergrenze des Feldes (3.7),F,M3 (Gate),offen
 SC-38,Statische Prüfung,10,"Einheiten auf Integern: `.to()` nur bei ganzzahligem Faktor, sonst `.to_float()` (3.2)",F,M3 (Gate),offen
 SC-39,Statische Prüfung,10,"Speicherbudget aller `baremetal`- und `rtos`-Profile: `takt size` (11.5) ≤ `ram`/`flash`/`iram` der Hardware-Konfiguration, aufgeschlüsselt; auf Targets mit XIP-Flash zusätzlich RAM-Residenz von Code und tick-gelesenen Konstanten (12.3); `debounce`-Haltedauer im Report",F,M3 (Gate),offen
@@ -580,7 +581,7 @@ SC-47,Statische Prüfung,10,"`inout`: kein Aliasing (ein Argument höchstens ein
 SC-48,Statische Prüfung,10,`irreversible`-Outputs: Zuweisung nur in Sequenzen unmittelbar nach `expect`; Szenario-Abdeckung Pflicht (12.7),F,M3 (Gate),offen
 SC-49,Statische Prüfung,10,Edition fehlt (2.5),W (Zertifizierungsmodus: F),M3 (Gate),fertig
 SC-50,Statische Prüfung,10,Reservierte Wörter als Bezeichner; reservierte Membernamen als Feld- oder Variantennamen (2.5),F,M3 (Gate),fertig
-SC-51,Statische Prüfung,10,`match` über offene Enums ohne `case _` (2.5),F,M3 (Gate),teilweise
+SC-51,Statische Prüfung,10,`match` über offene Enums ohne `case _` (2.5),F,M3 (Gate),fertig
 SC-52,Statische Prüfung,10,Generics: genau eine Fähigkeit je Typvariable; Instanziierungsgraph azyklisch; `const`-Variablen nur in Typen und `range` (3.12),F,M3 (Gate),offen
 SC-53,Statische Prüfung,10,Gescopte Instanzen: Single-Writer global; keine Instanzen in `idle`-Zuständen; kein (mittelbares) Selbst-Scoping (5.11),F,M3 (Gate),offen
 SC-54,Statische Prüfung,10,`resume` nur an Zuständen mit Kindern; Fault-Ziele werden über `initial` betreten (5.12),F,M3 (Gate),offen
@@ -619,24 +620,24 @@ PAR-2.5-Edition,Absatz/Regel,2.5,Edition,,M0 (Parser/MIR-Entwurf),teilweise
 PAR-2.5-Reservierte_Wörter,Absatz/Regel,2.5,Reservierte Wörter,,M0 (Parser/MIR-Entwurf),fertig
 PAR-2.5-Reservierte_Membernamen,Absatz/Regel,2.5,Reservierte Membernamen,,M0 (Parser/MIR-Entwurf),teilweise
 PAR-2.5-Offene_Enums,Absatz/Regel,2.5,Offene Enums,,M0 (Parser/MIR-Entwurf),teilweise
-PAR-2.5-Verdeckung_und_Additivität,Absatz/Regel,2.5,Verdeckung und Additivität,,M0 (Parser/MIR-Entwurf),offen
+PAR-2.5-Verdeckung_und_Additivität,Absatz/Regel,2.5,Verdeckung und Additivität,,M0 (Parser/MIR-Entwurf),teilweise
 PAR-2.5-Operator_Metadaten_v1.1,Absatz/Regel,2.5,Operator-Metadaten (v1.1),v1.1,M6,offen
-PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M1 (Kernsemantik),offen
-PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M1 (Kernsemantik),offen
-PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M1 (Kernsemantik),offen
+PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M1 (Kernsemantik),teilweise
+PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M1 (Kernsemantik),teilweise
+PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M1 (Kernsemantik),teilweise
 PAR-3.2-Einheiten_auf_Integern_v1.1,Absatz/Regel,3.2,Einheiten auf Integern (v1.1),v1.1,M6,offen
-PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymorphie in Funktionen und Blöcken,,M1 (Kernsemantik),offen
-PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M1 (Kernsemantik),offen
+PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymorphie in Funktionen und Blöcken,,M1 (Kernsemantik),teilweise
+PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M1 (Kernsemantik),teilweise
 PAR-3.3-Lexikalische_Regel,Absatz/Regel,3.3,Lexikalische Regel,,M1 (Kernsemantik),fertig
 PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M1 (Kernsemantik),offen
 PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M1 (Kernsemantik),offen
 PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M6,offen
 PAR-3.4-Darstellungsverengung,Absatz/Regel,3.4,Darstellungsverengung,,M1 (Kernsemantik),offen
-PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Absatz/Regel,3.5,Implizite Validitätsprüfung (Entscheidung),,M1 (Kernsemantik),offen
+PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Absatz/Regel,3.5,Implizite Validitätsprüfung (Entscheidung),,M1 (Kernsemantik),teilweise
 PAR-3.5-Rand_Durchsetzung,Absatz/Regel,3.5,Rand-Durchsetzung,,M1 (Kernsemantik),offen
 PAR-3.5-Entprellte_Qualität,Absatz/Regel,3.5,Entprellte Qualität,,M1 (Kernsemantik),offen
 PAR-3.7-Drahtformat_Details,Absatz/Regel,3.7,Drahtformat-Details,,M1 (Kernsemantik),offen
-PAR-3.7-default,Absatz/Regel,3.7,`default`,,M1 (Kernsemantik),offen
+PAR-3.7-default,Absatz/Regel,3.7,`default`,,M1 (Kernsemantik),teilweise
 PAR-3.8-Ergebnis_mit_Fehlercode_T_E,Absatz/Regel,3.8,Ergebnis mit Fehlercode `T!E`,,M1 (Kernsemantik),offen
 PAR-3.9-inout_Parameter,Absatz/Regel,3.9,`inout`-Parameter,,M1 (Kernsemantik),offen
 PAR-3.11-Uniforme_Form_v1,Absatz/Regel,3.11,Uniforme Form (v1),,M1 (Kernsemantik),offen
@@ -761,7 +762,7 @@ DESUGAR-repeat_n,Desugaring-Regel,6.2,`repeat n:`,,M1 (Kernsemantik),fertig
 DESUGAR-step_name,Desugaring-Regel,6.2,"`step ""name"":`",,M1 (Kernsemantik),fertig
 DESUGAR-Statement_mit_auch_in_if_elif_else,Desugaring-Regel,6.2,Statement mit `->` (auch in `if`/`elif`/`else`),,M1 (Kernsemantik),fertig
 DESUGAR-Ende_ohne,Desugaring-Regel,6.2,Ende ohne `->`,,M1 (Kernsemantik),fertig
-DESUGAR-var_x_e_in_der_Sequenz,Desugaring-Regel,6.2,`var x = e` in der Sequenz,,M1 (Kernsemantik),teilweise
+DESUGAR-var_x_e_in_der_Sequenz,Desugaring-Regel,6.2,`var x = e` in der Sequenz,,M1 (Kernsemantik),fertig
 DESUGAR-until_g_as_m,Desugaring-Regel,6.2,`until g as m`,,M1 (Kernsemantik),teilweise
 DESUGAR-until_c_timeout_d_X,Desugaring-Regel,6.2,`until c timeout d -> X`,,M1 (Kernsemantik),fertig
 DESUGAR-until_c_timeout_d_else,Desugaring-Regel,6.2,`until c timeout d else:`,,M1 (Kernsemantik),fertig

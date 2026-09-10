@@ -133,6 +133,15 @@ codec_enum!(ExprKind {
     34 MatOp { 1 one op, 2 rep args },
     35 Decode { 1 one record, 2 one bytes },
     36 Checked { 1 one expr, 2 one kind },
+    37 Lift(1 one e),
+    38 Ok(1 one e),
+    39 Err(1 one e),
+    40 Intrinsic { 1 one op, 2 rep args },
+});
+codec_unit_enum!(Intrinsic {
+    0 Abs, 1 Min, 2 Max, 3 Sqrt, 4 Sin, 5 Cos, 6 Tan, 7 Asin, 8 Acos, 9 Atan, 10 Atan2, 11 Exp, 12 Log, 13 Pow,
+    14 Fma, 15 Round, 16 Floor, 17 Ceil, 18 Rotl, 19 Rotr, 20 WrappingAdd, 21 WrappingSub, 22 WrappingMul,
+    23 SaturatingAdd, 24 SaturatingSub, 25 Interp,
 });
 codec_unit_enum!(TemporalOp { 0 Always, 1 Never, 2 Eventually, 3 Stable, 4 Once });
 codec_enum!(TProp {

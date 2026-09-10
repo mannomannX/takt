@@ -1053,6 +1053,29 @@ pub fn full_program() -> Program {
         span: sp(58),
     });
     let wide = vec![
+        e(ExprKind::Lift(bx(input_p())), t_opt),
+        e(ExprKind::Ok(bx(e(ExprKind::Var(v_frame), t_frame))), t_res),
+        e(ExprKind::Err(bx(e(ExprKind::Variant { enum_id: e_err, variant: 0, fields: vec![] }, t_res))), t_res),
+        e(ExprKind::Intrinsic { op: Intrinsic::Sqrt, args: vec![e(ExprKind::Float(4.0), t_float)] }, t_float),
+        e(ExprKind::Intrinsic { op: Intrinsic::Round, args: vec![e(ExprKind::Var(v_x), t_float)] }, t_int),
+        e(
+            ExprKind::Intrinsic {
+                op: Intrinsic::Fma,
+                args: vec![
+                    e(ExprKind::Float(1.0), t_float),
+                    e(ExprKind::Float(2.0), t_float),
+                    e(ExprKind::Float(3.0), t_float),
+                ],
+            },
+            t_float,
+        ),
+        e(
+            ExprKind::Intrinsic {
+                op: Intrinsic::WrappingAdd,
+                args: vec![e(ExprKind::Var(v_i), t_int), e(ExprKind::Int(1), t_int)],
+            },
+            t_int,
+        ),
         e(
             ExprKind::Accessor {
                 base: bx(e(ExprKind::Var(v_frame), t_frame)),

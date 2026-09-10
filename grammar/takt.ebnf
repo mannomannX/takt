@@ -77,8 +77,9 @@ record_field   := field NEWLINE
                 | IDENT ":" int_type "with" "bits" ":" NEWLINE INDENT { bitfield NEWLINE } DEDENT   (* endet mit DEDENT, daher kein NEWLINE *)
 field          := ( IDENT | "_" ) ":" type [ "=" const_expr ] [ "offset" "=" int_lit ] [ "with" "len" "=" IDENT ]   (* "_": Padding; Konstantenfeld, Offset, len_field: 3.7 *)   (* @check 37, 50 *)
 bitfield       := IDENT ":" ( "bool" | int_type ) "at" int_lit [ ".." int_lit ]   (* @check 46 *)
-unit_decl      := "unit" IDENT "=" number [ unit_lit ] NEWLINE                              (* ohne unit_expr: dimensionslos wie pct, 3.2 *)
-                | "unit" IDENT "=" "affine" "(" unit_expr "," number ")" NEWLINE
+unit_decl      := "unit" unit_name "=" number [ unit_lit ] NEWLINE                          (* ohne unit_expr: dimensionslos wie pct, 3.2 *)
+                | "unit" unit_name "=" "affine" "(" unit_expr "," number ")" NEWLINE
+unit_name      := IDENT | UPPER_IDENT | TYPE_IDENT   (* wie unit_term: bar, mV, V, Hz, KiB (3.2) *)
 
 (* ---------------------------------------------------------------- Konstanten, Parameter, Channels *)
 

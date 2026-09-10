@@ -36,6 +36,24 @@ pub fn parse_snippet(toks: &Tokens<'_>) -> (Vec<SnippetItem>, Vec<Diagnostic>) {
     with_deep_stack(|| parse_snippet_here(toks))
 }
 
+/// Parst genau einen Ausdruck, etwa den Platzhalter eines Formatstrings (3.9);
+/// nach dem Ausdruck darf nur noch Zeilenende folgen.
+pub fn parse_expr(toks: &Tokens<'_>) -> Result<Expr, Diagnostic> {
+    with_deep_stack(|| {
+        let mut p = Parser::new(toks);
+        let expr = p.parse_expr()?;
+        // `is_layout` schliesst `Eof` ein, und `bump` bleibt dort stehen:
+        // deshalb nur Zeilenenden ueberspringen.
+        while matches!(p.kind(), TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent) {
+            p.bump();
+        }
+        if !p.at(TokenKind::Eof) {
+            return Err(p.error_here("Ende des Ausdrucks"));
+        }
+        Ok(expr)
+    })
+}
+
 /// `parse_file` auf dem aktuellen Thread (fuer Aufrufer, die schon unter
 /// `with_deep_stack` laufen).
 pub(crate) fn parse_file_here(toks: &Tokens<'_>) -> (File, Vec<Diagnostic>) {
@@ -756,6 +774,15 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `unit_term := ( IDENT | UPPER_IDENT | TYPE_IDENT ) [ "^" INT ]`; in einem
     /// `unit_lit` gehoert der Exponent nur anliegend dazu.
+    /// `unit_name`: Einheitennamen tragen jede Namensform (3.2).
+    pub(super) fn parse_unit_name(&mut self) -> PResult<Ident> {
+        if matches!(self.kind(), TokenKind::Ident | TokenKind::UpperIdent | TokenKind::TypeIdent) {
+            let t = self.bump();
+            return Ok(self.ident_of(t));
+        }
+        Err(self.error_here("einen Einheitennamen wie `psi`, `V` oder `KiB`"))
+    }
+
     fn parse_unit_term(&mut self, compact: bool) -> PResult<UnitTerm> {
         let start = self.pos;
         let name = if matches!(self.kind(), TokenKind::Ident | TokenKind::UpperIdent | TokenKind::TypeIdent) {

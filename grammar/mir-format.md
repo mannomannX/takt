@@ -102,14 +102,16 @@ einem Versionssprung eingetragen.
 
 ```
 magic             8 Bytes  "TAKT-MIR"
-format_version    u16 LE   (1)
+format_version    u16 LE   (2)
 edition           u32 LE   (2.5; auch in Config.edition)
 compiler_version  Varint-Länge + UTF-8
 strings           Varint-Anzahl, je String Varint-Länge + UTF-8
 body              Varint-Länge + Bytes eines Wurzelknotens mit Feld 1 = Program
 ```
 
-Ein Leser mit kleinerer `format_version` als die Datei lehnt sie ab (`UnsupportedVersion`);
+Versionen: 1 (Freeze), 2 (`ExprKind::Lift`, `Ok`, `Err`, `Intrinsic`; neue Varianten kann ein
+Leser der Version 1 nicht überspringen, daher der Sprung). Ein Leser mit kleinerer
+`format_version` als die Datei lehnt sie ab (`UnsupportedVersion`);
 alles andere liest er, Unbekanntes überspringend. Der Kopf ist ohne Stringtabelle lesbar
 (`read_header`), damit Werkzeuge Edition und Compiler-Version ohne Vollparse zeigen.
 

@@ -555,6 +555,10 @@ impl Dumper<'_> {
                 format!("{}.decode({})", self.p.records[record.index()].name, self.expr(bytes))
             }
             ExprKind::Checked { expr, kind } => format!("checked[{kind:?}]({})", self.expr(expr)),
+            ExprKind::Lift(e) => format!("lift({})", self.expr(e)),
+            ExprKind::Ok(e) => format!("OK({})", self.expr(e)),
+            ExprKind::Err(e) => format!("ERR({})", self.expr(e)),
+            ExprKind::Intrinsic { op, args } => format!("{}({})", op.name(), self.args(args)),
         }
     }
 }

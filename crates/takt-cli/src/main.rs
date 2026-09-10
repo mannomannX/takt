@@ -77,7 +77,8 @@ fn check(args: &Args) -> bool {
             continue;
         };
         let map = SourceMap::single(path.as_str(), src.as_str());
-        let checked = takt_sema::check(&src, policy);
+        let options = takt_sema::Options { policy, build: takt_sema::Build::Sim, profile: None };
+        let checked = takt_sema::compile(&src, &options);
         for d in &checked.diagnostics {
             if line_format {
                 println!("{}", map.render_line(d));

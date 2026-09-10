@@ -1,0 +1,80 @@
+# Prelude: vordefinierte Einheiten, Typen und Bibliothek (Referenz 3.2, 3.7,
+# 5.3, 11.4). Es wird vor jedem Programm gelesen; Nutzerdefinitionen duerfen
+# diese Namen verdecken (Warnung, 2.5).
+#
+# Die SI-Basiseinheiten m, kg, s, A, K, mol, cd und g stehen im Rust-Code
+# (crates/takt-sema/src/units.rs), weil sie die Praefixregeln tragen.
+
+system:
+    language = 1
+
+# --- abgeleitete SI-Einheiten (3.2) ------------------------------------
+unit Hz    = 1 1/s
+unit N     = 1 kg*m/s^2
+unit Pa    = 1 N/m^2
+unit J     = 1 N*m
+unit W     = 1 J/s
+unit C     = 1 A*s
+unit V     = 1 W/A
+unit ohm   = 1 V/A
+unit F     = 1 C/V
+unit Wb    = 1 V*s
+unit T     = 1 Wb/m^2
+unit H     = 1 Wb/A
+
+# --- weitere Einheiten (3.2) -------------------------------------------
+unit min   = 60 s^1
+unit h     = 3600 s^1
+unit d     = 86400 s^1
+unit bar   = 100000 Pa
+unit psi   = 6894.757293168 Pa
+unit pct   = 0.01
+unit B     = 1
+unit Ah    = 3600 C
+unit Wh    = 3600 J
+unit degC  = affine(K, 273.15)
+
+# --- offene Enums (2.5) ------------------------------------------------
+enum ArithKind: OVERFLOW, DIV_ZERO, NON_FINITE, DOMAIN, SINGULAR
+enum RuntimeKind: OVERRUN, DRIVER, WATCHDOG, HARDWARE, NODE
+
+enum FaultKind open:
+    CHECK_FAILED
+    EXPECT
+    TIMEOUT
+    SENSOR_FAULT
+    MISSING_VALUE
+    ARITHMETIC(kind: ArithKind)
+    RANGE
+    STREAM_OVERFLOW
+    TIMING
+    SCHEDULE_OVERFLOW
+    JOB_OVERFLOW
+    ABORT
+    RUNTIME(kind: RuntimeKind)
+
+enum Quality open: GOOD, SUSPECT, STALE, BAD
+enum Reason open: STALE, OUT_OF_RANGE, IMPLAUSIBLE, DRIVER, NODE
+enum JobErr open: CANCELLED, FAILED
+enum BootReason open: POWER_ON, WATCHDOG, SOFTWARE, DEEP_SLEEP_WAKE, TRIAL
+enum ImageState open: CONFIRMED, TRIAL
+enum RebootCmd open: NONE, RESTART, DEEP_SLEEP
+
+# --- eingebaute Records (5.3, 8.6) -------------------------------------
+record LastFault:
+    kind    : FaultKind
+    message : str<128>
+    line    : int
+    tick    : int
+
+record Edge:
+    rising : bool
+
+# --- Standardbibliothek: reine Funktionen (11.4) -----------------------
+# Zustandsbehaftete Bloecke (lowpass, pid, …) folgen mit den Beispielen
+# 14.4 in M1; sie brauchen nur die hier stehenden Regeln.
+fn clamp[U](x: float[U], lo: float[U], hi: float[U]) -> float[U]:
+    return lo if x < lo else (hi if x > hi else x)
+
+fn lerp[U](a: float[U], b: float[U], t: float) -> float[U]:
+    return a + (b - a) * t

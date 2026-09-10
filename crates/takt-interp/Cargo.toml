@@ -1,16 +1,14 @@
 [package]
-name = "takt-sema"
+name = "takt-interp"
 version = "0.1.0"
-description = "Takt: Symbole, Edition und die Pruefungen aus Referenz 10"
+description = "Takt: Referenzinterpreter ueber der MIR, die ausfuehrbare Semantik aus Referenz 9"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
 takt-diag = { path = "../takt-diag" }
-takt-syntax = { path = "../takt-syntax" }
 takt-mir = { path = "../takt-mir" }
-takt-interp = { path = "../takt-interp" }
 
 [lints]
 workspace = true

@@ -17,6 +17,6 @@ pub mod token;
 pub use edition::Edition;
 pub use fmt::{format, format_snippet};
 pub use lexer::{tokenize, tokenize_in};
-pub use parser::{parse_file, parse_snippet};
+pub use parser::{parse_expr, parse_file, parse_snippet};
 pub use takt_diag::{Diagnostic, Severity, SourceMap, Span};
 pub use token::{ErrorCode, Token, TokenKind, Tokens, Trivia, TriviaKind};

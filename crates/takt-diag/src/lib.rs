@@ -204,9 +204,11 @@ impl Sink {
         self.diagnostics.iter().any(Diagnostic::is_error)
     }
 
-    /// Nach Position sortiert (Datei, Offset), stabil.
+    /// Nach Position sortiert (Datei, Offset), stabil; gleiche Diagnosen
+    /// (Code, Position, Meldung) nur einmal, etwa aus Instanzen einer Vorlage.
     pub fn sorted(mut self) -> Vec<Diagnostic> {
         self.diagnostics.sort_by_key(|d| (d.span.file.0, d.span.start));
+        self.diagnostics.dedup_by(|a, b| a.code == b.code && a.span == b.span && a.message == b.message);
         self.diagnostics
     }
 }
@@ -376,5 +378,17 @@ mod tests {
         let mut sink = Sink::new(Policy { certification: true, ..Default::default() });
         sink.report(w);
         assert!(sink.has_errors());
+    }
+
+    #[test]
+    fn sorted_drops_duplicates() {
+        let mut sink = Sink::new(Policy::default());
+        sink.report(Diagnostic::error("SC-3", Span::new(5, 6), "x"));
+        sink.report(Diagnostic::error("SC-3", Span::new(1, 2), "y"));
+        sink.report(Diagnostic::error("SC-3", Span::new(5, 6), "x"));
+        sink.report(Diagnostic::error("SC-2", Span::new(5, 6), "x"));
+        let out = sink.sorted();
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].span, Span::new(1, 2));
     }
 }

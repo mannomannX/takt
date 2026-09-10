@@ -129,6 +129,14 @@ fn sample_covers_every_node_kind() {
         "Wrap",
         "Runtime",
         "Arithmetic",
+        "Lift(",
+        "Ok(",
+        "Err(",
+        "Intrinsic {",
+        "Sqrt",
+        "Round",
+        "Fma",
+        "WrappingAdd",
     ];
     for name in expected {
         assert!(text.contains(name), "Knoten {name} fehlt im Beispielprogramm");
