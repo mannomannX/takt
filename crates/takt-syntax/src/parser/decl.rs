@@ -485,7 +485,7 @@ impl<'t, 's> Parser<'t, 's> {
         self.expect_word("mmio")?;
         self.expect_op("(")?;
         let t = self.expect(TokenKind::Hex, "eine Hex-Adresse wie `0x40000000`")?;
-        let address = IntLit { text: self.text_of(t).to_string(), span: Span { start: t.start, end: t.end } };
+        let address = IntLit { text: self.text_of(t).to_string(), span: Span::new(t.start, t.end) };
         self.expect_op(")")?;
         self.expect_newline()?;
         Ok(PortDecl { name, regs, address, span: self.span_from(start) })

@@ -73,7 +73,7 @@ Beiwerk).
 
 Ort: `crates/takt-syntax/src/fmt/` (Modul `fmt`), API `takt_syntax::fmt::format(src: &str) ->
 Result<String, Vec<ParseError>>`. Die Kommandozeile (`takt fmt`, `--check`, `--diff`, stdin)
-kommt mit `takt-cli`; bis dahin `examples/fmt.rs` wie `parse.rs`.
+ist `takt fmt` in `takt-cli`.
 
 ```
 Quelltext ──tokenize──▶ Tokens (mit Beiwerk, Zeilen, Anliegen)
@@ -220,7 +220,7 @@ Mindestabstand ist zwei Leerzeichen. Ein `input` in einer Gruppe mit `output` wi
 3. `fmt/print.rs`: Drucker für Einheiten, Typen, Ausdrücke (Strings), dann Statements,
    Maschinen, Deklarationen (Zeilen mit Zellen); Fortsetzungszeilen aus den Token-Zeilen.
 4. `fmt/align.rs`: Laufgruppen und Spaltenpass; `fmt/mod.rs`: Normierung und `format()`.
-5. Tests 1 bis 5, `examples/fmt.rs`, Erweiterung von `productions.rs` um `fmt_<name>`.
+5. Tests 1 bis 5, `takt fmt`, Erweiterung von `productions.rs` um `fmt_<name>`.
 6. Korpus, Schnipsel und Referenzblöcke kanonisieren (Test 6), Inventur nachziehen. Diese
    Umschreibung der Referenz geschieht nur nach Freigabe.
 7. Später: `takt fmt` in `takt-cli` mit `--check`/`--diff`/stdin und dem Eintragen der

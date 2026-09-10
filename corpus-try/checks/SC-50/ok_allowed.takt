@@ -1,0 +1,28 @@
+# SC-50: Records und Enums haben einen eigenen Namensraum; nur die acht
+# Wrapper-Zugriffe sind als Feldnamen verboten, Variantennamen sind frei.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+record CanFrame:
+    id     : u32 in 0..0x1FFFFFFF
+    data   : bytes<8>
+    len    : u8 in 0..8
+    count  : u16
+    offset : u32[B]
+
+enum Result:
+    NONE
+    OK(value: u8)
+    ERR(code: u8)
+
+input  rx  : stream<line<64>> @ hw("uart0/rx") with max_rate = 100 Hz
+output led : bool @ hw("gpio/led") with safe = false
+
+machine names:
+    initial RUN
+
+    state RUN:
+        on rx matches "OK {n:int}" as m:
+            led = m.n > 0

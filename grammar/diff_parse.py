@@ -27,7 +27,7 @@ def rust(paths, snippet):
     ok = set()
     errors = {}
     for chunk in batches(paths):
-        cmd = ["cargo", "run", "-q", "-p", "takt-syntax", "--example", "parse", "--"]
+        cmd = ["cargo", "run", "-q", "-p", "takt-cli", "--", "parse"]
         if snippet:
             cmd.append("--snippet")
         r = subprocess.run(cmd + chunk, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
@@ -61,7 +61,7 @@ def verify_format(paths, snippet):
     """Formatter-Garantien je Datei; liefert die Fehlermeldungen."""
     problems = []
     for chunk in batches(paths):
-        cmd = ["cargo", "run", "-q", "-p", "takt-syntax", "--example", "fmt", "--", "--verify"]
+        cmd = ["cargo", "run", "-q", "-p", "takt-cli", "--", "fmt", "--verify"]
         if snippet:
             cmd.append("--snippet")
         r = subprocess.run(cmd + chunk, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)

@@ -6,7 +6,9 @@
 //! verbrauchen dabei jedes Token genau einmal; ein Token, das nicht zum Baum
 //! passt, ist ein Fehler des Formatters und bricht die Ausgabe ab.
 
-use crate::parser::ParseError;
+use takt_diag::Diagnostic;
+
+use crate::parser::token_span;
 use crate::token::{Token, TokenKind, Tokens, TriviaKind};
 
 /// Art einer Ausgabezeile; gleichartige Nachbarzeilen bilden Laufgruppen fuer
@@ -83,7 +85,7 @@ pub(super) struct Emitter<'t, 's> {
     next_kind: Kind,
     /// Leerzeile aus dem Beiwerk eines `DEDENT`: gehoert hinter den Block.
     pending_blank: bool,
-    pub errors: Vec<ParseError>,
+    pub errors: Vec<Diagnostic>,
 }
 
 impl<'t, 's> Emitter<'t, 's> {
@@ -124,7 +126,7 @@ impl<'t, 's> Emitter<'t, 's> {
     fn fail(&mut self, message: String) {
         if self.errors.is_empty() {
             let t = self.peek();
-            self.errors.push(ParseError { line: t.line, col: t.col, message, suggestion: None });
+            self.errors.push(Diagnostic::error("F", token_span(t), message));
         }
     }
 

@@ -655,7 +655,7 @@ def run_parse(paths, snippet):
 
 
 def parse_chunk(chunk, snippet, result):
-    cmd = ["cargo", "run", "-q", "-p", "takt-syntax", "--example", "parse", "--", "--ast"]
+    cmd = ["cargo", "run", "-q", "-p", "takt-cli", "--", "parse", "--ast"]
     if snippet:
         cmd.append("--snippet")
     r = subprocess.run(cmd + chunk, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
@@ -704,7 +704,7 @@ def run_fmt(paths, snippet, verify):
     """fmt --verify: Pfad -> Meldung; ohne verify formatiert in place."""
     problems = {}
     for chunk in batches(paths):
-        cmd = ["cargo", "run", "-q", "-p", "takt-syntax", "--example", "fmt", "--"]
+        cmd = ["cargo", "run", "-q", "-p", "takt-cli", "--", "fmt"]
         if verify:
             cmd.append("--verify")
         if snippet:

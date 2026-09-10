@@ -11,7 +11,7 @@ import subprocess, sys, os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def rust(path):
-    r = subprocess.run(["cargo", "run", "-q", "-p", "takt-syntax", "--example", "tokens", "--", path],
+    r = subprocess.run(["cargo", "run", "-q", "-p", "takt-cli", "--", "tokens", path],
                        capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
     lines = [l for l in r.stdout.splitlines() if "\t" in l]
     return [l.split("\t")[:2] for l in lines], r.returncode

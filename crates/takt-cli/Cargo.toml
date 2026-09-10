@@ -1,0 +1,19 @@
+[package]
+name = "takt-cli"
+version = "0.1.0"
+description = "Takt: Kommandozeile (check, fmt, parse, tokens)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "takt"
+path = "src/main.rs"
+
+[dependencies]
+takt-diag = { path = "../takt-diag" }
+takt-syntax = { path = "../takt-syntax" }
+takt-sema = { path = "../takt-sema" }
+
+[lints]
+workspace = true

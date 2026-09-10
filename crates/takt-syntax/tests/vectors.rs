@@ -4,7 +4,7 @@
 //! Fehlervektoren, `~` zwischen Tokens verlangt das Flag *anliegend*.
 
 use takt_syntax::subtext::{FormatPiece, PatternPiece, address_text, format_text, pattern_text};
-use takt_syntax::{ErrorCode, TokenKind, tokenize};
+use takt_syntax::{TokenKind, tokenize};
 
 struct Vector {
     block: String,
@@ -209,10 +209,6 @@ fn kind_name(kind: TokenKind) -> &'static str {
     }
 }
 
-fn error_name(code: ErrorCode) -> &'static str {
-    code.as_str()
-}
-
 fn check_main(v: &Vector) -> Result<(), String> {
     let toks = tokenize(&v.input);
     if v.negative {
@@ -221,11 +217,11 @@ fn check_main(v: &Vector) -> Result<(), String> {
             None => (v.expected.as_str(), None),
         };
         let first = toks.errors.first().ok_or_else(|| format!("erwartet {want_code}, aber kein Fehler"))?;
-        if error_name(first.code) != want_code {
+        if first.code != want_code {
             return Err(format!("erwartet {want_code}, erhalten {}", first));
         }
         if let Some(d) = want_detail {
-            if first.detail != d {
+            if !first.message.contains(d) {
                 return Err(format!("erwartet {want_code}({d}), erhalten {}", first));
             }
         }
@@ -285,7 +281,7 @@ fn check_main(v: &Vector) -> Result<(), String> {
 }
 
 fn check_sub(v: &Vector) -> Result<(), String> {
-    let actual: Result<Vec<String>, ErrorCode> = match v.block.as_str() {
+    let actual: Result<Vec<String>, &str> = match v.block.as_str() {
         "vectors-format" => format_text(&v.input).map_err(|e| e.code).map(|ps| {
             ps.into_iter()
                 .map(|p| match p {
@@ -317,10 +313,10 @@ fn check_sub(v: &Vector) -> Result<(), String> {
         other => return Err(format!("unbekannter Block {other}")),
     };
     match (v.negative, actual) {
-        (true, Err(code)) if error_name(code) == v.expected => Ok(()),
-        (true, Err(code)) => Err(format!("erwartet {}, erhalten {}", v.expected, error_name(code))),
+        (true, Err(code)) if code == v.expected => Ok(()),
+        (true, Err(code)) => Err(format!("erwartet {}, erhalten {}", v.expected, code)),
         (true, Ok(pieces)) => Err(format!("erwartet {}, erhalten {}", v.expected, pieces.join(" "))),
-        (false, Err(code)) => Err(format!("unerwarteter Fehler {}", error_name(code))),
+        (false, Err(code)) => Err(format!("unerwarteter Fehler {}", code)),
         (false, Ok(pieces)) => {
             let want: Vec<String> = parse_items(&v.expected)
                 .into_iter()

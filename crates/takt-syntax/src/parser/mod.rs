@@ -12,62 +12,47 @@ mod machine;
 mod stmt;
 mod types;
 
-use std::fmt;
+use takt_diag::Diagnostic;
 
 use crate::ast::*;
 use crate::keywords::is_contextual;
 use crate::token::{Token, TokenKind, Tokens};
 
-/// Ein Syntaxfehler mit Position.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ParseError {
-    /// Zeile ab 1.
-    pub line: u32,
-    /// Spalte ab 1.
-    pub col: u32,
-    /// Was erwartet wurde und was da war.
-    pub message: String,
-    /// Handlungsvorschlag.
-    pub suggestion: Option<String>,
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Zeile {}, Spalte {}: {}", self.line, self.col, self.message)?;
-        if let Some(s) = &self.suggestion {
-            write!(f, " ({s})")?;
-        }
-        Ok(())
-    }
-}
-
 /// Ergebnis einer Produktion.
-pub type PResult<T> = Result<T, ParseError>;
+pub type PResult<T> = Result<T, Diagnostic>;
+
+/// Code der Parserdiagnosen (Pruefung 1 in Referenz 10).
+pub const CODE: &str = "P";
 
 /// Parst eine Datei (`file`). Fehler werden gesammelt; der Baum enthaelt alles,
 /// was sich parsen liess.
-pub fn parse_file(toks: &Tokens<'_>) -> (File, Vec<ParseError>) {
+pub fn parse_file(toks: &Tokens<'_>) -> (File, Vec<Diagnostic>) {
     with_deep_stack(|| parse_file_here(toks))
 }
 
 /// Parst einen Schnipsel: Deklarationen, Zustandsinhalte, Sequenzschritte und
 /// Anweisungen in beliebiger Folge (Testeinstieg fuer die Codebloecke der Referenz).
-pub fn parse_snippet(toks: &Tokens<'_>) -> (Vec<SnippetItem>, Vec<ParseError>) {
+pub fn parse_snippet(toks: &Tokens<'_>) -> (Vec<SnippetItem>, Vec<Diagnostic>) {
     with_deep_stack(|| parse_snippet_here(toks))
 }
 
 /// `parse_file` auf dem aktuellen Thread (fuer Aufrufer, die schon unter
 /// `with_deep_stack` laufen).
-pub(crate) fn parse_file_here(toks: &Tokens<'_>) -> (File, Vec<ParseError>) {
+pub(crate) fn parse_file_here(toks: &Tokens<'_>) -> (File, Vec<Diagnostic>) {
     let mut p = Parser::new(toks);
     let file = p.parse_file();
     (file, p.errors)
 }
 
-pub(crate) fn parse_snippet_here(toks: &Tokens<'_>) -> (Vec<SnippetItem>, Vec<ParseError>) {
+pub(crate) fn parse_snippet_here(toks: &Tokens<'_>) -> (Vec<SnippetItem>, Vec<Diagnostic>) {
     let mut p = Parser::new(toks);
     let items = p.parse_snippet_items();
     (items, p.errors)
+}
+
+/// Byte-Bereich eines Tokens als Diagnose-Position.
+pub(crate) fn token_span(t: &Token) -> Span {
+    Span::new(t.start, t.end)
 }
 
 /// Stapel fuer den rekursiven Abstieg: `MAX_DEPTH` Ebenen brauchen in einem
@@ -91,7 +76,7 @@ pub(crate) fn with_deep_stack<R: Send>(f: impl FnOnce() -> R + Send) -> R {
 pub struct Parser<'t, 's> {
     toks: &'t Tokens<'s>,
     pos: usize,
-    errors: Vec<ParseError>,
+    errors: Vec<Diagnostic>,
     /// In einer `property`: Temporaloperatoren und `implies` sind Ausdruecke.
     temporal: bool,
     /// Tiefe offener `<` in Typen: dort schliesst `>` und vergleicht nicht.
@@ -274,18 +259,17 @@ impl<'t, 's> Parser<'t, 's> {
         }
     }
 
-    fn error_here(&self, expected: &str) -> ParseError {
+    fn error_here(&self, expected: &str) -> Diagnostic {
         let t = self.tok();
-        ParseError {
-            line: t.line,
-            col: t.col,
-            message: format!("erwartet {expected}, gefunden {}", self.describe(t)),
-            suggestion: None,
-        }
+        Diagnostic::error(CODE, token_span(t), format!("erwartet {expected}, gefunden {}", self.describe(t)))
     }
 
-    fn error_at(&self, t: &Token, message: impl Into<String>, suggestion: Option<&str>) -> ParseError {
-        ParseError { line: t.line, col: t.col, message: message.into(), suggestion: suggestion.map(str::to_string) }
+    fn error_at(&self, t: &Token, message: impl Into<String>, suggestion: Option<&str>) -> Diagnostic {
+        let d = Diagnostic::error(CODE, token_span(t), message);
+        match suggestion {
+            Some(s) => d.with_suggestion(s),
+            None => d,
+        }
     }
 
     fn expect(&mut self, kind: TokenKind, what: &str) -> PResult<&'t Token> {
@@ -361,7 +345,7 @@ impl<'t, 's> Parser<'t, 's> {
         }
     }
 
-    fn report(&mut self, e: ParseError) {
+    fn report(&mut self, e: Diagnostic) {
         self.errors.push(e);
     }
 
@@ -370,14 +354,14 @@ impl<'t, 's> Parser<'t, 's> {
     fn span_from(&self, start: usize) -> Span {
         let first = &self.toks.tokens[start.min(self.toks.tokens.len() - 1)];
         if self.pos > start {
-            Span { start: first.start, end: self.toks.tokens[self.pos - 1].end }
+            Span::new(first.start, self.toks.tokens[self.pos - 1].end)
         } else {
-            Span { start: first.start, end: first.start }
+            Span::new(first.start, first.start)
         }
     }
 
     fn ident_of(&self, t: &Token) -> Ident {
-        Ident { name: self.text_of(t).to_string(), span: Span { start: t.start, end: t.end } }
+        Ident { name: self.text_of(t).to_string(), span: Span::new(t.start, t.end) }
     }
 
     fn ident(&mut self) -> PResult<Ident> {
@@ -397,19 +381,19 @@ impl<'t, 's> Parser<'t, 's> {
 
     fn string(&mut self) -> PResult<StrLit> {
         let t = self.expect(TokenKind::Str, "ein Stringliteral")?;
-        Ok(StrLit { value: self.toks.unescape(t), span: Span { start: t.start, end: t.end } })
+        Ok(StrLit { value: self.toks.unescape(t), span: Span::new(t.start, t.end) })
     }
 
     fn int_token(&mut self) -> PResult<IntLit> {
         let t = self.expect(TokenKind::Int, "eine ganze Zahl")?;
-        Ok(IntLit { text: self.text_of(t).to_string(), span: Span { start: t.start, end: t.end } })
+        Ok(IntLit { text: self.text_of(t).to_string(), span: Span::new(t.start, t.end) })
     }
 
     /// `int_lit := INT | HEX | BIN | OCT`
     fn parse_int_lit(&mut self) -> PResult<IntLit> {
         if matches!(self.kind(), TokenKind::Int | TokenKind::Hex | TokenKind::Bin | TokenKind::Oct) {
             let t = self.bump();
-            Ok(IntLit { text: self.text_of(t).to_string(), span: Span { start: t.start, end: t.end } })
+            Ok(IntLit { text: self.text_of(t).to_string(), span: Span::new(t.start, t.end) })
         } else {
             Err(self.error_here("eine ganze Zahl"))
         }
@@ -419,7 +403,7 @@ impl<'t, 's> Parser<'t, 's> {
     fn parse_number(&mut self) -> PResult<Number> {
         if self.at(TokenKind::Float) {
             let t = self.bump();
-            Ok(Number::Float(FloatLit { text: self.text_of(t).to_string(), span: Span { start: t.start, end: t.end } }))
+            Ok(Number::Float(FloatLit { text: self.text_of(t).to_string(), span: Span::new(t.start, t.end) }))
         } else {
             self.parse_int_lit().map(Number::Int)
         }
@@ -428,7 +412,7 @@ impl<'t, 's> Parser<'t, 's> {
     /// `duration_lit := DURATION`
     fn parse_duration_lit(&mut self) -> PResult<DurationLit> {
         let t = self.expect(TokenKind::Duration, "eine Dauer wie `200 ms`")?;
-        Ok(DurationLit { ns: t.value, span: Span { start: t.start, end: t.end } })
+        Ok(DurationLit { ns: t.value, span: Span::new(t.start, t.end) })
     }
 
     // ------------------------------------------------------------ Gemeinsame Produktionen
@@ -744,7 +728,7 @@ impl<'t, 's> Parser<'t, 's> {
         let start = self.pos;
         let (first, mut rest) = if self.at(TokenKind::Int) && self.text() == "1" {
             let one = self.bump();
-            let one_term = UnitTerm { name: None, exponent: None, span: Span { start: one.start, end: one.end } };
+            let one_term = UnitTerm { name: None, exponent: None, span: Span::new(one.start, one.end) };
             if !self.at_op("/") || (compact && !(one.joint && self.tok().joint)) {
                 return Err(self.error_here("`/` nach der `1` eines Einheitenausdrucks (dimensionslos ist `1/s`)"));
             }

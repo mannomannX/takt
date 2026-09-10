@@ -1,0 +1,16 @@
+# SC-50: reservierte Woerter als Bezeichner (der Tokenizer meldet sie, Sema
+# fuehrt sie unter Pruefung 50).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output region : bool @ hw("gpio/do0") with safe = false  #~ SC-50
+
+machine names:
+    initial RUN
+
+    state RUN:
+        loop:
+            region = true  #~ SC-50
+            while = 1  #~ SC-50

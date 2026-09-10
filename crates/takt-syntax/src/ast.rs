@@ -9,14 +9,8 @@
 //! kleinen (`Stmt`, `SeqItem`) sind gewollt, Boxen wuerde nur Zugriffe kosten.
 #![allow(clippy::large_enum_variant)]
 
-/// Byte-Bereich im Quelltext.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct Span {
-    /// Offset des ersten Bytes.
-    pub start: u32,
-    /// Offset hinter dem letzten Byte.
-    pub end: u32,
-}
+/// Byte-Bereich im Quelltext (derselbe Typ wie in den Diagnosen).
+pub use takt_diag::Span;
 
 /// Ein Name (IDENT, UPPER_IDENT, TYPE_IDENT oder Membername) mit Position.
 #[derive(Clone, Debug, PartialEq, Eq)]

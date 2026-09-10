@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/takt-syntax"]
+members = ["crates/takt-diag", "crates/takt-syntax", "crates/takt-sema", "crates/takt-cli"]
 
 [workspace.package]
 edition = "2024"

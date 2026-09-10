@@ -2,7 +2,9 @@
 //! Formatstrings, Musterliterale, Hardware-Adressen. Die Eingabe ist der
 //! Inhalt des Strings mit aufgeloesten Escapes; Positionen zaehlen Zeichen ab 1.
 
-use crate::token::{ErrorCode, LexError};
+use takt_diag::{Diagnostic, Span};
+
+use crate::token::{ErrorCode, lex_diagnostic};
 
 /// Baustein eines Formatstrings (3.9).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,8 +42,10 @@ pub struct AddressSegment {
     pub range: Option<(String, String)>,
 }
 
-fn err(code: ErrorCode, col: usize, detail: &str) -> LexError {
-    LexError { code, line: 1, col: col as u32 + 1, detail: detail.to_string() }
+/// Diagnose mit Position relativ zum Stringinhalt (Zeichen ab 0); der Aufrufer
+/// verschiebt sie an die Stelle des Literals.
+fn err(code: ErrorCode, col: usize, detail: &str) -> Diagnostic {
+    lex_diagnostic(code, Span::new(col as u32, col as u32 + 1), detail)
 }
 
 fn push_text(out: &mut Vec<FormatPiece>, text: &mut String) {
@@ -51,7 +55,7 @@ fn push_text(out: &mut Vec<FormatPiece>, text: &mut String) {
 }
 
 /// Zerlegt einen Formatstring (L5.4).
-pub fn format_text(s: &str) -> Result<Vec<FormatPiece>, LexError> {
+pub fn format_text(s: &str) -> Result<Vec<FormatPiece>, Diagnostic> {
     let cs: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
     let mut text = String::new();
@@ -138,7 +142,7 @@ fn pattern_kind(kind: &str) -> bool {
 }
 
 /// Zerlegt ein Musterliteral (L5.5, 8.7).
-pub fn pattern_text(s: &str) -> Result<Vec<PatternPiece>, LexError> {
+pub fn pattern_text(s: &str) -> Result<Vec<PatternPiece>, Diagnostic> {
     let cs: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
     let mut text = String::new();
@@ -190,7 +194,7 @@ pub fn pattern_text(s: &str) -> Result<Vec<PatternPiece>, LexError> {
 }
 
 /// Zerlegt eine Hardware-Adresse (L5.6, 8.1).
-pub fn address_text(s: &str) -> Result<Vec<AddressSegment>, LexError> {
+pub fn address_text(s: &str) -> Result<Vec<AddressSegment>, Diagnostic> {
     let mut out = Vec::new();
     let mut col = 0;
     for seg in s.split('/') {
@@ -201,7 +205,7 @@ pub fn address_text(s: &str) -> Result<Vec<AddressSegment>, LexError> {
 }
 
 /// `address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]`; `col` ist die Spalte des Segments.
-fn address_segment(seg: &str, col: usize) -> Result<AddressSegment, LexError> {
+fn address_segment(seg: &str, col: usize) -> Result<AddressSegment, Diagnostic> {
     let bytes = seg.as_bytes();
     let name_len = bytes
         .iter()

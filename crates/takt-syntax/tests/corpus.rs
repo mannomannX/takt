@@ -35,7 +35,7 @@ fn corpus_tokenizes() {
         match (expected_code, toks.errors.first()) {
             (None, None) => {}
             (None, Some(e)) => failures.push(format!("{name}: unerwartet {e}")),
-            (Some(code), Some(e)) if e.code == code => {}
+            (Some(code), Some(e)) if e.code == code.as_str() => {}
             (Some(code), other) => failures.push(format!("{name}: erwartet {}, erhalten {other:?}", code.as_str())),
         }
     }

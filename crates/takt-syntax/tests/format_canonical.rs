@@ -22,7 +22,7 @@ fn corpus_is_canonical() {
             Ok(out) => {
                 let line = src.lines().zip(out.lines()).position(|(a, b)| a != b).map(|i| i + 1);
                 failures.push(format!(
-                    "{name}: nicht kanonisch ab Zeile {} (cargo run --example fmt -- corpus-try/{name})",
+                    "{name}: nicht kanonisch ab Zeile {} (cargo run -p takt-cli -- fmt corpus-try/{name})",
                     line.unwrap_or(0)
                 ));
             }

@@ -1,0 +1,13 @@
+# SC-49: Edition fehlt; die Warnung steht am Dateianfang.  #~ SC-49
+
+system:
+    tick = 10 ms
+
+output led : bool @ hw("gpio/led") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            led = true

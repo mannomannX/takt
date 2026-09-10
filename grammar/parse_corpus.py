@@ -357,7 +357,7 @@ def main(argv):
             failures += 1
             continue
         if show_tokens:
-            # ART<TAB>Text<TAB>~ wie crates/takt-syntax/examples/tokens.rs, fuer den Differenzvergleich
+            # ART<TAB>Text<TAB>~ wie `takt tokens`, fuer den Differenzvergleich
             for t in tokens:
                 text = "" if t.kind in ("NEWLINE", "INDENT", "DEDENT") else t.text
                 kind = {"OP>": "Op", "OP": "Op", "UPPER": "UpperIdent", "TYPE": "TypeIdent", "KW": "Keyword",

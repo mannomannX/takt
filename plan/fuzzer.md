@@ -98,7 +98,7 @@ und geklammert (Abschnitt 1). Alle Fassungen einer Ableitung tragen denselben Na
 Seed.
 
 **Läufer.** Erzeugt n Programme in ein Arbeitsverzeichnis, ruft in Stapeln
-`cargo run --example parse`, `parse_corpus.py` und `cargo run --example fmt -- --verify`
+`takt parse --ast`, `parse_corpus.py` und `takt fmt --verify`
 (wie `diff_parse.py`), vergleicht die S-Expressions der Zwillinge über
 `parse --ast`, meldet Abdeckung, verkleinert Fehlschläge, Exit-Code ungleich 0 bei jedem
 Fund. Optionen: `--seed`, `--count`, `--start file|snippet`, `--depth`, `--cover k`,

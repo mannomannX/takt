@@ -56,7 +56,7 @@ def main(argv):
             p = Path(work) / f"{i:03d}.takt"
             io.open(p, "w", encoding="utf-8", newline="\n").write(text)
             paths.append(str(p))
-        r = subprocess.run(["cargo", "run", "-q", "-p", "takt-syntax", "--example", "fmt", "--", "--snippet"] + paths,
+        r = subprocess.run(["cargo", "run", "-q", "-p", "takt-cli", "--", "fmt", "--snippet"] + paths,
                            capture_output=True, text=True, encoding="utf-8", cwd=ex.ROOT)
         if r.returncode != 0:
             print(r.stderr or r.stdout)

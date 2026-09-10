@@ -1,0 +1,24 @@
+# SC-51: vordefinierte offene Enums (BootReason, FaultKind ueber last_fault.kind).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  boot_reason : BootReason @ hw("sys/boot_reason") with max_age = 1 s
+output led         : bool       @ hw("gpio/led")        with safe = false
+
+machine boot:
+    initial RUN
+
+    state RUN:
+        loop:
+            match boot_reason:  #~ SC-51
+                case POWER_ON:
+                    led = true
+                case WATCHDOG:
+                    led = false
+            match last_fault.kind:  #~ SC-51
+                case Timeout:
+                    led = false
+                case Abort:
+                    led = true

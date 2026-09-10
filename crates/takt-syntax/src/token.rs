@@ -1,5 +1,7 @@
 //! Tokens, Beiwerk und Fehler des Tokenizers (grammar/lexer.md).
 
+use takt_diag::{Diagnostic, Span};
+
 /// Tokenart. Die Namen entsprechen den Tokenarten in lexer.md; `Op` deckt alle
 /// Operatoren und Interpunktion aus L6 ab, der Text unterscheidet sie.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -42,6 +44,13 @@ pub enum TokenKind {
     Error,
     /// Dateiende; traegt das restliche Beiwerk.
     Eof,
+}
+
+impl TokenKind {
+    /// Struktur- statt Inhaltstoken (Zeilenende, Ein- und Ausrueckung, Dateiende).
+    pub fn is_layout(self) -> bool {
+        matches!(self, TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent | TokenKind::Eof)
+    }
 }
 
 /// Ein Token als Verweis in den Quelltext.
@@ -132,6 +141,29 @@ impl ErrorCode {
         }
     }
 
+    /// Ursache in einem Satzteil (Tabelle in L9).
+    pub fn describe(self) -> &'static str {
+        match self {
+            ErrorCode::Bom => "Byte-Order-Mark am Dateianfang",
+            ErrorCode::Cr => "einzelnes Wagenruecklauf-Zeichen",
+            ErrorCode::NonAscii => "Zeichen ausserhalb von ASCII",
+            ErrorCode::Tab => "Tabulator",
+            ErrorCode::Indent => "Einrueckung kein Vielfaches von 4 oder Sprung um mehr als eine Stufe",
+            ErrorCode::Dedent => "Einrueckung passt zu keinem offenen Block",
+            ErrorCode::Unclosed => "Klammer am Dateiende nicht geschlossen",
+            ErrorCode::Reserved => "reserviertes Wort",
+            ErrorCode::Number => "ungueltiges Zahlenliteral",
+            ErrorCode::UnitSpace => "Einheit ohne Leerzeichen nach der Zahl",
+            ErrorCode::Duration => "Dauer nicht darstellbar",
+            ErrorCode::String => "Stringliteral nicht geschlossen",
+            ErrorCode::Escape => "unbekannte Escape-Sequenz",
+            ErrorCode::Format => "ungueltiger Formatstring",
+            ErrorCode::Pattern => "ungueltiges Musterliteral",
+            ErrorCode::Address => "ungueltige Adresse",
+            ErrorCode::Char => "Zeichen ohne Bedeutung",
+        }
+    }
+
     /// Handlungsvorschlag aus der Tabelle in L9.
     pub fn suggestion(self) -> &'static str {
         match self {
@@ -156,31 +188,20 @@ impl ErrorCode {
     }
 }
 
-/// Ein Fehler des Tokenizers mit Position.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LexError {
-    /// Code.
-    pub code: ErrorCode,
-    /// Zeile ab 1.
-    pub line: u32,
-    /// Spalte ab 1.
-    pub col: u32,
-    /// Ergaenzung, etwa das betroffene Wort.
-    pub detail: String,
-}
-
-impl std::fmt::Display for LexError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} in Zeile {}, Spalte {}", self.code.as_str(), self.line, self.col)?;
-        if !self.detail.is_empty() {
-            write!(f, ": {}", self.detail)?;
-        }
-        // 2.5: `while` bekommt eine eigene Meldung.
-        if self.code == ErrorCode::Reserved && self.detail == "while" {
-            return write!(f, " (nicht erlaubt: for mit Schranke oder sequence mit until)");
-        }
-        write!(f, " ({})", self.code.suggestion())
-    }
+/// Baut die Diagnose eines Tokenizer-Fehlers (lexer.md L9): Meldung aus Code und
+/// Detail, Vorschlag aus der Tabelle; `while` bekommt die eigene Meldung aus 2.5.
+pub fn lex_diagnostic(code: ErrorCode, span: Span, detail: &str) -> Diagnostic {
+    let message = match (code, detail.is_empty()) {
+        (ErrorCode::Reserved, _) => format!("`{detail}` ist ein reserviertes Wort"),
+        (_, true) => code.describe().to_string(),
+        (_, false) => format!("{}: {detail}", code.describe()),
+    };
+    let suggestion = if code == ErrorCode::Reserved && detail == "while" {
+        "nicht erlaubt: for mit Schranke oder sequence mit until"
+    } else {
+        code.suggestion()
+    };
+    Diagnostic::error(code.as_str(), span, message).with_suggestion(suggestion)
 }
 
 /// Ergebnis des Tokenizers.
@@ -193,7 +214,7 @@ pub struct Tokens<'src> {
     /// Beiwerk, referenziert ueber `Token::trivia`.
     pub trivia: Vec<Trivia>,
     /// Fehler in Reihenfolge des Auftretens.
-    pub errors: Vec<LexError>,
+    pub errors: Vec<Diagnostic>,
 }
 
 impl<'src> Tokens<'src> {

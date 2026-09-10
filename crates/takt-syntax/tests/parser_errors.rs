@@ -2,15 +2,20 @@
 //! und Fehler, die der Parser mit Zeile und Vorschlag melden muss.
 
 use takt_syntax::ast::{BinaryOp, ExprKind, Item, SnippetItem, StmtKind};
-use takt_syntax::{ParseError, parse_file, parse_snippet, tokenize};
+use takt_syntax::{Diagnostic, SourceMap, parse_file, parse_snippet, tokenize};
 
-fn snippet(src: &str) -> (Vec<SnippetItem>, Vec<ParseError>) {
+/// Zeile (ab 1) einer Diagnose im Quelltext.
+fn line_of(src: &str, d: &Diagnostic) -> u32 {
+    SourceMap::single("t", src).line_col(d.span).0
+}
+
+fn snippet(src: &str) -> (Vec<SnippetItem>, Vec<Diagnostic>) {
     let toks = tokenize(src);
     assert!(toks.errors.is_empty(), "Tokenizer: {:?}", toks.errors);
     parse_snippet(&toks)
 }
 
-fn file_errors(src: &str) -> Vec<ParseError> {
+fn file_errors(src: &str) -> Vec<Diagnostic> {
     let toks = tokenize(src);
     assert!(toks.errors.is_empty(), "Tokenizer: {:?}", toks.errors);
     parse_file(&toks).1
@@ -142,14 +147,15 @@ fn state_sections_keep_their_order() {
     let src = "machine m:\n    initial A\n    state A:\n        when x: -> B\n        enter:\n            y = 1\n    state B:\n        loop:\n            pass\n";
     let errors = file_errors(src);
     assert_eq!(errors.len(), 1, "{errors:?}");
-    assert_eq!(errors[0].line, 5);
+    assert_eq!(line_of(src, &errors[0]), 5);
     assert!(errors[0].message.contains("`enter` muss vor `when/after`"), "{}", errors[0]);
 }
 
 #[test]
 fn machine_without_initial_reports_position() {
-    let errors = file_errors("machine m:\n    var x = 1\n    state A:\n        loop:\n            pass\n");
-    assert_eq!(errors[0].line, 3, "{}", errors[0]);
+    let src = "machine m:\n    var x = 1\n    state A:\n        loop:\n            pass\n";
+    let errors = file_errors(src);
+    assert_eq!(line_of(src, &errors[0]), 3, "{}", errors[0]);
     assert!(errors[0].message.contains("initial"));
 }
 
@@ -166,7 +172,7 @@ fn recovery_continues_after_a_bad_line() {
     let toks = tokenize(src);
     let (file, errors) = parse_file(&toks);
     assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].line, 2);
+    assert_eq!(line_of(src, &errors[0]), 2);
     assert_eq!(file.items.len(), 2);
     assert!(matches!(file.items[1], Item::Const(_)));
 }

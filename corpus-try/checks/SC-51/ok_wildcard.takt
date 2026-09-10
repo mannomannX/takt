@@ -1,0 +1,39 @@
+# SC-51: offene Enums mit case _, geschlossene Enums ohne (Pruefung 19 ist M3),
+# unbestimmbares Subjekt ohne Meldung.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+enum Cmd open: NOP, GO, STOP
+enum Level: LOW, MID, HIGH
+
+input  cmd_in : Cmd   @ hw("ui/cmd")   with max_age = 100 ms
+input  lvl_in : Level @ hw("ui/level") with max_age = 100 ms
+output led    : bool  @ hw("gpio/led") with safe = false
+
+fn pick(a: Cmd) -> bool:
+    match a:
+        case GO:
+            return true
+        case _:
+            return false
+
+machine dispatch:
+    initial RUN
+
+    state RUN:
+        loop:
+            match cmd_in:
+                case GO:
+                    led = true
+                case _:
+                    led = false
+            match lvl_in:
+                case LOW:
+                    led = false
+                case MID:
+                    led = true
+            match unknown_source():
+                case FOO:
+                    led = true

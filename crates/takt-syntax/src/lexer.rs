@@ -4,8 +4,10 @@
 //! offener Klammern entfallen NEWLINE, INDENT und DEDENT. Jeder Fehler wird
 //! gemeldet und die Analyse fortgesetzt (L9).
 
-use crate::keywords::{is_keyword, is_reserved};
-use crate::token::{ErrorCode, LexError, Token, TokenKind, Tokens, Trivia, TriviaKind};
+use takt_diag::{Diagnostic, Span};
+
+use crate::edition::Edition;
+use crate::token::{ErrorCode, Token, TokenKind, Tokens, Trivia, TriviaKind, lex_diagnostic};
 
 /// Zeitsuffixe und ihr Faktor in Nanosekunden (L4.4).
 const TIME: &[(&str, i128)] = &[
@@ -22,9 +24,15 @@ const TIME: &[(&str, i128)] = &[
 const OPS2: &[[u8; 2]] = &[*b"->", *b"..", *b"+=", *b"-=", *b"*=", *b"/=", *b"==", *b"!=", *b"<=", *b">=", *b"<<"];
 const OPS1: &[u8] = b"+-*/%&|^~<>=.,:()[]{}@?!";
 
-/// Zerlegt Quelltext in Tokens. Fehler stehen in `Tokens::errors`; das letzte
-/// Token ist immer `Eof`.
+/// Zerlegt Quelltext in Tokens mit dem Wortschatz der neuesten Edition. Fehler
+/// stehen in `Tokens::errors`; das letzte Token ist immer `Eof`.
 pub fn tokenize(src: &str) -> Tokens<'_> {
+    tokenize_in(src, Edition::LATEST)
+}
+
+/// Zerlegt Quelltext mit dem Wortschatz einer Edition (2.5; `edition::declared_edition`
+/// liest sie vorab aus dem `system:`-Block).
+pub fn tokenize_in(src: &str, edition: Edition) -> Tokens<'_> {
     let mut lexer = Lexer {
         src,
         bytes: src.as_bytes(),
@@ -32,6 +40,7 @@ pub fn tokenize(src: &str) -> Tokens<'_> {
         trivia: Vec::new(),
         pending: 0,
         errors: Vec::new(),
+        edition,
         stack: vec![0],
         depth: 0,
         line: 0,
@@ -47,7 +56,8 @@ struct Lexer<'s> {
     tokens: Vec<Token>,
     trivia: Vec<Trivia>,
     pending: u32,
-    errors: Vec<LexError>,
+    errors: Vec<Diagnostic>,
+    edition: Edition,
     stack: Vec<u32>,
     depth: u32,
     line: u32,
@@ -56,8 +66,10 @@ struct Lexer<'s> {
 
 impl Lexer<'_> {
     fn error(&mut self, code: ErrorCode, at: usize, detail: impl Into<String>) {
-        let col = (at.saturating_sub(self.line_start) + 1) as u32;
-        self.errors.push(LexError { code, line: self.line.max(1), col, detail: detail.into() });
+        let detail = detail.into();
+        let at = at.min(self.src.len());
+        let end = if !detail.is_empty() && self.src[at..].starts_with(&detail) { at + detail.len() } else { at + 1 };
+        self.errors.push(lex_diagnostic(code, Span::new(at as u32, end.min(self.src.len()).max(at) as u32), &detail));
     }
 
     fn push(&mut self, kind: TokenKind, start: usize, end: usize, value: i64, content_end: usize) {
@@ -335,9 +347,9 @@ impl Lexer<'_> {
         let word = &self.src[start..q];
         let kind = if word == "_" {
             TokenKind::Wild
-        } else if is_keyword(word) {
+        } else if self.edition.is_keyword(word) {
             TokenKind::Keyword
-        } else if is_reserved(word) {
+        } else if self.edition.is_reserved(word) {
             TokenKind::Reserved
         } else if b[start].is_ascii_lowercase() || b[start] == b'_' {
             TokenKind::Ident

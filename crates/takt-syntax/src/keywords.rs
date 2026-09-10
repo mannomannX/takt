@@ -212,6 +212,103 @@ pub const CONTEXTUAL: &[&str] = &[
     "word",
 ];
 
+/// Reservierte Membernamen der eingebauten Typen (2.5), in der Reihenfolge der
+/// Referenz; `wrap_*` steht fuer alle Namen mit diesem Praefix.
+pub const RESERVED_MEMBERS: &[&str] = &[
+    "valid",
+    "suspect",
+    "stale",
+    "age",
+    "reason",
+    "or",
+    "ok",
+    "err",
+    "t",
+    "seq",
+    "text",
+    "data",
+    "len",
+    "count",
+    "dropped",
+    "malformed",
+    "overflowed",
+    "free",
+    "jitter",
+    "time_warped",
+    "done",
+    "result",
+    "state",
+    "to",
+    "to_float",
+    "as",
+    "bit",
+    "bits",
+    "with_bit",
+    "wrap_*",
+    "min",
+    "max",
+    "mean",
+    "rms",
+    "last",
+    "transpose",
+    "inv",
+    "det",
+    "solve",
+    "cholesky",
+    "decode",
+    "encode",
+    "default",
+    "push",
+    "get",
+    "insert",
+    "remove",
+    "clear",
+    "skip",
+    "starts_with",
+    "contains",
+    "armed",
+    "fired",
+    "pre",
+    "post",
+    "samples",
+    "rate",
+    "remaining",
+    "truncated",
+    "reset",
+];
+
+/// Zugriffe der Wrapper (`T?`, `T!E`, Channel, Job- und Trigger-Handle): auf `x.name`
+/// ist immer der Wrapper gemeint, darum als Feldnamen verboten (2.5).
+pub const WRAPPER_ACCESSORS: &[&str] = &["valid", "suspect", "stale", "age", "reason", "or", "ok", "err"];
+
+/// Namen, die die Bindung eines Musters selbst traegt (8.7): als Capture-Namen verboten.
+pub const CAPTURE_NAMES: &[&str] = &["t", "seq", "text", "data"];
+
+/// Vordefinierte offene Enums (2.5) mit den in der Referenz genannten Varianten;
+/// `Reason` ist der Wertebereich von `x.reason` (3.5).
+pub const OPEN_ENUMS: &[(&str, &[&str])] = &[
+    (
+        "FaultKind",
+        &[
+            "CheckFailed",
+            "Timeout",
+            "Expect",
+            "Abort",
+            "Runtime",
+            "MissingValue",
+            "SensorFault",
+            "StreamOverflow",
+            "JobOverflow",
+        ],
+    ),
+    ("BootReason", &["POWER_ON", "WATCHDOG", "SOFTWARE", "DEEP_SLEEP_WAKE", "TRIAL"]),
+    ("ImageState", &["CONFIRMED", "TRIAL"]),
+    ("RebootCmd", &["NONE", "RESTART", "DEEP_SLEEP"]),
+    ("Quality", &["Good", "Suspect", "Stale", "Bad"]),
+    ("JobErr", &[]),
+    ("Reason", &[]),
+];
+
 /// Ist `word` ein Schluesselwort?
 pub fn is_keyword(word: &str) -> bool {
     KEYWORDS.binary_search(&word).is_ok()

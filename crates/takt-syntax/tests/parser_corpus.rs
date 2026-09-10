@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use takt_syntax::{parse_file, parse_snippet, tokenize};
+use takt_syntax::{SourceMap, parse_file, parse_snippet, tokenize};
 
 fn takt_files(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -50,7 +50,7 @@ fn negative_examples_fail_as_documented() {
         let toks = tokenize(&src);
         let (_, errors) = parse_file(&toks);
         let first = errors.first().unwrap_or_else(|| panic!("{name}: kein Parserfehler"));
-        assert_eq!(first.line, line, "{name}: {first}");
+        assert_eq!(SourceMap::single(name, &src).line_col(first.span).0, line, "{name}: {first}");
     }
     // n01 und n03 (Einrueckung, reservierte Namen) meldet schon der Tokenizer.
     for name in ["n01_bad_indent.takt", "n03_reserved_names.takt"] {

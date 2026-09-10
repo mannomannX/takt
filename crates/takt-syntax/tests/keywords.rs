@@ -1,6 +1,8 @@
 //! Paritaet der Schluesselwortlisten mit Referenz 2.2 (plan/definition.md).
 
-use takt_syntax::keywords::{CONTEXTUAL, KEYWORDS, RESERVED};
+use takt_syntax::keywords::{
+    CAPTURE_NAMES, CONTEXTUAL, KEYWORDS, OPEN_ENUMS, RESERVED, RESERVED_MEMBERS, WRAPPER_ACCESSORS,
+};
 
 fn section_2_2() -> String {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../plan/definition.md");
@@ -69,4 +71,27 @@ fn contextual_words_match_grammar() {
     words.dedup();
     let ours: Vec<String> = CONTEXTUAL.iter().map(|k| k.to_string()).collect();
     assert_eq!(ours, words, "kontextuelle Terminale weichen von der Grammatik ab");
+}
+
+fn section_2_5() -> String {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../plan/definition.md");
+    let text = std::fs::read_to_string(path).expect("plan/definition.md lesbar");
+    let start = text.find("### 2.5 Editionen").expect("Abschnitt 2.5");
+    let end = text[start..].find("\n## ").map_or(text.len(), |i| start + i);
+    text[start..end].to_string()
+}
+
+/// Die reservierten Membernamen sind die Liste in 2.5, in ihrer Reihenfolge.
+#[test]
+fn reserved_members_match_reference() {
+    let text = section_2_5();
+    let start = text.find("Die eingebauten Zugriffe — `").expect("Liste") + "Die eingebauten Zugriffe — `".len();
+    let end = text[start..].find('`').expect("Listenende") + start;
+    let listed: Vec<&str> = text[start..end].split_whitespace().collect();
+    assert_eq!(RESERVED_MEMBERS, listed.as_slice(), "reservierte Membernamen weichen von 2.5 ab");
+    assert!(WRAPPER_ACCESSORS.iter().all(|w| RESERVED_MEMBERS.contains(w)));
+    assert!(CAPTURE_NAMES.iter().all(|w| RESERVED_MEMBERS.contains(w)));
+    for (name, _) in OPEN_ENUMS {
+        assert!(name == &"Reason" || text.contains(&format!("`{name}`")), "offenes Enum {name} nicht in 2.5");
+    }
 }

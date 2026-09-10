@@ -1,0 +1,40 @@
+# SC-51: match ueber offene Enums ohne case _ — eigenes offenes Enum, ueber die
+# deklarierte Art des Subjekts und ueber die Variantennamen der Zweige.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+enum Cmd open: NOP, GO, STOP
+enum Level: LOW, MID, HIGH
+
+input  cmd_in : Cmd   @ hw("ui/cmd")   with max_age = 100 ms
+input  lvl_in : Level @ hw("ui/level") with max_age = 100 ms
+output led    : bool  @ hw("gpio/led") with safe = false
+
+machine dispatch:
+    var last : Cmd = NOP
+
+    initial RUN
+
+    state RUN:
+        loop:
+            match cmd_in:  #~ SC-51
+                case NOP:
+                    led = false
+                case GO:
+                    led = true
+                case STOP:
+                    led = false
+            match last:  #~ SC-51
+                case GO:
+                    led = true
+                case STOP:
+                    led = false
+            match lvl_in:
+                case LOW:
+                    led = false
+                case MID:
+                    led = true
+                case HIGH:
+                    led = true

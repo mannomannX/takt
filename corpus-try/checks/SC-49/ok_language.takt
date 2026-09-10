@@ -1,0 +1,14 @@
+# SC-49: Edition genannt.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output led : bool @ hw("gpio/led") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            led = true
