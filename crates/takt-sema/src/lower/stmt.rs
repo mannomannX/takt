@@ -606,6 +606,21 @@ impl Lowerer<'_> {
         args: &[ast::Arg],
         span: Span,
     ) -> Option<StmtKind> {
+        // 8.6: `s.skip()` untersucht das ganze Fenster. Ein Strom ist keine
+        // Stelle, darum vor `place` abgefangen.
+        if name.name == "skip" {
+            if let ast::ExprKind::Ident(id) = &base.kind {
+                if self.is_stream(id) {
+                    if target.is_some() {
+                        self.error(SC3, span, "`skip` liefert keinen Wert");
+                        return None;
+                    }
+                    self.method_args(args, &[], span)?;
+                    let (stream, _) = self.stream_ref(id)?;
+                    return Some(StmtKind::Skip(stream));
+                }
+            }
+        }
         let receiver = self.place(base)?;
         let rty = self.place_type(&receiver, base.span)?;
         let rtype = self.ty(rty).clone();
@@ -626,10 +641,6 @@ impl Lowerer<'_> {
             }
             ("insert" | "remove", Type::Map { .. }) => {
                 self.stage(span, "`map`", Stage::V1_1);
-                return None;
-            }
-            ("skip", _) => {
-                self.stage(span, "Streams", Stage::V1_1);
                 return None;
             }
             (m, _) => {
@@ -796,9 +807,17 @@ impl Lowerer<'_> {
                         vec![n],
                     ),
                     (Type::Map { key, value, .. }, ast::ForTarget::Pair(k, v)) => (vec![key, value], vec![k, v]),
-                    (Type::Stream(_), _) => {
-                        self.stage(span, "Fenster ueber Streams", Stage::V1_1);
-                        return None;
+                    // 8.7: `for ev in s:` laeuft ueber das Fenster; die
+                    // Schleifenvariable traegt wie eine Handler-Bindung die
+                    // Felder des Elements samt `.t` und `.seq`.
+                    (Type::Stream(elem), ast::ForTarget::One(n)) => {
+                        let type_name = match &self.mctx {
+                            Some(m) => format!("{}.{}.binding", m.machine.name, n.name),
+                            None => format!("{}.binding", n.name),
+                        };
+                        // Wer das Fenster liest, braucht einen Cursor (9.6).
+                        self.cursor_for(&it, e.span)?;
+                        (vec![self.binding_type(&type_name, &[], Some(elem), n.span)], vec![n])
                     }
                     _ => {
                         let n = self.type_name(it.ty);

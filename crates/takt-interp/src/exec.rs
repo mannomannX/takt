@@ -3,12 +3,15 @@
 //! `Err`. Modus `Entry` macht `->` wirkungslos (Entry-Tick-Regel, 5.2).
 
 use takt_diag::Span;
+use takt_mir::expr::{Expr, ExprKind, StreamRef};
 use takt_mir::machine::{FaultKind, Target};
 use takt_mir::stmt::*;
+use takt_mir::types::Type;
 
 use crate::env::Observation;
 use crate::eval::Ctx;
 use crate::format::render;
+use crate::loaded::Loaded;
 use crate::value::{EvalResult, Fault, Trap, Value, bug};
 
 /// Modus der Ausfuehrung (9.2).
@@ -127,6 +130,12 @@ impl Ctx<'_, '_> {
                 result
             }
             StmtKind::ForEach { vars, iter, body } => {
+                // 8.7: ueber ein Stream-Fenster laeuft die Schleife ueber
+                // Elemente, nicht ueber Werte; jedes betrachtete Element gilt
+                // als konsumiert.
+                if let Some(stream) = stream_of(self.loaded, iter) {
+                    return self.for_window(vars, stream, body, mode);
+                }
                 let items: Vec<Value> = match self.eval(iter)? {
                     Value::Array(x) | Value::Vec(x) | Value::Samples(x) => x,
                     Value::Map(pairs) => pairs.into_iter().map(|(k, v)| Value::Array(vec![k, v])).collect(),
@@ -224,6 +233,14 @@ impl Ctx<'_, '_> {
                     };
                     let v = self.eval(value)?;
                     self.outer.schedule(*c, t, v, stmt.span)?;
+                }
+                Ok(Out::Normal)
+            }
+            StmtKind::Skip(s) => {
+                // 8.6: `s.skip()` untersucht das ganze Fenster und verwirft
+                // es; der Cursor rueckt hinter das letzte Element.
+                if let Some(last) = self.outer.stream_window(*s)?.last() {
+                    self.outer.stream_examined(*s, last.seq)?;
                 }
                 Ok(Out::Normal)
             }
@@ -391,13 +408,32 @@ impl Ctx<'_, '_> {
                 other => bug(format!("clear auf {}", other.kind_name())),
             },
             Method::Insert | Method::Remove => bug("map ab M6"),
-            Method::Skip => {
-                // 8.6: `s.skip()` untersucht alles und verwirft das Fenster.
-                let Place::Var(v) = receiver else { return bug("`skip` auf einer Nicht-Variablen") };
-                let _ = v;
-                bug("`skip` nur auf einem Stream")
-            }
         }
+    }
+
+    /// `for ev in s:` ueber das Fenster eines Stroms (8.7, 9.6). Die Schleife
+    /// ist durch CAP beschraenkt; jedes betrachtete Element gilt als
+    /// konsumiert, ein `break` laesst den Rest im Puffer.
+    fn for_window(&mut self, vars: &ForVars, stream: StreamRef, body: &Block, mode: Mode) -> EvalResult<Out> {
+        let ForVars::One(var) = vars else { return bug("`for` ueber ein Fenster bindet genau eine Variable") };
+        let window = self.outer.stream_window(stream)?;
+        self.loops.push(0);
+        let result = (|| {
+            for (index, element) in window.into_iter().enumerate() {
+                *self.loops.last_mut().expect("Schleife offen") = index as i64;
+                let value = self.outer.element_value(*var, &element, Vec::new())?;
+                *self.var_mut(*var)? = value;
+                self.outer.stream_examined(stream, element.seq)?;
+                match self.exec_block(body, mode)? {
+                    Out::Normal => {}
+                    Out::Break => break,
+                    out => return Ok(out),
+                }
+            }
+            Ok(Out::Normal)
+        })();
+        self.loops.pop();
+        result
     }
 
     /// Kapazitaet einer Sammlung an einer Stelle: aus dem Typ der Variablen,
@@ -444,5 +480,18 @@ fn push_bounded(x: &mut Vec<Value>, v: Value, cap: usize) -> bool {
         true
     } else {
         false
+    }
+}
+
+/// Der Strom, ueber den eine Schleife laeuft; `None` bei einer gewoehnlichen
+/// Sammlung.
+fn stream_of(loaded: &Loaded<'_>, iter: &Expr) -> Option<StreamRef> {
+    if !matches!(loaded.ty(iter.ty), Type::Stream(_)) {
+        return None;
+    }
+    match &iter.kind {
+        ExprKind::Input { channel, .. } => Some(StreamRef::Channel(*channel)),
+        ExprKind::Stream(s) => Some(StreamRef::Internal(*s)),
+        _ => None,
     }
 }

@@ -286,6 +286,11 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 let v = self.eval(expr)?;
                 self.convert(v, *kind, *unit, expr.ty, e.ty, span)
             }
+            ExprKind::Stream(_) => {
+                // Ein Strom hat keinen Wert; nur seine Zaehler sind lesbar
+                // (8.6), und die faengt `accessor` ab.
+                bug("ein Strom ist kein Wert")
+            }
             ExprKind::Matches { subject, kind, pattern, binding } => {
                 self.matches(subject, *kind, pattern, *binding, span)
             }
@@ -418,7 +423,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
     /// Wert, der nicht passt, ergibt `false`. Trifft das Muster und traegt es
     /// eine Bindung, entsteht der Bindungsrecord aus den Captures; sichtbar
     /// ist er nur im dominierten Zweig (8.7, 4.4).
-    fn matches(
+    pub(crate) fn matches(
         &mut self,
         subject: &Expr,
         kind: MatchKind,
@@ -482,9 +487,16 @@ impl<'p, 'o> Ctx<'p, 'o> {
     fn accessor(&mut self, base: &Expr, acc: Accessor, args: &[Expr], span: Span) -> EvalResult<Value> {
         // Zaehler und freier Platz eines Stroms lesen den Puffer, nicht den
         // Wert des Ausdrucks (8.6, 8.8).
-        if let (ExprKind::Input { channel, .. }, Type::Stream(_)) = (&base.kind, self.loaded.ty(base.ty)) {
-            if let Some(v) = self.outer.stream_stat(*channel, acc)? {
-                return Ok(v);
+        if matches!(self.loaded.ty(base.ty), Type::Stream(_)) {
+            let r = match &base.kind {
+                ExprKind::Input { channel, .. } => Some(StreamRef::Channel(*channel)),
+                ExprKind::Stream(s) => Some(StreamRef::Internal(*s)),
+                _ => None,
+            };
+            if let Some(r) = r {
+                if let Some(v) = self.outer.stream_stat(r, acc)? {
+                    return Ok(v);
+                }
             }
         }
         // Wrapper-Zugriffe auf Inputs lesen die Abtastung, nicht den Wert (3.5).

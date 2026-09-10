@@ -941,7 +941,7 @@ pub fn full_program() -> Program {
             args: vec![e(ExprKind::Int(1), t_u16)],
         }),
         stmt(StmtKind::MethodCall { target: None, receiver: Place::Var(v_vec), method: Method::Clear, args: vec![] }),
-        stmt(StmtKind::MethodCall { target: None, receiver: Place::Var(v_trig), method: Method::Skip, args: vec![] }),
+        stmt(StmtKind::Skip(StreamRef::Var(v_trig))),
         stmt(StmtKind::Assign {
             target: Place::Index2(Box::new(Place::Var(v_mat)), e(ExprKind::Int(0), t_int), e(ExprKind::Int(1), t_int)),
             value: e(

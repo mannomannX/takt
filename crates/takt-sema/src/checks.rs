@@ -288,11 +288,16 @@ impl Lowerer<'_> {
             }
             let mut seen: HashSet<ChannelId> = HashSet::new();
             for_each_stmt(m, &mut |s| {
-                if let StmtKind::Assign { target, .. } = &s.kind {
-                    if let Some(c) = output_of(target) {
-                        if seen.insert(c) {
-                            writers.entry(c).or_default().push((MachineId(mi as u32), s.span));
-                        }
+                // `send o, e` schreibt einen Ausgabestrom genauso wie eine
+                // Zuweisung ein Latch (8.8); auch er hat genau einen Besitzer.
+                let target = match &s.kind {
+                    StmtKind::Assign { target, .. } => output_of(target),
+                    StmtKind::Send { stream: StreamRef::Channel(c), .. } => Some(*c),
+                    _ => None,
+                };
+                if let Some(c) = target {
+                    if seen.insert(c) {
+                        writers.entry(c).or_default().push((MachineId(mi as u32), s.span));
                     }
                 }
             });
@@ -542,6 +547,13 @@ impl Lowerer<'_> {
                     read.insert(*channel);
                 }
             });
+            // Ein Handler nennt seinen Strom nicht als Ausdruck; wer ihn liest,
+            // steht in `Layout::cursors` (9.6).
+            for r in &m.layout.cursors {
+                if let StreamRef::Channel(c) = r {
+                    read.insert(*c);
+                }
+            }
         }
         let mut diags = Vec::new();
         for (i, c) in self.program.channels.iter().enumerate() {

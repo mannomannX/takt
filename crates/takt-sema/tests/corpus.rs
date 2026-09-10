@@ -37,6 +37,8 @@ fn examples_14_1_to_14_5_lower_without_errors() {
 /// Der Korpus der Kernkonstrukte uebersetzt ebenfalls vollstaendig.
 #[test]
 fn core_corpus_lowers_without_errors() {
+    // `05_streams_and_protocol` fehlt hier: es nutzt `follows` (M6, v1.1).
+    // Alles andere daran senkt fehlerfrei.
     for name in ["01_minimal", "03_sequences_and_faults"] {
         let path = root().join(format!("{name}.takt"));
         let errors = errors_of(&path);

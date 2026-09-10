@@ -4,12 +4,14 @@
 use std::collections::HashMap;
 
 use takt_diag::Span;
-use takt_mir::program::{Direction, Program};
+use takt_mir::program::{Direction, Overflow, Program};
+use takt_mir::types::Type;
 use takt_mir::{ChannelId, MachineId, VarId};
 
 use crate::env::Observation;
+use crate::stream::Delivery;
 use crate::system::Sim;
-use crate::trace::{LineKind, Trace, TraceLine, sample_from_text, value_text};
+use crate::trace::{LineKind, Trace, TraceLine, parse_value, sample_from_text, value_text};
 use crate::value::{Trap, Value};
 
 /// Lauf-Verdikt (13.5): FAIL absorbiert.
@@ -98,6 +100,20 @@ fn apply_stimulus(sim: &mut Sim<'_>, stimulus: &Trace, tick: u64) -> Result<(), 
                     return Err(Trap::Bug(format!("Stimulus: `{channel}` ist kein Input")));
                 }
                 let ty = program.channels[id.index()].ty;
+                // 8.6: ein Stream-Input traegt kein Latch, sondern ein Element
+                // je Zeile; mehrere Zeilen eines Ticks liefern mehrere
+                // Elemente in ihrer Reihenfolge.
+                if let Some(Type::Stream(elem)) = program.types.list.get(ty.index()).cloned() {
+                    let text = sample.value.clone().unwrap_or_default();
+                    let value = parse_value(&text, elem, program).map_err(Trap::Bug)?;
+                    let attrs = &program.channels[id.index()].attrs;
+                    let drop_oldest = matches!(attrs.overflow, Some(Overflow::DropOldest));
+                    let t = i64::try_from(tick).unwrap_or(i64::MAX).saturating_mul(program.config.tick);
+                    if sim.image.push_element(id, t, value, drop_oldest) == Delivery::Overflow {
+                        sim.overflow_channel(id);
+                    }
+                    continue;
+                }
                 let s = sample_from_text(sample, ty, program).map_err(Trap::Bug)?;
                 sim.image.set_input(id, s, program);
             }
@@ -209,6 +225,8 @@ struct Writer<'p> {
     states: HashMap<MachineId, String>,
     published: HashMap<(MachineId, VarId), String>,
     alerts: HashMap<(MachineId, Span, Vec<i64>), bool>,
+    /// Letzter gemeldeter Stand von `dropped`, `overflowed`, `malformed`.
+    counters: HashMap<String, (u32, u32, u32)>,
 }
 
 impl<'p> Writer<'p> {
@@ -220,6 +238,7 @@ impl<'p> Writer<'p> {
             states: HashMap::new(),
             published: HashMap::new(),
             alerts: HashMap::new(),
+            counters: HashMap::new(),
         }
     }
 
@@ -246,7 +265,7 @@ impl<'p> Writer<'p> {
             });
         }
         for (i, c) in self.program.channels.iter().enumerate() {
-            if c.dir != Direction::Output {
+            if c.dir != Direction::Output || self.is_stream(c.ty) {
                 continue;
             }
             let id = ChannelId(i as u32);
@@ -255,6 +274,10 @@ impl<'p> Writer<'p> {
             self.lines.push(TraceLine { tick: 0, kind: LineKind::Output { channel: c.name.clone(), value: text } });
         }
         self.publish(sim, 0);
+        // Die Zaehler stehen in Tick 0 auf null; nur ihre Aenderungen sind
+        // eine Beobachtung, darum den Anfangsstand nur merken.
+        self.stream_counters(sim, 0);
+        self.lines.retain(|l| !matches!(l.kind, LineKind::Stream { .. }));
     }
 
     /// Aenderungen nach einem Tick.
@@ -275,11 +298,68 @@ impl<'p> Writer<'p> {
                 continue;
             }
             let id = ChannelId(i as u32);
+            if self.is_stream(c.ty) {
+                continue;
+            }
             let text = value_text(sim.output(id), c.ty, self.program);
             if self.outputs[i].as_deref() != Some(text.as_str()) {
                 self.outputs[i] = Some(text.clone());
                 self.lines.push(TraceLine { tick, kind: LineKind::Output { channel: c.name.clone(), value: text } });
             }
+        }
+        self.sent(sim, tick);
+        self.stream_counters(sim, tick);
+    }
+
+    /// Ist der Typ ein Strom? Ein Ausgabestrom traegt kein Latch (8.8).
+    fn is_stream(&self, ty: takt_mir::TypeId) -> bool {
+        matches!(self.program.types.list.get(ty.index()), Some(takt_mir::types::Type::Stream(_)))
+    }
+
+    /// `out <stream> <element>`: was der Treiber in diesem Tick abgeholt hat
+    /// (8.8). Anders als ein Latch erscheint jedes Element, auch ein
+    /// wiederholtes.
+    fn sent(&mut self, sim: &Sim<'_>, tick: u64) {
+        for (i, c) in self.program.channels.iter().enumerate() {
+            if c.dir != Direction::Output || !self.is_stream(c.ty) {
+                continue;
+            }
+            let Some(tx) = sim.image.tx.get(&ChannelId(i as u32)) else { continue };
+            if tx.sent.is_empty() {
+                continue;
+            }
+            let value = crate::value::Value::Bytes(tx.sent.clone());
+            let text = value_text(&value, c.ty, self.program);
+            self.lines.push(TraceLine { tick, kind: LineKind::Output { channel: c.name.clone(), value: text } });
+        }
+    }
+
+    /// `stream <name> dropped=… overflowed=… malformed=…` bei Aenderung
+    /// (8.6): die Zaehler sind beobachtbar und gehoeren in den Golden-Trace.
+    fn stream_counters(&mut self, sim: &Sim<'_>, tick: u64) {
+        let mut seen: Vec<(String, (u32, u32, u32))> = Vec::new();
+        for (i, c) in self.program.channels.iter().enumerate() {
+            if c.dir != Direction::Input || !self.is_stream(c.ty) {
+                continue;
+            }
+            if let Some(b) = sim.image.channel_bufs.get(&ChannelId(i as u32)) {
+                seen.push((c.name.clone(), (b.dropped, b.overflowed, b.malformed)));
+            }
+        }
+        for (i, def) in self.program.streams.iter().enumerate() {
+            if let Some(b) = sim.image.stream_bufs.get(i) {
+                seen.push((def.name.clone(), (b.dropped, b.overflowed, b.malformed)));
+            }
+        }
+        for (name, now) in seen {
+            if self.counters.get(&name) == Some(&now) {
+                continue;
+            }
+            self.counters.insert(name.clone(), now);
+            self.lines.push(TraceLine {
+                tick,
+                kind: LineKind::Stream { name, dropped: now.0, overflowed: now.1, malformed: now.2 },
+            });
         }
     }
 

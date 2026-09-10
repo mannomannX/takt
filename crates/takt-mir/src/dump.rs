@@ -291,6 +291,7 @@ impl Dumper<'_> {
             StmtKind::Send { stream, value, .. } => format!("send {}, {}", self.stream(*stream), self.expr(value)),
             StmtKind::At { time, .. } => format!("at {}: …", self.expr(time)),
             StmtKind::Cancel(c) => format!("cancel {}", self.p.channels[c.index()].name),
+            StmtKind::Skip(s) => format!("{}.skip()", self.stream(*s)),
             StmtKind::Raise(s) => format!("raise {}", self.m.signals[s.index()].name),
             StmtKind::Job { handle, native, args } => {
                 format!("job {} = {}({})", self.var_name(*handle), self.p.natives[native.index()].name, self.args(args))
@@ -562,6 +563,7 @@ impl Dumper<'_> {
             ExprKind::Lift(e) => format!("lift({})", self.expr(e)),
             ExprKind::Ok(e) => format!("OK({})", self.expr(e)),
             ExprKind::Err(e) => format!("ERR({})", self.expr(e)),
+            ExprKind::Stream(s) => self.p.streams[s.index()].name.clone(),
             ExprKind::Intrinsic { op, args } => format!("{}({})", op.name(), self.args(args)),
         }
     }

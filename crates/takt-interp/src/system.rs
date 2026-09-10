@@ -433,17 +433,38 @@ impl Outer for MachineEnv<'_, '_> {
         Ok(())
     }
 
-    fn stream_stat(&self, c: ChannelId, acc: Accessor) -> EvalResult<Option<Value>> {
+    fn stream_window(&self, s: StreamRef) -> EvalResult<Vec<Element>> {
+        Ok(self.window(self.loaded, s))
+    }
+
+    fn element_value(&mut self, v: VarId, e: &Element, caps: Vec<Value>) -> EvalResult<Value> {
+        self.element_record(self.loaded, v, e, caps)
+    }
+
+    fn stream_examined(&mut self, s: StreamRef, seq: i64) -> EvalResult<()> {
+        self.mark_examined(self.loaded, s, seq);
+        Ok(())
+    }
+
+    fn stream_stat(&self, r: StreamRef, acc: Accessor) -> EvalResult<Option<Value>> {
         // `count` zaehlt das Fenster dieser Maschine, die uebrigen Zaehler
         // gehoeren dem Strom (8.6).
         if acc == Accessor::Free {
-            let free = self.image.tx.get(&c).map_or(0, |t| t.free());
+            let free = match r {
+                StreamRef::Channel(c) => self.image.tx.get(&c).map_or(0, |t| t.free()),
+                _ => 0,
+            };
             return Ok(Some(Value::Int(i64::from(free))));
         }
-        let Some(buf) = self.image.channel_bufs.get(&c) else { return Ok(None) };
+        let buf = match r {
+            StreamRef::Channel(c) => self.image.channel_bufs.get(&c),
+            StreamRef::Internal(s) => self.image.stream_bufs.get(s.index()),
+            _ => None,
+        };
+        let Some(buf) = buf else { return Ok(None) };
         let v = match acc {
             Accessor::Count => {
-                let cursor = self.cursor_of(self.loaded, StreamRef::Channel(c));
+                let cursor = self.cursor_of(self.loaded, r);
                 Value::Int(buf.count(cursor) as i64)
             }
             Accessor::Dropped => Value::Int(i64::from(buf.dropped)),
@@ -541,6 +562,21 @@ impl<'p> Sim<'p> {
     /// `deliver(D_k)` (9.6): die im vorigen Tick gesendeten Elemente eines
     /// internen Stroms werden sichtbar. Ein Ueberlauf merkt den Fault fuer
     /// jeden Konsumenten vor; bei `drop_oldest` faellt ein Alert an.
+    /// Ein uebergelaufener Eingabestrom faultet jede Maschine, die ihn liest
+    /// (8.6): der Ueberlauf ist ein Fehler des Systems, kein stiller Verlust.
+    pub fn overflow_channel(&mut self, c: ChannelId) {
+        let program = self.loaded.program;
+        let name = program.channels[c.index()].name.clone();
+        let span = program.channels[c.index()].span;
+        let f = Fault::new(FaultKind::StreamOverflow, format!("Stream `{name}` uebergelaufen"), span, self.tick);
+        for id in self.order.clone() {
+            let reads = program.machines[id.index()].layout.cursors.contains(&StreamRef::Channel(c));
+            if reads && self.states[id.index()].pending.is_none() {
+                self.states[id.index()].pending = Some(f.clone());
+            }
+        }
+    }
+
     fn deliver(&mut self) -> Result<(), Trap> {
         let program = self.loaded.program;
         for (i, def) in program.streams.iter().enumerate() {

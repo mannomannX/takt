@@ -406,9 +406,12 @@ impl Lowerer<'_> {
                 );
                 None
             }
-            Entity::Stream(_) => {
-                self.stage(span, "interne Streams", Stage::V1_1);
-                None
+            Entity::Stream(sid) => {
+                // Ein interner Stream als Wert (8.6): Subjekt eines Guards
+                // und Traeger seiner Zaehler.
+                let elem = self.program.streams[sid.index()].elem;
+                let ty = self.intern(Type::Stream(elem));
+                Some(Expr::new(ExprKind::Stream(sid), ty, span))
             }
             Entity::Intrinsic(i) => {
                 self.error(SC3, span, format!("`{}` ist eine Funktion; Aufruf mit `(...)`", i.name()));

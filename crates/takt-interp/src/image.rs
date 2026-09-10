@@ -9,7 +9,7 @@ use takt_mir::{ChannelId, CommandId, MachineId, SignalId, VarId};
 
 use takt_mir::types::Type;
 
-use crate::stream::Buffer;
+use crate::stream::{Buffer, Delivery};
 use crate::value::{Quality, Reason, Sample, Value};
 
 /// Veroeffentlichte Groessen einer Maschine (Ψ, 9.1).
@@ -146,7 +146,19 @@ impl Image {
                     channel_bufs.insert(id, Buffer::new(cap, cap_bytes));
                 }
                 Direction::Output => {
-                    tx.insert(id, TxBuffer { capacity: c.attrs.capacity.unwrap_or(256), ..Default::default() });
+                    // 8.8: „die Simulation leert exakt `max_rate * T0` Bytes
+                    // pro Tick". Ohne `max_rate` holt der Treiber alles ab.
+                    let per_tick = match rate_hz(c) {
+                        Some(hz) => {
+                            let bytes = hz.saturating_mul(p.config.tick as u64) / 1_000_000_000;
+                            u32::try_from(bytes.max(1)).unwrap_or(u32::MAX)
+                        }
+                        None => u32::MAX,
+                    };
+                    tx.insert(
+                        id,
+                        TxBuffer { capacity: c.attrs.capacity.unwrap_or(256), per_tick, ..Default::default() },
+                    );
                 }
             }
         }
@@ -182,6 +194,17 @@ impl Image {
     pub fn set_input(&mut self, c: ChannelId, sample: Sample, p: &Program) {
         self.inputs[c.index()] = enforce_range(sample, c, p);
         self.driven[c.index()] = true;
+    }
+
+    /// Legt ein Element eines Eingabestroms ab (8.6). Es kommt vom Rand und
+    /// ist darum sofort sichtbar; der Unit-Delay gilt nur fuer interne
+    /// Stroeme, deren Schreiber im selben Tick laeuft (9.6).
+    pub fn push_element(&mut self, c: ChannelId, t: i64, value: Value, drop_oldest: bool) -> Delivery {
+        let bytes = crate::stream::byte_len(&value);
+        match self.channel_bufs.get_mut(&c) {
+            Some(buf) => buf.push(t, value, bytes, drop_oldest),
+            None => Delivery::Ok,
+        }
     }
 
     /// Command dieses Ticks.
@@ -337,17 +360,42 @@ fn enforce_range(sample: Sample, c: ChannelId, p: &Program) -> Sample {
         return sample;
     }
     let ty = &p.types.list[p.channels[c.index()].ty.index()];
-    let range = match ty {
+    // 8.9: bei einem oversampelten Kanal traegt das Element die Range; ein
+    // einziges Sample ausserhalb macht das ganze Tick-Array `Bad`
+    // (konservativ).
+    let (range, samples) = match ty {
+        takt_mir::types::Type::Samples { elem, .. } => (range_of(&p.types.list[elem.index()]), true),
+        other => (range_of(other), false),
+    };
+    let Some(range) = range else { return sample };
+    let ok = match (samples, value) {
+        (true, Value::Samples(items)) => items.iter().all(|x| crate::eval::in_range(x, &range)),
+        (true, _) => true,
+        (false, v) => crate::eval::in_range(v, &range),
+    };
+    if ok {
+        return sample;
+    }
+    Sample { value: None, quality: Quality::Bad, age: sample.age, reason: Some(Reason::OutOfRange) }
+}
+
+/// `max_rate` eines Streams in Hz; nur ein Literal, wie im Sema (8.6).
+fn rate_hz(c: &takt_mir::program::Channel) -> Option<u64> {
+    match &c.attrs.max_rate.as_ref()?.kind {
+        takt_mir::expr::ExprKind::Int(n) => u64::try_from(*n).ok(),
+        takt_mir::expr::ExprKind::Float(f) if *f >= 0.0 => Some(*f as u64),
+        _ => None,
+    }
+}
+
+/// Die deklarierte Range eines skalaren Typs (3.4).
+fn range_of(ty: &takt_mir::types::Type) -> Option<takt_mir::types::Range> {
+    match ty {
         takt_mir::types::Type::Int { range, .. }
         | takt_mir::types::Type::Float { range, .. }
         | takt_mir::types::Type::Duration { range } => *range,
         _ => None,
-    };
-    let Some(range) = range else { return sample };
-    if crate::eval::in_range(value, &range) {
-        return sample;
     }
-    Sample { value: None, quality: Quality::Bad, age: sample.age, reason: Some(Reason::OutOfRange) }
 }
 
 /// Adresse als Schluessel (`daq1/ai0`).

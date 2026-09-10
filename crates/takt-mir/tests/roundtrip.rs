@@ -236,7 +236,7 @@ fn accessor_names_are_reserved_members() {
     }
     assert_eq!(Accessor::Wrap(IntWidth::U16).name(), "wrap_u16");
     assert!(reserved.contains(&"wrap_*"));
-    for m in [Method::Step, Method::Reset, Method::Push, Method::Insert, Method::Remove, Method::Clear, Method::Skip] {
+    for m in [Method::Step, Method::Reset, Method::Push, Method::Insert, Method::Remove, Method::Clear] {
         let name = m.name().expect("Name");
         assert!(name == "step" || reserved.contains(&name), "{name} steht nicht in 2.5");
     }

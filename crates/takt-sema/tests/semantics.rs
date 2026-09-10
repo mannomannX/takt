@@ -898,6 +898,8 @@ t=7 measure hotfire boot_time 1500 ms
 t=8 verify hotfire fail \"supply not off\"
 t=8 fault hotfire Timeout \"no pressure\" -> SAFE
 t=9 verdict hotfire pass \"recovery ok\"
+t=9 out dut_tx [0x50, 0x49]
+t=9 stream dut_log dropped=2 overflowed=0 malformed=1
 t=9 verdict-final FAIL
 ";
     let trace = Trace::parse(text).expect("lesbar");

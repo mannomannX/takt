@@ -137,6 +137,7 @@ codec_enum!(ExprKind {
     38 Ok(1 one e),
     39 Err(1 one e),
     40 Intrinsic { 1 one op, 2 rep args },
+    41 Stream(1 one s),
 });
 codec_unit_enum!(Intrinsic {
     0 Abs, 1 Min, 2 Max, 3 Sqrt, 4 Sin, 5 Cos, 6 Tan, 7 Asin, 8 Acos, 9 Atan, 10 Atan2, 11 Exp, 12 Log, 13 Pow,
@@ -177,7 +178,7 @@ codec_enum!(Observe {
     3 Verify { 1 one cond, 2 one message, 3 opt req },
     4 Verdict { 1 one pass, 2 opt message },
 });
-codec_enum!(Method { 0 Step, 1 Reset, 2 Block(1 one f), 3 Push, 4 Insert, 5 Remove, 6 Clear, 7 Skip });
+codec_enum!(Method { 0 Step, 1 Reset, 2 Block(1 one f), 3 Push, 4 Insert, 5 Remove, 6 Clear });
 codec_enum!(StmtKind {
     0 Assign { 1 one target, 2 one value },
     1 Check { 1 one cond, 2 opt message, 3 opt confirm, 4 opt target, 5 opt req, 6 one kind },
@@ -199,6 +200,7 @@ codec_enum!(StmtKind {
     17 Arm { 1 one trigger, 2 one on },
     18 MethodCall { 1 opt target, 2 one receiver, 3 one method, 4 rep args },
     19 Pass,
+    20 Skip(1 one s),
 });
 
 // ---------------------------------------------------------------- Funktionen

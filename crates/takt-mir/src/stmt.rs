@@ -177,8 +177,6 @@ pub enum Method {
     Remove,
     /// `clear()`
     Clear,
-    /// `s.skip()`: verwirft das Fenster (8.6).
-    Skip,
 }
 
 impl Method {
@@ -192,7 +190,6 @@ impl Method {
             Method::Insert => Some("insert"),
             Method::Remove => Some("remove"),
             Method::Clear => Some("clear"),
-            Method::Skip => Some("skip"),
         }
     }
 }
@@ -254,6 +251,8 @@ pub enum StmtKind {
         body: Block,
     },
     Cancel(ChannelId),
+    /// `s.skip()`: untersucht das ganze Fenster und verwirft es (8.6).
+    Skip(StreamRef),
     Raise(SignalId),
     /// `job v = f(args)` (4.5, v1.1).
     Job {

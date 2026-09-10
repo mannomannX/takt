@@ -418,6 +418,10 @@ pub enum ExprKind {
         kind: ConvertKind,
         unit: UnitId,
     },
+    /// Ein interner Stream als Wert (8.6): Subjekt eines Guards und Traeger
+    /// der Zaehler `.count`, `.dropped`, `.overflowed`, `.malformed`. Ein
+    /// Stream-Channel steht als `Input` da; hier fehlt die `ChannelId`.
+    Stream(StreamId),
     /// `x matches P as m` / `x has P`; die Bindung ist eine gehobene Variable.
     Matches {
         subject: Box<Expr>,

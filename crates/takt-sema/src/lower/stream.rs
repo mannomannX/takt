@@ -7,7 +7,7 @@
 //! Recordtyp ihrer Captures (plan/m2.md 1.6, 1.7).
 
 use takt_diag::Span;
-use takt_mir::expr::StreamRef;
+use takt_mir::expr::{Expr, ExprKind, StreamRef};
 use takt_mir::machine::{Guard, Handler};
 use takt_mir::types::Type;
 use takt_mir::{ChannelId, TypeId, VarId};
@@ -42,6 +42,22 @@ impl Lowerer<'_> {
         };
         self.add_cursor(r);
         Some((r, elem))
+    }
+
+    /// Traegt den Strom eines schon gesenkten Ausdrucks als gelesen ein
+    /// (9.6). Ein blosser Zaehlerzugriff bekommt keinen Cursor; nur wer das
+    /// Fenster ansieht, konsumiert (8.6).
+    pub fn cursor_for(&mut self, e: &Expr, span: Span) -> Option<StreamRef> {
+        let r = match &e.kind {
+            ExprKind::Input { channel, .. } => StreamRef::Channel(*channel),
+            ExprKind::Stream(s) => StreamRef::Internal(*s),
+            _ => {
+                self.error(SC3, span, "hier steht kein Strom");
+                return None;
+            }
+        };
+        self.add_cursor(r);
+        Some(r)
     }
 
     /// Traegt einen gelesenen Stream in `Layout::cursors` ein (9.6); die

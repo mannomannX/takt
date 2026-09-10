@@ -50,6 +50,9 @@ pub enum LineKind {
     Verify { machine: String, ok: bool, text: String },
     /// `verdict <maschine> pass|fail ["<text>"]`
     Verdict { machine: String, pass: bool, text: Option<String> },
+    /// `stream <name> dropped=<n> overflowed=<n> malformed=<n>` — die
+    /// Zaehler eines Stroms, wenn sie sich aendern (8.6).
+    Stream { name: String, dropped: u32, overflowed: u32, malformed: u32 },
     /// `verdict-final PASS|FAIL|INCONCLUSIVE`
     Final { verdict: String },
 }
@@ -194,6 +197,22 @@ fn parse_line(line: &str) -> Result<TraceLine, String> {
             let text = if rest.trim().is_empty() { None } else { Some(parse_quoted(rest)?.0) };
             LineKind::Verdict { machine: machine.to_string(), pass: verdict == "pass", text }
         }
+        "stream" => {
+            let (name, rest) = split_first(args);
+            let mut counters = [0u32; 3];
+            for (i, key) in ["dropped", "overflowed", "malformed"].iter().enumerate() {
+                counters[i] = match rest.split_whitespace().find_map(|f| f.strip_prefix(&format!("{key}="))) {
+                    Some(v) => v.parse().map_err(|_| format!("`{key}=` erwartet eine Zahl"))?,
+                    None => return Err(format!("`{key}=` fehlt")),
+                };
+            }
+            LineKind::Stream {
+                name: name.to_string(),
+                dropped: counters[0],
+                overflowed: counters[1],
+                malformed: counters[2],
+            }
+        }
         "verdict-final" => {
             LineKind::Final { verdict: nonempty(args, "`verdict-final PASS|FAIL|INCONCLUSIVE`")?.to_string() }
         }
@@ -291,6 +310,9 @@ fn render_line(line: &TraceLine) -> String {
             format!("t={t} fault {machine} {kind} \"{message}\" -> {target}")
         }
         LineKind::Log { machine, text } => format!("t={t} log {machine} \"{text}\""),
+        LineKind::Stream { name, dropped, overflowed, malformed } => {
+            format!("t={t} stream {name} dropped={dropped} overflowed={overflowed} malformed={malformed}")
+        }
         LineKind::Alert { machine, on, text } => {
             format!("t={t} alert {machine} {} \"{text}\"", if *on { "on" } else { "off" })
         }
@@ -508,6 +530,17 @@ pub fn parse_value(text: &str, ty: TypeId, p: &Program) -> Result<Value, String>
                 return Err(format!("{len} Elemente erwartet, {} gefunden", parts.len()));
             }
             Ok(Value::Array(parts.iter().map(|x| parse_value(x, *elem, p)).collect::<Result<Vec<_>, _>>()?))
+        }
+        // 8.9: ein Tick-Array eines oversampelten Kanals. Es darf kuerzer als
+        // `N` sein — fehlende Samples sind der Normalfall und geben dem Wert
+        // die Qualitaet `Stale`, nicht einen Lesefehler.
+        Type::Samples { elem, len } => {
+            let inner = text.trim().trim_start_matches('[').trim_end_matches(']');
+            let parts: Vec<&str> = if inner.trim().is_empty() { Vec::new() } else { split_top(inner) };
+            if parts.len() > *len as usize {
+                return Err(format!("hoechstens {len} Samples, {} gefunden", parts.len()));
+            }
+            Ok(Value::Samples(parts.iter().map(|x| parse_value(x, *elem, p)).collect::<Result<Vec<_>, _>>()?))
         }
         other => Err(format!("Wert vom Typ {other:?} kann der Trace nicht lesen")),
     }

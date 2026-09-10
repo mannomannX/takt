@@ -12,6 +12,7 @@ use takt_mir::{ChannelId, CommandId, CounterId, MachineId, ParamId, SignalId, Si
 use crate::image::Image;
 use crate::loaded::Loaded;
 use crate::machine::MachineState;
+use crate::stream::Element;
 use crate::value::{EvalResult, Sample, Value, bug};
 
 /// Beobachtung (5.6, 13.5): nie ein Fault.
@@ -180,8 +181,23 @@ pub trait Outer {
     /// Zaehler eines Stroms (`s.count`, `.dropped`, `.overflowed`,
     /// `.malformed`, `.free`, 8.6/8.8); `None`, wenn der Zugriff kein
     /// Stream-Zaehler ist.
-    fn stream_stat(&self, _c: ChannelId, _acc: Accessor) -> EvalResult<Option<Value>> {
+    fn stream_stat(&self, _s: StreamRef, _acc: Accessor) -> EvalResult<Option<Value>> {
         Ok(None)
+    }
+    /// Fenster W eines Stroms fuer diese Aktivierung (9.6); es ist pro
+    /// Aktivierung fest und durch CAP beschraenkt.
+    fn stream_window(&self, _s: StreamRef) -> EvalResult<Vec<Element>> {
+        bug("Stream-Fenster ausserhalb einer Maschine")
+    }
+    /// Meldet ein Element als untersucht (9.6, „untersucht heisst
+    /// konsumiert").
+    fn stream_examined(&mut self, _s: StreamRef, _seq: i64) -> EvalResult<()> {
+        bug("Stream-Fenster ausserhalb einer Maschine")
+    }
+    /// Bindungsrecord eines Elements: Captures, dann `.t`, `.seq` und
+    /// `.text`/`.data` beziehungsweise die Felder des Elements (8.7).
+    fn element_value(&mut self, _v: VarId, _e: &Element, _caps: Vec<Value>) -> EvalResult<Value> {
+        bug("Stream-Bindung ausserhalb einer Maschine")
     }
 }
 

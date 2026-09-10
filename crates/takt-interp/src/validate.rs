@@ -178,6 +178,7 @@ impl Checker<'_> {
                 self.index(&self.p.units, unit.index(), "Einheit", span)?;
                 self.expr(expr)
             }
+            ExprKind::Stream(s) => self.index(&self.p.streams, s.index(), "Stream", span),
             ExprKind::Matches { subject, pattern, binding, .. } => {
                 if let takt_mir::pattern::Pattern::Record { record, fields } = pattern {
                     self.index(&self.p.records, record.index(), "Record", span)?;
@@ -266,6 +267,7 @@ impl Checker<'_> {
                 let m = self.machine.ok_or_else(|| err(span, "raise ausserhalb einer Maschine"))?;
                 self.index(&m.signals, sig.index(), "Signal", span)
             }
+            StmtKind::Skip(s) => self.stream(*s, span),
             StmtKind::Job { .. } => Err(stage(span, "job", Stage::V1_1)),
             StmtKind::Every { period, counter, body } => {
                 self.expr(period)?;

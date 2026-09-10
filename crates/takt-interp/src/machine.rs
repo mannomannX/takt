@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use takt_diag::Span;
-use takt_mir::expr::{Builtin, StreamRef};
+use takt_mir::expr::{Builtin, Expr, ExprKind, StreamRef};
 use takt_mir::machine::*;
 use takt_mir::stmt::Block;
 use takt_mir::*;
@@ -292,8 +292,79 @@ fn guard_value(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, g: &Guard, tic
             let mut ctx = env.ctx(loaded, tick);
             ctx.eval_bool(e)
         }
-        Guard::Match { .. } | Guard::Next { .. } => bug("Stream- und Musterguards ab M2"),
+        Guard::Match { subject, kind, pattern, binding } => match stream_of(subject) {
+            // Ein Stream-Guard sucht das erste passende Element in W und
+            // setzt `examined` auf dessen `seq`; was danach kommt, bleibt
+            // unkonsumiert (8.7).
+            Some(stream) => first_match(loaded, env, stream, tick, *binding, |loaded, env, element| {
+                let consts = pattern_consts(loaded, env, pattern, tick)?;
+                Ok(crate::pattern::match_value(pattern, *kind, &element.value, &consts))
+            }),
+            // Auf einem gewoehnlichen Wert ist der Guard der Musterabgleich
+            // selbst (8.7).
+            None => {
+                let mut ctx = env.ctx(loaded, tick);
+                match ctx.matches(subject, *kind, pattern, *binding, subject.span)? {
+                    Value::Bool(b) => Ok(b),
+                    other => bug(format!("Guard ergab {}", other.kind_name())),
+                }
+            }
+        },
+        // `when s as e:` trifft das naechste Element des Fensters (8.7).
+        Guard::Next { stream, binding } => {
+            first_match(loaded, env, *stream, tick, Some(*binding), |_, _, _| Ok(Some(Vec::new())))
+        }
     }
+}
+
+/// Der Strom, ueber den ein Guard laeuft; `None`, wenn das Subjekt ein
+/// gewoehnlicher Wert ist.
+fn stream_of(subject: &Expr) -> Option<StreamRef> {
+    match &subject.kind {
+        ExprKind::Input { channel, .. } => Some(StreamRef::Channel(*channel)),
+        ExprKind::Stream(s) => Some(StreamRef::Internal(*s)),
+        _ => None,
+    }
+}
+
+/// Die Konstanten der Feldbedingungen eines Musters (8.7).
+fn pattern_consts(
+    loaded: &Loaded<'_>,
+    env: &mut MachineEnv<'_, '_>,
+    pattern: &takt_mir::pattern::Pattern,
+    tick: u64,
+) -> Result<Vec<Value>, Trap> {
+    let takt_mir::pattern::Pattern::Record { fields, .. } = pattern else { return Ok(Vec::new()) };
+    let mut out = Vec::new();
+    for (_, e) in fields {
+        let mut ctx = env.ctx(loaded, tick);
+        out.push(ctx.eval(e)?);
+    }
+    Ok(out)
+}
+
+/// Sucht das erste Element des Fensters, das `hit` annimmt, bindet es und
+/// meldet `examined` (8.7). Elemente davor gelten als untersucht, Elemente
+/// danach bleiben im Puffer.
+fn first_match(
+    loaded: &Loaded<'_>,
+    env: &mut MachineEnv<'_, '_>,
+    stream: StreamRef,
+    tick: u64,
+    binding: Option<VarId>,
+    mut hit: impl FnMut(&Loaded<'_>, &mut MachineEnv<'_, '_>, &Element) -> Result<Option<Vec<Value>>, Trap>,
+) -> Result<bool, Trap> {
+    let _ = tick;
+    for element in env.window(loaded, stream) {
+        let Some(caps) = hit(loaded, env, &element)? else { continue };
+        if let Some(var) = binding {
+            let value = env.element_record(loaded, var, &element, caps)?;
+            *env.state.vars.get_mut(var.index()).ok_or_else(|| Trap::Bug("Bindung fehlt".into()))? = value;
+        }
+        env.mark_examined(loaded, stream, element.seq);
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// `loop:`-Bloecke der Kette von aussen nach innen (9.3, `exec_chain`).

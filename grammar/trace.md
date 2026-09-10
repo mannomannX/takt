@@ -41,6 +41,7 @@ Leerzeichen, außer im Rest einer Meldung.
 | `measure` | Golden | `measure <maschine> <name> <wert>` |
 | `verify` | Golden | `verify <maschine> ok\|fail "<text>"` |
 | `verdict` | Golden | `verdict <maschine> pass\|fail ["<text>"]` |
+| `stream` | Golden | `stream <name> dropped=<n> overflowed=<n> malformed=<n>` — bei Änderung (8.6) |
 | `verdict-final` | Golden | `verdict-final PASS\|FAIL\|INCONCLUSIVE` — letzte Zeile (13.5) |
 
 ## T2 Werte
@@ -66,6 +67,20 @@ t=3 cmd start
 t=4 abort
 ```
 
+Ein Strom trägt kein Latch, sondern ein *Element* je Zeile (8.6): der Wert
+steht in der Literalform des Elementtyps. Mehrere Zeilen eines Ticks liefern
+mehrere Elemente in ihrer Reihenfolge; ein Element vom Rand ist sofort
+sichtbar, während ein interner Stream den Unit-Delay aus 9.6 behält. Ein
+oversampelter Kanal (8.9) trägt sein Tick-Array als Liste; sie darf kürzer
+als `N` sein, weil fehlende Samples der Normalfall sind.
+
+```trace
+t=1 in dut_log "Boot v2.1"
+t=2 in can_rx CanFrame(0x7E8, [0x02, 0x10])
+t=2 in dut_log "Update complete"
+t=3 in i_dut [0.5 A, 1.0 A, 2.0 A, 1.2 A]
+```
+
 ## T3 Ausgaben
 
 ```trace
@@ -80,6 +95,16 @@ t=5 verify hotfire fail "supply not off"
 t=6 fault hotfire Timeout "no pressure" -> SAFE
 t=7 verdict hotfire pass "recovery ok"
 t=8 verdict-final FAIL
+```
+
+Ein Ausgabestrom erscheint als `out`, sobald der Treiber Bytes abgeholt hat
+(8.8: er leert `max_rate * T0` Bytes je Tick). Anders als ein Latch steht
+jedes Element da, auch ein wiederholtes. Die Zähler eines Stroms sind
+beobachtbar und erscheinen als eigene Zeile, wenn sie sich ändern (8.6).
+
+```trace
+t=7 out dut_tx [0x50, 0x49, 0x4e, 0x47]
+t=9 stream dut_log dropped=2 overflowed=0 malformed=1
 ```
 
 ## T4 Halten und Wiederholen
@@ -106,7 +131,9 @@ Innerhalb eines Ticks:
 2. je Maschine in Indexreihenfolge: `log`, `alert`, `measure`, `verify`,
    `verdict`, `signal`, `fault`, `state` in Ausführungsreihenfolge.
 3. `pub` in Maschinen- und Variablenindexreihenfolge.
-4. `out` in Channel-Indexreihenfolge.
+4. `out` in Channel-Indexreihenfolge; ein Ausgabestrom steht bei seinem
+   Channel.
+5. `stream` in Channel-, dann Stream-Indexreihenfolge.
 
 Die Ordnung hängt nicht davon ab, in welcher Reihenfolge die Maschinen
 geschritten sind; damit prüft ein Trace-Vergleich die Ordnungsunabhängigkeit
