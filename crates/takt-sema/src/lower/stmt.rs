@@ -897,8 +897,20 @@ impl Lowerer<'_> {
                         return None;
                     };
                     let field_tys = variants[v].1.clone();
+                    // Pruefung 19, zweite Klausel: Variantenfelder vollstaendig
+                    // gebunden (3.7).
                     if fields.len() != field_tys.len() {
-                        self.error(SC3, case.span, format!("Variante `{}` hat {} Felder", name.name, field_tys.len()));
+                        self.error_hint(
+                            "SC-19",
+                            case.span,
+                            format!(
+                                "Variante `{}` hat {} Felder, gebunden sind {}",
+                                name.name,
+                                field_tys.len(),
+                                fields.len()
+                            ),
+                            "jedes Feld der Variante braucht einen Namen (3.7)",
+                        );
                         return None;
                     }
                     covered.push(v as u32);

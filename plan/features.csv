@@ -549,7 +549,7 @@ SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inpu
 SC-16,Statische Prüfung,10,"Format-Strings: Platzhalter existieren, Typen formatierbar, Puffergröße",F,M3 (Gate),fertig
 SC-17,Statische Prüfung,10,Streams: `MAXPT * n_m <= CAP` je Konsument; Konsumentenmenge statisch; Elementtyp zulässig; `wake`-Attribute,F,M3 (Gate),fertig
 SC-18,Statische Prüfung,10,"Muster: Wohlgeformtheit, Mehrdeutigkeitsregel (8.7), Capture-Typen; Record-Muster nur mit konstanten Feldwerten",F,M3 (Gate),fertig
-SC-19,Statische Prüfung,10,`match` erschöpfend; Variantenfelder vollständig gebunden,F,M3 (Gate),teilweise
+SC-19,Statische Prüfung,10,`match` erschöpfend; Variantenfelder vollständig gebunden,F,M3 (Gate),fertig
 SC-20,Statische Prüfung,10,`send`: statische Summe der Höchstlängen je Aktivierung ≤ `capacity`,F,M3 (Gate),fertig
 SC-21,Statische Prüfung,10,`at`/`pulse`: Block enthält nur Zuweisungen an skalare Outputs; `T` vom Typ Duration; K_o,F,M3 (Gate),fertig
 SC-22,Statische Prüfung,10,"`idle`: keine `loop:`/Handler in Zustand und Vorfahren; Guards nur über Wake-Quellen, Konstanten, Params, Maschinenvariablen",F,M3 (Gate),offen

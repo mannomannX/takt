@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-19: jede Variante mit allen Feldern, dazu ein `case _` ueber Werte.
+
+enum Cmd: NONE, ARM(pre : int in 0..99, level : int in 0..99)
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    var c : Cmd = NONE
+    var x : int in 0..9 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            match c:
+                case NONE: n = 0
+                case ARM(p, l): n = p + l
+            match x:
+                case 0: n = 1
+                case _: n = 2

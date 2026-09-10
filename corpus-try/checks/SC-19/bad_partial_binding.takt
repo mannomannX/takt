@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-19: die Felder einer Variante werden vollstaendig gebunden (3.7).
+
+enum Cmd: NONE, ARM(pre : int in 0..99, level : int in 0..99)
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    var c : Cmd = NONE
+    initial RUN
+
+    state RUN:
+        loop:
+            match c:
+                case NONE: n = 0
+                case ARM(p): n = p  # ~ SC-19
