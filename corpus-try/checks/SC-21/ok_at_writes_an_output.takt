@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-21: ein geplanter Schreibvorgang auf einen skalaren Output.
+
+output valve : bool @ hw("o/valve") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            at now + 5 ms:
+                valve = true

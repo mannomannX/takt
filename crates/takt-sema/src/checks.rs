@@ -63,6 +63,7 @@ impl Lowerer<'_> {
     pub fn run_mir_checks(&mut self) {
         self.default_max_age();
         self.stream_capacities();
+        self.check_send_budget();
         self.check_writers();
         self.check_fault_forest();
         self.check_reachability();
@@ -256,6 +257,50 @@ impl Lowerer<'_> {
             worst = worst.max(n);
         }
         worst.max(1)
+    }
+
+    /// Pruefung 20 (8.8): „statische Summe der Hoechstlaengen je Aktivierung
+    /// <= `capacity`". Gerechnet wird je Maschine ueber alle erreichbaren
+    /// `send`, weil der Sendepuffer erst beim Commit geleert wird.
+    fn check_send_budget(&mut self) {
+        let mut diags = Vec::new();
+        for (i, c) in self.program.channels.iter().enumerate() {
+            let id = ChannelId(i as u32);
+            if !matches!(self.program.types.list.get(c.ty.index()), Some(Type::Stream(_))) {
+                continue;
+            }
+            if c.dir != Direction::Output {
+                continue;
+            }
+            let cap = u64::from(c.attrs.capacity.unwrap_or(256));
+            for m in &self.program.machines {
+                if matches!(m.kind, MachineKind::Template) {
+                    continue;
+                }
+                let mut sum = 0u64;
+                let mut site = None;
+                for_each_stmt(m, &mut |s| {
+                    if let StmtKind::Send { stream: StreamRef::Channel(t), len_max, .. } = &s.kind {
+                        if *t == id {
+                            sum += u64::from(*len_max);
+                            site.get_or_insert(s.span);
+                        }
+                    }
+                });
+                if sum > cap {
+                    let span = site.unwrap_or(c.span);
+                    diags.push(
+                        Diagnostic::error(
+                            SC20,
+                            span,
+                            format!("`{}`: {sum} Byte je Aktivierung, `capacity` ist {cap}", c.name),
+                        )
+                        .with_suggestion(format!("`with capacity = {sum}` setzen oder weniger senden (8.8)")),
+                    );
+                }
+            }
+        }
+        self.diags.extend(diags);
     }
 
     /// `max_rate` eines Channels in Hz, als ganze Zahl.

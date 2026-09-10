@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-20: dieselben zwei Zeilen mit einem Puffer, der sie fasst.
+
+output tx : stream<line<200>> @ hw("uart0/tx") with max_rate = 1000 Hz, capacity = 400
+
+machine talker:
+    initial RUN
+
+    state RUN:
+        loop:
+            send tx, "eins"
+            send tx, "zwei"

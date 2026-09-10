@@ -71,10 +71,10 @@ SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M2 (Ströme),offen
 SEM-8.3,Semantik/Abschnitt,8.3,Simulation und HIL,,M2 (Ströme),fertig
 SEM-8.4,Semantik/Abschnitt,8.4,Parameter und Profile,,M2 (Ströme),fertig
 SEM-8.5,Semantik/Abschnitt,8.5,Commands und Operator-Interaktion,,M2 (Ströme),fertig
-SEM-8.6,Semantik/Abschnitt,8.6,Ereignisströme (`stream<E>`),,M2 (Ströme),offen
-SEM-8.7,Semantik/Abschnitt,8.7,"Muster, Captures, Handler",,M2 (Ströme),offen
-SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),offen
-SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),offen
+SEM-8.6,Semantik/Abschnitt,8.6,Ereignisströme (`stream<E>`),,M2 (Ströme),fertig
+SEM-8.7,Semantik/Abschnitt,8.7,"Muster, Captures, Handler",,M2 (Ströme),fertig
+SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),fertig
+SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),teilweise
 SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M6,offen
 SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M2 (Ströme),offen
 SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),fertig
@@ -83,9 +83,9 @@ SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),fe
 SEM-9.3,Semantik/Abschnitt,9.3,Schritt einer Maschine,,M1/M2 (Interpreter),fertig
 SEM-9.4,Semantik/Abschnitt,9.4,System-Tick und Sätze,,M1/M2 (Interpreter),fertig
 SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M1/M2 (Interpreter),offen
-SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),offen
-SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),offen
-SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),offen
+SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),fertig
+SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),fertig
+SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig
 SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),offen
 SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M1/M2 (Interpreter),offen
 SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M3/M4,offen
@@ -547,11 +547,11 @@ SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `
 SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),fertig
 SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden",W,M3 (Gate),fertig
 SC-16,Statische Prüfung,10,"Format-Strings: Platzhalter existieren, Typen formatierbar, Puffergröße",F,M3 (Gate),fertig
-SC-17,Statische Prüfung,10,Streams: `MAXPT * n_m <= CAP` je Konsument; Konsumentenmenge statisch; Elementtyp zulässig; `wake`-Attribute,F,M3 (Gate),offen
-SC-18,Statische Prüfung,10,"Muster: Wohlgeformtheit, Mehrdeutigkeitsregel (8.7), Capture-Typen; Record-Muster nur mit konstanten Feldwerten",F,M3 (Gate),offen
+SC-17,Statische Prüfung,10,Streams: `MAXPT * n_m <= CAP` je Konsument; Konsumentenmenge statisch; Elementtyp zulässig; `wake`-Attribute,F,M3 (Gate),fertig
+SC-18,Statische Prüfung,10,"Muster: Wohlgeformtheit, Mehrdeutigkeitsregel (8.7), Capture-Typen; Record-Muster nur mit konstanten Feldwerten",F,M3 (Gate),fertig
 SC-19,Statische Prüfung,10,`match` erschöpfend; Variantenfelder vollständig gebunden,F,M3 (Gate),teilweise
-SC-20,Statische Prüfung,10,`send`: statische Summe der Höchstlängen je Aktivierung ≤ `capacity`,F,M3 (Gate),offen
-SC-21,Statische Prüfung,10,`at`/`pulse`: Block enthält nur Zuweisungen an skalare Outputs; `T` vom Typ Duration; K_o,F,M3 (Gate),offen
+SC-20,Statische Prüfung,10,`send`: statische Summe der Höchstlängen je Aktivierung ≤ `capacity`,F,M3 (Gate),fertig
+SC-21,Statische Prüfung,10,`at`/`pulse`: Block enthält nur Zuweisungen an skalare Outputs; `T` vom Typ Duration; K_o,F,M3 (Gate),fertig
 SC-22,Statische Prüfung,10,"`idle`: keine `loop:`/Handler in Zustand und Vorfahren; Guards nur über Wake-Quellen, Konstanten, Params, Maschinenvariablen",F,M3 (Gate),offen
 SC-23,Statische Prüfung,10,"`persist`: POD-Typ, Maschinenebene, nicht in Szenarien; Typ-Hash stabil",F,M3 (Gate),offen
 SC-24,Statische Prüfung,10,"Shift-Beträge, `as`-Konversionen, `vec`-Indizes, Slices: Range beweisbar oder impliziter Check",W,M3 (Gate),offen
@@ -573,11 +573,11 @@ SC-39,Statische Prüfung,10,"Speicherbudget aller `baremetal`- und `rtos`-Profil
 SC-40,Statische Prüfung,10,"Performance-Lint: `int` ohne Range in Schleifen und Regelpfaden auf 32-Bit-Zielen, mit Kostenanteil (3.4)",W,M3 (Gate),offen
 SC-41,Statische Prüfung,10,"Performance-Lint: `float = f64` auf Zielen ohne f64-Hardware, mit Kostenanteil der f64-Operationen; Vorschlag `system: float = f32` (4.2)",W,M3 (Gate),offen
 SC-42,Statische Prüfung,10,"Lint: Matrizen über 16×16 (Kosten n³, Scratch n²·8 Byte) (3.11); `expect_len < N` schwächt Lemma 9.6.1 zur deklarierten Annahme (8.6)",W,M3 (Gate),offen
-SC-43,Statische Prüfung,10,Interne Streams: genau ein Schreiber; `send` nur aus dessen Maschine; Kapazitäten wie 17 mit MAXPT = statische Höchstzahl von `send` je Aktivierung des Schreibers (8.6),F,M3 (Gate),offen
+SC-43,Statische Prüfung,10,Interne Streams: genau ein Schreiber; `send` nur aus dessen Maschine; Kapazitäten wie 17 mit MAXPT = statische Höchstzahl von `send` je Aktivierung des Schreibers (8.6),F,M3 (Gate),fertig
 SC-44,Statische Prüfung,10,"Jobs: höchstens K_j je Maschine, Argumente fester Größe, Handle zustandslokal oder Maschinenvariable; `duration` deklariert (4.5)",F,M3 (Gate),offen
-SC-45,Statische Prüfung,10,`T!E`: Dominanz durch `.ok` oder `check r.ok`; `match` über `OK`/`ERR` erschöpfend (3.8),F,M3 (Gate),offen
-SC-46,Statische Prüfung,10,"`layout`: Offsets überlappen nicht, Bitfelder innerhalb ihres Trägerfelds, Konstantenfelder passen zur Breite, Diskriminanten eindeutig (3.7)",F,M3 (Gate),offen
-SC-47,Statische Prüfung,10,"`inout`: kein Aliasing (ein Argument höchstens einmal, nicht zugleich als weiteres Argument) (3.9)",F,M3 (Gate),offen
+SC-45,Statische Prüfung,10,`T!E`: Dominanz durch `.ok` oder `check r.ok`; `match` über `OK`/`ERR` erschöpfend (3.8),F,M3 (Gate),fertig
+SC-46,Statische Prüfung,10,"`layout`: Offsets überlappen nicht, Bitfelder innerhalb ihres Trägerfelds, Konstantenfelder passen zur Breite, Diskriminanten eindeutig (3.7)",F,M3 (Gate),fertig
+SC-47,Statische Prüfung,10,"`inout`: kein Aliasing (ein Argument höchstens einmal, nicht zugleich als weiteres Argument) (3.9)",F,M3 (Gate),fertig
 SC-48,Statische Prüfung,10,`irreversible`-Outputs: Zuweisung nur in Sequenzen unmittelbar nach `expect`; Szenario-Abdeckung Pflicht (12.7),F,M3 (Gate),offen
 SC-49,Statische Prüfung,10,Edition fehlt (2.5),W (Zertifizierungsmodus: F),M3 (Gate),fertig
 SC-50,Statische Prüfung,10,Reservierte Wörter als Bezeichner; reservierte Membernamen als Feld- oder Variantennamen (2.5),F,M3 (Gate),fertig
@@ -668,32 +668,32 @@ PAR-7.5-Geplante_Ausgaben,Absatz/Regel,7.5,Geplante Ausgaben,,M1 (Kernsemantik),
 PAR-7.5-Latenzformel,Absatz/Regel,7.5,Latenzformel,,M1 (Kernsemantik),offen
 PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M1 (Kernsemantik),offen
 PAR-7.5-Trigger_v1.2_Regeln_auf_dem_I_O_Knoten,Absatz/Regel,7.5,Trigger (v1.2): Regeln auf dem I/O-Knoten,v1.2,M8,offen
-PAR-8.3-Sim_Build,Absatz/Regel,8.3,Sim-Build:,,M2 (Ströme),offen
-PAR-8.3-Plant_Modelle,Absatz/Regel,8.3,Plant-Modelle,,M2 (Ströme),offen
+PAR-8.3-Sim_Build,Absatz/Regel,8.3,Sim-Build:,,M2 (Ströme),fertig
+PAR-8.3-Plant_Modelle,Absatz/Regel,8.3,Plant-Modelle,,M2 (Ströme),fertig
 PAR-8.3-HIL_Umschaltung,Absatz/Regel,8.3,HIL-Umschaltung:,,M2 (Ströme),teilweise
-PAR-8.3-Sim_Ausführung,Absatz/Regel,8.3,Sim-Ausführung,,M2 (Ströme),offen
+PAR-8.3-Sim_Ausführung,Absatz/Regel,8.3,Sim-Ausführung,,M2 (Ströme),fertig
 PAR-8.4-Tunables_v1.1,Absatz/Regel,8.4,Tunables (v1.1),v1.1,M6,offen
-PAR-8.6-Motivation,Absatz/Regel,8.6,Motivation,,M2 (Ströme),offen
-PAR-8.6-Deklaration,Absatz/Regel,8.6,Deklaration,,M2 (Ströme),offen
-PAR-8.6-Semantik_ASCII_formal_in_9.6,Absatz/Regel,8.6,"Semantik (ASCII, formal in 9.6)",,M2 (Ströme),offen
-PAR-8.6-Statische_Prüfung,Absatz/Regel,8.6,Statische Prüfung,,M2 (Ströme),offen
-PAR-8.6-Byte_Ring_für_Elemente_variabler_Länge,Absatz/Regel,8.6,Byte-Ring für Elemente variabler Länge,,M2 (Ströme),offen
-PAR-8.6-Garantien,Absatz/Regel,8.6,Garantien,,M2 (Ströme),offen
-PAR-8.6-Interne_Streams_Warteschlangen_zwischen_Maschinen,Absatz/Regel,8.6,Interne Streams (Warteschlangen zwischen Maschinen),,M2 (Ströme),offen
-PAR-8.7-Motivation,Absatz/Regel,8.7,Motivation,,M2 (Ströme),offen
-PAR-8.7-Musterliterale,Absatz/Regel,8.7,Musterliterale,,M2 (Ströme),definiert
-PAR-8.7-Record_Muster,Absatz/Regel,8.7,Record-Muster,,M2 (Ströme),definiert
-PAR-8.7-Operatoren,Absatz/Regel,8.7,Operatoren,,M2 (Ströme),offen
-PAR-8.7-Handler,Absatz/Regel,8.7,Handler,,M2 (Ströme),offen
-PAR-8.7-Sequenzen_und_Übergänge,Absatz/Regel,8.7,Sequenzen und Übergänge,,M2 (Ströme),offen
-PAR-8.7-Garantien_und_Budget,Absatz/Regel,8.7,Garantien und Budget,,M2 (Ströme),offen
+PAR-8.6-Motivation,Absatz/Regel,8.6,Motivation,,M2 (Ströme),fertig
+PAR-8.6-Deklaration,Absatz/Regel,8.6,Deklaration,,M2 (Ströme),fertig
+PAR-8.6-Semantik_ASCII_formal_in_9.6,Absatz/Regel,8.6,"Semantik (ASCII, formal in 9.6)",,M2 (Ströme),fertig
+PAR-8.6-Statische_Prüfung,Absatz/Regel,8.6,Statische Prüfung,,M2 (Ströme),fertig
+PAR-8.6-Byte_Ring_für_Elemente_variabler_Länge,Absatz/Regel,8.6,Byte-Ring für Elemente variabler Länge,,M2 (Ströme),fertig
+PAR-8.6-Garantien,Absatz/Regel,8.6,Garantien,,M2 (Ströme),fertig
+PAR-8.6-Interne_Streams_Warteschlangen_zwischen_Maschinen,Absatz/Regel,8.6,Interne Streams (Warteschlangen zwischen Maschinen),,M2 (Ströme),fertig
+PAR-8.7-Motivation,Absatz/Regel,8.7,Motivation,,M2 (Ströme),fertig
+PAR-8.7-Musterliterale,Absatz/Regel,8.7,Musterliterale,,M2 (Ströme),fertig
+PAR-8.7-Record_Muster,Absatz/Regel,8.7,Record-Muster,,M2 (Ströme),fertig
+PAR-8.7-Operatoren,Absatz/Regel,8.7,Operatoren,,M2 (Ströme),fertig
+PAR-8.7-Handler,Absatz/Regel,8.7,Handler,,M2 (Ströme),fertig
+PAR-8.7-Sequenzen_und_Übergänge,Absatz/Regel,8.7,Sequenzen und Übergänge,,M2 (Ströme),fertig
+PAR-8.7-Garantien_und_Budget,Absatz/Regel,8.7,Garantien und Budget,,M2 (Ströme),fertig
 THM-Lemma-9.3.1,Satz/Lemma,9.3.1,Lemma 9.3.1,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.1,Satz/Lemma,9.4.1,Satz 9.4.1,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),offen
 PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 (Interpreter),offen
 THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M1/M2 (Interpreter),offen
-THM-Lemma-9.6.1.,Satz/Lemma,9.6.1,Lemma 9.6.1.,,M1/M2 (Interpreter),offen
+THM-Lemma-9.6.1.,Satz/Lemma,9.6.1,Lemma 9.6.1.,,M1/M2 (Interpreter),fertig
 THM-Satz-9.9.1,Satz/Lemma,9.9.1,Satz 9.9.1,,M1/M2 (Interpreter),offen
 PAR-11.2-Große_Werte,Absatz/Regel,11.2,Große Werte,,M3/M4,offen
 PAR-11.2-Statischer_Scratch,Absatz/Regel,11.2,Statischer Scratch,,M3/M4,offen
@@ -720,12 +720,12 @@ PAR-13.9-Abbildungsregeln,Absatz/Regel,13.9,Abbildungsregeln,,M4–M7,offen
 PAR-13.9-Grundregel_des_Importers,Absatz/Regel,13.9,Grundregel des Importers,,M4–M7,offen
 PAR-13.9-Orakel_Modus,Absatz/Regel,13.9,Orakel-Modus,,M4–M7,offen
 PAR-13.9-Vorgehen,Absatz/Regel,13.9,Vorgehen,,M4–M7,offen
-FN-9-advance_cursors,Semantikfunktion,9,advance_cursors,,M1/M2 (Interpreter),offen
-FN-9-apply_scheduled,Semantikfunktion,9,apply_scheduled,,M1/M2 (Interpreter),offen
-FN-9-cancel_all_scheduled,Semantikfunktion,9,cancel_all_scheduled,,M1/M2 (Interpreter),offen
-FN-9-deliver,Semantikfunktion,9,deliver,,M1/M2 (Interpreter),offen
+FN-9-advance_cursors,Semantikfunktion,9,advance_cursors,,M1/M2 (Interpreter),fertig
+FN-9-apply_scheduled,Semantikfunktion,9,apply_scheduled,,M1/M2 (Interpreter),fertig
+FN-9-cancel_all_scheduled,Semantikfunktion,9,cancel_all_scheduled,,M1/M2 (Interpreter),fertig
+FN-9-deliver,Semantikfunktion,9,deliver,,M1/M2 (Interpreter),fertig
 FN-9-deliverable,Semantikfunktion,9,deliverable,,M1/M2 (Interpreter),fertig
-FN-9-dispatch,Semantikfunktion,9,dispatch,,M1/M2 (Interpreter),offen
+FN-9-dispatch,Semantikfunktion,9,dispatch,,M1/M2 (Interpreter),fertig
 FN-9-exec,Semantikfunktion,9,exec,,M1/M2 (Interpreter),fertig
 FN-9-exec_chain,Semantikfunktion,9,exec_chain,,M1/M2 (Interpreter),fertig
 FN-9-resolve_m,Semantikfunktion,9,resolve_m,,M1/M2 (Interpreter),fertig
@@ -733,7 +733,7 @@ FN-9-sleep,Semantikfunktion,9,sleep,,M1/M2 (Interpreter),offen
 FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M1/M2 (Interpreter),offen
 FN-9-step_m,Semantikfunktion,9,step_m,,M1/M2 (Interpreter),fertig
 FN-9-tick,Semantikfunktion,9,tick,,M1/M2 (Interpreter),fertig
-FN-9-windows,Semantikfunktion,9,windows,,M1/M2 (Interpreter),offen
+FN-9-windows,Semantikfunktion,9,windows,,M1/M2 (Interpreter),fertig
 RULE-9.2-stmt,exec-Regel,9.2,exec(stmt),,M1/M2 (Interpreter),fertig
 RULE-9.2-x_=_e,exec-Regel,9.2,exec(x = e),,M1/M2 (Interpreter),fertig
 RULE-9.2-check_e,exec-Regel,9.2,exec(check e),,M1/M2 (Interpreter),fertig
@@ -743,12 +743,12 @@ RULE-9.2-abort,exec-Regel,9.2,exec(abort),,M1/M2 (Interpreter),fertig
 RULE-9.2-s1;_s2,exec-Regel,9.2,exec(s1; s2),,M1/M2 (Interpreter),fertig
 RULE-9.2-if_e:_b1_else:_b2,exec-Regel,9.2,exec(if e: b1 else: b2),,M1/M2 (Interpreter),fertig
 RULE-9.2-for_i_in_range(n):_b,exec-Regel,9.2,exec(for i in range(n): b),,M1/M2 (Interpreter),fertig
-RULE-9.2-for_x_in_W:_b,exec-Regel,9.2,exec(for x in W: b),,M1/M2 (Interpreter),offen
+RULE-9.2-for_x_in_W:_b,exec-Regel,9.2,exec(for x in W: b),,M1/M2 (Interpreter),fertig
 RULE-9.2-match_e:_cases,exec-Regel,9.2,exec(match e: cases),,M1/M2 (Interpreter),fertig
-"RULE-9.2-send_o,_e",exec-Regel,9.2,"exec(send o, e)",,M1/M2 (Interpreter),offen
-RULE-9.2-at_T:_b,exec-Regel,9.2,exec(at T: b),,M1/M2 (Interpreter),offen
-RULE-9.2-pulse_o_=_v_for_d,exec-Regel,9.2,exec(pulse o = v for d),,M1/M2 (Interpreter),offen
-RULE-9.2-cancel_o,exec-Regel,9.2,exec(cancel o),,M1/M2 (Interpreter),offen
+"RULE-9.2-send_o,_e",exec-Regel,9.2,"exec(send o, e)",,M1/M2 (Interpreter),fertig
+RULE-9.2-at_T:_b,exec-Regel,9.2,exec(at T: b),,M1/M2 (Interpreter),fertig
+RULE-9.2-pulse_o_=_v_for_d,exec-Regel,9.2,exec(pulse o = v for d),,M1/M2 (Interpreter),fertig
+RULE-9.2-cancel_o,exec-Regel,9.2,exec(cancel o),,M1/M2 (Interpreter),fertig
 RULE-9.2-raise_sig,exec-Regel,9.2,exec(raise sig),,M1/M2 (Interpreter),fertig
 RULE-9.2-job_v_=_f(args),exec-Regel,9.2,exec(job v = f(args)),,M1/M2 (Interpreter),offen
 RULE-9.2-every_d:_b,exec-Regel,9.2,exec(every d: b),,M1/M2 (Interpreter),fertig

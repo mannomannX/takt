@@ -119,7 +119,9 @@ machine brownout_test:
 # Zeilen auf `dut_log` (plan/m2.md 1.10). Damit prueft der Lauf beide
 # Richtungen des Stroms und bleibt in der Sprache.
 
-output dut_log_sim : stream<line<256>>      @ sim("uart0/rx")
+# Pruefung 20 summiert die Hoechstlaengen aller erreichbaren `send` je
+# Aktivierung, auch ueber einander ausschliessende Zustaende (8.8).
+output dut_log_sim : stream<line<256>>      @ sim("uart0/rx") with capacity = 1280
 output i_dut_sim   : samples<float[A], 4>   @ sim("daq1/ai2")
 
 # Der Treiber liefert je Tick ein Sample-Fenster (8.9); das Modell liefert

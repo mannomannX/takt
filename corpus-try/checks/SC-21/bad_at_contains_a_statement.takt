@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-21: der Block eines `at` enthaelt nur Zuweisungen an skalare Outputs;
+# eine Zuweisung an eine Variable faengt schon Pruefung 8 ab (5.5).
+
+output valve : bool @ hw("o/valve") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            at now + 5 ms:
+                log "zu spaet"  # ~ SC-21

@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-20: zwei Zeilen zu je 200 Byte brauchen 400 Byte, der Puffer haelt 256.
+
+output tx : stream<line<200>> @ hw("uart0/tx") with max_rate = 1000 Hz, capacity = 256
+
+machine talker:
+    initial RUN
+
+    state RUN:
+        loop:
+            send tx, "eins"  # ~ SC-20
+            send tx, "zwei"

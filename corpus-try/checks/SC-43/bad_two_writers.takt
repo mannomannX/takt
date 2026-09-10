@@ -1,0 +1,33 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-43: ein interner Stream hat genau einen Schreiber.
+
+stream<u8> q with capacity = 16
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine first:
+    initial RUN
+
+    state RUN:
+        loop:
+            send q, 1
+
+machine second:
+    initial RUN
+
+    state RUN:
+        loop:
+            send q, 2  # ~ SC-43
+
+machine reader:
+    var seen : int in 0..99 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            n = seen
+        on q as e:
+            seen = seen + 1

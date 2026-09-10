@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-17: ohne `max_rate` ist MAXPT unbekannt, die Schranke aus Lemma 9.6.1
+# also nicht nachweisbar.
+
+input rx  : stream<line<64>> @ hw("uart0/rx") with capacity = 8  # ~ SC-17
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    var seen : int in 0..99 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            n = seen
+        on rx as e:
+            seen = seen + 1

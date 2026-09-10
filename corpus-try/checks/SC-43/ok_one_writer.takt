@@ -1,0 +1,37 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-43: ein Schreiber, beliebig viele Leser.
+
+stream<u8> q with capacity = 16
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+output m : int in 0..99 @ hw("o/m") with safe = 0
+
+machine writer:
+    initial RUN
+
+    state RUN:
+        loop:
+            send q, 1
+
+machine reader_a:
+    var seen : int in 0..99 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            n = seen
+        on q as e:
+            seen = seen + 1
+
+machine reader_b:
+    var seen : int in 0..99 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            m = seen
+        on q as e:
+            seen = seen + 1
