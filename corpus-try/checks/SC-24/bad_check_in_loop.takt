@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-24: eine implizite Pruefung in einer `for`-Schleife warnt (3.4,
+# Warnpolitik). Ausserhalb einer Schleife bleibt sie stumm — sie ist dann
+# nur eine Zahl im Report.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    var big : int in 0..999 = 500
+    initial RUN
+
+    state RUN:
+        loop:
+            for i in range(3):
+                n = big  # ~ SC-24

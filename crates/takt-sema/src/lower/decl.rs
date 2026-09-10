@@ -604,6 +604,9 @@ impl Lowerer<'_> {
 
     /// `node NAME @ hw("…") [with tick = d]` (v2).
     pub fn node_decl(&mut self, decl: &ast::NodeDecl) {
+        // 12.9: verteilte Ausfuehrung ist v2. Der Knoten wird trotzdem
+        // gesammelt, damit Pruefung 58 ihn sehen kann.
+        self.stage(decl.span, "Knoten", Stage::V2);
         let address = match address_text(&decl.address.value) {
             Ok(s) => to_address(s),
             Err(d) => {

@@ -50,6 +50,8 @@ pub const SC10: &str = "SC-10";
 pub const SC11: &str = "SC-11";
 /// Simulation.
 pub const SC13: &str = "SC-13";
+/// Lints zu Matrizen und  (3.11, 8.6).
+pub const SC42: &str = "SC-42";
 /// Ungenutzte Channels.
 pub const SC15: &str = "SC-15";
 /// Definite Assignment (allgemeine Regel). Noch ohne Fundstelle: jedes `var`
@@ -155,8 +157,10 @@ impl Lowerer<'_> {
                     // wenn deklariert — dann warnt der Compiler einmal.
                     let per = match self.program.channels[i].attrs.expect_len {
                         Some(n) => {
+                            // Pruefung 42, zweite Klausel: die Annahme
+                            // schwaecht Lemma 9.6.1 (8.6).
                             self.warn_hint(
-                                SC17,
+                                SC42,
                                 span,
                                 format!("`expect_len = {n}` an `{name}`: Lemma 9.6.1 gilt nur unter dieser Annahme"),
                                 "mittlere Laenge ueber `capacity` Elemente hoechstens `expect_len` (8.6)",

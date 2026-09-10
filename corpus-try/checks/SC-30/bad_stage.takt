@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-30 ist erst pruefbar, wenn es Matrizen (3.11) gibt — v1.1.
+# Bis dahin ist die Ablehnung der Abnahmetest (plan/m3.md 1.4).
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var a : mat<2, 2> = default
+            n = 1

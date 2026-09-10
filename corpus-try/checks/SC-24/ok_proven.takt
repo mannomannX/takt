@@ -1,0 +1,25 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-24: Wo die Intervallanalyse den Wert beweist, entfaellt die Pruefung —
+# und mit ihr die Warnung (3.4). Beide Wege stehen hier: eine engere Range
+# am Ursprung und eine Verfeinerung im Zweig.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+output m : int in 0..99 @ hw("o/m") with safe = 0
+
+machine w:
+    var small : int in 0..9 = 5
+    var big   : int in 0..999 = 500
+    initial RUN
+
+    state RUN:
+        loop:
+            # Die Range am Ursprung traegt durch die Rechnung.
+            for i in range(3):
+                n = small + 1
+
+            # Der Vergleich verfeinert den Zweig.
+            if big < 100:
+                m = big

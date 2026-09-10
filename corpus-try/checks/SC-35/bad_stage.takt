@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-35 ist erst pruefbar, wenn es `tunable param` (8.4) gibt — v1.1.
+# Bis dahin ist die Ablehnung der Abnahmetest (plan/m3.md 1.4).
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+tunable param P : int in 0..9 = 3
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = 1

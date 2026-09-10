@@ -1,0 +1,14 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-26 ist erst pruefbar, wenn es Szenarien (13.6) gibt — v1.1.
+# Bis dahin ist die Ablehnung der Abnahmetest (plan/m3.md 1.4).
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+scenario "leer" every 1 ms:
+    initial RUN
+    state RUN:
+        loop:
+            pass

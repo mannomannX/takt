@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-54 ist erst pruefbar, wenn es `resume` (5.12) gibt — v1.2.
+# Bis dahin ist die Ablehnung der Abnahmetest (plan/m3.md 1.4).
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN resume:
+        initial SUB
+        state SUB:
+            loop:
+                n = 1

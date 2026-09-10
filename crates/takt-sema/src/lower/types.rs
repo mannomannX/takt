@@ -215,7 +215,11 @@ impl Lowerer<'_> {
                     }
                     None => takt_mir::types::MatUnits::Uniform(None),
                 };
-                Some(self.intern(Type::Mat { rows, cols, units }))
+                // 15: Matrizen sind v1.1. Der Typ entsteht, damit die
+                // Diagnose ihn nennen kann; das Programm laeuft nicht.
+                let _ = self.intern(Type::Mat { rows, cols, units });
+                self.stage(span, "Matrizen", Stage::V1_1);
+                None
             }
             ast::TypeKind::MatDim { .. } | ast::TypeKind::VecDim(_) => {
                 self.stage(span, "dimensionierte Matrizen", Stage::V1_1);
@@ -225,7 +229,10 @@ impl Lowerer<'_> {
                 let key = self.resolve_type(key)?;
                 let value = self.resolve_type(value)?;
                 let cap = self.const_cap(len)?;
-                Some(self.intern(Type::Map { key, value, cap }))
+                // 15: `map<K, V, N>` ist v1.1.
+                let _ = self.intern(Type::Map { key, value, cap });
+                self.stage(span, "`map`", Stage::V1_1);
+                None
             }
             ast::TypeKind::TypeVar { name, .. } => {
                 self.stage(name.span, "Typvariablen", Stage::V1_2);

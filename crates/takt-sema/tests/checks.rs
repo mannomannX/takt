@@ -6,6 +6,13 @@
 //! Der Formatter normiert `#Text` zu `# Text` (F7), aus `#~` wird also `# ~`;
 //! beide Schreibweisen gelten, damit die Korpusdateien kanonisch bleiben.
 //!
+//! Eine Datei `bad_stage.takt` ist der Sonderfall aus plan/m3.md 1.4: Die
+//! Pruefung ist erst moeglich, wenn ihr Konstrukt existiert. Bis dahin ist
+//! die *Ablehnung* der Abnahmetest — der Compiler muss das Konstrukt mit
+//! einer Stufe beantworten, nicht mit einem Absturz oder einem Durchwinken.
+//! Solche Dateien werden nicht ueber den Code geprueft (Stufenmeldungen
+//! tragen alle `SC-3`), sondern ueber das Stufenfeld der Diagnose.
+//!
 //! Die Dateien laufen durch `compile`, nicht durch `check`: die Pruefungen 6
 //! bis 16 entstehen erst mit der MIR, und `compile` schliesst die Syntax- und
 //! Namenspruefungen ein.
@@ -65,6 +72,16 @@ fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>) {
             seen_ok = true;
             if !actual.is_empty() {
                 failures.push(format!("{code}/{name}: unerwartet {code} in Zeilen {actual:?}"));
+            }
+        } else if name == "bad_stage.takt" {
+            seen_bad = true;
+            // Die Ablehnung selbst ist der Test: mindestens eine Diagnose
+            // nennt eine Stufe (plan/m3.md 1.4).
+            let staged: Vec<String> =
+                checked.diagnostics.iter().filter(|d| d.stage.is_some()).map(|d| map.render_line(d)).collect();
+            if staged.is_empty() {
+                let all: Vec<String> = checked.diagnostics.iter().map(|d| map.render_line(d)).collect();
+                failures.push(format!("{code}/{name}: keine Stufenmeldung\n  {}", all.join("\n  ")));
             }
         } else if name.starts_with("bad_") {
             seen_bad = true;

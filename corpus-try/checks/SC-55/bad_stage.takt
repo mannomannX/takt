@@ -1,0 +1,22 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-55 ist erst pruefbar, wenn es Trigger (7.5) gibt — v1.2.
+# Bis dahin ist die Ablehnung der Abnahmetest (plan/m3.md 1.4).
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+output v : bool @ hw("o/v") with safe = false
+
+trigger t:
+    when true
+    then at now + 1 ms:
+        v = true
+    bound 1 ms
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = 1

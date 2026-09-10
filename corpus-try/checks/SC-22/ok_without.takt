@@ -1,0 +1,13 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Dasselbe Programm ohne `idle`-Zustaende (5.10): keine Stufenmeldung.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = 1
