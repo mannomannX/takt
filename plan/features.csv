@@ -832,21 +832,21 @@ LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M3/M4,offen
 LIB-solve,Standardbibliothek,11.4,fn solve,,M3/M4,offen
 LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M3/M4,offen
 LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M3/M4,offen
-CLI-check,Werkzeug,11.1,takt check,,M3/M4,offen
-CLI-sim,Werkzeug,11.1,takt sim,,M3/M4,offen
-CLI-run,Werkzeug,11.1,takt run,,M3/M4,offen
-CLI-replay,Werkzeug,11.1,takt replay,,M3/M4,offen
-CLI-test,Werkzeug,11.1,takt test,,M3/M4,offen
-CLI-campaign,Werkzeug,11.1,takt campaign,,M3/M4,offen
-CLI-driver-test,Werkzeug,11.1,takt driver-test,,M3/M4,offen
-CLI-prove,Werkzeug,11.1,takt prove,,M3/M4,offen
-CLI-fmt,Werkzeug,11.1,takt fmt,,M3/M4,offen
-CLI-size,Werkzeug,11.1,takt size,,M3/M4,offen
-CLI-graph,Werkzeug,11.1,takt graph,,M3/M4,offen
-CLI-bench,Werkzeug,11.1,takt bench,,M3/M4,offen
-CLI-tune,Werkzeug,11.1,takt tune,,M3/M4,offen
-CLI-migrate,Werkzeug,11.1,takt migrate,,M3/M4,offen
-CLI-import-c,Werkzeug,11.1,takt import-c,,M3/M4,offen
+CLI-check,Werkzeug,11.1,takt check,,M3,fertig
+CLI-sim,Werkzeug,11.1,takt sim,,M4,offen
+CLI-run,Werkzeug,11.1,takt run,,M4,offen
+CLI-replay,Werkzeug,11.1,takt replay,,M4,offen
+CLI-test,Werkzeug,11.1,takt test,,M5/M6,offen
+CLI-campaign,Werkzeug,11.1,takt campaign,,M5/M6,offen
+CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5/M6,offen
+CLI-prove,Werkzeug,11.1,takt prove,,M6/M7,offen
+CLI-fmt,Werkzeug,11.1,takt fmt,,M3,fertig
+CLI-size,Werkzeug,11.1,takt size,,M3,offen
+CLI-graph,Werkzeug,11.1,takt graph,,M4,offen
+CLI-bench,Werkzeug,11.1,takt bench,,M5/M6,offen
+CLI-tune,Werkzeug,11.1,takt tune,,M5/M6,offen
+CLI-migrate,Werkzeug,11.1,takt migrate,,M6/M7,offen
+CLI-import-c,Werkzeug,11.1,takt import-c,,M6/M7,offen
 EX-14.1,Beispiel (Golden-Test),14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,je Meilenstein,teilweise
 EX-14.2,Beispiel (Golden-Test),14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,je Meilenstein,teilweise
 EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,je Meilenstein,teilweise
