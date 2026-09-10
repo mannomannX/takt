@@ -127,6 +127,10 @@ Zeilenende am Dateiende, keine Leerzeile am Dateianfang.
 - Fortsetzungszeilen in Klammern: Umbruch des Autors bleibt; die Fortsetzung wird auf die
   Spalte nach der öffnenden Klammer ausgerichtet (L7). Eine schließende Klammer auf eigener
   Zeile steht auf der Einrückung der Zeile, die die Klammer öffnete.
+- Fortsetzung ohne Klammern (L2.2a: hängendes Komma, führendes Infix-Zeichen) wird zu einer
+  Zeile zusammengezogen. Sie trägt keine Struktur, die der Leser braucht — anders als in
+  Klammern, wo der Umbruch die Gruppierung zeigt —, und die Regel *eine Zeile pro
+  Deklaration* bleibt so ohne Ausnahme.
 - Eine Zeile pro Statement, Deklaration, Variante, Feld, Systemeintrag, Kampagneneintrag.
 
 ### 4.2 Leerraum in Deklarationen

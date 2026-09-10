@@ -78,8 +78,21 @@ Die Blockstruktur folgt CPython: `NEWLINE` beendet eine logische Zeile, `INDENT`
   enthält, erzeugt kein Token und beeinflusst die Einrückung nicht.
 - **L2.2 Klammerfortsetzung.** Innerhalb offener `(`, `[` oder `{` erzeugen Zeilenenden
   weder `NEWLINE` noch `INDENT`/`DEDENT`; die Einrückung der Folgezeilen ist frei (2.1:
-  Zeilenfortsetzung innerhalb offener Klammern). Eine andere Fortsetzung, etwa per
-  Backslash, gibt es nicht. Ein Dateiende innerhalb offener Klammern ist `E_UNCLOSED`.
+  Zeilenfortsetzung innerhalb offener Klammern). Ein Dateiende innerhalb offener Klammern
+  ist `E_UNCLOSED`.
+- **L2.2a Fortsetzung ohne Klammern.** Auch ohne offene Klammer wird eine logische Zeile
+  fortgesetzt, wenn eine der beiden Bedingungen gilt — dann entfallen `NEWLINE`,
+  `INDENT` und `DEDENT` genauso, und die Einrückung der Folgezeile ist frei:
+  1. Die bisherige Zeile endet auf ein **hängendes Komma** (`with a = 1,` / `check c,`).
+  2. Die neue Zeile beginnt mit einem **verbindenden Zeichen**: `.` (Feldzugriff,
+     Methodenkette), einem Infix-Operator aus `+ * / % < > | & ^ == != <= >= << >>`,
+     oder einem der Wörter `and`, `or`, `with`.
+
+  Beide Formen sind an einem Token entscheidbar und können keine heute gültige Zeile
+  umdeuten: Eine vollständige Zeile endet nie auf `,` und beginnt nie mit einem dieser
+  Zeichen. Ausgenommen sind `-` und `~`, weil sie auch Vorzeichen sind (`unary`), sowie
+  `->` und `..`, weil `-> ZIEL` und Bereichsmuster eigene Zeilen bilden. Eine Fortsetzung
+  per Backslash gibt es nicht.
 - **L2.3 Schrittweite.** Die Einrückung einer logischen Zeile ist die Zahl führender
   Leerzeichen. Sie muss ein Vielfaches von 4 sein und darf gegenüber der vorigen
   logischen Zeile um höchstens eine Stufe (4 Leerzeichen) steigen. Sonst `E_INDENT`.
@@ -103,6 +116,15 @@ vectors
 !"a:\n        b\n"                        => E_INDENT
 !"a:\n    b:\n        c\n  d\n"           => E_DEDENT
 !"f(1,\n"                                 => E_UNCLOSED
+"a = 1,\n    2\n"                         => IDENT(a) = INT(1) , INT(2) NEWLINE
+"a = 1,\n2\n"                             => IDENT(a) = INT(1) , INT(2) NEWLINE
+"x\n    .f\n"                             => IDENT(x) . IDENT(f) NEWLINE
+"a\n    + b\n"                            => IDENT(a) + IDENT(b) NEWLINE
+"a\n    == b\n"                           => IDENT(a) == IDENT(b) NEWLINE
+"a\n    and b\n"                          => IDENT(a) KW(and) IDENT(b) NEWLINE
+"a\n    with b\n"                         => IDENT(a) KW(with) IDENT(b) NEWLINE
+"a:\n    -> B\n"                          => IDENT(a) : NEWLINE INDENT -> UPPER(B) NEWLINE DEDENT
+"a:\n    - b\n"                           => IDENT(a) : NEWLINE INDENT - IDENT(b) NEWLINE DEDENT
 ```
 
 ---

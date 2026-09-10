@@ -119,7 +119,7 @@ Vor dem ersten Commit stehen alle Outputs auf ihren `safe`-Werten (Runtime und I
 
 ### 2.1 Lexik
 - UTF-8; Blockstruktur durch `:` und Einrückung (4 Leerzeichen, Tabs sind Fehler; der Formatter ist kanonisch). Ausdrücke, Typen und Blöcke sind höchstens 64 Ebenen tief verschachtelt; tiefer ist ein Syntaxfehler mit Vorschlag, damit kein Werkzeug an pathologischen Eingaben scheitert.
-- Kommentare `# …`. Zeilenfortsetzung innerhalb offener Klammern.
+- Kommentare `# …`. Zeilenfortsetzung innerhalb offener Klammern; ohne Klammer setzt ein hängendes Komma am Zeilenende fort, ebenso eine Folgezeile, die mit `.`, einem Infix-Operator, `and`, `or` oder `with` beginnt (Lexer L2.2a). Damit sind lange Attributlisten, Methodenketten und mehrzeilige Ausdrücke umbrechbar, ohne ein Fortsetzungszeichen wie den Backslash einzuführen.
 - Namenskonventionen (vom Compiler geprüft, Warnung bei Verstoß): `snake_case` für Variablen, Channels, Funktionen, Blöcke, Maschinen; `UPPER_SNAKE_CASE` für Konstanten, Parameter, Zustände, Enum-Varianten; `PascalCase` für Typen.
 - Literale: `42`, `0x1F`, `0b1010`, `0o17`, `1_000_000`, `4.25`, `1e-3`, `true`, `false`, `none`, `"text"`, Einheitenliterale `85 degC`, `4.25 V`, `5 K/min`, `0.0005 1/s`, Dauern `200 ms`, `1.5 s`, `30 min`, `7 d`.
 - Musterliterale sind Strings mit typisierten Platzhaltern `{name:kind}` (8.7); `{{` und `}}` sind Escapes.

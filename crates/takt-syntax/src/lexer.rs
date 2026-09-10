@@ -22,6 +22,12 @@ const TIME: &[(&str, i128)] = &[
 
 /// Zweizeichen-Operatoren; `>>` fehlt absichtlich (L6.1).
 const OPS2: &[[u8; 2]] = &[*b"->", *b"..", *b"+=", *b"-=", *b"*=", *b"/=", *b"==", *b"!=", *b"<=", *b">=", *b"<<"];
+/// Zeichen, die eine Zeile nur fortsetzen koennen: Infix-Operatoren und der
+/// Feldzugriff. `-` und `~` fehlen, weil sie auch Vorzeichen sind.
+const INFIX1: &[u8] = b".+*/%<>|&^";
+/// Zweizeichen-Operatoren in derselben Rolle.
+const INFIX2: &[[u8; 2]] = &[*b"==", *b"!=", *b"<=", *b">=", *b"<<", *b">>"];
+
 const OPS1: &[u8] = b"+-*/%&|^~<>=.,:()[]{}@?!";
 
 /// Zerlegt Quelltext in Tokens mit dem Wortschatz der neuesten Edition. Fehler
@@ -151,8 +157,18 @@ impl Lexer<'_> {
         if let Some(at) = tab_at {
             self.error(ErrorCode::Tab, at, "");
         }
-        if self.depth == 0 {
+        // L2.2: eine Zeile hinter einem haengenden Trennzeichen und eine
+        // Zeile, die mit einem verbindenden Zeichen beginnt, setzen die
+        // vorige fort. Beides ist an einem Token entscheidbar und kann keine
+        // heute gueltige Zeile umdeuten: eine vollstaendige Zeile endet nie
+        // auf `,` und beginnt nie mit einem Infix-Zeichen.
+        let continued = self.depth == 0 && (self.after_comma() || self.starts_continuation(p, content_end));
+        if self.depth == 0 && !continued {
             self.indentation(spaces, line_start);
+        }
+        if continued {
+            // Das `NEWLINE` der vorigen Zeile war verfrueht.
+            self.drop_trailing_newline();
         }
         while p < content_end {
             let c = b[p];
@@ -184,6 +200,52 @@ impl Lexer<'_> {
         }
         if self.depth == 0 {
             self.push(TokenKind::Newline, content_end, content_end, 0, content_end);
+        }
+    }
+
+    /// Beginnt die Zeile mit einem Zeichen, das nur *zwischen* zwei
+    /// Operanden stehen kann? `-` und `~` sind ausgenommen, weil sie auch
+    /// Vorzeichen sind (2.3, `unary`) und eine neue Zeile eroeffnen koennen.
+    fn starts_continuation(&self, p: usize, content_end: usize) -> bool {
+        // Vor der ersten Zeile gibt es nichts fortzusetzen.
+        if !self.tokens.iter().any(|t| !t.kind.is_layout()) {
+            return false;
+        }
+        let b = self.bytes;
+        let two = if p + 1 < content_end { Some([b[p], b[p + 1]]) } else { None };
+        if two.is_some_and(|x| INFIX2.contains(&x)) {
+            return true;
+        }
+        if INFIX1.contains(&b[p]) {
+            // `.` vor einer Ziffer ist ein Zahlfehler, keine Fortsetzung.
+            return b[p] != b'.' || p + 1 >= content_end || !b[p + 1].is_ascii_digit();
+        }
+        // Wortoperatoren und das anhaengende `with` einer Deklaration.
+        let mut e = p;
+        while e < content_end && (b[e].is_ascii_alphanumeric() || b[e] == b'_') {
+            e += 1;
+        }
+        matches!(&self.src[p..e], "and" | "or" | "with")
+    }
+
+    /// Endet die bisherige Tokenfolge auf einem haengenden Trennzeichen?
+    /// Das `NEWLINE` dahinter zaehlt nicht, es wird gleich zurueckgenommen.
+    fn after_comma(&self) -> bool {
+        let mut it = self.tokens.iter().rev();
+        if !matches!(it.next().map(|t| t.kind), Some(TokenKind::Newline)) {
+            return false;
+        }
+        it.next().is_some_and(|t| t.kind == TokenKind::Op && &self.src[t.start as usize..t.end as usize] == ",")
+    }
+
+    /// Nimmt ein gerade erzeugtes `NEWLINE` zurueck, wenn die naechste Zeile
+    /// die logische Zeile fortsetzt.
+    fn drop_trailing_newline(&mut self) {
+        if self.tokens.last().is_some_and(|t| t.kind == TokenKind::Newline) {
+            let dropped = self.tokens.pop().expect("gerade geprueft");
+            // Die Trivia des zurueckgenommenen Tokens gehoeren an das
+            // naechste, damit kein Kommentar verlorengeht.
+            self.pending = dropped.trivia.0;
         }
     }
 
