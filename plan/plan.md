@@ -73,7 +73,7 @@ Innerhalb eines Meilensteins gilt B (Scheiben Ende-zu-Ende bis zur jeweils höch
 | **M0 Fundament** | Workspace; Inventur kuratiert und mit Meilensteinen versehen; Grammatik als Datei — einschließlich der reservierten Produktionen späterer Stufen (`generic_vars` mit `type`/`const`, `node_decl` und Platzierung, `instance_decl` im Zustand, `resume`, `capture`, `arm_stmt`, `property_decl`/`tprop`, `enum … open`, `language`); Tokenizer, Parser für die *vollständige* Grammatik, Formatter; AST; Fehlerrahmen mit Positionen und Vorschlägen; **Edition** (`language`, Warnung bei Fehlen, Hash-Anteil), Prüfung reservierter Wörter und Membernamen, Regel der offenen Enums; **MIR-Entwurf gegen die volle Referenz** (Dokument + Rust-Typen) mit Platzhalterknoten für gescopte Instanzen, `resume`-Pfade, Trigger-Handles, Captures, Eigenschaftsmonitore und Knotenplatzierung; versionierte MIR-Serialisierung; CI mit Inventur-Dashboard | alle acht Beispiele und alle Grammatik-Schnipsel der Referenz parsen und überstehen den Formatter-Roundtrip; jede Grammatik-ID hat einen Parse-Test; Konstrukte späterer Stufen werden geparst und mit „ab v1.1/v1.2/v2" beantwortet; MIR-Review: jede SEM-/G-/PAR-ID ist einem Knoten oder einer Desugaring-Regel zugeordnet; Prüfungen 49–51 |
 | **M1 Kernsemantik** | Sema für Skalare, Einheiten (inkl. affin), Ranges, Qualität, `T?`, Records, Enums, `match`; MIR v1: Maschinen, Zustände, Transitionen, Checks, `enter`/`exit`/`loop`, Sequenz-Desugaring, Timer, Fault-Wald, Abort-Phase mit Latch, Zähler-Scheduling, Multirate, `pub var`, Signale; Interpreter für 9.2–9.5, 9.9-Vorbereitung; Skalarkanäle mit `sim`-Bindung, Modelle als Maschinen; `takt check`, `takt sim` | 14.1–14.5 laufen im Interpreter mit Golden-Traces; Lemma 9.3.1, Sätze 9.4.1/9.4.2 als Tests (Ordnungsunabhängigkeit: Schrittreihenfolge permutieren, Trace gleich); Prüfungen 6–12, 14–16 |
 | **M2 Ströme und Protokolle** | Streams mit Cursor und Byte-Ring, Muster → DFA (Alphabetklassen, ein DFA je Zustand), Handler, `until … matches`, Ausgabeströme, interne Streams, `layout` inkl. Bitfelder/Diskriminanten/`len_field`, `T!E`, Bereichsmuster, `at`/`pulse`/`cancel`, `samples` | 14.6 läuft im Interpreter gegen ein UART-Modell; Lemma 9.6.1 als Test; Prüfungen 17–21, 43, 45–47 |
-| **M3 Statisches Gate** | Intervallanalyse mit impliziten Prüfungen und Warnpolitik, Dominanz, Definite Assignment je Eintritt, Single-Writer, `follows`-DAG, Kostenmodell nach Klassen, `takt size` mit Overlay/Scratch/Byte-Ringen, Darstellungsverengung als MIR-Annotation, Schedulability; die „gilt schon heute"-Prüfungen der verteilten Ausführung (58: `follows` knotenlokal, `hops` aus der Topologie — mit einem Knoten trivial) | alle 58 Prüfungen mit positivem und negativem Test (52–57 als Ablehnung „ab v1.1/v1.2", solange die Konstrukte fehlen); Kennzahl impliziter Prüfungen im Report; Lemma 3.4 als Test (Verengung ändert keinen Trace) |
+| **M3 Statisches Gate** | Intervallanalyse mit impliziten Prüfungen und Warnpolitik, Dominanz, Definite Assignment je Eintritt, Single-Writer, `follows`-DAG, Kostenmodell nach Klassen, `takt size` mit Overlay/Scratch/Byte-Ringen, Darstellungsverengung als MIR-Annotation, Schedulability; die „gilt schon heute"-Prüfungen der verteilten Ausführung (58: `follows` knotenlokal, `hops` aus der Topologie — mit einem Knoten trivial) | jede der 58 Prüfungen ist `fertig` oder `definiert`, keine `offen`: `fertig` mit positivem *und* negativem Test, `definiert` mit getesteter Ablehnung, solange ihr Konstrukt eine Stufe meldet (19 Prüfungen) oder ihre Eingabe fehlt (28, 29, 32, 39 brauchen die Hardware-Konfiguration aus 8.10, v1.1, bzw. die Kalibrierung aus 13.8); für die vier letzten baut M3 die Rechnung, nicht das Urteil. Kennzahl impliziter Prüfungen im Report, nach Ursache aufgeschlüsselt (3.4); Lemma 3.4 als Test (Verengung ändert keinen Trace); Entwurf und Begründung in `plan/m3.md` |
 | **M4 Codegen Linux** | `takt-llvm` für x86-64/aarch64, strikte FP, IEEE-Modus, `fma`; `libtaktm` beider Breiten mit Konformitätsvektoren; `takt-rt-core` + `linux_rt` (PREEMPT_RT, Doppelpuffer, Treiber-Threads, Rand-Selbstprüfungen); Simulationstreiber als HAL-Implementierung; Record/Replay; `takt run`, `takt replay` | differentielles Testen: Interpreter ≡ nativ (x86-64 ≡ aarch64) auf Korpus und Fuzzer; 14.1–14.6 in Echtzeit auf der Box; Replay reproduziert Läufe bitgenau |
 | **M5 Embedded** | `baremetal` auf je einem Cortex-M4F- und RV32IMAC-Board; Tick-Quelle, Timer-Compare für `at`, ADC-DMA für `samples`, Stack-Zusammensetzung mit Schutzbereich, XIP-Regeln, MPU-Regionen; `takt bench`, Kalibrierung `c_target`/`guard`/`jitter`; `driver-test` | 14.7 auf Hardware mit HIL-Checks; Traces bitidentisch zu Interpreter und Box; Konformitätsbericht je Zielklasse |
 | **M6 v1.1-Vertikalen** (jede Ende-zu-Ende: Sema → Interpreter → Codegen → Runtime → Konformität) | Jobs und Chunk-Natives; Konstantenvariablen in Generics `[const N]` (3.12); `persist` mit Journal und Stromausfall-Kampagne; `idle`/Systemschlaf; `tunable`; `follows`; Szenarien und Kampagnen; dimensionierte Matrizen; Oktagone; Einheiten auf Integern; Geräteprofile (8.10); System-Channels; Profile `rtos` und `boot`; Projekt-Natives; `property` als beschränkte Temporallogik mit Monitoren in Simulation und Hardware sowie `takt prove` (k-Induktion/BMC); `map<K, V, N>` mit deterministischem Hash; Operator-Metadaten; Leser für ältere Aufzeichnungs- und Konfigurationsformate | 14.8 auf Hardware mit Flash-Modell-Kampagne; Satz 9.9.1 als Test (Trace mit und ohne Schlaf gleich); Eigenschaftsmonitore bitidentisch zwischen Interpreter und Hardware; `map`-Iteration bitidentisch über Zielklassen; Inventur v1.1 grün |
@@ -87,6 +87,13 @@ Warum diese Reihenfolge und keine andere: M0 enthält das gesamte Reservierungsp
 
 ## 5. Parallelisierung
 
+**Zuordnung der Kommandos (2026-09-10).** Die Inventur führte alle fünfzehn Werkzeuge unter „M3/M4",
+was die Zuordnung offenließ. Sie folgt jetzt der Schicht, die das Kommando braucht: `check`, `size` und
+`fmt` nach M3 (nur Sema und Analyse); `sim`, `run`, `replay`, `graph` nach M4 (Interpreter beziehungsweise
+Codegen und Runtime); `test`, `campaign`, `bench`, `driver-test`, `tune` nach M5/M6 (Hardware,
+Kalibrierung, Szenarien); `prove`, `migrate`, `import-c` nach M6/M7. `check` und `fmt` sind damit fertig,
+`sim` läuft, bleibt aber offen, bis Szenarien und `--golden` dazukommen (13.6).
+
 **Korrektur (2026-09-10).** `reader`/`writer` standen in M2, gehören aber nach v1.1: Beide sind nach
 11.4 Blöcke über `bytes<N>` und brauchen dafür Konstantenvariablen in Generics (`block reader[const N]`,
 3.12) — die Referenz führt sie in Abschnitt 15 selbst unter v1.1, zusammen mit „Standardbibliothek
@@ -96,6 +103,50 @@ Protokollteil: Bis dahin sind `decode`/`encode` mit `layout` (3.7) der Weg, Curs
 mit v1.1 nach (plan/feedback.csv, FB-04).
 
 Nach M0 (MIR eingefroren) laufen fünf Stränge mit geringer Kopplung: (1) Sema und Analysen, (2) Interpreter, (3) `takt-rt-core` mit HAL und Simulationstreibern, (4) `libtaktm`/Natives mit Konformitätsvektoren, (5) LLVM-Backend gegen MIR-Fixtures. Die Stränge treffen sich in M4. Mit drei bis vier Ingenieuren ist das der kritische Pfad; mit weniger wird M0–M2 sequenziell. Die Standardbibliothek in Takt kann ab M1 von jemandem geschrieben werden, der die Sprache nur benutzt — sie ist zugleich der beste Test der Ergonomie.
+
+### 5.1 Wann kommt v1.1? — und was daraus folgt
+
+Die Frage stellt sich beim Planen von M3 mit Nachdruck, weil dort sichtbar
+wird, wie viel an v1.1 hängt: **19 der 31 offenen Prüfungen** können nicht
+scharf werden, weil ihr Konstrukt eine Stufe meldet, und vier weitere
+brauchen die Hardware-Konfiguration aus 8.10 — ebenfalls v1.1. Auch der
+Praxisbericht (`plan/feedback.csv`) landet mehrfach dort: `reader`/`writer`
+(FB-04), Segment-Timeouts (FB-13), Handler-Guards (FB-14), der
+`follows`-Lint (FB-18).
+
+**Der Fahrplan sagt: nach v1.** Abschnitt 8 veranschlagt M0–M5 mit 9–12
+Monaten, M6 (die v1.1-Vertikalen) mit weiteren 4–6. v1.1 liegt damit etwa
+**15–18 Monate** nach Beginn, und M6 ist kein einzelner Block, sondern ein
+Bündel unabhängiger Vertikalen, die parallel laufen.
+
+Das ist keine Verlegenheitsentscheidung, sondern folgt aus der
+Abhängigkeitsfolge: Jede M6-Vertikale ist Ende-zu-Ende definiert (Sema →
+Interpreter → Codegen → Runtime → Konformität) und braucht damit einen
+Codegen (M4) und eine Runtime (M4/M5). Ein `persist var` ohne Journal, ein
+`idle` ohne Systemschlaf, ein `follows` ohne Schedulability wären halbe
+Features — genau das, was Abschnitt 1 an Vorgehen B kritisiert.
+
+**Drei Kandidaten könnten trotzdem früher kommen**, weil sie keinen Codegen
+brauchen und in M3 spürbar entlasten:
+
+| Kandidat | Warum früher möglich | Was es löst |
+|---|---|---|
+| Konstantenvariablen `[const N]` (3.12) | reine Sema-Arbeit, Monomorphisierung im Lowering | `reader`/`writer` und die halbe Standardbibliothek (FB-04); Prüfung 52 wird prüfbar |
+| Einheiten auf Integern (3.2) | Typregeln, keine neue Laufzeit | Prüfung 38; der Registerteil beider Praxistreiber |
+| Hardware-Konfiguration (8.10), nur Lesen | eine Datei parsen und validieren | Prüfungen 28, 29, 32, 39 werden vom Bericht zum Urteil |
+
+Alle drei sind in M3 oder unmittelbar danach machbar, ohne die Reihenfolge
+zu brechen — sie sind Sema und Analyse, nicht Codegen. **Empfehlung: nach
+M3 bewerten, nicht jetzt entscheiden.** M3 zeigt an der Kennzahl und an der
+Zahl der `definiert`-Prüfungen, wie teuer das Warten wirklich ist; vorher
+wäre es geraten. Was M3 dafür tut, ist billig und steht in `plan/m3.md`:
+Die Prüfungen bekommen ihre Ablehnungstests jetzt, sodass ein Vorziehen
+später nur noch den Testfall austauscht statt ihn zu erfinden.
+
+Unverändert bleibt: Nichts an v1.1 ist ein Breaking Change. Das
+Reservierungspaket aus M0 (Grammatik, MIR-Platzhalter, reservierte Namen,
+Editionen) hält alle diese Konstrukte offen, und jedes v1-Programm bleibt
+gültig.
 
 ---
 
