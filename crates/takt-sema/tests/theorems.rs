@@ -9,6 +9,9 @@
 //! - **Satz 9.4.2**: für jeden Input-Strom existiert die Trace und enthält
 //!   keinen undefinierten Zustand. Jeder interne Fehler des Interpreters ist
 //!   ein `Trap::Bug` und damit ein Testfehler.
+//! - **Lemma 3.4**: die Darstellungsverengung ändert kein Ergebnis. Weil sie
+//!   eine Annotation ist (plan/m3.md 1.7), ist der Test derselbe Lauf mit und
+//!   ohne gesetztes Feld — nicht der Vergleich zweier Programme.
 
 use takt_diag::Policy;
 use takt_interp::{RunOptions, Trace, Trap, run};
@@ -210,4 +213,87 @@ fn a_fault_never_escapes_to_the_caller() {
     let stim = Trace::parse("").expect("leer");
     let out = run(&program, &stim, &RunOptions { ticks: 50, ..Default::default() });
     assert!(out.is_ok(), "Fault entkommen: {out:?}");
+}
+
+/// Ein Programm, das die Verengung wirklich beschäftigt: Schleife,
+/// Verzweigung, Arithmetik mit Ranges.
+const NARROWABLE: &str = "\
+output n : int in 0..999 @ hw(\"o/n\") with safe = 0
+output m : int in 0..99 @ hw(\"o/m\") with safe = 0
+
+machine w:
+    var acc : int in 0..999 = 0
+    var delta : int in 0..9 = 3
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(4):
+                if acc < 500:
+                    acc = acc + delta
+            n = acc
+            m = delta * 2
+";
+
+#[test]
+fn lemma_3_4_narrowing_does_not_change_the_trace() {
+    // 3.4: „Der Compiler waehlt die Darstellung eines `int` aus den
+    // bewiesenen Intervallen — ohne Aenderung der Semantik."
+    let narrowed = compile(NARROWABLE);
+    // Dass die Verengung ueberhaupt greift, ist Voraussetzung des Tests.
+    let annotated = takt_mir::analysis::narrow::narrow(&mut narrowed.clone());
+    assert!(annotated.0 > 0, "die Verengung greift: {annotated:?}");
+
+    // Derselbe Lauf ohne die Annotation.
+    let mut plain = narrowed.clone();
+    strip_repr(&mut plain);
+
+    let stim = Trace::parse("").expect("leer");
+    let a = run(&narrowed, &stim, &RunOptions { ticks: 8, ..Default::default() }).expect("Lauf");
+    let b = run(&plain, &stim, &RunOptions { ticks: 8, ..Default::default() }).expect("Lauf");
+    assert_eq!(a.trace.render(), b.trace.render(), "die Verengung aendert den Trace nicht");
+}
+
+/// Nimmt jede Darstellungsannotation zurueck.
+fn strip_repr(p: &mut Program) {
+    for m in &mut p.machines {
+        strip_block(&mut m.loop_block);
+        for s in &mut m.states {
+            strip_block(&mut s.enter);
+            strip_block(&mut s.exit);
+            strip_block(&mut s.loop_block);
+            for t in &mut s.transitions {
+                strip_block(&mut t.actions);
+            }
+        }
+    }
+}
+
+fn strip_block(b: &mut takt_mir::stmt::Block) {
+    for s in &mut b.stmts {
+        strip_stmt(s);
+    }
+}
+
+fn strip_stmt(s: &mut takt_mir::stmt::Stmt) {
+    use takt_mir::stmt::StmtKind;
+    match &mut s.kind {
+        StmtKind::Assign { value, .. } => strip_expr(value),
+        StmtKind::If { cond, then, otherwise } => {
+            strip_expr(cond);
+            strip_block(then);
+            strip_block(otherwise);
+        }
+        StmtKind::ForRange { count, body, .. } => {
+            strip_expr(count);
+            strip_block(body);
+        }
+        _ => {}
+    }
+}
+
+fn strip_expr(e: &mut takt_mir::expr::Expr) {
+    e.repr = None;
+    for c in e.children_mut() {
+        strip_expr(c);
+    }
 }

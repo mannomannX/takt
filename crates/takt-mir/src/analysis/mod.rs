@@ -79,7 +79,15 @@ pub fn analyze(program: &mut Program) -> (Vec<Diagnostic>, Report) {
     // Annotation stehen (3.4).
     prove::apply(program, &proofs);
 
+    // Eine Pruefung ist eine *Stelle* im Programm, keine Ausfuehrung: Ein
+    // abgerollter Schleifenkoerper besucht dieselbe Stelle mehrfach, zaehlt
+    // aber einmal. Warnt einer der Besuche, warnt die Stelle.
+    let mut seen: BTreeMap<(u32, u32), ImplicitCheck> = BTreeMap::new();
     for c in &all {
+        let key = (c.span.file.0, c.span.start);
+        seen.entry(key).and_modify(|e| e.warns |= c.warns).or_insert(*c);
+    }
+    for c in seen.values() {
         *report.checks.entry(c.cause.name()).or_default() += 1;
         if c.warns {
             report.warned += 1;

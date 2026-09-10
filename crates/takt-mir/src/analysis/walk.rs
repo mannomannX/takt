@@ -456,14 +456,6 @@ impl<'p> Walk<'p> {
             _ => Interval::Top,
         }
     }
-
-    /// Deklarierte Range eines Typs.
-    fn range_of(&self, ty: crate::TypeId) -> Option<Range> {
-        match self.program.types.list.get(ty.index())? {
-            Type::Int { range, .. } | Type::Float { range, .. } | Type::Duration { range } => *range,
-            _ => None,
-        }
-    }
 }
 
 /// Nach einer Schleife ist die Stelle wieder erreichbar: `break` beendet
