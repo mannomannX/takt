@@ -25,6 +25,7 @@ pub mod loaded;
 pub mod machine;
 pub mod pattern;
 pub mod run;
+pub mod stream;
 pub mod system;
 pub mod trace;
 pub mod validate;
