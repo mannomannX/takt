@@ -2,9 +2,11 @@
 //! Schrittphase, Abort-Phase, Veroeffentlichung und Commit; dazu die
 //! Umgebung einer Maschine ueber dem Prozessabbild.
 
-use takt_mir::expr::Builtin;
+use std::collections::HashMap;
+
+use takt_mir::expr::{Builtin, StreamRef};
 use takt_mir::machine::{FaultKind, Machine, MachineKind, VarScope};
-use takt_mir::program::{OutputTiming, Program};
+use takt_mir::program::{OutputTiming, Overflow, Program};
 use takt_mir::types::Type;
 use takt_mir::*;
 
@@ -13,6 +15,7 @@ use crate::eval::Ctx;
 use crate::image::Image;
 use crate::loaded::Loaded;
 use crate::machine::{self, MachineState};
+use crate::stream::Delivery;
 use crate::value::{EvalResult, Fault, Sample, Trap, Value, bug};
 
 impl<'a, 'p> MachineEnv<'a, 'p> {
@@ -355,6 +358,113 @@ impl<'p> Sim<'p> {
         Ok(())
     }
 
+    /// `deliver(D_k)` (9.6): die im vorigen Tick gesendeten Elemente eines
+    /// internen Stroms werden sichtbar. Ein Ueberlauf merkt den Fault fuer
+    /// jeden Konsumenten vor; bei `drop_oldest` faellt ein Alert an.
+    fn deliver(&mut self) -> Result<(), Trap> {
+        let program = self.loaded.program;
+        for (i, def) in program.streams.iter().enumerate() {
+            let pending = std::mem::take(&mut self.image.stream_next[i]);
+            if pending.is_empty() {
+                continue;
+            }
+            let drop_oldest = matches!(def.overflow, Overflow::DropOldest);
+            let mut overflowed = false;
+            let mut dropped = 0;
+            for (t, value, bytes) in pending {
+                match self.image.stream_bufs[i].push(t, value, bytes, drop_oldest) {
+                    Delivery::Ok => {}
+                    Delivery::Overflow => overflowed = true,
+                    Delivery::Dropped(n) => dropped += n,
+                }
+            }
+            if dropped > 0 {
+                let name = def.name.clone();
+                for id in self.order.clone() {
+                    if def.readers.contains(&id) {
+                        self.observations.push((
+                            id,
+                            Observation::Alert {
+                                span: def.span,
+                                index: Vec::new(),
+                                active: true,
+                                message: format!("Stream `{name}` hat {dropped} Elemente verworfen"),
+                                invalid: false,
+                            },
+                        ));
+                    }
+                }
+            }
+            if overflowed {
+                let f = Fault::new(
+                    FaultKind::StreamOverflow,
+                    format!("Stream `{}` uebergelaufen", def.name),
+                    def.span,
+                    self.tick,
+                );
+                for id in self.order.clone() {
+                    if def.readers.contains(&id) && self.states[id.index()].pending.is_none() {
+                        self.states[id.index()].pending = Some(f.clone());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `advance_cursors()` (9.6): der Cursor rueckt hinter das zuletzt
+    /// untersuchte Element; danach faellt alles weg, was kein Konsument mehr
+    /// sehen kann.
+    fn advance_cursors(&mut self) {
+        let program = self.loaded.program;
+        for id in self.order.clone() {
+            let m = &program.machines[id.index()];
+            let state = &mut self.states[id.index()];
+            for (i, _) in m.layout.cursors.iter().enumerate() {
+                let examined = state.examined.get(i).copied().unwrap_or(-1);
+                if examined >= 0 {
+                    if let Some(c) = state.cursors.get_mut(i) {
+                        *c = examined + 1;
+                    }
+                }
+                if let Some(e) = state.examined.get_mut(i) {
+                    *e = -1;
+                }
+            }
+        }
+        // Eviction: das Minimum ueber alle Konsumenten je Stream.
+        let mut min_channel: HashMap<ChannelId, i64> = HashMap::new();
+        let mut min_stream: Vec<Option<i64>> = vec![None; program.streams.len()];
+        for id in &self.order {
+            let m = &program.machines[id.index()];
+            let state = &self.states[id.index()];
+            for (i, r) in m.layout.cursors.iter().enumerate() {
+                let cur = state.cursors.get(i).copied().unwrap_or(0);
+                match r {
+                    StreamRef::Channel(c) => {
+                        let slot = min_channel.entry(*c).or_insert(cur);
+                        *slot = (*slot).min(cur);
+                    }
+                    StreamRef::Internal(sid) => {
+                        let slot = &mut min_stream[sid.index()];
+                        *slot = Some(slot.map_or(cur, |v: i64| v.min(cur)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for (c, min) in min_channel {
+            if let Some(buf) = self.image.channel_bufs.get_mut(&c) {
+                buf.evict(min);
+            }
+        }
+        for (i, min) in min_stream.iter().enumerate() {
+            if let Some(min) = min {
+                self.image.stream_bufs[i].evict(*min);
+            }
+        }
+    }
+
     /// Schreibt Aktivierungszaehler und Zustandstimer fort (9.4).
     fn advance_counters(&mut self, active: &[MachineId]) {
         let program = self.loaded.program;
@@ -392,6 +502,9 @@ impl<'p> Sim<'p> {
         // laeuft vor dem Stimulus dieses Ticks, damit eine frische Lieferung
         // mit dem Alter 0 gelesen wird (9.4: `I_k = sample()`).
         self.image.apply_sim_bindings(program);
+        // deliver(D_k): interne Streams werden sichtbar, Ueberlauf merkt den
+        // Fault fuer jeden Konsumenten vor (9.6).
+        self.deliver()?;
         // active(k): countdown == 0 (7.2)
         let active: Vec<MachineId> =
             self.order.iter().copied().filter(|id| self.states[id.index()].countdown == 0).collect();
@@ -412,6 +525,9 @@ impl<'p> Sim<'p> {
             self.raise_all();
         }
         self.abort_phase(tick_ns, &active)?;
+        // advance_cursors(): `cur[s, m] = examined + 1`, danach Eviction
+        // unterhalb des kleinsten Cursors (9.6).
+        self.advance_cursors();
         // Zaehler fortschreiben (7.2)
         self.advance_counters(&active);
         // Erhobene Signale als Beobachtung (5.8), bevor sie zurueckgesetzt werden

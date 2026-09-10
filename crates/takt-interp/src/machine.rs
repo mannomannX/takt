@@ -43,6 +43,12 @@ pub struct MachineState {
     pub countdown: u32,
     /// Signale, die in diesem Tick erhoben wurden.
     pub raised_signals: Vec<bool>,
+    /// `cur[s, m]` je gelesenem Stream (9.6), in der Reihenfolge von
+    /// `Layout::cursors`.
+    pub cursors: Vec<i64>,
+    /// `examined[s, m]` der laufenden Aktivierung: die groesste untersuchte
+    /// Nummer je Stream, oder -1. Wird in `advance_cursors` verbraucht.
+    pub examined: Vec<i64>,
     /// Ist die Maschine in `FAULTED`?
     pub faulted: bool,
 }
@@ -91,6 +97,8 @@ impl MachineState {
             last_fault: None,
             countdown: m.phase,
             raised_signals: vec![false; m.signals.len()],
+            cursors: vec![0; m.layout.cursors.len()],
+            examined: vec![-1; m.layout.cursors.len()],
             faulted: false,
         }
     }

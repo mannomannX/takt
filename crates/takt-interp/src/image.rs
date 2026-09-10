@@ -7,6 +7,9 @@ use takt_mir::machine::Machine;
 use takt_mir::program::{Binding, Direction, Program};
 use takt_mir::{ChannelId, CommandId, MachineId, SignalId, VarId};
 
+use takt_mir::types::Type;
+
+use crate::stream::Buffer;
 use crate::value::{Quality, Reason, Sample, Value};
 
 /// Veroeffentlichte Groessen einer Maschine (Ψ, 9.1).
@@ -45,6 +48,43 @@ pub struct Image {
     /// Inputs, die der Stimulus in diesem Tick gesetzt hat; ihre
     /// `sim`-Bindung ruht so lange (8.3).
     driven: Vec<bool>,
+    /// `buf[s]` je Stream-Channel (9.1, 9.6).
+    pub channel_bufs: HashMap<ChannelId, Buffer>,
+    /// `buf[s]` je internem Stream; was in Tick k gesendet wird, ist ab k+1
+    /// sichtbar (8.6, Unit-Delay wie Psi).
+    pub stream_bufs: Vec<Buffer>,
+    /// Was in diesem Tick per `send` in einen internen Stream ging.
+    pub stream_next: Vec<Vec<(i64, Value, u32)>>,
+    /// Sendepuffer je Ausgabestrom: freier Platz und Warteschlange (8.8).
+    pub tx: HashMap<ChannelId, TxBuffer>,
+}
+
+/// Sendepuffer eines Ausgabestroms (8.8): der Treiber leert ihn mit
+/// `max_rate`, `tx.free` ist der freie Platz zu Tick-Beginn.
+#[derive(Clone, Debug, Default)]
+pub struct TxBuffer {
+    /// Bytes, die auf das Senden warten.
+    pub queued: Vec<u8>,
+    /// Kapazitaet in Bytes.
+    pub capacity: u32,
+    /// Bytes, die der Treiber je Tick abholt.
+    pub per_tick: u32,
+    /// Im Tick gesendete Bytes (fuer den Trace).
+    pub sent: Vec<u8>,
+}
+
+impl TxBuffer {
+    /// Freier Platz (`tx.free`, 8.8).
+    pub fn free(&self) -> u32 {
+        self.capacity.saturating_sub(self.queued.len() as u32)
+    }
+
+    /// Der Treiber holt bis zu `per_tick` Bytes ab (8.8: „die Simulation
+    /// leert exakt `max_rate * T0` Bytes pro Tick").
+    pub fn drain(&mut self) {
+        let n = (self.per_tick as usize).min(self.queued.len());
+        self.sent = self.queued.drain(..n).collect();
+    }
 }
 
 impl Image {
@@ -87,6 +127,29 @@ impl Image {
             .collect();
         let driven = vec![false; p.channels.len()];
         let committed = outputs.clone();
+        // Puffer je Stream: Channels mit Stream-Typ und die internen Streams
+        // (8.6). Die Schranken stehen im Programm.
+        let mut channel_bufs = HashMap::new();
+        let mut tx = HashMap::new();
+        for (i, c) in p.channels.iter().enumerate() {
+            let id = ChannelId(i as u32);
+            if !matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))) {
+                continue;
+            }
+            match c.dir {
+                Direction::Input => {
+                    let cap = c.attrs.capacity.unwrap_or(16);
+                    let cap_bytes = c.attrs.capacity_bytes.unwrap_or(cap * 256);
+                    channel_bufs.insert(id, Buffer::new(cap, cap_bytes));
+                }
+                Direction::Output => {
+                    tx.insert(id, TxBuffer { capacity: c.attrs.capacity.unwrap_or(256), ..Default::default() });
+                }
+            }
+        }
+        let stream_bufs =
+            p.streams.iter().map(|s| Buffer::new(s.capacity, s.capacity_bytes.unwrap_or(s.capacity * 256))).collect();
+        let stream_next = p.streams.iter().map(|_| Vec::new()).collect();
         Image {
             inputs,
             outputs,
@@ -98,6 +161,10 @@ impl Image {
             sim_sources,
             hw_inputs,
             driven,
+            channel_bufs,
+            stream_bufs,
+            stream_next,
+            tx,
         }
     }
 
