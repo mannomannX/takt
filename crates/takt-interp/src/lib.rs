@@ -29,6 +29,7 @@ pub mod system;
 pub mod trace;
 pub mod validate;
 pub mod value;
+pub mod wire;
 
 pub use env::{ConstEnv, MachineEnv, Observation, Outer};
 pub use eval::Ctx;

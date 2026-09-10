@@ -906,9 +906,7 @@ impl Lowerer<'_> {
         }
         if let ast::ExprKind::TypeName { name: tn, args: None } = &base.kind {
             if member == "decode" {
-                let _ = tn;
-                self.stage(span, "`decode`", Stage::V1_1);
-                return None;
+                return self.decode(tn, args, span);
             }
         }
         // Elementzugriff auf ein Channel-Array: Wrapper je Element
@@ -1110,9 +1108,28 @@ impl Lowerer<'_> {
                     span,
                 ))
             }
-            ("encode", Type::Record(_)) => {
-                self.stage(span, "`encode`", Stage::V1_1);
-                None
+            ("encode", Type::Record(r)) => {
+                if !no_args(self) {
+                    return None;
+                }
+                // `f.encode() -> bytes<SIZE>` (3.7); ohne `layout` gibt es
+                // keine Byte-Repraesentation.
+                let Some(size) = self.program.records[r.index()].wire_size else {
+                    let name = self.program.records[r.index()].name.clone();
+                    self.error_hint(
+                        SC3,
+                        span,
+                        format!("`{name}` hat kein `layout`"),
+                        "`layout little` oder `layout big` am Record ergaenzen (3.7)",
+                    );
+                    return None;
+                };
+                let ty = self.intern(Type::Bytes { cap: size });
+                Some(Expr::new(
+                    ExprKind::Accessor { base: Box::new(b), accessor: Accessor::Encode, args: Vec::new() },
+                    ty,
+                    span,
+                ))
             }
             (field, Type::Record(r)) => {
                 let found = self.program.records[r.index()].fields.iter().position(|f| f.name == field);
@@ -1217,6 +1234,40 @@ impl Lowerer<'_> {
             ty,
             span,
         ))
+    }
+
+    /// `R.decode(b) -> R?` (3.7): der Record braucht ein `layout`, das
+    /// Argument ist `bytes<N>`.
+    fn decode(&mut self, name: &ast::Ident, args: Option<&[ast::Arg]>, span: Span) -> Option<Expr> {
+        let record = match self.lookup(name)? {
+            Entity::Record(r) => r,
+            _ => {
+                self.error(SC3, name.span, format!("`{}` ist kein Record", name.name));
+                return None;
+            }
+        };
+        if self.program.records[record.index()].wire_size.is_none() {
+            self.error_hint(
+                SC3,
+                span,
+                format!("`{}` hat kein `layout`", name.name),
+                "`layout little` oder `layout big` am Record ergaenzen (3.7)",
+            );
+            return None;
+        }
+        let Some([arg]) = args else {
+            self.error(SC3, span, "`decode` verlangt genau ein Argument");
+            return None;
+        };
+        let bytes = self.expr(&arg.value, None)?;
+        if !matches!(self.ty(bytes.ty), Type::Bytes { .. }) {
+            let n = self.type_name(bytes.ty);
+            self.error(SC3, span, format!("`decode` verlangt `bytes<N>`, gefunden `{n}`"));
+            return None;
+        }
+        let record_ty = self.intern(Type::Record(record));
+        let ty = self.intern(Type::Optional(record_ty));
+        Some(Expr::new(ExprKind::Decode { record, bytes: Box::new(bytes) }, ty, span))
     }
 
     fn wrapper_access(&mut self, base: Expr, name: &ast::Ident, args: Option<&[ast::Arg]>, span: Span) -> Option<Expr> {

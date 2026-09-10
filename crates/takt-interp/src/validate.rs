@@ -186,7 +186,10 @@ impl Checker<'_> {
                 self.exprs(args)
             }
             ExprKind::MatOp { .. } => Err(stage(span, "Matrixoperation", Stage::V1_1)),
-            ExprKind::Decode { .. } => Err(stage(span, "decode", Stage::V1_1)),
+            ExprKind::Decode { record, bytes } => {
+                self.index(&self.p.records, record.index(), "Record", span)?;
+                self.expr(bytes)
+            }
             ExprKind::Intrinsic { args, .. } => self.exprs(args),
         }
     }

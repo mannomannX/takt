@@ -55,7 +55,7 @@ codec_struct!(EnumDef { 1 one name, 2 rep variants, 3 opt layout, 4 one open, 5 
 codec_struct!(BitfieldDef { 1 one name, 2 one ty, 3 one lo, 4 one hi, 5 meta span });
 codec_struct!(FieldDef { 1 one name, 2 one ty, 3 opt const_value, 4 opt offset, 5 opt len_field, 6 rep bits, 7 meta span });
 codec_struct!(WireLayout { 1 one endian, 2 opt align });
-codec_struct!(RecordDef { 1 one name, 2 rep fields, 3 opt layout, 4 one builtin, 5 meta span });
+codec_struct!(RecordDef { 1 one name, 2 rep fields, 3 opt layout, 4 one builtin, 5 meta span, 6 opt wire_size });
 codec_struct!(Rational { 1 one num, 2 one den });
 codec_struct!(UnitDef { 1 one name, 2 one dimension, 3 one factor, 4 opt affine_offset, 5 one predefined, 6 meta span });
 codec_struct!(TypeTable { 1 rep list });

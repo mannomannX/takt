@@ -102,7 +102,7 @@ einem Versionssprung eingetragen.
 
 ```
 magic             8 Bytes  "TAKT-MIR"
-format_version    u16 LE   (2)
+format_version    u16 LE   (3)
 edition           u32 LE   (2.5; auch in Config.edition)
 compiler_version  Varint-Länge + UTF-8
 strings           Varint-Anzahl, je String Varint-Länge + UTF-8

@@ -1,0 +1,30 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46: Offsets ueberlappen nicht, Bitfelder liegen im Traegerfeld,
+# Konstantenfelder passen zur Breite, Diskriminanten sind eindeutig.
+
+enum ImageType layout u8: APP = 0x00, DATA = 0x01, BOOT = 0x02
+
+record PartitionEntry layout little, align = 4:
+    magic   : u16 = 0x50AA
+    kind    : ImageType
+    subtype : u8
+    offset  : u32
+    size    : u32
+    label   : [16] u8
+    flags   : u32 with bits:
+        encrypted : bool at 0
+        readonly  : bool at 1
+        level     : u8 at 4..7
+    _ : [4] u8
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            pass

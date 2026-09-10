@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46: ein verschachtelter Record braucht sein eigenes `layout`.
+
+record Inner:
+    a : u8
+
+record Outer layout little:
+    i : Inner  # ~ SC-46
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            pass

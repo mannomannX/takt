@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46: die beiden Felder ueberlappen sich im Drahtformat.
+
+record Overlap layout little:
+    a : u32 offset = 0
+    b : u32 offset = 2  # ~ SC-46
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            pass

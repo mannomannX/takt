@@ -226,7 +226,14 @@ impl Lowerer<'_> {
             }
         }
         let id = RecordId(self.program.records.len() as u32);
-        self.program.records.push(RecordDef { name: name.to_string(), fields, layout: None, builtin: true, span });
+        self.program.records.push(RecordDef {
+            name: name.to_string(),
+            fields,
+            layout: None,
+            builtin: true,
+            span,
+            wire_size: None,
+        });
         self.intern(Type::Record(id))
     }
 }

@@ -369,6 +369,7 @@ impl Lowerer<'_> {
             layout: None,
             builtin: true,
             span: decl.span,
+            wire_size: None,
         });
         self.block_records.insert(id, record);
         let before = self.diags.iter().filter(|d| d.is_error()).count();

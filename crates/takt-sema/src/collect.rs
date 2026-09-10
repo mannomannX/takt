@@ -91,6 +91,12 @@ impl Lowerer<'_> {
                 ast::Item::Instance(_) | ast::Item::Scenario(_) | ast::Item::Campaign(_) | ast::Item::Trigger(_) => {}
             }
         }
+        // Byteplan der `layout`-Records (3.7, Pruefung 46). Als Nachlauf,
+        // weil ein verschachtelter Record die Groesse des inneren braucht;
+        // die Deklarationsreihenfolge loest das auf.
+        for i in 0..self.program.records.len() {
+            self.wire_layout(takt_mir::RecordId(i as u32));
+        }
         if self.prelude {
             self.builtins_from_prelude();
         }

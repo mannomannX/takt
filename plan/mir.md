@@ -208,6 +208,7 @@ Checker 150 plus die CSV mit rund 450 Zeilen.
 
 | Datum | Formatversion | Änderung |
 |---|---|---|
+| 2026-09-10 | 3 | `RecordDef::wire_size`: die Gesamtlaenge eines `layout`-Records nach `align` (3.7). Der Byteplan entsteht einmal im Sema und ist danach die einzige Quelle fuer Interpreter und Codegen; ohne das Feld muesste jede Seite die Groesse verschachtelter Records neu rechnen (plan/m2.md 1.8). Feld 6, `opt`. |
 | 2026-09-10 | 2 | `ExprKind::Lift` (T nach T?, 3.8), `ExprKind::Ok`/`Err` (Konstruktoren von T!E), `ExprKind::Intrinsic` mit `Intrinsic` (Primitive mit eigener Fault-Semantik: `sqrt`, `round`, `fma`, `interp`, `rotl`, `wrapping_add`, …); gefunden beim Entwurf des Lowerings (plan/m1.md, Abschnitt 2). |
 | 2026-09-10 | 1 | Freeze: Knoten aus Abschnitt 2 als Rust-Typen, `desugar` nach 6.2, Format `TAKT-MIR` (grammar/mir-format.md), Logik-Hash, Abbildung `plan/mir_map.csv` (Prüfer leer). Änderungen ab hier nur mit Zeile in dieser Tabelle; Feldnummern werden nie umvergeben, neue Felder sind `opt` oder `rep`, ein neues Pflichtfeld verlangt einen Versionssprung. |
 

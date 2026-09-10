@@ -143,6 +143,7 @@ impl Lowerer<'_> {
             }),
             builtin: self.prelude,
             span: decl.span,
+            wire_size: None,
         });
         self.declare(&decl.name, Entity::Record(id));
     }
@@ -823,6 +824,7 @@ impl Lowerer<'_> {
             layout: None,
             builtin: true,
             span: decl.span,
+            wire_size: None,
         });
         self.block_records.insert(id, record);
         self.declare(&decl.name, Entity::Block(id));

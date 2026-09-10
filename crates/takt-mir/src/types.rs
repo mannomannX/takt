@@ -277,6 +277,10 @@ pub struct RecordDef {
     pub fields: Vec<FieldDef>,
     /// Drahtformat; ohne `layout` keine Byte-Repraesentation.
     pub layout: Option<WireLayout>,
+    /// Gesamtlaenge im Drahtformat nach `align` (3.7); nur mit `layout`.
+    /// Der Plan entsteht einmal im Sema und ist danach die einzige Quelle
+    /// fuer Interpreter und Codegen.
+    pub wire_size: Option<u32>,
     /// Eingebaut.
     pub builtin: bool,
     /// Position.

@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46: das Bitfeld liegt ausserhalb der Breite seines Traegerfelds.
+
+record Flags layout little:
+    bits8 : u8 with bits:
+        high : bool at 9  # ~ SC-46
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            pass

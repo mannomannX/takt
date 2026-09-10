@@ -212,6 +212,7 @@ pub fn full_program() -> Program {
         layout: Some(WireLayout { endian: Endian::Little, align: Some(4) }),
         builtin: false,
         span: sp(8),
+        wire_size: None,
     });
     p.records.push(RecordDef {
         name: "Edge".into(),
@@ -227,6 +228,7 @@ pub fn full_program() -> Program {
         layout: Some(WireLayout { endian: Endian::Big, align: None }),
         builtin: true,
         span: Span::default(),
+        wire_size: None,
     });
 
     // Channels, Streams, Parameter, Commands, Knoten

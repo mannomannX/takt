@@ -298,7 +298,14 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 self.call_native(*native, args, span)
             }
             ExprKind::MatOp { .. } => bug("Matrixoperationen ab M6"),
-            ExprKind::Decode { .. } => bug("decode ab M2"),
+            ExprKind::Decode { record, bytes } => {
+                // `R.decode(b) -> R?` (3.7): `none` bei zu kurzem Puffer,
+                // Konstantenverstoss oder Range-Verletzung; nie ein Fault.
+                let Value::Bytes(b) = self.eval(bytes)? else {
+                    return bug("`decode` verlangt `bytes<N>`");
+                };
+                Ok(Value::Optional(crate::wire::decode(self.loaded, *record, &b).map(Box::new)))
+            }
             ExprKind::Checked { expr, kind } => self.checked(expr, kind, span),
             ExprKind::Lift(inner) => Ok(Value::Optional(Some(Box::new(self.eval(inner)?)))),
             ExprKind::Ok(inner) => Ok(Value::Result(Ok(Box::new(self.eval(inner)?)))),
@@ -533,6 +540,17 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 Value::Str(t) => Ok(Value::Bool(s.contains(&t))),
                 other => bug(format!("contains mit {}", other.kind_name())),
             },
+            (Accessor::Encode, v @ Value::Record(_)) => {
+                // `f.encode() -> bytes<SIZE>` (3.7): der Plan steht im Typ,
+                // Konstantenfelder werden dabei gesetzt.
+                let Type::Record(r) = self.loaded.ty(base.ty) else {
+                    return bug("`encode` auf einem Nicht-Record");
+                };
+                match crate::wire::encode(self.loaded, *r, &v) {
+                    Some(bytes) => Ok(Value::Bytes(bytes)),
+                    None => bug("`encode` ohne Byteplan"),
+                }
+            }
             (Accessor::Get, Value::Vec(x) | Value::Array(x)) => {
                 let i = self.eval_int(&args[0])?;
                 Ok(Value::Optional(if i >= 0 && (i as usize) < x.len() {
