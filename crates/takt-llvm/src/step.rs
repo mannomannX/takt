@@ -141,15 +141,21 @@ fn transitions(
         let (take, skip) = (format!("uebergang{from}_{n}_{name}"), format!("bleibt{from}_{n}_{name}"));
         m.void_inst(&format!("br i1 {}, label %{take}, label %{skip}", c.value));
         m.label(&take);
-        // Der Aktionsblock laeuft im Modus ENTRY (5.2), also vor dem
-        // Eintritt in den Zielzustand.
-        block(&t.actions, ctx, m)?;
         let Target::State(to) = t.target else { return Err(NotYet { what: "Uebergangsziel" }) };
         let Some(index) = leaves.iter().position(|l| *l == to) else {
             // Ein Ziel, das kein Blatt ist, hat einen `initial`-Pfad
             // hinunter (5.2); der entsteht mit der Verschachtelung.
             return Err(NotYet { what: "Uebergang in einen zusammengesetzten Zustand" });
         };
+        // 5.2 gibt die Reihenfolge vor: `exit:` des verlassenen Zustands,
+        // dann der Aktionsblock des Uebergangs (Modus ENTRY), dann
+        // `enter:` des betretenen. Wer sie vertauscht, laesst `enter:` auf
+        // einem Zustand laufen, den `exit:` noch aufraeumt.
+        let from_state = &ctx.machine.states[leaves[from].index()];
+        block(&from_state.exit.clone(), ctx, m)?;
+        block(&t.actions, ctx, m)?;
+        let to_state = &ctx.machine.states[to.index()];
+        block(&to_state.enter.clone(), ctx, m)?;
         m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
         reset_time(ctx, m);
         m.void_inst(&format!("br label %{end}"));
@@ -171,4 +177,41 @@ fn reset_time(ctx: &Ctx<'_>, m: &mut Module) {
     // -1, weil das Ende des Schritts gleich um 1 erhoeht: Der erste Tick
     // im neuen Zustand hat `t_in_state == 0`.
     m.void_inst(&format!("store i64 -1, ptr {cell}"));
+}
+
+/// Schreibt die Eintrittsfunktion einer Maschine (9.4).
+///
+/// 9.4: Der Anfangszustand wird betreten, *bevor* der erste Tick laeuft —
+/// sein `enter:` gehoert darum nicht in den Tickschritt, sondern in eine
+/// eigene Funktion, die die Runtime einmal ruft. Stuende es im Schritt,
+/// liefe es in jedem Tick.
+pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    let leaves = machine::leaves(m);
+    let Some(index) = leaves.iter().position(|l| *l == m.initial) else {
+        return Err(NotYet { what: "Anfangszustand ist kein Blatt" });
+    };
+    let mark = module.mark();
+    let ptr = crate::ty::LlvmType::Ptr;
+    module.begin(
+        &format!("{}_init", m.name),
+        &crate::ty::LlvmType::Void,
+        &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
+    );
+    let state_ty = format!("%{}_state", m.name);
+    let Some(conf_i) = st.index_of(Role::Conf, 0) else {
+        module.abort(mark);
+        return Err(NotYet { what: "conf im Zustand" });
+    };
+    let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+    let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
+    module.void_inst(&format!("store i8 {index}, ptr {slot}"));
+
+    let mut ctx = Ctx::new(m, st, p);
+    let enter = m.states[m.initial.index()].enter.clone();
+    if let Err(e) = block(&enter, &mut ctx, module) {
+        module.abort(mark);
+        return Err(e);
+    }
+    module.end(None);
+    Ok(())
 }

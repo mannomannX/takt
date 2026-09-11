@@ -204,7 +204,7 @@ RESERVED    := "region" | "while" | "yield" | "await" | "async" | "spawn" | "sel
 (* ---------------------------------------------------------------- Datei *)
 
 file           := { NEWLINE | import | system_decl | type_decl | unitvec_decl | enum_decl | record_decl | unit_decl   (* @check 1 *)
-                  | stream_decl | port_decl | node_decl | property_decl
+                  | stream_decl | port_decl | node_decl | property_decl | assumption_decl
                   | const_decl | param_decl | profile_decl | channel_decl | command_decl
                   | fn_decl | native_decl | block_decl | machine_decl | instance_decl
                   | scenario_decl | campaign_decl | trigger_decl }
@@ -254,6 +254,8 @@ attr           := "safe" "=" const_expr | "max_age" "=" duration_lit | "rate" "=
                 | "capacity_bytes" "=" int_lit | "expect_len" "=" int_lit                      (* Byte-Ring, 8.6 *)
                 | "irreversible" "=" "true"                                                    (* 12.7 *)
                 | "label" "=" STRING | "display" "=" unit_expr | "group" "=" STRING | "doc" "=" STRING   (* Metadaten, 2.5; v1.1 *)
+                | "budget" "=" "{" budget_item { "," budget_item } "}"                  (* je Maschine, 7.2 *)   (* @check 62 *)
+budget_item    := ( "ram" | "wcet" ) "=" const_expr                                     (* wcet: braucht c_target, 13.8 *)
 framing        := "raw" | "lines" | "cobs" | "length_prefixed" "(" IDENT ")" | "fixed" "(" INT ")"
 command_decl   := "command" IDENT [ "with" attr { "," attr } ] NEWLINE                          (* wake: 5.10; Metadaten: 2.5 *)
 
@@ -307,6 +309,7 @@ seq_item       := stmt   (* @check 14 *)
 instance_decl  := "instance" IDENT [ "[" IDENT "in" range "]" ] [ "resume" ] "=" IDENT "(" [ args ] ")" NEWLINE   (* resume: 5.11, v1.2 *)   (* @check 53 *)
 node_decl      := "node" IDENT "@" "hw" "(" STRING ")" [ "with" "tick" "=" duration_lit ] NEWLINE          (* @stage v2 — 12.9 *)   (* @check 58 *)
 property_decl  := "property" IDENT ":" tprop [ "with" "monitor" "=" "true" ] NEWLINE                     (* @stage v1.1 — 13.3 *)   (* @check 56 *)
+assumption_decl := "assumption" IDENT ":" tprop [ "with" "monitor" "=" "true" ] NEWLINE                  (* @stage v1.1 — 13.3 *)   (* @check 56 *)
 tprop          := tprop_implies                                                                          (* @stage v1.1 — beschraenkte Temporallogik, 13.3 *)
 tprop_implies  := tprop_or { "implies" tprop_or }
 tprop_or       := tprop_and { "or" tprop_and }
@@ -342,7 +345,7 @@ case_pattern   := UPPER_IDENT [ "(" IDENT { "," IDENT } ")" ] | "_"
                 | const_expr [ ".." const_expr ] { "," const_expr [ ".." const_expr ] }       (* Bereiche und Mehrfachwerte *)
 at_stmt        := "at" duration_expr ":" action_block   (* @check 21, 28 *)
 every_stmt     := "every" duration_expr ":" block   (* @check 27 *)
-check_stmt     := "check" expr [ "," STRING ] [ "for" duration_expr ] [ "->" UPPER_IDENT ] [ "req" STRING ]   (* for: 5.6; req: v1.2 *)   (* @check 9, 36 *)
+check_stmt     := "check" expr [ "," STRING ] [ "for" duration_expr ] [ "within" duration_expr ] [ "->" UPPER_IDENT ] [ "req" STRING ]   (* for: 5.6; within: 9.4.5; req: v1.2 *)   (* @check 9, 36, 61 *)
 alert_stmt     := "alert" expr "," STRING [ "for" duration_expr ]   (* @check 36 *)
 log_stmt       := "log" STRING                                                               (* Inhalt nach format_text *)
 send_stmt      := "send" IDENT "," expr   (* @check 20 *)

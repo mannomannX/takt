@@ -295,3 +295,37 @@ fn the_loop_body_runs_before_the_transitions() {
 {ir}"
     );
 }
+
+// --- Reichweite des Codegens --------------------------------------------
+
+/// `scope` zaehlt unabhaengig vom Codegen; beide muessen dieselbe Menge
+/// meinen.
+///
+/// Ohne diesen Test koennte die Messung behaupten, ein Knoten sei gedeckt,
+/// waehrend `step_function` ihn ablehnt — eine Zahl, die besser aussieht
+/// als die Lage. Geprueft wird an den Programmen, die vollstaendig
+/// uebersetzen: Dort darf `scope` keinen offenen Knoten finden.
+#[test]
+fn the_measurement_agrees_with_the_codegen() {
+    for name in VOLLSTAENDIG {
+        let p = corpus(name);
+        let mut cov = takt_llvm::scope::Coverage::default();
+        for m in &p.machines {
+            takt_llvm::scope::machine(m, &mut cov);
+        }
+        assert!(cov.open.is_empty(), "{name} uebersetzt vollstaendig, aber `scope` meldet offen: {:?}", cov.open);
+    }
+}
+
+/// Die Messung sieht ueberhaupt etwas — ein leerer Zaehler waere zu 100 %
+/// gedeckt und damit wertlos.
+#[test]
+fn the_measurement_sees_the_corpus() {
+    let p = corpus("01_minimal.takt");
+    let mut cov = takt_llvm::scope::Coverage::default();
+    for m in &p.machines {
+        takt_llvm::scope::machine(m, &mut cov);
+    }
+    assert!(cov.total() > 10, "zu wenige Knoten gezaehlt: {}", cov.total());
+    assert!(cov.percent() > 99.0, "01_minimal sollte vollstaendig gedeckt sein: {:.0} %", cov.percent());
+}
