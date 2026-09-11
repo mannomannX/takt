@@ -41,6 +41,8 @@ pub struct Ctx<'a> {
     /// Die Nummer der Maschine im Programm; sie geht in jeden
     /// Runtime-Aufruf (`crate::abi`).
     pub machine_index: u32,
+    /// Das Blatt, dessen Zweig gerade entsteht; sein Fault-Ziel gilt.
+    pub leaf: Option<takt_mir::StateId>,
     /// Wie viele Meldungsstellen die Maschine schon hat.
     ///
     /// Der Index identifiziert die Stelle im Trace; die Reihenfolge ist
@@ -52,7 +54,7 @@ impl<'a> Ctx<'a> {
     /// Ein Kontext fuer eine Maschine.
     pub fn new(machine: &'a Machine, state: &'a StateStruct, program: &'a Program) -> Ctx<'a> {
         let machine_index = program.machines.iter().position(|m| m.name == machine.name).unwrap_or(0) as u32;
-        Ctx { machine, state, program, checks: 0, machine_index, sites: 0 }
+        Ctx { machine, state, program, checks: 0, machine_index, leaf: None, sites: 0 }
     }
 
     /// Eine frische Nummer fuer eine Meldungsstelle (9.3).
@@ -75,7 +77,7 @@ impl<'a> Ctx<'a> {
 
     /// Die Variablenabbildung dieser Maschine.
     pub fn vars(&self) -> StateVars<'a> {
-        StateVars { machine: self.machine, state: self.state, program: self.program }
+        StateVars { machine: self.machine, leaf: self.leaf, state: self.state, program: self.program }
     }
 
     /// Der Zeiger auf das `n`-te Feld einer Rolle im Zustands-Struct.
@@ -88,9 +90,12 @@ impl<'a> Ctx<'a> {
         Some(m.inst(&format!("getelementptr inbounds {ty}, ptr %0, i32 0, i32 {i}")))
     }
 
-    /// Der Name des Fault-Trampolins dieser Maschine.
+    /// Der Name des Fault-Trampolins des laufenden Blatts (5.3).
+    ///
+    /// Je Blatt einer, weil das Fault-Ziel am innersten Zustand haengt,
+    /// der eines deklariert (Fault-Wald).
     pub fn trampoline(&self) -> String {
-        format!("fault_{}", self.machine.name)
+        format!("fault_{}_{}", self.machine.name, self.leaf.map_or(0, |s| s.index()))
     }
 }
 
@@ -102,6 +107,8 @@ impl<'a> Ctx<'a> {
 pub struct StateVars<'a> {
     /// Die Maschine.
     pub machine: &'a Machine,
+    /// Das Blatt, dessen Zweig entsteht; sein Fault-Ziel gilt (5.3).
+    pub leaf: Option<takt_mir::StateId>,
     /// Ihr Zustands-Struct.
     pub state: &'a StateStruct,
     /// Das Programm, fuer die Typen.
@@ -131,6 +138,10 @@ impl StateVars<'_> {
 }
 
 impl Vars for StateVars<'_> {
+    fn fault_label(&self) -> Option<String> {
+        Some(format!("fault_{}_{}", self.machine.name, self.leaf?.index()))
+    }
+
     fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<Lowered> {
         let def = self.machine.vars.get(id.index())?;
         let ty = ty::lower(def.ty, self.program)?;
@@ -519,8 +530,7 @@ fn fn_stmt<V: Slots>(s: &Stmt, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result
         }
         StmtKind::Assign { target, value } => {
             let v = lower_expr(value, ctx.program, m, &ctx.vars)?;
-            let Place::Var(id) = target else { return Err(NotYet { what: "Zuweisungsziel in einer Funktion" }) };
-            let (ptr, _) = ctx.vars.slot(*id, m).ok_or(NotYet { what: "lokale Variable" })?;
+            let (ptr, _) = fn_place(target, ctx, m)?;
             m.void_inst(&format!("store {} {}, ptr {ptr}", v.ty, v.value));
             Ok(())
         }
@@ -817,4 +827,41 @@ fn bind_fields(value: &Lowered, fields: &[takt_mir::VarId], ctx: &mut Ctx<'_>, m
     let ptr = ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })?;
     m.void_inst(&format!("store {want} {v}, ptr {ptr}"));
     Ok(())
+}
+
+/// Der Speicherort eines Zuweisungsziels in einer Funktion (4.4).
+///
+/// Dieselbe Form wie `place` in einer Maschine; nur die Wurzel ist eine
+/// andere — eine Funktion hat keine Outputs, nur Locals.
+fn fn_place<V: Slots>(target: &Place, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result<(Reg, LlvmType), NotYet> {
+    match target {
+        Place::Var(id) => ctx.vars.slot(*id, m).ok_or(NotYet { what: "lokale Variable" }),
+        Place::Field(base, field) => {
+            let (ptr, ty) = fn_place(base, ctx, m)?;
+            let LlvmType::Struct(fields) = &ty else { return Err(NotYet { what: "Feld eines Nicht-Records" }) };
+            let inner = fields.get(*field as usize).cloned().ok_or(NotYet { what: "Feldnummer" })?;
+            let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 {field}"));
+            Ok((at, inner))
+        }
+        Place::Index(base, index) => {
+            let (ptr, ty) = fn_place(base, ctx, m)?;
+            let i = lower_expr(index, ctx.program, m, &ctx.vars)?;
+            // Bei einer Sammlung liegt das Element im `data`-Feld (3.9),
+            // bei einem Array unmittelbar. Die Grenze prueft der
+            // `Checked`-Knoten der MIR (4.1).
+            let (array_ty, data) = match &ty {
+                LlvmType::Struct(_) => {
+                    let l = collection::layout_of(&ty).ok_or(NotYet { what: "Index auf diesem Struct" })?;
+                    let d = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 1"));
+                    (LlvmType::Array(Box::new(l.elem), l.cap), d)
+                }
+                LlvmType::Array(..) => (ty.clone(), ptr),
+                _ => return Err(NotYet { what: "Index auf diesem Typ" }),
+            };
+            let LlvmType::Array(elem, _) = &array_ty else { return Err(NotYet { what: "Elementtyp" }) };
+            let at = m.inst(&format!("getelementptr inbounds {array_ty}, ptr {data}, i32 0, {} {}", i.ty, i.value));
+            Ok((at, (**elem).clone()))
+        }
+        _ => Err(NotYet { what: "Zuweisungsziel in einer Funktion" }),
+    }
 }

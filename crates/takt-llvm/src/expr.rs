@@ -85,6 +85,16 @@ pub trait Vars {
         None
     }
 
+    /// Wohin ein gescheiterter Laufzeit-Check springt (4.1, 5.3).
+    ///
+    /// Nur eine Maschine hat einen Fault-Pfad; eine reine Funktion (4.4)
+    /// faultet den Aufrufer, und ihr Zweig entsteht erst, wenn die MIR
+    /// den `Checked`-Knoten an die Aufrufstelle traegt. Bis dahin meldet
+    /// sie `None`.
+    fn fault_label(&self) -> Option<String> {
+        None
+    }
+
     /// Liest ein Command (8.5).
     ///
     /// Ein Command ist ein Puls, der genau einen Tick gilt; die Runtime
@@ -142,6 +152,14 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Convert { expr, kind, unit } => convert(expr, *kind, *unit, &want, p, m, vars),
         ExprKind::Accessor { base, accessor: which, args } => access(base, *which, args, &want, p, m, vars),
         ExprKind::Checked { expr, kind } => {
+            // 3.5: Ein Lesen auf einem ungueltigen Channel ist ein
+            // `SensorFault`. Die Pruefung steht *vor* dem Lesen — der Wert
+            // im Abbild ist bei `Bad` bedeutungslos.
+            if *kind == takt_mir::expr::CheckedKind::Valid
+                && let ExprKind::Input { channel, .. } = &expr.kind
+            {
+                valid_or_fault(*channel, m, vars)?;
+            }
             let inner = lower(expr, p, m, vars)?;
             // `Missing` ist das Auspacken eines `T?`/`T!E` (3.8): Der
             // Knoten prueft, dass ein Wert da ist, *und* liefert ihn. Der
@@ -539,6 +557,25 @@ fn decode(
     let _ = fields;
     let label = m.next_label();
     crate::wire::decode(data, &len.to_string(), record, want, p, m, label)
+}
+
+/// Prueft die Gueltigkeit eines Channels und springt sonst in den
+/// Fault-Pfad (3.5, 4.1).
+///
+/// Der Zweig steht vor dem Lesen: Bei `Bad` traegt das Abbild keinen
+/// Wert, und ihn zu lesen waere die stille Korruption, die 12.6
+/// ausschliesst.
+fn valid_or_fault(channel: takt_mir::ChannelId, m: &mut Module, vars: &dyn Vars) -> Result<(), NotYet> {
+    let Some(target) = vars.fault_label() else {
+        return Err(NotYet { what: "Gueltigkeitspruefung ohne Fault-Pfad" });
+    };
+    let q = vars.quality(channel, crate::image::Slot::Quality, m).ok_or(NotYet { what: "Qualitaet im Abbild" })?;
+    // `.valid` ist `Good` oder `Suspect` (3.5), also `<= SUSPECT`.
+    let ok = m.inst(&format!("icmp sle {} {}, {}", q.ty, q.value, crate::image::quality::SUSPECT));
+    let weiter = format!("gueltig{}", m.next_label());
+    m.void_inst(&format!("br i1 {ok}, label %{weiter}, label %{target}"));
+    m.label(&weiter);
+    Ok(())
 }
 
 /// `x[a..b]` (3.9): ein Teilstueck als eigene Sammlung.

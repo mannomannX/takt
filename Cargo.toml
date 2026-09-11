@@ -8,6 +8,7 @@ members = [
     "crates/takt-hal",
     "crates/takt-rt-core",
     "crates/takt-llvm",
+    "crates/takt-conformance",
     "crates/takt-interp",
     "crates/takt-sema",
     "crates/takt-cli",

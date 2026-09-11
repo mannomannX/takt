@@ -88,6 +88,7 @@ fn write_step(
     let mut ctx = Ctx::new(m, st, p);
     for (i, id) in leaves.iter().enumerate() {
         module.label(&machine::label_of(m, *id));
+        ctx.leaf = Some(*id);
         // 5.2: Aktiv ist ein *Pfad*, nicht ein Zustand. Die `loop:`-Bloecke
         // laufen von der Maschine abwaerts bis zum Blatt — ein `check` auf
         // einer Zwischenebene ist die Invariante *aller* Zustaende darunter,
@@ -114,9 +115,15 @@ fn write_step(
             transitions(&list, i, leaves, &mut ctx, module, &end, &slot)?;
         }
         module.void_inst(&format!("br label %{end}"));
+        // 5.2 Regel 5: Ein Fault fuehrt sofort zum Fault-Ziel des
+        // innersten Zustands, der eines deklariert (Fault-Wald, 5.3). Das
+        // Ziel wird betreten und im Entry-Modus ausgefuehrt — damit
+        // stehen die Outputs am Commit des Ticks auf seinen Werten.
+        //
+        // Der Trampolin steht je Blatt, weil das Ziel am Blatt haengt.
+        fault_path(st, *id, &Ziel { leaves, end: &end, conf: &slot }, &mut ctx, module)?;
     }
 
-    machine::fault_trampoline(m, st, module);
     module.label(&end);
     // `t_in_state` zaehlt die Ticks im aktiven Zustand (5.2, 11.2). Ein
     // Uebergang hat ihn auf 0 gesetzt; hier waechst er um einen Tick.
@@ -191,6 +198,17 @@ fn transitions(
         }
         m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
         reset_time(ctx, m);
+        // 5.2 Regel 4 (Entry-Tick): Die `loop:`-Bloecke der neu betretenen
+        // Zustaende laufen noch in diesem Tick — die darueberliegenden
+        // liefen bereits. `check`s wirken, `-> ZIEL` ist wirkungslos, und
+        // `on`-Handler laufen nicht (das Fenster ist leer).
+        //
+        // Ohne sie erreichte ein Zustand seine Invarianten einen Tick zu
+        // spaet, und die Outputs des Ticks stuenden auf den Werten des
+        // alten Zustands.
+        for id in machine::entering(ctx.machine, leaves[from], leaf) {
+            block(&ctx.machine.states[id.index()].loop_block.clone(), ctx, m)?;
+        }
         m.void_inst(&format!("br label %{end}"));
         m.label(&skip);
     }
@@ -243,6 +261,7 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     module.void_inst(&format!("store i8 {index}, ptr {slot}"));
 
     let mut ctx = Ctx::new(m, st, p);
+    ctx.leaf = Some(leaf);
     // Die ganze Kette von der Wurzel bis zum Blatt wird betreten (5.2).
     for id in machine::path_to(m, leaf) {
         let enter = m.states[id.index()].enter.clone();
@@ -251,6 +270,30 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
             return Err(e);
         }
     }
+    // 5.2 Regel 4: Der Anfangszustand laeuft im Tick 0 im Entry-Modus —
+    // „wie eine Maschine bei Tick 0" (1012). Seine `check`s wirken also
+    // schon dort, und ein Fault fuehrt vor dem ersten Commit zum
+    // Fault-Ziel. Ohne das stuenden die Outputs des Ticks 0 auf den
+    // Werten eines Zustands, den die Maschine bereits verlassen hat.
+    let kette: Vec<takt_mir::StateId> = machine::path_to(m, leaf);
+    let mut koerper = vec![m.loop_block.clone()];
+    koerper.extend(kette.iter().map(|id| m.states[id.index()].loop_block.clone()));
+    let ende = format!("init_ende_{}", m.name);
+    for b in &koerper {
+        if let Err(e) = block(b, &mut ctx, module) {
+            module.abort(mark);
+            return Err(e);
+        }
+    }
+    module.void_inst(&format!("br label %{ende}"));
+    // Der Fault-Pfad des Anfangszustands: Ein `check`, der schon im
+    // Tick 0 scheitert, fuehrt zum Fault-Ziel (5.2 Regel 5). Ohne ihn
+    // spraenge der Zweig ins Leere — die Marke steht nur im Schritt.
+    if let Err(e) = fault_path(st, leaf, &Ziel { leaves: &leaves, end: &ende, conf: &slot }, &mut ctx, module) {
+        module.abort(mark);
+        return Err(e);
+    }
+    module.label(&ende);
     module.end(None);
     Ok(())
 }
@@ -417,4 +460,82 @@ fn element_slot(
         }
     }
     Ok(m.inst("alloca i64"))
+}
+
+/// Der Fault-Pfad eines Blattzustands (5.2 Regel 5, 5.3).
+///
+/// Ein `check`, der scheitert, springt hierher. Der Pfad tut, was 5.2
+/// verlangt: Er merkt den Fault vor (`last_fault`, fuer `m.last_fault`),
+/// betritt das Fault-Ziel und fuehrt dessen `enter:` und `loop:` im
+/// Entry-Modus aus.
+///
+/// **Warum je Blatt und nicht einmal je Maschine.** Das Fault-Ziel haengt
+/// am innersten Zustand, der eines deklariert (Fault-Wald, 5.3); zwei
+/// Blaetter koennen verschiedene haben. Ein gemeinsamer Trampolin
+/// muesste die Konfiguration erneut auswerten — er haette den `switch`
+/// ein zweites Mal.
+fn fault_path(
+    st: &StateStruct,
+    from: takt_mir::StateId,
+    ziel: &Ziel<'_>,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let machine_def = ctx.machine;
+    let (leaves, end, conf_slot) = (ziel.leaves, ziel.end, ziel.conf);
+    m.label(&format!("fault_{}_{}", machine_def.name, from.index()));
+    // Der Fault wird vorgemerkt; `pending` traegt ihn fuer die
+    // Abort-Phase (5.4), die die Runtime fuehrt.
+    if let Some(pending) = st.index_of(Role::Pending, 0) {
+        let state_ty = format!("%{}_state", machine_def.name);
+        let field = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {pending}"));
+        let flag = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 0"));
+        m.void_inst(&format!("store i1 true, ptr {flag}"));
+    }
+    let target = machine_def.fault_target_of(from);
+    let takt_mir::machine::FaultTarget::State(to) = target else {
+        // `FAULTED` fuehrt keinen Nutzercode aus (5.2 Regel 5); die
+        // Outputs stehen bereits auf `safe`, was die Runtime stellt.
+        m.void_inst("ret void");
+        return Ok(());
+    };
+    let Some(leaf) = machine::initial_leaf(machine_def, to) else {
+        m.void_inst("ret void");
+        return Ok(());
+    };
+    let Some(index) = leaves.iter().position(|l| *l == leaf) else {
+        m.void_inst("ret void");
+        return Ok(());
+    };
+    // 5.2 Regel 3: `exit:` des verlassenen, `enter:` des betretenen
+    // Zustands. Ein Fault-Uebergang laeuft sonst wie jeder andere.
+    for id in machine::exiting(machine_def, from, leaf) {
+        block(&machine_def.states[id.index()].exit.clone(), ctx, m)?;
+    }
+    for id in machine::entering(machine_def, from, leaf) {
+        block(&machine_def.states[id.index()].enter.clone(), ctx, m)?;
+    }
+    m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
+    reset_time(ctx, m);
+    // Entry-Modus: Die `loop:`-Bloecke des Fault-Ziels laufen noch in
+    // diesem Tick (5.2 Regel 4 und 5).
+    for id in machine::entering(machine_def, from, leaf) {
+        block(&machine_def.states[id.index()].loop_block.clone(), ctx, m)?;
+    }
+    m.void_inst(&format!("br label %{end}"));
+    Ok(())
+}
+
+/// Wohin ein Fault-Pfad fuehrt und wo er endet.
+///
+/// Die drei gehoeren zusammen: Sie beschreiben denselben Zweig, und
+/// einzeln durchgereicht waeren sie drei Gelegenheiten, den falschen zu
+/// nehmen.
+struct Ziel<'a> {
+    /// Die Blattzustaende der Maschine, fuer die Nummer des Ziels.
+    leaves: &'a [StateId],
+    /// Die Marke am Ende des Schritts.
+    end: &'a str,
+    /// Der Zeiger auf `conf[0]`.
+    conf: &'a crate::emit::Reg,
 }
