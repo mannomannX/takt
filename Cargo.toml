@@ -7,6 +7,7 @@ members = [
     "crates/takt-mir",
     "crates/takt-hal",
     "crates/takt-rt-core",
+    "crates/takt-llvm",
     "crates/takt-interp",
     "crates/takt-sema",
     "crates/takt-cli",

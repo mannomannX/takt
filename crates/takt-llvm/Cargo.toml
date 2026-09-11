@@ -1,0 +1,14 @@
+[package]
+name = "takt-llvm"
+version = "0.1.0"
+description = "Takt: Codegen nach LLVM-IR (Referenz 11.2), als Text"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+takt-diag = { path = "../takt-diag" }
+takt-mir = { path = "../takt-mir" }
+
+[lints]
+workspace = true

@@ -40,6 +40,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "takt-llvm"
+version = "0.1.0"
+dependencies = [
+ "takt-diag",
+ "takt-mir",
+]
+
+[[package]]
 name = "takt-mir"
 version = "0.1.0"
 dependencies = [

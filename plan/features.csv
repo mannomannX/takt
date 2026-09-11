@@ -89,7 +89,7 @@ SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig
 SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),teilweise
 SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M1/M2 (Interpreter),offen
 SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,je Meilenstein,offen
-SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),offen
+SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),teilweise
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),teilweise
 SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M6 (stdlib),offen
 SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3 (Gate),teilweise
