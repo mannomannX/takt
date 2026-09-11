@@ -18,6 +18,7 @@ fn main() {
     let Some(p) = out.program else { return };
     let mut m = Module::new(&path, "x86_64-pc-windows-msvc");
     takt_llvm::abi::Abi::declare(&mut m);
+    takt_llvm::stream::Streams::declare(&mut m);
     // Bloecke zuerst: Die Maschinen halten ihre Instanzen (5.7).
     for b in &p.blocks {
         let Some(inst) = takt_llvm::block::instance_of(b, &p) else { continue };

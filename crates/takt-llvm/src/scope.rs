@@ -84,12 +84,16 @@ pub fn machine(m: &Machine, c: &mut Coverage) {
                 }
             }
         }
-        for _ in &s.handlers {
-            c.note("`on`-Handler", false);
+        for h in &s.handlers {
+            // Ein Catch-all wird gesenkt (8.7); Muster brauchen den
+            // Musterabgleich ueber Stromelementen.
+            c.note("`on`-Handler", h.pattern.is_none());
+            block(&h.body, c);
         }
     }
-    for _ in &m.handlers {
-        c.note("`on`-Handler", false);
+    for h in &m.handlers {
+        c.note("`on`-Handler", h.pattern.is_none());
+        block(&h.body, c);
     }
 }
 
@@ -255,6 +259,11 @@ fn expr(e: &Expr, c: &mut Coverage) {
         ExprKind::Variant { fields, .. } => c.note("Variante", fields.is_empty()),
         ExprKind::Array(_) => c.note("Array-Literal", false),
         ExprKind::Decode { .. } => c.note("`decode`", false),
+        ExprKind::Ok(v) | ExprKind::Err(v) | ExprKind::Lift(v) => {
+            c.note("`ok`/`err`", true);
+            expr(v, c);
+        }
+        ExprKind::None | ExprKind::Default => c.note("`none`/`default`", true),
         ExprKind::Matches { .. } => c.note("`matches`", false),
         ExprKind::MatOp { .. } => c.note("Matrixoperation", false),
         ExprKind::Slice { .. } => c.note("Teilbereich", false),

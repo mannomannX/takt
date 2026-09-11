@@ -85,13 +85,6 @@ fn write_step(
     // 4.1 verlangt Totalitaet, nicht undefiniertes Verhalten.
     module.void_inst(&format!("switch i8 {cur}, label %{end} [ {} ]", arms.join(" ")));
 
-    // 8.7: Handler verarbeiten das Fenster eines Stroms. Sie fehlen noch;
-    // sie hier zu uebergehen hiesse, ein Programm zu uebersetzen, das
-    // etwas anderes tut als geschrieben — der schlimmste Fehler, den ein
-    // Codegen machen kann.
-    if !m.handlers.is_empty() || m.states.iter().any(|s| !s.handlers.is_empty()) {
-        return Err(NotYet { what: "`on`-Handler" });
-    }
     let mut ctx = Ctx::new(m, st, p);
     for (i, id) in leaves.iter().enumerate() {
         module.label(&machine::label_of(m, *id));
@@ -104,6 +97,15 @@ fn write_step(
         for anc in &pfad {
             block(&m.states[anc.index()].loop_block.clone(), &mut ctx, module)?;
         }
+        // 8.7: Die Handler verarbeiten das Fenster ihres Stroms. Sie
+        // laufen nach den `loop:`-Bloecken, weil ein `check` dort die
+        // Invariante des Zustands ist — sie gilt, bevor ein Ereignis sie
+        // stoeren kann.
+        let mut handler: Vec<takt_mir::machine::Handler> = m.handlers.clone();
+        for anc in &pfad {
+            handler.extend(m.states[anc.index()].handlers.iter().cloned());
+        }
+        dispatch(&handler, &mut ctx, module, &end)?;
         // Dann die Uebergaenge, vom Blatt aufwaerts: Der innerste Zustand
         // entscheidet zuerst (5.2), und innerhalb einer Ebene gewinnt der
         // erste passende in Quelltextreihenfolge.
@@ -298,4 +300,121 @@ fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crat
     let reached = m.inst(&format!("icmp sge i64 {elapsed}, {}", frist.value));
     let both = m.inst(&format!("and i1 {positive}, {reached}"));
     Ok(crate::expr::Lowered { value: both.to_string(), ty: crate::ty::LlvmType::Int(1) })
+}
+
+/// Der Handler-Durchlauf eines Zustands (8.7, 9.6).
+///
+/// Die Form folgt dem Interpreter (`dispatch`): Stroeme in
+/// Deklarationsreihenfolge, je Strom das Fenster in `seq`-Reihenfolge,
+/// und je Element der erste passende Handler. Auch ein Element, auf das
+/// kein Handler passt, gilt als untersucht — sonst saehe die Maschine es
+/// im naechsten Tick wieder.
+///
+/// **Warum eine Schleife und keine abgerollte Folge.** Die Fenstergroesse
+/// ist zur Uebersetzungszeit nicht bekannt (sie haengt an der Lieferung),
+/// nur ihre Schranke: `CAP`. 4.1 verlangt eine Schranke, nicht eine feste
+/// Zahl — und `CAP` Durchlaeufe abzurollen waere bei einem Ring von 256
+/// Elementen unbrauchbar.
+fn dispatch(
+    handlers: &[takt_mir::machine::Handler],
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+    end: &str,
+) -> Result<(), NotYet> {
+    if handlers.is_empty() {
+        return Ok(());
+    }
+    // Stroeme in Deklarationsreihenfolge; jede Ebene sieht dasselbe
+    // Fenster (8.7).
+    let mut streams: Vec<takt_mir::expr::StreamRef> = Vec::new();
+    for h in handlers {
+        if !streams.contains(&h.stream) {
+            streams.push(h.stream);
+        }
+    }
+    for stream in streams {
+        let cursor = cursor_index(ctx, stream).ok_or(NotYet { what: "Cursor eines Stroms" })?;
+        let sid = stream_id(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+        let k = ctx.next_label();
+        let state_ty = format!("%{}_state", ctx.machine.name);
+        let cur_ptr = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {cursor}"));
+        let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
+        let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+        // Der Zaehler laeuft ueber das Fenster; seine Schranke ist `n`.
+        let i_ptr = m.inst("alloca i32");
+        m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
+        let (kopf, rumpf, ende) = (format!("strom{k}"), format!("strom{k}_rumpf"), format!("strom{k}_ende"));
+        m.void_inst(&format!("br label %{kopf}"));
+        m.label(&kopf);
+        let i = m.inst(&format!("load i32, ptr {i_ptr}"));
+        let weiter = m.inst(&format!("icmp slt i32 {i}, {n}"));
+        m.void_inst(&format!("br i1 {weiter}, label %{rumpf}, label %{ende}"));
+        m.label(&rumpf);
+        // Das Element wird in die Bindung geschrieben; ohne Bindung in
+        // einen Scratch, weil `takt_stream_at` einen Platz braucht.
+        let hs: Vec<&takt_mir::machine::Handler> = handlers.iter().filter(|h| h.stream == stream).collect();
+        let slot = element_slot(&hs, ctx, m)?;
+        let seq =
+            m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {slot})", crate::stream::Streams::AT));
+        // 9.6: Auch ein Element ohne passenden Handler gilt als
+        // untersucht — sonst saehe die Maschine es im naechsten Tick
+        // wieder.
+        m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
+        // 8.7: der erste passende Handler gewinnt. Solange nur
+        // Catch-alls gesenkt werden, ist das immer der erste — weitere
+        // kaemen nie zum Zug, und sie zu erzeugen waere toter Code.
+        // Sobald Muster dazukommen, wird daraus eine Kette von Zweigen.
+        let Some(first) = hs.first() else { continue };
+        if hs.iter().any(|h| h.pattern.is_some()) {
+            return Err(NotYet { what: "Handler mit Muster" });
+        }
+        block(&first.body.clone(), ctx, m)?;
+        let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
+        let next = m.inst(&format!("add i32 {cur_i}, 1"));
+        m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
+        m.void_inst(&format!("br label %{kopf}"));
+        m.label(&ende);
+        // Der Cursor steht danach hinter dem letzten untersuchten
+        // Element (9.6); die Runtime fuehrt ihn mit `examined` nach.
+        let _ = end;
+    }
+    Ok(())
+}
+
+/// Der Index des Cursors eines Stroms im Zustands-Struct (9.6).
+fn cursor_index(ctx: &Ctx<'_>, stream: takt_mir::expr::StreamRef) -> Option<u32> {
+    let nth = ctx.machine.layout.cursors.iter().position(|c| *c == stream)?;
+    ctx.state.index_of(Role::Cursor, nth)
+}
+
+/// Die Nummer eines Stroms fuer die Runtime.
+///
+/// Channel und interner Strom haben je eigene Nummern; die Runtime
+/// unterscheidet sie am Vorzeichen, damit ein Aufruf genuegt.
+fn stream_id(stream: takt_mir::expr::StreamRef) -> Option<i64> {
+    match stream {
+        takt_mir::expr::StreamRef::Channel(c) => Some(i64::from(c.0)),
+        takt_mir::expr::StreamRef::Internal(s) => Some(-1 - i64::from(s.0)),
+        // `t.fired` ist v1.2, ein Strom in einer Variablen v1.1; beide
+        // haben zur Uebersetzungszeit keine feste Nummer.
+        _ => None,
+    }
+}
+
+/// Der Platz, an den `takt_stream_at` das Element schreibt.
+///
+/// Mit Bindung ist das die gehobene Variable (8.7); ohne Bindung ein
+/// Scratch, weil der Aufruf einen Platz braucht und der Wert nicht
+/// gelesen wird.
+fn element_slot(
+    hs: &[&takt_mir::machine::Handler],
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::emit::Reg, NotYet> {
+    for h in hs {
+        if let Some(var) = h.binding {
+            return ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" });
+        }
+    }
+    Ok(m.inst("alloca i64"))
 }

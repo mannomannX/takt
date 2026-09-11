@@ -43,6 +43,8 @@ fn main() {
         dateien += 1;
         let mut m = Module::new("x", "x86_64-pc-windows-msvc");
         takt_llvm::abi::Abi::declare(&mut m);
+        takt_llvm::stream::Streams::declare(&mut m);
+        takt_llvm::stream::Streams::declare(&mut m);
         let mut alle = true;
         for b in &p.blocks {
             let Some(inst) = takt_llvm::block::instance_of(b, &p) else { continue };

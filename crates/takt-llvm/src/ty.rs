@@ -117,6 +117,12 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
             LlvmType::Struct(fields)
         }
         Type::Array { elem, len } => LlvmType::Array(Box::new(lower(*elem, p)?), *len),
+        // `T?` (3.8): Wert und Gueltigkeitsflag. Das Flag steht hinten,
+        // damit der Wert an derselben Stelle liegt wie ohne Wrapper.
+        Type::Optional(inner) => LlvmType::Struct(vec![lower(*inner, p)?, LlvmType::Int(1)]),
+        // `T!E` (3.8): Wert, Fehlerdiskriminante, Flag. Der Fehler ist
+        // ein Enum ohne Felder, also eine Zahl.
+        Type::Result { ok, .. } => LlvmType::Struct(vec![lower(*ok, p)?, LlvmType::Int(32), LlvmType::Int(1)]),
         Type::Bytes { cap } | Type::Str { cap } => {
             LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), *cap)])
         }

@@ -225,12 +225,17 @@ fn logical_not_and_bitwise_not_are_different() {
 /// nicht still etwas anderes.
 #[test]
 fn an_unsupported_expression_says_so() {
-    let (p, t) = program();
+    let (mut p, t) = program();
     let mut m = Module::new("t", "x86_64-unknown-linux-gnu");
     m.begin("f", &LlvmType::Void, &[]);
-    let got = lower(&e(ExprKind::None, t.f64_), &p, &mut m, &NoVars);
+    // `decode` braucht das Drahtformat (8.6); bis dahin meldet sich der
+    // Knoten, statt still etwas anderes zu erzeugen.
+    let bytes = push(&mut p, Type::Bytes { cap: 8 });
+    let call =
+        e(ExprKind::Decode { bytes: Box::new(e(ExprKind::Default, bytes)), record: takt_mir::RecordId(0) }, t.f64_);
+    let got = lower(&call, &p, &mut m, &NoVars);
     m.end(None);
-    assert!(got.is_err(), "`none` ist noch nicht gesenkt");
+    assert!(got.is_err(), "`decode` ist noch nicht gesenkt");
 }
 
 /// Die Ranges aus M3 senken die Breite nicht von selbst — der Codegen

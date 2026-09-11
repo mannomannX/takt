@@ -28,6 +28,7 @@ fn corpus(name: &str) -> Program {
 fn ir_of(p: &Program) -> String {
     let mut m = Module::new("korpus", "x86_64-pc-windows-msvc");
     takt_llvm::abi::Abi::declare(&mut m);
+    takt_llvm::stream::Streams::declare(&mut m);
     // Bloecke zuerst: Die Maschinen halten ihre Instanzen (5.7).
     let methoden: Vec<_> = p.blocks.iter().flat_map(|b| b.step.iter().chain(&b.methods).copied()).collect();
     for b in &p.blocks {
@@ -55,7 +56,8 @@ fn ir_of(p: &Program) -> String {
 /// Die Korpusprogramme, deren Maschinen der Codegen heute vollstaendig
 /// senkt. Die Liste waechst mit ihm; sie steht hier, damit ein Rueckschritt
 /// auffaellt.
-const VOLLSTAENDIG: [&str; 7] = [
+const VOLLSTAENDIG: [&str; 8] = [
+    "12_bitfields.takt",
     "18_blocks.takt",
     "01_minimal.takt",
     "03_sequences_and_faults.takt",
@@ -747,4 +749,71 @@ fn reset_restores_the_initial_state_and_clears_the_flag() {
         "`reset` gibt `step` nicht wieder frei:
 {ir}"
     );
+}
+
+// --- Ereignisstroeme (8.6, 8.7, 9.6) ------------------------------------
+
+/// 8.7: Der Handler laeuft ueber das Fenster seines Stroms. Die
+/// Fenstergroesse steht erst zur Laufzeit fest, die Schranke aber im Typ
+/// — also eine Schleife, keine abgerollte Folge.
+#[test]
+fn a_handler_walks_the_window_of_its_stream() {
+    let p = corpus("12_bitfields.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("@takt_stream_count"),
+        "die Fenstergroesse wird nicht erfragt:
+{ir}"
+    );
+    assert!(
+        ir.contains("@takt_stream_at"),
+        "die Elemente werden nicht gelesen:
+{ir}"
+    );
+}
+
+/// 9.6: Auch ein Element, auf das kein Handler passt, gilt als
+/// untersucht — sonst saehe die Maschine es im naechsten Tick wieder.
+#[test]
+fn every_element_of_the_window_counts_as_examined() {
+    let p = corpus("12_bitfields.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("@takt_stream_examined"),
+        "`examined` wird nicht gemeldet:
+{ir}"
+    );
+    // Der Aufruf steht *vor* dem Rumpf des Handlers: Er gilt fuer jedes
+    // Element, nicht nur fuer die getroffenen.
+    let at = ir.find("@takt_stream_at").expect("at");
+    let examined = ir[at..].find("@takt_stream_examined").expect("examined");
+    let body = ir[at..].find("store").unwrap_or(usize::MAX);
+    assert!(
+        examined < body,
+        "`examined` steht hinter dem Rumpf:
+{ir}"
+    );
+}
+
+// --- Wrapper-Typen (3.8) ------------------------------------------------
+
+/// 3.8: `T?` und `T!E` tragen ihr Flag am Ende, damit der Wert an
+/// derselben Stelle liegt wie ohne Wrapper.
+#[test]
+fn the_validity_flag_sits_at_the_end_of_the_wrapper() {
+    let p = corpus("13_protocol_analysis.takt");
+    let mut found = false;
+    for t in &p.types.list {
+        if let takt_mir::types::Type::Result { .. } = t {
+            let ty = takt_llvm::ty::lower(
+                takt_mir::TypeId(p.types.list.iter().position(|x| x == t).expect("Typ") as u32),
+                &p,
+            );
+            if let Some(takt_llvm::ty::LlvmType::Struct(fields)) = ty {
+                assert_eq!(fields.last(), Some(&takt_llvm::ty::LlvmType::Int(1)), "das Flag steht nicht hinten");
+                found = true;
+            }
+        }
+    }
+    assert!(found, "kein `T!E` im Programm");
 }

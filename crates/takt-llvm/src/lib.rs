@@ -25,6 +25,7 @@
 //! - `stmt`: Anweisungen, Checks und der Fault-Zweig (11.2).
 //! - `scope`: was der Codegen deckt, gemessen an echten Programmen.
 //! - `step`: die Schrittfunktion einer Maschine (11.2, 9.4).
+//! - `stream`: die Naht zu den Ereignisstroemen (8.6, 9.6).
 //! - `toolchain`: `clang` finden, um die IR zu pruefen und auszufuehren.
 
 pub mod abi;
@@ -38,6 +39,7 @@ pub mod machine;
 pub mod scope;
 pub mod step;
 pub mod stmt;
+pub mod stream;
 pub mod toolchain;
 pub mod ty;
 

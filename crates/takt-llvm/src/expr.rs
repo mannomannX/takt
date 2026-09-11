@@ -105,6 +105,11 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Float(f) => Ok(Lowered { value: float_literal(*f, &want), ty: want }),
         ExprKind::Var(id) => vars.var(*id, m).ok_or(NotYet { what: "unbekannte Variable" }),
         ExprKind::Default => default_of(&want),
+        ExprKind::None => default_of(&want),
+        // `ok(v)` und `err(e)` bauen ein `T!E` (3.8); `lift` hebt einen
+        // Wert in ein `T?`.
+        ExprKind::Ok(v) | ExprKind::Lift(v) => wrap(v, true, &want, p, m, vars),
+        ExprKind::Err(e) => wrap(e, false, &want, p, m, vars),
         ExprKind::Input { channel, .. } => vars.input(*channel, m).ok_or(NotYet { what: "Input" }),
         ExprKind::Param(id) => vars.param(*id, m).ok_or(NotYet { what: "Parameter" }),
         ExprKind::Output(channel) => vars.output(*channel, m).ok_or(NotYet { what: "Output-Latch" }),
@@ -238,6 +243,20 @@ fn access(
                 m.inst(&format!("select i1 {}, {} {}, {} {}", valid.value, x.ty, x.value, fallback.ty, fallback.value));
             Ok(Lowered { value: r.to_string(), ty: want.clone() })
         }
+        // `.ok`/`.err` (3.8): das Flag und die Diskriminante.
+        Accessor::Ok => {
+            let LlvmType::Struct(fields) = &x.ty else { return Err(NotYet { what: "`.ok` ohne Wrapper" }) };
+            let r = m.inst(&format!("extractvalue {} {}, {}", x.ty, x.value, fields.len() - 1));
+            Ok(Lowered { value: r.to_string(), ty: LlvmType::Int(1) })
+        }
+        Accessor::Err => {
+            let LlvmType::Struct(fields) = &x.ty else { return Err(NotYet { what: "`.err` ohne Wrapper" }) };
+            if fields.len() != 3 {
+                return Err(NotYet { what: "`.err` auf einem `T?`" });
+            }
+            let r = m.inst(&format!("extractvalue {} {}, 1", x.ty, x.value));
+            Ok(Lowered { value: r.to_string(), ty: want.clone() })
+        }
         // `.len` einer Sammlung (3.9): das Laengenfeld des Structs.
         Accessor::Len => {
             let LlvmType::Struct(_) = &x.ty else { return Err(NotYet { what: "`.len` auf einer Nicht-Sammlung" }) };
@@ -307,6 +326,36 @@ fn self_variant(
     let def = p.enums.get(enum_id.index()).ok_or(NotYet { what: "Enum" })?;
     let v = def.variants.get(variant as usize).ok_or(NotYet { what: "Variante" })?;
     Ok(Lowered { value: v.discriminant.to_string(), ty: want.clone() })
+}
+
+/// Baut ein `T?` oder `T!E` (3.8).
+///
+/// Das Flag steht am Ende des Structs: `ok` setzt es, `err` loescht es
+/// und legt die Fehlerdiskriminante daneben. So liegt der Wert an
+/// derselben Stelle wie ohne Wrapper, und das Auspacken ist ein
+/// `extractvalue 0` — dieselbe Instruktion fuer beide Formen.
+fn wrap(
+    inner: &Expr,
+    ok: bool,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`ok`/`err` ohne Wrapper-Typ" }) };
+    let v = lower(inner, p, m, vars)?;
+    let mut cur = "undef".to_string();
+    if ok {
+        cur = m.inst(&format!("insertvalue {want} {cur}, {} {}, 0", v.ty, v.value)).to_string();
+    } else if fields.len() == 3 {
+        // Bei `err` traegt das Feld 1 die Diskriminante; der Wert bleibt
+        // undefiniert, weil ihn niemand lesen darf (3.8: Dominanz).
+        cur = m.inst(&format!("insertvalue {want} {cur}, {} {}, 1", v.ty, v.value)).to_string();
+    }
+    let flag = fields.len() - 1;
+    let bit = if ok { "true" } else { "false" };
+    let r = m.inst(&format!("insertvalue {want} {cur}, i1 {bit}, {flag}"));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
 }
 
 /// Eine Primitive (4.1).
