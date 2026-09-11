@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import extract_snippets as ex  # noqa: E402
 
-BLOCK_RE = re.compile(r"^(### ([\d.]+) [^\n]*|## (\d+)\.[^\n]*|```[a-z]*\n(.*?)```)", re.S | re.M)
+BLOCK_RE = re.compile(r"^(### ([\d.]+) [^\n]*|## (\d+)\.[^\n]*|[ \t]*```[a-z]*\n(.*?)[ \t]*```)", re.S | re.M)
 
 
 def blocks(src):

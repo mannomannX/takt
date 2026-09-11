@@ -1,0 +1,3 @@
+b.push(x)           # Ergebnis verworfen — die übliche Form beim Serialisieren
+ok = b.push(x)      # Ergebnis in eine vorhandene Stelle
+var ok = b.push(x)  # Ergebnis in eine neue Bindung

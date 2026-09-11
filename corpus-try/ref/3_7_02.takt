@@ -1,5 +1,13 @@
-match classify(ev):
-    case ERASE(s): measure erase_sector = s
-    case WRITE(a, n): measure write_addr = a
-    case BOOT(v): verify v >= 3, "bootloader too old: {v}"
-    case OTHER: pass
+enum ImageType layout u8: APP = 0x00, DATA = 0x01, BOOT = 0x02  # explizite Diskriminanten mit Breite
+record PartitionEntry layout little, align = 4:
+    magic   : u16 = 0x50AA  # Konstantenfeld: decode prueft, encode setzt
+    kind    : ImageType
+    subtype : u8
+    offset  : u32[B]  # Byte-Adresse als Einheit (3.2)
+    size    : u32[B]
+    label   : [16] u8         # Array fester Laenge
+    flags   : u32 with bits:  # Bitfelder mit Positionen
+        encrypted : bool at 0
+        readonly  : bool at 1
+        level     : u8 at 4..7
+    _ : [4] u8  # Padding, ignoriert

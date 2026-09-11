@@ -93,6 +93,22 @@ Die Blockstruktur folgt CPython: `NEWLINE` beendet eine logische Zeile, `INDENT`
   Zeichen. Ausgenommen sind `-` und `~`, weil sie auch Vorzeichen sind (`unary`), sowie
   `->` und `..`, weil `-> ZIEL` und Bereichsmuster eigene Zeilen bilden. Eine Fortsetzung
   per Backslash gibt es nicht.
+
+  Die Ausnahme für `->` bedeutet, dass eine lange Funktionssignatur *innerhalb* der
+  Parameterliste umbricht — dort trägt schon die offene Klammer (L2.2) —, nicht vor dem
+  Rückgabepfeil:
+
+  ```
+  fn build_response(req: RdmHeader, own: Uid, rt: u8,        # so
+                    pd: bytes<231>, pdl: int in 0..231) -> bytes<264>:
+
+  fn build_response(req: RdmHeader, own: Uid, rt: u8, pd: bytes<231>)
+                    -> bytes<264>:                           # nicht so: E_INDENT
+  ```
+
+  Ein `->` am Zeilenanfang bei Klammertiefe 0 zur Fortsetzung zuzulassen wäre
+  entscheidbar (die vorige Zeile müsste auf `)` enden), ist aber zurückgestellt: Der
+  Umbruch in der Parameterliste ist der häufigere Stil und deckt den Fall ab.
 - **L2.3 Schrittweite.** Die Einrückung einer logischen Zeile ist die Zahl führender
   Leerzeichen. Sie muss ein Vielfaches von 4 sein und darf gegenüber der vorigen
   logischen Zeile um höchstens eine Stufe (4 Leerzeichen) steigen. Sonst `E_INDENT`.

@@ -1,0 +1,4 @@
+input  efuse           : EfuseBlock @ hw("sys/efuse")                                             # Schluessel-Hashes/-Werte, min_version, Secure-Boot-Flags (vordefiniertes Record)
+input  image_confirmed : [2] bool   @ hw("sys/image_confirmed")                                   # je Slot: vom Anwendungsimage bestaetigt
+output boot_jump       : u8         @ hw("sys/jump")       with safe = NONE                       # Sprung in den Slot; beendet den Lauf nach dem Commit
+output efuse_burn      : EfuseCmd   @ hw("sys/efuse_burn") with safe = NONE, irreversible = true  # einmalig programmierbare Bits

@@ -51,7 +51,9 @@ def main(argv):
     counter = {}
     rows = []
     pos = 0
-    for m in re.finditer(r"^(### ([\d.]+) [^\n]*|## (\d+)\.[^\n]*|```[a-z]*\n(.*?)```)", src, re.S | re.M):
+    # Eingerueckte Bloecke (unter einem Aufzaehlungspunkt) zaehlen mit: die
+    # gemeinsame Einrueckung wird unten ohnehin abgezogen.
+    for m in re.finditer(r"^(### ([\d.]+) [^\n]*|## (\d+)\.[^\n]*|[ \t]*```[a-z]*\n(.*?)[ \t]*```)", src, re.S | re.M):
         if m.group(2):
             section = m.group(2)
             continue

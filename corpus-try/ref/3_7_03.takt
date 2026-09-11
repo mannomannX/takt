@@ -1,0 +1,12 @@
+record SensorDef:
+    kind        : u8
+    messgroesse : u8
+    range_min   : i16
+    range_max   : i16
+
+const SENSORS : [2] SensorDef = [
+    SensorDef(kind = 0x00, messgroesse = 0x01, range_min = -400, range_max = 1250),
+    SensorDef(kind = 0x01, messgroesse = 0x05, range_min = 0, range_max = 300)]
+
+fn sensor_kind(idx: int in 0..1) -> u8:
+    return SENSORS[idx].kind

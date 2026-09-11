@@ -1,0 +1,17 @@
+record Head layout big:
+    start : u8 = 0xCC
+    len   : u8  # Platzhalter, wird nachgetragen
+    kind  : u8
+
+fn frame(kind: u8, pd: bytes<32>, pdl: int in 0..32) -> bytes<64>:
+    var out : bytes<64> = default
+    out.append(Head(start = 0xCC, len = 0, kind = kind).encode())
+    for i in range(32):  # nur weil `pdl` ein Teilstueck begrenzt
+        if i >= pdl:
+            break
+        out.push(pd[i])
+
+    out[1] = (3 + pdl) as u8           # Laenge nachtragen (Index-Schreiben)
+    var csum = checksum(out, 3 + pdl)  # liest den Puffer, der gerade entsteht
+    out.push(csum)
+    return out

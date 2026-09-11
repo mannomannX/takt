@@ -119,7 +119,15 @@ Vor dem ersten Commit stehen alle Outputs auf ihren `safe`-Werten (Runtime und I
 
 ### 2.1 Lexik
 - UTF-8; Blockstruktur durch `:` und Einrückung (4 Leerzeichen, Tabs sind Fehler; der Formatter ist kanonisch). Ausdrücke, Typen und Blöcke sind höchstens 64 Ebenen tief verschachtelt; tiefer ist ein Syntaxfehler mit Vorschlag, damit kein Werkzeug an pathologischen Eingaben scheitert.
-- Kommentare `# …`. Zeilenfortsetzung innerhalb offener Klammern; ohne Klammer setzt ein hängendes Komma am Zeilenende fort, ebenso eine Folgezeile, die mit `.`, einem Infix-Operator, `and`, `or` oder `with` beginnt (Lexer L2.2a). Damit sind lange Attributlisten, Methodenketten und mehrzeilige Ausdrücke umbrechbar, ohne ein Fortsetzungszeichen wie den Backslash einzuführen.
+- Kommentare `# …`. Zeilenfortsetzung innerhalb offener Klammern; ohne Klammer setzt ein hängendes Komma am Zeilenende fort, ebenso eine Folgezeile, die mit `.`, einem Infix-Operator, `and`, `or` oder `with` beginnt (Lexer L2.2a). Damit sind lange Attributlisten, Methodenketten und mehrzeilige Ausdrücke umbrechbar, ohne ein Fortsetzungszeichen wie den Backslash einzuführen. `->` und `..` setzen **nicht** fort, weil `-> ZIEL` und Bereichsmuster eigene Zeilen bilden; eine lange Funktionssignatur bricht deshalb innerhalb der Parameterliste um (dort trägt die Klammer), nicht vor dem Rückgabepfeil:
+
+```
+fn build_response(req: RdmHeader, own: Uid, rt: u8,
+                  pd: bytes<231>, pdl: int in 0..231) -> bytes<264>:
+    var out : bytes<264> = default
+    out.push(rt)
+    return out
+```
 - Namenskonventionen (vom Compiler geprüft, Warnung bei Verstoß): `snake_case` für Variablen, Channels, Funktionen, Blöcke, Maschinen; `UPPER_SNAKE_CASE` für Konstanten, Parameter, Zustände, Enum-Varianten; `PascalCase` für Typen.
 - Literale: `42`, `0x1F`, `0b1010`, `0o17`, `1_000_000`, `4.25`, `1e-3`, `true`, `false`, `none`, `"text"`, Einheitenliterale `85 degC`, `4.25 V`, `5 K/min`, `0.0005 1/s`, Dauern `200 ms`, `1.5 s`, `30 min`, `7 d`.
 - Musterliterale sind Strings mit typisierten Platzhaltern `{name:kind}` (8.7); `{{` und `}}` sind Escapes.
@@ -422,7 +430,7 @@ address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                            
 
 | Konstrukt | Bedeutung |
 |---|---|
-| `const` | Compile-Zeit-Konstante. |
+| `const` | Compile-Zeit-Konstante. **Nur auf Dateiebene** (2.3, `file`): In Funktions-, Block- und Zustandsrümpfen gibt es allein `var`. Eine Konstante beschreibt eine Eigenschaft des Programms, nicht einen Zwischenwert einer Berechnung; sie oben zu führen hält sie auffindbar und macht Tabellen wiederverwendbar, statt sie in einer Funktion zu verstecken. Ein `var` mit konstantem Initialisierer im Rumpf ist die gleichwertige lokale Form — die Intervallanalyse kennt seinen Wert genauso (3.4). |
 | `param` | Ladezeit-Parameter mit Typ und Range; während eines Laufs unveränderlich; im Lauf-Header aufgezeichnet. `profile` bündelt Belegungen. |
 | `input`/`output` | Logische Channels mit Typ, Einheit, Bindung (`hw`, `sim`, `none`), Attributen. Outputs müssen `safe` deklarieren. |
 | `command` | Puls-Input, ausgelöst von Operator/Dashboard/Netzwerk; erscheint automatisch in der Bedienoberfläche. |
@@ -480,7 +488,17 @@ address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                            
 
 **Reservierte Wörter.** Neben den Schlüsselwörtern (2.2) sind Wörter reserviert, die heute keine Bedeutung haben, als Bezeichner aber verboten sind (Liste in 2.2). `while` erhält eine eigene Meldung („nicht erlaubt: `for` mit Schranke oder `sequence` mit `until`"). Neue Wörter kommen nur mit einer Edition.
 
-**Reservierte Membernamen.** Die eingebauten Zugriffe — `valid suspect stale age reason or ok err t seq text data len count dropped malformed overflowed free jitter time_warped done result state to to_float as bit bits with_bit wrap_* min max mean rms last transpose inv det solve cholesky decode encode default push get insert remove clear skip starts_with contains armed fired pre post samples rate remaining truncated reset` — gehören zu den eingebauten Typen (Wrapper, Channels, Streams, Sammlungen, Blöcke, Matrizen, Captures). Records und Enums haben einen eigenen Namensraum: Verboten als Feldnamen sind nur die Zugriffe der Wrapper `valid suspect stale age reason or ok err`, weil auf einem Wrapper (`T?`, `T!E`, Channel, Job-Handle, Trigger-Handle) `x.name` immer den Wrapper meint und Felder des Inhalts erst nach dem Auspacken (Dominanz, 3.8) erreichbar sind. Alle anderen Namen der Liste dürfen Records tragen (`CanFrame.data`, 3.7); Variantennamen sind frei, auch `NONE`, `OK` und `ERR`, weil `match` typgeführt ist. Capture-Namen in Mustern (8.7) sind Feldnamen der Bindung, die zusätzlich `t`, `seq`, `text` und `data` trägt; diese vier sind als Capture-Namen verboten. Schlüsselwörter sind als Feldnamen verboten. Neue eingebaute Zugriffe kommen nur mit einer Edition.
+**Reservierte Membernamen.** Die eingebauten Zugriffe — `valid suspect stale age reason or ok err t seq text data len count dropped malformed overflowed free jitter time_warped done result state to to_float as bit bits with_bit wrap_* min max mean rms last transpose inv det solve cholesky decode encode default push append get insert remove clear skip starts_with contains armed fired pre post samples rate remaining truncated reset` — gehören zu den eingebauten Typen (Wrapper, Channels, Streams, Sammlungen, Blöcke, Matrizen, Captures). Records und Enums haben einen eigenen Namensraum: Verboten als Feldnamen sind nur die Zugriffe der Wrapper `valid suspect stale age reason or ok err`, weil auf einem Wrapper (`T?`, `T!E`, Channel, Job-Handle, Trigger-Handle) `x.name` immer den Wrapper meint und Felder des Inhalts erst nach dem Auspacken (Dominanz, 3.8) erreichbar sind. Alle anderen Namen der Liste dürfen Records tragen (`CanFrame.data`, 3.7); Variantennamen sind frei, auch `NONE`, `OK` und `ERR`, weil `match` typgeführt ist. Capture-Namen in Mustern (8.7) sind Feldnamen der Bindung, die zusätzlich `t`, `seq`, `text` und `data` trägt; diese vier sind als Capture-Namen verboten. Schlüsselwörter sind als Feldnamen verboten — und ebenso als Variablen-, Parameter- und Blocknamen: Ein Schlüsselwort ist im gesamten Programm kein Bezeichner. Praktisch stolpert man dabei fast immer über dieselben kurzen Wörter, die zugleich naheliegende Bezeichner sind; die Meldung nennt das Wort, die Ausweichnamen sind Geschmackssache:
+
+| Schlüsselwort | typischer Wunsch | bewährter Ausweichname |
+|---|---|---|
+| `on` | Schaltzustand einer Lampe, eines Relais | `lit`, `active`, `energized` |
+| `state` | Feld eines Statusregisters, Phase eines Protokolls | `phase`, `stage`, `status` |
+| `unit` | Messgröße eines Sensors (E1.20, IO-Link) | `messgroesse`, `quantity`, `uom` |
+| `step` | Schritt einer Sequenz als Datenfeld | `stage`, `index`, `no` |
+| `at` | Zeitstempel als Feldname | `t`, `when_ns`, `stamp` |
+
+Neue eingebaute Zugriffe kommen nur mit einer Edition.
 
 **Offene Enums.** `FaultKind`, `BootReason`, `ImageState`, `RebootCmd`, `Quality`, der Wertebereich von `x.reason` und `JobErr` sind *offen*: `match` über sie verlangt `case _`, damit neue Varianten (z. B. `Runtime(Node)`, 12.9) keine erschöpfenden Matches brechen. Nutzer dürfen eigene Enums mit `enum Msg open: …` als offen deklarieren (Nachrichtentypen, die über Firmware-Versionen wachsen); geschlossene Enums bleiben erschöpfend prüfbar (3.7).
 
@@ -498,12 +516,12 @@ address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                            
 - `float` = IEEE-754-Fließkommazahl, eingeschränkt auf endliche Werte; ihre Breite legt das Programm einmal fest (`system: float = f32 | f64`, Default f64, 4.2) — nicht das Target. `f32` und `f64` sind explizite Breiten für gemischte Fälle.
 - `Duration`: i64 Nanosekunden; Literale mit `ns us ms s min h d` (exakte ganzzahlige Faktoren; `1.5 s` = 1 500 000 000 ns exakt; nicht darstellbare Literale wie `0.1 ns` sind Fehler). Der Wertebereich reicht für 292 Jahre.
 - `enum`: benannte Varianten; Outputs mit Enum-Typ werden über die Hardware-Konfiguration auf Rohwerte abgebildet.
-- `[N] T`: Array fester Länge N (Compile-Zeit-Konstante); Index vom Typ `int in 0..N-1` (siehe 3.4).
+- `[N] T`: Array fester Länge N (Compile-Zeit-Konstante); Index vom Typ `int in 0..N-1` (siehe 3.4). **Ein Index trägt keine Einheit**: Der Typ ist strukturell `int in 0..N-1`, ein `int[slot]` ist dort nicht zulässig. Wer mehrere Nummernräume führt (1-basierte Slot-Nummer, 0-basierter Pufferoffset, Kanalindex), trennt sie mit eigenen Range-Typen und benannten Umrechnungsfunktionen, nicht mit Einheiten (3.2).
 - `str<N>`: String mit fester Kapazität; nur Literale und Formatierung (`"{p}"`) mit definierter Trunkierung.
 - Records und Summentypen (`enum` mit Varianten), erschöpfendes `match`: 3.7. Optionaltyp `T?`: 3.8.
 - `bytes<N>`, `vec<T, N>`, `line<N>`, `table<A, B>`: 3.9. Bit-Operationen und Konversionen: 3.10.
 - `mat<R, C>`, `mat<R, C>[U]` und dimensionierte `mat[R, C]`/`vec[R]`: 3.11.
-- Einheiten sind auf allen numerischen Skalartypen erlaubt, auch auf Integern (`int[mV]`, `u16[raw]`): 3.2.
+- Einheiten sind auf allen numerischen Skalartypen erlaubt, auch auf Integern (`int[mV]`, `u16[raw]`): 3.2 — mit Ausnahme der Indexposition, siehe oben.
 - `map<K, V, N>` (3.9) und `capture<T, N>` (8.9, nur als Stream-Element).
 - `stream<E>` (8.6), `samples<T, N>` (8.9) und das eingebaute Record `Edge` (`rising: bool`) sind Channel-Typen; sie kommen nur in Channel-Deklarationen und Maschinen vor.
 
@@ -514,7 +532,7 @@ address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                            
 
 Warum nominal statt automatisch konvertiert: Automatische Konversion fügt unsichtbare Multiplikationen ein (Präzision, Determinismus-Nachweis) und verleitet dazu, Einheitenfehler als Rundungsrauschen zu übersehen. Ein Techniker sieht bei `p_bar.to(psi)` genau, was passiert.
 
-**Vordefinierte Einheiten.** SI-Basis- und abgeleitete Einheiten mit SI-Präfixen (`mV`, `uA`, `kHz`, `mohm`, `um`), dazu `bar`, `psi`, `Hz`, `ohm`, `pct` (dimensionslos, Faktor 0.01), `degC`, `degF` (affin), `Ah`, `Wh` (mit Präfixen), sowie `B` (Byte, dimensionslose Zählgröße) mit binären Präfixen `KiB`, `MiB`. Adressen und Größen tragen `B` (`u32[B]`), projektspezifisch `unit sector = 4 KiB` — die Verwechslung von Sektornummern und Byteadressen ist damit ein Typfehler, und `(n * (1 sector)).to(B)` ist exakt (ganzzahliger Faktor). `to(...)` konvertiert zwischen Einheiten gleicher Dimension (Vergleich der Exponentenvektoren), also auch `V/A` nach `mohm`. Eigene Einheiten per `unit`; eine Neudefinition einer vordefinierten Einheit ist ein Fehler.
+**Vordefinierte Einheiten.** SI-Basis- und abgeleitete Einheiten mit SI-Präfixen (`mV`, `uA`, `kHz`, `mohm`, `um`), dazu `bar`, `psi`, `Hz`, `ohm`, `pct` (dimensionslos, Faktor 0.01), `degC`, `degF` (affin), `Ah`, `Wh` (mit Präfixen), sowie `B` (Byte, dimensionslose Zählgröße) mit binären Präfixen `KiB`, `MiB`. Adressen und Größen tragen `B` (`u32[B]`), projektspezifisch `unit sector = 4 KiB` — die Verwechslung von Sektornummern und Byteadressen ist damit ein Typfehler, und `(n * (1 sector)).to(B)` ist exakt (ganzzahliger Faktor). Das gilt für *Werte*; sobald eine solche Größe als **Array-Index** dient, verliert sie ihre Einheit, weil der Index strukturell `int in 0..N-1` ist (3.1). Ein Puffer, der über mehrere Nummernräume adressiert wird, bekommt seine Sicherheit deshalb aus Range-Typen und benannten Umrechnungen, nicht aus Einheiten. `to(...)` konvertiert zwischen Einheiten gleicher Dimension (Vergleich der Exponentenvektoren), also auch `V/A` nach `mohm`. Eigene Einheiten per `unit`; eine Neudefinition einer vordefinierten Einheit ist ein Fehler.
 
 **Einheiten auf Integern (v1.1).** `int[mV]`, `i32[mbar]`, `u16[raw]` folgen denselben Regeln: nominal, `*`/`/` kombinieren, `+`/`-`/Vergleich verlangen Gleichheit, Skalare skalieren. `x.to(U2)` ist nur erlaubt, wenn der Konversionsfaktor ganzzahlig ist (`mV -> uV`: ×1000); sonst `x.to_float(U2)` (exakt bis 2^53 bei f64, 2^24 bei f32). Division trunkiert wie 4.1, Overflow ist ein Fault wie 4.1. Damit rechnet ein Regler auf einem Kern ohne FPU einheitensicher und schnell, ohne einen zweiten Zahlentyp (Festkomma) einzuführen; die Skalierung steckt in der Wahl der Einheit.
 
@@ -615,24 +633,40 @@ enum BootMsg:
 - Längenpräfixierte Felder (v1.1): `value: bytes<64> with len = len_field` dekodiert ein Feld, dessen Länge in einem vorangehenden Feld steht, mit statischer Obergrenze 64; `decode` liefert `none`, wenn `len_field` die Obergrenze überschreitet. Damit sind TLV-Pakete und Diagnosedaten ohne dynamischen Speicher modellierbar (Cursor-Bausteine: 3.9).
 - **Drahtformat-Details** (für Header, Partitionstabellen, Protokollframes und die Übersetzung von C-Structs, 13.9):
   ```
-  enum ImageType layout u8: APP = 0x00, DATA = 0x01, BOOT = 0x02       # explizite Diskriminanten mit Breite
+  enum ImageType layout u8: APP = 0x00, DATA = 0x01, BOOT = 0x02  # explizite Diskriminanten mit Breite
   record PartitionEntry layout little, align = 4:
-      magic    : u16 = 0x50AA                     # Konstantenfeld: decode prueft, encode setzt
-      kind     : ImageType
-      subtype  : u8
-      offset   : u32[B]                           # Byte-Adresse als Einheit (3.2)
-      size     : u32[B]
-      label    : [16] u8                          # Array fester Laenge
-      flags    : u32 with bits:                   # Bitfelder mit Positionen
+      magic   : u16 = 0x50AA  # Konstantenfeld: decode prueft, encode setzt
+      kind    : ImageType
+      subtype : u8
+      offset  : u32[B]  # Byte-Adresse als Einheit (3.2)
+      size    : u32[B]
+      label   : [16] u8         # Array fester Laenge
+      flags   : u32 with bits:  # Bitfelder mit Positionen
           encrypted : bool at 0
           readonly  : bool at 1
           level     : u8 at 4..7
-      _        : [4] u8                           # Padding, ignoriert
+      _ : [4] u8  # Padding, ignoriert
   ```
   **Zugriff auf Bitfelder.** Ein benanntes Bitfeld ist eine *Sicht* auf sein Trägerfeld, kein eigener Speicher: `p.flags.encrypted` liest es mit dem deklarierten Typ (`bool` bei einer einzelnen Position, sonst der Integer-Typ), `p.flags.level = 5` schreibt genau seine Bits und lässt die übrigen des Trägers unverändert. Beides senkt auf die Bitoperatoren aus 3.10 (`bit`/`bits` beziehungsweise `with_bit` und Maske), kostet also nichts Zusätzliches. Der Träger bleibt daneben als Ganzes lesbar und schreibbar (`p.flags`), und weil der Codec ihn serialisiert, überstehen die Bitfelder `encode`/`decode` ohne eigenes Zutun. Zusammengesetzte Zuweisungen (`+=`) sind auf einem Bitfeld nicht erlaubt — der Rechenschritt gehört sichtbar hin.
 
 Regeln: verschachtelte Records und Arrays fester Länge; `offset = N` für absolute Positionen (sonst fortlaufend); `align` rundet die Gesamtlänge; Bitfelder liegen innerhalb der Breite ihres Trägerfelds und überlappen nicht (statisch geprüft); Konstantenfelder werden bei `decode` geprüft und bei `encode` gesetzt; die Länge eines Records ist statisch. `decode` liefert `none` bei Konstanten-, Range- oder Längenverstoß.
 - **`default`.** Jeder POD-Typ hat einen Standardwert: 0 bzw. `0 U`, `false`, die erste Variante, leere `vec`/`bytes`, Records feldweise; `var img : ImageHeader = default` ist damit ohne Literal möglich.
+- **Records als Konstanten, Arrays von Records als Gerätetabellen.** Ein Record-Konstruktor mit konstanten Argumenten ist ein `const_expr` (2.3). Statische Gerätebeschreibungen — Sensordefinitionen, PID-Tabellen, Personality-Listen, Registerkarten — stehen deshalb als ein Datenblock da und werden indiziert, statt als Kette von Bedingungen in den Code zu wandern:
+  ```
+  record SensorDef:
+      kind        : u8
+      messgroesse : u8
+      range_min   : i16
+      range_max   : i16
+
+  const SENSORS : [2] SensorDef = [
+      SensorDef(kind = 0x00, messgroesse = 0x01, range_min = -400, range_max = 1250),
+      SensorDef(kind = 0x01, messgroesse = 0x05, range_min = 0, range_max = 300)]
+
+  fn sensor_kind(idx: int in 0..1) -> u8:
+      return SENSORS[idx].kind
+  ```
+  Das ist der vorgesehene Weg für jede Tabelle, deren Zeilen zur Übersetzungszeit feststehen. Er ersetzt Ketten wie `0x00 if n == 0 else 0x01` in jedem Feld eines Konstruktors: Die Tabelle bleibt als Tabelle lesbar, und ein zusätzlicher Eintrag ist eine Zeile statt eines Eingriffs an mehreren Stellen. Der Index ist wie bei jedem Array `int in 0..N-1` (3.1); für Stützstellen mit Interpolation gibt es stattdessen `table<A, B>` (3.9).
 - Varianten mit Feldern werden mit `BOOT(version = 3)` oder positional `BOOT(3)` gebaut; Range-Felder werden bei Konstruktion geprüft (Intervallanalyse, sonst impliziter Check).
 - `match` ist **erschöpfend**: Fehlt eine Variante ohne `case _:`, ist das ein Compile-Fehler — die konstruktive Form der Totalität für Summentypen. Speicherbedarf = größte Variante plus Diskriminante.
 ```
@@ -661,8 +695,8 @@ fn parse_header(b: bytes<4096>, min_version: u32) -> ImageHeader!HeaderErr:
 `.ok`, `.err`, `.or(d)`, Dominanzanalyse wie bei `T?` (unbewachte Nutzung: impliziter Check, Fault `MissingValue` mit dem Fehlercode in der Nachricht); `match r: case OK(v): … case ERR(e): …` ist erschöpfend. `T!E` ist ein Typkonstruktor wie `T?`; es braucht keine Typ-Generics und ist die Zielform für C-Schnittstellen, die Fehlercodes mit Out-Parametern zurückgeben (13.9).
 
 ### 3.9 Bytes, Vektoren, Strings, Tabellen
-- `bytes<N>`: Bytefolge mit Länge `0..N`; `.len`, `.push(x) -> bool` (`false` bei vollem Puffer, kein Fault; als Statement mit Stelle für das Ergebnis, 4.4), `.clear()`, Index `b[i]` lesend **und schreibend** (`b[i] = x`), Slice `b[a..c]` mit `0 <= a <= c <= len` (implizit geprüft, Warnung, sonst `RangeFault`). Das Schreiben trifft eine bereits belegte Stelle (`i < len`) und ändert die Länge nicht; ein Index dahinter ist ein `RangeFault` wie beim Lesen, kein stiller Anhang. Damit ist *Backpatching* schreibbar — ein Platzhalter wird gepusht und später gefüllt, wie es Längenpräfix, CRC am Ende und COBS-Rahmung verlangen.
-- `vec<T, N>`: beschränkter Vektor mit denselben Operationen, Index ebenfalls lesend und schreibend; `v.get(i) -> T?` ohne Fault, `v[i]` mit implizitem Range-Check.
+- `bytes<N>`: Bytefolge mit Länge `0..N`; `.len`, `.push(x) -> bool` (`false` bei vollem Puffer, kein Fault; als Statement mit Stelle für das Ergebnis, 4.4), `.append(src) -> bool` (hängt eine ganze `bytes<M>` an — **alles oder nichts**: passt sie nicht vollständig, bleibt der Puffer unverändert und das Ergebnis ist `false`, damit nie ein halber Rahmen zurückbleibt; `M` darf von `N` abweichen), `.clear()`, Index `b[i]` lesend **und schreibend** (`b[i] = x`), Slice `b[a..c]` mit `0 <= a <= c <= len` (implizit geprüft, Warnung, sonst `RangeFault`). Das Schreiben trifft eine bereits belegte Stelle (`i < len`) und ändert die Länge nicht; ein Index dahinter ist ein `RangeFault` wie beim Lesen, kein stiller Anhang. Damit ist *Backpatching* schreibbar — ein Platzhalter wird gepusht und später gefüllt, wie es Längenpräfix, CRC am Ende und COBS-Rahmung verlangen.
+- `vec<T, N>`: beschränkter Vektor mit denselben Operationen — `push`, `append` (gleiche Elementtypen, Kapazitäten dürfen abweichen), `clear` —, Index ebenfalls lesend und schreibend; `v.get(i) -> T?` ohne Fault, `v[i]` mit implizitem Range-Check.
 - `map<K, V, N>` (v1.1): beschränkte assoziative Struktur mit offener Adressierung über ein festes Array. `insert(k, v) -> bool` (`false` bei voll, kein Fault), `get(k) -> V?`, `remove(k) -> bool`, `len`, `for (k, v) in m:` in Slot-Reihenfolge. Schlüssel sind POD mit Gleichheit; der Hash ist FNV-1a über die kanonische Byte-Kodierung des Schlüssels und je Edition festgelegt, Sondierung linear, Entfernen per Rückwärtsverschiebung (keine Grabsteine) — Ergebnisse und Iterationsreihenfolge sind auf allen Zielen identisch (Satz 9.4.4). Kosten O(N) je Operation im Worst Case und so im Budget; Speicher `N · (K + V + 1 Byte)`; in `persist var` erlaubt, wenn K und V POD sind.
 - `reader`/`writer` (Standardbibliothek, 11.4; **v1.1**, weil beide Blöcke über `bytes<N>` sind und dafür Konstantenvariablen in Generics brauchen, 3.12): Cursor-Bausteine über `bytes<N>` — `var r = reader(frame.data)`; `r.u8() -> u8?`, `r.u16_le() -> u16?`, `r.take(n) -> bytes<M>?` (M aus dem Zieltyp, `none` bei Unterlauf oder `n > M`), `r.remaining`; `var w = writer(buf)` schreibt in einen deklarierten Puffer `buf : bytes<N>`: `w.u8(x) -> bool`, `w.bytes(b) -> bool`, `w.fmt("… {x} …") -> bool` (`false` bei Überlauf), danach `send tx, buf`; `r.str(n) -> str<M>?` liest Text. Bis v1.1 übernimmt `layout` dieselbe Aufgabe: Ein Record mit `layout` liefert `encode`/`decode` für den festen Teil eines Rahmens (3.7), `push` hängt die Nutzlast an, und das Index-Schreiben füllt Platzhalter nach (Backpatching, oben). Das deckt Kopf, Nutzlast und Prüfsumme ab; was fehlt, ist der laufende Cursor über einer Folge ungleicher Felder.
 - **`inout`-Parameter** reiner Funktionen: `fn fill[const N](inout b: bytes<N>, x: u8)` ohne Rückgabetyp ist Zucker für eine Rückgabe (`b = fill(b, x)` an der Aufrufstelle); die Funktion bleibt rein, die Zeigerübergabe übernimmt der Compiler (11.2). Ein Argument darf pro Aufruf nur einmal als `inout` gebunden werden und nicht zugleich als weiteres Argument erscheinen (kein Aliasing, statisch geprüft). Das ist die Zielform für C-Funktionen, die Puffer in place ändern. Sie machen Parsen und Zusammensetzen variabler Nutzlasten total und lesbar, ohne dynamischen Speicher: jede reale Nutzlast hat eine feste Obergrenze (Modbus 253 Byte, CAN-FD 64 Byte).
@@ -674,6 +708,35 @@ const OCV : table<float[V], float[pct]> = [(3.0 V, 0 pct), (3.4 V, 10 pct), (3.7
 var soc = interp(OCV, cell_v.min())
 ```
 Arrays und `samples` bieten `.min() .max() .mean() .rms() .count .last` (Reduktionen mit Kosten O(N)).
+
+**Backpatching: einen Rahmen zusammensetzen.** Kopf per `encode`, Nutzlast per `push`, Länge und Prüfsumme nachträglich — das ist der Normalfall jedes Rahmungscodecs, und er kommt ohne `writer` (v1.1) aus. Der Puffer darf dabei gelesen werden, während er entsteht:
+
+```
+record Head layout big:
+    start : u8 = 0xCC
+    len   : u8  # Platzhalter, wird nachgetragen
+    kind  : u8
+
+fn frame(kind: u8, pd: bytes<32>, pdl: int in 0..32) -> bytes<64>:
+    var out : bytes<64> = default
+    out.append(Head(start = 0xCC, len = 0, kind = kind).encode())
+    for i in range(32):  # nur weil `pdl` ein Teilstueck begrenzt
+        if i >= pdl:
+            break
+        out.push(pd[i])
+
+    out[1] = (3 + pdl) as u8           # Laenge nachtragen (Index-Schreiben)
+    var csum = checksum(out, 3 + pdl)  # liest den Puffer, der gerade entsteht
+    out.push(csum)
+    return out
+```
+
+Zwei Punkte, die beim Lesen von 4.4 und von den `inout`-Regeln (unten) leicht als Verbot erscheinen, es aber nicht sind:
+
+- `out.append(…)` und `out.push(…)` stehen als Anweisung ohne Ergebnisziel — eine Bindung je Zug ist nicht nötig (4.4). Eine ganze Folge hängt `append` in einem Zug an; die Schleife darunter bleibt nur, weil `pdl` ein *Teilstück* von `pd` begrenzt.
+- `checksum(out, …)` liest `out` in einem Ausdruck, und die nächste Zeile schreibt hinein. Das ist erlaubt: `out` ist eine benannte lokale Stelle, kein `inout`-Argument. Die Aliasing-Regel weiter unten gilt für die *Parameterbindung* eines Aufrufs, nicht für die Abfolge von Lesen und Schreiben an derselben Stelle — Ausdrücke sind seiteneffektfrei, also ist die Reihenfolge von Anweisungen ohnehin die geschriebene.
+
+Ist die Länge vorab ausrechenbar, darf man sie natürlich gleich setzen; für COBS-Rahmung und CRC über das Vorherige geht das nicht, und dann ist das Index-Schreiben der vorgesehene Weg.
 
 Die drei Pufferarten unterscheiden sich in Zweck und Herkunft, nicht in der Kapazitätsdisziplin — alle drei sind fest begrenzt und total:
 
@@ -801,7 +864,17 @@ Folge (Satz 9.4.4): Ein Programm liefert auf Simulator, Linux-Box und MCU bei gl
 ### 4.4 Ausdrücke sind seiteneffektfrei
 Ausdrücke lesen nur; Zuweisungen, Channel-Schreiben, `block.step` und `check` sind Statements. Damit ist die Auswertungsreihenfolge innerhalb eines Ausdrucks semantisch irrelevant, und jede Faultquelle hat eine eindeutige Statement-Position (für „which line").
 
-Das gilt auch für die verändernden Methoden der Sammlungen (`push`, `insert`, `remove`, `clear`, 3.9) und für `step`/`reset` einer Blockinstanz (5.7): Sie stehen als Statement, nie in einem Ausdruck. Ihr Ergebnis nimmt eine Stelle entgegen — `ok = b.push(x)` oder, mit Deklaration, `var ok = b.push(x)`. Verschachtelt (`if b.push(x):`) sind sie ein Fehler, weil sonst die Reihenfolge der Teilausdrücke sichtbar würde.
+Das gilt auch für die verändernden Methoden der Sammlungen (`push`, `insert`, `remove`, `clear`, 3.9) und für `step`/`reset` einer Blockinstanz (5.7): Sie stehen als Statement, nie in einem Ausdruck. Verschachtelt (`if b.push(x):`) sind sie ein Fehler, weil sonst die Reihenfolge der Teilausdrücke sichtbar würde.
+
+**Das Ergebnisziel ist optional.** Eine verändernde Methode steht als Anweisung für sich; ein Ziel nimmt ihr Ergebnis nur entgegen, wenn es gebraucht wird:
+
+```
+b.push(x)           # Ergebnis verworfen — die übliche Form beim Serialisieren
+ok = b.push(x)      # Ergebnis in eine vorhandene Stelle
+var ok = b.push(x)  # Ergebnis in eine neue Bindung
+```
+
+Ein eigener Wegwerf-Name (`_ = b.push(x)`) ist deshalb nicht nötig und nicht vorgesehen; `_` bleibt dem Padding-Feld in `layout` vorbehalten (3.7). Wer eine feste Byte-Folge zusammensetzt, deren Kapazität statisch über dem Bedarf liegt, schreibt die Züge also ohne Bindungen untereinander — siehe das Backpatching-Beispiel in 3.9.
 
 
 ### 4.5 Native Funktionen mit Kostenvertrag
@@ -1610,7 +1683,7 @@ sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereigni
 | 30 | `mat`: Formprüfung bei `+ - *`, `inv`/`solve` nur quadratisch, R, C ≤ 16, Indizes in Range (3.11) | F |
 | 31 | Native Funktionen: nur die kuratierte Menge (v1), `cost`, `stack` und `total` deklariert, Argumente fester Größe (4.5) | F |
 | 32 | Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration | F |
-| 33 | `follows`: Kanten azyklisch; Follower liest nur gefolgte Maschinen frisch; keine frischen Lesevorgänge in Aktionsblöcken der Abort-Phase (7.2) | F |
+| 33 | `follows`: Kanten azyklisch; Follower liest nur gefolgte Maschinen frisch; keine frischen Lesevorgänge in Aktionsblöcken der Abort-Phase (7.2). **Warnung**, wenn ein Follower eine gefolgte Größe liest, die auch auf seinem Fault-Pfad vorkommt: Dort gilt Ψ_k statt des frischen Werts, die Bedeutung wechselt also still zwischen Schritt- und Abort-Phase (5.4) | F / W |
 | 34 | Dimensionierte Matrizen: Einheitentupel passen (Produkt, Addition, Inverse), Literale bilden ein äußeres Produkt, variable Indizes nur bei gleichen Einheiten (3.11) | F |
 | 35 | `tunable param` nicht in Compile-Zeit-Konstanten (Array-Größen, Kapazitäten, `repeat`) (8.4) | F |
 | 36 | `check … for d` / `alert … for d`: `d >= P_m`; Rundung auf Perioden mit effektivem Wert (5.6) | W |
@@ -1812,10 +1885,10 @@ Die Enums `BootReason`, `ImageState` und `RebootCmd` sind vordefiniert; welche C
 - **Tiefschlaf.** `reboot = DEEP_SLEEP` beendet den Lauf (kein virtueller Tick; Satz 9.9.1 gilt nur für RAM-erhaltenden Schlaf); der nächste Lauf beginnt mit `boot_reason = DEEP_SLEEP_WAKE` und s0 aus `persist` (5.9). Schemaänderungen über Firmware-Grenzen sind durch den Typ-Hash abgedeckt.
 - **Start-Channels.**
   ```
-  input  efuse           : EfuseBlock @ hw("sys/efuse")             # Schluessel-Hashes/-Werte, min_version, Secure-Boot-Flags (vordefiniertes Record)
-  input  image_confirmed : [2] bool   @ hw("sys/image_confirmed")   # je Slot: vom Anwendungsimage bestaetigt
-  output boot_jump       : u8         @ hw("sys/jump")  with safe = NONE           # Sprung in den Slot; beendet den Lauf nach dem Commit
-  output efuse_burn      : EfuseCmd   @ hw("sys/efuse_burn") with safe = NONE, irreversible = true   # einmalig programmierbare Bits
+  input  efuse           : EfuseBlock @ hw("sys/efuse")                                             # Schluessel-Hashes/-Werte, min_version, Secure-Boot-Flags (vordefiniertes Record)
+  input  image_confirmed : [2] bool   @ hw("sys/image_confirmed")                                   # je Slot: vom Anwendungsimage bestaetigt
+  output boot_jump       : u8         @ hw("sys/jump")       with safe = NONE                       # Sprung in den Slot; beendet den Lauf nach dem Commit
+  output efuse_burn      : EfuseCmd   @ hw("sys/efuse_burn") with safe = NONE, irreversible = true  # einmalig programmierbare Bits
   ```
   Vor `boot_jump`, `reboot` und Deep Sleep schreibt die Runtime ausstehende `persist`-Änderungen synchron (5.9), danach stehen alle Outputs auf `safe`.
 - **Irreversible Outputs** (`irreversible = true`): Der Compiler verlangt, dass jede Zuweisung in einer Sequenz unmittelbar auf ein `expect` folgt, das die Voraussetzung prüft, und dass mindestens ein Szenario die Zuweisung abdeckt (13.2); der Lauf-Header nennt alle irreversiblen Outputs.
