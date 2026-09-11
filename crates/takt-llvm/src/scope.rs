@@ -71,7 +71,12 @@ pub fn machine(m: &Machine, c: &mut Coverage) {
                     expr(e, c);
                 }
                 TransTrigger::When(_) => c.note("Uebergang mit Muster-Guard", false),
-                TransTrigger::After(_) => c.note("Uebergang `after d`", false),
+                TransTrigger::After(d) => {
+                    // Eine berechnete Dauer haette einen Wert je Tick; 7.2
+                    // koennte sie nicht beschraenken.
+                    let literal = matches!(d.kind, takt_mir::expr::ExprKind::Duration(_));
+                    c.note("Uebergang `after d`", literal);
+                }
             }
         }
         for _ in &s.handlers {
@@ -178,12 +183,19 @@ fn expr(e: &Expr, c: &mut Coverage) {
             expr(x, c);
         }
         ExprKind::Accessor { base, accessor, .. } => {
-            let ok = matches!(accessor, Accessor::Bit | Accessor::WithBit);
-            c.note(if ok { "Bitzugriff" } else { "Zugriff (`.valid`, `.age`, `.or`, ...)" }, ok);
+            let quality = matches!(
+                accessor,
+                Accessor::Valid | Accessor::Suspect | Accessor::Stale | Accessor::Age | Accessor::Reason | Accessor::Or
+            );
+            // Die Qualitaetszugriffe gelten nur auf einem Channel: Sie
+            // lesen den Eintrag im Prozessabbild (3.5).
+            let on_channel = matches!(base.kind, ExprKind::Input { .. });
+            let ok = matches!(accessor, Accessor::Bit | Accessor::WithBit) || (quality && on_channel);
+            c.note(if ok { "Zugriff" } else { "Zugriff (`.len`, `.count`, ...)" }, ok);
             expr(base, c);
         }
         ExprKind::Field { base, .. } => {
-            c.note("Feldzugriff", false);
+            c.note("Feldzugriff", true);
             expr(base, c);
         }
         ExprKind::Index { base, index } => {
@@ -193,14 +205,20 @@ fn expr(e: &Expr, c: &mut Coverage) {
         }
         ExprKind::Call { .. } => c.note("Funktionsaufruf", false),
         ExprKind::Intrinsic { .. } => c.note("Primitive", false),
-        ExprKind::Convert { .. } => c.note("Konversion", false),
-        ExprKind::Cast { .. } => c.note("`as`", false),
+        ExprKind::Convert { expr: x, .. } => {
+            c.note("Einheitenkonversion", true);
+            expr(x, c);
+        }
+        ExprKind::Cast { expr: x, .. } => {
+            c.note("`as`", true);
+            expr(x, c);
+        }
         ExprKind::Format(_) => c.note("Format-String", false),
         ExprKind::Builtin(_) => c.note("eingebauter Bezeichner", false),
         ExprKind::Published { .. } => c.note("Psi (`m.x`)", false),
         ExprKind::StateOf(_) => c.note("`m.state`", false),
         ExprKind::Record { .. } => c.note("Record-Literal", false),
-        ExprKind::Variant { .. } => c.note("Variante", false),
+        ExprKind::Variant { fields, .. } => c.note("Variante", fields.is_empty()),
         ExprKind::Array(_) => c.note("Array-Literal", false),
         ExprKind::Decode { .. } => c.note("`decode`", false),
         ExprKind::Matches { .. } => c.note("`matches`", false),

@@ -86,6 +86,20 @@ impl StateVars<'_> {
     /// Reihenfolge ist die der `ChannelId`, wie im Interpreter. Eine
     /// zweite Reihenfolge waere eine zweite Gelegenheit, sie verschieden
     /// zu waehlen.
+    /// Ein Feld des Abbild-Eintrags eines Channels (`crate::image`).
+    fn image_slot(&self, channel: takt_mir::ChannelId, slot: crate::image::Slot, m: &mut Module) -> Option<Lowered> {
+        let entry = crate::image::entry_type(channel, self.program)?;
+        let LlvmType::Struct(fields) = &entry else { return None };
+        let ty = fields.get(slot as usize)?.clone();
+        let off = crate::image::offset_of(channel, self.program)?;
+        // Der Versatz wird aufsummiert, weil die Eintraege verschieden
+        // gross sind; `image` begruendet das.
+        let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {off}"));
+        let field = m.inst(&format!("getelementptr inbounds {entry}, ptr {at}, i32 0, i32 {}", slot as usize));
+        let v = m.inst(&format!("load {ty}, ptr {field}"));
+        Some(Lowered { value: v.to_string(), ty })
+    }
+
     fn slot(&self, base: &str, ty: &LlvmType, index: usize, m: &mut Module) -> Lowered {
         let ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {base}, i32 {index}"));
         let v = m.inst(&format!("load {ty}, ptr {ptr}"));
@@ -105,10 +119,16 @@ impl Vars for StateVars<'_> {
     }
 
     /// Der Wert eines Inputs; `%1` ist das Prozessabbild (11.2).
+    ///
+    /// Der Aufbau steht in `crate::image`: je Channel ein Eintrag aus
+    /// Wert, Qualitaet, Grund und Alter.
     fn input(&self, channel: takt_mir::ChannelId, m: &mut Module) -> Option<Lowered> {
-        let c = self.program.channels.get(channel.index())?;
-        let ty = ty::lower(c.ty, self.program)?;
-        Some(self.slot("%1", &ty, channel.index(), m))
+        self.image_slot(channel, crate::image::Slot::Value, m)
+    }
+
+    /// Ein Feld des Abbild-Eintrags (3.5).
+    fn quality(&self, channel: takt_mir::ChannelId, slot: crate::image::Slot, m: &mut Module) -> Option<Lowered> {
+        self.image_slot(channel, slot, m)
     }
 
     /// Der Wert eines Parameters; `%2` traegt Ψ und den Parametervektor.

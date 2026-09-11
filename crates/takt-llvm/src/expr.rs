@@ -10,7 +10,7 @@
 //! traegt ein Flag; `emit` bietet dafuer keine Moeglichkeit (4.2).
 
 use takt_mir::TypeId;
-use takt_mir::expr::{Accessor, BinaryOp, Expr, ExprKind, UnaryOp};
+use takt_mir::expr::{Accessor, BinaryOp, ConvertKind, Expr, ExprKind, UnaryOp};
 use takt_mir::program::Program;
 use takt_mir::types::{IntWidth, Type};
 
@@ -77,6 +77,14 @@ pub trait Vars {
         None
     }
 
+    /// Liest ein Feld des Abbild-Eintrags eines Channels (3.5).
+    ///
+    /// `.valid`, `.suspect`, `.stale`, `.age` und `.reason` lesen die
+    /// Qualitaet neben dem Wert; `crate::image` beschreibt den Aufbau.
+    fn quality(&self, _channel: takt_mir::ChannelId, _slot: crate::image::Slot, _m: &mut Module) -> Option<Lowered> {
+        None
+    }
+
     /// Liest ein Command (8.5).
     ///
     /// Ein Command ist ein Puls, der genau einen Tick gilt; die Runtime
@@ -103,6 +111,10 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Unary { op, expr } => unary(*op, expr, &want, p, m, vars),
         ExprKind::Binary { op, lhs, rhs } => binary(*op, lhs, rhs, &want, p, m, vars),
         ExprKind::Cond { cond, then, otherwise } => cond_expr(cond, then, otherwise, &want, p, m, vars),
+        ExprKind::Variant { enum_id, variant, fields } => self_variant(*enum_id, *variant, fields, &want, p),
+        ExprKind::Field { base, field } => field_of(base, *field, &want, p, m, vars),
+        ExprKind::Cast { expr, to } => cast(expr, *to, &want, p, m, vars),
+        ExprKind::Convert { expr, kind, unit } => convert(expr, *kind, *unit, &want, p, m, vars),
         ExprKind::Accessor { base, accessor: which, args } => access(base, *which, args, &want, p, m, vars),
         ExprKind::Checked { expr, .. } => {
             // Schritt 6 senkt den Wert; der Trampolin, in den die Pruefung
@@ -176,7 +188,225 @@ fn access(
             let r = m.inst(&format!("select i1 {}, {} {set}, {} {clear}", b.value, x.ty, x.ty));
             Ok(Lowered { value: r.to_string(), ty: want.clone() })
         }
+        // Die Qualitaetszugriffe lesen den Eintrag des Channels neben
+        // seinem Wert (3.5, `crate::image`). Sie brauchen den Channel
+        // selbst, nicht seinen Wert — `x.valid` fragt nicht, *was*
+        // geliefert wurde, sondern *ob*.
+        Accessor::Valid | Accessor::Suspect | Accessor::Stale | Accessor::Age | Accessor::Reason => {
+            let ExprKind::Input { channel, .. } = &base.kind else {
+                return Err(NotYet { what: "Qualitaet eines Nicht-Channels" });
+            };
+            quality_of(*channel, which, want, m, vars)
+        }
+        // `x.or(d)`: der Wert, wenn gueltig, sonst der Ersatz (3.5).
+        Accessor::Or => {
+            let ExprKind::Input { channel, .. } = &base.kind else {
+                return Err(NotYet { what: "`.or` auf einem Nicht-Channel" });
+            };
+            let valid = quality_of(*channel, Accessor::Valid, &LlvmType::Int(1), m, vars)?;
+            let fallback = arg(0, m)?;
+            // `select` statt Verzweigung: Beide Seiten sind total (4.1),
+            // und der Wert ist ohnehin schon geladen.
+            let r =
+                m.inst(&format!("select i1 {}, {} {}, {} {}", valid.value, x.ty, x.value, fallback.ty, fallback.value));
+            Ok(Lowered { value: r.to_string(), ty: want.clone() })
+        }
         _ => Err(NotYet { what: "Zugriff (`.valid`, `.age`, ...)" }),
+    }
+}
+
+/// Ein Qualitaetszugriff auf einen Channel (3.5).
+///
+/// `.valid` ist der einzige, der rechnet: 3.5 sagt „`Good` oder `Suspect`
+/// mit Wert", also `quality <= SUSPECT`. Die uebrigen vergleichen oder
+/// lesen direkt.
+fn quality_of(
+    channel: takt_mir::ChannelId,
+    which: Accessor,
+    want: &LlvmType,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    use crate::image::{Slot, quality};
+    let slot = match which {
+        Accessor::Age => Slot::Age,
+        Accessor::Reason => Slot::Reason,
+        _ => Slot::Quality,
+    };
+    let q = vars.quality(channel, slot, m).ok_or(NotYet { what: "Qualitaet im Abbild" })?;
+    let value = match which {
+        // `.valid`: Good oder Suspect. Ein `Bad` ohne Wert und ein `Stale`
+        // sind beide ungueltig, und beide stehen ueber `SUSPECT`.
+        Accessor::Valid => m.inst(&format!("icmp sle {} {}, {}", q.ty, q.value, quality::SUSPECT)).to_string(),
+        Accessor::Suspect => m.inst(&format!("icmp eq {} {}, {}", q.ty, q.value, quality::SUSPECT)).to_string(),
+        Accessor::Stale => m.inst(&format!("icmp eq {} {}, {}", q.ty, q.value, quality::STALE)).to_string(),
+        // `.age` und `.reason` stehen so, wie sie sind.
+        _ => q.value,
+    };
+    let ty = match which {
+        Accessor::Valid | Accessor::Suspect | Accessor::Stale => LlvmType::Int(1),
+        _ => want.clone(),
+    };
+    Ok(Lowered { value, ty })
+}
+
+/// Eine Enum-Variante (3.7).
+///
+/// Eine Variante ohne Felder *ist* ihre Diskriminante — eine Konstante,
+/// die kein Register belegt. Die Diskriminante steht in der MIR (explizit
+/// oder fortlaufend vergeben); der Codegen rechnet sie nicht nach, sonst
+/// gaebe es zwei Stellen, an denen sie entsteht.
+fn self_variant(
+    enum_id: takt_mir::EnumId,
+    variant: u32,
+    fields: &[Expr],
+    want: &LlvmType,
+    p: &Program,
+) -> Result<Lowered, NotYet> {
+    if !fields.is_empty() {
+        // Eine Variante mit Feldern braucht ein Struct aus Diskriminante
+        // und Nutzlast; `ty::lower` lehnt solche Enums heute ab, und der
+        // Musterabgleich, der sie auspackt, fehlt ebenso.
+        return Err(NotYet { what: "Variante mit Feldern" });
+    }
+    let def = p.enums.get(enum_id.index()).ok_or(NotYet { what: "Enum" })?;
+    let v = def.variants.get(variant as usize).ok_or(NotYet { what: "Variante" })?;
+    Ok(Lowered { value: v.discriminant.to_string(), ty: want.clone() })
+}
+
+/// Ein Feldzugriff auf einen Record (3.7).
+///
+/// `extractvalue` statt `getelementptr` plus `load`: Der Record liegt als
+/// Wert vor, nicht als Speicherort — die Sprache hat keine Referenzen
+/// (11.2), jede Zuweisung ist eine Kopie, und LLVM faltet die Extraktion
+/// aus einem geladenen Struct ohnehin zusammen.
+fn field_of(
+    base: &Expr,
+    field: u32,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let x = lower(base, p, m, vars)?;
+    let LlvmType::Struct(_) = &x.ty else { return Err(NotYet { what: "Feldzugriff auf Nicht-Record" }) };
+    let r = m.inst(&format!("extractvalue {} {}, {field}", x.ty, x.value));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
+}
+
+/// `x as T` (3.10).
+///
+/// Die Range-Pruefung steht als `Checked`-Knoten *um* den Cast (die MIR
+/// setzt ihn), nicht hier — der Codegen erzeugt die Umwandlung, nicht ihre
+/// Absicherung. Welche Instruktion es ist, entscheiden Quelle und Ziel:
+/// `trunc` verkuerzt, `sext`/`zext` verlaengern (mit Vorzeichen oder ohne),
+/// `fptosi`/`sitofp` wechseln die Domaene.
+fn cast(
+    e: &Expr,
+    to: TypeId,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let x = lower(e, p, m, vars)?;
+    if x.ty == *want {
+        return Ok(x);
+    }
+    let from_signed = int_is_signed_ty(e.ty, p);
+    let to_signed = int_is_signed_ty(to, p);
+    let op = match (&x.ty, want) {
+        (LlvmType::Int(a), LlvmType::Int(b)) if a > b => "trunc",
+        (LlvmType::Int(a), LlvmType::Int(b)) if a < b => {
+            // Vorzeichen der *Quelle* entscheidet: Ein `u8` in einen `i32`
+            // wird mit Nullen aufgefuellt, ein `i8` mit dem Vorzeichenbit.
+            if from_signed { "sext" } else { "zext" }
+        }
+        (LlvmType::Int(_), LlvmType::F32 | LlvmType::F64) => {
+            if from_signed {
+                "sitofp"
+            } else {
+                "uitofp"
+            }
+        }
+        (LlvmType::F32 | LlvmType::F64, LlvmType::Int(_)) => {
+            // 4.1: `as` auf einen Integer schneidet ab; die Rundung ist
+            // `round`/`floor`/`ceil` und damit eine eigene Primitive.
+            if to_signed { "fptosi" } else { "fptoui" }
+        }
+        (LlvmType::F64, LlvmType::F32) => "fptrunc",
+        (LlvmType::F32, LlvmType::F64) => "fpext",
+        _ => return Err(NotYet { what: "`as` zwischen diesen Typen" }),
+    };
+    let r = m.inst(&format!("{op} {} {} to {want}", x.ty, x.value));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
+}
+
+/// Einheitenkonversion (3.2, 3.3).
+///
+/// Der Faktor zwischen zwei Einheiten derselben Dimension ist eine
+/// rationale Zahl und zur Uebersetzungszeit bekannt; die Konversion ist
+/// darum eine Multiplikation, keine Tabelle.
+///
+/// **Die Reihenfolge der Operationen ist dieselbe wie im Interpreter**
+/// (`takt-interp/src/eval.rs`, `convert`): erst der affine Versatz der
+/// Quelle, dann `* num`, dann `/ den`, dann der Versatz des Ziels. Eine
+/// andere Reihenfolge waere mathematisch gleich, aber in Fliesskomma eine
+/// andere Zahl — und Satz 9.4.4 verlangt dasselbe Bit.
+fn convert(
+    e: &Expr,
+    kind: ConvertKind,
+    unit: takt_mir::UnitId,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let x = lower(e, p, m, vars)?;
+    let dst = p.units.get(unit.index()).ok_or(NotYet { what: "Zieleinheit" })?;
+    match kind {
+        // `d.as(U)`: Nanosekunden je Einheit ist `factor * 1e9`.
+        ConvertKind::As => {
+            if !want.is_float() {
+                return Err(NotYet { what: "`as(U)` ohne Fliesskommaziel" });
+            }
+            let per = i128::from(dst.factor.num) * 1_000_000_000 / i128::from(dst.factor.den);
+            let as_float = m.inst(&format!("sitofp {} {} to {want}", x.ty, x.value));
+            let divisor = float_literal(per as f64, want);
+            let r = m.inst(&format!("fdiv {want} {as_float}, {divisor}"));
+            Ok(Lowered { value: r.to_string(), ty: want.clone() })
+        }
+        ConvertKind::To => {
+            let src = match p.types.list.get(e.ty.index()) {
+                Some(Type::Float { unit: Some(u), .. }) => p.units.get(u.index()).ok_or(NotYet { what: "Einheit" })?,
+                // 3.2: Einheiten auf Ganzzahlen sind M6.
+                _ => return Err(NotYet { what: "`to(U)` ohne Quelleinheit" }),
+            };
+            let mut cur = x.value;
+            if let Some(off) = src.affine_offset {
+                let o = float_literal(off.num as f64 / off.den as f64, want);
+                cur = m.inst(&format!("fadd {want} {cur}, {o}")).to_string();
+            }
+            let num = i128::from(src.factor.num) * i128::from(dst.factor.den);
+            let den = i128::from(src.factor.den) * i128::from(dst.factor.num);
+            cur = m.inst(&format!("fmul {want} {cur}, {}", float_literal(num as f64, want))).to_string();
+            cur = m.inst(&format!("fdiv {want} {cur}, {}", float_literal(den as f64, want))).to_string();
+            if let Some(off) = dst.affine_offset {
+                let o = float_literal(off.num as f64 / off.den as f64, want);
+                cur = m.inst(&format!("fsub {want} {cur}, {o}")).to_string();
+            }
+            Ok(Lowered { value: cur, ty: want.clone() })
+        }
+        ConvertKind::ToFloat => Err(NotYet { what: "`to_float(U)` (M6)" }),
+    }
+}
+
+/// Ist der Typ eine vorzeichenbehaftete Ganzzahl?
+fn int_is_signed_ty(ty: TypeId, p: &Program) -> bool {
+    match p.types.list.get(ty.index()) {
+        Some(Type::Int { width, .. }) => ty::signed(*width),
+        Some(Type::Duration { .. }) => true,
+        _ => true,
     }
 }
 

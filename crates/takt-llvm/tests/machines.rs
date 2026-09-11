@@ -38,7 +38,7 @@ fn ir_of(p: &Program) -> String {
 /// Die Korpusprogramme, deren Maschinen der Codegen heute vollstaendig
 /// senkt. Die Liste waechst mit ihm; sie steht hier, damit ein Rueckschritt
 /// auffaellt.
-const VOLLSTAENDIG: [&str; 2] = ["01_minimal.takt", "14_latency.takt"];
+const VOLLSTAENDIG: [&str; 4] = ["01_minimal.takt", "14_latency.takt", "15_quality.takt", "16_timing.takt"];
 
 // --- Der Zustands-Struct (11.2) -----------------------------------------
 
@@ -328,4 +328,85 @@ fn the_measurement_sees_the_corpus() {
     }
     assert!(cov.total() > 10, "zu wenige Knoten gezaehlt: {}", cov.total());
     assert!(cov.percent() > 99.0, "01_minimal sollte vollstaendig gedeckt sein: {:.0} %", cov.percent());
+}
+
+// --- Qualitaet am Rand (3.5) --------------------------------------------
+
+/// 3.5: `.valid` ist „`Good` oder `Suspect` mit Wert" — im erzeugten Code
+/// ein Vergleich gegen die Grenze zwischen beiden Haelften der Skala.
+#[test]
+fn valid_tests_the_quality_against_the_boundary() {
+    let p = corpus("15_quality.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("icmp sle i8"),
+        "`.valid` prueft nicht die Qualitaet:
+{ir}"
+    );
+}
+
+/// `.suspect` und `.stale` fragen nach je einem Wert der Skala.
+#[test]
+fn suspect_and_stale_compare_against_their_own_value() {
+    let p = corpus("15_quality.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("icmp eq i8"),
+        "`.suspect`/`.stale` fehlen:
+{ir}"
+    );
+}
+
+/// `x.or(d)`: der Wert, wenn gueltig, sonst der Ersatz — ohne
+/// Verzweigung, weil beide Seiten total sind (4.1).
+#[test]
+fn or_selects_between_value_and_fallback() {
+    let p = corpus("15_quality.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("select i1"),
+        "`.or` erzeugt kein `select`:
+{ir}"
+    );
+}
+
+/// Die Reihenfolge der Qualitaetsstufen ist eine ABI zwischen Runtime und
+/// erzeugtem Code; sie muss mit `takt-hal` uebereinstimmen.
+#[test]
+fn the_quality_scale_matches_the_runtime() {
+    use takt_llvm::image::quality;
+    assert_eq!(quality::GOOD, 0);
+    assert_eq!(quality::SUSPECT, 1);
+    assert_eq!(quality::STALE, 2);
+    assert_eq!(quality::BAD, 3);
+    // `.valid` heisst `<= SUSPECT`; das gilt nur, wenn `Stale` und `Bad`
+    // darueber liegen. Als `const`, weil die Bedingung schon beim
+    // Uebersetzen entscheidbar ist — dann bricht eine Umnummerierung den
+    // Bau, nicht erst den Test.
+    const _: () = assert!(quality::STALE > quality::SUSPECT && quality::BAD > quality::SUSPECT);
+}
+
+// --- `after d` (5.2, 7.1) ------------------------------------------------
+
+/// 7.1: `after` feuert „nie im Entry-Tick" — im erzeugten Code steht
+/// dafuer der Vergleich `elapsed > 0` neben `elapsed >= d`.
+#[test]
+fn after_never_fires_in_the_entry_tick() {
+    let p = corpus("16_timing.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("icmp sgt i64"),
+        "der Vergleich gegen 0 fehlt:
+{ir}"
+    );
+    assert!(
+        ir.contains("icmp sge i64 %"),
+        "der Vergleich gegen die Frist fehlt:
+{ir}"
+    );
+    assert!(
+        ir.contains("and i1"),
+        "beide Bedingungen werden nicht verknuepft:
+{ir}"
+    );
 }

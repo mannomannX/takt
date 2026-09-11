@@ -1,0 +1,14 @@
+(system
+  (language 1)
+  (tick 10ms))
+(input p :float[bar] in 0..100[bar] @hw("daq/p") max_age=50ms)
+(output ok :bool @hw("ui/ok") safe=false)
+(output shown :float[bar] in 0..100[bar] @hw("ui/p") safe=0[bar])
+(output alt :bool @hw("ui/alt") safe=false)
+(machine watch
+  (initial RUN)
+  (state RUN
+    (loop
+      (= ok (.valid p))
+      (= alt (or (.suspect p) (.stale p)))
+      (= shown (.or p 0[bar])))))

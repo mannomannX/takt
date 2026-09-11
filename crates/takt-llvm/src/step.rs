@@ -128,15 +128,16 @@ fn transitions(
     conf_slot: &crate::emit::Reg,
 ) -> Result<(), NotYet> {
     for (n, t) in list.iter().enumerate() {
-        let TransTrigger::When(Guard::Expr(cond)) = &t.trigger else {
-            // `after d` braucht `t_in_state` in Nanosekunden und die
-            // Periode der Maschine; Muster-Guards brauchen den
-            // Fensterzugriff (8.7). Beide kommen mit den Schritten, die
-            // sie tragen.
-            return Err(NotYet { what: "Uebergangsausloeser" });
+        let c = match &t.trigger {
+            TransTrigger::When(Guard::Expr(cond)) => {
+                let vars = ctx.vars();
+                lower_expr(cond, ctx.program, m, &vars)?
+            }
+            TransTrigger::After(d) => after(d, ctx, m)?,
+            // Muster-Guards brauchen den Fensterzugriff (8.7); er kommt mit
+            // den Stroemen.
+            TransTrigger::When(_) => return Err(NotYet { what: "Uebergang mit Muster-Guard" }),
         };
-        let vars = ctx.vars();
-        let c = lower_expr(cond, ctx.program, m, &vars)?;
         let name = &ctx.machine.name;
         let (take, skip) = (format!("uebergang{from}_{n}_{name}"), format!("bleibt{from}_{n}_{name}"));
         m.void_inst(&format!("br i1 {}, label %{take}, label %{skip}", c.value));
@@ -214,4 +215,42 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     }
     module.end(None);
     Ok(())
+}
+
+/// `after d` als Ausloeser (5.2, 7.1).
+///
+/// Die Bedingung ist die des Interpreters, Zeichen fuer Zeichen:
+///
+/// ```text
+/// elapsed = t_in_state * periode
+/// feuert  = elapsed > 0 and elapsed >= d
+/// ```
+///
+/// `elapsed > 0` ist nicht ueberfluessig: 7.1 sagt, `after` feuert „im
+/// ersten Aktivierungs-Tick mit `time_in_state >= d`, nie im Entry-Tick".
+/// Ohne den Vergleich feuerte `after 0 ms` schon beim Betreten, und eine
+/// Sequenz liefe in einem Tick durch alle Schritte.
+///
+/// Die Dauer muss ein Literal sein: Ein berechneter Ausdruck haette einen
+/// Wert je Tick, und die Schedulability (7.2) koennte ihn nicht
+/// beschraenken.
+fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crate::expr::Lowered, NotYet> {
+    let takt_mir::expr::ExprKind::Duration(ns) = d.kind else {
+        return Err(NotYet { what: "`after` mit berechneter Dauer" });
+    };
+    let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else {
+        return Err(NotYet { what: "t_in_state im Zustand" });
+    };
+    let state_ty = format!("%{}_state", ctx.machine.name);
+    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
+    let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
+    let ticks = m.inst(&format!("load i64, ptr {cell}"));
+    // Die Periode der Maschine in Nanosekunden steht fest (7.2): `period`
+    // Basis-Ticks mal T0.
+    let period_ns = i64::from(ctx.machine.period.max(1)).saturating_mul(ctx.program.config.tick);
+    let elapsed = m.inst(&format!("mul i64 {ticks}, {period_ns}"));
+    let positive = m.inst(&format!("icmp sgt i64 {elapsed}, 0"));
+    let reached = m.inst(&format!("icmp sge i64 {elapsed}, {ns}"));
+    let both = m.inst(&format!("and i1 {positive}, {reached}"));
+    Ok(crate::expr::Lowered { value: both.to_string(), ty: crate::ty::LlvmType::Int(1) })
 }

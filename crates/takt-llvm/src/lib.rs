@@ -16,6 +16,7 @@
 //! - `ty`: Typen der MIR nach LLVM-Typen (3.4, 11.2).
 //! - `emit`: der Textpuffer, der die IR aufbaut.
 //! - `expr`: Ausdruecke.
+//! - `image`: der Aufbau des Prozessabbilds, die ABI zur Runtime (9.1).
 //! - `machine`: Zustands-Struct und Tickschritt einer Maschine (11.2).
 //! - `stmt`: Anweisungen, Checks und der Fault-Zweig (11.2).
 //! - `scope`: was der Codegen deckt, gemessen an echten Programmen.
@@ -24,6 +25,7 @@
 
 pub mod emit;
 pub mod expr;
+pub mod image;
 pub mod machine;
 pub mod scope;
 pub mod step;

@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+input  p     : float[bar] in 0..100 bar @ hw("daq/p")  with max_age = 50 ms
+output ok    : bool                     @ hw("ui/ok")  with safe = false
+output shown : float[bar] in 0..100 bar @ hw("ui/p")   with safe = 0 bar
+output alt   : bool                     @ hw("ui/alt") with safe = false
+
+machine watch:
+    initial RUN
+    state RUN:
+        loop:
+            ok = p.valid
+            alt = p.suspect or p.stale
+            shown = p.or(0 bar)

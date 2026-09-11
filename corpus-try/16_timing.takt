@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+command go
+
+output led : bool @ hw("ui/led") with safe = false
+
+machine blink:
+    initial OFF
+
+    state OFF:
+        enter:
+            led = false
+        when go: -> ON
+
+    state ON:
+        enter:
+            led = true
+        after 200 ms: -> OFF
