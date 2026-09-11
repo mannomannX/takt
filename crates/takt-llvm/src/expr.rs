@@ -76,6 +76,15 @@ pub trait Vars {
     fn output(&self, _channel: takt_mir::ChannelId, _m: &mut Module) -> Option<Lowered> {
         None
     }
+
+    /// Liest ein Command (8.5).
+    ///
+    /// Ein Command ist ein Puls, der genau einen Tick gilt; die Runtime
+    /// setzt ihn vor dem Schritt und loescht ihn danach (12.1). Im
+    /// erzeugten Code ist er ein `bool` im Prozessabbild.
+    fn command(&self, _id: takt_mir::CommandId, _m: &mut Module) -> Option<Lowered> {
+        None
+    }
 }
 
 /// Senkt einen Ausdruck und liefert seinen Operanden.
@@ -90,6 +99,7 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Input { channel, .. } => vars.input(*channel, m).ok_or(NotYet { what: "Input" }),
         ExprKind::Param(id) => vars.param(*id, m).ok_or(NotYet { what: "Parameter" }),
         ExprKind::Output(channel) => vars.output(*channel, m).ok_or(NotYet { what: "Output-Latch" }),
+        ExprKind::Command(id) => vars.command(*id, m).ok_or(NotYet { what: "Command" }),
         ExprKind::Unary { op, expr } => unary(*op, expr, &want, p, m, vars),
         ExprKind::Binary { op, lhs, rhs } => binary(*op, lhs, rhs, &want, p, m, vars),
         ExprKind::Cond { cond, then, otherwise } => cond_expr(cond, then, otherwise, &want, p, m, vars),

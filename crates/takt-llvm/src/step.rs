@@ -1,18 +1,25 @@
-//! Der Tickschritt einer Maschine (11.2, 9.4).
+//! Der Tickschritt einer Maschine (11.2, 9.4, 5.2).
 //!
 //! 11.2: „Konfiguration als Pfad-Array fester Tiefe; Blattzustand =
 //! Enum-Diskriminante; `switch` ueber die Blaetter."
 //!
 //! Der Schritt liest `conf`, springt in den Block des aktiven Blatts,
-//! fuehrt dessen `loop:` aus und kehrt zurueck. Was er *nicht* tut, ist
-//! ebenso wichtig: Er committet keine Outputs (das macht die Runtime,
-//! 12.1) und er fuehrt keinen Fault aus (das macht die Abort-Phase, 5.4).
+//! fuehrt dessen `loop:` aus, prueft die Uebergaenge und kehrt zurueck.
+//! Was er *nicht* tut, ist ebenso wichtig: Er committet keine Outputs (das
+//! macht die Runtime, 12.1) und er fuehrt keinen Fault aus (das macht die
+//! Abort-Phase, 5.4).
+//!
+//! **Die Reihenfolge im Zustand folgt 5.2.** Erst `loop:`, dann die
+//! Uebergaenge — ein `check` im `loop:` wirkt also, bevor ein `when` den
+//! Zustand verlassen kann. Umgekehrt waere der Zustand schon gewechselt,
+//! wenn die Invariante bricht, und die Meldung nennte den falschen.
 
-use takt_mir::machine::Machine;
+use takt_mir::StateId;
+use takt_mir::machine::{Guard, Machine, Target, TransTrigger, Transition};
 use takt_mir::program::Program;
 
 use crate::emit::Module;
-use crate::expr::NotYet;
+use crate::expr::{NotYet, lower as lower_expr};
 use crate::machine::{self, Role, StateStruct};
 use crate::stmt::{Ctx, block};
 
@@ -23,14 +30,15 @@ use crate::stmt::{Ctx, block};
 /// ```text
 /// define void @m_step(ptr %0, ptr %1, ptr %2, ptr %3) {
 ///   %4 = load i8 aus conf[0]
-///   switch i8 %4, label %unbekannt [ i8 0, label %m_ZUSTAND … ]
+///   switch i8 %4, label %ende [ i8 0, label %m_ZUSTAND … ]
 /// m_ZUSTAND:
 ///   … loop-Koerper …
+///   … Uebergaenge: Guard pruefen, conf setzen, t_in_state = 0 …
 ///   br label %ende
 /// fault_m:
 ///   pending setzen, ret
 /// ende:
-///   ret void
+///   t_in_state += 1, ret void
 /// }
 /// ```
 ///
@@ -58,13 +66,10 @@ fn write_step(
     st: &StateStruct,
     p: &Program,
     module: &mut Module,
-    leaves: &[takt_mir::StateId],
+    leaves: &[StateId],
 ) -> Result<(), NotYet> {
     machine::begin_step(m, module);
 
-    // 11.2: `conf[0]` ist der aktive Zustand der obersten Ebene. Tiefere
-    // Ebenen kommen mit den geschachtelten Zustaenden; der `switch` ueber
-    // die Blaetter ist die Form, die 11.2 nennt.
     let state_ty = format!("%{}_state", m.name);
     let conf_i = st.index_of(Role::Conf, 0).ok_or(NotYet { what: "conf im Zustand" })?;
     let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
@@ -81,14 +86,89 @@ fn write_step(
     module.void_inst(&format!("switch i8 {cur}, label %{end} [ {} ]", arms.join(" ")));
 
     let mut ctx = Ctx::new(m, st, p);
-    for id in leaves {
+    for (i, id) in leaves.iter().enumerate() {
         module.label(&machine::label_of(m, *id));
-        block(&m.states[id.index()].loop_block, &mut ctx, module)?;
+        let state = &m.states[id.index()];
+        // 5.2: erst der `loop:`-Koerper …
+        block(&state.loop_block, &mut ctx, module)?;
+        // … dann die Uebergaenge, in Quelltextreihenfolge (5.2: der erste
+        // passende gewinnt).
+        transitions(&state.transitions, i, leaves, &mut ctx, module, &end, &slot)?;
         module.void_inst(&format!("br label %{end}"));
     }
 
     machine::fault_trampoline(m, st, module);
     module.label(&end);
+    // `t_in_state` zaehlt die Ticks im aktiven Zustand (5.2, 11.2). Ein
+    // Uebergang hat ihn auf 0 gesetzt; hier waechst er um einen Tick.
+    if let Some(t_i) = st.index_of(Role::TimeInState, 0) {
+        let base = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
+        let cell = module.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", st.depth));
+        let old = module.inst(&format!("load i64, ptr {cell}"));
+        let new = module.inst(&format!("add i64 {old}, 1"));
+        module.void_inst(&format!("store i64 {new}, ptr {cell}"));
+    }
     module.end(None);
     Ok(())
+}
+
+/// Die Uebergaenge eines Zustands (5.2).
+///
+/// Sie werden in Quelltextreihenfolge geprueft; der erste, dessen Guard
+/// haelt, gewinnt und verlaesst den Zustand. 8.7 verlangt dieselbe
+/// Reihenfolge fuer Handler — der Quelltext ist die Prioritaet, damit sie
+/// dasteht, statt hergeleitet werden zu muessen.
+fn transitions(
+    list: &[Transition],
+    from: usize,
+    leaves: &[StateId],
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+    end: &str,
+    conf_slot: &crate::emit::Reg,
+) -> Result<(), NotYet> {
+    for (n, t) in list.iter().enumerate() {
+        let TransTrigger::When(Guard::Expr(cond)) = &t.trigger else {
+            // `after d` braucht `t_in_state` in Nanosekunden und die
+            // Periode der Maschine; Muster-Guards brauchen den
+            // Fensterzugriff (8.7). Beide kommen mit den Schritten, die
+            // sie tragen.
+            return Err(NotYet { what: "Uebergangsausloeser" });
+        };
+        let vars = ctx.vars();
+        let c = lower_expr(cond, ctx.program, m, &vars)?;
+        let name = &ctx.machine.name;
+        let (take, skip) = (format!("uebergang{from}_{n}_{name}"), format!("bleibt{from}_{n}_{name}"));
+        m.void_inst(&format!("br i1 {}, label %{take}, label %{skip}", c.value));
+        m.label(&take);
+        // Der Aktionsblock laeuft im Modus ENTRY (5.2), also vor dem
+        // Eintritt in den Zielzustand.
+        block(&t.actions, ctx, m)?;
+        let Target::State(to) = t.target else { return Err(NotYet { what: "Uebergangsziel" }) };
+        let Some(index) = leaves.iter().position(|l| *l == to) else {
+            // Ein Ziel, das kein Blatt ist, hat einen `initial`-Pfad
+            // hinunter (5.2); der entsteht mit der Verschachtelung.
+            return Err(NotYet { what: "Uebergang in einen zusammengesetzten Zustand" });
+        };
+        m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
+        reset_time(ctx, m);
+        m.void_inst(&format!("br label %{end}"));
+        m.label(&skip);
+    }
+    Ok(())
+}
+
+/// `t_in_state = 0` beim Eintritt in einen Zustand (5.2).
+///
+/// Ohne das Zuruecksetzen misst `after d` die Zeit seit dem Start der
+/// Maschine statt seit dem Eintritt — der haeufigste Fehler, den eine
+/// handgeschriebene Zustandsmaschine macht.
+fn reset_time(ctx: &Ctx<'_>, m: &mut Module) {
+    let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else { return };
+    let state_ty = format!("%{}_state", ctx.machine.name);
+    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
+    let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
+    // -1, weil das Ende des Schritts gleich um 1 erhoeht: Der erste Tick
+    // im neuen Zustand hat `t_in_state == 0`.
+    m.void_inst(&format!("store i64 -1, ptr {cell}"));
 }

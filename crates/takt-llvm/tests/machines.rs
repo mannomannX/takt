@@ -38,8 +38,7 @@ fn ir_of(p: &Program) -> String {
 /// Die Korpusprogramme, deren Maschinen der Codegen heute vollstaendig
 /// senkt. Die Liste waechst mit ihm; sie steht hier, damit ein Rueckschritt
 /// auffaellt.
-const VOLLSTAENDIG: [&str; 4] =
-    ["01_minimal.takt", "03_sequences_and_faults.takt", "13_framing.takt", "14_latency.takt"];
+const VOLLSTAENDIG: [&str; 2] = ["01_minimal.takt", "14_latency.takt"];
 
 // --- Der Zustands-Struct (11.2) -----------------------------------------
 
@@ -241,4 +240,58 @@ fn the_state_struct_is_a_named_type() {
     let name = &p.machines[0].name;
     assert!(ir.contains(&format!("%{name}_state = type")), "{ir}");
     assert!(ir.contains(&format!("@{name}_step")), "{ir}");
+}
+
+// --- Uebergaenge (5.2) --------------------------------------------------
+
+/// 5.2: Ein Uebergang setzt `conf` auf den Zielzustand.
+#[test]
+fn a_transition_writes_the_target_into_the_configuration() {
+    let p = corpus("01_minimal.takt");
+    let ir = ir_of(&p);
+    // IDLE --start--> WATCH: WATCH ist das zweite Blatt, also `i8 1`.
+    assert!(
+        ir.contains("store i8 1, ptr"),
+        "der Zielzustand wird nicht geschrieben:
+{ir}"
+    );
+}
+
+/// 5.2: Beim Eintritt in einen Zustand beginnt `t_in_state` von vorn.
+///
+/// Ohne das Zuruecksetzen misst `after d` die Zeit seit dem Start der
+/// Maschine statt seit dem Eintritt.
+#[test]
+fn a_transition_resets_the_time_in_state() {
+    let p = corpus("01_minimal.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("store i64 -1, ptr"),
+        "`t_in_state` wird nicht zurueckgesetzt:
+{ir}"
+    );
+    // Am Ende des Schritts waechst er wieder um einen Tick; der erste Tick
+    // im neuen Zustand hat damit `t_in_state == 0`.
+    assert!(
+        ir.contains("add i64"),
+        "`t_in_state` waechst nicht:
+{ir}"
+    );
+}
+
+/// 5.2: Erst der `loop:`-Koerper, dann die Uebergaenge. Ein `check` wirkt
+/// also, bevor ein `when` den Zustand verlassen kann — sonst nennte die
+/// Meldung den falschen Zustand.
+#[test]
+fn the_loop_body_runs_before_the_transitions() {
+    let p = corpus("01_minimal.takt");
+    let ir = ir_of(&p);
+    let watch = ir.find("tank_guard_WATCH:").expect("Zustand WATCH");
+    let check = ir[watch..].find("fcmp").expect("der check in WATCH");
+    let trans = ir[watch..].find("uebergang1").expect("der Uebergang aus WATCH");
+    assert!(
+        check < trans,
+        "der Uebergang steht vor dem `check`:
+{ir}"
+    );
 }

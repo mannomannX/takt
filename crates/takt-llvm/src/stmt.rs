@@ -124,6 +124,14 @@ impl Vars for StateVars<'_> {
         let ty = ty::lower(c.ty, self.program)?;
         Some(self.slot("%3", &ty, channel.index(), m))
     }
+
+    /// Ein Command (8.5): ein `bool` im Prozessabbild, hinter den
+    /// Channels. Die Runtime setzt es vor dem Schritt und loescht es
+    /// danach — im erzeugten Code ist es ein gewoehnlicher Ladevorgang.
+    fn command(&self, id: takt_mir::CommandId, m: &mut Module) -> Option<Lowered> {
+        let after = self.program.channels.len();
+        Some(self.slot("%1", &LlvmType::Int(1), after + id.index(), m))
+    }
 }
 
 /// Senkt einen Block (11.2: Straight-Line-Code).
