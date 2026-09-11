@@ -262,6 +262,31 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
 
     let mut ctx = Ctx::new(m, st, p);
     ctx.leaf = Some(leaf);
+    // 9.4: `s0` sind die Anfangswerte der Variablen. Sie stehen *vor*
+    // jedem `enter:`, weil ein `enter:`-Block sie schon lesen darf (1.4)
+    // — und ohne sie stuende dort die Null, die der Speicher mitbringt.
+    for (i, v) in m.vars.iter().enumerate() {
+        let Some(init) = v.init.clone() else { continue };
+        let id = takt_mir::VarId(i as u32);
+        // Eine Blockinstanz wird nicht zugewiesen; ihr Zustand entsteht
+        // aus den Initialwerten des Blocks (5.7).
+        if machine::instance_block(m, id).is_some() {
+            continue;
+        }
+        let vars = ctx.vars();
+        let value = match crate::expr::lower(&init, p, module, &vars) {
+            Ok(v) => v,
+            Err(e) => {
+                module.abort(mark);
+                return Err(e);
+            }
+        };
+        let Some(ptr) = ctx.field(Role::Var, i, module) else {
+            module.abort(mark);
+            return Err(NotYet { what: "Variable im Zustand" });
+        };
+        module.void_inst(&format!("store {} {}, ptr {ptr}", value.ty, value.value));
+    }
     // Die ganze Kette von der Wurzel bis zum Blatt wird betreten (5.2).
     for id in machine::path_to(m, leaf) {
         let enter = m.states[id.index()].enter.clone();
