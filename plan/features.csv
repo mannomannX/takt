@@ -63,7 +63,7 @@ SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),fertig
 SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),teilweise
 SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),fertig
 SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig
-SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),offen
+SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),teilweise
 SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M1 (Kernsemantik),offen
 SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),offen
 SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M2 (Ströme),teilweise
@@ -86,14 +86,14 @@ SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing 
 SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),fertig
 SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),fertig
 SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig
-SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),offen
+SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),teilweise
 SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M1/M2 (Interpreter),offen
 SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,je Meilenstein,offen
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),offen
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),teilweise
 SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M6 (stdlib),offen
 SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3 (Gate),teilweise
-SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),offen
+SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),teilweise
 SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4/M5 (Runtime),offen
 SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M4/M5 (Runtime),offen
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M4/M5 (Runtime),offen
@@ -710,7 +710,7 @@ THM-Satz-9.4.5,Satz/Lemma,9.4.5,Satz 9.4.5,,M1/M2 (Interpreter),fertig
 PAR-9.4-Was_der_Satz_nicht_sagt,Absatz/Regel,9.4,Was der Satz nicht sagt,,M1/M2 (Interpreter),offen
 PAR-9.4-Auszahlung,Absatz/Regel,9.4,Auszahlung,,M1/M2 (Interpreter),offen
 THM-Lemma-9.6.1.,Satz/Lemma,9.6.1,Lemma 9.6.1.,,M1/M2 (Interpreter),fertig
-THM-Satz-9.9.1,Satz/Lemma,9.9.1,Satz 9.9.1,,M1/M2 (Interpreter),offen
+THM-Satz-9.9.1,Satz/Lemma,9.9.1,Satz 9.9.1,,M1/M2 (Interpreter),teilweise
 PAR-11.2-Große_Werte,Absatz/Regel,11.2,Große Werte,,M1-M4 (Lowering),offen
 PAR-11.2-Statischer_Scratch,Absatz/Regel,11.2,Statischer Scratch,,M1-M4 (Lowering),offen
 PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Absatz/Regel,11.2,Overlay exklusiver Zustandsspeicher,,M1-M4 (Lowering),offen
@@ -804,7 +804,7 @@ RAND-4,Regel/Prüfung,12.6,`max_slew` (3.5),,M4/M5 (Runtime),fertig
 RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M4/M5 (Runtime),teilweise
 RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M4/M5 (Runtime),teilweise
 RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M4/M5 (Runtime),teilweise
-PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4/M5 (Runtime),offen
+PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4/M5 (Runtime),teilweise
 PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M4/M5 (Runtime),offen
 PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M4/M5 (Runtime),offen
 PROFIL-boot,Profil/Eintrag,12.8,boot,,M4/M5 (Runtime),offen

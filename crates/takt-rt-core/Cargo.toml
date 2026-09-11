@@ -1,0 +1,13 @@
+[package]
+name = "takt-rt-core"
+version = "0.1.0"
+description = "Takt: die Tickschleife (Referenz 12.1), no_std und ohne Allokation"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Kein `takt-mir`: Der Kern laeuft auf dem Target und darf die IR nicht
+# kennen. Was er vom Programm braucht, bekommt er als Zahlen (plan/m4.md 5.4).
+
+[lints]
+workspace = true
