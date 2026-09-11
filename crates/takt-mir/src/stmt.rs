@@ -231,6 +231,9 @@ pub enum StmtKind {
         cond: Expr,
         message: Option<Format>,
         confirm: Option<Confirm>,
+        /// `within d` (9.4.5): geforderte Safe-State-Latenz. Die MIR traegt
+        /// sie, weil die Latenzanalyse sie braucht und der Report sie nennt.
+        within: Option<Expr>,
         target: Option<Target>,
         req: Option<String>,
         kind: CheckKind,

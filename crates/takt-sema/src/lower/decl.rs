@@ -589,10 +589,54 @@ impl Lowerer<'_> {
                 }
                 ast::AttrKind::Group(s) => meta.group = Some(s.value.clone()),
                 ast::AttrKind::Doc(s) => meta.doc = Some(s.value.clone()),
+                // `budget` steht am Maschinenkopf (7.2); dort liest es
+                // `declared_budget`. An einem Channel ist es ein Fehler —
+                // `dir` ist genau dann gesetzt (Input oder Output).
+                ast::AttrKind::Budget(_) => {
+                    if dir.is_some() {
+                        self.error(SC3, a.span, "`budget` nur an einer Maschine (7.2)");
+                    }
+                }
             }
         }
         let _ = span;
         (out, meta)
+    }
+
+    /// `with budget = {ram = …}` am Maschinenkopf (7.2).
+    ///
+    /// `wcet` ist grammatisch zugelassen, aber noch nicht pruefbar: Die
+    /// Umrechnung von Operationen in Zeit braucht die kalibrierte
+    /// Kostentabelle `c_target` (9.4.3, 13.8). Die Schreibweise steht damit
+    /// fest, bevor jemand sie anders erfindet, und der Compiler sagt, woran
+    /// es liegt — dasselbe Muster wie bei `map`, `mat` und `node`.
+    pub fn declared_budget(&mut self, attrs: &[ast::Attr]) -> Option<takt_mir::machine::DeclaredBudget> {
+        let mut out: Option<takt_mir::machine::DeclaredBudget> = None;
+        for a in attrs {
+            let ast::AttrKind::Budget(items) = &a.kind else { continue };
+            let mut b = takt_mir::machine::DeclaredBudget { ram: None, span: a.span };
+            for it in items {
+                match it.kind {
+                    ast::BudgetKind::Ram => {
+                        if b.ram.is_some() {
+                            self.error(SC3, it.span, "`ram` doppelt im Budget");
+                            continue;
+                        }
+                        let Some(v) = self.const_int(&it.value) else { continue };
+                        if v <= 0 {
+                            self.error(SC3, it.span, "`ram` verlangt eine positive Groesse");
+                            continue;
+                        }
+                        b.ram = u64::try_from(v).ok();
+                    }
+                    ast::BudgetKind::Wcet => {
+                        self.stage(it.span, "`wcet` im Budget", Stage::V1_1);
+                    }
+                }
+            }
+            out = Some(b);
+        }
+        out
     }
 
     fn int_attr(&mut self, n: &ast::IntLit) -> Option<u32> {

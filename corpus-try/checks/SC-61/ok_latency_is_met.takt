@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-61: 1 erkennen + 2 bestaetigen + 2 Fault-Pfad = 5 Ticks, gefordert sind 10.
+
+input  p : float[bar] @ hw("i/p") with max_rate = 1000 Hz
+output v : bool       @ hw("o/v") with safe = false
+
+machine m:
+    fault -> SAFE
+    initial RUN
+
+    state RUN:
+        loop:
+            check p < 5.0 bar, "zu hoch" for 2 ms within 10 ms
+            v = true
+
+    state SAFE:
+        loop:
+            v = false

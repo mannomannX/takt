@@ -499,7 +499,28 @@ impl Emitter<'_, '_> {
             AttrKind::Overflow(_) | AttrKind::Wake(_) | AttrKind::Irreversible => self.name(),
             AttrKind::Label(_) | AttrKind::Group(_) | AttrKind::Doc(_) => self.name(),
             AttrKind::Display(u) => self.fmt_unit_expr(u),
+            AttrKind::Budget(items) => {
+                // `{` folgt dem `=` mit Leerzeichen wie ein gewoehnlicher
+                // Wert; direkt dahinter beginnt der erste Posten, und das
+                // `}` schliesst ohne Leerzeichen an den letzten an.
+                self.sp("{");
+                self.glue();
+                for (i, it) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.op(",");
+                    }
+                    self.fmt_budget_item(it);
+                }
+                self.op("}");
+            }
         }
+    }
+
+    /// `budget_item`
+    fn fmt_budget_item(&mut self, it: &BudgetItem) {
+        self.name();
+        self.sp("=");
+        self.fmt_const_expr(&it.value);
     }
 
     /// `framing`
@@ -1218,9 +1239,14 @@ impl Emitter<'_, '_> {
             StmtKind::Var(v) => self.fmt_var_decl(v),
             StmtKind::Job { args, .. } => self.fmt_job_stmt(args),
             StmtKind::Arm { .. } => self.fmt_arm_stmt(),
-            StmtKind::Check { cond, message, confirm, target, req } => {
-                self.fmt_check_stmt(cond, message.is_some(), confirm.as_ref(), target.is_some(), req.is_some())
-            }
+            StmtKind::Check { cond, message, confirm, within, target, req } => self.fmt_check_stmt(
+                cond,
+                message.is_some(),
+                confirm.as_ref(),
+                within.as_ref(),
+                target.is_some(),
+                req.is_some(),
+            ),
             StmtKind::Alert { cond, confirm, .. } => self.fmt_alert_stmt(cond, confirm.as_ref()),
             StmtKind::Log(_) => self.fmt_log_stmt(),
             StmtKind::Goto(_) => self.fmt_goto_stmt(),
@@ -1390,7 +1416,15 @@ impl Emitter<'_, '_> {
     }
 
     /// `check_stmt`
-    fn fmt_check_stmt(&mut self, cond: &Expr, message: bool, confirm: Option<&Expr>, target: bool, req: bool) {
+    fn fmt_check_stmt(
+        &mut self,
+        cond: &Expr,
+        message: bool,
+        confirm: Option<&Expr>,
+        within: Option<&Expr>,
+        target: bool,
+        req: bool,
+    ) {
         self.sp("check");
         self.fmt_expr(cond);
         if message {
@@ -1400,6 +1434,10 @@ impl Emitter<'_, '_> {
         if let Some(c) = confirm {
             self.sp("for");
             self.fmt_duration_expr(c);
+        }
+        if let Some(w) = within {
+            self.sp("within");
+            self.fmt_duration_expr(w);
         }
         if target {
             self.fmt_goto_stmt();

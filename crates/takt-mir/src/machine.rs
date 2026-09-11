@@ -359,6 +359,20 @@ pub struct Budget {
     pub fault_path: crate::fns::CostVec,
 }
 
+/// Deklariertes Budget einer Maschine (`with budget = {…}`, 7.2).
+///
+/// Ohne Deklaration prueft erst die Integration, ob die Summe passt — in
+/// einem Projekt mit mehreren Teams faellt die Ueberschreitung dann auf,
+/// wenn sie teuer ist. Mit Deklaration ist das Budget ein Vertrag, der
+/// lokal und sofort scheitert (Pruefung 62).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeclaredBudget {
+    /// `ram = …` in Byte.
+    pub ram: Option<u64>,
+    /// Position der Deklaration.
+    pub span: Span,
+}
+
 /// Timer eines Zustands (7.1): Tick-Zaehler `time_in_state`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Timer {
@@ -481,6 +495,8 @@ pub struct Machine {
     pub layout: Layout,
     /// Budget, aus M3.
     pub budget: Option<Budget>,
+    /// Deklariertes Budget (7.2), aus `with budget = {…}`.
+    pub declared_budget: Option<DeclaredBudget>,
     /// Metadaten.
     pub meta: Meta,
     /// Position.
@@ -512,6 +528,7 @@ impl Machine {
             faulted: FaultedState::default(),
             layout: Layout::default(),
             budget: None,
+            declared_budget: None,
             meta: Meta::default(),
             span: Span::default(),
         }
@@ -537,6 +554,22 @@ impl Machine {
         }
         self.vars.push(var);
         id
+    }
+
+    /// Fault-Ziel φ(s) nach 5.3: explizit, sonst geerbt vom Elternzustand,
+    /// sonst von der Maschine — mit der Ausnahme, dass der als Fault-Ziel
+    /// der Maschine deklarierte Zustand nicht von ihr erbt, sondern
+    /// `FAULTED` bekommt. Sonst faende sich der Fault-Wald in einer
+    /// Schleife der Laenge eins wieder.
+    pub fn fault_target_of(&self, s: StateId) -> FaultTarget {
+        let mut cur = Some(s);
+        while let Some(id) = cur {
+            if let Some(t) = self.states[id.index()].fault_target {
+                return t;
+            }
+            cur = self.states[id.index()].parent;
+        }
+        if self.fault_target == FaultTarget::State(s) { FaultTarget::Faulted } else { self.fault_target }
     }
 
     /// Zustand mit diesem Namen.

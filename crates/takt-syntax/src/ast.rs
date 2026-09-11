@@ -481,6 +481,29 @@ pub enum AttrKind {
     Display(UnitExpr),
     Group(StrLit),
     Doc(StrLit),
+    /// `budget = {ram = …, wcet = …}` je Maschine (7.2).
+    Budget(Vec<BudgetItem>),
+}
+
+/// Ein Posten in `budget = {…}` (7.2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BudgetItem {
+    /// Welche Groesse.
+    pub kind: BudgetKind,
+    /// Der Wert.
+    pub value: Expr,
+    /// Position.
+    pub span: Span,
+}
+
+/// Groesse eines Budgetpostens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum BudgetKind {
+    /// Speicher der Maschine in Byte.
+    Ram,
+    /// Rechenzeit je Aktivierung; braucht `c_target` (13.8).
+    Wcet,
 }
 
 /// `framing`
@@ -1084,31 +1107,84 @@ pub struct Stmt {
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub enum StmtKind {
-    Assign { target: Expr, op: AssignOp, value: Expr },
+    Assign {
+        target: Expr,
+        op: AssignOp,
+        value: Expr,
+    },
     Var(VarDecl),
-    Job { handle: Ident, callee: Ident, args: Vec<Arg> },
-    Arm { arm: bool, trigger: Ident },
-    Check { cond: Expr, message: Option<StrLit>, confirm: Option<Expr>, target: Option<Ident>, req: Option<StrLit> },
-    Alert { cond: Expr, message: StrLit, confirm: Option<Expr> },
+    Job {
+        handle: Ident,
+        callee: Ident,
+        args: Vec<Arg>,
+    },
+    Arm {
+        arm: bool,
+        trigger: Ident,
+    },
+    Check {
+        cond: Expr,
+        message: Option<StrLit>,
+        confirm: Option<Expr>,
+        /// `within d` (9.4.5): Anforderung an die Safe-State-Latenz.
+        within: Option<Expr>,
+        target: Option<Ident>,
+        req: Option<StrLit>,
+    },
+    Alert {
+        cond: Expr,
+        message: StrLit,
+        confirm: Option<Expr>,
+    },
     Log(StrLit),
     Goto(Ident),
     Abort(Option<StrLit>),
     Return(Expr),
-    Send { stream: Ident, value: Expr },
-    Pulse { output: Ident, value: Expr, duration: Expr },
+    Send {
+        stream: Ident,
+        value: Expr,
+    },
+    Pulse {
+        output: Ident,
+        value: Expr,
+        duration: Expr,
+    },
     Cancel(Ident),
-    Measure { name: Ident, value: Expr },
-    Verify { cond: Expr, message: StrLit, req: Option<StrLit> },
-    Verdict { pass: bool, message: Option<StrLit> },
+    Measure {
+        name: Ident,
+        value: Expr,
+    },
+    Verify {
+        cond: Expr,
+        message: StrLit,
+        req: Option<StrLit>,
+    },
+    Verdict {
+        pass: bool,
+        message: Option<StrLit>,
+    },
     Raise(Ident),
     Break,
     Pass,
     Expr(Expr),
-    If { branches: Vec<(Expr, Block)>, otherwise: Option<Block> },
-    For { target: ForTarget, iter: ForIter, body: Block },
-    Match { subject: Expr, cases: Vec<Case> },
+    If {
+        branches: Vec<(Expr, Block)>,
+        otherwise: Option<Block>,
+    },
+    For {
+        target: ForTarget,
+        iter: ForIter,
+        body: Block,
+    },
+    Match {
+        subject: Expr,
+        cases: Vec<Case>,
+    },
     At(AtStmt),
-    Every { period: Expr, body: Block },
+    Every {
+        period: Expr,
+        body: Block,
+    },
 }
 
 /// `= += -= *= /=`

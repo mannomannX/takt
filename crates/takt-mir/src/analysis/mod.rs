@@ -14,6 +14,7 @@
 pub mod cost;
 pub mod domain;
 pub mod facts;
+pub mod latency;
 pub mod narrow;
 pub mod prove;
 pub mod size;

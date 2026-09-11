@@ -592,6 +592,8 @@ SC-57,Statische Prüfung,10,`map`: Schlüssel POD mit Gleichheit (3.9),F,M3 (Gat
 SC-58,Statische Prüfung,10,Knoten (12.9): `follows` knotenlokal; `hops` aus der Topologie berechenbar; Knotentick Vielfaches von `system.tick`,F,M3 (Gate),definiert
 SC-59,Statische Prüfung,10,"Treiberstufe (15, v1.2): Ein gepolltes Gerät läuft zwischen zwei Ticks nicht über — `fifo_depth[d] / byte_rate[d] >= P_m + jitter[tick_source] + wcet_poll[d]`, alle vier Größen aus der Hardware-Konfiguration (8.10) beziehungsweise der Konformitätsmessung (13.8). Fehlt eine, ist die Prüfung nicht entscheidbar: Sie verlangt die Messung oder die ausdrückliche Freigabe `with polling = unchecked`, die im Lauf-Header erscheint. Verletzung nennt drei Auswege: Periode senken, Gerät in die TCB geben (12.6), oder DMA statt Polling",F,M8 (mit port),offen
 SC-60,Statische Prüfung,10,"Channel-Bindung gegen die Hardware-Konfiguration (8.10): Einheit, Skalierung und Range eines `@ hw(…)`-Channels stimmen mit der Konfiguration überein. Ein Programm, das `float[bar]` bindet, während die Konfiguration `psi` führt, ist sonst unentdeckt — die Einheitenrechnung aus 3.2 endet am Channel-Rand. Fehlt die Konfiguration, entfällt die Prüfung (keine Eingabe, kein Urteil)",F,M6 (mit 8.10),offen
+SC-61,Statische Prüfung,10,"`check c, ""…"" within d`: Die gerechnete Safe-State-Latenz (Satz 9.4.5) hält die geforderte Frist ein. Verglichen wird in Ticks (`d / T₀`); die Meldung nennt die Aufschlüsselung nach Erkennung, Bestätigung, Fault-Pfad und Commit, weil die Zahl sonst nicht zu verbessern ist",F,M3 (Gate),fertig
+SC-62,Statische Prüfung,10,"`machine … with budget = {ram = …}`: Der gerechnete Speicher der Maschine (11.5, mit Overlay) liegt im deklarierten Budget. `wcet` braucht die Kalibrierung (13.8) und meldet bis dahin seine Stufe",F,M3 (Gate),fertig
 OBL-T1,Beweisverpflichtung,9.4.2,T1,,M1/M2 (Interpreter),offen
 OBL-T2,Beweisverpflichtung,9.4.2,T2,,M1/M2 (Interpreter),offen
 OBL-T3,Beweisverpflichtung,9.4.2,T3,,M1/M2 (Interpreter),offen
@@ -663,6 +665,7 @@ PAR-5.6-Permissive,Absatz/Regel,5.6,Permissive,,M1 (Kernsemantik),offen
 PAR-5.6-Alert,Absatz/Regel,5.6,Alert,,M1 (Kernsemantik),fertig
 PAR-5.6-Alerts_in_Schleifen,Absatz/Regel,5.6,Alerts in Schleifen,,M1 (Kernsemantik),fertig
 PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),fertig
+PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M1 (Kernsemantik),offen
 PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),offen
 PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M1 (Kernsemantik),offen
 PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M1 (Kernsemantik),offen
@@ -670,6 +673,7 @@ PAR-5.10-Nicht_Wake_Streams_in_idle,Absatz/Regel,5.10,Nicht-Wake-Streams in `idl
 PAR-5.10-Systemschlaf,Absatz/Regel,5.10,Systemschlaf,,M1 (Kernsemantik),offen
 PAR-7.1-Tick_Quelle,Absatz/Regel,7.1,Tick-Quelle,,M1 (Kernsemantik),offen
 PAR-7.2-follows_v1.1,Absatz/Regel,7.2,`follows` (v1.1),v1.1,M6,offen
+PAR-7.2-Budget_je_Maschine,Absatz/Regel,7.2,Budget je Maschine,,M1 (Kernsemantik),offen
 PAR-7.5-Zeitgestempelte_Eingaben,Absatz/Regel,7.5,Zeitgestempelte Eingaben,,M1 (Kernsemantik),offen
 PAR-7.5-Geplante_Ausgaben,Absatz/Regel,7.5,Geplante Ausgaben,,M1 (Kernsemantik),offen
 PAR-7.5-Latenzformel,Absatz/Regel,7.5,Latenzformel,,M1 (Kernsemantik),offen
@@ -700,6 +704,9 @@ THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),offen
 PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 (Interpreter),offen
 THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M1/M2 (Interpreter),offen
+THM-Satz-9.4.5,Satz/Lemma,9.4.5,Satz 9.4.5,,M1/M2 (Interpreter),fertig
+PAR-9.4-Was_der_Satz_nicht_sagt,Absatz/Regel,9.4,Was der Satz nicht sagt,,M1/M2 (Interpreter),offen
+PAR-9.4-Auszahlung,Absatz/Regel,9.4,Auszahlung,,M1/M2 (Interpreter),offen
 THM-Lemma-9.6.1.,Satz/Lemma,9.6.1,Lemma 9.6.1.,,M1/M2 (Interpreter),fertig
 THM-Satz-9.9.1,Satz/Lemma,9.9.1,Satz 9.9.1,,M1/M2 (Interpreter),offen
 PAR-11.2-Große_Werte,Absatz/Regel,11.2,Große Werte,,M1-M4 (Lowering),offen
@@ -849,6 +856,7 @@ CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen
 CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),offen
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig
 CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig
+CLI-latency,Werkzeug,11.1,takt latency,,M3 (Gate),fertig
 CLI-graph,Werkzeug,11.1,takt graph,,M4 (Codegen),offen
 CLI-bench,Werkzeug,11.1,takt bench,,M5 (Embedded),offen
 CLI-tune,Werkzeug,11.1,takt tune,,M6 (v1.1),offen

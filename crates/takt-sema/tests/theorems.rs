@@ -297,3 +297,58 @@ fn strip_expr(e: &mut takt_mir::expr::Expr) {
         strip_expr(c);
     }
 }
+
+/// **Satz 9.4.5 (Safe-State-Latenz).** Die gerechnete Schranke wird im Lauf
+/// eingehalten: Der Output steht spaetestens `D_safe` Ticks nach der
+/// Verletzung auf seinem `safe`-Wert.
+///
+/// Der Test ist kein Nachrechnen der Formel, sondern ihr Belastungsfall —
+/// die Bedingung wird ab Tick 0 verletzt, und der Trace sagt, wann der
+/// Aktor wirklich abgefallen ist.
+#[test]
+fn theorem_9_4_5_the_latency_bound_holds_in_the_run() {
+    let src = "\
+output valve : bool @ hw(\"o/valve\") with safe = false
+
+machine m every 2 ms:
+    fault -> SAFE
+    var n : int in 0..99 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            n = n + 1
+            check n < 3, \"zu viele Zyklen\"
+            valve = true
+
+    state SAFE:
+        loop:
+            valve = false
+";
+    let p = compile(src);
+    let bound = takt_mir::analysis::latency::latency(&p).worst_case();
+    assert!(bound > 0, "die Schranke ist gerechnet");
+
+    let stim = Trace::parse("").expect("leer");
+    let out = run(&p, &stim, &RunOptions { ticks: bound + 8, ..Default::default() }).expect("Lauf");
+    let text = out.trace.render();
+
+    // Der erste Tick, in dem `valve` auf `false` faellt, nachdem er `true` war.
+    let mut safe_at = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("t=") {
+            let (t, tail) = rest.split_once(' ').unwrap_or((rest, ""));
+            if tail.contains("out valve false") {
+                safe_at = t.parse::<u64>().ok();
+                break;
+            }
+        }
+    }
+    let Some(safe_at) = safe_at else {
+        panic!(
+            "der Aktor faellt ab:
+{text}"
+        )
+    };
+    assert!(safe_at <= bound, "sicher nach {safe_at} Ticks, Schranke {bound}:\n{text}");
+}

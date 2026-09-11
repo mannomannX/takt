@@ -81,6 +81,10 @@ MILESTONE_OVERRIDE = {
     "SC-59": "M8 (mit port)",
     # Braucht die Hardware-Konfiguration als Eingabe (8.10).
     "SC-60": "M6 (mit 8.10)",
+    # Latenz und Maschinenbudget rechnet das Gate (9.4.5, 7.2).
+    "SC-61": "M3 (Gate)",
+    "SC-62": "M3 (Gate)",
+    "CLI-latency": "M3 (Gate)",
     # `append` ist mit M3 gebaut, nicht mit dem Parser (FB-42).
     "MEM-append": "M3",
 }
@@ -383,7 +387,7 @@ for line in code_block(r"### 11\.4 Standardbibliothek").split("\n"):
 # `fmt`, `size` und die Entwicklerstufen stehen seit M0-M3, `run`/`replay`
 # brauchen die Runtime (M4), `bench`/`driver-test` die Hardware (M5).
 CLI_MILESTONE = {
-    "check": "M0-M3", "fmt": "M0", "size": "M3 (Gate)",
+    "check": "M0-M3", "fmt": "M0", "size": "M3 (Gate)", "latency": "M3 (Gate)",
     "mir": "M0", "parse": "M0", "tokens": "M0",
     "sim": "M1/M2 (Interpreter)",
     "run": "M4 (Codegen)", "replay": "M4 (Codegen)",

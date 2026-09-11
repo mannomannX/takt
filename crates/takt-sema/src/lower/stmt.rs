@@ -76,7 +76,7 @@ impl Lowerer<'_> {
                 self.stage(span, "Trigger", Stage::V1_2);
                 return None;
             }
-            ast::StmtKind::Check { cond, message, confirm, target, req } => {
+            ast::StmtKind::Check { cond, message, confirm, within, target, req } => {
                 if kind.is_action() {
                     return forbidden(self, "check");
                 }
@@ -90,6 +90,7 @@ impl Lowerer<'_> {
                     None => None,
                 };
                 let confirm = self.confirm(confirm.as_ref(), span)?;
+                let within = self.within(within.as_ref(), span)?;
                 let target = match target {
                     Some(t) => Some(self.target(t)?),
                     None => None,
@@ -102,6 +103,7 @@ impl Lowerer<'_> {
                     cond,
                     message,
                     confirm,
+                    within,
                     target,
                     req: req.as_ref().map(|r| r.value.clone()),
                     kind: CheckKind::Check,
@@ -224,6 +226,32 @@ impl Lowerer<'_> {
     }
 
     /// `for d` einer Bestaetigungszeit (5.6): Zaehlerstelle anlegen.
+    /// `within d` (9.4.5): die geforderte Safe-State-Latenz. Geprueft wird
+    /// gegen die *Tickzahl* — `within 5 ms` bei `T0 = 1 ms` heisst „in
+    /// hoechstens fuenf Ticks". Das ist heute exakt entscheidbar; die
+    /// Zeitspalte des Reports bekommt ihre Belastbarkeit erst mit der
+    /// Schedulability (7.2, 13.8), die Regel aendert sich dadurch nicht.
+    ///
+    /// Die eigentliche Pruefung steht in `checks.rs` (Pruefung 61): Sie
+    /// braucht den Fault-Wald der fertigen Maschine, den das Lowering hier
+    /// noch nicht hat.
+    fn within(&mut self, d: Option<&ast::Expr>, span: Span) -> Option<Option<Expr>> {
+        let Some(d) = d else { return Some(None) };
+        if self.mctx.is_none() {
+            self.error(SC8, span, "`within d` nur in Maschinen");
+            return None;
+        }
+        let dur = self.tys.duration;
+        let within = self.check(d, dur)?;
+        if let ExprKind::Duration(ns) = within.kind {
+            if ns <= 0 {
+                self.error(SC3, d.span, "`within` verlangt eine positive Dauer");
+                return None;
+            }
+        }
+        Some(Some(within))
+    }
+
     fn confirm(&mut self, d: Option<&ast::Expr>, span: Span) -> Option<Option<Confirm>> {
         let Some(d) = d else { return Some(None) };
         if self.mctx.is_none() {

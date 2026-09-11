@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-61: die Periode allein kostet 10 Ticks, gefordert sind 3.
+
+input  p : float[bar] @ hw("i/p") with max_rate = 1000 Hz
+output v : bool       @ hw("o/v") with safe = false
+
+machine m every 10 ms:
+    fault -> SAFE
+    initial RUN
+
+    state RUN:
+        loop:
+            check p < 5.0 bar, "zu hoch" within 3 ms  # ~ SC-61
+            v = true
+
+    state SAFE:
+        loop:
+            v = false

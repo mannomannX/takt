@@ -418,3 +418,38 @@ fn annotations(p: &Program) -> Vec<(Option<types::Range>, Option<expr::Repr>)> {
     }
     out
 }
+
+/// Die beiden Felder der Formatversion 6 ueberstehen das Dateiformat:
+/// `within` an einem `check` (9.4.5) und das deklarierte Budget einer
+/// Maschine (7.2). Ohne diesen Test liefe der Roundtrip leer darueber.
+#[test]
+fn within_and_declared_budget_survive_the_format() {
+    let p = full_program();
+    let bytes = write_program(&p, "takt 0.1.0");
+    let (_, back) = read_program(&bytes).expect("lesbar");
+
+    let before = withins(&p);
+    assert!(!before.is_empty(), "das Beispielprogramm hat ein `within`");
+    assert_eq!(before, withins(&back), "`within` kommt zurueck");
+
+    let budgets: Vec<_> = p.machines.iter().map(|m| m.declared_budget).collect();
+    let after: Vec<_> = back.machines.iter().map(|m| m.declared_budget).collect();
+    assert!(budgets.iter().any(|b| b.is_some_and(|b| b.ram.is_some())), "eine Maschine deklariert ein Budget");
+    assert_eq!(budgets, after, "das deklarierte Budget kommt zurueck");
+}
+
+/// Die geforderten Latenzen aller `check`-Anweisungen.
+fn withins(p: &Program) -> Vec<expr::ExprKind> {
+    let mut out = Vec::new();
+    for m in &p.machines {
+        let states = m.states.iter().flat_map(|s| [&s.enter, &s.loop_block, &s.exit]);
+        for b in std::iter::once(&m.loop_block).chain(states) {
+            for st in &b.stmts {
+                if let stmt::StmtKind::Check { within: Some(w), .. } = &st.kind {
+                    out.push(w.kind.clone());
+                }
+            }
+        }
+    }
+    out
+}

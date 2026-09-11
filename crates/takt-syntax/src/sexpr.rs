@@ -481,13 +481,16 @@ impl Printer {
             StmtKind::Arm { arm, trigger } => {
                 self.line(&format!("({} {})", if *arm { "arm" } else { "disarm" }, trigger.name));
             }
-            StmtKind::Check { cond, message, confirm, target, req } => {
+            StmtKind::Check { cond, message, confirm, within, target, req } => {
                 let mut s = format!("(check {}", expr(cond));
                 if let Some(m) = message {
                     let _ = write!(s, " {}", string(m));
                 }
                 if let Some(c) = confirm {
                     let _ = write!(s, " for={}", expr(c));
+                }
+                if let Some(w) = within {
+                    let _ = write!(s, " within={}", expr(w));
                 }
                 if let Some(t) = target {
                     let _ = write!(s, " -> {}", t.name);
@@ -622,6 +625,21 @@ fn attrs(list: &[Attr]) -> String {
         s.push(' ');
         s.push_str(&match &a.kind {
             AttrKind::Safe(e) => format!("safe={}", expr(e)),
+            AttrKind::Budget(items) => format!(
+                "budget={{{}}}",
+                items
+                    .iter()
+                    .map(|i| format!(
+                        "{}={}",
+                        match i.kind {
+                            BudgetKind::Ram => "ram",
+                            BudgetKind::Wcet => "wcet",
+                        },
+                        expr(&i.value)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
             AttrKind::MaxAge(d) => format!("max_age={}", duration(d)),
             AttrKind::Rate(e) => format!("rate={}", expr(e)),
             AttrKind::MaxRate(e) => format!("max_rate={}", expr(e)),

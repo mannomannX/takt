@@ -183,7 +183,7 @@ codec_enum!(Observe {
 codec_enum!(Method { 0 Step, 1 Reset, 2 Block(1 one f), 3 Push, 4 Insert, 5 Remove, 6 Clear, 7 Append });
 codec_enum!(StmtKind {
     0 Assign { 1 one target, 2 one value },
-    1 Check { 1 one cond, 2 opt message, 3 opt confirm, 4 opt target, 5 opt req, 6 one kind },
+    1 Check { 1 one cond, 2 opt message, 3 opt confirm, 4 opt target, 5 opt req, 6 one kind, 7 opt within },
     2 Goto(1 one t),
     3 Abort { 1 opt message },
     4 If { 1 one cond, 2 one then, 3 one otherwise },
@@ -274,6 +274,7 @@ codec_struct!(Machine {
     1 one name, 2 one kind, 3 one driver, 4 rep params, 5 one period, 6 one phase, 7 rep follows, 8 opt node,
     9 rep vars, 10 rep persist, 11 rep signals, 12 one fault_target, 13 rep states, 14 rep roots, 15 one initial,
     16 one loop_block, 17 rep handlers, 18 one faulted, 19 one layout, 20 opt budget, 21 meta meta, 22 meta span,
+    23 opt declared_budget,
 });
 
 // ---------------------------------------------------------------- Programm
@@ -284,6 +285,7 @@ codec_struct!(Config {
     1 one edition, 2 one tick, 3 one output_timing, 4 one fault_is_fail, 5 one float_width, 6 metaopt tick_source,
     7 opt tick_tolerance, 8 metaopt target,
 });
+codec_struct!(DeclaredBudget { 1 opt ram, 2 meta span });
 codec_struct!(Meta { 1 opt label, 2 opt display, 3 opt group, 4 opt doc });
 codec_unit_enum!(Direction { 0 Input, 1 Output });
 codec_enum!(Binding { 0 Hw(1 one a), 1 Sim(1 one a), 2 None });

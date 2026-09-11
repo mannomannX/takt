@@ -131,7 +131,10 @@ pub fn size(p: &Program) -> Size {
 /// Der Speicher einer Maschine mit Overlay (11.2): Geschwisterzustaende
 /// teilen sich den Platz ihrer zustandslokalen Variablen, weil nie zwei
 /// gleichzeitig aktiv sind.
-fn machine_bytes(p: &Program, m: &Machine) -> u64 {
+/// Speicher einer Maschine in Byte: maschinenweite Variablen plus das
+/// Overlay der exklusiven Zustaende (11.2). Pruefung 62 vergleicht sie
+/// mit dem deklarierten `budget = {ram = …}`.
+pub fn machine_bytes(p: &Program, m: &Machine) -> u64 {
     // Maschinenweite Variablen liegen immer.
     let machine_vars: u64 = m
         .vars

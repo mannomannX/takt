@@ -86,3 +86,15 @@ fn sim_runs_for_the_requested_ticks() {
     assert!(text.contains("t=0"), "der Trace beginnt bei t=0:\n{text}");
     assert!(text.contains("state builder"), "der Zustand steht im Trace:\n{text}");
 }
+
+/// `latency` gibt je Output die Schranke aus, mit Aufschluesselung und dem
+/// Vorbehalt der Zeitspalte (9.4.5).
+#[test]
+fn latency_reports_ticks_and_its_caveat() {
+    let out = takt(&["latency", "corpus-try/14_latency.takt"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let text = stdout(&out);
+    assert!(text.contains("Ticks"), "die Tickspalte steht da:\n{text}");
+    assert!(text.contains("erkennen"), "die Aufschluesselung steht dabei:\n{text}");
+    assert!(text.contains("Schedulability"), "der Vorbehalt der Zeitspalte steht dabei:\n{text}");
+}

@@ -824,6 +824,8 @@ pub fn full_program() -> Program {
 
     let input_p = || e(ExprKind::Input { channel: ch_p, dominated: true }, t_bar);
     let msg = |s: &str| Format::text(s);
+    // Deklariertes Budget (7.2); Formatversion 6 traegt das Feld.
+    m.declared_budget = Some(crate::machine::DeclaredBudget { ram: Some(4096), span: Span::default() });
     m.loop_block = Block::new(vec![
         stmt(StmtKind::Check {
             cond: e(
@@ -838,6 +840,8 @@ pub fn full_program() -> Program {
                 len_max: 32,
             }),
             confirm: Some(Confirm { duration: e(ExprKind::Duration(5_000_000), t_dur_plain), site: SiteId(0) }),
+            // `within 50 ms` (9.4.5); Formatversion 6 traegt das Feld.
+            within: Some(e(ExprKind::Duration(50_000_000), t_dur_plain)),
             target: Some(Target::State(s_safe)),
             req: Some("SR-12".into()),
             kind: CheckKind::Check,
@@ -1044,6 +1048,7 @@ pub fn full_program() -> Program {
             cond: e(ExprKind::Bool(true), t_bool),
             message: None,
             confirm: None,
+            within: None,
             target: None,
             req: None,
             kind: CheckKind::Expect,

@@ -131,6 +131,7 @@ impl Rig {
                 cond,
                 message: Some(Format::text(msg)),
                 confirm: None,
+                within: None,
                 target: None,
                 req: None,
                 kind: CheckKind::Check,

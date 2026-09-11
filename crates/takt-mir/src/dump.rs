@@ -259,7 +259,7 @@ impl Dumper<'_> {
     fn stmt(&self, s: &Stmt) -> String {
         match &s.kind {
             StmtKind::Assign { target, value } => format!("{} = {}", self.place(target), self.expr(value)),
-            StmtKind::Check { cond, message, confirm, target, req, kind } => {
+            StmtKind::Check { cond, message, confirm, within, target, req, kind } => {
                 let mut t =
                     format!("{} {}", if *kind == CheckKind::Check { "check" } else { "expect" }, self.expr(cond));
                 if let Some(m) = message {
@@ -267,6 +267,9 @@ impl Dumper<'_> {
                 }
                 if let Some(c) = confirm {
                     write!(t, " for {}", self.expr(&c.duration)).expect("String");
+                }
+                if let Some(w) = within {
+                    write!(t, " within {}", self.expr(w)).expect("String");
                 }
                 if let Some(x) = target {
                     write!(t, " -> {}", self.target(*x)).expect("String");

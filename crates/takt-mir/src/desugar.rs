@@ -294,7 +294,15 @@ impl<'a> Builder<'a> {
             span,
         });
         let check = Stmt::new(
-            StmtKind::Check { cond, message, confirm: None, target: None, req: None, kind: CheckKind::Expect },
+            StmtKind::Check {
+                cond,
+                message,
+                confirm: None,
+                within: None,
+                target: None,
+                req: None,
+                kind: CheckKind::Expect,
+            },
             span,
         );
         let clear = Stmt::new(StmtKind::Assign { target: Place::Var(flag), value: self.lit_bool(false, span) }, span);

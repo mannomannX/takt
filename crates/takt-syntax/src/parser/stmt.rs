@@ -285,9 +285,10 @@ impl<'t, 's> Parser<'t, 's> {
         let cond = self.parse_expr()?;
         let message = if self.eat_op(",") { Some(self.string()?) } else { None };
         let confirm = if self.eat_kw("for") { Some(self.parse_duration_expr()?) } else { None };
+        let within = if self.eat_word("within") { Some(self.parse_duration_expr()?) } else { None };
         let target = if self.at_op("->") { Some(self.parse_goto_stmt()?) } else { None };
         let req = if self.eat_word("req") { Some(self.string()?) } else { None };
-        Ok(StmtKind::Check { cond, message, confirm, target, req })
+        Ok(StmtKind::Check { cond, message, confirm, within, target, req })
     }
 
     /// `alert_stmt`

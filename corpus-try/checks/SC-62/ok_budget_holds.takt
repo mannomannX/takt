@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-62: das deklarierte Budget deckt den gerechneten Speicher.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m with budget = {ram = 4096}:
+    var a : int in 0..99 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            a = 1
+            n = a

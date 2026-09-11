@@ -1,0 +1,37 @@
+# Safe-State-Latenz (9.4.5) und Maschinenbudget (7.2).
+#
+# Die Latenz ist die Zahl, die im Safety Case zaehlt: von "Bedingung
+# verletzt" bis "Aktor sicher". Sie folgt aus Periode, Bestaetigungszeit
+# und Fault-Wald — alles Groessen, die der Compiler ohnehin hat.
+
+system:
+    language      = 1
+    tick          = 1 ms
+    output_timing = asap
+
+input  tank_p : float[bar] in 0..400 bar @ hw("i/p") with max_rate = 1000 Hz
+output valve  : bool                     @ hw("o/v") with safe = false
+output lamp   : bool                     @ hw("o/l") with safe = false
+
+param LIMIT : float[bar] = 300.0 bar
+
+# `within` fordert eine Latenz und wird gegen die gerechnete Tickzahl
+# geprueft (Pruefung 61); `budget` bindet den Speicher lokal (Pruefung 62).
+machine press every 5 ms with budget = {ram = 512}:
+    fault -> SAFE
+
+    var zyklen : int in 0..1_000_000 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            check tank_p < LIMIT, "Ueberdruck" for 20 ms within 100 ms
+            valve = true
+            lamp = false
+        when zyklen > 999_999: -> SAFE
+
+    state SAFE:
+        enter:
+            valve = false
+            lamp = true

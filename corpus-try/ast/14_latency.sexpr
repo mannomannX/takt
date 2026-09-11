@@ -1,0 +1,22 @@
+(system
+  (language 1)
+  (tick 1ms)
+  (output_timing asap))
+(input tank_p :float[bar] in 0..400[bar] @hw("i/p") max_rate=1000[Hz])
+(output valve :bool @hw("o/v") safe=false)
+(output lamp :bool @hw("o/l") safe=false)
+(param LIMIT :float[bar] 300.0[bar])
+(machine press every=5ms budget={ram=512}
+  (fault -> SAFE)
+  (var zyklen :int in 0..1_000_000 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (check (< tank_p LIMIT) "Ueberdruck" for=20ms within=100ms)
+      (= valve true)
+      (= lamp false))
+    (when (> zyklen 999_999) -> SAFE))
+  (state SAFE
+    (enter
+      (= valve false)
+      (= lamp true))))

@@ -101,6 +101,7 @@ impl Lowerer<'_> {
         m.span = decl.span;
         let (_, meta) = self.attrs(&decl.attrs, self.tys.bool, None, decl.span);
         m.meta = meta;
+        m.declared_budget = self.declared_budget(&decl.attrs);
         let tick = self.program.config.tick;
         if let Some(every) = &decl.every {
             if every.ns <= 0 {

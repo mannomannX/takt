@@ -491,15 +491,46 @@ impl<'t, 's> Parser<'t, 's> {
             "display" => AttrKind::Display(self.parse_unit_expr(false)?),
             "group" => AttrKind::Group(self.string()?),
             "doc" => AttrKind::Doc(self.string()?),
+            "budget" => AttrKind::Budget(self.parse_budget()?),
             other => {
                 return Err(self.error_at(
                     name_tok,
                     format!("unbekanntes Attribut `{other}`"),
-                    Some("Attribute: safe max_age rate max_rate capacity framing overflow wake jitter max_slew debounce capacity_bytes expect_len irreversible label display group doc"),
+                    Some("Attribute: safe max_age rate max_rate capacity framing overflow wake jitter max_slew debounce capacity_bytes expect_len irreversible label display group doc budget"),
                 ));
             }
         };
         Ok(Attr { kind, span: self.span_from(start) })
+    }
+
+    /// `budget = {ram = 2 KiB, wcet = 20 us}` (7.2).
+    fn parse_budget(&mut self) -> PResult<Vec<BudgetItem>> {
+        self.expect_op("{")?;
+        let mut out = Vec::new();
+        loop {
+            out.push(self.parse_budget_item()?);
+            if !self.eat_op(",") {
+                break;
+            }
+        }
+        self.expect_op("}")?;
+        Ok(out)
+    }
+
+    /// `budget_item`
+    fn parse_budget_item(&mut self) -> PResult<BudgetItem> {
+        let start = self.pos;
+        let tok = self.tok();
+        let kind = if self.eat_word("ram") {
+            BudgetKind::Ram
+        } else if self.eat_word("wcet") {
+            BudgetKind::Wcet
+        } else {
+            return Err(self.error_at(tok, "erwartet `ram` oder `wcet`".to_string(), None));
+        };
+        self.expect_op("=")?;
+        let value = self.parse_const_expr()?;
+        Ok(BudgetItem { kind, value, span: self.span_from(start) })
     }
 
     fn parse_bool_word(&mut self) -> PResult<bool> {

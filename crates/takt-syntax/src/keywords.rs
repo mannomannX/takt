@@ -123,6 +123,7 @@ pub const CONTEXTUAL: &[&str] = &[
     "bits",
     "bool",
     "boundary",
+    "budget",
     "bytes",
     "call",
     "capacity",
@@ -186,6 +187,7 @@ pub const CONTEXTUAL: &[&str] = &[
     "overflow",
     "phase",
     "pod",
+    "ram",
     "rate",
     "raw",
     "req",
@@ -209,6 +211,8 @@ pub const CONTEXTUAL: &[&str] = &[
     "u8",
     "vec",
     "wake",
+    "wcet",
+    "within",
     "word",
 ];
 

@@ -65,6 +65,10 @@ pub const SC41: &str = "SC-41";
 pub const SC48: &str = "SC-48";
 /// Laengenpraefixierte Felder (3.7).
 pub const SC37: &str = "SC-37";
+/// `within d`: die geforderte Safe-State-Latenz wird eingehalten (9.4.5).
+pub const SC61: &str = "SC-61";
+/// `budget = {ram = …}`: das deklarierte Budget wird eingehalten (7.2).
+pub const SC62: &str = "SC-62";
 /// Lints zu Matrizen und  (3.11, 8.6).
 pub const SC42: &str = "SC-42";
 /// Ungenutzte Channels.
@@ -85,6 +89,8 @@ impl Lowerer<'_> {
         self.performance_lints();
         self.check_writers();
         self.check_fault_forest();
+        self.check_latency();
+        self.check_declared_budget();
         self.check_reachability();
         self.check_termination();
         self.check_simulation();
@@ -328,6 +334,88 @@ impl Lowerer<'_> {
                     .with_suggestion("mit `in a..b` deklarieren; der Compiler rechnet dann in 32 Bit (3.4)"),
                 );
             });
+        }
+        self.diags.extend(diags);
+    }
+
+    /// Pruefung 61 (9.4.5): `check c, "…" within d` haelt seine Zusage.
+    ///
+    /// Verglichen wird in **Ticks**, nicht in Nanosekunden: `within 5 ms`
+    /// bei `T0 = 1 ms` heisst „in hoechstens fuenf Ticks". Die Tickzahl
+    /// folgt aus Periode, Bestaetigungszeit und Fault-Wald und ist exakt;
+    /// die Umrechnung in Zeit setzt voraus, dass jeder Tick eingehalten
+    /// wird, und das prueft erst die Schedulability (7.2). Die Regel
+    /// gewinnt dadurch spaeter an Aussage, ohne sich zu aendern.
+    ///
+    /// Die Meldung nennt die Aufschluesselung, weil die Zahl sonst nicht
+    /// zu verbessern ist: Wer nur „zu langsam" liest, weiss nicht, ob die
+    /// Periode, die Bestaetigungszeit oder der Fault-Wald schuld ist.
+    fn check_latency(&mut self) {
+        let lat = takt_mir::analysis::latency::latency(&self.program);
+        let tick = self.program.config.tick;
+        if tick <= 0 {
+            return;
+        }
+        let mut diags = Vec::new();
+        for site in &lat.sites {
+            let Some(want_ns) = site.within else { continue };
+            // Aufrunden: Eine Forderung von 2,5 Ticks ist mit zwei Ticks
+            // erfuellt — der dritte laeuft erst nach der Frist an.
+            let want_ticks = want_ns / tick;
+            let have = site.ticks() + lat.commit;
+            if i128::from(have) > i128::from(want_ticks) {
+                let m = &self.program.machines[site.machine.index()];
+                diags.push(
+                    Diagnostic::error(
+                        SC61,
+                        site.span,
+                        format!(
+                            "`within {}` nicht eingehalten: {} Ticks statt {want_ticks} \
+                             ({} erkennen + {} bestaetigen + {} Fault-Pfad + {} Commit)",
+                            takt_mir::dump::duration(want_ns),
+                            have,
+                            site.detect,
+                            site.confirm,
+                            site.fault,
+                            lat.commit,
+                        ),
+                    )
+                    .with_suggestion(format!(
+                        "Periode von `{}` senken, Bestaetigungszeit kuerzen oder den Fault-Wald flacher machen (5.3)",
+                        m.name
+                    )),
+                );
+            }
+        }
+        self.diags.extend(diags);
+    }
+
+    /// Pruefung 62 (7.2): `with budget = {ram = …}` wird eingehalten.
+    ///
+    /// Ohne Deklaration prueft erst die Integration, ob die Summe passt —
+    /// in einem Projekt mit mehreren Teams faellt die Ueberschreitung dann
+    /// auf, wenn sie teuer ist. Die Deklaration macht daraus einen lokalen,
+    /// sofortigen Fehler und damit einen Vertrag zwischen Teams.
+    fn check_declared_budget(&mut self) {
+        let mut diags = Vec::new();
+        for m in &self.program.machines {
+            let Some(b) = m.declared_budget else { continue };
+            let Some(want) = b.ram else { continue };
+            let have = takt_mir::analysis::size::machine_bytes(&self.program, m);
+            if have > want {
+                diags.push(
+                    Diagnostic::error(
+                        SC62,
+                        b.span,
+                        format!("`{}` braucht {have} Byte, deklariert sind {want}", m.name),
+                    )
+                    .with_suggestion(
+                        "Budget anheben, Variablen verkleinern oder Zustaende zusammenlegen (das Overlay teilt \
+                         den Speicher exklusiver Zustaende, 11.2)"
+                            .to_string(),
+                    ),
+                );
+            }
         }
         self.diags.extend(diags);
     }
@@ -825,18 +913,10 @@ fn output_of(p: &Place) -> Option<ChannelId> {
     }
 }
 
-/// Fault-Ziel φ(s) nach 5.3: explizit, sonst geerbt vom Elternzustand, sonst
-/// von der Maschine — mit der Ausnahme, dass der als Fault-Ziel der Maschine
-/// deklarierte Zustand nicht von ihr erbt, sondern `FAULTED` bekommt.
+/// Fault-Ziel φ(s) nach 5.3. Die Rechnung steht in `takt-mir`, weil sie
+/// reine MIR-Logik ist und die Latenzanalyse (9.4.5) sie ebenfalls braucht.
 pub fn fault_target_of(m: &Machine, s: StateId) -> FaultTarget {
-    let mut cur = Some(s);
-    while let Some(id) = cur {
-        if let Some(t) = m.states[id.index()].fault_target {
-            return t;
-        }
-        cur = m.states[id.index()].parent;
-    }
-    if m.fault_target == FaultTarget::State(s) { FaultTarget::Faulted } else { m.fault_target }
+    m.fault_target_of(s)
 }
 
 fn collect_targets(m: &Machine, s: StateId, out: &mut Vec<StateId>) {
