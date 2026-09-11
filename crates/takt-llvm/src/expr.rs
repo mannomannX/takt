@@ -97,6 +97,14 @@ pub trait Vars {
 
 /// Senkt einen Ausdruck und liefert seinen Operanden.
 pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
+    // `interp` steht vor der Typbestimmung: Sein erstes Argument ist eine
+    // Tabelle, und `table<A, B>` hat keine Darstellung als Wert — die
+    // Stuetzstellen gehen unmittelbar in die Rechnung (3.9). Den Typ zu
+    // verlangen hiesse, eine Darstellung zu fordern, die niemand braucht.
+    if let ExprKind::Intrinsic { op: Intrinsic::Interp, args } = &e.kind {
+        let want = ty::lower(e.ty, p).ok_or(NotYet { what: "Typ" })?;
+        return interp(args, &want, p, m, vars);
+    }
     let want = ty::lower(e.ty, p).ok_or(NotYet { what: "Typ" })?;
     match &e.kind {
         ExprKind::Bool(b) => Ok(Lowered { value: i32::from(*b).to_string(), ty: want }),
@@ -122,6 +130,8 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         // Ein Array-Literal wird wie ein Record gebaut: `insertvalue` je
         // Element aus `undef` heraus (3.9).
         ExprKind::Array(items) => record(items, &want, p, m, vars),
+        // Eine Stuetzstelle ist ein Paar (3.9); sie steht nur in einer
+        // Tabelle, und `interp` liest sie dort unmittelbar.
         ExprKind::Call { callee, args } => call(*callee, args, &want, p, m, vars),
         ExprKind::Intrinsic { op, args } => intrinsic(*op, args, &want, p, m, vars),
         ExprKind::Decode { record, bytes } => decode(*record, bytes, &want, p, m, vars),
@@ -495,6 +505,11 @@ fn intrinsic(
             m.needs_intrinsic(&format!("{} @llvm.{name}.{}({}, {})", x.ty, x.ty, x.ty, x.ty));
             m.inst(&format!("call {} @llvm.{name}.{}({} {}, {} {})", x.ty, x.ty, x.ty, x.value, y.ty, y.value))
         }
+        // 3.9: stueckweise linear, an den Raendern geklemmt, total. Die
+        // Stuetzstellen stehen als Literal am Aufruf (der Compiler faltet
+        // die Konstante dorthin), also ist ihre Zahl bekannt und die
+        // Suche abgerollt — keine Schleife, keine Schranke zu pruefen.
+        Intrinsic::Interp => return interp(args, want, p, m, vars),
         _ => return Err(NotYet { what: "Primitive" }),
     };
     Ok(Lowered { value: value.to_string(), ty: want.clone() })
@@ -565,6 +580,68 @@ fn slice(
     m.void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst_data}, ptr {at}, i64 {bytes}, i1 false)"));
     let v = m.inst(&format!("load {want}, ptr {out}"));
     Ok(Lowered { value: v.to_string(), ty: want.clone() })
+}
+
+/// `interp(t, x)` (3.9): stueckweise lineare Interpolation.
+///
+/// **Die Stuetzstellen stehen als Literal am Aufruf.** `table<A, B>` ist
+/// immer eine Konstante (3.9), und der Compiler faltet sie an die
+/// Aufrufstelle — ihre Zahl ist damit bekannt, und die Suche wird
+/// abgerollt. Das ist nicht nur schneller als eine Schleife: 4.1 verlangt
+/// eine Schranke, und die abgerollte Form *ist* die Schranke.
+///
+/// Die Rechnung ist die des Interpreters, Operation fuer Operation:
+/// `y0 + (y1 - y0) * (x - x0) / (x1 - x0)`, jede einzeln gerundet. Eine
+/// andere Klammerung waere mathematisch gleich und in Fliesskomma eine
+/// andere Zahl (Satz 9.4.4).
+///
+/// An den Raendern wird geklemmt, nicht extrapoliert — das haelt die
+/// Funktion total (4.1) und vermeidet, dass ein Wert ausserhalb der
+/// Kennlinie eine Zahl erfindet.
+fn interp(args: &[Expr], want: &LlvmType, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
+    let table = args.first().ok_or(NotYet { what: "`interp` ohne Tabelle" })?;
+    let ExprKind::Array(points) = &table.kind else {
+        return Err(NotYet { what: "`interp` ueber eine berechnete Tabelle" });
+    };
+    if points.len() < 2 {
+        return Err(NotYet { what: "`interp` ueber weniger als zwei Stuetzstellen" });
+    }
+    let x = lower(args.get(1).ok_or(NotYet { what: "`interp` ohne Argument" })?, p, m, vars)?;
+
+    // Die Stuetzstellen einzeln senken; sie sind Literale, belegen also
+    // kein Register.
+    let mut xs = Vec::with_capacity(points.len());
+    let mut ys = Vec::with_capacity(points.len());
+    for pt in points {
+        let ExprKind::Tuple(a, b) = &pt.kind else { return Err(NotYet { what: "Stuetzstelle" }) };
+        xs.push(lower(a, p, m, vars)?);
+        ys.push(lower(b, p, m, vars)?);
+    }
+
+    // Von hinten nach vorn: Das Ergebnis ist der geklemmte rechte Rand,
+    // und jede Stuetzstelle davor ueberschreibt es, wenn `x` in ihr
+    // Segment faellt. So entsteht eine Kette von `select`, die den ersten
+    // Treffer von links gewinnen laesst — dieselbe Reihenfolge wie die
+    // Schleife des Interpreters, ohne Verzweigung.
+    let mut result = ys.last().expect("nicht leer").value.clone();
+    for i in (0..points.len() - 1).rev() {
+        let (x0, x1) = (&xs[i], &xs[i + 1]);
+        let (y0, y1) = (&ys[i], &ys[i + 1]);
+        let dy = m.inst(&format!("fsub {want} {}, {}", y1.value, y0.value));
+        let dx = m.inst(&format!("fsub {want} {}, {}", x1.value, x0.value));
+        let dxi = m.inst(&format!("fsub {want} {}, {}", x.value, x0.value));
+        let scaled = m.inst(&format!("fmul {want} {dy}, {dxi}"));
+        let ratio = m.inst(&format!("fdiv {want} {scaled}, {dx}"));
+        let segment = m.inst(&format!("fadd {want} {}, {ratio}", y0.value));
+        // `x <= x1` waehlt dieses Segment; weiter links liegende
+        // ueberschreiben es in der naechsten Runde.
+        let in_segment = m.inst(&format!("fcmp ole {want} {}, {}", x.value, x1.value));
+        result = m.inst(&format!("select i1 {in_segment}, {want} {segment}, {want} {result}")).to_string();
+    }
+    // Links vom ersten Stuetzpunkt wird geklemmt (3.9).
+    let below = m.inst(&format!("fcmp ole {want} {}, {}", x.value, xs[0].value));
+    let clamped = m.inst(&format!("select i1 {below}, {want} {}, {want} {result}", ys[0].value));
+    Ok(Lowered { value: clamped.to_string(), ty: want.clone() })
 }
 
 /// Ein Index (3.9).

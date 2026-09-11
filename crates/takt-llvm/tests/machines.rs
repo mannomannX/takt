@@ -56,17 +56,10 @@ fn ir_of(p: &Program) -> String {
 /// Die Korpusprogramme, deren Maschinen der Codegen heute vollstaendig
 /// senkt. Die Liste waechst mit ihm; sie steht hier, damit ein Rueckschritt
 /// auffaellt.
-const VOLLSTAENDIG: [&str; 9] = [
-    "12_bitfields.takt",
-    "13_protocol_analysis.takt",
-    "18_blocks.takt",
-    "01_minimal.takt",
-    "03_sequences_and_faults.takt",
-    "14_latency.takt",
-    "15_quality.takt",
-    "16_timing.takt",
-    "17_nested.takt",
-];
+/// Alle Korpusdateien, die fehlerfrei zu MIR uebersetzen — der Codegen
+/// senkt sie vollstaendig. Die Liste *ist* `UEBERSETZBAR`, und dass sie
+/// es ist, hat den Codegen fertig gemacht.
+const VOLLSTAENDIG: [&str; 11] = UEBERSETZBAR;
 
 /// Alle Korpusdateien, die fehlerfrei zu MIR uebersetzen — auch die, deren
 /// Maschinen der Codegen nur teilweise senkt. Was er *erzeugt*, muss
@@ -900,6 +893,59 @@ fn a_result_matches_on_its_error_field() {
     assert!(
         ir.contains("icmp eq i32"),
         "kein Vergleich der Diskriminante:
+{ir}"
+    );
+}
+
+// --- Kennlinien (3.9) ----------------------------------------------------
+
+/// 3.9: `interp` ist stueckweise linear und an den Raendern geklemmt.
+/// Geklemmt heisst: Links vom ersten und rechts vom letzten Stuetzpunkt
+/// steht dessen Wert, nicht eine Extrapolation — das haelt die Funktion
+/// total (4.1).
+#[test]
+fn interp_clamps_at_both_ends() {
+    let p = corpus("02_units_and_data.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("fcmp ole"),
+        "kein Vergleich gegen die Stuetzstellen:
+{ir}"
+    );
+    assert!(
+        ir.contains("select i1"),
+        "die Segmente werden nicht ausgewaehlt:
+{ir}"
+    );
+}
+
+/// Die Stuetzstellen stehen als Literal am Aufruf, also ist die Suche
+/// abgerollt — keine Schleife, keine Schranke zu pruefen (4.1).
+#[test]
+fn interp_unrolls_the_search() {
+    let p = corpus("02_units_and_data.takt");
+    let ir = ir_of(&p);
+    // Vier Stuetzstellen ergeben drei Segmente, jedes mit seiner
+    // Steigung: `fsub`, `fsub`, `fsub`, `fmul`, `fdiv`, `fadd`.
+    assert!(
+        ir.matches("fdiv").count() >= 3,
+        "die Segmente sind nicht abgerollt:
+{ir}"
+    );
+}
+
+/// Die Rechnung ist die des Interpreters, Operation fuer Operation:
+/// `y0 + (y1 - y0) * (x - x0) / (x1 - x0)`. Eine andere Klammerung waere
+/// mathematisch gleich und in Fliesskomma eine andere Zahl (9.4.4).
+#[test]
+fn interp_keeps_the_operation_order_of_the_interpreter() {
+    let p = corpus("02_units_and_data.takt");
+    let ir = ir_of(&p);
+    let at = ir.find("fdiv").expect("Division");
+    let vorher = &ir[..at];
+    assert!(
+        vorher.contains("fmul"),
+        "die Multiplikation steht nicht vor der Division:
 {ir}"
     );
 }

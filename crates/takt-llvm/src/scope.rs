@@ -256,12 +256,16 @@ fn expr(e: &Expr, c: &mut Coverage) {
             }
         }
         ExprKind::Intrinsic { op, args } => {
-            // Die Integer-Primitiven sind vollstaendig (4.1); die
-            // Fliesskomma-Primitiven ruft `libtaktm`, und `interp`
-            // braucht `table<A, B>`.
-            let ok = !matches!(op, takt_mir::expr::Intrinsic::Interp);
-            c.note("Primitive", ok);
-            for a in args {
+            c.note("Primitive", true);
+            // `interp` verbraucht seine Tabelle unmittelbar (3.9): Die
+            // Stuetzstellen gehen in die Rechnung, nicht durch die
+            // Typabbildung. Sie hier mitzuzaehlen wuerde eine Luecke
+            // melden, die es nicht gibt.
+            let tabelle = *op == takt_mir::expr::Intrinsic::Interp;
+            for (i, a) in args.iter().enumerate() {
+                if tabelle && i == 0 {
+                    continue;
+                }
                 expr(a, c);
             }
         }
@@ -308,10 +312,10 @@ fn expr(e: &Expr, c: &mut Coverage) {
             expr(to, c);
         }
         ExprKind::NativeCall { .. } => c.note("native Funktion", false),
-        // Eine Stuetzstelle gehoert zu `table<A, B>`; deren Typ traegt
-        // keine Laenge, was zugleich eine Luecke fuer `takt size` ist
-        // (11.5). Beides gehoert zusammen geloest.
-        ExprKind::Tuple(..) => c.note("Stuetzstelle einer Tabelle", false),
+        // Eine Stuetzstelle steht nur in einer Tabelle, und `interp`
+        // liest sie dort unmittelbar (3.9) — ausserhalb kommt sie nicht
+        // vor.
+        ExprKind::Tuple(..) => c.note("Stuetzstelle einer Tabelle", true),
         _ => c.note("weiterer Ausdruck", false),
     }
 }
