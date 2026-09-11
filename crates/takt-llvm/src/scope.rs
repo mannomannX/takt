@@ -126,6 +126,17 @@ fn stmt(s: &Stmt, c: &mut Coverage) {
             block(body, c);
         }
         StmtKind::Abort { .. } => c.note("`abort`", true),
+        StmtKind::MethodCall { method, args, .. } => {
+            // `step`/`reset` einer Blockinstanz (5.7) und die
+            // Sammlungsmethoden (3.9) senkt der Codegen; `insert` und
+            // `remove` gehoeren zu `map` und damit zu v1.1.
+            let ok = !matches!(takt_mir::stmt::Method::Insert, m2 if *method == m2)
+                && !matches!(takt_mir::stmt::Method::Remove, m2 if *method == m2);
+            c.note("Methode", ok);
+            for a in args {
+                expr(a, c);
+            }
+        }
         StmtKind::Observe(o) => {
             let ok = matches!(
                 o,
@@ -165,7 +176,7 @@ pub fn stmt_name(s: &StmtKind) -> &'static str {
         // (9.3). Die MIR fasst sie darum zusammen.
         StmtKind::Observe(_) => "Beobachtung (`alert`, `log`, `measure`, ...)",
         StmtKind::Arm { .. } => "`arm`/`disarm`",
-        StmtKind::MethodCall { .. } => "Blockmethode",
+        StmtKind::MethodCall { .. } => "Methode",
         _ => "weitere Anweisung",
     }
 }

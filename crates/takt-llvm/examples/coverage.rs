@@ -44,9 +44,21 @@ fn main() {
         let mut m = Module::new("x", "x86_64-pc-windows-msvc");
         takt_llvm::abi::Abi::declare(&mut m);
         let mut alle = true;
-        // Reine Funktionen zuerst: Die Maschinen rufen sie (4.4).
-        for f in &p.fns {
-            let _ = takt_llvm::fns::function(f, &p, &mut m);
+        for b in &p.blocks {
+            let Some(inst) = takt_llvm::block::instance_of(b, &p) else { continue };
+            takt_llvm::block::declare(b, &inst, &mut m);
+            for fid in b.step.iter().chain(&b.methods) {
+                let Some(f) = p.fns.get(fid.index()) else { continue };
+                let _ = takt_llvm::fns::block_method(b, f, &p, &mut m);
+            }
+        }
+        // Reine Funktionen: Die Maschinen rufen sie (4.4). Die Methoden
+        // der Bloecke stehen auch in `p.fns`, sind aber schon geschrieben.
+        let methoden: Vec<_> = p.blocks.iter().flat_map(|b| b.step.iter().chain(&b.methods).copied()).collect();
+        for (i, f) in p.fns.iter().enumerate() {
+            if !methoden.contains(&takt_mir::FnId(i as u32)) {
+                let _ = takt_llvm::fns::function(f, &p, &mut m);
+            }
         }
         for mm in &p.machines {
             maschinen += 1;

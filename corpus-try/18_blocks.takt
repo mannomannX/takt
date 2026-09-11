@@ -1,0 +1,31 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Ein Block haelt Zustand ueber den Tick hinaus (5.7); `step` laeuft
+# hoechstens einmal je Aktivierung.
+block counter(limit: int in 1..1000):
+    var n : int in 0..1000 = 0
+    step(up: bool) -> int:
+        if up and n < limit:
+            n = n + 1
+        return n
+
+command tick_up
+command clear
+
+output shown : int in 0..1000 @ hw("ui/n") with safe = 0
+
+machine gauge:
+    var c = counter(limit = 100)
+
+    initial RUN
+    state RUN:
+        loop:
+            shown = c.step(tick_up)
+        when clear: -> RESET
+
+    state RESET:
+        enter:
+            c.reset()
+        when tick_up: -> RUN

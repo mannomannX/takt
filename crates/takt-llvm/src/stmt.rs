@@ -221,9 +221,15 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
 /// Kostenrechnung (9.4.3) nicht moeglich. Der Zaehler liegt in einem
 /// Slot wie jede andere lokale Variable; `mem2reg` macht daraus ein
 /// Register, wenn er sich nicht entzieht.
-fn fn_for(var: takt_mir::VarId, count: &Expr, body: &Block, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> {
-    let n = lower_expr(count, ctx.program, m, &ctx.locals)?;
-    let (ptr, ty) = ctx.locals.slot(var).ok_or(NotYet { what: "Schleifenvariable" })?;
+fn fn_for<V: Slots>(
+    var: takt_mir::VarId,
+    count: &Expr,
+    body: &Block,
+    ctx: &mut FnCtx<'_, V>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let n = lower_expr(count, ctx.program, m, &ctx.vars)?;
+    let (ptr, ty) = ctx.vars.slot(var, m).ok_or(NotYet { what: "Schleifenvariable" })?;
     m.void_inst(&format!("store {ty} 0, ptr {ptr}"));
     let k = ctx.next_label();
     let (kopf, rumpf, ende) = (format!("fuer{k}"), format!("fuer{k}_rumpf"), format!("fuer{k}_ende"));
@@ -405,6 +411,13 @@ fn method_call(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
+    // 5.7: `step` und `reset` einer Blockinstanz. Der Empfaenger ist die
+    // Instanz selbst; sie liegt im Zustands-Struct der Maschine.
+    if let Place::Var(id) = receiver
+        && let Some(block) = crate::machine::instance_block(ctx.machine, *id)
+    {
+        return block_method_call(target, *id, block, method, args, ctx, m);
+    }
     if !collection::is_collection_method(method) {
         return Err(collection::unsupported(method));
     }
@@ -443,18 +456,30 @@ fn method_call(
 /// Variablen sind Locals auf dem Stack, und ein `check` in ihr faultet
 /// den Aufrufer, nicht sie selbst. Darum ein eigener Kontext statt eines
 /// `Ctx` mit lauter leeren Feldern.
-pub struct FnCtx<'a> {
+pub struct FnCtx<'a, V: Slots> {
     /// Das Programm, fuer Typen und Konstanten.
     pub program: &'a Program,
-    /// Die lokalen Variablen.
-    pub locals: crate::fns::Locals,
+    /// Woher die Variablen kommen.
+    ///
+    /// Eine reine Funktion hat Locals auf dem Stack (4.4), eine
+    /// Blockmethode ihre Parameter dort und ihren Zustand in der Instanz
+    /// (5.7). Der Rumpf ist derselbe — nur die Quelle unterscheidet sie,
+    /// und ein zweiter Satz Senkungen waere eine zweite Gelegenheit, sie
+    /// verschieden zu senken.
+    pub vars: V,
     /// Zaehler fuer eindeutige Marken.
     pub labels: u32,
     /// Sprungziele der laufenden Schleifen; `break` nimmt das oberste.
     pub breaks: Vec<String>,
 }
 
-impl FnCtx<'_> {
+/// Eine Variablenquelle, in die auch geschrieben werden kann.
+pub trait Slots: Vars {
+    /// Der Speicherort einer Variablen.
+    fn slot(&self, id: takt_mir::VarId, m: &mut Module) -> Option<(Reg, LlvmType)>;
+}
+
+impl<V: Slots> FnCtx<'_, V> {
     /// Eine frische Nummer fuer eine Marke.
     pub fn next_label(&mut self) -> u32 {
         self.labels += 1;
@@ -463,7 +488,7 @@ impl FnCtx<'_> {
 }
 
 /// Senkt den Rumpf einer Funktion (4.4).
-pub fn fn_block(b: &Block, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> {
+pub fn fn_block<V: Slots>(b: &Block, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result<(), NotYet> {
     for s in &b.stmts {
         fn_stmt(s, ctx, m)?;
     }
@@ -475,22 +500,22 @@ pub fn fn_block(b: &Block, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), No
 /// Der Vorrat ist kleiner als in einer Maschine: Eine reine Funktion hat
 /// keine Zustaende, keine Outputs und keine Beobachtungen (4.4). Was sie
 /// hat, ist Rechnung, Verzweigung und `return`.
-fn fn_stmt(s: &Stmt, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> {
+fn fn_stmt<V: Slots>(s: &Stmt, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result<(), NotYet> {
     match &s.kind {
         StmtKind::Return(e) => {
-            let v = lower_expr(e, ctx.program, m, &ctx.locals)?;
+            let v = lower_expr(e, ctx.program, m, &ctx.vars)?;
             m.void_inst(&format!("ret {} {}", v.ty, v.value));
             Ok(())
         }
         StmtKind::Assign { target, value } => {
-            let v = lower_expr(value, ctx.program, m, &ctx.locals)?;
+            let v = lower_expr(value, ctx.program, m, &ctx.vars)?;
             let Place::Var(id) = target else { return Err(NotYet { what: "Zuweisungsziel in einer Funktion" }) };
-            let (ptr, _) = ctx.locals.slot(*id).ok_or(NotYet { what: "lokale Variable" })?;
+            let (ptr, _) = ctx.vars.slot(*id, m).ok_or(NotYet { what: "lokale Variable" })?;
             m.void_inst(&format!("store {} {}, ptr {ptr}", v.ty, v.value));
             Ok(())
         }
         StmtKind::If { cond, then, otherwise } => {
-            let c = lower_expr(cond, ctx.program, m, &ctx.locals)?;
+            let c = lower_expr(cond, ctx.program, m, &ctx.vars)?;
             let n = ctx.next_label();
             let (t, f, end) = (format!("dann{n}"), format!("sonst{n}"), format!("ende{n}"));
             m.void_inst(&format!("br i1 {}, label %{t}, label %{f}", c.value));
@@ -510,7 +535,7 @@ fn fn_stmt(s: &Stmt, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> 
                 return Err(collection::unsupported(*method));
             }
             let Place::Var(id) = receiver else { return Err(NotYet { what: "Empfaenger in einer Funktion" }) };
-            let (recv, ty) = ctx.locals.slot(*id).ok_or(NotYet { what: "lokale Sammlung" })?;
+            let (recv, ty) = ctx.vars.slot(*id, m).ok_or(NotYet { what: "lokale Sammlung" })?;
             let layout = collection::layout_of(&ty).ok_or(NotYet { what: "Methode auf einer Nicht-Sammlung" })?;
             let label = ctx.next_label();
             let ok = match method {
@@ -519,7 +544,7 @@ fn fn_stmt(s: &Stmt, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> 
                         args.first().ok_or(NotYet { what: "`push` ohne Argument" })?,
                         ctx.program,
                         m,
-                        &ctx.locals,
+                        &ctx.vars,
                     )?;
                     collection::push(recv, &layout, &v, label, m)
                 }
@@ -530,9 +555,9 @@ fn fn_stmt(s: &Stmt, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> 
                     // Scratch). LLVM hebt die `alloca` in den
                     // Eintrittsblock und entfernt sie, wo sie unnoetig ist.
                     let src_ptr = match src.kind {
-                        ExprKind::Var(sid) => ctx.locals.slot(sid).ok_or(NotYet { what: "Quelle" })?.0,
+                        ExprKind::Var(sid) => ctx.vars.slot(sid, m).ok_or(NotYet { what: "Quelle" })?.0,
                         _ => {
-                            let v = lower_expr(src, ctx.program, m, &ctx.locals)?;
+                            let v = lower_expr(src, ctx.program, m, &ctx.vars)?;
                             let tmp = m.inst(&format!("alloca {}", v.ty));
                             m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
                             tmp
@@ -543,7 +568,7 @@ fn fn_stmt(s: &Stmt, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> 
                 _ => collection::clear(recv, &layout, m),
             };
             if let Some(Place::Var(tid)) = target {
-                let (ptr, _) = ctx.locals.slot(*tid).ok_or(NotYet { what: "Ziel" })?;
+                let (ptr, _) = ctx.vars.slot(*tid, m).ok_or(NotYet { what: "Ziel" })?;
                 m.void_inst(&format!("store i1 {ok}, ptr {ptr}"));
             }
             Ok(())
@@ -561,4 +586,97 @@ fn fn_stmt(s: &Stmt, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> 
         }
         other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
+}
+
+/// `i.step(...)` oder `i.reset()` einer Blockinstanz (5.7).
+///
+/// 5.7: „Jede Instanz darf pro Aktivierungs-Tick hoechstens einmal `step`
+/// ausfuehren." Die Pruefung ist statisch (Pruefung 52), aber das Flag im
+/// Zustand ist die Absicherung: Ein Aufruf in zwei Zweigen desselben
+/// Ticks ist statisch nicht immer auszuschliessen, und ein Filter, der
+/// zweimal laeuft, hat einen Tick uebersprungen, ohne dass es jemand
+/// saehe.
+fn block_method_call(
+    target: Option<&Place>,
+    var: takt_mir::VarId,
+    block: takt_mir::BlockId,
+    method: Method,
+    args: &[Expr],
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let def = ctx.program.blocks.get(block.index()).ok_or(NotYet { what: "Block" })?;
+    let inst = crate::block::instance_of(def, ctx.program).ok_or(NotYet { what: "Blockinstanz" })?;
+    let ptr = ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Instanz im Zustand" })?;
+    let mut ops = vec![format!("ptr {ptr}")];
+    let vars = ctx.vars();
+    for a in args {
+        let v = lower_expr(a, ctx.program, m, &vars)?;
+        ops.push(format!("{} {}", v.ty, v.value));
+    }
+    let (_, fid) = match method {
+        Method::Step => ("step", def.step.ok_or(NotYet { what: "Block ohne `step`" })?),
+        Method::Reset => {
+            // `reset()` stellt den Anfangszustand her; er steht in den
+            // Initialwerten der Zustandsvariablen (5.7). Der Codegen
+            // schreibt sie unmittelbar, statt eine Methode zu rufen, die
+            // es nicht gibt.
+            return reset_instance(ptr, def, &inst, ctx, m);
+        }
+        _ => return Err(collection::unsupported(method)),
+    };
+    let f = ctx.program.fns.get(fid.index()).ok_or(NotYet { what: "Methode" })?;
+    let ret = match f.ret {
+        Some(t) => ty::lower(t, ctx.program).ok_or(NotYet { what: "Rueckgabetyp" })?,
+        None => LlvmType::Void,
+    };
+    // 5.7: hoechstens einmal je Aktivierung. Der Zweig ueberspringt den
+    // zweiten Aufruf, statt ihn zu wiederholen.
+    let label = ctx.next_label();
+    let flag = m.inst(&format!(
+        "getelementptr inbounds {}, ptr {ptr}, i32 0, i32 {}",
+        LlvmType::Struct(inst.fields.clone()),
+        inst.stepped()
+    ));
+    let done = m.inst(&format!("load i1, ptr {flag}"));
+    let (weiter, ende) = (format!("step{label}"), format!("step{label}_ende"));
+    m.void_inst(&format!("br i1 {done}, label %{ende}, label %{weiter}"));
+    m.label(&weiter);
+    m.void_inst(&format!("store i1 true, ptr {flag}"));
+    let symbol = crate::block::method_symbol(def, &f.name);
+    let call = if ret == LlvmType::Void {
+        m.void_inst(&format!("call void @{symbol}({})", ops.join(", ")));
+        None
+    } else {
+        Some(m.inst(&format!("call {ret} @{symbol}({})", ops.join(", "))))
+    };
+    if let (Some(t), Some(v)) = (target, call) {
+        let (dst, _) = place(t, ctx, m)?;
+        m.void_inst(&format!("store {ret} {v}, ptr {dst}"));
+    }
+    m.void_inst(&format!("br label %{ende}"));
+    m.label(&ende);
+    Ok(())
+}
+
+/// `i.reset()` (5.7): die Zustandsvariablen auf ihre Initialwerte.
+fn reset_instance(
+    ptr: Reg,
+    def: &takt_mir::fns::BlockDef,
+    inst: &crate::block::Instance,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let struct_ty = LlvmType::Struct(inst.fields.clone());
+    let vars = ctx.vars();
+    for (i, v) in def.state_vars.iter().enumerate() {
+        let init = v.init.as_ref().ok_or(NotYet { what: "Zustandsvariable ohne Initialwert" })?;
+        let value = lower_expr(init, ctx.program, m, &vars)?;
+        let at = m.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {i}"));
+        m.void_inst(&format!("store {} {}, ptr {at}", value.ty, value.value));
+    }
+    // Das Flag geht mit zurueck: Nach `reset()` darf `step` wieder laufen.
+    let flag = m.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {}", inst.stepped()));
+    m.void_inst(&format!("store i1 false, ptr {flag}"));
+    Ok(())
 }

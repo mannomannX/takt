@@ -108,7 +108,14 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
         role: Role::TimeInState,
     });
     for (i, v) in m.vars.iter().enumerate() {
-        fields.push(Field { name: format!("var{i}_{}", v.name), ty: ty::lower(v.ty, p)?, role: Role::Var });
+        // Eine Blockinstanz traegt ihren Zustand im Struct der Maschine
+        // (5.7); ihr Typ steht nicht im Typsystem, sondern in
+        // `Layout::block_instances`.
+        let ty = match instance_block(m, takt_mir::VarId(i as u32)) {
+            Some(b) => crate::block::instance_of(p.blocks.get(b.index())?, p)?.llvm(),
+            None => ty::lower(v.ty, p)?,
+        };
+        fields.push(Field { name: format!("var{i}_{}", v.name), ty, role: Role::Var });
     }
     for (i, _) in m.layout.every_counters.iter().enumerate() {
         fields.push(Field { name: format!("every_next{i}"), ty: LlvmType::Int(64), role: Role::EveryNext });
@@ -331,4 +338,12 @@ fn common_ancestor(m: &Machine, a: StateId, b: StateId) -> Option<StateId> {
     // Ein Zustand ist nicht sein eigener Vorfahre: Ein Uebergang auf sich
     // selbst verlaesst und betritt ihn (5.2, Selbstuebergang).
     if common == Some(a) && a == b { None } else { common }
+}
+
+/// Der Block, dessen Instanz in dieser Variablen steht (5.7).
+///
+/// Die Identitaet steht in `Layout::block_instances`, nicht im Typ: Das
+/// Sema gibt jeder Instanz denselben Platzhaltertyp (FB-77).
+pub fn instance_block(m: &Machine, var: takt_mir::VarId) -> Option<takt_mir::BlockId> {
+    m.layout.block_instances.iter().find(|b| b.var == var).map(|b| b.block)
 }

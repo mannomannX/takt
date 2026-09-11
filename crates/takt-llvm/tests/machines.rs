@@ -28,9 +28,21 @@ fn corpus(name: &str) -> Program {
 fn ir_of(p: &Program) -> String {
     let mut m = Module::new("korpus", "x86_64-pc-windows-msvc");
     takt_llvm::abi::Abi::declare(&mut m);
-    // Reine Funktionen zuerst: Die Maschinen rufen sie (4.4).
-    for f in &p.fns {
-        let _ = takt_llvm::fns::function(f, p, &mut m);
+    // Bloecke zuerst: Die Maschinen halten ihre Instanzen (5.7).
+    let methoden: Vec<_> = p.blocks.iter().flat_map(|b| b.step.iter().chain(&b.methods).copied()).collect();
+    for b in &p.blocks {
+        let Some(inst) = takt_llvm::block::instance_of(b, p) else { continue };
+        takt_llvm::block::declare(b, &inst, &mut m);
+        for fid in b.step.iter().chain(&b.methods) {
+            let Some(f) = p.fns.get(fid.index()) else { continue };
+            let _ = takt_llvm::fns::block_method(b, f, p, &mut m);
+        }
+    }
+    // Reine Funktionen: Die Maschinen rufen sie (4.4).
+    for (i, f) in p.fns.iter().enumerate() {
+        if !methoden.contains(&takt_mir::FnId(i as u32)) {
+            let _ = takt_llvm::fns::function(f, p, &mut m);
+        }
     }
     for machine in &p.machines {
         let Some(st) = state_struct(machine, p) else { continue };
@@ -43,7 +55,8 @@ fn ir_of(p: &Program) -> String {
 /// Die Korpusprogramme, deren Maschinen der Codegen heute vollstaendig
 /// senkt. Die Liste waechst mit ihm; sie steht hier, damit ein Rueckschritt
 /// auffaellt.
-const VOLLSTAENDIG: [&str; 6] = [
+const VOLLSTAENDIG: [&str; 7] = [
+    "18_blocks.takt",
     "01_minimal.takt",
     "03_sequences_and_faults.takt",
     "14_latency.takt",
@@ -55,7 +68,8 @@ const VOLLSTAENDIG: [&str; 6] = [
 /// Alle Korpusdateien, die fehlerfrei zu MIR uebersetzen — auch die, deren
 /// Maschinen der Codegen nur teilweise senkt. Was er *erzeugt*, muss
 /// gueltig sein, sonst faellt eine halbe Funktion erst spaeter auf.
-const UEBERSETZBAR: [&str; 10] = [
+const UEBERSETZBAR: [&str; 11] = [
+    "18_blocks.takt",
     "01_minimal.takt",
     "02_units_and_data.takt",
     "03_sequences_and_faults.takt",
@@ -687,4 +701,50 @@ fn every_called_function_is_defined_or_declared() {
             assert!(bereit, "{name}: `{symbol}` wird gerufen, aber weder definiert noch deklariert");
         }
     }
+}
+
+// --- Blockinstanzen (5.7) -----------------------------------------------
+
+/// 5.7: `step` hoechstens einmal je Aktivierung. Das Flag im Zustand ist
+/// die Absicherung — ein Filter, der zweimal laeuft, hat einen Tick
+/// uebersprungen, ohne dass es jemand saehe.
+#[test]
+fn step_runs_at_most_once_per_activation() {
+    let p = corpus("18_blocks.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("store i1 true"),
+        "das `stepped`-Flag wird nicht gesetzt:
+{ir}"
+    );
+    assert!(
+        ir.contains("step1_ende") || ir.contains("_ende"),
+        "kein Zweig um den Aufruf:
+{ir}"
+    );
+}
+
+/// Eine Blockmethode bekommt die Instanz als Zeiger: Sie aendert ihren
+/// Zustand, also braucht sie einen Speicherort, keinen Wert.
+#[test]
+fn a_block_method_takes_its_instance_by_pointer() {
+    let p = corpus("18_blocks.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("@takt_block_counter_step(ptr"),
+        "die Methode nimmt keinen Zeiger:
+{ir}"
+    );
+}
+
+/// `reset()` stellt die Initialwerte her und gibt `step` wieder frei.
+#[test]
+fn reset_restores_the_initial_state_and_clears_the_flag() {
+    let p = corpus("18_blocks.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("store i1 false"),
+        "`reset` gibt `step` nicht wieder frei:
+{ir}"
+    );
 }

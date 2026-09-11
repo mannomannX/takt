@@ -117,9 +117,6 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
             LlvmType::Struct(fields)
         }
         Type::Array { elem, len } => LlvmType::Array(Box::new(lower(*elem, p)?), *len),
-        // `bytes<N>` und `str<N>` tragen ihre Laenge mit (3.9): ein
-        // Laengenfeld und der Speicher. Ohne das Feld waere `.len` nicht
-        // darstellbar.
         Type::Bytes { cap } | Type::Str { cap } => {
             LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), *cap)])
         }

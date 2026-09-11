@@ -1,0 +1,23 @@
+(system
+  (language 1)
+  (tick 10ms))
+(block counter (limit:int in 1..1000)
+  (var n :int in 0..1000 0)
+  (step (up:bool) -> int
+    (if (and up (< n limit))
+      (= n (+ n 1)))
+    (return n)))
+(command tick_up)
+(command clear)
+(output shown :int in 0..1000 @hw("ui/n") safe=0)
+(machine gauge
+  (var c (call counter limit=100))
+  (initial RUN)
+  (state RUN
+    (loop
+      (= shown (.step c tick_up)))
+    (when clear -> RESET))
+  (state RESET
+    (enter
+      (.reset c))
+    (when tick_up -> RUN)))
