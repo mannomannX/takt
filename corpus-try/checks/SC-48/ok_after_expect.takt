@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-48: Die Zuweisung folgt unmittelbar auf das `expect`, das die
+# Voraussetzung prueft (12.7).
+
+input  ready : bool @ hw("otp/ready") with max_age = 10 ms
+output fuse  : bool @ hw("otp/fuse")  with safe = false, irreversible = true
+
+machine m:
+    initial RUN
+
+    state RUN:
+        sequence:
+            expect ready.or(false), "Brennspannung steht"
+            fuse = true

@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-48: Ein irreversibler Output hat keinen Rueckweg — die Voraussetzung
+# muss sichtbar geprueft sein (12.7).
+
+output fuse : bool @ hw("otp/fuse") with safe = false, irreversible = true
+
+machine m:
+    initial RUN
+
+    state RUN:
+        sequence:
+            wait 1 ms
+            fuse = true  # ~ SC-48

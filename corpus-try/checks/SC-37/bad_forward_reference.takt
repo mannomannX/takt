@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-37: Das Laengenfeld steht *vor* dem Feld, dessen Laenge es traegt —
+# beim Dekodieren ist es sonst noch nicht gelesen (3.7).
+
+record Tlv layout little:
+    value : bytes<64> with len = size  # ~ SC-37
+    size  : u8
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            n = 1

@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+    target   = baremetal
+    float    = f32
+
+# SC-41: `system: float = f32` ist der Ausweg (4.2).
+
+output v : float @ hw("o/v") with safe = 0.0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = 1.5

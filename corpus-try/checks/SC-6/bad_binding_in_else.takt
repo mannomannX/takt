@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-6: Der `else`-Zweig laeuft, *weil* das Muster nicht getroffen hat — die
+# Bindung traegt dort keinen Wert (6.2).
+
+input  rx : stream<line<64>> @ hw("uart0/rx") with max_rate = 100 Hz, capacity = 4
+output n  : int in 0..99     @ hw("o/n")      with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        sequence:
+            until rx matches "v{a:int}" as got timeout 1 s else:
+                n = got.a  # ~ SC-6

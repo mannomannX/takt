@@ -526,6 +526,22 @@ impl Lowerer<'_> {
         out
     }
 
+    /// Der `else`-Zweig eines `until` (6.2, Pruefung 6): Er laeuft, *weil*
+    /// das Muster nicht getroffen hat — die Bindung des Guards traegt dort
+    /// keinen Wert. Fuer die Dauer des Zweigs gilt sie als ungebunden; wer
+    /// sie liest, bekommt einen Fehler statt eines stillen Defaults.
+    fn else_block(&mut self, guard: &ast::Guard, b: &ast::Block) -> takt_mir::stmt::Block {
+        let name = guard_binding(guard);
+        if let Some(n) = &name {
+            self.unbound.push(n.clone());
+        }
+        let block = self.block(b, BlockKind::Else);
+        if name.is_some() {
+            self.unbound.pop();
+        }
+        block
+    }
+
     fn seq_item(&mut self, item: &ast::SeqItem) -> Option<SeqItem> {
         let dur = self.tys.duration;
         match item {
@@ -553,7 +569,7 @@ impl Lowerer<'_> {
                         let action = match &t.action {
                             ast::TimeoutAction::Fault => TimeoutAction::Fault,
                             ast::TimeoutAction::Goto(x) => TimeoutAction::Goto(self.target(x)?),
-                            ast::TimeoutAction::Else(b) => TimeoutAction::Else(self.block(b, BlockKind::Else)),
+                            ast::TimeoutAction::Else(b) => TimeoutAction::Else(self.else_block(guard, b)),
                         };
                         Some(Timeout { duration: d, action })
                     }
@@ -806,5 +822,16 @@ pub fn stmt_kind_name(s: &Stmt) -> &'static str {
         StmtKind::Assign { .. } => "Zuweisung",
         StmtKind::Check { .. } => "check",
         _ => "Anweisung",
+    }
+}
+
+/// Der Name, den ein Guard bindet (8.7).
+fn guard_binding(g: &ast::Guard) -> Option<String> {
+    match g {
+        ast::Guard::Next { binding, .. } => Some(binding.name.clone()),
+        ast::Guard::Expr(e) => match &e.kind {
+            ast::ExprKind::Match { binding: Some(b), .. } => Some(b.name.clone()),
+            _ => None,
+        },
     }
 }

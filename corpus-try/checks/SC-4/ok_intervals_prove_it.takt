@@ -1,0 +1,30 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-4: Die Intervallanalyse (3.4) belegt hier jede Zuweisung, also fuegt
+# der Compiler keine Laufzeitpruefung ein und warnt nicht. Drei Wege, die
+# alle tragen: eine Range am Ursprung, eine Verfeinerung im Zweig und eine
+# nach einem bestandenen `check`.
+
+output a : int in 0..99 @ hw("o/a") with safe = 0
+output b : int in 0..99 @ hw("o/b") with safe = 0
+output c : int in 0..99 @ hw("o/c") with safe = 0
+
+machine prover:
+    var small : int in 0..9   = 5
+    var wide  : int in 0..999 = 500
+    initial RUN
+
+    state RUN:
+        loop:
+            # Die Range traegt durch die Rechnung: 0..9 plus 1 liegt in 0..99.
+            a = small + 1
+
+            # Der Vergleich verfeinert den Zweig.
+            if wide < 100:
+                b = wide
+
+            # Ein bestandener `check` gilt fuer das Folgende (5.6).
+            check wide < 50
+            c = wide

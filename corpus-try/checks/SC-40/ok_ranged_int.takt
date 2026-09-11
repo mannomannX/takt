@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+    target   = baremetal
+    float    = f32
+
+# SC-40: Mit Range rechnet der Compiler in 32 Bit (3.4, Lemma 3.4).
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    var acc : int in 0..99 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            for i in range(4):
+                acc = 1
+            n = acc

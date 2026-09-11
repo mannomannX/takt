@@ -138,3 +138,27 @@ fn syntax_errors_stop_before_semantic_checks() {
     assert!(checked.diagnostics.iter().all(|d| d.code != "SC-50"), "{:?}", checked.diagnostics);
     assert!(checked.diagnostics.iter().any(|d| d.code == "P"));
 }
+
+/// Pruefung 1 (Tokenizer und Parser) hat kein Verzeichnis unter
+/// `corpus-try/checks/`: Sie meldet nie den Code `SC-1`, sondern die Codes
+/// des Lexers (`E_INDENT`, `E_DEDENT`, `E_TAB`, …) und des Parsers (`P`).
+/// Ihre Vektoren stehen in `grammar/lexer.md`, ihr Korpus ist
+/// `corpus-try/n0*.takt`. Dieser Test haelt die drei Klassen fest, damit die
+/// Pruefung eine Fundstelle hat.
+#[test]
+fn check_1_reports_lexer_and_parser_codes() {
+    let cases = [
+        ("system:\n    language = 1\n  tick = 1 ms\n", "E_DEDENT"),
+        ("system:\n      language = 1\n", "E_INDENT"),
+        ("system:\n\tlanguage = 1\n", "E_TAB"),
+        ("machine m:\n    state\n", "P"),
+    ];
+    for (src, code) in cases {
+        let checked = takt_sema::check(src, Policy::default());
+        assert!(
+            checked.diagnostics.iter().any(|d| d.code == code),
+            "{code} fehlt fuer {src:?}: {:?}",
+            checked.diagnostics.iter().map(|d| d.code).collect::<Vec<_>>()
+        );
+    }
+}

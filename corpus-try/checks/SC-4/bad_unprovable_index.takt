@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-4: Wo die Analyse nichts beweist, bleibt die Pruefung stehen — und in
+# einer Schleife warnt sie (3.4, Warnpolitik; die Warnung traegt SC-24).
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine reader:
+    var wide : int in 0..999 = 500
+    initial RUN
+
+    state RUN:
+        loop:
+            for i in range(3):
+                n = wide  # ~ SC-24

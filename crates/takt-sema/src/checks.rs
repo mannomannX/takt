@@ -50,6 +50,14 @@ pub const SC10: &str = "SC-10";
 pub const SC11: &str = "SC-11";
 /// Simulation.
 pub const SC13: &str = "SC-13";
+/// Performance-Lint: `int` ohne Range auf schmalen Kernen (3.4).
+pub const SC40: &str = "SC-40";
+/// Performance-Lint: `float = f64` ohne f64-Hardware (4.2).
+pub const SC41: &str = "SC-41";
+/// Irreversible Outputs (12.7).
+pub const SC48: &str = "SC-48";
+/// Laengenpraefixierte Felder (3.7).
+pub const SC37: &str = "SC-37";
 /// Lints zu Matrizen und  (3.11, 8.6).
 pub const SC42: &str = "SC-42";
 /// Ungenutzte Channels.
@@ -66,6 +74,8 @@ impl Lowerer<'_> {
         self.default_max_age();
         self.stream_capacities();
         self.check_send_budget();
+        self.check_irreversible();
+        self.performance_lints();
         self.check_writers();
         self.check_fault_forest();
         self.check_reachability();
@@ -261,6 +271,104 @@ impl Lowerer<'_> {
             worst = worst.max(n);
         }
         worst.max(1)
+    }
+
+    /// Pruefungen 40 und 41 (3.4, 4.2): zwei Hinweise, die nur auf schmalen
+    /// Kernen etwas kosten. Der Kostenanteil, den die Referenz nennt, kommt
+    /// mit der kalibrierten Tabelle (13.8); bis dahin nennt der Lint die
+    /// Stelle und den Ausweg.
+    fn performance_lints(&mut self) {
+        // 12.8: `baremetal` und `boot` laufen auf MCUs. `linux_rt` und
+        // `rtos` sagen ueber die Breite nichts, also schweigt der Lint dort.
+        let narrow_core = matches!(self.program.config.target.as_deref(), Some("baremetal" | "boot"));
+        if !narrow_core {
+            return;
+        }
+        let mut diags = Vec::new();
+
+        // 41: eine programmweite Entscheidung, also eine Meldung.
+        if self.program.config.float_width == takt_mir::types::FloatWidth::F64 {
+            // Eine programmweite Entscheidung hat keine Stelle im Text.
+            let span = takt_diag::Span::default();
+            diags.push(
+                Diagnostic::warning(SC41, span, "`float = f64` auf einem Kern, der f64 in Software rechnet")
+                    .with_suggestion("`system: float = f32` erwaegen; f64 kostet dort zwei Groessenordnungen (4.2)"),
+            );
+        }
+
+        // 40: `int` ohne Range in einer Schleife bleibt 64 Bit (3.4).
+        for m in &self.program.machines {
+            if matches!(m.kind, MachineKind::Template) {
+                continue;
+            }
+            for_each_stmt_ctx(m, &mut |s, depth| {
+                if depth == 0 {
+                    return;
+                }
+                let StmtKind::Assign { target: Place::Var(v), .. } = &s.kind else { return };
+                let Some(def) = m.vars.get(v.index()) else { return };
+                if !matches!(self.program.types.list.get(def.ty.index()), Some(Type::Int { width, range: None, .. }) if width.bits() == 64)
+                {
+                    return;
+                }
+                let name = def.name.clone();
+                diags.push(
+                    Diagnostic::warning(
+                        SC40,
+                        s.span,
+                        format!("`{name}` hat keine Range und bleibt in einer Schleife 64 Bit"),
+                    )
+                    .with_suggestion("mit `in a..b` deklarieren; der Compiler rechnet dann in 32 Bit (3.4)"),
+                );
+            });
+        }
+        self.diags.extend(diags);
+    }
+
+    /// Pruefung 48 (12.7): Ein `irreversible`-Output wird nur in einer
+    /// Sequenz geschrieben, und dort unmittelbar nach einem `expect`. Es gibt
+    /// keinen Rueckweg — die Voraussetzung muss sichtbar geprueft sein.
+    fn check_irreversible(&mut self) {
+        let marked: HashSet<ChannelId> = self
+            .program
+            .channels
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.attrs.irreversible)
+            .map(|(i, _)| ChannelId(i as u32))
+            .collect();
+        if marked.is_empty() {
+            return;
+        }
+        let mut diags = Vec::new();
+        for m in &self.program.machines {
+            if matches!(m.kind, MachineKind::Template) {
+                continue;
+            }
+            // Erlaubt ist nur der Platz unmittelbar hinter einem `expect`.
+            let mut allowed: HashSet<(u32, u32)> = HashSet::new();
+            for s in &m.states {
+                if let Some(seq) = &s.sequence {
+                    mark_after_expect(&seq.items, &mut allowed);
+                }
+            }
+            for_each_stmt(m, &mut |s| {
+                let StmtKind::Assign { target, .. } = &s.kind else { return };
+                let Some(c) = output_of(target) else { return };
+                if !marked.contains(&c) {
+                    return;
+                }
+                if allowed.contains(&(s.span.file.0, s.span.start)) {
+                    return;
+                }
+                let name = self.program.channels[c.index()].name.clone();
+                diags.push(
+                    Diagnostic::error(SC48, s.span, format!("`{name}` ist irreversibel und braucht ein `expect`"))
+                        .with_suggestion("die Zuweisung steht in einer Sequenz unmittelbar nach `expect` (12.7)"),
+                );
+            });
+        }
+        self.diags.extend(diags);
     }
 
     /// Pruefung 20 (8.8): „statische Summe der Hoechstlaengen je Aktivierung
@@ -1120,4 +1228,31 @@ struct Caps {
     cap_bytes: u64,
     /// Bytelast eines Elements.
     elem_bytes: u64,
+}
+
+/// Sammelt die Stellen, die unmittelbar auf ein `expect` folgen (12.7).
+/// `repeat` und `step` zaehlen als eigene Folge.
+fn mark_after_expect(items: &[SeqItem], out: &mut HashSet<(u32, u32)>) {
+    let mut after = false;
+    for item in items {
+        match item {
+            SeqItem::Expect { .. } => after = true,
+            SeqItem::Stmt(s) => {
+                if after {
+                    out.insert((s.span.file.0, s.span.start));
+                }
+                // Nur die *eine* Anweisung hinter dem `expect` ist gedeckt.
+                after = false;
+            }
+            SeqItem::Repeat { body, .. } => {
+                after = false;
+                mark_after_expect(body, out);
+            }
+            SeqItem::Step { body, .. } => {
+                after = false;
+                mark_after_expect(body, out);
+            }
+            _ => after = false,
+        }
+    }
 }

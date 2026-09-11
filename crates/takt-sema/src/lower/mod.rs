@@ -187,6 +187,10 @@ pub struct Lowerer<'a> {
     pub units: Units,
     /// Sichtbereiche.
     pub scopes: Scopes,
+    /// Namen, die im gerade gesenkten `else`-Zweig keinen Wert tragen
+    /// (Pruefung 6, 6.2): die Bindung eines `until`-Guards, dessen Muster
+    /// nicht getroffen hat.
+    pub unbound: Vec<String>,
     /// Diagnosen.
     pub diags: Vec<Diagnostic>,
     /// Optionen.
@@ -244,6 +248,7 @@ impl<'a> Lowerer<'a> {
             program,
             units,
             scopes,
+            unbound: Vec::new(),
             diags: Vec::new(),
             options,
             edition,
@@ -347,6 +352,18 @@ impl<'a> Lowerer<'a> {
 
     /// Sucht einen Namen; unbekannte Namen bekommen einen Vorschlag.
     pub fn lookup(&mut self, name: &ast::Ident) -> Option<Entity> {
+        // Pruefung 6 (6.2): Im `else`-Zweig eines `until` traegt die Bindung
+        // des Guards keinen Wert — der Zweig laeuft ja, *weil* das Muster
+        // nicht getroffen hat.
+        if self.unbound.iter().any(|n| n == &name.name) {
+            self.error_hint(
+                crate::checks::SC6,
+                name.span,
+                format!("`{}` ist hier nicht gebunden", name.name),
+                "der `else`-Zweig laeuft, weil das Muster nicht getroffen hat (6.2)",
+            );
+            return None;
+        }
         match self.scopes.lookup(&name.name) {
             Some(s) => Some(s.entity.clone()),
             None => {

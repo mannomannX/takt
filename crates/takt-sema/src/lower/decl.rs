@@ -190,7 +190,7 @@ impl Lowerer<'_> {
         for f in &decl.fields {
             match f {
                 ast::RecordField::Plain(field) => {
-                    let mut lowered = self.fields(std::slice::from_ref(field));
+                    let mut lowered = self.fields_after(&fields, std::slice::from_ref(field));
                     fields.append(&mut lowered);
                 }
                 ast::RecordField::Bits { name, ty, bits, span } => {
@@ -241,6 +241,12 @@ impl Lowerer<'_> {
     }
 
     fn fields(&mut self, fields: &[ast::Field]) -> Vec<FieldDef> {
+        self.fields_after(&[], fields)
+    }
+
+    /// Wie `fields`, aber mit den schon gesenkten Feldern als Kontext: nur so
+    /// findet `len = feld` sein Ziel (3.7, Pruefung 37).
+    fn fields_after(&mut self, before: &[FieldDef], fields: &[ast::Field]) -> Vec<FieldDef> {
         let mut out = Vec::new();
         for f in fields {
             let Some(ty) = self.resolve_type(&f.ty) else { continue };
@@ -255,10 +261,8 @@ impl Lowerer<'_> {
                 None => None,
             };
             let offset = f.offset.as_ref().and_then(|o| o.text.replace('_', "").parse().ok());
-            let len_field = f
-                .len_field
-                .as_ref()
-                .and_then(|lf| out.iter().position(|x: &FieldDef| x.name == lf.name).map(|i| i as u32));
+            let known: Vec<FieldDef> = before.iter().chain(out.iter()).cloned().collect();
+            let len_field = f.len_field.as_ref().and_then(|lf| self.len_field_index(&known, lf, f.span));
             out.push(FieldDef {
                 name: f.name.name.clone(),
                 ty,
@@ -270,6 +274,33 @@ impl Lowerer<'_> {
             });
         }
         out
+    }
+
+    /// Pruefung 37 (3.7): `len = len_field` verweist auf ein *vorangehendes*
+    /// Integer-Feld. Ein Verweis nach vorn waere beim Dekodieren nicht
+    /// lesbar, ein Verweis auf ein Nicht-Integer nicht als Laenge deutbar.
+    fn len_field_index(&mut self, done: &[FieldDef], name: &ast::Ident, span: Span) -> Option<u32> {
+        let Some(i) = done.iter().position(|x| x.name == name.name) else {
+            self.error_hint(
+                crate::checks::SC37,
+                name.span,
+                format!("`len_field` nennt kein vorangehendes Feld: `{}`", name.name),
+                "das Laengenfeld steht vor dem Feld, dessen Laenge es traegt (3.7)",
+            );
+            return None;
+        };
+        if !matches!(self.ty(done[i].ty), Type::Int { .. }) {
+            let n = self.type_name(done[i].ty);
+            self.error_hint(
+                crate::checks::SC37,
+                name.span,
+                format!("`len_field` verweist auf `{}` vom Typ `{n}`", name.name),
+                "ein Laengenfeld ist ganzzahlig (3.7)",
+            );
+            return None;
+        }
+        let _ = span;
+        Some(i as u32)
     }
 
     // ------------------------------------------------------------ Einheiten

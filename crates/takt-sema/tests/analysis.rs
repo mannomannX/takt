@@ -201,3 +201,62 @@ machine m:
     let text = s.lines().join("\n");
     assert!(text.contains("exakt") && text.contains("offen"), "beide Herkuenfte stehen da: {text}");
 }
+
+#[test]
+fn the_cost_budget_separates_activation_from_fault_path() {
+    // Pruefung 12 (9.4.3): `B_m` je Aktivierung und `F_m` je Fault-Pfad sind
+    // getrennte Vektoren — die Abort-Phase (5.4) summiert nur die zweiten.
+    let (p, _, _) = compile(
+        "\
+machine m:
+    fault -> SAFE
+    var a : int in 0..9 = 1
+    initial RUN
+    state RUN:
+        loop:
+            a = a
+            check a < 9, \"zu gross\"
+            n = a
+    state SAFE:
+        loop:
+            n = 0
+",
+    );
+    let b = p.machines[0].budget.expect("Budget aus M3");
+    assert!(b.activation.i32 + b.activation.i64 > 0, "die Aktivierung kostet: {:?}", b.activation);
+    // Ohne Uebergaenge aus `FAULTED` ist der Fault-Pfad leer; entscheidend
+    // ist, dass er *getrennt* gefuehrt wird.
+    assert_eq!(b.fault_path.call, 0, "der Fault-Pfad ist eigenstaendig: {:?}", b.fault_path);
+}
+
+#[test]
+fn a_loop_multiplies_the_budget() {
+    // 9.4.3: die statische Schranke einer `for`-Schleife geht in das Budget
+    // ein — sonst waere es keine obere Schranke.
+    let (one, _, _) = compile(
+        "\
+machine m:
+    var a : int in 0..9 = 1
+    initial RUN
+    state RUN:
+        loop:
+            a = a + 1
+            n = a
+",
+    );
+    let (many, _, _) = compile(
+        "\
+machine m:
+    var a : int in 0..9 = 1
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(4):
+                a = a + 1
+            n = a
+",
+    );
+    let (b1, b4) = (one.machines[0].budget.expect("B"), many.machines[0].budget.expect("B"));
+    let sum = |c: takt_mir::fns::CostVec| c.i32 + c.i64;
+    assert!(sum(b4.activation) > sum(b1.activation), "vier Durchlaeufe kosten mehr: {:?} vs {:?}", b4, b1);
+}

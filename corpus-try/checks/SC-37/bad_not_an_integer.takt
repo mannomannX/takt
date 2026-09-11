@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-37: Ein Laengenfeld ist ganzzahlig (3.7).
+
+record Tlv layout little:
+    tag   : bool
+    value : bytes<64> with len = tag  # ~ SC-37
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            n = 1

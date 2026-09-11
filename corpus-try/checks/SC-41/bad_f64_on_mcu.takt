@@ -1,0 +1,16 @@
+system:  # ~ SC-41
+    language = 1
+    tick     = 1 ms
+    target   = baremetal
+
+# SC-41: Ohne f64-Hardware rechnet jede Operation in Software (4.2). Die
+# Meldung gilt dem Programm, nicht einer Zeile.
+
+output v : float @ hw("o/v") with safe = 0.0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = 1.5

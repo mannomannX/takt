@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+    target   = baremetal
+
+# SC-40: Ein `int` ohne Range bleibt 64 Bit; auf einem 32-Bit-Kern kostet
+# jede Operation das Doppelte (3.4).
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    var acc : int = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            for i in range(4):
+                acc = acc + 1  # ~ SC-40
+            n = 1

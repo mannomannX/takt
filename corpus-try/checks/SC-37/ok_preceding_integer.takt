@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-37: So ist es richtig — ein vorangehendes Integer-Feld traegt die
+# Laenge, die Obergrenze steht im Typ (3.7).
+
+record Tlv layout little:
+    size  : u8
+    value : bytes<64> with len = size
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            n = 1
