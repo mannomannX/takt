@@ -208,6 +208,8 @@ Checker 150 plus die CSV mit rund 450 Zeilen.
 
 | Datum | Formatversion | Änderung |
 |---|---|---|
+| 2026-09-11 | 5 | `Method::Append`: `b.append(src) -> bool` hängt eine ganze Folge an `bytes<N>` oder `vec<T, N>` an (3.9). Der Rahmungscodec setzte bis dahin jede Byte-Folge elementweise zusammen (`for i in range(24): out.push(head[i])`) — 11 der 19 Schleifen des DMX-Treibers waren reine Kopierschleifen (FB-42). Alles oder nichts: Passt die Quelle nicht vollständig, bleibt das Ziel unverändert. Kosten O(Kapazität der Quelle), damit die Schranke statisch bleibt. Tag 7. |
+| 2026-09-10 | 4 | `Expr::repr` mit `Repr{I32, I64}`: die vom Compiler gewählte Darstellung eines Integer-Ausdrucks (3.4, Lemma). Feld 5, `opt`. Nachgetragen — die Version wurde mit M3 erhöht, aber nicht hier vermerkt. |
 | 2026-09-10 | 3 | `ExprKind::Format(Format)`: ein String mit Platzhaltern als Wert (8.8). Bisher formatierten nur `log`, `check` und `verify`; `send tx, "UPDATE {n}"` sendete den Text mitsamt Klammern. Ein Literal ohne Platzhalter bleibt `Str`. Tag 42. |
 | 2026-09-10 | 3 | `StmtKind::Skip(StreamRef)`: `s.skip()` verwirft das Fenster (8.6). Es war als `Method::Skip` vorgesehen, aber eine Methode braucht eine `Place` als Empfaenger, und ein Strom ist keine Stelle; `Method::Skip` entfaellt darum ersatzlos. Tag 20. |
 | 2026-09-10 | 3 | `ExprKind::Stream(StreamId)`: ein interner Strom als Wert — Subjekt eines Guards und Traeger der Zaehler `.count`, `.dropped`, `.overflowed`, `.malformed` (8.6). Ein Stream-Channel steht als `Input` da; dem internen Strom fehlt die `ChannelId`. Tag 41. |
@@ -221,7 +223,7 @@ Checker 150 plus die CSV mit rund 450 Zeilen.
 Abweichungen vom Entwurf in Abschnitt 2, jeweils mit Grund:
 
 - **`BlockStep`/`BlockMethod` sind keine Ausdrücke**, sondern `StmtKind::MethodCall`
-  (`target = receiver.method(args)`), ebenso `push`, `insert`, `remove`, `clear`, `skip`,
+  (`target = receiver.method(args)`), ebenso `push`, `append`, `insert`, `remove`, `clear`, `skip`,
   `reset`. Ausdrücke bleiben damit seiteneffektfrei (4.4); `Accessor` enthält nur die reinen
   Zugriffe, `ConvertKind` die Konversionen, `MatOp` die Matrixoperationen.
 - **`Tunable` ist kein eigener Knoten**: `Param.tunable` (8.4); `ExprKind::Param` liest beides,

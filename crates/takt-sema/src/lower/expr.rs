@@ -1063,7 +1063,28 @@ impl Lowerer<'_> {
                 if !no_args(self) {
                     return None;
                 }
-                let ty = self.tys.int;
+                // Die Laenge liegt immer in `0..Kapazitaet` (3.9). Ohne diese
+                // Schranke fuegt jede Zuweisung an eine range-typisierte Stelle
+                // eine implizite Pruefung ein, die nie scheitern kann.
+                let cap = match self.ty(b.ty) {
+                    Type::Bytes { cap }
+                    | Type::Vec { cap, .. }
+                    | Type::Map { cap, .. }
+                    | Type::Str { cap }
+                    | Type::Line { cap } => Some(i64::from(*cap)),
+                    _ => None,
+                };
+                let ty = match cap {
+                    Some(cap) => {
+                        let range = takt_mir::types::Range {
+                            lo: takt_mir::types::Const::Int(0),
+                            hi: takt_mir::types::Const::Int(cap),
+                            origin: takt_mir::types::RangeOrigin::Declared,
+                        };
+                        self.intern(Type::Int { width: IntWidth::I64, unit: None, range: Some(range) })
+                    }
+                    None => self.tys.int,
+                };
                 Some(Expr::new(
                     ExprKind::Accessor { base: Box::new(b), accessor: Accessor::Len, args: vec![] },
                     ty,

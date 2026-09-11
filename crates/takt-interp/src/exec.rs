@@ -392,6 +392,32 @@ impl Ctx<'_, '_> {
                     (other, _) => bug(format!("push auf {}", other.kind_name())),
                 }
             }
+            // 3.9: alles oder nichts. Ein Teilanhang liesse einen halben
+            // Rahmen im Puffer zurueck, den niemand als Fehler erkennt.
+            Method::Append => {
+                let cap = self.capacity(receiver, span)?;
+                let src = args.into_iter().next();
+                let target = self.place_mut(receiver, span)?;
+                match (target, src) {
+                    (Value::Vec(x), Some(Value::Vec(v))) => {
+                        if x.len() + v.len() <= cap {
+                            x.extend(v);
+                            Ok(Value::Bool(true))
+                        } else {
+                            Ok(Value::Bool(false))
+                        }
+                    }
+                    (Value::Bytes(b), Some(Value::Bytes(v))) => {
+                        if b.len() + v.len() <= cap {
+                            b.extend_from_slice(&v);
+                            Ok(Value::Bool(true))
+                        } else {
+                            Ok(Value::Bool(false))
+                        }
+                    }
+                    (other, _) => bug(format!("append auf {}", other.kind_name())),
+                }
+            }
             Method::Clear => match self.place_mut(receiver, span)? {
                 Value::Vec(x) => {
                     x.clear();

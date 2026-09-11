@@ -258,6 +258,7 @@ fn accessor_names_are_reserved_members() {
                 "decode",
                 "default",
                 "push",
+                "append",
                 "insert",
                 "remove",
                 "clear",
@@ -381,4 +382,39 @@ fn every_span_is_outside_the_logic_hash() {
     r.machines[0].states[0].instances.push(instance(Span::default()));
     assert_ne!(logic_hash(&q), base);
     assert_eq!(logic_hash(&q), logic_hash(&r));
+}
+
+/// Die Annotationen aus M3 (3.4) ueberstehen das Dateiformat: bewiesenes
+/// Intervall und gewaehlte Darstellung. `full_program_round_trips` vergleicht
+/// zwar ganze Programme, sagt aber nicht, *welches* Feld fehlte — dieser Test
+/// nennt die beiden neuen beim Namen.
+#[test]
+fn range_and_repr_survive_the_format() {
+    let p = full_program();
+    let bytes = write_program(&p, "takt 0.1.0");
+    let (_, back) = read_program(&bytes).expect("lesbar");
+
+    let before = annotations(&p);
+    assert!(!before.is_empty(), "das Beispielprogramm traegt Annotationen");
+    assert_eq!(before, annotations(&back), "Intervall und Darstellung kommen zurueck");
+}
+
+/// Intervall und Darstellung jeder annotierten Zuweisung, aus allen drei
+/// Bloecken eines Zustands — nicht nur dem `loop:`.
+fn annotations(p: &Program) -> Vec<(Option<types::Range>, Option<expr::Repr>)> {
+    let mut out = Vec::new();
+    for m in &p.machines {
+        for s in &m.states {
+            for b in [&s.enter, &s.loop_block, &s.exit] {
+                for st in &b.stmts {
+                    if let stmt::StmtKind::Assign { value, .. } = &st.kind {
+                        if value.range.is_some() || value.repr.is_some() {
+                            out.push((value.range, value.repr));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
 }

@@ -1,0 +1,69 @@
+# Rahmenbau (3.9): Kopf per `encode`, Nutzlast per `append`, Laenge und
+# Pruefsumme per Index-Schreiben nachgetragen (Backpatching).
+#
+# Der Fall, an dem sich Protokolltreiber entscheiden: Ein Rahmen entsteht aus
+# fertigen Byte-Folgen, nicht Byte fuer Byte.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+const SC_FRAME : u8 = 0xCC
+
+record Head layout big:
+    start : u8 = 0xCC
+    len   : u8
+    kind  : u8
+
+output frame_len : int in 0..99 @ hw("o/len")  with safe = 0
+output sent      : bool         @ hw("o/sent") with safe = false
+
+# Pruefsumme ueber das bisher Geschriebene: der Puffer darf gelesen werden,
+# waehrend er entsteht (keine `inout`-Bindung, also kein Aliasing).
+fn checksum(b: bytes<64>, len: int in 0..64) -> u8:
+    var s : u8 = 0
+    for i in range(64):
+        if i >= len:
+            break
+        s = wrapping_add(s, b[i])
+    return s
+
+# `append` haengt den Kopf in einem Zug an; die Schleife bleibt nur, weil
+# `pdl` ein Teilstueck von `pd` begrenzt.
+fn frame(kind: u8, pd: bytes<32>, pdl: int in 0..32) -> bytes<64>:
+    var out : bytes<64> = default
+    out.append(Head(start = SC_FRAME, len = 0, kind = kind).encode())
+    for i in range(32):
+        if i >= pdl:
+            break
+        out.push(pd[i])
+
+    out[1] = (3 + pdl) as u8
+    var csum = checksum(out, 3 + pdl)
+    out.push(csum)
+    return out
+
+machine builder:
+    var payload : bytes<32> = default
+    var wire    : bytes<64> = default
+    var ok      : bool = false
+    var laenge  : int in 0..64 = 0
+    initial BUILD
+
+    state BUILD:
+        enter:
+            payload.push(0x11)
+            payload.push(0x22)
+            wire = frame(0x07, payload, 2)
+            laenge = wire.len
+            frame_len = laenge
+        after 2 ms: -> COPY
+
+    # Anhaengen scheitert als Ganzes, wenn die Quelle nicht passt: ein halber
+    # Rahmen bliebe sonst unbemerkt im Puffer stehen.
+    state COPY:
+        var small : bytes<4> = default
+        enter:
+            ok = small.append(wire)
+            sent = ok
+        after 2 ms: -> BUILD

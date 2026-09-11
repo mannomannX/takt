@@ -191,6 +191,9 @@ pub enum Method {
     Block(FnId),
     /// `push(x) -> bool`
     Push,
+    /// `append(src) -> bool`: haengt eine ganze Folge an (3.9). Kosten
+    /// O(Kapazitaet der Quelle), damit die Schranke statisch bleibt.
+    Append,
     /// `insert(k, v) -> bool`
     Insert,
     /// `remove(k) -> bool`
@@ -207,6 +210,7 @@ impl Method {
             Method::Reset => Some("reset"),
             Method::Block(_) => None,
             Method::Push => Some("push"),
+            Method::Append => Some("append"),
             Method::Insert => Some("insert"),
             Method::Remove => Some("remove"),
             Method::Clear => Some("clear"),

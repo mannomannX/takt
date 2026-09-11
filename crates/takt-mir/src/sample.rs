@@ -25,6 +25,15 @@ fn bx(x: Expr) -> Box<Expr> {
     Box::new(x)
 }
 
+/// Ein Ausdruck mit den Annotationen aus M3 (3.4): bewiesenes Intervall und
+/// gewaehlte Darstellung. Der Roundtrip muss beide tragen.
+fn annotated(kind: ExprKind, ty: TypeId) -> Expr {
+    let mut x = e(kind, ty);
+    x.range = Some(Range { lo: Const::Int(0), hi: Const::Int(9), origin: RangeOrigin::Proven });
+    x.repr = Some(crate::expr::Repr::I32);
+    x
+}
+
 fn stmt(kind: StmtKind) -> Stmt {
     Stmt::new(kind, sp(9))
 }
@@ -928,6 +937,13 @@ pub fn full_program() -> Program {
             method: Method::Push,
             args: vec![e(ExprKind::Int(1), t_u8)],
         }),
+        // `append` haengt eine ganze Folge an (3.9); Formatversion 5.
+        stmt(StmtKind::MethodCall {
+            target: None,
+            receiver: Place::Var(v_vec),
+            method: Method::Append,
+            args: vec![e(ExprKind::Var(v_vec), t_vec)],
+        }),
         stmt(StmtKind::MethodCall {
             target: None,
             receiver: Place::Var(v_map),
@@ -942,6 +958,8 @@ pub fn full_program() -> Program {
         }),
         stmt(StmtKind::MethodCall { target: None, receiver: Place::Var(v_vec), method: Method::Clear, args: vec![] }),
         stmt(StmtKind::Skip(StreamRef::Var(v_trig))),
+        // Ein Ausdruck mit Intervall und Darstellung (M3, 3.4).
+        stmt(StmtKind::Assign { target: Place::Var(v_i), value: annotated(ExprKind::Int(3), t_int) }),
         stmt(StmtKind::Assign {
             target: Place::Index2(Box::new(Place::Var(v_mat)), e(ExprKind::Int(0), t_int), e(ExprKind::Int(1), t_int)),
             value: e(

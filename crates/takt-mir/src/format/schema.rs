@@ -180,7 +180,7 @@ codec_enum!(Observe {
     3 Verify { 1 one cond, 2 one message, 3 opt req },
     4 Verdict { 1 one pass, 2 opt message },
 });
-codec_enum!(Method { 0 Step, 1 Reset, 2 Block(1 one f), 3 Push, 4 Insert, 5 Remove, 6 Clear });
+codec_enum!(Method { 0 Step, 1 Reset, 2 Block(1 one f), 3 Push, 4 Insert, 5 Remove, 6 Clear, 7 Append });
 codec_enum!(StmtKind {
     0 Assign { 1 one target, 2 one value },
     1 Check { 1 one cond, 2 opt message, 3 opt confirm, 4 opt target, 5 opt req, 6 one kind },

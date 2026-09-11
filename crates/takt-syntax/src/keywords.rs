@@ -259,6 +259,7 @@ pub const RESERVED_MEMBERS: &[&str] = &[
     "encode",
     "default",
     "push",
+    "append",
     "get",
     "insert",
     "remove",

@@ -15,7 +15,7 @@ use crate::checks::SC7;
 
 /// Methoden, die ihren Empfaenger veraendern: sie sind Anweisungen, nie Teil
 /// eines Ausdrucks (4.4, 5.7).
-pub(crate) const MUTATING: &[&str] = &["push", "insert", "remove", "clear", "skip", "step", "reset"];
+pub(crate) const MUTATING: &[&str] = &["push", "append", "insert", "remove", "clear", "skip", "step", "reset"];
 use crate::symbols::Entity;
 
 /// Code der `every`/Handler-Regel.
@@ -754,6 +754,19 @@ impl Lowerer<'_> {
                 let a = self.method_args(args, &[u8], span)?;
                 (Method::Push, Some(self.tys.bool), a)
             }
+            // 3.9: `append` haengt eine ganze Folge an. Die Quelle darf eine
+            // andere Kapazitaet haben als das Ziel — nur der Elementtyp muss
+            // passen —, darum wird sie ohne Zieltyp gesenkt und selbst geprueft.
+            ("append", Type::Vec { elem, .. }) => {
+                let want = *elem;
+                let what = format!("vec<{}, …>", self.type_name(want));
+                let a = self.append_arg(args, span, |t| matches!(t, Type::Vec { elem, .. } if *elem == want), &what)?;
+                (Method::Append, Some(self.tys.bool), a)
+            }
+            ("append", Type::Bytes { .. }) => {
+                let a = self.append_arg(args, span, |t| matches!(t, Type::Bytes { .. }), "bytes<…>")?;
+                (Method::Append, Some(self.tys.bool), a)
+            }
             ("clear", Type::Vec { .. } | Type::Bytes { .. } | Type::Map { .. }) => {
                 (Method::Clear, None, self.method_args(args, &[], span)?)
             }
@@ -866,6 +879,29 @@ impl Lowerer<'_> {
             return None;
         }
         Some(id)
+    }
+
+    /// Das eine Argument von `append`: genau eines, positional, und sein Typ
+    /// muss `ok` erfuellen. Anders als [`Self::method_args`] gibt es keinen
+    /// Zieltyp — `bytes<24>` an `bytes<264>` anzuhaengen ist der Normalfall.
+    fn append_arg(
+        &mut self,
+        args: &[ast::Arg],
+        span: Span,
+        ok: impl Fn(&Type) -> bool,
+        what: &str,
+    ) -> Option<Vec<Expr>> {
+        if args.len() != 1 || args[0].name.is_some() {
+            self.error(SC3, span, "ein positionales Argument erwartet");
+            return None;
+        }
+        let x = self.expr(&args[0].value, None)?;
+        if !ok(self.ty(x.ty)) {
+            let got = self.type_name(x.ty);
+            self.error(SC3, args[0].value.span, format!("`append` erwartet `{what}`, gefunden `{got}`"));
+            return None;
+        }
+        Some(vec![x])
     }
 
     fn method_args(&mut self, args: &[ast::Arg], tys: &[TypeId], span: Span) -> Option<Vec<Expr>> {

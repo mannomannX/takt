@@ -1,0 +1,48 @@
+(system
+  (language 1)
+  (tick 1ms))
+(const SC_FRAME :u8 0xCC)
+(record Head layout=big
+  (start: u8 = 0xCC)
+  (len: u8)
+  (kind: u8))
+(output frame_len :int in 0..99 @hw("o/len") safe=0)
+(output sent :bool @hw("o/sent") safe=false)
+(fn checksum (b:bytes<64> len:int in 0..64) -> u8
+  (var s :u8 0)
+  (for i in (range 64)
+    (if (>= i len)
+      (break))
+    (= s (call wrapping_add s (index b i))))
+  (return s))
+(fn frame (kind:u8 pd:bytes<32> pdl:int in 0..32) -> bytes<64>
+  (var out :bytes<64> default)
+  (.append out (.encode (Head start=SC_FRAME len=0 kind=kind)))
+  (for i in (range 32)
+    (if (>= i pdl)
+      (break))
+    (.push out (index pd i)))
+  (= (index out 1) (as (+ 3 pdl) u8))
+  (var csum (call checksum out (+ 3 pdl)))
+  (.push out csum)
+  (return out))
+(machine builder
+  (var payload :bytes<32> default)
+  (var wire :bytes<64> default)
+  (var ok :bool false)
+  (var laenge :int in 0..64 0)
+  (initial BUILD)
+  (state BUILD
+    (enter
+      (.push payload 0x11)
+      (.push payload 0x22)
+      (= wire (call frame 0x07 payload 2))
+      (= laenge (.len wire))
+      (= frame_len laenge))
+    (after 2ms -> COPY))
+  (state COPY
+    (var small :bytes<4> default)
+    (enter
+      (= ok (.append small wire))
+      (= sent ok))
+    (after 2ms -> BUILD)))

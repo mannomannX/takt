@@ -260,3 +260,94 @@ machine m:
     let sum = |c: takt_mir::fns::CostVec| c.i32 + c.i64;
     assert!(sum(b4.activation) > sum(b1.activation), "vier Durchlaeufe kosten mehr: {:?} vs {:?}", b4, b1);
 }
+
+#[test]
+fn a_sequence_var_always_carries_an_initialiser() {
+    // Pruefung 25 (Definite Assignment je Eintritt) hat heute keinen eigenen
+    // Fall: Die Grammatik verlangt an jedem `var` ein `=` (2.3, `var_decl`),
+    // also ist eine gehobene Variable nie uninitialisiert. Faellt diese
+    // Schranke, muss 25 einen Korpus bekommen — dann schlaegt dieser Test
+    // fehl und erinnert daran.
+    let src = format!(
+        "{HEAD}{OUT}{}",
+        "machine m:
+    initial RUN
+    state RUN:
+        sequence:
+            var k : int in 0..9
+            step \"setzen\":
+                k = 3
+            step \"lesen\":
+                n = k
+            -> RUN
+"
+    );
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(&src, &options);
+    let codes: Vec<&str> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code).collect();
+    assert!(codes.contains(&"P"), "ein `var` ohne Initialisierer ist ein Syntaxfehler, kein SC-25: {codes:?}");
+}
+
+#[test]
+fn an_error_inside_a_format_string_points_at_the_placeholder() {
+    // FB-31: Die Spans eines Platzhalter-Ausdrucks zaehlen ab dem Platzhalter,
+    // nicht ab dem Dateianfang. Ohne Verschiebung meldete jeder Namensfehler
+    // in `log "… {x}"` die Stelle 1:1 — in einer langen Datei unbrauchbar.
+    let src = format!(
+        "{HEAD}{OUT}{}",
+        "machine m:
+    var zaehler : int in 0..99 = 0
+    initial RUN
+    state RUN:
+        enter:
+            log \"start {zaehlr}\"
+        loop:
+            n = zaehler
+"
+    );
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(&src, &options);
+    let d = out.diagnostics.iter().find(|d| d.code == "SC-2").expect("der Tippfehler wird gemeldet");
+    let at = src[d.span.start as usize..d.span.end as usize].to_string();
+    assert_eq!(at, "zaehlr", "der Span zeigt genau auf den Namen im Platzhalter");
+}
+
+#[test]
+fn append_costs_the_capacity_of_its_source() {
+    // 9.4.3: `append` kopiert, die obere Schranke ist die Kapazitaet der
+    // Quelle — nicht ihre aktuelle Laenge, die statisch niemand kennt.
+    let small = compile(
+        "\
+machine m:
+    var a : bytes<4> = default
+    var b : bytes<512> = default
+    initial RUN
+    state RUN:
+        loop:
+            b.append(a)
+            n = 0
+",
+    )
+    .0;
+    let large = compile(
+        "\
+machine m:
+    var a : bytes<256> = default
+    var b : bytes<512> = default
+    initial RUN
+    state RUN:
+        loop:
+            b.append(a)
+            n = 0
+",
+    )
+    .0;
+    let (s, l) = (small.machines[0].budget.expect("B"), large.machines[0].budget.expect("B"));
+    assert!(
+        l.activation.mem > s.activation.mem,
+        "die groessere Quelle kostet mehr: {} vs {}",
+        l.activation.mem,
+        s.activation.mem
+    );
+    assert_eq!(l.activation.mem - s.activation.mem, 252, "genau die Differenz der Kapazitaeten");
+}

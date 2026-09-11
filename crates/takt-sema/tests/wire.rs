@@ -319,3 +319,125 @@ machine m:
     assert!(trace.contains("t=0 out frame_len 8\n"), "Kopf plus Nutzlast: {trace}");
     assert!(trace.contains("t=0 out kind_ok true\n"), "der Rahmen liest sich zurueck: {trace}");
 }
+
+/// 3.9: `append` haengt eine ganze Folge an; die Kapazitaeten von Quelle und
+/// Ziel duerfen sich unterscheiden.
+#[test]
+fn append_copies_a_whole_sequence() {
+    let trace = simulate(
+        "\
+output len : int in 0..99 @ hw(\"o/len\") with safe = 0
+
+machine m:
+    var src : bytes<4> = default
+    var dst : bytes<64> = default
+    initial RUN
+    state RUN:
+        enter:
+            src.push(1)
+            src.push(2)
+            src.push(3)
+            dst.push(9)
+            dst.append(src)
+            len = dst.len
+        after 3 ms: -> RUN
+",
+        1,
+    );
+    assert!(trace.contains("out len 4"), "1 + 3 Byte: {trace}");
+}
+
+/// 3.9: Passt die Quelle nicht vollstaendig, bleibt das Ziel unveraendert —
+/// ein Teilanhang liesse einen halben Rahmen im Puffer zurueck.
+#[test]
+fn append_is_all_or_nothing() {
+    let trace = simulate(
+        "\
+output len  : int in 0..99 @ hw(\"o/len\")  with safe = 0
+output voll : bool         @ hw(\"o/voll\") with safe = false
+
+machine m:
+    var src : bytes<8> = default
+    var dst : bytes<4> = default
+    var ok  : bool = false
+    initial RUN
+    state RUN:
+        enter:
+            src.push(1)
+            src.push(2)
+            src.push(3)
+            src.push(4)
+            src.push(5)
+            dst.push(9)
+            ok   = dst.append(src)
+            voll = not ok
+            len  = dst.len
+        after 3 ms: -> RUN
+",
+        1,
+    );
+    assert!(trace.contains("out voll true"), "der Anhang scheitert: {trace}");
+    assert!(trace.contains("out len 1"), "das Ziel bleibt unveraendert: {trace}");
+}
+
+/// `append` traegt auch auf `vec<T, N>`; der Elementtyp muss passen, die
+/// Kapazitaet nicht.
+#[test]
+fn append_works_on_vectors_too() {
+    let trace = simulate(
+        "\
+output len : int in 0..99 @ hw(\"o/len\") with safe = 0
+
+machine m:
+    var a : vec<int, 4> = default
+    var b : vec<int, 8> = default
+    initial RUN
+    state RUN:
+        enter:
+            a.push(7)
+            a.push(8)
+            b.push(1)
+            b.append(a)
+            len = b.len
+        after 3 ms: -> RUN
+",
+        1,
+    );
+    assert!(trace.contains("out len 3"), "1 + 2 Elemente: {trace}");
+}
+
+/// Der Elementtyp muss passen, und `append` ist eine Anweisung (4.4).
+#[test]
+fn append_rejects_a_foreign_element_type_and_nesting() {
+    let wrong = errors(
+        "\
+output v : bool @ hw(\"o/v\") with safe = false
+
+machine m:
+    var a : vec<bool, 4> = default
+    var b : vec<int, 8> = default
+    initial RUN
+    state RUN:
+        enter:
+            b.append(a)
+        after 3 ms: -> RUN
+",
+    );
+    assert!(wrong.contains("`append` erwartet `vec<int, …>`"), "Elementtyp: {wrong}");
+
+    let nested = errors(
+        "\
+output v : bool @ hw(\"o/v\") with safe = false
+
+machine m:
+    var a : bytes<4> = default
+    var b : bytes<8> = default
+    initial RUN
+    state RUN:
+        loop:
+            if b.append(a):
+                v = true
+",
+    );
+    assert!(nested.contains("nur als Anweisung"), "keine Verschachtelung (4.4): {nested}");
+}

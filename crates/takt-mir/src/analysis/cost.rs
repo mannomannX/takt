@@ -12,7 +12,7 @@ use crate::Program;
 use crate::expr::{Expr, ExprKind, Repr};
 use crate::fns::CostVec;
 use crate::machine::{Budget, Machine};
-use crate::stmt::{Block, Place, Stmt, StmtKind};
+use crate::stmt::{Block, Method, Place, Stmt, StmtKind};
 use crate::types::{FloatWidth, Type};
 
 /// Rechnet je Maschine `B_m` (Aktivierung) und `F_m` (Fault-Pfad) und traegt
@@ -106,10 +106,16 @@ fn stmt_cost(s: &Stmt, types: &[Type], natives: &[CostVec]) -> CostVec {
         StmtKind::Every { period, body, .. } => expr_cost(period, types, natives) + block_cost(body, types, natives),
         StmtKind::At { time, body } => expr_cost(time, types, natives) + block_cost(body, types, natives),
         StmtKind::Send { value, .. } | StmtKind::Return(value) => expr_cost(value, types, natives),
-        StmtKind::MethodCall { target, args, .. } => {
+        StmtKind::MethodCall { target, method, args, .. } => {
             let a = args.iter().fold(CostVec::default(), |acc, x| acc + expr_cost(x, types, natives));
             let t = target.as_ref().map_or(CostVec::default(), |p| place_cost(p, types, natives));
-            a + t + CostVec { call: 1, ..CostVec::default() }
+            // `append` kopiert; die obere Schranke ist die Kapazitaet der
+            // Quelle (3.9), nicht ihre aktuelle Laenge. Alles andere ist O(1).
+            let copy = match (method, args.first()) {
+                (Method::Append, Some(src)) => CostVec { mem: capacity(src, types), ..CostVec::default() },
+                _ => CostVec::default(),
+            };
+            a + t + copy + CostVec { call: 1, ..CostVec::default() }
         }
         StmtKind::Job { args, native, .. } => {
             let a = args.iter().fold(CostVec::default(), |acc, x| acc + expr_cost(x, types, natives));
