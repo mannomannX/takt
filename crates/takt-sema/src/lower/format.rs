@@ -20,7 +20,7 @@ impl Lowerer<'_> {
         let pieces = match subtext::format_text(&lit.value) {
             Ok(p) => p,
             Err(d) => {
-                let d = shift(d, lit.span);
+                let d = shift(d, lit.span, 0);
                 self.diags.push(d);
                 return None;
             }
@@ -34,7 +34,7 @@ impl Lowerer<'_> {
                     len_max += t.len() as u32;
                     out.push(FormatPiece::Text(t));
                 }
-                Piece::Expr(text) => {
+                Piece::Expr(text, at) => {
                     let spec = match it.peek() {
                         Some(Piece::Spec(_)) => match it.next() {
                             Some(Piece::Spec(s)) => Some(s),
@@ -45,18 +45,25 @@ impl Lowerer<'_> {
                     let edition = self.edition;
                     let toks = tokenize_in(&text, edition);
                     if let Some(e) = toks.errors.first() {
-                        self.diags.push(shift(e.clone(), lit.span));
+                        self.diags.push(shift(e.clone(), lit.span, at));
                         return None;
                     }
                     let ast = match parse_expr(&toks) {
                         Ok(e) => e,
                         Err(d) => {
-                            self.diags.push(shift(d, lit.span));
+                            self.diags.push(shift(d, lit.span, at));
                             return None;
                         }
                     };
-                    let expr = self.expr(&ast, None)?;
-                    let mut expr = expr;
+                    // Die Spans des Teilausdrucks zaehlen ab dem Anfang des
+                    // Platzhalters, nicht ab dem Dateianfang. Ohne Verschiebung
+                    // landet jede Diagnose aus `expr` auf 1:1 (FB-31).
+                    let first = self.diags.len();
+                    let expr = self.expr(&ast, None);
+                    for d in &mut self.diags[first..] {
+                        d.span = shift_span(d.span, lit.span, at);
+                    }
+                    let mut expr = expr?;
                     expr.span = lit.span;
                     let width = self.placeholder_width(expr.ty, spec.as_deref(), lit.span)?;
                     len_max += width;
@@ -133,8 +140,15 @@ impl Lowerer<'_> {
 }
 
 /// Verschiebt eine Diagnose relativ zum Stringinhalt an das Literal.
-fn shift(mut d: takt_diag::Diagnostic, lit: Span) -> takt_diag::Diagnostic {
-    d.span = Span { file: lit.file, start: lit.start + 1 + d.span.start, end: lit.start + 1 + d.span.end };
+fn shift(mut d: takt_diag::Diagnostic, lit: Span, at: u32) -> takt_diag::Diagnostic {
+    d.span = shift_span(d.span, lit, at);
     d.code = SC16;
     d
+}
+
+/// Rechnet einen Span im Platzhaltertext auf die Datei um: Anfang des
+/// Literals, das oeffnende Anfuehrungszeichen, der Versatz des Platzhalters.
+fn shift_span(inner: Span, lit: Span, at: u32) -> Span {
+    let base = lit.start + 1 + at;
+    Span { file: lit.file, start: base + inner.start, end: base + inner.end }
 }

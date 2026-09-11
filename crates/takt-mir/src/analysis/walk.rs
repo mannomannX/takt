@@ -354,18 +354,18 @@ impl<'p> Walk<'p> {
             ExprKind::Unary { op, expr } => {
                 let i = self.expr(expr, f);
                 match op {
-                    UnaryOp::Neg => i.neg(),
+                    UnaryOp::Neg => -i,
                     _ => Interval::Top,
                 }
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 let (a, b) = (self.expr(lhs, f), self.expr(rhs, f));
                 match op {
-                    BinaryOp::Add => a.add(b),
-                    BinaryOp::Sub => a.sub(b),
-                    BinaryOp::Mul => a.mul(b),
-                    BinaryOp::Div => a.div(b),
-                    BinaryOp::Rem => a.rem(b),
+                    BinaryOp::Add => a + b,
+                    BinaryOp::Sub => a - b,
+                    BinaryOp::Mul => a * b,
+                    BinaryOp::Div => a / b,
+                    BinaryOp::Rem => a % b,
                     _ => Interval::Top,
                 }
             }

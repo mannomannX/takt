@@ -286,7 +286,7 @@ fn check_sub(v: &Vector) -> Result<(), String> {
             ps.into_iter()
                 .map(|p| match p {
                     FormatPiece::Text(t) => format!("TEXT({t})"),
-                    FormatPiece::Expr(t) => format!("EXPR({t})"),
+                    FormatPiece::Expr(t, _) => format!("EXPR({t})"),
                     FormatPiece::Spec(t) => format!("SPEC({t})"),
                 })
                 .collect()

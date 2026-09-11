@@ -145,62 +145,6 @@ impl Domain for Intervals {
 /// Intervallarithmetik (3.4). Jede Operation ist total: was nicht bewiesen
 /// werden kann, ist `Top`.
 impl Interval {
-    /// Summe.
-    pub fn add(self, o: Interval) -> Interval {
-        Self::lift(self, o, |a, b, c, d| Some((a.checked_add(c)?, b.checked_add(d)?)))
-    }
-
-    /// Differenz.
-    pub fn sub(self, o: Interval) -> Interval {
-        Self::lift(self, o, |a, b, c, d| Some((a.checked_sub(d)?, b.checked_sub(c)?)))
-    }
-
-    /// Produkt: alle vier Eckprodukte, weil Vorzeichen wechseln koennen.
-    pub fn mul(self, o: Interval) -> Interval {
-        Self::lift(self, o, |a, b, c, d| {
-            let e = [a.checked_mul(c)?, a.checked_mul(d)?, b.checked_mul(c)?, b.checked_mul(d)?];
-            Some((*e.iter().min()?, *e.iter().max()?))
-        })
-    }
-
-    /// Quotient. Enthaelt der Divisor die Null, ist das Ergebnis `Top` —
-    /// die Pruefung faengt den Fall zur Laufzeit (4.1).
-    pub fn div(self, o: Interval) -> Interval {
-        if o.contains_zero() {
-            return Interval::Top;
-        }
-        Self::lift(self, o, |a, b, c, d| {
-            let e = [a.checked_div(c)?, a.checked_div(d)?, b.checked_div(c)?, b.checked_div(d)?];
-            Some((*e.iter().min()?, *e.iter().max()?))
-        })
-    }
-
-    /// Rest. Der Betrag ist kleiner als der des Divisors; das Vorzeichen
-    /// folgt dem Dividenden (4.1, trunkierend).
-    pub fn rem(self, o: Interval) -> Interval {
-        if o.contains_zero() {
-            return Interval::Top;
-        }
-        let Interval::Int { lo: c, hi: d } = o else { return Interval::Top };
-        let m = c.abs().max(d.abs()) - 1;
-        match self {
-            Interval::Bottom => Interval::Bottom,
-            Interval::Int { lo, .. } if lo >= 0 => Interval::Int { lo: 0, hi: m },
-            _ => Interval::Int { lo: -m, hi: m },
-        }
-    }
-
-    /// Vorzeichenwechsel.
-    pub fn neg(self) -> Interval {
-        match self {
-            Interval::Int { lo, hi } => match (lo.checked_neg(), hi.checked_neg()) {
-                (Some(a), Some(b)) => Interval::Int { lo: b, hi: a },
-                _ => Interval::Top,
-            },
-            other => other,
-        }
-    }
-
     /// Betrag.
     pub fn abs(self) -> Interval {
         match self {
@@ -262,5 +206,85 @@ impl Interval {
     /// Alles ab `lo` einschliesslich.
     pub fn at_least(lo: i128) -> Interval {
         Interval::Int { lo, hi: i128::from(i64::MAX) }
+    }
+}
+
+/// Summe.
+impl std::ops::Add for Interval {
+    type Output = Interval;
+
+    fn add(self, o: Interval) -> Interval {
+        Self::lift(self, o, |a, b, c, d| Some((a.checked_add(c)?, b.checked_add(d)?)))
+    }
+}
+
+/// Differenz.
+impl std::ops::Sub for Interval {
+    type Output = Interval;
+
+    fn sub(self, o: Interval) -> Interval {
+        Self::lift(self, o, |a, b, c, d| Some((a.checked_sub(d)?, b.checked_sub(c)?)))
+    }
+}
+
+/// Produkt: alle vier Eckprodukte, weil Vorzeichen wechseln koennen.
+impl std::ops::Mul for Interval {
+    type Output = Interval;
+
+    fn mul(self, o: Interval) -> Interval {
+        Self::lift(self, o, |a, b, c, d| {
+            let e = [a.checked_mul(c)?, a.checked_mul(d)?, b.checked_mul(c)?, b.checked_mul(d)?];
+            Some((*e.iter().min()?, *e.iter().max()?))
+        })
+    }
+}
+
+/// Quotient. Enthaelt der Divisor die Null, ist das Ergebnis `Top` —
+/// die Pruefung faengt den Fall zur Laufzeit (4.1).
+impl std::ops::Div for Interval {
+    type Output = Interval;
+
+    fn div(self, o: Interval) -> Interval {
+        if o.contains_zero() {
+            return Interval::Top;
+        }
+        Self::lift(self, o, |a, b, c, d| {
+            let e = [a.checked_div(c)?, a.checked_div(d)?, b.checked_div(c)?, b.checked_div(d)?];
+            Some((*e.iter().min()?, *e.iter().max()?))
+        })
+    }
+}
+
+/// Rest. Der Betrag ist kleiner als der des Divisors; das Vorzeichen
+/// folgt dem Dividenden (4.1, trunkierend).
+impl std::ops::Rem for Interval {
+    type Output = Interval;
+
+    fn rem(self, o: Interval) -> Interval {
+        if o.contains_zero() {
+            return Interval::Top;
+        }
+        let Interval::Int { lo: c, hi: d } = o else { return Interval::Top };
+        let m = c.abs().max(d.abs()) - 1;
+        match self {
+            Interval::Bottom => Interval::Bottom,
+            Interval::Int { lo, .. } if lo >= 0 => Interval::Int { lo: 0, hi: m },
+            _ => Interval::Int { lo: -m, hi: m },
+        }
+    }
+}
+
+/// Vorzeichenwechsel.
+impl std::ops::Neg for Interval {
+    type Output = Interval;
+
+    fn neg(self) -> Interval {
+        match self {
+            Interval::Int { lo, hi } => match (lo.checked_neg(), hi.checked_neg()) {
+                (Some(a), Some(b)) => Interval::Int { lo: b, hi: a },
+                _ => Interval::Top,
+            },
+            other => other,
+        }
     }
 }

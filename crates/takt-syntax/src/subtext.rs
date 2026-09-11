@@ -11,8 +11,10 @@ use crate::token::{ErrorCode, lex_diagnostic};
 pub enum FormatPiece {
     /// Text, Escapes `{{` und `}}` bereits aufgeloest.
     Text(String),
-    /// Ausdruck zwischen `{` und `}` beziehungsweise `:`, unzerlegt.
-    Expr(String),
+    /// Ausdruck zwischen `{` und `}` beziehungsweise `:`, unzerlegt, mit
+    /// seinem Versatz im Literaltext — damit eine Diagnose aus dem
+    /// Teilausdruck auf die richtige Spalte zeigt.
+    Expr(String, u32),
     /// Formatangabe nach `:`: `hex`, `.3`, `08`.
     Spec(String),
 }
@@ -108,7 +110,7 @@ pub fn format_text(s: &str) -> Result<Vec<FormatPiece>, Diagnostic> {
                 if expr.trim().is_empty() {
                     return Err(err(ErrorCode::Format, open, "leerer Platzhalter"));
                 }
-                out.push(FormatPiece::Expr(expr));
+                out.push(FormatPiece::Expr(expr, open as u32 + 1));
                 if let Some(sp) = spec {
                     if !format_spec(&sp) {
                         return Err(err(ErrorCode::Format, open, "Formatangabe: hex, .N oder N"));
