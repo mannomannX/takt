@@ -88,11 +88,11 @@ SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),fertig
 SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig
 SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),offen
 SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M1/M2 (Interpreter),offen
-SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M3/M4,offen
-SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M3/M4,offen
-SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M3/M4,teilweise
-SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M3/M4,offen
-SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3/M4,offen
+SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,je Meilenstein,offen
+SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),offen
+SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),teilweise
+SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M6 (stdlib),offen
+SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3 (Gate),teilweise
 SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),offen
 SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4/M5 (Runtime),offen
 SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M4/M5 (Runtime),offen
@@ -701,13 +701,13 @@ PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 
 THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M1/M2 (Interpreter),offen
 THM-Lemma-9.6.1.,Satz/Lemma,9.6.1,Lemma 9.6.1.,,M1/M2 (Interpreter),fertig
 THM-Satz-9.9.1,Satz/Lemma,9.9.1,Satz 9.9.1,,M1/M2 (Interpreter),offen
-PAR-11.2-Große_Werte,Absatz/Regel,11.2,Große Werte,,M3/M4,offen
-PAR-11.2-Statischer_Scratch,Absatz/Regel,11.2,Statischer Scratch,,M3/M4,offen
-PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Absatz/Regel,11.2,Overlay exklusiver Zustandsspeicher,,M3/M4,offen
-PAR-11.2-DFA_Tabellen,Absatz/Regel,11.2,DFA-Tabellen,,M3/M4,offen
-PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M3/M4,offen
-PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M3/M4,teilweise
-PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M3/M4,teilweise
+PAR-11.2-Große_Werte,Absatz/Regel,11.2,Große Werte,,M1-M4 (Lowering),offen
+PAR-11.2-Statischer_Scratch,Absatz/Regel,11.2,Statischer Scratch,,M1-M4 (Lowering),offen
+PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Absatz/Regel,11.2,Overlay exklusiver Zustandsspeicher,,M1-M4 (Lowering),offen
+PAR-11.2-DFA_Tabellen,Absatz/Regel,11.2,DFA-Tabellen,,M1-M4 (Lowering),offen
+PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M4 (Codegen),offen
+PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M4 (Codegen),teilweise
+PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M4 (Codegen),teilweise
 PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M4/M5 (Runtime),offen
 PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M4/M5 (Runtime),offen
 PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M4/M5 (Runtime),offen
@@ -812,47 +812,50 @@ QUAL-Good,Qualität,3.5,Good,,M1 (Kernsemantik),offen
 QUAL-Suspect,Qualität,3.5,Suspect,,M1 (Kernsemantik),offen
 QUAL-Stale,Qualität,3.5,Stale,,M1 (Kernsemantik),offen
 QUAL-Bad,Qualität,3.5,Bad,,M1 (Kernsemantik),offen
-LIB-clamp,Standardbibliothek,11.4,fn clamp[U],,M3/M4,fertig
-LIB-map_range,Standardbibliothek,11.4,"fn map_range[U, V]",,M3/M4,offen
-LIB-interp,Standardbibliothek,11.4,"fn interp[U, V]",,M3/M4,fertig
-LIB-lowpass,Standardbibliothek,11.4,block lowpass[U],,M3/M4,offen
-LIB-hysteresis,Standardbibliothek,11.4,block hysteresis[U],,M3/M4,offen
-LIB-debounce,Standardbibliothek,11.4,block debounce,,M3/M4,offen
-LIB-rising,Standardbibliothek,11.4,block rising,,M3/M4,offen
-LIB-integrate,Standardbibliothek,11.4,block integrate[U],,M3/M4,offen
-LIB-rate,Standardbibliothek,11.4,block rate[U],,M3/M4,offen
-LIB-window_min,Standardbibliothek,11.4,"block window_min[U, const N]",,M3/M4,offen
-LIB-rate_limiter,Standardbibliothek,11.4,block rate_limiter[U],,M3/M4,offen
-LIB-pid,Standardbibliothek,11.4,"block pid[O, E]",,M3/M4,offen
-LIB-stopwatch,Standardbibliothek,11.4,block stopwatch,,M3/M4,offen
-LIB-pulse_counter,Standardbibliothek,11.4,block pulse_counter,,M3/M4,offen
-LIB-cross_check,Standardbibliothek,11.4,block cross_check[U],,M3/M4,offen
-LIB-vote2oo3,Standardbibliothek,11.4,block vote2oo3[U],,M3/M4,offen
-LIB-hold_last,Standardbibliothek,11.4,block hold_last[U],,M3/M4,offen
-LIB-reader,Standardbibliothek,11.4,block reader[const N],,M3/M4,offen
-LIB-writer,Standardbibliothek,11.4,block writer[const N],,M3/M4,offen
-LIB-pid_i,Standardbibliothek,11.4,"block pid_i[O, E]",,M3/M4,offen
-LIB-sha256_init,Standardbibliothek,11.4,native fn sha256_init / sha256_update,,M3/M4,offen
-LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M3/M4,offen
-LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M3/M4,offen
-LIB-solve,Standardbibliothek,11.4,fn solve,,M3/M4,offen
-LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M3/M4,offen
-LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M3/M4,offen
-CLI-check,Werkzeug,11.1,takt check,,M3/M4,fertig
-CLI-sim,Werkzeug,11.1,takt sim,,M3/M4,offen
-CLI-run,Werkzeug,11.1,takt run,,M3/M4,offen
-CLI-replay,Werkzeug,11.1,takt replay,,M3/M4,offen
-CLI-test,Werkzeug,11.1,takt test,,M3/M4,offen
-CLI-campaign,Werkzeug,11.1,takt campaign,,M3/M4,offen
-CLI-driver-test,Werkzeug,11.1,takt driver-test,,M3/M4,offen
-CLI-prove,Werkzeug,11.1,takt prove,,M3/M4,offen
-CLI-fmt,Werkzeug,11.1,takt fmt,,M3/M4,fertig
-CLI-size,Werkzeug,11.1,takt size,,M3/M4,fertig
-CLI-graph,Werkzeug,11.1,takt graph,,M3/M4,offen
-CLI-bench,Werkzeug,11.1,takt bench,,M3/M4,offen
-CLI-tune,Werkzeug,11.1,takt tune,,M3/M4,offen
-CLI-migrate,Werkzeug,11.1,takt migrate,,M3/M4,offen
-CLI-import-c,Werkzeug,11.1,takt import-c,,M3/M4,offen
+LIB-clamp,Standardbibliothek,11.4,fn clamp[U],,M6 (stdlib),fertig
+LIB-map_range,Standardbibliothek,11.4,"fn map_range[U, V]",,M6 (stdlib),offen
+LIB-interp,Standardbibliothek,11.4,"fn interp[U, V]",,M6 (stdlib),fertig
+LIB-lowpass,Standardbibliothek,11.4,block lowpass[U],,M6 (stdlib),offen
+LIB-hysteresis,Standardbibliothek,11.4,block hysteresis[U],,M6 (stdlib),offen
+LIB-debounce,Standardbibliothek,11.4,block debounce,,M6 (stdlib),offen
+LIB-rising,Standardbibliothek,11.4,block rising,,M6 (stdlib),offen
+LIB-integrate,Standardbibliothek,11.4,block integrate[U],,M6 (stdlib),offen
+LIB-rate,Standardbibliothek,11.4,block rate[U],,M6 (stdlib),offen
+LIB-window_min,Standardbibliothek,11.4,"block window_min[U, const N]",,M6 (stdlib),offen
+LIB-rate_limiter,Standardbibliothek,11.4,block rate_limiter[U],,M6 (stdlib),offen
+LIB-pid,Standardbibliothek,11.4,"block pid[O, E]",,M6 (stdlib),offen
+LIB-stopwatch,Standardbibliothek,11.4,block stopwatch,,M6 (stdlib),offen
+LIB-pulse_counter,Standardbibliothek,11.4,block pulse_counter,,M6 (stdlib),offen
+LIB-cross_check,Standardbibliothek,11.4,block cross_check[U],,M6 (stdlib),offen
+LIB-vote2oo3,Standardbibliothek,11.4,block vote2oo3[U],,M6 (stdlib),offen
+LIB-hold_last,Standardbibliothek,11.4,block hold_last[U],,M6 (stdlib),offen
+LIB-reader,Standardbibliothek,11.4,block reader[const N],,M6 (stdlib),offen
+LIB-writer,Standardbibliothek,11.4,block writer[const N],,M6 (stdlib),offen
+LIB-pid_i,Standardbibliothek,11.4,"block pid_i[O, E]",,M6 (stdlib),offen
+LIB-sha256_init,Standardbibliothek,11.4,native fn sha256_init / sha256_update,,M6 (stdlib),offen
+LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M6 (stdlib),offen
+LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M6 (stdlib),offen
+LIB-solve,Standardbibliothek,11.4,fn solve,,M6 (stdlib),offen
+LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M6 (stdlib),offen
+LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M6 (stdlib),offen
+CLI-check,Werkzeug,11.1,takt check,,M0-M3,fertig
+CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig
+CLI-run,Werkzeug,11.1,takt run,,M4 (Codegen),offen
+CLI-replay,Werkzeug,11.1,takt replay,,M4 (Codegen),offen
+CLI-test,Werkzeug,11.1,takt test,,M4 (Codegen),offen
+CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),offen
+CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen
+CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),offen
+CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig
+CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig
+CLI-graph,Werkzeug,11.1,takt graph,,M4 (Codegen),offen
+CLI-bench,Werkzeug,11.1,takt bench,,M5 (Embedded),offen
+CLI-tune,Werkzeug,11.1,takt tune,,M6 (v1.1),offen
+CLI-migrate,Werkzeug,11.1,takt migrate,,M7 (Werkzeuge),offen
+CLI-import-c,Werkzeug,11.1,takt import-c,,M7 (Werkzeuge),offen
+CLI-mir,Werkzeug,11.1,takt mir,,M0,fertig
+CLI-parse,Werkzeug,11.1,takt parse,,M0,fertig
+CLI-tokens,Werkzeug,11.1,takt tokens,,M0,fertig
 EX-14.1,Beispiel (Golden-Test),14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,je Meilenstein,teilweise
 EX-14.2,Beispiel (Golden-Test),14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,je Meilenstein,teilweise
 EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,je Meilenstein,teilweise

@@ -351,3 +351,25 @@ machine m:
     );
     assert_eq!(l.activation.mem - s.activation.mem, 252, "genau die Differenz der Kapazitaeten");
 }
+
+#[test]
+fn size_lists_the_dfa_tables_as_open_until_codegen() {
+    // 11.5 zaehlt die DFA-Tabellen der Muster zu den Posten. Die Rechnung
+    // steht, aber gefuellt werden die Tabellen erst vom Codegen — der
+    // Interpreter gleicht direkt ab (plan/m2.md 1.1). Der Posten steht
+    // darum auf `offen`: eine Null, die noch niemand gerechnet hat, ist
+    // kein Messwert. Schlaegt der Test fehl, weil er nun `exakt` ist, hat
+    // der Codegen die Tabellen gebaut — dann ist das die richtige Meldung.
+    let (p, _, _) = compile(
+        "\
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = 0
+",
+    );
+    let text = takt_mir::analysis::size::size(&p).lines().join("\n");
+    let line = text.lines().find(|l| l.contains("DFA")).expect("der Posten steht in der Liste");
+    assert!(line.contains("offen"), "ohne Codegen ist er offen: {line}");
+}

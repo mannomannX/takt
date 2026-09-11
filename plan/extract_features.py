@@ -41,7 +41,11 @@ MILESTONE_BY_CHAPTER = {
     "8": "M2 (Ströme)",
     "9": "M1/M2 (Interpreter)",
     "10": "M3 (Gate)",
-    "11": "M3/M4",
+    # Kapitel 11 mischt vier Dinge mit sehr verschiedenen Zeitpunkten:
+    # 11.1 Komponenten (durchgehend), 11.2 Lowering (M1-M4), 11.3
+    # Build-Regeln (M4), 11.4 Standardbibliothek (M6) und 11.5 `takt size`
+    # (M3). MILESTONE_BY_SECTION loest sie auf; ohne Eintrag gilt 11 -> M4.
+    "11": "M4 (Codegen)",
     "12": "M4/M5 (Runtime)",
     "13": "M4–M7",
     "14": "je Meilenstein",
@@ -97,9 +101,24 @@ def stage_of(text):
     return "v" + m.group(1) if m else ""
 
 
+# Abschnitt (zwei Ebenen) -> Meilenstein, feiner als das Kapitel. Greift
+# nach MILESTONE_OVERRIDE und vor MILESTONE_BY_CHAPTER.
+MILESTONE_BY_SECTION = {
+    "11.1": "je Meilenstein",   # Komponentenliste: waechst mit jedem Strang
+    "11.2": "M1-M4 (Lowering)",  # Lowering-Skizze: Sema baut, Codegen nutzt
+    "11.3": "M4 (Codegen)",      # Sim/HW-Build, reproduzierbare Builds
+    "11.4": "M6 (stdlib)",       # Standardbibliothek in Takt selbst
+    "11.5": "M3 (Gate)",         # `takt size` — mit M3 gebaut
+}
+
+
 def milestone(entry_id, kategorie, section, stage):
     if entry_id in MILESTONE_OVERRIDE:
         return MILESTONE_OVERRIDE[entry_id]
+    # Die Abschnittszuordnung gilt, solange keine Stufe etwas anderes sagt:
+    # ein `@stage v1.1` verschiebt den Eintrag unabhaengig vom Abschnitt.
+    if section in MILESTONE_BY_SECTION and not (stage and kategorie in STAGE_DRIVES_MILESTONE):
+        return MILESTONE_BY_SECTION[section]
     if stage in MILESTONE_BY_STAGE:
         if kategorie in STAGE_DRIVES_MILESTONE:
             return MILESTONE_BY_STAGE[stage]
@@ -353,13 +372,28 @@ for line in code_block(r"### 11\.4 Standardbibliothek").split("\n"):
     if m:
         kind, name = m.group(1), m.group(2).strip()
         key = re.match(r"[A-Za-z_]\w*", name).group(0)
-        add("LIB-" + key, "Standardbibliothek", "11.4",
-            "%s %s" % (kind, name), ms="M3/M4")
+        lib = "LIB-" + key
+        add(lib, "Standardbibliothek", "11.4", "%s %s" % (kind, name),
+            ms=MILESTONE_OVERRIDE.get(lib, MILESTONE_BY_SECTION["11.4"]))
 
 # --- Werkzeugkommandos ------------------------------------------------------
+# Die Kommandos entstehen mit sehr verschiedenen Meilensteinen: `check`,
+# `fmt`, `size` und die Entwicklerstufen stehen seit M0-M3, `run`/`replay`
+# brauchen die Runtime (M4), `bench`/`driver-test` die Hardware (M5).
+CLI_MILESTONE = {
+    "check": "M0-M3", "fmt": "M0", "size": "M3 (Gate)",
+    "mir": "M0", "parse": "M0", "tokens": "M0",
+    "sim": "M1/M2 (Interpreter)",
+    "run": "M4 (Codegen)", "replay": "M4 (Codegen)",
+    "test": "M4 (Codegen)", "graph": "M4 (Codegen)",
+    "campaign": "M6 (v1.1)", "prove": "M6 (v1.1)", "tune": "M6 (v1.1)",
+    "driver-test": "M5 (Embedded)", "bench": "M5 (Embedded)",
+    "migrate": "M7 (Werkzeuge)", "import-c": "M7 (Werkzeuge)",
+}
 cli = re.search(r"^takt-cli\s+(.+)$", code_block(r"### 11\.1 Komponenten"), re.M)
 for command in [c.strip() for c in cli.group(1).split("|")]:
-    add("CLI-" + command, "Werkzeug", "11.1", "takt " + command, ms="M3/M4")
+    add("CLI-" + command, "Werkzeug", "11.1", "takt " + command,
+        ms=CLI_MILESTONE.get(command, "M4 (Codegen)"))
 
 # --- Beispiele --------------------------------------------------------------
 for section, title in SECTIONS:

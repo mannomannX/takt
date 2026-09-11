@@ -1737,9 +1737,11 @@ takt-native       kuratierte native Funktionen (4.5): DSP-Kerne, Prüfsummen, Ha
 takt-stdlib       Standardbibliothek in Takt selbst (11.4): Blöcke, Funktionen, Protokollpakete, Simulationsmodelle
 takt-conformance  Testkorpus, Golden-Traces, Kalibrierung (`c_target`, `guard`, `jitter`), Subnormal-Vektoren, `takt bench` (13.8)
 takt-import-c     C-Frontend mit Klassifikation, Abbildungsregeln und Orakel-Modus (13.9; v1.1)
-takt-cli          check | sim | run | replay | test | campaign | driver-test | prove | fmt | size | graph | bench | tune | migrate | import-c
+takt-cli          check | sim | run | replay | test | campaign | driver-test | prove | fmt | size | graph | bench | tune | migrate | import-c | mir | parse | tokens
 takt-lsp          Editor-Integration, Live-Zustandsanzeige über Telemetrie
 ```
+
+`mir`, `parse` und `tokens` sind die Entwicklerstufen: Sie geben das Zwischenergebnis einer einzelnen Schicht aus (Tokenstrom, Syntaxbaum als S-Expression, MIR als Text oder Datei). Sie gehören nicht zum Arbeitsablauf eines Anwenders, sind aber die Schnittstelle, an der die differenziellen Tests gegen die Referenzwerkzeuge in `grammar/` ansetzen (13.1).
 
 ### 11.2 Lowering einer Maschine (Skizze)
 ```

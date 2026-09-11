@@ -6,7 +6,8 @@
 //! Geschaetztes einrechnet, ist schlechter als keine, weil ihr niemand
 //! ansieht, welchem Teil er trauen kann (11.5).
 
-use crate::machine::Machine;
+use crate::machine::{Guard, Machine, TransTrigger};
+use crate::pattern::Pattern;
 use crate::types::{FloatWidth, IntWidth, Type};
 use crate::{Program, TypeId};
 
@@ -107,6 +108,15 @@ pub fn size(p: &Program) -> Size {
     let scratch: u64 = p.machines.iter().map(|m| u64::from(m.layout.scratch_bytes.unwrap_or(0))).sum();
     items.push(Item { name: "Scratch je Maschine".into(), bytes: scratch, origin: Origin::Exact });
 
+    // 11.5: die vorkompilierten Automaten der Muster (8.7). Die Rechnung
+    // steht; gefuellt sind die Tabellen erst, wenn der Codegen sie erzeugt
+    // — der Interpreter gleicht direkt ab und braucht sie nicht
+    // (plan/m2.md 1.1). Bis dahin ist der Posten `offen`, nicht `exakt`:
+    // eine Null, die noch niemand gerechnet hat, ist kein Messwert.
+    let dfa = dfa_bytes(p);
+    let origin = if dfa > 0 { Origin::Exact } else { Origin::Open };
+    items.push(Item { name: "DFA-Tabellen der Muster".into(), bytes: dfa, origin });
+
     // 4.5: der Stack einer nativen Funktion steht in ihrem Vertrag.
     let native_stack: u64 = p.natives.iter().map(|n| u64::from(n.stack)).sum();
     items.push(Item { name: "Stack nativer Funktionen".into(), bytes: native_stack, origin: Origin::Contract });
@@ -199,4 +209,40 @@ pub fn type_bytes(p: &Program, ty: TypeId) -> u32 {
         Some(Type::Mat { rows, cols, .. }) => rows * cols * 8,
         _ => 8,
     }
+}
+
+/// Byte der vorkompilierten Musterautomaten (8.7, 11.5): Klassentabelle
+/// (256 Byte), Uebergangstabelle (`states × class_count`, je 4 Byte) und
+/// die Liste akzeptierender Zustaende. Muster ohne Automat — Record-Muster
+/// sind eine Konjunktion von Feldgleichheiten — zaehlen nicht.
+fn dfa_bytes(p: &Program) -> u64 {
+    fn one(pat: &Pattern) -> u64 {
+        match pat {
+            Pattern::Text { dfa: Some(d), .. } => {
+                d.classes.len() as u64 + d.table.len() as u64 * 4 + d.accept.len() as u64 * 4
+            }
+            _ => 0,
+        }
+    }
+    let mut total = 0;
+    for m in &p.machines {
+        for h in &m.handlers {
+            if let Some((_, pat)) = &h.pattern {
+                total += one(pat);
+            }
+        }
+        for st in &m.states {
+            for h in &st.handlers {
+                if let Some((_, pat)) = &h.pattern {
+                    total += one(pat);
+                }
+            }
+            for t in &st.transitions {
+                if let TransTrigger::When(Guard::Match { pattern, .. }) = &t.trigger {
+                    total += one(pattern);
+                }
+            }
+        }
+    }
+    total
 }
