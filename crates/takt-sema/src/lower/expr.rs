@@ -719,7 +719,33 @@ impl Lowerer<'_> {
         }
     }
 
+    /// Nur was `libtaktm` korrekt gerundet rechnet, darf ins Programm (13.8).
+    ///
+    /// Die Referenz verlangt in 4.2 bitidentische Ergebnisse auf jedem
+    /// Target. Die Standardbibliothek der Plattform kann das nicht zusagen,
+    /// und eine Zahl, die nur auf *dieser* Maschine stimmt, ist schlechter
+    /// als eine Meldung: Sie sieht aus wie eine Zusage. 13.8 zieht die Linie
+    /// ausdruecklich — eine Funktion kommt in die kuratierte Menge,
+    /// *nachdem* ihre Bit-Gleichheit belegt ist.
+    ///
+    /// Die Meldung traegt darum keine Stufe (das Konstrukt ist v1), sondern
+    /// nennt den Grund.
+    fn curated(&mut self, op: Intrinsic, span: Span) -> Option<()> {
+        let Some(f) = libtaktm_fun(op) else { return Some(()) };
+        if libtaktm::curated(f) == libtaktm::Curated::Yes {
+            return Some(());
+        }
+        self.error_hint(
+            SC3,
+            span,
+            format!("`{}` ist noch nicht korrekt gerundet implementiert (4.2)", op.name()),
+            "bis dahin nicht benutzbar: eine Zahl aus der Plattformbibliothek waere auf einem anderen Target eine andere (Satz 9.4.4)",
+        );
+        None
+    }
+
     fn intrinsic(&mut self, op: Intrinsic, args: &[ast::Arg], hint: Option<TypeId>, span: Span) -> Option<Expr> {
+        self.curated(op, span)?;
         let want = match op {
             Intrinsic::Atan2
             | Intrinsic::Pow
@@ -2254,4 +2280,42 @@ fn record_field(lo: &Lowerer<'_>, ty: TypeId, name: &str) -> Option<(u32, TypeId
     let Type::Record(r) = lo.program.types.list.get(ty.index())? else { return None };
     let f = lo.program.records[r.index()].fields.iter().position(|f| f.name == name)?;
     Some((f as u32, lo.program.records[r.index()].fields[f].ty))
+}
+
+/// Die Funktion der Mathematikbibliothek zu einer Primitive.
+///
+/// `None` heisst: Die Primitive rechnet nicht mit `libtaktm` — Integer-
+/// und Vergleichsoperationen sind exakt definiert und brauchen keine.
+fn libtaktm_fun(op: Intrinsic) -> Option<libtaktm::Fun> {
+    Some(match op {
+        Intrinsic::Sqrt => libtaktm::Fun::Sqrt,
+        Intrinsic::Fma => libtaktm::Fun::Fma,
+        Intrinsic::Sin => libtaktm::Fun::Sin,
+        Intrinsic::Cos => libtaktm::Fun::Cos,
+        Intrinsic::Tan => libtaktm::Fun::Tan,
+        Intrinsic::Asin => libtaktm::Fun::Asin,
+        Intrinsic::Acos => libtaktm::Fun::Acos,
+        Intrinsic::Atan => libtaktm::Fun::Atan,
+        Intrinsic::Atan2 => libtaktm::Fun::Atan2,
+        Intrinsic::Exp => libtaktm::Fun::Exp,
+        Intrinsic::Log => libtaktm::Fun::Log,
+        Intrinsic::Pow => libtaktm::Fun::Pow,
+        // `round`, `floor` und `ceil` liefern in Takt einen Integer (4.1);
+        // die Rundung selbst ist exakt, die Range-Pruefung macht der
+        // Interpreter. Sie brauchen die Bibliothek nicht.
+        Intrinsic::Abs
+        | Intrinsic::Min
+        | Intrinsic::Max
+        | Intrinsic::Round
+        | Intrinsic::Floor
+        | Intrinsic::Ceil
+        | Intrinsic::Rotl
+        | Intrinsic::Rotr
+        | Intrinsic::WrappingAdd
+        | Intrinsic::WrappingSub
+        | Intrinsic::WrappingMul
+        | Intrinsic::SaturatingAdd
+        | Intrinsic::SaturatingSub
+        | Intrinsic::Interp => return None,
+    })
 }

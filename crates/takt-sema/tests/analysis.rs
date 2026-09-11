@@ -438,3 +438,45 @@ fn the_protocol_case_keeps_its_implicit_checks_low() {
     assert_eq!(r.warned, 0, "keine davon steht in einer Schleife oder einem Aktionsblock: {:?}", r.checks);
     assert!(r.narrowed > 0, "die Verengung greift auch hier: {} von {}", r.narrowed, r.integer_exprs);
 }
+
+#[test]
+fn an_uncurated_math_function_is_rejected_before_the_run() {
+    // 13.8: Eine Funktion kommt in die kuratierte Menge, *nachdem* ihre
+    // Bit-Gleichheit belegt ist. `sin` ist es noch nicht — und eine Zahl
+    // aus der Plattformbibliothek waere auf einem anderen Target eine
+    // andere, also behauptete sie eine Zusage, die sie nicht haelt
+    // (Satz 9.4.4). Der Compiler sagt es vor dem Lauf.
+    let src = format!(
+        "{HEAD}{OUT}{}",
+        "\
+machine m:
+    var x : float = 0.0
+    initial RUN
+    state RUN:
+        loop:
+            x = sin(1.0)
+            n = 0
+"
+    );
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(&src, &options);
+    let text: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(text.iter().any(|t| t.contains("korrekt gerundet")), "`sin` wird abgelehnt: {text:?}");
+
+    // `sqrt` und `fma` sind kuratiert (Stufe 1) und laufen.
+    let src = format!(
+        "{HEAD}{OUT}{}",
+        "\
+machine m:
+    var x : float = 0.0
+    initial RUN
+    state RUN:
+        loop:
+            x = sqrt(2.0) + fma(1.0, 2.0, 3.0)
+            n = 0
+"
+    );
+    let out = takt_sema::compile(&src, &options);
+    let errors: Vec<&str> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code).collect();
+    assert!(errors.is_empty(), "`sqrt` und `fma` sind kuratiert: {errors:?}");
+}

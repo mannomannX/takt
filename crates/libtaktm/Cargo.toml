@@ -1,0 +1,21 @@
+[package]
+name = "libtaktm"
+version = "0.1.0"
+description = "Takt: korrekt gerundete Mathematik beider Breiten (Referenz 4.2)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# `sqrt`, `fma` und die Rundungen sind LLVM-Intrinsics und stehen nur in
+# `std`; `core` hat sie auf stabilem Rust nicht (plan/m4.md 2.3c). Ohne
+# dieses Feature ist das Crate `no_std`, aber keine Funktion kuratiert —
+# die Software-Emulation kommt mit M5, wenn ein `no_std`-Target existiert,
+# an dem sie sich pruefen laesst.
+default = ["std"]
+std = []
+
+[dependencies]
+
+[lints]
+workspace = true

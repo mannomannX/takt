@@ -88,6 +88,10 @@ MILESTONE_OVERRIDE = {
     # Bewertet und vorgezogen: erster Baustein von M6, weil Grammatik,
     # AST, MIR-Feld und Einheitenalgebra stehen (plan/einheiten-integer.md).
     "SC-38": "M6 (frueh)",
+    # `fma` ist eine Primitive aus `libtaktm` (4.2), kein Baustein der
+    # Standardbibliothek; Satz 9.4.4 wird mit dem Codegen pruefbar.
+    "LIB-fma": "M4 (libtaktm)",
+    "THM-Satz-9.4.4": "M4 (Codegen)",
     # Die Annahmen gehoeren zu `property` und damit zu M6; die
     # Hardware-Konfiguration ist die Eingabe der Pruefungen 28/32/39/60
     # und entsteht mit 8.10, nicht im Parser.
@@ -329,8 +333,11 @@ for line in LINES:
     title = m2.group(1).strip()
     if re.match(r"^(Satz|Lemma) ", title):
         name = title.split("(")[0].strip()
-        add("THM-" + name.replace(" ", "-"), "Satz/Lemma",
-            name.split()[1].rstrip("."), name, ms="M1/M2 (Interpreter)")
+        thm = "THM-" + name.replace(" ", "-")
+        # Die meisten Saetze prueft der Interpreter; die Ausnahmen nennt
+        # MILESTONE_OVERRIDE (9.4.4 braucht den Codegen als zweite Quelle).
+        add(thm, "Satz/Lemma", name.split()[1].rstrip("."), name,
+            ms=MILESTONE_OVERRIDE.get(thm, "M1/M2 (Interpreter)"))
     else:
         title = title.rstrip(".")
         add("PAR-%s-%s" % (section, slug(title)), "Absatz/Regel", section,

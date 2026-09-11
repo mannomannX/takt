@@ -705,7 +705,7 @@ THM-Satz-9.4.1,Satz/Lemma,9.4.1,Satz 9.4.1,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),offen
 PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 (Interpreter),offen
-THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M1/M2 (Interpreter),offen
+THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M4 (Codegen),offen
 THM-Satz-9.4.5,Satz/Lemma,9.4.5,Satz 9.4.5,,M1/M2 (Interpreter),fertig
 PAR-9.4-Was_der_Satz_nicht_sagt,Absatz/Regel,9.4,Was der Satz nicht sagt,,M1/M2 (Interpreter),offen
 PAR-9.4-Auszahlung,Absatz/Regel,9.4,Auszahlung,,M1/M2 (Interpreter),offen
@@ -849,7 +849,7 @@ LIB-sha256_init,Standardbibliothek,11.4,native fn sha256_init / sha256_update,,M
 LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M6 (stdlib),offen
 LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M6 (stdlib),offen
 LIB-solve,Standardbibliothek,11.4,fn solve,,M6 (stdlib),offen
-LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M6 (stdlib),offen
+LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M4 (libtaktm),offen
 LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M6 (stdlib),offen
 CLI-check,Werkzeug,11.1,takt check,,M0-M3,fertig
 CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig

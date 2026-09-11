@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "libtaktm"
+version = "0.1.0"
+
+[[package]]
 name = "takt-cli"
 version = "0.1.0"
 dependencies = [
@@ -21,6 +25,7 @@ version = "0.1.0"
 name = "takt-interp"
 version = "0.1.0"
 dependencies = [
+ "libtaktm",
  "takt-diag",
  "takt-mir",
 ]
@@ -36,6 +41,7 @@ dependencies = [
 name = "takt-sema"
 version = "0.1.0"
 dependencies = [
+ "libtaktm",
  "takt-diag",
  "takt-interp",
  "takt-mir",
