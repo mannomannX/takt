@@ -16,11 +16,17 @@
 //! - `ty`: Typen der MIR nach LLVM-Typen (3.4, 11.2).
 //! - `emit`: der Textpuffer, der die IR aufbaut.
 //! - `expr`: Ausdruecke.
+//! - `machine`: Zustands-Struct und Tickschritt einer Maschine (11.2).
+//! - `toolchain`: `clang` finden, um die IR zu pruefen und auszufuehren.
 
 pub mod emit;
 pub mod expr;
+pub mod machine;
+pub mod toolchain;
 pub mod ty;
 
 pub use emit::{Module, Reg};
 pub use expr::Lowered;
+pub use machine::{StateStruct, state_struct};
+pub use toolchain::Clang;
 pub use ty::LlvmType;

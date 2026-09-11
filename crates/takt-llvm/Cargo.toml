@@ -12,3 +12,8 @@ takt-mir = { path = "../takt-mir" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Nur fuer die Tests: Sie uebersetzen echte Korpusprogramme, statt MIR zu
+# erfinden — ein Struct, der nur fuer Testdaten stimmt, ist kein Beleg.
+takt-sema = { path = "../takt-sema" }

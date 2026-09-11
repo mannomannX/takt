@@ -45,6 +45,7 @@ version = "0.1.0"
 dependencies = [
  "takt-diag",
  "takt-mir",
+ "takt-sema",
 ]
 
 [[package]]
