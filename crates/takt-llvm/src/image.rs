@@ -72,7 +72,53 @@ pub enum Slot {
 pub fn offset_of(channel: ChannelId, p: &Program) -> Option<u64> {
     let mut sum = 0;
     for i in 0..channel.index() {
-        sum += entry_type(ChannelId(i as u32), p)?.size();
+        // Ein Strom hat keinen Eintrag im Abbild: Seine Elemente stehen
+        // im Puffer der Runtime (8.6). Sein Platz bleibt leer, damit der
+        // Index eines Channels seine `ChannelId` bleibt.
+        sum += entry_type(ChannelId(i as u32), p).map_or(0, |t| t.size());
     }
     Some(sum)
+}
+
+/// Der Versatz eines Outputs im Latch (9.2, 11.2).
+///
+/// Der Latch traegt je Output nur den Wert — die Qualitaet gehoert zur
+/// Eingabe (3.5). Die Versaetze werden wie beim Prozessabbild
+/// aufsummiert: Ein Index waere falsch, sobald zwei Outputs verschieden
+/// breit sind.
+///
+/// Gezaehlt wird ueber *alle* Channels, nicht nur die Outputs: Der Index
+/// eines Channels ist seine `ChannelId`, und eine zweite Nummerierung
+/// waere eine zweite Gelegenheit, sie verschieden zu vergeben.
+pub fn latch_offset(channel: ChannelId, p: &Program) -> Option<u64> {
+    let mut sum = 0;
+    for i in 0..channel.index() {
+        // Ein Strom hat keinen Latch: Er wird gesendet, nicht gestellt
+        // (8.8). Sein Platz im Vektor bleibt leer, damit der Index eines
+        // Channels seine `ChannelId` bleibt.
+        sum += crate::ty::lower(p.channels.get(i)?.ty, p).map_or(0, |t| t.size());
+    }
+    Some(sum)
+}
+
+/// Der Versatz eines Parameters im Parametervektor (8.4).
+pub fn param_offset(id: takt_mir::ParamId, p: &Program) -> Option<u64> {
+    let mut sum = 0;
+    for i in 0..id.index() {
+        sum += crate::ty::lower(p.params.get(i)?.ty, p)?.size();
+    }
+    Some(sum)
+}
+
+/// Der Versatz eines Commands im Prozessabbild (8.5).
+///
+/// Commands stehen hinter den Channels; ihr Versatz beginnt damit hinter
+/// dem letzten Channel-Eintrag. Ein Command ist ein Puls und traegt nur
+/// ein Byte — es hat keine Qualitaet, weil es keine Lieferung ist.
+pub fn command_offset(id: takt_mir::CommandId, p: &Program) -> Option<u64> {
+    let mut sum = 0;
+    for i in 0..p.channels.len() {
+        sum += entry_type(ChannelId(i as u32), p).map_or(0, |t| t.size());
+    }
+    Some(sum + id.index() as u64)
 }

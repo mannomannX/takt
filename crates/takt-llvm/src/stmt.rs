@@ -128,12 +128,6 @@ impl StateVars<'_> {
         let v = m.inst(&format!("load {ty}, ptr {field}"));
         Some(Lowered { value: v.to_string(), ty })
     }
-
-    fn slot(&self, base: &str, ty: &LlvmType, index: usize, m: &mut Module) -> Lowered {
-        let ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {base}, i32 {index}"));
-        let v = m.inst(&format!("load {ty}, ptr {ptr}"));
-        Lowered { value: v.to_string(), ty: ty.clone() }
-    }
 }
 
 impl Vars for StateVars<'_> {
@@ -164,22 +158,32 @@ impl Vars for StateVars<'_> {
     fn param(&self, id: takt_mir::ParamId, m: &mut Module) -> Option<Lowered> {
         let p = self.program.params.get(id.index())?;
         let ty = ty::lower(p.ty, self.program)?;
-        Some(self.slot("%2", &ty, id.index(), m))
+        let off = crate::image::param_offset(id, self.program)?;
+        let at = m.inst(&format!("getelementptr inbounds i8, ptr %2, i64 {off}"));
+        let v = m.inst(&format!("load {ty}, ptr {at}"));
+        Some(Lowered { value: v.to_string(), ty })
     }
 
     /// Der Latch eines eigenen Outputs; `%3` ist der Latch (11.2).
     fn output(&self, channel: takt_mir::ChannelId, m: &mut Module) -> Option<Lowered> {
         let c = self.program.channels.get(channel.index())?;
         let ty = ty::lower(c.ty, self.program)?;
-        Some(self.slot("%3", &ty, channel.index(), m))
+        let off = crate::image::latch_offset(channel, self.program)?;
+        let at = m.inst(&format!("getelementptr inbounds i8, ptr %3, i64 {off}"));
+        let v = m.inst(&format!("load {ty}, ptr {at}"));
+        Some(Lowered { value: v.to_string(), ty })
     }
 
     /// Ein Command (8.5): ein `bool` im Prozessabbild, hinter den
     /// Channels. Die Runtime setzt es vor dem Schritt und loescht es
     /// danach — im erzeugten Code ist es ein gewoehnlicher Ladevorgang.
     fn command(&self, id: takt_mir::CommandId, m: &mut Module) -> Option<Lowered> {
-        let after = self.program.channels.len();
-        Some(self.slot("%1", &LlvmType::Int(1), after + id.index(), m))
+        let off = crate::image::command_offset(id, self.program)?;
+        let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {off}"));
+        let raw = m.inst(&format!("load i8, ptr {at}"));
+        // Ein Command ist ein Byte im Abbild; `bool` ist `i1`.
+        let b = m.inst(&format!("icmp ne i8 {raw}, 0"));
+        Some(Lowered { value: b.to_string(), ty: LlvmType::Int(1) })
     }
 }
 
@@ -373,7 +377,8 @@ fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, Llvm
         Place::Output(c) => {
             let ch = ctx.program.channels.get(c.index()).ok_or(NotYet { what: "Channel" })?;
             let ty = ty::lower(ch.ty, ctx.program).ok_or(NotYet { what: "Channeltyp" })?;
-            let ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr %3, i32 {}", c.index()));
+            let off = crate::image::latch_offset(*c, ctx.program).ok_or(NotYet { what: "Versatz im Latch" })?;
+            let ptr = m.inst(&format!("getelementptr inbounds i8, ptr %3, i64 {off}"));
             Ok((ptr, ty))
         }
         Place::Field(base, field) => {
