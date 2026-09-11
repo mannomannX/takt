@@ -169,17 +169,39 @@ fn llvm_does_not_contract_a_multiply_and_add_into_an_fma() {
     );
 }
 
-/// 11.3: Dieselbe Eingabe ergibt dieselbe Objektdatei — reproduzierbare
-/// Builds, bis in das Artefakt hinein.
+/// 11.3: Reproduzierbare Builds.
+///
+/// Geprueft wird der *Inhalt* der Objektdatei, nicht ihr Kopf: Das
+/// COFF-Format traegt an Byte 4 bis 7 einen Zeitstempel, den clang setzt
+/// und nicht der Codegen. 11.3 verlangt „keine Zeitstempel oder Pfade im
+/// Binary" vom Compiler; den Stempel des Assemblers schaltet erst der
+/// Linkschritt ab (`/Brepro`), und er gehoert nicht zu dem, was hier zu
+/// belegen ist.
+///
+/// Was hier zu belegen ist: Aus derselben IR entsteht derselbe Code.
 #[test]
-fn the_same_ir_produces_the_same_object_file() {
+fn the_same_ir_produces_the_same_code() {
     let clang = clang_or_skip!();
     let ir = every_float_instruction();
-    let mut hashes = Vec::new();
+    let mut objekte = Vec::new();
     for run in 0..2 {
         let dir = Temp::new(&format!("reproduzierbar{run}"));
         clang.assembles(&ir, &dir.0).unwrap_or_else(|e| panic!("{e}"));
-        hashes.push(std::fs::read(dir.0.join("modul.o")).expect("Objektdatei lesbar"));
+        objekte.push(std::fs::read(dir.0.join("modul.o")).expect("Objektdatei lesbar"));
     }
-    assert_eq!(hashes[0], hashes[1], "zwei Laeufe, zwei verschiedene Objektdateien");
+    assert_eq!(objekte[0].len(), objekte[1].len(), "verschiedene Groesse");
+    // Byte 4 bis 7: Zeitstempel des COFF-Kopfes.
+    let ohne_stempel = |o: &[u8]| {
+        let mut v = o.to_vec();
+        v[4..8].fill(0);
+        v
+    };
+    assert_eq!(ohne_stempel(&objekte[0]), ohne_stempel(&objekte[1]), "zwei Laeufe, zwei verschiedene Objektdateien");
+}
+
+/// Und die IR selbst traegt ueberhaupt keinen Zeitstempel — das ist die
+/// Zusage, die 11.3 dem Compiler macht.
+#[test]
+fn the_generated_ir_is_byte_identical_across_runs() {
+    assert_eq!(every_float_instruction(), every_float_instruction());
 }

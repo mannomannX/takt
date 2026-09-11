@@ -51,6 +51,10 @@ impl Coverage {
 }
 
 /// Zaehlt die Knoten einer Maschine.
+///
+/// Jeder Block genau einmal: Der `loop:` einer Zwischenebene laeuft im
+/// erzeugten Code zwar je Blatt, steht aber einmal im Programm, und
+/// gezaehlt wird, was zu senken ist.
 pub fn machine(m: &Machine, c: &mut Coverage) {
     block(&m.loop_block, c);
     for s in &m.states {

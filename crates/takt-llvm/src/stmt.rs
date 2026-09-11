@@ -44,6 +44,17 @@ impl<'a> Ctx<'a> {
         Ctx { machine, state, program, checks: 0 }
     }
 
+    /// Eine frische Nummer fuer eine Marke.
+    ///
+    /// Marken muessen je erzeugter Verzweigung eindeutig sein, nicht je
+    /// Zustand oder Anweisung: Derselbe Block kann mehrfach erzeugt
+    /// werden, etwa der `loop:` einer Zwischenebene je Blatt darunter
+    /// (5.2).
+    pub fn next_label(&mut self) -> u32 {
+        self.checks += 1;
+        self.checks
+    }
+
     /// Die Variablenabbildung dieser Maschine.
     pub fn vars(&self) -> StateVars<'a> {
         StateVars { machine: self.machine, state: self.state, program: self.program }

@@ -1,0 +1,28 @@
+(system
+  (language 1)
+  (tick 10ms))
+(command go)
+(command halt)
+(input p :float[bar] in 0..100[bar] @hw("daq/p") max_age=50ms)
+(output pump :bool @hw("io/pump") safe=false)
+(output horn :bool @hw("io/horn") safe=false)
+(machine plant
+  (fault -> SAFE)
+  (initial RUNNING)
+  (state RUNNING
+    (initial WARMUP)
+    (loop
+      (check (< p 90[bar]) "overpressure {p}"))
+    (when halt -> SAFE)
+    (state WARMUP
+      (enter
+        (= pump false))
+      (after 500ms -> ACTIVE))
+    (state ACTIVE
+      (enter
+        (= pump true))
+      (when go -> WARMUP)))
+  (state SAFE
+    (enter
+      (= pump false)
+      (= horn true))))

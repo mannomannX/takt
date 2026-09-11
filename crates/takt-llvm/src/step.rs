@@ -88,12 +88,22 @@ fn write_step(
     let mut ctx = Ctx::new(m, st, p);
     for (i, id) in leaves.iter().enumerate() {
         module.label(&machine::label_of(m, *id));
-        let state = &m.states[id.index()];
-        // 5.2: erst der `loop:`-Koerper …
-        block(&state.loop_block, &mut ctx, module)?;
-        // … dann die Uebergaenge, in Quelltextreihenfolge (5.2: der erste
-        // passende gewinnt).
-        transitions(&state.transitions, i, leaves, &mut ctx, module, &end, &slot)?;
+        // 5.2: Aktiv ist ein *Pfad*, nicht ein Zustand. Die `loop:`-Bloecke
+        // laufen von der Maschine abwaerts bis zum Blatt — ein `check` auf
+        // einer Zwischenebene ist die Invariante *aller* Zustaende darunter,
+        // und wer nur das Blatt ausfuehrt, laesst sie fallen.
+        block(&m.loop_block.clone(), &mut ctx, module)?;
+        let pfad = machine::path_to(m, *id);
+        for anc in &pfad {
+            block(&m.states[anc.index()].loop_block.clone(), &mut ctx, module)?;
+        }
+        // Dann die Uebergaenge, vom Blatt aufwaerts: Der innerste Zustand
+        // entscheidet zuerst (5.2), und innerhalb einer Ebene gewinnt der
+        // erste passende in Quelltextreihenfolge.
+        for anc in pfad.iter().rev() {
+            let list = m.states[anc.index()].transitions.clone();
+            transitions(&list, i, leaves, &mut ctx, module, &end, &slot)?;
+        }
         module.void_inst(&format!("br label %{end}"));
     }
 
@@ -127,7 +137,7 @@ fn transitions(
     end: &str,
     conf_slot: &crate::emit::Reg,
 ) -> Result<(), NotYet> {
-    for (n, t) in list.iter().enumerate() {
+    for t in list {
         let c = match &t.trigger {
             TransTrigger::When(Guard::Expr(cond)) => {
                 let vars = ctx.vars();
@@ -138,25 +148,38 @@ fn transitions(
             // den Stroemen.
             TransTrigger::When(_) => return Err(NotYet { what: "Uebergang mit Muster-Guard" }),
         };
+        // Die Marke muss je *erzeugter* Verzweigung eindeutig sein, nicht
+        // je Zustand: Ein Blatt fuehrt auch die Uebergaenge seiner
+        // Vorfahren aus (5.2), und zwei Ebenen haetten sonst dieselbe.
+        let id = ctx.next_label();
         let name = &ctx.machine.name;
-        let (take, skip) = (format!("uebergang{from}_{n}_{name}"), format!("bleibt{from}_{n}_{name}"));
+        let (take, skip) = (format!("uebergang{id}_{name}"), format!("bleibt{id}_{name}"));
         m.void_inst(&format!("br i1 {}, label %{take}, label %{skip}", c.value));
         m.label(&take);
         let Target::State(to) = t.target else { return Err(NotYet { what: "Uebergangsziel" }) };
-        let Some(index) = leaves.iter().position(|l| *l == to) else {
-            // Ein Ziel, das kein Blatt ist, hat einen `initial`-Pfad
-            // hinunter (5.2); der entsteht mit der Verschachtelung.
-            return Err(NotYet { what: "Uebergang in einen zusammengesetzten Zustand" });
+        // 5.2: Ein Uebergang auf einen zusammengesetzten Zustand betritt
+        // dessen `initial`-Kind, und das rekursiv bis zu einem Blatt.
+        let leaf = machine::initial_leaf(ctx.machine, to).ok_or(NotYet { what: "Zielzustand ohne `initial`" })?;
+        let Some(index) = leaves.iter().position(|l| *l == leaf) else {
+            return Err(NotYet { what: "Zielblatt" });
         };
         // 5.2 gibt die Reihenfolge vor: `exit:` des verlassenen Zustands,
         // dann der Aktionsblock des Uebergangs (Modus ENTRY), dann
         // `enter:` des betretenen. Wer sie vertauscht, laesst `enter:` auf
         // einem Zustand laufen, den `exit:` noch aufraeumt.
-        let from_state = &ctx.machine.states[leaves[from].index()];
-        block(&from_state.exit.clone(), ctx, m)?;
+        // 5.2: `exit:` laeuft vom verlassenen Blatt aufwaerts bis unter
+        // den gemeinsamen Vorfahren, `enter:` von dort abwaerts bis zum
+        // neuen Blatt. Wer nur Blatt und Ziel nimmt, laesst die
+        // Zwischenebenen aus — und ein `enter:` auf einer Zwischenebene
+        // ist genau die Stelle, an der ein Ablauf seine Vorbedingung
+        // herstellt.
+        for id in machine::exiting(ctx.machine, leaves[from], leaf) {
+            block(&ctx.machine.states[id.index()].exit.clone(), ctx, m)?;
+        }
         block(&t.actions, ctx, m)?;
-        let to_state = &ctx.machine.states[to.index()];
-        block(&to_state.enter.clone(), ctx, m)?;
+        for id in machine::entering(ctx.machine, leaves[from], leaf) {
+            block(&ctx.machine.states[id.index()].enter.clone(), ctx, m)?;
+        }
         m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
         reset_time(ctx, m);
         m.void_inst(&format!("br label %{end}"));
@@ -188,8 +211,11 @@ fn reset_time(ctx: &Ctx<'_>, m: &mut Module) {
 /// liefe es in jedem Tick.
 pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     let leaves = machine::leaves(m);
-    let Some(index) = leaves.iter().position(|l| *l == m.initial) else {
-        return Err(NotYet { what: "Anfangszustand ist kein Blatt" });
+    // 5.2: Auch der Anfangszustand kann zusammengesetzt sein; betreten
+    // wird sein `initial`-Pfad bis zum Blatt.
+    let leaf = machine::initial_leaf(m, m.initial).ok_or(NotYet { what: "Anfangszustand ohne `initial`" })?;
+    let Some(index) = leaves.iter().position(|l| *l == leaf) else {
+        return Err(NotYet { what: "Anfangsblatt" });
     };
     let mark = module.mark();
     let ptr = crate::ty::LlvmType::Ptr;
@@ -208,10 +234,13 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     module.void_inst(&format!("store i8 {index}, ptr {slot}"));
 
     let mut ctx = Ctx::new(m, st, p);
-    let enter = m.states[m.initial.index()].enter.clone();
-    if let Err(e) = block(&enter, &mut ctx, module) {
-        module.abort(mark);
-        return Err(e);
+    // Die ganze Kette von der Wurzel bis zum Blatt wird betreten (5.2).
+    for id in machine::path_to(m, leaf) {
+        let enter = m.states[id.index()].enter.clone();
+        if let Err(e) = block(&enter, &mut ctx, module) {
+            module.abort(mark);
+            return Err(e);
+        }
     }
     module.end(None);
     Ok(())

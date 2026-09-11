@@ -253,3 +253,82 @@ pub fn state_of(m: &Machine, id: StateId) -> &State {
 pub fn machine_of(p: &Program, id: MachineId) -> &Machine {
     &p.machines[id.index()]
 }
+
+/// Das Blatt, das beim Betreten eines Zustands aktiv wird (5.2).
+///
+/// Ein zusammengesetzter Zustand ist nie allein aktiv: Sein `initial`-Kind
+/// wird mitbetreten, und dessen `initial`-Kind, bis ein Blatt erreicht
+/// ist. `None` heisst, dass ein zusammengesetzter Zustand kein `initial`
+/// hat — das faengt Pruefung 10 ab, aber der Codegen verlaesst sich nicht
+/// darauf.
+pub fn initial_leaf(m: &Machine, from: StateId) -> Option<StateId> {
+    let mut cur = from;
+    // Die Schranke ist die Zahl der Zustaende: Ein Zyklus im `initial`-Pfad
+    // waere ein Fehler im Sema, aber eine Endlosschleife im Codegen waere
+    // schlimmer als eine Meldung (4.1: beschraenkte Schleifen).
+    for _ in 0..=m.states.len() {
+        let s = &m.states[cur.index()];
+        if s.children.is_empty() {
+            return Some(cur);
+        }
+        cur = s.initial?;
+    }
+    None
+}
+
+/// Die Zustaende, deren `exit:` bei einem Uebergang laeuft (5.2).
+///
+/// Vom verlassenen Blatt aufwaerts bis unter den gemeinsamen Vorfahren mit
+/// dem Ziel. Der Vorfahre selbst bleibt aktiv und wird nicht verlassen —
+/// ein Uebergang zwischen zwei Geschwistern raeumt nicht ihren Elternteil
+/// ab.
+pub fn exiting(m: &Machine, from: StateId, to: StateId) -> Vec<StateId> {
+    let common = common_ancestor(m, from, to);
+    let mut out = Vec::new();
+    let mut cur = Some(from);
+    while let Some(id) = cur {
+        if Some(id) == common {
+            break;
+        }
+        out.push(id);
+        cur = m.states[id.index()].parent;
+    }
+    out
+}
+
+/// Die Zustaende, deren `enter:` bei einem Uebergang laeuft (5.2).
+///
+/// Von unter dem gemeinsamen Vorfahren abwaerts bis zum neuen Blatt, in
+/// dieser Richtung: Ein `enter:` weiter oben stellt her, worauf das
+/// darunter sich verlaesst.
+pub fn entering(m: &Machine, from: StateId, to: StateId) -> Vec<StateId> {
+    let common = common_ancestor(m, from, to);
+    let mut out: Vec<StateId> = Vec::new();
+    let mut cur = Some(to);
+    while let Some(id) = cur {
+        if Some(id) == common {
+            break;
+        }
+        out.push(id);
+        cur = m.states[id.index()].parent;
+    }
+    out.reverse();
+    out
+}
+
+/// Der naechste gemeinsame Vorfahre zweier Zustaende; `None`, wenn sie in
+/// verschiedenen Baeumen der obersten Ebene stehen.
+fn common_ancestor(m: &Machine, a: StateId, b: StateId) -> Option<StateId> {
+    let pa = path_to(m, a);
+    let pb = path_to(m, b);
+    let mut common = None;
+    for (x, y) in pa.iter().zip(&pb) {
+        if x != y {
+            break;
+        }
+        common = Some(*x);
+    }
+    // Ein Zustand ist nicht sein eigener Vorfahre: Ein Uebergang auf sich
+    // selbst verlaesst und betritt ihn (5.2, Selbstuebergang).
+    if common == Some(a) && a == b { None } else { common }
+}

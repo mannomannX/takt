@@ -288,7 +288,7 @@ fn the_loop_body_runs_before_the_transitions() {
     let ir = ir_of(&p);
     let watch = ir.find("tank_guard_WATCH:").expect("Zustand WATCH");
     let check = ir[watch..].find("fcmp").expect("der check in WATCH");
-    let trans = ir[watch..].find("uebergang1").expect("der Uebergang aus WATCH");
+    let trans = ir[watch..].find("uebergang").expect("der Uebergang aus WATCH");
     assert!(
         check < trans,
         "der Uebergang steht vor dem `check`:
@@ -409,4 +409,77 @@ fn after_never_fires_in_the_entry_tick() {
         "beide Bedingungen werden nicht verknuepft:
 {ir}"
     );
+}
+
+// --- Geschachtelte Zustaende (5.2) --------------------------------------
+
+/// 5.2: Aktiv ist ein *Pfad*, nicht ein Zustand. Der `loop:` einer
+/// Zwischenebene ist die Invariante aller Zustaende darunter und laeuft
+/// darum in jedem ihrer Blaetter.
+#[test]
+fn an_ancestor_loop_runs_in_every_leaf_below_it() {
+    let p = corpus("17_nested.takt");
+    let ir = ir_of(&p);
+    // Der `check p < 90 bar` steht einmal im Programm, unter `RUNNING`
+    // mit zwei Blaettern — also zweimal in der IR.
+    let checks = ir.matches("fcmp olt").count();
+    assert_eq!(
+        checks, 2,
+        "der `check` von RUNNING laeuft nicht in beiden Blaettern:
+{ir}"
+    );
+}
+
+/// 5.2: Ein Uebergang auf einen zusammengesetzten Zustand betritt dessen
+/// `initial`-Kind, rekursiv bis zu einem Blatt.
+#[test]
+fn a_transition_into_a_composite_state_reaches_its_initial_leaf() {
+    let p = corpus("17_nested.takt");
+    let m = &p.machines[0];
+    let running = m.states.iter().position(|s| s.name == "RUNNING").expect("RUNNING");
+    let leaf = takt_llvm::machine::initial_leaf(m, takt_mir::StateId(running as u32)).expect("Blatt");
+    assert_eq!(m.states[leaf.index()].name, "WARMUP", "das `initial`-Kind von RUNNING");
+    assert!(m.states[leaf.index()].children.is_empty(), "und es ist ein Blatt");
+}
+
+/// 5.2: Ein Uebergang zwischen Geschwistern raeumt ihren Elternteil nicht
+/// ab — sein `exit:` laeuft nicht, sein `enter:` auch nicht.
+#[test]
+fn a_transition_between_siblings_leaves_the_parent_alone() {
+    let p = corpus("17_nested.takt");
+    let m = &p.machines[0];
+    let find = |n: &str| takt_mir::StateId(m.states.iter().position(|s| s.name == n).expect(n) as u32);
+    let (warmup, active) = (find("WARMUP"), find("ACTIVE"));
+    let raus = takt_llvm::machine::exiting(m, warmup, active);
+    let rein = takt_llvm::machine::entering(m, warmup, active);
+    assert_eq!(raus, vec![warmup], "nur das Geschwister wird verlassen");
+    assert_eq!(rein, vec![active], "nur das Geschwister wird betreten");
+}
+
+/// Ein Uebergang aus der Tiefe nach aussen verlaesst die ganze Kette.
+#[test]
+fn a_transition_out_of_a_hierarchy_exits_the_whole_chain() {
+    let p = corpus("17_nested.takt");
+    let m = &p.machines[0];
+    let find = |n: &str| takt_mir::StateId(m.states.iter().position(|s| s.name == n).expect(n) as u32);
+    let raus = takt_llvm::machine::exiting(m, find("WARMUP"), find("SAFE"));
+    assert_eq!(raus, vec![find("WARMUP"), find("RUNNING")], "erst das Blatt, dann sein Elternteil");
+}
+
+/// Marken muessen je erzeugter Verzweigung eindeutig sein: Ein Blatt
+/// fuehrt auch die Uebergaenge seiner Vorfahren aus, und zwei Ebenen
+/// haetten sonst dieselbe Marke — ungueltige IR, die nur LLVM findet.
+#[test]
+fn every_label_in_the_generated_ir_is_unique() {
+    for name in VOLLSTAENDIG {
+        let p = corpus(name);
+        let ir = ir_of(&p);
+        let mut seen = std::collections::BTreeSet::new();
+        for line in ir.lines() {
+            let t = line.trim_end();
+            if t.ends_with(':') && !t.starts_with(' ') && !t.starts_with(';') {
+                assert!(seen.insert(t.to_string()), "{name}: Marke `{t}` kommt zweimal vor");
+            }
+        }
+    }
 }
