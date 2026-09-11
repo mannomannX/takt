@@ -85,6 +85,13 @@ fn write_step(
     // 4.1 verlangt Totalitaet, nicht undefiniertes Verhalten.
     module.void_inst(&format!("switch i8 {cur}, label %{end} [ {} ]", arms.join(" ")));
 
+    // 8.7: Handler verarbeiten das Fenster eines Stroms. Sie fehlen noch;
+    // sie hier zu uebergehen hiesse, ein Programm zu uebersetzen, das
+    // etwas anderes tut als geschrieben — der schlimmste Fehler, den ein
+    // Codegen machen kann.
+    if !m.handlers.is_empty() || m.states.iter().any(|s| !s.handlers.is_empty()) {
+        return Err(NotYet { what: "`on`-Handler" });
+    }
     let mut ctx = Ctx::new(m, st, p);
     for (i, id) in leaves.iter().enumerate() {
         module.label(&machine::label_of(m, *id));

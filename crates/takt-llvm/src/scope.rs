@@ -207,7 +207,8 @@ fn expr(e: &Expr, c: &mut Coverage) {
             // Die Qualitaetszugriffe gelten nur auf einem Channel: Sie
             // lesen den Eintrag im Prozessabbild (3.5).
             let on_channel = matches!(base.kind, ExprKind::Input { .. });
-            let ok = matches!(accessor, Accessor::Bit | Accessor::Bits | Accessor::WithBit) || (quality && on_channel);
+            let ok = matches!(accessor, Accessor::Bit | Accessor::Bits | Accessor::WithBit | Accessor::Len)
+                || (quality && on_channel);
             c.note(if ok { "Zugriff" } else { "Zugriff (`.len`, `.count`, ...)" }, ok);
             expr(base, c);
         }

@@ -17,6 +17,8 @@
 //! - `emit`: der Textpuffer, der die IR aufbaut.
 //! - `expr`: Ausdruecke.
 //! - `abi`: was der erzeugte Code von der Runtime ruft (9.3, 5.4).
+//! - `collection`: `push`, `append`, `clear` auf `bytes`/`vec` (3.9).
+//! - `fns`: reine Funktionen als LLVM-Funktionen (4.4).
 //! - `image`: der Aufbau des Prozessabbilds, die ABI zur Runtime (9.1).
 //! - `machine`: Zustands-Struct und Tickschritt einer Maschine (11.2).
 //! - `stmt`: Anweisungen, Checks und der Fault-Zweig (11.2).
@@ -25,8 +27,10 @@
 //! - `toolchain`: `clang` finden, um die IR zu pruefen und auszufuehren.
 
 pub mod abi;
+pub mod collection;
 pub mod emit;
 pub mod expr;
+pub mod fns;
 pub mod image;
 pub mod machine;
 pub mod scope;

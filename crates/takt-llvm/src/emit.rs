@@ -35,6 +35,14 @@ pub struct Module {
     next: u32,
     /// Laeuft gerade eine Funktion?
     open: bool,
+    /// Name des laufenden Basisblocks; `phi` braucht ihn.
+    block: String,
+    /// Gerufene LLVM-Intrinsics mit ihrer Signatur.
+    ///
+    /// Sie sind je Breite eigene Symbole (`@llvm.smin.i8` ist nicht
+    /// `@llvm.smin.i32`), also laesst sich die Liste nicht vorab
+    /// schreiben — sie haengt an den Typen, die im Programm vorkommen.
+    intrinsics: std::collections::BTreeSet<String>,
     /// Ist der laufende Basisblock schon terminiert?
     ///
     /// LLVM verlangt, dass jeder Block mit `br`, `ret`, `switch` oder
@@ -57,7 +65,15 @@ impl Module {
         let _ = writeln!(head, "; erzeugt von takt-llvm; strikte FP nach Referenz 4.2:");
         let _ = writeln!(head, "; keine Fast-Math-Flags, contract=off, keine Reassoziation");
         let _ = writeln!(head, "target triple = \"{triple}\"");
-        Module { head, body: String::new(), next: 0, open: false, terminated: false }
+        Module {
+            head,
+            body: String::new(),
+            next: 0,
+            open: false,
+            block: String::new(),
+            intrinsics: std::collections::BTreeSet::new(),
+            terminated: false,
+        }
     }
 
     /// Beginnt eine Funktion.
@@ -73,6 +89,9 @@ impl Module {
         self.next = params.len() as u32 + 1;
         self.open = true;
         self.terminated = false;
+        // LLVM nummeriert den Eintrittsblock wie ein Register; seine
+        // Nummer ist die letzte vergebene.
+        self.block = format!("{}", params.len());
         regs
     }
 
@@ -151,12 +170,30 @@ impl Module {
             let _ = writeln!(self.body, "  br label %{name}");
         }
         let _ = writeln!(self.body, "{name}:");
+        self.block = name.to_string();
         self.terminated = false;
     }
 
     /// Ist der laufende Basisblock terminiert?
     pub fn terminated(&self) -> bool {
         self.terminated
+    }
+
+    /// Merkt ein gerufenes Intrinsic vor; die Deklaration entsteht beim
+    /// Abschluss.
+    ///
+    /// `signature` ist die vollstaendige Zeile ohne `declare`, etwa
+    /// `i8 @llvm.smin.i8(i8, i8)`.
+    pub fn needs_intrinsic(&mut self, signature: &str) {
+        self.intrinsics.insert(signature.to_string());
+    }
+
+    /// Der Name des laufenden Basisblocks.
+    ///
+    /// `phi` nennt seine Vorgaenger beim Namen; wer ihn raet, erzeugt
+    /// stillen Unsinn, den erst LLVM findet.
+    pub fn block(&self) -> &str {
+        &self.block
     }
 
     /// Bricht die laufende Funktion ab und verwirft sie.
@@ -184,7 +221,11 @@ impl Module {
     /// Das fertige Modul als Text.
     pub fn finish(self) -> String {
         debug_assert!(!self.open, "eine Funktion ist noch offen");
-        format!("{}{}", self.head, self.body)
+        let mut decls = String::new();
+        for sig in &self.intrinsics {
+            let _ = writeln!(decls, "declare {sig}");
+        }
+        format!("{}{decls}{}", self.head, self.body)
     }
 }
 

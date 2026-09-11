@@ -58,6 +58,10 @@ impl Abi {
         m.declare(&format!("declare void @{}(i32, i32, double)", Abi::MEASURE));
         m.declare(&format!("declare void @{}(i32, i32, i1)", Abi::VERIFY));
         m.declare(&format!("declare void @{}(i32, i32)", Abi::ABORT));
+        // `append` kopiert eine ganze Folge in einem Zug (3.9); LLVM
+        // kennt das als Intrinsic, und eine Schleife braeuchte eine
+        // Schranke, die 4.1 ohnehin verlangt.
+        m.declare("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)");
     }
 }
 

@@ -11,12 +11,13 @@
 //! selbst entscheidet das nicht — er waere dabei schlechter als LLVM und
 //! muesste die Entscheidung gegen jede Optimierung verteidigen.
 
-use takt_mir::expr::Expr;
+use takt_mir::expr::{Expr, ExprKind};
 use takt_mir::machine::Machine;
 use takt_mir::program::Program;
-use takt_mir::stmt::{Block, Observe, Place, Stmt, StmtKind};
+use takt_mir::stmt::{Block, Method, Observe, Place, Stmt, StmtKind};
 
 use crate::abi::Abi;
+use crate::collection;
 use crate::emit::{Module, Reg};
 use crate::expr::{Lowered, NotYet, Vars, lower as lower_expr};
 use crate::machine::{Role, StateStruct};
@@ -197,6 +198,9 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         StmtKind::Check { cond, kind, .. } => check(cond, *kind, ctx, m),
         StmtKind::If { cond, then, otherwise } => branch(cond, then, otherwise, ctx, m),
         StmtKind::Observe(o) => observe(o, ctx, m),
+        StmtKind::MethodCall { target, receiver, method, args } => {
+            method_call(target.as_ref(), receiver, *method, args, ctx, m)
+        }
         StmtKind::Abort { .. } => {
             // 5.4: `abort` faultet *alle* Maschinen im selben Tick. Der
             // erzeugte Code kann das nicht selbst — er kennt die anderen
@@ -206,8 +210,43 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
             m.void_inst("ret void");
             Ok(())
         }
+        StmtKind::Pass => Ok(()),
         other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
+}
+
+/// `for i in range(n)` in einer Funktion (4.1).
+///
+/// Die Schranke ist statisch — 4.1 verlangt es, und ohne sie waere die
+/// Kostenrechnung (9.4.3) nicht moeglich. Der Zaehler liegt in einem
+/// Slot wie jede andere lokale Variable; `mem2reg` macht daraus ein
+/// Register, wenn er sich nicht entzieht.
+fn fn_for(var: takt_mir::VarId, count: &Expr, body: &Block, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let n = lower_expr(count, ctx.program, m, &ctx.locals)?;
+    let (ptr, ty) = ctx.locals.slot(var).ok_or(NotYet { what: "Schleifenvariable" })?;
+    m.void_inst(&format!("store {ty} 0, ptr {ptr}"));
+    let k = ctx.next_label();
+    let (kopf, rumpf, ende) = (format!("fuer{k}"), format!("fuer{k}_rumpf"), format!("fuer{k}_ende"));
+    m.void_inst(&format!("br label %{kopf}"));
+    m.label(&kopf);
+    let i = m.inst(&format!("load {ty}, ptr {ptr}"));
+    // Der Vergleich ist vorzeichenbehaftet: `range(n)` laeuft von 0 bis
+    // n-1, und `n` ist ein `int` (3.2).
+    let weiter = m.inst(&format!("icmp slt {ty} {i}, {}", n.value));
+    m.void_inst(&format!("br i1 {weiter}, label %{rumpf}, label %{ende}"));
+    m.label(&rumpf);
+    ctx.breaks.push(ende.clone());
+    let result = fn_block(body, ctx, m);
+    ctx.breaks.pop();
+    result?;
+    // Der Zaehler waechst am Ende des Rumpfs; ein `break` springt daran
+    // vorbei, und das ist richtig — es verlaesst die Schleife.
+    let cur = m.inst(&format!("load {ty}, ptr {ptr}"));
+    let next = m.inst(&format!("add {ty} {cur}, 1"));
+    m.void_inst(&format!("store {ty} {next}, ptr {ptr}"));
+    m.void_inst(&format!("br label %{kopf}"));
+    m.label(&ende);
+    Ok(())
 }
 
 /// `x = e`: Wert berechnen, in den Speicherort schreiben.
@@ -348,5 +387,178 @@ fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, Llvm
             Ok((at, (**elem).clone()))
         }
         Place::Index2(..) => Err(NotYet { what: "Matrixelement als Ziel" }),
+    }
+}
+
+/// Ein Methodenaufruf (3.9, 5.7).
+///
+/// Die Sammlungsmethoden aendern ihren Empfaenger *an Ort und Stelle* —
+/// sie bekommen darum seinen Zeiger, nicht seinen Wert. Ein `push` auf
+/// eine Kopie waere folgenlos, und die Sprache hat keine Referenzen, mit
+/// denen man den Unterschied ausdruecken koennte (11.2): Der Empfaenger
+/// ist ein `Place`, und das genuegt.
+fn method_call(
+    target: Option<&Place>,
+    receiver: &Place,
+    method: Method,
+    args: &[Expr],
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    if !collection::is_collection_method(method) {
+        return Err(collection::unsupported(method));
+    }
+    let (recv, ty) = place(receiver, ctx, m)?;
+    let layout = collection::layout_of(&ty).ok_or(NotYet { what: "Methode auf einer Nicht-Sammlung" })?;
+    let label = ctx.next_label();
+    let ok = match method {
+        Method::Push => {
+            let vars = ctx.vars();
+            let v = lower_expr(args.first().ok_or(NotYet { what: "`push` ohne Argument" })?, ctx.program, m, &vars)?;
+            collection::push(recv, &layout, &v, label, m)
+        }
+        Method::Append => {
+            // Die Quelle ist selbst eine Sammlung und damit ein
+            // Speicherort; ihr Wert waere eine Kopie, die `memcpy` nicht
+            // lesen kann.
+            let src = args.first().ok_or(NotYet { what: "`append` ohne Argument" })?;
+            let ExprKind::Var(id) = src.kind else { return Err(NotYet { what: "`append` aus einem Ausdruck" }) };
+            let (src_ptr, _) = place(&Place::Var(id), ctx, m)?;
+            collection::append(recv, src_ptr, &layout, label, m)
+        }
+        _ => collection::clear(recv, &layout, m),
+    };
+    // 3.9: Der Rueckgabewert sagt, ob es gelang. Wer ihn nicht verwendet,
+    // hat es nach Pruefung 33 ausdruecklich getan.
+    if let Some(t) = target {
+        let (ptr, _) = place(t, ctx, m)?;
+        m.void_inst(&format!("store i1 {ok}, ptr {ptr}"));
+    }
+    Ok(())
+}
+
+/// Der Kontext eines Funktionsrumpfs (4.4).
+///
+/// Eine Funktion hat keinen Zustands-Struct und keine Maschine: Ihre
+/// Variablen sind Locals auf dem Stack, und ein `check` in ihr faultet
+/// den Aufrufer, nicht sie selbst. Darum ein eigener Kontext statt eines
+/// `Ctx` mit lauter leeren Feldern.
+pub struct FnCtx<'a> {
+    /// Das Programm, fuer Typen und Konstanten.
+    pub program: &'a Program,
+    /// Die lokalen Variablen.
+    pub locals: crate::fns::Locals,
+    /// Zaehler fuer eindeutige Marken.
+    pub labels: u32,
+    /// Sprungziele der laufenden Schleifen; `break` nimmt das oberste.
+    pub breaks: Vec<String>,
+}
+
+impl FnCtx<'_> {
+    /// Eine frische Nummer fuer eine Marke.
+    pub fn next_label(&mut self) -> u32 {
+        self.labels += 1;
+        self.labels
+    }
+}
+
+/// Senkt den Rumpf einer Funktion (4.4).
+pub fn fn_block(b: &Block, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    for s in &b.stmts {
+        fn_stmt(s, ctx, m)?;
+    }
+    Ok(())
+}
+
+/// Eine Anweisung im Rumpf einer Funktion.
+///
+/// Der Vorrat ist kleiner als in einer Maschine: Eine reine Funktion hat
+/// keine Zustaende, keine Outputs und keine Beobachtungen (4.4). Was sie
+/// hat, ist Rechnung, Verzweigung und `return`.
+fn fn_stmt(s: &Stmt, ctx: &mut FnCtx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    match &s.kind {
+        StmtKind::Return(e) => {
+            let v = lower_expr(e, ctx.program, m, &ctx.locals)?;
+            m.void_inst(&format!("ret {} {}", v.ty, v.value));
+            Ok(())
+        }
+        StmtKind::Assign { target, value } => {
+            let v = lower_expr(value, ctx.program, m, &ctx.locals)?;
+            let Place::Var(id) = target else { return Err(NotYet { what: "Zuweisungsziel in einer Funktion" }) };
+            let (ptr, _) = ctx.locals.slot(*id).ok_or(NotYet { what: "lokale Variable" })?;
+            m.void_inst(&format!("store {} {}, ptr {ptr}", v.ty, v.value));
+            Ok(())
+        }
+        StmtKind::If { cond, then, otherwise } => {
+            let c = lower_expr(cond, ctx.program, m, &ctx.locals)?;
+            let n = ctx.next_label();
+            let (t, f, end) = (format!("dann{n}"), format!("sonst{n}"), format!("ende{n}"));
+            m.void_inst(&format!("br i1 {}, label %{t}, label %{f}", c.value));
+            m.label(&t);
+            fn_block(then, ctx, m)?;
+            m.void_inst(&format!("br label %{end}"));
+            m.label(&f);
+            fn_block(otherwise, ctx, m)?;
+            m.void_inst(&format!("br label %{end}"));
+            m.label(&end);
+            Ok(())
+        }
+        StmtKind::MethodCall { target, receiver, method, args } => {
+            // 3.9 gilt in Funktionen wie in Maschinen; nur der
+            // Speicherort ist ein anderer.
+            if !collection::is_collection_method(*method) {
+                return Err(collection::unsupported(*method));
+            }
+            let Place::Var(id) = receiver else { return Err(NotYet { what: "Empfaenger in einer Funktion" }) };
+            let (recv, ty) = ctx.locals.slot(*id).ok_or(NotYet { what: "lokale Sammlung" })?;
+            let layout = collection::layout_of(&ty).ok_or(NotYet { what: "Methode auf einer Nicht-Sammlung" })?;
+            let label = ctx.next_label();
+            let ok = match method {
+                Method::Push => {
+                    let v = lower_expr(
+                        args.first().ok_or(NotYet { what: "`push` ohne Argument" })?,
+                        ctx.program,
+                        m,
+                        &ctx.locals,
+                    )?;
+                    collection::push(recv, &layout, &v, label, m)
+                }
+                Method::Append => {
+                    let src = args.first().ok_or(NotYet { what: "`append` ohne Argument" })?;
+                    // `memcpy` liest aus dem Speicher; eine berechnete
+                    // Quelle bekommt dafuer einen Platz (11.2: statischer
+                    // Scratch). LLVM hebt die `alloca` in den
+                    // Eintrittsblock und entfernt sie, wo sie unnoetig ist.
+                    let src_ptr = match src.kind {
+                        ExprKind::Var(sid) => ctx.locals.slot(sid).ok_or(NotYet { what: "Quelle" })?.0,
+                        _ => {
+                            let v = lower_expr(src, ctx.program, m, &ctx.locals)?;
+                            let tmp = m.inst(&format!("alloca {}", v.ty));
+                            m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+                            tmp
+                        }
+                    };
+                    collection::append(recv, src_ptr, &layout, label, m)
+                }
+                _ => collection::clear(recv, &layout, m),
+            };
+            if let Some(Place::Var(tid)) = target {
+                let (ptr, _) = ctx.locals.slot(*tid).ok_or(NotYet { what: "Ziel" })?;
+                m.void_inst(&format!("store i1 {ok}, ptr {ptr}"));
+            }
+            Ok(())
+        }
+        StmtKind::ForRange { var, count, body } => fn_for(*var, count, body, ctx, m),
+        StmtKind::Break => {
+            // 4.1: Die Schleife hat eine statische Schranke; `break`
+            // verlaesst sie vorzeitig. Das Ziel steht auf dem Stapel der
+            // laufenden Schleifen.
+            let Some(target) = ctx.breaks.last().cloned() else {
+                return Err(NotYet { what: "`break` ausserhalb einer Schleife" });
+            };
+            m.void_inst(&format!("br label %{target}"));
+            Ok(())
+        }
+        other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
 }

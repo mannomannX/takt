@@ -18,6 +18,12 @@ fn main() {
     let Some(p) = out.program else { return };
     let mut m = Module::new(&path, "x86_64-pc-windows-msvc");
     takt_llvm::abi::Abi::declare(&mut m);
+    // Reine Funktionen zuerst: Die Maschinen rufen sie (4.4).
+    for f in &p.fns {
+        if let Err(e) = takt_llvm::fns::function(f, &p, &mut m) {
+            eprintln!("; fn {}: {e:?}", f.name);
+        }
+    }
     for machine in &p.machines {
         let Some(st) = state_struct(machine, &p) else {
             eprintln!("; {}: Zustand nicht abbildbar", machine.name);

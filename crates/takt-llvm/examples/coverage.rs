@@ -44,6 +44,10 @@ fn main() {
         let mut m = Module::new("x", "x86_64-pc-windows-msvc");
         takt_llvm::abi::Abi::declare(&mut m);
         let mut alle = true;
+        // Reine Funktionen zuerst: Die Maschinen rufen sie (4.4).
+        for f in &p.fns {
+            let _ = takt_llvm::fns::function(f, &p, &mut m);
+        }
         for mm in &p.machines {
             maschinen += 1;
             measure(mm, &mut cov);

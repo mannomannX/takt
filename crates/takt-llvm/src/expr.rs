@@ -10,7 +10,7 @@
 //! traegt ein Flag; `emit` bietet dafuer keine Moeglichkeit (4.2).
 
 use takt_mir::TypeId;
-use takt_mir::expr::{Accessor, BinaryOp, ConvertKind, Expr, ExprKind, UnaryOp};
+use takt_mir::expr::{Accessor, BinaryOp, ConvertKind, Expr, ExprKind, Intrinsic, UnaryOp};
 use takt_mir::program::Program;
 use takt_mir::types::{IntWidth, Type};
 
@@ -104,6 +104,7 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Duration(d) => Ok(Lowered { value: d.to_string(), ty: want }),
         ExprKind::Float(f) => Ok(Lowered { value: float_literal(*f, &want), ty: want }),
         ExprKind::Var(id) => vars.var(*id, m).ok_or(NotYet { what: "unbekannte Variable" }),
+        ExprKind::Default => default_of(&want),
         ExprKind::Input { channel, .. } => vars.input(*channel, m).ok_or(NotYet { what: "Input" }),
         ExprKind::Param(id) => vars.param(*id, m).ok_or(NotYet { what: "Parameter" }),
         ExprKind::Output(channel) => vars.output(*channel, m).ok_or(NotYet { what: "Output-Latch" }),
@@ -113,6 +114,9 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Cond { cond, then, otherwise } => cond_expr(cond, then, otherwise, &want, p, m, vars),
         ExprKind::Variant { enum_id, variant, fields } => self_variant(*enum_id, *variant, fields, &want, p),
         ExprKind::Record { fields, .. } => record(fields, &want, p, m, vars),
+        ExprKind::Call { callee, args } => call(*callee, args, &want, p, m, vars),
+        ExprKind::Intrinsic { op, args } => intrinsic(*op, args, &want, p, m, vars),
+        ExprKind::Index { base, index } => index_of(base, index, &want, p, m, vars),
         ExprKind::Field { base, field } => field_of(base, *field, &want, p, m, vars),
         ExprKind::Cast { expr, to } => cast(expr, *to, &want, p, m, vars),
         ExprKind::Convert { expr, kind, unit } => convert(expr, *kind, *unit, &want, p, m, vars),
@@ -234,6 +238,14 @@ fn access(
                 m.inst(&format!("select i1 {}, {} {}, {} {}", valid.value, x.ty, x.value, fallback.ty, fallback.value));
             Ok(Lowered { value: r.to_string(), ty: want.clone() })
         }
+        // `.len` einer Sammlung (3.9): das Laengenfeld des Structs.
+        Accessor::Len => {
+            let LlvmType::Struct(_) = &x.ty else { return Err(NotYet { what: "`.len` auf einer Nicht-Sammlung" }) };
+            let r = m.inst(&format!("extractvalue {} {}, 0", x.ty, x.value));
+            // Die Laenge steht als `i32` im Struct; `int` ist `i64` (3.2).
+            let wide = m.inst(&format!("sext i32 {r} to {want}"));
+            Ok(Lowered { value: wide.to_string(), ty: want.clone() })
+        }
         _ => Err(NotYet { what: crate::scope::accessor_name(which) }),
     }
 }
@@ -295,6 +307,174 @@ fn self_variant(
     let def = p.enums.get(enum_id.index()).ok_or(NotYet { what: "Enum" })?;
     let v = def.variants.get(variant as usize).ok_or(NotYet { what: "Variante" })?;
     Ok(Lowered { value: v.discriminant.to_string(), ty: want.clone() })
+}
+
+/// Eine Primitive (4.1).
+///
+/// Die Integer-Primitiven sind hier vollstaendig: Sie sind exakt
+/// definiert und brauchen keine Bibliothek (plan/m4.md 3.1). Die
+/// Fliesskomma-Primitiven ruft `libtaktm`, und was dort nicht kuratiert
+/// ist, hat der Compiler schon abgelehnt (13.8) — der Codegen sieht es
+/// nicht mehr.
+fn intrinsic(
+    op: Intrinsic,
+    args: &[Expr],
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let mut ops = Vec::with_capacity(args.len());
+    for a in args {
+        ops.push(lower(a, p, m, vars)?);
+    }
+    let a = |i: usize| ops.get(i).cloned().ok_or(NotYet { what: "Argument einer Primitive" });
+    let value = match op {
+        // 4.1: Die `wrapping_*`-Primitiven sind der *explizite* Umlauf;
+        // der gewoehnliche Operator faultet statt umzulaufen. In LLVM ist
+        // der Umlauf das Standardverhalten ohne `nsw`/`nuw` — dieselbe
+        // Instruktion, nur ohne den Ueberlauf-Check darum herum.
+        Intrinsic::WrappingAdd => {
+            let (x, y) = (a(0)?, a(1)?);
+            m.inst(&format!("add {} {}, {}", x.ty, x.value, y.value))
+        }
+        Intrinsic::WrappingSub => {
+            let (x, y) = (a(0)?, a(1)?);
+            m.inst(&format!("sub {} {}, {}", x.ty, x.value, y.value))
+        }
+        Intrinsic::WrappingMul => {
+            let (x, y) = (a(0)?, a(1)?);
+            m.inst(&format!("mul {} {}, {}", x.ty, x.value, y.value))
+        }
+        // LLVM hat die Saettigung als Intrinsic; sie von Hand zu bauen
+        // waere drei Instruktionen und eine Gelegenheit fuer einen Fehler.
+        Intrinsic::SaturatingAdd | Intrinsic::SaturatingSub => {
+            let (x, y) = (a(0)?, a(1)?);
+            let signed = int_is_signed_ty(args[0].ty, p);
+            let name = match (op, signed) {
+                (Intrinsic::SaturatingAdd, true) => "sadd.sat",
+                (Intrinsic::SaturatingAdd, false) => "uadd.sat",
+                (_, true) => "ssub.sat",
+                (_, false) => "usub.sat",
+            };
+            m.needs_intrinsic(&format!("{} @llvm.{name}.{}({}, {})", x.ty, x.ty, x.ty, x.ty));
+            m.inst(&format!("call {} @llvm.{name}.{}({} {}, {} {})", x.ty, x.ty, x.ty, x.value, y.ty, y.value))
+        }
+        Intrinsic::Rotl | Intrinsic::Rotr => {
+            let (x, y) = (a(0)?, a(1)?);
+            let name = if op == Intrinsic::Rotl { "fshl" } else { "fshr" };
+            // `fshl(x, x, n)` ist die Rotation: Der Trichter nimmt
+            // dieselbe Zahl als beide Haelften.
+            m.needs_intrinsic(&format!("{} @llvm.{name}.{}({}, {}, {})", x.ty, x.ty, x.ty, x.ty, x.ty));
+            m.inst(&format!(
+                "call {} @llvm.{name}.{}({} {}, {} {}, {} {})",
+                x.ty, x.ty, x.ty, x.value, x.ty, x.value, y.ty, y.value
+            ))
+        }
+        Intrinsic::Abs if !want.is_float() => {
+            let x = a(0)?;
+            // `abs` auf einem Integer faultet beim kleinsten Wert (4.1);
+            // der `Checked`-Knoten der MIR steht darum herum, und `false`
+            // heisst hier „kein undefiniertes Verhalten".
+            m.needs_intrinsic(&format!("{} @llvm.abs.{}({}, i1)", x.ty, x.ty, x.ty));
+            m.inst(&format!("call {} @llvm.abs.{}({} {}, i1 false)", x.ty, x.ty, x.ty, x.value))
+        }
+        Intrinsic::Min | Intrinsic::Max => {
+            let (x, y) = (a(0)?, a(1)?);
+            let signed = int_is_signed_ty(args[0].ty, p);
+            let name = match (op == Intrinsic::Min, x.ty.is_float(), signed) {
+                (true, true, _) => "minnum",
+                (false, true, _) => "maxnum",
+                (true, false, true) => "smin",
+                (true, false, false) => "umin",
+                (false, false, true) => "smax",
+                (false, false, false) => "umax",
+            };
+            m.needs_intrinsic(&format!("{} @llvm.{name}.{}({}, {})", x.ty, x.ty, x.ty, x.ty));
+            m.inst(&format!("call {} @llvm.{name}.{}({} {}, {} {})", x.ty, x.ty, x.ty, x.value, y.ty, y.value))
+        }
+        _ => return Err(NotYet { what: "Primitive" }),
+    };
+    Ok(Lowered { value: value.to_string(), ty: want.clone() })
+}
+
+/// Ein Index (3.9).
+///
+/// Die Grenze prueft der `Checked`-Knoten der MIR (4.1); hier steht der
+/// Zugriff. Eine Sammlung wird ueber ihr `data`-Feld indiziert, ein Array
+/// unmittelbar.
+fn index_of(
+    base: &Expr,
+    index: &Expr,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let x = lower(base, p, m, vars)?;
+    let i = lower(index, p, m, vars)?;
+    // Der Wert liegt als Register vor, nicht im Speicher; ein
+    // `extractvalue` mit berechnetem Index gibt es nicht. Er bekommt
+    // darum einen Platz (11.2: statischer Scratch), und LLVM entfernt
+    // ihn, wo er unnoetig ist.
+    let tmp = m.inst(&format!("alloca {}", x.ty));
+    m.void_inst(&format!("store {} {}, ptr {tmp}", x.ty, x.value));
+    let (array_ty, data) = match &x.ty {
+        LlvmType::Struct(_) => {
+            let l = crate::collection::layout_of(&x.ty).ok_or(NotYet { what: "Index auf diesem Struct" })?;
+            let d = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", x.ty));
+            (LlvmType::Array(Box::new(l.elem), l.cap), d)
+        }
+        LlvmType::Array(..) => (x.ty.clone(), tmp),
+        _ => return Err(NotYet { what: "Index auf diesem Typ" }),
+    };
+    let at = m.inst(&format!("getelementptr inbounds {array_ty}, ptr {data}, i32 0, {} {}", i.ty, i.value));
+    let v = m.inst(&format!("load {want}, ptr {at}"));
+    Ok(Lowered { value: v.to_string(), ty: want.clone() })
+}
+
+/// `default` eines Typs (3.7): 0, `false`, leere Sammlung.
+///
+/// LLVM hat dafuer `zeroinitializer` — ein Wert, der kein Register belegt
+/// und den der Linker in `.bss` legt. Das ist nicht nur kuerzer als Feld
+/// fuer Feld zu schreiben, es ist auch das, was 12.3 fuer den
+/// Speicherbedarf annimmt: Nullen kosten kein Flash.
+fn default_of(want: &LlvmType) -> Result<Lowered, NotYet> {
+    match want {
+        LlvmType::Void => Err(NotYet { what: "`default` ohne Typ" }),
+        // Eine leere Sammlung ist `{ len = 0, data = beliebig }`; die
+        // Elemente jenseits der Laenge sind nicht lesbar (3.9).
+        _ => Ok(Lowered { value: "zeroinitializer".into(), ty: want.clone() }),
+    }
+}
+
+/// Ein Aufruf einer reinen Funktion (4.4).
+///
+/// Reine Funktionen haben keinen Zustand und keinen Seiteneffekt; der
+/// Aufruf ist darum eine gewoehnliche `call`-Instruktion, und LLVM darf
+/// sie einbetten oder mehrfache Aufrufe mit denselben Argumenten
+/// zusammenfassen.
+fn call(
+    func: takt_mir::FnId,
+    args: &[Expr],
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let f = p.fns.get(func.index()).ok_or(NotYet { what: "Funktion" })?;
+    let mut operands = Vec::with_capacity(args.len());
+    for a in args {
+        let v = lower(a, p, m, vars)?;
+        operands.push(format!("{} {}", v.ty, v.value));
+    }
+    let name = crate::fns::symbol(f);
+    if *want == LlvmType::Void {
+        m.void_inst(&format!("call void @{name}({})", operands.join(", ")));
+        return Ok(Lowered { value: String::new(), ty: LlvmType::Void });
+    }
+    let r = m.inst(&format!("call {want} @{name}({})", operands.join(", ")));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
 }
 
 /// Ein Record-Literal (3.7).

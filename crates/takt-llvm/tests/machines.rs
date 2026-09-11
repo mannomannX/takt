@@ -28,6 +28,10 @@ fn corpus(name: &str) -> Program {
 fn ir_of(p: &Program) -> String {
     let mut m = Module::new("korpus", "x86_64-pc-windows-msvc");
     takt_llvm::abi::Abi::declare(&mut m);
+    // Reine Funktionen zuerst: Die Maschinen rufen sie (4.4).
+    for f in &p.fns {
+        let _ = takt_llvm::fns::function(f, p, &mut m);
+    }
     for machine in &p.machines {
         let Some(st) = state_struct(machine, p) else { continue };
         machine::declare_state(machine, &st, &mut m);
@@ -566,6 +570,121 @@ fn nothing_follows_a_terminator() {
             if matches!(head, "br" | "ret" | "switch" | "unreachable") {
                 terminated = true;
             }
+        }
+    }
+}
+
+// --- Sammlungen (3.9) ---------------------------------------------------
+
+/// 3.9: `push` schreibt nur, wenn Platz ist, und sagt es. Der Vergleich
+/// steht vor dem Sprung, damit der haeufige Weg der gerade ist.
+#[test]
+fn push_checks_the_capacity_before_writing() {
+    let p = corpus("13_framing.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("icmp ult i32"),
+        "`push` prueft die Kapazitaet nicht:
+{ir}"
+    );
+    assert!(
+        ir.contains("phi i1"),
+        "`push` liefert kein `bool`:
+{ir}"
+    );
+}
+
+/// 3.9: `append` ist alles-oder-nichts — ein Teilanhang liesse einen
+/// halben Rahmen im Puffer, den niemand als Fehler erkennt.
+#[test]
+fn append_copies_everything_or_nothing() {
+    let p = corpus("13_framing.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("icmp ule i32"),
+        "`append` prueft die Summe nicht:
+{ir}"
+    );
+    assert!(
+        ir.contains("llvm.memcpy"),
+        "`append` kopiert nicht in einem Zug:
+{ir}"
+    );
+}
+
+// --- Reine Funktionen (4.4) ---------------------------------------------
+
+/// Eine `fn` wird eine gewoehnliche LLVM-Funktion; LLVM darf sie
+/// einbetten und ueber Aufrufe hinweg optimieren.
+#[test]
+fn a_pure_function_becomes_an_llvm_function() {
+    let p = corpus("13_framing.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("@takt_fn_checksum"),
+        "`checksum` fehlt:
+{ir}"
+    );
+    assert!(
+        ir.contains("define") && ir.contains("@takt_fn_"),
+        "keine Funktionsdefinition:
+{ir}"
+    );
+}
+
+/// 4.1: `for i in range(n)` hat eine statische Schranke, und `break`
+/// verlaesst die Schleife vorzeitig.
+#[test]
+fn a_bounded_loop_has_a_header_and_an_exit() {
+    let p = corpus("13_framing.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("fuer") && ir.contains("_rumpf"),
+        "keine Schleife:
+{ir}"
+    );
+    assert!(
+        ir.contains("icmp slt"),
+        "der Schleifenvergleich fehlt:
+{ir}"
+    );
+}
+
+/// 4.1: Die `wrapping_*`-Primitiven sind der explizite Umlauf — dieselbe
+/// Instruktion wie der gewoehnliche Operator, nur ohne `nsw`/`nuw` und
+/// ohne den Ueberlauf-Check darum herum.
+#[test]
+fn wrapping_arithmetic_has_no_overflow_flags() {
+    let p = corpus("13_framing.takt");
+    let ir = ir_of(&p);
+    for line in ir.lines().filter(|l| l.contains(" add i8") || l.contains(" add i32")) {
+        assert!(!line.contains("nsw") && !line.contains("nuw"), "{line}");
+    }
+}
+
+/// Eine Funktion, deren Rumpf der Codegen nicht senkt, wird *deklariert*
+/// statt weggelassen: Ein Aufruf auf ein undefiniertes Symbol ist
+/// gueltige IR, ein fehlendes Symbol laesst clang die ganze Datei
+/// zurueckweisen.
+#[test]
+fn every_called_function_is_defined_or_declared() {
+    for name in UEBERSETZBAR {
+        let p = corpus(name);
+        let ir = ir_of(&p);
+        for line in ir.lines() {
+            let Some(at) = line.find("@takt_fn_") else { continue };
+            if !line.trim_start().starts_with("call") {
+                continue;
+            }
+            let symbol: String =
+                line[at..].chars().take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '@')).collect();
+            // Bereitgestellt heisst: Es gibt eine Zeile, die das Symbol
+            // definiert oder deklariert — nicht nur eine, die es ruft.
+            let bereit = ir.lines().any(|l| {
+                let t = l.trim_start();
+                (t.starts_with("define ") || t.starts_with("declare ")) && t.contains(&symbol)
+            });
+            assert!(bereit, "{name}: `{symbol}` wird gerufen, aber weder definiert noch deklariert");
         }
     }
 }
