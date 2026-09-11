@@ -515,6 +515,7 @@ MEM-decode,Reservierter Membername,2.5,decode,,M0 (Parser/MIR-Entwurf),teilweise
 MEM-encode,Reservierter Membername,2.5,encode,,M0 (Parser/MIR-Entwurf),teilweise
 MEM-default,Reservierter Membername,2.5,default,,M0 (Parser/MIR-Entwurf),teilweise
 MEM-push,Reservierter Membername,2.5,push,,M0 (Parser/MIR-Entwurf),teilweise
+MEM-append,Reservierter Membername,2.5,append,,M3,fertig
 MEM-get,Reservierter Membername,2.5,get,,M0 (Parser/MIR-Entwurf),teilweise
 MEM-insert,Reservierter Membername,2.5,insert,,M0 (Parser/MIR-Entwurf),teilweise
 MEM-remove,Reservierter Membername,2.5,remove,,M0 (Parser/MIR-Entwurf),teilweise
@@ -532,10 +533,10 @@ MEM-remaining,Reservierter Membername,2.5,remaining,,M0 (Parser/MIR-Entwurf),tei
 MEM-truncated,Reservierter Membername,2.5,truncated,,M0 (Parser/MIR-Entwurf),teilweise
 MEM-reset,Reservierter Membername,2.5,reset,,M0 (Parser/MIR-Entwurf),teilweise
 SC-1,Statische Prüfung,10,"Tokenizer/Parser (Einrückung, Grammatik)",F,M3,fertig
-SC-2,Statische Prüfung,10,"Namensauflösung, Modul-Linking, Namenskonventionen",F / W,M3,teilweise
-SC-3,Statische Prüfung,10,"Typ- und Einheiteninferenz, affine Regeln, Duration-Regeln",F,M3,teilweise
+SC-2,Statische Prüfung,10,"Namensauflösung, Modul-Linking, Namenskonventionen",F / W,M3,fertig
+SC-3,Statische Prüfung,10,"Typ- und Einheiteninferenz, affine Regeln, Duration-Regeln",F,M3,fertig
 SC-4,Statische Prüfung,10,"Intervallanalyse: Ranges, Division, Overflow, Index; implizite Prüfungen",W bei jeder eingefügten Laufzeitprüfung (außer i64-Overflow),M3,fertig
-SC-5,Statische Prüfung,10,Validitäts-Dominanz für Channel-Lesen,— (impliziter Check ist Default),M3,teilweise
+SC-5,Statische Prüfung,10,Validitäts-Dominanz für Channel-Lesen,— (impliziter Check ist Default),M3,fertig
 SC-6,Statische Prüfung,10,Definite Assignment,F,M3,fertig
 SC-7,Statische Prüfung,10,Single-Writer für Outputs und `pub var`; Channel-Richtung; jede `hw`-Adresse höchstens einmal gebunden,F,M3,fertig
 SC-8,Statische Prüfung,10,"Maschinen: eindeutige Zustandsnamen, `initial` vorhanden, Ziele existieren, Transitionsblöcke enden mit `->`, Aktionsblock-Einschränkungen (5.5)",F,M3,fertig
@@ -557,16 +558,16 @@ SC-23,Statische Prüfung,10,"`persist`: POD-Typ, Maschinenebene, nicht in Szenar
 SC-24,Statische Prüfung,10,"Shift-Beträge, `as`-Konversionen, `vec`-Indizes, Slices: Range beweisbar oder impliziter Check",W,M3,fertig
 SC-25,Statische Prüfung,10,"Zustandslokale und gehobene Variablen (Sequenz-`var`, Captures): Definite Assignment je Eintritt",F,M3,teilweise
 SC-26,Statische Prüfung,10,Szenarien schreiben nur `sim`-Outputs; Single-Writer gegenüber Modellmaschinen,F,M3,definiert
-SC-27,Statische Prüfung,10,`every d:` nur in `loop:`; `on`-Handler nur auf deklarierten Streams,F,M3,teilweise
+SC-27,Statische Prüfung,10,`every d:` nur in `loop:`; `on`-Handler nur auf deklarierten Streams,F,M3,fertig
 SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0` („tick-granular"", 7.5); deklarierte `jitter`-Anforderung größer als gemessener Wert erfüllt, sonst Fehler (8.1)",W / F,M3,offen
 SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M3,definiert
 SC-30,Statische Prüfung,10,"`mat`: Formprüfung bei `+ - *`, `inv`/`solve` nur quadratisch, R, C ≤ 16, Indizes in Range (3.11)",F,M3,definiert
 SC-31,Statische Prüfung,10,"Native Funktionen: nur die kuratierte Menge (v1), `cost`, `stack` und `total` deklariert, Argumente fester Größe (4.5)",F,M3,definiert
 SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration",F,M3,offen
-SC-33,Statische Prüfung,10,`follows`: Kanten azyklisch; Follower liest nur gefolgte Maschinen frisch; keine frischen Lesevorgänge in Aktionsblöcken der Abort-Phase (7.2),F,M3,definiert
+SC-33,Statische Prüfung,10,"`follows`: Kanten azyklisch; Follower liest nur gefolgte Maschinen frisch; keine frischen Lesevorgänge in Aktionsblöcken der Abort-Phase (7.2); Warnung bei gefolgter Größe, die auch auf dem Fault-Pfad vorkommt",F / W,M3,definiert
 SC-34,Statische Prüfung,10,"Dimensionierte Matrizen: Einheitentupel passen (Produkt, Addition, Inverse), Literale bilden ein äußeres Produkt, variable Indizes nur bei gleichen Einheiten (3.11)",F,M3,definiert
 SC-35,Statische Prüfung,10,"`tunable param` nicht in Compile-Zeit-Konstanten (Array-Größen, Kapazitäten, `repeat`) (8.4)",F,M3,definiert
-SC-36,Statische Prüfung,10,`check … for d` / `alert … for d`: `d >= P_m`; Rundung auf Perioden mit effektivem Wert (5.6),W,M3,teilweise
+SC-36,Statische Prüfung,10,`check … for d` / `alert … for d`: `d >= P_m`; Rundung auf Perioden mit effektivem Wert (5.6),W,M3,fertig
 SC-37,Statische Prüfung,10,`len_field`: verweist auf ein vorangehendes Integer-Feld; statische Obergrenze des Feldes (3.7),F,M3,fertig
 SC-38,Statische Prüfung,10,"Einheiten auf Integern: `.to()` nur bei ganzzahligem Faktor, sonst `.to_float()` (3.2)",F,M3,definiert
 SC-39,Statische Prüfung,10,"Speicherbudget aller `baremetal`- und `rtos`-Profile: `takt size` (11.5) ≤ `ram`/`flash`/`iram` der Hardware-Konfiguration, aufgeschlüsselt; auf Targets mit XIP-Flash zusätzlich RAM-Residenz von Code und tick-gelesenen Konstanten (12.3); `debounce`-Haltedauer im Report",F,M3,offen
@@ -841,7 +842,7 @@ CLI-campaign,Werkzeug,11.1,takt campaign,,M5/M6,offen
 CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5/M6,offen
 CLI-prove,Werkzeug,11.1,takt prove,,M6/M7,offen
 CLI-fmt,Werkzeug,11.1,takt fmt,,M3,fertig
-CLI-size,Werkzeug,11.1,takt size,,M3,offen
+CLI-size,Werkzeug,11.1,takt size,,M3,fertig
 CLI-graph,Werkzeug,11.1,takt graph,,M4,offen
 CLI-bench,Werkzeug,11.1,takt bench,,M5/M6,offen
 CLI-tune,Werkzeug,11.1,takt tune,,M5/M6,offen
