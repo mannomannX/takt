@@ -95,6 +95,12 @@ MILESTONE_OVERRIDE = {
     "PAR-13.3-Kanal_Attribute_gelten_automatisch_als_Annahmen": "M6 (v1.1)",
     "PAR-13.3-Kompositionalität": "M6 (v1.1)",
     "FMT-Hardware-Konfiguration": "M6 (mit 8.10)",
+    # Jedes Format entsteht mit seinem Verbraucher: die Aufzeichnung mit
+    # Record/Replay (12.5), der Lauf-Header mit `takt run`, der
+    # Konformitaetsbericht mit `takt bench` (13.8).
+    "FMT-Aufzeichnung": "M4 (Codegen)",
+    "FMT-Lauf-Header": "M4 (Codegen)",
+    "FMT-Konformitätsbericht": "M5 (Embedded)",
     "CLI-latency": "M3 (Gate)",
     # `append` ist mit M3 gebaut, nicht mit dem Parser (FB-42).
     "MEM-append": "M3",

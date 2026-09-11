@@ -1,0 +1,58 @@
+(system
+  (language 1)
+  (tick 1ms))
+(const MAGIC :u16 0x50AA)
+(enum ParseErr
+  (SHORT)
+  (BAD_MAGIC)
+  (BAD_LEN)
+  (BAD_CRC))
+(record Header layout=big
+  (magic: u16 = 0x50AA)
+  (kind: u8)
+  (len: u8 in 0..64)
+  (bits flags: u8
+    (urgent: bool at 0)
+    (encrypt: bool at 1)
+    (prio: u8 at 4..7)))
+(const HEAD_BYTES :int 5)
+(input rx :stream<bytes<128>> @hw("uart0/rx") max_rate=1000[Hz] capacity=4 framing=raw)
+(output ok :bool @hw("o/ok") safe=false)
+(output prio :int in 0..15 @hw("o/prio") safe=0)
+(fn crc8 (b:bytes<128> from:int in 0..128 len:int in 0..64) -> u8
+  (var c :u8 0xFF)
+  (for i in (range 64)
+    (if (>= i len)
+      (break))
+    (= c (call wrapping_add c (index b (+ from i)))))
+  (return c))
+(fn parse (frame:bytes<128>) -> Header!ParseErr
+  (if (< (.len frame) (+ HEAD_BYTES 1))
+    (return (ERR SHORT)))
+  (var d (.decode Header frame))
+  (if (not (.valid d))
+    (return (ERR BAD_MAGIC)))
+  (var h d)
+  (if (>= (+ (as (.len h) int) HEAD_BYTES) (.len frame))
+    (return (ERR BAD_LEN)))
+  (if (!= (call crc8 frame HEAD_BYTES (as (.len h) int)) (index frame (+ HEAD_BYTES (as (.len h) int))))
+    (return (ERR BAD_CRC)))
+  (return (OK h)))
+(machine parser
+  (var gueltig :int in 0..1_000_000 0)
+  (var kaputt :int in 0..1_000_000 0)
+  (initial LESEN)
+  (state LESEN
+    (loop
+      (= ok (> gueltig 0)))
+    (on rx as frame
+      (var r (call parse (.data frame)))
+      (match r
+        (case (OK h)
+          (= gueltig (call min (+ gueltig 1) 1_000_000))
+          (= prio (as (.prio (.flags h)) int))
+          (var nutz (slice (.data frame) HEAD_BYTES (+ HEAD_BYTES (as (.len h) int))))
+          (= ok (> (.len nutz) 0)))
+        (case (ERR e)
+          (= kaputt (call min (+ kaputt 1) 1_000_000))
+          (= ok false))))))

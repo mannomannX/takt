@@ -19,16 +19,16 @@ CH-16,Kapitel,16,Entscheidungslog,,Doku/Rationale,rationale
 SEM-0.1,Semantik/Abschnitt,0.1,Was die Sprache verspricht (und wie das Versprechen eingelöst wird),,Doku/Rationale,offen
 SEM-0.2,Semantik/Abschnitt,0.2,Die vierundzwanzig tragenden Entscheidungen,,Doku/Rationale,offen
 SEM-0.3,Semantik/Abschnitt,0.3,Nicht-Ziele (bewusst),,Doku/Rationale,offen
-SEM-1.1,Semantik/Abschnitt,1.1,Das Bild in einem Absatz,,M0 (Parser/MIR-Entwurf),offen
-SEM-1.2,Semantik/Abschnitt,1.2,Die drei Ebenen,,M0 (Parser/MIR-Entwurf),offen
-SEM-1.3,Semantik/Abschnitt,1.3,"Tick, Perioden, Hyperperiode",,M0 (Parser/MIR-Entwurf),offen
-SEM-1.4,Semantik/Abschnitt,1.4,Datenfluss,,M0 (Parser/MIR-Entwurf),offen
-SEM-1.5,Semantik/Abschnitt,1.5,Lebenszyklus,,M0 (Parser/MIR-Entwurf),offen
+SEM-1.1,Semantik/Abschnitt,1.1,Das Bild in einem Absatz,,M0 (Parser/MIR-Entwurf),fertig
+SEM-1.2,Semantik/Abschnitt,1.2,Die drei Ebenen,,M0 (Parser/MIR-Entwurf),fertig
+SEM-1.3,Semantik/Abschnitt,1.3,"Tick, Perioden, Hyperperiode",,M0 (Parser/MIR-Entwurf),fertig
+SEM-1.4,Semantik/Abschnitt,1.4,Datenfluss,,M0 (Parser/MIR-Entwurf),fertig
+SEM-1.5,Semantik/Abschnitt,1.5,Lebenszyklus,,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.1,Semantik/Abschnitt,2.1,Lexik,,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.2,Semantik/Abschnitt,2.2,Schlüsselwörter,,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.3,Semantik/Abschnitt,2.3,Grammatik (EBNF),,M0 (Parser/MIR-Entwurf),fertig
-SEM-2.4,Semantik/Abschnitt,2.4,Bedeutung der Kernkonstrukte (informell),,M0 (Parser/MIR-Entwurf),offen
-SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit",,M0 (Parser/MIR-Entwurf),offen
+SEM-2.4,Semantik/Abschnitt,2.4,Bedeutung der Kernkonstrukte (informell),,M0 (Parser/MIR-Entwurf),fertig
+SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit",,M0 (Parser/MIR-Entwurf),fertig
 SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),teilweise
 SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),teilweise
 SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),teilweise
@@ -132,7 +132,7 @@ G-record_field,Grammatik,2.3,record_field,,M0 (Parser/MIR-Entwurf),fertig
 G-field,Grammatik,2.3,field,,M0 (Parser/MIR-Entwurf),fertig
 G-bitfield,Grammatik,2.3,bitfield,,M0 (Parser/MIR-Entwurf),fertig
 G-unit_decl,Grammatik,2.3,unit_decl,,M0 (Parser/MIR-Entwurf),fertig
-G-unit_name,Grammatik,2.3,unit_name,,M0 (Parser/MIR-Entwurf),offen
+G-unit_name,Grammatik,2.3,unit_name,,M0 (Parser/MIR-Entwurf),fertig
 G-const_decl,Grammatik,2.3,const_decl,,M0 (Parser/MIR-Entwurf),fertig
 G-param_decl,Grammatik,2.3,param_decl,v1.1,M0 (Parser) / M6,fertig
 G-profile_decl,Grammatik,2.3,profile_decl,,M0 (Parser/MIR-Entwurf),fertig
@@ -484,55 +484,55 @@ MEM-t,Reservierter Membername,2.5,t,,M0 (Parser/MIR-Entwurf),fertig
 MEM-seq,Reservierter Membername,2.5,seq,,M0 (Parser/MIR-Entwurf),fertig
 MEM-text,Reservierter Membername,2.5,text,,M0 (Parser/MIR-Entwurf),fertig
 MEM-data,Reservierter Membername,2.5,data,,M0 (Parser/MIR-Entwurf),fertig
-MEM-len,Reservierter Membername,2.5,len,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-count,Reservierter Membername,2.5,count,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-dropped,Reservierter Membername,2.5,dropped,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-malformed,Reservierter Membername,2.5,malformed,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-overflowed,Reservierter Membername,2.5,overflowed,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-free,Reservierter Membername,2.5,free,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-jitter,Reservierter Membername,2.5,jitter,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-time_warped,Reservierter Membername,2.5,time_warped,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-done,Reservierter Membername,2.5,done,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-result,Reservierter Membername,2.5,result,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-state,Reservierter Membername,2.5,state,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-to,Reservierter Membername,2.5,to,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-to_float,Reservierter Membername,2.5,to_float,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-as,Reservierter Membername,2.5,as,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-bit,Reservierter Membername,2.5,bit,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-bits,Reservierter Membername,2.5,bits,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-with_bit,Reservierter Membername,2.5,with_bit,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-wrap_*,Reservierter Membername,2.5,wrap_*,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-min,Reservierter Membername,2.5,min,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-max,Reservierter Membername,2.5,max,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-mean,Reservierter Membername,2.5,mean,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-rms,Reservierter Membername,2.5,rms,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-last,Reservierter Membername,2.5,last,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-transpose,Reservierter Membername,2.5,transpose,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-inv,Reservierter Membername,2.5,inv,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-det,Reservierter Membername,2.5,det,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-solve,Reservierter Membername,2.5,solve,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-cholesky,Reservierter Membername,2.5,cholesky,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-decode,Reservierter Membername,2.5,decode,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-encode,Reservierter Membername,2.5,encode,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-default,Reservierter Membername,2.5,default,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-push,Reservierter Membername,2.5,push,,M0 (Parser/MIR-Entwurf),teilweise
+MEM-len,Reservierter Membername,2.5,len,,M0 (Parser/MIR-Entwurf),fertig
+MEM-count,Reservierter Membername,2.5,count,,M0 (Parser/MIR-Entwurf),fertig
+MEM-dropped,Reservierter Membername,2.5,dropped,,M0 (Parser/MIR-Entwurf),fertig
+MEM-malformed,Reservierter Membername,2.5,malformed,,M0 (Parser/MIR-Entwurf),fertig
+MEM-overflowed,Reservierter Membername,2.5,overflowed,,M0 (Parser/MIR-Entwurf),fertig
+MEM-free,Reservierter Membername,2.5,free,,M0 (Parser/MIR-Entwurf),fertig
+MEM-jitter,Reservierter Membername,2.5,jitter,,M0 (Parser/MIR-Entwurf),definiert
+MEM-time_warped,Reservierter Membername,2.5,time_warped,,M0 (Parser/MIR-Entwurf),definiert
+MEM-done,Reservierter Membername,2.5,done,,M0 (Parser/MIR-Entwurf),definiert
+MEM-result,Reservierter Membername,2.5,result,,M0 (Parser/MIR-Entwurf),definiert
+MEM-state,Reservierter Membername,2.5,state,,M0 (Parser/MIR-Entwurf),fertig
+MEM-to,Reservierter Membername,2.5,to,,M0 (Parser/MIR-Entwurf),fertig
+MEM-to_float,Reservierter Membername,2.5,to_float,,M0 (Parser/MIR-Entwurf),definiert
+MEM-as,Reservierter Membername,2.5,as,,M0 (Parser/MIR-Entwurf),fertig
+MEM-bit,Reservierter Membername,2.5,bit,,M0 (Parser/MIR-Entwurf),fertig
+MEM-bits,Reservierter Membername,2.5,bits,,M0 (Parser/MIR-Entwurf),fertig
+MEM-with_bit,Reservierter Membername,2.5,with_bit,,M0 (Parser/MIR-Entwurf),fertig
+MEM-wrap_*,Reservierter Membername,2.5,wrap_*,,M0 (Parser/MIR-Entwurf),fertig
+MEM-min,Reservierter Membername,2.5,min,,M0 (Parser/MIR-Entwurf),fertig
+MEM-max,Reservierter Membername,2.5,max,,M0 (Parser/MIR-Entwurf),fertig
+MEM-mean,Reservierter Membername,2.5,mean,,M0 (Parser/MIR-Entwurf),fertig
+MEM-rms,Reservierter Membername,2.5,rms,,M0 (Parser/MIR-Entwurf),fertig
+MEM-last,Reservierter Membername,2.5,last,,M0 (Parser/MIR-Entwurf),fertig
+MEM-transpose,Reservierter Membername,2.5,transpose,,M0 (Parser/MIR-Entwurf),definiert
+MEM-inv,Reservierter Membername,2.5,inv,,M0 (Parser/MIR-Entwurf),definiert
+MEM-det,Reservierter Membername,2.5,det,,M0 (Parser/MIR-Entwurf),definiert
+MEM-solve,Reservierter Membername,2.5,solve,,M0 (Parser/MIR-Entwurf),definiert
+MEM-cholesky,Reservierter Membername,2.5,cholesky,,M0 (Parser/MIR-Entwurf),definiert
+MEM-decode,Reservierter Membername,2.5,decode,,M0 (Parser/MIR-Entwurf),fertig
+MEM-encode,Reservierter Membername,2.5,encode,,M0 (Parser/MIR-Entwurf),fertig
+MEM-default,Reservierter Membername,2.5,default,,M0 (Parser/MIR-Entwurf),fertig
+MEM-push,Reservierter Membername,2.5,push,,M0 (Parser/MIR-Entwurf),fertig
 MEM-append,Reservierter Membername,2.5,append,,M3,fertig
-MEM-get,Reservierter Membername,2.5,get,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-insert,Reservierter Membername,2.5,insert,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-remove,Reservierter Membername,2.5,remove,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-clear,Reservierter Membername,2.5,clear,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-skip,Reservierter Membername,2.5,skip,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-starts_with,Reservierter Membername,2.5,starts_with,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-contains,Reservierter Membername,2.5,contains,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-armed,Reservierter Membername,2.5,armed,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-fired,Reservierter Membername,2.5,fired,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-pre,Reservierter Membername,2.5,pre,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-post,Reservierter Membername,2.5,post,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-samples,Reservierter Membername,2.5,samples,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-rate,Reservierter Membername,2.5,rate,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-remaining,Reservierter Membername,2.5,remaining,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-truncated,Reservierter Membername,2.5,truncated,,M0 (Parser/MIR-Entwurf),teilweise
-MEM-reset,Reservierter Membername,2.5,reset,,M0 (Parser/MIR-Entwurf),teilweise
+MEM-get,Reservierter Membername,2.5,get,,M0 (Parser/MIR-Entwurf),fertig
+MEM-insert,Reservierter Membername,2.5,insert,,M0 (Parser/MIR-Entwurf),definiert
+MEM-remove,Reservierter Membername,2.5,remove,,M0 (Parser/MIR-Entwurf),definiert
+MEM-clear,Reservierter Membername,2.5,clear,,M0 (Parser/MIR-Entwurf),fertig
+MEM-skip,Reservierter Membername,2.5,skip,,M0 (Parser/MIR-Entwurf),fertig
+MEM-starts_with,Reservierter Membername,2.5,starts_with,,M0 (Parser/MIR-Entwurf),fertig
+MEM-contains,Reservierter Membername,2.5,contains,,M0 (Parser/MIR-Entwurf),fertig
+MEM-armed,Reservierter Membername,2.5,armed,,M0 (Parser/MIR-Entwurf),definiert
+MEM-fired,Reservierter Membername,2.5,fired,,M0 (Parser/MIR-Entwurf),definiert
+MEM-pre,Reservierter Membername,2.5,pre,,M0 (Parser/MIR-Entwurf),definiert
+MEM-post,Reservierter Membername,2.5,post,,M0 (Parser/MIR-Entwurf),definiert
+MEM-samples,Reservierter Membername,2.5,samples,,M0 (Parser/MIR-Entwurf),definiert
+MEM-rate,Reservierter Membername,2.5,rate,,M0 (Parser/MIR-Entwurf),definiert
+MEM-remaining,Reservierter Membername,2.5,remaining,,M0 (Parser/MIR-Entwurf),definiert
+MEM-truncated,Reservierter Membername,2.5,truncated,,M0 (Parser/MIR-Entwurf),fertig
+MEM-reset,Reservierter Membername,2.5,reset,,M0 (Parser/MIR-Entwurf),fertig
 SC-1,Statische Prüfung,10,"Tokenizer/Parser (Einrückung, Grammatik)",F,M3 (Gate),fertig
 SC-2,Statische Prüfung,10,"Namensauflösung, Modul-Linking, Namenskonventionen",F / W,M3 (Gate),fertig
 SC-3,Statische Prüfung,10,"Typ- und Einheiteninferenz, affine Regeln, Duration-Regeln",F,M3 (Gate),fertig
@@ -612,22 +612,22 @@ OBL-T13,Beweisverpflichtung,9.4.2,T13,,M1/M2 (Interpreter),offen
 OBL-T14,Beweisverpflichtung,9.4.2,T14,,M1/M2 (Interpreter),offen
 OBL-T15,Beweisverpflichtung,9.4.2,T15,,M1/M2 (Interpreter),offen
 OBL-T16,Beweisverpflichtung,9.4.2,T16,,M1/M2 (Interpreter),offen
-PAR-1.4-Inputs,Absatz/Regel,1.4,Inputs,,M0 (Parser/MIR-Entwurf),offen
-PAR-1.4-Outputs,Absatz/Regel,1.4,Outputs,,M0 (Parser/MIR-Entwurf),offen
-PAR-1.4-Veröffentlichte_Variablen,Absatz/Regel,1.4,Veröffentlichte Variablen,,M0 (Parser/MIR-Entwurf),offen
-PAR-1.4-Commands,Absatz/Regel,1.4,Commands,,M0 (Parser/MIR-Entwurf),offen
-PAR-1.4-Ereignisströme,Absatz/Regel,1.4,Ereignisströme,,M0 (Parser/MIR-Entwurf),offen
-PAR-1.4-Geplante_Ausgaben,Absatz/Regel,1.4,Geplante Ausgaben,,M0 (Parser/MIR-Entwurf),offen
-PAR-1.4-Abort_Phase,Absatz/Regel,1.4,Abort-Phase,,M0 (Parser/MIR-Entwurf),offen
-PAR-1.4-Defensiver_Treiberrand,Absatz/Regel,1.4,Defensiver Treiberrand,,M0 (Parser/MIR-Entwurf),offen
-PAR-1.4-follows,Absatz/Regel,1.4,`follows`,,M0 (Parser/MIR-Entwurf),offen
-PAR-1.4-Tunables,Absatz/Regel,1.4,Tunables,,M0 (Parser/MIR-Entwurf),offen
+PAR-1.4-Inputs,Absatz/Regel,1.4,Inputs,,M0 (Parser/MIR-Entwurf),fertig
+PAR-1.4-Outputs,Absatz/Regel,1.4,Outputs,,M0 (Parser/MIR-Entwurf),fertig
+PAR-1.4-Veröffentlichte_Variablen,Absatz/Regel,1.4,Veröffentlichte Variablen,,M0 (Parser/MIR-Entwurf),fertig
+PAR-1.4-Commands,Absatz/Regel,1.4,Commands,,M0 (Parser/MIR-Entwurf),fertig
+PAR-1.4-Ereignisströme,Absatz/Regel,1.4,Ereignisströme,,M0 (Parser/MIR-Entwurf),fertig
+PAR-1.4-Geplante_Ausgaben,Absatz/Regel,1.4,Geplante Ausgaben,,M0 (Parser/MIR-Entwurf),fertig
+PAR-1.4-Abort_Phase,Absatz/Regel,1.4,Abort-Phase,,M0 (Parser/MIR-Entwurf),fertig
+PAR-1.4-Defensiver_Treiberrand,Absatz/Regel,1.4,Defensiver Treiberrand,,M0 (Parser/MIR-Entwurf),fertig
+PAR-1.4-follows,Absatz/Regel,1.4,`follows`,,M0 (Parser/MIR-Entwurf),definiert
+PAR-1.4-Tunables,Absatz/Regel,1.4,Tunables,,M0 (Parser/MIR-Entwurf),fertig
 PAR-2.2-Regel,Absatz/Regel,2.2,Regel,,M0 (Parser/MIR-Entwurf),fertig
-PAR-2.5-Edition,Absatz/Regel,2.5,Edition,,M0 (Parser/MIR-Entwurf),teilweise
+PAR-2.5-Edition,Absatz/Regel,2.5,Edition,,M0 (Parser/MIR-Entwurf),fertig
 PAR-2.5-Reservierte_Wörter,Absatz/Regel,2.5,Reservierte Wörter,,M0 (Parser/MIR-Entwurf),fertig
-PAR-2.5-Reservierte_Membernamen,Absatz/Regel,2.5,Reservierte Membernamen,,M0 (Parser/MIR-Entwurf),teilweise
-PAR-2.5-Offene_Enums,Absatz/Regel,2.5,Offene Enums,,M0 (Parser/MIR-Entwurf),teilweise
-PAR-2.5-Verdeckung_und_Additivität,Absatz/Regel,2.5,Verdeckung und Additivität,,M0 (Parser/MIR-Entwurf),teilweise
+PAR-2.5-Reservierte_Membernamen,Absatz/Regel,2.5,Reservierte Membernamen,,M0 (Parser/MIR-Entwurf),fertig
+PAR-2.5-Offene_Enums,Absatz/Regel,2.5,Offene Enums,,M0 (Parser/MIR-Entwurf),fertig
+PAR-2.5-Verdeckung_und_Additivität,Absatz/Regel,2.5,Verdeckung und Additivität,,M0 (Parser/MIR-Entwurf),fertig
 PAR-2.5-Operator_Metadaten_v1.1,Absatz/Regel,2.5,Operator-Metadaten (v1.1),v1.1,M6,offen
 PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M1 (Kernsemantik),teilweise
 PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M1 (Kernsemantik),teilweise
@@ -1045,19 +1045,19 @@ CON-irreversible,Konstrukt (2.4),2.4,`irreversible`,,M0 (Parser/MIR-Entwurf),def
 "CON-driver_machine,_port",Konstrukt (2.4),2.4,"`driver machine`, `port`",,M0 (Parser/MIR-Entwurf),definiert
 CON-tunable_param,Konstrukt (2.4),2.4,`tunable param`,,M0 (Parser/MIR-Entwurf),definiert
 CON-follows,Konstrukt (2.4),2.4,`follows`,,M0 (Parser/MIR-Entwurf),definiert
-"CON-debounce,_Suspect",Konstrukt (2.4),2.4,"`debounce`, `Suspect`",,M0 (Parser/MIR-Entwurf),offen
+"CON-debounce,_Suspect",Konstrukt (2.4),2.4,"`debounce`, `Suspect`",,M0 (Parser/MIR-Entwurf),fertig
 "CON-check_…_for_d,_alert_…_for_d",Konstrukt (2.4),2.4,"`check … for d`, `alert … for d`",,M0 (Parser/MIR-Entwurf),definiert
-"CON-reader,_writer",Konstrukt (2.4),2.4,"`reader`, `writer`",,M0 (Parser/MIR-Entwurf),offen
+"CON-reader,_writer",Konstrukt (2.4),2.4,"`reader`, `writer`",,M0 (Parser/MIR-Entwurf),definiert
 CON-len_field,Konstrukt (2.4),2.4,`len_field`,,M0 (Parser/MIR-Entwurf),definiert
-CON-System-Channels_sys/…,Konstrukt (2.4),2.4,System-Channels `sys/…`,,M0 (Parser/MIR-Entwurf),offen
+CON-System-Channels_sys/…,Konstrukt (2.4),2.4,System-Channels `sys/…`,,M0 (Parser/MIR-Entwurf),definiert
 CON-native_fn,Konstrukt (2.4),2.4,`native fn`,,M0 (Parser/MIR-Entwurf),definiert
 CON-tick_source,Konstrukt (2.4),2.4,`tick_source`,,M0 (Parser/MIR-Entwurf),definiert
 "CON-jitter,_max_slew",Konstrukt (2.4),2.4,"`jitter`, `max_slew`",,M0 (Parser/MIR-Entwurf),definiert
 FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M0 (Parser/MIR-Entwurf),teilweise
-FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M0 (Parser/MIR-Entwurf),offen
+FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M4 (Codegen),offen
 FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M6 (mit 8.10),offen
-FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M0 (Parser/MIR-Entwurf),offen
-FMT-Lauf-Header,Versioniertes Format,11.3,Lauf-Header,,M0 (Parser/MIR-Entwurf),offen
+FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M5 (Embedded),offen
+FMT-Lauf-Header,Versioniertes Format,11.3,Lauf-Header,,M4 (Codegen),offen
 STUFE-v1_(Kern),Stufe (Roadmap),15,v1 (Kern),,Doku/Rationale,rationale
 STUFE-v1.1,Stufe (Roadmap),15,v1.1,,Doku/Rationale,rationale
 STUFE-v1.2,Stufe (Roadmap),15,v1.2,,Doku/Rationale,rationale

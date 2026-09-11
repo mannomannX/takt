@@ -1,0 +1,82 @@
+# Messfall der Intervallanalyse fuer die Protokollhaelfte (plan/m3.md 1.9).
+#
+# FB-24: 9 von 11 substanziellen Luecken beider Praxisberichte lagen in der
+# Daten- und Protokollhaelfte. Die Kennzahl impliziter Pruefungen (3.4) wurde
+# bis dahin nur an steuerungsnahen Dateien gemessen — ein Rauschmass an ihnen
+# sagt ueber den kritischen Fall nichts.
+#
+# Die vier Konstrukte, aus denen der UART-Bericht seine Warnung ableitet:
+# Dekodierung, Slices ueber dekodierte Laengen, CRC-Schleife und Bitfelder.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+const MAGIC : u16 = 0x50AA
+
+enum ParseErr: SHORT, BAD_MAGIC, BAD_LEN, BAD_CRC
+
+# Kopf mit Konstantenfeld, Laengenfeld und Bitfeldern ueber einem Traeger.
+record Header layout big:
+    magic : u16 = 0x50AA
+    kind  : u8
+    len   : u8 in 0..64
+    flags : u8 with bits:
+        urgent  : bool at 0
+        encrypt : bool at 1
+        prio    : u8 at 4..7
+
+const HEAD_BYTES : int = 5
+
+input  rx   : stream<bytes<128>> @ hw("uart0/rx") with max_rate = 1000 Hz, capacity = 4, framing = raw
+output ok   : bool               @ hw("o/ok")     with safe = false
+output prio : int in 0..15       @ hw("o/prio")   with safe = 0
+
+# CRC-Schleife ueber ein dekodiertes Teilstueck: die Schranke ist statisch,
+# der Abbruch haengt an einem Wert, den erst `decode` liefert.
+fn crc8(b: bytes<128>, from: int in 0..128, len: int in 0..64) -> u8:
+    var c : u8 = 0xFF
+    for i in range(64):
+        if i >= len:
+            break
+        c = wrapping_add(c, b[from + i])
+    return c
+
+# Dekodierung mit Laengenpruefung. Jeder Rueckgabepfad nennt seinen Grund;
+# der Fehler ist Normalbetrieb, kein Fault (T!E, 3.8).
+fn parse(frame: bytes<128>) -> Header!ParseErr:
+    if frame.len < HEAD_BYTES + 1:
+        return ERR(SHORT)
+    var d = Header.decode(frame)
+    if not d.valid:
+        return ERR(BAD_MAGIC)
+    var h = d
+    if (h.len as int) + HEAD_BYTES >= frame.len:
+        return ERR(BAD_LEN)
+    if crc8(frame, HEAD_BYTES, h.len as int) != frame[HEAD_BYTES + (h.len as int)]:
+        return ERR(BAD_CRC)
+    return OK(h)
+
+machine parser:
+    var gueltig : int in 0..1_000_000 = 0
+    var kaputt  : int in 0..1_000_000 = 0
+    initial LESEN
+
+    state LESEN:
+        loop:
+            ok = gueltig > 0
+
+        on rx as frame:
+            var r = parse(frame.data)
+            match r:
+                case OK(h):
+                    gueltig = min(gueltig + 1, 1_000_000)
+                    # Bitfeld ueber dem Traeger: eine Sicht, kein Speicher.
+                    prio = h.flags.prio as int
+                    # Slice ueber eine dekodierte Laenge — der Fall, an dem
+                    # die Analyse ihre impliziten Pruefungen zeigt.
+                    var nutz = frame.data[HEAD_BYTES..HEAD_BYTES + (h.len as int)]
+                    ok = nutz.len > 0
+                case ERR(e):
+                    kaputt = min(kaputt + 1, 1_000_000)
+                    ok = false

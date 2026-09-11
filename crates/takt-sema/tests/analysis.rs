@@ -413,3 +413,28 @@ fn warnings_of(body: &str) -> Vec<String> {
     let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
     takt_sema::compile(&src, &options).diagnostics.iter().map(|d| format!("{d}")).collect()
 }
+
+#[test]
+fn the_protocol_case_keeps_its_implicit_checks_low() {
+    // FB-24 und plan/m3.md 1.9: Die Kennzahl (3.4) wurde bis M3 nur an
+    // steuerungsnahen Dateien gemessen — die Haelfte, die laut beiden
+    // Praxisberichten keine Probleme macht. `13_protocol_analysis.takt` ist
+    // der Messfall der Protokollhaelfte: Dekodierung, Slice ueber eine
+    // dekodierte Laenge, CRC-Schleife und Bitfelder.
+    //
+    // Der Befund ist das eigentliche Ergebnis: Der UART-Bericht befuerchtet
+    // eine hohe Zahl, die Analyse beweist das Gegenteil. Der Slice ueber
+    // `h.len` braucht keine Pruefung, weil das Laengenfeld `u8 in 0..64`
+    // deklariert und die Schranke vorher geprueft ist.
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/13_protocol_analysis.takt");
+    let src = std::fs::read_to_string(path).expect("Messfall lesbar");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(&src, &options);
+    let errors: Vec<&str> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code).collect();
+    assert!(errors.is_empty(), "der Messfall uebersetzt: {errors:?}");
+
+    let r = out.report;
+    assert!(r.total_checks() <= 4, "Protokollcode bleibt unter vier impliziten Pruefungen: {:?}", r.checks);
+    assert_eq!(r.warned, 0, "keine davon steht in einer Schleife oder einem Aktionsblock: {:?}", r.checks);
+    assert!(r.narrowed > 0, "die Verengung greift auch hier: {} von {}", r.narrowed, r.integer_exprs);
+}
