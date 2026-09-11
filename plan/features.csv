@@ -366,6 +366,7 @@ KW-port,Schlüsselwort,2.2,port,,M0 (Parser/MIR-Entwurf),fertig
 KW-node,Schlüsselwort,2.2,node,,M0 (Parser/MIR-Entwurf),fertig
 KW-unitvec,Schlüsselwort,2.2,unitvec,,M0 (Parser/MIR-Entwurf),fertig
 KW-property,Schlüsselwort,2.2,property,,M0 (Parser/MIR-Entwurf),fertig
+KW-assumption,Schlüsselwort,2.2,assumption,,M0 (Parser/MIR-Entwurf),fertig
 KW-input,Schlüsselwort,2.2,input,,M0 (Parser/MIR-Entwurf),fertig
 KW-output,Schlüsselwort,2.2,output,,M0 (Parser/MIR-Entwurf),fertig
 KW-command,Schlüsselwort,2.2,command,,M0 (Parser/MIR-Entwurf),fertig
@@ -594,6 +595,7 @@ SC-59,Statische Prüfung,10,"Treiberstufe (15, v1.2): Ein gepolltes Gerät läuf
 SC-60,Statische Prüfung,10,"Channel-Bindung gegen die Hardware-Konfiguration (8.10): Einheit, Skalierung und Range eines `@ hw(…)`-Channels stimmen mit der Konfiguration überein. Ein Programm, das `float[bar]` bindet, während die Konfiguration `psi` führt, ist sonst unentdeckt — die Einheitenrechnung aus 3.2 endet am Channel-Rand. Fehlt die Konfiguration, entfällt die Prüfung (keine Eingabe, kein Urteil)",F,M6 (mit 8.10),offen
 SC-61,Statische Prüfung,10,"`check c, ""…"" within d`: Die gerechnete Safe-State-Latenz (Satz 9.4.5) hält die geforderte Frist ein. Verglichen wird in Ticks (`d / T₀`); die Meldung nennt die Aufschlüsselung nach Erkennung, Bestätigung, Fault-Pfad und Commit, weil die Zahl sonst nicht zu verbessern ist",F,M3 (Gate),fertig
 SC-62,Statische Prüfung,10,"`machine … with budget = {ram = …}`: Der gerechnete Speicher der Maschine (11.5, mit Overlay) liegt im deklarierten Budget. `wcet` braucht die Kalibrierung (13.8) und meldet bis dahin seine Stufe",F,M3 (Gate),fertig
+SC-63,Statische Prüfung,10,"Zwei Lints ohne eigene Syntax: (a) `alert` und `check` mit **derselben** Bedingung im selben Block — die Polaritaet ist entgegengesetzt gemeint (5.6), und weil beide Zeilen gleich aussehen, faellt die Verwechslung sonst niemandem auf; (b) ein `profile`, das einen `param` nicht nennt — er nimmt still seinen Default, und das ist beim Lesen nicht von der Absicht zu unterscheiden (4.6)",W,M3 (Gate),fertig
 OBL-T1,Beweisverpflichtung,9.4.2,T1,,M1/M2 (Interpreter),offen
 OBL-T2,Beweisverpflichtung,9.4.2,T2,,M1/M2 (Interpreter),offen
 OBL-T3,Beweisverpflichtung,9.4.2,T3,,M1/M2 (Interpreter),offen
@@ -727,6 +729,9 @@ PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M4/M5 (Runtime),offen
 PAR-13.3-Sprache,Absatz/Regel,13.3,Sprache,,M4–M7,offen
 PAR-13.3-Semantik,Absatz/Regel,13.3,Semantik,,M4–M7,offen
 PAR-13.3-Verwendung,Absatz/Regel,13.3,Verwendung,,M4–M7,offen
+PAR-13.3-Umgebungsannahmen_assumption,Absatz/Regel,13.3,Umgebungsannahmen (`assumption`),,M6 (v1.1),offen
+PAR-13.3-Kanal_Attribute_gelten_automatisch_als_Annahmen,Absatz/Regel,13.3,Kanal-Attribute gelten automatisch als Annahmen,,M6 (v1.1),offen
+PAR-13.3-Kompositionalität,Absatz/Regel,13.3,Kompositionalität,,M6 (v1.1),offen
 PAR-13.5-Lauf_Verdikt,Absatz/Regel,13.5,Lauf-Verdikt,,M4–M7,offen
 PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M4–M7,offen
 PAR-13.9-Klassifikation,Absatz/Regel,13.9,Klassifikation,,M4–M7,offen
@@ -1050,7 +1055,7 @@ CON-tick_source,Konstrukt (2.4),2.4,`tick_source`,,M0 (Parser/MIR-Entwurf),defin
 "CON-jitter,_max_slew",Konstrukt (2.4),2.4,"`jitter`, `max_slew`",,M0 (Parser/MIR-Entwurf),definiert
 FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M0 (Parser/MIR-Entwurf),teilweise
 FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M0 (Parser/MIR-Entwurf),offen
-FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M0 (Parser/MIR-Entwurf),offen
+FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M6 (mit 8.10),offen
 FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M0 (Parser/MIR-Entwurf),offen
 FMT-Lauf-Header,Versioniertes Format,11.3,Lauf-Header,,M0 (Parser/MIR-Entwurf),offen
 STUFE-v1_(Kern),Stufe (Roadmap),15,v1 (Kern),,Doku/Rationale,rationale

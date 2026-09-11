@@ -43,6 +43,36 @@ impl Expr {
     }
 
     /// Die unmittelbaren Teilausdruecke, veraenderbar.
+    /// Gleichheit ohne Position und ohne Annotationen.
+    ///
+    /// `PartialEq` vergleicht alle Felder, also auch `span`, `range` und
+    /// `repr` — zwei gleich geschriebene Bedingungen an verschiedenen
+    /// Stellen sind damit nie gleich. Wer fragt „steht hier zweimal
+    /// dasselbe?" (etwa der Polaritaets-Lint, 5.6) braucht diese Form.
+    pub fn same_as(&self, other: &Expr) -> bool {
+        if self.ty != other.ty || std::mem::discriminant(&self.kind) != std::mem::discriminant(&other.kind) {
+            return false;
+        }
+        // Der Vergleich laeuft ueber die normierten Kopien: Position und
+        // Annotationen weg, Kinder ebenso normiert. Das ist eine Kopie je
+        // Aufruf, aber der Lint laeuft einmal ueber die Bedingungen eines
+        // Blocks — die Klarheit ist den Preis wert.
+        self.normalised() == other.normalised()
+    }
+
+    /// Der Ausdruck ohne Position und Annotationen, rekursiv.
+    fn normalised(&self) -> Expr {
+        let mut out = self.clone();
+        out.span = Span::default();
+        out.range = None;
+        out.repr = None;
+        for c in out.children_mut() {
+            *c = c.normalised();
+        }
+        out
+    }
+
+    /// Die unmittelbaren Teilausdruecke, veraenderlich.
     pub fn children_mut(&mut self) -> Vec<&mut Expr> {
         match &mut self.kind {
             ExprKind::Variant { fields, .. } | ExprKind::Record { fields, .. } => fields.iter_mut().collect(),

@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-63: `check` nennt die Invariante, `alert` das Ereignis — entgegengesetzt,
+# wie 5.6 es vorsieht. Beide stehen nebeneinander im selben `loop:`.
+
+input  t : float[degC] in -50..200 degC @ hw("i/t") with max_rate = 100 Hz
+output v : bool                         @ hw("o/v") with safe = false
+
+param GRENZE : float[degC] = 100.0 degC
+
+profile HEISS:
+    GRENZE = 150.0 degC
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            check t < GRENZE, "zu heiss"
+            alert t > GRENZE, "wird warm"
+            v = true

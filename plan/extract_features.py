@@ -84,6 +84,14 @@ MILESTONE_OVERRIDE = {
     # Latenz und Maschinenbudget rechnet das Gate (9.4.5, 7.2).
     "SC-61": "M3 (Gate)",
     "SC-62": "M3 (Gate)",
+    "SC-63": "M3 (Gate)",
+    # Die Annahmen gehoeren zu `property` und damit zu M6; die
+    # Hardware-Konfiguration ist die Eingabe der Pruefungen 28/32/39/60
+    # und entsteht mit 8.10, nicht im Parser.
+    "PAR-13.3-Umgebungsannahmen_assumption": "M6 (v1.1)",
+    "PAR-13.3-Kanal_Attribute_gelten_automatisch_als_Annahmen": "M6 (v1.1)",
+    "PAR-13.3-Kompositionalität": "M6 (v1.1)",
+    "FMT-Hardware-Konfiguration": "M6 (mit 8.10)",
     "CLI-latency": "M3 (Gate)",
     # `append` ist mit M3 gebaut, nicht mit dem Parser (FB-42).
     "MEM-append": "M3",
@@ -433,8 +441,11 @@ formats = re.search(r"\*\*Versionierte Formate\.\*\* (.+?) tragen Formatversion"
 for name in re.split(r",\s*|\s+und\s+", formats.strip()):
     name = re.sub(r"\s*\([^)]*\)", "", name).strip().rstrip(".")
     if name:
-        add("FMT-" + name.replace(" ", "-"), "Versioniertes Format", "11.3",
-            name, ms="M0 (Parser/MIR-Entwurf)")
+        fmt_id = "FMT-" + name.replace(" ", "-")
+        # Die meisten Formate entstehen mit der MIR; die Ausnahmen nennt
+        # MILESTONE_OVERRIDE (die Hardware-Konfiguration etwa kommt mit 8.10).
+        add(fmt_id, "Versioniertes Format", "11.3", name,
+            ms=MILESTONE_OVERRIDE.get(fmt_id, "M0 (Parser/MIR-Entwurf)"))
 
 # --- Stufenplan -------------------------------------------------------------
 for cells in table(r"## 15\. Stufenplan"):

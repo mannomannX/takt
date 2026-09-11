@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-63: derselbe Vergleich in `check` und `alert` — der Alert meldet dann
+# den Normalfall statt des Ereignisses.
+
+input  t : float[degC] in -50..200 degC @ hw("i/t") with max_rate = 100 Hz
+output v : bool                         @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            check t < 100.0 degC, "zu heiss"
+            alert t < 100.0 degC, "wird warm"  # ~ SC-63
+            v = true

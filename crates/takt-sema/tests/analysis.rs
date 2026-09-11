@@ -373,3 +373,43 @@ machine m:
     let line = text.lines().find(|l| l.contains("DFA")).expect("der Posten steht in der Liste");
     assert!(line.contains("offen"), "ohne Codegen ist er offen: {line}");
 }
+
+#[test]
+fn the_alert_polarity_lint_only_fires_on_the_same_comparison() {
+    // Pruefung 63a (5.6): Ein `alert` nennt das zu meldende Ereignis, ein
+    // `check` die einzuhaltende Invariante. Dieselbe Vergleichsrichtung in
+    // beiden ist der beweisbare Fehlerfall; die entgegengesetzte ist der
+    // dokumentierte Normalfall und muss schweigen.
+    let same = warnings_of(
+        "\
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            check n < 50, \"zu gross\"
+            alert n < 50, \"waechst\"
+            n = 0
+",
+    );
+    assert!(same.iter().any(|w| w.contains("SC-63")), "gleiche Richtung warnt: {same:?}");
+
+    let opposite = warnings_of(
+        "\
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            check n < 50, \"zu gross\"
+            alert n > 50, \"waechst\"
+            n = 0
+",
+    );
+    assert!(!opposite.iter().any(|w| w.contains("SC-63")), "die richtige Polaritaet schweigt: {opposite:?}");
+}
+
+/// Die Warnungen eines Maschinenrumpfs als Text.
+fn warnings_of(body: &str) -> Vec<String> {
+    let src = format!("{HEAD}{OUT}{body}");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    takt_sema::compile(&src, &options).diagnostics.iter().map(|d| format!("{d}")).collect()
+}

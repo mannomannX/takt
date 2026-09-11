@@ -154,7 +154,13 @@ impl Lowerer<'_> {
                 ast::Item::Instance(i) => self.instance_decl(i),
                 ast::Item::Scenario(s) => self.scenario_decl(s),
                 ast::Item::Profile(p) => self.profile_decl(p),
-                ast::Item::Property(p) => self.stage(p.span, "`property`", Stage::V1_1),
+                ast::Item::Property(p) => {
+                    let what = match p.kind {
+                        ast::PropertyKind::Property => "`property`",
+                        ast::PropertyKind::Assumption => "`assumption`",
+                    };
+                    self.stage(p.span, what, Stage::V1_1);
+                }
                 ast::Item::Campaign(c) => self.stage(c.span, "`campaign`", Stage::V1_1),
                 ast::Item::Trigger(t) => self.stage(t.span, "`trigger`", Stage::V1_2),
                 _ => {}

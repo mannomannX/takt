@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use takt_diag::{Diagnostic, Span};
-use takt_mir::expr::{Expr, ExprKind, StreamRef};
+use takt_mir::expr::{BinaryOp, Expr, ExprKind, StreamRef};
 use takt_mir::machine::*;
 use takt_mir::program::{Binding, Direction};
 use takt_mir::stmt::*;
@@ -69,6 +69,8 @@ pub const SC37: &str = "SC-37";
 pub const SC61: &str = "SC-61";
 /// `budget = {ram = …}`: das deklarierte Budget wird eingehalten (7.2).
 pub const SC62: &str = "SC-62";
+/// Lints: `alert`-Polaritaet, Profil-Vollstaendigkeit (5.6, 4.6).
+pub const SC63: &str = "SC-63";
 /// Lints zu Matrizen und  (3.11, 8.6).
 pub const SC42: &str = "SC-42";
 /// Ungenutzte Channels.
@@ -91,6 +93,8 @@ impl Lowerer<'_> {
         self.check_fault_forest();
         self.check_latency();
         self.check_declared_budget();
+        self.check_alert_polarity();
+        self.check_profile_completeness();
         self.check_reachability();
         self.check_termination();
         self.check_simulation();
@@ -418,6 +422,109 @@ impl Lowerer<'_> {
             }
         }
         self.diags.extend(diags);
+    }
+
+    /// Pruefung 63, zweiter Teil (4.6): Ein `profile` nennt jeden `param`.
+    ///
+    /// Ein fehlender Parameter nimmt still seinen Default. Das ist
+    /// semantisch richtig, aber beim Lesen nicht von der Absicht zu
+    /// unterscheiden: Ein Profil, das einen Parameter vergisst, sieht aus
+    /// wie eines, das den Default will. Die Warnung zwingt zu nichts — wer
+    /// den Default meint, schreibt ihn hin und hat es dokumentiert.
+    ///
+    /// Zur Uebersetzungszeit, nicht zur Laufzeit: Es ist eine Eigenschaft
+    /// des Profils, und im Lauf waere die Meldung zu spaet.
+    fn check_profile_completeness(&mut self) {
+        let mut diags = Vec::new();
+        for pr in &self.program.profiles {
+            let named: Vec<u32> = pr.assignments.iter().map(|(id, _)| id.0).collect();
+            let missing: Vec<&str> = self
+                .program
+                .params
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !named.contains(&(*i as u32)))
+                .map(|(_, p)| p.name.as_str())
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            diags.push(
+                Diagnostic::warning(
+                    SC63,
+                    pr.span,
+                    format!(
+                        "Profil `{}` nennt {} von {} Parametern nicht",
+                        pr.name,
+                        missing.len(),
+                        self.program.params.len()
+                    ),
+                )
+                .with_suggestion(format!(
+                    "sie nehmen ihren Default; ausdruecklich setzen macht die Absicht sichtbar ({})",
+                    missing.join(", ")
+                )),
+            );
+        }
+        self.diags.extend(diags);
+    }
+
+    /// Pruefung 63, erster Teil (5.6): Ein `alert` nennt das zu *meldende
+    /// Ereignis*, ein `check` die *einzuhaltende Invariante* — die
+    /// Polaritaet ist entgegengesetzt, und genau deshalb wird sie
+    /// verwechselt.
+    ///
+    /// Gemeldet wird der Fall, der sich beweisen laesst: Dieselbe Groesse,
+    /// dieselbe Schranke, dieselbe Vergleichsrichtung in einem `check` und
+    /// einem `alert` desselben Blocks. Die Referenz nennt beide
+    /// ausdruecklich nebeneinander im selben `loop:` (14.1) — dort faellt
+    /// der Fehler sonst niemandem auf, weil beide Zeilen gleich aussehen.
+    fn check_alert_polarity(&mut self) {
+        let mut diags = Vec::new();
+        for m in &self.program.machines {
+            if matches!(m.kind, MachineKind::Template) {
+                continue;
+            }
+            let states = m.states.iter().flat_map(|s| [&s.enter, &s.loop_block, &s.exit]);
+            for b in std::iter::once(&m.loop_block).chain(states) {
+                Self::alert_polarity_in(b, &mut diags);
+            }
+        }
+        self.diags.extend(diags);
+    }
+
+    /// Vergleicht die `check`- und `alert`-Bedingungen eines Blocks.
+    fn alert_polarity_in(b: &takt_mir::stmt::Block, diags: &mut Vec<Diagnostic>) {
+        let mut checks: Vec<(BinaryOp, &Expr, &Expr)> = Vec::new();
+        for s in &b.stmts {
+            if let StmtKind::Check { cond, kind: takt_mir::stmt::CheckKind::Check, .. } = &s.kind {
+                if let Some(c) = comparison(cond) {
+                    checks.push(c);
+                }
+            }
+        }
+        if checks.is_empty() {
+            return;
+        }
+        for s in &b.stmts {
+            let StmtKind::Observe(takt_mir::stmt::Observe::Alert { cond, .. }) = &s.kind else { continue };
+            let Some((op, lhs, rhs)) = comparison(cond) else { continue };
+            if !checks.iter().any(|(o, l, r)| *o == op && l.same_as(lhs) && r.same_as(rhs)) {
+                continue;
+            }
+            diags.push(
+                Diagnostic::warning(
+                    SC63,
+                    s.span,
+                    "`alert` und `check` haben dieselbe Bedingung; die Polaritaet ist entgegengesetzt gemeint (5.6)",
+                )
+                .with_suggestion(
+                    "ein `check` nennt die einzuhaltende Invariante, ein `alert` das zu meldende Ereignis — \
+                     der Vergleich des Alerts gehoert vermutlich umgedreht"
+                        .to_string(),
+                ),
+            );
+        }
     }
 
     /// Pruefung 48 (12.7): Ein `irreversible`-Output wird nur in einer
@@ -1341,5 +1448,20 @@ fn mark_after_expect(items: &[SeqItem], out: &mut HashSet<(u32, u32)>) {
             }
             _ => after = false,
         }
+    }
+}
+
+/// Zerlegt eine Bedingung in Vergleich, linke und rechte Seite — nur die
+/// Ordnungsvergleiche, weil `==`/`!=` keine Polaritaet haben.
+fn comparison(e: &Expr) -> Option<(BinaryOp, &Expr, &Expr)> {
+    match &e.kind {
+        ExprKind::Binary { op, lhs, rhs }
+            if matches!(op, BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge) =>
+        {
+            Some((*op, lhs.as_ref(), rhs.as_ref()))
+        }
+        // Ein impliziter Validitaetscheck steht vor dem Vergleich (3.5).
+        ExprKind::Checked { expr, .. } => comparison(expr),
+        _ => None,
     }
 }

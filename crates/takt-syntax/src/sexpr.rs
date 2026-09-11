@@ -176,7 +176,7 @@ impl Printer {
             }
             Item::Property(p) => {
                 let monitor = if p.monitor { " monitor" } else { "" };
-                self.line(&format!("(property {}{monitor} {})", p.name.name, expr(&p.prop)));
+                self.line(&format!("({} {}{monitor} {})", p.kind.word(), p.name.name, expr(&p.prop)));
             }
             Item::Const(c) => {
                 let t = c.ty.as_ref().map(|t| format!(" :{}", ty(t))).unwrap_or_default();

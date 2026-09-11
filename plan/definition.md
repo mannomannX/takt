@@ -135,7 +135,7 @@ fn build_response(req: RdmHeader, own: Uid, rt: u8,
 
 ### 2.2 Schlüsselwörter
 ```
-system import type enum record unit const param profile stream port node unitvec property
+system import type enum record unit const param profile stream port node unitvec property assumption
 input output command fn native block machine instance scenario campaign trigger
 var pub persist signal tunable driver
 initial state enter loop exit on when after fault sequence wait until expect repeat step every
@@ -1733,6 +1733,7 @@ sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereigni
 | 60 | Channel-Bindung gegen die Hardware-Konfiguration (8.10): Einheit, Skalierung und Range eines `@ hw(…)`-Channels stimmen mit der Konfiguration überein. Ein Programm, das `float[bar]` bindet, während die Konfiguration `psi` führt, ist sonst unentdeckt — die Einheitenrechnung aus 3.2 endet am Channel-Rand. Fehlt die Konfiguration, entfällt die Prüfung (keine Eingabe, kein Urteil) | F |
 | 61 | `check c, "…" within d`: Die gerechnete Safe-State-Latenz (Satz 9.4.5) hält die geforderte Frist ein. Verglichen wird in Ticks (`d / T₀`); die Meldung nennt die Aufschlüsselung nach Erkennung, Bestätigung, Fault-Pfad und Commit, weil die Zahl sonst nicht zu verbessern ist | F |
 | 62 | `machine … with budget = {ram = …}`: Der gerechnete Speicher der Maschine (11.5, mit Overlay) liegt im deklarierten Budget. `wcet` braucht die Kalibrierung (13.8) und meldet bis dahin seine Stufe | F |
+| 63 | Zwei Lints ohne eigene Syntax: (a) `alert` und `check` mit **derselben** Bedingung im selben Block — die Polaritaet ist entgegengesetzt gemeint (5.6), und weil beide Zeilen gleich aussehen, faellt die Verwechslung sonst niemandem auf; (b) ein `profile`, das einen `param` nicht nennt — er nimmt still seinen Default, und das ist beim Lesen nicht von der Absicht zu unterscheiden (4.6) | W |
 
 Die Kombination aus 4, 8, 9, 11, 17–22 und 30–32 ist die konstruktive Form der Sätze in Abschnitt 9.
 
@@ -1987,6 +1988,18 @@ property armed_before_fire: always(igniter implies once[1 s](armed))
 **Semantik** über der Folge der Tick-Rand-Snapshots (committete Outputs, Ψ, Zustände, Inputs des Ticks): `always(φ)` gilt an jedem Tick; `eventually[d](φ)` an Tick k gilt, wenn φ an einem Tick in `[k, k + d/T0]` gilt; `stable[d](φ)` an k, wenn φ an allen Ticks in `[k, k + d/T0]` gilt; `once[d](φ)` an k, wenn φ an einem Tick in `[k − d/T0, k]` galt. Alle Operatoren sind mit Ringpuffern der Länge `d/T0` oder Zählern überwachbar (O(1) je Tick und Operator). Eine Eigenschaft liest nur (Unit-Delay wie Szenarien), schreibt nie und kann keinen Fault auslösen — sie ist Beobachtung im Sinne von 5.6; eine Verletzung ist ein FAIL-Befund (13.5).
 
 **Verwendung.** Standard: Monitor in der Simulation (`takt test`) und Beweisziel für `takt prove` (k-Induktion/BMC über die Schrittfunktion; Zukunftsoperatoren werden zu Zählern in Σ, Export der MIR als Lustre-Knoten oder eigene SMT-Kodierung). Optional auf Hardware als Laufzeitmonitor (`with monitor = true`), dann mit Kosten im Budget (Klassen `i32`/`mem`). Durch Unit-Delay und endliche Zustände ist die Kodierung einfach; unerreichbare Zustände und tote Transitionen sind statisch erkennbar.
+
+**Umgebungsannahmen (`assumption`).** Ohne sie liefert der Modellprüfer physikalisch unmögliche Gegenbeispiele — „Tankdruck springt in einem Tick von 0 bar auf 400 bar" ist formal zulässig und praktisch wertlos; nach dem dritten solchen Befund schaltet ein Team das Werkzeug ab.
+
+```
+assumption slew_is_physical: always(abs(tank_p - tank_p.prev) < 5 bar) with monitor = true
+```
+
+Eine Annahme beschränkt die **Beweisverpflichtung**, nicht die Typsicherheit — das ist der Unterschied zum abgelehnten `assume` der Intervallanalyse (3.4), das die Laufzeitgarantie unterhöhlen würde. Die Soundness-Schleife schließt dieselbe Konstruktion wie bei `check` gegen `alert`: **Annehmen darf man, beobachten muss man.** Eine Annahme ist zugleich ein Monitor; ihre Verletzung ist ein FAIL-Befund (13.5), nie ein Fault.
+
+**Kanal-Attribute gelten automatisch als Annahmen.** `max_slew`, `debounce`, `max_age` und die deklarierte Range eines Channels stehen bereits in der Quelle und werden vom defensiven Treiberrand (12.6) zur Laufzeit *erzwungen* — der Beweiser darf sie deshalb ohne Zusatzaufwand voraussetzen. Das ist die zweite Auszahlung des Treiberrands und kostet nichts; `assumption` bleibt für den Rest.
+
+**Kompositionalität.** Unter dem Unit-Delay (Entscheidung 6) ist Assume-Guarantee zirkelfrei: Nimmt A in Tick k etwas über B an, ist der Wert von Tick k−1 gemeint, die Induktion läuft also über die Zeit statt über die Komponenten, ohne Fixpunktbildung. Mit `follows` bleibt das gültig, weil die Kanten azyklisch sind (Prüfung 33) — die Induktion folgt dann der topologischen Ordnung innerhalb des Ticks. Praktische Folge: `takt prove` beweist je Maschine, mit den Ψ-Lesevorgängen als freien Variablen unter Annahmen, statt das Gesamtsystem in einen Solver zu werfen.
 
 ### 13.4 Zertifizierungspfad
 - Die Sprache ist per Konstruktion eine Teilmenge im Sinne von MISRA/JPL Power of Ten (keine Rekursion, keine dynamische Allokation, beschränkte Schleifen, keine Exceptions).

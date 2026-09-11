@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-63: das Profil nennt `ZWEITER` nicht; er nimmt still seinen Default.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+param ERSTER  : int in 0..99 = 1
+param ZWEITER : int in 0..99 = 2
+
+profile TEST:  # ~ SC-63
+    ERSTER = 5
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            n = ERSTER + ZWEITER

@@ -48,7 +48,7 @@ RESERVED    := "region" | "while" | "yield" | "await" | "async" | "spawn" | "sel
 (* ---------------------------------------------------------------- Datei *)
 
 file           := { NEWLINE | import | system_decl | type_decl | unitvec_decl | enum_decl | record_decl | unit_decl   (* @check 1 *)
-                  | stream_decl | port_decl | node_decl | property_decl
+                  | stream_decl | port_decl | node_decl | property_decl | assumption_decl
                   | const_decl | param_decl | profile_decl | channel_decl | command_decl
                   | fn_decl | native_decl | block_decl | machine_decl | instance_decl
                   | scenario_decl | campaign_decl | trigger_decl }
@@ -153,6 +153,7 @@ seq_item       := stmt   (* @check 14 *)
 instance_decl  := "instance" IDENT [ "[" IDENT "in" range "]" ] [ "resume" ] "=" IDENT "(" [ args ] ")" NEWLINE   (* resume: 5.11, v1.2 *)   (* @check 53 *)
 node_decl      := "node" IDENT "@" "hw" "(" STRING ")" [ "with" "tick" "=" duration_lit ] NEWLINE          (* @stage v2 — 12.9 *)   (* @check 58 *)
 property_decl  := "property" IDENT ":" tprop [ "with" "monitor" "=" "true" ] NEWLINE                     (* @stage v1.1 — 13.3 *)   (* @check 56 *)
+assumption_decl := "assumption" IDENT ":" tprop [ "with" "monitor" "=" "true" ] NEWLINE                  (* @stage v1.1 — 13.3 *)   (* @check 56 *)
 tprop          := tprop_implies                                                                          (* @stage v1.1 — beschraenkte Temporallogik, 13.3 *)
 tprop_implies  := tprop_or { "implies" tprop_or }
 tprop_or       := tprop_and { "or" tprop_and }

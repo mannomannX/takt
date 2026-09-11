@@ -972,9 +972,36 @@ pub struct NodeDecl {
     pub span: Span,
 }
 
-/// `property_decl`
+/// Art einer Eigenschaftsdeklaration (13.3).
+///
+/// `property` und `assumption` tragen dieselbe Temporallogik und denselben
+/// Monitor; sie unterscheiden sich nur in der Beweisrichtung — eine
+/// Eigenschaft ist zu *zeigen*, eine Annahme darf *vorausgesetzt* werden.
+/// Ein gemeinsamer Knoten haelt beide Seiten automatisch im Gleichschritt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PropertyKind {
+    /// `property p: …` — Beweisziel und Monitor.
+    Property,
+    /// `assumption a: …` — Umgebungsannahme, beschraenkt die
+    /// Beweisverpflichtung und wird beobachtet.
+    Assumption,
+}
+
+impl PropertyKind {
+    /// Das Schluesselwort.
+    pub fn word(self) -> &'static str {
+        match self {
+            PropertyKind::Property => "property",
+            PropertyKind::Assumption => "assumption",
+        }
+    }
+}
+
+/// `property_decl` und `assumption_decl`
 #[derive(Clone, Debug, PartialEq)]
 pub struct PropertyDecl {
+    /// Art.
+    pub kind: PropertyKind,
     /// Name.
     pub name: Ident,
     /// Eigenschaft: ein Ausdruck mit Temporaloperatoren und `implies`.

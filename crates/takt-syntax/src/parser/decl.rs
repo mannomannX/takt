@@ -5,9 +5,34 @@ use crate::ast::*;
 use crate::token::TokenKind;
 
 const ITEM_KEYWORDS: &[&str] = &[
-    "import", "system", "type", "unitvec", "enum", "record", "unit", "stream", "port", "node", "property", "const",
-    "param", "tunable", "profile", "input", "output", "command", "fn", "native", "block", "machine", "driver",
-    "instance", "scenario", "campaign", "trigger",
+    "import",
+    "system",
+    "type",
+    "unitvec",
+    "enum",
+    "record",
+    "unit",
+    "stream",
+    "port",
+    "node",
+    "property",
+    "assumption",
+    "const",
+    "param",
+    "tunable",
+    "profile",
+    "input",
+    "output",
+    "command",
+    "fn",
+    "native",
+    "block",
+    "machine",
+    "driver",
+    "instance",
+    "scenario",
+    "campaign",
+    "trigger",
 ];
 
 impl<'t, 's> Parser<'t, 's> {
@@ -54,6 +79,7 @@ impl<'t, 's> Parser<'t, 's> {
             "port" => Item::Port(self.parse_port_decl()?),
             "node" => Item::Node(self.parse_node_decl()?),
             "property" => Item::Property(self.parse_property_decl()?),
+            "assumption" => Item::Property(self.parse_assumption_decl()?),
             "const" => Item::Const(self.parse_const_decl()?),
             "param" | "tunable" => Item::Param(self.parse_param_decl()?),
             "profile" => Item::Profile(self.parse_profile_decl()?),
@@ -735,8 +761,17 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `property_decl`
     fn parse_property_decl(&mut self) -> PResult<PropertyDecl> {
+        self.parse_property_like(PropertyKind::Property)
+    }
+
+    /// `assumption_decl` — dieselbe Form wie `property_decl` (13.3).
+    fn parse_assumption_decl(&mut self) -> PResult<PropertyDecl> {
+        self.parse_property_like(PropertyKind::Assumption)
+    }
+
+    fn parse_property_like(&mut self, kind: PropertyKind) -> PResult<PropertyDecl> {
         let start = self.pos;
-        self.expect_kw("property")?;
+        self.expect_kw(kind.word())?;
         let name = self.ident()?;
         self.expect_op(":")?;
         let prop = self.parse_tprop()?;
@@ -756,7 +791,7 @@ impl<'t, 's> Parser<'t, 's> {
             false
         };
         self.expect_newline()?;
-        Ok(PropertyDecl { name, prop, monitor, span: self.span_from(start) })
+        Ok(PropertyDecl { kind, name, prop, monitor, span: self.span_from(start) })
     }
 
     /// `scenario_decl`

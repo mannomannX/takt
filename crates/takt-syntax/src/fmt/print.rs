@@ -65,7 +65,10 @@ impl Emitter<'_, '_> {
             Item::Stream(s) => self.fmt_stream_decl(s),
             Item::Port(p) => self.fmt_port_decl(p),
             Item::Node(n) => self.fmt_node_decl(n),
-            Item::Property(p) => self.fmt_property_decl(p),
+            Item::Property(p) => match p.kind {
+                PropertyKind::Property => self.fmt_property_decl(p),
+                PropertyKind::Assumption => self.fmt_assumption_decl(p),
+            },
             Item::Const(c) => self.fmt_const_decl(c),
             Item::Param(p) => self.fmt_param_decl(p),
             Item::Profile(p) => self.fmt_profile_decl(p),
@@ -1094,7 +1097,16 @@ impl Emitter<'_, '_> {
 
     /// `property_decl`
     fn fmt_property_decl(&mut self, p: &PropertyDecl) {
-        self.sp("property");
+        self.fmt_property_like(p)
+    }
+
+    /// `assumption_decl` — dieselbe Form wie `property_decl` (13.3).
+    fn fmt_assumption_decl(&mut self, p: &PropertyDecl) {
+        self.fmt_property_like(p)
+    }
+
+    fn fmt_property_like(&mut self, p: &PropertyDecl) {
+        self.sp(p.kind.word());
         self.name();
         self.op(":");
         self.fmt_tprop(&p.prop);

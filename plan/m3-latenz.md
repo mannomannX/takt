@@ -278,3 +278,58 @@ delegiert, damit die vorhandenen Aufrufer unverändert bleiben.
 - **Die Zeitspalte** wird belastbar, sobald die Schedulability geprüft ist
   (7.2 mit `c_target` aus 13.8, M5). Die Regel von Prüfung 61 ändert sich
   dadurch nicht — sie gewinnt an Aussage.
+
+---
+
+## 6. Nachtrag: die zwei Lints und die Auffindbarkeit
+
+**Schritt 5 ist erledigt.** Beide Lints laufen unter Prüfung 63:
+
+- **E7 (`alert`-Polarität)** meldet den Fall, der sich beweisen lässt:
+  dieselbe Größe, dieselbe Schranke, dieselbe Vergleichsrichtung in einem
+  `check` und einem `alert` desselben Blocks. 14.1 stellt beide
+  ausdrücklich nebeneinander in denselben `loop:` — dort sehen die zwei
+  Zeilen gleich aus, und genau deshalb fällt die Verwechslung niemandem
+  auf. Die entgegengesetzte Polarität, der dokumentierte Normalfall,
+  schweigt.
+- **E8 (Profil-Vollständigkeit)** warnt, wenn ein `profile` einen `param`
+  nicht nennt. Zur Übersetzungszeit, nicht zur Laufzeit: Es ist eine
+  Eigenschaft des Profils, und im Lauf wäre die Meldung zu spät.
+
+Dabei fiel ein Werkzeugbefund an: `Expr` leitet `PartialEq` über alle
+Felder ab, also auch über `span`, `range` und `repr`. Zwei gleich
+geschriebene Bedingungen an verschiedenen Stellen sind damit nie gleich —
+und genau die sucht der Lint. `Expr::same_as` vergleicht ohne Position und
+Annotationen; die Methode gehört nach `takt-mir`, weil die Frage „steht
+hier zweimal dasselbe?" nicht auf den Lint beschränkt ist.
+
+### 6.1 Auffindbarkeit von B1 und E5
+
+Die Frage war, ob die beiden verschobenen Befunde irgendwo festgehalten
+sind. Sie standen in `plan/feedback.csv` — aber **nur dort**, und das ist
+zu wenig: Wer M6 aus der Referenz oder der Inventur plant, hätte
+`assumption` nirgends gefunden. Es kam im ganzen Repository nur in zwei
+Plandokumenten vor.
+
+Behoben (FB-53):
+
+| | vorher | jetzt |
+|---|---|---|
+| `assumption` in der Referenz | fehlte | 13.3 mit Begründung, Kanal-Attributen, Kompositionalität |
+| `assumption` in der Grammatik | fehlte | `assumption_decl`, Schlüsselwort in 2.2 |
+| `assumption` im Compiler | fehlte | wird geparst, meldet Stufe v1.1 |
+| `assumption` in der Inventur | fehlte | `KW-assumption` + drei `PAR-13.3` |
+| Hardware-Konfiguration | `FMT-…` auf M0 | auf M6, wo 8.10 entsteht |
+
+**Zur Keyword-Entscheidung.** `assumption` ist Schlüsselwort der
+Edition 1, obwohl das Konstrukt v1.1 ist. Das folgt dem vorhandenen
+Muster: `campaign`, `persist`, `port`, `node`, `arm` und `disarm` sind
+ebenfalls Konstrukte späterer Stufen, deren Wörter seit Edition 1
+reserviert sind — 2.5 verlangt für neue Wörter eine neue Edition, also
+werden sie vorab belegt. Ein Programm, das heute `assumption` als
+Bezeichner benutzt, gäbe es nicht; ein Programm, das es nach einem
+Editionswechsel nicht mehr benutzen dürfte, wäre der teurere Fall.
+
+Damit gruppiert M6 alles, was B1 und E5 brauchen: `SEM-8.10`, `SEM-13.3`,
+`FMT-Hardware-Konfiguration`, die Prüfungen 28, 29, 32, 39 und 60 sowie
+die drei `PAR-13.3`-Absätze.

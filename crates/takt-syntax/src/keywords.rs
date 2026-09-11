@@ -14,6 +14,7 @@ pub const KEYWORDS: &[&str] = &[
     "and",
     "arm",
     "as",
+    "assumption",
     "at",
     "block",
     "bound",
