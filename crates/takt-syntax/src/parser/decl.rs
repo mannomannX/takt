@@ -68,10 +68,21 @@ impl<'t, 's> Parser<'t, 's> {
             "campaign" => Item::Campaign(self.parse_campaign_decl()?),
             "trigger" => Item::Trigger(self.parse_trigger_decl()?),
             other => {
+                // Wer `pub var` oder `signal` auf Dateiebene schreibt, sucht
+                // die Maschinenebene (5.8) — der Hinweis nennt sie, statt nur
+                // aufzuzaehlen, was hier erlaubt waere.
+                let hint = match other {
+                    "pub" | "var" | "persist" => "`var`, `pub var` und `persist var` stehen in einer Maschine (5.1)",
+                    "signal" => "`signal` steht in einer Maschine (5.8)",
+                    "loop" | "state" | "initial" | "enter" | "exit" | "on" | "sequence" => {
+                        "das gehoert in eine Maschine (2.3: machine_body)"
+                    }
+                    _ => "auf Dateiebene stehen system, Typen, Channels, Parameter, fn, block, machine und Instanzen",
+                };
                 return Err(self.error_at(
                     self.tok(),
                     format!("`{other}` kann keine Deklaration einleiten"),
-                    Some("auf Dateiebene stehen system, Typen, Channels, Parameter, fn, block, machine und Instanzen"),
+                    Some(hint),
                 ));
             }
         })

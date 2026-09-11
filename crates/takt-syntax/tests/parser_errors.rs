@@ -275,3 +275,20 @@ fn without_spans(text: &str) -> String {
     out.push_str(rest);
     out
 }
+
+/// FB-21: `pub var` und `signal` auf Dateiebene sind richtig abgelehnt, aber
+/// der Hinweis zaehlte nur auf, was *hier* erlaubt ist. Er nennt jetzt, wo
+/// die Deklaration hingehoert — zwei Entwickler haben sie unabhaengig oben
+/// geschrieben.
+#[test]
+fn a_machine_level_declaration_at_file_level_names_its_place() {
+    let errors = file_errors("system:\n    language = 1\n    tick = 1 ms\n\npub var x : int in 0..9 = 0\n");
+    let d = errors.first().expect("abgelehnt");
+    let hint = d.suggestion.as_deref().unwrap_or_default();
+    assert!(hint.contains("in einer Maschine"), "der Hinweis nennt die Maschinenebene: {hint}");
+
+    let errors = file_errors("system:\n    language = 1\n    tick = 1 ms\n\nsignal fertig\n");
+    let d = errors.first().expect("abgelehnt");
+    let hint = d.suggestion.as_deref().unwrap_or_default();
+    assert!(hint.contains("5.8"), "der Hinweis nennt 5.8: {hint}");
+}

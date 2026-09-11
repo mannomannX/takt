@@ -64,6 +64,19 @@ MILESTONE_OVERRIDE = {
     "G-generic_vars": "M0 (Parser) / M6 (const) / M8 (type)",
     "G-gvar": "M0 (Parser) / M6 (const) / M8 (type)",
     "G-instance_decl": "M0 (Parser) / M8 (im Zustand)",
+    # 28, 29, 32 und 39 rechnet M3 aus, aber ihre Eingabe entsteht erst
+    # spaeter: `jitter`, `c_target[c]` und die Speichergroessen kommen aus
+    # der Konformitaetsmessung (13.8, M5) und der Hardware-Konfiguration
+    # (8.10, M6). Ohne sie gaebe es nur ein Urteil ueber geschaetzte Zahlen
+    # (plan/feedback-design.md, Abschnitt 10).
+    "SC-28": "M6 (mit 8.10)",
+    "SC-29": "M6 (mit 8.10)",
+    "SC-32": "M6 (mit 8.10)",
+    "SC-39": "M6 (mit 8.10)",
+    # Die Treiberstufe (`port`, `driver machine`) kommt mit v1.2.
+    "SC-59": "M8 (mit port)",
+    # `append` ist mit M3 gebaut, nicht mit dem Parser (FB-42).
+    "MEM-append": "M3",
 }
 
 
@@ -245,8 +258,11 @@ for name in members.group(1).replace("`", "").split():
 # --- Statische Pruefungen ---------------------------------------------------
 for cells in table(r"## 10\. Statische Analysen"):
     if len(cells) >= 3 and cells[0].isdigit():
-        add("SC-" + cells[0], "Statische Prüfung", "10", cells[1], cells[2],
-            ms="M3 (Gate)")
+        # Die meisten Pruefungen entstehen im Gate; die wenigen, deren
+        # Eingabe oder Konstrukt spaeter kommt, nennt MILESTONE_OVERRIDE.
+        sc = "SC-" + cells[0]
+        add(sc, "Statische Prüfung", "10", cells[1], cells[2],
+            ms=MILESTONE_OVERRIDE.get(sc, "M3 (Gate)"))
 
 # --- Beweisverpflichtungen T1..T16 ------------------------------------------
 proof = re.search(r"\*\*Satz 9\.4\.2.*?∎", SRC, re.S).group(0)
