@@ -79,6 +79,8 @@ MILESTONE_OVERRIDE = {
     "SC-39": "M6 (mit 8.10)",
     # Die Treiberstufe (`port`, `driver machine`) kommt mit v1.2.
     "SC-59": "M8 (mit port)",
+    # Braucht die Hardware-Konfiguration als Eingabe (8.10).
+    "SC-60": "M6 (mit 8.10)",
     # `append` ist mit M3 gebaut, nicht mit dem Parser (FB-42).
     "MEM-append": "M3",
 }

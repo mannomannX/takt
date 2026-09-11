@@ -1712,6 +1712,7 @@ sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereigni
 | 57 | `map`: Schlüssel POD mit Gleichheit (3.9) | F |
 | 58 | Knoten (12.9): `follows` knotenlokal; `hops` aus der Topologie berechenbar; Knotentick Vielfaches von `system.tick` | F |
 | 59 | Treiberstufe (15, v1.2): Ein gepolltes Gerät läuft zwischen zwei Ticks nicht über — `fifo_depth[d] / byte_rate[d] >= P_m + jitter[tick_source] + wcet_poll[d]`, alle vier Größen aus der Hardware-Konfiguration (8.10) beziehungsweise der Konformitätsmessung (13.8). Fehlt eine, ist die Prüfung nicht entscheidbar: Sie verlangt die Messung oder die ausdrückliche Freigabe `with polling = unchecked`, die im Lauf-Header erscheint. Verletzung nennt drei Auswege: Periode senken, Gerät in die TCB geben (12.6), oder DMA statt Polling | F |
+| 60 | Channel-Bindung gegen die Hardware-Konfiguration (8.10): Einheit, Skalierung und Range eines `@ hw(…)`-Channels stimmen mit der Konfiguration überein. Ein Programm, das `float[bar]` bindet, während die Konfiguration `psi` führt, ist sonst unentdeckt — die Einheitenrechnung aus 3.2 endet am Channel-Rand. Fehlt die Konfiguration, entfällt die Prüfung (keine Eingabe, kein Urteil) | F |
 
 Die Kombination aus 4, 8, 9, 11, 17–22 und 30–32 ist die konstruktive Form der Sätze in Abschnitt 9.
 

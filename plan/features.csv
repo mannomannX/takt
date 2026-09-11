@@ -591,6 +591,7 @@ SC-56,Statische Prüfung,10,"`property`: nur lesend, alle Zeitoperatoren beschr�
 SC-57,Statische Prüfung,10,`map`: Schlüssel POD mit Gleichheit (3.9),F,M3 (Gate),definiert
 SC-58,Statische Prüfung,10,Knoten (12.9): `follows` knotenlokal; `hops` aus der Topologie berechenbar; Knotentick Vielfaches von `system.tick`,F,M3 (Gate),definiert
 SC-59,Statische Prüfung,10,"Treiberstufe (15, v1.2): Ein gepolltes Gerät läuft zwischen zwei Ticks nicht über — `fifo_depth[d] / byte_rate[d] >= P_m + jitter[tick_source] + wcet_poll[d]`, alle vier Größen aus der Hardware-Konfiguration (8.10) beziehungsweise der Konformitätsmessung (13.8). Fehlt eine, ist die Prüfung nicht entscheidbar: Sie verlangt die Messung oder die ausdrückliche Freigabe `with polling = unchecked`, die im Lauf-Header erscheint. Verletzung nennt drei Auswege: Periode senken, Gerät in die TCB geben (12.6), oder DMA statt Polling",F,M8 (mit port),offen
+SC-60,Statische Prüfung,10,"Channel-Bindung gegen die Hardware-Konfiguration (8.10): Einheit, Skalierung und Range eines `@ hw(…)`-Channels stimmen mit der Konfiguration überein. Ein Programm, das `float[bar]` bindet, während die Konfiguration `psi` führt, ist sonst unentdeckt — die Einheitenrechnung aus 3.2 endet am Channel-Rand. Fehlt die Konfiguration, entfällt die Prüfung (keine Eingabe, kein Urteil)",F,M6 (mit 8.10),offen
 OBL-T1,Beweisverpflichtung,9.4.2,T1,,M1/M2 (Interpreter),offen
 OBL-T2,Beweisverpflichtung,9.4.2,T2,,M1/M2 (Interpreter),offen
 OBL-T3,Beweisverpflichtung,9.4.2,T3,,M1/M2 (Interpreter),offen
