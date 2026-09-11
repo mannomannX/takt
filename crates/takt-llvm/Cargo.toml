@@ -17,3 +17,4 @@ workspace = true
 # Nur fuer die Tests: Sie uebersetzen echte Korpusprogramme, statt MIR zu
 # erfinden — ein Struct, der nur fuer Testdaten stimmt, ist kein Beleg.
 takt-sema = { path = "../takt-sema" }
+takt-diag = { path = "../takt-diag" }

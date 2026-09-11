@@ -17,11 +17,15 @@
 //! - `emit`: der Textpuffer, der die IR aufbaut.
 //! - `expr`: Ausdruecke.
 //! - `machine`: Zustands-Struct und Tickschritt einer Maschine (11.2).
+//! - `stmt`: Anweisungen, Checks und der Fault-Zweig (11.2).
+//! - `step`: die Schrittfunktion einer Maschine (11.2, 9.4).
 //! - `toolchain`: `clang` finden, um die IR zu pruefen und auszufuehren.
 
 pub mod emit;
 pub mod expr;
 pub mod machine;
+pub mod step;
+pub mod stmt;
 pub mod toolchain;
 pub mod ty;
 

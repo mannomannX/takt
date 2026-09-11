@@ -150,6 +150,23 @@ impl Module {
         self.terminated
     }
 
+    /// Bricht die laufende Funktion ab und verwirft sie.
+    ///
+    /// Wird gebraucht, wenn ein Koerper etwas enthaelt, das der Codegen
+    /// nicht senkt: Die halb geschriebene Funktion faellt weg, statt als
+    /// ungueltige IR stehen zu bleiben. Eine halbe Schrittfunktion waere
+    /// schlimmer als keine, weil sie moeglicherweise uebersetzt.
+    pub fn abort(&mut self, from: usize) {
+        self.body.truncate(from);
+        self.open = false;
+        self.terminated = true;
+    }
+
+    /// Die Laenge des Rumpfes; Merkzeichen fuer [`Module::abort`].
+    pub fn mark(&self) -> usize {
+        self.body.len()
+    }
+
     /// Eine Zeile in den Kopf, etwa eine Deklaration.
     pub fn declare(&mut self, text: &str) {
         let _ = writeln!(self.head, "{text}");

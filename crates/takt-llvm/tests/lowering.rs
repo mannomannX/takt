@@ -46,7 +46,7 @@ fn e(kind: ExprKind, ty: TypeId) -> Expr {
 struct NoVars;
 
 impl Vars for NoVars {
-    fn var(&self, _: VarId) -> Option<Lowered> {
+    fn var(&self, _: VarId, _: &mut Module) -> Option<Lowered> {
         None
     }
 }
