@@ -570,7 +570,7 @@ SC-34,Statische Prüfung,10,"Dimensionierte Matrizen: Einheitentupel passen (Pro
 SC-35,Statische Prüfung,10,"`tunable param` nicht in Compile-Zeit-Konstanten (Array-Größen, Kapazitäten, `repeat`) (8.4)",F,M3 (Gate),definiert
 SC-36,Statische Prüfung,10,`check … for d` / `alert … for d`: `d >= P_m`; Rundung auf Perioden mit effektivem Wert (5.6),W,M3 (Gate),fertig
 SC-37,Statische Prüfung,10,`len_field`: verweist auf ein vorangehendes Integer-Feld; statische Obergrenze des Feldes (3.7),F,M3 (Gate),fertig
-SC-38,Statische Prüfung,10,"Einheiten auf Integern: `.to()` nur bei ganzzahligem Faktor, sonst `.to_float()` (3.2)",F,M3 (Gate),definiert
+SC-38,Statische Prüfung,10,"Einheiten auf Integern: `.to()` nur bei ganzzahligem Faktor, sonst `.to_float()` (3.2)",F,M6 (frueh),definiert
 SC-39,Statische Prüfung,10,"Speicherbudget aller `baremetal`- und `rtos`-Profile: `takt size` (11.5) ≤ `ram`/`flash`/`iram` der Hardware-Konfiguration, aufgeschlüsselt; auf Targets mit XIP-Flash zusätzlich RAM-Residenz von Code und tick-gelesenen Konstanten (12.3); `debounce`-Haltedauer im Report",F,M6 (mit 8.10),offen
 SC-40,Statische Prüfung,10,"Performance-Lint: `int` ohne Range in Schleifen und Regelpfaden auf 32-Bit-Zielen, mit Kostenanteil (3.4)",W,M3 (Gate),fertig
 SC-41,Statische Prüfung,10,"Performance-Lint: `float = f64` auf Zielen ohne f64-Hardware, mit Kostenanteil der f64-Operationen; Vorschlag `system: float = f32` (4.2)",W,M3 (Gate),fertig

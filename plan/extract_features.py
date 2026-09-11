@@ -85,6 +85,9 @@ MILESTONE_OVERRIDE = {
     "SC-61": "M3 (Gate)",
     "SC-62": "M3 (Gate)",
     "SC-63": "M3 (Gate)",
+    # Bewertet und vorgezogen: erster Baustein von M6, weil Grammatik,
+    # AST, MIR-Feld und Einheitenalgebra stehen (plan/einheiten-integer.md).
+    "SC-38": "M6 (frueh)",
     # Die Annahmen gehoeren zu `property` und damit zu M6; die
     # Hardware-Konfiguration ist die Eingabe der Pruefungen 28/32/39/60
     # und entsteht mit 8.10, nicht im Parser.
