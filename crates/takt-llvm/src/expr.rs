@@ -119,18 +119,33 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Cond { cond, then, otherwise } => cond_expr(cond, then, otherwise, &want, p, m, vars),
         ExprKind::Variant { enum_id, variant, fields } => self_variant(*enum_id, *variant, fields, &want, p),
         ExprKind::Record { fields, .. } => record(fields, &want, p, m, vars),
+        // Ein Array-Literal wird wie ein Record gebaut: `insertvalue` je
+        // Element aus `undef` heraus (3.9).
+        ExprKind::Array(items) => record(items, &want, p, m, vars),
         ExprKind::Call { callee, args } => call(*callee, args, &want, p, m, vars),
         ExprKind::Intrinsic { op, args } => intrinsic(*op, args, &want, p, m, vars),
+        ExprKind::Decode { record, bytes } => decode(*record, bytes, &want, p, m, vars),
+        ExprKind::Slice { base, from, to } => slice(base, from, to, &want, p, m, vars),
         ExprKind::Index { base, index } => index_of(base, index, &want, p, m, vars),
         ExprKind::Field { base, field } => field_of(base, *field, &want, p, m, vars),
         ExprKind::Cast { expr, to } => cast(expr, *to, &want, p, m, vars),
         ExprKind::Convert { expr, kind, unit } => convert(expr, *kind, *unit, &want, p, m, vars),
         ExprKind::Accessor { base, accessor: which, args } => access(base, *which, args, &want, p, m, vars),
-        ExprKind::Checked { expr, .. } => {
-            // Schritt 6 senkt den Wert; der Trampolin, in den die Pruefung
-            // springt, entsteht mit der Maschine (Schritt 7). Bis dahin
-            // waere ein erzeugter Zweig ohne Ziel schlechter als keiner.
-            lower(expr, p, m, vars)
+        ExprKind::Checked { expr, kind } => {
+            let inner = lower(expr, p, m, vars)?;
+            // `Missing` ist das Auspacken eines `T?`/`T!E` (3.8): Der
+            // Knoten prueft, dass ein Wert da ist, *und* liefert ihn. Der
+            // Zweig in den Fault-Trampolin entsteht in der Maschine; hier
+            // steht das Auspacken, ohne das jeder folgende Zugriff auf den
+            // Wrapper statt auf den Inhalt ginge.
+            if *kind == takt_mir::expr::CheckedKind::Missing
+                && let LlvmType::Struct(_) = &inner.ty
+                && inner.ty != want
+            {
+                let v = m.inst(&format!("extractvalue {} {}, 0", inner.ty, inner.value));
+                return Ok(Lowered { value: v.to_string(), ty: want });
+            }
+            Ok(inner)
         }
         other => Err(NotYet { what: node_name(other) }),
     }
@@ -225,23 +240,61 @@ fn access(
         // selbst, nicht seinen Wert — `x.valid` fragt nicht, *was*
         // geliefert wurde, sondern *ob*.
         Accessor::Valid | Accessor::Suspect | Accessor::Stale | Accessor::Age | Accessor::Reason => {
-            let ExprKind::Input { channel, .. } = &base.kind else {
+            if let ExprKind::Input { channel, .. } = &base.kind {
+                return quality_of(*channel, which, want, m, vars);
+            }
+            // `.valid` auf einem `T?` (3.8) ist das Flag des Wrappers —
+            // dieselbe Frage wie bei einem Channel („ist ein Wert da?"),
+            // nur mit einer anderen Quelle. `.age` und `.reason` gibt es
+            // dort nicht: Ein Wrapper hat keine Herkunft.
+            let LlvmType::Struct(fields) = &x.ty else {
                 return Err(NotYet { what: "Qualitaet eines Nicht-Channels" });
             };
-            quality_of(*channel, which, want, m, vars)
+            if which != Accessor::Valid {
+                return Err(NotYet { what: crate::scope::accessor_name(which) });
+            }
+            let r = m.inst(&format!("extractvalue {} {}, {}", x.ty, x.value, fields.len() - 1));
+            Ok(Lowered { value: r.to_string(), ty: LlvmType::Int(1) })
         }
         // `x.or(d)`: der Wert, wenn gueltig, sonst der Ersatz (3.5).
         Accessor::Or => {
-            let ExprKind::Input { channel, .. } = &base.kind else {
-                return Err(NotYet { what: "`.or` auf einem Nicht-Channel" });
+            let valid = match &base.kind {
+                ExprKind::Input { channel, .. } => quality_of(*channel, Accessor::Valid, &LlvmType::Int(1), m, vars)?,
+                // Auf einem `T?`/`T!E` ist es das Flag des Wrappers (3.8).
+                _ => {
+                    let LlvmType::Struct(fields) = &x.ty else {
+                        return Err(NotYet { what: "`.or` auf einem Nicht-Channel" });
+                    };
+                    let f = m.inst(&format!("extractvalue {} {}, {}", x.ty, x.value, fields.len() - 1));
+                    Lowered { value: f.to_string(), ty: LlvmType::Int(1) }
+                }
             };
-            let valid = quality_of(*channel, Accessor::Valid, &LlvmType::Int(1), m, vars)?;
             let fallback = arg(0, m)?;
             // `select` statt Verzweigung: Beide Seiten sind total (4.1),
             // und der Wert ist ohnehin schon geladen.
-            let r =
-                m.inst(&format!("select i1 {}, {} {}, {} {}", valid.value, x.ty, x.value, fallback.ty, fallback.value));
+            // Bei einem Wrapper ist der Wert das Feld 0, nicht der
+            // Wrapper selbst (3.8).
+            let wert = match (&base.kind, &x.ty) {
+                (ExprKind::Input { .. }, _) => x.clone(),
+                (_, LlvmType::Struct(_)) => {
+                    let v = m.inst(&format!("extractvalue {} {}, 0", x.ty, x.value));
+                    Lowered { value: v.to_string(), ty: want.clone() }
+                }
+                _ => x.clone(),
+            };
+            let r = m.inst(&format!(
+                "select i1 {}, {} {}, {} {}",
+                valid.value, wert.ty, wert.value, fallback.ty, fallback.value
+            ));
             Ok(Lowered { value: r.to_string(), ty: want.clone() })
+        }
+        // `f.encode()` (3.7): der Record als Bytes seiner deklarierten
+        // Laenge.
+        Accessor::Encode => {
+            let Some(Type::Record(r)) = p.types.list.get(base.ty.index()) else {
+                return Err(NotYet { what: "`encode` auf einem Nicht-Record" });
+            };
+            crate::wire::encode(&x, *r, want, p, m)
         }
         // `.ok`/`.err` (3.8): das Flag und die Diskriminante.
         Accessor::Ok => {
@@ -447,6 +500,73 @@ fn intrinsic(
     Ok(Lowered { value: value.to_string(), ty: want.clone() })
 }
 
+/// `R.decode(b)` (3.7).
+///
+/// Der Puffer liegt als Wert vor; `decode` liest ihn byteweise und
+/// braucht dafuer einen Platz. 11.2 nennt ihn den statischen Scratch —
+/// LLVM hebt die `alloca` in den Eintrittsblock und entfernt sie, wo sie
+/// unnoetig ist.
+fn decode(
+    record: takt_mir::RecordId,
+    bytes: &Expr,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let b = lower(bytes, p, m, vars)?;
+    let LlvmType::Struct(fields) = &b.ty else { return Err(NotYet { what: "`decode` auf einer Nicht-Sammlung" }) };
+    let tmp = m.inst(&format!("alloca {}", b.ty));
+    m.void_inst(&format!("store {} {}, ptr {tmp}", b.ty, b.value));
+    // Die Laenge steht im Kopf der Sammlung (3.9), die Daten dahinter.
+    let len = m.inst(&format!("extractvalue {} {}, 0", b.ty, b.value));
+    let data = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", b.ty));
+    let _ = fields;
+    let label = m.next_label();
+    crate::wire::decode(data, &len.to_string(), record, want, p, m, label)
+}
+
+/// `x[a..b]` (3.9): ein Teilstueck als eigene Sammlung.
+///
+/// Die Grenzen prueft der `Checked`-Knoten der MIR (4.1); hier steht die
+/// Kopie. Sie geht ueber `llvm.memcpy`, weil die Laenge erst zur Laufzeit
+/// feststeht — eine Schleife braeuchte eine Schranke, und die waere die
+/// Kapazitaet, nicht die Laenge.
+fn slice(
+    base: &Expr,
+    from: &Expr,
+    to: &Expr,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let x = lower(base, p, m, vars)?;
+    let a = lower(from, p, m, vars)?;
+    let b = lower(to, p, m, vars)?;
+    let src = crate::collection::layout_of(&x.ty).ok_or(NotYet { what: "Teilbereich einer Nicht-Sammlung" })?;
+    let dst = crate::collection::layout_of(want).ok_or(NotYet { what: "Teilbereich ohne Zielsammlung" })?;
+    // Quelle und Ziel liegen als Werte vor; `memcpy` liest und schreibt
+    // Speicher (11.2: statischer Scratch).
+    let src_ptr = m.inst(&format!("alloca {}", x.ty));
+    m.void_inst(&format!("store {} {}, ptr {src_ptr}", x.ty, x.value));
+    let out = m.inst(&format!("alloca {want}"));
+    let len = m.inst(&format!("sub {} {}, {}", a.ty, b.value, a.value));
+    let len32 = m.inst(&format!("trunc {} {len} to i32", a.ty));
+    let len_ptr = m.inst(&format!("getelementptr inbounds {want}, ptr {out}, i32 0, i32 0"));
+    m.void_inst(&format!("store i32 {len32}, ptr {len_ptr}"));
+    let src_data = m.inst(&format!("getelementptr inbounds {}, ptr {src_ptr}, i32 0, i32 1", x.ty));
+    let at = m.inst(&format!(
+        "getelementptr inbounds [{} x {}], ptr {src_data}, i32 0, {} {}",
+        src.cap, src.elem, a.ty, a.value
+    ));
+    let dst_data = m.inst(&format!("getelementptr inbounds {want}, ptr {out}, i32 0, i32 1"));
+    let bytes = m.inst(&format!("mul {} {len}, {}", a.ty, dst.elem.size().max(1)));
+    m.void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst_data}, ptr {at}, i64 {bytes}, i1 false)"));
+    let v = m.inst(&format!("load {want}, ptr {out}"));
+    Ok(Lowered { value: v.to_string(), ty: want.clone() })
+}
+
 /// Ein Index (3.9).
 ///
 /// Die Grenze prueft der `Checked`-Knoten der MIR (4.1); hier steht der
@@ -533,9 +653,13 @@ fn call(
 /// Feldzugriff und bleibt wie dieser ein Wert — kein Speicherort, keine
 /// Kopie (11.2: die Sprache hat keine Referenzen).
 fn record(fields: &[Expr], want: &LlvmType, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
-    let LlvmType::Struct(types) = want else { return Err(NotYet { what: "Record-Literal ohne Struct-Typ" }) };
-    if types.len() != fields.len() {
-        return Err(NotYet { what: "Record-Literal mit anderer Feldzahl" });
+    let n = match want {
+        LlvmType::Struct(types) => types.len(),
+        LlvmType::Array(_, len) => *len as usize,
+        _ => return Err(NotYet { what: "Literal ohne zusammengesetzten Typ" }),
+    };
+    if n != fields.len() {
+        return Err(NotYet { what: "Literal mit anderer Elementzahl" });
     }
     let mut cur = "undef".to_string();
     for (i, f) in fields.iter().enumerate() {
@@ -559,6 +683,9 @@ fn field_of(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
+    // 3.8 (Dominanz): Ein Feld auf einem Wrapper meint das Feld des
+    // Inhalts. Ausgepackt hat ihn schon der `Checked{Missing}`-Knoten,
+    // den die MIR darum herum setzt — hier steht nur noch der Zugriff.
     let x = lower(base, p, m, vars)?;
     let LlvmType::Struct(_) = &x.ty else { return Err(NotYet { what: "Feldzugriff auf Nicht-Record" }) };
     let r = m.inst(&format!("extractvalue {} {}, {field}", x.ty, x.value));

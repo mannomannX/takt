@@ -37,6 +37,8 @@ pub struct Module {
     open: bool,
     /// Name des laufenden Basisblocks; `phi` braucht ihn.
     block: String,
+    /// Zaehler fuer Marken, die aus Ausdruecken entstehen.
+    labels: u32,
     /// Gerufene LLVM-Intrinsics mit ihrer Signatur.
     ///
     /// Sie sind je Breite eigene Symbole (`@llvm.smin.i8` ist nicht
@@ -69,6 +71,7 @@ impl Module {
             head,
             body: String::new(),
             next: 0,
+            labels: 0,
             open: false,
             block: String::new(),
             intrinsics: std::collections::BTreeSet::new(),
@@ -177,6 +180,16 @@ impl Module {
     /// Ist der laufende Basisblock terminiert?
     pub fn terminated(&self) -> bool {
         self.terminated
+    }
+
+    /// Eine frische Nummer fuer eine Marke.
+    ///
+    /// Ausdruecke koennen Zweige brauchen (`decode`, 3.7), und sie kennen
+    /// den Kontext nicht, der sonst die Nummern vergibt. Der Zaehler des
+    /// Moduls ist die Stelle, die beide erreichen.
+    pub fn next_label(&mut self) -> u32 {
+        self.labels += 1;
+        self.labels
     }
 
     /// Merkt ein gerufenes Intrinsic vor; die Deklaration entsteht beim

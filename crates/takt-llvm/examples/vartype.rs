@@ -1,9 +1,20 @@
 //! Zeigt, wie eine Blockinstanz getypt ist.
 fn main() {
-    let src = std::fs::read_to_string("corpus-try/18_blocks.takt").expect("lesbar");
+    let path = std::env::args().nth(1).unwrap_or_else(|| "corpus-try/18_blocks.takt".into());
+    let src = std::fs::read_to_string(&path).expect("lesbar");
     let o = takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
     let out = takt_sema::compile(&src, &o);
     let Some(p) = out.program else { return };
+    for f in &p.fns {
+        for v in &f.locals {
+            println!("fn {} local {} : {:?}", f.name, v.name, p.types.list.get(v.ty.index()));
+            if v.name == "h" {
+                if let Some(takt_mir::types::Type::Optional(i)) = p.types.list.get(v.ty.index()) {
+                    println!("   inner {:?} -> llvm {:?}", p.types.list.get(i.index()), takt_llvm::ty::lower(*i, &p));
+                }
+            }
+        }
+    }
     for b in &p.blocks {
         println!(
             "block {}: params={:?} state={:?}",

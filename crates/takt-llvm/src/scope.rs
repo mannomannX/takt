@@ -152,7 +152,13 @@ fn stmt(s: &Stmt, c: &mut Coverage) {
             c.note("Beobachtung (`alert`, `log`, `measure`, ...)", ok);
         }
         StmtKind::Match { arms, subject } => {
-            c.note("`match`", false);
+            // Varianten ohne Feldbindungen und Wertmuster werden gesenkt;
+            // Bindungen brauchen den Musterabgleich ueber Summentypen.
+            let ok = arms.iter().all(|a| match &a.pattern {
+                takt_mir::stmt::ArmPattern::Variant { fields, .. } => fields.len() <= 1,
+                _ => true,
+            });
+            c.note("`match`", ok);
             expr(subject, c);
             for a in arms {
                 block(&a.body, c);
@@ -222,8 +228,15 @@ fn expr(e: &Expr, c: &mut Coverage) {
             // Die Qualitaetszugriffe gelten nur auf einem Channel: Sie
             // lesen den Eintrag im Prozessabbild (3.5).
             let on_channel = matches!(base.kind, ExprKind::Input { .. });
-            let ok = matches!(accessor, Accessor::Bit | Accessor::Bits | Accessor::WithBit | Accessor::Len)
-                || (quality && on_channel);
+            // `.valid` und `.or` gelten auch auf einem Wrapper (3.8),
+            // `.age`/`.reason` nur auf einem Channel — ein Wrapper hat
+            // keine Herkunft.
+            let auf_wrapper = matches!(accessor, Accessor::Valid | Accessor::Or | Accessor::Ok | Accessor::Err);
+            let ok = matches!(
+                accessor,
+                Accessor::Bit | Accessor::Bits | Accessor::WithBit | Accessor::Len | Accessor::Encode
+            ) || (quality && on_channel)
+                || auf_wrapper;
             c.note(if ok { "Zugriff" } else { "Zugriff (`.len`, `.count`, ...)" }, ok);
             expr(base, c);
         }
@@ -236,8 +249,22 @@ fn expr(e: &Expr, c: &mut Coverage) {
             expr(base, c);
             expr(index, c);
         }
-        ExprKind::Call { .. } => c.note("Funktionsaufruf", false),
-        ExprKind::Intrinsic { .. } => c.note("Primitive", false),
+        ExprKind::Call { args, .. } => {
+            c.note("Funktionsaufruf", true);
+            for a in args {
+                expr(a, c);
+            }
+        }
+        ExprKind::Intrinsic { op, args } => {
+            // Die Integer-Primitiven sind vollstaendig (4.1); die
+            // Fliesskomma-Primitiven ruft `libtaktm`, und `interp`
+            // braucht `table<A, B>`.
+            let ok = !matches!(op, takt_mir::expr::Intrinsic::Interp);
+            c.note("Primitive", ok);
+            for a in args {
+                expr(a, c);
+            }
+        }
         ExprKind::Convert { expr: x, .. } => {
             c.note("Einheitenkonversion", true);
             expr(x, c);
@@ -257,8 +284,16 @@ fn expr(e: &Expr, c: &mut Coverage) {
             }
         }
         ExprKind::Variant { fields, .. } => c.note("Variante", fields.is_empty()),
-        ExprKind::Array(_) => c.note("Array-Literal", false),
-        ExprKind::Decode { .. } => c.note("`decode`", false),
+        ExprKind::Array(items) => {
+            c.note("Array-Literal", true);
+            for i in items {
+                expr(i, c);
+            }
+        }
+        ExprKind::Decode { bytes, .. } => {
+            c.note("`decode`", true);
+            expr(bytes, c);
+        }
         ExprKind::Ok(v) | ExprKind::Err(v) | ExprKind::Lift(v) => {
             c.note("`ok`/`err`", true);
             expr(v, c);
@@ -266,8 +301,17 @@ fn expr(e: &Expr, c: &mut Coverage) {
         ExprKind::None | ExprKind::Default => c.note("`none`/`default`", true),
         ExprKind::Matches { .. } => c.note("`matches`", false),
         ExprKind::MatOp { .. } => c.note("Matrixoperation", false),
-        ExprKind::Slice { .. } => c.note("Teilbereich", false),
+        ExprKind::Slice { base, from, to } => {
+            c.note("Teilbereich", true);
+            expr(base, c);
+            expr(from, c);
+            expr(to, c);
+        }
         ExprKind::NativeCall { .. } => c.note("native Funktion", false),
+        // Eine Stuetzstelle gehoert zu `table<A, B>`; deren Typ traegt
+        // keine Laenge, was zugleich eine Luecke fuer `takt size` ist
+        // (11.5). Beides gehoert zusammen geloest.
+        ExprKind::Tuple(..) => c.note("Stuetzstelle einer Tabelle", false),
         _ => c.note("weiterer Ausdruck", false),
     }
 }

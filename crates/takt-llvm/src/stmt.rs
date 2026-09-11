@@ -198,6 +198,7 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         StmtKind::Check { cond, kind, .. } => check(cond, *kind, ctx, m),
         StmtKind::If { cond, then, otherwise } => branch(cond, then, otherwise, ctx, m),
         StmtKind::Observe(o) => observe(o, ctx, m),
+        StmtKind::Match { subject, arms } => match_stmt(subject, arms, ctx, m),
         StmtKind::MethodCall { target, receiver, method, args } => {
             method_call(target.as_ref(), receiver, *method, args, ctx, m)
         }
@@ -231,7 +232,7 @@ fn fn_for<V: Slots>(
     let n = lower_expr(count, ctx.program, m, &ctx.vars)?;
     let (ptr, ty) = ctx.vars.slot(var, m).ok_or(NotYet { what: "Schleifenvariable" })?;
     m.void_inst(&format!("store {ty} 0, ptr {ptr}"));
-    let k = ctx.next_label();
+    let k = ctx.next_label(m);
     let (kopf, rumpf, ende) = (format!("fuer{k}"), format!("fuer{k}_rumpf"), format!("fuer{k}_ende"));
     m.void_inst(&format!("br label %{kopf}"));
     m.label(&kopf);
@@ -481,9 +482,13 @@ pub trait Slots: Vars {
 
 impl<V: Slots> FnCtx<'_, V> {
     /// Eine frische Nummer fuer eine Marke.
-    pub fn next_label(&mut self) -> u32 {
+    ///
+    /// Sie kommt aus dem Modul, nicht aus dem Kontext: Marken stehen im
+    /// Modul, und zwei Funktionen haetten sonst beide `dann1` (derselbe
+    /// Befund wie FB-72 bei den Uebergaengen).
+    pub fn next_label(&mut self, m: &mut Module) -> u32 {
         self.labels += 1;
-        self.labels
+        m.next_label()
     }
 }
 
@@ -516,7 +521,7 @@ fn fn_stmt<V: Slots>(s: &Stmt, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result
         }
         StmtKind::If { cond, then, otherwise } => {
             let c = lower_expr(cond, ctx.program, m, &ctx.vars)?;
-            let n = ctx.next_label();
+            let n = ctx.next_label(m);
             let (t, f, end) = (format!("dann{n}"), format!("sonst{n}"), format!("ende{n}"));
             m.void_inst(&format!("br i1 {}, label %{t}, label %{f}", c.value));
             m.label(&t);
@@ -537,7 +542,7 @@ fn fn_stmt<V: Slots>(s: &Stmt, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result
             let Place::Var(id) = receiver else { return Err(NotYet { what: "Empfaenger in einer Funktion" }) };
             let (recv, ty) = ctx.vars.slot(*id, m).ok_or(NotYet { what: "lokale Sammlung" })?;
             let layout = collection::layout_of(&ty).ok_or(NotYet { what: "Methode auf einer Nicht-Sammlung" })?;
-            let label = ctx.next_label();
+            let label = ctx.next_label(m);
             let ok = match method {
                 Method::Push => {
                     let v = lower_expr(
@@ -678,5 +683,133 @@ fn reset_instance(
     // Das Flag geht mit zurueck: Nach `reset()` darf `step` wieder laufen.
     let flag = m.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {}", inst.stepped()));
     m.void_inst(&format!("store i1 false, ptr {flag}"));
+    Ok(())
+}
+
+/// `match` ueber einen Summentyp oder Werte (3.8, 6.1).
+///
+/// Eine Kette von Vergleichen, kein `switch`: Die Muster koennen Bereiche
+/// sein (`case 1..9`), und ein `switch` kann nur einzelne Werte. LLVM
+/// macht aus einer Kette gleicher Vergleiche selbst einen `switch`, wo es
+/// sich lohnt — der Codegen waere dabei schlechter als er.
+///
+/// **Die Reihenfolge ist die des Quelltexts.** 6.1 sagt, der erste
+/// passende `case` gewinnt; ein Umsortieren (etwa nach Diskriminante)
+/// waere eine andere Semantik, sobald sich zwei Muster ueberschneiden.
+fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let vars = ctx.vars();
+    let value = lower_expr(subject, ctx.program, m, &vars)?;
+    let n = ctx.next_label();
+    let name = ctx.machine.name.clone();
+    let ende = format!("match{n}_{name}");
+    // Bei einem Summentyp wird die Diskriminante verglichen; die MIR
+    // legt sie als Feld 0 ab, wenn die Variante Felder traegt, sonst ist
+    // der Wert selbst die Diskriminante (3.7).
+    // Woher die Diskriminante kommt, sagt der Typ: Bei `T!E` steht sie im
+    // Feld 1 (3.8: Wert, Fehler, Flag), bei einem Summentyp mit Feldern
+    // im Feld 0. Ein fieldloses Enum *ist* seine Diskriminante.
+    let disc = match (&value.ty, ctx.program.types.list.get(subject.ty.index())) {
+        (LlvmType::Struct(_), Some(takt_mir::types::Type::Result { .. })) => {
+            let d = m.inst(&format!("extractvalue {} {}, 1", value.ty, value.value));
+            Lowered { value: d.to_string(), ty: LlvmType::Int(32) }
+        }
+        (LlvmType::Struct(_), _) => {
+            let d = m.inst(&format!("extractvalue {} {}, 0", value.ty, value.value));
+            Lowered { value: d.to_string(), ty: LlvmType::Int(32) }
+        }
+        _ => value.clone(),
+    };
+    for (i, arm) in arms.iter().enumerate() {
+        let treffer = format!("case{n}_{i}_{name}");
+        let weiter = format!("case{n}_{i}_sonst_{name}");
+        match &arm.pattern {
+            takt_mir::stmt::ArmPattern::Wild => {
+                // `case _` faengt alles; die folgenden kaemen nie zum Zug.
+                block(&arm.body.clone(), ctx, m)?;
+                m.void_inst(&format!("br label %{ende}"));
+                m.label(&ende);
+                return Ok(());
+            }
+            takt_mir::stmt::ArmPattern::Variant { variant, fields } => {
+                let def = enum_of(subject.ty, ctx.program).ok_or(NotYet { what: "Enum des `match`" })?;
+                let d = def.variants.get(*variant as usize).ok_or(NotYet { what: "Variante" })?.discriminant;
+                let ok = m.inst(&format!("icmp eq {} {}, {d}", disc.ty, disc.value));
+                m.void_inst(&format!("br i1 {ok}, label %{treffer}, label %{weiter}"));
+                m.label(&treffer);
+                // 6.1: Die Felder der Variante werden an gehobene
+                // Variablen gebunden, bevor der Rumpf laeuft. Sie liegen
+                // im Wert hinter der Diskriminante.
+                bind_fields(&value, fields, ctx, m)?;
+                block(&arm.body.clone(), ctx, m)?;
+                m.void_inst(&format!("br label %{ende}"));
+                m.label(&weiter);
+                continue;
+            }
+            takt_mir::stmt::ArmPattern::Values(values) => {
+                let mut ok = "false".to_string();
+                for v in values {
+                    let lo = lower_expr(&v.lo, ctx.program, m, &vars)?;
+                    let hit = match &v.hi {
+                        // `case a..b`: einschliesslich beider Grenzen.
+                        Some(hi) => {
+                            let h = lower_expr(hi, ctx.program, m, &vars)?;
+                            let a = m.inst(&format!("icmp sge {} {}, {}", disc.ty, disc.value, lo.value));
+                            let b = m.inst(&format!("icmp sle {} {}, {}", disc.ty, disc.value, h.value));
+                            m.inst(&format!("and i1 {a}, {b}")).to_string()
+                        }
+                        None => m.inst(&format!("icmp eq {} {}, {}", disc.ty, disc.value, lo.value)).to_string(),
+                    };
+                    ok = m.inst(&format!("or i1 {ok}, {hit}")).to_string();
+                }
+                m.void_inst(&format!("br i1 {ok}, label %{treffer}, label %{weiter}"));
+            }
+        }
+        m.label(&treffer);
+        block(&arm.body.clone(), ctx, m)?;
+        m.void_inst(&format!("br label %{ende}"));
+        m.label(&weiter);
+    }
+    // Kein `case` hat getroffen. Bei einem geschlossenen Enum kann das
+    // nicht vorkommen (Pruefung 7 verlangt Vollstaendigkeit); der Sprung
+    // steht trotzdem da, weil LLVM einen Terminator braucht.
+    m.void_inst(&format!("br label %{ende}"));
+    m.label(&ende);
+    Ok(())
+}
+
+/// Das Enum hinter einem `match`-Subjekt.
+fn enum_of(ty: takt_mir::TypeId, p: &Program) -> Option<&takt_mir::types::EnumDef> {
+    match p.types.list.get(ty.index())? {
+        takt_mir::types::Type::Enum(e) => p.enums.get(e.index()),
+        // Bei `T!E` steht die Fehlerdiskriminante im Feld 1; das Enum
+        // ist das der Fehlerseite (3.8).
+        takt_mir::types::Type::Result { err, .. } => p.enums.get(err.index()),
+        _ => None,
+    }
+}
+
+/// Bindet die Felder einer Variante an ihre gehobenen Variablen (6.1).
+///
+/// Die Felder stehen im Wert hinter der Diskriminante; bei einem `T!E`
+/// ist das Feld 0 der Wert und Feld 1 der Fehler (3.8). Mehr als ein Feld
+/// braucht den Aufbau der Variante im Wert, den erst die Summentypen mit
+/// Feldern mitbringen.
+fn bind_fields(value: &Lowered, fields: &[takt_mir::VarId], ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    if fields.is_empty() {
+        return Ok(());
+    }
+    let LlvmType::Struct(parts) = &value.ty else { return Err(NotYet { what: "Variante ohne Felder im Wert" }) };
+    if fields.len() > 1 {
+        return Err(NotYet { what: "`case` mit mehreren Feldbindungen" });
+    }
+    // Bei `T!E` traegt Feld 0 den Wert und Feld 1 den Fehler; welches
+    // gemeint ist, sagt der Typ der Bindung.
+    let var = fields[0];
+    let def = ctx.machine.vars.get(var.index()).ok_or(NotYet { what: "Bindung" })?;
+    let want = ty::lower(def.ty, ctx.program).ok_or(NotYet { what: "Typ der Bindung" })?;
+    let index = parts.iter().position(|t| *t == want).ok_or(NotYet { what: "Feld der Variante" })?;
+    let v = m.inst(&format!("extractvalue {} {}, {index}", value.ty, value.value));
+    let ptr = ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })?;
+    m.void_inst(&format!("store {want} {v}, ptr {ptr}"));
     Ok(())
 }

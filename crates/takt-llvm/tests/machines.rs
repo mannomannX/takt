@@ -56,8 +56,9 @@ fn ir_of(p: &Program) -> String {
 /// Die Korpusprogramme, deren Maschinen der Codegen heute vollstaendig
 /// senkt. Die Liste waechst mit ihm; sie steht hier, damit ein Rueckschritt
 /// auffaellt.
-const VOLLSTAENDIG: [&str; 8] = [
+const VOLLSTAENDIG: [&str; 9] = [
     "12_bitfields.takt",
+    "13_protocol_analysis.takt",
     "18_blocks.takt",
     "01_minimal.takt",
     "03_sequences_and_faults.takt",
@@ -816,4 +817,89 @@ fn the_validity_flag_sits_at_the_end_of_the_wrapper() {
         }
     }
     assert!(found, "kein `T!E` im Programm");
+}
+
+// --- Drahtformat (3.7) ---------------------------------------------------
+
+/// 3.7: `decode` faultet nie. Ein zu kurzer Puffer ergibt `none` — das
+/// Programm entscheidet mit `match`, was das bedeutet.
+#[test]
+fn decode_checks_the_length_before_reading() {
+    let p = corpus("13_protocol_analysis.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("icmp uge i32"),
+        "die Laenge wird nicht geprueft:
+{ir}"
+    );
+    assert!(
+        ir.contains("phi"),
+        "die beiden Wege werden nicht zusammengefuehrt:
+{ir}"
+    );
+}
+
+/// 3.7: Der Plan steht im Typ — der Codegen rollt die Felder ab, statt zu
+/// rechnen. Kein Schleifencode, keine Laufvariable.
+#[test]
+fn decode_unrolls_the_fields() {
+    let p = corpus("13_protocol_analysis.takt");
+    let ir = ir_of(&p);
+    let decode_start = ir.find("icmp uge i32").expect("Laengenpruefung");
+    let window = &ir[decode_start..decode_start.saturating_add(2000)];
+    assert!(
+        window.contains("insertvalue"),
+        "die Felder werden nicht zusammengesetzt:
+{window}"
+    );
+}
+
+/// 3.7: Ein Konstantenfeld muss den deklarierten Wert tragen; sonst ist
+/// das Ergebnis `none`.
+#[test]
+fn a_constant_field_is_verified() {
+    let p = corpus("13_protocol_analysis.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("and i1"),
+        "die Pruefungen werden nicht verknuepft:
+{ir}"
+    );
+}
+
+// --- `match` (6.1) -------------------------------------------------------
+
+/// 6.1: Der erste passende `case` gewinnt — eine Kette von Vergleichen in
+/// Quelltextreihenfolge, kein umsortierter `switch`.
+#[test]
+fn match_tests_the_cases_in_source_order() {
+    let p = corpus("13_protocol_analysis.takt");
+    let ir = ir_of(&p);
+    assert!(
+        ir.contains("case"),
+        "keine `case`-Marken:
+{ir}"
+    );
+    let first = ir.find("case").expect("erster case");
+    let rest = &ir[first..];
+    assert!(
+        rest.contains("_sonst_"),
+        "kein Weiterreichen an den naechsten `case`:
+{ir}"
+    );
+}
+
+/// 3.8: Bei `T!E` steht die Fehlerdiskriminante im Feld 1, nicht im
+/// Feld 0 — dort steht der Wert.
+#[test]
+fn a_result_matches_on_its_error_field() {
+    let p = corpus("13_protocol_analysis.takt");
+    let ir = ir_of(&p);
+    // Der Vergleich laeuft auf `i32`; er kaeme auf dem Feld 0 nie
+    // zustande, weil dort der Record steht.
+    assert!(
+        ir.contains("icmp eq i32"),
+        "kein Vergleich der Diskriminante:
+{ir}"
+    );
 }
