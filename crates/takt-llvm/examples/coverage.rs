@@ -42,6 +42,7 @@ fn main() {
         let Some(p) = out.program else { continue };
         dateien += 1;
         let mut m = Module::new("x", "x86_64-pc-windows-msvc");
+        takt_llvm::abi::Abi::declare(&mut m);
         let mut alle = true;
         for mm in &p.machines {
             maschinen += 1;

@@ -16,6 +16,7 @@
 //! - `ty`: Typen der MIR nach LLVM-Typen (3.4, 11.2).
 //! - `emit`: der Textpuffer, der die IR aufbaut.
 //! - `expr`: Ausdruecke.
+//! - `abi`: was der erzeugte Code von der Runtime ruft (9.3, 5.4).
 //! - `image`: der Aufbau des Prozessabbilds, die ABI zur Runtime (9.1).
 //! - `machine`: Zustands-Struct und Tickschritt einer Maschine (11.2).
 //! - `stmt`: Anweisungen, Checks und der Fault-Zweig (11.2).
@@ -23,6 +24,7 @@
 //! - `step`: die Schrittfunktion einer Maschine (11.2, 9.4).
 //! - `toolchain`: `clang` finden, um die IR zu pruefen und auszufuehren.
 
+pub mod abi;
 pub mod emit;
 pub mod expr;
 pub mod image;

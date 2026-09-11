@@ -112,6 +112,7 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Binary { op, lhs, rhs } => binary(*op, lhs, rhs, &want, p, m, vars),
         ExprKind::Cond { cond, then, otherwise } => cond_expr(cond, then, otherwise, &want, p, m, vars),
         ExprKind::Variant { enum_id, variant, fields } => self_variant(*enum_id, *variant, fields, &want, p),
+        ExprKind::Record { fields, .. } => record(fields, &want, p, m, vars),
         ExprKind::Field { base, field } => field_of(base, *field, &want, p, m, vars),
         ExprKind::Cast { expr, to } => cast(expr, *to, &want, p, m, vars),
         ExprKind::Convert { expr, kind, unit } => convert(expr, *kind, *unit, &want, p, m, vars),
@@ -178,6 +179,28 @@ fn access(
             let b = m.inst(&format!("icmp ne {} {one}, 0", x.ty));
             Ok(Lowered { value: b.to_string(), ty: LlvmType::Int(1) })
         }
+        // `x.bits(hi, lo)` = (x >> lo) & ((1 << (hi - lo + 1)) - 1), also
+        // das Feld von `lo` bis `hi` einschliesslich (3.10). Die Grenzen
+        // sind Konstanten (die Pruefung im Sema verlangt es), darum
+        // entsteht die Maske beim Uebersetzen und nicht zur Laufzeit.
+        Accessor::Bits => {
+            let (hi, lo) = (arg(0, m)?, arg(1, m)?);
+            let (Ok(hi), Ok(lo)) = (hi.value.parse::<u32>(), lo.value.parse::<u32>()) else {
+                return Err(NotYet { what: "`.bits` mit berechneten Grenzen" });
+            };
+            if hi < lo {
+                return Err(NotYet { what: "`.bits` mit vertauschten Grenzen" });
+            }
+            let width = hi - lo + 1;
+            let mask: u64 = if width >= 64 { u64::MAX } else { (1u64 << width) - 1 };
+            let sh = m.inst(&format!("lshr {} {}, {lo}", x.ty, x.value));
+            let r = m.inst(&format!("and {} {sh}, {mask}", x.ty));
+            // Das Ergebnis hat die Breite des Traegers, nicht die des
+            // Zieltyps: Ein `.bits(7, 4)` auf einem `u16` liefert einen
+            // `i16`, den erst ein `as` verengt. Gaebe der Knoten hier den
+            // Zieltyp an, waere die naechste Instruktion falsch getypt.
+            Ok(Lowered { value: r.to_string(), ty: x.ty.clone() })
+        }
         // `x.with_bit(i, b)`: setzen oder loeschen, ohne Verzweigung.
         Accessor::WithBit => {
             let (i, b) = (arg(0, m)?, arg(1, m)?);
@@ -211,7 +234,7 @@ fn access(
                 m.inst(&format!("select i1 {}, {} {}, {} {}", valid.value, x.ty, x.value, fallback.ty, fallback.value));
             Ok(Lowered { value: r.to_string(), ty: want.clone() })
         }
-        _ => Err(NotYet { what: "Zugriff (`.valid`, `.age`, ...)" }),
+        _ => Err(NotYet { what: crate::scope::accessor_name(which) }),
     }
 }
 
@@ -272,6 +295,25 @@ fn self_variant(
     let def = p.enums.get(enum_id.index()).ok_or(NotYet { what: "Enum" })?;
     let v = def.variants.get(variant as usize).ok_or(NotYet { what: "Variante" })?;
     Ok(Lowered { value: v.discriminant.to_string(), ty: want.clone() })
+}
+
+/// Ein Record-Literal (3.7).
+///
+/// LLVM baut einen Struct-Wert mit `insertvalue`, Feld fuer Feld, aus
+/// `undef` heraus. Das ist die Umkehrung von `extractvalue` beim
+/// Feldzugriff und bleibt wie dieser ein Wert — kein Speicherort, keine
+/// Kopie (11.2: die Sprache hat keine Referenzen).
+fn record(fields: &[Expr], want: &LlvmType, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
+    let LlvmType::Struct(types) = want else { return Err(NotYet { what: "Record-Literal ohne Struct-Typ" }) };
+    if types.len() != fields.len() {
+        return Err(NotYet { what: "Record-Literal mit anderer Feldzahl" });
+    }
+    let mut cur = "undef".to_string();
+    for (i, f) in fields.iter().enumerate() {
+        let v = lower(f, p, m, vars)?;
+        cur = m.inst(&format!("insertvalue {want} {cur}, {} {}, {i}", v.ty, v.value)).to_string();
+    }
+    Ok(Lowered { value: cur, ty: want.clone() })
 }
 
 /// Ein Feldzugriff auf einen Record (3.7).

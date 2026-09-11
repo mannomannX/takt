@@ -27,6 +27,7 @@ fn corpus(name: &str) -> Program {
 /// was *entsteht*, gueltig ist.
 fn ir_of(p: &Program) -> String {
     let mut m = Module::new("korpus", "x86_64-pc-windows-msvc");
+    takt_llvm::abi::Abi::declare(&mut m);
     for machine in &p.machines {
         let Some(st) = state_struct(machine, p) else { continue };
         machine::declare_state(machine, &st, &mut m);
@@ -38,7 +39,30 @@ fn ir_of(p: &Program) -> String {
 /// Die Korpusprogramme, deren Maschinen der Codegen heute vollstaendig
 /// senkt. Die Liste waechst mit ihm; sie steht hier, damit ein Rueckschritt
 /// auffaellt.
-const VOLLSTAENDIG: [&str; 4] = ["01_minimal.takt", "14_latency.takt", "15_quality.takt", "16_timing.takt"];
+const VOLLSTAENDIG: [&str; 6] = [
+    "01_minimal.takt",
+    "03_sequences_and_faults.takt",
+    "14_latency.takt",
+    "15_quality.takt",
+    "16_timing.takt",
+    "17_nested.takt",
+];
+
+/// Alle Korpusdateien, die fehlerfrei zu MIR uebersetzen — auch die, deren
+/// Maschinen der Codegen nur teilweise senkt. Was er *erzeugt*, muss
+/// gueltig sein, sonst faellt eine halbe Funktion erst spaeter auf.
+const UEBERSETZBAR: [&str; 10] = [
+    "01_minimal.takt",
+    "02_units_and_data.takt",
+    "03_sequences_and_faults.takt",
+    "12_bitfields.takt",
+    "13_framing.takt",
+    "13_protocol_analysis.takt",
+    "14_latency.takt",
+    "15_quality.takt",
+    "16_timing.takt",
+    "17_nested.takt",
+];
 
 // --- Der Zustands-Struct (11.2) -----------------------------------------
 
@@ -479,6 +503,68 @@ fn every_label_in_the_generated_ir_is_unique() {
             let t = line.trim_end();
             if t.ends_with(':') && !t.starts_with(' ') && !t.starts_with(';') {
                 assert!(seen.insert(t.to_string()), "{name}: Marke `{t}` kommt zweimal vor");
+            }
+        }
+    }
+}
+
+/// Was der Codegen erzeugt, ist gueltige LLVM-IR — auch fuer Programme,
+/// die er nur teilweise senkt.
+///
+/// Das ist die schaerfere Fassung von
+/// `the_machines_of_the_corpus_compile_to_object_code`: Sie prueft die
+/// vollstaendigen, dieser hier *alle*. Eine halbe Funktion, die
+/// assembliert, waere schlimmer als eine, die es nicht tut.
+#[test]
+fn everything_the_codegen_emits_assembles() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    for name in UEBERSETZBAR {
+        let p = corpus(name);
+        let ir = ir_of(&p);
+        let dir = std::env::temp_dir().join(format!("takt-llvm-all-{}", name.replace('.', "_")));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("Verzeichnis");
+        if let Err(e) = clang.assembles(&ir, &dir) {
+            panic!(
+                "{name}: die IR assembliert nicht:
+{e}
+--- IR ---
+{ir}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// 5.4: `abort` faultet alle Maschinen und verlaesst den Schritt. Was
+/// danach im Block stand, ist unerreichbar und darf nicht in der IR
+/// stehen — LLVM nimmt es nicht an.
+#[test]
+fn nothing_follows_a_terminator() {
+    for name in UEBERSETZBAR {
+        let p = corpus(name);
+        let ir = ir_of(&p);
+        let mut terminated = false;
+        for line in ir.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with(';') {
+                continue;
+            }
+            if t.ends_with(':') || t.starts_with("define") {
+                terminated = false;
+                continue;
+            }
+            if t == "}" {
+                continue;
+            }
+            assert!(!terminated, "{name}: `{t}` steht hinter einem Terminator");
+            let head = t.split_whitespace().next().unwrap_or("");
+            if matches!(head, "br" | "ret" | "switch" | "unreachable") {
+                terminated = true;
             }
         }
     }

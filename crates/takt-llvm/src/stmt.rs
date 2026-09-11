@@ -14,8 +14,9 @@
 use takt_mir::expr::Expr;
 use takt_mir::machine::Machine;
 use takt_mir::program::Program;
-use takt_mir::stmt::{Block, Place, Stmt, StmtKind};
+use takt_mir::stmt::{Block, Observe, Place, Stmt, StmtKind};
 
+use crate::abi::Abi;
 use crate::emit::{Module, Reg};
 use crate::expr::{Lowered, NotYet, Vars, lower as lower_expr};
 use crate::machine::{Role, StateStruct};
@@ -36,12 +37,28 @@ pub struct Ctx<'a> {
     /// Wie oft schon ein Fault-Zweig entstanden ist; die Marken muessen
     /// eindeutig sein.
     checks: u32,
+    /// Die Nummer der Maschine im Programm; sie geht in jeden
+    /// Runtime-Aufruf (`crate::abi`).
+    pub machine_index: u32,
+    /// Wie viele Meldungsstellen die Maschine schon hat.
+    ///
+    /// Der Index identifiziert die Stelle im Trace; die Reihenfolge ist
+    /// die der Erzeugung und damit die des Quelltexts.
+    sites: u32,
 }
 
 impl<'a> Ctx<'a> {
     /// Ein Kontext fuer eine Maschine.
     pub fn new(machine: &'a Machine, state: &'a StateStruct, program: &'a Program) -> Ctx<'a> {
-        Ctx { machine, state, program, checks: 0 }
+        let machine_index = program.machines.iter().position(|m| m.name == machine.name).unwrap_or(0) as u32;
+        Ctx { machine, state, program, checks: 0, machine_index, sites: 0 }
+    }
+
+    /// Eine frische Nummer fuer eine Meldungsstelle (9.3).
+    pub fn next_site(&mut self) -> u32 {
+        let n = self.sites;
+        self.sites += 1;
+        n
     }
 
     /// Eine frische Nummer fuer eine Marke.
@@ -179,7 +196,17 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         StmtKind::Assign { target, value } => assign(target, value, ctx, m),
         StmtKind::Check { cond, kind, .. } => check(cond, *kind, ctx, m),
         StmtKind::If { cond, then, otherwise } => branch(cond, then, otherwise, ctx, m),
-        _ => Err(NotYet { what: "Anweisung" }),
+        StmtKind::Observe(o) => observe(o, ctx, m),
+        StmtKind::Abort { .. } => {
+            // 5.4: `abort` faultet *alle* Maschinen im selben Tick. Der
+            // erzeugte Code kann das nicht selbst — er kennt die anderen
+            // nicht —, also ruft er die Runtime und verlaesst den Schritt.
+            let site = ctx.next_site();
+            m.void_inst(&format!("call void @{}(i32 {}, i32 {site})", Abi::ABORT, ctx.machine_index));
+            m.void_inst("ret void");
+            Ok(())
+        }
+        other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
 }
 
@@ -187,19 +214,8 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
 fn assign(target: &Place, value: &Expr, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let vars = ctx.vars();
     let v = lower_expr(value, ctx.program, m, &vars)?;
-    match target {
-        Place::Var(id) => {
-            let ptr = ctx.field(Role::Var, id.index(), m).ok_or(NotYet { what: "Variable im Zustand" })?;
-            m.void_inst(&format!("store {} {}, ptr {ptr}", v.ty, v.value));
-        }
-        // 9.2: Ein Output wird in den Latch geschrieben; die Runtime
-        // committet ihn (12.1). `%3` ist der Latch (11.2).
-        Place::Output(c) => {
-            let ptr = m.inst(&format!("getelementptr inbounds {}, ptr %3, i32 {}", v.ty, c.index()));
-            m.void_inst(&format!("store {} {}, ptr {ptr}", v.ty, v.value));
-        }
-        _ => return Err(NotYet { what: "Zuweisungsziel" }),
-    }
+    let (ptr, _) = place(target, ctx, m)?;
+    m.void_inst(&format!("store {} {}, ptr {ptr}", v.ty, v.value));
     Ok(())
 }
 
@@ -240,4 +256,97 @@ fn branch(cond: &Expr, then: &Block, otherwise: &Block, ctx: &mut Ctx<'_>, m: &m
     m.void_inst(&format!("br label %{end}"));
     m.label(&end);
     Ok(())
+}
+
+/// Eine Beobachtung (9.3): `alert`, `log`, `measure`, `verify`.
+///
+/// Beobachtungen aendern den Zustand nicht — sie tragen etwas nach
+/// draussen. Der erzeugte Code ruft dafuer die Runtime (`crate::abi`);
+/// der Text steht als Index in einer Tabelle, nicht als Zeichenkette im
+/// Aufruf.
+fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let machine = ctx.machine_index;
+    match o {
+        Observe::Alert { cond, .. } => {
+            let vars = ctx.vars();
+            let c = lower_expr(cond, ctx.program, m, &vars)?;
+            let site = ctx.next_site();
+            // Die Flanke bildet die Runtime: Sie kennt den vorigen Wert,
+            // der erzeugte Code muesste ihn sonst im Zustand fuehren.
+            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {})", Abi::ALERT, c.value));
+            Ok(())
+        }
+        Observe::Log(_) => {
+            let site = ctx.next_site();
+            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site})", Abi::LOG,));
+            Ok(())
+        }
+        Observe::Measure { value, .. } => {
+            let vars = ctx.vars();
+            let v = lower_expr(value, ctx.program, m, &vars)?;
+            // Der Report rechnet in `double`, unabhaengig von der Breite
+            // des Programms (13.2): Ein Messwert ist eine Zahl fuer
+            // Menschen, keine, mit der weitergerechnet wird.
+            let as_double = match v.ty {
+                LlvmType::F64 => v.value.clone(),
+                LlvmType::F32 => m.inst(&format!("fpext float {} to double", v.value)).to_string(),
+                LlvmType::Int(_) => m.inst(&format!("sitofp {} {} to double", v.ty, v.value)).to_string(),
+                _ => return Err(NotYet { what: "`measure` auf diesem Typ" }),
+            };
+            let site = ctx.next_site();
+            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, double {as_double})", Abi::MEASURE));
+            Ok(())
+        }
+        Observe::Verify { cond, .. } => {
+            let vars = ctx.vars();
+            let c = lower_expr(cond, ctx.program, m, &vars)?;
+            let site = ctx.next_site();
+            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {})", Abi::VERIFY, c.value));
+            Ok(())
+        }
+        _ => Err(NotYet { what: "Beobachtung" }),
+    }
+}
+
+/// Der Speicherort eines Zuweisungsziels und sein Typ (11.2).
+///
+/// Felder und Elemente werden ueber `getelementptr` erreicht, nicht ueber
+/// `insertvalue` in einen geladenen Wert: Eine Zuweisung an `s.f` soll
+/// *das Feld* schreiben, nicht den ganzen Record neu bauen. Der Unterschied
+/// ist bei einem `bytes<256>` der zwischen einem Byte und 256.
+fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, LlvmType), NotYet> {
+    match target {
+        Place::Var(id) => {
+            let def = ctx.machine.vars.get(id.index()).ok_or(NotYet { what: "Variable" })?;
+            let ty = ty::lower(def.ty, ctx.program).ok_or(NotYet { what: "Variablentyp" })?;
+            let ptr = ctx.field(Role::Var, id.index(), m).ok_or(NotYet { what: "Variable im Zustand" })?;
+            Ok((ptr, ty))
+        }
+        // 9.2: Ein Output wird in den Latch geschrieben; die Runtime
+        // committet ihn (12.1). `%3` ist der Latch (11.2).
+        Place::Output(c) => {
+            let ch = ctx.program.channels.get(c.index()).ok_or(NotYet { what: "Channel" })?;
+            let ty = ty::lower(ch.ty, ctx.program).ok_or(NotYet { what: "Channeltyp" })?;
+            let ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr %3, i32 {}", c.index()));
+            Ok((ptr, ty))
+        }
+        Place::Field(base, field) => {
+            let (ptr, ty) = place(base, ctx, m)?;
+            let LlvmType::Struct(fields) = &ty else { return Err(NotYet { what: "Feld eines Nicht-Records" }) };
+            let inner = fields.get(*field as usize).cloned().ok_or(NotYet { what: "Feldnummer" })?;
+            let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 {field}"));
+            Ok((at, inner))
+        }
+        Place::Index(base, index) => {
+            let (ptr, ty) = place(base, ctx, m)?;
+            let LlvmType::Array(elem, _) = &ty else { return Err(NotYet { what: "Index auf Nicht-Array" }) };
+            let vars = ctx.vars();
+            let i = lower_expr(index, ctx.program, m, &vars)?;
+            // Die Grenze prueft der `Checked`-Knoten der MIR (4.1); hier
+            // steht nur der Zugriff.
+            let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, {} {}", i.ty, i.value));
+            Ok((at, (**elem).clone()))
+        }
+        Place::Index2(..) => Err(NotYet { what: "Matrixelement als Ziel" }),
+    }
 }

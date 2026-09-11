@@ -112,6 +112,12 @@ impl Module {
     /// bewusst keine Variante, die Flags anhaengt (4.2).
     pub fn inst(&mut self, rest: &str) -> Reg {
         let r = self.reg();
+        if self.terminated {
+            // Unerreichbar: Der Block endete schon. Die Nummer wird
+            // trotzdem vergeben, damit der Aufrufer eine gueltige
+            // Referenz bekommt; geschrieben wird nichts.
+            return r;
+        }
         let _ = writeln!(self.body, "  {r} = {rest}");
         r
     }
@@ -124,6 +130,9 @@ impl Module {
 
     /// Schreibt eine Anweisung ohne Ergebnis (`store`, `br`).
     pub fn void_inst(&mut self, text: &str) {
+        if self.terminated {
+            return;
+        }
         let _ = writeln!(self.body, "  {text}");
         if Module::is_terminator(text) {
             self.terminated = true;

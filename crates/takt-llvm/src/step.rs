@@ -264,8 +264,17 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
 /// Wert je Tick, und die Schedulability (7.2) koennte ihn nicht
 /// beschraenken.
 fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crate::expr::Lowered, NotYet> {
-    let takt_mir::expr::ExprKind::Duration(ns) = d.kind else {
-        return Err(NotYet { what: "`after` mit berechneter Dauer" });
+    // Die Frist darf ein Literal oder ein Parameter sein: Beide stehen
+    // fuer den Lauf fest, und nur dann kann die Schedulability (7.2) sie
+    // beschraenken. Ein Ausdruck ueber Variablen haette einen Wert je
+    // Tick — `after` waere dann keine Frist mehr, sondern eine Bedingung.
+    let vars = ctx.vars();
+    let frist = match d.kind {
+        takt_mir::expr::ExprKind::Duration(ns) => {
+            crate::expr::Lowered { value: ns.to_string(), ty: crate::ty::LlvmType::Int(64) }
+        }
+        takt_mir::expr::ExprKind::Param(_) => crate::expr::lower(d, ctx.program, m, &vars)?,
+        _ => return Err(NotYet { what: "`after` mit berechneter Dauer" }),
     };
     let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else {
         return Err(NotYet { what: "t_in_state im Zustand" });
@@ -279,7 +288,7 @@ fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crat
     let period_ns = i64::from(ctx.machine.period.max(1)).saturating_mul(ctx.program.config.tick);
     let elapsed = m.inst(&format!("mul i64 {ticks}, {period_ns}"));
     let positive = m.inst(&format!("icmp sgt i64 {elapsed}, 0"));
-    let reached = m.inst(&format!("icmp sge i64 {elapsed}, {ns}"));
+    let reached = m.inst(&format!("icmp sge i64 {elapsed}, {}", frist.value));
     let both = m.inst(&format!("and i1 {positive}, {reached}"));
     Ok(crate::expr::Lowered { value: both.to_string(), ty: crate::ty::LlvmType::Int(1) })
 }

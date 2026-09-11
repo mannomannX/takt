@@ -78,7 +78,8 @@ pub fn machine(m: &Machine, c: &mut Coverage) {
                 TransTrigger::After(d) => {
                     // Eine berechnete Dauer haette einen Wert je Tick; 7.2
                     // koennte sie nicht beschraenken.
-                    let literal = matches!(d.kind, takt_mir::expr::ExprKind::Duration(_));
+                    let literal =
+                        matches!(d.kind, takt_mir::expr::ExprKind::Duration(_) | takt_mir::expr::ExprKind::Param(_));
                     c.note("Uebergang `after d`", literal);
                 }
             }
@@ -102,8 +103,8 @@ pub fn block(b: &Block, c: &mut Coverage) {
 fn stmt(s: &Stmt, c: &mut Coverage) {
     match &s.kind {
         StmtKind::Assign { target, value } => {
-            let ok = matches!(target, Place::Var(_) | Place::Output(_));
-            c.note(if ok { "Zuweisung" } else { "Zuweisung an Feld oder Index" }, ok);
+            let ok = !matches!(target, Place::Index2(..));
+            c.note(if ok { "Zuweisung" } else { "Zuweisung an ein Matrixelement" }, ok);
             expr(value, c);
         }
         StmtKind::Check { cond, .. } => {
@@ -124,6 +125,17 @@ fn stmt(s: &Stmt, c: &mut Coverage) {
             c.note("`for x in W`", false);
             block(body, c);
         }
+        StmtKind::Abort { .. } => c.note("`abort`", true),
+        StmtKind::Observe(o) => {
+            let ok = matches!(
+                o,
+                takt_mir::stmt::Observe::Alert { .. }
+                    | takt_mir::stmt::Observe::Log(_)
+                    | takt_mir::stmt::Observe::Measure { .. }
+                    | takt_mir::stmt::Observe::Verify { .. }
+            );
+            c.note("Beobachtung (`alert`, `log`, `measure`, ...)", ok);
+        }
         StmtKind::Match { arms, subject } => {
             c.note("`match`", false);
             expr(subject, c);
@@ -135,7 +147,8 @@ fn stmt(s: &Stmt, c: &mut Coverage) {
     }
 }
 
-fn stmt_name(s: &StmtKind) -> &'static str {
+/// Der Name einer Anweisung fuer Meldung und Messung.
+pub fn stmt_name(s: &StmtKind) -> &'static str {
     match s {
         StmtKind::Goto(_) => "`->` als Anweisung",
         StmtKind::Abort { .. } => "`abort`",
@@ -194,7 +207,7 @@ fn expr(e: &Expr, c: &mut Coverage) {
             // Die Qualitaetszugriffe gelten nur auf einem Channel: Sie
             // lesen den Eintrag im Prozessabbild (3.5).
             let on_channel = matches!(base.kind, ExprKind::Input { .. });
-            let ok = matches!(accessor, Accessor::Bit | Accessor::WithBit) || (quality && on_channel);
+            let ok = matches!(accessor, Accessor::Bit | Accessor::Bits | Accessor::WithBit) || (quality && on_channel);
             c.note(if ok { "Zugriff" } else { "Zugriff (`.len`, `.count`, ...)" }, ok);
             expr(base, c);
         }
@@ -221,7 +234,12 @@ fn expr(e: &Expr, c: &mut Coverage) {
         ExprKind::Builtin(_) => c.note("eingebauter Bezeichner", false),
         ExprKind::Published { .. } => c.note("Psi (`m.x`)", false),
         ExprKind::StateOf(_) => c.note("`m.state`", false),
-        ExprKind::Record { .. } => c.note("Record-Literal", false),
+        ExprKind::Record { fields, .. } => {
+            c.note("Record-Literal", true);
+            for f in fields {
+                expr(f, c);
+            }
+        }
         ExprKind::Variant { fields, .. } => c.note("Variante", fields.is_empty()),
         ExprKind::Array(_) => c.note("Array-Literal", false),
         ExprKind::Decode { .. } => c.note("`decode`", false),
@@ -230,5 +248,37 @@ fn expr(e: &Expr, c: &mut Coverage) {
         ExprKind::Slice { .. } => c.note("Teilbereich", false),
         ExprKind::NativeCall { .. } => c.note("native Funktion", false),
         _ => c.note("weiterer Ausdruck", false),
+    }
+}
+
+/// Der Name eines Zugriffs fuer Meldung und Messung (3.5, 3.9).
+pub fn accessor_name(a: Accessor) -> &'static str {
+    match a {
+        Accessor::Valid => "`.valid`",
+        Accessor::Suspect => "`.suspect`",
+        Accessor::Stale => "`.stale`",
+        Accessor::Age => "`.age`",
+        Accessor::Reason => "`.reason`",
+        Accessor::Or => "`.or`",
+        Accessor::Ok => "`.ok`",
+        Accessor::Err => "`.err`",
+        Accessor::T => "`.t`",
+        Accessor::Seq => "`.seq`",
+        Accessor::Text => "`.text`",
+        Accessor::Data => "`.data`",
+        Accessor::Len => "`.len`",
+        Accessor::Count => "`.count`",
+        Accessor::Dropped => "`.dropped`",
+        Accessor::Malformed => "`.malformed`",
+        Accessor::Overflowed => "`.overflowed`",
+        Accessor::Free => "`.free`",
+        Accessor::Jitter => "`.jitter`",
+        Accessor::TimeWarped => "`.time_warped`",
+        Accessor::Done => "`.done`",
+        Accessor::Result => "`.result`",
+        Accessor::Bit => "`.bit`",
+        Accessor::Bits => "`.bits`",
+        Accessor::WithBit => "`.with_bit`",
+        _ => "Zugriff",
     }
 }

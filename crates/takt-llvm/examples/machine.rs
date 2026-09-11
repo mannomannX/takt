@@ -17,6 +17,7 @@ fn main() {
     }
     let Some(p) = out.program else { return };
     let mut m = Module::new(&path, "x86_64-pc-windows-msvc");
+    takt_llvm::abi::Abi::declare(&mut m);
     for machine in &p.machines {
         let Some(st) = state_struct(machine, &p) else {
             eprintln!("; {}: Zustand nicht abbildbar", machine.name);
