@@ -4,7 +4,7 @@ system:
 
 # SC-19: jede Variante mit allen Feldern, dazu ein `case _` ueber Werte.
 
-enum Cmd: NONE, ARM(pre : int in 0..99, level : int in 0..99)
+enum Cmd: NONE, ARM(pre: int in 0..99, level: int in 0..99)
 
 output n : int in 0..99 @ hw("o/n") with safe = 0
 

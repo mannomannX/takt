@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-36: 5 ms sind kuerzer als die Periode von 10 ms — die Bedingung liesse
+# sich nie ueber die geforderte Dauer beobachten.
+
+input  p     : float[bar] @ hw("i/p")     with max_rate = 1000 Hz
+output valve : bool       @ hw("o/valve") with safe = false
+
+machine m every 10 ms:
+    initial RUN
+
+    state RUN:
+        loop:
+            check p < 5.0 bar, "Druck zu hoch" for 5 ms  # ~ SC-36
+            valve = false

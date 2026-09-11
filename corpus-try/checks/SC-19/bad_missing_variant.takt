@@ -4,7 +4,7 @@ system:
 
 # SC-19: `match` ueber ein Enum deckt jede Variante ab oder traegt `case _`.
 
-enum Cmd: NONE, ARM(pre : int in 0..99, level : int in 0..99)
+enum Cmd: NONE, ARM(pre: int in 0..99, level: int in 0..99)
 
 output n : int in 0..99 @ hw("o/n") with safe = 0
 

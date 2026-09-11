@@ -1,0 +1,14 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-3: ein bool-Output nimmt keine Zahl auf.
+
+output valve : bool @ hw("o/valve") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            valve = 3  # ~ SC-3

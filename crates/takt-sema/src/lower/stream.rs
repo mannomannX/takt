@@ -13,6 +13,7 @@ use takt_mir::types::Type;
 use takt_mir::{ChannelId, TypeId, VarId};
 use takt_syntax::ast;
 
+use super::stmt::SC27;
 use super::{BlockKind, Lowerer, SC2, SC3};
 use crate::symbols::Entity;
 
@@ -20,13 +21,19 @@ impl Lowerer<'_> {
     /// Loest einen Stream-Namen auf und traegt ihn als Konsument ein.
     /// Liefert Bezug und Elementtyp.
     pub fn stream_ref(&mut self, name: &ast::Ident) -> Option<(StreamRef, TypeId)> {
+        self.stream_ref_as(name, SC3)
+    }
+
+    /// Wie [`Self::stream_ref`], aber unter dem Code des Aufrufers: ein
+    /// `on`-Handler auf einem Nicht-Stream ist Pruefung 27, nicht 3 (2.3).
+    pub fn stream_ref_as(&mut self, name: &ast::Ident, code: &'static str) -> Option<(StreamRef, TypeId)> {
         let entity = self.lookup(name)?;
         let (r, elem) = match entity {
             Entity::Channel(c) => {
                 let ty = self.program.channels[c.index()].ty;
                 let Type::Stream(elem) = self.ty(ty).clone() else {
                     let n = self.type_name(ty);
-                    self.error(SC3, name.span, format!("`{}` ist kein Stream, sondern `{n}`", name.name));
+                    self.error(code, name.span, format!("`{}` ist kein Stream, sondern `{n}`", name.name));
                     return None;
                 };
                 (StreamRef::Channel(c), elem)
@@ -78,7 +85,7 @@ impl Lowerer<'_> {
 
     /// `on s [matches P | has P] [as b]:` (8.7).
     pub fn handler(&mut self, h: &ast::OnHandler) -> Option<Handler> {
-        let (stream, elem) = self.stream_ref(&h.stream)?;
+        let (stream, elem) = self.stream_ref_as(&h.stream, SC27)?;
         // Muster, Bindung und Rumpf liegen im selben Sichtbereich: die
         // Bindung ist nur im Rumpf sichtbar (8.7, „im dominierten Zweig").
         self.scopes.push();

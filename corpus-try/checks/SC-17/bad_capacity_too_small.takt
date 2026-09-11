@@ -5,7 +5,7 @@ system:
 # SC-17: der Konsument laeuft alle 10 ms, der Rand liefert bis zu 2000 Hz.
 # In einer Aktivierung koennen damit 20 Elemente auflaufen, der Puffer haelt 4.
 
-input rx  : stream<line<64>> @ hw("uart0/rx") with max_rate = 2000 Hz, capacity = 4  # ~ SC-17
+input  rx : stream<line<64>> @ hw("uart0/rx") with max_rate = 2000 Hz, capacity = 4  # ~ SC-17
 
 output n : int in 0..99 @ hw("o/n") with safe = 0
 

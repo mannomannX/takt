@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-2: jeder Name ist genau einmal deklariert und jede Benutzung findet ihn.
+
+enum Mode: IDLE, BUSY
+
+output valve : bool @ hw("o/valve") with safe = false
+
+machine m:
+    var mode : Mode = IDLE
+    initial RUN
+
+    state RUN:
+        loop:
+            valve = mode == BUSY

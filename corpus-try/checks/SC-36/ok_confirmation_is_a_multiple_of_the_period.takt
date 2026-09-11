@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-36: die Bestaetigungszeit ist ein ganzes Vielfaches der Maschinenperiode.
+
+input  p     : float[bar] @ hw("i/p")     with max_rate = 1000 Hz
+output valve : bool       @ hw("o/valve") with safe = false
+
+machine m every 10 ms:
+    initial RUN
+
+    state RUN:
+        loop:
+            check p < 5.0 bar, "Druck zu hoch" for 50 ms
+            valve = false

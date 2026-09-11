@@ -1,0 +1,14 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-2: eine Benutzung, zu der keine Deklaration gehoert.
+
+output valve : bool @ hw("o/valve") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            valve = zustand  # ~ SC-2

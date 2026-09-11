@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-27: ein `on`-Handler steht nur auf einem deklarierten Stream.
+
+input  p     : float[bar] @ hw("i/p")     with max_rate = 100 Hz
+output valve : bool       @ hw("o/valve") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            valve = false
+        on p as v:  # ~ SC-27
+            valve = v > 1.0 bar

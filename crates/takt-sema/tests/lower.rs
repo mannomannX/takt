@@ -310,3 +310,42 @@ machine m:
     let out = diagnose(&format!("{HEAD}enum Ee: A = 9223372036854775807, B\n"));
     assert!(messages(&out).contains("i64::MAX"), "{}", messages(&out));
 }
+
+/// Pruefung 5 (Validitaets-Dominanz) meldet nie einen Code — sie ist
+/// strukturell: Ein nicht dominiertes Lesen bekommt `checked[Valid]`, ein
+/// dominiertes nicht („impliziter Check ist Default", Tabelle 10.1). Darum
+/// kann sie kein Korpusverzeichnis haben; dieser Test haelt beide Haelften
+/// fest.
+#[test]
+fn validity_dominance_shows_in_the_mir_not_in_a_code() {
+    let src = format!(
+        "{HEAD}input  p     : float[bar] @ hw(\"i/p\")     with max_rate = 100 Hz
+output valve : bool       @ hw(\"o/valve\") with safe = false
+
+machine ctrl:
+    initial RUN
+    state RUN:
+        loop:
+            valve = p > 1.0 bar
+            if p.valid:
+                valve = p > 2.0 bar
+"
+    );
+    let p = compile(&src);
+    let text = dump_machine(&p, MachineId(0));
+    assert!(
+        text.contains("checked[Valid](p) > 1.0"),
+        "das ungeschuetzte Lesen traegt den Check:
+{text}"
+    );
+    assert!(
+        text.contains("(p > 2.0)"),
+        "das dominierte Lesen steht roh da:
+{text}"
+    );
+    assert!(
+        !text.contains("checked[Valid](p) > 2.0"),
+        "kein doppelter Check unter `valid`:
+{text}"
+    );
+}

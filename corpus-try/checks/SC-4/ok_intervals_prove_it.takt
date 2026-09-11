@@ -12,7 +12,7 @@ output b : int in 0..99 @ hw("o/b") with safe = 0
 output c : int in 0..99 @ hw("o/c") with safe = 0
 
 machine prover:
-    var small : int in 0..9   = 5
+    var small : int in 0..9 = 5
     var wide  : int in 0..999 = 500
     initial RUN
 

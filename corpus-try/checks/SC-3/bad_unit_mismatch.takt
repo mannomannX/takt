@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-3: eine Laenge nimmt keine Zeit auf — die Einheiten stimmen nicht ueberein.
+
+output valve : bool @ hw("o/valve") with safe = false
+
+machine m:
+    var weg : float[m] = 0.0 m
+    initial RUN
+
+    state RUN:
+        loop:
+            weg = weg + 1.0 s  # ~ SC-3
+            valve = weg > 3.0 m

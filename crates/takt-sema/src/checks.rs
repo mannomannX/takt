@@ -36,9 +36,16 @@ pub const SC46: &str = "SC-46";
 /// `inout`: kein Aliasing (3.9).
 pub const SC47: &str = "SC-47";
 /// Pruefung 25: Definite Assignment zustandslokaler und gehobener Variablen
-/// je Eintritt. Pruefung 6 ist die allgemeine Regel; in M1 ist keine von
-/// beiden ausloesbar, weil jedes `var` einen Initialisierer traegt und die
-/// einzige uninitialisierte Bindung aus `until … matches` (M2) stammt.
+/// je Eintritt (Sequenz-`var`, Captures). Pruefung 6 ist die allgemeine
+/// Regel.
+///
+/// Der Code steht, ist aber derzeit nicht ausloesbar: `VarDef::init` ist nur
+/// an einer Stelle `None` — der Musterbindung in `lower/pattern.rs` —, und
+/// jeden Lesezugriff darauf faengt schon Pruefung 6 ab. Ein Sequenz-`var`
+/// ohne Initialisierer, der zweite Fall der Regel, ist grammatisch gar nicht
+/// schreibbar (2.3: `var_decl` verlangt `=`). Erst wenn die Grammatik ihn
+/// zulaesst, bekommt 25 einen eigenen Fall; bis dahin haelt
+/// `tests/analysis.rs` den Grund fest.
 pub const SC25: &str = "SC-25";
 /// Maschinenregeln.
 pub const SC8: &str = "SC-8";

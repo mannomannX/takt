@@ -4,7 +4,7 @@ system:
 
 # SC-17: 2000 Hz mal 10 ms sind 20 Elemente je Aktivierung; so viele passen.
 
-input rx  : stream<line<64>> @ hw("uart0/rx") with max_rate = 2000 Hz, capacity = 20
+input  rx : stream<line<64>> @ hw("uart0/rx") with max_rate = 2000 Hz, capacity = 20
 
 output n : int in 0..99 @ hw("o/n") with safe = 0
 

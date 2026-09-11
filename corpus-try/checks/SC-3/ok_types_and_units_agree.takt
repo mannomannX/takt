@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-3: beide Seiten tragen dieselbe Einheit, die Zuweisung passt zum Typ.
+
+output valve : bool @ hw("o/valve") with safe = false
+
+machine m:
+    var weg   : float[m] = 0.0 m
+    var dauer : Duration = 5 ms
+    initial RUN
+
+    state RUN:
+        loop:
+            weg = weg + 1.0 m
+            dauer = dauer + 1 ms
+            valve = weg > 3.0 m

@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-27: `every` gehoert in den `loop:`, nicht in den `enter:`.
+
+output valve : bool @ hw("o/valve") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        enter:
+            every 10 ms:  # ~ SC-27
+                valve = false
+        loop:
+            valve = true

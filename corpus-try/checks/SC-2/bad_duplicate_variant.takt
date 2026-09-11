@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-2: derselbe Variantenname zweimal im selben Enum.
+
+enum Mode:
+    IDLE = 0
+    IDLE = 1  # ~ SC-2
+
+output valve : bool @ hw("o/valve") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            valve = false
