@@ -5,6 +5,7 @@ members = [
     "crates/takt-diag",
     "crates/takt-syntax",
     "crates/takt-mir",
+    "crates/takt-hal",
     "crates/takt-interp",
     "crates/takt-sema",
     "crates/takt-cli",

@@ -63,6 +63,33 @@ impl Sample {
     }
 }
 
+/// Der Treiberrand (12.6) prueft Ranges und `max_slew` ueber `takt-hal`;
+/// dafuer braucht er von einem Wert nur Ordnung und Differenz.
+///
+/// Ein Wert, der keine Zahl ist, traegt weder Range noch Steigung: Beide
+/// Methoden liefern `None`, und die Pruefungen lassen ihn durch.
+impl takt_hal::Scalar for Value {
+    fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::F32(f) => Some(f64::from(*f)),
+            Value::F64(f) => Some(*f),
+            Value::Int(i) => Some(*i as f64),
+            Value::UInt(u) => Some(*u as f64),
+            Value::Duration(d) => Some(*d as f64),
+            _ => None,
+        }
+    }
+
+    fn as_i64(&self) -> Option<i64> {
+        match self {
+            Value::Int(i) => Some(*i),
+            Value::UInt(u) => i64::try_from(*u).ok(),
+            Value::Duration(d) => Some(*d),
+            _ => None,
+        }
+    }
+}
+
 /// Zustand einer Blockinstanz (5.7): Parameter, dann Zustandsvariablen, wie
 /// der `VarId`-Raum der Blockmethoden (plan/mir.md, Abschnitt 7).
 #[derive(Clone, Debug, PartialEq)]

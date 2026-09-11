@@ -98,7 +98,7 @@ SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4/M5 (Runtime),
 SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M4/M5 (Runtime),offen
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M4/M5 (Runtime),offen
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4/M5 (Runtime),offen
-SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M4/M5 (Runtime),offen
+SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M4/M5 (Runtime),teilweise
 SEM-12.7,Semantik/Abschnitt,12.7,"Plattformschnittstelle (System-Channels, v1.1)",v1.1,M6,offen
 SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M6,offen
 SEM-12.9,Semantik/Abschnitt,12.9,"Verteilte Ausführung (v2): Regeln, die schon heute gelten",v2,M9 (v2),offen
@@ -797,13 +797,13 @@ DIST-rule6,Regel,12.9,Verbindungsverlust.,v2,M9 (v2),offen
 DIST-rule7,Regel,12.9,Jobs,v2,M9 (v2),offen
 DIST-rule8,Regel,12.9,Aufzeichnung,v2,M9 (v2),offen
 DIST-rule9,Regel,12.9,Simulation.,v2,M9 (v2),offen
-RAND-1,Regel/Prüfung,12.6,"Zeitstempel innerhalb `(t_(k-1), t_k]`",,M4/M5 (Runtime),offen
-RAND-2,Regel/Prüfung,12.6,"Zeitstempel und `seq` streng steigend, `seq` lückenlos, `len(D) <= MAXPT` je Stream, Qualitätsflags konsistent (`Bad` ohne Wert, Alter monoton)",,M4/M5 (Runtime),offen
-RAND-3,Regel/Prüfung,12.6,Werte innerhalb deklarierter Ranges (3.5),,M4/M5 (Runtime),offen
-RAND-4,Regel/Prüfung,12.6,`max_slew` (3.5),,M4/M5 (Runtime),offen
-RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M4/M5 (Runtime),offen
-RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M4/M5 (Runtime),offen
-RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M4/M5 (Runtime),offen
+RAND-1,Regel/Prüfung,12.6,"Zeitstempel innerhalb `(t_(k-1), t_k]`",,M4/M5 (Runtime),teilweise
+RAND-2,Regel/Prüfung,12.6,"Zeitstempel und `seq` streng steigend, `seq` lückenlos, `len(D) <= MAXPT` je Stream, Qualitätsflags konsistent (`Bad` ohne Wert, Alter monoton)",,M4/M5 (Runtime),teilweise
+RAND-3,Regel/Prüfung,12.6,Werte innerhalb deklarierter Ranges (3.5),,M4/M5 (Runtime),fertig
+RAND-4,Regel/Prüfung,12.6,`max_slew` (3.5),,M4/M5 (Runtime),fertig
+RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M4/M5 (Runtime),teilweise
+RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M4/M5 (Runtime),teilweise
+RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M4/M5 (Runtime),teilweise
 PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4/M5 (Runtime),offen
 PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M4/M5 (Runtime),offen
 PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M4/M5 (Runtime),offen

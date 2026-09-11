@@ -12,3 +12,5 @@ beispiel,szenario,ticks,profil,verdikt,beschreibung
 14_5,over,300,,FAIL,"Ein Element des Channel-Arrays ueberschreitet die Grenze"
 14_5,invalid,300,,INCONCLUSIVE,"Das Channel-Array wird ungueltig, der Alert meldet die Flanke"
 14_6,brownout,900,,PASS,"Versorgungsunterbrechung gegen ein UART-Modell: Muster, Handler, geplante Ausgabe, Verdikt (8.6-8.8)"
+14_8,slew,600,,INCONCLUSIVE,"max_slew und debounce am Treiberrand: Suspect haelt, dann Bad (12.6)"
+14_8,range,400,,INCONCLUSIVE,"Ein Wert ausserhalb der deklarierten Range wird Bad/OutOfRange (12.6)"

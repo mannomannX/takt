@@ -22,11 +22,20 @@ name = "takt-diag"
 version = "0.1.0"
 
 [[package]]
+name = "takt-hal"
+version = "0.1.0"
+dependencies = [
+ "takt-diag",
+ "takt-mir",
+]
+
+[[package]]
 name = "takt-interp"
 version = "0.1.0"
 dependencies = [
  "libtaktm",
  "takt-diag",
+ "takt-hal",
  "takt-mir",
 ]
 

@@ -115,7 +115,8 @@ fn apply_stimulus(sim: &mut Sim<'_>, stimulus: &Trace, tick: u64) -> Result<(), 
                     continue;
                 }
                 let s = sample_from_text(sample, ty, program).map_err(Trap::Bug)?;
-                sim.image.set_input(id, s, program);
+                let now = i64::try_from(tick).unwrap_or(i64::MAX).saturating_mul(program.config.tick);
+                sim.image.set_input(id, s, now, program);
             }
             LineKind::Command { name } => {
                 let Some(i) = program.commands.iter().position(|c| c.name == *name) else {

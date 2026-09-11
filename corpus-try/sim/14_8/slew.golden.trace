@@ -1,0 +1,17 @@
+t=0 alert edge_watch on "raw_p ungueltig: DRIVER"
+t=0 state edge_watch WATCH
+t=0 out p_quality 2
+t=0 out raw_valid false
+t=100 alert edge_watch off "raw_p ungueltig: none"
+t=100 out p_quality 0
+t=100 out raw_valid true
+t=200 alert edge_watch on "chamber_p entprellt: IMPLAUSIBLE"
+t=200 alert edge_watch on "raw_p ungueltig: IMPLAUSIBLE"
+t=200 out p_quality 1
+t=200 out raw_valid false
+t=300 alert edge_watch off "raw_p ungueltig: none"
+t=300 out raw_valid true
+t=400 alert edge_watch off "chamber_p entprellt: IMPLAUSIBLE"
+t=400 out p_quality 2
+t=500 out p_quality 0
+t=600 verdict-final INCONCLUSIVE

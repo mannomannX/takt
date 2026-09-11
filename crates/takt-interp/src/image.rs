@@ -61,6 +61,18 @@ pub struct Image {
     /// `sched[o]`: geplante Schreibvorgaenge, nach `T` sortiert (9.8). Nur
     /// fuer Outputs, die in einem `at` oder `pulse` vorkommen.
     pub sched: HashMap<ChannelId, Vec<(i64, Value)>>,
+    /// Der defensive Treiberrand je Input (12.6): Range, `max_slew`,
+    /// `debounce`. Er steht in `takt-hal`, damit Interpreter und erzeugter
+    /// Code denselben Rand benutzen — sonst gaelte Satz 9.4.4 fuer die
+    /// Randfaelle nicht.
+    gates: Vec<takt_hal::quality::Gate>,
+    /// Die ausgewerteten Grenzen je Channel; einmal beim Start gerechnet,
+    /// nicht in jedem Tick (12.1).
+    limits: Vec<takt_hal::quality::Limits>,
+    /// Der zuletzt gut gelieferte Wert je Channel; ihn haelt `debounce`
+    /// (3.5). Er steht hier und nicht im Rand, weil nur der Interpreter
+    /// den Typ des Kanals kennt.
+    last_good: Vec<Option<Value>>,
 }
 
 /// Sendepuffer eines Ausgabestroms (8.8): der Treiber leert ihn mit
@@ -188,6 +200,9 @@ impl Image {
             stream_next,
             tx,
             sched: HashMap::new(),
+            gates: vec![takt_hal::quality::Gate::default(); p.channels.len()],
+            limits: p.channels.iter().map(|c| limits_of(c, p)).collect(),
+            last_good: vec![None; p.channels.len()],
         }
     }
 
@@ -196,11 +211,56 @@ impl Image {
         &self.inputs[c.index()]
     }
 
-    /// Setzt eine Abtastung (Stimulus). Der Wert durchlaeuft die
-    /// Rand-Durchsetzung: die Simulation ist der Treiberrand (12.6).
-    pub fn set_input(&mut self, c: ChannelId, sample: Sample, p: &Program) {
-        self.inputs[c.index()] = enforce_range(sample, c, p);
+    /// Setzt eine Abtastung (Stimulus). Der Wert durchlaeuft den
+    /// Treiberrand: Die Simulation ist eine Treiberimplementierung, kein
+    /// Sonderweg (12.6, Prinzip 4).
+    ///
+    /// `now` ist der Zeitstempel der Lieferung in Nanosekunden; `max_slew`
+    /// ist eine Rate und braucht ihn.
+    pub fn set_input(&mut self, c: ChannelId, sample: Sample, now: i64, p: &Program) {
+        self.inputs[c.index()] = self.through_edge(sample, c, now, p);
         self.driven[c.index()] = true;
+    }
+
+    /// Fuehrt eine Lieferung durch den Rand (12.6, Zeilen 3 und 4).
+    ///
+    /// Ein Wert ausserhalb der Range wird `Bad`/`OutOfRange`, ein Wert
+    /// jenseits `max_slew` `Bad`/`Implausible` — mit `debounce` zunaechst
+    /// `Suspect`, wobei der letzte gute Wert gehalten wird (3.5). Geklemmt
+    /// wird nie: Das verbirgt den Fehler, statt ihn sichtbar zu machen.
+    fn through_edge(&mut self, sample: Sample, c: ChannelId, now: i64, p: &Program) -> Sample {
+        let Some(value) = &sample.value else { return sample };
+        if sample.quality == Quality::Bad {
+            self.gates[c.index()].driver_bad();
+            self.last_good[c.index()] = None;
+            return sample;
+        }
+        // 8.9: Bei einem oversampelten Kanal traegt das Element die Range;
+        // ein einziges Sample ausserhalb macht das ganze Tick-Array `Bad`
+        // (konservativ). Die Steigung misst der Rand am ersten Element.
+        let channel = &p.channels[c.index()];
+        let limits = self.limits[c.index()];
+        let worst = match value {
+            Value::Samples(items) => {
+                let mut worst = takt_hal::quality::Verdict::good();
+                for item in items {
+                    let v = self.gates[c.index()].check(item, channel, now, &limits);
+                    if severity(v.quality) > severity(worst.quality) {
+                        worst = v;
+                    }
+                }
+                worst
+            }
+            v => self.gates[c.index()].check(v, channel, now, &limits),
+        };
+        if worst.quality == takt_hal::Quality::Good {
+            self.last_good[c.index()] = sample.value.clone();
+        }
+        let held = worst.held.then(|| self.last_good[c.index()].clone()).flatten();
+        if worst.quality == takt_hal::Quality::Bad {
+            self.last_good[c.index()] = None;
+        }
+        apply(sample, worst, held.as_ref())
     }
 
     /// Legt ein Element eines Eingabestroms ab (8.6). Es kommt vom Rand und
@@ -348,7 +408,7 @@ impl Image {
                 Value::Samples(items) if items.is_empty() => Sample::bad(Reason::Stale),
                 _ => Sample::good(value),
             };
-            self.inputs[inp.index()] = enforce_range(sample, inp, p);
+            self.inputs[inp.index()] = self.through_edge(sample, inp, now, p);
         }
         self.driven.iter_mut().for_each(|d| *d = false);
     }
@@ -377,33 +437,72 @@ impl Image {
     }
 }
 
-/// Rand-Durchsetzung (3.5, 12.6): ein Wert ausserhalb der deklarierten Range
-/// des Channels wird `Bad` mit Grund `OutOfRange`, nicht geklemmt und nicht
-/// zu einem Fault. Ohne sie waeren die deklarierten Ranges keine gueltigen
-/// Annahmen der Intervallanalyse (3.4).
-fn enforce_range(sample: Sample, c: ChannelId, p: &Program) -> Sample {
-    let Some(value) = &sample.value else { return sample };
-    if sample.quality == Quality::Bad {
-        return sample;
+/// Uebertraegt das Urteil des Randes auf die Abtastung (3.5).
+///
+/// Bei `Suspect` wird der letzte gute Wert gehalten und `.valid` bleibt
+/// wahr; bei `Bad` faellt der Wert weg, und das Programm entscheidet ueber
+/// `.or()`, was das heisst. `held` ist der Wert, den der Kanal zuletzt gut
+/// geliefert hat — der Rand kennt ihn nicht, weil er den Typ nicht kennt.
+fn apply(sample: Sample, v: takt_hal::quality::Verdict, held: Option<&Value>) -> Sample {
+    match v.quality {
+        takt_hal::Quality::Good => sample,
+        takt_hal::Quality::Suspect => {
+            Sample { value: held.cloned(), quality: Quality::Suspect, age: sample.age, reason: v.reason.map(reason_of) }
+        }
+        _ => Sample { value: None, quality: Quality::Bad, age: sample.age, reason: v.reason.map(reason_of) },
     }
-    let ty = &p.types.list[p.channels[c.index()].ty.index()];
-    // 8.9: bei einem oversampelten Kanal traegt das Element die Range; ein
-    // einziges Sample ausserhalb macht das ganze Tick-Array `Bad`
-    // (konservativ).
-    let (range, samples) = match ty {
-        takt_mir::types::Type::Samples { elem, .. } => (range_of(&p.types.list[elem.index()]), true),
-        other => (range_of(other), false),
-    };
-    let Some(range) = range else { return sample };
-    let ok = match (samples, value) {
-        (true, Value::Samples(items)) => items.iter().all(|x| crate::eval::in_range(x, &range)),
-        (true, _) => true,
-        (false, v) => crate::eval::in_range(v, &range),
-    };
-    if ok {
-        return sample;
+}
+
+/// Wie schlecht ist eine Qualitaet? Bei oversampelten Kanaelen zaehlt die
+/// schlechteste (8.9).
+fn severity(q: takt_hal::Quality) -> u8 {
+    match q {
+        takt_hal::Quality::Good => 0,
+        takt_hal::Quality::Suspect => 1,
+        takt_hal::Quality::Stale => 2,
+        takt_hal::Quality::Bad => 3,
     }
-    Sample { value: None, quality: Quality::Bad, age: sample.age, reason: Some(Reason::OutOfRange) }
+}
+
+/// Der Grund des Randes als Grund der Abtastung.
+fn reason_of(r: takt_hal::Reason) -> Reason {
+    match r {
+        takt_hal::Reason::Stale => Reason::Stale,
+        takt_hal::Reason::OutOfRange => Reason::OutOfRange,
+        takt_hal::Reason::Implausible => Reason::Implausible,
+        takt_hal::Reason::Driver => Reason::Driver,
+    }
+}
+
+/// Die ausgewerteten Grenzen eines Channels fuer den Rand (3.4, 3.5).
+///
+/// `max_slew` steht als `const_expr` in der MIR; nur ein Literal ist
+/// sinnvoll, wie bei `max_rate` (8.6). Die Einheit ist „je Sekunde" —
+/// `50 bar/s` steht als 50 da, weil der Wert in der Basiseinheit des
+/// Channels gerechnet wird (3.2).
+fn limits_of(c: &takt_mir::program::Channel, p: &Program) -> takt_hal::quality::Limits {
+    let ty = &p.types.list[c.ty.index()];
+    let ty = match ty {
+        Type::Samples { elem, .. } => &p.types.list[elem.index()],
+        other => other,
+    };
+    let range = range_of(ty).and_then(|r| Some((const_f64(&r.lo)?, const_f64(&r.hi)?)));
+    let max_slew = match c.attrs.max_slew.as_ref().map(|e| &e.kind) {
+        Some(takt_mir::expr::ExprKind::Float(f)) => Some(*f),
+        Some(takt_mir::expr::ExprKind::Int(n)) => Some(*n as f64),
+        _ => None,
+    };
+    takt_hal::quality::Limits { range, max_slew }
+}
+
+/// Eine Grenze als `f64`.
+fn const_f64(c: &takt_mir::types::Const) -> Option<f64> {
+    match c {
+        takt_mir::types::Const::Int(i) => Some(*i as f64),
+        takt_mir::types::Const::Float(f) => Some(*f),
+        takt_mir::types::Const::Duration(d) => Some(*d as f64),
+        takt_mir::types::Const::Bool(_) => None,
+    }
 }
 
 /// Deutet die gesendeten Bytes als Element des Zieltyps (8.3). Ein

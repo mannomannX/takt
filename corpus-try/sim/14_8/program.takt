@@ -1,0 +1,20 @@
+system:
+    language = 1
+
+# `max_slew` und `debounce` sind seit je deklarierbar; erzwungen werden sie
+# vom defensiven Treiberrand (12.6, Zeilen 3 und 4).
+input  chamber_p : float[bar] in 0..250 bar @ hw("daq1/p0") with max_age = 200 ms, max_slew = 50 bar/s, debounce = 2
+input  raw_p     : float[bar] in 0..250 bar @ hw("daq1/p1") with max_age = 200 ms, max_slew = 50 bar/s
+
+output p_quality : int in 0..3 @ hw("ui/quality") with safe = 3
+output raw_valid : bool        @ hw("ui/raw_valid") with safe = false
+
+machine edge_watch every 100 ms:
+    initial WATCH
+    state WATCH:
+        loop:
+            # 0 = gut, 1 = entprellt gehalten, 2 = ungueltig
+            p_quality = 0 if chamber_p.valid and not chamber_p.suspect else (1 if chamber_p.suspect else 2)
+            raw_valid = raw_p.valid
+            alert chamber_p.suspect, "chamber_p entprellt: {chamber_p.reason}"
+            alert not raw_p.valid, "raw_p ungueltig: {raw_p.reason}"
