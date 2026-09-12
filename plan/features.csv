@@ -95,6 +95,7 @@ SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvaria
 SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3 (Gate),teilweise
 SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),fertig
 SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4 (Codegen),fertig
+RT-8.6-Strompuffer,Umsetzung,12.1,"Strompuffer der Runtime (`takt-rt-core::stream`): Ring ueber geliehenen Feldern statt Const-Generics, feste Slots und Byte-Ring in einer Struktur (FB-115)",,M4/M5 (Runtime),teilweise
 SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedded),offen
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M5 (Embedded),offen
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig

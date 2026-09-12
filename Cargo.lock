@@ -91,6 +91,7 @@ dependencies = [
  "takt-match",
  "takt-mir",
  "takt-native",
+ "takt-rt-core",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ takt-hal = { path = "../takt-hal" }
 takt-mir = { path = "../takt-mir" }
 takt-native = { path = "../takt-native" }
 takt-match = { path = "../takt-match" }
+takt-rt-core = { path = "../takt-rt-core" }
 
 [lints]
 workspace = true
