@@ -1,0 +1,31 @@
+[package]
+name = "takt-rt-linux"
+version = "0.1.0"
+description = "Takt: Profilaufsatz `linux_rt` (Referenz 12.2, 12.8)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+takt-rt-core = { path = "../takt-rt-core" }
+
+# `rustix` liefert die drei Syscalls aus 12.2 als *sichere* Funktionen:
+# `clock_nanosleep_absolute`, `mlockall`, `sched_setaffinity`. Damit bleibt
+# `unsafe_code = "forbid"` im ganzen Workspace — und das ist nach 13.4 kein
+# Schoenheitsargument: „kein unsafe, nirgends" ist eine Zusage in einem
+# Satz, „kein unsafe ausser hier, begruendet wie folgt" ein Argument je
+# Audit.
+#
+# Die Abhaengigkeit erweitert die TCB nicht: 9.5 nennt Runtime und OS
+# bereits darin. `rustix` macht den Aufruf sicher, nicht die Zusage
+# groesser.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["thread", "mm", "process", "time"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# Nur fuer den Test, der zeigt, dass der Befund in den Lauf-Header geht
+# (11.3): Die Runtime kennt den Kopf nicht, sie liefert nur Zeilen.
+takt-interp = { path = "../takt-interp" }

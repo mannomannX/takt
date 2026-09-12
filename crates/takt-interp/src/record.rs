@@ -52,6 +52,19 @@ pub struct Header {
     pub params: Vec<(String, String)>,
     /// Laufzeitprofil (12.8).
     pub target: Option<String>,
+    /// Was die Runtime ueber ihre Umgebung meldet (12.2, 11.3).
+    ///
+    /// Der Interpreter weiss davon nichts — er laeuft ueberall, das
+    /// Laufzeitprofil nur auf seiner Plattform. Die Zeilen kommen darum
+    /// von der Runtime (`takt-rt-linux::Guarantee::header_lines`), und
+    /// der Kopf traegt sie unveraendert.
+    ///
+    /// Warum sie hierher gehoeren: Eine Zeitgarantie, die still
+    /// ausfaellt, ist schlimmer als eine, die fehlt — eine Messung unter
+    /// ihr sieht gueltig aus. Der Unterschied zwischen „lief unter
+    /// `linux_rt`" und „lief unter `linux_rt` *mit* der Zusage" gehoert
+    /// in die Aufzeichnung, nicht in die Erinnerung des Bedieners.
+    pub runtime: Vec<String>,
     /// Native Funktionen, die das Programm benutzt (4.5).
     ///
     /// 4.5 verlangt ihre Nennung im Kopf, „damit die erweiterte TCB
@@ -76,6 +89,7 @@ impl Header {
                 .map(|param| (param.name.clone(), crate::run::value_untyped(&default_value(param, p))))
                 .collect(),
             target: p.config.target.clone(),
+            runtime: Vec::new(),
             natives: p.natives.iter().map(|n| n.name.clone()).collect(),
         }
     }
@@ -101,6 +115,9 @@ impl Header {
         for (name, value) in &self.params {
             let _ = writeln!(out, "#! param {name} {value}");
         }
+        for line in &self.runtime {
+            let _ = writeln!(out, "#! runtime {line}");
+        }
         for n in &self.natives {
             let _ = writeln!(out, "#! native {n}");
         }
@@ -115,6 +132,7 @@ impl Header {
             logic: String::new(),
             tick: 0,
             ticks: 0,
+            runtime: Vec::new(),
             profile: None,
             params: Vec::new(),
             target: None,
@@ -138,6 +156,14 @@ impl Header {
                 "profil" => h.profile = Some(value.to_string()),
                 "target" => h.target = Some(value.to_string()),
                 "param" => h.params.push((value.to_string(), w.collect::<Vec<_>>().join(" "))),
+                "runtime" => {
+                    let rest: Vec<&str> = w.collect();
+                    h.runtime.push(if rest.is_empty() {
+                        value.to_string()
+                    } else {
+                        format!("{value} {}", rest.join(" "))
+                    });
+                }
                 "native" => h.natives.push(value.to_string()),
                 _ => {}
             }
