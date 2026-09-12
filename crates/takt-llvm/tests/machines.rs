@@ -701,6 +701,26 @@ fn every_called_function_is_defined_or_declared() {
     }
 }
 
+/// Ein monomorphisierter Name traegt seine Einheiten (`clamp[bar]`,
+/// 3.12) — lesbar in Diagnosen, in einem LLVM-Bezeichner aber nicht
+/// erlaubt. Die Bereinigung ersetzt zeichenweise, damit `clamp[bar]` und
+/// `clamp[psi]` zwei Symbole bleiben.
+#[test]
+fn a_monomorphised_name_becomes_a_valid_symbol() {
+    use takt_llvm::fns::sanitized;
+    assert_eq!(sanitized("clamp[bar]"), "clamp.bar.");
+    assert_ne!(sanitized("clamp[bar]"), sanitized("clamp[psi]"), "zwei Instanzen, zwei Symbole");
+    assert_eq!(sanitized("zaehler.reset"), "zaehler.reset", "Blockmethoden bleiben unveraendert");
+    assert_eq!(sanitized("schlicht"), "schlicht", "ein gewoehnlicher Name bleibt, wie er ist");
+    // Jedes Zeichen des Ergebnisses ist in einem LLVM-Bezeichner erlaubt.
+    for name in ["clamp[bar]", "lim[1/s, m]", "b.step"] {
+        assert!(
+            sanitized(name).chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.')),
+            "`{name}` ergibt keinen gueltigen Bezeichner"
+        );
+    }
+}
+
 // --- Blockinstanzen (5.7) -----------------------------------------------
 
 /// 5.7: `step` hoechstens einmal je Aktivierung. Das Flag im Zustand ist

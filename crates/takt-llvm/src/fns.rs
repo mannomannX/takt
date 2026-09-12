@@ -27,8 +27,26 @@ use crate::ty::{self, LlvmType};
 ///
 /// Das Praefix trennt sie von den Schrittfunktionen der Maschinen und von
 /// allem, was der Linker sonst sieht.
+///
+/// Eine monomorphisierte Funktion traegt ihre Einheiten im Namen
+/// (`clamp[bar]`, 3.12) — lesbar in Diagnosen, aber in einem LLVM-Symbol
+/// nicht erlaubt. Solche Zeichen werden darum ersetzt, nicht entfernt:
+/// `clamp[bar]` und `clamp[psi]` muessen zwei Symbole bleiben.
 pub fn symbol(f: &FnDef) -> String {
-    format!("takt_fn_{}", f.name)
+    format!("takt_fn_{}", sanitized(&f.name))
+}
+
+/// Ein Name, wie ihn LLVM als Bezeichner annimmt.
+///
+/// Eine monomorphisierte Funktion traegt ihre Einheiten im Namen
+/// (`clamp[bar]`, 3.12) und eine Blockmethode ihren Block (`zaehler.reset`)
+/// — beides lesbar in Diagnosen, aber nicht in einem Symbol oder Label.
+/// Ersetzt wird zeichenweise, nicht entfernt: `clamp[bar]` und
+/// `clamp[psi]` muessen zwei Namen bleiben. Der Ersatz ist `.`, weil
+/// LLVM ihn zulaesst und Takt ihn in Bezeichnern nicht kennt (2.2) —
+/// ein `_` koennte mit einem gewoehnlichen Namen zusammenfallen.
+pub fn sanitized(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '.' }).collect()
 }
 
 /// Die Locals einer Funktion: `alloca` im Eintrittsblock.
@@ -72,7 +90,7 @@ pub fn prologue(f: &FnDef, p: &Program, args: &[Reg], m: &mut Module) -> Result<
         }
         slots.push((ptr, ty));
     }
-    Ok(Locals { slots, exit: format!("fn_fault_{}", f.name.replace('.', "_")) })
+    Ok(Locals { slots, exit: format!("fn_fault_{}", sanitized(&f.name)) })
 }
 
 /// Die Signatur einer Funktion: Parametertypen und Rueckgabetyp.
@@ -128,7 +146,7 @@ fn body(f: &FnDef, p: &Program, args: &[Reg], ret: &LlvmType, m: &mut Module) ->
     // 4.1: Eine reine Funktion hat keinen Fault-Pfad — sie setzt das Flag
     // und kehrt zurueck. Der Aufrufer prueft es und nimmt seinen eigenen
     // Pfad (`abi::Abi::FAULT_FLAG`).
-    m.label(&format!("fn_fault_{}", f.name.replace('.', "_")));
+    m.label(&format!("fn_fault_{}", sanitized(&f.name)));
     m.void_inst(&format!("store i8 1, ptr @{}", crate::abi::Abi::FAULT_FLAG));
     match ret {
         LlvmType::Void => m.void_inst("ret void"),
@@ -266,7 +284,7 @@ fn block_body(
         params.push((ptr, ty));
     }
     let vars = BlockVars {
-        exit: format!("fn_fault_{}", f.name.replace('.', "_")),
+        exit: format!("fn_fault_{}", sanitized(&f.name)),
         instance_fields: inst.fields[..inst.fields.len() - 1].to_vec(),
         instance,
         instance_ty: inst.llvm(),
@@ -283,7 +301,7 @@ fn block_body(
     // 4.1: Eine reine Funktion hat keinen Fault-Pfad — sie setzt das Flag
     // und kehrt zurueck. Der Aufrufer prueft es und nimmt seinen eigenen
     // Pfad (`abi::Abi::FAULT_FLAG`).
-    m.label(&format!("fn_fault_{}", f.name.replace('.', "_")));
+    m.label(&format!("fn_fault_{}", sanitized(&f.name)));
     m.void_inst(&format!("store i8 1, ptr @{}", crate::abi::Abi::FAULT_FLAG));
     match ret {
         LlvmType::Void => m.void_inst("ret void"),

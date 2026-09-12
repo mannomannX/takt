@@ -16,9 +16,9 @@ CH-13,Kapitel,13,"Verifikation, Test, Zertifizierung",,Doku/Rationale,rationale
 CH-14,Kapitel,14,Beispiele,,Doku/Rationale,rationale
 CH-15,Kapitel,15,Stufenplan und Erweiterungs-Roadmap,,Doku/Rationale,rationale
 CH-16,Kapitel,16,Entscheidungslog,,Doku/Rationale,rationale
-SEM-0.1,Semantik/Abschnitt,0.1,Was die Sprache verspricht (und wie das Versprechen eingelöst wird),,Doku/Rationale,offen
-SEM-0.2,Semantik/Abschnitt,0.2,Die vierundzwanzig tragenden Entscheidungen,,Doku/Rationale,offen
-SEM-0.3,Semantik/Abschnitt,0.3,Nicht-Ziele (bewusst),,Doku/Rationale,offen
+SEM-0.1,Semantik/Abschnitt,0.1,Was die Sprache verspricht (und wie das Versprechen eingelöst wird),,Doku/Rationale,rationale
+SEM-0.2,Semantik/Abschnitt,0.2,Die vierundzwanzig tragenden Entscheidungen,,Doku/Rationale,rationale
+SEM-0.3,Semantik/Abschnitt,0.3,Nicht-Ziele (bewusst),,Doku/Rationale,rationale
 SEM-1.1,Semantik/Abschnitt,1.1,Das Bild in einem Absatz,,M0 (Parser/MIR-Entwurf),fertig
 SEM-1.2,Semantik/Abschnitt,1.2,Die drei Ebenen,,M0 (Parser/MIR-Entwurf),fertig
 SEM-1.3,Semantik/Abschnitt,1.3,"Tick, Perioden, Hyperperiode",,M0 (Parser/MIR-Entwurf),fertig
@@ -29,45 +29,45 @@ SEM-2.2,Semantik/Abschnitt,2.2,Schlüsselwörter,,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.3,Semantik/Abschnitt,2.3,Grammatik (EBNF),,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.4,Semantik/Abschnitt,2.4,Bedeutung der Kernkonstrukte (informell),,M0 (Parser/MIR-Entwurf),fertig
 SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit",,M0 (Parser/MIR-Entwurf),fertig
-SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),teilweise
-SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),teilweise
-SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),teilweise
+SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),fertig
+SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),fertig
+SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),fertig
 SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M1 (Kernsemantik),teilweise
 SEM-3.5,Semantik/Abschnitt,3.5,Qualität von Input-Channels,,M1 (Kernsemantik),fertig
-SEM-3.6,Semantik/Abschnitt,3.6,Typinferenz,,M1 (Kernsemantik),teilweise
-SEM-3.7,Semantik/Abschnitt,3.7,Records und Summentypen,,M1 (Kernsemantik),teilweise
-SEM-3.8,Semantik/Abschnitt,3.8,Optionaltyp `T?`,,M1 (Kernsemantik),teilweise
+SEM-3.6,Semantik/Abschnitt,3.6,Typinferenz,,M1 (Kernsemantik),fertig
+SEM-3.7,Semantik/Abschnitt,3.7,Records und Summentypen,,M1 (Kernsemantik),fertig
+SEM-3.8,Semantik/Abschnitt,3.8,Optionaltyp `T?`,,M1 (Kernsemantik),fertig
 SEM-3.9,Semantik/Abschnitt,3.9,"Bytes, Vektoren, Strings, Tabellen",,M1 (Kernsemantik),fertig
 SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernsemantik),fertig
 SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M6 (v1.1),offen
 SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),teilweise
-SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),teilweise
+SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),fertig
 SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M1 (Kernsemantik),teilweise
-SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),teilweise
-SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),teilweise
+SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),fertig
+SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),fertig
 SEM-4.5,Semantik/Abschnitt,4.5,Native Funktionen mit Kostenvertrag,,M1 (Kernsemantik),fertig
-SEM-5.1,Semantik/Abschnitt,5.1,Struktur,,M1 (Kernsemantik),teilweise
+SEM-5.1,Semantik/Abschnitt,5.1,Struktur,,M1 (Kernsemantik),fertig
 SEM-5.2,Semantik/Abschnitt,5.2,"Ausführung eines Ticks (informell, exakt in 9.3)",,M1 (Kernsemantik),fertig
 SEM-5.3,Semantik/Abschnitt,5.3,Fault-Wald,,M1 (Kernsemantik),fertig
 SEM-5.4,Semantik/Abschnitt,5.4,`abort`,,M1 (Kernsemantik),fertig
-SEM-5.5,Semantik/Abschnitt,5.5,Eingeschränkte Aktionsblöcke,,M1 (Kernsemantik),teilweise
+SEM-5.5,Semantik/Abschnitt,5.5,Eingeschränkte Aktionsblöcke,,M1 (Kernsemantik),fertig
 SEM-5.6,Semantik/Abschnitt,5.6,"Interlocks, Permissives, Alerts",,M1 (Kernsemantik),fertig
 SEM-5.7,Semantik/Abschnitt,5.7,Blöcke innerhalb von Maschinen,,M1 (Kernsemantik),fertig
-SEM-5.8,Semantik/Abschnitt,5.8,Ergonomie in Maschinen,,M1 (Kernsemantik),teilweise
+SEM-5.8,Semantik/Abschnitt,5.8,Ergonomie in Maschinen,,M1 (Kernsemantik),fertig
 SEM-5.9,Semantik/Abschnitt,5.9,Persistente Variablen (v1.1),v1.1,M6,offen
 SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M6,offen
 SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,offen
 SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,offen
-SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),teilweise
+SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),fertig
 SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),fertig
-SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),teilweise
+SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),fertig
 SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),fertig
 SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig
-SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),teilweise
+SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),fertig
 SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M6 (v1.1),offen
 SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),fertig
 SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M2 (Ströme),teilweise
-SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M2 (Ströme),offen
+SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M6 (mit 8.10),offen
 SEM-8.3,Semantik/Abschnitt,8.3,Simulation und HIL,,M2 (Ströme),fertig
 SEM-8.4,Semantik/Abschnitt,8.4,Parameter und Profile,,M2 (Ströme),fertig
 SEM-8.5,Semantik/Abschnitt,8.5,Commands und Operator-Interaktion,,M2 (Ströme),fertig
@@ -76,7 +76,7 @@ SEM-8.7,Semantik/Abschnitt,8.7,"Muster, Captures, Handler",,M2 (Ströme),fertig
 SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),fertig
 SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),teilweise
 SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M6,offen
-SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M2 (Ströme),offen
+SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M6 (v1.1),offen
 SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),fertig
 SEM-9.1,Semantik/Abschnitt,9.1,Objekte,,M1/M2 (Interpreter),fertig
 SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),fertig
@@ -94,31 +94,31 @@ SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),teilweise
 SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M6 (stdlib),offen
 SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3 (Gate),teilweise
 SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),fertig
-SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4/M5 (Runtime),offen
-SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M4/M5 (Runtime),offen
-SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M4/M5 (Runtime),offen
-SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4/M5 (Runtime),offen
-SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M4/M5 (Runtime),teilweise
+SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4 (Codegen),fertig
+SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedded),offen
+SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M5 (Embedded),offen
+SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig
+SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M5 (Embedded),teilweise
 SEM-12.7,Semantik/Abschnitt,12.7,"Plattformschnittstelle (System-Channels, v1.1)",v1.1,M6,offen
-SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M6,offen
+SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M6 (v1.1),teilweise
 SEM-12.9,Semantik/Abschnitt,12.9,"Verteilte Ausführung (v2): Regeln, die schon heute gelten",v2,M9 (v2),offen
-SEM-13.1,Semantik/Abschnitt,13.1,Referenzinterpreter und differentielles Testen,,M4–M7,offen
-SEM-13.2,Semantik/Abschnitt,13.2,Coverage aus der Simulation,,M4–M7,offen
+SEM-13.1,Semantik/Abschnitt,13.1,Referenzinterpreter und differentielles Testen,,M4 (Codegen),fertig
+SEM-13.2,Semantik/Abschnitt,13.2,Coverage aus der Simulation,,M6 (v1.1),offen
 SEM-13.3,Semantik/Abschnitt,13.3,Eigenschaftsprüfung (v1.1),v1.1,M6,offen
-SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M4–M7,offen
-SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4–M7,offen
+SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M5 (Embedded),offen
+SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4 (Codegen),fertig
 SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,offen
 SEM-13.7,Semantik/Abschnitt,13.7,Kampagnen (v1.1),v1.1,M6,offen
-SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M4–M7,offen
-SEM-13.9,Semantik/Abschnitt,13.9,Migration aus C: `takt import-c` und Orakel-Modus (v1.1),v1.1,M6,offen
-SEM-14.1,Semantik/Abschnitt,14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,je Meilenstein,offen
-SEM-14.2,Semantik/Abschnitt,14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,je Meilenstein,offen
-SEM-14.3,Semantik/Abschnitt,14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,je Meilenstein,offen
-SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,je Meilenstein,offen
-SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,je Meilenstein,offen
-SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,je Meilenstein,offen
-SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,je Meilenstein,offen
-SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,je Meilenstein,offen
+SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M5 (Embedded),offen
+SEM-13.9,Semantik/Abschnitt,13.9,Migration aus C: `takt import-c` und Orakel-Modus (v1.1),v1.1,M7 (Werkzeuge),offen
+SEM-14.1,Semantik/Abschnitt,14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),teilweise
+SEM-14.2,Semantik/Abschnitt,14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,M4 (Codegen),teilweise
+SEM-14.3,Semantik/Abschnitt,14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,M4 (Codegen),teilweise
+SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),teilweise
+SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),teilweise
+SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),teilweise
+SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),offen
+SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise
 G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),fertig
 G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),fertig
 G-system_decl,Grammatik,2.3,system_decl,,M0 (Parser/MIR-Entwurf),fertig
@@ -716,30 +716,30 @@ PAR-11.2-Große_Werte,Absatz/Regel,11.2,Große Werte,,M1-M4 (Lowering),fertig
 PAR-11.2-Statischer_Scratch,Absatz/Regel,11.2,Statischer Scratch,,M1-M4 (Lowering),fertig
 PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Absatz/Regel,11.2,Overlay exklusiver Zustandsspeicher,,M1-M4 (Lowering),fertig
 PAR-11.2-DFA_Tabellen,Absatz/Regel,11.2,DFA-Tabellen,,M5 (Embedded),offen
-PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M4 (Codegen),offen
+PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M4 (Codegen),fertig
 PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M4 (Codegen),teilweise
 PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M4 (Codegen),teilweise
-PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M4/M5 (Runtime),offen
-PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M4/M5 (Runtime),offen
-PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M4/M5 (Runtime),offen
-PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M4/M5 (Runtime),offen
-PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M4/M5 (Runtime),offen
-PAR-12.7-Start_Channels,Absatz/Regel,12.7,Start-Channels,,M4/M5 (Runtime),offen
-PAR-12.7-Irreversible_Outputs,Absatz/Regel,12.7,Irreversible Outputs,,M4/M5 (Runtime),offen
-PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M4/M5 (Runtime),offen
-PAR-13.3-Sprache,Absatz/Regel,13.3,Sprache,,M4–M7,offen
-PAR-13.3-Semantik,Absatz/Regel,13.3,Semantik,,M4–M7,offen
-PAR-13.3-Verwendung,Absatz/Regel,13.3,Verwendung,,M4–M7,offen
+PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M5 (Embedded),offen
+PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M5 (Embedded),offen
+PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M6 (v1.1),offen
+PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M6 (v1.1),offen
+PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M6 (v1.1),offen
+PAR-12.7-Start_Channels,Absatz/Regel,12.7,Start-Channels,,M6 (v1.1),offen
+PAR-12.7-Irreversible_Outputs,Absatz/Regel,12.7,Irreversible Outputs,,M6 (v1.1),offen
+PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M5 (Embedded),offen
+PAR-13.3-Sprache,Absatz/Regel,13.3,Sprache,,M6 (v1.1),offen
+PAR-13.3-Semantik,Absatz/Regel,13.3,Semantik,,M6 (v1.1),offen
+PAR-13.3-Verwendung,Absatz/Regel,13.3,Verwendung,,M6 (v1.1),offen
 PAR-13.3-Umgebungsannahmen_assumption,Absatz/Regel,13.3,Umgebungsannahmen (`assumption`),,M6 (v1.1),offen
 PAR-13.3-Kanal_Attribute_gelten_automatisch_als_Annahmen,Absatz/Regel,13.3,Kanal-Attribute gelten automatisch als Annahmen,,M6 (v1.1),offen
 PAR-13.3-Kompositionalität,Absatz/Regel,13.3,Kompositionalität,,M6 (v1.1),offen
-PAR-13.5-Lauf_Verdikt,Absatz/Regel,13.5,Lauf-Verdikt,,M4–M7,offen
-PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M4–M7,offen
-PAR-13.9-Klassifikation,Absatz/Regel,13.9,Klassifikation,,M4–M7,offen
-PAR-13.9-Abbildungsregeln,Absatz/Regel,13.9,Abbildungsregeln,,M4–M7,offen
-PAR-13.9-Grundregel_des_Importers,Absatz/Regel,13.9,Grundregel des Importers,,M4–M7,offen
-PAR-13.9-Orakel_Modus,Absatz/Regel,13.9,Orakel-Modus,,M4–M7,offen
-PAR-13.9-Vorgehen,Absatz/Regel,13.9,Vorgehen,,M4–M7,offen
+PAR-13.5-Lauf_Verdikt,Absatz/Regel,13.5,Lauf-Verdikt,,M4 (Codegen),fertig
+PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M5 (Embedded),offen
+PAR-13.9-Klassifikation,Absatz/Regel,13.9,Klassifikation,,M7 (Werkzeuge),offen
+PAR-13.9-Abbildungsregeln,Absatz/Regel,13.9,Abbildungsregeln,,M7 (Werkzeuge),offen
+PAR-13.9-Grundregel_des_Importers,Absatz/Regel,13.9,Grundregel des Importers,,M7 (Werkzeuge),offen
+PAR-13.9-Orakel_Modus,Absatz/Regel,13.9,Orakel-Modus,,M7 (Werkzeuge),offen
+PAR-13.9-Vorgehen,Absatz/Regel,13.9,Vorgehen,,M7 (Werkzeuge),offen
 FN-9-advance_cursors,Semantikfunktion,9,advance_cursors,,M1/M2 (Interpreter),fertig
 FN-9-apply_scheduled,Semantikfunktion,9,apply_scheduled,,M1/M2 (Interpreter),fertig
 FN-9-cancel_all_scheduled,Semantikfunktion,9,cancel_all_scheduled,,M1/M2 (Interpreter),fertig
@@ -798,17 +798,17 @@ DIST-rule6,Regel,12.9,Verbindungsverlust.,v2,M9 (v2),offen
 DIST-rule7,Regel,12.9,Jobs,v2,M9 (v2),offen
 DIST-rule8,Regel,12.9,Aufzeichnung,v2,M9 (v2),offen
 DIST-rule9,Regel,12.9,Simulation.,v2,M9 (v2),offen
-RAND-1,Regel/Prüfung,12.6,"Zeitstempel innerhalb `(t_(k-1), t_k]`",,M4/M5 (Runtime),teilweise
-RAND-2,Regel/Prüfung,12.6,"Zeitstempel und `seq` streng steigend, `seq` lückenlos, `len(D) <= MAXPT` je Stream, Qualitätsflags konsistent (`Bad` ohne Wert, Alter monoton)",,M4/M5 (Runtime),teilweise
+RAND-1,Regel/Prüfung,12.6,"Zeitstempel innerhalb `(t_(k-1), t_k]`",,M5 (Embedded),teilweise
+RAND-2,Regel/Prüfung,12.6,"Zeitstempel und `seq` streng steigend, `seq` lückenlos, `len(D) <= MAXPT` je Stream, Qualitätsflags konsistent (`Bad` ohne Wert, Alter monoton)",,M5 (Embedded),teilweise
 RAND-3,Regel/Prüfung,12.6,Werte innerhalb deklarierter Ranges (3.5),,M4/M5 (Runtime),fertig
 RAND-4,Regel/Prüfung,12.6,`max_slew` (3.5),,M4/M5 (Runtime),fertig
-RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M4/M5 (Runtime),teilweise
-RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M4/M5 (Runtime),teilweise
-RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M4/M5 (Runtime),teilweise
-PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4/M5 (Runtime),teilweise
-PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M4/M5 (Runtime),offen
-PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M4/M5 (Runtime),offen
-PROFIL-boot,Profil/Eintrag,12.8,boot,,M4/M5 (Runtime),offen
+RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M5 (Embedded),teilweise
+RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M5 (Embedded),teilweise
+RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M5 (Embedded),teilweise
+PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4 (Codegen),teilweise
+PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M5 (Embedded),offen
+PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M6 (v1.1),offen
+PROFIL-boot,Profil/Eintrag,12.8,boot,,M6 (v1.1),offen
 FAULT-CheckFailed,Fault-Art,5.3,CheckFailed,,M1 (Kernsemantik),fertig
 FAULT-Expect,Fault-Art,5.3,Expect,,M1 (Kernsemantik),fertig
 FAULT-Timeout,Fault-Art,5.3,Timeout,,M1 (Kernsemantik),fertig
@@ -871,14 +871,14 @@ CLI-import-c,Werkzeug,11.1,takt import-c,,M7 (Werkzeuge),offen
 CLI-mir,Werkzeug,11.1,takt mir,,M0,fertig
 CLI-parse,Werkzeug,11.1,takt parse,,M0,fertig
 CLI-tokens,Werkzeug,11.1,takt tokens,,M0,fertig
-EX-14.1,Beispiel (Golden-Test),14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,je Meilenstein,teilweise
-EX-14.2,Beispiel (Golden-Test),14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,je Meilenstein,teilweise
-EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,je Meilenstein,teilweise
-EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,je Meilenstein,teilweise
-EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,je Meilenstein,teilweise
-EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,je Meilenstein,offen
-EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,je Meilenstein,offen
-EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,je Meilenstein,offen
+EX-14.1,Beispiel (Golden-Test),14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),teilweise
+EX-14.2,Beispiel (Golden-Test),14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,M4 (Codegen),teilweise
+EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,M4 (Codegen),teilweise
+EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),teilweise
+EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),teilweise
+EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),teilweise
+EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),offen
+EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise
 PRINC-1,Leitentscheidung,0.2,Synchron-zyklische Multirate-Ausführung.,,Doku/Rationale,rationale
 PRINC-2,Leitentscheidung,0.2,Drei Konstruktebenen.,,Doku/Rationale,rationale
 PRINC-3,Leitentscheidung,0.2,"Hierarchische Zustände, Parallelität nur zwischen Maschinen.",,Doku/Rationale,rationale

@@ -41,7 +41,12 @@ pub fn ir_for(p: &Program, triple: &str) -> String {
         let Some(st) = takt_llvm::machine::state_struct(machine, p) else { continue };
         takt_llvm::machine::declare_state(machine, &st, &mut m);
         let _ = takt_llvm::step::init_function(machine, &st, p, &mut m);
-        let _ = takt_llvm::step::step_function(machine, &st, p, &mut m);
+        // Der Abbruchgrund gehoert in die IR, nicht in den Papierkorb:
+        // Ohne ihn fehlt die Schrittfunktion still, und der Linker meldet
+        // ein fehlendes Symbol statt des Konstrukts, das gefehlt hat.
+        if let Err(e) = takt_llvm::step::step_function(machine, &st, p, &mut m) {
+            eprintln!("{}_step fehlt: {}", machine.name, e.what);
+        }
     }
     m.finish()
 }
