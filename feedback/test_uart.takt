@@ -134,9 +134,6 @@ port uart_dr   : UartData   @ mmio(0x4000_100C)
 stream<RxByte> rx_raw with capacity = 64, overflow = fault
 stream<u8>     tx_raw with capacity = 256, overflow = fault
 
-# Diagnose nach oben, ohne Steuerwirkung.
-pub var dummy_anchor : bool = false    # (Platzhalter entfaellt; siehe uart_port)
-
 output rs485_de : bool @ hw("gpio/rs485_de") with safe = false
 
 command uart_reset
@@ -285,27 +282,26 @@ fn cobs_encode(src: bytes<1024>, inout dst: bytes<1030>) -> bool:
     dst.clear()
     var code_at : int in 0..1030 = 0
     var code    : int in 1..255  = 1
-    var ok      : bool = dst.push(0)                   # Platzhalter fuer den Code
+    var ok      : bool = true
+    var put     : bool = dst.push(0)                   # Platzhalter fuer den Code
+    ok = ok and put
     for i in range(MAX_PAYLOAD):
         if i >= src.len:
             break
         var b = src[i]
         if b != 0:
-            ok = dst.push(b) and ok
+            put = dst.push(b)
+            ok = ok and put
             code += 1
-            if code == 255:
-                dst = dst.with_byte(code_at, code as u8)
-                code_at = dst.len
-                ok = dst.push(0) and ok
-                code = 1
-        else:
-            dst = dst.with_byte(code_at, code as u8)
+        if b == 0 or code == 255:
+            dst[code_at] = code as u8
             code_at = dst.len
-            ok = dst.push(0) and ok
+            put = dst.push(0)
+            ok = ok and put
             code = 1
-    dst = dst.with_byte(code_at, code as u8)
-    ok = dst.push(0) and ok                            # Rahmentrenner
-    return ok
+    dst[code_at] = code as u8
+    put = dst.push(0)                                  # Rahmentrenner
+    return ok and put
 
 fn cobs_decode(src: bytes<1030>, inout dst: bytes<1024>) -> bool:
     dst.clear()
@@ -320,11 +316,13 @@ fn cobs_decode(src: bytes<1030>, inout dst: bytes<1024>) -> bool:
         for k in range(254):
             if k + 1 >= code or i >= src.len:
                 break
-            if not dst.push(src[i]):
+            var put = dst.push(src[i])
+            if not put:
                 return false                           # Nutzlast zu gross
             i += 1
         if code < 255 and i < src.len:
-            if not dst.push(0):
+            var sep = dst.push(0)
+            if not sep:
                 return false
     return dst.len > 0
 
@@ -373,14 +371,14 @@ machine uart_framer follows uart_port:
         loop:
             # TX-Richtung: ein Frame je Aktivierung, damit das Budget flach bleibt.
             for f in tx_frames:
-                if cobs_encode(f, enc):
+                if cobs_encode(f.data, enc):
                     for i in range(MAX_ENCODED):
                         if i >= enc.len:
                             break
                         send tx_raw, enc[i]
                     frames_out += 1
                 else:
-                    alert true, "cobs encode overflow ({f.len} bytes)"
+                    alert true, "cobs encode overflow ({f.data.len} bytes)"
                 break
 
         on rx_raw as ev:
@@ -397,7 +395,8 @@ machine uart_framer follows uart_port:
                         decode_errors += 1
                 acc.clear()
             else:
-                if not acc.push(ev.b):
+                var put = acc.push(ev.b)
+                if not put:
                     too_long += 1
                     -> RESYNC
 
@@ -415,15 +414,15 @@ machine uart_framer follows uart_port:
 const HDR_LEN : int = 5                                # magic + kind + seq + len(2)
 
 stream<bytes<1024>> app_rx with capacity = 8, expect_len = 96, overflow = fault
-stream<bytes<1024>> app_tx with capacity = 8, expect_len = 96, overflow = fault
+stream<bytes<1024>> app_tx  with capacity = 8, expect_len = 96, overflow = fault
+stream<bytes<1024>> app_tx2 with capacity = 8, expect_len = 96, overflow = fault
 
 param RETRIES     : int in 0..8 = 3
 param ACK_TIMEOUT : Duration in 1 ms..2 s = 25 ms
 param BACKOFF     : Duration in 0 s..500 ms = 5 ms
 
-signal link_established
-
 machine uart_link every 500 us:
+    signal link_established
     fault -> LINK_DOWN
 
     pub var tx_seq     : u8 = 0
@@ -438,7 +437,7 @@ machine uart_link every 500 us:
     var attempts : int in 0..8 = 0
     var scratch  : bytes<1024> = default
 
-    initial IDLE_LINK
+    initial RECEIVING
 
     # Maschinenweite Ablaufinvariante: die Zaehler duerfen nie ueberlaufen —
     # der implizite Range-Check tut das ohnehin, `check` macht es sichtbar.
@@ -485,7 +484,7 @@ machine uart_link every 500 us:
                 up = false
             loop:
                 for m in app_tx:
-                    pending = m
+                    pending = m.data
                     attempts = 0
                     -> SENDING
 
@@ -501,14 +500,16 @@ machine uart_link every 500 us:
                 when true: -> AWAIT_ACK
 
             state AWAIT_ACK:
-                on rx_frames matches LinkHeader(kind = ACK) as a:
-                    up = true
-                    raise link_established
-                    tx_seq = tx_seq.wrap_u8() + 1
-                    -> IDLE_LINK
-                on rx_frames matches LinkHeader(kind = NAK) as n:
-                    last_err = PEER_NAK
-                    -> BACKOFF_ST
+                on rx_frames as f:
+                    var h = LinkHeader.decode(f.data)
+                    if h.valid and h.kind == ACK:
+                        up = true
+                        raise link_established
+                        tx_seq = tx_seq.wrap_u8() + 1
+                        -> IDLE_LINK
+                    if h.valid and h.kind == NAK:
+                        last_err = PEER_NAK
+                        -> BACKOFF_ST
                 after ACK_TIMEOUT:
                     last_err = TIMEOUT
                     -> BACKOFF_ST
@@ -558,21 +559,28 @@ fn make_data(seq: u8, payload: bytes<1024>) -> bytes<1024>:
 # 5. L3 — Zeilenzusammenbau als reiner Block (Textprotokolle)
 # ============================================================================
 
+# Ergebnis eines Zeichens: fertige Zeile oder nicht. `bytes<N>?` waere
+# die kuerzere Schreibweise, die Grammatik kennt sie aber nicht (3.8).
+record AssembledLine:
+    ready : bool
+    data  : bytes<1024>
+
+
 block line_assembler[const N in 16..1024]():
     var buf  : bytes<1024> = default
     var trunc: bool = false
 
-    step(ev: RxByte) -> bytes<1024>?:
+    step(ev: RxByte) -> AssembledLine:
         if ev.b == 0x0A:                                   # LF beendet die Zeile
             var out = buf
             buf.clear()
             trunc = false
-            return out
+            return AssembledLine(ready = true, data = out)
         if ev.b == 0x0D:                                   # CR ignorieren
-            return none
+            return AssembledLine(ready = false, data = default)
         if not buf.push(ev.b):
             trunc = true
-        return none
+        return AssembledLine(ready = false, data = default)
 
     truncated() -> bool:
         return trunc
@@ -586,17 +594,13 @@ block line_assembler[const N in 16..1024]():
 # 6. Eigenschaften (v1.1) — Monitor in Simulation, Beweisziel fuer `takt prove`
 # ============================================================================
 
-property no_tx_without_cts:
-    always(uart_port.tx_bytes > 0 implies once[1 ms](uart_port.cts_ok))
+property no_tx_without_cts: always(uart_port.tx_bytes > 0 implies once[1 ms](uart_port.cts_ok))
 
-property de_before_data:
-    always(rs485_de implies stable[10 us](rs485_de))
+property de_before_data: always(rs485_de implies stable[10 us](rs485_de))
 
-property link_recovers:
-    always(uart_link.up == false implies eventually[2 s](uart_link.up == true))
+property link_recovers: always(uart_link.up == false implies eventually[2 s](uart_link.up == true))
 
-property no_silent_loss:
-    always(uart_framer.frames_in >= uart_link.delivered)
+property no_silent_loss: always(uart_framer.frames_in >= uart_link.delivered)
 
 
 # ============================================================================
@@ -614,12 +618,13 @@ machine uart_model:
     initial RUN
     state RUN:
         loop:
-            st_sim = UartStatus(flags = 0)
-                        .with_bit(1, true)
-                        .with_bit(7, now < CTS_DROP_AT or CTS_DROP_AT == 0 s)
+            var f0 : u8 = 0x02
+            if now < CTS_DROP_AT or CTS_DROP_AT == 0 s:
+                f0 = f0 | 0x80
+            st_sim = UartStatus(flags = f0)
         on tx_raw as b:
             seen += 1
-            var v : u8 = b
+            var v : u8 = b.data   # FB-98: das Element ist nicht erreichbar
             if BIT_ERROR_AT != 0 and seen == BIT_ERROR_AT:
                 v = v ^ 0x40
             send rx_raw_sim, RxByte(b = v, frame = false, parity = false, brk = false)
@@ -638,7 +643,7 @@ scenario "single bit error triggers exactly one retransmit" every 100 us:
     initial RUN
     state RUN:
         sequence:
-            send app_tx, "PING 2\n"
+            send app_tx2, "PING 2\n"
             until uart_link.retransmits >= 1 timeout 500 ms else:
                 verdict fail "no retransmit after injected bit error"
             until app_rx as m timeout 500 ms

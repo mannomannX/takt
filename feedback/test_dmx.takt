@@ -222,7 +222,8 @@ output tx_enable   : bool             @ hw("gpio/rs485_de")
                      with safe = false, jitter = 2 us
 
 # --- Nutzlast des Geraets ------------------------------------------------------
-output dimmer      : [4] float in 0..1 @ hw("pwm/ch[0:4]") with safe = 0
+output dimmer      : [4] float in 0..1 @ hw("pwm/ch[0:4]")
+                     with safe = [0.0, 0.0, 0.0, 0.0]
 output identify_led: bool              @ hw("gpio/ident")  with safe = false
 output status_led  : u8 in 0..255      @ hw("pwm/status")  with safe = 0
 
@@ -312,10 +313,10 @@ fn level_to_unit(raw: u8) -> float:
 # Sensorwert nach E1.20 10.7.2: signed 16 Bit in der Einheit des Sensors.
 # Temperatur in 0,1 degC (prefix DECI), Spannung in 0,1 V.
 fn temp_to_sensor(t: float[degC]) -> i16:
-    return clamp(round(t.to(K).as(K) * 10.0 - 2731.5), -32768.0, 32767.0) as i16
+    return round(clamp(t.to(K) / 1.0 K * 10.0 - 2731.5, -32768.0, 32767.0)) as i16
 
 fn volt_to_sensor(v: float[V]) -> i16:
-    return clamp(round(v.as(V) * 10.0), -32768.0, 32767.0) as i16
+    return round(clamp(v / 1.0 V * 10.0, -32768.0, 32767.0)) as i16
 
 # Klassifikation einer PID — offenes Enum, damit neue PIDs nichts brechen (2.5).
 fn classify_pid(pid: u16) -> PidClass:
@@ -333,7 +334,7 @@ fn classify_pid(pid: u16) -> PidClass:
 # Gleitender Extremwert-Halter je Sensor (E1.20 verlangt lowest/highest seit
 # dem letzten RECORD_SENSORS bzw. Reset).
 block sensor_track():
-    var st   : SensorState = SensorState(lowest = 32767, highest = -32768, recorded = 0)
+    var st   : SensorState = SensorState(lowest = 0, highest = 0, recorded = 0)
     var seen : bool = false
     step(v: i16) -> SensorState:
         if not seen:
@@ -353,17 +354,17 @@ block sensor_track():
 # Identify-Blinken: 2 Hz, deterministisch aus dem Tick abgeleitet.
 block blinker(period: Duration in 100 ms..10 s):
     var acc : Duration = 0 s
-    var on  : bool = false
+    var lit : bool = false
     step(dt: Duration in tick..1 h) -> bool:
         acc = acc + dt
         if acc >= period / 2:
             acc = 0 s
-            on = not on
-        return on
+            lit = not lit
+        return lit
     force(v: bool) -> bool:
-        on = v
+        lit = v
         acc = 0 s
-        return on
+        return lit
 
 
 # =============================================================================
@@ -420,7 +421,9 @@ machine dmx_core every 1 ms:
                     dimmer[i] = 1.0 if b else 0.0
             else:
                 identify_led = false
-                apply_slots()
+                for i in range(4):
+                    dimmer[i] = level_to_unit(
+                        slot_value(slots, slot_count, (start_addr as int) - 1 + i))
 
         # Jedes NULL-Start-Code-Element des Fensters wird verarbeitet; das
         # letzte gewinnt, weil spaetere Frames neuere Daten tragen. Fremde
@@ -435,16 +438,16 @@ machine dmx_core every 1 ms:
                 frames_seen = min(frames_seen + 1, 1_000_000)
                 last_frame_at = f.t
 
-        state SIGNAL_LOST:
-            enter:
-                dmx_present = false
-                for i in range(4):
-                    dimmer[i] = 0
-                identify_led = false
-            on dmx_rx as f:
-                if f.start_code == SC_NULL:
-                    last_frame_at = f.t
-                    -> RECEIVING
+    state SIGNAL_LOST:
+        enter:
+            dmx_present = false
+            for i in range(4):
+                dimmer[i] = 0
+            identify_led = false
+        on dmx_rx as f:
+            if f.start_code == SC_NULL:
+                last_frame_at = f.t
+                -> RECEIVING
 
     state DMX_SAFE:
         enter:
@@ -454,15 +457,10 @@ machine dmx_core every 1 ms:
             status_led = 0
         after 1 s: -> WAIT_SIGNAL
 
-    # Abbildung der Slots ab start_addr auf die vier Kanaele. Der Zugriff ist
-    # bereichsgeprueft: Ausserhalb des empfangenen Frames bleibt der Kanal 0,
-    # wie E1.11 es fuer nicht gesendete Slots verlangt.
-    fn_apply():
-        pass
 
-
-# Hilfsfunktion als Methode waere ein Block; hier reicht ein reiner Ausdruck,
-# der im loop steht. Aus Lesbarkeitsgruenden als eigene Funktion:
+# Abbildung der Slots ab start_addr auf einen Kanal: ausserhalb des
+# empfangenen Frames bleibt er 0, wie E1.11 es fuer nicht gesendete Slots
+# verlangt.
 fn slot_value(s: bytes<512>, count: int in 0..512, idx: int in 0..515) -> u8:
     if idx < 0 or idx >= count:
         return 0
@@ -506,8 +504,8 @@ machine rdm_responder follows dmx_core every 1 ms:
     var sens_volt : SensorState = SensorState(lowest = 0, highest = 0, recorded = 0)
 
     # --- Sendepuffer ----------------------------------------------------------
-    var tx_buf    : bytes<264> = default
-    var tx_len    : int in 0..264 = 0
+    pub var tx_buf : bytes<264> = default
+    pub var tx_len : int in 0..264 = 0
 
     initial BOOT
 
@@ -564,7 +562,25 @@ machine rdm_responder follows dmx_core every 1 ms:
         on dmx_rx as f:
             if f.start_code == SC_RDM:
                 rdm_rx_count = min(rdm_rx_count + 1, 1_000_000)
-                handle_rdm(f)
+                var frame = DmxFrame(start_code = f.start_code,
+                                     length = f.length, data = f.data)
+                # Ein kaputtes Paket wird still verworfen (E1.20 6.2.10),
+                # nicht gefaultet: Der Bus gehoert nicht uns allein.
+                match parse_rdm(frame):
+                    case OK(req):
+                        last_pid = req.hdr.parameter_id
+                        var kind = response_kind(req.hdr, own_uid, muted)
+                        if kind == DISCOVERY:
+                            tx_buf = build_disc_response(own_uid)
+                            tx_len = 24
+                            rdm_tx_count = min(rdm_tx_count + 1, 1_000_000)
+                        elif kind == NORMAL:
+                            tx_buf = answer(req, own_uid, cfg_start_addr,
+                                            cfg_personality, sens_temp, sens_volt)
+                            tx_len = 26 + (tx_buf[2] as int) - 24
+                            rdm_tx_count = min(rdm_tx_count + 1, 1_000_000)
+                    case ERR(e):
+                        rdm_bad_count = min(rdm_bad_count + 1, 1_000_000)
 
         when factory_reset: -> FACTORY
 
@@ -644,8 +660,8 @@ fn parse_rdm(frame: DmxFrame) -> RdmRequest!RdmErr:
 
 # Gemeinsamer Kopf einer normalen Antwort (E1.20 6.2.9: Quelle und Ziel
 # vertauscht, CC + 1, ResponseType statt PortID).
-fn build_response(req: RdmHeader, own: Uid, rt: u8, pd: bytes<231>, pdl: int in 0..231)
-                  -> bytes<264>:
+fn build_response(req: RdmHeader, own: Uid, rt: u8,
+                  pd: bytes<231>, pdl: int in 0..231) -> bytes<264>:
     var msg_len : int = 24 + pdl
     var hdr = RdmHeader(
         start_code     = SC_RDM,
@@ -713,8 +729,8 @@ fn build_disc_response(own: Uid) -> bytes<264>:
 # --- Nutzlastbau je PID -------------------------------------------------------
 
 fn pd_device_info(start_addr: u16 in 1..512, personality: u8 in 1..4,
-                  footprint: u16, sensors: u8, model: u16, cat: u16, sw: u32)
-                  -> bytes<231>:
+                  footprint: u16, sensors: u8, model: u16,
+                  cat: u16, sw: u32) -> bytes<231>:
     var info = DeviceInfo(
         protocol_major   = 0x01,
         protocol_minor   = 0x00,
@@ -744,15 +760,16 @@ fn pd_u8(v: u8) -> bytes<231>:
     var a = pd.push(v)
     return pd
 
+# E1.20 10.4.1: Liste der unterstuetzten PIDs ohne die Pflicht-PIDs.
+const SUPPORTED_PIDS : [6] u16 = [PID_DMX_START_ADDRESS, PID_IDENTIFY_DEVICE,
+                                  PID_SENSOR_DEFINITION, PID_SENSOR_VALUE,
+                                  PID_RECORD_SENSORS, PID_RESET_DEVICE]
+
 fn pd_supported_params() -> bytes<231>:
-    # E1.20 10.4.1: Liste der unterstuetzten PIDs ohne die Pflicht-PIDs.
-    const LIST : [6] u16 = [PID_DMX_START_ADDRESS, PID_IDENTIFY_DEVICE,
-                            PID_SENSOR_DEFINITION, PID_SENSOR_VALUE,
-                            PID_RECORD_SENSORS, PID_RESET_DEVICE]
     var pd : bytes<231> = default
     for i in range(6):
-        var a = pd.push((LIST[i] >> 8) as u8)
-        var b = pd.push((LIST[i] & 0x00FF) as u8)
+        var a = pd.push((SUPPORTED_PIDS[i] >> 8) as u8)
+        var b = pd.push((SUPPORTED_PIDS[i] & 0x00FF) as u8)
     return pd
 
 fn pd_sensor_value(n: u8, st: SensorState, now_v: i16) -> bytes<231>:
@@ -786,6 +803,62 @@ fn pd_sensor_def(n: u8) -> bytes<231>:
     for i in range(13):
         var ok = pd.push(enc[i])
     return pd
+
+
+# =============================================================================
+# 11a. Antwortwahl (E1.20 6.2.9)
+#
+#   - Discovery an Broadcast/Bereich: Antwort OHNE Break, nur wenn nicht muted
+#   - Broadcast (nicht Discovery): keine Antwort
+#   - Unicast: genau eine Antwort im Fenster 176 us .. 2 ms
+# =============================================================================
+
+fn response_kind(hdr: RdmHeader, own: Uid, muted: bool) -> RespKind:
+    if not uid_addresses_us(hdr.dest_uid, own):
+        return NO_RESPONSE
+    if hdr.command_class == CC_DISCOVERY:
+        if hdr.parameter_id != PID_DISC_UNIQUE_BRANCH:
+            return NORMAL
+        if muted or not uid_in_range(own, hdr.dest_uid, hdr.dest_uid):
+            return NO_RESPONSE
+        return DISCOVERY
+    if uid_is_broadcast(hdr.dest_uid, own.manufacturer):
+        return NO_RESPONSE
+    return NORMAL
+
+
+fn answer(req: RdmRequest, own: Uid, start_addr: u16 in 1..512,
+          personality: u8 in 1..4, st_temp: SensorState,
+          st_volt: SensorState) -> bytes<264>:
+    var pid = req.hdr.parameter_id
+    var cc  = req.hdr.command_class
+
+    if cc != CC_GET and cc != CC_SET:
+        return build_nack(req.hdr, own, NR_UNSUPPORTED_CC)
+
+    if pid == PID_DEVICE_INFO:
+        return build_ack(req.hdr, own,
+                         pd_device_info(start_addr, personality, DMX_FOOTPRINT,
+                                        SENSOR_COUNT, DEVICE_MODEL,
+                                        PRODUCT_CATEGORY, SOFTWARE_VERSION), 19)
+    if pid == PID_SUPPORTED_PARAMS:
+        return build_ack(req.hdr, own, pd_supported_params(), 12)
+    if pid == PID_DMX_START_ADDRESS:
+        return build_ack(req.hdr, own, pd_u16(start_addr), 2)
+    if pid == PID_SOFTWARE_VERSION_L:
+        return build_ack(req.hdr, own, pd_u16(0x0130), 2)
+    if pid == PID_SENSOR_DEFINITION:
+        if req.pdl < 1 or req.pd[0] >= SENSOR_COUNT:
+            return build_nack(req.hdr, own, NR_DATA_OUT_OF_RANGE)
+        return build_ack(req.hdr, own, pd_sensor_def(req.pd[0]), 13)
+    if pid == PID_SENSOR_VALUE:
+        if req.pdl < 1 or req.pd[0] >= SENSOR_COUNT:
+            return build_nack(req.hdr, own, NR_DATA_OUT_OF_RANGE)
+        var st = st_temp if req.pd[0] == 0 else st_volt
+        return build_ack(req.hdr, own,
+                         pd_sensor_value(req.pd[0], st, st.recorded), 9)
+
+    return build_nack(req.hdr, own, NR_UNKNOWN_PID)
 
 
 # =============================================================================
@@ -829,7 +902,7 @@ machine rdm_dispatch follows rdm_responder every 1 ms:
             # Sendefreigabe exakt fuer die Dauer der Antwort. Der Zeitpunkt ist
             # relativ zum Hardware-Zeitstempel des empfangenen Pakets, nicht zum
             # Tick — Praezision ist die des Timers (7.5, Latenzformel).
-            pulse tx_enable = true for (blen * 44 us) + 100 us
+            pulse tx_enable = true for blen * 44 us + 100 us
             send rdm_tx, buf
             wait 2 ms
             -> IDLE
@@ -844,21 +917,15 @@ machine rdm_dispatch follows rdm_responder every 1 ms:
 # 13. Eigenschaften (v1.1) — was der Treiber garantiert
 # =============================================================================
 
-property never_tx_without_enable:
-    always(rdm_dispatch.pending_kind == NO_RESPONSE or rdm_dispatch.state == SENDING)
+property never_tx_without_enable: always(rdm_dispatch.pending_kind == NO_RESPONSE or rdm_dispatch.state == SENDING)
 
-property identify_forces_output:
-    always(rdm_responder.identify implies eventually[600 ms](identify_led))
+property identify_forces_output: always(rdm_responder.identify implies eventually[600 ms](identify_led))
 
-property mute_survives_discovery:
-    always(rdm_responder.muted implies stable[1 s](rdm_responder.muted))
-    with monitor = true
+property mute_survives_discovery: always(rdm_responder.muted implies stable[1 s](rdm_responder.muted)) with monitor = true
 
-property dmx_loss_darkens:
-    always(dmx_core.state == SIGNAL_LOST implies dimmer[0] == 0)
+property dmx_loss_darkens: always(dmx_core.state == SIGNAL_LOST implies dimmer[0] == 0)
 
-property bus_released:
-    always(tx_enable implies once[3 ms](rdm_responder.rdm_rx_count > 0))
+property bus_released: always(tx_enable implies once[3 ms](rdm_responder.rdm_rx_count > 0))
 
 
 # =============================================================================
