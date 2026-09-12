@@ -92,3 +92,19 @@ fn the_interpreter_and_the_generated_code_agree() {
 }
 
 mod common;
+
+/// Die Grenzen der Abnahme stehen im Code, nicht nur im Plan.
+///
+/// Der Test gibt sie aus, damit ein gruener Lauf sie mitliefert — und er
+/// prueft, dass die Liste nicht leer laeuft. Eine Grenze ohne Termin
+/// waere eine Ausrede; jede traegt einen.
+#[test]
+fn the_limits_of_the_acceptance_are_written_down() {
+    let limits = takt_conformance::LIMITS;
+    assert!(limits.len() >= 5, "die Liste ist zu kurz, um vollstaendig zu sein: {}", limits.len());
+    for l in limits {
+        assert!(!l.was.is_empty() && !l.warum.is_empty(), "eine Grenze ohne Begruendung");
+        assert!(!l.wann.is_empty(), "`{}` hat keinen Termin", l.was);
+    }
+    eprintln!("{}", takt_conformance::limits::report());
+}

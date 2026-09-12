@@ -22,7 +22,9 @@
 
 pub mod harness;
 pub mod layout;
+pub mod limits;
 pub mod run;
 
 pub use harness::Harness;
+pub use limits::LIMITS;
 pub use run::{Difference, compare};
