@@ -48,6 +48,7 @@ dependencies = [
  "takt-diag",
  "takt-hal",
  "takt-mir",
+ "takt-native",
 ]
 
 [[package]]
@@ -67,6 +68,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "takt-native"
+version = "0.1.0"
+
+[[package]]
 name = "takt-rt-core"
 version = "0.1.0"
 
@@ -78,6 +83,7 @@ dependencies = [
  "takt-diag",
  "takt-interp",
  "takt-mir",
+ "takt-native",
  "takt-syntax",
 ]
 

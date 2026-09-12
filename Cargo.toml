@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/libtaktm",
+    "crates/takt-native",
     "crates/takt-diag",
     "crates/takt-syntax",
     "crates/takt-mir",

@@ -1,0 +1,13 @@
+[package]
+name = "takt-native"
+version = "0.1.0"
+description = "Takt: die kuratierte Menge nativer Funktionen (Referenz 4.5)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Keine Abhaengigkeit: Eine native Funktion gehoert zur TCB (9.5), und
+# jede Abhaengigkeit gehoerte dann dazu.
+
+[lints]
+workspace = true

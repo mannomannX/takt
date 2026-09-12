@@ -1,0 +1,19 @@
+(system
+  (language 1)
+  (tick 10ms))
+(native-fn crc32 (b:bytes<64>) -> u32 cost=1600 stack=16)
+(output pruefsumme :u32 @hw("ui/crc") safe=0)
+(output stimmt :bool @hw("ui/ok") safe=false)
+(machine rahmen
+  (var puffer :bytes<64> default)
+  (var summe :u32 0)
+  (initial FUELLEN)
+  (state FUELLEN
+    (enter
+      (.push puffer 0x31)
+      (.push puffer 0x32)
+      (.push puffer 0x33))
+    (loop
+      (= summe (call crc32 puffer))
+      (= pruefsumme summe)
+      (= stimmt (!= summe 0)))))

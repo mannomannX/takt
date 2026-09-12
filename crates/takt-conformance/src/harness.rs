@@ -66,6 +66,27 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_stream_examined(int s, long long seq) {{ (void)s; (void)seq; }}\n");
 
+    // 4.5: Die nativen Funktionen liegen in der Runtime. Der Rahmen
+    // liefert sie in C — dieselbe Rechnung wie `takt-native`, damit der
+    // Vergleich sie mitprueft statt sie zu umgehen.
+    if p.natives.iter().any(|n| n.name == "crc32") {
+        let _ = writeln!(s, "unsigned int takt_native_crc32(const unsigned char *b, int n) {{");
+        let _ = writeln!(s, "    unsigned int c = 0xFFFFFFFFu;");
+        let _ = writeln!(s, "    for (int i = 0; i < n; i++) {{");
+        let _ = writeln!(s, "        c ^= b[i];");
+        let _ = writeln!(s, "        for (int k = 0; k < 8; k++)");
+        let _ = writeln!(s, "            c = (c & 1u) ? ((c >> 1) ^ 0xEDB88320u) : (c >> 1);");
+        let _ = writeln!(s, "    }}");
+        let _ = writeln!(s, "    return c ^ 0xFFFFFFFFu;");
+        let _ = writeln!(s, "}}");
+    }
+    if p.natives.iter().any(|n| n.name == "sum8") {
+        let _ = writeln!(s, "unsigned char takt_native_sum8(const unsigned char *b, int n) {{");
+        let _ = writeln!(s, "    unsigned char s = 0;");
+        let _ = writeln!(s, "    for (int i = 0; i < n; i++) s = (unsigned char)(s + b[i]);");
+        let _ = writeln!(s, "    return s;");
+        let _ = writeln!(s, "}}");
+    }
     let _ = writeln!(s, "void {machine}_init(void *st, void *in, void *par, void *out);");
     let _ = writeln!(s, "void {machine}_step(void *st, void *in, void *par, void *out);\n");
 
@@ -94,7 +115,7 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
     // Die Parameter stehen fuer den Lauf fest (8.4); sie werden einmal
     // gesetzt.
     for (i, slot) in layout.parameters.iter().enumerate() {
-        let Some(ct) = c_type(&slot.ty) else { continue };
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
         let Some(value) = param_literal(p, i) else { continue };
         let _ = writeln!(s, "    *({ct} *)(params + {}) = {value}; /* {} */", slot.offset, slot.name);
     }
@@ -112,7 +133,7 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
     let mut dump = String::new();
     let _ = writeln!(dump, "\nstatic void dump(long long t) {{");
     for slot in &layout.outputs {
-        let Some(ct) = c_type(&slot.ty) else { continue };
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
         // Ein Enum wird mit seinem Variantennamen ausgegeben, nicht mit
         // der Diskriminante: Der Interpreter schreibt den Namen (9.3), und
         // ein Vergleich von `CLOSED` gegen `0` waere ein Unterschied in
@@ -126,13 +147,13 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
             let _ = writeln!(dump, "    }}");
             continue;
         }
-        let fmt = match slot.ty {
-            takt_llvm::ty::LlvmType::F32 | takt_llvm::ty::LlvmType::F64 => "%.17g",
-            _ => "%lld",
-        };
-        let cast = match slot.ty {
-            takt_llvm::ty::LlvmType::F32 | takt_llvm::ty::LlvmType::F64 => "(double)",
-            _ => "(long long)",
+        // Vorzeichenlose Werte werden vorzeichenlos ausgegeben: Der
+        // Interpreter schreibt die Zahl, die der Typ meint, und `%lld`
+        // auf einem `u32` gaebe 2286445522 als -2008521774.
+        let (fmt, cast) = match (&slot.ty, slot.signed) {
+            (takt_llvm::ty::LlvmType::F32 | takt_llvm::ty::LlvmType::F64, _) => ("%.17g", "(double)"),
+            (_, true) => ("%lld", "(long long)"),
+            (_, false) => ("%llu", "(unsigned long long)"),
         };
         let _ = writeln!(
             dump,

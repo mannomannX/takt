@@ -1,0 +1,30 @@
+# 20 — Native Funktionen mit Kostenvertrag (4.5).
+#
+# Eine native Funktion ist eine Signatur mit drei Zusagen: `stack`, `cost`
+# und `total`. Ihre Implementierung gehoert zur TCB (9.5), und ihre
+# Vektoren stehen in grammar/takt-native.md.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+native fn crc32(b: bytes<64>) -> u32 with cost = 1600, stack = 16, total
+
+output pruefsumme : u32  @ hw("ui/crc") with safe = 0
+output stimmt     : bool @ hw("ui/ok")  with safe = false
+
+machine rahmen:
+    var puffer : bytes<64> = default
+    var summe  : u32 = 0
+
+    initial FUELLEN
+
+    state FUELLEN:
+        enter:
+            puffer.push(0x31)
+            puffer.push(0x32)
+            puffer.push(0x33)
+        loop:
+            summe = crc32(puffer)
+            pruefsumme = summe
+            stimmt = summe != 0

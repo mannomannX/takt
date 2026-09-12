@@ -11,6 +11,7 @@ libtaktm = { path = "../libtaktm" }
 takt-diag = { path = "../takt-diag" }
 takt-syntax = { path = "../takt-syntax" }
 takt-mir = { path = "../takt-mir" }
+takt-native = { path = "../takt-native" }
 takt-interp = { path = "../takt-interp" }
 
 [lints]

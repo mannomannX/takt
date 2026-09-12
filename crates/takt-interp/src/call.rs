@@ -130,9 +130,30 @@ impl Ctx<'_, '_> {
     }
 
     /// Native Funktionen (4.5): die kuratierte Menge kommt mit `takt-native` (M4).
-    pub fn call_native(&mut self, id: NativeId, _args: Vec<Value>, _span: Span) -> EvalResult<Value> {
+    pub fn call_native(&mut self, id: NativeId, args: Vec<Value>, _span: Span) -> EvalResult<Value> {
         let n = &self.loaded.program.natives[id.index()];
-        bug(format!("native Funktion `{}` ist im Interpreter noch nicht verfuegbar (M4)", n.name))
+        // 4.5: Nur die kuratierte Menge. Was nicht darin ist, lehnt der
+        // Compiler ab (Pruefung im Sema); der Trap hier ist der Rueckhalt
+        // fuer eine MIR, die daran vorbeikam.
+        let Some(f) = takt_native::Native::by_name(&n.name) else {
+            return bug(format!(
+                "`{}` gehoert nicht zur kuratierten Menge (4.5); \
+                 ihre Vektoren stehen in grammar/takt-native.md",
+                n.name
+            ));
+        };
+        // Die Pruefsummen nehmen einen Byteblock. Andere Signaturen kommen
+        // mit den Funktionen, die sie brauchen.
+        let Some(Value::Bytes(bytes)) = args.first() else {
+            return bug(format!("`{}` erwartet `bytes<N>`", n.name));
+        };
+        let raw = takt_native::apply(f, bytes);
+        // Die Breite steht im Rueckgabetyp; `apply` liefert `u64`, weil
+        // die Funktionen sich darin unterscheiden.
+        Ok(match self.loaded.ty(n.ret) {
+            Type::Int { width, .. } if width.signed() => Value::Int(raw as i64),
+            _ => Value::UInt(raw),
+        })
     }
 
     /// Primitive (4.1, 3.9, 3.10).

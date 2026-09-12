@@ -143,6 +143,7 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         // Eine Stuetzstelle ist ein Paar (3.9); sie steht nur in einer
         // Tabelle, und `interp` liest sie dort unmittelbar.
         ExprKind::Call { callee, args } => call(*callee, args, &want, p, m, vars),
+        ExprKind::NativeCall { native, args } => native_call(*native, args, &want, p, m, vars),
         ExprKind::Intrinsic { op, args } => intrinsic(*op, args, &want, p, m, vars),
         ExprKind::Decode { record, bytes } => decode(*record, bytes, &want, p, m, vars),
         ExprKind::Slice { base, from, to } => slice(base, from, to, &want, p, m, vars),
@@ -890,6 +891,52 @@ fn index_of(
     let at = m.inst(&format!("getelementptr inbounds {array_ty}, ptr {data}, i32 0, {} {}", i.ty, i.value));
     let v = m.inst(&format!("load {want}, ptr {at}"));
     Ok(Lowered { value: v.to_string(), ty: want.clone() })
+}
+
+/// Ein Aufruf einer nativen Funktion (4.5).
+///
+/// Sie liegt als Symbol in der Runtime, nicht im erzeugten Code: Ihre
+/// Implementierung gehoert zur TCB (9.5) und ist in Rust geschrieben. Der
+/// Aufruf ist darum eine `declare` plus `call` — dieselbe Form wie die
+/// Runtime-ABI.
+///
+/// **Sie kann nicht faulten.** 4.5 verlangt `total`: keine Panics,
+/// Terminierung, bitreproduzierbare Ergebnisse. Ein Zweig wie bei den
+/// reinen Funktionen (FB-87) waere hier falsch — er behauptete eine
+/// Moeglichkeit, die der Vertrag ausschliesst.
+fn native_call(
+    native: takt_mir::NativeId,
+    args: &[Expr],
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let n = p.natives.get(native.index()).ok_or(NotYet { what: "native Funktion" })?;
+    let mut ops = Vec::with_capacity(args.len());
+    let mut sig = Vec::with_capacity(args.len());
+    for a in args {
+        let v = lower(a, p, m, vars)?;
+        // Ein Byteblock geht als Zeiger und Laenge; sein Wert waere eine
+        // Kopie von bis zu mehreren KiB je Aufruf.
+        if let LlvmType::Struct(_) = &v.ty {
+            let tmp = m.inst(&format!("alloca {}", v.ty));
+            m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+            let len = m.inst(&format!("extractvalue {} {}, 0", v.ty, v.value));
+            let data = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", v.ty));
+            ops.push(format!("ptr {data}"));
+            ops.push(format!("i32 {len}"));
+            sig.push("ptr".to_string());
+            sig.push("i32".to_string());
+            continue;
+        }
+        ops.push(format!("{} {}", v.ty, v.value));
+        sig.push(v.ty.to_string());
+    }
+    let symbol = format!("takt_native_{}", n.name);
+    m.needs_intrinsic(&format!("{want} @{symbol}({})", sig.join(", ")));
+    let r = m.inst(&format!("call {want} @{symbol}({})", ops.join(", ")));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
 }
 
 /// `default` eines Typs (3.7): 0, `false`, leere Sammlung.

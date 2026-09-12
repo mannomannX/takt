@@ -836,6 +836,24 @@ impl Lowerer<'_> {
             self.stage(decl.span, "generische Natives", Stage::V1_1);
             return;
         }
+        // 4.5: „v1: nur die kuratierte, mitgelieferte Menge." Eine
+        // Funktion kommt hinein, *nachdem* ihre Vektoren gruen sind
+        // (13.8) — dieselbe Huerde wie bei `libtaktm`. Eine Deklaration
+        // ohne Implementierung waere eine Zusage, die beim Aufruf bricht.
+        //
+        // Ein Projekt-Native (`from "..."`) ist etwas anderes: Es *soll*
+        // nicht in der Menge stehen, sondern eine eigene Implementierung
+        // mitbringen. Dafuer gilt die Stufenmeldung unten (v1.1), und sie
+        // ist die praezisere Auskunft.
+        if decl.from.is_none() && takt_native::Native::by_name(&decl.name.name).is_none() {
+            self.error_hint(
+                SC3,
+                decl.span,
+                format!("`{}` gehoert nicht zur kuratierten Menge nativer Funktionen (4.5)", decl.name.name),
+                "verfuegbar sind: crc32, crc32c, crc16, sum8 (grammar/takt-native.md);                  Projekt-Natives sind v1.1",
+            );
+            return;
+        }
         let Some(params) = self.params(&decl.params) else { return };
         let Some(ret) = self.resolve_type(&decl.ret) else { return };
         let mut cost = CostVec::default();
