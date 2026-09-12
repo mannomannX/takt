@@ -182,7 +182,7 @@ pub fn declare_state(m: &Machine, st: &StateStruct, module: &mut Module) {
 
 /// Der Name der Schrittfunktion einer Maschine (11.2: `hotfire_step`).
 pub fn step_name(m: &Machine) -> String {
-    format!("{}_step", m.name)
+    format!("{}_step", crate::fns::sanitized(&m.name))
 }
 
 /// Beginnt die Schrittfunktion einer Maschine.
@@ -214,7 +214,7 @@ pub fn fault_trampoline(m: &Machine, st: &StateStruct, module: &mut Module) {
         module.void_inst("ret void");
         return;
     };
-    let state_ty = format!("%{}_state", m.name);
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
     // `pending` ist `{ i1 gueltig, i32 art, i32 ursprung }` (5.3). Die
     // beiden Zahlen kommen von der Sprungstelle; hier wird das Flag
     // gesetzt, damit die Abort-Phase den Fault findet.
@@ -227,7 +227,7 @@ pub fn fault_trampoline(m: &Machine, st: &StateStruct, module: &mut Module) {
 
 /// Der Name eines Zustands, wie er als Marke in der IR erscheint.
 pub fn label_of(m: &Machine, id: StateId) -> String {
-    format!("{}_{}", m.name, m.states[id.index()].name)
+    format!("{}_{}", crate::fns::sanitized(&m.name), crate::fns::sanitized(&m.states[id.index()].name))
 }
 
 /// Die Blattzustaende einer Maschine in der Reihenfolge ihrer Ids.
@@ -270,6 +270,11 @@ pub fn machine_of(p: &Program, id: MachineId) -> &Machine {
 /// darauf.
 pub fn initial_leaf(m: &Machine, from: StateId) -> Option<StateId> {
     let mut cur = from;
+    // Eine Vorlage hat keine Zustaende (5.8); `from` zeigt dann ins
+    // Leere, und ein Index waere ein Absturz statt einer Meldung.
+    if m.states.is_empty() {
+        return None;
+    }
     // Die Schranke ist die Zahl der Zustaende: Ein Zyklus im `initial`-Pfad
     // waere ein Fehler im Sema, aber eine Endlosschleife im Codegen waere
     // schlimmer als eine Meldung (4.1: beschraenkte Schleifen).

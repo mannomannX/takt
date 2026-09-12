@@ -35,13 +35,42 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
     build_with(p, machine, ticks, &[])
 }
 
+/// Baut den Rahmen fuer *alle* Maschinen des Programms (8.3, 12.1).
+///
+/// Ein Plant-Modell ist eine gewoehnliche Maschine (8.3): Es schreibt
+/// `sim`-Outputs, die an derselben Adresse haengen wie die `hw`-Inputs
+/// des Programms. Ein Rahmen, der nur eine Maschine tickt, sieht davon
+/// nichts — die Eingaenge bleiben `Bad`, und der Vergleich prueft einen
+/// Lauf, den es nicht gibt.
+///
+/// Darum bekommt der Rahmen die Tickschleife der Runtime statt einer
+/// Sonderbehandlung fuer Modelle: alle Maschinen in Deklarations-
+/// reihenfolge, jede nach ihrer Periode (7.2), und am Ende des Ticks die
+/// Bindung `sim` -> `hw` (8.3). Das Modell braucht dann nichts, was ein
+/// gewoehnliches Programm nicht auch braucht.
+pub fn build_all(p: &Program, ticks: u64, inputs: &[(u64, String)]) -> Harness {
+    build_inner(p, None, ticks, inputs)
+}
+
 /// Baut den Rahmen mit Eingaben (12.5).
 ///
 /// `inputs` ist der Stimulus, den auch der Interpreter sieht: je Eintrag
 /// ein Tick und ein Command. Damit prueft die Abnahme die *Reaktion* auf
 /// Lieferungen und nicht nur den Anfangszustand.
 pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[(u64, String)]) -> Harness {
+    build_inner(p, Some(machine), ticks, inputs)
+}
+
+/// Der gemeinsame Rumpf: `Some(name)` tickt eine Maschine, `None` alle.
+fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[(u64, String)]) -> Harness {
     let layout = crate::layout::of(p);
+    // Die Maschinen, die der Rahmen fuehrt, in Deklarationsreihenfolge —
+    // dieselbe, die der Interpreter nimmt (9.4: ohne `follows` ist sie
+    // semantisch irrelevant, aber der Trace soll gleich aussehen).
+    let gefuehrt: Vec<&takt_mir::machine::Machine> = match machine {
+        Some(name) => p.machines.iter().filter(|m| m.name == name).collect(),
+        None => p.machines.iter().filter(|m| m.kind != takt_mir::machine::MachineKind::Template).collect(),
+    };
     let mut s = String::new();
     let _ = writeln!(s, "/* Testrahmen (13.8); erzeugt von takt-conformance. */");
     let _ = writeln!(s, "#include <stdio.h>");
@@ -96,19 +125,27 @@ pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[(u64, String
         let _ = writeln!(s, "    return s;");
         let _ = writeln!(s, "}}");
     }
-    let _ = writeln!(s, "void {machine}_init(void *st, void *in, void *par, void *out);");
-    let _ = writeln!(s, "void {machine}_step(void *st, void *in, void *par, void *out);\n");
+    for m in &gefuehrt {
+        let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
+    }
+    let _ = writeln!(s);
 
-    // Der Zustands-Struct ist gross genug bemessen; seine genaue Groesse
-    // kennt nur der Codegen, und sie ueberzuschaetzen kostet im Test
-    // nichts.
-    let _ = writeln!(s, "static char state[4096];");
+    // Je Maschine ein eigener Zustand: Sie teilen das Abbild und den
+    // Latch, nicht ihren Zustand. Der Struct ist gross genug bemessen;
+    // seine genaue Groesse kennt nur der Codegen, und sie zu
+    // ueberschaetzen kostet im Test nichts.
+    for m in &gefuehrt {
+        let _ = writeln!(s, "static char state_{}[4096];", m.name);
+    }
     let _ = writeln!(s, "static char image[{}];", layout.image.max(1));
     let _ = writeln!(s, "static char params[{}];", layout.params.max(1));
     let _ = writeln!(s, "static char latch[{}];\n", layout.latch.max(1));
 
     let _ = writeln!(s, "int main(void) {{");
-    let _ = writeln!(s, "    memset(state, 0, sizeof state);");
+    for m in &gefuehrt {
+        let _ = writeln!(s, "    memset(state_{0}, 0, sizeof state_{0});", m.name);
+    }
     let _ = writeln!(s, "    memset(image, 0, sizeof image);");
     let _ = writeln!(s, "    memset(params, 0, sizeof params);");
     let _ = writeln!(s, "    memset(latch, 0, sizeof latch);");
@@ -129,7 +166,10 @@ pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[(u64, String
         let _ = writeln!(s, "    *({ct} *)(params + {}) = {value}; /* {} */", slot.offset, slot.name);
     }
 
-    let _ = writeln!(s, "    {machine}_init(state, image, params, latch);");
+    for m in &gefuehrt {
+        let _ = writeln!(s, "    {0}_init(state_{0}, image, params, latch);", m.name);
+    }
+    sim_bindings(&mut s, p, "    ");
     let _ = writeln!(s, "    dump(0);");
     let _ = writeln!(s, "    for (g_tick = 1; g_tick <= {ticks}; g_tick++) {{");
     // 8.5: Ein Command gilt einen Tick. Der Rahmen setzt es vor dem
@@ -142,7 +182,20 @@ pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[(u64, String
         let bedingung = ticks_of.iter().map(|t| format!("g_tick == {t}")).collect::<Vec<_>>().join(" || ");
         let _ = writeln!(s, "        image[{slot}] = ({bedingung}) ? 1 : 0; /* {name} */");
     }
-    let _ = writeln!(s, "        {machine}_step(state, image, params, latch);");
+    // 7.2: Eine Maschine laeuft in jedem `period`-ten Tick. Ohne die
+    // Bedingung liefe ein `every 50 ms`-Modell bei 10 ms Tick fuenfmal
+    // zu oft, und sein Wert stuende im Trace an der falschen Stelle.
+    for m in &gefuehrt {
+        let bedingung = match (m.period.max(1), m.phase) {
+            (1, _) => String::new(),
+            (per, 0) => format!("if (g_tick % {per} == 0) "),
+            (per, ph) => format!("if (g_tick % {per} == {ph}) "),
+        };
+        let _ = writeln!(s, "        {bedingung}{0}_step(state_{0}, image, params, latch);", m.name);
+    }
+    // 8.3: Was ein Modell in diesem Tick auf einen `sim`-Output gestellt
+    // hat, liest das Programm im naechsten — Unit-Delay wie bei Ψ.
+    sim_bindings(&mut s, p, "        ");
     let _ = writeln!(s, "        dump(g_tick);");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    return 0;");
@@ -193,6 +246,57 @@ pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[(u64, String
 ///
 /// Nur Literale: Ein berechneter Default braeuchte den Interpreter, und
 /// der Rahmen soll nichts auswerten, was der Vergleich pruefen soll.
+/// Speist die `sim`-Outputs in die `hw`-Inputs derselben Adresse (8.3).
+///
+/// Ein Plant-Modell schreibt `output p_sim : float[bar] @ sim("daq1/ai0")`,
+/// das Programm liest `input p : float[bar] @ hw("daq1/ai0")`. Die
+/// Adresse ist die Naht, und der Interpreter zieht sie in
+/// `Image::apply_sim_bindings`. Hier steht dieselbe Naht in C.
+///
+/// Der Wert geht aus dem Latch in den Wertteil des Abbild-Eintrags, und
+/// die Qualitaet wird `Good` (0): Der Eingang hat eine Quelle, also ist
+/// er nicht mehr `Bad` (3.5). Ohne das bliebe er `Bad`, und jeder
+/// Lesezugriff faultete.
+fn sim_bindings(s: &mut String, p: &Program, einzug: &str) {
+    use takt_mir::program::{Binding, Direction};
+    let adresse = |b: &Binding| match b {
+        Binding::Hw(a) | Binding::Sim(a) => Some(a.clone()),
+        Binding::None => None,
+    };
+    for (i, out) in p.channels.iter().enumerate() {
+        if out.dir != Direction::Output {
+            continue;
+        }
+        let Binding::Sim(_) = &out.binding else { continue };
+        let Some(addr) = adresse(&out.binding) else { continue };
+        // Der Eingang an derselben Adresse; ein Strom wird gesendet, nicht
+        // gestellt (8.8) und bleibt hier aussen vor.
+        let Some((j, inp)) = p
+            .channels
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.dir == Direction::Input && matches!(&c.binding, Binding::Hw(a) if *a == addr))
+        else {
+            continue;
+        };
+        if matches!(p.types.list.get(inp.ty.index()), Some(takt_mir::types::Type::Stream(_))) {
+            continue;
+        }
+        let from = takt_mir::ChannelId(i as u32);
+        let to = takt_mir::ChannelId(j as u32);
+        let (Some(src), Some(dst)) = (takt_llvm::image::latch_offset(from, p), takt_llvm::image::offset_of(to, p))
+        else {
+            continue;
+        };
+        let Some(size) = takt_llvm::ty::lower(inp.ty, p).map(|t| t.size()) else { continue };
+        let _ = writeln!(s, "{einzug}memcpy(image + {dst}, latch + {src}, {size}); /* {} -> {} */", out.name, inp.name);
+        // Qualitaet `Good` (3.5): Der Eingang hat jetzt eine Quelle.
+        if let Some(q) = quality_offset(p, &inp.name) {
+            let _ = writeln!(s, "{einzug}image[{q}] = 0;");
+        }
+    }
+}
+
 fn param_literal(p: &Program, index: usize) -> Option<String> {
     let param = p.params.get(index)?;
     match &param.default.kind {

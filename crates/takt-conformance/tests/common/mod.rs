@@ -58,11 +58,32 @@ pub fn run_native(clang: &Clang, p: &Program, name: &str, machine: &str, ticks: 
 
 /// Wie `run_native`, mit Eingaben (12.5): je Eintrag ein Tick und ein
 /// Command. Beide Seiten sehen damit denselben Stimulus.
+/// Uebersetzt ein Programm mit *allen* Maschinen und fuehrt es aus.
+///
+/// Fuer Programme mit Plant-Modell (8.3): Das Modell ist eine
+/// gewoehnliche Maschine, und ohne sie bleiben die Eingaenge `Bad`.
+#[allow(dead_code)]
+pub fn run_native_all(clang: &Clang, p: &Program, name: &str, ticks: u64) -> Result<String, String> {
+    run_native_inner(clang, p, name, None, ticks, &[])
+}
+
 pub fn run_native_with(
     clang: &Clang,
     p: &Program,
     name: &str,
     machine: &str,
+    ticks: u64,
+    inputs: &[(u64, String)],
+) -> Result<String, String> {
+    run_native_inner(clang, p, name, Some(machine), ticks, inputs)
+}
+
+/// Der gemeinsame Rumpf: `Some(name)` fuehrt eine Maschine, `None` alle.
+fn run_native_inner(
+    clang: &Clang,
+    p: &Program,
+    name: &str,
+    machine: Option<&str>,
     ticks: u64,
     inputs: &[(u64, String)],
 ) -> Result<String, String> {
@@ -73,7 +94,10 @@ pub fn run_native_with(
     let c = dir.join("rahmen.c");
     let exe = dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" });
     std::fs::write(&ll, ir_of(p)).map_err(|e| e.to_string())?;
-    let h = harness::build_with(p, machine, ticks, inputs);
+    let h = match machine {
+        Some(name) => harness::build_with(p, name, ticks, inputs),
+        None => harness::build_all(p, ticks, inputs),
+    };
     std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
     let path = clang.path().ok_or("clang")?;
     let build = std::process::Command::new(path)

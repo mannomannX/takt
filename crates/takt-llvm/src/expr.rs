@@ -933,7 +933,7 @@ fn native_call(
         ops.push(format!("{} {}", v.ty, v.value));
         sig.push(v.ty.to_string());
     }
-    let symbol = format!("takt_native_{}", n.name);
+    let symbol = format!("takt_native_{}", crate::fns::sanitized(&n.name));
     m.needs_intrinsic(&format!("{want} @{symbol}({})", sig.join(", ")));
     let r = m.inst(&format!("call {want} @{symbol}({})", ops.join(", ")));
     Ok(Lowered { value: r.to_string(), ty: want.clone() })

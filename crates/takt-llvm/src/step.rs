@@ -70,7 +70,7 @@ fn write_step(
 ) -> Result<(), NotYet> {
     machine::begin_step(m, module);
 
-    let state_ty = format!("%{}_state", m.name);
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
     let conf_i = st.index_of(Role::Conf, 0).ok_or(NotYet { what: "conf im Zustand" })?;
     let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
     let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
@@ -278,7 +278,7 @@ fn safe_outputs(ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
 /// gescheiterter `check`, und die Abort-Phase (5.4) reicht ihn weiter.
 fn pending(ctx: &Ctx<'_>, m: &mut Module, kind: takt_mir::machine::FaultKind) {
     let Some(i) = ctx.state.index_of(Role::Pending, 0) else { return };
-    let state_ty = format!("%{}_state", ctx.machine.name);
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
     let field = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}"));
     let art = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 1"));
     m.void_inst(&format!("store i32 {}, ptr {art}", fault_code(kind)));
@@ -315,7 +315,7 @@ fn fault_code(kind: takt_mir::machine::FaultKind) -> u32 {
 /// trifft ihn nicht, und damit laeuft nichts mehr.
 fn leave_configuration(ctx: &Ctx<'_>, m: &mut Module, leaves: usize) {
     let Some(conf_i) = ctx.state.index_of(Role::Conf, 0) else { return };
-    let state_ty = format!("%{}_state", ctx.machine.name);
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
     let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
     let cell = m.inst(&format!("getelementptr inbounds [{} x i8], ptr {base}, i32 0, i32 0", ctx.state.depth));
     // Der Index hinter dem letzten Blatt: Der `switch` der
@@ -331,7 +331,7 @@ fn leave_configuration(ctx: &Ctx<'_>, m: &mut Module, leaves: usize) {
 /// handgeschriebene Zustandsmaschine macht.
 fn reset_time(ctx: &Ctx<'_>, m: &mut Module) {
     let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else { return };
-    let state_ty = format!("%{}_state", ctx.machine.name);
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
     let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
     let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
     // 0, wie im Interpreter (`enter_state`): Ein Zustand, der im Tick k
@@ -365,7 +365,7 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
         &crate::ty::LlvmType::Void,
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
     );
-    let state_ty = format!("%{}_state", m.name);
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
     let Some(conf_i) = st.index_of(Role::Conf, 0) else {
         module.abort(mark);
         return Err(NotYet { what: "conf im Zustand" });
@@ -450,7 +450,7 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
 /// Initialisierung, weil Tick 0 dazugehoert.
 fn advance_time(ctx: &Ctx<'_>, m: &mut Module) {
     let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else { return };
-    let state_ty = format!("%{}_state", ctx.machine.name);
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
     let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
     let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
     let now = m.inst(&format!("load i64, ptr {cell}"));
@@ -491,7 +491,7 @@ fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crat
     let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else {
         return Err(NotYet { what: "t_in_state im Zustand" });
     };
-    let state_ty = format!("%{}_state", ctx.machine.name);
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
     let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
     let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
     let ticks = m.inst(&format!("load i64, ptr {cell}"));
@@ -539,7 +539,7 @@ fn dispatch(
         let cursor = cursor_index(ctx, stream).ok_or(NotYet { what: "Cursor eines Stroms" })?;
         let sid = stream_id(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
         let k = ctx.next_label();
-        let state_ty = format!("%{}_state", ctx.machine.name);
+        let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
         let cur_ptr = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {cursor}"));
         let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
         let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
@@ -647,7 +647,7 @@ fn fault_path(
     // Der Fault wird vorgemerkt; `pending` traegt ihn fuer die
     // Abort-Phase (5.4), die die Runtime fuehrt.
     if let Some(pending) = st.index_of(Role::Pending, 0) {
-        let state_ty = format!("%{}_state", machine_def.name);
+        let state_ty = format!("%{}_state", crate::fns::sanitized(&machine_def.name));
         let field = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {pending}"));
         let flag = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 0"));
         m.void_inst(&format!("store i1 true, ptr {flag}"));

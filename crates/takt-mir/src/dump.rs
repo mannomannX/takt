@@ -52,7 +52,13 @@ impl Dumper<'_> {
         if !m.loop_block.stmts.is_empty() {
             self.block(1, "loop:", &m.loop_block);
         }
-        let initial = m.states[m.initial.index()].name.clone();
+        // Eine Vorlage hat keine Zustaende: Ihr Rumpf entsteht erst in
+        // der Instanz (5.8). `initial` zeigt dann ins Leere.
+        let Some(state) = m.states.get(m.initial.index()) else {
+            self.line(1, "(Vorlage; der Rumpf steht in den Instanzen)");
+            return;
+        };
+        let initial = state.name.clone();
         self.line(1, &format!("initial {initial}"));
         for &s in &m.roots {
             self.state(1, s);

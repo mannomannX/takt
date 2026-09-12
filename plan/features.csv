@@ -863,7 +863,7 @@ CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),offen
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig
 CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig
 CLI-latency,Werkzeug,11.1,takt latency,,M3 (Gate),fertig
-CLI-graph,Werkzeug,11.1,takt graph,,M4 (Codegen),offen
+CLI-graph,Werkzeug,11.1,takt graph,,M4 (Codegen),fertig
 CLI-bench,Werkzeug,11.1,takt bench,,M5 (Embedded),offen
 CLI-tune,Werkzeug,11.1,takt tune,,M6 (v1.1),offen
 CLI-migrate,Werkzeug,11.1,takt migrate,,M7 (Werkzeuge),offen

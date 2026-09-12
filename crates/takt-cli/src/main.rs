@@ -23,7 +23,7 @@ use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
 const USAGE: &str =
-    "takt check|sim|run|replay|size|latency|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
+    "takt check|sim|run|replay|size|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -97,6 +97,7 @@ fn main() -> ExitCode {
         "fmt" => fmt(&args),
         "size" => size(&args),
         "latency" => latency(&args),
+        "graph" => graph(&args),
         "parse" => parse(&args),
         "tokens" => tokens(&args),
         _ => {
@@ -174,6 +175,38 @@ fn latency(args: &Args) -> bool {
         };
         println!("{path}:");
         for line in takt_mir::analysis::latency::latency(program).lines(program) {
+            println!("{line}");
+        }
+    }
+    ok
+}
+
+/// `takt graph`: Wer schreibt worauf, wer liest von wem (11.1).
+///
+/// Die Antworten stehen in der MIR verstreut; das Kommando sammelt sie.
+/// Ausgegeben wird Text, damit die Ausgabe in einen Bericht passt und
+/// sich mit `diff` vergleichen laesst.
+fn graph(args: &Args) -> bool {
+    let policy =
+        Policy { warnings_as_errors: args.has("--warnings-as-errors"), certification: args.has("--certification") };
+    let mut ok = true;
+    for path in &args.files {
+        let Some(src) = read(path) else {
+            ok = false;
+            continue;
+        };
+        let map = SourceMap::single(path.as_str(), src.as_str());
+        let options = takt_sema::Options { policy, build: build_of(args), profile: profile_of(args) };
+        let checked = takt_sema::compile(&src, &options);
+        for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
+            println!("{}", map.render(d));
+        }
+        let Some(program) = &checked.program else {
+            ok = false;
+            continue;
+        };
+        println!("{path}:");
+        for line in takt_mir::analysis::graph::graph(program).lines(program) {
             println!("{line}");
         }
     }

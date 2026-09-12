@@ -86,7 +86,7 @@ impl<'a> Ctx<'a> {
     /// `StateStruct` ist die Quelle, und hier wird sie gelesen.
     pub fn field(&self, role: Role, nth: usize, m: &mut Module) -> Option<Reg> {
         let i = self.state.index_of(role, nth)?;
-        let ty = format!("%{}_state", self.machine.name);
+        let ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
         Some(m.inst(&format!("getelementptr inbounds {ty}, ptr %0, i32 0, i32 {i}")))
     }
 
@@ -146,7 +146,7 @@ impl Vars for StateVars<'_> {
         let def = self.machine.vars.get(id.index())?;
         let ty = ty::lower(def.ty, self.program)?;
         let i = self.state.index_of(Role::Var, id.index())?;
-        let state_ty = format!("%{}_state", self.machine.name);
+        let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
         let ptr = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}"));
         let v = m.inst(&format!("load {ty}, ptr {ptr}"));
         Some(Lowered { value: v.to_string(), ty })

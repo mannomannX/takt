@@ -85,7 +85,7 @@ pub fn instance_of(b: &BlockDef, p: &Program) -> Option<Instance> {
 
 /// Der Name der Typdefinition eines Blocks.
 pub fn type_name(b: &BlockDef) -> String {
-    format!("%{}_block", b.name)
+    format!("%{}_block", crate::fns::sanitized(&b.name))
 }
 
 /// Der Name einer Methode im erzeugten Code.
@@ -96,7 +96,10 @@ pub fn type_name(b: &BlockDef) -> String {
 /// `takt_fn_` tragen.
 pub fn method_symbol(b: &BlockDef, method: &str) -> String {
     let _ = b;
-    format!("takt_block_{}", method.replace('.', "_"))
+    // Der Punkt trennt Block und Methode (`counter.step`); im Symbol
+    // wird er zum Unterstrich, damit der Name lesbar bleibt. Alles
+    // andere, was LLVM nicht annimmt, bereinigt `sanitized`.
+    format!("takt_block_{}", crate::fns::sanitized(&method.replace('.', "_")))
 }
 
 /// Schreibt die Typdefinition eines Blocks.
