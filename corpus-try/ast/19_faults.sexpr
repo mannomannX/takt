@@ -1,0 +1,15 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output r :int in 0..200 @hw("ui/r") safe=0)
+(machine f
+  (fault -> SAFE)
+  (var n :int in 0..200 100)
+  (initial GROW)
+  (state GROW
+    (loop
+      (= n (+ n 60))
+      (= r n)))
+  (state SAFE
+    (enter
+      (= r 7))))

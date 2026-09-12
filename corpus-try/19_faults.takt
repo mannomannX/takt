@@ -1,0 +1,25 @@
+# 19 — Laufzeitpruefungen (4.1): Was die Intervallanalyse nicht
+# wegbeweisen kann, prueft der erzeugte Code zur Laufzeit.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output r : int in 0..200 @ hw("ui/r") with safe = 0
+
+machine f:
+    fault -> SAFE
+    var n : int in 0..200 = 100
+
+    initial GROW
+
+    state GROW:
+        loop:
+            # Nach zwei Ticks ueberschreitet `n` seine Range; das ist ein
+            # `RangeFault` und fuehrt zu SAFE.
+            n = n + 60
+            r = n
+
+    state SAFE:
+        enter:
+            r = 7

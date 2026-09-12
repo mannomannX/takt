@@ -13,8 +13,9 @@ use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 11] = [
+const KORPUS: [&str; 12] = [
     "01_minimal.takt",
+    "19_faults.takt",
     "02_units_and_data.takt",
     "03_sequences_and_faults.takt",
     "12_bitfields.takt",
