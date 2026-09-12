@@ -1,4 +1,8 @@
-//! Was beide Abnahmetests brauchen: bauen und ausfuehren.
+//! Was die Abnahmetests brauchen: bauen und ausfuehren.
+//!
+//! Jeder Test bindet dieses Modul einzeln ein, und keiner benutzt alles —
+//!  ist hier die Regel, nicht die Ausnahme.
+#![allow(dead_code)]
 
 use takt_conformance::harness;
 use takt_llvm::emit::Module;
@@ -7,7 +11,16 @@ use takt_mir::program::Program;
 
 /// Erzeugt die IR eines Programms, so wie der Compiler sie erzeugt.
 pub fn ir_of(p: &Program) -> String {
-    let mut m = Module::new("abnahme", "x86_64-pc-windows-msvc");
+    ir_for(p, "x86_64-pc-windows-msvc")
+}
+
+/// Wie `ir_of`, fuer ein bestimmtes Ziel (12.8).
+///
+/// Der einzige Unterschied ist das Triple im Kopf — das ist die
+/// Bedingung, unter der Satz 9.4.4 eine Aussage ueber eine Uebersetzung
+/// ist und nicht ueber zwei Programme.
+pub fn ir_for(p: &Program, triple: &str) -> String {
+    let mut m = Module::new("abnahme", triple);
     takt_llvm::abi::Abi::declare(&mut m);
     takt_llvm::stream::Streams::declare(&mut m);
     let methoden: Vec<_> = p.blocks.iter().flat_map(|b| b.step.iter().chain(&b.methods).copied()).collect();

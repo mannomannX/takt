@@ -26,6 +26,7 @@
 //! - `scope`: was der Codegen deckt, gemessen an echten Programmen.
 //! - `step`: die Schrittfunktion einer Maschine (11.2, 9.4).
 //! - `stream`: die Naht zu den Ereignisstroemen (8.6, 9.6).
+//! - `target`: die Zielklassen (12.8).
 //! - `wire`: das Drahtformat der Records, `decode`/`encode` (3.7).
 //! - `toolchain`: `clang` finden, um die IR zu pruefen und auszufuehren.
 
@@ -41,6 +42,7 @@ pub mod scope;
 pub mod step;
 pub mod stmt;
 pub mod stream;
+pub mod target;
 pub mod toolchain;
 pub mod ty;
 pub mod wire;
@@ -48,5 +50,6 @@ pub mod wire;
 pub use emit::{Module, Reg};
 pub use expr::Lowered;
 pub use machine::{StateStruct, state_struct};
+pub use target::Target;
 pub use toolchain::Clang;
 pub use ty::LlvmType;

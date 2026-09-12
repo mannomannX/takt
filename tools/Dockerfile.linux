@@ -1,0 +1,22 @@
+# Bauumgebung fuer die Teile, die nur unter Linux laufen (12.2) und fuer
+# die Abnahme ueber zwei Ziele (13.8, Schritt 11).
+#
+# Sie traegt clang (fuer die IR und den Testrahmen), die
+# aarch64-Werkzeugkette (Linker und Standardbibliothek) und qemu, um
+# aarch64-Binaries auf x86-64 auszufuehren. Ohne qemu liesse sich die
+# Bit-Gleichheit nur behaupten, nicht messen.
+FROM rust:1-slim
+
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+        clang lld \
+        gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+        qemu-user \
+        util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add aarch64-unknown-linux-gnu
+
+# Cargo braucht fuer aarch64 einen Linker; `qemu-aarch64` fuehrt das
+# Ergebnis auf dieser Maschine aus.
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER=qemu-aarch64

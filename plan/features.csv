@@ -89,11 +89,11 @@ SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig
 SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),teilweise
 SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M1/M2 (Interpreter),offen
 SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,je Meilenstein,offen
-SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),teilweise
+SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),fertig
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),teilweise
 SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M6 (stdlib),offen
 SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3 (Gate),teilweise
-SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),teilweise
+SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),fertig
 SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4/M5 (Runtime),offen
 SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M4/M5 (Runtime),offen
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M4/M5 (Runtime),offen
@@ -705,7 +705,7 @@ THM-Satz-9.4.1,Satz/Lemma,9.4.1,Satz 9.4.1,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),offen
 PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 (Interpreter),offen
-THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M4 (Codegen),offen
+THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M4 (Codegen),fertig
 THM-Satz-9.4.5,Satz/Lemma,9.4.5,Satz 9.4.5,,M1/M2 (Interpreter),fertig
 PAR-9.4-Was_der_Satz_nicht_sagt,Absatz/Regel,9.4,Was der Satz nicht sagt,,M1/M2 (Interpreter),offen
 PAR-9.4-Auszahlung,Absatz/Regel,9.4,Auszahlung,,M1/M2 (Interpreter),offen
