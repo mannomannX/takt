@@ -15,6 +15,7 @@
 
 pub mod analysis;
 pub mod desugar;
+pub mod dfa;
 pub mod dump;
 pub mod expr;
 pub mod fns;

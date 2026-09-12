@@ -61,7 +61,16 @@ impl Lowerer<'_> {
             .collect();
         self.check_pattern(&pieces, span)?;
         let captures = self.capture_types(&pieces, span)?;
-        Some(Lowered { pattern: Pattern::Text { pieces, dfa: None }, captures })
+        // 11.2: Der Automat entsteht zur Uebersetzungszeit. Er sagt, *ob*
+        // das Muster trifft; die Werte holt der Vorwaertsdurchlauf (8.7:
+        // „Matching plus Extraktion ist ein einziger Vorwaertsdurchlauf").
+        //
+        // `None` ist kein Fehler: Ein Muster mit offenem Ende (`str<N>`,
+        // `{_}`) endet erst am Folgeliteral, und das kann der Durchlauf
+        // besser als eine Tabelle. Wer den Automaten liest, faellt dann
+        // auf den Durchlauf zurueck — dasselbe Ergebnis, hoehere Kosten.
+        let dfa = takt_mir::dfa::build(&[&pieces]);
+        Some(Lowered { pattern: Pattern::Text { pieces, dfa }, captures })
     }
 
     /// Pruefung 18: Wohlgeformtheit und Mehrdeutigkeit (8.7).
