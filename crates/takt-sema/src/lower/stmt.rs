@@ -13,8 +13,12 @@ use takt_syntax::ast;
 use super::{BlockKind, Lowerer, SC3, SC8, is_literal};
 use crate::checks::SC7;
 
-/// Methoden, die ihren Empfaenger veraendern: sie sind Anweisungen, nie Teil
-/// eines Ausdrucks (4.4, 5.7).
+/// Methoden der eingebauten Typen, die ihren Empfaenger veraendern: sie
+/// sind Anweisungen, nie Teil eines Ausdrucks (4.4, 5.7).
+///
+/// Fuer eine Blockinstanz reicht die Liste nicht — ihre Methoden heissen,
+/// wie der Block sie nennt. Dort entscheidet `is_mutating_call` am
+/// Empfaenger.
 pub(crate) const MUTATING: &[&str] = &["push", "append", "insert", "remove", "clear", "skip", "step", "reset"];
 use crate::symbols::Entity;
 
@@ -389,7 +393,7 @@ impl Lowerer<'_> {
         // mutierende Methode steht nie in einem Ausdruck (4.4).
         if op == ast::AssignOp::Set {
             if let ast::ExprKind::Member { base, name, args: Some(args) } = &value.kind {
-                if MUTATING.contains(&name.name.as_str()) {
+                if self.is_mutating_call(base, &name.name) {
                     let kind = self.method_call(Some(place), base, name, args, span)?;
                     return Some(Stmt::new(kind, span));
                 }
@@ -674,7 +678,7 @@ impl Lowerer<'_> {
             return None;
         }
         if let ast::ExprKind::Member { base, name, args: Some(args) } = &decl.value.kind {
-            if MUTATING.contains(&name.name.as_str()) {
+            if self.is_mutating_call(base, &name.name) {
                 return self.var_from_method(decl, kind, base, name, args);
             }
         }
@@ -938,6 +942,36 @@ impl Lowerer<'_> {
             return None;
         }
         args.iter().zip(tys).map(|(a, t)| self.check(&a.value, *t)).collect()
+    }
+
+    /// Ist `base.name(...)` ein veraendernder Methodenaufruf?
+    ///
+    /// Fuer die eingebauten Typen entscheidet der Name (`MUTATING`), fuer
+    /// eine Blockinstanz der Empfaenger: Jeder ihrer Methodenaufrufe
+    /// veraendert sie, weil er ihren Zustand fortschreibt (5.7). Der
+    /// Aufruf darf darum nie in einem groesseren Ausdruck stehen — sonst
+    /// wuerde die Reihenfolge der Teilausdruecke sichtbar (4.4).
+    pub fn is_mutating_call(&self, base: &ast::Expr, name: &str) -> bool {
+        MUTATING.contains(&name) || self.block_of_expr(base).is_some()
+    }
+
+    /// Block einer Instanzvariablen, ueber den Ausdruck.
+    ///
+    /// Wie `block_of_place`, aber ohne zu senken und ohne zu melden: Die
+    /// Frage stellt sich, *bevor* entschieden ist, ob der Ausdruck eine
+    /// Anweisung oder ein Wert ist.
+    pub fn block_of_expr(&self, e: &ast::Expr) -> Option<BlockId> {
+        let name = match &e.kind {
+            ast::ExprKind::Ident(n) => &n.name,
+            ast::ExprKind::Index { base, .. } => match &base.kind {
+                ast::ExprKind::Ident(n) => &n.name,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let Some(Entity::Var(var, _)) = self.peek(name) else { return None };
+        let m = self.mctx.as_ref()?;
+        m.machine.layout.block_instances.iter().find(|b| b.var == *var).map(|b| b.block)
     }
 
     /// Block einer Instanzvariablen (Typ `BlockInit` merkt sich der Elaborator

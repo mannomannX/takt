@@ -255,6 +255,34 @@ impl Lowerer<'_> {
 
     // ------------------------------------------------------------ Literale
 
+    /// Ein Ganzzahlliteral mit vorangestelltem `-` in einem Ganzzahl-
+    /// kontext, als *ein* Wert geprueft.
+    ///
+    /// Das aeussere `None` heisst „nicht dieser Fall": Der Aufrufer
+    /// senkt dann gewoehnlich. Das innere heisst „behandelt, aber
+    /// fehlerhaft" — es ist gemeldet, und ein zweiter Durchgang wuerde
+    /// dieselbe Stelle ein zweites Mal anstreichen.
+    fn negative_literal(&mut self, expr: &ast::Expr, hint: Option<TypeId>, span: Span) -> Option<Option<Expr>> {
+        let ast::ExprKind::Number { value: ast::Number::Int(i), unit: None } = &expr.kind else {
+            return None;
+        };
+        let hint = hint?;
+        let Type::Int { width, range, .. } = self.ty(hint).clone() else { return None };
+        let v = -parse_int(&i.text)?;
+        let (lo, hi) = takt_interp::arith::bounds(width);
+        if v < lo || v > hi {
+            self.error(SC3, span, format!("Literal passt nicht in `{}`", takt_interp::arith::name(width)));
+            return Some(None);
+        }
+        if let Some(r) = range {
+            if !takt_interp::eval::in_range(&takt_interp::Value::Int(v as i64), &r) {
+                self.error(SC3, span, "Literal ausserhalb der Range");
+                return Some(None);
+            }
+        }
+        Some(Some(Expr::new(ExprKind::Int(v as i64), hint, span)))
+    }
+
     fn number(
         &mut self,
         value: &ast::Number,
@@ -1808,6 +1836,16 @@ impl Lowerer<'_> {
                 );
                 return None;
             }
+            (Type::Enum(_), _) => {
+                let n = self.type_name(x.ty);
+                self.error_hint(
+                    SC3,
+                    span,
+                    format!("`as` auf `{n}`"),
+                    "ein Enum traegt seine Diskriminante ins Drahtformat (`layout`, 3.7), nicht in die Rechnung",
+                );
+                return None;
+            }
             _ => {
                 let n = self.type_name(x.ty);
                 self.error(SC3, span, format!("`as` auf `{n}`"));
@@ -1838,6 +1876,13 @@ impl Lowerer<'_> {
                 Some(Expr::new(ExprKind::Unary { op: UnaryOp::Not, expr: Box::new(x) }, ty, span))
             }
             ast::UnaryOp::Neg => {
+                // Der Zweierkomplementbereich ist asymmetrisch: `-32768`
+                // passt in `i16`, `32768` nicht. Wuerde der Operand fuer
+                // sich geprueft, fiele genau die Untergrenze jeder
+                // signierten Breite durch (3.1).
+                if let Some(e) = self.negative_literal(expr, hint, span) {
+                    return e;
+                }
                 let x = self.expr(expr, hint)?;
                 if !(self.is_numeric(x.ty) || self.is_duration(x.ty)) {
                     let n = self.type_name(x.ty);

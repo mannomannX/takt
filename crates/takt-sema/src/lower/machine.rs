@@ -28,12 +28,14 @@ pub enum Bound {
 
 impl Lowerer<'_> {
     /// Registriert eine Maschine: Singleton mit Eintrag, Vorlage mit
-    /// Parametern; beide mit Zustandstyp.
+    /// Parametern; beide mit Zustandstyp und veroeffentlichter Schnittstelle.
     pub fn register_machine(&mut self, decl: &ast::MachineDecl) {
         let state_enum = self.state_enum(&decl.name.name, &decl.body);
         if decl.params.is_empty() {
             let id = MachineId(self.program.machines.len() as u32);
-            self.program.machines.push(Machine::new(decl.name.name.clone()));
+            let mut m = Machine::new(decl.name.name.clone());
+            self.declare_interface(&mut m, &decl.body);
+            self.program.machines.push(m);
             self.state_enums.insert(id, state_enum);
             self.declare(&decl.name, Entity::Machine(id));
         } else {
@@ -41,11 +43,67 @@ impl Lowerer<'_> {
             let mut m = Machine::new(decl.name.name.clone());
             m.kind = MachineKind::Template;
             m.span = decl.span;
+            self.declare_interface(&mut m, &decl.body);
             self.program.machines.push(m);
             self.state_enums.insert(id, state_enum);
             let idx = self.templates.machines.len();
             self.templates.machines.push(MachineTemplate { decl: decl.clone(), id, state_enum, prelude: self.prelude });
             self.declare(&decl.name, Entity::MachineTemplate(idx));
+        }
+    }
+
+    /// Traegt `pub var` und Signale einer Maschine ein, bevor irgendein
+    /// Rumpf gesenkt wird.
+    ///
+    /// Kommunikation zwischen Maschinen laeuft mit Unit-Delay, und
+    /// „dadurch ist die Ausfuehrungsreihenfolge im Tick beweisbar
+    /// irrelevant" (Grundentscheidung 6, Satz 9.4.1). Waere die
+    /// *Deklarations*reihenfolge dennoch massgeblich, waere die Zusage an
+    /// einer sichtbaren Stelle durchbrochen: Zwei Maschinen, die einander
+    /// lesen, sind nicht beide zuerst deklarierbar — und das ist bei
+    /// Gegenkopplung der Normalfall.
+    ///
+    /// Eingetragen werden Name, Typ und Sichtbarkeit; der Initialwert
+    /// bleibt offen, weil er auf andere Maschinen verweisen darf und die
+    /// Aufloesung damit zyklisch wuerde. Er entsteht beim Senken des
+    /// Rumpfs, das diesen Eintrag vollstaendig ersetzt.
+    ///
+    /// Die Liste entsteht deckungsgleich zur spaeteren: `VarId` ist der
+    /// Index in `machine.vars` (so liest ihn der Interpreter), und eine
+    /// Luecke verschoebe jede aufgeloeste Referenz um eins. Das faellt
+    /// nicht als Fehler auf, sondern als falscher Wert. Darum bekommt
+    /// jede Variable ihren Platz — auch die nicht-oeffentliche und die,
+    /// deren Typ hier noch nicht steht; ein `var` ohne Annotation zoege
+    /// ihn aus dem Initialwert, und genau der bleibt offen. Ein solcher
+    /// Platzhalter ist nur nicht auffindbar, und sein Typfehler wird
+    /// gemeldet, wo er hingehoert: beim Senken des Rumpfs.
+    fn declare_interface(&mut self, m: &mut Machine, body: &ast::MachineBody) {
+        for item in &body.prelude {
+            match item {
+                ast::MachinePrelude::Var(v) => {
+                    let ty = v.ty.as_ref().and_then(|t| {
+                        let before = self.diags.len();
+                        let ty = self.resolve_type(t);
+                        self.diags.truncate(before);
+                        ty
+                    });
+                    m.vars.push(VarDef {
+                        name: v.name.name.clone(),
+                        ty: ty.unwrap_or(self.tys.bool),
+                        init: None,
+                        scope: VarScope::Machine,
+                        // Ohne Typ ist der Platz reserviert, aber nicht
+                        // benutzbar: Ein Zugriff darauf saehe sonst einen
+                        // Typ, den das Programm nicht genannt hat.
+                        public: v.public && ty.is_some(),
+                        span: v.span,
+                    });
+                }
+                ast::MachinePrelude::Signal(name) => {
+                    m.signals.push(SignalDef { name: name.name.clone(), span: name.span });
+                }
+                _ => {}
+            }
         }
     }
 
@@ -520,6 +578,14 @@ impl Lowerer<'_> {
     fn seq_items(&mut self, items: &[ast::SeqItem]) -> Vec<SeqItem> {
         let mut out = Vec::new();
         for item in items {
+            if let ast::SeqItem::Stmt(s) = item {
+                if let ast::StmtKind::Pulse { output, value, duration } = &s.kind {
+                    if let Some(pair) = self.pulse(output, value, duration, s.span) {
+                        out.extend(pair.into_iter().map(SeqItem::Stmt));
+                    }
+                    continue;
+                }
+            }
             if let Some(i) = self.seq_item(item) {
                 out.push(i);
             }

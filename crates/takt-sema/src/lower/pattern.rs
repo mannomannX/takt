@@ -232,7 +232,13 @@ impl Lowerer<'_> {
                         }
                     }
                 }
-                _ => {}
+                // Ein Skalarelement (8.6 nennt `u8`, dazu `Edge` und
+                // Enums) traegt seinen Wert unter demselben Namen wie
+                // `bytes<N>`: Beide sind der *Inhalt* des Elements, im
+                // Unterschied zu den Metadaten `.t` und `.seq`. Ohne das
+                // Feld ist der Wert gar nicht erreichbar — ein Byte-Strom
+                // waere aus einem Handler heraus nicht verarbeitbar.
+                _ => fields.push(field("data", elem, span)),
             }
         }
         let id = RecordId(self.program.records.len() as u32);

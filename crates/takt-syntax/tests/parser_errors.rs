@@ -184,6 +184,22 @@ fn fn_without_return_type_needs_inout() {
     assert!(file_errors("fn f(inout b: bytes<8>, x: u8):\n    pass\n").is_empty());
 }
 
+/// FB-93: `->` setzt eine Zeile nicht fort (2.1), weil `-> ZIEL` eine
+/// eigene Zeile bildet. Eine Signatur, die davor umbricht, lief in
+/// dieselbe Meldung wie eine ohne Rueckgabetyp — und deren Vorschlag
+/// (inout) passt dort nicht.
+#[test]
+fn a_signature_broken_before_the_arrow_names_the_bracket_rule() {
+    let umbruch = file_errors("fn f(a: int, b: int)\n    -> int:\n        return a\n");
+    let hint = umbruch[0].suggestion.as_deref().unwrap_or_default();
+    assert!(hint.contains("Parameterliste"), "{:?}", umbruch[0]);
+
+    // Ohne folgendes `->` bleibt der Hinweis auf `inout` der richtige.
+    let ohne = file_errors("fn f(a: int, b: int):\n    return a\n");
+    let hint = ohne[0].suggestion.as_deref().unwrap_or_default();
+    assert!(hint.contains("inout"), "{:?}", ohne[0]);
+}
+
 #[test]
 fn errors_carry_a_suggestion() {
     let errors = file_errors(

@@ -624,7 +624,7 @@ machine uart_model:
             st_sim = UartStatus(flags = f0)
         on tx_raw as b:
             seen += 1
-            var v : u8 = b.data   # FB-98: das Element ist nicht erreichbar
+            var v : u8 = b.data
             if BIT_ERROR_AT != 0 and seen == BIT_ERROR_AT:
                 v = v ^ 0x40
             send rx_raw_sim, RxByte(b = v, frame = false, parity = false, brk = false)

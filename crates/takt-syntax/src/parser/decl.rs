@@ -547,15 +547,30 @@ impl<'t, 's> Parser<'t, 's> {
         let params = self.parse_param_list()?;
         let ret = if self.eat_op("->") { Some(self.parse_type()?) } else { None };
         if ret.is_none() && !params.iter().any(|p| p.inout) {
-            return Err(self.error_at(
-                self.tok(),
-                "erwartet `->` mit Rueckgabetyp",
-                Some("ohne Rueckgabetyp nur mit einem inout-Parameter (3.9)"),
-            ));
+            let hint = if self.arrow_on_next_line() {
+                "`->` setzt die Zeile nicht fort; innerhalb der Parameterliste umbrechen, dort traegt die Klammer (2.1)"
+            } else {
+                "ohne Rueckgabetyp nur mit einem inout-Parameter (3.9)"
+            };
+            return Err(self.error_at(self.tok(), "erwartet `->` mit Rueckgabetyp", Some(hint)));
         }
         self.expect_op(":")?;
         let body = self.parse_block()?;
         Ok(FnDecl { name, generics, params, ret, body, span: self.span_from(start) })
+    }
+
+    /// Steht hinter dem Zeilenende ein `->`?
+    ///
+    /// `->` setzt eine Zeile nicht fort (2.1), weil `-> ZIEL` eine eigene
+    /// Zeile bildet. Eine Signatur, die davor umbricht, laeuft darum in
+    /// eine Meldung, deren Vorschlag nicht passt — diese Frage trennt die
+    /// beiden Faelle.
+    fn arrow_on_next_line(&self) -> bool {
+        let mut n = 0;
+        while matches!(self.tok_at(n).kind, TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent) {
+            n += 1;
+        }
+        n > 0 && self.at_op_at(n, "->")
     }
 
     /// `native_decl`

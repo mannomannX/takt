@@ -334,7 +334,7 @@ fn classify_pid(pid: u16) -> PidClass:
 # Gleitender Extremwert-Halter je Sensor (E1.20 verlangt lowest/highest seit
 # dem letzten RECORD_SENSORS bzw. Reset).
 block sensor_track():
-    var st   : SensorState = SensorState(lowest = 0, highest = 0, recorded = 0)
+    var st   : SensorState = SensorState(lowest = 32767, highest = -32768, recorded = 0)
     var seen : bool = false
     step(v: i16) -> SensorState:
         if not seen:
