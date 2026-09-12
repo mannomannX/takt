@@ -35,6 +35,19 @@ pub fn ir_of(p: &Program) -> String {
 
 /// Uebersetzt ein Programm mit seinem Testrahmen und fuehrt es aus.
 pub fn run_native(clang: &Clang, p: &Program, name: &str, machine: &str, ticks: u64) -> Result<String, String> {
+    run_native_with(clang, p, name, machine, ticks, &[])
+}
+
+/// Wie `run_native`, mit Eingaben (12.5): je Eintrag ein Tick und ein
+/// Command. Beide Seiten sehen damit denselben Stimulus.
+pub fn run_native_with(
+    clang: &Clang,
+    p: &Program,
+    name: &str,
+    machine: &str,
+    ticks: u64,
+    inputs: &[(u64, String)],
+) -> Result<String, String> {
     let dir = std::env::temp_dir().join(format!("takt-abnahme-{}", name.replace('.', "_")));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -42,7 +55,7 @@ pub fn run_native(clang: &Clang, p: &Program, name: &str, machine: &str, ticks: 
     let c = dir.join("rahmen.c");
     let exe = dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" });
     std::fs::write(&ll, ir_of(p)).map_err(|e| e.to_string())?;
-    let h = harness::build(p, machine, ticks);
+    let h = harness::build_with(p, machine, ticks, inputs);
     std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
     let path = clang.path().ok_or("clang")?;
     let build = std::process::Command::new(path)

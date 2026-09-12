@@ -25,12 +25,12 @@ pub struct Limit {
 /// wird, ist schlechter als keine, weil ihr jemand glaubt.
 pub const LIMITS: &[Limit] = &[
     Limit {
-        was: "Eingaben ueber die Zeit",
-        warum: "Der Rahmen hat keine Treiber. Die Inputs stehen auf ihrem Anfangswert und \
-                ihrer Anfangsqualitaet (`Bad`, 3.5); ein Lauf prueft damit den Anfangszustand \
-                und seine Fortschreibung, nicht die Reaktion auf Lieferungen.",
-        wann: "Schritt 10 (Record/Replay): Eine Aufzeichnung *ist* die Folge der Inputs, und \
-               `takt replay` spielt sie beiden Seiten vor.",
+        was: "Skalare Inputs ueber die Zeit",
+        warum: "Commands prueft die Abnahme seit Schritt 10 (ein Puls, ein Byte, 8.5); \
+                skalare Lieferungen mit Wert, Qualitaet und Alter brauchen die Umrechnung \
+                von Trace-Text in Abbild-Bytes, und die gehoert zum Treiber.",
+        wann: "Schritt 5 (`takt-rt-linux`): Der Simulationstreiber aus `takt-hal` liefert \
+               sie beiden Seiten; er ist bereits die erste HAL-Implementierung (Prinzip 4).",
     },
     Limit {
         was: "Die Abort-Phase (5.4)",

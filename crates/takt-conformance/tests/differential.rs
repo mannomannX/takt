@@ -109,3 +109,61 @@ fn the_limits_of_the_acceptance_are_written_down() {
     }
     eprintln!("{}", takt_conformance::limits::report());
 }
+
+/// **Die Abnahme mit Eingaben** (12.5): Beide Seiten sehen denselben
+/// Stimulus, und ihre Outputs stimmen ueberein.
+///
+/// Das ist die Haelfte, die bis Schritt 10 fehlte: Ein Lauf ohne
+/// Eingaben prueft den Anfangszustand und seine Fortschreibung, nicht die
+/// *Reaktion* auf Lieferungen. Ein Command ist die einfachste Form davon
+/// (ein Puls, ein Byte, 8.5) — und die, die der Korpus benutzt.
+#[test]
+fn the_two_implementations_agree_on_recorded_inputs() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    // `16_timing` wartet auf `go` und faellt nach 200 ms zurueck; damit
+    // laeuft jeder Uebergang mindestens einmal.
+    let p = corpus("16_timing.takt");
+    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
+    let stimulus = takt_interp::Trace::parse(
+        "t=3 cmd go
+t=40 cmd go
+",
+    )
+    .expect("Stimulus");
+    let inputs: Vec<(u64, String)> = stimulus
+        .lines
+        .iter()
+        .filter_map(|l| match &l.kind {
+            takt_interp::trace::LineKind::Command { name } => Some((l.tick, name.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inputs.len(), 2, "der Stimulus traegt zwei Commands");
+
+    let native =
+        common::run_native_with(&clang, &p, "eingaben", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen mit Eingaben:
+{}
+--- Interpreter ---
+{}
+--- nativ ---
+{}",
+        diffs.len(),
+        diffs.iter().take(6).map(|d| format!("  {d}")).collect::<Vec<_>>().join(
+            "
+"
+        ),
+        interpreted,
+        native
+    );
+}

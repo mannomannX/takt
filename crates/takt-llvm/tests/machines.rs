@@ -295,16 +295,18 @@ fn a_transition_writes_the_target_into_the_configuration() {
     );
 }
 
-/// 5.2: Beim Eintritt in einen Zustand beginnt `t_in_state` von vorn.
+/// 5.2: Beim Eintritt in einen Zustand beginnt `t_in_state` bei null.
 ///
-/// Ohne das Zuruecksetzen misst `after d` die Zeit seit dem Start der
-/// Maschine statt seit dem Eintritt.
+/// Bei *null*, nicht bei -1: Der Entry-Modus (5.2 Regel 4) laeuft noch im
+/// selben Tick und liest den Wert. Ein `-1` haette jede `after`-Frist um
+/// einen Tick verschoben; der Interpreter setzt in `enter_state`
+/// ebenfalls 0 (FB-89).
 #[test]
 fn a_transition_resets_the_time_in_state() {
     let p = corpus("01_minimal.takt");
     let ir = ir_of(&p);
     assert!(
-        ir.contains("store i64 -1, ptr"),
+        ir.contains("store i64 0, ptr"),
         "`t_in_state` wird nicht zurueckgesetzt:
 {ir}"
     );

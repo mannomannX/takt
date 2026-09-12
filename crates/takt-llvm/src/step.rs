@@ -225,9 +225,14 @@ fn reset_time(ctx: &Ctx<'_>, m: &mut Module) {
     let state_ty = format!("%{}_state", ctx.machine.name);
     let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
     let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
-    // -1, weil das Ende des Schritts gleich um 1 erhoeht: Der erste Tick
-    // im neuen Zustand hat `t_in_state == 0`.
-    m.void_inst(&format!("store i64 -1, ptr {cell}"));
+    // 0, wie im Interpreter (`enter_state`): Ein Zustand, der im Tick k
+    // betreten wird, liest dort `t_in_state == 0` — der Entry-Modus
+    // (5.2 Regel 4) laeuft noch in diesem Tick und sieht die Null.
+    //
+    // Die Erhoehung am Ende des Schritts macht daraus 1 fuer den
+    // naechsten Tick. Ein `-1` hier haette den Entry-Modus -1 lesen
+    // lassen und jede `after`-Frist um einen Tick verschoben.
+    m.void_inst(&format!("store i64 0, ptr {cell}"));
 }
 
 /// Schreibt die Eintrittsfunktion einer Maschine (9.4).

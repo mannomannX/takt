@@ -22,7 +22,8 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|sim|size|latency|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str =
+    "takt check|sim|run|replay|size|latency|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -46,8 +47,18 @@ impl Args {
 
     /// Zerlegt die Argumentliste: Schalter, ihre Werte und Dateien.
     fn parse(rest: &[String]) -> Args {
-        const WITH_VALUE: &[&str] =
-            &["--ticks", "--stim", "--golden", "--trace", "--profile", "--order", "--build", "--format", "--write"];
+        const WITH_VALUE: &[&str] = &[
+            "--ticks",
+            "--stim",
+            "--golden",
+            "--trace",
+            "--profile",
+            "--order",
+            "--build",
+            "--format",
+            "--write",
+            "--record",
+        ];
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
         let mut i = 0;
         while i < rest.len() {
@@ -80,6 +91,8 @@ fn main() -> ExitCode {
     let ok = match command.as_str() {
         "check" => check(&args),
         "sim" => sim(&args),
+        "run" => run_cmd(&args),
+        "replay" => replay(&args),
         "mir" => mir(&args),
         "fmt" => fmt(&args),
         "size" => size(&args),
@@ -295,6 +308,147 @@ fn sim(args: &Args) -> bool {
     }
     println!("{path}: {} nach {ticks} Ticks", result.verdict.name());
     ok
+}
+
+/// `takt run`: ein Lauf, der seine Eingaben aufzeichnet (12.5).
+///
+/// Der Unterschied zu `sim` ist die Aufzeichnung: `run` schreibt mit
+/// `--record`, was hineinging, damit `replay` es wiederholen kann. Ohne
+/// `--record` ist es `sim` mit anderem Namen — und das ist der Punkt:
+/// 11.3 verlangt „gleiche Quelle, gleiche Toolchain, gleiches Ergebnis",
+/// also darf die Aufzeichnung den Lauf nicht aendern.
+fn run_cmd(args: &Args) -> bool {
+    let Some(path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let Some(program) = compile_file(path, args) else { return false };
+    let Some(ticks) = ticks_of(args) else { return false };
+    let Some(stimulus) = stimulus_of(args) else { return false };
+
+    let options = RunOptions { ticks, profile: profile_of(args), order_seed: None };
+    let result = match takt_interp::run(&program, &stimulus, &options) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{path}: {e:?}");
+            return false;
+        }
+    };
+    if let Some(out) = args.value("--record") {
+        let recording = takt_interp::record::Recording {
+            header: takt_interp::record::Header::of(&program, profile_of(args).as_deref(), ticks),
+            inputs: stimulus,
+        };
+        if let Err(e) = std::fs::write(out, recording.render()) {
+            eprintln!("{out}: {e}");
+            return false;
+        }
+        println!("{out}: aufgezeichnet");
+    }
+    if let Some(out) = args.value("--trace") {
+        if let Err(e) = std::fs::write(out, result.trace.render()) {
+            eprintln!("{out}: {e}");
+            return false;
+        }
+    } else {
+        print!("{}", result.trace.render());
+    }
+    println!("{path}: {} nach {ticks} Ticks", result.verdict.name());
+    result.verdict != Verdict::Fail
+}
+
+/// `takt replay`: eine Aufzeichnung wiederholen und vergleichen (12.5).
+///
+/// 12.5: „`takt replay` fuehrt dasselbe Binaer im Sim-Modus mit den
+/// aufgezeichneten Inputs aus und vergleicht Outputs und Zustandspfade;
+/// Abweichung = Fehler in Runtime oder Treiber, nie in der Logik (Satz
+/// 9.4.4)."
+///
+/// Der Satz gilt nur, wenn die Logik dieselbe ist — der Logik-Hash im
+/// Kopf prueft das, und eine Aufzeichnung zu einem anderen Programm wird
+/// abgelehnt statt verglichen.
+fn replay(args: &Args) -> bool {
+    let Some(path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let Some(program) = compile_file(path, args) else { return false };
+    let Some(record_path) = args.value("--record") else {
+        eprintln!("--record fehlt: `takt replay PROGRAMM --record AUFZEICHNUNG`");
+        return false;
+    };
+    let Some(text) = read(record_path) else { return false };
+    let recording = match takt_interp::record::Recording::parse(&text) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{record_path}: {e}");
+            return false;
+        }
+    };
+    if let Err(e) = recording.matches(&program) {
+        eprintln!("{record_path}: {e}");
+        return false;
+    }
+    // Die Zahl der Ticks steht im Kopf; `--ticks` darf sie ueberschreiben,
+    // um einen Lauf abzukuerzen.
+    let ticks = args.value("--ticks").and_then(|v| v.parse::<u64>().ok()).unwrap_or(recording.header.ticks);
+    let options = RunOptions { ticks, profile: recording.header.profile.clone(), order_seed: None };
+    let result = match takt_interp::run(&program, &recording.inputs, &options) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{path}: {e:?}");
+            return false;
+        }
+    };
+    let text = result.trace.render();
+    // Mit `--golden` wird verglichen, sonst ausgegeben. Der Vergleich ist
+    // der eigentliche Zweck: Er zeigt, ob Runtime und Treiber sich
+    // gleich verhalten haben.
+    match args.value("--golden") {
+        Some(golden) => {
+            let Some(expected) = read(golden) else { return false };
+            if text != expected {
+                print!("{}", diff(&expected, &text));
+                eprintln!("{golden}: Trace weicht ab — Fehler in Runtime oder Treiber (12.5)");
+                return false;
+            }
+            println!("{record_path}: reproduziert, {ticks} Ticks");
+        }
+        None => print!("{text}"),
+    }
+    result.verdict != Verdict::Fail
+}
+
+/// `--ticks` lesen; die Meldung nennt, was fehlt.
+fn ticks_of(args: &Args) -> Option<u64> {
+    match args.value("--ticks").map(str::parse::<u64>) {
+        Some(Ok(n)) => Some(n),
+        Some(Err(e)) => {
+            eprintln!("--ticks: {e}");
+            None
+        }
+        None => {
+            eprintln!("--ticks fehlt");
+            None
+        }
+    }
+}
+
+/// `--stim` lesen; ohne Angabe ein leerer Stimulus.
+fn stimulus_of(args: &Args) -> Option<Trace> {
+    match args.value("--stim") {
+        Some(p) => {
+            let text = read(p)?;
+            match Trace::parse(&text) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    eprintln!("{p}: {e}");
+                    None
+                }
+            }
+        }
+        None => Some(Trace::default()),
+    }
 }
 
 /// Zeilenweiser Unterschied zweier Traces (`-` erwartet, `+` erhalten).

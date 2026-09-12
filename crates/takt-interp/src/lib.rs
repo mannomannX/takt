@@ -24,6 +24,7 @@ pub mod image;
 pub mod loaded;
 pub mod machine;
 pub mod pattern;
+pub mod record;
 pub mod run;
 pub mod stream;
 pub mod system;

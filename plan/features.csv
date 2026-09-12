@@ -853,8 +853,8 @@ LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M4 (libtaktm),offen
 LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M6 (stdlib),offen
 CLI-check,Werkzeug,11.1,takt check,,M0-M3,fertig
 CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig
-CLI-run,Werkzeug,11.1,takt run,,M4 (Codegen),offen
-CLI-replay,Werkzeug,11.1,takt replay,,M4 (Codegen),offen
+CLI-run,Werkzeug,11.1,takt run,,M4 (Codegen),fertig
+CLI-replay,Werkzeug,11.1,takt replay,,M4 (Codegen),fertig
 CLI-test,Werkzeug,11.1,takt test,,M4 (Codegen),offen
 CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),offen
 CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen
@@ -1054,10 +1054,10 @@ CON-native_fn,Konstrukt (2.4),2.4,`native fn`,,M0 (Parser/MIR-Entwurf),definiert
 CON-tick_source,Konstrukt (2.4),2.4,`tick_source`,,M0 (Parser/MIR-Entwurf),definiert
 "CON-jitter,_max_slew",Konstrukt (2.4),2.4,"`jitter`, `max_slew`",,M0 (Parser/MIR-Entwurf),definiert
 FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M0 (Parser/MIR-Entwurf),teilweise
-FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M4 (Codegen),offen
+FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M4 (Codegen),fertig
 FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M6 (mit 8.10),offen
 FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M5 (Embedded),offen
-FMT-Lauf-Header,Versioniertes Format,11.3,Lauf-Header,,M4 (Codegen),offen
+FMT-Lauf-Header,Versioniertes Format,11.3,Lauf-Header,,M4 (Codegen),fertig
 STUFE-v1_(Kern),Stufe (Roadmap),15,v1 (Kern),,Doku/Rationale,rationale
 STUFE-v1.1,Stufe (Roadmap),15,v1.1,,Doku/Rationale,rationale
 STUFE-v1.2,Stufe (Roadmap),15,v1.2,,Doku/Rationale,rationale

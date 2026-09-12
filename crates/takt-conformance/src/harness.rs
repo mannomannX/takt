@@ -32,6 +32,15 @@ pub struct Harness {
 /// `machine` ist der Name der Maschine, deren Schritt gerufen wird; ihre
 /// Funktionen heissen `<name>_init` und `<name>_step` (11.2).
 pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
+    build_with(p, machine, ticks, &[])
+}
+
+/// Baut den Rahmen mit Eingaben (12.5).
+///
+/// `inputs` ist der Stimulus, den auch der Interpreter sieht: je Eintrag
+/// ein Tick und ein Command. Damit prueft die Abnahme die *Reaktion* auf
+/// Lieferungen und nicht nur den Anfangszustand.
+pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[(u64, String)]) -> Harness {
     let layout = crate::layout::of(p);
     let mut s = String::new();
     let _ = writeln!(s, "/* Testrahmen (13.8); erzeugt von takt-conformance. */");
@@ -123,6 +132,16 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
     let _ = writeln!(s, "    {machine}_init(state, image, params, latch);");
     let _ = writeln!(s, "    dump(0);");
     let _ = writeln!(s, "    for (g_tick = 1; g_tick <= {ticks}; g_tick++) {{");
+    // 8.5: Ein Command gilt einen Tick. Der Rahmen setzt es vor dem
+    // Schritt und loescht es danach — wie die Runtime (12.1).
+    for (name, slot) in layout.commands.iter().map(|c| (c.name.clone(), c.offset)) {
+        let ticks_of: Vec<String> = inputs.iter().filter(|(_, n)| *n == name).map(|(t, _)| t.to_string()).collect();
+        if ticks_of.is_empty() {
+            continue;
+        }
+        let bedingung = ticks_of.iter().map(|t| format!("g_tick == {t}")).collect::<Vec<_>>().join(" || ");
+        let _ = writeln!(s, "        image[{slot}] = ({bedingung}) ? 1 : 0; /* {name} */");
+    }
     let _ = writeln!(s, "        {machine}_step(state, image, params, latch);");
     let _ = writeln!(s, "        dump(g_tick);");
     let _ = writeln!(s, "    }}");
