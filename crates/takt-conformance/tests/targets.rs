@@ -21,17 +21,35 @@ use takt_llvm::Target;
 
 mod common;
 
-/// Die Programme, die auf beiden Zielen laufen muessen.
+/// Die Korpusprogramme, die auf beiden Zielen laufen muessen.
 ///
-/// Dieselbe Liste wie die Abnahme in `differential.rs`: Was auf einer
-/// Architektur uebersetzt, muss auf der anderen dasselbe tun.
+/// Dieselbe Art Liste wie die Abnahme in `differential.rs`: Was auf
+/// einer Architektur uebersetzt, muss auf der anderen dasselbe tun.
 const KORPUS: [&str; 5] =
     ["01_minimal.takt", "02_units_and_data.takt", "16_timing.takt", "19_faults.takt", "20_native.takt"];
 
+/// Die Referenzbeispiele, die auf beiden Zielen laufen muessen.
+///
+/// `plan.md` 6.2 macht sie zur Abnahme einer EX-ID: fertig heisst
+/// „derselbe Trace auf jeder bis dahin unterstuetzten Zielklasse", und
+/// M4 traegt zwei. Ohne sie hier waere der Exit fuer die halbe
+/// Zielmenge behauptet statt belegt.
+const BEISPIELE: [&str; 5] = ["14_1", "14_2", "14_3", "14_4", "14_5"];
+
 const TICKS: u64 = 20;
 
+/// Ein Referenzbeispiel aus `corpus-try/sim/`.
+fn beispiel(name: &str) -> takt_mir::Program {
+    lade(&format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/sim/{}/program.takt"), name))
+}
+
 fn corpus(name: &str) -> takt_mir::Program {
-    let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
+    lade(&format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name))
+}
+
+fn lade(path: &str) -> takt_mir::Program {
+    let path = path.to_string();
+    let name = path.clone();
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let options =
         takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
@@ -50,7 +68,12 @@ fn cross_available() -> bool {
 }
 
 /// Uebersetzt und laeuft ein Programm fuer ein Ziel.
-fn run_for(target: Target, p: &takt_mir::Program, name: &str, machine: &str) -> Result<String, String> {
+/// Uebersetzt und laeuft ein Programm fuer ein Ziel.
+///
+/// `machine` nennt die eine Maschine, die getickt wird; `None` fuehrt
+/// alle — noetig fuer Programme mit Plant-Modell (8.3), deren Eingaenge
+/// sonst `Bad` bleiben.
+fn run_for(target: Target, p: &takt_mir::Program, name: &str, machine: Option<&str>) -> Result<String, String> {
     let dir = std::env::temp_dir().join(format!("takt-ziel-{}-{}", target.name, name.replace('.', "_")));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -61,7 +84,10 @@ fn run_for(target: Target, p: &takt_mir::Program, name: &str, machine: &str) -> 
     // Dieselbe IR, nur mit anderem Triple: Das ist der Kern von 9.4.4.
     let ir = common::ir_for(p, target.triple);
     std::fs::write(&ll, &ir).map_err(|e| e.to_string())?;
-    let h = takt_conformance::harness::build(p, machine, TICKS);
+    let h = match machine {
+        Some(name) => takt_conformance::harness::build(p, name, TICKS),
+        None => takt_conformance::harness::build_all(p, TICKS, &[]),
+    };
     std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
 
     // Uebersetzt wird in zwei Schritten: clang macht aus der IR ein
@@ -111,45 +137,55 @@ fn x86_64_and_aarch64_agree() {
     }
     let mut fehler = Vec::new();
     let mut geprueft = 0;
+    // Die Korpusprogramme: je eine Maschine, wie in `differential.rs`.
     for name in KORPUS {
         let p = corpus(name);
         let Some(machine) = p.machines.first().map(|m| m.name.clone()) else { continue };
-        let a = match run_for(Target::X86_64_LINUX, &p, name, &machine) {
-            Ok(t) => t,
-            Err(e) => {
-                fehler.push(format!("{name} (x86-64): {e}"));
-                continue;
-            }
-        };
-        let b = match run_for(Target::AARCH64_LINUX, &p, name, &machine) {
-            Ok(t) => t,
-            Err(e) => {
-                fehler.push(format!("{name} (aarch64): {e}"));
-                continue;
-            }
-        };
-        geprueft += 1;
-        if a != b {
-            let erste = a.lines().zip(b.lines()).position(|(x, y)| x != y).unwrap_or(0);
-            fehler.push(format!(
-                "{name}: die Ziele weichen ab, zuerst in Zeile {}\n  x86-64  {}\n  aarch64 {}",
-                erste + 1,
-                a.lines().nth(erste).unwrap_or(""),
-                b.lines().nth(erste).unwrap_or("")
-            ));
+        if vergleiche(name, &p, Some(&machine), &mut fehler) {
+            geprueft += 1;
         }
     }
-    assert!(
-        fehler.is_empty(),
-        "{}",
-        fehler.join(
-            "
+    // Die Referenzbeispiele: alle Maschinen, weil fuenf von ihnen ein
+    // Plant-Modell haben (8.3).
+    for name in BEISPIELE {
+        let p = beispiel(name);
+        if vergleiche(name, &p, None, &mut fehler) {
+            geprueft += 1;
+        }
+    }
+    assert!(fehler.is_empty(), "{}", fehler.join("\n\n"));
+    assert_eq!(geprueft, KORPUS.len() + BEISPIELE.len(), "es wurden nicht alle Programme auf beiden Zielen geprueft");
+}
 
-"
-        )
-    );
-    // Ein Test, der nichts geprueft hat, ist gruen und wertlos.
-    assert_eq!(geprueft, KORPUS.len(), "nicht alle Programme liefen auf beiden Zielen");
+/// Laeuft ein Programm auf beiden Zielen und vergleicht die Traces.
+///
+/// Liefert `true`, wenn der Vergleich zustande kam — ein Programm, das
+/// sich nicht bauen laesst, ist ein Fehler und kein Vergleich.
+fn vergleiche(name: &str, p: &takt_mir::Program, machine: Option<&str>, fehler: &mut Vec<String>) -> bool {
+    let a = match run_for(Target::X86_64_LINUX, p, name, machine) {
+        Ok(t) => t,
+        Err(e) => {
+            fehler.push(format!("{name} (x86-64): {e}"));
+            return false;
+        }
+    };
+    let b = match run_for(Target::AARCH64_LINUX, p, name, machine) {
+        Ok(t) => t,
+        Err(e) => {
+            fehler.push(format!("{name} (aarch64): {e}"));
+            return false;
+        }
+    };
+    if a != b {
+        let erste = a.lines().zip(b.lines()).position(|(x, y)| x != y).unwrap_or(0);
+        fehler.push(format!(
+            "{name}: die Ziele weichen ab, zuerst in Zeile {}\n  x86-64  {}\n  aarch64 {}",
+            erste + 1,
+            a.lines().nth(erste).unwrap_or(""),
+            b.lines().nth(erste).unwrap_or("")
+        ));
+    }
+    true
 }
 
 /// 12.8: Beide Ziele gehoeren derselben Zielklasse an — dieselbe Breite,

@@ -111,11 +111,11 @@ SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,offen
 SEM-13.7,Semantik/Abschnitt,13.7,Kampagnen (v1.1),v1.1,M6,offen
 SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M5 (Embedded),offen
 SEM-13.9,Semantik/Abschnitt,13.9,Migration aus C: `takt import-c` und Orakel-Modus (v1.1),v1.1,M7 (Werkzeuge),offen
-SEM-14.1,Semantik/Abschnitt,14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),teilweise
-SEM-14.2,Semantik/Abschnitt,14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,M4 (Codegen),teilweise
-SEM-14.3,Semantik/Abschnitt,14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,M4 (Codegen),teilweise
-SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),teilweise
-SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),teilweise
+SEM-14.1,Semantik/Abschnitt,14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),fertig
+SEM-14.2,Semantik/Abschnitt,14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,M4 (Codegen),fertig
+SEM-14.3,Semantik/Abschnitt,14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,M4 (Codegen),fertig
+SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig
+SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig
 SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),teilweise
 SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),offen
 SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise
@@ -871,11 +871,11 @@ CLI-import-c,Werkzeug,11.1,takt import-c,,M7 (Werkzeuge),offen
 CLI-mir,Werkzeug,11.1,takt mir,,M0,fertig
 CLI-parse,Werkzeug,11.1,takt parse,,M0,fertig
 CLI-tokens,Werkzeug,11.1,takt tokens,,M0,fertig
-EX-14.1,Beispiel (Golden-Test),14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),teilweise
-EX-14.2,Beispiel (Golden-Test),14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,M4 (Codegen),teilweise
-EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,M4 (Codegen),teilweise
-EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),teilweise
-EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),teilweise
+EX-14.1,Beispiel (Golden-Test),14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),fertig
+EX-14.2,Beispiel (Golden-Test),14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,M4 (Codegen),fertig
+EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,M4 (Codegen),fertig
+EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig
+EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig
 EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),teilweise
 EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),offen
 EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise
