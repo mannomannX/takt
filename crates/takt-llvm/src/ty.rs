@@ -117,6 +117,11 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
             LlvmType::Struct(fields)
         }
         Type::Array { elem, len } => LlvmType::Array(Box::new(lower(*elem, p)?), *len),
+        // 8.9: `samples<T, N>` liefert je Tick "ein beschraenktes Array";
+        // die Reduktionen rechnen darauf. Der Interpreter haelt es ebenso
+        // (`Value::Samples` neben `Value::Array`), und die Zahl der
+        // gelieferten Samples steht in der Qualitaet, nicht im Typ.
+        Type::Samples { elem, len } => LlvmType::Array(Box::new(lower(*elem, p)?), *len),
         // `T?` (3.8): Wert und Gueltigkeitsflag. Das Flag steht hinten,
         // damit der Wert an derselben Stelle liegt wie ohne Wrapper.
         Type::Optional(inner) => LlvmType::Struct(vec![lower(*inner, p)?, LlvmType::Int(1)]),
@@ -126,6 +131,14 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
         Type::Bytes { cap } | Type::Str { cap } => {
             LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), *cap)])
         }
+        // `line<N>` ist `str<N>` plus `.truncated` (3.9): Nur dort hat
+        // ein *anderer* — der Treiberrand — die Laenge begrenzt, und das
+        // Programm koennte es sonst nicht merken (754).
+        Type::Line { cap } => LlvmType::Struct(vec![
+            LlvmType::Int(32),
+            LlvmType::Array(Box::new(LlvmType::Int(8)), *cap),
+            LlvmType::Int(1),
+        ]),
         _ => return None,
     })
 }

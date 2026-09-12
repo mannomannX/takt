@@ -472,21 +472,27 @@ fn advance_time(ctx: &Ctx<'_>, m: &mut Module) {
 /// Ohne den Vergleich feuerte `after 0 ms` schon beim Betreten, und eine
 /// Sequenz liefe in einem Tick durch alle Schritte.
 ///
-/// Die Dauer muss ein Literal sein: Ein berechneter Ausdruck haette einen
-/// Wert je Tick, und die Schedulability (7.2) koennte ihn nicht
-/// beschraenken.
+/// Die Dauer ist jeder Ausdruck vom Typ `Duration`; die Grammatik sagt
+/// es so (`duration_expr := expr`), und der Interpreter wertet ihn aus.
 fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crate::expr::Lowered, NotYet> {
-    // Die Frist darf ein Literal oder ein Parameter sein: Beide stehen
-    // fuer den Lauf fest, und nur dann kann die Schedulability (7.2) sie
-    // beschraenken. Ein Ausdruck ueber Variablen haette einen Wert je
-    // Tick — `after` waere dann keine Frist mehr, sondern eine Bedingung.
+    // Ein Literal steht schon zur Uebersetzungszeit fest und braucht
+    // keine Anweisung; alles andere wird gesenkt wie jeder Ausdruck —
+    // ein Maschinenparameter (5.8) ebenso wie eine Variable.
+    //
+    // **Warum keine Beschraenkung auf Konstanten.** Der Codegen verlangte
+    // frueher ein Literal oder einen `param`, mit Verweis auf die
+    // Schedulability (7.2). Die begrenzt aber die *Kosten je
+    // Aktivierung*, nicht die Fristen: Eine `after`-Dauer geht in die
+    // Budgetrechnung gar nicht ein. Der Interpreter wertet jeden
+    // `Duration`-Ausdruck aus, und die Grammatik erlaubt ihn — eine
+    // engere Regel im Codegen hiesse, dass dasselbe Programm auf zwei
+    // Wegen verschieden ausfaellt.
     let vars = ctx.vars();
     let frist = match d.kind {
         takt_mir::expr::ExprKind::Duration(ns) => {
             crate::expr::Lowered { value: ns.to_string(), ty: crate::ty::LlvmType::Int(64) }
         }
-        takt_mir::expr::ExprKind::Param(_) => crate::expr::lower(d, ctx.program, m, &vars)?,
-        _ => return Err(NotYet { what: "`after` mit berechneter Dauer" }),
+        _ => crate::expr::lower(d, ctx.program, m, &vars)?,
     };
     let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else {
         return Err(NotYet { what: "t_in_state im Zustand" });

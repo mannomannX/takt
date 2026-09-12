@@ -168,6 +168,18 @@ fn stmt(s: &Stmt, c: &mut Coverage) {
     }
 }
 
+/// Der Name einer eingebauten Groesse fuer die Meldung (3.3, 5.3).
+pub fn builtin_name(b: takt_mir::expr::Builtin) -> &'static str {
+    use takt_mir::expr::Builtin as B;
+    match b {
+        B::Now => "`now`",
+        B::Tick => "`tick`",
+        B::TimeInState => "`time_in_state`",
+        B::LastFault => "`last_fault`",
+        B::Event => "`event`",
+    }
+}
+
 /// Der Name einer Anweisung fuer Meldung und Messung.
 pub fn stmt_name(s: &StmtKind) -> &'static str {
     match s {

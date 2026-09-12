@@ -47,6 +47,14 @@ impl Abi {
     /// `abort "text"` (5.4): Fault fuer *alle* Maschinen im selben Tick.
     pub const ABORT: &'static str = "takt_abort";
 
+    /// `now` (3.3): die Dauer seit dem Start des Laufs.
+    ///
+    /// Sie steht nicht im Zustand einer Maschine, sondern gehoert der
+    /// Runtime: Alle Maschinen lesen dieselbe Uhr, und der Tickzaehler
+    /// liegt in der Tickschleife (12.1). Eine Kopie je Maschine waere
+    /// eine zweite Quelle fuer dieselbe Zahl.
+    pub const NOW: &'static str = "takt_now";
+
     /// Das Fault-Flag einer reinen Funktion (4.1).
     ///
     /// Eine Funktion hat keinen eigenen Fault-Pfad — sie faultet den

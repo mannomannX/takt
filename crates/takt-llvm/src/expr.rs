@@ -77,6 +77,16 @@ pub trait Vars {
         None
     }
 
+    /// Eine eingebaute Groesse (3.3, 5.3).
+    ///
+    /// Sie haengt an der Quelle: `now` kommt von der Runtime, die die
+    /// Uhr fuehrt (12.1); `time_in_state` steht im Zustand der Maschine;
+    /// `tick` ist eine Konstante des Programms. Eine reine Funktion hat
+    /// keine davon — sie sieht nur ihre Argumente (4.4).
+    fn builtin(&self, _b: takt_mir::expr::Builtin, _p: &Program, _m: &mut Module) -> Option<Lowered> {
+        None
+    }
+
     /// Liest ein Feld des Abbild-Eintrags eines Channels (3.5).
     ///
     /// `.valid`, `.suspect`, `.stale`, `.age` und `.reason` lesen die
@@ -132,6 +142,7 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Param(id) => vars.param(*id, m).ok_or(NotYet { what: "Parameter" }),
         ExprKind::Output(channel) => vars.output(*channel, m).ok_or(NotYet { what: "Output-Latch" }),
         ExprKind::Command(id) => vars.command(*id, m).ok_or(NotYet { what: "Command" }),
+        ExprKind::Builtin(b) => vars.builtin(*b, p, m).ok_or(NotYet { what: crate::scope::builtin_name(*b) }),
         ExprKind::Unary { op, expr } => unary(*op, expr, &want, p, m, vars),
         ExprKind::Binary { op, lhs, rhs } => binary(*op, lhs, rhs, &want, p, m, vars),
         ExprKind::Cond { cond, then, otherwise } => cond_expr(cond, then, otherwise, &want, p, m, vars),
@@ -274,8 +285,8 @@ fn access(
         // selbst, nicht seinen Wert — `x.valid` fragt nicht, *was*
         // geliefert wurde, sondern *ob*.
         Accessor::Valid | Accessor::Suspect | Accessor::Stale | Accessor::Age | Accessor::Reason => {
-            if let ExprKind::Input { channel, .. } = &base.kind {
-                return quality_of(*channel, which, want, m, vars);
+            if let Some(channel) = channel_of(base) {
+                return quality_of(channel, which, want, m, vars);
             }
             // `.valid` auf einem `T?` (3.8) ist das Flag des Wrappers —
             // dieselbe Frage wie bei einem Channel („ist ein Wert da?"),
@@ -292,10 +303,10 @@ fn access(
         }
         // `x.or(d)`: der Wert, wenn gueltig, sonst der Ersatz (3.5).
         Accessor::Or => {
-            let valid = match &base.kind {
-                ExprKind::Input { channel, .. } => quality_of(*channel, Accessor::Valid, &LlvmType::Int(1), m, vars)?,
+            let valid = match channel_of(base) {
+                Some(channel) => quality_of(channel, Accessor::Valid, &LlvmType::Int(1), m, vars)?,
                 // Auf einem `T?`/`T!E` ist es das Flag des Wrappers (3.8).
-                _ => {
+                None => {
                     let LlvmType::Struct(fields) = &x.ty else {
                         return Err(NotYet { what: "`.or` auf einem Nicht-Channel" });
                     };
@@ -353,6 +364,22 @@ fn access(
             Ok(Lowered { value: wide.to_string(), ty: want.clone() })
         }
         _ => Err(NotYet { what: crate::scope::accessor_name(which) }),
+    }
+}
+
+/// Der Channel hinter einem Ausdruck, sofern es einer ist.
+///
+/// Ein Channel-Array traegt *eine* Abtastung fuer alle Elemente (8.1):
+/// `tcs[i].valid` fragt nach der Qualitaet der Lieferung, nicht nach der
+/// des i-ten Werts — die Karte liefert alle Kanaele zugleich oder
+/// keinen. Der Index waehlt darum nur den Wert, und die Qualitaet steht
+/// am Channel. Der Interpreter loest es in `sample_of` ebenso.
+fn channel_of(e: &Expr) -> Option<takt_mir::ChannelId> {
+    match &e.kind {
+        ExprKind::Input { channel, .. } => Some(*channel),
+        ExprKind::Checked { expr, .. } => channel_of(expr),
+        ExprKind::Index { base, .. } => channel_of(base),
+        _ => None,
     }
 }
 
@@ -1299,7 +1326,7 @@ fn node_name(e: &ExprKind) -> &'static str {
         ExprKind::Published { .. } => "Psi",
         ExprKind::StateOf(_) => "`m.state`",
         ExprKind::Signal { .. } => "Signal",
-        ExprKind::Builtin(_) => "eingebauter Bezeichner",
+        ExprKind::Builtin(_) => "eingebauter Bezeichner (`tick`, `last_fault`, ...)",
         ExprKind::Field { .. } => "Feldzugriff",
         ExprKind::Index { .. } => "Index",
         ExprKind::Accessor { .. } => "Zugriff (`.valid`, `.age`, ...)",

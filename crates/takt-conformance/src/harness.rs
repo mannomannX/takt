@@ -87,6 +87,10 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[(u64, S
     let _ = writeln!(s, "    printf(\"t=%lld alert %d %d %d\\n\", g_tick, m, site, on ? 1 : 0);");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_log(int m, int site) {{ printf(\"t=%lld log %d %d\\n\", g_tick, m, site); }}");
+    // 3.3: `now` ist die Dauer seit dem Start des Laufs — die Tickzahl
+    // mal T0, wie im Interpreter. Die Runtime fuehrt sie, weil alle
+    // Maschinen dieselbe Uhr lesen (12.1).
+    let _ = writeln!(s, "long long takt_now(void) {{ return g_tick * {}LL; }}", p.config.tick);
     let _ = writeln!(s, "void takt_measure(int m, int site, double v) {{");
     let _ = writeln!(s, "    printf(\"t=%lld measure %d %d %.17g\\n\", g_tick, m, site, v);");
     let _ = writeln!(s, "}}");
@@ -166,6 +170,11 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[(u64, S
         let _ = writeln!(s, "    *({ct} *)(params + {}) = {value}; /* {} */", slot.offset, slot.name);
     }
 
+    // 9.4: Der Lauf beginnt mit den Outputs auf `safe` (5.3) — vor
+    // jedem Init, wie in `Sim::new`. Danach erst bindet die Simulation,
+    // damit ein `enter:`-Block schon den sicheren Wert sieht.
+    safe_outputs(&mut s, p, &layout);
+    sim_bindings(&mut s, p, "    ");
     for m in &gefuehrt {
         let _ = writeln!(s, "    {0}_init(state_{0}, image, params, latch);", m.name);
     }
@@ -246,6 +255,26 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[(u64, S
 ///
 /// Nur Literale: Ein berechneter Default braeuchte den Interpreter, und
 /// der Rahmen soll nichts auswerten, was der Vergleich pruefen soll.
+/// Setzt jeden Output auf seinen `safe`-Wert (5.3, 9.4).
+///
+/// Der Interpreter tut das in `Sim::new`, bevor eine Maschine laeuft:
+/// Ein Lauf beginnt im sicheren Zustand, nicht bei null. Der Unterschied
+/// faellt auf, sobald ein Wert nicht zufaellig 0 ist — ein Modell mit
+/// `safe = 22 degC` lieferte sonst 0, und jeder Vergleich daran haengt.
+///
+/// Nur Literale: Ein berechneter `safe`-Wert braeuchte den Interpreter,
+/// und der Rahmen soll ohne ihn auskommen (dieselbe Grenze wie bei den
+/// Parametern).
+fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout) {
+    for slot in &layout.outputs {
+        let Some(i) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
+        let Some(safe) = &p.channels[i].attrs.safe else { continue };
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let Some(text) = literal(safe) else { continue };
+        let _ = writeln!(s, "    *({ct} *)(latch + {}) = {text}; /* {} auf safe (5.3) */", slot.offset, slot.name);
+    }
+}
+
 /// Speist die `sim`-Outputs in die `hw`-Inputs derselben Adresse (8.3).
 ///
 /// Ein Plant-Modell schreibt `output p_sim : float[bar] @ sim("daq1/ai0")`,
@@ -298,8 +327,12 @@ fn sim_bindings(s: &mut String, p: &Program, einzug: &str) {
 }
 
 fn param_literal(p: &Program, index: usize) -> Option<String> {
-    let param = p.params.get(index)?;
-    match &param.default.kind {
+    literal(&p.params.get(index)?.default)
+}
+
+/// Ein Literal als C-Text; alles andere braeuchte den Interpreter.
+fn literal(e: &takt_mir::expr::Expr) -> Option<String> {
+    match &e.kind {
         takt_mir::expr::ExprKind::Int(n) => Some(n.to_string()),
         takt_mir::expr::ExprKind::Duration(d) => Some(d.to_string()),
         takt_mir::expr::ExprKind::Bool(b) => Some(u8::from(*b).to_string()),

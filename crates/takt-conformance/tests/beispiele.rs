@@ -28,7 +28,7 @@ mod common;
 /// 14.7 fehlt: Es laeuft auf Hardware (M5-Exit), und es gibt kein
 /// Programm dafuer im Korpus. 14.8 gehoert zu M6 (Flash-Modell-
 /// Kampagne) und hat seine Golden-Traces bereits.
-const BEISPIELE: [&str; 2] = ["14_1", "14_4"];
+const BEISPIELE: [&str; 5] = ["14_1", "14_2", "14_3", "14_4", "14_5"];
 
 /// Die uebrigen, mit dem Konstrukt, an dem der Codegen abbricht.
 ///
@@ -36,12 +36,7 @@ const BEISPIELE: [&str; 2] = ["14_1", "14_4"];
 /// soll: Was fehlt, ist Teil des Ergebnisses. Der Eintrag verschwindet,
 /// sobald das Konstrukt gesenkt wird — und dann faellt der Test auf, der
 /// ihn noch fuehrt.
-const OFFEN: [(&str, &str); 4] = [
-    ("14_2", "`repeat`/`step` in einer Sequenz (6.2)"),
-    ("14_3", "`after` mit einem Maschinenparameter als Dauer (5.8)"),
-    ("14_5", "`for i in range(n)` im Maschinenrumpf (4.1)"),
-    ("14_6", "Stroeme im Codegen (8.6)"),
-];
+const OFFEN: [(&str, &str); 1] = [("14_6", "Mustervergleich und `send` im Codegen (8.7, 8.8; FB-112)")];
 
 /// Wie viele Ticks verglichen werden.
 ///

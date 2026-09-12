@@ -48,13 +48,15 @@ pub struct Ctx<'a> {
     /// Der Index identifiziert die Stelle im Trace; die Reihenfolge ist
     /// die der Erzeugung und damit die des Quelltexts.
     sites: u32,
+    /// Sprungziele der laufenden Schleifen; `break` nimmt das oberste.
+    breaks: Vec<String>,
 }
 
 impl<'a> Ctx<'a> {
     /// Ein Kontext fuer eine Maschine.
     pub fn new(machine: &'a Machine, state: &'a StateStruct, program: &'a Program) -> Ctx<'a> {
         let machine_index = program.machines.iter().position(|m| m.name == machine.name).unwrap_or(0) as u32;
-        Ctx { machine, state, program, checks: 0, machine_index, leaf: None, sites: 0 }
+        Ctx { machine, state, program, checks: 0, machine_index, leaf: None, sites: 0, breaks: Vec::new() }
     }
 
     /// Eine frische Nummer fuer eine Meldungsstelle (9.3).
@@ -165,6 +167,38 @@ impl Vars for StateVars<'_> {
         self.image_slot(channel, slot, m)
     }
 
+    /// Eine eingebaute Groesse (3.3).
+    ///
+    /// `tick` ist eine Konstante des Programms und steht direkt in der
+    /// IR. `now` fuehrt die Runtime, weil alle Maschinen dieselbe Uhr
+    /// lesen — eine Kopie je Maschine waere eine zweite Quelle fuer
+    /// dieselbe Zahl. `time_in_state` steht im Zustand.
+    fn builtin(&self, b: takt_mir::expr::Builtin, p: &Program, m: &mut Module) -> Option<Lowered> {
+        use takt_mir::expr::Builtin as B;
+        let dur = LlvmType::Int(64);
+        match b {
+            B::Tick => Some(Lowered { value: p.config.tick.to_string(), ty: dur }),
+            B::Now => {
+                let v = m.inst(&format!("call i64 @{}()", crate::abi::Abi::NOW));
+                Some(Lowered { value: v.to_string(), ty: dur })
+            }
+            B::TimeInState => {
+                let i = self.state.index_of(Role::TimeInState, 0)?;
+                let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
+                let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}"));
+                let cell =
+                    m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", self.state.depth));
+                let ticks = m.inst(&format!("load i64, ptr {cell}"));
+                // Der Zaehler zaehlt Aktivierungen; die Zeit ist ihre
+                // Zahl mal der Periode (7.2), wie in `after`.
+                let per = i64::from(self.machine.period.max(1)).saturating_mul(p.config.tick);
+                let ns = m.inst(&format!("mul i64 {ticks}, {per}"));
+                Some(Lowered { value: ns.to_string(), ty: dur })
+            }
+            B::LastFault | B::Event => None,
+        }
+    }
+
     /// Der Wert eines Parameters; `%2` traegt Ψ und den Parametervektor.
     fn param(&self, id: takt_mir::ParamId, m: &mut Module) -> Option<Lowered> {
         let p = self.program.params.get(id.index())?;
@@ -226,9 +260,69 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
             m.void_inst("ret void");
             Ok(())
         }
+        StmtKind::ForRange { var, count, body } => for_range(*var, count, body, ctx, m),
+        StmtKind::Break => {
+            // 4.1: Die Schleife hat eine statische Schranke; `break`
+            // verlaesst sie vorzeitig.
+            let Some(target) = ctx.breaks.last().cloned() else {
+                return Err(NotYet { what: "`break` ausserhalb einer Schleife" });
+            };
+            m.void_inst(&format!("br label %{target}"));
+            Ok(())
+        }
         StmtKind::Pass => Ok(()),
         other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
+}
+
+/// `for i in range(n)` im Rumpf einer Maschine (4.1).
+///
+/// Dieselbe Form wie in einer Funktion (`fn_for`), nur liegt der Zaehler
+/// im Zustands-Struct statt auf dem Stack: Eine Maschine hat keine
+/// Locals, ihre Variablen sind Felder (11.2). Die Schranke ist statisch,
+/// weil 4.1 es verlangt und die Kostenrechnung (9.4.3) sie braucht.
+///
+/// **Warum nicht `fn_for` mitbenutzt.** Die beiden Kontexte
+/// unterscheiden sich in mehr als der Variablenquelle: Eine Maschine hat
+/// einen Fault-Pfad, Meldungsstellen und ein Blatt, eine Funktion nicht.
+/// `Ctx` in `FnCtx` zu pressen hiesse, beide um das zu erweitern, was
+/// der andere braucht — der Rumpf ist zwoelf Zeilen, die Naht waere
+/// teurer als die Wiederholung.
+fn for_range(
+    var: takt_mir::VarId,
+    count: &Expr,
+    body: &Block,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let vars = ctx.vars();
+    let n = lower_expr(count, ctx.program, m, &vars)?;
+    let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
+    m.void_inst(&format!("store {ty} 0, ptr {ptr}"));
+    let k = ctx.next_label();
+    let name = &ctx.machine.name;
+    let (kopf, rumpf, ende) =
+        (format!("fuer{k}_{name}"), format!("fuer{k}_{name}_rumpf"), format!("fuer{k}_{name}_ende"));
+    m.void_inst(&format!("br label %{kopf}"));
+    m.label(&kopf);
+    let i = m.inst(&format!("load {ty}, ptr {ptr}"));
+    // Vorzeichenbehaftet: `range(n)` laeuft von 0 bis n-1 ueber einem
+    // `int` (3.1).
+    let weiter = m.inst(&format!("icmp slt {ty} {i}, {}", n.value));
+    m.void_inst(&format!("br i1 {weiter}, label %{rumpf}, label %{ende}"));
+    m.label(&rumpf);
+    ctx.breaks.push(ende.clone());
+    let result = block(body, ctx, m);
+    ctx.breaks.pop();
+    result?;
+    // Der Zaehler waechst am Ende des Rumpfs; ein `break` springt daran
+    // vorbei, und das ist richtig — er verlaesst die Schleife.
+    let cur = m.inst(&format!("load {ty}, ptr {ptr}"));
+    let next = m.inst(&format!("add {ty} {cur}, 1"));
+    m.void_inst(&format!("store {ty} {next}, ptr {ptr}"));
+    m.void_inst(&format!("br label %{kopf}"));
+    m.label(&ende);
+    Ok(())
 }
 
 /// `for i in range(n)` in einer Funktion (4.1).
