@@ -161,6 +161,117 @@ machine m every 1 ms:
     assert!(trace.contains("t=1 out y 7"), "das Element kam nicht an:\n{trace}");
 }
 
+/// Der Inhalt steht als *ein* Wert zur Verfuegung und geht damit an eine
+/// reine Funktion ueber dem Elementtyp — die Form, die 4.1 und 13.8
+/// wollen: ohne Hardware testbar.
+#[test]
+fn the_content_of_a_binding_passes_to_a_function() {
+    let body = "\
+record Frm layout big:
+    kind : u8
+    len  : u16 in 0..64
+
+stream<Frm> q with capacity = 4, overflow = fault
+output y : int @ sim(\"o\")
+
+fn breite(f: Frm) -> int:
+    return f.len as int
+
+machine w every 1 ms:
+    initial A
+    state A:
+        loop:
+            send q, Frm(kind = 1, len = 42)
+        after 1 s: -> A
+
+machine m every 1 ms:
+    initial A
+    state A:
+        on q as f:
+            y = breite(f.data)
+        after 1 s: -> A
+";
+    let trace = simulate(body, 3);
+    assert!(trace.contains("t=1 out y 42"), "der Inhalt kam nicht an:\n{trace}");
+}
+
+/// **Der Grund fuer den Wrapper.** Ein Protokollfeld `seq` — in
+/// Rahmenformaten der Normalfall — wurde von der Stromnummer verdeckt,
+/// solange die Bindung die Felder des Elements durchreichte. Der Zugriff
+/// war nicht etwa ein Fehler: Er lieferte still den falschen Wert.
+#[test]
+fn a_protocol_field_is_not_shadowed_by_the_stream_metadata() {
+    let body = "\
+record LinkHeader layout little:
+    kind : u8
+    seq  : u8
+
+stream<LinkHeader> q with capacity = 4, overflow = fault
+output y : int @ sim(\"o\")
+output z : int @ sim(\"z\")
+
+machine w every 1 ms:
+    initial A
+    state A:
+        loop:
+            send q, LinkHeader(kind = 1, seq = 99)
+        after 1 s: -> A
+
+machine m every 1 ms:
+    initial A
+    state A:
+        on q as h:
+            y = h.data.seq as int
+            z = h.seq
+        after 1 s: -> A
+";
+    let trace = simulate(body, 3);
+    assert!(trace.contains("t=1 out y 99"), "das Protokollfeld fehlt:\n{trace}");
+    // Die Nummer im Strom bleibt daneben lesbar und ist eine andere.
+    assert!(trace.contains("t=2 out z 1"), "die Stromnummer fehlt:\n{trace}");
+}
+
+/// Felder des Elements sind nur ueber den Inhalt erreichbar — wie bei
+/// `T?` „Felder des Inhalts erst nach dem Auspacken" (2.5).
+#[test]
+fn element_fields_are_reached_through_the_content() {
+    let body = "\
+record Frm layout big:
+    kind : u8
+
+stream<Frm> q with capacity = 4, overflow = fault
+output y : int @ sim(\"o\")
+
+machine m every 1 ms:
+    initial A
+    state A:
+        on q as f:
+            y = f.kind as int
+        after 1 s: -> A
+";
+    let e = errors(body);
+    assert!(e.contains("kein Feld `kind`"), "der direkte Zugriff sollte scheitern:\n{e}");
+}
+
+/// `line<N>` nennt seinen Inhalt `.text`, weil dort Text steht und nicht
+/// Bytes (8.6).
+#[test]
+fn a_line_stream_names_its_content_text() {
+    let body = "\
+input rx_log : stream<line<64>> @ hw(\"u/log\") with max_rate = 100 Hz, capacity = 4
+output y : int @ sim(\"o\")
+
+machine m every 1 ms:
+    initial A
+    state A:
+        on rx_log as l:
+            y = l.text.len
+        after 1 s: -> A
+";
+    let e = errors(body);
+    assert!(e.is_empty(), "`.text` fehlt bei `line<N>`:\n{e}");
+}
+
 // --- FB-99: Sichtbarkeit veroeffentlichter Groessen ---------------------
 
 /// Grundentscheidung 6: Kommunikation laeuft mit Unit-Delay, „dadurch ist

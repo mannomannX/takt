@@ -364,7 +364,7 @@ machine uart_framer follows uart_port:
         loop:
             acc.clear()
         on rx_raw as ev:
-            if ev.b == 0:
+            if ev.data.b == 0:
                 -> ASSEMBLE
 
     state ASSEMBLE:
@@ -383,10 +383,10 @@ machine uart_framer follows uart_port:
 
         on rx_raw as ev:
             # Leitungsfehler auf Byteebene verwerfen den ganzen Frame.
-            if ev.frame or ev.parity or ev.brk:
+            if ev.data.frame or ev.data.parity or ev.data.brk:
                 decode_errors += 1
                 -> RESYNC
-            if ev.b == 0:
+            if ev.data.b == 0:
                 if acc.len > 0:
                     if cobs_decode(acc, out):
                         send rx_frames, out
@@ -395,7 +395,7 @@ machine uart_framer follows uart_port:
                         decode_errors += 1
                 acc.clear()
             else:
-                var put = acc.push(ev.b)
+                var put = acc.push(ev.data.b)
                 if not put:
                     too_long += 1
                     -> RESYNC

@@ -700,6 +700,7 @@ PAR-8.7-Operatoren,Absatz/Regel,8.7,Operatoren,,M2 (Ströme),fertig
 PAR-8.7-Handler,Absatz/Regel,8.7,Handler,,M2 (Ströme),fertig
 PAR-8.7-Sequenzen_und_Übergänge,Absatz/Regel,8.7,Sequenzen und Übergänge,,M2 (Ströme),fertig
 PAR-8.7-Garantien_und_Budget,Absatz/Regel,8.7,Garantien und Budget,,M2 (Ströme),fertig
+PAR-8.7-Bindung_als_Wrapper,Absatz/Regel,8.7,"Bindung als Wrapper (Entscheidung, v0.2.9)",,M2 (Stroeme),fertig
 THM-Lemma-9.3.1,Satz/Lemma,9.3.1,Lemma 9.3.1,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.1,Satz/Lemma,9.4.1,Satz 9.4.1,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),fertig

@@ -400,7 +400,7 @@ machine dmx_core every 1 ms:
                 dimmer[i] = 0
             dmx_present = false
         on dmx_rx as f:
-            if f.start_code == SC_NULL:
+            if f.data.start_code == SC_NULL:
                 last_frame_at = f.t
                 -> RECEIVING
 
@@ -430,11 +430,11 @@ machine dmx_core every 1 ms:
         # Start-Codes (0xCC, Alternate Start Codes) bleiben unberuehrt fuer
         # den jeweils anderen Konsumenten (eigener Cursor je Maschine, 8.6).
         on dmx_rx as f:
-            if f.start_code == SC_NULL:
+            if f.data.start_code == SC_NULL:
                 # Der Rahmungs-Transducer garantiert length <= 513; Slot 0 ist
                 # der Start-Code, die Datenslots folgen (E1.11 8.2).
                 slots = f.data
-                slot_count = (f.length as int) - 1
+                slot_count = (f.data.length as int) - 1
                 frames_seen = min(frames_seen + 1, 1_000_000)
                 last_frame_at = f.t
 
@@ -445,7 +445,7 @@ machine dmx_core every 1 ms:
                 dimmer[i] = 0
             identify_led = false
         on dmx_rx as f:
-            if f.start_code == SC_NULL:
+            if f.data.start_code == SC_NULL:
                 last_frame_at = f.t
                 -> RECEIVING
 
@@ -560,13 +560,11 @@ machine rdm_responder follows dmx_core every 1 ms:
             tx_len = 0
 
         on dmx_rx as f:
-            if f.start_code == SC_RDM:
+            if f.data.start_code == SC_RDM:
                 rdm_rx_count = min(rdm_rx_count + 1, 1_000_000)
-                var frame = DmxFrame(start_code = f.start_code,
-                                     length = f.length, data = f.data)
                 # Ein kaputtes Paket wird still verworfen (E1.20 6.2.10),
                 # nicht gefaultet: Der Bus gehoert nicht uns allein.
-                match parse_rdm(frame):
+                match parse_rdm(f.data):
                     case OK(req):
                         last_pid = req.hdr.parameter_id
                         var kind = response_kind(req.hdr, own_uid, muted)

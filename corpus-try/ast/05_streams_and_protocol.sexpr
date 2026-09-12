@@ -90,4 +90,4 @@
   (initial RUN)
   (state RUN
     (on tx_queue as fr
-      (send tx_uart (.encode (.head fr))))))
+      (send tx_uart (.encode (.head (.data fr)))))))

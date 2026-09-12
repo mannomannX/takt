@@ -551,7 +551,7 @@ machine can_router:
 
         on can_rx as f:
             rx_frames += 1
-            var id : u32 = f.id
+            var id : u32 = f.data.id
             var mine : bool = (id & 0x7F) == (NODE_ID as u32)
 
             if id == cob(FC_TPDO1, NODE_ID):
@@ -585,7 +585,7 @@ machine can_router:
                     nmt_state = nmt_of(h.raw.nmt)
                     if (h.raw.nmt & HB_TOGGLE_MASK) == 0:
                         bootup_seen = true
-            elif id == cob(FC_EMCY, NODE_ID) and f.dlc == 8:
+            elif id == cob(FC_EMCY, NODE_ID) and f.data.dlc == 8:
                 var e = EmcyFrame.decode(f.data)
                 if e.valid:
                     send emcy_q, e
@@ -633,11 +633,11 @@ machine sdo_client follows can_router:
         enter:
             busy = false
         when sdo_req_drv as r:
-            req = r
+            req = r.data
             tries = 0
             -> SDO_SEND
         when sdo_req_q as r:
-            req = r
+            req = r.data
             tries = 0
             -> SDO_SEND
 
@@ -830,10 +830,10 @@ machine cia402_drive follows can_router, nmt_master:
         sto_request = not enabled
 
     on emcy_q as e:
-        last_emcy = e.code
-        log "EMCY {e.code:hex} reg={e.err_reg:hex}"
-        if emcy_is_fatal(e):
-            abort "fatal emergency {e.code:hex}"
+        last_emcy = e.data.code
+        log "EMCY {e.data.code:hex} reg={e.data.err_reg:hex}"
+        if emcy_is_fatal(e.data):
+            abort "fatal emergency {e.data.code:hex}"
 
     # =====================================================================
     state DRV_INIT:
@@ -1136,13 +1136,13 @@ machine bus_tx follows cia402_drive, motion_profile, sdo_client, nmt_master:
         #     sie duerfen den zyklischen Verkehr nicht verdraengen:
         #     ein Frame pro Tick genuegt fuer jeden Handshake.
         on tx_q as f:
-            send can_tx, f.encode()
-            tx_bytes += (f.dlc as int) + 5
+            send can_tx, f.data.encode()
+            tx_bytes += (f.data.dlc as int) + 5
             break
 
         on tx_nmt as f:
-            send can_tx, f.encode()
-            tx_bytes += (f.dlc as int) + 5
+            send can_tx, f.data.encode()
+            tx_bytes += (f.data.dlc as int) + 5
             break
 
     state TX_SAFE:

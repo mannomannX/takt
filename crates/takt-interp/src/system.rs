@@ -165,25 +165,16 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
             return bug(format!("Bindung {} ist kein Record", var.0));
         };
         let defs = loaded.program.records[r.index()].fields.clone();
-        // Bei einem Record-Strom traegt die Bindung die Felder des Elements
-        // (8.7). Sie stehen im Bindungstyp hinter `t` und `seq` und in
-        // derselben Reihenfolge wie im Element.
-        let inner: &[Value] = match &element.value {
-            Value::Record(f) => f,
-            _ => &[],
-        };
+        // Die Bindung ist ein Wrapper (8.7): hinter den Captures stehen
+        // `t`, `seq` und der Inhalt unter einem Namen. Felder eines
+        // Record-Elements sind darunter erreichbar, nicht daneben.
         let mut fields = caps;
-        let mut taken = 0;
         for def in defs.iter().skip(fields.len()) {
             let v = match def.name.as_str() {
                 "t" => Value::Duration(element.t),
                 "seq" => Value::Int(element.seq),
                 "text" | "data" => element.value.clone(),
-                _ => {
-                    let v = inner.get(taken).cloned();
-                    taken += 1;
-                    v.unwrap_or_else(|| Value::default_for(def.ty, loaded.program))
-                }
+                _ => Value::default_for(def.ty, loaded.program),
             };
             fields.push(v);
         }

@@ -202,9 +202,24 @@ impl Lowerer<'_> {
         Some(record)
     }
 
-    /// Recordtyp der Bindung `as b`: die Captures, gefolgt von den Feldern,
-    /// die ein Stream-Element traegt (8.7). Der Name ist nicht aus Quelltext
-    /// erreichbar, erscheint aber in Dump und Diagnosen.
+    /// Recordtyp der Bindung `as b`: die Captures, die Metadaten des
+    /// Elements und ein benannter Zugriff auf seinen Inhalt (8.7). Der Name
+    /// ist nicht aus Quelltext erreichbar, erscheint aber in Dump und
+    /// Diagnosen.
+    ///
+    /// **Die Bindung ist ein Wrapper, kein Abbild.** `b.t` und `b.seq`
+    /// gehoeren ihr, der Inhalt steht unter `b.data` (bei `line<N>`:
+    /// `b.text`) — die Felder eines Record-Elements sind erst danach
+    /// erreichbar, also `b.data.feld`. Dieselbe Regel gilt in 2.5 fuer
+    /// `T?` und `T!E`: „auf einem Wrapper meint `x.name` immer den
+    /// Wrapper, und Felder des Inhalts sind erst nach dem Auspacken
+    /// erreichbar".
+    ///
+    /// Frueher reichte die Bindung die Felder eines Record-Elements
+    /// durch. Das las sich kuerzer und verdeckte sie: Ein Protokollfeld
+    /// `seq` — in Rahmenformaten der Normalfall — war unerreichbar, weil
+    /// `b.seq` die Stromnummer lieferte. Still, ohne Meldung. Mit dem
+    /// Wrapper ist beides sichtbar und keins verdeckt.
     pub fn binding_type(
         &mut self,
         name: &str,
@@ -218,28 +233,11 @@ impl Lowerer<'_> {
             let int = self.tys.int;
             fields.push(field("t", duration, span));
             fields.push(field("seq", int, span));
-            // `line<N>` traegt `.text`, `bytes<N>` traegt `.data` (8.6); bei
-            // einem Record-Strom traegt die Bindung dessen Felder (8.7).
-            match self.ty(elem).clone() {
-                Type::Line { .. } => fields.push(field("text", elem, span)),
-                Type::Bytes { .. } => fields.push(field("data", elem, span)),
-                Type::Record(r) => {
-                    let inner = self.program.records[r.index()].fields.clone();
-                    for f in inner {
-                        // Ein Capture gleichen Namens hat Vorrang.
-                        if !fields.iter().any(|x| x.name == f.name) {
-                            fields.push(field(&f.name, f.ty, span));
-                        }
-                    }
-                }
-                // Ein Skalarelement (8.6 nennt `u8`, dazu `Edge` und
-                // Enums) traegt seinen Wert unter demselben Namen wie
-                // `bytes<N>`: Beide sind der *Inhalt* des Elements, im
-                // Unterschied zu den Metadaten `.t` und `.seq`. Ohne das
-                // Feld ist der Wert gar nicht erreichbar — ein Byte-Strom
-                // waere aus einem Handler heraus nicht verarbeitbar.
-                _ => fields.push(field("data", elem, span)),
-            }
+            // Ein Zugriff fuer jede Elementart: `line<N>` nennt ihn
+            // `.text`, weil dort Text steht und nicht Bytes; sonst heisst
+            // er `.data` (8.6).
+            let content = if matches!(self.ty(elem), Type::Line { .. }) { "text" } else { "data" };
+            fields.push(field(content, elem, span));
         }
         let id = RecordId(self.program.records.len() as u32);
         self.program.records.push(RecordDef {

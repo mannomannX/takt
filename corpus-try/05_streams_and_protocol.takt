@@ -108,4 +108,4 @@ machine sender follows link every 5 ms:
 
     state RUN:
         on tx_queue as fr:
-            send tx_uart, fr.head.encode()
+            send tx_uart, fr.data.head.encode()
