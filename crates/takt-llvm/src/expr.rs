@@ -161,6 +161,11 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
                 valid_or_fault(*channel, m, vars)?;
             }
             let inner = lower(expr, p, m, vars)?;
+            // 4.1: Die uebrigen Pruefungen stehen *hinter* dem Wert — sie
+            // pruefen ihn. Wo M3 sie wegbeweisen konnte, steht hier kein
+            // `Checked`-Knoten (plan/m4.md 4.2), und es entsteht kein
+            // Zweig.
+            runtime_check(kind, &inner, m, vars)?;
             // `Missing` ist das Auspacken eines `T?`/`T!E` (3.8): Der
             // Knoten prueft, dass ein Wert da ist, *und* liefert ihn. Der
             // Zweig in den Fault-Trampolin entsteht in der Maschine; hier
@@ -559,6 +564,148 @@ fn decode(
     crate::wire::decode(data, &len.to_string(), record, want, p, m, label)
 }
 
+/// Prueft das Fault-Flag nach einem Aufruf (4.1).
+///
+/// Wer keinen Fault-Pfad hat — eine Funktion, die eine andere ruft —
+/// reicht ihn weiter: Ihr eigenes Ziel ist der Ausgang, der das Flag
+/// setzt, und es steht bereits.
+fn propagate_fault(m: &mut Module, vars: &dyn Vars) -> Result<(), NotYet> {
+    let Some(target) = vars.fault_label() else {
+        return Err(NotYet { what: "Aufruf ohne Fault-Pfad" });
+    };
+    let flag = m.inst(&format!("load i8, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    let ok = m.inst(&format!("icmp eq i8 {flag}, 0"));
+    let weiter = format!("nach_aufruf{}", m.next_label());
+    m.void_inst(&format!("br i1 {ok}, label %{weiter}, label %{target}"));
+    m.label(&weiter);
+    Ok(())
+}
+
+/// Die Laufzeitpruefungen aus 4.1.
+///
+/// **Sie stehen hinter dem Wert, nicht davor.** Ein Ueberlauf ist erst am
+/// Ergebnis zu erkennen, eine Range-Verletzung auch. Nur die
+/// Gueltigkeitspruefung (3.5) geht voran, weil der Wert eines `Bad`-Kanals
+/// gar nicht erst gelesen werden darf.
+///
+/// **Was hier fehlt, hat M3 wegbewiesen.** Die Intervallanalyse setzt
+/// einen `Checked`-Knoten nur, wo sie die Schranke nicht zeigen konnte
+/// (3.4) — der Codegen erzeugt also genau die Zweige, die noetig sind,
+/// und keinen mehr. Das ist die Auszahlung der Reihenfolge M3 → M4.
+fn runtime_check(
+    kind: &takt_mir::expr::CheckedKind,
+    value: &Lowered,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<(), NotYet> {
+    use takt_mir::expr::CheckedKind as K;
+    let bedingung = match kind {
+        // Die Range steht am Knoten; beide Grenzen einschliesslich (3.4).
+        K::Range(r) => match &value.ty {
+            LlvmType::Int(bits) => {
+                let (Some(lo), Some(hi)) = (const_i64(&r.lo), const_i64(&r.hi)) else {
+                    return Ok(());
+                };
+                // Eine Grenze, die in die Breite des Werts nicht passt,
+                // ist keine: `slt i8 x, 255` vergleicht gegen -1, und die
+                // Pruefung schluege immer fehl. Der Wert *kann* sie dann
+                // nicht verletzen — die Analyse hat die Schranke schon im
+                // Typ (3.4), und ein Zweig waere toter Code.
+                let passt = |v: i64| {
+                    let b = i64::from(*bits);
+                    b >= 64 || (v >= -(1i64 << (b - 1)) && v < (1i64 << (b - 1)))
+                };
+                if !passt(lo) || !passt(hi) {
+                    return Ok(());
+                }
+                m.void_inst(&format!("; Range {lo}..{hi} auf {}", value.ty));
+                let a = m.inst(&format!("icmp sge {} {}, {lo}", value.ty, value.value));
+                let b = m.inst(&format!("icmp sle {} {}, {hi}", value.ty, value.value));
+                m.inst(&format!("and i1 {a}, {b}")).to_string()
+            }
+            // Die Grenzen stehen als Bitmuster, nicht dezimal: `0.1`
+            // dezimal waere eine andere Zahl als die im Programm (4.2),
+            // und eine Grenze, die um ein Bit danebenliegt, laesst genau
+            // den Wert durch, den sie fangen soll.
+            LlvmType::F32 | LlvmType::F64 => {
+                let (Some(lo), Some(hi)) = (const_f64(&r.lo), const_f64(&r.hi)) else {
+                    return Ok(());
+                };
+                let (l, h) = (float_literal(lo, &value.ty), float_literal(hi, &value.ty));
+                let a = m.inst(&format!("fcmp oge {} {}, {l}", value.ty, value.value));
+                let b = m.inst(&format!("fcmp ole {} {}, {h}", value.ty, value.value));
+                m.inst(&format!("and i1 {a}, {b}")).to_string()
+            }
+            _ => return Ok(()),
+        },
+        // 4.1: Ein Index ausserhalb `0..len-1` ist ein `RangeFault`. Der
+        // Knoten umschliesst aber den *Zugriff*, nicht den Index — der
+        // geprueft Wert waere hier das Element. Die Pruefung gehoert
+        // darum in `index_of`, wo der Index vorliegt; hier stuende sie auf
+        // dem falschen Wert.
+        //
+        // Bei einer Sammlung ist die Schranke ausserdem die *Laenge* zur
+        // Laufzeit, nicht die Kapazitaet (3.9): Das Sema traegt dann 0 ein
+        // und meint „lies sie aus dem Wert".
+        K::Index { .. } => return Ok(()),
+        // Ein Divisor von null ist ein `ArithmeticFault` (4.1). Geprueft
+        // wird der *Divisor*; die MIR setzt den Knoten um ihn.
+        K::DivZero => m.inst(&format!("icmp ne {} {}, 0", value.ty, value.value)).to_string(),
+        // Ueberlauf, Domaene und Konversion brauchen den Operator, den der
+        // Knoten nicht nennt — sie kommen mit dem Kostenmodell, das sie
+        // ohnehin braucht. Bis dahin steht hier kein Zweig, und das ist
+        // sichtbar: Der Knoten wird gemeldet, nicht uebergangen.
+        K::Overflow | K::NonFinite | K::Domain | K::Convert | K::Shift => return Ok(()),
+        // `Valid` steht vor dem Wert (siehe oben), `Missing` ist das
+        // Auspacken (3.8).
+        K::Valid | K::Missing => return Ok(()),
+    };
+    let Some(target) = vars.fault_label() else {
+        return Err(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" });
+    };
+    let weiter = format!("geprueft_{}_{}", kind_name(kind), m.next_label());
+    m.void_inst(&format!("br i1 {bedingung}, label %{weiter}, label %{target}"));
+    m.label(&weiter);
+    Ok(())
+}
+
+/// Der Name einer Pruefungsart, fuer die Marke.
+fn kind_name(k: &takt_mir::expr::CheckedKind) -> &'static str {
+    use takt_mir::expr::CheckedKind as K;
+    match k {
+        K::Range(_) => "range",
+        K::Index { .. } => "index",
+        K::DivZero => "div",
+        K::Overflow => "ovf",
+        K::NonFinite => "fin",
+        K::Domain => "dom",
+        K::Convert => "conv",
+        K::Shift => "shift",
+        K::Valid => "valid",
+        K::Missing => "missing",
+    }
+}
+
+/// Eine Grenze als Fliesskommazahl.
+fn const_f64(c: &takt_mir::types::Const) -> Option<f64> {
+    match c {
+        takt_mir::types::Const::Int(i) => Some(*i as f64),
+        takt_mir::types::Const::Duration(d) => Some(*d as f64),
+        takt_mir::types::Const::Float(f) => Some(*f),
+        takt_mir::types::Const::Bool(_) => None,
+    }
+}
+
+/// Eine Grenze als ganze Zahl.
+fn const_i64(c: &takt_mir::types::Const) -> Option<i64> {
+    match c {
+        takt_mir::types::Const::Int(i) => Some(*i),
+        takt_mir::types::Const::Duration(d) => Some(*d),
+        takt_mir::types::Const::Float(f) => Some(*f as i64),
+        takt_mir::types::Const::Bool(_) => None,
+    }
+}
+
 /// Prueft die Gueltigkeit eines Channels und springt sonst in den
 /// Fault-Pfad (3.5, 4.1).
 ///
@@ -696,6 +843,35 @@ fn index_of(
 ) -> Result<Lowered, NotYet> {
     let x = lower(base, p, m, vars)?;
     let i = lower(index, p, m, vars)?;
+    // 4.1: Der Index liegt in `0..len-1`. Die Schranke ist bei einer
+    // Sammlung ihre *Laenge* zur Laufzeit (3.9), bei einem Array seine
+    // statische Groesse.
+    //
+    // Geprueft wird immer, auch wo M3 die Schranke gezeigt hat: Der
+    // `Checked{Index}`-Knoten umschliesst den *Zugriff*, nicht den Index,
+    // und `index_of` sieht ihn darum nicht. Das kostet einen Zweig, den
+    // LLVM meist wegoptimiert — und es ist die konservative Seite. Die
+    // Verbindung herzustellen hiesse, den Knoten an den Index zu haengen;
+    // das gehoert in die MIR, nicht in den Codegen.
+    {
+        let grenze = match &x.ty {
+            LlvmType::Struct(_) => {
+                let l = m.inst(&format!("extractvalue {} {}, 0", x.ty, x.value));
+                let wide = m.inst(&format!("sext i32 {l} to {}", i.ty));
+                wide.to_string()
+            }
+            LlvmType::Array(_, n) => n.to_string(),
+            _ => return Err(NotYet { what: "Index auf diesem Typ" }),
+        };
+        if let Some(target) = vars.fault_label() {
+            let a = m.inst(&format!("icmp sge {} {}, 0", i.ty, i.value));
+            let b = m.inst(&format!("icmp slt {} {}, {grenze}", i.ty, i.value));
+            let ok = m.inst(&format!("and i1 {a}, {b}"));
+            let weiter = format!("index_ok{}", m.next_label());
+            m.void_inst(&format!("br i1 {ok}, label %{weiter}, label %{target}"));
+            m.label(&weiter);
+        }
+    }
     // Der Wert liegt als Register vor, nicht im Speicher; ein
     // `extractvalue` mit berechnetem Index gibt es nicht. Er bekommt
     // darum einen Platz (11.2: statischer Scratch), und LLVM entfernt
@@ -752,12 +928,18 @@ fn call(
         operands.push(format!("{} {}", v.ty, v.value));
     }
     let name = crate::fns::symbol(f);
-    if *want == LlvmType::Void {
+    let result = if *want == LlvmType::Void {
         m.void_inst(&format!("call void @{name}({})", operands.join(", ")));
-        return Ok(Lowered { value: String::new(), ty: LlvmType::Void });
-    }
-    let r = m.inst(&format!("call {want} @{name}({})", operands.join(", ")));
-    Ok(Lowered { value: r.to_string(), ty: want.clone() })
+        Lowered { value: String::new(), ty: LlvmType::Void }
+    } else {
+        let r = m.inst(&format!("call {want} @{name}({})", operands.join(", ")));
+        Lowered { value: r.to_string(), ty: want.clone() }
+    };
+    // 4.1: Eine reine Funktion faultet den Aufrufer. Sie setzt dafuer das
+    // Flag; hier wird es geprueft, und der Aufrufer nimmt seinen eigenen
+    // Fault-Pfad (`abi::Abi::FAULT_FLAG`).
+    propagate_fault(m, vars)?;
+    Ok(result)
 }
 
 /// Ein Record-Literal (3.7).

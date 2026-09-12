@@ -39,9 +39,15 @@ pub fn symbol(f: &FnDef) -> String {
 pub struct Locals {
     /// Zeiger je lokaler Variable, in der Reihenfolge der MIR.
     slots: Vec<(Reg, LlvmType)>,
+    /// Die Marke, an der die Funktion mit gesetztem Fault-Flag endet.
+    exit: String,
 }
 
 impl Vars for Locals {
+    fn fault_label(&self) -> Option<String> {
+        Some(self.exit.clone())
+    }
+
     fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<Lowered> {
         let (ptr, ty) = self.slots.get(id.index())?.clone();
         let v = m.inst(&format!("load {ty}, ptr {ptr}"));
@@ -66,7 +72,7 @@ pub fn prologue(f: &FnDef, p: &Program, args: &[Reg], m: &mut Module) -> Result<
         }
         slots.push((ptr, ty));
     }
-    Ok(Locals { slots })
+    Ok(Locals { slots, exit: format!("fn_fault_{}", f.name.replace('.', "_")) })
 }
 
 /// Die Signatur einer Funktion: Parametertypen und Rueckgabetyp.
@@ -119,6 +125,17 @@ fn body(f: &FnDef, p: &Program, args: &[Reg], ret: &LlvmType, m: &mut Module) ->
             _ => m.void_inst("unreachable"),
         }
     }
+    // 4.1: Eine reine Funktion hat keinen Fault-Pfad — sie setzt das Flag
+    // und kehrt zurueck. Der Aufrufer prueft es und nimmt seinen eigenen
+    // Pfad (`abi::Abi::FAULT_FLAG`).
+    m.label(&format!("fn_fault_{}", f.name.replace('.', "_")));
+    m.void_inst(&format!("store i8 1, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    match ret {
+        LlvmType::Void => m.void_inst("ret void"),
+        // Der Wert ist bedeutungslos: Der Aufrufer liest ihn nicht, wenn
+        // das Flag steht.
+        _ => m.void_inst(&format!("ret {ret} zeroinitializer")),
+    }
     m.end(None);
     Ok(())
 }
@@ -132,6 +149,8 @@ fn body(f: &FnDef, p: &Program, args: &[Reg], ret: &LlvmType, m: &mut Module) ->
 /// Argument und umgekehrt; beides uebersetzt, und nur die Zahlen sind
 /// falsch.
 pub struct BlockVars {
+    /// Die Marke, an der die Methode mit gesetztem Fault-Flag endet.
+    exit: String,
     /// Typen der Instanzvariablen (Parameter, dann Zustand).
     instance_fields: Vec<LlvmType>,
     /// Zeiger auf die Instanz.
@@ -163,6 +182,10 @@ enum Ort {
 }
 
 impl Vars for BlockVars {
+    fn fault_label(&self) -> Option<String> {
+        Some(self.exit.clone())
+    }
+
     fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<Lowered> {
         let (ptr, ty) = match self.locate(id)? {
             Ort::Parameter(ptr, ty) => (ptr, ty),
@@ -243,6 +266,7 @@ fn block_body(
         params.push((ptr, ty));
     }
     let vars = BlockVars {
+        exit: format!("fn_fault_{}", f.name.replace('.', "_")),
         instance_fields: inst.fields[..inst.fields.len() - 1].to_vec(),
         instance,
         instance_ty: inst.llvm(),
@@ -255,6 +279,17 @@ fn block_body(
             LlvmType::Void => m.void_inst("ret void"),
             _ => m.void_inst("unreachable"),
         }
+    }
+    // 4.1: Eine reine Funktion hat keinen Fault-Pfad — sie setzt das Flag
+    // und kehrt zurueck. Der Aufrufer prueft es und nimmt seinen eigenen
+    // Pfad (`abi::Abi::FAULT_FLAG`).
+    m.label(&format!("fn_fault_{}", f.name.replace('.', "_")));
+    m.void_inst(&format!("store i8 1, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    match ret {
+        LlvmType::Void => m.void_inst("ret void"),
+        // Der Wert ist bedeutungslos: Der Aufrufer liest ihn nicht, wenn
+        // das Flag steht.
+        _ => m.void_inst(&format!("ret {ret} zeroinitializer")),
     }
     m.end(None);
     Ok(())

@@ -47,6 +47,18 @@ impl Abi {
     /// `abort "text"` (5.4): Fault fuer *alle* Maschinen im selben Tick.
     pub const ABORT: &'static str = "takt_abort";
 
+    /// Das Fault-Flag einer reinen Funktion (4.1).
+    ///
+    /// Eine Funktion hat keinen eigenen Fault-Pfad — sie faultet den
+    /// Aufrufer. Sie setzt darum dieses Flag, und der Aufrufer prueft es
+    /// nach dem Aufruf; trifft er es gesetzt, nimmt er seinen eigenen
+    /// Fault-Pfad.
+    ///
+    /// Eine Stelle genuegt: 9.4 kennt keinen nebenlaeufigen Zugriff auf
+    /// den Zustand einer Maschine (Satz 9.4.1, die Schritte kommutieren),
+    /// und innerhalb eines Schritts laeuft immer nur ein Aufruf.
+    pub const FAULT_FLAG: &'static str = "takt_fn_fault";
+
     /// Schreibt die Deklarationen in den Modulkopf.
     ///
     /// Alle nehmen `(machine: i32, site: i32, ...)`: Die Stelle ist das,
@@ -61,6 +73,7 @@ impl Abi {
         // `append` kopiert eine ganze Folge in einem Zug (3.9); LLVM
         // kennt das als Intrinsic, und eine Schleife braeuchte eine
         // Schranke, die 4.1 ohnehin verlangt.
+        m.declare(&format!("@{} = external global i8", Abi::FAULT_FLAG));
         m.declare("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)");
     }
 }

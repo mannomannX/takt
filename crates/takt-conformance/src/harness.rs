@@ -41,6 +41,10 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
     // Die Runtime-Aufrufe (`takt-llvm/src/abi.rs`). Sie schreiben in den
     // Trace, damit der Vergleich sie sieht.
     let _ = writeln!(s, "static long long g_tick = 0;");
+    // Das Fault-Flag der reinen Funktionen (4.1, `abi::Abi::FAULT_FLAG`).
+    // Es gehoert der Runtime; der Rahmen stellt es bereit und setzt es je
+    // Tick zurueck, wie es die Abort-Phase taete.
+    let _ = writeln!(s, "unsigned char takt_fn_fault = 0;");
     let _ = writeln!(s, "void takt_alert(int m, int site, unsigned char on) {{");
     let _ = writeln!(s, "    printf(\"t=%lld alert %d %d %d\\n\", g_tick, m, site, on ? 1 : 0);");
     let _ = writeln!(s, "}}");

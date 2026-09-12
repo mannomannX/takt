@@ -151,19 +151,21 @@ fn generated_programs_agree() {
         return;
     };
     let clang = Clang::At(path);
+    // Mehrere Startwerte: Ein einzelner trifft immer dieselben Formen,
+    // und die Formen sind das, was hier gesucht wird.
     let mut rng = Rng(0x2026_0912);
     let (mut gebaut, mut abgelehnt) = (0, 0);
     let mut fehler = Vec::new();
 
-    for runde in 0..60 {
+    for runde in 0..160 {
         // Die zweite Haelfte rechnet in Fliesskomma: Dort sitzt Satz
         // 9.4.4, und dort ist eine Abweichung am schwersten zu finden.
         let (expr, src) = if runde % 2 == 0 {
-            let e = int_expr(&mut rng, 2 + (runde % 2) as u32);
+            let e = int_expr(&mut rng, 2 + (runde % 3) as u32);
             let s = program(&e);
             (e, s)
         } else {
-            let e = float_expr(&mut rng, 2);
+            let e = float_expr(&mut rng, 2 + (runde % 3) as u32);
             let s = float_program(&e);
             (e, s)
         };
