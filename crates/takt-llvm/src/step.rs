@@ -172,7 +172,33 @@ fn transitions(
         let (take, skip) = (format!("uebergang{id}_{name}"), format!("bleibt{id}_{name}"));
         m.void_inst(&format!("br i1 {}, label %{take}, label %{skip}", c.value));
         m.label(&take);
-        let Target::State(to) = t.target else { return Err(NotYet { what: "Uebergangsziel" }) };
+        // 5.3 und 6.2: Ein Uebergang zeigt nicht immer auf einen Zustand.
+        // Die beiden anderen Ziele gehen verschiedene Wege, und der
+        // Unterschied ist der Fault selbst.
+        let to = match t.target {
+            Target::State(to) => to,
+            // Der Timeout einer Sequenz (6.2) *ist* ein Fault: Er wird
+            // vorgemerkt und nimmt dann den Fault-Pfad des Blatts —
+            // denselben, den ein gescheiterter `check` nimmt. Der Pfad
+            // endet in `end`, hier kommt nichts nach.
+            Target::Fault(kind) => {
+                pending(ctx, m, kind);
+                m.void_inst(&format!("br label %fault_{}_{}", ctx.machine.name, leaves[from].index()));
+                m.label(&skip);
+                continue;
+            }
+            // `-> FAULTED` (5.3) ist kein Fault, sondern ein Ziel: Die
+            // Konfiguration wird leer, kein Nutzercode laeuft mehr, und
+            // die Outputs stehen auf `safe`. Der Interpreter setzt hier
+            // keinen `last_fault`, also tut es der Codegen auch nicht.
+            Target::Faulted => {
+                leave_configuration(ctx, m, leaves.len());
+                safe_outputs(ctx, m)?;
+                m.void_inst(&format!("br label %{end}"));
+                m.label(&skip);
+                continue;
+            }
+        };
         // 5.2: Ein Uebergang auf einen zusammengesetzten Zustand betritt
         // dessen `initial`-Kind, und das rekursiv bis zu einem Blatt.
         let leaf = machine::initial_leaf(ctx.machine, to).ok_or(NotYet { what: "Zielzustand ohne `initial`" })?;
@@ -213,6 +239,89 @@ fn transitions(
         m.label(&skip);
     }
     Ok(())
+}
+
+/// Setzt die Outputs der Maschine auf ihren `safe`-Wert (5.3).
+///
+/// In `FAULTED` laeuft kein Nutzercode mehr, und niemand schreibt die
+/// Outputs — ohne diesen Schritt behielten sie den letzten Wert des
+/// verlassenen Zustands. Genau das soll `safe` verhindern: Ein
+/// Ventil, das offen stand, bliebe offen.
+///
+/// Der Interpreter tut dasselbe (`safe_outputs`), und nur die Outputs
+/// *dieser* Maschine: Ein Fault einer Maschine stellt nicht die Anlage
+/// still, sondern ihren eigenen Wirkungsbereich (5.4).
+fn safe_outputs(ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let eigene: Vec<(takt_mir::ChannelId, takt_mir::expr::Expr)> = ctx
+        .program
+        .channels
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.owner == Some(takt_mir::MachineId(ctx.machine_index)))
+        .filter_map(|(i, c)| c.attrs.safe.clone().map(|e| (takt_mir::ChannelId(i as u32), e)))
+        .collect();
+    for (c, safe) in eigene {
+        let vars = ctx.vars();
+        let value = crate::expr::lower(&safe, ctx.program, m, &vars)?;
+        let off = crate::image::latch_offset(c, ctx.program).ok_or(NotYet { what: "Versatz im Latch" })?;
+        let ptr = m.inst(&format!("getelementptr inbounds i8, ptr %3, i64 {off}"));
+        m.void_inst(&format!("store {} {}, ptr {ptr}", value.ty, value.value));
+    }
+    Ok(())
+}
+
+/// Merkt einen Fault vor, bevor der Fault-Pfad ihn aufnimmt (5.4).
+///
+/// `pending` ist `{ i1 gueltig, i32 Art, i32 Ursprung }`. Der Fault-Pfad
+/// setzt das Flag selbst; hier kommt die *Art* dazu, weil nur der
+/// Uebergang sie kennt — ein Timeout ist ein anderer Fault als ein
+/// gescheiterter `check`, und die Abort-Phase (5.4) reicht ihn weiter.
+fn pending(ctx: &Ctx<'_>, m: &mut Module, kind: takt_mir::machine::FaultKind) {
+    let Some(i) = ctx.state.index_of(Role::Pending, 0) else { return };
+    let state_ty = format!("%{}_state", ctx.machine.name);
+    let field = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}"));
+    let art = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 1"));
+    m.void_inst(&format!("store i32 {}, ptr {art}", fault_code(kind)));
+}
+
+/// Die Fault-Art als Zahl, in der Reihenfolge von `FaultKind` (5.3).
+///
+/// Die Runtime liest sie aus `pending`; die Zahlen sind darum Teil der
+/// ABI und stehen neben `abi.rs`, nicht im Code verstreut.
+fn fault_code(kind: takt_mir::machine::FaultKind) -> u32 {
+    use takt_mir::machine::FaultKind as F;
+    match kind {
+        F::CheckFailed => 0,
+        F::Expect => 1,
+        F::Timeout => 2,
+        F::SensorFault => 3,
+        F::MissingValue => 4,
+        F::Arithmetic(_) => 5,
+        F::Range => 6,
+        F::StreamOverflow => 7,
+        F::Timing => 8,
+        F::ScheduleOverflow => 9,
+        F::JobOverflow => 10,
+        F::Abort => 11,
+        F::Runtime(_) => 12,
+    }
+}
+
+/// `-> FAULTED`: die Konfiguration wird leer (5.3, 9.3).
+///
+/// Es gibt keinen Zustand mehr, in dem Code laeuft. Der Interpreter
+/// setzt `conf` auf die leere Folge; im erzeugten Code steht dafuer der
+/// Index hinter dem letzten Blatt — der `switch` der Schrittfunktion
+/// trifft ihn nicht, und damit laeuft nichts mehr.
+fn leave_configuration(ctx: &Ctx<'_>, m: &mut Module, leaves: usize) {
+    let Some(conf_i) = ctx.state.index_of(Role::Conf, 0) else { return };
+    let state_ty = format!("%{}_state", ctx.machine.name);
+    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+    let cell = m.inst(&format!("getelementptr inbounds [{} x i8], ptr {base}, i32 0, i32 0", ctx.state.depth));
+    // Der Index hinter dem letzten Blatt: Der `switch` der
+    // Schrittfunktion kennt nur 0..leaves und trifft ihn nicht.
+    m.void_inst(&format!("store i8 {leaves}, ptr {cell}"));
+    reset_time(ctx, m);
 }
 
 /// `t_in_state = 0` beim Eintritt in einen Zustand (5.2).
@@ -324,8 +433,29 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
         return Err(e);
     }
     module.label(&ende);
+    // 9.4: Tick 0 schreibt den Zaehler fort „wie am Ende jedes Ticks"
+    // (`System::init` ruft `advance_counters`). Ohne das misst der
+    // erzeugte Code eine Frist um einen Tick zu lang: Der Interpreter
+    // steht zu Beginn von Tick 1 bei `t_in_state == 1`, der Code bei 0,
+    // und `after 30 ms` feuert bei 10 ms Tick erst in Tick 4 statt 3.
+    advance_time(&ctx, module);
     module.end(None);
     Ok(())
+}
+
+/// Schreibt `t_in_state` um einen Tick fort (9.4).
+///
+/// Der Zaehler misst die Ticks *seit* dem Eintritt; er waechst am Ende
+/// jedes Ticks, in dem die Maschine aktiv war — und am Ende der
+/// Initialisierung, weil Tick 0 dazugehoert.
+fn advance_time(ctx: &Ctx<'_>, m: &mut Module) {
+    let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else { return };
+    let state_ty = format!("%{}_state", ctx.machine.name);
+    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
+    let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
+    let now = m.inst(&format!("load i64, ptr {cell}"));
+    let next = m.inst(&format!("add i64 {now}, 1"));
+    m.void_inst(&format!("store i64 {next}, ptr {cell}"));
 }
 
 /// `after d` als Ausloeser (5.2, 7.1).
@@ -524,9 +654,13 @@ fn fault_path(
     }
     let target = machine_def.fault_target_of(from);
     let takt_mir::machine::FaultTarget::State(to) = target else {
-        // `FAULTED` fuehrt keinen Nutzercode aus (5.2 Regel 5); die
-        // Outputs stehen bereits auf `safe`, was die Runtime stellt.
-        m.void_inst("ret void");
+        // `FAULTED` fuehrt keinen Nutzercode aus (5.2 Regel 5), und die
+        // Outputs gehen auf `safe` — noch in diesem Tick, nicht erst im
+        // naechsten: Der Interpreter tut es an derselben Stelle, und ein
+        // Ventil, das offen stand, bliebe sonst einen Tick laenger offen.
+        leave_configuration(ctx, m, leaves.len());
+        safe_outputs(ctx, m)?;
+        m.void_inst(&format!("br label %{end}"));
         return Ok(());
     };
     let Some(leaf) = machine::initial_leaf(machine_def, to) else {

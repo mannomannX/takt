@@ -1,0 +1,31 @@
+# 22 — `FAULTED` ohne Fault-Ziel (5.3).
+#
+# Eine Maschine ohne `fault -> ZIEL` faultet nach `FAULTED`: Die
+# Konfiguration wird leer, kein Nutzercode laeuft mehr, und die Outputs
+# gehen auf ihren `safe`-Wert — noch in demselben Tick. Ein Ventil, das
+# offen stand, bliebe sonst einen Tick laenger offen.
+#
+# Dazu die Frist als solche: `after d` feuert im ersten Tick mit
+# `t_in_state >= d`, nicht einen spaeter (7.1).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output y : int in 0..9 @ hw("ui/y") with safe = 2
+
+machine m:
+    initial A
+
+    state A:
+        enter:
+            y = 5
+        after 30 ms: -> B
+
+    # Der `check` scheitert in jedem Tick; ohne Fault-Ziel fuehrt er
+    # nach `FAULTED`, und `y` faellt von 7 auf den sicheren Wert.
+    state B:
+        enter:
+            y = 7
+        loop:
+            check y == 9, "immer falsch"

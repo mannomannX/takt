@@ -13,7 +13,7 @@ use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 13] = [
+const KORPUS: [&str; 15] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -27,6 +27,8 @@ const KORPUS: [&str; 13] = [
     "16_timing.takt",
     "17_nested.takt",
     "18_blocks.takt",
+    "21_fault_targets.takt",
+    "22_faulted_outputs.takt",
 ];
 
 /// Wie viele Ticks verglichen werden.

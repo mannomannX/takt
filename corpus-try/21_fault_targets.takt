@@ -1,0 +1,35 @@
+# 21 — Uebergangsziele, die keine Zustaende sind (5.3, 6.2).
+#
+# `Target` hat drei Varianten, und zwei davon zeigen nicht auf einen
+# Zustand: der Timeout einer Sequenz nimmt den Fault-Pfad, `-> FAULTED`
+# verlaesst die Konfiguration. Beide liefen bis hierher nur im
+# Interpreter — der Codegen brach ab, und kein Korpusprogramm zeigte es.
+#
+# Eine Maschine, weil der Testrahmen der Abnahme genau eine tickt.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output stufe : int in 0..9 @ hw("ui/stufe") with safe = 0
+
+machine ablauf:
+    fault -> GEBORGEN
+
+    initial WARTEN
+
+    # 6.2: `until … timeout d` ohne Ziel nimmt den Fault-Pfad des
+    # Zustands. Die Bedingung trifft nie, also laeuft die Frist ab.
+    state WARTEN:
+        enter:
+            stufe = 1
+        sequence:
+            until stufe == 9 timeout 30 ms
+            stufe = 2
+
+    # 5.3: `-> FAULTED` ist ein Ziel, kein Fault. Danach laeuft kein
+    # Nutzercode mehr; `stufe` behaelt den Wert des letzten Ticks.
+    state GEBORGEN:
+        enter:
+            stufe = 7
+        after 30 ms: -> FAULTED

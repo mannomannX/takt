@@ -1,0 +1,15 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output y :int in 0..9 @hw("ui/y") safe=2)
+(machine m
+  (initial A)
+  (state A
+    (enter
+      (= y 5))
+    (after 30ms -> B))
+  (state B
+    (enter
+      (= y 7))
+    (loop
+      (check (== y 9) "immer falsch"))))

@@ -1,0 +1,17 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output stufe :int in 0..9 @hw("ui/stufe") safe=0)
+(machine ablauf
+  (fault -> GEBORGEN)
+  (initial WARTEN)
+  (state WARTEN
+    (enter
+      (= stufe 1))
+    (sequence
+      (until (== stufe 9) timeout=30ms)
+      (= stufe 2)))
+  (state GEBORGEN
+    (enter
+      (= stufe 7))
+    (after 30ms -> FAULTED)))
