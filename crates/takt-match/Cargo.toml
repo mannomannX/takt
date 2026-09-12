@@ -1,0 +1,13 @@
+[package]
+name = "takt-match"
+version = "0.1.0"
+description = "Takt: Mustervergleich und Werteextraktion (Referenz 8.7)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Keine Abhaengigkeit: Das Crate laeuft im Host-Interpreter und auf jedem
+# Target, und beide teilen dieselbe Uebersetzung (Prinzip 4 des Plans).
+
+[lints]
+workspace = true

@@ -88,6 +88,7 @@ dependencies = [
  "libtaktm",
  "takt-diag",
  "takt-hal",
+ "takt-match",
  "takt-mir",
  "takt-native",
 ]
@@ -100,6 +101,10 @@ dependencies = [
  "takt-mir",
  "takt-sema",
 ]
+
+[[package]]
+name = "takt-match"
+version = "0.1.0"
 
 [[package]]
 name = "takt-mir"
