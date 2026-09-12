@@ -94,6 +94,14 @@ Codegen und Runtime); `test`, `campaign`, `bench`, `driver-test`, `tune` nach M5
 Kalibrierung, Szenarien); `prove`, `migrate`, `import-c` nach M6/M7. `check` und `fmt` sind damit fertig,
 `sim` läuft, bleibt aber offen, bis Szenarien und `--golden` dazukommen (13.6).
 
+**Korrektur (2026-09-12).** `takt test` stand in der Inventur unter M4, obwohl die Zuordnung
+oben es bereits nach M5/M6 legt — die CSV war seit dem 10.09. inkonsistent. Sachlich entscheidet
+13.6: Das Kommando führt `scenario`-Deklarationen als Sim-Läufe aus, und Szenarien sind v1.1
+(der Compiler meldet sie heute als Stufe). Ohne sie hätte `takt test` nichts auszuführen. Es
+steht damit unter M6, neben `campaign` und `SEM-13.6`/`SEM-13.7`, die dort schon geführt wurden.
+Der M4-Exit ist davon unberührt: Er verlangt differentielles Testen, Echtzeitläufe und Replay,
+nicht das Kommando.
+
 **Korrektur (2026-09-10).** `reader`/`writer` standen in M2, gehören aber nach v1.1: Beide sind nach
 11.4 Blöcke über `bytes<N>` und brauchen dafür Konstantenvariablen in Generics (`block reader[const N]`,
 3.12) — die Referenz führt sie in Abschnitt 15 selbst unter v1.1, zusammen mit „Standardbibliothek

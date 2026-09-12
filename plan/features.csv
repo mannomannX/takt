@@ -32,20 +32,20 @@ SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit
 SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),teilweise
 SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),teilweise
 SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),teilweise
-SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M1 (Kernsemantik),offen
+SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M1 (Kernsemantik),teilweise
 SEM-3.5,Semantik/Abschnitt,3.5,Qualität von Input-Channels,,M1 (Kernsemantik),fertig
 SEM-3.6,Semantik/Abschnitt,3.6,Typinferenz,,M1 (Kernsemantik),teilweise
 SEM-3.7,Semantik/Abschnitt,3.7,Records und Summentypen,,M1 (Kernsemantik),teilweise
 SEM-3.8,Semantik/Abschnitt,3.8,Optionaltyp `T?`,,M1 (Kernsemantik),teilweise
-SEM-3.9,Semantik/Abschnitt,3.9,"Bytes, Vektoren, Strings, Tabellen",,M1 (Kernsemantik),offen
-SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernsemantik),offen
-SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M1 (Kernsemantik),offen
+SEM-3.9,Semantik/Abschnitt,3.9,"Bytes, Vektoren, Strings, Tabellen",,M1 (Kernsemantik),fertig
+SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernsemantik),fertig
+SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M6 (v1.1),offen
 SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),teilweise
 SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),teilweise
 SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M1 (Kernsemantik),teilweise
 SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),teilweise
 SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),teilweise
-SEM-4.5,Semantik/Abschnitt,4.5,Native Funktionen mit Kostenvertrag,,M1 (Kernsemantik),offen
+SEM-4.5,Semantik/Abschnitt,4.5,Native Funktionen mit Kostenvertrag,,M1 (Kernsemantik),fertig
 SEM-5.1,Semantik/Abschnitt,5.1,Struktur,,M1 (Kernsemantik),teilweise
 SEM-5.2,Semantik/Abschnitt,5.2,"Ausführung eines Ticks (informell, exakt in 9.3)",,M1 (Kernsemantik),fertig
 SEM-5.3,Semantik/Abschnitt,5.3,Fault-Wald,,M1 (Kernsemantik),fertig
@@ -64,8 +64,8 @@ SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),teilw
 SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),fertig
 SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig
 SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),teilweise
-SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M1 (Kernsemantik),offen
-SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),offen
+SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M6 (v1.1),offen
+SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),fertig
 SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M2 (Ströme),teilweise
 SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M2 (Ströme),offen
 SEM-8.3,Semantik/Abschnitt,8.3,Simulation und HIL,,M2 (Ströme),fertig
@@ -82,12 +82,12 @@ SEM-9.1,Semantik/Abschnitt,9.1,Objekte,,M1/M2 (Interpreter),fertig
 SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),fertig
 SEM-9.3,Semantik/Abschnitt,9.3,Schritt einer Maschine,,M1/M2 (Interpreter),fertig
 SEM-9.4,Semantik/Abschnitt,9.4,System-Tick und Sätze,,M1/M2 (Interpreter),fertig
-SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M1/M2 (Interpreter),offen
+SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M1/M2 (Interpreter),teilweise
 SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),fertig
 SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),fertig
 SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig
 SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),teilweise
-SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M1/M2 (Interpreter),offen
+SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M6 (v1.1),offen
 SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,je Meilenstein,offen
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),fertig
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),teilweise
@@ -598,20 +598,20 @@ SC-62,Statische Prüfung,10,"`machine … with budget = {ram = …}`: Der gerech
 SC-63,Statische Prüfung,10,"Zwei Lints ohne eigene Syntax: (a) `alert` und `check` mit **derselben** Bedingung im selben Block — die Polaritaet ist entgegengesetzt gemeint (5.6), und weil beide Zeilen gleich aussehen, faellt die Verwechslung sonst niemandem auf; (b) ein `profile`, das einen `param` nicht nennt — er nimmt still seinen Default, und das ist beim Lesen nicht von der Absicht zu unterscheiden (4.6)",W,M3 (Gate),fertig
 OBL-T1,Beweisverpflichtung,9.4.2,T1,,M1/M2 (Interpreter),offen
 OBL-T2,Beweisverpflichtung,9.4.2,T2,,M1/M2 (Interpreter),offen
-OBL-T3,Beweisverpflichtung,9.4.2,T3,,M1/M2 (Interpreter),offen
-OBL-T4,Beweisverpflichtung,9.4.2,T4,,M1/M2 (Interpreter),offen
-OBL-T5,Beweisverpflichtung,9.4.2,T5,,M1/M2 (Interpreter),offen
-OBL-T6,Beweisverpflichtung,9.4.2,T6,,M1/M2 (Interpreter),offen
-OBL-T7,Beweisverpflichtung,9.4.2,T7,,M1/M2 (Interpreter),offen
-OBL-T8,Beweisverpflichtung,9.4.2,T8,,M1/M2 (Interpreter),offen
-OBL-T9,Beweisverpflichtung,9.4.2,T9,,M1/M2 (Interpreter),offen
-OBL-T10,Beweisverpflichtung,9.4.2,T10,,M1/M2 (Interpreter),offen
-OBL-T11,Beweisverpflichtung,9.4.2,T11,,M1/M2 (Interpreter),offen
-OBL-T12,Beweisverpflichtung,9.4.2,T12,,M1/M2 (Interpreter),offen
-OBL-T13,Beweisverpflichtung,9.4.2,T13,,M1/M2 (Interpreter),offen
-OBL-T14,Beweisverpflichtung,9.4.2,T14,,M1/M2 (Interpreter),offen
-OBL-T15,Beweisverpflichtung,9.4.2,T15,,M1/M2 (Interpreter),offen
-OBL-T16,Beweisverpflichtung,9.4.2,T16,,M1/M2 (Interpreter),offen
+OBL-T3,Beweisverpflichtung,9.4.2,T3,,M1/M2 (Interpreter),fertig
+OBL-T4,Beweisverpflichtung,9.4.2,T4,,M1/M2 (Interpreter),fertig
+OBL-T5,Beweisverpflichtung,9.4.2,T5,,M1/M2 (Interpreter),fertig
+OBL-T6,Beweisverpflichtung,9.4.2,T6,,M1/M2 (Interpreter),fertig
+OBL-T7,Beweisverpflichtung,9.4.2,T7,,M1/M2 (Interpreter),fertig
+OBL-T8,Beweisverpflichtung,9.4.2,T8,,M1/M2 (Interpreter),fertig
+OBL-T9,Beweisverpflichtung,9.4.2,T9,,M1/M2 (Interpreter),fertig
+OBL-T10,Beweisverpflichtung,9.4.2,T10,,M1/M2 (Interpreter),fertig
+OBL-T11,Beweisverpflichtung,9.4.2,T11,,M1/M2 (Interpreter),fertig
+OBL-T12,Beweisverpflichtung,9.4.2,T12,,M6 (v1.1),offen
+OBL-T13,Beweisverpflichtung,9.4.2,T13,,M1/M2 (Interpreter),fertig
+OBL-T14,Beweisverpflichtung,9.4.2,T14,,M1/M2 (Interpreter),fertig
+OBL-T15,Beweisverpflichtung,9.4.2,T15,,M1/M2 (Interpreter),fertig
+OBL-T16,Beweisverpflichtung,9.4.2,T16,,M6 (v1.1),offen
 PAR-1.4-Inputs,Absatz/Regel,1.4,Inputs,,M0 (Parser/MIR-Entwurf),fertig
 PAR-1.4-Outputs,Absatz/Regel,1.4,Outputs,,M0 (Parser/MIR-Entwurf),fertig
 PAR-1.4-Veröffentlichte_Variablen,Absatz/Regel,1.4,Veröffentlichte Variablen,,M0 (Parser/MIR-Entwurf),fertig
@@ -632,54 +632,54 @@ PAR-2.5-Operator_Metadaten_v1.1,Absatz/Regel,2.5,Operator-Metadaten (v1.1),v1.1,
 PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M1 (Kernsemantik),teilweise
 PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M1 (Kernsemantik),teilweise
 PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M1 (Kernsemantik),teilweise
-PAR-3.2-Entdimensionieren,Absatz/Regel,3.2,Entdimensionieren,,M1 (Kernsemantik),offen
+PAR-3.2-Entdimensionieren,Absatz/Regel,3.2,Entdimensionieren,,M1 (Kernsemantik),fertig
 PAR-3.2-Einheiten_auf_Integern_v1.1,Absatz/Regel,3.2,Einheiten auf Integern (v1.1),v1.1,M6,offen
 PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymorphie in Funktionen und Blöcken,,M1 (Kernsemantik),teilweise
 PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M1 (Kernsemantik),teilweise
 PAR-3.3-Lexikalische_Regel,Absatz/Regel,3.3,Lexikalische Regel,,M1 (Kernsemantik),fertig
-PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M1 (Kernsemantik),offen
-PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M1 (Kernsemantik),offen
+PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M1 (Kernsemantik),teilweise
+PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M1 (Kernsemantik),teilweise
 PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M6,offen
-PAR-3.4-Darstellungsverengung,Absatz/Regel,3.4,Darstellungsverengung,,M1 (Kernsemantik),offen
+PAR-3.4-Darstellungsverengung,Absatz/Regel,3.4,Darstellungsverengung,,M1 (Kernsemantik),fertig
 PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Absatz/Regel,3.5,Implizite Validitätsprüfung (Entscheidung),,M1 (Kernsemantik),teilweise
-PAR-3.5-Rand_Durchsetzung,Absatz/Regel,3.5,Rand-Durchsetzung,,M1 (Kernsemantik),offen
-PAR-3.5-Entprellte_Qualität,Absatz/Regel,3.5,Entprellte Qualität,,M1 (Kernsemantik),offen
-PAR-3.7-Drahtformat_Details,Absatz/Regel,3.7,Drahtformat-Details,,M1 (Kernsemantik),offen
+PAR-3.5-Rand_Durchsetzung,Absatz/Regel,3.5,Rand-Durchsetzung,,M1 (Kernsemantik),fertig
+PAR-3.5-Entprellte_Qualität,Absatz/Regel,3.5,Entprellte Qualität,,M1 (Kernsemantik),fertig
+PAR-3.7-Drahtformat_Details,Absatz/Regel,3.7,Drahtformat-Details,,M1 (Kernsemantik),fertig
 PAR-3.7-default,Absatz/Regel,3.7,`default`,,M1 (Kernsemantik),teilweise
-PAR-3.7-Records_als_Konstanten_Arrays_von_Records_als_Gerätetabellen,Absatz/Regel,3.7,"Records als Konstanten, Arrays von Records als Gerätetabellen",,M1 (Kernsemantik),offen
-PAR-3.8-Ergebnis_mit_Fehlercode_T_E,Absatz/Regel,3.8,Ergebnis mit Fehlercode `T!E`,,M1 (Kernsemantik),offen
-PAR-3.9-inout_Parameter,Absatz/Regel,3.9,`inout`-Parameter,,M1 (Kernsemantik),offen
-PAR-3.9-Backpatching_einen_Rahmen_zusammensetzen,Absatz/Regel,3.9,Backpatching: einen Rahmen zusammensetzen,,M1 (Kernsemantik),offen
-PAR-3.11-Uniforme_Form_v1,Absatz/Regel,3.11,Uniforme Form (v1),,M1 (Kernsemantik),offen
+PAR-3.7-Records_als_Konstanten_Arrays_von_Records_als_Gerätetabellen,Absatz/Regel,3.7,"Records als Konstanten, Arrays von Records als Gerätetabellen",,M1 (Kernsemantik),fertig
+PAR-3.8-Ergebnis_mit_Fehlercode_T_E,Absatz/Regel,3.8,Ergebnis mit Fehlercode `T!E`,,M1 (Kernsemantik),fertig
+PAR-3.9-inout_Parameter,Absatz/Regel,3.9,`inout`-Parameter,,M1 (Kernsemantik),fertig
+PAR-3.9-Backpatching_einen_Rahmen_zusammensetzen,Absatz/Regel,3.9,Backpatching: einen Rahmen zusammensetzen,,M1 (Kernsemantik),fertig
+PAR-3.11-Uniforme_Form_v1,Absatz/Regel,3.11,Uniforme Form (v1),,M6 (v1.1),offen
 PAR-3.11-Dimensionierte_Form_v1.1,Absatz/Regel,3.11,Dimensionierte Form (v1.1),v1.1,M6,offen
-PAR-4.2-Breite_von_float,Absatz/Regel,4.2,Breite von `float`,,M1 (Kernsemantik),offen
-PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M1 (Kernsemantik),offen
-PAR-4.2-fma,Absatz/Regel,4.2,`fma`,,M1 (Kernsemantik),offen
-PAR-4.2-Reduktionen,Absatz/Regel,4.2,Reduktionen,,M1 (Kernsemantik),offen
-PAR-4.2-Subnormale_in_Zuständen,Absatz/Regel,4.2,Subnormale in Zuständen,,M1 (Kernsemantik),offen
-PAR-4.4-Das_Ergebnisziel_ist_optional,Absatz/Regel,4.4,Das Ergebnisziel ist optional,,M1 (Kernsemantik),offen
-PAR-4.5-Chunk_Natives,Absatz/Regel,4.5,Chunk-Natives,,M1 (Kernsemantik),offen
-PAR-4.5-Jobs,Absatz/Regel,4.5,Jobs,,M1 (Kernsemantik),offen
-PAR-5.1-Richtlinie_für_Regelkreise,Absatz/Regel,5.1,Richtlinie für Regelkreise,,M1 (Kernsemantik),offen
-PAR-5.3-Statische_Regel,Absatz/Regel,5.3,Statische Regel:,,M1 (Kernsemantik),offen
-PAR-5.6-Interlock,Absatz/Regel,5.6,Interlock,,M1 (Kernsemantik),offen
-PAR-5.6-Permissive,Absatz/Regel,5.6,Permissive,,M1 (Kernsemantik),offen
+PAR-4.2-Breite_von_float,Absatz/Regel,4.2,Breite von `float`,,M1 (Kernsemantik),fertig
+PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M1 (Kernsemantik),teilweise
+PAR-4.2-fma,Absatz/Regel,4.2,`fma`,,M1 (Kernsemantik),fertig
+PAR-4.2-Reduktionen,Absatz/Regel,4.2,Reduktionen,,M1 (Kernsemantik),fertig
+PAR-4.2-Subnormale_in_Zuständen,Absatz/Regel,4.2,Subnormale in Zuständen,,M1 (Kernsemantik),teilweise
+PAR-4.4-Das_Ergebnisziel_ist_optional,Absatz/Regel,4.4,Das Ergebnisziel ist optional,,M1 (Kernsemantik),fertig
+PAR-4.5-Chunk_Natives,Absatz/Regel,4.5,Chunk-Natives,,M1 (Kernsemantik),fertig
+PAR-4.5-Jobs,Absatz/Regel,4.5,Jobs,,M6 (v1.1),offen
+PAR-5.1-Richtlinie_für_Regelkreise,Absatz/Regel,5.1,Richtlinie für Regelkreise,,M6 (stdlib),offen
+PAR-5.3-Statische_Regel,Absatz/Regel,5.3,Statische Regel:,,M1 (Kernsemantik),fertig
+PAR-5.6-Interlock,Absatz/Regel,5.6,Interlock,,M1 (Kernsemantik),fertig
+PAR-5.6-Permissive,Absatz/Regel,5.6,Permissive,,M6 (stdlib),offen
 PAR-5.6-Alert,Absatz/Regel,5.6,Alert,,M1 (Kernsemantik),fertig
 PAR-5.6-Alerts_in_Schleifen,Absatz/Regel,5.6,Alerts in Schleifen,,M1 (Kernsemantik),fertig
 PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),fertig
-PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M1 (Kernsemantik),offen
-PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),offen
-PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M1 (Kernsemantik),offen
-PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M1 (Kernsemantik),offen
-PAR-5.10-Nicht_Wake_Streams_in_idle,Absatz/Regel,5.10,Nicht-Wake-Streams in `idle`,,M1 (Kernsemantik),offen
-PAR-5.10-Systemschlaf,Absatz/Regel,5.10,Systemschlaf,,M1 (Kernsemantik),offen
-PAR-7.1-Tick_Quelle,Absatz/Regel,7.1,Tick-Quelle,,M1 (Kernsemantik),offen
+PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M6 (mit 8.10),offen
+PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),fertig
+PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M6 (v1.1),offen
+PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M6 (v1.1),offen
+PAR-5.10-Nicht_Wake_Streams_in_idle,Absatz/Regel,5.10,Nicht-Wake-Streams in `idle`,,M6 (v1.1),offen
+PAR-5.10-Systemschlaf,Absatz/Regel,5.10,Systemschlaf,,M6 (v1.1),offen
+PAR-7.1-Tick_Quelle,Absatz/Regel,7.1,Tick-Quelle,,M1 (Kernsemantik),fertig
 PAR-7.2-follows_v1.1,Absatz/Regel,7.2,`follows` (v1.1),v1.1,M6,offen
-PAR-7.2-Budget_je_Maschine,Absatz/Regel,7.2,Budget je Maschine,,M1 (Kernsemantik),offen
-PAR-7.5-Zeitgestempelte_Eingaben,Absatz/Regel,7.5,Zeitgestempelte Eingaben,,M1 (Kernsemantik),offen
-PAR-7.5-Geplante_Ausgaben,Absatz/Regel,7.5,Geplante Ausgaben,,M1 (Kernsemantik),offen
-PAR-7.5-Latenzformel,Absatz/Regel,7.5,Latenzformel,,M1 (Kernsemantik),offen
-PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M1 (Kernsemantik),offen
+PAR-7.2-Budget_je_Maschine,Absatz/Regel,7.2,Budget je Maschine,,M1 (Kernsemantik),fertig
+PAR-7.5-Zeitgestempelte_Eingaben,Absatz/Regel,7.5,Zeitgestempelte Eingaben,,M1 (Kernsemantik),fertig
+PAR-7.5-Geplante_Ausgaben,Absatz/Regel,7.5,Geplante Ausgaben,,M1 (Kernsemantik),fertig
+PAR-7.5-Latenzformel,Absatz/Regel,7.5,Latenzformel,,M1 (Kernsemantik),fertig
+PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M5 (Embedded),offen
 PAR-7.5-Trigger_v1.2_Regeln_auf_dem_I_O_Knoten,Absatz/Regel,7.5,Trigger (v1.2): Regeln auf dem I/O-Knoten,v1.2,M8,offen
 PAR-8.3-Sim_Build,Absatz/Regel,8.3,Sim-Build:,,M2 (Ströme),fertig
 PAR-8.3-Plant_Modelle,Absatz/Regel,8.3,Plant-Modelle,,M2 (Ströme),fertig
@@ -704,18 +704,18 @@ PAR-8.7-Bindung_als_Wrapper,Absatz/Regel,8.7,"Bindung als Wrapper (Entscheidung,
 THM-Lemma-9.3.1,Satz/Lemma,9.3.1,Lemma 9.3.1,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.1,Satz/Lemma,9.4.1,Satz 9.4.1,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),fertig
-THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),offen
+THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),fertig
 PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 (Interpreter),offen
 THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M4 (Codegen),fertig
 THM-Satz-9.4.5,Satz/Lemma,9.4.5,Satz 9.4.5,,M1/M2 (Interpreter),fertig
 PAR-9.4-Was_der_Satz_nicht_sagt,Absatz/Regel,9.4,Was der Satz nicht sagt,,M1/M2 (Interpreter),offen
-PAR-9.4-Auszahlung,Absatz/Regel,9.4,Auszahlung,,M1/M2 (Interpreter),offen
+PAR-9.4-Auszahlung,Absatz/Regel,9.4,Auszahlung,,M1/M2 (Interpreter),fertig
 THM-Lemma-9.6.1.,Satz/Lemma,9.6.1,Lemma 9.6.1.,,M1/M2 (Interpreter),fertig
 THM-Satz-9.9.1,Satz/Lemma,9.9.1,Satz 9.9.1,,M1/M2 (Interpreter),teilweise
-PAR-11.2-Große_Werte,Absatz/Regel,11.2,Große Werte,,M1-M4 (Lowering),offen
-PAR-11.2-Statischer_Scratch,Absatz/Regel,11.2,Statischer Scratch,,M1-M4 (Lowering),offen
-PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Absatz/Regel,11.2,Overlay exklusiver Zustandsspeicher,,M1-M4 (Lowering),offen
-PAR-11.2-DFA_Tabellen,Absatz/Regel,11.2,DFA-Tabellen,,M1-M4 (Lowering),offen
+PAR-11.2-Große_Werte,Absatz/Regel,11.2,Große Werte,,M1-M4 (Lowering),fertig
+PAR-11.2-Statischer_Scratch,Absatz/Regel,11.2,Statischer Scratch,,M1-M4 (Lowering),fertig
+PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Absatz/Regel,11.2,Overlay exklusiver Zustandsspeicher,,M1-M4 (Lowering),fertig
+PAR-11.2-DFA_Tabellen,Absatz/Regel,11.2,DFA-Tabellen,,M5 (Embedded),offen
 PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M4 (Codegen),offen
 PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M4 (Codegen),teilweise
 PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M4 (Codegen),teilweise
@@ -749,8 +749,8 @@ FN-9-dispatch,Semantikfunktion,9,dispatch,,M1/M2 (Interpreter),fertig
 FN-9-exec,Semantikfunktion,9,exec,,M1/M2 (Interpreter),fertig
 FN-9-exec_chain,Semantikfunktion,9,exec_chain,,M1/M2 (Interpreter),fertig
 FN-9-resolve_m,Semantikfunktion,9,resolve_m,,M1/M2 (Interpreter),fertig
-FN-9-sleep,Semantikfunktion,9,sleep,,M1/M2 (Interpreter),offen
-FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M1/M2 (Interpreter),offen
+FN-9-sleep,Semantikfunktion,9,sleep,,M6 (v1.1),offen
+FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M6 (v1.1),offen
 FN-9-step_m,Semantikfunktion,9,step_m,,M1/M2 (Interpreter),fertig
 FN-9-tick,Semantikfunktion,9,tick,,M1/M2 (Interpreter),fertig
 FN-9-windows,Semantikfunktion,9,windows,,M1/M2 (Interpreter),fertig
@@ -770,7 +770,7 @@ RULE-9.2-at_T:_b,exec-Regel,9.2,exec(at T: b),,M1/M2 (Interpreter),fertig
 RULE-9.2-pulse_o_=_v_for_d,exec-Regel,9.2,exec(pulse o = v for d),,M1/M2 (Interpreter),fertig
 RULE-9.2-cancel_o,exec-Regel,9.2,exec(cancel o),,M1/M2 (Interpreter),fertig
 RULE-9.2-raise_sig,exec-Regel,9.2,exec(raise sig),,M1/M2 (Interpreter),fertig
-RULE-9.2-job_v_=_f(args),exec-Regel,9.2,exec(job v = f(args)),,M1/M2 (Interpreter),offen
+RULE-9.2-job_v_=_f(args),exec-Regel,9.2,exec(job v = f(args)),,M6 (v1.1),offen
 RULE-9.2-every_d:_b,exec-Regel,9.2,exec(every d: b),,M1/M2 (Interpreter),fertig
 RULE-9.2-break,exec-Regel,9.2,exec(break),,M1/M2 (Interpreter),fertig
 "RULE-9.2-alert_e,_msg",exec-Regel,9.2,"exec(alert e, msg)",,M1/M2 (Interpreter),fertig
@@ -809,23 +809,23 @@ PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4/M5 (Runtime),teilweise
 PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M4/M5 (Runtime),offen
 PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M4/M5 (Runtime),offen
 PROFIL-boot,Profil/Eintrag,12.8,boot,,M4/M5 (Runtime),offen
-FAULT-CheckFailed,Fault-Art,5.3,CheckFailed,,M1 (Kernsemantik),offen
-FAULT-Expect,Fault-Art,5.3,Expect,,M1 (Kernsemantik),offen
-FAULT-Timeout,Fault-Art,5.3,Timeout,,M1 (Kernsemantik),offen
-FAULT-SensorFault,Fault-Art,5.3,SensorFault,,M1 (Kernsemantik),offen
-FAULT-MissingValue,Fault-Art,5.3,MissingValue,,M1 (Kernsemantik),offen
-FAULT-ArithmeticFault_Overflow_DivZero_NonFinite_Domain_Singular,Fault-Art,5.3,ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular),,M1 (Kernsemantik),offen
-FAULT-RangeFault,Fault-Art,5.3,RangeFault,,M1 (Kernsemantik),offen
-FAULT-StreamOverflow,Fault-Art,5.3,StreamOverflow,,M1 (Kernsemantik),offen
-FAULT-TimingFault,Fault-Art,5.3,TimingFault,,M1 (Kernsemantik),offen
-FAULT-ScheduleOverflow,Fault-Art,5.3,ScheduleOverflow,,M1 (Kernsemantik),offen
-FAULT-Abort,Fault-Art,5.3,Abort,,M1 (Kernsemantik),offen
-FAULT-Runtime_Overrun_Driver_Watchdog_Hardware_Node,Fault-Art,5.3,Runtime(Overrun | Driver | Watchdog | Hardware | Node),,M1 (Kernsemantik),offen
-FAULT-Node,Fault-Art,5.3,Node,,M1 (Kernsemantik),offen
-QUAL-Good,Qualität,3.5,Good,,M1 (Kernsemantik),offen
-QUAL-Suspect,Qualität,3.5,Suspect,,M1 (Kernsemantik),offen
-QUAL-Stale,Qualität,3.5,Stale,,M1 (Kernsemantik),offen
-QUAL-Bad,Qualität,3.5,Bad,,M1 (Kernsemantik),offen
+FAULT-CheckFailed,Fault-Art,5.3,CheckFailed,,M1 (Kernsemantik),fertig
+FAULT-Expect,Fault-Art,5.3,Expect,,M1 (Kernsemantik),fertig
+FAULT-Timeout,Fault-Art,5.3,Timeout,,M1 (Kernsemantik),fertig
+FAULT-SensorFault,Fault-Art,5.3,SensorFault,,M1 (Kernsemantik),fertig
+FAULT-MissingValue,Fault-Art,5.3,MissingValue,,M1 (Kernsemantik),fertig
+FAULT-ArithmeticFault_Overflow_DivZero_NonFinite_Domain_Singular,Fault-Art,5.3,ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular),,M1 (Kernsemantik),teilweise
+FAULT-RangeFault,Fault-Art,5.3,RangeFault,,M1 (Kernsemantik),fertig
+FAULT-StreamOverflow,Fault-Art,5.3,StreamOverflow,,M1 (Kernsemantik),fertig
+FAULT-TimingFault,Fault-Art,5.3,TimingFault,,M1 (Kernsemantik),teilweise
+FAULT-ScheduleOverflow,Fault-Art,5.3,ScheduleOverflow,,M1 (Kernsemantik),teilweise
+FAULT-Abort,Fault-Art,5.3,Abort,,M1 (Kernsemantik),fertig
+FAULT-Runtime_Overrun_Driver_Watchdog_Hardware_Node,Fault-Art,5.3,Runtime(Overrun | Driver | Watchdog | Hardware | Node),,M1 (Kernsemantik),teilweise
+FAULT-Node,Fault-Art,5.3,Node,,M9 (v2),offen
+QUAL-Good,Qualität,3.5,Good,,M1 (Kernsemantik),fertig
+QUAL-Suspect,Qualität,3.5,Suspect,,M1 (Kernsemantik),fertig
+QUAL-Stale,Qualität,3.5,Stale,,M1 (Kernsemantik),fertig
+QUAL-Bad,Qualität,3.5,Bad,,M1 (Kernsemantik),fertig
 LIB-clamp,Standardbibliothek,11.4,fn clamp[U],,M6 (stdlib),fertig
 LIB-map_range,Standardbibliothek,11.4,"fn map_range[U, V]",,M6 (stdlib),offen
 LIB-interp,Standardbibliothek,11.4,"fn interp[U, V]",,M6 (stdlib),fertig
@@ -850,13 +850,13 @@ LIB-sha256_init,Standardbibliothek,11.4,native fn sha256_init / sha256_update,,M
 LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M6 (stdlib),offen
 LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M6 (stdlib),offen
 LIB-solve,Standardbibliothek,11.4,fn solve,,M6 (stdlib),offen
-LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M4 (libtaktm),offen
+LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M4 (libtaktm),fertig
 LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M6 (stdlib),offen
 CLI-check,Werkzeug,11.1,takt check,,M0-M3,fertig
 CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig
 CLI-run,Werkzeug,11.1,takt run,,M4 (Codegen),fertig
 CLI-replay,Werkzeug,11.1,takt replay,,M4 (Codegen),fertig
-CLI-test,Werkzeug,11.1,takt test,,M4 (Codegen),offen
+CLI-test,Werkzeug,11.1,takt test,,M6 (v1.1),offen
 CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),offen
 CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen
 CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),offen
