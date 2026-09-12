@@ -33,6 +33,7 @@
 pub mod abi;
 pub mod block;
 pub mod collection;
+pub mod dfa;
 pub mod emit;
 pub mod expr;
 pub mod fns;

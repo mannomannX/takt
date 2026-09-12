@@ -569,15 +569,14 @@ fn dispatch(
         // untersucht — sonst saehe die Maschine es im naechsten Tick
         // wieder.
         m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
-        // 8.7: der erste passende Handler gewinnt. Solange nur
-        // Catch-alls gesenkt werden, ist das immer der erste — weitere
-        // kaemen nie zum Zug, und sie zu erzeugen waere toter Code.
-        // Sobald Muster dazukommen, wird daraus eine Kette von Zweigen.
-        let Some(first) = hs.first() else { continue };
-        if hs.iter().any(|h| h.pattern.is_some()) {
-            return Err(NotYet { what: "Handler mit Muster" });
+        // 8.7: Der erste passende Handler gewinnt. Ohne Muster ist das
+        // immer der erste — weitere kaemen nie zum Zug. Mit Muster wird
+        // daraus eine Kette: Je Handler prueft der Automat, und wer
+        // trifft, laeuft; die uebrigen springen ans Ende.
+        if hs.is_empty() {
+            continue;
         }
-        block(&first.body.clone(), ctx, m)?;
+        handler_chain(&hs, slot, ctx, m)?;
         let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
         let next = m.inst(&format!("add i32 {cur_i}, 1"));
         m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
@@ -626,6 +625,65 @@ fn element_slot(
         }
     }
     Ok(m.inst("alloca i64"))
+}
+
+/// Die Handler eines Stroms als Kette (8.7).
+///
+/// „Der erste passende Handler gewinnt": Je Handler entsteht eine
+/// Pruefung und ein Rumpf, und wer trifft, springt ans Ende der Kette.
+/// Ein Catch-all beendet sie — was danach kaeme, liefe nie.
+fn handler_chain(
+    hs: &[&takt_mir::machine::Handler],
+    slot: crate::emit::Reg,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let k = ctx.next_label();
+    let name = &ctx.machine.name;
+    let ende = format!("handler{k}_{name}_ende");
+    for (n, h) in hs.iter().enumerate() {
+        let Some((kind, pattern)) = &h.pattern else {
+            // Catch-all: Er laeuft immer, und die Kette endet hier.
+            block(&h.body.clone(), ctx, m)?;
+            m.void_inst(&format!("br label %{ende}"));
+            m.label(&ende);
+            return Ok(());
+        };
+        let takt_mir::pattern::Pattern::Text { pieces, dfa } = pattern else {
+            return Err(NotYet { what: "Record-Muster im Handler" });
+        };
+        // 8.7: `matches` verlangt den ganzen Text, `has` ein Vorkommen.
+        // Der Automat entscheidet den ersten Fall; `has` braucht den
+        // Vorwaertsdurchlauf ueber jede Startposition und kommt spaeter.
+        if *kind != takt_mir::expr::MatchKind::Matches {
+            return Err(NotYet { what: "`has` im Handler" });
+        }
+        let Some(dfa) = dfa else {
+            return Err(NotYet { what: "Muster mit offenem Ende im Handler" });
+        };
+        // Die Bindung ist ein Record; der Inhalt steht unter `.data`
+        // beziehungsweise `.text` (8.7). Der Automat laeuft darauf.
+        let text = m.inst(&format!("getelementptr inbounds i8, ptr {slot}, i64 0"));
+        let id = m.next_label();
+        crate::dfa::declare(id, dfa, m);
+        let hit = crate::dfa::run(id, dfa, text, m)?;
+        let (dann, sonst) = (format!("handler{k}_{n}_{name}"), format!("handler{k}_{n}_{name}_sonst"));
+        m.void_inst(&format!("br i1 {hit}, label %{dann}, label %{sonst}"));
+        m.label(&dann);
+        // Ein Muster mit Platzhaltern braucht die Extraktion: Der Automat
+        // sagt, *dass* es trifft, nicht was in `{n:int}` steht. Ohne sie
+        // liefe der Rumpf mit falschen Werten, und ein falscher Wert ist
+        // schlimmer als eine Meldung (4.1).
+        if pieces.iter().any(|p| matches!(p, takt_mir::pattern::PatternPiece::Capture { .. })) {
+            return Err(NotYet { what: "Capture im Handler-Muster" });
+        }
+        block(&h.body.clone(), ctx, m)?;
+        m.void_inst(&format!("br label %{ende}"));
+        m.label(&sonst);
+    }
+    m.void_inst(&format!("br label %{ende}"));
+    m.label(&ende);
+    Ok(())
 }
 
 /// Der Fault-Pfad eines Blattzustands (5.2 Regel 5, 5.3).

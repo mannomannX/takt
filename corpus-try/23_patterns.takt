@@ -1,0 +1,23 @@
+# 23 — Musterpruefung im erzeugten Code (8.7, 11.2).
+#
+# Ein Handler mit `matches` laeuft ueber den Produkt-DFA: Der Automat
+# entsteht zur Uebersetzungszeit (Teilmengenkonstruktion, 8.7), seine
+# Tabellen stehen als Konstanten in der IR, und `takt size` weist sie aus.
+#
+# Ohne Platzhalter, weil die Extraktion der Captures noch fehlt: Der
+# Automat sagt, *dass* ein Muster trifft, nicht was in `{n:int}` steht.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  rx_log : stream<line<64>> @ hw("u/rx") with max_rate = 100 Hz, capacity = 4
+output y      : int in 0..9      @ sim("o")
+
+machine m:
+    initial A
+
+    state A:
+        on rx_log matches "READY" as l:
+            y = 7
+        after 1 s: -> A

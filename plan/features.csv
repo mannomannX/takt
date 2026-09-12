@@ -715,7 +715,7 @@ THM-Satz-9.9.1,Satz/Lemma,9.9.1,Satz 9.9.1,,M1/M2 (Interpreter),teilweise
 PAR-11.2-Große_Werte,Absatz/Regel,11.2,Große Werte,,M1-M4 (Lowering),fertig
 PAR-11.2-Statischer_Scratch,Absatz/Regel,11.2,Statischer Scratch,,M1-M4 (Lowering),fertig
 PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Absatz/Regel,11.2,Overlay exklusiver Zustandsspeicher,,M1-M4 (Lowering),fertig
-PAR-11.2-DFA_Tabellen,Absatz/Regel,11.2,DFA-Tabellen,,M5 (Embedded),offen
+PAR-11.2-DFA_Tabellen,Absatz/Regel,11.2,DFA-Tabellen,,M4 (Codegen),fertig
 PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M4 (Codegen),fertig
 PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M4 (Codegen),teilweise
 PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M4 (Codegen),teilweise
