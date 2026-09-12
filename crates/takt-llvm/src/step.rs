@@ -552,6 +552,11 @@ fn dispatch(
         // Der Zaehler laeuft ueber das Fenster; seine Schranke ist `n`.
         let i_ptr = m.inst("alloca i32");
         m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
+        // 9.6: `examined` merkt sich die hoechste untersuchte Nummer;
+        // daraus wird am Ende `cur[s, m] = examined + 1`. Der Anfangswert
+        // `-1` heisst „nichts untersucht" — dann bleibt der Cursor stehen.
+        let ex_ptr = m.inst("alloca i64");
+        m.void_inst(&format!("store i64 -1, ptr {ex_ptr}"));
         let (kopf, rumpf, ende) = (format!("strom{k}"), format!("strom{k}_rumpf"), format!("strom{k}_ende"));
         m.void_inst(&format!("br label %{kopf}"));
         m.label(&kopf);
@@ -569,6 +574,7 @@ fn dispatch(
         // untersucht — sonst saehe die Maschine es im naechsten Tick
         // wieder.
         m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
+        m.void_inst(&format!("store i64 {seq}, ptr {ex_ptr}"));
         // 8.7: Der erste passende Handler gewinnt. Ohne Muster ist das
         // immer der erste — weitere kaemen nie zum Zug. Mit Muster wird
         // daraus eine Kette: Je Handler prueft der Automat, und wer
@@ -582,8 +588,18 @@ fn dispatch(
         m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
         m.void_inst(&format!("br label %{kopf}"));
         m.label(&ende);
-        // Der Cursor steht danach hinter dem letzten untersuchten
-        // Element (9.6); die Runtime fuehrt ihn mit `examined` nach.
+        // 9.6, `advance_cursors()`: `cur[s, m] = examined + 1`. Der
+        // Cursor steht im Zustand der Maschine, nicht im Strom — nur der
+        // erzeugte Code kann ihn schreiben. `takt_stream_examined` meldet
+        // dasselbe an die Runtime, die daraus das Minimum ueber *alle*
+        // Konsumenten bildet und den Puffer freigibt; beides ist noetig,
+        // und 9.6 fuehrt es als zwei Schritte.
+        let ex = m.inst(&format!("load i64, ptr {ex_ptr}"));
+        let etwas = m.inst(&format!("icmp sge i64 {ex}, 0"));
+        let weiter_cur = m.inst(&format!("add i64 {ex}, 1"));
+        // Ohne untersuchtes Element bleibt der Cursor, wo er stand.
+        let neu = m.inst(&format!("select i1 {etwas}, i64 {weiter_cur}, i64 {cur}"));
+        m.void_inst(&format!("store i64 {neu}, ptr {cur_ptr}"));
         let _ = end;
     }
     Ok(())

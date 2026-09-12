@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use takt_conformance::harness;
+use takt_conformance::stimulus::Stimulus;
 use takt_llvm::emit::Module;
 use takt_llvm::toolchain::Clang;
 use takt_mir::program::Program;
@@ -56,8 +57,8 @@ pub fn run_native(clang: &Clang, p: &Program, name: &str, machine: &str, ticks: 
     run_native_with(clang, p, name, machine, ticks, &[])
 }
 
-/// Wie `run_native`, mit Eingaben (12.5): je Eintrag ein Tick und ein
-/// Command. Beide Seiten sehen damit denselben Stimulus.
+/// Wie `run_native`, mit Eingaben (12.5): Commands (8.5) und
+/// Stromelemente (8.6). Beide Seiten sehen damit denselben Stimulus.
 /// Uebersetzt ein Programm mit *allen* Maschinen und fuehrt es aus.
 ///
 /// Fuer Programme mit Plant-Modell (8.3): Das Modell ist eine
@@ -73,7 +74,7 @@ pub fn run_native_with(
     name: &str,
     machine: &str,
     ticks: u64,
-    inputs: &[(u64, String)],
+    inputs: &[Stimulus],
 ) -> Result<String, String> {
     run_native_inner(clang, p, name, Some(machine), ticks, inputs)
 }
@@ -85,7 +86,7 @@ fn run_native_inner(
     name: &str,
     machine: Option<&str>,
     ticks: u64,
-    inputs: &[(u64, String)],
+    inputs: &[Stimulus],
 ) -> Result<String, String> {
     let dir = std::env::temp_dir().join(format!("takt-abnahme-{}", name.replace('.', "_")));
     let _ = std::fs::remove_dir_all(&dir);

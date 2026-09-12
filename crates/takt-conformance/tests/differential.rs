@@ -95,6 +95,8 @@ fn the_interpreter_and_the_generated_code_agree() {
     assert!(gescheitert.is_empty(), "{}", gescheitert.join("\n\n"));
 }
 
+use takt_conformance::stimulus::Stimulus;
+
 mod common;
 
 /// Die Grenzen der Abnahme stehen im Code, nicht nur im Plan.
@@ -137,11 +139,11 @@ t=40 cmd go
 ",
     )
     .expect("Stimulus");
-    let inputs: Vec<(u64, String)> = stimulus
+    let inputs: Vec<Stimulus> = stimulus
         .lines
         .iter()
         .filter_map(|l| match &l.kind {
-            takt_interp::trace::LineKind::Command { name } => Some((l.tick, name.clone())),
+            takt_interp::trace::LineKind::Command { name } => Some(Stimulus::cmd(l.tick, name)),
             _ => None,
         })
         .collect();
@@ -166,6 +168,73 @@ t=40 cmd go
             "
 "
         ),
+        interpreted,
+        native
+    );
+}
+
+/// **Die Abnahme mit Stromelementen** (8.6, 8.7): Ein Handler laeuft
+/// nativ ueber ein Fenster mit Daten.
+///
+/// Bis hierher war das nicht geprueft, und zwar unbemerkt: `takt_stream_count`
+/// lieferte null, also lief der Handler-Dispatch des erzeugten Codes
+/// zwar, aber nie ueber ein Element (FB-115). Ein leeres Fenster ist
+/// gruen wie ein richtiges Ergebnis.
+///
+/// `23_patterns` ist der Fall, der es zeigt: ein Handler mit `matches`
+/// ueber dem Produkt-DFA (8.7, 11.2). Trifft das Muster, steht `y = 7` im
+/// Trace; trifft es nicht, bleibt der Anfangswert. Beide Seiten muessen
+/// dasselbe sagen — und der Unterschied zwischen „trifft" und „trifft
+/// nicht" ist im Trace sichtbar, sonst prueft der Test nichts.
+#[test]
+fn the_two_implementations_agree_on_stream_elements() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("23_patterns.takt");
+    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
+    // Zwei Elemente: eines trifft das Muster `"READY"`, eines nicht.
+    // Ohne den zweiten Fall pruefte der Test nur, dass ueberhaupt etwas
+    // ankommt, nicht dass der Automat unterscheidet.
+    let stimulus = takt_interp::Trace::parse(
+        "t=2 in rx_log READY
+t=5 in rx_log BUSY
+",
+    )
+    .expect("Stimulus");
+    let inputs: Vec<Stimulus> = stimulus
+        .lines
+        .iter()
+        .filter_map(|l| match &l.kind {
+            takt_interp::trace::LineKind::Input { channel, sample } => {
+                Some(Stimulus::element(l.tick, channel, sample.value.as_deref().unwrap_or_default()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inputs.len(), 2, "der Stimulus traegt zwei Elemente");
+
+    let native =
+        common::run_native_with(&clang, &p, "stroeme", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+
+    // Der Handler muss gelaufen sein: `y = 7` steht nur im Trace, wenn
+    // das Muster getroffen hat. Ohne diese Zusicherung waere ein Lauf,
+    // in dem beide Seiten nichts tun, ebenfalls gruen.
+    assert!(
+        interpreted.contains("out y 7"),
+        "der Interpreter hat den Handler nicht ausgefuehrt; der Test pruefte sonst ein leeres Fenster:\n{interpreted}"
+    );
+
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen mit Stromelementen:\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
+        diffs.len(),
+        diffs.iter().take(6).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n"),
         interpreted,
         native
     );

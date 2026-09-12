@@ -18,6 +18,7 @@ use std::fmt::Write as _;
 use takt_mir::program::Program;
 
 use crate::layout::{Layout, c_type};
+use crate::stimulus::Stimulus;
 
 /// Der erzeugte Testrahmen.
 pub struct Harness {
@@ -48,21 +49,22 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
 /// reihenfolge, jede nach ihrer Periode (7.2), und am Ende des Ticks die
 /// Bindung `sim` -> `hw` (8.3). Das Modell braucht dann nichts, was ein
 /// gewoehnliches Programm nicht auch braucht.
-pub fn build_all(p: &Program, ticks: u64, inputs: &[(u64, String)]) -> Harness {
+pub fn build_all(p: &Program, ticks: u64, inputs: &[Stimulus]) -> Harness {
     build_inner(p, None, ticks, inputs)
 }
 
 /// Baut den Rahmen mit Eingaben (12.5).
 ///
 /// `inputs` ist der Stimulus, den auch der Interpreter sieht: je Eintrag
-/// ein Tick und ein Command. Damit prueft die Abnahme die *Reaktion* auf
-/// Lieferungen und nicht nur den Anfangszustand.
-pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[(u64, String)]) -> Harness {
+/// ein Tick und ein Command (8.5) oder ein Stromelement (8.6). Damit
+/// prueft die Abnahme die *Reaktion* auf Lieferungen und nicht nur den
+/// Anfangszustand.
+pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[Stimulus]) -> Harness {
     build_inner(p, Some(machine), ticks, inputs)
 }
 
 /// Der gemeinsame Rumpf: `Some(name)` tickt eine Maschine, `None` alle.
-fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[(u64, String)]) -> Harness {
+fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulus]) -> Harness {
     let layout = crate::layout::of(p);
     // Die Maschinen, die der Rahmen fuehrt, in Deklarationsreihenfolge —
     // dieselbe, die der Interpreter nimmt (9.4: ohne `follows` ist sie
@@ -99,14 +101,9 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[(u64, S
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_abort(int m, int site) {{ printf(\"t=%lld abort %d %d\\n\", g_tick, m, site); }}\n");
 
-    // Die Stroeme (`takt-llvm/src/stream.rs`). Der Rahmen liefert keine
-    // Elemente; ein leeres Fenster ist der Fall, den jedes Programm
-    // aushalten muss.
-    let _ = writeln!(s, "int takt_stream_count(int s, long long cur) {{ (void)s; (void)cur; return 0; }}");
-    let _ = writeln!(s, "long long takt_stream_at(int s, long long cur, int i, void *out) {{");
-    let _ = writeln!(s, "    (void)s; (void)cur; (void)i; (void)out; return 0;");
-    let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_stream_examined(int s, long long seq) {{ (void)s; (void)seq; }}\n");
+    // Die Stroeme (`takt-llvm/src/stream.rs`): die drei Aufrufe ueber
+    // dem Stimulus, der vor dem Lauf feststeht (`streams`).
+    crate::streams::emit(&mut s, p, inputs);
 
     // 4.5: Die nativen Funktionen liegen in der Runtime. Der Rahmen
     // liefert sie in C — dieselbe Rechnung wie `takt-native`, damit der
@@ -184,7 +181,13 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[(u64, S
     // 8.5: Ein Command gilt einen Tick. Der Rahmen setzt es vor dem
     // Schritt und loescht es danach — wie die Runtime (12.1).
     for (name, slot) in layout.commands.iter().map(|c| (c.name.clone(), c.offset)) {
-        let ticks_of: Vec<String> = inputs.iter().filter(|(_, n)| *n == name).map(|(t, _)| t.to_string()).collect();
+        let ticks_of: Vec<String> = inputs
+            .iter()
+            .filter_map(|s| match s {
+                Stimulus::Command { tick, name: n } if *n == name => Some(tick.to_string()),
+                _ => None,
+            })
+            .collect();
         if ticks_of.is_empty() {
             continue;
         }

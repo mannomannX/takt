@@ -48,11 +48,14 @@ pub const LIMITS: &[Limit] = &[
                sie bereits, nur die Bindung an den erzeugten Code fehlt.",
     },
     Limit {
-        was: "Stroeme mit Inhalt (8.6)",
-        warum: "`takt_stream_count` liefert 0. Ein leeres Fenster ist der Fall, den jedes \
-                Programm aushalten muss — aber `on`-Handler laufen damit nie.",
-        wann: "Schritt 10: Eine Aufzeichnung traegt die Stream-Elemente mit ihren Zeitstempeln \
-               (12.5).",
+        was: "Ueberlaufende Stroeme (8.6)",
+        warum: "Der Rahmen liefert Stromelemente (`streams.rs`), prueft `capacity` und \
+                `capacity_bytes` aber je Tick — unter der Annahme eines Konsumenten, der sein \
+                Fenster leert. Ein Puffer, der ueber mehrere Ticks volllaeuft, weil niemand \
+                liest, braeuchte den Cursor des Konsumenten, und den kennt erst der Lauf. \
+                `s.overflowed` und der `StreamOverflow` bleiben darum ungeprueft.",
+        wann: "Mit der Runtime: `takt-rt-core::stream` haelt den Ring samt Verdraengung und \
+               Eviction; wo der Rahmen rechnet, wuerde sie messen.",
     },
     Limit {
         was: "Faults im Fuzzer",

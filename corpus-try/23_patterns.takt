@@ -13,11 +13,23 @@ system:
 
 input  rx_log : stream<line<64>> @ hw("u/rx") with max_rate = 100 Hz, capacity = 4
 output y      : int in 0..9      @ sim("o")
+output count  : int in 0..99     @ sim("c")
 
 machine m:
+    # `seen` zaehlt jedes untersuchte Element. 9.6 rueckt den Cursor
+    # hinter das zuletzt untersuchte, und `seen` macht das sichtbar:
+    # Bliebe der Cursor stehen, saehe die Maschine dieselben Elemente in
+    # jedem Tick wieder und zaehlte weiter.
+    var seen : int in 0..99 = 0
+
     initial A
 
     state A:
+        loop:
+            count = seen
         on rx_log matches "READY" as l:
             y = 7
+            seen = seen + 1
+        on rx_log as l:
+            seen = seen + 1
         after 1 s: -> A

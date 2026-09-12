@@ -24,7 +24,10 @@ pub mod harness;
 pub mod layout;
 pub mod limits;
 pub mod run;
+pub mod stimulus;
+pub mod streams;
 
 pub use harness::Harness;
 pub use limits::LIMITS;
 pub use run::{Difference, compare};
+pub use stimulus::Stimulus;

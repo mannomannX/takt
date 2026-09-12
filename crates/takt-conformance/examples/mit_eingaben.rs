@@ -6,7 +6,8 @@ fn main() {
     let out = takt_sema::compile(&src, &o);
     let Some(p) = out.program else { return };
     let machine = p.machines.first().map(|m| m.name.clone()).unwrap_or_default();
-    let inputs = vec![(3u64, "go".to_string()), (40, "go".to_string())];
+    use takt_conformance::stimulus::Stimulus;
+    let inputs = vec![Stimulus::cmd(3, "go"), Stimulus::cmd(40, "go")];
     let h = takt_conformance::harness::build_with(&p, &machine, 60, &inputs);
     println!("{}", h.source);
 }
