@@ -99,6 +99,7 @@ name = "takt-llvm"
 version = "0.1.0"
 dependencies = [
  "takt-diag",
+ "takt-match",
  "takt-mir",
  "takt-sema",
 ]

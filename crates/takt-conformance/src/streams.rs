@@ -134,6 +134,7 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
         let _ = writeln!(s, "    (void)s; (void)cur; (void)i; (void)out; return 0;");
         let _ = writeln!(s, "}}");
         let _ = writeln!(s, "void takt_stream_examined(int s, long long seq) {{ (void)s; (void)seq; }}\n");
+        sende(s, p);
         return;
     }
 
@@ -206,4 +207,92 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
     // und der erzeugte Code fuehrt ihn in seinem Zustand — der Rahmen
     // muss ihn darum nicht halten.
     let _ = writeln!(s, "void takt_stream_examined(int s, long long seq) {{ (void)s; (void)seq; }}\n");
+    sende(s, p);
+}
+
+/// `takt_stream_send` (8.8): der Sendepuffer eines Ausgabestroms.
+///
+/// **Der Treiber leert ihn mit `max_rate`.** 8.8: „die Simulation leert
+/// exakt `max_rate * T0` Bytes pro Tick". Ein `send` legt also in eine
+/// Warteschlange, und je Tick geht daraus ein Stueck hinaus — bei
+/// 1000 Hz und 10 ms Tick sind das zehn Byte. Der Interpreter rechnet
+/// ebenso (`TxBuffer::per_tick`), und was er abholt, schreibt er als
+/// `out <stream> [bytes]` in den Trace.
+///
+/// Ohne diese Rate stuende im nativen Trace der ganze Text in einem
+/// Tick, im interpretierten haeppchenweise — und der Vergleich saehe
+/// einen Unterschied, den es in der Sache nicht gibt.
+fn sende(s: &mut String, p: &Program) {
+    let stroeme: Vec<(usize, &Channel)> = p
+        .channels
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.dir == Direction::Output && matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))))
+        .collect();
+    let _ = writeln!(s, "#define TAKT_TX_MAX 4096");
+    let _ = writeln!(s, "static unsigned char g_tx[{}][TAKT_TX_MAX];", stroeme.len().max(1));
+    let _ = writeln!(s, "static int g_tx_n[{}];", stroeme.len().max(1));
+    let _ = writeln!(s, "static int takt_tx_slot(int s) {{");
+    let _ = writeln!(s, "    switch (s) {{");
+    for (slot, (i, c)) in stroeme.iter().enumerate() {
+        let _ = writeln!(s, "    case {i}: return {slot}; /* {} */", c.name);
+    }
+    let _ = writeln!(s, "    default: return -1;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+    // Die Kapazitaet je Strom (8.8, Default 256): Was nicht hineinpasst,
+    // ist ein `StreamOverflow`.
+    let _ = writeln!(s, "static int takt_tx_cap(int s) {{");
+    let _ = writeln!(s, "    switch (s) {{");
+    for (i, c) in &stroeme {
+        let _ = writeln!(s, "    case {i}: return {};", c.attrs.capacity.unwrap_or(256));
+    }
+    let _ = writeln!(s, "    default: return 0;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "_Bool takt_stream_send(int s, const char *b, int n) {{");
+    let _ = writeln!(s, "    int k = takt_tx_slot(s);");
+    let _ = writeln!(s, "    if (k < 0) return 0;");
+    // 8.8: `len > tx.free` ist ein `StreamOverflow`.
+    let _ = writeln!(s, "    if (g_tx_n[k] + n > takt_tx_cap(s) || g_tx_n[k] + n > TAKT_TX_MAX) return 0;");
+    let _ = writeln!(s, "    memcpy(g_tx[k] + g_tx_n[k], b, (size_t)n);");
+    let _ = writeln!(s, "    g_tx_n[k] += n;");
+    let _ = writeln!(s, "    return 1;");
+    let _ = writeln!(s, "}}");
+    // Der Commit: Der Treiber holt `per_tick` Bytes ab und meldet sie als
+    // `out <stream> [0x.., ..]` — dieselbe Schreibweise wie im
+    // Interpreter (`value_text` fuer `Value::Bytes`).
+    let _ = writeln!(s, "static void takt_tx_commit(long long t) {{");
+    for (slot, (_, c)) in stroeme.iter().enumerate() {
+        let per_tick = match rate_hz(c) {
+            Some(hz) => {
+                let bytes = hz.saturating_mul(p.config.tick as u64) / 1_000_000_000;
+                u32::try_from(bytes.max(1)).unwrap_or(u32::MAX)
+            }
+            None => u32::MAX,
+        };
+        let _ = writeln!(s, "    if (g_tx_n[{slot}] > 0) {{");
+        let _ = writeln!(s, "        int n = g_tx_n[{slot}] < {per_tick} ? g_tx_n[{slot}] : {per_tick};");
+        let _ = writeln!(s, "        printf(\"t=%lld out {} [\", t);", c.name);
+        let _ = writeln!(s, "        for (int i = 0; i < n; i++)");
+        let _ = writeln!(s, "            printf(i ? \", 0x%02x\" : \"0x%02x\", g_tx[{slot}][i]);");
+        let _ = writeln!(s, "        printf(\"]\\n\");");
+        let _ = writeln!(s, "        memmove(g_tx[{slot}], g_tx[{slot}] + n, (size_t)(g_tx_n[{slot}] - n));");
+        let _ = writeln!(s, "        g_tx_n[{slot}] -= n;");
+        let _ = writeln!(s, "    }}");
+    }
+    let _ = writeln!(s, "}}\n");
+}
+
+/// `max_rate` eines Stroms in Hz; nur ein Literal, wie im Sema (8.6).
+///
+/// Dieselbe Rechnung wie `Image::new` im Interpreter — eine zweite
+/// Auslegung derselben Angabe waere ein Unterschied, den 9.4.4 nicht
+/// zulaesst.
+fn rate_hz(c: &Channel) -> Option<u64> {
+    match &c.attrs.max_rate.as_ref()?.kind {
+        takt_mir::expr::ExprKind::Int(n) => u64::try_from(*n).ok(),
+        takt_mir::expr::ExprKind::Float(f) if *f >= 0.0 => Some(*f as u64),
+        _ => None,
+    }
 }

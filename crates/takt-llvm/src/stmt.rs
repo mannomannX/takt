@@ -271,8 +271,66 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
             Ok(())
         }
         StmtKind::Pass => Ok(()),
+        StmtKind::Send { stream, value, len_max } => send(*stream, value, *len_max, ctx, m),
         other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
+}
+
+/// `send o, e` (8.8): Der Wert geht in den Sendepuffer des Stroms.
+///
+/// Der Text entsteht in einem Puffer auf dem Stack — seine Hoechstlaenge
+/// steht in `len_max`, und 8.8 prueft statisch, dass die Summe aller
+/// erreichbaren `send` die `capacity` nicht uebersteigt. Die Runtime
+/// nimmt ihn entgegen; passt er nicht in `tx.free`, ist das ein
+/// `StreamOverflow` (8.8), und der Fault-Trampolin faengt ihn.
+fn send(
+    stream: takt_mir::expr::StreamRef,
+    value: &Expr,
+    len_max: u32,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let sid = match stream {
+        takt_mir::expr::StreamRef::Channel(c) => i64::from(c.0),
+        takt_mir::expr::StreamRef::Internal(s) => -1 - i64::from(s.0),
+        _ => return Err(NotYet { what: "`send` auf einem Strom ohne feste Nummer" }),
+    };
+    // Der Puffer: `{ i32 len, [len_max x i8] }`, wie `str<N>` (3.9).
+    let ty = LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), len_max)]);
+    let puffer = m.inst(&format!("alloca {ty}"));
+    let vars = ctx.vars();
+    match &value.kind {
+        // Der haeufige Fall: ein Formatstring (8.8). Er wird an Ort und
+        // Stelle gebaut, statt als Wert erzeugt und dann kopiert.
+        takt_mir::expr::ExprKind::Format(f) => {
+            crate::format::render(f, puffer, &ty, len_max, ctx.program, m, &vars)?;
+        }
+        // Ein Literal ohne Platzhalter bleibt `Str` (3.9); es ist ein
+        // Formatstring aus einem einzigen Textbaustein.
+        takt_mir::expr::ExprKind::Str(lit) => {
+            let f = takt_mir::pattern::Format::text(lit);
+            crate::format::render(&f, puffer, &ty, len_max, ctx.program, m, &vars)?;
+        }
+        // Alles andere ist ein fertiger Wert — `bytes<N>` aus
+        // `frame.encode()` etwa (8.8).
+        _ => {
+            let v = lower_expr(value, ctx.program, m, &vars)?;
+            let LlvmType::Struct(_) = v.ty else {
+                return Err(NotYet { what: "`send` mit einem Wert ohne Laenge" });
+            };
+            m.void_inst(&format!("store {} {}, ptr {puffer}", v.ty, v.value));
+        }
+    }
+    let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {puffer}, i32 0, i32 0"));
+    let len = m.inst(&format!("load i32, ptr {len_ptr}"));
+    let bytes = m.inst(&format!("getelementptr inbounds {ty}, ptr {puffer}, i32 0, i32 1"));
+    let ok = m.inst(&format!("call i1 @{}(i32 {sid}, ptr {bytes}, i32 {len})", crate::stream::Streams::SEND));
+    // 8.8: `len > tx.free` ist ein `StreamOverflow`.
+    ctx.checks += 1;
+    let weiter = format!("gesendet{}_{}", ctx.checks, ctx.machine.name);
+    m.void_inst(&format!("br i1 {ok}, label %{weiter}, label %{}", ctx.trampoline()));
+    m.label(&weiter);
+    Ok(())
 }
 
 /// `for i in range(n)` im Rumpf einer Maschine (4.1).

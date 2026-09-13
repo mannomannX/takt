@@ -1,0 +1,31 @@
+# 24 — `has` und `send` im erzeugten Code (8.7, 8.8).
+#
+# `has P` ist die Kurzform fuer `matches "{_}" + P + "{_}"` (8.7): Das
+# Muster darf an jeder Stelle beginnen, gesucht wird das linkeste
+# Vorkommen. Der Automat entscheidet das nicht — er prueft den ganzen
+# Text —, also laeuft der Durchlauf aus 8.7 ueber jede Startposition.
+#
+# `send` schreibt in den Sendepuffer eines Ausgabestroms (8.8). Die
+# Hoechstlaenge steht statisch fest, der Text entsteht im erzeugten Code.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  rx   : stream<line<64>> @ hw("u/rx") with max_rate = 100 Hz, capacity = 4
+output tx   : stream<u8>       @ hw("u/tx") with max_rate = 100000 Hz, capacity = 64
+output hits : int in 0..99     @ sim("h")
+
+machine m:
+    # Zaehlt die Zeilen, in denen `ERR` irgendwo vorkommt.
+    var found : int in 0..99 = 0
+
+    initial A
+
+    state A:
+        loop:
+            hits = found
+        on rx has "ERR" as l:
+            found = found + 1
+            send tx, "ack {found}\n"
+        after 1 s: -> A

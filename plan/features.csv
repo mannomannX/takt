@@ -97,6 +97,8 @@ SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),fertig
 SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4 (Codegen),fertig
 RT-8.6-Strompuffer,Umsetzung,12.1,"Strompuffer der Runtime (`takt-rt-core::stream`): Ring ueber geliehenen Feldern statt Const-Generics, feste Slots und Byte-Ring in einer Struktur (FB-115)",,M4/M5 (Runtime),fertig
 RT-8.6-Rahmenstroeme,Umsetzung,12.1,"Stroeme im Testrahmen (`takt-conformance::streams`): Tabelle ueber dem Stimulus statt Ring, weil der Stimulus vor dem Lauf feststeht; Schranken aus 8.6 je Tick (FB-115)",,M4 (Codegen),fertig
+CG-8.7-Captures,Umsetzung,11.2,"Mustervergleich mit Extraktion im erzeugten Code (`takt-llvm::captures`): Vorwaertsdurchlauf als IR statt Aufruf in die Runtime, weil die Naht Rohzeiger braeuchte (13.4); `takt-match` als Orakel (FB-113)",,M4 (Codegen),fertig
+CG-8.8-Send,Umsetzung,11.2,"`send` und Formatstrings im erzeugten Code (`takt-llvm::format`): `{x}`, `{x:hex}`, `{x:04}`; `float` bleibt aus (4.2, zweite Rundungsquelle) (FB-112)",,M4 (Codegen),fertig
 SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedded),offen
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M5 (Embedded),offen
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig

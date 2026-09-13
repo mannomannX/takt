@@ -41,11 +41,20 @@ impl Streams {
     /// examined + 1`).
     pub const EXAMINED: &'static str = "takt_stream_examined";
 
+    /// Legt Bytes in den Sendepuffer eines Ausgabestroms (8.8).
+    ///
+    /// Der Puffer gehoert der Runtime, wie der Empfangsring: Der Treiber
+    /// leert ihn mit `max_rate`, und `tx.free` wird zu Tick-Beginn
+    /// gesampelt. Das Ergebnis sagt, ob die Bytes hineinpassten — ein
+    /// `send` mit `len > tx.free` ist ein `StreamOverflow` (8.8).
+    pub const SEND: &'static str = "takt_stream_send";
+
     /// Schreibt die Deklarationen in den Modulkopf.
     pub fn declare(m: &mut Module) {
-        m.declare("\n; Stroeme (8.6, 9.6); die Puffer gehoeren der Runtime");
+        m.declare("\n; Stroeme (8.6, 8.8, 9.6); die Puffer gehoeren der Runtime");
         m.declare(&format!("declare i32 @{}(i32, i64)", Streams::COUNT));
         m.declare(&format!("declare i64 @{}(i32, i64, i32, ptr)", Streams::AT));
         m.declare(&format!("declare void @{}(i32, i64)", Streams::EXAMINED));
+        m.declare(&format!("declare i1 @{}(i32, ptr, i32)", Streams::SEND));
     }
 }

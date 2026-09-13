@@ -18,3 +18,6 @@ workspace = true
 # erfinden — ein Struct, der nur fuer Testdaten stimmt, ist kein Beleg.
 takt-sema = { path = "../takt-sema" }
 takt-diag = { path = "../takt-diag" }
+# Das Orakel des Mustervergleichs: Der erzeugte Code muss mit ihm
+# uebereinstimmen (8.7, Satz 9.4.4).
+takt-match = { path = "../takt-match" }

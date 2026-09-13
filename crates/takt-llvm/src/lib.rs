@@ -32,11 +32,13 @@
 
 pub mod abi;
 pub mod block;
+pub mod captures;
 pub mod collection;
 pub mod dfa;
 pub mod emit;
 pub mod expr;
 pub mod fns;
+pub mod format;
 pub mod image;
 pub mod machine;
 pub mod scope;

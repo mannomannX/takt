@@ -668,31 +668,30 @@ fn handler_chain(
         let takt_mir::pattern::Pattern::Text { pieces, dfa } = pattern else {
             return Err(NotYet { what: "Record-Muster im Handler" });
         };
-        // 8.7: `matches` verlangt den ganzen Text, `has` ein Vorkommen.
-        // Der Automat entscheidet den ersten Fall; `has` braucht den
-        // Vorwaertsdurchlauf ueber jede Startposition und kommt spaeter.
-        if *kind != takt_mir::expr::MatchKind::Matches {
-            return Err(NotYet { what: "`has` im Handler" });
-        }
-        let Some(dfa) = dfa else {
-            return Err(NotYet { what: "Muster mit offenem Ende im Handler" });
-        };
         // Die Bindung ist ein Record; der Inhalt steht unter `.data`
-        // beziehungsweise `.text` (8.7). Der Automat laeuft darauf.
+        // beziehungsweise `.text` (8.7). Der Vergleich laeuft darauf.
         let text = m.inst(&format!("getelementptr inbounds i8, ptr {slot}, i64 0"));
-        let id = m.next_label();
-        crate::dfa::declare(id, dfa, m);
-        let hit = crate::dfa::run(id, dfa, text, m)?;
+        let hat_capture = pieces.iter().any(|p| matches!(p, takt_mir::pattern::PatternPiece::Capture { .. }));
+        // 8.7: `matches` verlangt den ganzen Text, `has` ein Vorkommen.
+        //
+        // Ohne Platzhalter genuegt der Automat: Er liest jedes Byte
+        // einmal und sagt, ob das Muster traegt (11.2). Mit Platzhaltern
+        // braucht es den Durchlauf, denn ein Automat ueber Zeichenklassen
+        // kennt die Grenzen, aber nicht die Werte — und ihn zusaetzlich
+        // laufen zu lassen hiesse, denselben Text zweimal zu lesen.
+        let ist_matches = *kind == takt_mir::expr::MatchKind::Matches;
+        let hit = match (hat_capture, ist_matches, dfa) {
+            (false, true, Some(dfa)) => {
+                let id = m.next_label();
+                crate::dfa::declare(id, dfa, m);
+                crate::dfa::run(id, dfa, text, m)?
+            }
+            (_, true, _) => pattern_matches(pieces, text, h, ctx, m)?,
+            (_, false, _) => pattern_has(pieces, text, h, ctx, m)?,
+        };
         let (dann, sonst) = (format!("handler{k}_{n}_{name}"), format!("handler{k}_{n}_{name}_sonst"));
         m.void_inst(&format!("br i1 {hit}, label %{dann}, label %{sonst}"));
         m.label(&dann);
-        // Ein Muster mit Platzhaltern braucht die Extraktion: Der Automat
-        // sagt, *dass* es trifft, nicht was in `{n:int}` steht. Ohne sie
-        // liefe der Rumpf mit falschen Werten, und ein falscher Wert ist
-        // schlimmer als eine Meldung (4.1).
-        if pieces.iter().any(|p| matches!(p, takt_mir::pattern::PatternPiece::Capture { .. })) {
-            return Err(NotYet { what: "Capture im Handler-Muster" });
-        }
         block(&h.body.clone(), ctx, m)?;
         m.void_inst(&format!("br label %{ende}"));
         m.label(&sonst);
@@ -700,6 +699,122 @@ fn handler_chain(
     m.void_inst(&format!("br label %{ende}"));
     m.label(&ende);
     Ok(())
+}
+
+/// Wohin die Werte eines Musters gehen (8.7, Wrapper-Regel).
+///
+/// Die Bindung ist ein Record, dessen erste Felder die Platzhalter sind;
+/// dahinter stehen `t`, `seq` und der Inhalt.
+struct Bindung {
+    /// Die Variable im Zustand der Maschine.
+    var: takt_mir::VarId,
+    /// Ihr Typ, fuer die Adressrechnung.
+    record: crate::ty::LlvmType,
+    /// Index und Typ je Capture, in Musterreihenfolge.
+    felder: Vec<(u32, crate::ty::LlvmType)>,
+}
+
+impl Bindung {
+    /// `None` heisst: keine Bindung, also nichts abzulegen — der
+    /// Vergleich laeuft trotzdem.
+    fn of(h: &takt_mir::machine::Handler, ctx: &Ctx<'_>) -> Option<Bindung> {
+        let var = h.binding?;
+        let ty = ctx.machine.vars.get(var.index())?.ty;
+        let record = crate::ty::lower(ty, ctx.program)?;
+        let crate::ty::LlvmType::Struct(fields) = &record else { return None };
+        let takt_mir::types::Type::Record(r) = ctx.program.types.list.get(ty.index())? else { return None };
+        let defs = &ctx.program.records.get(r.index())?.fields;
+        // Die Captures stehen vorn; `t`, `seq` und `text`/`data`
+        // schliessen an. Die Grenze ist der erste dieser Namen.
+        let ende =
+            defs.iter().position(|d| matches!(d.name.as_str(), "t" | "seq" | "text" | "data")).unwrap_or(defs.len());
+        let felder = (0..ende).filter_map(|i| fields.get(i).map(|f| (i as u32, f.clone()))).collect();
+        Some(Bindung { var, record, felder })
+    }
+
+    /// Der Platz im Zustand, an den die Werte gehen.
+    fn slot(&self, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<crate::emit::Reg, NotYet> {
+        ctx.field(Role::Var, self.var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })
+    }
+}
+
+/// Was `captures::walk` braucht, oder nichts.
+fn ziel<'a>(
+    b: &'a Option<Bindung>,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<Option<crate::captures::Ziel<'a>>, NotYet> {
+    match b {
+        Some(b) => {
+            let slot = b.slot(ctx, m)?;
+            Ok(Some(crate::captures::Ziel { slot, record: &b.record, felder: &b.felder }))
+        }
+        None => Ok(None),
+    }
+}
+
+/// `matches P`: Das Muster muss den ganzen Text verbrauchen (8.7).
+fn pattern_matches(
+    pieces: &[takt_mir::pattern::PatternPiece],
+    text: crate::emit::Reg,
+    h: &takt_mir::machine::Handler,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::emit::Reg, NotYet> {
+    let b = Bindung::of(h, ctx);
+    let wohin = ziel(&b, ctx, m)?;
+    let null = m.inst("add i32 0, 0");
+    let (ok, at) = crate::captures::walk(pieces, text, wohin.as_ref(), null, m)?;
+    // Der ganze Text: Was hinter dem Durchlauf steht, darf nicht sein.
+    let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
+    let len = m.inst(&format!("load i32, ptr {len_ptr}"));
+    let ganz = m.inst(&format!("icmp eq i32 {at}, {len}"));
+    Ok(m.inst(&format!("and i1 {ok}, {ganz}")))
+}
+
+/// `has P`: Das Muster darf an jeder Stelle beginnen (8.7).
+///
+/// Gesucht wird das linkeste Vorkommen. Die Schleife ist durch die
+/// Textlaenge beschraenkt, die ihrerseits durch `N` beschraenkt ist
+/// (3.9) — 4.1 verlangt genau das.
+fn pattern_has(
+    pieces: &[takt_mir::pattern::PatternPiece],
+    text: crate::emit::Reg,
+    h: &takt_mir::machine::Handler,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::emit::Reg, NotYet> {
+    let b = Bindung::of(h, ctx);
+    let wohin = ziel(&b, ctx, m)?;
+    let k = m.next_label();
+    let (kopf, rumpf, fertig) = (format!("has{k}"), format!("has{k}_rumpf"), format!("has{k}_fertig"));
+    let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
+    let len = m.inst(&format!("load i32, ptr {len_ptr}"));
+    let start_ptr = m.inst("alloca i32");
+    m.void_inst(&format!("store i32 0, ptr {start_ptr}"));
+    let hit_ptr = m.inst("alloca i1");
+    m.void_inst(&format!("store i1 false, ptr {hit_ptr}"));
+    m.void_inst(&format!("br label %{kopf}"));
+
+    m.label(&kopf);
+    let start = m.inst(&format!("load i32, ptr {start_ptr}"));
+    // Auch hinter dem letzten Zeichen wird geprueft: Ein leeres Muster
+    // passt am Ende (8.7).
+    let im_text = m.inst(&format!("icmp sle i32 {start}, {len}"));
+    let bisher = m.inst(&format!("load i1, ptr {hit_ptr}"));
+    let offen = m.inst(&format!("xor i1 {bisher}, true"));
+    let suchen = m.inst(&format!("and i1 {im_text}, {offen}"));
+    m.void_inst(&format!("br i1 {suchen}, label %{rumpf}, label %{fertig}"));
+
+    m.label(&rumpf);
+    let (ok, _) = crate::captures::walk(pieces, text, wohin.as_ref(), start, m)?;
+    m.void_inst(&format!("store i1 {ok}, ptr {hit_ptr}"));
+    let ni = m.inst(&format!("add i32 {start}, 1"));
+    m.void_inst(&format!("store i32 {ni}, ptr {start_ptr}"));
+    m.void_inst(&format!("br label %{kopf}"));
+
+    m.label(&fertig);
+    Ok(m.inst(&format!("load i1, ptr {hit_ptr}")))
 }
 
 /// Der Fault-Pfad eines Blattzustands (5.2 Regel 5, 5.3).

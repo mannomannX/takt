@@ -77,6 +77,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let _ = writeln!(s, "/* Testrahmen (13.8); erzeugt von takt-conformance. */");
     let _ = writeln!(s, "#include <stdio.h>");
     let _ = writeln!(s, "#include <string.h>\n");
+    let _ = writeln!(s, "static void takt_tx_commit(long long);");
 
     // Die Runtime-Aufrufe (`takt-llvm/src/abi.rs`). Sie schreiben in den
     // Trace, damit der Vergleich sie sieht.
@@ -208,6 +209,10 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // 8.3: Was ein Modell in diesem Tick auf einen `sim`-Output gestellt
     // hat, liest das Programm im naechsten — Unit-Delay wie bei Ψ.
     sim_bindings(&mut s, p, "        ");
+    // 8.8: Gesendet wird beim Commit des Ticks. Der Treiber holt seine
+    // Rate ab, bevor der Latch ausgeschrieben wird — sonst stuende die
+    // Zeile einen Tick spaeter als beim Interpreter.
+    let _ = writeln!(s, "        takt_tx_commit(g_tick);");
     let _ = writeln!(s, "        dump(g_tick);");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    return 0;");

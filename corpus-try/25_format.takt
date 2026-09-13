@@ -1,0 +1,44 @@
+# 25 — Formatangaben im erzeugten Code (3.9, 8.8).
+#
+# `{x}` dezimal, `{x:hex}` hexadezimal, `{x:04}` mit Nullen gefuellt.
+# Die Raender stecken in den Werten: die Null hat keine Ziffer, ein
+# negativer Wert traegt sein Minus vor der Fuellung, und `10` ist
+# einstellig in hex und zweistellig dezimal.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output tx : stream<u8>     @ hw("u/tx") with max_rate = 100000 Hz, capacity = 256
+output k  : int in -99..99 @ sim("k")
+
+machine m:
+    initial NULL
+
+    # Je Zustand ein Wert: Das umgeht eine Fortschreibung mit
+    # Range-Pruefung und macht die geprueften Faelle sichtbar. Formatiert
+    # wird die Variable, nicht ein Literal — sonst pruefte der Test, ob
+    # `send` Text kopiert, statt ob es rechnet.
+    state NULL:
+        enter:
+            k = 0
+            send tx, "d={k} h={k:hex} p={k:04}"
+        after 10 ms: -> EINS
+
+    state EINS:
+        enter:
+            k = 1
+            send tx, "d={k} h={k:hex} p={k:04}"
+        after 10 ms: -> MINUS
+
+    state MINUS:
+        enter:
+            k = -2
+            send tx, "d={k} h={k:hex} p={k:04}"
+        after 10 ms: -> ZEHN
+
+    state ZEHN:
+        enter:
+            k = 10
+            send tx, "d={k} h={k:hex} p={k:04}"
+        after 10 ms: -> NULL

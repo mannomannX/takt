@@ -4,8 +4,10 @@
 # entsteht zur Uebersetzungszeit (Teilmengenkonstruktion, 8.7), seine
 # Tabellen stehen als Konstanten in der IR, und `takt size` weist sie aus.
 #
-# Ohne Platzhalter, weil die Extraktion der Captures noch fehlt: Der
-# Automat sagt, *dass* ein Muster trifft, nicht was in `{n:int}` steht.
+# Mit Platzhaltern laeuft statt des Automaten der Durchlauf aus 8.7: Er
+# misst die Spannen und traegt die Werte in die Bindung ein. Beides
+# erzeugt der Codegen selbst; `takt-match` ist das Orakel, gegen das er
+# gemessen wird.
 
 system:
     language = 1
@@ -14,6 +16,7 @@ system:
 input  rx_log : stream<line<64>> @ hw("u/rx") with max_rate = 100 Hz, capacity = 4
 output y      : int in 0..9      @ sim("o")
 output count  : int in 0..99     @ sim("c")
+output sector : int in 0..999    @ sim("s")
 
 machine m:
     # `seen` zaehlt jedes untersuchte Element. 9.6 rueckt den Cursor
@@ -22,13 +25,22 @@ machine m:
     # jedem Tick wieder und zaehlte weiter.
     var seen : int in 0..99 = 0
 
+    # Der zuletzt gelesene Sektor. Er steht in einem Platzhalter, und
+    # sein Wert im Trace belegt die Extraktion: Ein Automat allein sagt
+    # nur, *dass* das Muster trifft.
+    var last : int in 0..999 = 0
+
     initial A
 
     state A:
         loop:
             count = seen
+            sector = last
         on rx_log matches "READY" as l:
             y = 7
+            seen = seen + 1
+        on rx_log matches "Erasing sector {n:int}" as l:
+            last = l.n
             seen = seen + 1
         on rx_log as l:
             seen = seen + 1

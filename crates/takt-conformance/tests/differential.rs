@@ -9,11 +9,14 @@
 //! die Werkzeugkette steht.
 
 use takt_conformance::compare;
+use takt_conformance::stimulus::Stimulus;
 use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
+mod common;
+
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 16] = [
+const KORPUS: [&str; 18] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -30,6 +33,8 @@ const KORPUS: [&str; 16] = [
     "21_fault_targets.takt",
     "22_faulted_outputs.takt",
     "23_patterns.takt",
+    "24_send_has.takt",
+    "25_format.takt",
 ];
 
 /// Wie viele Ticks verglichen werden.
@@ -94,10 +99,6 @@ fn the_interpreter_and_the_generated_code_agree() {
     }
     assert!(gescheitert.is_empty(), "{}", gescheitert.join("\n\n"));
 }
-
-use takt_conformance::stimulus::Stimulus;
-
-mod common;
 
 /// Die Grenzen der Abnahme stehen im Code, nicht nur im Plan.
 ///
@@ -195,12 +196,15 @@ fn the_two_implementations_agree_on_stream_elements() {
     let clang = Clang::At(path);
     let p = corpus("23_patterns.takt");
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
-    // Zwei Elemente: eines trifft das Muster `"READY"`, eines nicht.
-    // Ohne den zweiten Fall pruefte der Test nur, dass ueberhaupt etwas
-    // ankommt, nicht dass der Automat unterscheidet.
+    // Vier Elemente: eines trifft `"READY"`, eines gar kein Muster, und
+    // zwei tragen einen Platzhalter mit verschiedenen Werten. Ohne den
+    // zweiten Fall pruefte der Test nur, dass etwas ankommt; ohne die
+    // letzten beiden nicht, dass die Extraktion den *Wert* trifft.
     let stimulus = takt_interp::Trace::parse(
         "t=2 in rx_log READY
 t=5 in rx_log BUSY
+t=8 in rx_log Erasing sector 42
+t=11 in rx_log Erasing sector 7
 ",
     )
     .expect("Stimulus");
@@ -214,7 +218,7 @@ t=5 in rx_log BUSY
             _ => None,
         })
         .collect();
-    assert_eq!(inputs.len(), 2, "der Stimulus traegt zwei Elemente");
+    assert_eq!(inputs.len(), 4, "der Stimulus traegt vier Elemente");
 
     let native =
         common::run_native_with(&clang, &p, "stroeme", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
@@ -238,4 +242,104 @@ t=5 in rx_log BUSY
         interpreted,
         native
     );
+}
+
+/// **`has` und `send` mit Daten** (8.7, 8.8): Das Muster darf an jeder
+/// Stelle beginnen, und der Rumpf sendet.
+///
+/// `has` ist der Fall, den der Automat *nicht* entscheidet: Er prueft
+/// den ganzen Text, `has` sucht ein Vorkommen. Der Codegen laeuft darum
+/// den Durchlauf aus 8.7 ueber jede Startposition — und dieser Test
+/// misst, dass er dieselben Stellen findet wie der Interpreter.
+#[test]
+fn the_two_implementations_agree_on_has_and_send() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("24_send_has.takt");
+    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
+    // Vier Zeilen: `ERR` am Anfang, in der Mitte, am Ende, und gar nicht.
+    // Ein Muster, das nur am Anfang traefe, kaeme auf eine andere Zahl.
+    let stimulus = takt_interp::Trace::parse(
+        "t=2 in rx ERR init failed
+t=4 in rx warn: ERR on bus
+t=6 in rx sensor ERR
+t=8 in rx all good
+",
+    )
+    .expect("Stimulus");
+    let inputs: Vec<Stimulus> = stimulus
+        .lines
+        .iter()
+        .filter_map(|l| match &l.kind {
+            takt_interp::trace::LineKind::Input { channel, sample } => {
+                Some(Stimulus::element(l.tick, channel, sample.value.as_deref().unwrap_or_default()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inputs.len(), 4, "der Stimulus traegt vier Zeilen");
+
+    let native =
+        common::run_native_with(&clang, &p, "has_send", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+
+    // Drei der vier Zeilen tragen `ERR`; stuende hier eine andere Zahl,
+    // haette `has` nicht an jeder Stelle gesucht.
+    assert!(
+        interpreted.contains("out hits 3"),
+        "`has` hat nicht drei Vorkommen gefunden; der Test pruefte sonst nichts:\n{interpreted}"
+    );
+    // Der Treiber holt das Gesendete ab und meldet es als `out tx
+    // [bytes]` (8.8) — `compare` prueft die Zeile also gegen den
+    // Interpreter. Die Zusicherung hier belegt, dass ueberhaupt gesendet
+    // wurde: Ein Lauf ohne `send` waere sonst ebenfalls gruen.
+    assert!(
+        native.contains("out tx [0x61, 0x63, 0x6b, 0x20, 0x31, 0x0a]"),
+        "`ack 1` fehlt im nativen Trace:\n{native}"
+    );
+
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen bei `has`/`send`:\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
+        diffs.len(),
+        diffs.iter().take(6).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n"),
+        interpreted,
+        native
+    );
+}
+
+/// Die Formatangaben aus 3.9 im erzeugten Code: `{x}`, `{x:hex}`,
+/// `{x:04}`.
+///
+/// Sie laufen ueber dieselbe Ziffernrechnung, unterscheiden sich aber in
+/// Basis, Vorzeichen und Fuellung — und jede davon hat einen Rand: die
+/// Null ohne Ziffer, das Minus vor der Zahl, die Fuellung, die kuerzer
+/// ist als die Zahl.
+#[test]
+fn the_format_specs_produce_the_expected_text() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("25_format.takt");
+    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
+    let native = common::run_native_with(&clang, &p, "format", &machine, 8, &[]).unwrap_or_else(|e| panic!("{e}"));
+    // Der Treiber meldet die Bytes als `out tx [..]` (8.8), also prueft
+    // `compare` sie gegen den Interpreter. Hier steht, *was* dort stehen
+    // muss — sonst waere ein Lauf gruen, in dem beide Seiten dasselbe
+    // Falsche schreiben.
+    for (was, bytes) in [
+        // `d=10 h=a p=0010`
+        ("`{x:hex}` von 10 ist `a`", "0x64, 0x3d, 0x31, 0x30, 0x20, 0x68, 0x3d, 0x61"),
+        // `d=-2 h=fffffffffffffffe …`: hex zaehlt das Bitmuster (3.9).
+        ("`{x:hex}` von -2 ist vorzeichenlos", "0x64, 0x3d, 0x2d, 0x32, 0x20, 0x68, 0x3d, 0x66, 0x66"),
+    ] {
+        assert!(native.contains(bytes), "{was} — fehlt:\n{native}");
+    }
 }
