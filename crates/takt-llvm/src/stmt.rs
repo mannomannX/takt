@@ -272,6 +272,7 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         }
         StmtKind::Pass => Ok(()),
         StmtKind::Send { stream, value, len_max } => send(*stream, value, *len_max, ctx, m),
+        StmtKind::Every { period, counter, body } => every(period, *counter, body, ctx, m),
         other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
 }
@@ -331,6 +332,88 @@ fn send(
     m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{}", ctx.trampoline()));
     m.label(&go_on);
     Ok(())
+}
+
+/// `every d:` (5.8): der Block laeuft, wenn die Uhr den naechsten
+/// Zeitpunkt erreicht hat.
+///
+/// **Die Uhr haengt am Ort.** Steht das `every` in einem Zustand, ist sie
+/// `t_in_state`; im maschinenweiten `loop:` ist sie `now` (5.8). Der
+/// Grund steht dort: Ein Block im Maschinen-`loop:` gehoert keinem
+/// Zustand, dessen Eintritt ihn neu startete, und verstummte mit
+/// `t_in_state` nach dem ersten Wechsel. Mit `now` ueberlebt seine Phase
+/// Zustandswechsel und Fault-Pfade — die gewollte Phasenstarrheit fuer
+/// Takterzeuger.
+///
+/// **Der Zaehler steht im Zustand**, ein `i64` je Aufrufstelle
+/// (`Role::EveryNext`, 11.2). Der Interpreter haelt ihn zusaetzlich je
+/// Schleifenindex (5.6); der Codegen senkt `every` in einer `for`-
+/// Schleife darum noch nicht — mit einem Feld je Stelle zaehlten alle
+/// Durchlaeufe gemeinsam, und das waere still falsch.
+fn every(
+    period: &Expr,
+    counter: takt_mir::CounterId,
+    body: &Block,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let site = ctx
+        .machine
+        .layout
+        .every_counters
+        .get(counter.index())
+        .copied()
+        .ok_or(NotYet { what: "`every` ohne Zaehlerstelle" })?;
+    let idx = ctx.state.index_of(Role::EveryNext, counter.index()).ok_or(NotYet { what: "`every` im Zustand" })?;
+    let vars = ctx.vars();
+    let d = lower_expr(period, ctx.program, m, &vars)?;
+    if d.ty != LlvmType::Int(64) {
+        return Err(NotYet { what: "`every` mit einer Dauer, die keine Dauer ist" });
+    }
+    // Die Uhr: `t_in_state` in einem Zustand, sonst `now` (5.8).
+    let clock = match site.state {
+        Some(_) => time_in_state_ns(ctx, m)?,
+        None => {
+            // `takt_now` steht im Modulkopf (`Abi::declare`).
+            m.inst(&format!("call i64 @{}()", crate::abi::Abi::NOW)).to_string()
+        }
+    };
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
+    let slot = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {idx}"));
+    let next = m.inst(&format!("load i64, ptr {slot}"));
+    // `-1` heisst „seit dem Eintritt noch nicht gesetzt": Dann gilt `d`
+    // als naechster Zeitpunkt (5.8, Startwert `d`).
+    let fresh = m.inst(&format!("icmp slt i64 {next}, 0"));
+    let due_at = m.inst(&format!("select i1 {fresh}, i64 {}, i64 {next}", d.value));
+    let due = m.inst(&format!("icmp sge i64 {clock}, {due_at}"));
+
+    let k = ctx.next_label();
+    let name = &ctx.machine.name;
+    let (run, skip) = (format!("every{k}_{name}"), format!("every{k}_{name}_aus"));
+    m.void_inst(&format!("br i1 {due}, label %{run}, label %{skip}"));
+    m.label(&run);
+    // `next += d` — vom faelligen Zeitpunkt aus, nicht von der Uhr: Das
+    // Raster bleibt starr, auch wenn eine Aktivierung ausfiel (5.8).
+    let advanced = m.inst(&format!("add i64 {due_at}, {}", d.value));
+    m.void_inst(&format!("store i64 {advanced}, ptr {slot}"));
+    block(body, ctx, m)?;
+    m.void_inst(&format!("br label %{skip}"));
+    m.label(&skip);
+    Ok(())
+}
+
+/// `t_in_state` in Nanosekunden (5.8).
+///
+/// Der Zaehler im Zustand zaehlt Aktivierungen; eine Aktivierung ist
+/// `period` Basis-Ticks lang (7.2). Dieselbe Rechnung wie in `after`.
+fn time_in_state_ns(ctx: &Ctx<'_>, m: &mut Module) -> Result<String, NotYet> {
+    let t_i = ctx.state.index_of(Role::TimeInState, 0).ok_or(NotYet { what: "t_in_state im Zustand" })?;
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
+    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
+    let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
+    let ticks = m.inst(&format!("load i64, ptr {cell}"));
+    let period_ns = i64::from(ctx.machine.period.max(1)).saturating_mul(ctx.program.config.tick);
+    Ok(m.inst(&format!("mul i64 {ticks}, {period_ns}")).to_string())
 }
 
 /// `for i in range(n)` im Rumpf einer Maschine (4.1).
@@ -517,7 +600,15 @@ fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet>
             m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {})", Abi::VERIFY, c.value));
             Ok(())
         }
-        _ => Err(NotYet { what: "Beobachtung" }),
+        // `verdict pass | fail` (13.2): das Urteil eines Tests. Wie
+        // `verify` eine reine Beobachtung — sie loest nie einen Fault aus
+        // (Leitentscheidung 14), also nur ein Aufruf.
+        Observe::Verdict { pass, .. } => {
+            let site = ctx.next_site();
+            let v = u8::from(*pass);
+            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {v})", Abi::VERDICT));
+            Ok(())
+        }
     }
 }
 

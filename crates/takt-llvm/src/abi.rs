@@ -55,6 +55,13 @@ impl Abi {
     /// eine zweite Quelle fuer dieselbe Zahl.
     pub const NOW: &'static str = "takt_now";
 
+    /// `verdict pass | fail` (13.2): das Urteil eines Tests.
+    ///
+    /// Wie `verify` eine reine Beobachtung — sie kann nie einen Fault
+    /// ausloesen (Leitentscheidung 14). Der Report sammelt sie; die
+    /// Runtime reicht sie weiter.
+    pub const VERDICT: &'static str = "takt_verdict";
+
     /// Das Fault-Flag einer reinen Funktion (4.1).
     ///
     /// Eine Funktion hat keinen eigenen Fault-Pfad — sie faultet den
@@ -78,6 +85,8 @@ impl Abi {
         m.declare(&format!("declare void @{}(i32, i32, double)", Abi::MEASURE));
         m.declare(&format!("declare void @{}(i32, i32, i1)", Abi::VERIFY));
         m.declare(&format!("declare void @{}(i32, i32)", Abi::ABORT));
+        m.declare(&format!("declare i64 @{}()", Abi::NOW));
+        m.declare(&format!("declare void @{}(i32, i32, i1)", Abi::VERDICT));
         // `append` kopiert eine ganze Folge in einem Zug (3.9); LLVM
         // kennt das als Intrinsic, und eine Schleife braeuchte eine
         // Schranke, die 4.1 ohnehin verlangt.

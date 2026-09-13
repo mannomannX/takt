@@ -1,0 +1,42 @@
+# 27 — `every d:` im erzeugten Code (5.8).
+#
+# Ein Zaehler je Aufrufstelle haelt den naechsten Zeitpunkt; der Block
+# laeuft, sobald die Uhr ihn erreicht, und der Zeitpunkt rueckt um `d`
+# vor. Nicht um die Uhr, sondern um den faelligen Zeitpunkt: Das Raster
+# bleibt starr, auch wenn eine Aktivierung ausfiel.
+#
+# **Die Uhr haengt am Ort.** Im maschinenweiten `loop:` ist sie `now`,
+# in einem Zustand `t_in_state` (5.8). Der Unterschied ist sichtbar:
+# `beat` zaehlt durch, `local` beginnt nach jedem Eintritt neu.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output beat  : int in 0..99 @ sim("b")
+output local : int in 0..99 @ sim("l")
+
+machine m:
+    var b : int in 0..99 = 0
+    var l : int in 0..99 = 0
+
+    initial A
+
+    # Im Maschinen-`loop:`: Die Phase ueberlebt jeden Zustandswechsel,
+    # weil `now` weiterlaeuft (5.8, Phasenstarrheit).
+    loop:
+        every 30 ms:
+            b = b + 1
+        beat = b
+        local = l
+
+    state A:
+        # Im Zustand: Die Uhr ist `t_in_state`, und der Eintritt setzt
+        # Zaehler und Uhr gemeinsam zurueck.
+        loop:
+            every 20 ms:
+                l = l + 1
+        after 100 ms: -> B
+
+    state B:
+        after 100 ms: -> A

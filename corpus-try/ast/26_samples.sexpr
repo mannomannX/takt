@@ -1,0 +1,18 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output lo :float @sim("lo"))
+(output hi :float @sim("hi"))
+(output avg :float @sim("avg"))
+(output quad :float @sim("quad"))
+(output n :int in 0..9 @sim("n"))
+(machine m
+  (var xs :[4]float (array 3.0 (- 1.0) 4.0 2.0))
+  (initial A)
+  (state A
+    (loop
+      (= lo (.min xs))
+      (= hi (.max xs))
+      (= avg (.mean xs))
+      (= quad (.rms xs))
+      (= n (.count xs)))))

@@ -1,0 +1,21 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output beat :int in 0..99 @sim("b"))
+(output local :int in 0..99 @sim("l"))
+(machine m
+  (var b :int in 0..99 0)
+  (var l :int in 0..99 0)
+  (initial A)
+  (loop
+    (every 30ms
+      (= b (+ b 1)))
+    (= beat b)
+    (= local l))
+  (state A
+    (loop
+      (every 20ms
+        (= l (+ l 1))))
+    (after 100ms -> B))
+  (state B
+    (after 100ms -> A)))

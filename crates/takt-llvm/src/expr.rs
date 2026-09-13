@@ -363,7 +363,14 @@ fn access(
             let wide = m.inst(&format!("sext i32 {r} to {want}"));
             Ok(Lowered { value: wide.to_string(), ty: want.clone() })
         }
-        _ => Err(NotYet { what: crate::scope::accessor_name(which) }),
+        // Reduktionen ueber ein Feld (8.9): `min`, `max`, `mean`, `rms`,
+        // `count`, `last`. Sie stehen in `reduce`, weil sie zusammen
+        // gehoeren und eine gemeinsame Zusage tragen — die Reihenfolge
+        // der Summation ist dort Semantik (4.2).
+        _ => match crate::reduce::access(which, &x, want, m) {
+            Some(r) => r,
+            None => Err(NotYet { what: crate::scope::accessor_name(which) }),
+        },
     }
 }
 

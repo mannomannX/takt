@@ -1,0 +1,40 @@
+# 26 — Reduktionen ueber ein Abtastfenster (8.9).
+#
+# `samples<T, N>` liefert je Tick ein beschraenktes Feld; `min`, `max`,
+# `mean` und `rms` rechnen darauf. Die Laenge steht im Typ, also ist
+# jede Reduktion statisch beschraenkt (4.1).
+#
+# Die Summation laeuft von links nach rechts — im Interpreter wie im
+# erzeugten Code. Eine andere Reihenfolge waere numerisch oft besser und
+# liefe gegen 4.2: Bitgleiche Ergebnisse ueber alle Targets verlangen
+# dieselbe Folge von Additionen.
+#
+# Gerechnet wird auf einem Feld aus Konstanten statt auf einem Eingang:
+# Ein `samples`-Eingang braeuchte ein Plant-Modell, und der Vergleich
+# soll die Reduktionen pruefen, nicht die Bindung (8.3).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output lo   : float       @ sim("lo")
+output hi   : float       @ sim("hi")
+output avg  : float       @ sim("avg")
+output quad : float       @ sim("quad")
+output n    : int in 0..9 @ sim("n")
+
+machine m:
+    # Die Werte liegen so, dass die Reduktionen auseinanderfallen: `min`
+    # und `max` an verschiedenen Stellen, und `mean` ungleich `rms`, weil
+    # das Quadrat die grossen Werte staerker gewichtet.
+    var xs : [4] float = [3.0, -1.0, 4.0, 2.0]
+
+    initial A
+
+    state A:
+        loop:
+            lo = xs.min()
+            hi = xs.max()
+            avg = xs.mean()
+            quad = xs.rms()
+            n = xs.count

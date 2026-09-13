@@ -224,6 +224,13 @@ fn transitions(
         }
         m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
         reset_time(ctx, m);
+        // 5.8/5.6: Die `every`- und Bestaetigungszaehler der betretenen
+        // Zustaende beginnen neu. Vor den `loop:`-Bloecken darunter, weil
+        // die im selben Tick laufen (5.2 Regel 4) und das `every` dort
+        // steht — ein Reset danach setzte zurueck, was gerade feuerte.
+        for id in machine::entering(ctx.machine, leaves[from], leaf) {
+            reset_counters(ctx, Some(id), m);
+        }
         // 5.2 Regel 4 (Entry-Tick): Die `loop:`-Bloecke der neu betretenen
         // Zustaende laufen noch in diesem Tick — die darueberliegenden
         // liefen bereits. `check`s wirken, `-> ZIEL` ist wirkungslos, und
@@ -344,6 +351,43 @@ fn reset_time(ctx: &Ctx<'_>, m: &mut Module) {
     m.void_inst(&format!("store i64 0, ptr {cell}"));
 }
 
+/// Setzt die `every`- und Bestaetigungszaehler eines Zustands beim
+/// Eintritt zurueck (5.8, 5.6).
+///
+/// Der Interpreter loescht ihre Eintraege (`enter_state`), sodass der
+/// naechste Zugriff wieder mit dem Startwert beginnt. Hier stehen sie als
+/// Felder, also wird geschrieben: `every_next` auf null — der Block
+/// laeuft dann, sobald `uhr >= 0` gilt, und `every` addiert `d` darauf.
+///
+/// **Warum null und nicht `d`.** 5.8 nennt `d` als Startwert, und der
+/// Interpreter setzt ihn in `at_or`. Beide Wege ergeben dasselbe
+/// Verhalten, weil die Uhr beim Eintritt ebenfalls auf null steht: Mit
+/// Start `d` feuert der Block erstmals bei `uhr == d`, mit Start null
+/// sofort. Der Unterschied ist beobachtbar — darum wird hier `d` beim
+/// ersten Durchlauf gesetzt, nicht hier; siehe `every`.
+fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
+    for (i, c) in ctx.machine.layout.every_counters.iter().enumerate() {
+        if c.state != s {
+            continue;
+        }
+        let Some(idx) = ctx.state.index_of(Role::EveryNext, i) else { continue };
+        let p = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {idx}"));
+        // `-1` heisst „noch nicht gesetzt": Der erste Durchlauf traegt
+        // `d` ein (5.8). Eine Null waere ein gueltiger Zeitpunkt und
+        // liesse den Block im Eintritts-Tick laufen.
+        m.void_inst(&format!("store i64 -1, ptr {p}"));
+    }
+    for (i, c) in ctx.machine.layout.viol_sites.iter().enumerate() {
+        if c.state != s {
+            continue;
+        }
+        let Some(idx) = ctx.state.index_of(Role::Viol, i) else { continue };
+        let p = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {idx}"));
+        m.void_inst(&format!("store i32 0, ptr {p}"));
+    }
+}
+
 /// Schreibt die Eintrittsfunktion einer Maschine (9.4).
 ///
 /// 9.4: Der Anfangszustand wird betreten, *bevor* der erste Tick laeuft —
@@ -415,6 +459,14 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     // Fault-Ziel. Ohne das stuenden die Outputs des Ticks 0 auf den
     // Werten eines Zustands, den die Maschine bereits verlassen hat.
     let kette: Vec<takt_mir::StateId> = machine::path_to(m, leaf);
+    // Die Zaehler der betretenen Zustaende und die der Maschinenebene
+    // beginnen bei `-1` („noch nicht gesetzt", 5.8). Der Speicher kommt
+    // genullt, und die Null waere ein gueltiger Zeitpunkt — das `every`
+    // liefe dann schon im Tick 0 statt nach `d`.
+    reset_counters(&ctx, None, module);
+    for id in &kette {
+        reset_counters(&ctx, Some(*id), module);
+    }
     let mut koerper = vec![m.loop_block.clone()];
     koerper.extend(kette.iter().map(|id| m.states[id.index()].loop_block.clone()));
     let end_at = format!("init_ende_{}", m.name);
@@ -876,6 +928,11 @@ fn fault_path(
     }
     m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
     reset_time(ctx, m);
+    // Auch der Fault-Pfad betritt einen Zustand: seine Zaehler beginnen
+    // neu (5.8, 5.6).
+    for id in machine::entering(machine_def, from, leaf) {
+        reset_counters(ctx, Some(id), m);
+    }
     // Entry-Modus: Die `loop:`-Bloecke des Fault-Ziels laufen noch in
     // diesem Tick (5.2 Regel 4 und 5).
     for id in machine::entering(machine_def, from, leaf) {

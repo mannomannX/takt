@@ -41,6 +41,7 @@ pub mod fns;
 pub mod format;
 pub mod image;
 pub mod machine;
+pub mod reduce;
 pub mod scope;
 pub mod step;
 pub mod stmt;
