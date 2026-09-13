@@ -23,7 +23,7 @@ fn mir_cap(kind: CaptureKind) -> PatternPiece {
 }
 
 /// Dasselbe Muster in der Form von `takt-match`.
-fn als_match(pieces: &[PatternPiece]) -> Vec<takt_match::Piece<'_>> {
+fn as_match(pieces: &[PatternPiece]) -> Vec<takt_match::Piece<'_>> {
     pieces
         .iter()
         .map(|p| match p {
@@ -41,7 +41,7 @@ fn als_match(pieces: &[PatternPiece]) -> Vec<takt_match::Piece<'_>> {
 }
 
 /// Die Zeilen, an denen beide gemessen werden.
-const ZEILEN: [&str; 16] = [
+const LINES: [&str; 16] = [
     "",
     "READY",
     "READ",
@@ -61,9 +61,9 @@ const ZEILEN: [&str; 16] = [
 ];
 
 /// Vergleicht Urteil und Werte auf jeder Zeile.
-fn vergleiche(pieces: &[PatternPiece]) {
-    let mp = als_match(pieces);
-    for line in ZEILEN {
+fn compare_all(pieces: &[PatternPiece]) {
+    let mp = as_match(pieces);
+    for line in LINES {
         let interp = match_text(pieces, line);
         let eigen = takt_match::matches(&mp, line.as_bytes());
         assert_eq!(
@@ -95,22 +95,22 @@ fn vergleiche(pieces: &[PatternPiece]) {
 
 #[test]
 fn a_literal_agrees() {
-    vergleiche(&[mir_text("READY")]);
+    compare_all(&[mir_text("READY")]);
 }
 
 #[test]
 fn an_int_capture_agrees_in_value_and_verdict() {
-    vergleiche(&[mir_text("Erasing sector "), mir_cap(CaptureKind::Int)]);
+    compare_all(&[mir_text("Erasing sector "), mir_cap(CaptureKind::Int)]);
 }
 
 #[test]
 fn two_captures_agree() {
-    vergleiche(&[mir_text("Boot v"), mir_cap(CaptureKind::Int), mir_text("."), mir_cap(CaptureKind::Int)]);
+    compare_all(&[mir_text("Boot v"), mir_cap(CaptureKind::Int), mir_text("."), mir_cap(CaptureKind::Int)]);
 }
 
 #[test]
 fn a_word_capture_agrees() {
-    vergleiche(&[mir_text("Recovery: "), mir_cap(CaptureKind::Word)]);
+    compare_all(&[mir_text("Recovery: "), mir_cap(CaptureKind::Word)]);
 }
 
 /// 8.7: „Ueberlauf → kein Match" — beide Seiten muessen dieselbe Grenze
@@ -118,7 +118,7 @@ fn a_word_capture_agrees() {
 #[test]
 fn the_overflow_boundary_agrees() {
     let p = [mir_text("n="), mir_cap(CaptureKind::Int)];
-    let mp = als_match(&p);
+    let mp = as_match(&p);
     for text in ["n=9223372036854775807", "n=9223372036854775808", "n=-9223372036854775808"] {
         let interp = match_text(&p, text);
         let eigen = takt_match::matches(&mp, text.as_bytes())

@@ -1,0 +1,27 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output tx :stream<u8> @hw("u/tx") max_rate=100000[Hz] capacity=256)
+(output k :int in (- 99)..99 @sim("k"))
+(machine m
+  (initial NULL)
+  (state NULL
+    (enter
+      (= k 0)
+      (send tx "d={k} h={k:hex} p={k:04}"))
+    (after 10ms -> EINS))
+  (state EINS
+    (enter
+      (= k 1)
+      (send tx "d={k} h={k:hex} p={k:04}"))
+    (after 10ms -> MINUS))
+  (state MINUS
+    (enter
+      (= k (- 2))
+      (send tx "d={k} h={k:hex} p={k:04}"))
+    (after 10ms -> ZEHN))
+  (state ZEHN
+    (enter
+      (= k 10)
+      (send tx "d={k} h={k:hex} p={k:04}"))
+    (after 10ms -> NULL)))

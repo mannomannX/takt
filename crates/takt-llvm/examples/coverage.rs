@@ -29,7 +29,7 @@ fn main() {
     files.sort();
 
     let mut cov = Coverage::default();
-    let (mut ganze_dateien, mut dateien, mut maschinen, mut fertig) = (0, 0, 0, 0);
+    let (mut ganze_dateien, mut dateien, mut maschinen, mut done) = (0, 0, 0, 0);
 
     for path in &files {
         let Ok(src) = std::fs::read_to_string(path) else { continue };
@@ -45,7 +45,7 @@ fn main() {
         takt_llvm::abi::Abi::declare(&mut m);
         takt_llvm::stream::Streams::declare(&mut m);
         takt_llvm::stream::Streams::declare(&mut m);
-        let mut alle = true;
+        let mut all_of = true;
         for b in &p.blocks {
             let Some(inst) = takt_llvm::block::instance_of(b, &p) else { continue };
             takt_llvm::block::declare(b, &inst, &mut m);
@@ -67,12 +67,12 @@ fn main() {
             measure(mm, &mut cov);
             let ok = state_struct(mm, &p).is_some_and(|st| step_function(mm, &st, &p, &mut m).is_ok());
             if ok {
-                fertig += 1;
+                done += 1;
             } else {
-                alle = false;
+                all_of = false;
             }
         }
-        if alle {
+        if all_of {
             ganze_dateien += 1;
         }
     }
@@ -84,13 +84,13 @@ fn main() {
         cov.total(),
         cov.percent()
     );
-    println!("Maschinen:   {fertig} von {maschinen} vollstaendig");
+    println!("Maschinen:   {done} von {maschinen} vollstaendig");
     println!("Dateien:     {ganze_dateien} von {dateien} vollstaendig\n");
 
-    let mut offen: Vec<_> = cov.open.iter().collect();
-    offen.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    let mut open_still: Vec<_> = cov.open.iter().collect();
+    open_still.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
     println!("Was noch fehlt, nach Haeufigkeit im Korpus:");
-    for (was, n) in &offen {
+    for (was, n) in &open_still {
         println!("  {n:4}  {was}");
     }
 

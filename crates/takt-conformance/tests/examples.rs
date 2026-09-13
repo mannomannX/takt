@@ -28,7 +28,7 @@ mod common;
 /// 14.7 fehlt: Es laeuft auf Hardware (M5-Exit), und es gibt kein
 /// Programm dafuer im Korpus. 14.8 gehoert zu M6 (Flash-Modell-
 /// Kampagne) und hat seine Golden-Traces bereits.
-const BEISPIELE: [&str; 5] = ["14_1", "14_2", "14_3", "14_4", "14_5"];
+const EXAMPLES: [&str; 5] = ["14_1", "14_2", "14_3", "14_4", "14_5"];
 
 /// Die uebrigen, mit dem Konstrukt, an dem der Codegen abbricht.
 ///
@@ -36,7 +36,7 @@ const BEISPIELE: [&str; 5] = ["14_1", "14_2", "14_3", "14_4", "14_5"];
 /// soll: Was fehlt, ist Teil des Ergebnisses. Der Eintrag verschwindet,
 /// sobald das Konstrukt gesenkt wird — und dann faellt der Test auf, der
 /// ihn noch fuehrt.
-const OFFEN: [(&str, &str); 1] = [("14_6", "Mustervergleich und `send` im Codegen (8.7, 8.8; FB-112)")];
+const OPEN: [(&str, &str); 1] = [("14_6", "Mustervergleich und `send` im Codegen (8.7, 8.8; FB-112)")];
 
 /// Wie viele Ticks verglichen werden.
 ///
@@ -44,17 +44,17 @@ const OFFEN: [(&str, &str); 1] = [("14_6", "Mustervergleich und `send` im Codege
 /// dass der Vergleich im Testlauf bleibt.
 const TICKS: u64 = 40;
 
-fn beispiel(name: &str) -> Program {
+fn example(name: &str) -> Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/sim/{}/program.takt"), name);
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
     let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
     let out = takt_sema::compile(&src, &options);
-    let fehler: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
-    assert!(fehler.is_empty(), "{name}:\n{}", fehler.join("\n"));
+    let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(errors.is_empty(), "{name}:\n{}", errors.join("\n"));
     out.program.expect("Programm")
 }
 
-fn interpretiert(p: &Program) -> String {
+fn interpreted(p: &Program) -> String {
     let options = RunOptions { ticks: TICKS, ..Default::default() };
     match run(p, &Trace::default(), &options) {
         Ok(out) => out.trace.render(),
@@ -71,33 +71,33 @@ fn the_reference_examples_agree_on_both_paths() {
         return;
     };
     let clang = Clang::At(path);
-    let mut gescheitert = Vec::new();
-    let mut geprueft = 0;
-    for name in BEISPIELE {
-        let p = beispiel(name);
+    let mut failed = Vec::new();
+    let mut checked = 0;
+    for name in EXAMPLES {
+        let p = example(name);
         let native = match common::run_native_all(&clang, &p, name, TICKS) {
             Ok(t) => t,
             Err(e) => {
-                gescheitert.push(format!("{name}: laesst sich nicht bauen:\n{e}"));
+                failed.push(format!("{name}: laesst sich nicht bauen:\n{e}"));
                 continue;
             }
         };
-        let interpreted = interpretiert(&p);
+        let interpreted = interpreted(&p);
         let diffs = compare(&interpreted, &native);
-        geprueft += 1;
+        checked += 1;
         if !diffs.is_empty() {
-            let liste: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
-            gescheitert.push(format!(
+            let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
+            failed.push(format!(
                 "{name}: {} Abweichungen\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
                 diffs.len(),
-                liste.join("\n"),
+                list.join("\n"),
                 interpreted.lines().take(12).collect::<Vec<_>>().join("\n"),
                 native.lines().take(12).collect::<Vec<_>>().join("\n")
             ));
         }
     }
-    assert!(gescheitert.is_empty(), "{}", gescheitert.join("\n\n"));
-    assert_eq!(geprueft, BEISPIELE.len(), "es wurden nicht alle Beispiele geprueft");
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    assert_eq!(checked, EXAMPLES.len(), "es wurden nicht alle Beispiele geprueft");
 }
 
 /// Was der M4-Exit noch schuldet.
@@ -114,14 +114,14 @@ fn the_remaining_examples_name_what_is_missing() {
     };
     let clang = Clang::At(path);
     let mut unerwartet = Vec::new();
-    for (name, grund) in OFFEN {
-        let p = beispiel(name);
+    for (name, reason) in OPEN {
+        let p = example(name);
         if let Ok(native) = common::run_native_all(&clang, &p, name, TICKS) {
-            if compare(&interpretiert(&p), &native).is_empty() {
-                unerwartet.push(format!("{name} laeuft jetzt ({grund} ist gesenkt) — in BEISPIELE aufnehmen"));
+            if compare(&interpreted(&p), &native).is_empty() {
+                unerwartet.push(format!("{name} laeuft jetzt ({reason} ist gesenkt) — in BEISPIELE aufnehmen"));
             }
         }
     }
     assert!(unerwartet.is_empty(), "{}", unerwartet.join("\n"));
-    assert_eq!(BEISPIELE.len() + OFFEN.len(), 6, "die sechs Beispiele des M4-Exits");
+    assert_eq!(EXAMPLES.len() + OPEN.len(), 6, "die sechs Beispiele des M4-Exits");
 }

@@ -16,12 +16,12 @@ fn every_output_has_exactly_one_writer() {
     let g = graph(&p);
     for (i, c) in p.channels.iter().enumerate() {
         let id = takt_mir::ChannelId(i as u32);
-        let schreiber = g.edges.iter().filter(|e| e.kind == Kind::Writes && e.to == Node::Channel(id)).count();
+        let writer = g.edges.iter().filter(|e| e.kind == Kind::Writes && e.to == Node::Channel(id)).count();
         // 8.1: Genau ein Schreiber je Output — mehr waere ein Fehler des
         // Sema, keiner heisst, dass der Kanal vom Rand kommt.
-        assert!(schreiber <= 1, "`{}` hat {schreiber} Schreiber", c.name);
+        assert!(writer <= 1, "`{}` hat {writer} Schreiber", c.name);
         if c.owner.is_some() {
-            assert_eq!(schreiber, 1, "`{}` hat einen Besitzer, aber keine Kante", c.name);
+            assert_eq!(writer, 1, "`{}` hat einen Besitzer, aber keine Kante", c.name);
         }
     }
 }
@@ -71,11 +71,11 @@ fn every_cursor_becomes_a_read_edge() {
 #[test]
 fn the_text_names_every_machine_that_runs() {
     let p = full_program();
-    let zeilen = graph(&p).lines(&p).join("\n");
+    let lines = graph(&p).lines(&p).join("\n");
     for m in &p.machines {
         if m.kind == MachineKind::Template {
             continue;
         }
-        assert!(zeilen.contains(&m.name), "`{}` fehlt in der Ausgabe:\n{zeilen}", m.name);
+        assert!(lines.contains(&m.name), "`{}` fehlt in der Ausgabe:\n{lines}", m.name);
     }
 }

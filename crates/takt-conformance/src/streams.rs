@@ -46,7 +46,7 @@ struct Element {
 }
 
 /// Ein Strom mit seinen Elementen und Schranken.
-struct Strom {
+struct Stream {
     /// Nummer, wie der erzeugte Code sie uebergibt (`stream_id`).
     id: i64,
     /// Name des Kanals, fuer den Kommentar im C.
@@ -54,7 +54,7 @@ struct Strom {
     /// Kapazitaet des Elementtyps in Byte (`line<N>` → N).
     cap: u32,
     /// Die Elemente in Reihenfolge, nach der Schrankenpruefung.
-    elemente: Vec<Element>,
+    elements: Vec<Element>,
 }
 
 /// Sammelt die Stroeme mit ihren Elementen (8.6).
@@ -69,8 +69,8 @@ struct Strom {
 /// Das ist der Fall, den der erzeugte Code herstellt (der Dispatch
 /// laeuft ueber das ganze Fenster), und `grenzen()` in `limits.rs` nennt
 /// den Rest.
-fn sammeln(p: &Program, stimulus: &[Stimulus]) -> Vec<Strom> {
-    let mut stroeme: Vec<Strom> = Vec::new();
+fn collect_streams(p: &Program, stimulus: &[Stimulus]) -> Vec<Stream> {
+    let mut streams: Vec<Stream> = Vec::new();
     for (i, c) in p.channels.iter().enumerate() {
         if c.dir != Direction::Input {
             continue;
@@ -78,10 +78,10 @@ fn sammeln(p: &Program, stimulus: &[Stimulus]) -> Vec<Strom> {
         let Some(cap) = element_cap(c, p) else { continue };
         // Die Schranken wie im Interpreter (`Image::new`): ohne Angabe
         // 16 Elemente, und die Bytegrenze das 256-fache davon.
-        let schranke = c.attrs.capacity.unwrap_or(16);
-        let schranke_bytes = c.attrs.capacity_bytes.unwrap_or(schranke.saturating_mul(256));
-        let mut elemente: Vec<Element> = Vec::new();
-        let mut je_tick: (u64, u32, u32) = (u64::MAX, 0, 0);
+        let bound = c.attrs.capacity.unwrap_or(16);
+        let bound_bytes = c.attrs.capacity_bytes.unwrap_or(bound.saturating_mul(256));
+        let mut elements: Vec<Element> = Vec::new();
+        let mut per_tick: (u64, u32, u32) = (u64::MAX, 0, 0);
         for s in stimulus {
             let Stimulus::Element { tick, channel, text } = s else { continue };
             if *channel != c.name {
@@ -91,24 +91,24 @@ fn sammeln(p: &Program, stimulus: &[Stimulus]) -> Vec<Strom> {
             // abgeschnitten und nicht verworfen.
             let mut bytes = text.as_bytes().to_vec();
             bytes.truncate(cap as usize);
-            if je_tick.0 != *tick {
-                je_tick = (*tick, 0, 0);
+            if per_tick.0 != *tick {
+                per_tick = (*tick, 0, 0);
             }
             let n = bytes.len() as u32;
             // 8.6: Zwei Schranken, Elemente und Byte. Was nicht
             // hineinpasst, ist ein Ueberlauf und kein Element.
-            if je_tick.1 + 1 > schranke || je_tick.2 + n > schranke_bytes {
+            if per_tick.1 + 1 > bound || per_tick.2 + n > bound_bytes {
                 continue;
             }
-            je_tick = (*tick, je_tick.1 + 1, je_tick.2 + n);
-            elemente.push(Element { tick: *tick, bytes });
+            per_tick = (*tick, per_tick.1 + 1, per_tick.2 + n);
+            elements.push(Element { tick: *tick, bytes });
         }
-        if elemente.is_empty() {
+        if elements.is_empty() {
             continue;
         }
-        stroeme.push(Strom { id: i64::from(i as u32), name: c.name.clone(), cap, elemente });
+        streams.push(Stream { id: i64::from(i as u32), name: c.name.clone(), cap, elements });
     }
-    stroeme
+    streams
 }
 
 /// Die Kapazitaet des Elementtyps in Byte, falls der Kanal ein Strom
@@ -126,15 +126,15 @@ fn element_cap(c: &Channel, p: &Program) -> Option<u32> {
 /// Ohne Elemente bleibt es beim leeren Fenster — der Fall, den jedes
 /// Programm aushalten muss, und der bis hierher der einzige war.
 pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
-    let stroeme = sammeln(p, stimulus);
+    let streams = collect_streams(p, stimulus);
     let _ = writeln!(s, "/* Stroeme (8.6, 9.6); der Stimulus steht vor dem Lauf fest. */");
-    if stroeme.is_empty() {
+    if streams.is_empty() {
         let _ = writeln!(s, "int takt_stream_count(int s, long long cur) {{ (void)s; (void)cur; return 0; }}");
         let _ = writeln!(s, "long long takt_stream_at(int s, long long cur, int i, void *out) {{");
         let _ = writeln!(s, "    (void)s; (void)cur; (void)i; (void)out; return 0;");
         let _ = writeln!(s, "}}");
         let _ = writeln!(s, "void takt_stream_examined(int s, long long seq) {{ (void)s; (void)seq; }}\n");
-        sende(s, p);
+        emit_send(s, p);
         return;
     }
 
@@ -143,8 +143,8 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
     let _ =
         writeln!(s, "struct takt_elem {{ int stream; long long tick; long long seq; int len; const char *bytes; }};");
     let _ = writeln!(s, "static const struct takt_elem g_elems[] = {{");
-    for st in &stroeme {
-        for (seq, e) in st.elemente.iter().enumerate() {
+    for st in &streams {
+        for (seq, e) in st.elements.iter().enumerate() {
             let text: String = e.bytes.iter().map(|b| format!("\\x{b:02x}")).collect();
             let _ = writeln!(
                 s,
@@ -165,7 +165,7 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
     // `{{ i32 len, [N x i8], i1 truncated }}` (takt-llvm/src/ty.rs).
     let _ = writeln!(s, "static int takt_stream_cap(int s) {{");
     let _ = writeln!(s, "    switch (s) {{");
-    for st in &stroeme {
+    for st in &streams {
         let _ = writeln!(s, "    case {}: return {}; /* {} */", st.id, st.cap, st.name);
     }
     let _ = writeln!(s, "    default: return 0;");
@@ -207,7 +207,7 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
     // und der erzeugte Code fuehrt ihn in seinem Zustand — der Rahmen
     // muss ihn darum nicht halten.
     let _ = writeln!(s, "void takt_stream_examined(int s, long long seq) {{ (void)s; (void)seq; }}\n");
-    sende(s, p);
+    emit_send(s, p);
 }
 
 /// `takt_stream_send` (8.8): der Sendepuffer eines Ausgabestroms.
@@ -222,19 +222,19 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
 /// Ohne diese Rate stuende im nativen Trace der ganze Text in einem
 /// Tick, im interpretierten haeppchenweise — und der Vergleich saehe
 /// einen Unterschied, den es in der Sache nicht gibt.
-fn sende(s: &mut String, p: &Program) {
-    let stroeme: Vec<(usize, &Channel)> = p
+fn emit_send(s: &mut String, p: &Program) {
+    let streams: Vec<(usize, &Channel)> = p
         .channels
         .iter()
         .enumerate()
         .filter(|(_, c)| c.dir == Direction::Output && matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))))
         .collect();
     let _ = writeln!(s, "#define TAKT_TX_MAX 4096");
-    let _ = writeln!(s, "static unsigned char g_tx[{}][TAKT_TX_MAX];", stroeme.len().max(1));
-    let _ = writeln!(s, "static int g_tx_n[{}];", stroeme.len().max(1));
+    let _ = writeln!(s, "static unsigned char g_tx[{}][TAKT_TX_MAX];", streams.len().max(1));
+    let _ = writeln!(s, "static int g_tx_n[{}];", streams.len().max(1));
     let _ = writeln!(s, "static int takt_tx_slot(int s) {{");
     let _ = writeln!(s, "    switch (s) {{");
-    for (slot, (i, c)) in stroeme.iter().enumerate() {
+    for (slot, (i, c)) in streams.iter().enumerate() {
         let _ = writeln!(s, "    case {i}: return {slot}; /* {} */", c.name);
     }
     let _ = writeln!(s, "    default: return -1;");
@@ -244,7 +244,7 @@ fn sende(s: &mut String, p: &Program) {
     // ist ein `StreamOverflow`.
     let _ = writeln!(s, "static int takt_tx_cap(int s) {{");
     let _ = writeln!(s, "    switch (s) {{");
-    for (i, c) in &stroeme {
+    for (i, c) in &streams {
         let _ = writeln!(s, "    case {i}: return {};", c.attrs.capacity.unwrap_or(256));
     }
     let _ = writeln!(s, "    default: return 0;");
@@ -263,7 +263,7 @@ fn sende(s: &mut String, p: &Program) {
     // `out <stream> [0x.., ..]` — dieselbe Schreibweise wie im
     // Interpreter (`value_text` fuer `Value::Bytes`).
     let _ = writeln!(s, "static void takt_tx_commit(long long t) {{");
-    for (slot, (_, c)) in stroeme.iter().enumerate() {
+    for (slot, (_, c)) in streams.iter().enumerate() {
         let per_tick = match rate_hz(c) {
             Some(hz) => {
                 let bytes = hz.saturating_mul(p.config.tick as u64) / 1_000_000_000;

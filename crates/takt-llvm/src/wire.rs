@@ -154,13 +154,13 @@ pub fn decode(
     let LlvmType::Struct(wrapper) = want else { return Err(NotYet { what: "`decode` ohne `R?`" }) };
     let inner = wrapper.first().cloned().ok_or(NotYet { what: "Record-Typ" })?;
 
-    let ende = format!("decode{label}_ende");
+    let end_at = format!("decode{label}_ende");
     let zu_kurz = format!("decode{label}_kurz");
     // 3.7: zu kurzer Puffer ergibt `none`.
     let long_enough = m.inst(&format!("icmp uge i32 {len}, {size}"));
-    let weiter = format!("decode{label}_felder");
-    m.void_inst(&format!("br i1 {long_enough}, label %{weiter}, label %{zu_kurz}"));
-    m.label(&weiter);
+    let go_on = format!("decode{label}_felder");
+    m.void_inst(&format!("br i1 {long_enough}, label %{go_on}, label %{zu_kurz}"));
+    m.label(&go_on);
 
     let mut value = "undef".to_string();
     let mut checks: Vec<(String, String)> = Vec::new();
@@ -184,10 +184,10 @@ pub fn decode(
         ok = m.inst(&format!("and i1 {ok}, {c}")).to_string();
     }
     let gut = m.block().to_string();
-    m.void_inst(&format!("br label %{ende}"));
+    m.void_inst(&format!("br label %{end_at}"));
     m.label(&zu_kurz);
-    m.void_inst(&format!("br label %{ende}"));
-    m.label(&ende);
+    m.void_inst(&format!("br label %{end_at}"));
+    m.label(&end_at);
 
     // `phi` sammelt die beiden Wege: der gelesene Record mit seinem Flag,
     // oder `none`.

@@ -143,13 +143,13 @@ impl<'a> Ring<'a> {
             self.overflowed += 1;
             return Delivery::Overflow;
         }
-        if !self.passt(n) {
+        if !self.fits(n) {
             if !drop_oldest {
                 self.overflowed += 1;
                 return Delivery::Overflow;
             }
             let mut weg = 0;
-            while !self.passt(n) && self.len > 0 {
+            while !self.fits(n) && self.len > 0 {
                 self.pop_front();
                 weg += 1;
             }
@@ -162,7 +162,7 @@ impl<'a> Ring<'a> {
     }
 
     /// Passt ein Element dieser Laenge noch hinein?
-    fn passt(&self, n: usize) -> bool {
+    fn fits(&self, n: usize) -> bool {
         self.len < self.descs.len() && self.byte_len + n <= self.bytes.len()
     }
 

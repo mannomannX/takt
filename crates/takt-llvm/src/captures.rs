@@ -43,7 +43,7 @@ use crate::expr::NotYet;
 /// Die Bindung ist ein Record, dessen erste Felder die Platzhalter sind.
 /// Ohne Bindung laeuft der Vergleich trotzdem — er sagt dann nur, *ob*
 /// das Muster trifft.
-pub struct Ziel<'a> {
+pub struct Target<'a> {
     /// Der Record im Zustand der Maschine.
     pub slot: Reg,
     /// Sein Typ, fuer die Adressrechnung: Die Ausrichtung kennt erst das
@@ -51,7 +51,7 @@ pub struct Ziel<'a> {
     /// Feldindex statt ueber einen gerechneten Versatz (11.2).
     pub record: &'a crate::ty::LlvmType,
     /// Index und Typ je Capture, in Musterreihenfolge.
-    pub felder: &'a [(u32, crate::ty::LlvmType)],
+    pub fields: &'a [(u32, crate::ty::LlvmType)],
 }
 
 /// Die Hoechstlaenge eines `word` (8.7).
@@ -73,7 +73,7 @@ const INT_MAX_DIGITS: u32 = 19;
 pub fn walk(
     pieces: &[PatternPiece],
     text: Reg,
-    ziel: Option<&Ziel<'_>>,
+    target: Option<&Target<'_>>,
     from: Reg,
     m: &mut Module,
 ) -> Result<(Reg, Reg), NotYet> {
@@ -90,37 +90,37 @@ pub fn walk(
     let ok_ptr = m.inst("alloca i1");
     m.void_inst(&format!("store i1 true, ptr {ok_ptr}"));
 
-    let ende = format!("cap{k}_ende");
-    let mut cap_nr = 0usize;
+    let end_at = format!("cap{k}_ende");
+    let mut cap_index = 0usize;
     for (i, piece) in pieces.iter().enumerate() {
-        let weiter = format!("cap{k}_{i}");
+        let go_on = format!("cap{k}_{i}");
         // Ein gescheiterter Baustein ueberspringt den Rest: Der
         // Durchlauf bricht ab, wie `walk` in `takt-match`.
         let ok = m.inst(&format!("load i1, ptr {ok_ptr}"));
-        m.void_inst(&format!("br i1 {ok}, label %{weiter}, label %{ende}"));
-        m.label(&weiter);
+        m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{end_at}"));
+        m.label(&go_on);
         match piece {
             PatternPiece::Text(lit) => literal(lit.as_bytes(), bytes, len, at_ptr, ok_ptr, m),
             PatternPiece::Any => {
-                let bis = open_end(&pieces[i + 1..], bytes, len, at_ptr, ok_ptr, None, m)?;
-                let _ = bis;
+                let upto = open_end(&pieces[i + 1..], bytes, len, at_ptr, ok_ptr, None, m)?;
+                let _ = upto;
             }
             PatternPiece::Capture { kind, .. } => {
-                let vor = m.inst(&format!("load i32, ptr {at_ptr}"));
+                let before = m.inst(&format!("load i32, ptr {at_ptr}"));
                 // Die Ziffern beginnen hinter dem Vorzeichen und hinter
-                // `0x`; `vor` zeigt davor. Der Wert entsteht aus den
+                // `0x`; `before` zeigt davor. Der Wert entsteht aus den
                 // Ziffern, das Vorzeichen kommt getrennt — sonst liefe
                 // `-` in die Stellenrechnung.
-                let (start, negativ) = match kind {
+                let (start, negative) = match kind {
                     CaptureKind::Int => signed(bytes, len, at_ptr, ok_ptr, m),
                     CaptureKind::Hex => (hex(bytes, len, at_ptr, ok_ptr, m), None),
                     CaptureKind::Word => {
-                        bounded(bytes, len, at_ptr, ok_ptr, Klasse::Word, WORD_MAX, m);
-                        (vor, None)
+                        bounded(bytes, len, at_ptr, ok_ptr, Class::Word, WORD_MAX, m);
+                        (before, None)
                     }
                     CaptureKind::Str(n) => {
                         open_end(&pieces[i + 1..], bytes, len, at_ptr, ok_ptr, Some(*n), m)?;
-                        (vor, None)
+                        (before, None)
                     }
                     // 4.2 verlangt bitgleiche Fliesskommaergebnisse. Eine
                     // eigene Dezimal-nach-Binaer-Konversion waere eine
@@ -129,17 +129,17 @@ pub fn walk(
                     CaptureKind::Float => return Err(NotYet { what: "`{x:float}` im Handler-Muster" }),
                 };
                 // `{_}` bindet nicht (8.7) und belegt kein Feld.
-                if let Some((z, (idx, ty))) = ziel.zip(ziel.and_then(|z| z.felder.get(cap_nr))) {
-                    let ende_pos = m.inst(&format!("load i32, ptr {at_ptr}"));
-                    let wo = Feld { ziel: z, index: *idx, ty, start, ende: ende_pos, negativ };
-                    store_capture(kind, &wo, bytes, m)?;
+                if let Some((z, (idx, ty))) = target.zip(target.and_then(|z| z.fields.get(cap_index))) {
+                    let end_pos = m.inst(&format!("load i32, ptr {at_ptr}"));
+                    let where_to = Slot { target: z, index: *idx, ty, start, end_at: end_pos, negative };
+                    store_capture(kind, &where_to, bytes, m)?;
                 }
-                cap_nr += 1;
+                cap_index += 1;
             }
         }
     }
-    m.void_inst(&format!("br label %{ende}"));
-    m.label(&ende);
+    m.void_inst(&format!("br label %{end_at}"));
+    m.label(&end_at);
     let ok = m.inst(&format!("load i1, ptr {ok_ptr}"));
     let at = m.inst(&format!("load i32, ptr {at_ptr}"));
     Ok((ok, at))
@@ -153,34 +153,34 @@ pub fn walk(
 fn literal(lit: &[u8], bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, m: &mut Module) {
     let at = m.inst(&format!("load i32, ptr {at_ptr}"));
     let n = lit.len() as u32;
-    let bis = m.inst(&format!("add i32 {at}, {n}"));
+    let upto = m.inst(&format!("add i32 {at}, {n}"));
     // Passt das Literal ueberhaupt noch in den Rest?
-    let passt = m.inst(&format!("icmp sle i32 {bis}, {len}"));
-    let mut gleich = passt;
+    let fits = m.inst(&format!("icmp sle i32 {upto}, {len}"));
+    let mut same = fits;
     for (j, b) in lit.iter().enumerate() {
         // Ausserhalb des Texts wird nicht gelesen: Der Index wird auf
         // eine gueltige Stelle geklemmt, und `gleich` ist dann ohnehin
         // falsch. Ein Sprung je Byte waere die Alternative und braeuchte
         // eine Marke je Zeichen.
         let idx = m.inst(&format!("add i32 {at}, {j}"));
-        let sicher = m.inst(&format!("icmp slt i32 {idx}, {len}"));
-        let safe_idx = m.inst(&format!("select i1 {sicher}, i32 {idx}, i32 0"));
+        let in_range = m.inst(&format!("icmp slt i32 {idx}, {len}"));
+        let safe_idx = m.inst(&format!("select i1 {in_range}, i32 {idx}, i32 0"));
         let p = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {safe_idx}"));
         let got = m.inst(&format!("load i8, ptr {p}"));
         let eq = m.inst(&format!("icmp eq i8 {got}, {b}"));
-        gleich = m.inst(&format!("and i1 {gleich}, {eq}"));
+        same = m.inst(&format!("and i1 {same}, {eq}"));
     }
-    let alt = m.inst(&format!("load i1, ptr {ok_ptr}"));
-    let neu = m.inst(&format!("and i1 {alt}, {gleich}"));
-    m.void_inst(&format!("store i1 {neu}, ptr {ok_ptr}"));
+    let old = m.inst(&format!("load i1, ptr {ok_ptr}"));
+    let new_val = m.inst(&format!("and i1 {old}, {same}"));
+    m.void_inst(&format!("store i1 {new_val}, ptr {ok_ptr}"));
     // Nur bei Erfolg ruecken; sonst bliebe die Position unbestimmt.
-    let weiter = m.inst(&format!("select i1 {gleich}, i32 {bis}, i32 {at}"));
-    m.void_inst(&format!("store i32 {weiter}, ptr {at_ptr}"));
+    let go_on = m.inst(&format!("select i1 {same}, i32 {upto}, i32 {at}"));
+    m.void_inst(&format!("store i32 {go_on}, ptr {at_ptr}"));
 }
 
 /// Die Zeichenklassen, die ein Platzhalter verbraucht (8.7).
 #[derive(Clone, Copy)]
-enum Klasse {
+enum Class {
     /// `0`–`9`.
     Digit,
     /// `0`–`9`, `a`–`f`, `A`–`F`.
@@ -189,7 +189,7 @@ enum Klasse {
     Word,
 }
 
-impl Klasse {
+impl Class {
     /// Der Test als IR: Gehoert das Byte zur Klasse?
     fn test(self, b: Reg, m: &mut Module) -> Reg {
         let ziffer = |m: &mut Module| {
@@ -198,8 +198,8 @@ impl Klasse {
             m.inst(&format!("and i1 {ge}, {le}"))
         };
         match self {
-            Klasse::Digit => ziffer(m),
-            Klasse::Hex => {
+            Class::Digit => ziffer(m),
+            Class::Hex => {
                 let d = ziffer(m);
                 let a_ge = m.inst(&format!("icmp uge i8 {b}, 97"));
                 let f_le = m.inst(&format!("icmp ule i8 {b}, 102"));
@@ -207,10 +207,10 @@ impl Klasse {
                 let a_ge2 = m.inst(&format!("icmp uge i8 {b}, 65"));
                 let f_le2 = m.inst(&format!("icmp ule i8 {b}, 70"));
                 let gross = m.inst(&format!("and i1 {a_ge2}, {f_le2}"));
-                let buchst = m.inst(&format!("or i1 {klein}, {gross}"));
-                m.inst(&format!("or i1 {d}, {buchst}"))
+                let letter = m.inst(&format!("or i1 {klein}, {gross}"));
+                m.inst(&format!("or i1 {d}, {letter}"))
             }
-            Klasse::Word => {
+            Class::Word => {
                 let d = ziffer(m);
                 let a_ge = m.inst(&format!("icmp uge i8 {b}, 97"));
                 let z_le = m.inst(&format!("icmp ule i8 {b}, 122"));
@@ -231,36 +231,36 @@ impl Klasse {
 ///
 /// Ein leeres Praefix ist kein Treffer: Jede Klasse verlangt mindestens
 /// ein Zeichen (8.7, `{1,…}`).
-fn bounded(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, klasse: Klasse, max: u32, m: &mut Module) {
+fn bounded(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, class_of: Class, max: u32, m: &mut Module) {
     let k = m.next_label();
-    let (kopf, rumpf, fertig) = (format!("kl{k}"), format!("kl{k}_rumpf"), format!("kl{k}_fertig"));
+    let (head, body, done) = (format!("kl{k}"), format!("kl{k}_rumpf"), format!("kl{k}_fertig"));
     let start = m.inst(&format!("load i32, ptr {at_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&kopf);
+    m.label(&head);
     let at = m.inst(&format!("load i32, ptr {at_ptr}"));
-    let im_text = m.inst(&format!("icmp slt i32 {at}, {len}"));
-    let genommen = m.inst(&format!("sub i32 {at}, {start}"));
-    let unter_max = m.inst(&format!("icmp slt i32 {genommen}, {max}"));
-    let darf = m.inst(&format!("and i1 {im_text}, {unter_max}"));
-    m.void_inst(&format!("br i1 {darf}, label %{rumpf}, label %{fertig}"));
+    let in_text = m.inst(&format!("icmp slt i32 {at}, {len}"));
+    let taken = m.inst(&format!("sub i32 {at}, {start}"));
+    let under_max = m.inst(&format!("icmp slt i32 {taken}, {max}"));
+    let may_take = m.inst(&format!("and i1 {in_text}, {under_max}"));
+    m.void_inst(&format!("br i1 {may_take}, label %{body}, label %{done}"));
 
-    m.label(&rumpf);
+    m.label(&body);
     let p = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {at}"));
     let b = m.inst(&format!("load i8, ptr {p}"));
-    let passt = klasse.test(b, m);
+    let fits = class_of.test(b, m);
     let next = m.inst(&format!("add i32 {at}, 1"));
-    let neu = m.inst(&format!("select i1 {passt}, i32 {next}, i32 {at}"));
-    m.void_inst(&format!("store i32 {neu}, ptr {at_ptr}"));
-    m.void_inst(&format!("br i1 {passt}, label %{kopf}, label %{fertig}"));
+    let new_val = m.inst(&format!("select i1 {fits}, i32 {next}, i32 {at}"));
+    m.void_inst(&format!("store i32 {new_val}, ptr {at_ptr}"));
+    m.void_inst(&format!("br i1 {fits}, label %{head}, label %{done}"));
 
-    m.label(&fertig);
-    let ende = m.inst(&format!("load i32, ptr {at_ptr}"));
-    let leer = m.inst(&format!("icmp eq i32 {ende}, {start}"));
-    let hat = m.inst(&format!("xor i1 {leer}, true"));
-    let alt = m.inst(&format!("load i1, ptr {ok_ptr}"));
-    let neu_ok = m.inst(&format!("and i1 {alt}, {hat}"));
-    m.void_inst(&format!("store i1 {neu_ok}, ptr {ok_ptr}"));
+    m.label(&done);
+    let end_at = m.inst(&format!("load i32, ptr {at_ptr}"));
+    let empty = m.inst(&format!("icmp eq i32 {end_at}, {start}"));
+    let has_any = m.inst(&format!("xor i1 {empty}, true"));
+    let old = m.inst(&format!("load i1, ptr {ok_ptr}"));
+    let new_ok = m.inst(&format!("and i1 {old}, {has_any}"));
+    m.void_inst(&format!("store i1 {new_ok}, ptr {ok_ptr}"));
 }
 
 /// `{n:int}`: ein optionales `-`, dann Ziffern (8.7).
@@ -270,16 +270,16 @@ fn bounded(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, klasse: Klasse, max: 
 /// Stellenrechnung waere eine Ziffer mit dem Wert -3.
 fn signed(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, m: &mut Module) -> (Reg, Option<Reg>) {
     let at = m.inst(&format!("load i32, ptr {at_ptr}"));
-    let im_text = m.inst(&format!("icmp slt i32 {at}, {len}"));
-    let safe = m.inst(&format!("select i1 {im_text}, i32 {at}, i32 0"));
+    let in_text = m.inst(&format!("icmp slt i32 {at}, {len}"));
+    let safe = m.inst(&format!("select i1 {in_text}, i32 {at}, i32 0"));
     let p = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {safe}"));
     let b = m.inst(&format!("load i8, ptr {p}"));
-    let ist_minus = m.inst(&format!("icmp eq i8 {b}, 45"));
-    let minus = m.inst(&format!("and i1 {ist_minus}, {im_text}"));
-    let nach = m.inst(&format!("add i32 {at}, 1"));
-    let start = m.inst(&format!("select i1 {minus}, i32 {nach}, i32 {at}"));
+    let is_minus = m.inst(&format!("icmp eq i8 {b}, 45"));
+    let minus = m.inst(&format!("and i1 {is_minus}, {in_text}"));
+    let after = m.inst(&format!("add i32 {at}, 1"));
+    let start = m.inst(&format!("select i1 {minus}, i32 {after}, i32 {at}"));
     m.void_inst(&format!("store i32 {start}, ptr {at_ptr}"));
-    bounded(bytes, len, at_ptr, ok_ptr, Klasse::Digit, INT_MAX_DIGITS, m);
+    bounded(bytes, len, at_ptr, ok_ptr, Class::Digit, INT_MAX_DIGITS, m);
     (start, Some(minus))
 }
 
@@ -291,22 +291,22 @@ fn signed(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, m: &mut Module) -> (Re
 /// Hexziffer ist.
 fn hex(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, m: &mut Module) -> Reg {
     let at = m.inst(&format!("load i32, ptr {at_ptr}"));
-    let zwei = m.inst(&format!("add i32 {at}, 2"));
-    let passt = m.inst(&format!("icmp sle i32 {zwei}, {len}"));
-    let safe0 = m.inst(&format!("select i1 {passt}, i32 {at}, i32 0"));
+    let two = m.inst(&format!("add i32 {at}, 2"));
+    let fits = m.inst(&format!("icmp sle i32 {two}, {len}"));
+    let safe0 = m.inst(&format!("select i1 {fits}, i32 {at}, i32 0"));
     let p0 = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {safe0}"));
     let b0 = m.inst(&format!("load i8, ptr {p0}"));
-    let eins = m.inst(&format!("add i32 {safe0}, 1"));
-    let p1 = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {eins}"));
+    let one = m.inst(&format!("add i32 {safe0}, 1"));
+    let p1 = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {one}"));
     let b1 = m.inst(&format!("load i8, ptr {p1}"));
-    let null = m.inst(&format!("icmp eq i8 {b0}, 48"));
+    let zero = m.inst(&format!("icmp eq i8 {b0}, 48"));
     let x = m.inst(&format!("icmp eq i8 {b1}, 120"));
-    let praefix0 = m.inst(&format!("and i1 {null}, {x}"));
-    let praefix = m.inst(&format!("and i1 {praefix0}, {passt}"));
-    let start = m.inst(&format!("select i1 {praefix}, i32 {zwei}, i32 {at}"));
+    let prefix0 = m.inst(&format!("and i1 {zero}, {x}"));
+    let prefix = m.inst(&format!("and i1 {prefix0}, {fits}"));
+    let start = m.inst(&format!("select i1 {prefix}, i32 {two}, i32 {at}"));
     m.void_inst(&format!("store i32 {start}, ptr {at_ptr}"));
     // 16 Hexziffern sind 64 Bit; mehr traegt `int` nicht (3.1).
-    bounded(bytes, len, at_ptr, ok_ptr, Klasse::Hex, 16, m);
+    bounded(bytes, len, at_ptr, ok_ptr, Class::Hex, 16, m);
     start
 }
 
@@ -326,86 +326,86 @@ fn open_end(
     let Some(PatternPiece::Text(lit)) = after.first() else {
         let at = m.inst(&format!("load i32, ptr {at_ptr}"));
         let rest = m.inst(&format!("sub i32 {len}, {at}"));
-        let ziel = match max {
+        let target = match max {
             // `str<N>` nimmt hoechstens `N` Zeichen (3.9).
             Some(n) => {
-                let zu_lang = m.inst(&format!("icmp sgt i32 {rest}, {n}"));
-                let alt = m.inst(&format!("load i1, ptr {ok_ptr}"));
-                let passt = m.inst(&format!("xor i1 {zu_lang}, true"));
-                let neu = m.inst(&format!("and i1 {alt}, {passt}"));
-                m.void_inst(&format!("store i1 {neu}, ptr {ok_ptr}"));
+                let too_long = m.inst(&format!("icmp sgt i32 {rest}, {n}"));
+                let old = m.inst(&format!("load i1, ptr {ok_ptr}"));
+                let fits = m.inst(&format!("xor i1 {too_long}, true"));
+                let new_val = m.inst(&format!("and i1 {old}, {fits}"));
+                m.void_inst(&format!("store i1 {new_val}, ptr {ok_ptr}"));
                 len
             }
             None => len,
         };
-        m.void_inst(&format!("store i32 {ziel}, ptr {at_ptr}"));
-        return Ok(ziel);
+        m.void_inst(&format!("store i32 {target}, ptr {at_ptr}"));
+        return Ok(target);
     };
     let lit = lit.clone();
     let lit_len = lit.len() as u32;
     let k = m.next_label();
-    let (kopf, rumpf, fertig) = (format!("oe{k}"), format!("oe{k}_rumpf"), format!("oe{k}_fertig"));
+    let (head, body, done) = (format!("oe{k}"), format!("oe{k}_rumpf"), format!("oe{k}_fertig"));
     let start = m.inst(&format!("load i32, ptr {at_ptr}"));
     // `gefunden` merkt die Fundstelle; `-1` heisst „noch nichts".
-    let fund_ptr = m.inst("alloca i32");
-    m.void_inst(&format!("store i32 -1, ptr {fund_ptr}"));
+    let found_ptr = m.inst("alloca i32");
+    m.void_inst(&format!("store i32 -1, ptr {found_ptr}"));
     let i_ptr = m.inst("alloca i32");
     m.void_inst(&format!("store i32 {start}, ptr {i_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&kopf);
+    m.label(&head);
     let i = m.inst(&format!("load i32, ptr {i_ptr}"));
-    let bis = m.inst(&format!("add i32 {i}, {lit_len}"));
-    let im_text = m.inst(&format!("icmp sle i32 {bis}, {len}"));
-    let fund = m.inst(&format!("load i32, ptr {fund_ptr}"));
-    let offen = m.inst(&format!("icmp eq i32 {fund}, -1"));
-    let suchen = m.inst(&format!("and i1 {im_text}, {offen}"));
-    m.void_inst(&format!("br i1 {suchen}, label %{rumpf}, label %{fertig}"));
+    let upto = m.inst(&format!("add i32 {i}, {lit_len}"));
+    let in_text = m.inst(&format!("icmp sle i32 {upto}, {len}"));
+    let found_at = m.inst(&format!("load i32, ptr {found_ptr}"));
+    let open_still = m.inst(&format!("icmp eq i32 {found_at}, -1"));
+    let searching = m.inst(&format!("and i1 {in_text}, {open_still}"));
+    m.void_inst(&format!("br i1 {searching}, label %{body}, label %{done}"));
 
-    m.label(&rumpf);
-    let mut gleich = m.inst("and i1 true, true");
+    m.label(&body);
+    let mut same = m.inst("and i1 true, true");
     for (j, b) in lit.as_bytes().iter().enumerate() {
         let idx = m.inst(&format!("add i32 {i}, {j}"));
         let p = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {idx}"));
         let got = m.inst(&format!("load i8, ptr {p}"));
         let eq = m.inst(&format!("icmp eq i8 {got}, {b}"));
-        gleich = m.inst(&format!("and i1 {gleich}, {eq}"));
+        same = m.inst(&format!("and i1 {same}, {eq}"));
     }
-    let hier = m.inst(&format!("select i1 {gleich}, i32 {i}, i32 -1"));
-    m.void_inst(&format!("store i32 {hier}, ptr {fund_ptr}"));
-    let ni = m.inst(&format!("add i32 {i}, 1"));
-    m.void_inst(&format!("store i32 {ni}, ptr {i_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    let here = m.inst(&format!("select i1 {same}, i32 {i}, i32 -1"));
+    m.void_inst(&format!("store i32 {here}, ptr {found_ptr}"));
+    let next_i = m.inst(&format!("add i32 {i}, 1"));
+    m.void_inst(&format!("store i32 {next_i}, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&fertig);
-    let gefunden = m.inst(&format!("load i32, ptr {fund_ptr}"));
-    let hat = m.inst(&format!("icmp sge i32 {gefunden}, 0"));
-    let alt = m.inst(&format!("load i1, ptr {ok_ptr}"));
-    let mut neu = m.inst(&format!("and i1 {alt}, {hat}"));
+    m.label(&done);
+    let found = m.inst(&format!("load i32, ptr {found_ptr}"));
+    let has_any = m.inst(&format!("icmp sge i32 {found}, 0"));
+    let old = m.inst(&format!("load i1, ptr {ok_ptr}"));
+    let mut new_val = m.inst(&format!("and i1 {old}, {has_any}"));
     // `str<N>`: Die Spanne darf `N` nicht ueberschreiten (3.9).
     if let Some(n) = max {
-        let ende = m.inst(&format!("select i1 {hat}, i32 {gefunden}, i32 {start}"));
-        let breite = m.inst(&format!("sub i32 {ende}, {start}"));
-        let passt = m.inst(&format!("icmp sle i32 {breite}, {n}"));
-        neu = m.inst(&format!("and i1 {neu}, {passt}"));
+        let end_at = m.inst(&format!("select i1 {has_any}, i32 {found}, i32 {start}"));
+        let width = m.inst(&format!("sub i32 {end_at}, {start}"));
+        let fits = m.inst(&format!("icmp sle i32 {width}, {n}"));
+        new_val = m.inst(&format!("and i1 {new_val}, {fits}"));
     }
-    m.void_inst(&format!("store i1 {neu}, ptr {ok_ptr}"));
-    let ziel = m.inst(&format!("select i1 {hat}, i32 {gefunden}, i32 {start}"));
-    m.void_inst(&format!("store i32 {ziel}, ptr {at_ptr}"));
-    Ok(ziel)
+    m.void_inst(&format!("store i1 {new_val}, ptr {ok_ptr}"));
+    let target = m.inst(&format!("select i1 {has_any}, i32 {found}, i32 {start}"));
+    m.void_inst(&format!("store i32 {target}, ptr {at_ptr}"));
+    Ok(target)
 }
 
 /// Ein Platzhalter und sein Platz: was `store_capture` braucht.
-struct Feld<'a> {
-    ziel: &'a Ziel<'a>,
+struct Slot<'a> {
+    target: &'a Target<'a>,
     index: u32,
     ty: &'a crate::ty::LlvmType,
     /// Beginn der Ziffern, hinter Vorzeichen und `0x`.
     start: Reg,
     /// Ende der Spanne.
-    ende: Reg,
+    end_at: Reg,
     /// Das Vorzeichen, falls `signed` eines verbraucht hat.
-    negativ: Option<Reg>,
+    negative: Option<Reg>,
 }
 
 /// Legt den Wert eines Platzhalters in sein Feld der Bindung (8.7).
@@ -413,17 +413,21 @@ struct Feld<'a> {
 /// Das Feld wird ueber seinen *Index* adressiert, nicht ueber einen
 /// gerechneten Versatz: Die Ausrichtung kennt erst das Datenlayout des
 /// Targets, und `LlvmType::size()` laesst sie bewusst weg (11.2).
-fn store_capture(kind: &CaptureKind, wo: &Feld<'_>, bytes: Reg, m: &mut Module) -> Result<(), NotYet> {
-    let (feld, ty, start, ende, negativ) = (wo.index, wo.ty, wo.start, wo.ende, wo.negativ);
-    let ziel = m.inst(&format!("getelementptr inbounds {}, ptr {}, i32 0, i32 {feld}", wo.ziel.record, wo.ziel.slot));
+fn store_capture(kind: &CaptureKind, where_to: &Slot<'_>, bytes: Reg, m: &mut Module) -> Result<(), NotYet> {
+    let (field, ty, start, end_at, negative) =
+        (where_to.index, where_to.ty, where_to.start, where_to.end_at, where_to.negative);
+    let target = m.inst(&format!(
+        "getelementptr inbounds {}, ptr {}, i32 0, i32 {field}",
+        where_to.target.record, where_to.target.slot
+    ));
     match kind {
         CaptureKind::Int => {
-            let v = parse_int(bytes, start, ende, negativ, m);
-            m.void_inst(&format!("store i64 {v}, ptr {ziel}"));
+            let v = parse_int(bytes, start, end_at, negative, m);
+            m.void_inst(&format!("store i64 {v}, ptr {target}"));
         }
         CaptureKind::Hex => {
-            let v = parse_hex(bytes, start, ende, m);
-            m.void_inst(&format!("store i64 {v}, ptr {ziel}"));
+            let v = parse_hex(bytes, start, end_at, m);
+            m.void_inst(&format!("store i64 {v}, ptr {target}"));
         }
         // `word` und `str<N>` liefern Text; er wandert als
         // `{ i32 len, [N x i8] }` in das Feld (3.9).
@@ -434,7 +438,7 @@ fn store_capture(kind: &CaptureKind, wo: &Feld<'_>, bytes: Reg, m: &mut Module) 
             let Some(crate::ty::LlvmType::Array(_, cap)) = f.get(1) else {
                 return Err(NotYet { what: "Textcapture ohne Puffer" });
             };
-            copy_text(bytes, start, ende, ziel, ty, *cap, m);
+            copy_text(bytes, start, end_at, target, ty, *cap, m);
         }
         CaptureKind::Float => return Err(NotYet { what: "`{x:float}` im Handler-Muster" }),
     }
@@ -447,12 +451,12 @@ fn store_capture(kind: &CaptureKind, wo: &Feld<'_>, bytes: Reg, m: &mut Module) 
 /// Zweierkomplementbereich ist asymmetrisch, und
 /// `-9223372036854775808` waere positiv nicht darstellbar (FB-114,
 /// derselbe Fall wie FB-95).
-fn parse_int(bytes: Reg, start: Reg, ende: Reg, negativ: Option<Reg>, m: &mut Module) -> Reg {
+fn parse_int(bytes: Reg, start: Reg, end_at: Reg, negative: Option<Reg>, m: &mut Module) -> Reg {
     let k = m.next_label();
-    let (kopf, rumpf, fertig) = (format!("pi{k}"), format!("pi{k}_rumpf"), format!("pi{k}_fertig"));
+    let (head, body, done) = (format!("pi{k}"), format!("pi{k}_rumpf"), format!("pi{k}_fertig"));
     // Das Vorzeichen kommt von `signed`, das es verbraucht hat; hier
     // zurueckzulesen hiesse, dieselbe Stelle zweimal zu deuten.
-    let negativ = match negativ {
+    let negative = match negative {
         Some(r) => r,
         None => m.inst("and i1 false, false"),
     };
@@ -460,101 +464,101 @@ fn parse_int(bytes: Reg, start: Reg, ende: Reg, negativ: Option<Reg>, m: &mut Mo
     m.void_inst(&format!("store i64 0, ptr {acc_ptr}"));
     let i_ptr = m.inst("alloca i32");
     m.void_inst(&format!("store i32 {start}, ptr {i_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&kopf);
+    m.label(&head);
     let i = m.inst(&format!("load i32, ptr {i_ptr}"));
-    let weiter = m.inst(&format!("icmp slt i32 {i}, {ende}"));
-    m.void_inst(&format!("br i1 {weiter}, label %{rumpf}, label %{fertig}"));
+    let go_on = m.inst(&format!("icmp slt i32 {i}, {end_at}"));
+    m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{done}"));
 
-    m.label(&rumpf);
+    m.label(&body);
     let at = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {i}"));
     let byte = m.inst(&format!("load i8, ptr {at}"));
     let d8 = m.inst(&format!("sub i8 {byte}, 48"));
     let d = m.inst(&format!("zext i8 {d8} to i64"));
     let acc = m.inst(&format!("load i64, ptr {acc_ptr}"));
-    let mal = m.inst(&format!("mul i64 {acc}, 10"));
+    let scaled = m.inst(&format!("mul i64 {acc}, 10"));
     // Negativ aufbauen; am Ende wird bei Bedarf negiert.
-    let minus = m.inst(&format!("sub i64 {mal}, {d}"));
+    let minus = m.inst(&format!("sub i64 {scaled}, {d}"));
     m.void_inst(&format!("store i64 {minus}, ptr {acc_ptr}"));
-    let ni = m.inst(&format!("add i32 {i}, 1"));
-    m.void_inst(&format!("store i32 {ni}, ptr {i_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    let next_i = m.inst(&format!("add i32 {i}, 1"));
+    m.void_inst(&format!("store i32 {next_i}, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&fertig);
+    m.label(&done);
     let acc = m.inst(&format!("load i64, ptr {acc_ptr}"));
-    let positiv = m.inst(&format!("sub i64 0, {acc}"));
-    m.inst(&format!("select i1 {negativ}, i64 {acc}, i64 {positiv}"))
+    let positive = m.inst(&format!("sub i64 0, {acc}"));
+    m.inst(&format!("select i1 {negative}, i64 {acc}, i64 {positive}"))
 }
 
 /// Die Hexziffern zwischen `start` und `ende` als `i64` (8.7).
-fn parse_hex(bytes: Reg, start: Reg, ende: Reg, m: &mut Module) -> Reg {
+fn parse_hex(bytes: Reg, start: Reg, end_at: Reg, m: &mut Module) -> Reg {
     let k = m.next_label();
-    let (kopf, rumpf, fertig) = (format!("ph{k}"), format!("ph{k}_rumpf"), format!("ph{k}_fertig"));
+    let (head, body, done) = (format!("ph{k}"), format!("ph{k}_rumpf"), format!("ph{k}_fertig"));
     let acc_ptr = m.inst("alloca i64");
     m.void_inst(&format!("store i64 0, ptr {acc_ptr}"));
     let i_ptr = m.inst("alloca i32");
     m.void_inst(&format!("store i32 {start}, ptr {i_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&kopf);
+    m.label(&head);
     let i = m.inst(&format!("load i32, ptr {i_ptr}"));
-    let weiter = m.inst(&format!("icmp slt i32 {i}, {ende}"));
-    m.void_inst(&format!("br i1 {weiter}, label %{rumpf}, label %{fertig}"));
+    let go_on = m.inst(&format!("icmp slt i32 {i}, {end_at}"));
+    m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{done}"));
 
-    m.label(&rumpf);
+    m.label(&body);
     let at = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {i}"));
     let byte = m.inst(&format!("load i8, ptr {at}"));
     // Ziffer, Klein- oder Grossbuchstabe: drei Faelle, zwei Auswahlen.
-    let ist_ziffer = m.inst(&format!("icmp ule i8 {byte}, 57"));
-    let ist_klein = m.inst(&format!("icmp uge i8 {byte}, 97"));
-    let von_ziffer = m.inst(&format!("sub i8 {byte}, 48"));
-    let von_klein = m.inst(&format!("sub i8 {byte}, 87"));
-    let von_gross = m.inst(&format!("sub i8 {byte}, 55"));
-    let buchst = m.inst(&format!("select i1 {ist_klein}, i8 {von_klein}, i8 {von_gross}"));
-    let d8 = m.inst(&format!("select i1 {ist_ziffer}, i8 {von_ziffer}, i8 {buchst}"));
+    let is_digit_char = m.inst(&format!("icmp ule i8 {byte}, 57"));
+    let is_lower = m.inst(&format!("icmp uge i8 {byte}, 97"));
+    let from_digit = m.inst(&format!("sub i8 {byte}, 48"));
+    let from_lower = m.inst(&format!("sub i8 {byte}, 87"));
+    let from_upper = m.inst(&format!("sub i8 {byte}, 55"));
+    let letter = m.inst(&format!("select i1 {is_lower}, i8 {from_lower}, i8 {from_upper}"));
+    let d8 = m.inst(&format!("select i1 {is_digit_char}, i8 {from_digit}, i8 {letter}"));
     let d = m.inst(&format!("zext i8 {d8} to i64"));
     let acc = m.inst(&format!("load i64, ptr {acc_ptr}"));
-    let mal = m.inst(&format!("mul i64 {acc}, 16"));
-    let plus = m.inst(&format!("add i64 {mal}, {d}"));
-    m.void_inst(&format!("store i64 {plus}, ptr {acc_ptr}"));
-    let ni = m.inst(&format!("add i32 {i}, 1"));
-    m.void_inst(&format!("store i32 {ni}, ptr {i_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    let scaled = m.inst(&format!("mul i64 {acc}, 16"));
+    let sum_val = m.inst(&format!("add i64 {scaled}, {d}"));
+    m.void_inst(&format!("store i64 {sum_val}, ptr {acc_ptr}"));
+    let next_i = m.inst(&format!("add i32 {i}, 1"));
+    m.void_inst(&format!("store i32 {next_i}, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&fertig);
+    m.label(&done);
     m.inst(&format!("load i64, ptr {acc_ptr}"))
 }
 
 /// Kopiert die Spanne in ein Textfeld `{ i32 len, [cap x i8] }` (3.9).
-fn copy_text(bytes: Reg, start: Reg, ende: Reg, ziel: Reg, ty: &crate::ty::LlvmType, cap: u32, m: &mut Module) {
+fn copy_text(bytes: Reg, start: Reg, end_at: Reg, target: Reg, ty: &crate::ty::LlvmType, cap: u32, m: &mut Module) {
     let k = m.next_label();
-    let (kopf, rumpf, fertig) = (format!("ct{k}"), format!("ct{k}_rumpf"), format!("ct{k}_fertig"));
-    let breite = m.inst(&format!("sub i32 {ende}, {start}"));
+    let (head, body, done) = (format!("ct{k}"), format!("ct{k}_rumpf"), format!("ct{k}_fertig"));
+    let width = m.inst(&format!("sub i32 {end_at}, {start}"));
     // Der Rand begrenzt; laenger als der Puffer wird nicht kopiert.
-    let zu_lang = m.inst(&format!("icmp sgt i32 {breite}, {cap}"));
-    let n = m.inst(&format!("select i1 {zu_lang}, i32 {cap}, i32 {breite}"));
-    let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {ziel}, i32 0, i32 0"));
+    let too_long = m.inst(&format!("icmp sgt i32 {width}, {cap}"));
+    let n = m.inst(&format!("select i1 {too_long}, i32 {cap}, i32 {width}"));
+    let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {target}, i32 0, i32 0"));
     m.void_inst(&format!("store i32 {n}, ptr {len_ptr}"));
-    let puffer = m.inst(&format!("getelementptr inbounds {ty}, ptr {ziel}, i32 0, i32 1"));
+    let buffer = m.inst(&format!("getelementptr inbounds {ty}, ptr {target}, i32 0, i32 1"));
     let i_ptr = m.inst("alloca i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&kopf);
+    m.label(&head);
     let i = m.inst(&format!("load i32, ptr {i_ptr}"));
-    let weiter = m.inst(&format!("icmp slt i32 {i}, {n}"));
-    m.void_inst(&format!("br i1 {weiter}, label %{rumpf}, label %{fertig}"));
+    let go_on = m.inst(&format!("icmp slt i32 {i}, {n}"));
+    m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{done}"));
 
-    m.label(&rumpf);
-    let von = m.inst(&format!("add i32 {start}, {i}"));
-    let src = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {von}"));
+    m.label(&body);
+    let from_at = m.inst(&format!("add i32 {start}, {i}"));
+    let src = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {from_at}"));
     let b = m.inst(&format!("load i8, ptr {src}"));
-    let dst = m.inst(&format!("getelementptr inbounds i8, ptr {puffer}, i32 {i}"));
+    let dst = m.inst(&format!("getelementptr inbounds i8, ptr {buffer}, i32 {i}"));
     m.void_inst(&format!("store i8 {b}, ptr {dst}"));
-    let ni = m.inst(&format!("add i32 {i}, 1"));
-    m.void_inst(&format!("store i32 {ni}, ptr {i_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    let next_i = m.inst(&format!("add i32 {i}, 1"));
+    m.void_inst(&format!("store i32 {next_i}, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&fertig);
+    m.label(&done);
 }

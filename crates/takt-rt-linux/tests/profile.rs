@@ -14,9 +14,9 @@ use takt_rt_linux::{Guarantee, RealtimeClock, Scheduling, prepare};
 /// Millisekunden.
 #[test]
 fn the_guarantee_holds_only_when_all_three_parts_do() {
-    let voll = Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1 };
-    assert!(voll.is_complete());
-    assert!(voll.missing().is_empty());
+    let full = Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1 };
+    assert!(full.is_complete());
+    assert!(full.missing().is_empty());
 
     for teil in [
         Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1 },
@@ -31,12 +31,12 @@ fn the_guarantee_holds_only_when_all_three_parts_do() {
 /// Ein Befund ohne Abhilfe ist eine Klage: Jede Meldung nennt den Weg.
 #[test]
 fn every_missing_part_names_its_remedy() {
-    let nichts = Guarantee { scheduling: Scheduling::Normal, locked: false, cpus: 8 };
-    let fehlt = nichts.missing();
-    assert_eq!(fehlt.len(), 3);
-    assert!(fehlt.iter().any(|m| m.contains("chrt")), "die Prioritaet nennt `chrt`: {fehlt:?}");
-    assert!(fehlt.iter().any(|m| m.contains("RLIMIT_MEMLOCK")), "`mlockall` nennt das Limit: {fehlt:?}");
-    assert!(fehlt.iter().any(|m| m.contains("taskset")), "die Bindung nennt `taskset`: {fehlt:?}");
+    let nothing = Guarantee { scheduling: Scheduling::Normal, locked: false, cpus: 8 };
+    let missing = nothing.missing();
+    assert_eq!(missing.len(), 3);
+    assert!(missing.iter().any(|m| m.contains("chrt")), "die Prioritaet nennt `chrt`: {missing:?}");
+    assert!(missing.iter().any(|m| m.contains("RLIMIT_MEMLOCK")), "`mlockall` nennt das Limit: {missing:?}");
+    assert!(missing.iter().any(|m| m.contains("taskset")), "die Bindung nennt `taskset`: {missing:?}");
 }
 
 /// 12.2: Das Programm setzt die Prioritaet *nicht* selbst, und die
@@ -54,9 +54,9 @@ fn the_message_explains_why_the_program_does_not_set_the_priority() {
 #[test]
 fn the_guarantee_goes_into_the_run_header() {
     let g = Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1 };
-    let zeilen = g.header_lines();
-    assert!(zeilen.iter().any(|z| z == "scheduling fifo"));
-    assert!(zeilen.iter().any(|z| z == "echtzeit ja"));
+    let lines = g.header_lines();
+    assert!(lines.iter().any(|z| z == "scheduling fifo"));
+    assert!(lines.iter().any(|z| z == "echtzeit ja"));
 
     let ohne = Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1 };
     assert!(ohne.header_lines().iter().any(|z| z == "echtzeit nein"), "die fehlende Zusage steht im Kopf");
@@ -95,16 +95,16 @@ fn the_clock_starts_at_zero_and_moves_forward() {
 #[test]
 fn absolute_deadlines_do_not_accumulate_drift() {
     let mut c = RealtimeClock::new();
-    const SCHRITT: i64 = 5_000_000;
+    const STEP: i64 = 5_000_000;
     for k in 1..=3 {
-        c.wait_until(SCHRITT * k);
+        c.wait_until(STEP * k);
     }
     let verstrichen = c.now();
-    assert!(verstrichen >= SCHRITT * 3, "zu frueh: {verstrichen}");
+    assert!(verstrichen >= STEP * 3, "zu frueh: {verstrichen}");
     // Grosszuegig, weil ein gewoehnlicher Scheduler dazwischenkommt —
     // ohne `SCHED_FIFO` ist das der Normalfall, und der Test soll die
     // Drift pruefen, nicht die Maschine.
-    assert!(verstrichen < SCHRITT * 3 + 50_000_000, "zu viel Drift: {verstrichen}");
+    assert!(verstrichen < STEP * 3 + 50_000_000, "zu viel Drift: {verstrichen}");
 }
 
 /// 7.3: Eine Frist, die schon vergangen ist, wird nicht nachgeholt — der
@@ -122,25 +122,25 @@ fn an_overdue_deadline_is_counted_not_awaited() {
 // --- Die Schleife mit echter Uhr ----------------------------------------
 
 #[derive(Default)]
-struct Zaehler(u32);
+struct Counter(u32);
 
-impl Program for Zaehler {
+impl Program for Counter {
     fn tick(&mut self, _k: u64, _now: i64) {
         self.0 += 1;
     }
 }
 
 #[derive(Default)]
-struct KeinWatchdog;
+struct NoWatchdog;
 
-impl Watchdog for KeinWatchdog {
+impl Watchdog for NoWatchdog {
     fn kick(&mut self) {}
 }
 
 #[derive(Default)]
-struct Stumm;
+struct Silent;
 
-impl Sink for Stumm {
+impl Sink for Silent {
     fn record(&mut self, _t: &Tick) {}
 }
 
@@ -152,8 +152,8 @@ impl Sink for Stumm {
 #[test]
 fn the_tick_loop_runs_on_the_real_clock() {
     const T0: i64 = 1_000_000;
-    let uhr = RealtimeClock::new();
-    let mut rt = Runtime::new(Zaehler::default(), uhr, KeinWatchdog, Stumm, Profile::LINUX_RT, T0, Policy::Fault);
+    let clock = RealtimeClock::new();
+    let mut rt = Runtime::new(Counter::default(), clock, NoWatchdog, Silent, Profile::LINUX_RT, T0, Policy::Fault);
     let start = std::time::Instant::now();
     rt.run(10);
     assert_eq!(rt.program.0, 10, "zehn Ticks");

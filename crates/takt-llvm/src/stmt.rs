@@ -297,19 +297,19 @@ fn send(
     };
     // Der Puffer: `{ i32 len, [len_max x i8] }`, wie `str<N>` (3.9).
     let ty = LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), len_max)]);
-    let puffer = m.inst(&format!("alloca {ty}"));
+    let buffer = m.inst(&format!("alloca {ty}"));
     let vars = ctx.vars();
     match &value.kind {
         // Der haeufige Fall: ein Formatstring (8.8). Er wird an Ort und
         // Stelle gebaut, statt als Wert erzeugt und dann kopiert.
         takt_mir::expr::ExprKind::Format(f) => {
-            crate::format::render(f, puffer, &ty, len_max, ctx.program, m, &vars)?;
+            crate::format::render(f, buffer, &ty, len_max, ctx.program, m, &vars)?;
         }
         // Ein Literal ohne Platzhalter bleibt `Str` (3.9); es ist ein
         // Formatstring aus einem einzigen Textbaustein.
         takt_mir::expr::ExprKind::Str(lit) => {
             let f = takt_mir::pattern::Format::text(lit);
-            crate::format::render(&f, puffer, &ty, len_max, ctx.program, m, &vars)?;
+            crate::format::render(&f, buffer, &ty, len_max, ctx.program, m, &vars)?;
         }
         // Alles andere ist ein fertiger Wert — `bytes<N>` aus
         // `frame.encode()` etwa (8.8).
@@ -318,18 +318,18 @@ fn send(
             let LlvmType::Struct(_) = v.ty else {
                 return Err(NotYet { what: "`send` mit einem Wert ohne Laenge" });
             };
-            m.void_inst(&format!("store {} {}, ptr {puffer}", v.ty, v.value));
+            m.void_inst(&format!("store {} {}, ptr {buffer}", v.ty, v.value));
         }
     }
-    let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {puffer}, i32 0, i32 0"));
+    let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 0"));
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
-    let bytes = m.inst(&format!("getelementptr inbounds {ty}, ptr {puffer}, i32 0, i32 1"));
+    let bytes = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 1"));
     let ok = m.inst(&format!("call i1 @{}(i32 {sid}, ptr {bytes}, i32 {len})", crate::stream::Streams::SEND));
     // 8.8: `len > tx.free` ist ein `StreamOverflow`.
     ctx.checks += 1;
-    let weiter = format!("gesendet{}_{}", ctx.checks, ctx.machine.name);
-    m.void_inst(&format!("br i1 {ok}, label %{weiter}, label %{}", ctx.trampoline()));
-    m.label(&weiter);
+    let go_on = format!("gesendet{}_{}", ctx.checks, ctx.machine.name);
+    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{}", ctx.trampoline()));
+    m.label(&go_on);
     Ok(())
 }
 
@@ -359,17 +359,17 @@ fn for_range(
     m.void_inst(&format!("store {ty} 0, ptr {ptr}"));
     let k = ctx.next_label();
     let name = &ctx.machine.name;
-    let (kopf, rumpf, ende) =
+    let (head, loop_body, end_at) =
         (format!("fuer{k}_{name}"), format!("fuer{k}_{name}_rumpf"), format!("fuer{k}_{name}_ende"));
-    m.void_inst(&format!("br label %{kopf}"));
-    m.label(&kopf);
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&head);
     let i = m.inst(&format!("load {ty}, ptr {ptr}"));
     // Vorzeichenbehaftet: `range(n)` laeuft von 0 bis n-1 ueber einem
     // `int` (3.1).
-    let weiter = m.inst(&format!("icmp slt {ty} {i}, {}", n.value));
-    m.void_inst(&format!("br i1 {weiter}, label %{rumpf}, label %{ende}"));
-    m.label(&rumpf);
-    ctx.breaks.push(ende.clone());
+    let go_on = m.inst(&format!("icmp slt {ty} {i}, {}", n.value));
+    m.void_inst(&format!("br i1 {go_on}, label %{loop_body}, label %{end_at}"));
+    m.label(&loop_body);
+    ctx.breaks.push(end_at.clone());
     let result = block(body, ctx, m);
     ctx.breaks.pop();
     result?;
@@ -378,8 +378,8 @@ fn for_range(
     let cur = m.inst(&format!("load {ty}, ptr {ptr}"));
     let next = m.inst(&format!("add {ty} {cur}, 1"));
     m.void_inst(&format!("store {ty} {next}, ptr {ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
-    m.label(&ende);
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&end_at);
     Ok(())
 }
 
@@ -400,16 +400,16 @@ fn fn_for<V: Slots>(
     let (ptr, ty) = ctx.vars.slot(var, m).ok_or(NotYet { what: "Schleifenvariable" })?;
     m.void_inst(&format!("store {ty} 0, ptr {ptr}"));
     let k = ctx.next_label(m);
-    let (kopf, rumpf, ende) = (format!("fuer{k}"), format!("fuer{k}_rumpf"), format!("fuer{k}_ende"));
-    m.void_inst(&format!("br label %{kopf}"));
-    m.label(&kopf);
+    let (head, loop_body, end_at) = (format!("fuer{k}"), format!("fuer{k}_rumpf"), format!("fuer{k}_ende"));
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&head);
     let i = m.inst(&format!("load {ty}, ptr {ptr}"));
     // Der Vergleich ist vorzeichenbehaftet: `range(n)` laeuft von 0 bis
     // n-1, und `n` ist ein `int` (3.2).
-    let weiter = m.inst(&format!("icmp slt {ty} {i}, {}", n.value));
-    m.void_inst(&format!("br i1 {weiter}, label %{rumpf}, label %{ende}"));
-    m.label(&rumpf);
-    ctx.breaks.push(ende.clone());
+    let go_on = m.inst(&format!("icmp slt {ty} {i}, {}", n.value));
+    m.void_inst(&format!("br i1 {go_on}, label %{loop_body}, label %{end_at}"));
+    m.label(&loop_body);
+    ctx.breaks.push(end_at.clone());
     let result = fn_block(body, ctx, m);
     ctx.breaks.pop();
     result?;
@@ -418,8 +418,8 @@ fn fn_for<V: Slots>(
     let cur = m.inst(&format!("load {ty}, ptr {ptr}"));
     let next = m.inst(&format!("add {ty} {cur}, 1"));
     m.void_inst(&format!("store {ty} {next}, ptr {ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
-    m.label(&ende);
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&end_at);
     Ok(())
 }
 
@@ -811,9 +811,9 @@ fn block_method_call(
         inst.stepped()
     ));
     let done = m.inst(&format!("load i1, ptr {flag}"));
-    let (weiter, ende) = (format!("step{label}"), format!("step{label}_ende"));
-    m.void_inst(&format!("br i1 {done}, label %{ende}, label %{weiter}"));
-    m.label(&weiter);
+    let (go_on, end_at) = (format!("step{label}"), format!("step{label}_ende"));
+    m.void_inst(&format!("br i1 {done}, label %{end_at}, label %{go_on}"));
+    m.label(&go_on);
     m.void_inst(&format!("store i1 true, ptr {flag}"));
     let symbol = crate::block::method_symbol(def, &f.name);
     let call = if ret == LlvmType::Void {
@@ -826,8 +826,8 @@ fn block_method_call(
         let (dst, _) = place(t, ctx, m)?;
         m.void_inst(&format!("store {ret} {v}, ptr {dst}"));
     }
-    m.void_inst(&format!("br label %{ende}"));
-    m.label(&ende);
+    m.void_inst(&format!("br label %{end_at}"));
+    m.label(&end_at);
     Ok(())
 }
 
@@ -868,7 +868,7 @@ fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m
     let value = lower_expr(subject, ctx.program, m, &vars)?;
     let n = ctx.next_label();
     let name = ctx.machine.name.clone();
-    let ende = format!("match{n}_{name}");
+    let end_at = format!("match{n}_{name}");
     // Bei einem Summentyp wird die Diskriminante verglichen; die MIR
     // legt sie als Feld 0 ab, wenn die Variante Felder traegt, sonst ist
     // der Wert selbst die Diskriminante (3.7).
@@ -887,29 +887,29 @@ fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m
         _ => value.clone(),
     };
     for (i, arm) in arms.iter().enumerate() {
-        let treffer = format!("case{n}_{i}_{name}");
-        let weiter = format!("case{n}_{i}_sonst_{name}");
+        let hit = format!("case{n}_{i}_{name}");
+        let go_on = format!("case{n}_{i}_sonst_{name}");
         match &arm.pattern {
             takt_mir::stmt::ArmPattern::Wild => {
                 // `case _` faengt alles; die folgenden kaemen nie zum Zug.
                 block(&arm.body.clone(), ctx, m)?;
-                m.void_inst(&format!("br label %{ende}"));
-                m.label(&ende);
+                m.void_inst(&format!("br label %{end_at}"));
+                m.label(&end_at);
                 return Ok(());
             }
             takt_mir::stmt::ArmPattern::Variant { variant, fields } => {
                 let def = enum_of(subject.ty, ctx.program).ok_or(NotYet { what: "Enum des `match`" })?;
                 let d = def.variants.get(*variant as usize).ok_or(NotYet { what: "Variante" })?.discriminant;
                 let ok = m.inst(&format!("icmp eq {} {}, {d}", disc.ty, disc.value));
-                m.void_inst(&format!("br i1 {ok}, label %{treffer}, label %{weiter}"));
-                m.label(&treffer);
+                m.void_inst(&format!("br i1 {ok}, label %{hit}, label %{go_on}"));
+                m.label(&hit);
                 // 6.1: Die Felder der Variante werden an gehobene
                 // Variablen gebunden, bevor der Rumpf laeuft. Sie liegen
                 // im Wert hinter der Diskriminante.
                 bind_fields(&value, fields, ctx, m)?;
                 block(&arm.body.clone(), ctx, m)?;
-                m.void_inst(&format!("br label %{ende}"));
-                m.label(&weiter);
+                m.void_inst(&format!("br label %{end_at}"));
+                m.label(&go_on);
                 continue;
             }
             takt_mir::stmt::ArmPattern::Values(values) => {
@@ -928,19 +928,19 @@ fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m
                     };
                     ok = m.inst(&format!("or i1 {ok}, {hit}")).to_string();
                 }
-                m.void_inst(&format!("br i1 {ok}, label %{treffer}, label %{weiter}"));
+                m.void_inst(&format!("br i1 {ok}, label %{hit}, label %{go_on}"));
             }
         }
-        m.label(&treffer);
+        m.label(&hit);
         block(&arm.body.clone(), ctx, m)?;
-        m.void_inst(&format!("br label %{ende}"));
-        m.label(&weiter);
+        m.void_inst(&format!("br label %{end_at}"));
+        m.label(&go_on);
     }
     // Kein `case` hat getroffen. Bei einem geschlossenen Enum kann das
     // nicht vorkommen (Pruefung 7 verlangt Vollstaendigkeit); der Sprung
     // steht trotzdem da, weil LLVM einen Terminator braucht.
-    m.void_inst(&format!("br label %{ende}"));
-    m.label(&ende);
+    m.void_inst(&format!("br label %{end_at}"));
+    m.label(&end_at);
     Ok(())
 }
 

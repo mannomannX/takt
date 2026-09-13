@@ -22,13 +22,13 @@ use takt_mir::pattern::{CaptureKind, PatternPiece};
 
 /// Ein Muster in beiden Darstellungen: fuer den Codegen und fuer das
 /// Orakel.
-struct Muster {
+struct Pattern {
     /// Wie der Mensch es schreibt — nur fuer die Fehlermeldung.
     text: &'static str,
     /// Fuer den Codegen.
     pieces: Vec<PatternPiece>,
     /// Fuer `takt-match`.
-    stuecke: Vec<Piece<'static>>,
+    pieces_of: Vec<Piece<'static>>,
 }
 
 fn lit(s: &'static str) -> (PatternPiece, Piece<'static>) {
@@ -39,26 +39,29 @@ fn cap(kind: CaptureKind, k: Kind) -> (PatternPiece, Piece<'static>) {
     (PatternPiece::Capture { name: "x".to_string(), kind }, Piece::Capture(k))
 }
 
-fn muster(text: &'static str, teile: Vec<(PatternPiece, Piece<'static>)>) -> Muster {
-    let (pieces, stuecke) = teile.into_iter().unzip();
-    Muster { text, pieces, stuecke }
+fn pattern_of(text: &'static str, parts: Vec<(PatternPiece, Piece<'static>)>) -> Pattern {
+    let (pieces, pieces_of) = parts.into_iter().unzip();
+    Pattern { text, pieces, pieces_of }
 }
 
 /// Die Muster, die beide Seiten sehen.
-fn alle() -> Vec<Muster> {
+fn all_of() -> Vec<Pattern> {
     vec![
-        muster("READY", vec![lit("READY")]),
-        muster("Boot v{n:int}", vec![lit("Boot v"), cap(CaptureKind::Int, Kind::Int)]),
-        muster("Erasing sector {n:int}", vec![lit("Erasing sector "), cap(CaptureKind::Int, Kind::Int)]),
-        muster("{a:int}-{b:int}", vec![cap(CaptureKind::Int, Kind::Int), lit("-"), cap(CaptureKind::Int, Kind::Int)]),
-        muster("addr {x:hex}", vec![lit("addr "), cap(CaptureKind::Hex, Kind::Hex)]),
-        muster("user {w:word}", vec![lit("user "), cap(CaptureKind::Word, Kind::Word)]),
-        muster(
+        pattern_of("READY", vec![lit("READY")]),
+        pattern_of("Boot v{n:int}", vec![lit("Boot v"), cap(CaptureKind::Int, Kind::Int)]),
+        pattern_of("Erasing sector {n:int}", vec![lit("Erasing sector "), cap(CaptureKind::Int, Kind::Int)]),
+        pattern_of(
+            "{a:int}-{b:int}",
+            vec![cap(CaptureKind::Int, Kind::Int), lit("-"), cap(CaptureKind::Int, Kind::Int)],
+        ),
+        pattern_of("addr {x:hex}", vec![lit("addr "), cap(CaptureKind::Hex, Kind::Hex)]),
+        pattern_of("user {w:word}", vec![lit("user "), cap(CaptureKind::Word, Kind::Word)]),
+        pattern_of(
             "{w:word}={n:int}",
             vec![cap(CaptureKind::Word, Kind::Word), lit("="), cap(CaptureKind::Int, Kind::Int)],
         ),
-        muster("[{s:str<8>}]", vec![lit("["), cap(CaptureKind::Str(8), Kind::Str(8)), lit("]")]),
-        muster("T{n:int}C", vec![lit("T"), cap(CaptureKind::Int, Kind::Int), lit("C")]),
+        pattern_of("[{s:str<8>}]", vec![lit("["), cap(CaptureKind::Str(8), Kind::Str(8)), lit("]")]),
+        pattern_of("T{n:int}C", vec![lit("T"), cap(CaptureKind::Int, Kind::Int), lit("C")]),
     ]
 }
 
@@ -67,7 +70,7 @@ fn alle() -> Vec<Muster> {
 /// Sie decken die Raender ab: leer, knapp daneben, der kleinste `int`
 /// (FB-114/FB-95), fuehrende Nullen, Hex in beiden Schreibweisen, und
 /// Text, der nur teilweise passt.
-const TEXTE: [&str; 28] = [
+const TEXTS: [&str; 28] = [
     "",
     "READY",
     "READ",
@@ -103,12 +106,12 @@ const TEXTE: [&str; 28] = [
 /// Die Funktion nimmt einen Zeiger auf `{ i32 len, [64 x i8] }` und
 /// schreibt das Ergebnis: das Urteil und die Werte der Captures. Mehr
 /// braucht der Vergleich nicht, und weniger waere zu wenig.
-fn modul(muster: &[Muster]) -> String {
+fn module_of(pattern_of: &[Pattern]) -> String {
     // Der Test uebersetzt *und* laeuft, also muss das Triple das des
     // Wirts sein.
     let triple = if cfg!(windows) { "x86_64-pc-windows-msvc" } else { "x86_64-unknown-linux-gnu" };
     let mut m = Module::new("captures", triple);
-    for (i, mu) in muster.iter().enumerate() {
+    for (i, mu) in pattern_of.iter().enumerate() {
         // `pruef(text, out) -> i1`; `out` nimmt den Aufnahmerecord.
         let regs = m.begin(
             &format!("pruef{i}"),
@@ -116,10 +119,10 @@ fn modul(muster: &[Muster]) -> String {
             &[takt_llvm::ty::LlvmType::Ptr, takt_llvm::ty::LlvmType::Ptr],
         );
         let (text, out) = (regs[0], regs[1]);
-        let anzahl = mu.pieces.iter().filter(|p| matches!(p, PatternPiece::Capture { .. })).count();
+        let count_of = mu.pieces.iter().filter(|p| matches!(p, PatternPiece::Capture { .. })).count();
         // Der Aufnahmerecord: je Capture ein Feld. `int` und `hex` sind
         // i64, `word` und `str` ein Textpuffer wie `str<N>` (3.9).
-        let felder: Vec<takt_llvm::ty::LlvmType> = mu
+        let fields: Vec<takt_llvm::ty::LlvmType> = mu
             .pieces
             .iter()
             .filter_map(|p| match p {
@@ -135,17 +138,17 @@ fn modul(muster: &[Muster]) -> String {
                 _ => None,
             })
             .collect();
-        let rec = takt_llvm::ty::LlvmType::Struct(felder.clone());
-        let liste: Vec<(u32, takt_llvm::ty::LlvmType)> =
-            felder.iter().enumerate().map(|(j, f)| (j as u32, f.clone())).collect();
-        let wohin = (anzahl > 0).then(|| takt_llvm::captures::Ziel { slot: out, record: &rec, felder: &liste });
-        let null = m.inst("add i32 0, 0");
-        let (ok, at) = takt_llvm::captures::walk(&mu.pieces, text, wohin.as_ref(), null, &mut m).expect("walk");
+        let rec = takt_llvm::ty::LlvmType::Struct(fields.clone());
+        let list: Vec<(u32, takt_llvm::ty::LlvmType)> =
+            fields.iter().enumerate().map(|(j, f)| (j as u32, f.clone())).collect();
+        let into = (count_of > 0).then(|| takt_llvm::captures::Target { slot: out, record: &rec, fields: &list });
+        let zero = m.inst("add i32 0, 0");
+        let (ok, at) = takt_llvm::captures::walk(&mu.pieces, text, into.as_ref(), zero, &mut m).expect("walk");
         // `matches`: der ganze Text muss verbraucht sein (8.7).
         let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
         let len = m.inst(&format!("load i32, ptr {len_ptr}"));
-        let ganz = m.inst(&format!("icmp eq i32 {at}, {len}"));
-        let hit = m.inst(&format!("and i1 {ok}, {ganz}"));
+        let whole = m.inst(&format!("icmp eq i32 {at}, {len}"));
+        let hit = m.inst(&format!("and i1 {ok}, {whole}"));
         m.end(Some((&takt_llvm::ty::LlvmType::Int(1), hit.to_string())));
     }
     m.finish()
@@ -159,8 +162,8 @@ fn the_generated_matcher_agrees_with_takt_match() {
     };
     let clang = Clang::At(path.clone());
     let _ = &clang;
-    let muster = alle();
-    let ir = modul(&muster);
+    let pattern_of = all_of();
+    let ir = module_of(&pattern_of);
 
     let dir = std::env::temp_dir().join("takt-llvm-captures");
     let _ = std::fs::remove_dir_all(&dir);
@@ -169,7 +172,7 @@ fn the_generated_matcher_agrees_with_takt_match() {
     let c = dir.join("treiber.c");
     let exe = dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" });
     std::fs::write(&ll, &ir).expect("IR");
-    std::fs::write(&c, treiber(&muster)).expect("Treiber");
+    std::fs::write(&c, driver(&pattern_of)).expect("Treiber");
 
     let build = std::process::Command::new(path)
         .args(["-Wno-override-module", "-O1"])
@@ -189,51 +192,51 @@ fn the_generated_matcher_agrees_with_takt_match() {
     let nativ = String::from_utf8_lossy(&lauf.stdout);
 
     // Dasselbe durch `takt-match`, das Orakel.
-    let erwartet = orakel(&muster);
+    let expected = oracle(&pattern_of);
     let ist: Vec<&str> = nativ.lines().filter(|l| !l.is_empty()).collect();
-    assert_eq!(ist.len(), erwartet.len(), "verschieden viele Zeilen");
-    let mut abweichungen = Vec::new();
-    for (i, (a, b)) in ist.iter().zip(erwartet.iter()).enumerate() {
+    assert_eq!(ist.len(), expected.len(), "verschieden viele Zeilen");
+    let mut differences = Vec::new();
+    for (i, (a, b)) in ist.iter().zip(expected.iter()).enumerate() {
         if a != b {
-            let m = &muster[i / TEXTE.len()];
-            let t = TEXTE[i % TEXTE.len()];
-            abweichungen.push(format!("  `{}` gegen {t:?}: nativ `{a}`, `takt-match` `{b}`", m.text));
+            let m = &pattern_of[i / TEXTS.len()];
+            let t = TEXTS[i % TEXTS.len()];
+            differences.push(format!("  `{}` gegen {t:?}: nativ `{a}`, `takt-match` `{b}`", m.text));
         }
     }
     assert!(
-        abweichungen.is_empty(),
+        differences.is_empty(),
         "{} Abweichungen zwischen erzeugtem Code und `takt-match`:\n{}",
-        abweichungen.len(),
-        abweichungen.join("\n")
+        differences.len(),
+        differences.join("\n")
     );
 }
 
 /// Was `takt-match` zu jedem Paar sagt, in derselben Schreibweise wie
 /// der Treiber.
-fn orakel(muster: &[Muster]) -> Vec<String> {
+fn oracle(pattern_of: &[Pattern]) -> Vec<String> {
     let mut out = Vec::new();
-    for mu in muster {
-        for t in TEXTE {
-            let Some(treffer) = takt_match::matches(&mu.stuecke, t.as_bytes()) else {
+    for mu in pattern_of {
+        for t in TEXTS {
+            let Some(hit) = takt_match::matches(&mu.pieces_of, t.as_bytes()) else {
                 out.push("0".to_string());
                 continue;
             };
-            let mut zeile = String::from("1");
+            let mut line_of = String::from("1");
             let mut kinds = mu.pieces.iter().filter_map(|p| match p {
                 PatternPiece::Capture { kind, .. } => Some(kind),
                 _ => None,
             });
-            for s in &treffer.spans[..treffer.count as usize] {
+            for s in &hit.spans[..hit.count as usize] {
                 let roh = s.of(t.as_bytes());
-                let wert = match kinds.next() {
+                let value_of = match kinds.next() {
                     Some(CaptureKind::Int) => takt_match::parse_int(roh).map_or("?".into(), |v| v.to_string()),
                     Some(CaptureKind::Hex) => takt_match::parse_hex(roh).map_or("?".into(), |v| v.to_string()),
                     _ => String::from_utf8_lossy(roh).to_string(),
                 };
-                zeile.push(' ');
-                zeile.push_str(&wert);
+                line_of.push(' ');
+                line_of.push_str(&value_of);
             }
-            out.push(zeile);
+            out.push(line_of);
         }
     }
     out
@@ -241,7 +244,7 @@ fn orakel(muster: &[Muster]) -> Vec<String> {
 
 /// Der C-Treiber: Er ruft je Muster und Text die erzeugte Funktion und
 /// schreibt Urteil und Werte.
-fn treiber(muster: &[Muster]) -> String {
+fn driver(pattern_of: &[Pattern]) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();
     let _ = writeln!(s, "#include <stdio.h>");
@@ -251,8 +254,8 @@ fn treiber(muster: &[Muster]) -> String {
     // Je Muster ein eigener Record: Die Ausrichtung rechnet der
     // C-Compiler, wie LLVM sie auf der anderen Seite rechnet. Versaetze
     // von Hand waeren eine dritte Meinung dazu.
-    for (i, mu) in muster.iter().enumerate() {
-        let felder: Vec<String> = mu
+    for (i, mu) in pattern_of.iter().enumerate() {
+        let fields: Vec<String> = mu
             .pieces
             .iter()
             .filter_map(|p| match p {
@@ -263,23 +266,23 @@ fn treiber(muster: &[Muster]) -> String {
             .enumerate()
             .map(|(j, ct)| format!("{ct} f{j};"))
             .collect();
-        if felder.is_empty() {
+        if fields.is_empty() {
             let _ = writeln!(s, "struct rec{i} {{ char leer; }};");
         } else {
-            let _ = writeln!(s, "struct rec{i} {{ {} }};", felder.join(" "));
+            let _ = writeln!(s, "struct rec{i} {{ {} }};", fields.join(" "));
         }
     }
     let _ = writeln!(s);
-    for (i, _) in muster.iter().enumerate() {
+    for (i, _) in pattern_of.iter().enumerate() {
         let _ = writeln!(s, "_Bool pruef{i}(struct text *, void *);");
     }
     let _ = writeln!(s, "\nint main(void) {{");
     let _ = writeln!(s, "    struct text t;");
-    for (i, _) in muster.iter().enumerate() {
+    for (i, _) in pattern_of.iter().enumerate() {
         let _ = writeln!(s, "    struct rec{i} r{i};");
     }
-    for (i, mu) in muster.iter().enumerate() {
-        for text in TEXTE {
+    for (i, mu) in pattern_of.iter().enumerate() {
+        for text in TEXTS {
             let bytes: String = text.as_bytes().iter().map(|b| format!("\\x{b:02x}")).collect();
             let _ = writeln!(s, "    memset(&t, 0, sizeof t);");
             let _ = writeln!(s, "    t.len = {};", text.len());

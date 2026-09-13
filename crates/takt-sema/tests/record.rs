@@ -98,12 +98,12 @@ fn the_header_carries_no_timestamp_and_no_path() {
 /// erweiterte TCB sichtbar bleibt".
 #[test]
 fn the_header_names_the_native_functions() {
-    let quelle = "system:\n    language = 1\n    tick     = 10 ms\n\n\
+    let source = "system:\n    language = 1\n    tick     = 10 ms\n\n\
          native fn crc32(b: bytes<8>) -> u32 with cost = 200, stack = 16, total\n\n\
          output r : u32 @ hw(\"ui/r\") with safe = 0\n\n\
          machine m:\n    var b : bytes<8> = default\n\n    initial RUN\n\
          \x20   state RUN:\n        loop:\n            r = crc32(b)\n";
-    let p = program(quelle);
+    let p = program(source);
     let text = Header::of(&p, None, 1).render();
     assert!(text.contains("#! native crc32"), "die native Funktion fehlt im Kopf:\n{text}");
 }

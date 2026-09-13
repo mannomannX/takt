@@ -73,31 +73,31 @@ fn the_interpreter_and_the_generated_code_agree() {
         return;
     };
     let clang = Clang::At(path);
-    let mut gescheitert = Vec::new();
+    let mut failed = Vec::new();
     for name in KORPUS {
         let p = corpus(name);
         let Some(machine) = p.machines.first().map(|m| m.name.clone()) else { continue };
         let native = match common::run_native(&clang, &p, name, &machine, TICKS) {
             Ok(t) => t,
             Err(e) => {
-                gescheitert.push(format!("{name}: laesst sich nicht bauen:\n{e}"));
+                failed.push(format!("{name}: laesst sich nicht bauen:\n{e}"));
                 continue;
             }
         };
         let interpreted = run_interpreted(&p);
         let diffs = compare(&interpreted, &native);
         if !diffs.is_empty() {
-            let liste: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
-            gescheitert.push(format!(
+            let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
+            failed.push(format!(
                 "{name}: {} Abweichungen\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
                 diffs.len(),
-                liste.join("\n"),
+                list.join("\n"),
                 interpreted.lines().take(12).collect::<Vec<_>>().join("\n"),
                 native.lines().take(12).collect::<Vec<_>>().join("\n")
             ));
         }
     }
-    assert!(gescheitert.is_empty(), "{}", gescheitert.join("\n\n"));
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
 /// Die Grenzen der Abnahme stehen im Code, nicht nur im Plan.

@@ -57,8 +57,8 @@ pub fn declare(id: u32, dfa: &Dfa, m: &mut Module) {
 /// durch `N` beschraenkt (3.9) — 4.1 verlangt genau das.
 pub fn run(id: u32, dfa: &Dfa, text: Reg, m: &mut Module) -> Result<Reg, NotYet> {
     let k = m.next_label();
-    let (kopf, rumpf) = (format!("dfa{k}"), format!("dfa{k}_rumpf"));
-    let (pruef, fertig) = (format!("dfa{k}_pruef"), format!("dfa{k}_fertig"));
+    let (head, body) = (format!("dfa{k}"), format!("dfa{k}_rumpf"));
+    let (check, done) = (format!("dfa{k}_pruef"), format!("dfa{k}_fertig"));
 
     // Laenge und Bytes des Texts.
     let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
@@ -69,14 +69,14 @@ pub fn run(id: u32, dfa: &Dfa, text: Reg, m: &mut Module) -> Result<Reg, NotYet>
     m.void_inst(&format!("store i32 0, ptr {state_ptr}"));
     let i_ptr = m.inst("alloca i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&kopf);
+    m.label(&head);
     let i = m.inst(&format!("load i32, ptr {i_ptr}"));
-    let weiter = m.inst(&format!("icmp slt i32 {i}, {len}"));
-    m.void_inst(&format!("br i1 {weiter}, label %{rumpf}, label %{pruef}"));
+    let go_on = m.inst(&format!("icmp slt i32 {i}, {len}"));
+    m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{check}"));
 
-    m.label(&rumpf);
+    m.label(&body);
     let at = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {i}"));
     let byte = m.inst(&format!("load i8, ptr {at}"));
     let idx = m.inst(&format!("zext i8 {byte} to i32"));
@@ -94,9 +94,9 @@ pub fn run(id: u32, dfa: &Dfa, text: Reg, m: &mut Module) -> Result<Reg, NotYet>
     ));
     let next = m.inst(&format!("load i32, ptr {cell}"));
     m.void_inst(&format!("store i32 {next}, ptr {state_ptr}"));
-    let ni = m.inst(&format!("add i32 {i}, 1"));
-    m.void_inst(&format!("store i32 {ni}, ptr {i_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    let next_i = m.inst(&format!("add i32 {i}, 1"));
+    m.void_inst(&format!("store i32 {next_i}, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
 
     // Am Ende: Ist der erreichte Zustand akzeptierend?
     //
@@ -105,14 +105,14 @@ pub fn run(id: u32, dfa: &Dfa, text: Reg, m: &mut Module) -> Result<Reg, NotYet>
     // Sie ist typisch ein- bis dreielementig, und LLVM macht daraus
     // einen `switch`, wenn es sich lohnt. Eine Tabelle brauchte einen
     // Zaehler, eine Schleife und drei Marken fuer dieselbe Frage.
-    m.label(&pruef);
+    m.label(&check);
     let end_state = m.inst(&format!("load i32, ptr {state_ptr}"));
     let mut hit = m.inst("and i1 false, false");
     for a in &dfa.accept {
-        let gleich = m.inst(&format!("icmp eq i32 {end_state}, {a}"));
-        hit = m.inst(&format!("or i1 {hit}, {gleich}"));
+        let same = m.inst(&format!("icmp eq i32 {end_state}, {a}"));
+        hit = m.inst(&format!("or i1 {hit}, {same}"));
     }
-    m.void_inst(&format!("br label %{fertig}"));
-    m.label(&fertig);
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
     Ok(hit)
 }

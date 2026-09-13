@@ -155,7 +155,7 @@ fn generated_programs_agree() {
     // und die Formen sind das, was hier gesucht wird.
     let mut rng = Rng(0x2026_0912);
     let (mut gebaut, mut abgelehnt) = (0, 0);
-    let mut fehler = Vec::new();
+    let mut errors = Vec::new();
 
     for runde in 0..160 {
         // Die zweite Haelfte rechnet in Fliesskomma: Dort sitzt Satz
@@ -177,7 +177,7 @@ fn generated_programs_agree() {
         let native = match crate::common::run_native(&clang, &p, &format!("fuzz{runde}"), &machine, TICKS) {
             Ok(t) => t,
             Err(e) => {
-                fehler.push(format!("`{expr}`: laesst sich nicht bauen:\n{e}"));
+                errors.push(format!("`{expr}`: laesst sich nicht bauen:\n{e}"));
                 continue;
             }
         };
@@ -191,13 +191,13 @@ fn generated_programs_agree() {
         gebaut += 1;
         let diffs = compare(&interpreted, &native);
         if !diffs.is_empty() {
-            fehler.push(format!("`{expr}`:\n  {}", diffs[0]));
+            errors.push(format!("`{expr}`:\n  {}", diffs[0]));
         }
     }
 
     eprintln!("gebaut: {gebaut}, abgelehnt: {abgelehnt}");
     assert!(gebaut >= 10, "zu wenige Programme uebersetzt: {gebaut} (abgelehnt: {abgelehnt})");
-    assert!(fehler.is_empty(), "{} Abweichungen:\n{}", fehler.len(), fehler.join("\n"));
+    assert!(errors.is_empty(), "{} Abweichungen:\n{}", errors.len(), errors.join("\n"));
 }
 
 mod common;

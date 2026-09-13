@@ -69,7 +69,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // Die Maschinen, die der Rahmen fuehrt, in Deklarationsreihenfolge —
     // dieselbe, die der Interpreter nimmt (9.4: ohne `follows` ist sie
     // semantisch irrelevant, aber der Trace soll gleich aussehen).
-    let gefuehrt: Vec<&takt_mir::machine::Machine> = match machine {
+    let driven: Vec<&takt_mir::machine::Machine> = match machine {
         Some(name) => p.machines.iter().filter(|m| m.name == name).collect(),
         None => p.machines.iter().filter(|m| m.kind != takt_mir::machine::MachineKind::Template).collect(),
     };
@@ -127,7 +127,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
         let _ = writeln!(s, "    return s;");
         let _ = writeln!(s, "}}");
     }
-    for m in &gefuehrt {
+    for m in &driven {
         let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
     }
@@ -137,7 +137,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // Latch, nicht ihren Zustand. Der Struct ist gross genug bemessen;
     // seine genaue Groesse kennt nur der Codegen, und sie zu
     // ueberschaetzen kostet im Test nichts.
-    for m in &gefuehrt {
+    for m in &driven {
         let _ = writeln!(s, "static char state_{}[4096];", m.name);
     }
     let _ = writeln!(s, "static char image[{}];", layout.image.max(1));
@@ -145,7 +145,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let _ = writeln!(s, "static char latch[{}];\n", layout.latch.max(1));
 
     let _ = writeln!(s, "int main(void) {{");
-    for m in &gefuehrt {
+    for m in &driven {
         let _ = writeln!(s, "    memset(state_{0}, 0, sizeof state_{0});", m.name);
     }
     let _ = writeln!(s, "    memset(image, 0, sizeof image);");
@@ -173,7 +173,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // damit ein `enter:`-Block schon den sicheren Wert sieht.
     safe_outputs(&mut s, p, &layout);
     sim_bindings(&mut s, p, "    ");
-    for m in &gefuehrt {
+    for m in &driven {
         let _ = writeln!(s, "    {0}_init(state_{0}, image, params, latch);", m.name);
     }
     sim_bindings(&mut s, p, "    ");
@@ -198,7 +198,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // 7.2: Eine Maschine laeuft in jedem `period`-ten Tick. Ohne die
     // Bedingung liefe ein `every 50 ms`-Modell bei 10 ms Tick fuenfmal
     // zu oft, und sein Wert stuende im Trace an der falschen Stelle.
-    for m in &gefuehrt {
+    for m in &driven {
         let bedingung = match (m.period.max(1), m.phase) {
             (1, _) => String::new(),
             (per, 0) => format!("if (g_tick % {per} == 0) "),
@@ -294,7 +294,7 @@ fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout) {
 /// die Qualitaet wird `Good` (0): Der Eingang hat eine Quelle, also ist
 /// er nicht mehr `Bad` (3.5). Ohne das bliebe er `Bad`, und jeder
 /// Lesezugriff faultete.
-fn sim_bindings(s: &mut String, p: &Program, einzug: &str) {
+fn sim_bindings(s: &mut String, p: &Program, indent: &str) {
     use takt_mir::program::{Binding, Direction};
     let adresse = |b: &Binding| match b {
         Binding::Hw(a) | Binding::Sim(a) => Some(a.clone()),
@@ -326,10 +326,10 @@ fn sim_bindings(s: &mut String, p: &Program, einzug: &str) {
             continue;
         };
         let Some(size) = takt_llvm::ty::lower(inp.ty, p).map(|t| t.size()) else { continue };
-        let _ = writeln!(s, "{einzug}memcpy(image + {dst}, latch + {src}, {size}); /* {} -> {} */", out.name, inp.name);
+        let _ = writeln!(s, "{indent}memcpy(image + {dst}, latch + {src}, {size}); /* {} -> {} */", out.name, inp.name);
         // Qualitaet `Good` (3.5): Der Eingang hat jetzt eine Quelle.
         if let Some(q) = quality_offset(p, &inp.name) {
-            let _ = writeln!(s, "{einzug}image[{q}] = 0;");
+            let _ = writeln!(s, "{indent}image[{q}] = 0;");
         }
     }
 }

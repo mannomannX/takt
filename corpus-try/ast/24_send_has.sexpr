@@ -1,0 +1,16 @@
+(system
+  (language 1)
+  (tick 10ms))
+(input rx :stream<line<64>> @hw("u/rx") max_rate=100[Hz] capacity=4)
+(output tx :stream<u8> @hw("u/tx") max_rate=100000[Hz] capacity=64)
+(output hits :int in 0..99 @sim("h"))
+(machine m
+  (var found :int in 0..99 0)
+  (initial A)
+  (state A
+    (loop
+      (= hits found))
+    (on rx has "ERR" as l
+      (= found (+ found 1))
+      (send tx "ack {found}\n"))
+    (after 1s -> A)))

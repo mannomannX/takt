@@ -9,11 +9,11 @@ use takt_conformance::harness;
 use takt_conformance::stimulus::Stimulus;
 use takt_mir::program::Program;
 
-fn programm(src: &str) -> Program {
+fn program_of(src: &str) -> Program {
     let o = takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
     let out = takt_sema::compile(src, &o);
-    let fehler: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
-    assert!(fehler.is_empty(), "{}", fehler.join("\n"));
+    let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
     out.program.expect("Programm")
 }
 
@@ -21,8 +21,8 @@ fn programm(src: &str) -> Program {
 ///
 /// `max_rate` steht immer dabei: 8.6 verlangt es fuer jeden Strom
 /// (SC-17), weil ohne obere Rate keine Schranke fuer das Fenster folgt.
-fn mit_schranken(attrs: &str) -> Program {
-    programm(&format!(
+fn with_bounds(attrs: &str) -> Program {
+    program_of(&format!(
         "system:\n    language = 1\n    tick     = 10 ms\n\n\
          input  rx : stream<line<16>> @ hw(\"u/rx\") with max_rate = 100 Hz{attrs}\n\
          output y  : int in 0..9      @ sim(\"o\")\n\n\
@@ -30,7 +30,7 @@ fn mit_schranken(attrs: &str) -> Program {
     ))
 }
 
-fn rahmen(p: &Program, stimulus: &[Stimulus]) -> String {
+fn harness_of(p: &Program, stimulus: &[Stimulus]) -> String {
     harness::build_with(p, "m", 10, stimulus).source
 }
 
@@ -38,8 +38,8 @@ fn rahmen(p: &Program, stimulus: &[Stimulus]) -> String {
 /// Programm aushalten muss.
 #[test]
 fn without_elements_the_window_stays_empty() {
-    let p = mit_schranken("");
-    let c = rahmen(&p, &[]);
+    let p = with_bounds("");
+    let c = harness_of(&p, &[]);
     assert!(c.contains("takt_stream_count(int s, long long cur) { (void)s; (void)cur; return 0; }"));
     assert!(!c.contains("g_elems"), "ohne Stimulus braucht es keine Tabelle");
 }
@@ -47,8 +47,8 @@ fn without_elements_the_window_stays_empty() {
 /// Die Elemente stehen in der Tabelle, mit Tick, Nummer und Inhalt.
 #[test]
 fn elements_reach_the_table_with_their_numbering() {
-    let p = mit_schranken("");
-    let c = rahmen(&p, &[Stimulus::element(2, "rx", "AB"), Stimulus::element(5, "rx", "C")]);
+    let p = with_bounds("");
+    let c = harness_of(&p, &[Stimulus::element(2, "rx", "AB"), Stimulus::element(5, "rx", "C")]);
     // 9.6: `seq` ist streng steigend und beginnt bei null.
     assert!(c.contains("{ 0, 2, 0, 2, \"\\x41\\x42\" }"), "erstes Element fehlt:\n{c}");
     assert!(c.contains("{ 0, 5, 1, 1, \"\\x43\" }"), "zweites Element fehlt:\n{c}");
@@ -58,8 +58,8 @@ fn elements_reach_the_table_with_their_numbering() {
 /// abgeschnitten und nicht verworfen.
 #[test]
 fn an_overlong_element_is_truncated_not_dropped() {
-    let p = mit_schranken("");
-    let c = rahmen(&p, &[Stimulus::element(1, "rx", "0123456789ABCDEFXXXX")]);
+    let p = with_bounds("");
+    let c = harness_of(&p, &[Stimulus::element(1, "rx", "0123456789ABCDEFXXXX")]);
     assert!(c.contains(", 16, \""), "auf `line<16>` gekuerzt:\n{c}");
     assert!(!c.contains("\\x58"), "das abgeschnittene `X` steht nicht in der Tabelle");
 }
@@ -68,8 +68,8 @@ fn an_overlong_element_is_truncated_not_dropped() {
 /// hineinpasst, ist ein Ueberlauf und kein Element.
 #[test]
 fn the_element_bound_holds() {
-    let p = mit_schranken(", capacity = 2");
-    let c = rahmen(
+    let p = with_bounds(", capacity = 2");
+    let c = harness_of(
         &p,
         &[Stimulus::element(1, "rx", "A"), Stimulus::element(1, "rx", "B"), Stimulus::element(1, "rx", "C")],
     );
@@ -77,7 +77,7 @@ fn the_element_bound_holds() {
     assert!(!c.contains("\\x43"), "das dritte reisst `capacity = 2`");
     // Ein spaeterer Tick faengt wieder bei null an: Der Konsument hat
     // sein Fenster geleert.
-    let c = rahmen(
+    let c = harness_of(
         &p,
         &[Stimulus::element(1, "rx", "A"), Stimulus::element(1, "rx", "B"), Stimulus::element(2, "rx", "C")],
     );
@@ -93,9 +93,9 @@ fn the_element_bound_holds() {
 /// ueber die Summe, nicht ueber ein einzelnes Element.
 #[test]
 fn the_byte_bound_holds_independently() {
-    let p = mit_schranken(", capacity = 4, capacity_bytes = 64");
+    let p = with_bounds(", capacity = 4, capacity_bytes = 64");
     let lang = "0123456789ABCDEF";
-    let c = rahmen(
+    let c = harness_of(
         &p,
         &[
             Stimulus::element(1, "rx", lang),
@@ -114,7 +114,7 @@ fn the_byte_bound_holds_independently() {
 /// Ein Stimulus fuer einen anderen Kanal beruehrt den Strom nicht.
 #[test]
 fn a_stimulus_for_another_channel_is_ignored() {
-    let p = mit_schranken("");
-    let c = rahmen(&p, &[Stimulus::element(1, "andere", "A"), Stimulus::cmd(1, "go")]);
+    let p = with_bounds("");
+    let c = harness_of(&p, &[Stimulus::element(1, "andere", "A"), Stimulus::cmd(1, "go")]);
     assert!(!c.contains("g_elems"), "kein Element fuer `rx`:\n{c}");
 }

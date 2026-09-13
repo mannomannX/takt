@@ -37,7 +37,7 @@ fn dfa_says(dfa: &Dfa, line: &str) -> bool {
 /// Sie decken die Faelle ab, die 8.7 nennt: Treffer, Beinahe-Treffer
 /// (ein Zeichen zu kurz, eines zu viel), leerer Platzhalter, falsche
 /// Zeichenklasse und leerer Text.
-const ZEILEN: [&str; 14] = [
+const LINES: [&str; 14] = [
     "",
     "READY",
     "READ",
@@ -54,9 +54,9 @@ const ZEILEN: [&str; 14] = [
     "Boot v1x",
 ];
 
-fn vergleiche(pieces: &[PatternPiece]) {
+fn compare_all(pieces: &[PatternPiece]) {
     let Some(dfa) = build(&[pieces]) else { return };
-    for line in ZEILEN {
+    for line in LINES {
         let durchlauf = match_text(pieces, line).is_some();
         let automat = dfa_says(&dfa, line);
         assert_eq!(
@@ -68,13 +68,13 @@ fn vergleiche(pieces: &[PatternPiece]) {
 
 #[test]
 fn a_literal_agrees_on_every_line() {
-    vergleiche(&[text("READY")]);
+    compare_all(&[text("READY")]);
 }
 
 #[test]
 fn a_trailing_capture_agrees_on_every_line() {
-    vergleiche(&[text("Boot v"), cap(CaptureKind::Int)]);
-    vergleiche(&[text("Erasing sector "), cap(CaptureKind::Int)]);
+    compare_all(&[text("Boot v"), cap(CaptureKind::Int)]);
+    compare_all(&[text("Erasing sector "), cap(CaptureKind::Int)]);
 }
 
 #[test]
@@ -82,30 +82,30 @@ fn an_inner_capture_agrees_on_every_line() {
     // `Boot v{major:int}.{minor:int}` — zwei Platzhalter mit Literal
     // dazwischen, wie 8.7 es verlangt (auf `int` folgt ein Zeichen
     // ausserhalb der Klasse).
-    vergleiche(&[text("Boot v"), cap(CaptureKind::Int), text("."), cap(CaptureKind::Int)]);
+    compare_all(&[text("Boot v"), cap(CaptureKind::Int), text("."), cap(CaptureKind::Int)]);
 }
 
 #[test]
 fn a_word_capture_agrees_on_every_line() {
-    vergleiche(&[text("Recovery: "), cap(CaptureKind::Word)]);
+    compare_all(&[text("Recovery: "), cap(CaptureKind::Word)]);
 }
 
 /// Die Zeilen, die 14.6 wirklich sieht (Referenzbeispiel).
 #[test]
 fn the_patterns_of_the_reference_example_agree() {
-    let muster: [Vec<PatternPiece>; 3] = [
+    let pattern_of: [Vec<PatternPiece>; 3] = [
         vec![text("Boot v"), cap(CaptureKind::Int), text("."), cap(CaptureKind::Int)],
         vec![text("Erasing sector "), cap(CaptureKind::Int)],
         vec![text("READY")],
     ];
-    for m in &muster {
-        vergleiche(m);
+    for m in &pattern_of {
+        compare_all(m);
     }
     // Und als Produkt: Ein Durchlauf beantwortet alle drei (11.2).
-    let refs: Vec<&[PatternPiece]> = muster.iter().map(Vec::as_slice).collect();
+    let refs: Vec<&[PatternPiece]> = pattern_of.iter().map(Vec::as_slice).collect();
     let dfa = build(&refs).expect("Produkt-Automat");
-    for line in ZEILEN {
-        let einzeln = muster.iter().any(|m| match_text(m, line).is_some());
-        assert_eq!(einzeln, dfa_says(&dfa, line), "`{line}`: das Produkt weicht von den Einzelmustern ab");
+    for line in LINES {
+        let single = pattern_of.iter().any(|m| match_text(m, line).is_some());
+        assert_eq!(single, dfa_says(&dfa, line), "`{line}`: das Produkt weicht von den Einzelmustern ab");
     }
 }

@@ -121,20 +121,20 @@ pub fn guard_stepped(ptr: Reg, inst: &Instance, block: &BlockDef, label: u32, m:
     let ty = type_name(block);
     let flag = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 {}", inst.stepped()));
     let done = m.inst(&format!("load i1, ptr {flag}"));
-    let (weiter, ende) = (format!("step{label}"), format!("step{label}_ende"));
-    m.void_inst(&format!("br i1 {done}, label %{ende}, label %{weiter}"));
-    m.label(&weiter);
+    let (go_on, end_at) = (format!("step{label}"), format!("step{label}_ende"));
+    m.void_inst(&format!("br i1 {done}, label %{end_at}, label %{go_on}"));
+    m.label(&go_on);
     m.void_inst(&format!("store i1 true, ptr {flag}"));
     // Der Aufrufer schreibt den Aufruf; `finish_stepped` schliesst.
-    let _ = ende;
+    let _ = end_at;
     Ok(())
 }
 
 /// Schliesst den Zweig aus [`guard_stepped`].
 pub fn finish_stepped(label: u32, m: &mut Module) {
-    let ende = format!("step{label}_ende");
-    m.void_inst(&format!("br label %{ende}"));
-    m.label(&ende);
+    let end_at = format!("step{label}_ende");
+    m.void_inst(&format!("br label %{end_at}"));
+    m.label(&end_at);
 }
 
 /// Setzt alle Felder einer Instanz auf ihren Anfangswert (5.7).

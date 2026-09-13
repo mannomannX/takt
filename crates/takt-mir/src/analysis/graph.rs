@@ -101,12 +101,12 @@ pub fn graph(p: &Program) -> Graph {
             // Ein Trigger (v1.2) und ein Handle in einer Variablen haben
             // keinen Knoten: Der eine kommt spaeter, der andere nennt
             // seinen Strom erst zur Laufzeit.
-            let von = match s {
+            let from_at = match s {
                 StreamRef::Channel(c) => Node::Channel(*c),
                 StreamRef::Internal(k) => Node::Stream(*k),
                 StreamRef::Fired(_) | StreamRef::Var(_) => continue,
             };
-            edges.push(Edge { from: von, to: Node::Machine(id), kind: Kind::Reads });
+            edges.push(Edge { from: from_at, to: Node::Machine(id), kind: Kind::Reads });
         }
         for &f in &m.follows {
             edges.push(Edge { from: Node::Machine(f), to: Node::Machine(id), kind: Kind::Follows });
@@ -162,25 +162,25 @@ impl Graph {
             let id = MachineId(i as u32);
             let takt = if m.period == 1 { String::new() } else { format!("  (jeder {}. Tick)", m.period) };
             out.push(format!("  {}{takt}", m.name));
-            let mut zeilen = Vec::new();
+            let mut lines = Vec::new();
             for e in &self.edges {
                 match (&e.from, &e.to) {
                     (Node::Machine(f), Node::Machine(t)) if *t == id => {
-                        zeilen.push(format!("      {} {}", e.kind.word(), p.machines[f.index()].name));
+                        lines.push(format!("      {} {}", e.kind.word(), p.machines[f.index()].name));
                     }
-                    (von, Node::Machine(t)) if *t == id => {
-                        zeilen.push(format!("      {} {}", e.kind.word(), name_of(von, p)));
+                    (from_at, Node::Machine(t)) if *t == id => {
+                        lines.push(format!("      {} {}", e.kind.word(), name_of(from_at, p)));
                     }
                     (Node::Machine(f), zu) if *f == id => {
-                        zeilen.push(format!("      {} {}", e.kind.word(), name_of(zu, p)));
+                        lines.push(format!("      {} {}", e.kind.word(), name_of(zu, p)));
                     }
                     _ => {}
                 }
             }
-            if zeilen.is_empty() {
+            if lines.is_empty() {
                 out.push("      (ohne Kanten)".into());
             } else {
-                out.extend(zeilen);
+                out.extend(lines);
             }
         }
         let sim: Vec<String> = self

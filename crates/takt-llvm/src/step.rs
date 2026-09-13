@@ -121,7 +121,7 @@ fn write_step(
         // stehen die Outputs am Commit des Ticks auf seinen Werten.
         //
         // Der Trampolin steht je Blatt, weil das Ziel am Blatt haengt.
-        fault_path(st, *id, &Ziel { leaves, end: &end, conf: &slot }, &mut ctx, module)?;
+        fault_path(st, *id, &Jump { leaves, end: &end, conf: &slot }, &mut ctx, module)?;
     }
 
     module.label(&end);
@@ -417,22 +417,22 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     let kette: Vec<takt_mir::StateId> = machine::path_to(m, leaf);
     let mut koerper = vec![m.loop_block.clone()];
     koerper.extend(kette.iter().map(|id| m.states[id.index()].loop_block.clone()));
-    let ende = format!("init_ende_{}", m.name);
+    let end_at = format!("init_ende_{}", m.name);
     for b in &koerper {
         if let Err(e) = block(b, &mut ctx, module) {
             module.abort(mark);
             return Err(e);
         }
     }
-    module.void_inst(&format!("br label %{ende}"));
+    module.void_inst(&format!("br label %{end_at}"));
     // Der Fault-Pfad des Anfangszustands: Ein `check`, der schon im
     // Tick 0 scheitert, fuehrt zum Fault-Ziel (5.2 Regel 5). Ohne ihn
     // spraenge der Zweig ins Leere — die Marke steht nur im Schritt.
-    if let Err(e) = fault_path(st, leaf, &Ziel { leaves: &leaves, end: &ende, conf: &slot }, &mut ctx, module) {
+    if let Err(e) = fault_path(st, leaf, &Jump { leaves: &leaves, end: &end_at, conf: &slot }, &mut ctx, module) {
         module.abort(mark);
         return Err(e);
     }
-    module.label(&ende);
+    module.label(&end_at);
     // 9.4: Tick 0 schreibt den Zaehler fort „wie am Ende jedes Ticks"
     // (`System::init` ruft `advance_counters`). Ohne das misst der
     // erzeugte Code eine Frist um einen Tick zu lang: Der Interpreter
@@ -557,13 +557,13 @@ fn dispatch(
         // `-1` heisst „nichts untersucht" — dann bleibt der Cursor stehen.
         let ex_ptr = m.inst("alloca i64");
         m.void_inst(&format!("store i64 -1, ptr {ex_ptr}"));
-        let (kopf, rumpf, ende) = (format!("strom{k}"), format!("strom{k}_rumpf"), format!("strom{k}_ende"));
-        m.void_inst(&format!("br label %{kopf}"));
-        m.label(&kopf);
+        let (head, body, end_at) = (format!("strom{k}"), format!("strom{k}_rumpf"), format!("strom{k}_ende"));
+        m.void_inst(&format!("br label %{head}"));
+        m.label(&head);
         let i = m.inst(&format!("load i32, ptr {i_ptr}"));
-        let weiter = m.inst(&format!("icmp slt i32 {i}, {n}"));
-        m.void_inst(&format!("br i1 {weiter}, label %{rumpf}, label %{ende}"));
-        m.label(&rumpf);
+        let go_on = m.inst(&format!("icmp slt i32 {i}, {n}"));
+        m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{end_at}"));
+        m.label(&body);
         // Das Element wird in die Bindung geschrieben; ohne Bindung in
         // einen Scratch, weil `takt_stream_at` einen Platz braucht.
         let hs: Vec<&takt_mir::machine::Handler> = handlers.iter().filter(|h| h.stream == stream).collect();
@@ -586,8 +586,8 @@ fn dispatch(
         let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
         let next = m.inst(&format!("add i32 {cur_i}, 1"));
         m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
-        m.void_inst(&format!("br label %{kopf}"));
-        m.label(&ende);
+        m.void_inst(&format!("br label %{head}"));
+        m.label(&end_at);
         // 9.6, `advance_cursors()`: `cur[s, m] = examined + 1`. Der
         // Cursor steht im Zustand der Maschine, nicht im Strom — nur der
         // erzeugte Code kann ihn schreiben. `takt_stream_examined` meldet
@@ -595,11 +595,11 @@ fn dispatch(
         // Konsumenten bildet und den Puffer freigibt; beides ist noetig,
         // und 9.6 fuehrt es als zwei Schritte.
         let ex = m.inst(&format!("load i64, ptr {ex_ptr}"));
-        let etwas = m.inst(&format!("icmp sge i64 {ex}, 0"));
-        let weiter_cur = m.inst(&format!("add i64 {ex}, 1"));
+        let any_seen = m.inst(&format!("icmp sge i64 {ex}, 0"));
+        let next_cursor = m.inst(&format!("add i64 {ex}, 1"));
         // Ohne untersuchtes Element bleibt der Cursor, wo er stand.
-        let neu = m.inst(&format!("select i1 {etwas}, i64 {weiter_cur}, i64 {cur}"));
-        m.void_inst(&format!("store i64 {neu}, ptr {cur_ptr}"));
+        let new_val = m.inst(&format!("select i1 {any_seen}, i64 {next_cursor}, i64 {cur}"));
+        m.void_inst(&format!("store i64 {new_val}, ptr {cur_ptr}"));
         let _ = end;
     }
     Ok(())
@@ -656,13 +656,13 @@ fn handler_chain(
 ) -> Result<(), NotYet> {
     let k = ctx.next_label();
     let name = &ctx.machine.name;
-    let ende = format!("handler{k}_{name}_ende");
+    let end_at = format!("handler{k}_{name}_ende");
     for (n, h) in hs.iter().enumerate() {
         let Some((kind, pattern)) = &h.pattern else {
             // Catch-all: Er laeuft immer, und die Kette endet hier.
             block(&h.body.clone(), ctx, m)?;
-            m.void_inst(&format!("br label %{ende}"));
-            m.label(&ende);
+            m.void_inst(&format!("br label %{end_at}"));
+            m.label(&end_at);
             return Ok(());
         };
         let takt_mir::pattern::Pattern::Text { pieces, dfa } = pattern else {
@@ -689,15 +689,15 @@ fn handler_chain(
             (_, true, _) => pattern_matches(pieces, text, h, ctx, m)?,
             (_, false, _) => pattern_has(pieces, text, h, ctx, m)?,
         };
-        let (dann, sonst) = (format!("handler{k}_{n}_{name}"), format!("handler{k}_{n}_{name}_sonst"));
-        m.void_inst(&format!("br i1 {hit}, label %{dann}, label %{sonst}"));
-        m.label(&dann);
+        let (then_l, else_l) = (format!("handler{k}_{n}_{name}"), format!("handler{k}_{n}_{name}_sonst"));
+        m.void_inst(&format!("br i1 {hit}, label %{then_l}, label %{else_l}"));
+        m.label(&then_l);
         block(&h.body.clone(), ctx, m)?;
-        m.void_inst(&format!("br label %{ende}"));
-        m.label(&sonst);
+        m.void_inst(&format!("br label %{end_at}"));
+        m.label(&else_l);
     }
-    m.void_inst(&format!("br label %{ende}"));
-    m.label(&ende);
+    m.void_inst(&format!("br label %{end_at}"));
+    m.label(&end_at);
     Ok(())
 }
 
@@ -705,19 +705,19 @@ fn handler_chain(
 ///
 /// Die Bindung ist ein Record, dessen erste Felder die Platzhalter sind;
 /// dahinter stehen `t`, `seq` und der Inhalt.
-struct Bindung {
+struct Binding {
     /// Die Variable im Zustand der Maschine.
     var: takt_mir::VarId,
     /// Ihr Typ, fuer die Adressrechnung.
     record: crate::ty::LlvmType,
     /// Index und Typ je Capture, in Musterreihenfolge.
-    felder: Vec<(u32, crate::ty::LlvmType)>,
+    fields: Vec<(u32, crate::ty::LlvmType)>,
 }
 
-impl Bindung {
+impl Binding {
     /// `None` heisst: keine Bindung, also nichts abzulegen — der
     /// Vergleich laeuft trotzdem.
-    fn of(h: &takt_mir::machine::Handler, ctx: &Ctx<'_>) -> Option<Bindung> {
+    fn of(h: &takt_mir::machine::Handler, ctx: &Ctx<'_>) -> Option<Binding> {
         let var = h.binding?;
         let ty = ctx.machine.vars.get(var.index())?.ty;
         let record = crate::ty::lower(ty, ctx.program)?;
@@ -726,10 +726,10 @@ impl Bindung {
         let defs = &ctx.program.records.get(r.index())?.fields;
         // Die Captures stehen vorn; `t`, `seq` und `text`/`data`
         // schliessen an. Die Grenze ist der erste dieser Namen.
-        let ende =
+        let end_at =
             defs.iter().position(|d| matches!(d.name.as_str(), "t" | "seq" | "text" | "data")).unwrap_or(defs.len());
-        let felder = (0..ende).filter_map(|i| fields.get(i).map(|f| (i as u32, f.clone()))).collect();
-        Some(Bindung { var, record, felder })
+        let fields = (0..end_at).filter_map(|i| fields.get(i).map(|f| (i as u32, f.clone()))).collect();
+        Some(Binding { var, record, fields })
     }
 
     /// Der Platz im Zustand, an den die Werte gehen.
@@ -739,15 +739,15 @@ impl Bindung {
 }
 
 /// Was `captures::walk` braucht, oder nichts.
-fn ziel<'a>(
-    b: &'a Option<Bindung>,
+fn target<'a>(
+    b: &'a Option<Binding>,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
-) -> Result<Option<crate::captures::Ziel<'a>>, NotYet> {
+) -> Result<Option<crate::captures::Target<'a>>, NotYet> {
     match b {
         Some(b) => {
             let slot = b.slot(ctx, m)?;
-            Ok(Some(crate::captures::Ziel { slot, record: &b.record, felder: &b.felder }))
+            Ok(Some(crate::captures::Target { slot, record: &b.record, fields: &b.fields }))
         }
         None => Ok(None),
     }
@@ -761,15 +761,15 @@ fn pattern_matches(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<crate::emit::Reg, NotYet> {
-    let b = Bindung::of(h, ctx);
-    let wohin = ziel(&b, ctx, m)?;
-    let null = m.inst("add i32 0, 0");
-    let (ok, at) = crate::captures::walk(pieces, text, wohin.as_ref(), null, m)?;
+    let b = Binding::of(h, ctx);
+    let into = target(&b, ctx, m)?;
+    let zero = m.inst("add i32 0, 0");
+    let (ok, at) = crate::captures::walk(pieces, text, into.as_ref(), zero, m)?;
     // Der ganze Text: Was hinter dem Durchlauf steht, darf nicht sein.
     let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
-    let ganz = m.inst(&format!("icmp eq i32 {at}, {len}"));
-    Ok(m.inst(&format!("and i1 {ok}, {ganz}")))
+    let whole = m.inst(&format!("icmp eq i32 {at}, {len}"));
+    Ok(m.inst(&format!("and i1 {ok}, {whole}")))
 }
 
 /// `has P`: Das Muster darf an jeder Stelle beginnen (8.7).
@@ -784,36 +784,36 @@ fn pattern_has(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<crate::emit::Reg, NotYet> {
-    let b = Bindung::of(h, ctx);
-    let wohin = ziel(&b, ctx, m)?;
+    let b = Binding::of(h, ctx);
+    let into = target(&b, ctx, m)?;
     let k = m.next_label();
-    let (kopf, rumpf, fertig) = (format!("has{k}"), format!("has{k}_rumpf"), format!("has{k}_fertig"));
+    let (head, body, done) = (format!("has{k}"), format!("has{k}_rumpf"), format!("has{k}_fertig"));
     let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
     let start_ptr = m.inst("alloca i32");
     m.void_inst(&format!("store i32 0, ptr {start_ptr}"));
     let hit_ptr = m.inst("alloca i1");
     m.void_inst(&format!("store i1 false, ptr {hit_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&kopf);
+    m.label(&head);
     let start = m.inst(&format!("load i32, ptr {start_ptr}"));
     // Auch hinter dem letzten Zeichen wird geprueft: Ein leeres Muster
     // passt am Ende (8.7).
-    let im_text = m.inst(&format!("icmp sle i32 {start}, {len}"));
+    let in_text = m.inst(&format!("icmp sle i32 {start}, {len}"));
     let bisher = m.inst(&format!("load i1, ptr {hit_ptr}"));
-    let offen = m.inst(&format!("xor i1 {bisher}, true"));
-    let suchen = m.inst(&format!("and i1 {im_text}, {offen}"));
-    m.void_inst(&format!("br i1 {suchen}, label %{rumpf}, label %{fertig}"));
+    let open_still = m.inst(&format!("xor i1 {bisher}, true"));
+    let searching = m.inst(&format!("and i1 {in_text}, {open_still}"));
+    m.void_inst(&format!("br i1 {searching}, label %{body}, label %{done}"));
 
-    m.label(&rumpf);
-    let (ok, _) = crate::captures::walk(pieces, text, wohin.as_ref(), start, m)?;
+    m.label(&body);
+    let (ok, _) = crate::captures::walk(pieces, text, into.as_ref(), start, m)?;
     m.void_inst(&format!("store i1 {ok}, ptr {hit_ptr}"));
-    let ni = m.inst(&format!("add i32 {start}, 1"));
-    m.void_inst(&format!("store i32 {ni}, ptr {start_ptr}"));
-    m.void_inst(&format!("br label %{kopf}"));
+    let next_i = m.inst(&format!("add i32 {start}, 1"));
+    m.void_inst(&format!("store i32 {next_i}, ptr {start_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
 
-    m.label(&fertig);
+    m.label(&done);
     Ok(m.inst(&format!("load i1, ptr {hit_ptr}")))
 }
 
@@ -832,12 +832,12 @@ fn pattern_has(
 fn fault_path(
     st: &StateStruct,
     from: takt_mir::StateId,
-    ziel: &Ziel<'_>,
+    target: &Jump<'_>,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
     let machine_def = ctx.machine;
-    let (leaves, end, conf_slot) = (ziel.leaves, ziel.end, ziel.conf);
+    let (leaves, end, conf_slot) = (target.leaves, target.end, target.conf);
     m.label(&format!("fault_{}_{}", machine_def.name, from.index()));
     // Der Fault wird vorgemerkt; `pending` traegt ihn fuer die
     // Abort-Phase (5.4), die die Runtime fuehrt.
@@ -890,7 +890,7 @@ fn fault_path(
 /// Die drei gehoeren zusammen: Sie beschreiben denselben Zweig, und
 /// einzeln durchgereicht waeren sie drei Gelegenheiten, den falschen zu
 /// nehmen.
-struct Ziel<'a> {
+struct Jump<'a> {
     /// Die Blattzustaende der Maschine, fuer die Nummer des Ziels.
     leaves: &'a [StateId],
     /// Die Marke am Ende des Schritts.

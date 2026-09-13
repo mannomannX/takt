@@ -11,16 +11,16 @@ use takt_rt_core::{Policy, Profile, Program, Runtime, Sink, Tick, Watchdog};
 use takt_rt_linux::RealtimeClock;
 
 #[derive(Default)]
-struct Leer;
+struct Empty;
 
-impl Program for Leer {
+impl Program for Empty {
     fn tick(&mut self, _k: u64, _now: i64) {}
 }
 
 #[derive(Default)]
-struct KeinWatchdog;
+struct NoWatchdog;
 
-impl Watchdog for KeinWatchdog {
+impl Watchdog for NoWatchdog {
     fn kick(&mut self) {}
 }
 
@@ -41,7 +41,7 @@ fn main() {
     const N: u64 = 1000;
 
     let mut rt =
-        Runtime::new(Leer, RealtimeClock::new(), KeinWatchdog, Drift::default(), Profile::LINUX_RT, T0, Policy::Fault);
+        Runtime::new(Empty, RealtimeClock::new(), NoWatchdog, Drift::default(), Profile::LINUX_RT, T0, Policy::Fault);
     rt.run(N);
 
     let mut drift = std::mem::take(&mut rt.sink.0);

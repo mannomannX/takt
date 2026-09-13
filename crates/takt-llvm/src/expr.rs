@@ -319,7 +319,7 @@ fn access(
             // und der Wert ist ohnehin schon geladen.
             // Bei einem Wrapper ist der Wert das Feld 0, nicht der
             // Wrapper selbst (3.8).
-            let wert = match (&base.kind, &x.ty) {
+            let value_of = match (&base.kind, &x.ty) {
                 (ExprKind::Input { .. }, _) => x.clone(),
                 (_, LlvmType::Struct(_)) => {
                     let v = m.inst(&format!("extractvalue {} {}, 0", x.ty, x.value));
@@ -329,7 +329,7 @@ fn access(
             };
             let r = m.inst(&format!(
                 "select i1 {}, {} {}, {} {}",
-                valid.value, wert.ty, wert.value, fallback.ty, fallback.value
+                valid.value, value_of.ty, value_of.value, fallback.ty, fallback.value
             ));
             Ok(Lowered { value: r.to_string(), ty: want.clone() })
         }
@@ -603,9 +603,9 @@ fn propagate_fault(m: &mut Module, vars: &dyn Vars) -> Result<(), NotYet> {
     };
     let flag = m.inst(&format!("load i8, ptr @{}", crate::abi::Abi::FAULT_FLAG));
     let ok = m.inst(&format!("icmp eq i8 {flag}, 0"));
-    let weiter = format!("nach_aufruf{}", m.next_label());
-    m.void_inst(&format!("br i1 {ok}, label %{weiter}, label %{target}"));
-    m.label(&weiter);
+    let go_on = format!("nach_aufruf{}", m.next_label());
+    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
+    m.label(&go_on);
     Ok(())
 }
 
@@ -639,11 +639,11 @@ fn runtime_check(
                 // Pruefung schluege immer fehl. Der Wert *kann* sie dann
                 // nicht verletzen — die Analyse hat die Schranke schon im
                 // Typ (3.4), und ein Zweig waere toter Code.
-                let passt = |v: i64| {
+                let fits = |v: i64| {
                     let b = i64::from(*bits);
                     b >= 64 || (v >= -(1i64 << (b - 1)) && v < (1i64 << (b - 1)))
                 };
-                if !passt(lo) || !passt(hi) {
+                if !fits(lo) || !fits(hi) {
                     return Ok(());
                 }
                 m.void_inst(&format!("; Range {lo}..{hi} auf {}", value.ty));
@@ -691,9 +691,9 @@ fn runtime_check(
     let Some(target) = vars.fault_label() else {
         return Err(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" });
     };
-    let weiter = format!("geprueft_{}_{}", kind_name(kind), m.next_label());
-    m.void_inst(&format!("br i1 {bedingung}, label %{weiter}, label %{target}"));
-    m.label(&weiter);
+    let go_on = format!("geprueft_{}_{}", kind_name(kind), m.next_label());
+    m.void_inst(&format!("br i1 {bedingung}, label %{go_on}, label %{target}"));
+    m.label(&go_on);
     Ok(())
 }
 
@@ -747,9 +747,9 @@ fn valid_or_fault(channel: takt_mir::ChannelId, m: &mut Module, vars: &dyn Vars)
     let q = vars.quality(channel, crate::image::Slot::Quality, m).ok_or(NotYet { what: "Qualitaet im Abbild" })?;
     // `.valid` ist `Good` oder `Suspect` (3.5), also `<= SUSPECT`.
     let ok = m.inst(&format!("icmp sle {} {}, {}", q.ty, q.value, crate::image::quality::SUSPECT));
-    let weiter = format!("gueltig{}", m.next_label());
-    m.void_inst(&format!("br i1 {ok}, label %{weiter}, label %{target}"));
-    m.label(&weiter);
+    let go_on = format!("gueltig{}", m.next_label());
+    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
+    m.label(&go_on);
     Ok(())
 }
 
@@ -895,9 +895,9 @@ fn index_of(
             let a = m.inst(&format!("icmp sge {} {}, 0", i.ty, i.value));
             let b = m.inst(&format!("icmp slt {} {}, {grenze}", i.ty, i.value));
             let ok = m.inst(&format!("and i1 {a}, {b}"));
-            let weiter = format!("index_ok{}", m.next_label());
-            m.void_inst(&format!("br i1 {ok}, label %{weiter}, label %{target}"));
-            m.label(&weiter);
+            let go_on = format!("index_ok{}", m.next_label());
+            m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
+            m.label(&go_on);
         }
     }
     // Der Wert liegt als Register vor, nicht im Speicher; ein

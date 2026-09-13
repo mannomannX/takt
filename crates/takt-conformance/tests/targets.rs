@@ -34,12 +34,12 @@ const KORPUS: [&str; 5] =
 /// „derselbe Trace auf jeder bis dahin unterstuetzten Zielklasse", und
 /// M4 traegt zwei. Ohne sie hier waere der Exit fuer die halbe
 /// Zielmenge behauptet statt belegt.
-const BEISPIELE: [&str; 5] = ["14_1", "14_2", "14_3", "14_4", "14_5"];
+const EXAMPLES: [&str; 5] = ["14_1", "14_2", "14_3", "14_4", "14_5"];
 
 const TICKS: u64 = 20;
 
 /// Ein Referenzbeispiel aus `corpus-try/sim/`.
-fn beispiel(name: &str) -> takt_mir::Program {
+fn example(name: &str) -> takt_mir::Program {
     lade(&format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/sim/{}/program.takt"), name))
 }
 
@@ -135,50 +135,50 @@ fn x86_64_and_aarch64_agree() {
         eprintln!("uebersprungen: aarch64-Werkzeugkette fehlt (tools/Dockerfile.linux baut sie)");
         return;
     }
-    let mut fehler = Vec::new();
-    let mut geprueft = 0;
+    let mut errors = Vec::new();
+    let mut checked = 0;
     // Die Korpusprogramme: je eine Maschine, wie in `differential.rs`.
     for name in KORPUS {
         let p = corpus(name);
         let Some(machine) = p.machines.first().map(|m| m.name.clone()) else { continue };
-        if vergleiche(name, &p, Some(&machine), &mut fehler) {
-            geprueft += 1;
+        if compare_all(name, &p, Some(&machine), &mut errors) {
+            checked += 1;
         }
     }
     // Die Referenzbeispiele: alle Maschinen, weil fuenf von ihnen ein
     // Plant-Modell haben (8.3).
-    for name in BEISPIELE {
-        let p = beispiel(name);
-        if vergleiche(name, &p, None, &mut fehler) {
-            geprueft += 1;
+    for name in EXAMPLES {
+        let p = example(name);
+        if compare_all(name, &p, None, &mut errors) {
+            checked += 1;
         }
     }
-    assert!(fehler.is_empty(), "{}", fehler.join("\n\n"));
-    assert_eq!(geprueft, KORPUS.len() + BEISPIELE.len(), "es wurden nicht alle Programme auf beiden Zielen geprueft");
+    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
+    assert_eq!(checked, KORPUS.len() + EXAMPLES.len(), "es wurden nicht alle Programme auf beiden Zielen geprueft");
 }
 
 /// Laeuft ein Programm auf beiden Zielen und vergleicht die Traces.
 ///
 /// Liefert `true`, wenn der Vergleich zustande kam — ein Programm, das
 /// sich nicht bauen laesst, ist ein Fehler und kein Vergleich.
-fn vergleiche(name: &str, p: &takt_mir::Program, machine: Option<&str>, fehler: &mut Vec<String>) -> bool {
+fn compare_all(name: &str, p: &takt_mir::Program, machine: Option<&str>, errors: &mut Vec<String>) -> bool {
     let a = match run_for(Target::X86_64_LINUX, p, name, machine) {
         Ok(t) => t,
         Err(e) => {
-            fehler.push(format!("{name} (x86-64): {e}"));
+            errors.push(format!("{name} (x86-64): {e}"));
             return false;
         }
     };
     let b = match run_for(Target::AARCH64_LINUX, p, name, machine) {
         Ok(t) => t,
         Err(e) => {
-            fehler.push(format!("{name} (aarch64): {e}"));
+            errors.push(format!("{name} (aarch64): {e}"));
             return false;
         }
     };
     if a != b {
         let erste = a.lines().zip(b.lines()).position(|(x, y)| x != y).unwrap_or(0);
-        fehler.push(format!(
+        errors.push(format!(
             "{name}: die Ziele weichen ab, zuerst in Zeile {}\n  x86-64  {}\n  aarch64 {}",
             erste + 1,
             a.lines().nth(erste).unwrap_or(""),

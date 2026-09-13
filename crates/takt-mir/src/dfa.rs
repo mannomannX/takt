@@ -190,8 +190,8 @@ fn step(patterns: &[&[PatternPiece]], set: &Set, class: u32, classes: &[u8]) -> 
                 // Ein Zeichen der Klasse bleibt im Platzhalter; das erste
                 // ausserhalb beendet ihn. Die Mehrdeutigkeitsregel (8.7)
                 // garantiert, dass das die gesuchte Grenze ist.
-                let passt = (0..=255u8).any(|b| u32::from(classes[b as usize]) == class && in_class(kind, b));
-                if passt {
+                let fits = (0..=255u8).any(|b| u32::from(classes[b as usize]) == class && in_class(kind, b));
+                if fits {
                     // `offset = 1` merkt: mindestens ein Zeichen gelesen.
                     out.insert(Position { offset: 1, ..*pos });
                     advance(patterns, *pos, &mut out);
