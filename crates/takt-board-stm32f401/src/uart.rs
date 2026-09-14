@@ -36,16 +36,19 @@ impl Telemetry {
     ) -> Result<Telemetry, takt_board_support::uart::BaudError> {
         rcc.ahb1enr().modify(|_, w| w.gpioaen().set_bit());
         rcc.apb2enr().modify(|_, w| w.usart1en().set_bit());
+        // Errata: zwei APB-Takte Verzoegerung, siehe lib.rs.
+        let _ = rcc.apb2enr().read();
 
-        // PA9 und PA10 auf die Alternativfunktion 7 (USART1).
-        gpioa.moder().modify(|_, w| unsafe {
-            w.moder9().bits(0b10);
-            w.moder10().bits(0b10)
-        });
-        gpioa.afrh().modify(|_, w| unsafe {
-            w.afrh9().bits(7);
-            w.afrh10().bits(7)
-        });
+        // **Nur PA9 (TX).** PA10 (RX) bleibt unberuehrt: Die Telemetrie
+        // sendet, sie empfaengt nichts. Einen Pin als Alternativfunktion
+        // zu belegen, ohne den Empfaenger einzuschalten, hiesse ihn zu
+        // besetzen, ohne ihn zu benutzen — und ein floating RX erzeugt
+        // Framing-Fehler, sobald jemand das Register liest.
+        gpioa.moder().modify(|_, w| unsafe { w.moder9().bits(0b10) });
+        gpioa.afrh().modify(|_, w| unsafe { w.afrh9().bits(7) });
+        // Hohe Flankensteilheit: Bei 115200 Baud unnoetig, bei 921600
+        // (die `takt-board-support` als erreichbar fuehrt) nicht mehr.
+        gpioa.ospeedr().modify(|_, w| unsafe { w.ospeedr9().bits(0b10) });
 
         // Der Teiler steht als Festkommazahl: obere 12 Bit ganzzahlig,
         // untere 4 als Sechzehntel. Die Rechnung liegt in

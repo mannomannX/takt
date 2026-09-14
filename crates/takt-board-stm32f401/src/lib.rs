@@ -145,13 +145,14 @@ pub fn init(
     board: Board,
     rcc: &stm32f4::stm32f401::RCC,
     flash: &stm32f4::stm32f401::FLASH,
+    pwr: &stm32f4::stm32f401::PWR,
     tim2: &stm32f4::stm32f401::TIM2,
     tick_ns: i64,
 ) -> Result<Tim2Tick, InitError> {
     let counts = takt_board_support::counts_for(TIMER_HZ, tick_ns).map_err(InitError::Period)?;
     let psc = takt_board_support::prescaler_for(CORE_HZ, TIMER_HZ).ok_or(InitError::ClockNotReady)?;
     let pllm = takt_board_support::pll::divider_m(board.hse_hz).ok_or(InitError::UnsupportedCrystal)?;
-    clocks(rcc, flash, pllm)?;
+    clocks(rcc, flash, pwr, pllm)?;
     start_tim2(rcc, tim2, psc, counts);
     Ok(Tim2Tick::new(TIMER_HZ, counts, CORE_HZ))
 }
@@ -161,17 +162,62 @@ pub fn init(
 /// Die Teiler kommen aus `takt-board-support::pll`, wo die Kette gegen
 /// beide gaengigen Quarze geprueft ist. Hier steht nur, wie sie in die
 /// Register kommen.
-fn clocks(rcc: &stm32f4::stm32f401::RCC, flash: &stm32f4::stm32f401::FLASH, pllm: u8) -> Result<(), InitError> {
-    // Flash braucht Wartezyklen, bevor der Takt steigt — andersherum
-    // liest der Kern Befehle, die noch nicht da sind.
+fn clocks(
+    rcc: &stm32f4::stm32f401::RCC,
+    flash: &stm32f4::stm32f401::FLASH,
+    pwr: &stm32f4::stm32f401::PWR,
+    pllm: u8,
+) -> Result<(), InitError> {
+    // **Erst der Spannungsregler.** Der F401 erreicht 84 MHz nur im
+    // Regler-Bereich 1 (`VOS = 0b10`); im Standardbereich 2 liegt die
+    // Grenze bei 60 MHz. Die Folge eines Versaeumnisses ist kein Fehler,
+    // sondern Unzuverlaessigkeit: Der Kern laeuft, meist sogar lange,
+    // und faellt bei Temperatur oder Spannungsschwankung aus.
+    rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
+    // Der Dummy-Read ist kein Aberglaube: Zwischen dem Freigeben eines
+    // Peripherietakts und dem ersten Registerzugriff liegen bis zu zwei
+    // APB-Takte (ST-Errata „Delay after an RCC peripheral clock
+    // enabling"). Ohne ihn kann der folgende Schreibvorgang verloren
+    // gehen — und zwar je nach Optimierungsgrad mal ja, mal nein.
+    let _ = rcc.apb1enr().read();
+    pwr.cr().modify(|_, w| unsafe { w.vos().bits(0b10) });
+
+    // Dann die Flash-Wartezyklen, bevor der Takt steigt — andersherum
+    // liest der Kern Befehle, die noch nicht da sind. Bei 84 MHz und
+    // 3,3 V sind zwei Zyklen gefordert (RM0368, Tabelle 6).
+    //
+    // **Und zurueckgelesen**, wie RM0368 es verlangt: Kommt der Wert
+    // nicht an und der Takt steigt trotzdem, liest der Kern Befehle aus
+    // einem Flash, der noch nicht geliefert hat — ein HardFault beim
+    // ersten Zugriff, sporadisch und schwer zu finden.
     flash.acr().modify(|_, w| unsafe { w.latency().bits(2) });
+    if !wait_for(|| flash.acr().read().latency().bits() == 2) {
+        return Err(InitError::ClockNotReady);
+    }
+
+    // **Auf HSI zurueck und die PLL aus, bevor sie neu gesetzt wird.**
+    // `PLLCFGR` ist schreibgeschuetzt, solange die PLL laeuft — und nach
+    // einem Sprung aus dem HID-Bootloader laeuft sie: Der Bootloader
+    // braucht sie fuer USB. Ohne diesen Schritt verpufft die
+    // Konfiguration still, der Kern behaelt die Frequenz des Bootloaders,
+    // und `CORE_HZ` luegt. Jede Zeitmessung waere dann falsch, ohne dass
+    // irgendetwas auffiele — genau die Sorte Fehler, gegen die 7.1 die
+    // gemessene Periode stellt.
+    rcc.cfgr().modify(|_, w| unsafe { w.sw().bits(0b00) });
+    if !wait_for(|| rcc.cfgr().read().sws().bits() == 0b00) {
+        return Err(InitError::ClockNotReady);
+    }
+    rcc.cr().modify(|_, w| w.pllon().clear_bit());
+    if !wait_for(|| rcc.cr().read().pllrdy().bit_is_clear()) {
+        return Err(InitError::ClockNotReady);
+    }
 
     rcc.cr().modify(|_, w| w.hseon().set_bit());
     if !wait_for(|| rcc.cr().read().hserdy().bit_is_set()) {
         return Err(InitError::ClockNotReady);
     }
 
-    let pllp = takt_board_support::pll::divider_p().ok_or(InitError::ClockNotReady)?;
+    let pllp = takt_board_support::pll::divider_p().ok_or(InitError::UnsupportedCrystal)?;
     rcc.pllcfgr().write(|w| unsafe {
         w.pllsrc().set_bit(); // HSE als Quelle
         w.pllm().bits(pllm);
@@ -187,7 +233,16 @@ fn clocks(rcc: &stm32f4::stm32f401::RCC, flash: &stm32f4::stm32f401::FLASH, pllm
     // APB1 auf 42 MHz (Teiler 2): Der F401 erlaubt dort hoechstens 42.
     // Die Timer an APB1 bekommen dafuer den doppelten Takt, also wieder
     // 84 MHz — deshalb rechnet `start_tim2` mit `CORE_HZ`.
-    rcc.cfgr().modify(|_, w| unsafe { w.ppre1().bits(0b100) });
+    //
+    // APB2 bleibt bei Teiler 1, also 84 MHz. Der Reset-Wert waere
+    // derselbe; er steht trotzdem hier, weil `Telemetry` den Takt als
+    // `CORE_HZ` uebergeben bekommt und diese Zeile die Zusage dazu ist.
+    // Ein Reset-Wert, auf den man sich stillschweigend verlaesst, ist
+    // eine Annahme ohne Beleg.
+    rcc.cfgr().modify(|_, w| unsafe {
+        w.ppre1().bits(0b100);
+        w.ppre2().bits(0b000)
+    });
     rcc.cfgr().modify(|_, w| unsafe { w.sw().bits(0b10) });
     if !wait_for(|| rcc.cfgr().read().sws().bits() == 0b10) {
         return Err(InitError::ClockNotReady);
@@ -210,12 +265,27 @@ fn wait_for(mut ready: impl FnMut() -> bool) -> bool {
 /// TIM2 als Tickquelle: Aufwaertszaehler mit Update-Interrupt.
 fn start_tim2(rcc: &stm32f4::stm32f401::RCC, tim2: &stm32f4::stm32f401::TIM2, psc: u16, counts: u32) {
     rcc.apb1enr().modify(|_, w| w.tim2en().set_bit());
+    let _ = rcc.apb1enr().read();
 
     tim2.psc().write(|w| unsafe { w.psc().bits(psc) });
     // Der Zaehler laeuft von 0 bis `arr`, das sind `arr + 1` Schritte.
     tim2.arr().write(|w| unsafe { w.bits(counts.saturating_sub(1)) });
+
     // Die neuen Werte uebernehmen, bevor der Zaehler laeuft.
     tim2.egr().write(|w| w.ug().set_bit());
+
+    // **Und das dabei gesetzte Flag wieder loeschen.** `ug` erzeugt ein
+    // Update-Ereignis — genau dasselbe, das der Ueberlauf spaeter
+    // erzeugt —, und es setzt `UIF`. Bliebe es stehen, feuerte die ISR
+    // sofort beim Freigeben des Interrupts, und der erste Tick kaeme vom
+    // Aufsetzen statt vom Timer. Die Periodenmessung haette damit einen
+    // sinnlosen ersten Wert, und die Tickzahl waere um eins verschoben.
+    //
+    // `write` mit Maske, weil `SR` ein `rc_w0`-Register ist: Nullen
+    // loeschen, Einsen lassen stehen. Hier ist ohnehin alles frisch, aber
+    // die Form bleibt dieselbe wie in der ISR.
+    tim2.sr().write(|w| unsafe { w.bits(!1) });
+
     tim2.dier().modify(|_, w| w.uie().set_bit());
     tim2.cr1().modify(|_, w| w.cen().set_bit());
 }

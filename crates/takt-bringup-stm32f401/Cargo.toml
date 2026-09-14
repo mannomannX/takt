@@ -22,7 +22,14 @@ takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 # Ohne sie fehlt dem Linker `_critical_section_1_0_acquire`.
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 # Der Startcode: Vektortabelle, `.data`-Kopie, `.bss`-Nullung, `#[entry]`.
-cortex-m-rt = "0.7"
+#
+# `set-vtor` ist hier **noetig, nicht optional**: Die Anwendung liegt
+# hinter dem Bootloader bei 0x0800_4000, der Kern liest seine
+# Interrupt-Vektoren aber ueber `VTOR`, das nach Reset auf 0x0800_0000
+# zeigt. Ohne das Feature spraenge der erste TIM2-Interrupt in den
+# Bootloader — das Programm liefe an, bis der Tick kommt, und dann waere
+# es weg. Ein Fehler, der wie ein Aufhaenger aussieht und keiner ist.
+cortex-m-rt = { version = "0.7", features = ["set-vtor"] }
 stm32f4 = { version = "0.16", features = ["stm32f401", "rt"] }
 
 # Ohne Panic-Handler linkt ein `no_std`-Binary nicht. `panic-halt` haelt
@@ -34,7 +41,13 @@ panic-halt = "1.0"
 # Ein Bring-up-Programm ist nur mit Optimierung brauchbar: Ohne sie
 # braucht ein Tick ein Vielfaches, und die Periodenmessung misst den
 # Debug-Modus statt die Hardware.
+[profile.dev]
+panic = "abort"
+
 [profile.release]
+# `abort` statt Abwickeln: Ohne `std` gibt es keinen Entwickler, der
+# einen Panic auffaengt, und der Abwickelcode kostet Flash fuer nichts.
+panic = "abort"
 codegen-units = 1
 debug = true
 lto = true

@@ -26,6 +26,7 @@ members = [
     "crates/takt-interp",
     "crates/takt-sema",
     "crates/takt-cli",
+    "crates/takt-flash-weact",
 ]
 
 [workspace.package]

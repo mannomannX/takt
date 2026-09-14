@@ -80,7 +80,15 @@ fn TIM2() {
     let now = cycles::now();
     let elapsed = now.wrapping_sub(LAST_STAMP.swap(now, Ordering::Relaxed));
 
-    tim2.sr().modify(|_, w| w.uif().clear_bit());
+    // **`write` mit Maske, nicht `modify`.** `TIMx_SR` ist `rc_w0`:
+    // Eine Null loescht, eine Eins laesst stehen. Ein `modify` liest
+    // zuerst und schriebe ein Flag, das zwischen Lesen und Schreiben
+    // gesetzt wurde, mit einer Null zurueck — es waere weg, ohne dass es
+    // jemand gesehen hat. Heute ist nur `UIF` aktiv, aber die
+    // Compare-Kanaele fuer `at` (7.5) kommen, und dann verloere dieser
+    // Handler still ihre Ereignisse. Dieselbe Falle beschreibt FB-11 fuer
+    // die Registerfeld-Zugriffsarten.
+    tim2.sr().write(|w| unsafe { w.bits(!1) });
     tick::on_timer_interrupt(elapsed);
 }
 
@@ -90,7 +98,7 @@ fn main() -> ! {
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
     let board = Board::WEACT_BLACKPILL;
 
-    let mut clock = match takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.TIM2, TICK_NS) {
+    let mut clock = match takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, TICK_NS) {
         Ok(c) => c,
         // Ohne Takt gibt es keine Telemetrie, mit der man es melden
         // koennte — also bleibt die LED als einziges Signal. Sie an zu

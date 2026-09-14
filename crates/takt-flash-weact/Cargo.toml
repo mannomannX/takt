@@ -1,0 +1,17 @@
+[package]
+name = "takt-flash-weact"
+version = "0.1.0"
+description = "Takt: Flash-Werkzeug fuer den WeAct HID-Bootloader (STM32)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# `hidapi` spricht HID ueber die Betriebssystem-Schnittstelle. Es bringt
+# `unsafe` in seinen eigenen Kisten mit (FFI auf die HID-Bibliothek des
+# Systems); das workspace-weite `forbid` (13.4) gilt fuer eigenen Code,
+# und dieses Crate selbst schreibt keines.
+hidapi = "2.6"
+
+[lints]
+workspace = true

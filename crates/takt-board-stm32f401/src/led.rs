@@ -21,6 +21,8 @@ impl Led {
     /// unterstuetzt, weil die bekannten F401-Boards ihre LED dort haben.
     pub fn new(gpioc: GPIOC, rcc: &RCC, board: crate::Board) -> Led {
         rcc.ahb1enr().modify(|_, w| w.gpiocen().set_bit());
+        // Errata: zwei APB-Takte Verzoegerung, siehe lib.rs.
+        let _ = rcc.ahb1enr().read();
         let pin = board.led.1;
         // Ausgang (0b01) im Moder-Register, zwei Bits je Pin.
         gpioc.moder().modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << (pin * 2))) | (0b01 << (pin * 2))) });
