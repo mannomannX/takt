@@ -86,7 +86,7 @@ SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing 
 SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),fertig
 SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),fertig
 SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig
-SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),teilweise
+SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M5 (Embedded),teilweise
 SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M5 (Embedded),offen
 SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,je Meilenstein,offen
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),fertig
@@ -560,7 +560,7 @@ SC-8,Statische Prüfung,10,"Maschinen: eindeutige Zustandsnamen, `initial` vorha
 SC-9,Statische Prüfung,10,Fault-Wald azyklisch; `FAULTED` erreichbar; Guards der Transitionen aus `FAULTED` ohne implizite Prüfungen,F,M3 (Gate),fertig
 SC-10,Statische Prüfung,10,Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige,W,M3 (Gate),fertig
 SC-11,Statische Prüfung,10,Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick,F,M3 (Gate),fertig
-SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M3 (Gate),teilweise
+SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M5 (Embedded),teilweise
 SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle,F,M3 (Gate),fertig
 SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),fertig
 SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden",W,M3 (Gate),fertig
@@ -570,8 +570,8 @@ SC-18,Statische Prüfung,10,"Muster: Wohlgeformtheit, Mehrdeutigkeitsregel (8.7)
 SC-19,Statische Prüfung,10,`match` erschöpfend; Variantenfelder vollständig gebunden,F,M3 (Gate),fertig
 SC-20,Statische Prüfung,10,`send`: statische Summe der Höchstlängen je Aktivierung ≤ `capacity`,F,M3 (Gate),fertig
 SC-21,Statische Prüfung,10,`at`/`pulse`: Block enthält nur Zuweisungen an skalare Outputs; `T` vom Typ Duration; K_o,F,M3 (Gate),fertig
-SC-22,Statische Prüfung,10,"`idle`: keine `loop:`/Handler in Zustand und Vorfahren; Guards nur über Wake-Quellen, Konstanten, Params, Maschinenvariablen",F,M3 (Gate),definiert
-SC-23,Statische Prüfung,10,"`persist`: POD-Typ, Maschinenebene, nicht in Szenarien; Typ-Hash stabil",F,M3 (Gate),definiert
+SC-22,Statische Prüfung,10,"`idle`: keine `loop:`/Handler in Zustand und Vorfahren; Guards nur über Wake-Quellen, Konstanten, Params, Maschinenvariablen",F,M5 (Embedded),definiert
+SC-23,Statische Prüfung,10,"`persist`: POD-Typ, Maschinenebene, nicht in Szenarien; Typ-Hash stabil",F,M5 (Embedded),definiert
 SC-24,Statische Prüfung,10,"Shift-Beträge, `as`-Konversionen, `vec`-Indizes, Slices: Range beweisbar oder impliziter Check",W,M3 (Gate),fertig
 SC-25,Statische Prüfung,10,"Zustandslokale und gehobene Variablen (Sequenz-`var`, Captures): Definite Assignment je Eintritt",F,M3 (Gate),teilweise
 SC-26,Statische Prüfung,10,Szenarien schreiben nur `sim`-Outputs; Single-Writer gegenüber Modellmaschinen,F,M3 (Gate),definiert
@@ -612,8 +612,8 @@ SC-60,Statische Prüfung,10,"Channel-Bindung gegen die Hardware-Konfiguration (8
 SC-61,Statische Prüfung,10,"`check c, ""…"" within d`: Die gerechnete Safe-State-Latenz (Satz 9.4.5) hält die geforderte Frist ein. Verglichen wird in Ticks (`d / T₀`); die Meldung nennt die Aufschlüsselung nach Erkennung, Bestätigung, Fault-Pfad und Commit, weil die Zahl sonst nicht zu verbessern ist",F,M3 (Gate),fertig
 SC-62,Statische Prüfung,10,"`machine … with budget = {ram = …}`: Der gerechnete Speicher der Maschine (11.5, mit Overlay) liegt im deklarierten Budget. `wcet` braucht die Kalibrierung (13.8) und meldet bis dahin seine Stufe",F,M3 (Gate),fertig
 SC-63,Statische Prüfung,10,"Zwei Lints ohne eigene Syntax: (a) `alert` und `check` mit **derselben** Bedingung im selben Block — die Polaritaet ist entgegengesetzt gemeint (5.6), und weil beide Zeilen gleich aussehen, faellt die Verwechslung sonst niemandem auf; (b) ein `profile`, das einen `param` nicht nennt — er nimmt still seinen Default, und das ist beim Lesen nicht von der Absicht zu unterscheiden (4.6)",W,M3 (Gate),fertig
-OBL-T1,Beweisverpflichtung,9.4.2,T1,,M1/M2 (Interpreter),offen
-OBL-T2,Beweisverpflichtung,9.4.2,T2,,M1/M2 (Interpreter),offen
+OBL-T1,Beweisverpflichtung,9.4.2,T1,,M1/M2 (Interpreter),rationale
+OBL-T2,Beweisverpflichtung,9.4.2,T2,,M1/M2 (Interpreter),fertig
 OBL-T3,Beweisverpflichtung,9.4.2,T3,,M1/M2 (Interpreter),fertig
 OBL-T4,Beweisverpflichtung,9.4.2,T4,,M1/M2 (Interpreter),fertig
 OBL-T5,Beweisverpflichtung,9.4.2,T5,,M1/M2 (Interpreter),fertig
@@ -721,10 +721,10 @@ THM-Lemma-9.3.1,Satz/Lemma,9.3.1,Lemma 9.3.1,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.1,Satz/Lemma,9.4.1,Satz 9.4.1,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),fertig
 THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),fertig
-PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 (Interpreter),offen
+PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 (Interpreter),rationale
 THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M4 (Codegen),fertig
 THM-Satz-9.4.5,Satz/Lemma,9.4.5,Satz 9.4.5,,M1/M2 (Interpreter),fertig
-PAR-9.4-Was_der_Satz_nicht_sagt,Absatz/Regel,9.4,Was der Satz nicht sagt,,M1/M2 (Interpreter),offen
+PAR-9.4-Was_der_Satz_nicht_sagt,Absatz/Regel,9.4,Was der Satz nicht sagt,,M1/M2 (Interpreter),rationale
 PAR-9.4-Auszahlung,Absatz/Regel,9.4,Auszahlung,,M1/M2 (Interpreter),fertig
 THM-Lemma-9.6.1.,Satz/Lemma,9.6.1,Lemma 9.6.1.,,M1/M2 (Interpreter),fertig
 THM-Satz-9.9.1,Satz/Lemma,9.9.1,Satz 9.9.1,,M1/M2 (Interpreter),teilweise
