@@ -1,0 +1,270 @@
+system:
+    language      = 1
+    tick          = 5 ms
+    float         = f32
+    output_timing = asap
+    fault_is_fail = true
+
+# ----------------------------------------------------------------------
+# Physikalische Einheiten
+# ----------------------------------------------------------------------
+unit kHz  = 1000 Hz
+unit MHz  = 1000 kHz
+unit dBuV = 1
+unit dB   = 1
+
+# ----------------------------------------------------------------------
+# Protokoll-, Register- und Drahtformate (3.7)
+# ----------------------------------------------------------------------
+enum TunerOp layout u8:
+    NOP         = 0x00
+    POWER_UP    = 0x01
+    POWER_DOWN  = 0x02
+    SET_FREQ    = 0x10
+    SEEK_START  = 0x11
+    GET_METRICS = 0x20
+    SET_AUDIO   = 0x30
+
+enum AudioMode:
+    MONO
+    STEREO
+    MUTED
+
+record TunerTxFrame layout big:
+    opcode    : TunerOp
+    arg_hi    : u8
+    arg_lo    : u8
+    ctrl_bits : u8 with bits:
+        afc_en   : bool at 0
+        mute_l   : bool at 1
+        mute_r   : bool at 2
+        stereo_f : bool at 3
+
+record TunerRxFrame layout big:
+    resp_op : TunerOp
+    status  : u8 with bits:
+        ready        : bool at 0
+        seek_success : bool at 1
+        seek_fail    : bool at 2
+        afc_rail     : bool at 3
+        dev_err      : bool at 7
+    chan_khz   : u16
+    rssi_raw   : u8 in 0..127
+    snr_raw    : u8 in 0..127
+    stereo_det : bool
+
+# ----------------------------------------------------------------------
+# Hardware-Channels & Streams (8.1, 8.6, 8.8)
+# ----------------------------------------------------------------------
+input  supply_v  : float[V] in 2.5..3.6 V @ hw("pmu/v_radio")  with max_age = 25 ms, max_slew = 10 V/s
+input  pwr_good  : bool                   @ hw("pmu/radio_pg") with max_age = 20 ms
+input  rx_stream : stream<TunerRxFrame>   @ hw("spi0/rx")      with max_rate = 200 Hz, capacity = 8, overflow = fault
+
+output tx_stream   : stream<TunerTxFrame>     @ hw("spi0/tx")          with max_rate = 200 Hz, capacity = 8
+output rst_n       : bool                     @ hw("gpio/tuner_rst_n") with safe = false
+output ant_boost   : bool                     @ hw("gpio/ant_boost")   with safe = false
+output audio_mute  : bool                     @ hw("gpio/amp_mute")    with safe = true
+output volume_gain : float[pct] in 0..100 pct @ hw("dac/audio_vol")    with safe = 0 pct
+
+# ----------------------------------------------------------------------
+# Parameter, Tunables & Commands (8.4, 8.5)
+# ----------------------------------------------------------------------
+param BAND_MIN      : float[MHz] in 87.5..108.0 MHz = 87.5 MHz
+param BAND_MAX      : float[MHz] in 87.5..108.0 MHz = 108.0 MHz
+param CHAN_SPACING  : float[kHz] in 50..200 kHz = 100 kHz
+param RSSI_LOCK_MIN : int in 5..80 = 24
+param SNR_LOCK_MIN  : int in 0..50 = 12
+param TUNE_TIMEOUT  : Duration = 120 ms
+param SEEK_TIMEOUT  : Duration = 800 ms
+
+param TARGET_VOLUME : float[pct] in 0..100 pct = 70 pct
+
+command cmd_power_on
+command cmd_power_off
+command cmd_tune_up
+command cmd_tune_down
+command cmd_seek_next
+command cmd_mute_toggle
+
+# ----------------------------------------------------------------------
+# Pure Hilfsfunktionen (3.2, 4.1)
+# ----------------------------------------------------------------------
+fn freq_to_chan(f: float[MHz], f_base: float[MHz], spacing: float[kHz]) -> u16:
+    var delta_khz = (f - f_base).to(kHz)
+    var delta_raw = round(delta_khz / (1 kHz))
+    var step_raw  = round(spacing / (1 kHz))
+    if step_raw <= 0:
+        return 0 as u16
+    return (delta_raw / step_raw) as u16
+
+fn chan_to_freq(chan: u16, f_base: float[MHz], spacing: float[kHz]) -> float[MHz]:
+    var khz_val = ((chan as float) * (spacing / (1 kHz))) * (1 kHz)
+    return f_base + khz_val.to(MHz)
+
+fn clamp_freq(f: float[MHz], lo: float[MHz], hi: float[MHz]) -> float[MHz]:
+    return lo if f < lo else (hi if f > hi else f)
+
+# ----------------------------------------------------------------------
+# Radio-Treiber-Maschine (5.1)
+# ----------------------------------------------------------------------
+machine radio_tuner every 10 ms:
+    # Veröffentlichte Statusgrößen (Unit-Delay für HMI / Telemetrie)
+    pub var active_freq : float[MHz] in 87.5..108.0 MHz = 87.5 MHz
+    pub var rssi_dbuv   : int in 0..127 = 0
+    pub var snr_db      : int in 0..127 = 0
+    pub var mode        : AudioMode = MUTED
+    pub var is_seeking  : bool = false
+    pub var muted_by_op : bool = false
+
+    # Lokaler Maschinenzustand
+    var pending_freq    : float[MHz] in 87.5..108.0 MHz = 87.5 MHz
+    var ramp_vol        : float[pct] in 0..100 pct = 0 pct
+    var poll_seq_active : bool = false
+
+    fault -> SAFE
+    initial STANDBY
+
+    state STANDBY:
+        enter:
+            rst_n = false
+            ant_boost = false
+            audio_mute = true
+            volume_gain = 0 pct
+            ramp_vol = 0 pct
+            mode = MUTED
+            is_seeking = false
+        when cmd_power_on: -> POWER_ON_SEQ
+
+    state POWER_ON_SEQ:
+        sequence:
+            ant_boost = true
+            wait 20 ms
+            expect supply_v >= 2.8 V, "supply not stable before reset release"
+            rst_n = true
+            wait 15 ms
+            send tx_stream, TunerTxFrame(opcode = POWER_UP, arg_hi = 0, arg_lo = 0, ctrl_bits = 0)
+            until rx_stream as resp timeout 100 ms -> SAFE
+            expect resp.data.resp_op == POWER_UP, "unexpected response to power up"
+            expect resp.data.status.ready, "hardware status flag not ready"
+            pending_freq = active_freq
+            -> TUNE_SYNC
+
+    state RUNNING:
+        initial IDLE_ACTIVE
+        loop:
+            # Sicherheits-Interlocks für das gesamte Betriebsfenster
+            check supply_v >= 2.7 V, "supply undervoltage on radio domain: {supply_v}" for 30 ms
+            check pwr_good, "power rail degraded flag asserted"
+            alert rssi_dbuv < RSSI_LOCK_MIN and not is_seeking, "weak RF carrier detected"
+
+            # Operator-Abschaltung
+            if cmd_power_off:
+                -> POWER_OFF_SEQ
+
+        state IDLE_ACTIVE:
+            loop:
+                # Anti-Pop Lautstärkerampe
+                if muted_by_op or is_seeking:
+                    ramp_vol = 0 pct
+                    audio_mute = true
+                else:
+                    audio_mute = false
+                    if ramp_vol < TARGET_VOLUME:
+                        ramp_vol = ramp_vol + 2 pct
+                    elif ramp_vol > TARGET_VOLUME:
+                        ramp_vol = ramp_vol - 2 pct
+                volume_gain = ramp_vol
+
+                # Zyklische Telemetrieabfrage (200 ms)
+                every 200 ms:
+                    if not poll_seq_active:
+                        send tx_stream, TunerTxFrame(opcode = GET_METRICS, arg_hi = 0, arg_lo = 0, ctrl_bits = 0)
+                        poll_seq_active = true
+
+            on rx_stream as msg:
+                poll_seq_active = false
+                if msg.data.resp_op == GET_METRICS:
+                    rssi_dbuv = msg.data.rssi_raw as int
+                    snr_db = msg.data.snr_raw as int
+                    mode = STEREO if msg.data.stereo_det else MONO
+                    check not msg.data.status.dev_err, "hardware error reported by baseband processor"
+
+            when cmd_mute_toggle:
+                muted_by_op = not muted_by_op
+                -> IDLE_ACTIVE
+
+            when cmd_tune_up:
+                pending_freq = clamp_freq(active_freq + (CHAN_SPACING).to(MHz), BAND_MIN, BAND_MAX)
+                -> TUNE_SYNC
+
+            when cmd_tune_down:
+                pending_freq = clamp_freq(active_freq - (CHAN_SPACING).to(MHz), BAND_MIN, BAND_MAX)
+                -> TUNE_SYNC
+
+            when cmd_seek_next:
+                -> SEEK_START_STEP
+
+        state TUNE_SYNC:
+            enter:
+                audio_mute = true
+                volume_gain = 0 pct
+                ramp_vol = 0 pct
+            sequence:
+                var chan_code = freq_to_chan(pending_freq, BAND_MIN, CHAN_SPACING)
+                send tx_stream, TunerTxFrame(opcode = SET_FREQ,
+                                             arg_hi = (chan_code >> 8) as u8,
+                                             arg_lo = (chan_code & 0xFF) as u8,
+                                             ctrl_bits = 0x01)
+                until rx_stream as r timeout TUNE_TIMEOUT -> SAFE
+                expect r.data.resp_op == SET_FREQ, "invalid tune ack received"
+                expect not r.data.status.afc_rail, "AFC railed on channel lock"
+                active_freq = pending_freq
+                rssi_dbuv = r.data.rssi_raw as int
+                snr_db = r.data.snr_raw as int
+                -> IDLE_ACTIVE
+
+        state SEEK_START_STEP:
+            enter:
+                is_seeking = true
+                audio_mute = true
+                volume_gain = 0 pct
+                ramp_vol = 0 pct
+            sequence:
+                send tx_stream, TunerTxFrame(opcode = SEEK_START, arg_hi = 0, arg_lo = 0, ctrl_bits = 0x01)
+                until rx_stream as r timeout SEEK_TIMEOUT else:
+                    is_seeking = false
+                    -> IDLE_ACTIVE
+
+                if r.data.status.seek_success:
+                    var raw_chan = r.data.chan_khz
+                    active_freq = chan_to_freq(raw_chan, BAND_MIN, CHAN_SPACING)
+                    rssi_dbuv = r.data.rssi_raw as int
+                    snr_db = r.data.snr_raw as int
+                    is_seeking = false
+                    -> IDLE_ACTIVE
+                else:
+                    # Seek fehlgeschlagen oder Bandende erreicht: auf Minima zurückspringen
+                    pending_freq = BAND_MIN
+                    is_seeking = false
+                    -> TUNE_SYNC
+
+        state POWER_OFF_SEQ:
+            sequence:
+                audio_mute = true
+                volume_gain = 0 pct
+                wait 10 ms
+                send tx_stream, TunerTxFrame(opcode = POWER_DOWN, arg_hi = 0, arg_lo = 0, ctrl_bits = 0)
+                wait 15 ms
+                -> STANDBY
+
+    state SAFE:
+        enter:
+            audio_mute = true
+            volume_gain = 0 pct
+            ramp_vol = 0 pct
+            rst_n = false
+            ant_boost = false
+            mode = MUTED
+            is_seeking = false
+            poll_seq_active = false
+        when cmd_power_on and supply_v >= 2.8 V: -> STANDBY

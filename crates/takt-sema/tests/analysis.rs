@@ -288,6 +288,44 @@ fn a_sequence_var_always_carries_an_initialiser() {
     assert!(codes.contains(&"P"), "ein `var` ohne Initialisierer ist ein Syntaxfehler, kein SC-25: {codes:?}");
 }
 
+/// SC-25 (6.2): Eine Zuweisung in einem verschachtelten Block zaehlt.
+///
+/// **Der Fall, der falsch meldete.** `if c: var k = 7; y = k` steckt
+/// Deklaration und Nutzung in *eine* Anweisung. Die Pruefung suchte alle
+/// Lesungen einer Anweisung rekursiv, merkte aber nur Zuweisungen der
+/// obersten Ebene vor — und meldete damit die eigene Initialisierung als
+/// fehlend (FB-123, gefunden am Radio-Treiber in `feedback/`).
+///
+/// Sie laeuft jetzt verschraenkt: je Anweisung erst ihre eigenen
+/// Ausdruecke, dann ihre Zuweisung, dann die Bloecke darunter.
+#[test]
+fn an_assignment_inside_a_branch_counts_as_assignment() {
+    let src = format!(
+        "{HEAD}{OUT}{}",
+        "machine m:
+    var flag : bool = true
+
+    initial RUN
+
+    state RUN:
+        sequence:
+            wait 10 ms
+            if flag:
+                var k = 7
+                n = k
+            -> RUN
+"
+    );
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(&src, &options);
+    let codes: Vec<&str> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code).collect();
+    assert!(
+        !codes.contains(&"SC-25"),
+        "die Zuweisung steht unmittelbar ueber der Lesung; SC-25 darf nicht melden: {codes:?}"
+    );
+    assert!(codes.is_empty(), "unerwartete Fehler: {codes:?}");
+}
+
 #[test]
 fn an_error_inside_a_format_string_points_at_the_placeholder() {
     // FB-31: Die Spans eines Platzhalter-Ausdrucks zaehlen ab dem Platzhalter,

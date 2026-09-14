@@ -400,6 +400,22 @@ pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Res
                 return Err(NotYet { what: "Zielblatt" });
             };
             enter_leaf(ctx, m, leaves[from_index], leaf, index, &slot, None)?;
+            // 5.2 Regel 4: Die `loop:`-Bloecke der neu betretenen
+            // Zustaende laufen noch in diesem Tick. Der Interpreter tut
+            // es in `switch` (`exec_chain(… Mode::Entry)`), und zwar fuer
+            // *jeden* Wechsel — auch fuer ein `->` im Block.
+            //
+            // Ohne das zaehlte ein Zaehler im Ziel einen Tick zu spaet;
+            // der Strukturfuzzer fand es an `c = c + 1; -> S1` mit einem
+            // zweiten `c = c + 10` im Ziel (FB-122).
+            //
+            // Im Entry-Modus ist ein weiteres `->` wirkungslos, darum
+            // wird das Sprungziel fuer die Dauer entfernt.
+            let saved = ctx.end.take();
+            for id in machine::entering(ctx.machine, leaves[from_index], leaf) {
+                block(&ctx.machine.states[id.index()].loop_block.clone(), ctx, m)?;
+            }
+            ctx.end = saved;
         }
         // `-> FAULTED` (5.3): die Konfiguration wird leer, die Outputs
         // gehen auf `safe`. Wie beim Uebergang.

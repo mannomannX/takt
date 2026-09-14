@@ -965,6 +965,76 @@ impl Lowerer<'_> {
     }
 }
 
+/// Eine Anweisung und die in ihr steckenden, in Programmreihenfolge.
+///
+/// **Lesen und Zuweisen muessen verschraenkt laufen.** Wer erst alle
+/// Lesungen einer Anweisung prueft und danach ihre Zuweisungen vormerkt,
+/// meldet `if c: var k = 7; y = k` als Fehler — Deklaration und Nutzung
+/// stecken dort in *einer* Anweisung, und der Stand „davor" kennt die
+/// Zuweisung noch nicht (FB-123).
+///
+/// Ein bedingter Zweig zaehlt dabei als Zuweisung, obwohl er sie nicht
+/// immer haelt. Das ist Absicht: SC-25 prueft die Reihenfolge der
+/// Segmente (6.2) — ob ein Wert auf *jedem* Pfad entsteht, ist die Frage
+/// der Flussanalyse (3.4) und hat ihre eigene Pruefung.
+fn check_stmt(
+    s: &Stmt,
+    assigned: &mut HashSet<VarId>,
+    lifted: &HashSet<VarId>,
+    m: &Machine,
+    diags: &mut Vec<Diagnostic>,
+) {
+    // Die Ausdruecke dieser Anweisung selbst — ohne die verschachtelten
+    // Bloecke, die danach einzeln drankommen.
+    stmt_exprs(s, &mut |e| {
+        walk_expr(e, &mut |x| {
+            if let ExprKind::Var(v) = &x.kind
+                && lifted.contains(v)
+                && !assigned.contains(v)
+            {
+                diags.push(
+                    Diagnostic::error(
+                        SC25,
+                        x.span,
+                        format!("`{}` wird gelesen, bevor sie zugewiesen ist", m.vars[v.index()].name),
+                    )
+                    .with_suggestion("Zuweisung in ein frueheres Segment legen (6.2, 5.8)"),
+                );
+            }
+        });
+    });
+    if let StmtKind::Assign { target: Place::Var(v), .. } = &s.kind {
+        assigned.insert(*v);
+    }
+    // Dann die Bloecke darunter, jeder in seiner Reihenfolge.
+    match &s.kind {
+        StmtKind::If { then, otherwise, .. } => {
+            for inner in &then.stmts {
+                check_stmt(inner, assigned, lifted, m, diags);
+            }
+            for inner in &otherwise.stmts {
+                check_stmt(inner, assigned, lifted, m, diags);
+            }
+        }
+        StmtKind::ForRange { body, .. }
+        | StmtKind::ForEach { body, .. }
+        | StmtKind::Every { body, .. }
+        | StmtKind::At { body, .. } => {
+            for inner in &body.stmts {
+                check_stmt(inner, assigned, lifted, m, diags);
+            }
+        }
+        StmtKind::Match { arms, .. } => {
+            for a in arms {
+                for inner in &a.body.stmts {
+                    check_stmt(inner, assigned, lifted, m, diags);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn check_seq_items(
     items: &[SeqItem],
     assigned: &mut HashSet<VarId>,
@@ -974,25 +1044,7 @@ fn check_seq_items(
 ) {
     for item in items {
         match item {
-            SeqItem::Stmt(s) => {
-                for_each_expr_stmt(s, &mut |e| {
-                    if let ExprKind::Var(v) = &e.kind {
-                        if lifted.contains(v) && !assigned.contains(v) {
-                            diags.push(
-                                Diagnostic::error(
-                                    SC25,
-                                    e.span,
-                                    format!("`{}` wird gelesen, bevor sie zugewiesen ist", m.vars[v.index()].name),
-                                )
-                                .with_suggestion("Zuweisung in ein frueheres Segment legen (6.2, 5.8)"),
-                            );
-                        }
-                    }
-                });
-                if let StmtKind::Assign { target: Place::Var(v), .. } = &s.kind {
-                    assigned.insert(*v);
-                }
-            }
+            SeqItem::Stmt(s) => check_stmt(s, assigned, lifted, m, diags),
             SeqItem::Repeat { body, counter, .. } => {
                 assigned.insert(*counter);
                 check_seq_items(body, assigned, lifted, m, diags);
