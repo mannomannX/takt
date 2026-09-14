@@ -18,6 +18,13 @@ pub enum Origin {
     Exact,
     /// Aus einer Deklaration uebernommen (etwa ein `stack`-Vertrag, 4.5).
     Contract,
+    /// Aus dem erzeugten Objekt gelesen (Sektionsgroessen nach dem Link).
+    ///
+    /// Eine eigene Herkunft, weil der Posten weder aus der MIR rechenbar
+    /// noch deklariert ist — nach dem Link aber exakt. Er unterscheidet
+    /// sich damit von `Open`: Eine Profilreserve braucht Hardware und
+    /// einen Lauf unter Last (13.8), eine Sektionsgroesse nur den Linker.
+    Measured,
     /// Die Eingabe fehlt noch (Profilreserve ohne Kalibrierung).
     Open,
 }
@@ -28,6 +35,7 @@ impl Origin {
         match self {
             Origin::Exact => "exakt",
             Origin::Contract => "Vertrag",
+            Origin::Measured => "gemessen",
             Origin::Open => "offen",
         }
     }
@@ -52,7 +60,7 @@ pub struct Size {
 }
 
 impl Size {
-    /// Summe der belastbaren Posten (`exakt` und `Vertrag`).
+    /// Summe der belastbaren Posten (`exakt`, `Vertrag` und `gemessen`).
     pub fn total(&self) -> u64 {
         self.items.iter().filter(|i| i.origin != Origin::Open).map(|i| i.bytes).sum()
     }
@@ -123,6 +131,11 @@ pub fn size(p: &Program) -> Size {
 
     // Was ohne Hardware-Konfiguration (8.10) und Kalibrierung (13.8) fehlt.
     items.push(Item { name: "Runtime-Reserven je Profil".into(), bytes: 0, origin: Origin::Open });
+
+    // Der Flash-Posten steht hier als `offen`, weil `size` vor dem Link
+    // laeuft. Mit einem Objekt wird er `gemessen` (11.5): Die
+    // Sektionsgroessen liest `takt-llvm::inspect`, und die Zahl ist dann
+    // exakt. Das Verdrahten gehoert zu M5 (plan/m5.md 5, Schritt 5).
     items.push(Item { name: "Flash (Code, Konstanten)".into(), bytes: 0, origin: Origin::Open });
 
     Size { items }

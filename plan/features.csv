@@ -54,8 +54,8 @@ SEM-5.5,Semantik/Abschnitt,5.5,Eingeschränkte Aktionsblöcke,,M1 (Kernsemantik)
 SEM-5.6,Semantik/Abschnitt,5.6,"Interlocks, Permissives, Alerts",,M1 (Kernsemantik),fertig
 SEM-5.7,Semantik/Abschnitt,5.7,Blöcke innerhalb von Maschinen,,M1 (Kernsemantik),fertig
 SEM-5.8,Semantik/Abschnitt,5.8,Ergonomie in Maschinen,,M1 (Kernsemantik),fertig
-SEM-5.9,Semantik/Abschnitt,5.9,Persistente Variablen (v1.1),v1.1,M6,offen
-SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M6,offen
+SEM-5.9,Semantik/Abschnitt,5.9,Persistente Variablen (v1.1),v1.1,M5 (Embedded),offen
+SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M5 (Embedded),offen
 SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,offen
 SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,offen
 SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),fertig
@@ -87,7 +87,7 @@ SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),fertig
 SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),fertig
 SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig
 SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M1/M2 (Interpreter),teilweise
-SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M6 (v1.1),offen
+SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M5 (Embedded),offen
 SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,je Meilenstein,offen
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),fertig
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),fertig
@@ -685,10 +685,10 @@ PAR-5.6-Alerts_in_Schleifen,Absatz/Regel,5.6,Alerts in Schleifen,,M1 (Kernsemant
 PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),fertig
 PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M6 (mit 8.10),offen
 PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),fertig
-PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M6 (v1.1),offen
+PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M5 (Embedded),offen
 PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M6 (v1.1),offen
-PAR-5.10-Nicht_Wake_Streams_in_idle,Absatz/Regel,5.10,Nicht-Wake-Streams in `idle`,,M6 (v1.1),offen
-PAR-5.10-Systemschlaf,Absatz/Regel,5.10,Systemschlaf,,M6 (v1.1),offen
+PAR-5.10-Nicht_Wake_Streams_in_idle,Absatz/Regel,5.10,Nicht-Wake-Streams in `idle`,,M5 (Embedded),offen
+PAR-5.10-Systemschlaf,Absatz/Regel,5.10,Systemschlaf,,M5 (Embedded),offen
 PAR-7.1-Tick_Quelle,Absatz/Regel,7.1,Tick-Quelle,,M1 (Kernsemantik),fertig
 PAR-7.2-follows_v1.1,Absatz/Regel,7.2,`follows` (v1.1),v1.1,M6,offen
 PAR-7.2-Budget_je_Maschine,Absatz/Regel,7.2,Budget je Maschine,,M1 (Kernsemantik),fertig
@@ -739,7 +739,7 @@ PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M5 (Embedded),offen
 PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M5 (Embedded),offen
 PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M6 (v1.1),offen
 PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M6 (v1.1),offen
-PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M6 (v1.1),offen
+PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M5 (Embedded),offen
 PAR-12.7-Start_Channels,Absatz/Regel,12.7,Start-Channels,,M6 (v1.1),offen
 PAR-12.7-Irreversible_Outputs,Absatz/Regel,12.7,Irreversible Outputs,,M6 (v1.1),offen
 PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M5 (Embedded),offen

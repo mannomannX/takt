@@ -75,8 +75,8 @@ Innerhalb eines Meilensteins gilt B (Scheiben Ende-zu-Ende bis zur jeweils höch
 | **M2 Ströme und Protokolle** | Streams mit Cursor und Byte-Ring, Muster → DFA (Alphabetklassen, ein DFA je Zustand), Handler, `until … matches`, Ausgabeströme, interne Streams, `layout` inkl. Bitfelder/Diskriminanten/`len_field`, `T!E`, Bereichsmuster, `at`/`pulse`/`cancel`, `samples` | 14.6 läuft im Interpreter gegen ein UART-Modell; Lemma 9.6.1 als Test; Prüfungen 17–21, 43, 45–47 |
 | **M3 Statisches Gate** ✔ | Intervallanalyse mit impliziten Prüfungen und Warnpolitik, Dominanz, Definite Assignment je Eintritt, Single-Writer, `follows`-DAG, Kostenmodell nach Klassen, `takt size` mit Overlay/Scratch/Byte-Ringen, Darstellungsverengung als MIR-Annotation, Schedulability; die „gilt schon heute"-Prüfungen der verteilten Ausführung (58: `follows` knotenlokal, `hops` aus der Topologie — mit einem Knoten trivial). **Hinzugekommen:** Safe-State-Latenz mit `within` (Satz 9.4.5, Prüfung 61), Budget je Maschine (Prüfung 62), zwei Lints (Prüfung 63) | jede der 58 Prüfungen ist `fertig` oder `definiert`, keine `offen`: `fertig` mit positivem *und* negativem Test, `definiert` mit getesteter Ablehnung, solange ihr Konstrukt eine Stufe meldet (19 Prüfungen); die vier Prüfungen, deren *Eingabe* fehlt (28, 29, 32, 39 brauchen die Hardware-Konfiguration aus 8.10 bzw. die Kalibrierung aus 13.8), sind nach M6 verschoben, wo beide entstehen — M3 baut für sie die Rechnung (`takt size`, die Budgetvektoren), nicht das Urteil. Kennzahl impliziter Prüfungen im Report, nach Ursache aufgeschlüsselt (3.4); Lemma 3.4 als Test (Verengung ändert keinen Trace); Entwurf und Begründung in `plan/m3.md` |
 | **M4 Codegen Linux** | `takt-llvm` für x86-64/aarch64, strikte FP, IEEE-Modus, `fma`; `libtaktm` beider Breiten mit Konformitätsvektoren; `takt-rt-core` + `linux_rt` (PREEMPT_RT, Doppelpuffer, Treiber-Threads, Rand-Selbstprüfungen); Simulationstreiber als HAL-Implementierung; Record/Replay; `takt run`, `takt replay` | differentielles Testen: Interpreter ≡ nativ (x86-64 ≡ aarch64) auf Korpus und Fuzzer; 14.1–14.6 in Echtzeit auf der Box; Replay reproduziert Läufe bitgenau |
-| **M5 Embedded** | `baremetal` auf je einem Cortex-M4F- und RV32IMAC-Board; Tick-Quelle, Timer-Compare für `at`, ADC-DMA für `samples`, Stack-Zusammensetzung mit Schutzbereich, XIP-Regeln, MPU-Regionen; `takt bench`, Kalibrierung `c_target`/`guard`/`jitter`; `driver-test` | 14.7 auf Hardware mit HIL-Checks; Traces bitidentisch zu Interpreter und Box; Konformitätsbericht je Zielklasse |
-| **M6 v1.1-Vertikalen** (jede Ende-zu-Ende: Sema → Interpreter → Codegen → Runtime → Konformität) | Jobs und Chunk-Natives; Konstantenvariablen in Generics `[const N]` (3.12); `persist` mit Journal und Stromausfall-Kampagne; `idle`/Systemschlaf; `tunable`; `follows`; Szenarien und Kampagnen; dimensionierte Matrizen; Oktagone; Einheiten auf Integern; Geräteprofile (8.10); System-Channels; Profile `rtos` und `boot`; Projekt-Natives; `property` als beschränkte Temporallogik mit Monitoren in Simulation und Hardware sowie `takt prove` (k-Induktion/BMC); `map<K, V, N>` mit deterministischem Hash; Operator-Metadaten; Leser für ältere Aufzeichnungs- und Konfigurationsformate | 14.8 auf Hardware mit Flash-Modell-Kampagne; Satz 9.9.1 als Test (Trace mit und ohne Schlaf gleich); Eigenschaftsmonitore bitidentisch zwischen Interpreter und Hardware; `map`-Iteration bitidentisch über Zielklassen; Inventur v1.1 grün |
+| **M5 Embedded** | `baremetal` auf je einem Cortex-M4F- und RV32IMAC-Board; Tick-Quelle, Timer-Compare für `at`, ADC-DMA für `samples`, Stack-Zusammensetzung mit Schutzbereich, XIP-Regeln, MPU-Regionen; `persist` mit NVM-Journal und `idle`/Systemschlaf (aus M6 vorgezogen, s. u.); `takt bench`, Kalibrierung `c_target`/`guard`/`jitter`; `driver-test` | 14.7 auf Hardware mit HIL-Checks; Traces bitidentisch zu Interpreter und Box; Konformitätsbericht je Zielklasse |
+| **M6 v1.1-Vertikalen** (jede Ende-zu-Ende: Sema → Interpreter → Codegen → Runtime → Konformität) | Jobs und Chunk-Natives; Konstantenvariablen in Generics `[const N]` (3.12); die Stromausfall-Kampagne zu `persist` (das Journal selbst steht in M5); `tunable`; `follows`; Szenarien und Kampagnen; dimensionierte Matrizen; Oktagone; Einheiten auf Integern; Geräteprofile (8.10); System-Channels; Profile `rtos` und `boot`; Projekt-Natives; `property` als beschränkte Temporallogik mit Monitoren in Simulation und Hardware sowie `takt prove` (k-Induktion/BMC); `map<K, V, N>` mit deterministischem Hash; Operator-Metadaten; Leser für ältere Aufzeichnungs- und Konfigurationsformate | 14.8 auf Hardware mit Flash-Modell-Kampagne; Satz 9.9.1 als Test (Trace mit und ohne Schlaf gleich); Eigenschaftsmonitore bitidentisch zwischen Interpreter und Hardware; `map`-Iteration bitidentisch über Zielklassen; Inventur v1.1 grün |
 | **M7 Werkzeuge und Migration** | LSP mit Live-Zustandsanzeige; `takt import-c` (Klassifikation, Abbildung, Check-Einfügung); Orakel-Modus; Protokollpakete | ein realer C-Baustein migriert und per Orakel abgenommen |
 | **M8 v1.2** | Gescopte Instanzen (Lebenszyklus in `switch`, Spitzenlast über Konfigurationen, Overlay), `resume` (tiefe History, `saved` außerhalb des Overlays), Trigger mit `arm`/`disarm`/`fired`/`armed` (Knotenregel, Simulation mit `bound`), `capture<T, N>` als Stream-Element mit Armierung, Generics über Typen (Monomorphisierung, Fähigkeiten, azyklischer Instanziierungsgraph), Treiberstufe `port`, Anforderungsreferenzen, beschränkte QP-Löser; Prüfungen 52–55 aktiv | Inventur v1.2 grün; Konformität aktualisiert; Satz 9.4.1 mit gescopten Instanzen als Test (Aktivität aus der Konfiguration zu Tick-Beginn) |
 | **M9 v2 (außerhalb dieses Plans, vorbereitet)** | Verteilte Ausführung nach 12.9: Knotenticks, `hops`-Verlauf von Ψ, Abort über Knoten, Verbindungsverlust als Degradation/Fault, Aufzeichnung je Knoten, atomares Deployment; Bytecode-VM als Verbraucher der versionierten MIR | MIR-Platzhalter, Grammatik und Prüfung 58 existieren seit M0; keine Änderung an v1-Programmen nötig |
@@ -150,6 +150,27 @@ Zahl der `definiert`-Prüfungen, wie teuer das Warten wirklich ist; vorher
 wäre es geraten. Was M3 dafür tut, ist billig und steht in `plan/m3.md`:
 Die Prüfungen bekommen ihre Ablehnungstests jetzt, sodass ein Vorziehen
 später nur noch den Testfall austauscht statt ihn zu erfinden.
+
+**Entscheidung (2026-09-14): `persist` und `idle` gehen nach M5.** Beide
+standen in M6, weil sie v1.1 sind — eine Zuordnung nach *Sprachstufe*.
+Ihre Arbeit liegt aber am *Arbeitsort* M5: Das NVM-Journal ist
+Flash-Sektorwechsel mit CRC und Typ-Hash (12.3), der Systemschlaf ist
+WFI/STOP mit Wake-Quellen als Interrupts (12.3, 9.9). Beides entsteht auf
+der MCU oder gar nicht. Hinzu kommt, dass der M5-Exit 14.7 verlangt und
+das Beispiel ohne die zwei nicht läuft: Es ist gerade das Beispiel, das
+eine MCU von der Box unterscheidet (Persistenz über den Stromausfall,
+Schlaf zwischen den Ticks).
+
+Der Stand stützt es: `SEM-9.9` (Schlaf-Semantik) steht bereits unter M1/M2
+auf `teilweise` — der Interpreter kennt das Überspringen eines
+`idle`-Zustands, abgelehnt wird allein das Konstrukt als Stufe
+(`validate.rs`). Die fehlende Arbeit ist Runtime, nicht Semantik.
+
+Was in M6 bleibt: die **Stromausfall-Kampagne** zu `persist` (sie braucht
+Szenarien und Kampagnen, 13.6/13.7) und **Satz 9.9.1** als Test (Trace mit
+und ohne Schlaf gleich). M5 liefert beiden die Hardware. Die Ausnahme ist
+strikt auf diese zwei Konstrukte begrenzt; jede Erweiterung wäre eine neue
+Entscheidung. Begründung ausführlich in `plan/m5.md` 3.6.
 
 Unverändert bleibt: Nichts an v1.1 ist ein Breaking Change. Das
 Reservierungspaket aus M0 (Grammatik, MIR-Platzhalter, reservierte Namen,
