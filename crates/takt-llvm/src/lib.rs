@@ -40,6 +40,7 @@ pub mod expr;
 pub mod fns;
 pub mod format;
 pub mod image;
+pub mod inspect;
 pub mod machine;
 pub mod reduce;
 pub mod scope;

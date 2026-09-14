@@ -106,6 +106,11 @@ CG-9.8-At,Umsetzung,11.2,"`at T:` und `cancel` im erzeugten Code: die Warteschla
 CG-11.2-Goto,Umsetzung,11.2,`->` als Anweisung: Zustandswechsel und Sprung ans Kettenende (11.2); im Entry-Tick wirkungslos (5.2 Regel 4). Teilt `enter_leaf` mit den Uebergaengen,,M4 (Codegen),fertig
 CG-8.7-Guard,Umsetzung,11.2,"Muster-Guard in Uebergaengen (`until … matches`): erstes passendes Element im Fenster, `examined` nur bis dorthin (8.7)",,M4 (Codegen),fertig
 CG-3.9-Text,Umsetzung,11.2,"Textliterale als Wert und Textvergleich nach Inhalt (3.9): was hinter der Laenge steht, zaehlt nicht",,M4 (Codegen),fertig
+CG-11.5-Inspect,Umsetzung,11.5,"Messung am erzeugten Objekt (`takt-llvm::inspect`): Abschnitte, Symbole und Stackrahmen ueber die Binutils der jeweiligen Zielkette; ELF und PE/COFF",,M4 (Codegen),fertig
+CG-11.5-SizeGemessen,Umsetzung,11.5,`takt size` gegen das Objekt geprueft: die DFA-Tabellen stimmen mit `.rodata` ueberein (FB-121),,M4 (Codegen),fertig
+CG-11.5-FlashPosten,Umsetzung,11.5,"Der Posten „Flash (Code, Konstanten)"" wird gemessen statt `offen`: braucht ein festes Ziel",,M5 (Embedded),offen
+CG-12.3-StackTiefe,Umsetzung,12.3,"Stacktiefe als laengster Pfad im Aufrufgraphen plus Rahmen je Funktion; die Messung steht (`inspect::stack_frame`), die Rechnung kommt mit dem Profil",,M5 (Embedded),offen
+CG-13.4-Objektcode,Umsetzung,13.4,Objektcode gegen Quelle nachvollziehen (Zertifizierung): baut auf `inspect::symbols` auf,,M9 (v2),offen
 SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedded),offen
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M5 (Embedded),offen
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig

@@ -215,14 +215,34 @@ pub fn type_bytes(p: &Program, ty: TypeId) -> u32 {
 }
 
 /// Byte der vorkompilierten Musterautomaten (8.7, 11.5): Klassentabelle
-/// (256 Byte), Uebergangstabelle (`states × class_count`, je 4 Byte) und
-/// die Liste akzeptierender Zustaende. Muster ohne Automat — Record-Muster
-/// sind eine Konjunktion von Feldgleichheiten — zaehlen nicht.
+/// (256 Byte) und Uebergangstabelle (`states × class_count`, je 4 Byte).
+///
+/// **Gezaehlt wird, was der Codegen emittiert** — nicht, was die MIR
+/// traegt. Drei Unterschiede, jeder davon gemessen (FB-121):
+///
+/// - Die akzeptierenden Zustaende stehen *nicht* als Tabelle im Objekt.
+///   `dfa::run` macht daraus eine Vergleichskette, weil die Menge zur
+///   Uebersetzungszeit feststeht und typisch ein- bis dreielementig ist.
+/// - Ein Muster mit Platzhaltern bekommt keinen Automaten: Der Vergleich
+///   laeuft dort ueber `captures::walk`, weil der Automat zwar sagt, *ob*
+///   ein Muster trifft, nicht aber was in `{n:int}` steht (8.7).
+/// - Ein Record-Muster hat ohnehin keinen — es ist eine Konjunktion von
+///   Feldgleichheiten.
+///
+/// Ohne diese drei rechnete der Posten bei `23_patterns` 1696 Byte gegen
+/// 424 gemessene. Eine Zahl, die `takt size` `exakt` nennt und auf die
+/// sich fuer `baremetal` ein Compile-Fehler stuetzt (11.5), darf nicht
+/// vierfach danebenliegen.
 fn dfa_bytes(p: &Program) -> u64 {
     fn one(pat: &Pattern) -> u64 {
         match pat {
-            Pattern::Text { dfa: Some(d), .. } => {
-                d.classes.len() as u64 + d.table.len() as u64 * 4 + d.accept.len() as u64 * 4
+            Pattern::Text { pieces, dfa: Some(d) } => {
+                // Mit Platzhaltern laeuft der Durchlauf, nicht der
+                // Automat (`step::handler_chain`).
+                if pieces.iter().any(|x| matches!(x, crate::pattern::PatternPiece::Capture { .. })) {
+                    return 0;
+                }
+                d.classes.len() as u64 + d.table.len() as u64 * 4
             }
             _ => 0,
         }
