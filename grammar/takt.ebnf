@@ -71,7 +71,7 @@ type_decl      := "type" TYPE_IDENT "=" type NEWLINE
 unitvec_decl   := "unitvec" UPPER_IDENT "=" "(" unit_expr { "," unit_expr } ")" NEWLINE    (* @stage v1.1 — 3.11 *)
 enum_decl      := "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" variant { "," variant } NEWLINE   (* layout: 3.7; open: 2.5 *)   (* @check 51 *)
                 | "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" NEWLINE INDENT { variant NEWLINE } DEDENT
-variant        := UPPER_IDENT [ "=" int_lit ] [ "(" field { "," field } ")" ]             (* explizite Diskriminante, auch 0x00 *)
+variant        := UPPER_IDENT [ "=" int_lit ] [ "(" field { "," field } ")" ]             (* explizite Diskriminante, auch 0x00 *)   (* einzeilig mit Kommas ODER eingerueckt ohne; nicht gemischt *)
 record_decl    := "record" TYPE_IDENT [ "layout" ( "little" | "big" ) [ "," "align" "=" int_lit ] ] ":" NEWLINE INDENT { record_field } DEDENT   (* @check 46 *)
 record_field   := field NEWLINE
                 | IDENT ":" int_type "with" "bits" ":" NEWLINE INDENT { bitfield NEWLINE } DEDENT   (* endet mit DEDENT, daher kein NEWLINE *)
@@ -125,7 +125,7 @@ param          := [ "inout" ] IDENT ":" [ "input" | "output" ] type [ "=" const_
 
 machine_decl   := [ "driver" ] "machine" IDENT [ "(" params ")" ] [ "follows" IDENT { "," IDENT } ] [ "node" IDENT ]   (* driver: v1.2; node: 12.9, v2 *)   (* @check 33 *)
                   [ "every" duration_lit ] [ "phase" duration_lit ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT machine_body DEDENT   (* follows: 7.2, v1.1; with: Metadaten 2.5 *)
-machine_body   := { var_decl NEWLINE | persist_decl | signal_decl | fault_clause }   (* @check 8 *)
+machine_body   := { var_decl NEWLINE | persist_decl | signal_decl | fault_clause }   (* @check 8 *)   (* Reihenfolge: erst diese vier in beliebiger Folge, dann initial, dann loop/on/state *)
                   "initial" UPPER_IDENT NEWLINE [ loop_block ] { on_handler } { state_decl }
 persist_decl   := "persist" "var" IDENT ":" type "=" const_expr [ "with" "min_interval" "=" duration_lit ] NEWLINE   (* @stage v1.1 — 5.9 *)   (* @check 23 *)
 signal_decl    := "signal" IDENT NEWLINE

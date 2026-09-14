@@ -227,7 +227,7 @@ type_decl      := "type" TYPE_IDENT "=" type NEWLINE
 unitvec_decl   := "unitvec" UPPER_IDENT "=" "(" unit_expr { "," unit_expr } ")" NEWLINE    (* @stage v1.1 — 3.11 *)
 enum_decl      := "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" variant { "," variant } NEWLINE   (* layout: 3.7; open: 2.5 *)   (* @check 51 *)
                 | "enum" TYPE_IDENT [ "layout" int_type ] [ "open" ] ":" NEWLINE INDENT { variant NEWLINE } DEDENT
-variant        := UPPER_IDENT [ "=" int_lit ] [ "(" field { "," field } ")" ]             (* explizite Diskriminante, auch 0x00 *)
+variant        := UPPER_IDENT [ "=" int_lit ] [ "(" field { "," field } ")" ]             (* explizite Diskriminante, auch 0x00 *)   (* einzeilig mit Kommas ODER eingerueckt ohne; nicht gemischt *)
 record_decl    := "record" TYPE_IDENT [ "layout" ( "little" | "big" ) [ "," "align" "=" int_lit ] ] ":" NEWLINE INDENT { record_field } DEDENT   (* @check 46 *)
 record_field   := field NEWLINE
                 | IDENT ":" int_type "with" "bits" ":" NEWLINE INDENT { bitfield NEWLINE } DEDENT   (* endet mit DEDENT, daher kein NEWLINE *)
@@ -281,7 +281,7 @@ param          := [ "inout" ] IDENT ":" [ "input" | "output" ] type [ "=" const_
 
 machine_decl   := [ "driver" ] "machine" IDENT [ "(" params ")" ] [ "follows" IDENT { "," IDENT } ] [ "node" IDENT ]   (* driver: v1.2; node: 12.9, v2 *)   (* @check 33 *)
                   [ "every" duration_lit ] [ "phase" duration_lit ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT machine_body DEDENT   (* follows: 7.2, v1.1; with: Metadaten 2.5 *)
-machine_body   := { var_decl NEWLINE | persist_decl | signal_decl | fault_clause }   (* @check 8 *)
+machine_body   := { var_decl NEWLINE | persist_decl | signal_decl | fault_clause }   (* @check 8 *)   (* Reihenfolge: erst diese vier in beliebiger Folge, dann initial, dann loop/on/state *)
                   "initial" UPPER_IDENT NEWLINE [ loop_block ] { on_handler } { state_decl }
 persist_decl   := "persist" "var" IDENT ":" type "=" const_expr [ "with" "min_interval" "=" duration_lit ] NEWLINE   (* @stage v1.1 — 5.9 *)   (* @check 23 *)
 signal_decl    := "signal" IDENT NEWLINE
@@ -292,7 +292,7 @@ fault_clause   := "fault" "->" UPPER_IDENT NEWLINE   (* @check 9 *)
 enter_block    := "enter" ":" action_block
 exit_block     := "exit" ":" action_block
 loop_block     := "loop" ":" block
-on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] ":" block   (* @check 27 *)
+on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] ":" block   (* die Bindung ist ein Wrapper: .t, .seq und der Inhalt unter .data bzw. .text; Elementfelder darunter (8.6, 8.7) *)   (* @check 27 *)
 transition     := ( "when" guard | "after" duration_expr ) ":" trans_block   (* @check 14 *)
 guard          := expr | postfix ( "matches" | "has" ) pattern [ "as" IDENT ] | postfix "as" IDENT   (* letzteres: naechstes Element, 8.7; postfix auch fuer m.fired, cells[i].done. "as" IDENT ist Bindung, ausser IDENT ist ein Skalartypname: dann Cast *)
 trans_block    := goto_stmt NEWLINE | NEWLINE INDENT { stmt } goto_stmt NEWLINE DEDENT   (* @check 8 *)
@@ -952,7 +952,7 @@ Ein `block`-Aufruf an einer Stelle des Codes ist eine Instanz (wie ein Operator 
 |---|---|---|
 | Zustandslokale Variablen | `state RETRY:` / `    var tries : int in 0..3 = 0` | bei jedem Eintritt neu initialisiert; lebt, solange der Zustand aktiv ist; `var` in einer Sequenz wird auf diese Ebene gehoben (6.2) |
 | Speicher exklusiver Zustände | — | Zustandslokale Variablen, gehobene Sequenz-Variablen und Captures, Bestätigungs- und `every`-Zähler von Geschwisterzuständen werden im selben Speicher überlagert (11.2); semantikneutral, weil nie zwei Geschwister gleichzeitig aktiv sind und jeder Eintritt neu initialisiert |
-| Periodische Teilaktion | `loop:` / `    every 100 ms:` / `        log "..."` | pro Aufrufstelle ein Zähler `next` (Startwert `d`); der Block läuft in Aktivierungen mit `uhr >= next`, danach `next += d`. Die Uhr ist `time_in_state` für eine Stelle in einem Zustand (der Eintritt setzt Zähler und Uhr gemeinsam zurück) und `now` für eine im maschinenweiten `loop:` — dieser Block gehört keinem Zustand, dessen Eintritt ihn neu startete, und verstummte mit `time_in_state` nach dem ersten Zustandswechsel. In einer `for`-Schleife zählt jede Stelle je Durchlauf getrennt (5.6). Folge für die Stelle im maschinenweiten `loop:`: Ihre **Phase überlebt Zustandswechsel und Fault-Pfade**, weil `now` weiterläuft — nach der Rückkehr aus `FAULTED` liegt das Raster unverändert, statt neu zu beginnen. Für Takterzeuger (CAN-SYNC, Abfragezyklen) ist das die gewollte Phasenstarrheit; wer nach jedem Eintritt neu messen will, setzt das `every` in einen Zustand |
+| Periodische Teilaktion | `loop:` / `    every 100 ms:` / `        log "..."` | pro Aufrufstelle ein Zähler `next` (Startwert `d`); der Block läuft in Aktivierungen mit `uhr >= next`, danach `next += d`. Die Uhr ist `time_in_state` für eine Stelle in einem Zustand (der Eintritt setzt Zähler und Uhr gemeinsam zurück) und `now` für eine im maschinenweiten `loop:` — dieser Block gehört keinem Zustand, dessen Eintritt ihn neu startete, und verstummte mit `time_in_state` nach dem ersten Zustandswechsel. In einer `for`-Schleife zählt jede Stelle je Durchlauf getrennt (5.6). Folge für die Stelle im maschinenweiten `loop:`: Ihre **Phase überlebt Zustandswechsel und Fault-Pfade**, weil `now` weiterläuft — nach der Rückkehr aus `FAULTED` liegt das Raster unverändert, statt neu zu beginnen. Für Takterzeuger (CAN-SYNC, Abfragezyklen) ist das die gewollte Phasenstarrheit; wer nach jedem Eintritt neu messen will, setzt das `every` in einen Zustand. **Die Kehrseite steht in derselben Regel:** Ein `every` in einem Zustand, der öfter gewechselt wird als seine Periode lang ist, feuert nie — jeder Eintritt setzt `time_in_state` und den Zähler gemeinsam zurück. Ein 200-ms-Polling in einem Zustand, der alle 50 ms verlassen wird, ist stumm, und zwar ohne Diagnose: Ob ein Zustand lange genug aktiv bleibt, ist zur Übersetzungszeit nicht entscheidbar. Wer periodisch arbeiten will, *obwohl* der Zustand wechselt, gehört ins maschinenweite `loop:` |
 | Signale | `signal done` (Maschinenebene), `raise done` (Statement), `m.done` (Leser) | veröffentlichter Puls: für Leser im nächsten Basis-Tick genau einen Tick lang `true`; Single-Writer wie `pub var`. **Ein Signal trägt keinen Wert.** Für ein *Ereignis mit Nutzlast* gibt es den internen Strom: `stream<E> ereignis with capacity = 1` — jeder Leser hat seinen eigenen Cursor (8.6), sieht also jedes Element genau einmal, und die Nutzlast ist der Elementtyp. Er beantwortet Kapazität, Überlauf und Lebensdauer bereits; ein Signal mit Nutzlast müsste dieselben Fragen erneut stellen |
 | `break` | in `for` | beendet die Schleife; das Budget bleibt die statische obere Schranke |
 | Parameter-Defaults | `machine valve_ctrl(..., travel: Duration = 2 s)` | wie `param`; Instanzen dürfen sie weglassen |
@@ -1369,6 +1369,10 @@ send dut_tx, "UPDATE {size} {crc:hex}\n"  # formatiert in festen Puffer (Hoechst
 send dut_tx, frame.encode()               # bytes<N>
 ```
 Ein Ausgabestrom hat einen Sendepuffer (`capacity`, Default 256 Bytes), den der Treiber mit `max_rate` leert. Der freie Platz `tx.free` wird zu Tick-Beginn als Input gesampelt (Determinismus über den Input, wie bei jedem Sensor; die Simulation leert exakt `max_rate * T0` Bytes pro Tick). Statisch prüft der Compiler, dass die Summe der Höchstlängen aller in einer Aktivierung erreichbaren `send`-Statements `capacity` nicht übersteigt; zur Laufzeit ist `send` mit `len > tx.free` ein `FAULT StreamOverflow(tx)` (oder Alert bei `overflow = drop`). Gesendet wird beim Commit des Ticks in Sendereihenfolge.
+
+**Ein Pin und ein Byte werden gemeinsam committet, aber nicht gemeinsam wirksam.** `commit(L)` schreibt Latches und Sendepuffer im selben Schritt (9.4); was danach geschieht, unterscheidet sich: Der Latch eines Pins liegt am Ende des Commits an der Leitung, die Bytes des Sendepuffers laufen mit `max_rate` hinaus. Wer in einem Tick `dc = false`, `send tx, cmd` und `dc = true` schreibt, bekommt darum *nicht* die Reihenfolge, die der Quelltext nahelegt — der Pin steht am Tickende auf `true`, während das Byte noch in der FIFO liegt.
+
+Das ist kein Mangel des Commits, sondern die Grenze eines synchronen Modells an einem asynchronen Bus: Ein Tick ist die kleinste Einheit, in der die Sprache Reihenfolge zusagt, und ein SPI-Transfer ist kürzer als einer. Ein Treiber, der Steuerleitungen zu einzelnen Bytes moduliert, braucht darum je Phase einen Tick (oder einen Bus-Treiber, der die Leitung selbst führt — das ist die Aufgabe von `port`, 15). Der Compiler warnt nicht: Welche Leitung zu welchem Byte gehört, steht nicht im Typsystem.
 
 ### 8.9 Oversampelte Kanäle, Register, Capture-Fenster
 ```
