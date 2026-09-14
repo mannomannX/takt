@@ -578,3 +578,69 @@ machine m:
     let frames = vec![None; p.fns.len()];
     assert!(takt_mir::analysis::stack::depth(&p, &frames).is_none(), "ohne Messung keine Schranke");
 }
+
+/// 9.4.3: `B_m` ist der zustandsfreie Anteil plus das komponentenweise
+/// Maximum ueber die Zustaende — nicht ueber die Summe.
+///
+/// Die Feinheit: Das Maximum ist *je Klasse*. Zwei Zustaende, von denen
+/// einer `i32` und der andere `f32` treibt, liefern beide ihren Wert an
+/// `B_m` — sie schliessen einander aus, also ist jede Klasse einzeln
+/// erreichbar.
+#[test]
+fn the_budget_takes_the_peak_per_class_not_per_state() {
+    let (p, _, _) = compile(
+        "\
+machine m:
+    var a : int in 0..99 = 0
+    var x : float = 0.0
+    initial ONE
+
+    state ONE:
+        loop:
+            a = a + 1
+            n = 0
+        when a > 50: -> TWO
+
+    state TWO:
+        loop:
+            x = x + 1.5
+            n = 1
+        when a > 50: -> ONE
+",
+    );
+    let r = takt_mir::analysis::budget::report(&p);
+    let m = r.machines.iter().find(|m| m.name == "m").expect("Maschine");
+
+    let one = m.states.iter().find(|s| s.name == "ONE").expect("ONE");
+    let two = m.states.iter().find(|s| s.name == "TWO").expect("TWO");
+    assert!(one.cost.i32 > 0, "ONE rechnet mit Integern");
+    assert!(two.cost.f64 > 0 || two.cost.f32 > 0, "TWO rechnet mit Gleitkomma");
+
+    // Beide Klassen stehen in B_m — das Maximum ist komponentenweise.
+    assert!(m.activation.i32 >= one.cost.i32, "die i32-Spitze aus ONE steht in B_m");
+    assert!(m.activation.f64 >= two.cost.f64, "die f64-Spitze aus TWO steht in B_m");
+
+    // Und jede Klasse nennt ihren Zustand.
+    assert!(one.drives.iter().any(|c| c.name() == "i32"), "ONE treibt i32: {:?}", one.drives);
+}
+
+/// Der Bericht nennt, was ihm fehlt.
+///
+/// Operationen sind keine Zeit; die Umrechnung braucht `c_target` aus der
+/// Messung (13.8). Ein Bericht, der das verschweigt, laedt dazu ein, die
+/// Zahlen fuer Mikrosekunden zu halten.
+#[test]
+fn the_cost_report_says_what_it_cannot_tell() {
+    let (p, _, _) = compile(
+        "\
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = 1
+",
+    );
+    let lines = takt_mir::analysis::budget::report(&p).lines().join("\n");
+    assert!(lines.contains("c_target"), "der Bericht nennt die fehlende Kalibrierung:\n{lines}");
+    assert!(lines.contains("13.8"), "mit Fundstelle:\n{lines}");
+}

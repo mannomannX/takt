@@ -50,6 +50,73 @@ impl CostVec {
             native: self.native.max(o.native),
         }
     }
+
+    /// Der Wert einer Klasse.
+    pub fn of(self, c: CostClass) -> u64 {
+        match c {
+            CostClass::I32 => self.i32,
+            CostClass::I64 => self.i64,
+            CostClass::F32 => self.f32,
+            CostClass::F64 => self.f64,
+            CostClass::Mem => self.mem,
+            CostClass::Call => self.call,
+            CostClass::Native => self.native,
+        }
+    }
+
+    /// Summe ueber alle Klassen.
+    ///
+    /// Nur fuer Vergleiche und Anteile im Bericht: Operationen
+    /// verschiedener Klassen kosten verschieden viel, und was sie in Zeit
+    /// bedeuten, sagt erst `c_target` (13.8). Eine Summe ueber Klassen ist
+    /// darum eine Ordnungsgroesse, keine Zeitaussage.
+    pub fn sum(self) -> u64 {
+        CostClass::ALL.iter().map(|c| self.of(*c)).sum()
+    }
+
+    /// Ist der Vektor ueberall null?
+    pub fn is_zero(self) -> bool {
+        self.sum() == 0
+    }
+}
+
+/// Die sieben Operationsklassen (9.4.3, Grammatik `cost_class`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum CostClass {
+    I32,
+    I64,
+    F32,
+    F64,
+    Mem,
+    Call,
+    Native,
+}
+
+impl CostClass {
+    /// Alle Klassen in der Reihenfolge der Referenz (9.4.3).
+    pub const ALL: [CostClass; 7] = [
+        CostClass::I32,
+        CostClass::I64,
+        CostClass::F32,
+        CostClass::F64,
+        CostClass::Mem,
+        CostClass::Call,
+        CostClass::Native,
+    ];
+
+    /// Der Name, wie ihn die Grammatik schreibt (`cost_class`).
+    pub fn name(self) -> &'static str {
+        match self {
+            CostClass::I32 => "i32",
+            CostClass::I64 => "i64",
+            CostClass::F32 => "f32",
+            CostClass::F64 => "f64",
+            CostClass::Mem => "mem",
+            CostClass::Call => "call",
+            CostClass::Native => "native",
+        }
+    }
 }
 
 /// Argument einer monomorphisierten Instanz (3.12).

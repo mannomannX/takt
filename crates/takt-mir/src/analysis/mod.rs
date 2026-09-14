@@ -11,6 +11,7 @@
 //! braucht — den hat erst die MIR — und weil Codegen, `takt size` und der
 //! Importer dieselben Intervalle benutzen (plan/m3.md 1.1).
 
+pub mod budget;
 pub mod cost;
 pub mod domain;
 pub mod facts;

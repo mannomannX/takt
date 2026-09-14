@@ -1,11 +1,13 @@
-//! `takt`: Kommandozeile fuer `check`, `sim`, `size`, `latency`, `mir`,
-//! `fmt`, `parse` und `tokens`.
+//! `takt`: Kommandozeile fuer `check`, `sim`, `size`, `cost`, `latency`,
+//! `mir`, `fmt`, `parse` und `tokens`.
 //!
 //! ```text
 //! takt check DATEI… [--warnings-as-errors] [--certification] [--format text|line]
 //!                   [--build sim|hw] [--profile P]
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--profile P] [--order random:SEED]
+//! takt size  DATEI… [--build sim|hw] [--profile P]
+//! takt cost  DATEI… [--build sim|hw] [--profile P]
 //! takt latency DATEI… [--build sim|hw] [--profile P]
 //! takt mir   DATEI [--dump] [--write OUT.mir] [--hash]
 //! takt fmt   DATEI… [--check] [--stdout] [--snippet] [--verify] [--edition]
@@ -23,7 +25,7 @@ use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
 const USAGE: &str =
-    "takt check|sim|run|replay|size|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
+    "takt check|sim|run|replay|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -96,6 +98,7 @@ fn main() -> ExitCode {
         "mir" => mir(&args),
         "fmt" => fmt(&args),
         "size" => size(&args),
+        "cost" => cost(&args),
         "latency" => latency(&args),
         "graph" => graph(&args),
         "parse" => parse(&args),
@@ -152,7 +155,6 @@ fn check(args: &Args) -> bool {
     ok
 }
 
-/// `takt size`: das Speicherbudget eines Programms (11.5).
 /// `takt latency`: Safe-State-Latenz je Output (9.4.5).
 fn latency(args: &Args) -> bool {
     let policy =
@@ -213,6 +215,40 @@ fn graph(args: &Args) -> bool {
     ok
 }
 
+/// `takt cost`: das Kostenbudget je Maschine und Zustand (9.4.3, 7.2).
+///
+/// Das Gegenstueck zu `takt size`: Dort Bytes, hier Operationen. Beide
+/// sagen, was ihnen fehlt — `size` ueber die Herkunft je Posten (11.5),
+/// `cost` ueber die Kalibrierung, ohne die aus Operationen keine Zeit
+/// wird (13.8).
+fn cost(args: &Args) -> bool {
+    let policy =
+        Policy { warnings_as_errors: args.has("--warnings-as-errors"), certification: args.has("--certification") };
+    let mut ok = true;
+    for path in &args.files {
+        let Some(src) = read(path) else {
+            ok = false;
+            continue;
+        };
+        let map = SourceMap::single(path.as_str(), src.as_str());
+        let options = takt_sema::Options { policy, build: build_of(args), profile: profile_of(args) };
+        let checked = takt_sema::compile(&src, &options);
+        for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
+            println!("{}", map.render(d));
+        }
+        let Some(program) = &checked.program else {
+            ok = false;
+            continue;
+        };
+        println!("{path}:");
+        for line in takt_mir::analysis::budget::report(program).lines() {
+            println!("{line}");
+        }
+    }
+    ok
+}
+
+/// `takt size`: das Speicherbudget eines Programms (11.5).
 fn size(args: &Args) -> bool {
     let policy =
         Policy { warnings_as_errors: args.has("--warnings-as-errors"), certification: args.has("--certification") };

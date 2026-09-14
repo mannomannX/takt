@@ -10,7 +10,7 @@
 
 use crate::Program;
 use crate::expr::{Expr, ExprKind, Repr};
-use crate::fns::CostVec;
+use crate::fns::{CostClass, CostVec};
 use crate::machine::{Budget, Machine};
 use crate::stmt::{Block, Method, Place, Stmt, StmtKind};
 use crate::types::{FloatWidth, Type};
@@ -23,33 +23,79 @@ pub fn budgets(program: &mut Program) {
     for i in 0..program.machines.len() {
         let (activation, fault_path) = {
             let m = &program.machines[i];
-            (activation_cost(m, &types, &natives), fault_cost(m, &types, &natives))
+            (activation(m, &types, &natives).total, fault_cost(m, &types, &natives))
         };
         program.machines[i].budget = Some(Budget { activation, fault_path });
     }
 }
 
+/// `B_m` mit seiner Herkunft je Zustand.
+///
+/// **Warum die Aufschluesselung hier entsteht und nicht im Bericht.** Die
+/// Zustandswerte fallen beim Rechnen von `B_m` ohnehin an — `max` wirft sie
+/// nur weg. Sie im Bericht erneut zu rechnen waere eine zweite Stelle mit
+/// derselben Formel, und sie in `Budget` zu legen hiesse, sie in jede
+/// MIR-Datei zu schreiben (Feld 20 des Formats), damit ein Werkzeug sie
+/// gelegentlich anzeigen kann. Eine Rechnung, zwei Verbraucher: Wer nur
+/// die Summe will, nimmt `.total`.
+#[derive(Clone, Debug, Default)]
+pub struct Activation {
+    /// `B_m`: der maschinenweite Anteil plus das komponentenweise Maximum
+    /// ueber die Zustaende.
+    pub total: CostVec,
+    /// Was unabhaengig vom Zustand anfaellt (`loop:` und Handler).
+    pub base: CostVec,
+    /// Je Zustand seine Kosten, indiziert wie `Machine::states`.
+    pub states: Vec<CostVec>,
+}
+
+impl Activation {
+    /// Der Zustand, der eine Klasse bestimmt — je Klasse ein anderer.
+    ///
+    /// **Es gibt keinen „teuersten Zustand".** Das Maximum ist
+    /// komponentenweise (9.4.3: Kosten sind Vektoren), und die Schranke
+    /// darf das sein: Zwei Zustaende schliessen einander aus, also ist
+    /// fuer *jede* Klasse einzeln der groesste Wert erreichbar. Wer den
+    /// Bericht liest, will darum je Klasse wissen, wo die Zahl herkommt —
+    /// und das koennen verschiedene Zustaende sein.
+    ///
+    /// Bei Gleichstand gewinnt der erste: willkuerlich, aber stabil, damit
+    /// zwei Laeufe desselben Programms denselben Bericht ergeben.
+    pub fn driver(&self, class: CostClass) -> Option<usize> {
+        let peak = self.states.iter().map(|c| c.of(class)).max()?;
+        self.states.iter().position(|c| c.of(class) == peak)
+    }
+}
+
 /// `B_m`: was eine Aktivierung im schlimmsten Fall kostet. Die Zustaende
 /// schliessen einander aus, also zaehlt das Maximum, nicht die Summe.
-fn activation_cost(m: &Machine, types: &[Type], natives: &[CostVec]) -> CostVec {
+pub fn activation(m: &Machine, types: &[Type], natives: &[CostVec]) -> Activation {
     let mut base = block_cost(&m.loop_block, types, natives);
     for h in &m.handlers {
         base = base + block_cost(&h.body, types, natives);
     }
-    let mut worst = CostVec::default();
-    for s in &m.states {
-        let mut c = block_cost(&s.enter, types, natives)
-            + block_cost(&s.loop_block, types, natives)
-            + block_cost(&s.exit, types, natives);
-        for h in &s.handlers {
-            c = c + block_cost(&h.body, types, natives);
-        }
-        for t in &s.transitions {
-            c = c + block_cost(&t.actions, types, natives);
-        }
-        worst = max(worst, c);
-    }
-    base + worst
+    let states: Vec<CostVec> = m
+        .states
+        .iter()
+        .map(|s| {
+            let mut c = block_cost(&s.enter, types, natives)
+                + block_cost(&s.loop_block, types, natives)
+                + block_cost(&s.exit, types, natives);
+            for h in &s.handlers {
+                c = c + block_cost(&h.body, types, natives);
+            }
+            for t in &s.transitions {
+                c = c + block_cost(&t.actions, types, natives);
+            }
+            c
+        })
+        .collect();
+
+    // Komponentenweise, nicht „der teuerste Zustand": Zwei Zustaende
+    // schliessen einander aus, also ist fuer jede Klasse einzeln ihr
+    // groesster Wert erreichbar (9.4.3).
+    let peak = states.iter().fold(CostVec::default(), |acc, c| acc.max(*c));
+    Activation { total: base + peak, base, states }
 }
 
 /// `F_m`: der Fault-Pfad (5.3, 5.4). Er laeuft hoechstens einmal je Tick
@@ -60,19 +106,6 @@ fn fault_cost(m: &Machine, types: &[Type], natives: &[CostVec]) -> CostVec {
         c = c + block_cost(&t.actions, types, natives);
     }
     c
-}
-
-/// Komponentenweises Maximum: zwei einander ausschliessende Zweige.
-fn max(a: CostVec, b: CostVec) -> CostVec {
-    CostVec {
-        i32: a.i32.max(b.i32),
-        i64: a.i64.max(b.i64),
-        f32: a.f32.max(b.f32),
-        f64: a.f64.max(b.f64),
-        mem: a.mem.max(b.mem),
-        call: a.call.max(b.call),
-        native: a.native.max(b.native),
-    }
 }
 
 fn block_cost(b: &Block, types: &[Type], natives: &[CostVec]) -> CostVec {
@@ -86,7 +119,7 @@ fn stmt_cost(s: &Stmt, types: &[Type], natives: &[CostVec]) -> CostVec {
         StmtKind::If { cond, then, otherwise } => {
             // Nur ein Zweig laeuft.
             expr_cost(cond, types, natives)
-                + max(block_cost(then, types, natives), block_cost(otherwise, types, natives))
+                + block_cost(then, types, natives).max(block_cost(otherwise, types, natives))
         }
         StmtKind::ForRange { count, body, .. } => {
             let n = match count.kind {
@@ -100,7 +133,7 @@ fn stmt_cost(s: &Stmt, types: &[Type], natives: &[CostVec]) -> CostVec {
             expr_cost(iter, types, natives) + times(block_cost(body, types, natives), capacity(iter, types))
         }
         StmtKind::Match { subject, arms } => {
-            let worst = arms.iter().fold(CostVec::default(), |acc, a| max(acc, block_cost(&a.body, types, natives)));
+            let worst = arms.iter().fold(CostVec::default(), |acc, a| acc.max(block_cost(&a.body, types, natives)));
             expr_cost(subject, types, natives) + worst
         }
         StmtKind::Every { period, body, .. } => expr_cost(period, types, natives) + block_cost(body, types, natives),
