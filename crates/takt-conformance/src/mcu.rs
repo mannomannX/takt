@@ -80,43 +80,54 @@ fn runtime_abi(s: &mut String, p: &Program) {
     // 3.3: `now` ist die Dauer seit dem Start — Tickzahl mal T0.
     let _ = writeln!(s, "long long takt_now(void) {{ return g_tick * {}LL; }}\n", p.config.tick);
 
-    for (name, args, kind) in [
-        ("takt_alert", "int m, int site, unsigned char on", "alert"),
-        ("takt_log", "int m, int site", "log"),
-        ("takt_abort", "int m, int site", "abort"),
+    // Jede Beobachtungszeile traegt ihren Tick, wie beim Interpreter
+    // (`grammar/trace.md`): Ohne ihn laesst sie sich keinem Tick zuordnen.
+    for (name, args, kind, flag) in [
+        ("takt_alert", "int m, int site, unsigned char on", "alert", Some("on")),
+        ("takt_log", "int m, int site", "log", None),
+        ("takt_abort", "int m, int site", "abort", None),
+        ("takt_verify", "int m, int site, unsigned char ok", "verify", Some("ok")),
+        ("takt_verdict", "int m, int site, unsigned char pass", "verdict", Some("pass")),
     ] {
         let _ = writeln!(s, "void {name}({args}) {{");
+        let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+        let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
         let _ = writeln!(s, "    takt_board_trace(\"{kind} \");");
         let _ = writeln!(s, "    takt_board_trace_i64(m);");
         let _ = writeln!(s, "    takt_board_trace_i64(site);");
-        if args.contains("on") {
-            let _ = writeln!(s, "    takt_board_trace_i64(on ? 1 : 0);");
+        if let Some(f) = flag {
+            let _ = writeln!(s, "    takt_board_trace_i64({f} ? 1 : 0);");
         }
         let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
         let _ = writeln!(s, "}}");
     }
+
+    // **Das Bitmuster, nicht der gerechnete Wert.** Eine erste Fassung gab
+    // `(long long)(v * 1000000.0)` aus — Mikroeinheiten, weil es ohne
+    // `printf` kein `%g` gibt. Das kostete auf einem Kern ohne f64-Hardware
+    // die ganze Software-Emulation: `__muldf3`, `u64_div_rem` und
+    // `__aeabi_d2lz`, zusammen 1778 Byte, und das in einem Binary von
+    // 4866 Byte — fuer eine Funktion, die das Programm nie rief (FB-143).
+    //
+    // Die Bits kosten nichts und sagen mehr: 4.2 verlangt bitgleiche
+    // Ergebnisse ueber alle Targets, und `same_number` vergleicht
+    // Fliesskomma ohnehin bitweise (9.4.4). Eine Multiplikation waere eine
+    // zweite Rundungsquelle vor genau diesem Vergleich.
+    //
+    // `memcpy` statt eines Zeiger-Casts: Ein `*(long long *)&v` waere ein
+    // Verstoss gegen die Aliasing-Regeln von C, und ein Compiler darf ihn
+    // wegoptimieren. Fuer acht Byte erzeugt jeder Compiler daraus einen
+    // Registertausch.
     let _ = writeln!(s, "void takt_measure(int m, int site, double v) {{");
-    // Ohne `printf` kein `%g`: Der Wert geht als Ganzzahl in Mikroeinheiten
-    // heraus. Fuer den Vergleich genuegt das; die Zahl selbst steht im
-    // Interpreter-Trace genauer.
+    let _ = writeln!(s, "    unsigned long long bits;");
+    let _ = writeln!(s, "    __builtin_memcpy(&bits, &v, sizeof bits);");
+    let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
     let _ = writeln!(s, "    takt_board_trace(\"measure \");");
     let _ = writeln!(s, "    takt_board_trace_i64(m);");
     let _ = writeln!(s, "    takt_board_trace_i64(site);");
-    let _ = writeln!(s, "    takt_board_trace_i64((long long)(v * 1000000.0));");
-    let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
-    let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_verify(int m, int site, unsigned char ok) {{");
-    let _ = writeln!(s, "    takt_board_trace(\"verify \");");
-    let _ = writeln!(s, "    takt_board_trace_i64(m);");
-    let _ = writeln!(s, "    takt_board_trace_i64(site);");
-    let _ = writeln!(s, "    takt_board_trace_i64(ok ? 1 : 0);");
-    let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
-    let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_verdict(int m, int site, unsigned char pass) {{");
-    let _ = writeln!(s, "    takt_board_trace(\"verdict \");");
-    let _ = writeln!(s, "    takt_board_trace_i64(m);");
-    let _ = writeln!(s, "    takt_board_trace_i64(site);");
-    let _ = writeln!(s, "    takt_board_trace_i64(pass ? 1 : 0);");
+    let _ = writeln!(s, "    takt_board_trace(\"bits \");");
+    let _ = writeln!(s, "    takt_board_trace_i64((long long)bits);");
     let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
     let _ = writeln!(s, "}}\n");
 }

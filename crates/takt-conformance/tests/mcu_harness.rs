@@ -268,3 +268,51 @@ fn an_enum_output_carries_its_name() {
     }
     assert!(src.contains("switch (*"), "ein Enum-Ausgang wird verzweigt, nicht als Zahl geschrieben:\n{src}");
 }
+
+/// **Der Rahmen rechnet nicht mit `double`** (12.3, 4.2; FB-143).
+///
+/// `takt_measure` gab seinen Wert als `(long long)(v * 1000000.0)` aus.
+/// Auf einem Kern ohne f64-Hardware bindet das die Software-Emulation ein
+/// — `__muldf3`, `__aeabi_d2lz`, `__aeabi_dmul`, zusammen 784 Byte in
+/// einem Binary von 4866. Fuer eine Funktion, die das Programm nie rief:
+/// Der Linker kann sie nicht entfernen, weil der Rahmen sie exportiert.
+///
+/// Die Bits kosten nichts und sagen mehr. 4.2 verlangt bitgleiche
+/// Ergebnisse ueber alle Targets, und `same_number` vergleicht
+/// Fliesskomma ohnehin bitweise (9.4.4) — eine Multiplikation waere eine
+/// zweite Rundungsquelle unmittelbar vor diesem Vergleich.
+#[test]
+fn the_harness_does_no_floating_point_arithmetic() {
+    for name in ["19_faults.takt", "29_heartbeat.takt"] {
+        let p = corpus(name);
+        let src = takt_conformance::mcu::build(&p).source;
+        for line in src.lines() {
+            let rechnung = line.contains(" * ") || line.contains(" / ") || line.contains(" + ");
+            assert!(
+                !(rechnung && (line.contains("double") || line.contains(".0"))),
+                "{name}: Fliesskomma-Rechnung im Rahmen: {line}"
+            );
+        }
+        assert!(src.contains("__builtin_memcpy(&bits, &v"), "{name}: `measure` gibt die Bits heraus");
+    }
+}
+
+/// Jede Beobachtungszeile traegt ihren Tick.
+///
+/// `grammar/trace.md` gibt `t=<tick> <art> …` vor. Der Rahmen schrieb
+/// `alert 0 3` ohne Tick — dieselbe Luecke wie bei den Ausgaengen, nur
+/// eine Zeile weiter, und aus demselben Grund unentdeckt: Verglichen
+/// wurden bisher nur `out`-Zeilen.
+#[test]
+fn every_observation_line_carries_its_tick() {
+    let p = corpus("19_faults.takt");
+    let src = takt_conformance::mcu::build(&p).source;
+    for kind in ["alert", "log", "abort", "verify", "verdict", "measure"] {
+        let at = src.find(&format!("takt_board_trace(\"{kind} \")")).unwrap_or_else(|| {
+            panic!("`{kind}` fehlt im Rahmen");
+        });
+        // Die beiden Zeilen davor muessen den Tick schreiben.
+        let davor = &src[at.saturating_sub(120)..at];
+        assert!(davor.contains("takt_board_trace_i64(g_tick)"), "`{kind}` ohne Tickzahl:\n{davor}");
+    }
+}
