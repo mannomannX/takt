@@ -20,6 +20,8 @@
 pub mod clock;
 pub mod counter;
 pub mod cycles;
+pub mod pll;
+pub mod uart;
 
 pub use clock::{PeriodError, counts_for, ns_per_count, prescaler_for};
 pub use counter::Counter64;

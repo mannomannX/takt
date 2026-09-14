@@ -6,7 +6,7 @@ exclude = [
     # Treiber in der Trusted Computing Base — dort faellt die Grenze,
     # und sie wird dadurch sichtbar statt verwischt. Gebaut und
     # geprueft wird das Crate von `tools/embedded.sh`.
-    "crates/takt-board-blackpill",
+    "crates/takt-board-stm32f401",
 ]
 
 members = [

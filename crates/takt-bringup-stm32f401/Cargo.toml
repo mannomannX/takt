@@ -1,0 +1,47 @@
+[package]
+name = "takt-bringup-stm32f401"
+version = "0.1.0"
+description = "Takt: Bring-up-Programm fuer die Black Pill — Tick, LED, Telemetrie"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+# Eigener Workspace wie das Board-Crate: Ein ausfuehrbares `no_std`-Programm
+# braucht `unsafe` (Interrupt-Handler, Registerzugriff), und `forbid` (13.4)
+# laesst sich nicht lokal aufheben. Siehe `takt-board-stm32f401`.
+[workspace]
+
+[dependencies]
+takt-board-stm32f401 = { path = "../takt-board-stm32f401" }
+takt-board-support = { path = "../takt-board-support" }
+takt-rt-baremetal = { path = "../takt-rt-baremetal" }
+
+# `critical-section-single-core` liefert die Implementierung, die die PAC
+# fuer `Peripherals::take()` braucht: Auf einem Einkern-System ohne
+# Betriebssystem ist ein kritischer Abschnitt schlicht „Interrupts aus".
+# Ohne sie fehlt dem Linker `_critical_section_1_0_acquire`.
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+# Der Startcode: Vektortabelle, `.data`-Kopie, `.bss`-Nullung, `#[entry]`.
+cortex-m-rt = "0.7"
+stm32f4 = { version = "0.16", features = ["stm32f401", "rt"] }
+
+# Ohne Panic-Handler linkt ein `no_std`-Binary nicht. `panic-halt` haelt
+# an, statt zu melden — fuer den Bring-up richtig: Eine Panik ist hier ein
+# Fehler in der TCB, und ein haengendes Board faellt auf, weil die LED
+# stehen bleibt.
+panic-halt = "1.0"
+
+# Ein Bring-up-Programm ist nur mit Optimierung brauchbar: Ohne sie
+# braucht ein Tick ein Vielfaches, und die Periodenmessung misst den
+# Debug-Modus statt die Hardware.
+[profile.release]
+codegen-units = 1
+debug = true
+lto = true
+opt-level = "s"
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"

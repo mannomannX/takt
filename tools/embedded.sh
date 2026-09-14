@@ -47,13 +47,20 @@ echo "== 2. Das Board-Crate (eigener Workspace, thumbv7em)"
 # testbar ist, liegt ohnehin in `takt-board-support` — und genau das ist
 # der Grund fuer die Trennung.
 (
-    cd crates/takt-board-blackpill
+    cd crates/takt-board-stm32f401
     cargo build --target thumbv7em-none-eabihf "$@"
     cargo clippy --target thumbv7em-none-eabihf "$@" -- -D warnings
 )
 
 echo
-echo "== 3. Die rechnende Haelfte auf dem Wirt"
+echo "== 3. Das Bring-up-Programm (baut und linkt gegen memory.x)"
+(
+    cd crates/takt-bringup-stm32f401
+    cargo build --release "$@"
+)
+
+echo
+echo "== 4. Die rechnende Haelfte auf dem Wirt"
 cargo test -p takt-board-support "$@"
 
 echo

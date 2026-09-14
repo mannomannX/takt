@@ -1,5 +1,5 @@
 [package]
-name = "takt-board-blackpill"
+name = "takt-board-stm32f401"
 version = "0.1.0"
 description = "Takt: Board-Unterstuetzung fuer die WeAct Black Pill (STM32F401CCU6)"
 edition = "2024"

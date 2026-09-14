@@ -16,7 +16,7 @@ use std::path::Path;
 
 /// Der Pfad zum Board-Crate, vom Manifest dieses Crates aus.
 fn board_src() -> &'static Path {
-    Path::new("../takt-board-blackpill/src")
+    Path::new("../takt-board-stm32f401/src")
 }
 
 /// **Dieses Crate bleibt frei von Hardware-Abhaengigkeiten.**

@@ -1,9 +1,17 @@
-//! WeAct Black Pill (STM32F401CCU6) als Takt-Board (12.3, 12.8).
+//! STM32F401 als Takt-Board (12.3, 12.8).
 //!
 //! **Was hier steht.** Alles, was ein Register anfasst — Timer, Watchdog,
 //! Takte —, und sonst nichts. Die Regeln daraus stehen eine Ebene hoeher
 //! in `takt-rt-baremetal`, das dieses Crate nicht kennt: Es kennt nur
 //! seine vier Traits, und die erfuellt dieses hier (plan/m5.md 2.2).
+//!
+//! **Benannt nach dem Chip, nicht nach dem Board.** Der F401 bestimmt,
+//! was hier steht: Register, Peripherie, die 84-MHz-Grenze der PLL. Was
+//! *ein Board* beitraegt, sind ein Dutzend Konstanten — Quarzfrequenz,
+//! LED-Pin, der Versatz eines Bootloaders. Sie stehen als [`Board`]
+//! beisammen, damit ein anderes F401-Board dieselbe Kiste mit drei
+//! geaenderten Werten traegt. Geprueft ist bisher die WeAct Black Pill
+//! (`STM32F401CCU6`, 25-MHz-Quarz), siehe [`Board::WEACT_BLACKPILL`].
 //!
 //! **Dieses Crate gehoert zur TCB** (9.5): „Compiler und LLVM,
 //! `libtaktm`, native Funktionen, Runtime, Treiber …, OS, Hardware." Die
@@ -27,26 +35,65 @@
 //! Ausdruck, nicht um einen Block: Je kleiner die Stelle, desto leichter
 //! ist sie zu pruefen.
 //!
-//! ## Das Board
+//! ## Der Chip
 //!
 //! | | |
 //! |---|---|
-//! | Kern | Cortex-M4F, 84 MHz, f32 in Hardware (12.8: „32-Bit mit f32-FPU") |
-//! | Flash | 256 KB, intern — **kein XIP**, also keine `xip_flash`-Regeln |
+//! | Kern | Cortex-M4F, bis 84 MHz, f32 in Hardware (12.8: „32-Bit mit f32-FPU") |
+//! | Flash | 256 KB (Variante CC), intern — **kein XIP**, also keine `xip_flash`-Regeln |
 //! | RAM | 64 KB |
 //! | Tick | TIM2, 32-bittig, vier Compare-Kanaele |
-//! | LED | PC13, aktiv low |
-//! | Buttons | NRST (Reset), KEY an PA0 |
+//! | Telemetrie | USART1 auf PA9/PA10 |
 
 #![no_std]
 #![allow(unsafe_code, reason = "Registerzugriff ueber die PAC; 9.5 fuehrt Treiber in der TCB")]
 
 pub mod cycles;
 pub mod guard;
+pub mod led;
 pub mod tick;
+pub mod uart;
 
 pub use guard::{Canary, Iwdg, WfiSleep, reboot};
+pub use led::Led;
+pub use uart::Telemetry;
 pub use tick::{Tim2Tick, on_timer_interrupt};
+
+/// Was ein einzelnes Board beitraegt.
+///
+/// Der Chip bestimmt fast alles; hier steht der Rest. Die Trennung macht
+/// sichtbar, wie klein er ist — und sie erlaubt, ein anderes F401-Board
+/// zu tragen, ohne eine Zeile Code zu aendern.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Board {
+    /// Frequenz des externen Quarzes in Hertz.
+    ///
+    /// F401-Boards gibt es mit 8 und mit 25 MHz; der Wert geht in den
+    /// PLL-Teiler `pllm` ein. Ein falscher Wert bricht nichts — er
+    /// verschiebt nur den ganzen Takt, und damit jede Zeitmessung.
+    pub hse_hz: u32,
+    /// Der Pin der Nutzer-LED, als `(Port, Nummer)`.
+    ///
+    /// Auf der Black Pill ist es `PC13`, und die LED ist aktiv low: Sie
+    /// leuchtet, wenn der Pin auf null steht.
+    pub led: (char, u8),
+    /// Ist die LED aktiv low?
+    pub led_active_low: bool,
+}
+
+impl Board {
+    /// Die WeAct Black Pill mit STM32F401CCU6.
+    ///
+    /// Das Board, an dem M5 entwickelt wurde: 25-MHz-Quarz, LED an PC13
+    /// (aktiv low), HID-Bootloader in den ersten 16 KiB des Flash.
+    pub const WEACT_BLACKPILL: Board = Board { hse_hz: 25_000_000, led: ('C', 13), led_active_low: true };
+
+    /// Ein F401-Board mit 8-MHz-Quarz, sonst wie die Black Pill.
+    ///
+    /// Die zweite gaengige Bestueckung. Sie steht hier, weil sie zeigt,
+    /// was ein anderes Board wirklich kostet: eine Zeile.
+    pub const HSE_8MHZ: Board = Board { hse_hz: 8_000_000, ..Board::WEACT_BLACKPILL };
+}
 
 /// Die Taktfrequenz des Kerns nach [`init`], in Hertz.
 ///
@@ -81,6 +128,12 @@ pub enum InitError {
     /// `2 pct`. Ein Board, das seinen Quarz nicht startet, soll das
     /// melden statt still ungenau zu laufen.
     ClockNotReady,
+    /// Die Quarzfrequenz des Boards passt nicht in die PLL.
+    ///
+    /// Sie muss ganzzahlig auf 1 MHz teilen (25, 8, 16 …). Ein krummer
+    /// Wert wuerde den ganzen Takt verschieben, und mit ihm jede
+    /// Zeitmessung — darum ein Fehler statt einer Naeherung.
+    UnsupportedCrystal,
 }
 
 /// Setzt Takte und Tickquelle auf und gibt die Board-Teile zurueck.
@@ -89,6 +142,7 @@ pub enum InitError {
 /// nicht beliebig: Erst der Takt, dann der Timer — ein Timer, der vor der
 /// PLL konfiguriert wird, rechnet mit der falschen Eingangsfrequenz.
 pub fn init(
+    board: Board,
     rcc: &stm32f4::stm32f401::RCC,
     flash: &stm32f4::stm32f401::FLASH,
     tim2: &stm32f4::stm32f401::TIM2,
@@ -96,17 +150,18 @@ pub fn init(
 ) -> Result<Tim2Tick, InitError> {
     let counts = takt_board_support::counts_for(TIMER_HZ, tick_ns).map_err(InitError::Period)?;
     let psc = takt_board_support::prescaler_for(CORE_HZ, TIMER_HZ).ok_or(InitError::ClockNotReady)?;
-    clocks(rcc, flash)?;
+    let pllm = takt_board_support::pll::divider_m(board.hse_hz).ok_or(InitError::UnsupportedCrystal)?;
+    clocks(rcc, flash, pllm)?;
     start_tim2(rcc, tim2, psc, counts);
-    Ok(Tim2Tick::new(TIMER_HZ, counts))
+    Ok(Tim2Tick::new(TIMER_HZ, counts, CORE_HZ))
 }
 
-/// PLL auf 84 MHz aus dem 25-MHz-Quarz des Boards.
+/// PLL auf 84 MHz aus dem Quarz des Boards.
 ///
-/// Die Kette ist `25 MHz / 25 * 336 / 4 = 84 MHz`. Der Umweg ueber 336
-/// ist nicht Zierde: Die PLL verlangt einen VCO zwischen 100 und 432 MHz,
-/// und 336 ist der Wert, der mit Teiler 4 genau 84 ergibt.
-fn clocks(rcc: &stm32f4::stm32f401::RCC, flash: &stm32f4::stm32f401::FLASH) -> Result<(), InitError> {
+/// Die Teiler kommen aus `takt-board-support::pll`, wo die Kette gegen
+/// beide gaengigen Quarze geprueft ist. Hier steht nur, wie sie in die
+/// Register kommen.
+fn clocks(rcc: &stm32f4::stm32f401::RCC, flash: &stm32f4::stm32f401::FLASH, pllm: u8) -> Result<(), InitError> {
     // Flash braucht Wartezyklen, bevor der Takt steigt — andersherum
     // liest der Kern Befehle, die noch nicht da sind.
     flash.acr().modify(|_, w| unsafe { w.latency().bits(2) });
@@ -116,11 +171,12 @@ fn clocks(rcc: &stm32f4::stm32f401::RCC, flash: &stm32f4::stm32f401::FLASH) -> R
         return Err(InitError::ClockNotReady);
     }
 
+    let pllp = takt_board_support::pll::divider_p().ok_or(InitError::ClockNotReady)?;
     rcc.pllcfgr().write(|w| unsafe {
         w.pllsrc().set_bit(); // HSE als Quelle
-        w.pllm().bits(25);
-        w.plln().bits(336);
-        w.pllp().bits(0b01); // Teiler 4
+        w.pllm().bits(pllm);
+        w.plln().bits(takt_board_support::pll::divider_n());
+        w.pllp().bits(pllp);
         w
     });
     rcc.cr().modify(|_, w| w.pllon().set_bit());

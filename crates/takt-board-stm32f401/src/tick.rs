@@ -23,22 +23,27 @@ use takt_rt_baremetal::TickSource;
 /// Wie oft die ISR gefeuert hat, seit dem Start.
 static TICKS: Counter64 = Counter64::new();
 
-/// Die zuletzt gemessene Periode in Timer-Schritten.
+/// Der Abstand der letzten zwei Interrupts, in Kernzyklen.
 ///
-/// Sie entsteht aus dem Zaehlerstand beim Interrupt: Ein Timer, der bei
-/// `arr` ueberlaeuft, sollte genau `arr + 1` gezaehlt haben. Weicht es
-/// ab, driftet die Uhr — das prueft `tick_tolerance` (7.1).
-static LAST_PERIOD: AtomicU32 = AtomicU32::new(0);
+/// **Warum Kernzyklen und nicht Timer-Schritte.** Der Timerzaehler steht
+/// beim Update-Interrupt immer nahe null — er ist gerade uebergelaufen,
+/// und sein Stand sagt nichts ueber den Abstand. Was die Periode wirklich
+/// misst, ist der Zyklenzaehler des Kerns (DWT): Er laeuft unabhaengig
+/// vom Timer, mit `CORE_HZ`, und der Abstand zweier Ablesungen *ist* die
+/// Periode. Ein Timer, der sich selbst misst, koennte seine eigene Drift
+/// nicht sehen.
+static LAST_CYCLES: AtomicU32 = AtomicU32::new(0);
 
 /// Vom Interrupt-Handler des Boards zu rufen.
 ///
-/// Sie steht hier und nicht im `#[interrupt]`-Rumpf, weil das Attribut
-/// zum Board-Programm gehoert und nicht in eine Bibliothek: Ein Crate,
-/// das einen Interrupt-Vektor belegt, laesst sich nicht zweimal in
-/// dasselbe Programm binden.
-pub fn on_timer_interrupt(measured_counts: u32) {
+/// `elapsed_cycles` ist der Abstand zum vorigen Interrupt in Kernzyklen,
+/// gemessen am DWT. Die Funktion steht hier und nicht im
+/// `#[interrupt]`-Rumpf, weil das Attribut zum Board-Programm gehoert und
+/// nicht in eine Bibliothek: Ein Crate, das einen Interrupt-Vektor
+/// belegt, laesst sich nicht zweimal in dasselbe Programm binden.
+pub fn on_timer_interrupt(elapsed_cycles: u32) {
     TICKS.tick();
-    LAST_PERIOD.store(measured_counts, Ordering::Relaxed);
+    LAST_CYCLES.store(elapsed_cycles, Ordering::Relaxed);
 }
 
 /// Der Tickzaehler.
@@ -57,12 +62,14 @@ pub struct Tim2Tick {
     counts_per_tick: u32,
     /// Die Frequenz, mit der der Timer zaehlt.
     timer_hz: u32,
+    /// Die Frequenz des Kerns — sie deutet [`LAST_CYCLES`].
+    core_hz: u32,
 }
 
 impl Tim2Tick {
     /// Bindet die Tickquelle an die Konfiguration des Timers.
-    pub fn new(timer_hz: u32, counts_per_tick: u32) -> Tim2Tick {
-        Tim2Tick { counts_per_tick, timer_hz }
+    pub fn new(timer_hz: u32, counts_per_tick: u32, core_hz: u32) -> Tim2Tick {
+        Tim2Tick { counts_per_tick, timer_hz, core_hz }
     }
 
     /// Die nominale Periode in Nanosekunden aus der Timerkonfiguration.
@@ -81,7 +88,9 @@ impl TickSource for Tim2Tick {
     }
 
     fn last_period_ns(&self) -> i64 {
-        takt_board_support::clock::period_ns(self.timer_hz, LAST_PERIOD.load(Ordering::Relaxed))
+        // Die Messung steht in Kernzyklen; `Measurement` rechnet sie um —
+        // dieselbe Rechnung, die auch `takt bench` benutzen wird (13.8).
+        takt_board_support::Measurement { cycles: LAST_CYCLES.load(Ordering::Relaxed), core_hz: self.core_hz }.ns()
     }
 
     fn wait_for_tick(&mut self) {

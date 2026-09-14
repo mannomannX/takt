@@ -5,3 +5,5 @@ out/
 # Eigene Probierdateien im Wurzelverzeichnis (nicht Teil des Korpus).
 /test.takt
 /scratch*.takt
+# Erzeugte Flash-Abbilder des Bring-up-Programms.
+*.bin

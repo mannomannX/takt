@@ -1,0 +1,13 @@
+# Das Ziel und die Linker-Argumente des Bring-up-Programms.
+#
+# `--nmagic` schaltet die Ausrichtung auf Seitengrenzen ab: Auf einer MCU
+# gibt es keine Seiten, und die Luecken kosten Flash.
+#
+# `link.x` kommt von `cortex-m-rt` und zieht `memory.x` aus diesem
+# Verzeichnis nach.
+
+[target.thumbv7em-none-eabihf]
+rustflags = ["-C", "link-arg=--nmagic", "-C", "link-arg=-Tlink.x"]
+
+[build]
+target = "thumbv7em-none-eabihf"
