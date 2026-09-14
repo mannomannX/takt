@@ -69,9 +69,11 @@ pub const SC37: &str = "SC-37";
 pub const SC61: &str = "SC-61";
 /// `budget = {ram = …}`: das deklarierte Budget wird eingehalten (7.2).
 pub const SC62: &str = "SC-62";
+/// Kostenbudget je Maschine, Schedulability und Stack-Schranke (9.4.3, 7.2).
+pub const SC12: &str = "SC-12";
 /// Lints: `alert`-Polaritaet, Profil-Vollstaendigkeit (5.6, 4.6).
 pub const SC63: &str = "SC-63";
-/// Lints zu Matrizen und  (3.11, 8.6).
+/// Lints zu Matrizen und Stroemen (3.11, 8.6).
 pub const SC42: &str = "SC-42";
 /// Ungenutzte Channels.
 pub const SC15: &str = "SC-15";
@@ -93,6 +95,7 @@ impl Lowerer<'_> {
         self.check_fault_forest();
         self.check_latency();
         self.check_declared_budget();
+        self.check_cost_budget();
         self.check_alert_polarity();
         self.check_profile_completeness();
         self.check_reachability();
@@ -392,6 +395,44 @@ impl Lowerer<'_> {
             }
         }
         self.diags.extend(diags);
+    }
+
+    /// Pruefung 12 (9.4.3, 7.2): Kostenbudget, Schedulability, Stack.
+    ///
+    /// **Sie sagt, warum sie nicht urteilen kann, statt zu schweigen.**
+    /// Die Pruefung hat drei Teile, und alle drei brauchen dieselbe
+    /// Eingabe: `c_target`, die kalibrierte Kostentabelle aus 13.8. Ohne
+    /// sie sind `B_m` und `F_m` Operationszahlen und keine Zeiten, und
+    /// eine Schedulability ohne Zeiten ist keine.
+    ///
+    /// Bis dahin schwieg sie ganz — und ein Nutzer konnte nicht wissen, ob
+    /// sein Programm geprueft wurde oder ob es nichts zu beanstanden gab.
+    /// Das ist der schlechtere von zwei Zustaenden: `wcet` im Budget wird
+    /// seit je mit Stufenhinweis abgelehnt, und genau dieses Muster ist
+    /// hier richtig (FB-136).
+    ///
+    /// Gemeldet wird als Hinweis, nicht als Warnung: Ein Programm ohne
+    /// Kalibrierung ist nicht fehlerhaft, es ist ungemessen.
+    fn check_cost_budget(&mut self) {
+        // Nur wo jemand ein Budget deklariert hat: Wer keines nennt, hat
+        // nichts erwartet, und ein Hinweis auf eine fehlende Pruefung
+        // waere dort Rauschen.
+        let spans: Vec<(Span, String)> =
+            self.program.machines.iter().filter_map(|m| m.declared_budget.map(|b| (b.span, m.name.clone()))).collect();
+        for (span, name) in spans {
+            self.diags.push(
+                Diagnostic::new(
+                    takt_diag::Severity::Note,
+                    SC12,
+                    span,
+                    format!("`{name}`: Kostenbudget und Schedulability sind noch nicht entscheidbar"),
+                )
+                .with_suggestion(
+                    "Die Umrechnung von Operationen in Zeit braucht die kalibrierte Kostentabelle `c_target`                      (9.4.3, 13.8); `takt cost` zeigt die gerechneten Vektoren schon heute"
+                        .to_string(),
+                ),
+            );
+        }
     }
 
     /// Pruefung 62 (7.2): `with budget = {ram = …}` wird eingehalten.

@@ -644,3 +644,49 @@ machine m:
     assert!(lines.contains("c_target"), "der Bericht nennt die fehlende Kalibrierung:\n{lines}");
     assert!(lines.contains("13.8"), "mit Fundstelle:\n{lines}");
 }
+
+/// **SC-12 sagt, warum es nicht urteilen kann** (9.4.3, 7.2; FB-136).
+///
+/// Pruefung 12 verlangt Kostenbudget und Schedulability. Beide brauchen
+/// `c_target` aus der Kalibrierung (13.8), und bis die vorliegt, kann
+/// niemand entscheiden. Bis hierher schwieg die Pruefung darum ganz — und
+/// ein Nutzer konnte nicht unterscheiden, ob sein Budget geprueft wurde
+/// oder ob es die Pruefung gar nicht gibt.
+#[test]
+fn a_declared_budget_learns_why_it_cannot_be_judged() {
+    let (_, _, warnings) = compile(
+        "\
+machine m with budget = {ram = 256}:
+    initial S
+
+    state S:
+        enter:
+            n = 1
+",
+    );
+    let hint = warnings.iter().find(|w| w.contains("SC-12")).unwrap_or_else(|| {
+        panic!("SC-12 meldet sich nicht; gefunden:\n{}", warnings.join("\n"));
+    });
+    assert!(hint.contains("c_target"), "die Meldung nennt die fehlende Eingabe: {hint}");
+}
+
+/// Ohne deklariertes Budget schweigt SC-12.
+///
+/// Wer kein Budget nennt, hat nichts erwartet; ein Hinweis auf eine
+/// fehlende Pruefung waere dort Rauschen. 3.4 haelt dieselbe Regel fuer
+/// die Performance-Lints fest — gewarnt wird, wo jemand eine Zusage
+/// gemacht hat.
+#[test]
+fn without_a_declared_budget_check_twelve_stays_quiet() {
+    let (_, _, warnings) = compile(
+        "\
+machine m:
+    initial S
+
+    state S:
+        enter:
+            n = 1
+",
+    );
+    assert!(!warnings.iter().any(|w| w.contains("SC-12")), "SC-12 meldet sich ungefragt:\n{}", warnings.join("\n"));
+}

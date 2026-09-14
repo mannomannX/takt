@@ -132,13 +132,48 @@ pub fn size(p: &Program) -> Size {
     // Was ohne Hardware-Konfiguration (8.10) und Kalibrierung (13.8) fehlt.
     items.push(Item { name: "Runtime-Reserven je Profil".into(), bytes: 0, origin: Origin::Open });
 
-    // Der Flash-Posten steht hier als `offen`, weil `size` vor dem Link
-    // laeuft. Mit einem Objekt wird er `gemessen` (11.5): Die
-    // Sektionsgroessen liest `takt-llvm::inspect`, und die Zahl ist dann
-    // exakt. Das Verdrahten gehoert zu M5 (plan/m5.md 5, Schritt 5).
+    // Flash und Stack braeuchten ein Objekt; ohne eines bleiben sie
+    // offen. [`with_object`] fuellt sie.
     items.push(Item { name: "Flash (Code, Konstanten)".into(), bytes: 0, origin: Origin::Open });
+    items.push(Item { name: "Stack (Programmanteil)".into(), bytes: 0, origin: Origin::Open });
 
     Size { items }
+}
+
+/// Was sich erst an einem erzeugten Objekt ablesen laesst (11.5, 12.3).
+///
+/// Zwei Posten stehen ohne Objekt auf `offen`, und zwar nicht aus
+/// Unfertigkeit: Wie viele Bytes der Code belegt und wie tief er den Stack
+/// nimmt, entscheidet der Codegen, nicht die MIR. `takt size --object`
+/// reicht die Messung nach.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Measured {
+    /// Code und Konstanten aus den Sektionsgroessen.
+    pub flash: Option<u64>,
+    /// Der Programmanteil des Stacks als laengster Pfad (12.3).
+    pub stack: Option<super::stack::Depth>,
+}
+
+impl Size {
+    /// Ersetzt die offenen Posten durch Messwerte.
+    ///
+    /// **Ein fehlender Messwert laesst den Posten offen**, statt ihn auf
+    /// null zu setzen: Eine Null, die niemand gemessen hat, waere in der
+    /// Summe eine Luege — und die Summe heisst „belastbar".
+    pub fn with_object(mut self, m: &Measured) -> Size {
+        for item in &mut self.items {
+            let value = match item.name.as_str() {
+                "Flash (Code, Konstanten)" => m.flash,
+                "Stack (Programmanteil)" => m.stack.as_ref().map(|d| d.bytes),
+                _ => continue,
+            };
+            if let Some(bytes) = value {
+                item.bytes = bytes;
+                item.origin = Origin::Measured;
+            }
+        }
+        self
+    }
 }
 
 /// Der Speicher einer Maschine mit Overlay (11.2): Geschwisterzustaende

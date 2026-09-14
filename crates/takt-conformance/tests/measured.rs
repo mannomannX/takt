@@ -191,3 +191,94 @@ fn the_step_function_has_a_measurable_frame() {
     // das ein Hinweis darauf, dass die Messung ins Leere lief.
     assert!(frame > 0, "die Schrittfunktion hat keinen messbaren Rahmen; die Messung greift nicht");
 }
+
+/// **Der Bericht nimmt die Messung auf** (11.5, 12.3).
+///
+/// Die beiden Tests darueber belegen, dass sich Flash und Stackrahmen
+/// messen lassen. Das genuegte lange nicht: Die Zahlen entstanden und
+/// niemand las sie — `stack::depth` hatte ausser einem Test keinen
+/// Aufrufer, und `size.rs` setzte den Flash-Posten weiter auf `offen`.
+///
+/// Dieser Test schliesst die Kette. Er prueft beides, weil beides
+/// zusammengehoert: dass die Posten ohne Objekt `offen` bleiben — eine
+/// Null, die niemand gemessen hat, waere in einer Summe namens
+/// „belastbar" eine Luege — und dass sie mit Objekt `gemessen` werden.
+#[test]
+fn the_report_takes_the_measurement() {
+    let Clang::At(clang) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let tools = Binutils::host();
+    if !tools.available() {
+        eprintln!("uebersprungen: binutils nicht gefunden");
+        return;
+    }
+    let p = corpus(NAME);
+
+    // Ohne Objekt: beide Posten offen, und die Summe sagt es.
+    let plain = size::size(&p);
+    for name in ["Flash (Code, Konstanten)", "Stack (Programmanteil)"] {
+        let item = plain.items.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("Posten `{name}` fehlt"));
+        assert_eq!(item.origin, size::Origin::Open, "`{name}` ohne Objekt");
+    }
+
+    let dir = std::env::temp_dir().join("takt-measured-report");
+    let _ = std::fs::remove_dir_all(&dir);
+    let Some(obj) = object(&p, &dir, &clang) else {
+        panic!("das Objekt liess sich nicht bauen");
+    };
+    let Some(sections) = tools.sections(&obj) else {
+        eprintln!("uebersprungen: `size` liest dieses Format nicht");
+        return;
+    };
+
+    let symbols: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
+    let frames: Vec<Option<u32>> =
+        tools.stack_frames(&obj, &symbols).into_iter().map(|f| f.and_then(|n| u32::try_from(n).ok())).collect();
+    let measured =
+        size::Measured { flash: Some(sections.flash()), stack: takt_mir::analysis::stack::depth(&p, &frames) };
+
+    let report = size::size(&p).with_object(&measured);
+    let flash = report.items.iter().find(|i| i.name == "Flash (Code, Konstanten)").expect("Flash-Posten");
+    assert_eq!(flash.origin, size::Origin::Measured, "mit Objekt ist der Flash gemessen");
+    assert!(flash.bytes > 0, "und traegt eine Zahl");
+    assert!(report.total() > plain.total(), "die Summe waechst um das Gemessene");
+    eprintln!("{NAME}: Flash {} B gemessen, Summe {} B", flash.bytes, report.total());
+}
+
+/// Alle Rahmen in einem Durchlauf sind dieselben wie einzeln gelesen.
+///
+/// [`Binutils::stack_frames`] liest die Disassemblierung einmal statt je
+/// Funktion — bei einem Programm mit vielen Funktionen ist das der
+/// Unterschied zwischen einem Aufruf und N. Ein schnellerer Weg, der
+/// andere Zahlen liefert, waere keiner.
+#[test]
+fn reading_all_frames_at_once_agrees_with_reading_them_singly() {
+    let Clang::At(clang) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let tools = Binutils::host();
+    if !tools.available() {
+        eprintln!("uebersprungen: binutils nicht gefunden");
+        return;
+    }
+    let p = corpus("02_units_and_data.takt");
+    let dir = std::env::temp_dir().join("takt-measured-frames");
+    let _ = std::fs::remove_dir_all(&dir);
+    let Some(obj) = object(&p, &dir, &clang) else {
+        panic!("das Objekt liess sich nicht bauen");
+    };
+
+    let symbols: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
+    if symbols.is_empty() {
+        eprintln!("uebersprungen: das Programm hat keine Funktionen");
+        return;
+    }
+    let batch = tools.stack_frames(&obj, &symbols);
+    for (i, sym) in symbols.iter().enumerate() {
+        assert_eq!(batch[i], tools.stack_frame(&obj, sym), "`{sym}`: Stapel- und Einzelmessung weichen ab");
+    }
+    eprintln!("{} Funktionen, Rahmen: {batch:?}", symbols.len());
+}

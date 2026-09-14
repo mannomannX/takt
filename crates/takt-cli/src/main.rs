@@ -8,7 +8,7 @@
 //!                   [--profile P] [--order random:SEED]
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD]
-//! takt size  DATEI… [--build sim|hw] [--profile P]
+//! takt size  DATEI… [--build sim|hw] [--profile P] [--object DATEI.o] [--target NAME]
 //! takt cost  DATEI… [--build sim|hw] [--profile P]
 //! takt latency DATEI… [--build sim|hw] [--profile P]
 //! takt mir   DATEI [--dump] [--write OUT.mir] [--hash]
@@ -64,6 +64,7 @@ impl Args {
             "--target",
             "--emit",
             "--out",
+            "--object",
         ];
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
         let mut i = 0;
@@ -479,11 +480,43 @@ fn size(args: &Args) -> bool {
             continue;
         };
         println!("{path}:");
-        for line in takt_mir::analysis::size::size(program).lines() {
+        let report = takt_mir::analysis::size::size(program).with_object(&measure(args, program));
+        for line in report.lines() {
             println!("{line}");
         }
     }
     ok
+}
+
+/// Was ein erzeugtes Objekt beisteuert (11.5, 12.3).
+///
+/// **Ohne `--object` bleibt es leer, und das ist kein Mangel.** Flash und
+/// Stacktiefe entscheidet der Codegen, nicht die MIR; wer sie wissen will,
+/// muss uebersetzt haben. `takt build --emit obj` liefert die Datei.
+fn measure(args: &Args, p: &takt_mir::Program) -> takt_mir::analysis::size::Measured {
+    let mut out = takt_mir::analysis::size::Measured::default();
+    let Some(file) = args.value("--object") else { return out };
+    let path = std::path::Path::new(file);
+    if !path.exists() {
+        eprintln!("{file}: nicht gefunden; Flash und Stack bleiben offen");
+        return out;
+    }
+
+    // Ohne `--target` der Wirt: Ein Objekt ohne Angabe stammt meist aus
+    // `takt build` ohne Ziel, und das uebersetzt fuer den Wirt.
+    let host = if cfg!(windows) { takt_llvm::Target::X86_64_WINDOWS } else { takt_llvm::Target::X86_64_LINUX };
+    let target = args.value("--target").and_then(takt_llvm::Target::by_name).unwrap_or(host);
+    let tools = takt_llvm::inspect::Binutils::best_for(target);
+
+    out.flash = tools.sections(path).map(|s| s.flash());
+
+    // Die Rahmen aller Funktionen in einem Durchlauf; die Rechnung
+    // braucht sie vollstaendig, sonst meldet sie unbekannt.
+    let symbols: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
+    let frames: Vec<Option<u32>> =
+        tools.stack_frames(path, &symbols).into_iter().map(|f| f.and_then(|n| u32::try_from(n).ok())).collect();
+    out.stack = takt_mir::analysis::stack::depth(p, &frames);
+    out
 }
 
 /// Build aus `--build sim|hw` (Default `sim`).

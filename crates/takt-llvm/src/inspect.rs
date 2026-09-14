@@ -237,6 +237,68 @@ impl Binutils {
     /// `None` heisst: kein Werkzeug, oder die Funktion steht nicht in der
     /// Datei. `Some(0)` heisst: Sie hat keinen Rahmen — ein Blatt, das
     /// mit Registern auskommt.
+    /// Die Rahmengroessen aller genannten Funktionen in einem Durchlauf.
+    ///
+    /// **Einmal lesen statt je Funktion.** [`Binutils::stack_frame`] ruft
+    /// `objdump` fuer jedes Symbol neu; bei einem Programm mit vielen
+    /// Funktionen ist das dieselbe Disassemblierung N-mal. Fuer die
+    /// Stackrechnung (12.3) werden ohnehin alle gebraucht, also entsteht
+    /// die Tabelle in einem Zug.
+    ///
+    /// Die Rueckgabe hat dieselbe Laenge und Reihenfolge wie `symbols`.
+    /// `None` an einer Stelle heisst „nicht gefunden" — die Rechnung
+    /// meldet dann eine unbekannte Tiefe statt einer zu kleinen.
+    pub fn stack_frames(&self, file: &Path, symbols: &[String]) -> Vec<Option<u64>> {
+        let mut out = vec![None; symbols.len()];
+        let Ok(res) = Command::new(self.tool("objdump")).args(["-d", "--no-show-raw-insn"]).arg(file).output() else {
+            return out;
+        };
+        if !res.status.success() {
+            return out;
+        }
+        let text = String::from_utf8_lossy(&res.stdout);
+
+        // Ein Durchlauf: Beim Funktionskopf merken, welches Symbol gerade
+        // laeuft, und die erste Rahmenanpassung danach nehmen.
+        let mut current: Option<usize> = None;
+        for line in text.lines() {
+            if line.contains(">:") {
+                // Ein Kopf ohne Rahmenanpassung ist ein Blatt mit Registern.
+                if let Some(i) = current.take()
+                    && out[i].is_none()
+                {
+                    out[i] = Some(0);
+                }
+                current = symbols.iter().position(|sym| line.contains(&format!("<{sym}>:")));
+                continue;
+            }
+            if let Some(i) = current
+                && out[i].is_none()
+                && let Some(n) = frame_adjust(line)
+            {
+                out[i] = Some(n);
+                current = None;
+            }
+        }
+        if let Some(i) = current
+            && out[i].is_none()
+        {
+            out[i] = Some(0);
+        }
+        out
+    }
+
+    /// Der Stackrahmen einer Funktion, aus ihrem Prolog gelesen (12.3).
+    ///
+    /// 12.3 rechnet die Tiefe als laengsten Pfad im Aufrufgraphen; hier
+    /// entsteht die Zahl je Knoten.
+    ///
+    /// `None` heisst: kein Werkzeug, oder die Funktion steht nicht in der
+    /// Datei. `Some(0)` heisst: Sie hat keinen Rahmen — ein Blatt, das
+    /// mit Registern auskommt.
+    ///
+    /// Fuer mehrere Funktionen ist [`Binutils::stack_frames`] der Weg: Es
+    /// liest die Disassemblierung einmal statt je Aufruf.
     pub fn stack_frame(&self, file: &Path, symbol: &str) -> Option<u64> {
         let out = Command::new(self.tool("objdump")).args(["-d", "--no-show-raw-insn"]).arg(file).output().ok()?;
         if !out.status.success() {
