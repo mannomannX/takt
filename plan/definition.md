@@ -1401,15 +1401,20 @@ Bus-Mappings — Modbus-Registertabellen, CANopen-PDO/SDO-Zuordnungen, EtherCAT-
 
 | Feld | Bedeutung |
 |---|---|
-| Gerät | Treibertyp, Adresse, Heartbeat, Zykluszeit |
+| Gerät | Treibertyp, Adresse, Heartbeat, Zykluszeit; bei gepollten Geräten `fifo_depth` und `byte_rate` (Prüfung 59) |
 | Channel | Adresse (`"modbus1/40001"`, `"can0/pdo/0x181/0"`), Richtung, Rohtyp, Skalierung/Kalibrierung (linear oder Tabelle), Einheit, Range, `safe`-Wert (Outputs), Rate/`max_rate`, Rahmung |
+| Anschluss | Was der Treibertyp braucht, um den Kanal zu erreichen — bei einem Bus steht es schon in der Adresse, bei direkt angeschlossener Peripherie nicht: Port und Pin, Polarität, Alternativfunktion, Timer-Kanal. Der Inhalt ist treiberspezifisch und für die Sprache undurchsichtig; der Compiler reicht ihn weiter, statt ihn zu deuten (9.5) |
 | Messwerte | `guard`, `jitter` je Output, Abtastlatenz je Input — aus der Konformitätsmessung (13.8) |
 | Speicher und Stack | `ram`, `flash`, ggf. `iram`; Stack-Reserven für Runtime, Treiber, ISRs, RTOS (11.5, 12.3) |
 | Topologie (v2) | Knoten, Verbindungen, `hops` (12.9) |
 | Formatversion | Schemaversion der Konfiguration (11.3) |
 | Herkunft | Geräteprofil (EDS für CANopen, ESI für EtherCAT, Modbus-Registertabelle, DMX-Kanalplan) |
 
-Das Programm sieht nur logische Channels: `import channels from "site1.hw"` (8.2) macht sie typisiert sichtbar; die Bindung im Programm (`@ hw("…")`) nennt die Adresse symbolisch. Transaktionen (SDO-Zugriff, Modbus-Lesen mit Antwort) sind mit den vorhandenen Konstrukten ausdrückbar: `send` plus `until rx matches ModbusResp(tid = req.tid) as r timeout 200 ms`; ein `request`-Zucker wäre protokollspezifisch (Korrelation über Transaktions-IDs oder Index/Subindex) und bringt keine neue Garantie. Die Standardbibliothek liefert Protokollpakete: Records mit `layout` für Modbus-, CANopen- und DMX-Frames sowie Hilfsfunktionen für CRC und Codierung (11.4).
+Das Programm sieht nur logische Channels: `import channels from "site1.hw"` (8.2) macht sie typisiert sichtbar; die Bindung im Programm (`@ hw("…")`) nennt die Adresse symbolisch. Die Adresse ist ein Schlüssel, kein Ort: Sie benennt einen Eintrag der Konfiguration, und erst dort steht, welcher Treiber ihn bedient und wie er angeschlossen ist. Ein Programm, dessen Adressen in keiner Konfiguration vorkommen, bleibt übersetzbar — die Bindung ist ein Metadatum (8.3), und der Logik-Hash kennt sie nicht.
+
+**Wie die Adresse den Treiber erreicht.** Ohne Konfiguration braucht der erzeugte Code trotzdem einen Weg nach außen, und er darf keinen Pin kennen (9.5). Der Compiler bildet die Adresse darum auf einen Namen ab — aus `hw("ui/led")` wird `takt_out_ui_led` — und ruft ihn in `commit_outputs` (12.1); wer die Peripherie besitzt, stellt die Funktion bereit. Der Name entsteht aus der *Adresse*, nicht aus dem Channel-Namen: Zwei Programme, die denselben Ausgang verschieden nennen, passen damit auf denselben Treiber. Ein gebundener Ausgang ohne Treiber ist ein Bindefehler, der die Adresse nennt, und keine stille Wirkungslosigkeit — dieselbe Entscheidung wie beim defensiven Treiberrand (12.6): lieber laut als unbemerkt. Auf Zielen mit Konfiguration tritt diese an die Stelle der festen Namen; die Abbildung Adresse → Treiber bleibt dieselbe, sie steht dann nur deklarativ statt im Symbol.
+
+Transaktionen (SDO-Zugriff, Modbus-Lesen mit Antwort) sind mit den vorhandenen Konstrukten ausdrückbar: `send` plus `until rx matches ModbusResp(tid = req.tid) as r timeout 200 ms`; ein `request`-Zucker wäre protokollspezifisch (Korrelation über Transaktions-IDs oder Index/Subindex) und bringt keine neue Garantie. Die Standardbibliothek liefert Protokollpakete: Records mit `layout` für Modbus-, CANopen- und DMX-Frames sowie Hilfsfunktionen für CRC und Codierung (11.4).
 
 
 ### 8.11 Geräte mit Kommando und Status
@@ -1855,7 +1860,7 @@ loop:
     advance_cursors()
     publish()
     apply_scheduled()        # geplante Ausgaben dieses Ticks in den Latch; Treiber schreibt zum Hardware-Zeitpunkt
-    commit_outputs()         # asap: sofort; boundary: am nächsten Tick-Anfang; Sendepuffer an Treiber
+    commit_outputs()         # asap: sofort; boundary: am nächsten Tick-Anfang; Sendepuffer an Treiber (Adresse -> Treiber: 8.10)
     record_and_telemeter()   # außerhalb der Semantik, nie blockierend; persist-Journal
     kick_watchdog()
     maybe_sleep()            # 9.9
