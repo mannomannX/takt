@@ -72,7 +72,9 @@ cargo build --release --target thumbv7em-none-eabihf \
 # `.cargo/config.toml` des Nutzers); `cargo metadata` weiss, wohin.
 target_dir="$(cargo metadata --format-version 1 --no-deps 2>/dev/null |
     sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
-bin="${target_dir:-target}/thumbv7em-none-eabihf/release/takt-bringup-stm32f401"
+# `takt` ist das Binary mit dem Takt-Programm; die anderen drei tragen
+# keines und saegen die Frage nicht, um die es hier geht.
+bin="${target_dir:-target}/thumbv7em-none-eabihf/release/takt"
 sysroot="$(rustc --print sysroot)"
 host="$(rustc -vV | sed -n 's/^host: //p')"
 objcopy="$sysroot/lib/rustlib/$host/bin/llvm-objcopy"
@@ -83,6 +85,27 @@ if [ -f "$bin" ] && { [ -x "$objcopy" ] || [ -x "$objcopy.exe" ]; }; then
     rm -f "$tmp"
 else
     echo "  (Abbildpruefung uebersprungen: Binaerdatei oder llvm-objcopy fehlt)"
+fi
+
+# **Traegt das Binary wirklich das Programm aus `takt.toml`?**
+#
+# Ein Bau ohne gesetztes `TAKT_PROGRAM` fiel frueher still auf einen
+# Default zurueck, und das Ergebnis lief korrekt und blieb dabei dunkel —
+# das Programm hing an einem Kommando, das auf dem Board niemand sendet
+# (FB-141). Von aussen sah es aus wie ein Defekt. Die Maschine steht als
+# Symbol im Binary, also ist die Frage in einer Zeile zu beantworten.
+nm="$sysroot/lib/rustlib/$host/bin/llvm-nm"
+toml="crates/takt-bringup-stm32f401/takt.toml"
+konfiguriert="$(grep -o 'program *= *"[^"]*"' "$toml" | cut -d'"' -f2)"
+if [ -f "$bin" ] && { [ -x "$nm" ] || [ -x "$nm.exe" ]; } && [ -n "$konfiguriert" ]; then
+    maschine="$(grep -o '^machine [A-Za-z_][A-Za-z0-9_]*' \
+        "crates/takt-bringup-stm32f401/$konfiguriert" | head -1 | cut -d' ' -f2)"
+    if [ -n "$maschine" ] && "$nm" "$bin" 2>/dev/null | grep -q "${maschine}_step"; then
+        echo "  Programm im Binary: $maschine (aus $konfiguriert)"
+    else
+        echo "  FEHLER: ${maschine}_step fehlt im Binary — gebaut wurde ein anderes Programm." >&2
+        exit 1
+    fi
 fi
 
 echo

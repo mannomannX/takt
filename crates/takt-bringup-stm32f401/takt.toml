@@ -1,0 +1,18 @@
+# Welches Takt-Programm das Bring-up ausfuehrt.
+#
+# **Hier und nicht in einer Umgebungsvariablen.** Der Pfad bestimmt den
+# Inhalt des Binaries; eine Variable taete das unsichtbar — man sieht einem
+# fertigen Binary nicht an, mit welchem Wert es entstand, und ein
+# vergessener Wert faellt still auf den Default zurueck. Genau das ist
+# passiert: Ein Bau ohne `TAKT_PROGRAM` nahm `29_heartbeat.takt`, dessen
+# Maschine an `when go` haengt und darum auf einem Board ohne Kommandoquelle
+# fuer immer dunkel bleibt. Das Binary lief korrekt und sah aus wie ein
+# Defekt (FB-141).
+#
+# Als Datei ist der Pfad eine `rerun-if-changed`-Quelle wie jede andere,
+# der Bau ist aus dem Repo heraus reproduzierbar (13.8), und wer ein
+# anderes Programm bauen will, aendert eine Zeile statt eine Shell-Variable.
+#
+# Relativ zu diesem Verzeichnis. `TAKT_PROGRAM` sticht weiterhin — fuer
+# einen einmaligen Versuch, nicht fuer den Normalfall.
+program = "../../corpus-try/29_heartbeat.takt"

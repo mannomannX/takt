@@ -55,8 +55,7 @@ fn main() {
 /// `blink` und `minimal` bleiben baubar: Sie binden weder die Bibliothek
 /// noch die erzeugten Konstanten ein.
 fn build_takt_program(out: &Path) {
-    let program = env::var("TAKT_PROGRAM")
-        .unwrap_or_else(|_| format!("{}/../../corpus-try/16_timing.takt", env!("CARGO_MANIFEST_DIR")));
+    let program = program_path();
     println!("cargo:rerun-if-env-changed=TAKT_PROGRAM");
     println!("cargo:rerun-if-changed={program}");
 
@@ -86,6 +85,37 @@ fn build_takt_program(out: &Path) {
 
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=taktprogramm");
+}
+
+/// Welches Programm gebaut wird.
+///
+/// **Aus `takt.toml`, nicht aus der Umgebung.** Der Pfad bestimmt den
+/// Inhalt des Binaries, und eine Umgebungsvariable taete das unsichtbar:
+/// Einem fertigen Binary sieht man nicht an, mit welchem Wert es entstand.
+/// Ein Bau ohne `TAKT_PROGRAM` fiel darum still auf einen Default zurueck
+/// und erzeugte ein Programm, das auf dem Board korrekt lief und dabei
+/// dunkel blieb — es hing an einem Kommando, das dort niemand sendet
+/// (FB-141).
+///
+/// `TAKT_PROGRAM` sticht weiterhin: fuer einen einmaligen Versuch, nicht
+/// fuer den Normalfall.
+fn program_path() -> String {
+    if let Ok(p) = env::var("TAKT_PROGRAM") {
+        return p;
+    }
+    let here = env!("CARGO_MANIFEST_DIR");
+    let config = format!("{here}/takt.toml");
+    println!("cargo:rerun-if-changed={config}");
+    let text = fs::read_to_string(&config).unwrap_or_else(|e| panic!("{config}: {e}"));
+    // Eine Zeile `program = "…"`; ein TOML-Parser waere fuer einen
+    // Schluessel eine Abhaengigkeit zu viel.
+    let value = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .find_map(|l| l.strip_prefix("program")?.trim_start().strip_prefix('=')?.trim().strip_prefix('"')?.strip_suffix('"'))
+        .unwrap_or_else(|| panic!("{config}: kein `program = \"…\"`"));
+    format!("{here}/{value}")
 }
 
 /// Uebersetzt das Programm, um den Rahmen dazu bauen zu koennen.
