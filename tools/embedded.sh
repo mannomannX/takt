@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
-# Baut die `no_std`-Crates fuer die beiden M5-Ziele (12.3, 12.8).
+# Baut und prueft, was auf die MCU geht (12.3, 12.8).
 #
-# Der Zweck ist nicht das Artefakt, sondern die Probe: `takt-rt-core` und
-# `takt-rt-baremetal` muessen **ohne Board-Crate** fuer beide Ziele bauen.
-# Geht das nicht mehr, ist Board-Wissen in eine Schicht gesickert, die
-# keines haben darf (plan/m5.md 2.2) — und das faellt sonst erst auf, wenn
-# das erste Board da ist und die Schichten nicht mehr zu trennen sind.
+# **Warum ein eigenes Skript.** Das Board-Crate liegt ausserhalb des
+# Workspace — Registerzugriff braucht `unsafe`, und `forbid` (13.4) laesst
+# sich nicht lokal aufheben. Ein Crate ausserhalb des Workspace wird von
+# `cargo test --workspace` nicht erfasst und darum leicht vergessen; genau
+# das verhindert dieses Skript.
 #
-# Die beiden Ziele liegen in *verschiedenen* Zielklassen (12.8): Cortex-M4F
-# rechnet `f32` in Hardware, RV32IMAC in Software. Was hier baut, ist damit
-# gegen beide Numerikwege geprueft.
+# Drei Pruefungen, jede mit eigenem Zweck:
+#
+#   1. Die `no_std`-Kerne bauen fuer *beide* M5-Ziele — ohne Board-Crate.
+#      Geht das nicht mehr, ist Board-Wissen in eine Schicht gesickert,
+#      die keines haben darf (plan/m5.md 2.2).
+#   2. Das Board-Crate baut fuer sein Ziel und ist clippy-sauber.
+#   3. Die rechnende Haelfte (`takt-board-support`) laeuft auf dem Wirt
+#      mit ihren Tests. Sie ist der Grund, warum die Ausnahme klein ist:
+#      Perioden, Prescaler, Zaehlerueberlauf und Zyklenumrechnung sind
+#      dort, wo sie geprueft werden koennen.
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
 targets=(thumbv7em-none-eabihf riscv32imac-unknown-none-elf)
-crates=(takt-rt-core takt-rt-baremetal)
+cores=(takt-rt-core takt-rt-baremetal)
 
 for t in "${targets[@]}"; do
     if ! rustup target list --installed | grep -qx "$t"; then
@@ -22,12 +31,30 @@ for t in "${targets[@]}"; do
     fi
 done
 
+echo "== 1. Die Kerne, fuer beide Ziele, ohne Board"
 for t in "${targets[@]}"; do
-    for c in "${crates[@]}"; do
-        echo "== $c fuer $t"
+    for c in "${cores[@]}"; do
+        echo "-- $c fuer $t"
         cargo build -p "$c" --target "$t" "$@"
     done
 done
 
 echo
-echo "Beide Ziele, beide Crates: gebaut ohne Board."
+echo "== 2. Das Board-Crate (eigener Workspace, thumbv7em)"
+#
+# Ohne `--all-targets`: Tests fuer ein `no_std`-Ziel brauchen einen
+# Testlaeufer und einen `panic_handler`, die es dort nicht gibt. Was
+# testbar ist, liegt ohnehin in `takt-board-support` — und genau das ist
+# der Grund fuer die Trennung.
+(
+    cd crates/takt-board-blackpill
+    cargo build --target thumbv7em-none-eabihf "$@"
+    cargo clippy --target thumbv7em-none-eabihf "$@" -- -D warnings
+)
+
+echo
+echo "== 3. Die rechnende Haelfte auf dem Wirt"
+cargo test -p takt-board-support "$@"
+
+echo
+echo "Alles gebaut und geprueft."

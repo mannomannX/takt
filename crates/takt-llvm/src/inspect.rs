@@ -23,10 +23,17 @@
 //! **Warum ueber die Binutils und nicht mit einem eigenen ELF-Leser.**
 //! Ein Leser fuer ELF *und* PE *und* Mach-O waere ein Crate fuer sich,
 //! und er muesste jede Eigenheit jedes Ziels kennen. `size`, `nm` und
-//! `objdump` stehen in jeder Werkzeugkette, die ohnehin gebraucht wird —
-//! fuer aarch64 als `aarch64-linux-gnu-*`, fuer die MCU als
-//! `arm-none-eabi-*`. Das Modul kennt darum nur ihre Ausgabe, nicht das
-//! Format.
+//! `objdump` stehen in jeder Werkzeugkette, die ohnehin gebraucht wird.
+//! Das Modul kennt darum nur ihre Ausgabe, nicht das Format.
+//!
+//! **Die LLVM-Werkzeuge sind der kuerzere Weg.** `rustup component add
+//! llvm-tools` liefert `llvm-objdump`, `llvm-nm` und `llvm-size`, und ein
+//! einziges Binaerprogramm liest ARM, ARM64 und RISC-V — die
+//! GNU-Werkzeuge brauchen je Ziel eine eigene Kette (`arm-none-eabi-*`,
+//! `riscv32-unknown-elf-*`). Fuer M5 heisst das: keine Cross-binutils zu
+//! beschaffen, und dieselbe LLVM-Version, die auch den Code erzeugt hat,
+//! liest ihn wieder. [`Binutils::llvm`] findet sie in der aktiven
+//! Toolchain; [`Binutils::with_prefix`] bleibt fuer GNU-Ketten.
 //!
 //! **Was fehlt, ist kein Fehler.** Wo kein Werkzeug steht, liefert jede
 //! Funktion `None`. Ein Test, der misst, ueberspringt sich dann — wie
@@ -94,6 +101,39 @@ impl Binutils {
     /// Die Werkzeuge einer Cross-Kette, etwa `aarch64-linux-gnu-`.
     pub fn with_prefix(prefix: &str) -> Binutils {
         Binutils { prefix: prefix.to_string() }
+    }
+
+    /// Die LLVM-Werkzeuge der aktiven Rust-Toolchain.
+    ///
+    /// `rustup component add llvm-tools` legt sie unter
+    /// `<sysroot>/lib/rustlib/<host>/bin` ab. Ein einziges `llvm-objdump`
+    /// liest ARM, ARM64 und RISC-V, also brauchen alle vier Ziele aus
+    /// [`crate::target::Target::ALL`] keine eigene Kette.
+    ///
+    /// `None`, wenn die Komponente fehlt oder `rustc` nicht erreichbar
+    /// ist — dann bleibt [`Binutils::with_prefix`] fuer eine GNU-Kette.
+    pub fn llvm() -> Option<Binutils> {
+        let out = Command::new("rustc").args(["--print", "sysroot"]).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let sysroot = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let host = Command::new("rustc").arg("-vV").output().ok()?;
+        let host =
+            String::from_utf8_lossy(&host.stdout).lines().find_map(|l| l.strip_prefix("host: ").map(str::to_string))?;
+        let dir = Path::new(&sysroot).join("lib").join("rustlib").join(host).join("bin");
+        let probe = dir.join(if cfg!(windows) { "llvm-nm.exe" } else { "llvm-nm" });
+        probe.exists().then(|| Binutils { prefix: format!("{}{}llvm-", dir.display(), std::path::MAIN_SEPARATOR) })
+    }
+
+    /// Die Werkzeuge fuer ein Ziel: LLVM, wo vorhanden, sonst die
+    /// GNU-Kette des Ziels.
+    ///
+    /// Die Reihenfolge ist Absicht. LLVM liest jedes der vier Ziele und
+    /// stammt aus derselben Version, die den Code erzeugt hat; eine
+    /// GNU-Kette muss erst beschafft werden und gibt es je Ziel einzeln.
+    pub fn best_for(target: crate::target::Target) -> Binutils {
+        Binutils::llvm().unwrap_or_else(|| Binutils::for_target(target))
     }
 
     /// Die Werkzeuge, die zu einem Ziel gehoeren (12.8).

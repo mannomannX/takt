@@ -1,0 +1,13 @@
+[package]
+name = "takt-board-support"
+version = "0.1.0"
+description = "Takt: die rechnende Haelfte der Board-Unterstuetzung, ohne Registerzugriff"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Keine Abhaengigkeit, auch nicht `cortex-m`: Was hier steht, ist
+# Arithmetik und Zaehlerlogik. Genau deshalb laeuft es auf dem Wirt und
+# ist testbar — `tests/boundary.rs` wacht darueber.
+[lints]
+workspace = true

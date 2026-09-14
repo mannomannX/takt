@@ -48,6 +48,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "takt-board-support"
+version = "0.1.0"
+
+[[package]]
 name = "takt-cli"
 version = "0.1.0"
 dependencies = [

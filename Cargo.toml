@@ -1,5 +1,14 @@
 [workspace]
 resolver = "3"
+exclude = [
+    # Eigener Workspace, mit Absicht: Registerzugriff braucht `unsafe`,
+    # und `forbid` (13.4) laesst sich nicht lokal aufheben. 9.5 fuehrt
+    # Treiber in der Trusted Computing Base — dort faellt die Grenze,
+    # und sie wird dadurch sichtbar statt verwischt. Gebaut und
+    # geprueft wird das Crate von `tools/embedded.sh`.
+    "crates/takt-board-blackpill",
+]
+
 members = [
     "crates/libtaktm",
     "crates/takt-native",
@@ -11,6 +20,7 @@ members = [
     "crates/takt-rt-core",
     "crates/takt-rt-linux",
     "crates/takt-rt-baremetal",
+    "crates/takt-board-support",
     "crates/takt-llvm",
     "crates/takt-conformance",
     "crates/takt-interp",

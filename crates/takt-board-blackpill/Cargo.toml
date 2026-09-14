@@ -1,0 +1,49 @@
+[package]
+name = "takt-board-blackpill"
+version = "0.1.0"
+description = "Takt: Board-Unterstuetzung fuer die WeAct Black Pill (STM32F401CCU6)"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+# **Ein eigener Workspace, mit Absicht.**
+#
+# Registerzugriff braucht `unsafe`; der Haupt-Workspace fuehrt
+# `unsafe_code = "forbid"` (13.4), und `forbid` laesst sich nicht lokal
+# aufheben — das ist sein Sinn. Die Grenze faellt darum dorthin, wo 9.5
+# sie ohnehin zieht: „Compiler und LLVM, `libtaktm`, native Funktionen,
+# Runtime, **Treiber** …, OS, Hardware" sind die Trusted Computing Base.
+#
+# **Was hier liegt, ist darum so wenig wie moeglich.** Alles, was reine
+# Rechnung ist — Periodenumrechnung, Zyklen in Nanosekunden, die
+# Zaehlerzusammensetzung — liegt in `takt-board-support`, das im
+# Haupt-Workspace bleibt, `forbid` einhaelt und auf dem Wirt vollstaendig
+# getestet wird. Hier bleibt, was ein Register anfasst: Takte, Timer,
+# Watchdog. Diese Trennung ist der Grund, warum die Ausnahme klein ist.
+[workspace]
+
+[dependencies]
+takt-board-support = { path = "../takt-board-support" }
+takt-rt-baremetal = { path = "../takt-rt-baremetal" }
+
+# `cortex-m` liefert, was dem *Prozessorkern* gehoert: DWT-Zyklenzaehler
+# (12.3, Grundlage der Kalibrierung), `wfi` fuer den Schlaf (9.9), MPU
+# fuer den Schutzbereich (12.3), NVIC. Derselbe Code traegt spaeter jedes
+# andere Cortex-M-Ziel — der nRF52 ist ebenfalls ein M4.
+cortex-m = "0.7"
+
+# Die PAC liefert die *Peripherie* um den Kern: Timer, ADC, USART, RCC,
+# Watchdog. Bewusst die PAC und nicht `stm32f4xx-hal` (plan/m5.md 2.2):
+# Ein HAL bringt ein eigenes Zeit- und Taktmodell mit, und Takt hat
+# bereits eines. Zwei Rundungsquellen fuer dieselbe Tickperiode waeren
+# eine Fehlerquelle in genau der Groessenordnung, die `tick_tolerance`
+# (7.1) messen soll.
+stm32f4 = { version = "0.16", features = ["stm32f401"] }
+
+[lints.rust]
+# `unsafe_code` fehlt hier bewusst: Es ist der Grund fuer den eigenen
+# Workspace. Alles andere bleibt so scharf wie im Haupt-Workspace.
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
