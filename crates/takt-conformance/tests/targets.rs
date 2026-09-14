@@ -18,6 +18,7 @@
 //! `tools/Dockerfile.linux` bringen beides mit.
 
 use takt_llvm::Target;
+use takt_llvm::toolchain::Clang;
 
 mod common;
 
@@ -96,7 +97,8 @@ fn run_for(target: Target, p: &takt_mir::Program, name: &str, machine: Option<&s
     // aarch64 die Startdateien und `libgcc` der Cross-Kette — der
     // gcc-Treiber kennt sie ohnehin.
     let obj = dir.join("programm.o");
-    let out = std::process::Command::new("clang")
+    let mut cmd = std::process::Command::new("clang");
+    let out = Clang::deterministic(&mut cmd)
         .args(["-Wno-override-module", "-O1", "-c"])
         .arg(format!("--target={}", target.triple))
         .arg(&ll)
@@ -108,8 +110,11 @@ fn run_for(target: Target, p: &takt_mir::Program, name: &str, machine: Option<&s
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
     let linker = if target == Target::AARCH64_LINUX { "aarch64-linux-gnu-gcc" } else { "cc" };
+    // Auch der Linker erbt die Zusage aus 11.3: Er setzt sonst einen
+    // Zeitstempel, und zwei Uebersetzungen waeren verschieden.
+    let mut cmd = std::process::Command::new(linker);
     let out =
-        std::process::Command::new(linker).arg(&c).arg(&obj).arg("-o").arg(&exe).output().map_err(|e| e.to_string())?;
+        Clang::deterministic(&mut cmd).arg(&c).arg(&obj).arg("-o").arg(&exe).output().map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }

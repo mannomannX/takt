@@ -11,15 +11,25 @@
 //! Lauf-Header (8.4), und ein Hash taugt nur, wenn dieselbe Quelle
 //! dasselbe Ergebnis liefert.
 //!
-//! **Drei Stufen, drei Tests.** Die Eigenschaft kann an drei Stellen
-//! brechen, und jede hat ihre eigene Ursache: eine `HashMap` im Codegen
-//! macht die *IR* unstet, ein Zeitstempel oder Pfad das *Objekt*, und
-//! eine ungeordnete Symboltabelle das *Binary*. Ein Test ueber alles
-//! zusammen saehe nur, dass etwas kaputt ist; drei sagen, was.
+//! **Vier Stufen, vier Tests.** Die Eigenschaft kann an mehreren
+//! Stellen brechen, und jede hat ihre eigene Ursache: eine `HashMap` im
+//! Codegen macht die *IR* unstet, ein Zeitstempel oder Pfad das
+//! *Objekt*, eine ungeordnete Symboltabelle das *Binary* — und alles
+//! davon kann je Zielarchitektur verschieden sein. Ein Test ueber alles
+//! zusammen saehe nur, dass etwas kaputt ist; vier sagen, was und wo.
 //!
-//! Die letzten beiden brauchen clang und ueberspringen sich ohne, wie
-//! die uebrigen Werkzeugkettentests.
+//! **Warum die Zielarchitektur eine eigene Stufe ist.** Die ersten drei
+//! Stufen pruefen den Wirt. Ein Programm, das auf eine MCU geht, wird
+//! aber fuer ein anderes Ziel uebersetzt, und dort greift eine andere
+//! Werkzeugkette: ein anderer Linker, andere Startdateien, andere
+//! Standardbibliothek. 11.3 macht keine Ausnahme fuer das Ziel, also
+//! darf der Test keine machen — sonst gaelte die Zusage nur dort, wo
+//! ohnehin entwickelt wird, und nicht dort, wo signiert wird (13.4).
+//!
+//! Alle ausser der ersten brauchen clang und ueberspringen sich ohne,
+//! wie die uebrigen Werkzeugkettentests.
 
+use takt_llvm::Target;
 use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
@@ -167,6 +177,95 @@ fn the_same_source_yields_the_same_binary() {
     if let Some(stamp) = pe_timestamp(&binaries[0]) {
         assert_eq!(stamp, 0, "der PE-Kopf traegt einen Build-Zeitstempel ({stamp}); 11.3 verbietet ihn");
     }
+}
+
+/// **Stufe 4**: Auch je Zielarchitektur ist die Uebersetzung
+/// reproduzierbar (11.3, 12.8).
+///
+/// Die Stufen davor pruefen den Wirt. Diese prueft *jedes* Ziel, das M4
+/// traegt — x86-64 und aarch64 —, weil jede Zielkette ihren eigenen
+/// Linker und ihre eigenen Startdateien mitbringt.
+///
+/// **Was diese Stufe nicht faengt.** Der Zeitstempel aus FB-119 ist ein
+/// PE-Feld; ELF traegt keines, und die Ziele hier sind beide ELF. Ein
+/// Lauf ohne `SOURCE_DATE_EPOCH` bleibt darum gruen — nachgemessen: auch
+/// ueber eine Sekundengrenze hinweg sind zwei ELF-Binaries gleich. Die
+/// Stufe prueft also die *uebrigen* Quellen von Unbestimmtheit je Ziel
+/// (Symbolordnung, Pfade, Linkerzustand); den Zeitstempel prueft Stufe 3
+/// auf dem Wirt, wo er auftreten kann.
+///
+/// Der Test ueberspringt sich ohne die Cross-Kette; `tools/linux.sh`
+/// bringt sie mit.
+#[test]
+fn every_target_builds_reproducibly() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    if !cross_available() {
+        eprintln!("uebersprungen: aarch64-Werkzeugkette fehlt (tools/Dockerfile.linux baut sie)");
+        return;
+    }
+    let p = corpus(NAME);
+    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
+    let harness = takt_conformance::harness::build(&p, &machine, 4).source;
+
+    let root = std::env::temp_dir().join("takt-repro-ziel");
+    let _ = std::fs::remove_dir_all(&root);
+    let mut geprueft = 0;
+    for target in [Target::X86_64_LINUX, Target::AARCH64_LINUX] {
+        let ir = common::ir_for(&p, target.triple);
+        let mut binaries = Vec::new();
+        for lauf in 0..2 {
+            let dir = root.join(format!("{}-{lauf}", target.name));
+            std::fs::create_dir_all(&dir).expect("Verzeichnis");
+            let ll = dir.join("programm.ll");
+            let c = dir.join("rahmen.c");
+            let obj = dir.join("programm.o");
+            let exe = dir.join("lauf");
+            std::fs::write(&ll, &ir).expect("IR");
+            std::fs::write(&c, &harness).expect("Rahmen");
+
+            let mut cmd = std::process::Command::new(&path);
+            let out = Clang::deterministic(&mut cmd)
+                .args(["-Wno-override-module", "-O1", "-c"])
+                .arg(format!("--target={}", target.triple))
+                .arg(&ll)
+                .arg("-o")
+                .arg(&obj)
+                .output()
+                .expect("clang");
+            assert!(out.status.success(), "{}: {}", target.name, String::from_utf8_lossy(&out.stderr));
+
+            let linker = if target == Target::AARCH64_LINUX { "aarch64-linux-gnu-gcc" } else { "cc" };
+            let mut cmd = std::process::Command::new(linker);
+            let out = Clang::deterministic(&mut cmd).arg(&c).arg(&obj).arg("-o").arg(&exe).output().expect("Linker");
+            assert!(out.status.success(), "{}: {}", target.name, String::from_utf8_lossy(&out.stderr));
+            binaries.push(std::fs::read(&exe).expect("Binary"));
+        }
+        assert_eq!(binaries[0].len(), binaries[1].len(), "{}: verschiedene Groesse", target.name);
+        assert!(
+            binaries[0] == binaries[1],
+            "{}: zwei Uebersetzungen ergeben verschiedene Binaries; 11.3 verlangt Bitgleichheit",
+            target.name
+        );
+        geprueft += 1;
+    }
+    assert_eq!(geprueft, 2, "es wurden nicht beide Ziele geprueft");
+    eprintln!("{geprueft} Ziele reproduzierbar uebersetzt");
+}
+
+/// Ist die Werkzeugkette fuer aarch64 da?
+///
+/// Dieselbe Pruefung wie in `targets.rs`; sie steht dort und hier, weil
+/// Integrationstests keine Module teilen ausser ueber `common` — und
+/// `common` ist der Ort fuer das Bauen, nicht fuer das Suchen.
+fn cross_available() -> bool {
+    std::process::Command::new("qemu-aarch64").arg("--version").output().is_ok_and(|o| o.status.success())
+        && std::process::Command::new("aarch64-linux-gnu-gcc")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
 }
 
 /// Der `TimeDateStamp` aus dem PE-Kopf (Windows), falls es einer ist.
