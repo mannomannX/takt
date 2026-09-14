@@ -133,11 +133,18 @@ fn main() -> ! {
 
     banner(clock.nominal_ns());
 
-    // Der erzeugte Code, bereit fuer den ersten Tick. `trace = true`:
-    // Der Latch geht je Tick heraus, damit der Lauf gegen den
-    // Interpreter zu halten ist (13.1). Im Betrieb waere das zu viel —
-    // 12.8 nennt `states` als Default fuer `baremetal`.
-    let mut program = Generated::init(true);
+    // **Der Trace laeuft nicht je Tick, und das ist keine Sparsamkeit.**
+    // Eine Zeile ueber UART dauert bei 115200 Baud rund 1,7 ms — laenger
+    // als die Tickperiode. Wuerde sie je Tick geschrieben, kaeme die
+    // Schleife nie zum Warten: Jeder Tick waere schon vergangen, bevor
+    // der vorige fertig ausgegeben ist, und das Programm haenge im
+    // Senden statt zu rechnen (sichtbar daran, dass die LED dunkel
+    // bleibt).
+    //
+    // 12.8 sagt es voraus: „Instrumentierungs-Defaults: `statements` in
+    // `linux_rt`, `states` in `baremetal`." Die MCU traegt weniger, und
+    // der Trace folgt darum dem Blinktakt statt dem Tick.
+    let mut program = Generated::init(false);
 
     let mut next_blink = BLINK_EVERY;
     loop {
@@ -148,6 +155,9 @@ fn main() -> ! {
         if k >= next_blink {
             next_blink = k + BLINK_EVERY;
             led.toggle();
+            // Der Latch alle 500 Ticks: genug fuer den Vergleich mit dem
+            // Interpreter, wenig genug fuer die Leitung.
+            program.dump();
         }
     }
 }

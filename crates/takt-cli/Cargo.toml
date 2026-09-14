@@ -15,6 +15,9 @@ takt-diag = { path = "../takt-diag" }
 takt-syntax = { path = "../takt-syntax" }
 takt-mir = { path = "../takt-mir" }
 takt-interp = { path = "../takt-interp" }
+# Fuer `takt build`: die Uebersetzung nach LLVM-IR (11.2) und die
+# Zielliste (12.8).
+takt-llvm = { path = "../takt-llvm" }
 takt-sema = { path = "../takt-sema" }
 
 [lints]

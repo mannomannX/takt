@@ -104,6 +104,7 @@ version = "0.1.0"
 dependencies = [
  "takt-diag",
  "takt-interp",
+ "takt-llvm",
  "takt-mir",
  "takt-sema",
  "takt-syntax",

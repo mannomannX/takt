@@ -68,6 +68,20 @@ impl Generated {
     }
 }
 
+impl Generated {
+    /// Gibt den Latch als Trace-Zeilen aus (`grammar/trace.md`).
+    ///
+    /// **Getrennt von [`Program::tick`], weil die Leitung langsamer ist
+    /// als der Tick.** Eine Zeile ueber UART dauert bei 115200 Baud rund
+    /// 1,7 ms; bei 1 ms Tickperiode kaeme eine Schleife, die je Tick
+    /// ausgibt, nie zum Rechnen. Wer vergleichen will, ruft das hier in
+    /// dem Takt, den die Leitung traegt — 12.8 nennt `states` als
+    /// Instrumentierungs-Default fuer `baremetal`, nicht `statements`.
+    pub fn dump(&self) {
+        unsafe { takt_mcu_dump() };
+    }
+}
+
 impl Program for Generated {
     fn tick(&mut self, k: u64, _now: i64) {
         // `now` kommt vom Rahmen, nicht von der Schleife: Er rechnet es
@@ -75,7 +89,7 @@ impl Program for Generated {
         // Zwei Quellen fuer dieselbe Zeit waeren eine zu viel.
         unsafe { takt_mcu_tick(k as i64) };
         if self.trace {
-            unsafe { takt_mcu_dump() };
+            self.dump();
         }
     }
 }

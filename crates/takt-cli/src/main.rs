@@ -1,11 +1,12 @@
-//! `takt`: Kommandozeile fuer `check`, `sim`, `size`, `cost`, `latency`,
-//! `mir`, `fmt`, `parse` und `tokens`.
+//! `takt`: Kommandozeile fuer `check`, `build`, `sim`, `size`, `cost`,
+//! `latency`, `mir`, `fmt`, `parse` und `tokens`.
 //!
 //! ```text
 //! takt check DATEI… [--warnings-as-errors] [--certification] [--format text|line]
 //!                   [--build sim|hw] [--profile P]
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--profile P] [--order random:SEED]
+//! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac] [--emit ir|obj] [--out PFAD]
 //! takt size  DATEI… [--build sim|hw] [--profile P]
 //! takt cost  DATEI… [--build sim|hw] [--profile P]
 //! takt latency DATEI… [--build sim|hw] [--profile P]
@@ -24,8 +25,7 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str =
-    "takt check|sim|run|replay|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -60,6 +60,9 @@ impl Args {
             "--format",
             "--write",
             "--record",
+            "--target",
+            "--emit",
+            "--out",
         ];
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
         let mut i = 0;
@@ -97,6 +100,7 @@ fn main() -> ExitCode {
         "replay" => replay(&args),
         "mir" => mir(&args),
         "fmt" => fmt(&args),
+        "build" => build(&args),
         "size" => size(&args),
         "cost" => cost(&args),
         "latency" => latency(&args),
@@ -213,6 +217,131 @@ fn graph(args: &Args) -> bool {
         }
     }
     ok
+}
+
+/// `takt build`: ein Programm fuer ein Ziel uebersetzen (11.2, 12.8).
+///
+/// ```text
+/// takt build DATEI [--target NAME] [--emit ir|obj] [--out PFAD]
+/// ```
+///
+/// **Warum es dieses Kommando gibt.** Bis M5 endete jeder Weg aus einer
+/// `.takt`-Datei entweder im Interpreter (`takt sim`) oder in einem Lauf
+/// auf dem Wirt (`takt run`). Fuer ein fremdes Ziel gab es nichts — das
+/// erste Bring-up-Programm behalf sich mit einer `build.rs`, die Sema,
+/// Lowering, clang und llvm-ar hintereinander rief. Was dort steht, ist
+/// nicht aufrufbar, meldet Fehler als Warnung und ist unauffindbar
+/// (FB-138).
+///
+/// **Was es tut und was nicht.** Es uebersetzt und assembliert; es
+/// *bindet nicht*. Ein fertiges Binary braucht Startcode, Linker-Skript
+/// und Speicherkarte, und die gehoeren zum Board, nicht zum Compiler:
+/// Dieselbe `.o`-Datei laeuft auf jedem F401, aber jedes Board hat seinen
+/// eigenen Flash-Versatz. Wer bindet, weiss das; wer uebersetzt, muss es
+/// nicht wissen.
+///
+/// **Der Rahmen (12.1) gehoert nicht hierher.** Das C-Stueck, das
+/// Prozessabbild und Latch haelt und `<maschine>_step` ruft, steht in
+/// `takt-conformance::mcu` — zusammen mit der Speicherform, die es
+/// braucht. Ihn hier zu erzeugen hiesse, die halbe Abnahmesuite in das
+/// CLI zu ziehen; wer ihn braucht, erzeugt ihn dort. Das ist die
+/// unbequemere, aber ehrlichere Trennung: `takt build` uebersetzt ein
+/// Programm, es baut keine Runtime.
+fn build(args: &Args) -> bool {
+    let Some(path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let target_name = args.value("--target").unwrap_or("x86_64");
+    let Some(target) = takt_llvm::Target::by_name(target_name) else {
+        eprintln!("Unbekanntes Ziel `{target_name}`. Bekannt: x86_64, aarch64, thumbv7em, riscv32imac");
+        return false;
+    };
+    let Some(program) = compile_file(path, args) else { return false };
+
+    let lowered = takt_llvm::lower::program(&program, target.triple, module_name(path));
+    for s in &lowered.skipped {
+        // Ein fehlender Schritt ist ein Loch, kein Schoenheitsfehler: Ohne
+        // ihn meldet der Linker spaeter ein unbekanntes Symbol statt des
+        // Konstrukts, das gefehlt hat (FB-104).
+        eprintln!("{}_step fehlt: {}", s.machine, s.reason);
+    }
+
+    let emit = args.value("--emit").unwrap_or("obj");
+    let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("programm");
+
+    match emit {
+        "ir" => {
+            let out = args.value("--out").map_or_else(|| format!("{stem}.ll"), str::to_string);
+            match std::fs::write(&out, &lowered.ir) {
+                Ok(()) => {
+                    println!("{out}: {} Byte IR fuer {}", lowered.ir.len(), target.name);
+                    lowered.complete()
+                }
+                Err(e) => {
+                    eprintln!("{out}: {e}");
+                    false
+                }
+            }
+        }
+        "obj" => {
+            let out = args.value("--out").map_or_else(|| format!("{stem}.o"), str::to_string);
+            emit_object(&lowered.ir, target, &out) && lowered.complete()
+        }
+        other => {
+            eprintln!("Unbekannte Ausgabeart `{other}`. Bekannt: ir, obj");
+            false
+        }
+    }
+}
+
+/// Der Modulname in der IR: der Dateiname ohne Endung.
+fn module_name(path: &str) -> &str {
+    std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("programm")
+}
+
+/// Assembliert IR zu einem Objekt.
+fn emit_object(ir: &str, target: takt_llvm::Target, out: &str) -> bool {
+    let takt_llvm::toolchain::Clang::At(clang) = takt_llvm::toolchain::find() else {
+        eprintln!("clang fehlt — ohne ihn gibt es nur `--emit ir`");
+        return false;
+    };
+    let tmp = std::env::temp_dir().join(format!("takt-build-{}.ll", std::process::id()));
+    if let Err(e) = std::fs::write(&tmp, ir) {
+        eprintln!("{}: {e}", tmp.display());
+        return false;
+    }
+
+    let mut cmd = std::process::Command::new(&clang);
+    let cmd = takt_llvm::toolchain::Clang::deterministic(&mut cmd)
+        .args(["-Wno-override-module", "-O2", "-c"])
+        .arg(format!("--target={}", target.triple));
+    // Freistehend nur fuer die MCU: Auf dem Wirt gibt es eine libc, und
+    // `-nostdlib` naehme sie dem Objekt ohne Not.
+    if target.is_bare_metal() {
+        cmd.args(["-ffreestanding", "-nostdlib"]);
+    }
+    if !target.march.is_empty() {
+        cmd.arg(format!("-march={}", target.march));
+    }
+    let result = cmd.arg(&tmp).arg("-o").arg(out).output();
+    let _ = std::fs::remove_file(&tmp);
+
+    match result {
+        Ok(o) if o.status.success() => {
+            let size = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
+            println!("{out}: {size} Byte fuer {} ({})", target.name, target.class.name());
+            true
+        }
+        Ok(o) => {
+            eprintln!("{}", String::from_utf8_lossy(&o.stderr));
+            false
+        }
+        Err(e) => {
+            eprintln!("clang: {e}");
+            false
+        }
+    }
 }
 
 /// `takt cost`: das Kostenbudget je Maschine und Zustand (9.4.3, 7.2).
