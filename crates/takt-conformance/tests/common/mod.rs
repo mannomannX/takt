@@ -107,7 +107,8 @@ fn run_native_inner(
     };
     std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
     let path = clang.path().ok_or("clang")?;
-    let build = std::process::Command::new(path)
+    let mut cmd = std::process::Command::new(path);
+    let build = Clang::deterministic(&mut cmd)
         .args(["-Wno-override-module", "-O1"])
         .arg(&ll)
         .arg(&c)

@@ -64,6 +64,27 @@ pub fn find() -> Clang {
 }
 
 impl Clang {
+    /// Was jeder Aufruf mitbekommt, damit das Ergebnis reproduzierbar
+    /// ist (11.3).
+    ///
+    /// **`SOURCE_DATE_EPOCH` ist der Standard dafuer**, und clang wie
+    /// LLD lesen ihn: Er ersetzt jeden Zeitstempel im Ergebnis durch
+    /// einen festen Wert. Ohne ihn traegt ein PE-Binary den Build-
+    /// Zeitpunkt in seinem Kopf (`TimeDateStamp`), und zwei
+    /// Uebersetzungen derselben Quelle unterscheiden sich in genau
+    /// diesem einen Feld — gemessen an `23_patterns`: ein Byte von
+    /// 151552.
+    ///
+    /// Der Wert ist null, nicht die aktuelle Zeit: 11.3 verlangt, dass
+    /// „gleiche Quelle plus gleiche Toolchain-Version" genuegt, und eine
+    /// Zeit, die der Compiler selbst waehlt, waere eine dritte Eingabe.
+    ///
+    /// Die Flags stehen hier und nicht an den Aufrufstellen, weil sie
+    /// eine Zusage sind und keine Vorliebe: Wer clang ruft, ruft ihn so.
+    pub fn deterministic(cmd: &mut Command) -> &mut Command {
+        cmd.env("SOURCE_DATE_EPOCH", "0")
+    }
+
     /// Der Pfad, wenn gefunden.
     pub fn path(&self) -> Option<&PathBuf> {
         match self {
@@ -84,7 +105,8 @@ impl Clang {
         let ll = dir.join("modul.ll");
         let obj = dir.join("modul.o");
         std::fs::write(&ll, ir).map_err(|e| e.to_string())?;
-        let out = Command::new(path)
+        let mut cmd = Command::new(path);
+        let out = Clang::deterministic(&mut cmd)
             .args(["-c", "-Wno-override-module"])
             .arg(&ll)
             .arg("-o")
@@ -104,7 +126,8 @@ impl Clang {
         let ll = dir.join("lauf.ll");
         let exe = dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" });
         std::fs::write(&ll, ir).map_err(|e| e.to_string())?;
-        let build = Command::new(path)
+        let mut cmd = Command::new(path);
+        let build = Clang::deterministic(&mut cmd)
             .args(["-Wno-override-module", "-O2"])
             .arg(&ll)
             .arg("-o")

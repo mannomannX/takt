@@ -156,6 +156,30 @@ fn header_is_checked() {
     assert!(matches!(read_program(short), Err(FormatError::Truncated)));
 }
 
+/// 11.3: „Leser akzeptieren aeltere Versionen ihres Formats, Schreiber
+/// schreiben die neueste."
+///
+/// Die Ablehnung einer *neueren* Version steht in `header_is_checked`;
+/// hier steht die andere Haelfte. Sie ist die wichtigere: Eine
+/// Aufzeichnung von gestern muss sich heute lesen lassen, sonst ist die
+/// Versionierung nur Zierde.
+///
+/// Geprueft wird an einer Datei, deren Kopf eine aeltere Version nennt.
+/// Der Rumpf ist der heutige — das ist der Fall, den die Regel deckt:
+/// Der Leser darf an der Version nicht scheitern, und die Felder, die er
+/// nicht kennt, ueberspringt er ohnehin (der Test darunter).
+#[test]
+fn a_reader_accepts_an_older_format_version() {
+    let p = full_program();
+    let mut bytes = write_program(&p, "takt 0.1.0");
+    for older in 1..FORMAT_VERSION {
+        bytes[8..10].copy_from_slice(&older.to_le_bytes());
+        let (header, back) = read_program(&bytes).expect("eine aeltere Version ist lesbar");
+        assert_eq!(header.format_version, older);
+        assert_eq!(back, p, "Version {older}: der Rumpf kommt unveraendert zurueck");
+    }
+}
+
 /// Ein aelterer Leser ueberspringt Felder, die er nicht kennt; ein neuerer
 /// Leser liest Listenfelder, die eine alte Datei nicht hat, als leer.
 #[test]
