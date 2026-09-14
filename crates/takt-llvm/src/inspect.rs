@@ -96,6 +96,15 @@ impl Binutils {
         Binutils { prefix: prefix.to_string() }
     }
 
+    /// Die Werkzeuge, die zu einem Ziel gehoeren (12.8).
+    ///
+    /// Der Praefix steht damit an einer Stelle — am Ziel, wo auch Triple
+    /// und Zielklasse stehen. Ein frei getippter Praefix an der
+    /// Aufrufstelle waere eine zweite Quelle fuer dieselbe Angabe.
+    pub fn for_target(target: crate::target::Target) -> Binutils {
+        Binutils { prefix: target.prefix.to_string() }
+    }
+
     /// Stehen sie zur Verfuegung?
     ///
     /// Geprueft wird `nm`, weil die drei Werkzeuge aus demselben Paket

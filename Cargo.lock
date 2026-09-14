@@ -120,6 +120,13 @@ name = "takt-native"
 version = "0.1.0"
 
 [[package]]
+name = "takt-rt-baremetal"
+version = "0.1.0"
+dependencies = [
+ "takt-rt-core",
+]
+
+[[package]]
 name = "takt-rt-core"
 version = "0.1.0"
 

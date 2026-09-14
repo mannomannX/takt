@@ -1,0 +1,17 @@
+[package]
+name = "takt-rt-baremetal"
+version = "0.1.0"
+description = "Takt: Profilaufsatz `baremetal` (Referenz 12.3, 12.8)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Nur der Kern. Kein Board, keine PAC, kein HAL-Crate eines Herstellers:
+# Was board-spezifisch ist, liegt hinter den Traits in `board.rs` und wird
+# vom Board-Crate geliefert (plan/m5.md 2.2). Der Test dazu ist
+# mechanisch — dieses Crate baut fuer beide Targets ohne Board.
+[dependencies]
+takt-rt-core = { path = "../takt-rt-core" }
+
+[lints]
+workspace = true

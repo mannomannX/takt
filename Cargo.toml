@@ -10,6 +10,7 @@ members = [
     "crates/takt-hal",
     "crates/takt-rt-core",
     "crates/takt-rt-linux",
+    "crates/takt-rt-baremetal",
     "crates/takt-llvm",
     "crates/takt-conformance",
     "crates/takt-interp",
