@@ -816,7 +816,7 @@ RAND-4,Regel/Prüfung,12.6,`max_slew` (3.5),,M4/M5 (Runtime),fertig
 RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M5 (Embedded),teilweise
 RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M5 (Embedded),teilweise
 RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M5 (Embedded),teilweise
-PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4 (Codegen),teilweise
+PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4 (Codegen),fertig
 PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M5 (Embedded),offen
 PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M6 (v1.1),offen
 PROFIL-boot,Profil/Eintrag,12.8,boot,,M6 (v1.1),offen

@@ -39,6 +39,12 @@ pub fn ir_for(p: &Program, triple: &str) -> String {
         }
     }
     for machine in &p.machines {
+        // Eine Vorlage hat keine eigene Schrittfunktion — nur ihre
+        // Instanzen laufen (5.9). Sie zu senken zu versuchen meldete
+        // „Maschine ohne Blattzustand", und das las sich wie ein Mangel.
+        if machine.kind == takt_mir::machine::MachineKind::Template {
+            continue;
+        }
         let Some(st) = takt_llvm::machine::state_struct(machine, p) else { continue };
         takt_llvm::machine::declare_state(machine, &st, &mut m);
         let _ = takt_llvm::step::init_function(machine, &st, p, &mut m);

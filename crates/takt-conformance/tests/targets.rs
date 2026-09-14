@@ -155,6 +155,7 @@ fn x86_64_and_aarch64_agree() {
     }
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
     assert_eq!(checked, KORPUS.len() + EXAMPLES.len(), "es wurden nicht alle Programme auf beiden Zielen geprueft");
+    eprintln!("{checked} Programme auf x86-64 und aarch64 verglichen");
 }
 
 /// Laeuft ein Programm auf beiden Zielen und vergleicht die Traces.
