@@ -23,6 +23,7 @@
 pub mod harness;
 pub mod layout;
 pub mod limits;
+pub mod mcu;
 pub mod run;
 pub mod stimulus;
 pub mod streams;

@@ -420,7 +420,7 @@ fn sim_bindings(s: &mut String, p: &Program, indent: &str) {
     }
 }
 
-fn param_literal(p: &Program, index: usize) -> Option<String> {
+pub(crate) fn param_literal(p: &Program, index: usize) -> Option<String> {
     literal(&p.params.get(index)?.default)
 }
 
@@ -436,7 +436,7 @@ fn literal(e: &takt_mir::expr::Expr) -> Option<String> {
 }
 
 /// Der Versatz des Qualitaetsbytes eines Inputs im Abbild (3.5).
-fn quality_offset(p: &Program, name: &str) -> Option<u64> {
+pub(crate) fn quality_offset(p: &Program, name: &str) -> Option<u64> {
     let index = p.channels.iter().position(|c| c.name == name)?;
     let id = takt_mir::ChannelId(index as u32);
     let base = takt_llvm::image::offset_of(id, p)?;
