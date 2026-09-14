@@ -64,7 +64,18 @@ impl Class {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Target {
     /// Das LLVM-Triple; es steht im Kopf der IR (11.3).
+    ///
+    /// **Nicht immer derselbe Name wie das Rust-Target.** Rust nennt sein
+    /// RISC-V-Ziel `riscv32imac-unknown-none-elf` und kodiert die
+    /// Erweiterungen im Triple; LLVM kennt dort nur
+    /// `riscv32-unknown-none-elf` und nimmt die Erweiterungen ueber
+    /// `-march` entgegen. Wer beides gleichsetzt, bekommt „unknown target
+    /// triple" — und zwar erst beim Uebersetzen, nicht beim Bauen.
     pub triple: &'static str,
+    /// Die Architekturerweiterungen fuer `-march`, wo LLVM sie braucht.
+    ///
+    /// Leer, wo das Triple sie schon traegt (x86-64, aarch64, thumbv7em).
+    pub march: &'static str,
     /// Der Name in `system: target = …` (12.8).
     pub name: &'static str,
     /// Breite eines Zeigers in Byte.
@@ -84,13 +95,20 @@ pub struct Target {
 
 impl Target {
     /// x86-64 unter Linux (12.8: Zielklasse „64-Bit Linux").
-    pub const X86_64_LINUX: Target =
-        Target { triple: "x86_64-unknown-linux-gnu", name: "x86_64", pointer: 8, class: Class::Linux64, prefix: "" };
+    pub const X86_64_LINUX: Target = Target {
+        triple: "x86_64-unknown-linux-gnu",
+        name: "x86_64",
+        march: "",
+        pointer: 8,
+        class: Class::Linux64,
+        prefix: "",
+    };
 
     /// aarch64 unter Linux, Cortex-A-Klasse (12.8: dieselbe Zielklasse).
     pub const AARCH64_LINUX: Target = Target {
         triple: "aarch64-unknown-linux-gnu",
         name: "aarch64",
+        march: "",
         pointer: 8,
         class: Class::Linux64,
         prefix: "aarch64-linux-gnu-",
@@ -100,6 +118,7 @@ impl Target {
     pub const X86_64_WINDOWS: Target = Target {
         triple: "x86_64-pc-windows-msvc",
         name: "x86_64-windows",
+        march: "",
         pointer: 8,
         class: Class::Linux64,
         prefix: "",
@@ -113,6 +132,7 @@ impl Target {
     pub const THUMBV7EM: Target = Target {
         triple: "thumbv7em-none-eabihf",
         name: "thumbv7em",
+        march: "",
         pointer: 4,
         class: Class::Mcu32F32,
         prefix: "arm-none-eabi-",
@@ -125,8 +145,11 @@ impl Target {
     /// einmal in Hardware, einmal in Software, und beide muessen bitgleich
     /// sein (4.2, Satz 9.4.4).
     pub const RISCV32IMAC: Target = Target {
-        triple: "riscv32imac-unknown-none-elf",
+        // LLVM kennt nur den Basistriple; die Erweiterungen kommen ueber
+        // `-march`. Das Rust-Target heisst anders — siehe `triple`.
+        triple: "riscv32-unknown-none-elf",
         name: "riscv32imac",
+        march: "rv32imac",
         pointer: 4,
         class: Class::Mcu32NoFpu,
         prefix: "riscv32-unknown-elf-",

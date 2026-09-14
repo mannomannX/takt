@@ -1,7 +1,7 @@
 //! `takt-flash-weact`: Ein Abbild in den WeAct HID-Bootloader schreiben.
 //!
 //! ```text
-//! takt-flash-weact <abbild.bin> [--dry-run]
+//! takt-flash-weact <abbild.bin> [--dry-run] [--no-reboot]
 //! ```
 //!
 //! **Der Name nennt das Protokoll, nicht die Aufgabe.** Flashen ist
@@ -9,7 +9,7 @@
 //! Adafruit-Bootloader UF2, ein ESP32 sein eigenes Protokoll ueber UART,
 //! und dieses Werkzeug spricht das HID-Protokoll der WeAct-Boards. Ein
 //! `takt-flash` ohne Zusatz verspraeche eine Abstraktion, die es nicht
-//! gibt — und der erste Nutzer mit einem anderen Board haelte sie fuer
+//! gibt — und der erste Nutzer mit einem anderen Board hielte sie fuer
 //! kaputt statt fuer unzustaendig.
 //!
 //! Wo es eine Abstraktion gibt, heisst sie `probe-rs`: Sie deckt SWD auf
@@ -17,29 +17,24 @@
 //! Dieses Werkzeug ist der Weg *ohne* Probe — mit dem Bootloader, den das
 //! Board ab Werk mitbringt.
 //!
-//! **Was es prueft, bevor es schreibt.** Ein Abbild an der falschen
-//! Adresse ueberschreibt den Bootloader, und danach hilft nur noch SWD.
-//! Die ersten acht Byte sagen genug, um das auszuschliessen — siehe
-//! [`protocol::check`]. `--dry-run` fuehrt alle Pruefungen aus und
-//! schreibt nichts; damit laesst sich ein Abbild beurteilen, ohne ein
-//! Board anzuschliessen.
-//!
-//! **Das Board muss im Bootloader stehen.** Der WeAct-Bootloader startet,
-//! wenn beim Reset die KEY-Taste gehalten wird: BOOT/KEY druecken, NRST
-//! kurz druecken, beide loslassen. Windows meldet dann „WeAct Studio HID
-//! Bootloader"; solange die Anwendung laeuft, ist nichts zu sehen.
+//! **Das Board muss im Bootloader stehen.** KEY halten, NRST kurz
+//! druecken, beide loslassen; die LED an PC13 blinkt dann. Nach dem
+//! Schreiben springt das Werkzeug selbst in die Anwendung
+//! (`--no-reboot` laesst es bleiben).
 
 mod protocol;
 
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
-use protocol::{PACKET, PRODUCT_ID, VENDOR_ID};
+use protocol::{Command, PRODUCT_ID, REPORT, REPORTS_PER_SECTOR, VENDOR_ID};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let dry_run = args.iter().any(|a| a == "--dry-run");
+    let reboot = !args.iter().any(|a| a == "--no-reboot");
     let Some(path) = args.iter().find(|a| !a.starts_with("--")) else {
-        eprintln!("takt-flash <abbild.bin> [--dry-run]");
+        eprintln!("takt-flash-weact <abbild.bin> [--dry-run] [--no-reboot]");
         return ExitCode::FAILURE;
     };
 
@@ -58,9 +53,9 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let pages = protocol::pages_for(image.len());
-    let packets = protocol::packets(&image);
-    println!("{path}: {} Byte, {pages} Seiten, {} Pakete", image.len(), packets.len());
+    let sectors = protocol::sectors_for(image.len());
+    let reports = protocol::reports(&image);
+    println!("{path}: {} Byte, {sectors} Sektoren, {} Berichte", image.len(), reports.len());
     println!("  Ziel      {:#010x}", protocol::APP_ORIGIN);
     println!("  Stack     {:#010x}", u32::from_le_bytes([image[0], image[1], image[2], image[3]]));
     println!("  Reset     {:#010x}", u32::from_le_bytes([image[4], image[5], image[6], image[7]]));
@@ -70,9 +65,9 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    match flash(&packets, pages) {
+    match flash(&reports, sectors, reboot) {
         Ok(()) => {
-            println!("\nGeschrieben. Das Board startet die Anwendung nach einem Reset (NRST).");
+            println!("\nGeschrieben.{}", if reboot { " Das Board startet die Anwendung." } else { "" });
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -82,8 +77,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// Schreibt die Pakete ueber HID.
-fn flash(packets: &[[u8; PACKET]], pages: u32) -> Result<(), String> {
+/// Schreibt die Berichte ueber HID.
+fn flash(reports: &[[u8; REPORT]], sectors: usize, reboot: bool) -> Result<(), String> {
     let api = hidapi::HidApi::new().map_err(|e| format!("HID nicht verfuegbar: {e}"))?;
     let device = api.open(VENDOR_ID, PRODUCT_ID).map_err(|e| {
         format!(
@@ -92,22 +87,67 @@ fn flash(packets: &[[u8; PACKET]], pages: u32) -> Result<(), String> {
         )
     })?;
 
-    // Das erste Byte jedes HID-Berichts ist die Report-ID. Der Bootloader
-    // nutzt keine, also steht dort null und die Nutzdaten folgen.
-    let mut report = [0u8; PACKET + 1];
-
-    report[1..].copy_from_slice(&protocol::write_command(protocol::APP_ORIGIN, pages));
-    device.write(&report).map_err(|e| format!("Kommando nicht angenommen: {e}"))?;
-
-    for (i, p) in packets.iter().enumerate() {
-        report[1..].copy_from_slice(p);
-        device.write(&report).map_err(|e| format!("Paket {i} von {}: {e}", packets.len()))?;
-        if i % 16 == 15 {
-            print!("\r  Seite {} von {pages}", i / 16 + 1);
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
+    // Die Firmware-Fassung steht im USB-Deskriptor (`bcdDevice`). Der
+    // Original-Flasher bricht unter 0x0200 ab; die Pruefung steht hier,
+    // damit ein altes Board eine Aussage bekommt statt eines stillen
+    // Fehlschlags — genau die Sorte Diagnose, die diesem Werkzeug in
+    // seiner ersten Fassung fehlte.
+    if let Some(info) = api.device_list().find(|d| d.vendor_id() == VENDOR_ID && d.product_id() == PRODUCT_ID) {
+        let version = info.release_number();
+        if version < protocol::MIN_FIRMWARE {
+            return Err(format!(
+                "Bootloader-Fassung {version:#06x} ist zu alt (noetig: {:#06x}). \
+                 Der Flasher von WeAct kann sie aktualisieren.",
+                protocol::MIN_FIRMWARE
+            ));
         }
     }
+
+    // Den Seitenzaehler zuruecksetzen. **Das Protokoll kennt keine
+    // Adresse** — der Bootloader zaehlt selbst und legt den Versatz auf
+    // 0x0800_4000; dieser Befehl stellt ihn auf Anfang.
+    device.write(&protocol::command(Command::ResetPage)).map_err(|e| format!("ResetPage: {e}"))?;
+
+    for (n, sector) in reports.chunks(REPORTS_PER_SECTOR).enumerate() {
+        for (i, r) in sector.iter().enumerate() {
+            device.write(r).map_err(|e| format!("Sektor {n}, Bericht {i}: {e}"))?;
+            // Der Original-Flasher pausiert zwischen den Berichten; ohne
+            // das ueberfaehrt man den Bootloader.
+            std::thread::sleep(Duration::from_micros(500));
+        }
+        wait_for_ack(&device, n)?;
+        print!("\r  Sektor {} von {sectors}", n + 1);
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+    }
     println!();
+
+    if reboot {
+        // Ohne Antwort: Der Bootloader springt und ist danach weg.
+        device.write(&protocol::command(Command::Reboot)).map_err(|e| format!("Reboot: {e}"))?;
+    }
     Ok(())
+}
+
+/// Wartet auf die Quittung eines Sektors.
+///
+/// **Mit Zeitgrenze, anders als das Original.** Der Flasher von WeAct
+/// pollt endlos; bleibt die Quittung aus, haengt er ohne Aussage. Eine
+/// Grenze macht aus dem Haenger eine Meldung — und die Meldung nennt den
+/// Sektor, bei dem es stehenblieb.
+fn wait_for_ack(device: &hidapi::HidDevice, sector: usize) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut reply = [0u8; 8];
+    while Instant::now() < deadline {
+        match device.read_timeout(&mut reply, 100) {
+            Ok(0) => continue,
+            Ok(_) if protocol::is_ack(&reply) => return Ok(()),
+            Ok(_) => continue,
+            Err(e) => return Err(format!("Sektor {sector}: Lesen fehlgeschlagen: {e}")),
+        }
+    }
+    Err(format!(
+        "Sektor {sector}: keine Quittung nach drei Sekunden.\n\
+         Der Bootloader hat die Daten nicht angenommen — steht das Board noch im Bootloader?"
+    ))
 }

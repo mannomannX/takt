@@ -98,22 +98,21 @@ fn main() -> ! {
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
     let board = Board::WEACT_BLACKPILL;
 
+    // Die LED zuerst: Sie ist das einzige Anzeigegeraet, das ohne Takt
+    // und ohne Telemetrie funktioniert, und darum das erste, was steht.
+    let led = Led::new(dp.GPIOC, &dp.RCC, board);
+
     let mut clock = match takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, TICK_NS) {
         Ok(c) => c,
-        // Ohne Takt gibt es keine Telemetrie, mit der man es melden
-        // koennte — also bleibt die LED als einziges Signal. Sie an zu
-        // lassen heisst: Der Start ist gescheitert.
-        Err(_) => {
-            let led = Led::new(dp.GPIOC, &dp.RCC, board);
-            led.on();
-            loop {
-                cortex_m::asm::wfi();
-            }
-        }
+        Err(e) => blink_error(&led, error_code(e)),
     };
 
-    let led = Led::new(dp.GPIOC, &dp.RCC, board);
-    let mut uart = Telemetry::new(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, 115_200).expect("115200 Baud bei 84 MHz");
+    // **Kein `expect` hier.** Ein Panic haelt an, und `panic-halt` laesst
+    // die LED stehen, wo sie gerade war — ein Zustand, der wie „laeuft"
+    // aussehen kann. Ein Fehlercode blinkt stattdessen.
+    let Ok(mut uart) = Telemetry::new(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, 115_200) else {
+        blink_error(&led, 4);
+    };
 
     // Der Zyklenzaehler (12.3, 13.8). `enable` braucht beide: Ohne den
     // Debug-Block bleibt der DWT stumm auf null stehen.
@@ -131,10 +130,69 @@ fn main() -> ! {
         let now = clock.ticks();
 
         if now >= next_report {
-            next_report += REPORT_EVERY;
+            // **Erst die LED, dann der Bericht.** Die Telemetrie dauert
+            // bei 115200 Baud rund zehn Millisekunden und blockiert
+            // solange; stuende sie davor, verschoebe sie die Flanke um
+            // zehn Ticks. Sichtbar waere das nicht, aber die LED ist hier
+            // das Messgeraet, und ein Messgeraet, das auf die Ausgabe
+            // wartet, misst die Ausgabe mit.
             led.toggle();
             report(&mut uart, &clock, now);
+
+            // `next_report` folgt der *tatsaechlichen* Tickzahl, nicht
+            // dem Sollwert: Nach einem langen Bericht sind schon Ticks
+            // vergangen, und ein starres `+= REPORT_EVERY` liefe ihnen
+            // hinterher, bis die Bedingung dauernd erfuellt waere — die
+            // LED flackerte dann statt zu blinken.
+            next_report = now + REPORT_EVERY;
         }
+    }
+}
+
+/// Der Fehlercode einer gescheiterten Initialisierung.
+///
+/// Eine Zahl, die man blinken kann — mehr braucht es nicht, und mehr
+/// geht auch nicht, solange weder Takt noch Telemetrie stehen.
+fn error_code(e: takt_board_stm32f401::InitError) -> u8 {
+    use takt_board_stm32f401::InitError;
+    match e {
+        InitError::Period(_) => 1,
+        InitError::ClockNotReady => 2,
+        InitError::UnsupportedCrystal => 3,
+    }
+}
+
+/// Blinkt einen Fehlercode und kehrt nicht zurueck.
+///
+/// **Warum nicht Dauerlicht.** Eine LED, die einfach an ist, sagt „etwas
+/// ist schiefgegangen" und sonst nichts — und sie ist von einem
+/// haengenden Programm nicht zu unterscheiden. `n` kurze Blitze, dann
+/// eine Pause, sagt *welcher* Fehler. Das ist die einzige Diagnose, die
+/// ohne Debugger und ohne Telemetrie funktioniert.
+///
+/// Die Zeitbasis ist eine Zaehlschleife, keine Uhr: Wer hier ankommt,
+/// hat keinen verlaesslichen Takt. Die Blitze sind darum ungenau, aber
+/// zaehlbar — und das genuegt.
+fn blink_error(led: &Led, code: u8) -> ! {
+    // Grob bemessen fuer den HSI-Startakt (16 MHz); mit PLL ist es
+    // schneller, bleibt aber erkennbar.
+    const SHORT: u32 = 400_000;
+    const LONG: u32 = 3_000_000;
+    loop {
+        for _ in 0..code {
+            led.on();
+            spin(SHORT);
+            led.off();
+            spin(SHORT);
+        }
+        spin(LONG);
+    }
+}
+
+/// Eine Warteschleife, die der Optimierer nicht wegrechnet.
+fn spin(n: u32) {
+    for _ in 0..n {
+        core::hint::black_box(());
     }
 }
 

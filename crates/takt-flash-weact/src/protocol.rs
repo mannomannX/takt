@@ -1,92 +1,140 @@
 //! Das Protokoll des WeAct HID-Bootloaders.
 //!
-//! **Warum es eigenen Code bekommt.** Der Bootloader spricht ein sehr
-//! kleines Protokoll: ein Kommando, dann Seiten zu 1024 Byte, jede in
-//! 64-Byte-Paketen. Ein fertiges Werkzeug dafuer gibt es in Rust nicht,
-//! und die Alternative — ein Python-Skript aus dem Netz — waere eine
-//! Abhaengigkeit, die niemand liest und niemand testet.
+//! **Quelle:** `WeActStudio/WeAct_HID_Bootloader_F4x1`, Datei
+//! `Cli/WeAct_HID_Flash_CLI.c`. Die Bootloader-Firmware selbst ist nicht
+//! offengelegt; der veroeffentlichte Flasher ist damit die maassgebliche
+//! Beschreibung des Drahtformats.
 //!
-//! Die Rahmenlogik steht hier und ist auf dem Wirt pruefbar; der
-//! USB-Zugriff liegt eine Ebene darueber. Dieselbe Trennung wie zwischen
-//! `takt-board-support` und dem Board-Crate, aus demselben Grund: Ein
-//! Fehler in der Paketaufteilung faellt sonst erst am Board auf, und dort
-//! sieht man nur, dass nichts passiert.
+//! **Warum das hier steht und nicht geraten ist.** Eine erste Fassung
+//! dieses Moduls beruhte auf einer konstruierten Annahme — ein
+//! Befehlscode `0x01`, ein Adressfeld, Seiten ohne Quittung. Sie war in
+//! jedem Punkt falsch, und das Werkzeug meldete trotzdem „Geschrieben":
+//! `hidapi` nimmt jedes Paket an, der Bootloader verwarf sie stumm. Die
+//! Tests dazu waren wertlos, weil sie pruefen, ob der Code seiner eigenen
+//! Annahme folgt.
+//!
+//! **Das Protokoll ist nicht das von Serasidis.** Der bekannte
+//! STM32-HID-Bootloader nutzt das Magic `BTLDCMD` und VID/PID
+//! `1209:BEBA`. WeAct hat abgezweigt: anderes Magic, anderer Befehlssatz,
+//! andere Kennung. Ein Flasher fuer den einen spricht den anderen nicht.
 
 /// Die Kennung des Bootloaders am USB.
 pub const VENDOR_ID: u16 = 0x0483;
 /// Die Produktkennung.
 pub const PRODUCT_ID: u16 = 0x572A;
 
-/// Groesse eines HID-Pakets in Byte.
+/// Die Firmware-Fassung, ab der das Werkzeug arbeitet.
 ///
-/// Der Bootloader nimmt genau so viel je Uebertragung; kuerzere Pakete
-/// verwirft er, laengere kennt HID nicht.
-pub const PACKET: usize = 64;
+/// Der Original-Flasher bricht darunter mit „Please update the firmware"
+/// ab; die Pruefung steht hier, damit ein altes Board eine Aussage
+/// bekommt statt eines stillen Fehlschlags.
+pub const MIN_FIRMWARE: u16 = 0x0200;
 
-/// Groesse einer Flash-Seite in Byte.
+/// Nutzdaten je HID-Bericht.
+pub const PAYLOAD: usize = 64;
+
+/// Ein Bericht: eine fuehrende Report-ID plus die Nutzdaten.
 ///
-/// Der Bootloader schreibt seitenweise. Eine unvollstaendige Seite muss
-/// aufgefuellt werden — sonst steht im Flash, was vorher da war.
-pub const PAGE: usize = 1024;
+/// **Immer 65 Byte, nie 64.** Das erste Byte ist die Report-ID und
+/// bleibt null; `hidapi` erwartet sie als Teil des Puffers.
+pub const REPORT: usize = PAYLOAD + 1;
+
+/// Groesse eines Flash-Sektors in Byte.
+///
+/// Der Bootloader schreibt sektorweise, also 16 Berichte je Sektor. Eine
+/// angefangene Seite wird mit `0xFF` aufgefuellt — so sieht geloeschter
+/// Flash aus.
+pub const SECTOR: usize = 1024;
+
+/// Berichte je Sektor.
+pub const REPORTS_PER_SECTOR: usize = SECTOR / PAYLOAD;
 
 /// Wohin die Anwendung geschrieben wird.
 ///
-/// Der Bootloader belegt die ersten 16 KiB; alles davor ist er selbst,
-/// und ein Schreibversuch dorthin macht das Board unbrauchbar. Die
-/// Adresse steht auch in `memory.x` des Bring-up-Programms — beide
-/// muessen uebereinstimmen, sonst laeuft die Anwendung an der falschen
-/// Stelle.
+/// Der Bootloader belegt die ersten 16 KiB — auf dem F4 ist der erste
+/// Flash-Sektor ohnehin so gross. **Das Protokoll kennt kein Adressfeld:**
+/// Der Bootloader fuehrt seinen eigenen Seitenzaehler, den
+/// [`Command::ResetPage`] zurueckstellt, und legt den Versatz selbst
+/// darauf. Die Adresse steht hier nur, weil das Abbild dafuer gelinkt
+/// sein muss — siehe [`check`].
 pub const APP_ORIGIN: u32 = 0x0800_4000;
 
-/// Das Kommando, das den Schreibvorgang einleitet.
+/// Die Kennung, mit der jeder Befehl beginnt.
+pub const MAGIC: [u8; 6] = *b"WeAct:";
+
+/// Die Befehle des Bootloaders.
 ///
-/// Acht Bytes: die Kennung `0x01`, dann die Zieladresse in Little Endian,
-/// dann die Laenge in Seiten. Der Rest des Pakets bleibt null.
-pub fn write_command(origin: u32, pages: u32) -> [u8; PACKET] {
-    let mut p = [0u8; PACKET];
-    p[0] = 0x01;
-    p[1..5].copy_from_slice(&origin.to_le_bytes());
-    p[5..9].copy_from_slice(&pages.to_le_bytes());
-    p
+/// Vollstaendig nach der Quelle, auch was dieses Werkzeug nicht braucht:
+/// Eine Aufzaehlung mit Luecken laedt dazu ein, den fehlenden Wert beim
+/// naechsten Mal zu raten — und genau daraus ist die erste, falsche
+/// Fassung dieses Moduls entstanden.
+#[allow(dead_code, reason = "vollstaendig nach der Spezifikation, nicht nach dem heutigen Bedarf")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Command {
+    /// Setzt den Seitenzaehler zurueck und leitet das Schreiben ein.
+    ResetPage = 0x00,
+    /// Springt in die Anwendung.
+    Reboot = 0x01,
+    /// Fragt die Firmware-Fassung ab.
+    FirmwareVersion = 0x02,
+    /// Nur als Antwort: Der Sektor ist angekommen.
+    Ack = 0x03,
+    /// Loescht den Anwendungsbereich.
+    Erase = 0x04,
 }
 
-/// Wie viele Seiten ein Abbild belegt.
+/// Baut einen Befehlsbericht.
 ///
-/// Aufgerundet: Eine angefangene Seite ist eine ganze, weil der
-/// Bootloader nicht feiner schreibt.
-pub fn pages_for(len: usize) -> u32 {
-    u32::try_from(len.div_ceil(PAGE)).unwrap_or(u32::MAX)
+/// Sieben Byte tragen Inhalt: die Report-ID, das Magic, der Befehl. Der
+/// Rest bleibt null.
+pub fn command(cmd: Command) -> [u8; REPORT] {
+    let mut r = [0u8; REPORT];
+    r[1..7].copy_from_slice(&MAGIC);
+    r[7] = cmd as u8;
+    r
 }
 
-/// Teilt ein Abbild in Pakete, die letzte Seite mit `0xFF` aufgefuellt.
+/// Ist eine Antwort die Quittung eines Sektors?
 ///
-/// **`0xFF` und nicht null**, weil geloeschter Flash so aussieht: Eine
-/// mit Nullen aufgefuellte Seite zwingt den Bootloader, Bits zu
-/// schreiben, die er nicht schreiben muss — und auf manchen Chips ist
-/// das Programmieren einer Null in eine bereits geloeschte Zelle
-/// unnoetiger Verschleiss.
-pub fn packets(image: &[u8]) -> Vec<[u8; PACKET]> {
-    let padded = pages_for(image.len()) as usize * PAGE;
-    let mut out = Vec::with_capacity(padded / PACKET);
-    for chunk_start in (0..padded).step_by(PACKET) {
-        let mut p = [0xFFu8; PACKET];
-        for (i, slot) in p.iter_mut().enumerate() {
-            if let Some(b) = image.get(chunk_start + i) {
-                *slot = *b;
-            }
+/// **Die Quittung hat ein eigenes Format.** Sie kommt als sieben Byte,
+/// und der Status steht an Stelle 6 — waehrend die Antworten auf `read`
+/// und `erase` als voller Bericht kommen und mit dem Magic beginnen. Die
+/// Unregelmaessigkeit stammt aus dem Original und ist kein Fehler dieser
+/// Umsetzung.
+pub fn is_ack(reply: &[u8]) -> bool {
+    reply.get(6) == Some(&(Command::Ack as u8))
+}
+
+/// Wie viele Sektoren ein Abbild belegt.
+pub fn sectors_for(len: usize) -> usize {
+    len.div_ceil(SECTOR)
+}
+
+/// Teilt ein Abbild in Berichte, den letzten Sektor mit `0xFF` gefuellt.
+///
+/// `0xFF` und nicht null, weil geloeschter Flash so aussieht.
+pub fn reports(image: &[u8]) -> Vec<[u8; REPORT]> {
+    let padded = sectors_for(image.len()) * SECTOR;
+    let mut out = Vec::with_capacity(padded / PAYLOAD);
+    for start in (0..padded).step_by(PAYLOAD) {
+        let mut r = [0u8; REPORT];
+        // r[0] bleibt die Report-ID.
+        for (i, slot) in r[1..].iter_mut().enumerate() {
+            *slot = image.get(start + i).copied().unwrap_or(0xFF);
         }
-        out.push(p);
+        out.push(r);
     }
     out
 }
 
 /// Prueft, ob ein Abbild plausibel ist, bevor es geschrieben wird.
 ///
-/// **Der Schutz vor dem teuersten Fehler.** Ein Abbild, das an der
-/// falschen Adresse gelinkt wurde, ueberschreibt entweder den Bootloader
-/// oder laeuft nie an. Beides sieht man erst danach — und im ersten Fall
-/// hilft nur noch SWD. Die ersten acht Byte sagen genug: Stackzeiger ins
-/// RAM, Resetvektor in den Anwendungsbereich.
+/// **Der Schutz vor dem teuersten Fehler.** Ein Abbild, das fuer
+/// `0x0800_0000` gelinkt wurde, traegt eine Vektortabelle, die im
+/// Bootloaderbereich laege — der Bootloader schriebe es an seinen eigenen
+/// Platz, und danach hilft nur noch SWD. Die ersten acht Byte sagen
+/// genug.
 pub fn check(image: &[u8]) -> Result<(), ImageError> {
     if image.len() < 8 {
         return Err(ImageError::TooShort);
@@ -94,13 +142,9 @@ pub fn check(image: &[u8]) -> Result<(), ImageError> {
     let sp = u32::from_le_bytes([image[0], image[1], image[2], image[3]]);
     let reset = u32::from_le_bytes([image[4], image[5], image[6], image[7]]);
 
-    // Der Stackzeiger zeigt ins SRAM (0x2000_0000 .. +64 KiB).
     if !(0x2000_0000..=0x2001_0000).contains(&sp) {
         return Err(ImageError::BadStackPointer(sp));
     }
-    // Der Resetvektor zeigt hinter den Bootloader und ist ungerade
-    // (Thumb-Modus; eine gerade Adresse waere ein Sprung in den
-    // ARM-Modus, den der Cortex-M nicht hat).
     if reset < APP_ORIGIN {
         return Err(ImageError::ResetBeforeApp(reset));
     }
@@ -117,8 +161,7 @@ pub enum ImageError {
     TooShort,
     /// Der Stackzeiger zeigt nicht ins RAM.
     BadStackPointer(u32),
-    /// Der Resetvektor liegt vor dem Anwendungsbereich — das Abbild ist
-    /// fuer 0x0800_0000 gelinkt und wuerde den Bootloader ueberschreiben.
+    /// Der Resetvektor liegt vor dem Anwendungsbereich.
     ResetBeforeApp(u32),
     /// Der Resetvektor ist gerade; der Cortex-M erwartet Thumb.
     ResetNotThumb(u32),
@@ -134,7 +177,7 @@ impl core::fmt::Display for ImageError {
             ImageError::ResetBeforeApp(r) => write!(
                 f,
                 "Resetvektor {r:#010x} liegt vor {APP_ORIGIN:#010x}: Das Abbild ist fuer 0x08000000 gelinkt und \
-                 wuerde den Bootloader ueberschreiben. `memory.x` pruefen."
+                 wuerde im Bootloaderbereich landen. `memory.x` pruefen."
             ),
             ImageError::ResetNotThumb(r) => write!(f, "Resetvektor {r:#010x} ist gerade; Thumb verlangt ungerade"),
         }
@@ -145,7 +188,6 @@ impl core::fmt::Display for ImageError {
 mod tests {
     use super::*;
 
-    /// Ein Abbild, wie `llvm-objcopy` es aus dem Bring-up-Programm macht.
     fn good_image(len: usize) -> Vec<u8> {
         let mut v = vec![0u8; len.max(8)];
         v[0..4].copy_from_slice(&0x2001_0000u32.to_le_bytes());
@@ -153,15 +195,77 @@ mod tests {
         v
     }
 
+    /// Der Befehlsrahmen, wie der Original-Flasher ihn baut.
+    #[test]
+    fn a_command_carries_the_magic_and_the_code() {
+        let c = command(Command::ResetPage);
+        assert_eq!(c[0], 0x00, "Report-ID");
+        assert_eq!(&c[1..7], b"WeAct:");
+        assert_eq!(c[7], 0x00, "ResetPage");
+        assert!(c[8..].iter().all(|b| *b == 0), "der Rest bleibt null");
+        assert_eq!(c.len(), 65, "immer 65 Byte, nie 64");
+    }
+
+    #[test]
+    fn every_command_has_its_code() {
+        assert_eq!(command(Command::Reboot)[7], 0x01);
+        assert_eq!(command(Command::FirmwareVersion)[7], 0x02);
+        assert_eq!(command(Command::Erase)[7], 0x04);
+    }
+
+    /// Die Quittung steht an Stelle 6, nicht am Anfang.
+    #[test]
+    fn an_ack_is_recognised_at_offset_six() {
+        let mut reply = [0u8; 7];
+        reply[6] = Command::Ack as u8;
+        assert!(is_ack(&reply));
+
+        reply[6] = 0x00;
+        assert!(!is_ack(&reply), "ResetPage ist keine Quittung");
+        assert!(!is_ack(&[]), "eine leere Antwort auch nicht");
+    }
+
+    #[test]
+    fn sectors_round_up() {
+        assert_eq!(sectors_for(1), 1);
+        assert_eq!(sectors_for(SECTOR), 1);
+        assert_eq!(sectors_for(SECTOR + 1), 2);
+        assert_eq!(sectors_for(3816), 4);
+    }
+
+    /// Jeder Bericht traegt die Report-ID und 64 Nutzbytes.
+    #[test]
+    fn reports_have_a_leading_report_id() {
+        let rs = reports(&good_image(3816));
+        assert_eq!(rs.len(), 4 * REPORTS_PER_SECTOR, "vier Sektoren zu je 16 Berichten");
+        assert!(rs.iter().all(|r| r[0] == 0x00), "jede Report-ID ist null");
+        assert_eq!(rs[0][1], 0x00, "erstes Nutzbyte: Stackzeiger, niedrigstes Byte");
+        assert_eq!(rs[0][4], 0x20, "viertes: Stackzeiger, hoechstes Byte");
+    }
+
+    #[test]
+    fn the_tail_is_filled_with_erased_flash() {
+        let rs = reports(&good_image(10));
+        let last = rs.last().expect("Berichte");
+        assert!(last[1..].iter().all(|b| *b == 0xFF), "die Nutzdaten des letzten Berichts sind leer");
+        assert_eq!(last[0], 0x00, "die Report-ID bleibt null");
+    }
+
+    /// Der Inhalt steht unveraendert in den Berichten, um eins versetzt.
+    #[test]
+    fn the_image_survives_the_split() {
+        let img = good_image(100);
+        let rs = reports(&img);
+        let flat: Vec<u8> = rs.iter().flat_map(|r| r[1..].iter().copied()).collect();
+        assert_eq!(&flat[..100], &img[..], "die ersten 100 Byte sind das Abbild");
+    }
+
     #[test]
     fn a_well_linked_image_passes() {
-        assert_eq!(check(&good_image(3704)), Ok(()));
+        assert_eq!(check(&good_image(3816)), Ok(()));
     }
 
     /// **Der Fehler, der das Board unbrauchbar machte.**
-    ///
-    /// Ein Abbild fuer 0x0800_0000 ueberschriebe den Bootloader — danach
-    /// hilft nur noch SWD. Genau davor schuetzt die Pruefung.
     #[test]
     fn an_image_linked_for_the_bootloader_area_is_refused() {
         let mut v = good_image(1024);
@@ -169,8 +273,6 @@ mod tests {
         assert_eq!(check(&v), Err(ImageError::ResetBeforeApp(0x0800_0195)));
     }
 
-    /// Ein ELF statt eines Rohabbilds faellt am Stackzeiger auf: Die
-    /// ersten Bytes sind dort `7f 45 4c 46`.
     #[test]
     fn an_elf_is_refused() {
         let elf = [0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00];
@@ -187,50 +289,5 @@ mod tests {
     #[test]
     fn a_short_image_is_refused() {
         assert_eq!(check(&[0u8; 4]), Err(ImageError::TooShort));
-    }
-
-    #[test]
-    fn pages_round_up() {
-        assert_eq!(pages_for(1), 1);
-        assert_eq!(pages_for(PAGE), 1);
-        assert_eq!(pages_for(PAGE + 1), 2);
-        assert_eq!(pages_for(3704), 4, "3704 Byte sind vier Seiten");
-    }
-
-    /// Die Pakete decken ganze Seiten ab, auch wenn das Abbild
-    /// dazwischen endet.
-    #[test]
-    fn packets_fill_whole_pages() {
-        let ps = packets(&good_image(3704));
-        assert_eq!(ps.len(), 4 * PAGE / PACKET, "vier Seiten zu je 16 Paketen");
-    }
-
-    /// **Aufgefuellt wird mit `0xFF`.**
-    ///
-    /// So sieht geloeschter Flash aus. Nullen zu schreiben waere
-    /// unnoetiger Verschleiss.
-    #[test]
-    fn the_tail_is_filled_with_erased_flash() {
-        let ps = packets(&good_image(10));
-        let last = ps.last().expect("Pakete");
-        assert!(last.iter().all(|b| *b == 0xFF), "das letzte Paket ist leer");
-    }
-
-    /// Der Inhalt steht unveraendert in den Paketen.
-    #[test]
-    fn the_image_survives_the_split() {
-        let img = good_image(100);
-        let ps = packets(&img);
-        let flat: Vec<u8> = ps.iter().flatten().copied().collect();
-        assert_eq!(&flat[..100], &img[..], "die ersten 100 Byte sind das Abbild");
-    }
-
-    #[test]
-    fn the_write_command_carries_address_and_length() {
-        let c = write_command(APP_ORIGIN, 4);
-        assert_eq!(c[0], 0x01);
-        assert_eq!(&c[1..5], &APP_ORIGIN.to_le_bytes());
-        assert_eq!(&c[5..9], &4u32.to_le_bytes());
-        assert!(c[9..].iter().all(|b| *b == 0), "der Rest bleibt null");
     }
 }
