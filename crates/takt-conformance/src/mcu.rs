@@ -211,19 +211,57 @@ fn tick(s: &mut String, _p: &Program, driven: &[&takt_mir::machine::Machine]) {
 }
 
 /// `takt_mcu_dump`: den Latch ausgeben, fuer den Vergleich.
-fn telemetry(s: &mut String, _p: &Program, layout: &Layout) {
+///
+/// **Dieselbe Form wie der Linux-Rahmen**, und das ist der Punkt: Ohne
+/// `t=<tick>` laesst sich keine Zeile zuordnen, und der Vergleich mit
+/// `takt sim` — der Kern des M5-Exits — waere nicht moeglich. Eine erste
+/// Fassung schrieb `out led 1` ohne Tick; damit war der Hardwarelauf
+/// nicht gegen den Interpreter zu halten, und das fiel nicht auf, weil
+/// niemand es versucht hat.
+///
+/// [`crate::run::compare`] liest genau diese Form.
+fn telemetry(s: &mut String, p: &Program, layout: &Layout) {
     let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md). */");
     let _ = writeln!(s, "void takt_mcu_dump(void) {{");
     for slot in &layout.outputs {
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+        let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
         let _ = writeln!(s, "    takt_board_trace(\"out {} \");", slot.name);
-        let _ = writeln!(s, "    takt_board_trace_i64((long long)*({ct} *)(latch + {}));", slot.offset);
+        // Ein Enum mit seinem Variantennamen, nicht mit der Diskriminante:
+        // Der Interpreter schreibt den Namen (9.3), und `same_number`
+        // gliche `CLOSED` gegen `0` nicht aus — das ist keine Zahl.
+        if let Some(varianten) = enum_variants(p, &slot.name) {
+            let _ = writeln!(s, "    switch (*({ct} *)(latch + {})) {{", slot.offset);
+            for (d, name) in varianten {
+                let _ = writeln!(s, "    case {d}: takt_board_trace(\"{name}\"); break;");
+            }
+            let _ = writeln!(s, "    default: takt_board_trace(\"?\");");
+            let _ = writeln!(s, "    }}");
+        } else {
+            // Zahlen als `i64`, auch `bool` und vorzeichenlose: Der
+            // Vergleich normalisiert `true`/`false` gegen 1/0 und prueft
+            // sonst den Zahlenwert.
+            let _ = writeln!(s, "    takt_board_trace_i64((long long)*({ct} *)(latch + {}));", slot.offset);
+        }
         let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
     }
     let _ = writeln!(s, "}}\n");
 
     commit(s, layout);
     outputs(s, layout);
+}
+
+/// Die Varianten eines Enum-Ausgangs mit ihren Diskriminanten.
+///
+/// Dieselbe Abfrage wie im Linux-Rahmen: Beide muessen den Namen
+/// schreiben, den der Interpreter schreibt (9.3), sonst vergliche der
+/// Exit-Test Schreibweisen statt Werte.
+fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
+    let c = p.channels.iter().find(|c| c.name == name)?;
+    let takt_mir::types::Type::Enum(e) = p.types.list.get(c.ty.index())? else { return None };
+    let def = p.enums.get(e.index())?;
+    Some(def.variants.iter().map(|v| (v.discriminant, v.name.clone())).collect())
 }
 
 /// `takt_mcu_commit`: den Latch an die Treiber geben (12.1).

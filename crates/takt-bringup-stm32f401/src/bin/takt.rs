@@ -62,12 +62,28 @@ mod takt {
 
 use takt::TICK_NS;
 
+/// Die Baudrate der Telemetrie.
+const BAUD: u32 = 115_200;
+
 /// Wie viele Ticks zwischen zwei Trace-Zeilen liegen.
 ///
-/// Nicht je Tick: Eine Zeile ueber UART dauert bei 115200 Baud rund
-/// 1,7 ms, laenger als die Tickperiode. 12.8 nennt `states` als
-/// Instrumentierungs-Default fuer `baremetal`, nicht `statements`.
-const TRACE_EVERY: u64 = 100;
+/// **Gerechnet, nicht gesetzt.** Eine Zeile `t=<n> out <name> <wert>` ist
+/// gut zwanzig Zeichen; bei 115200 Baud und zehn Bit je Zeichen sind das
+/// rund 1,8 ms. Passt das in eine Tickperiode, geht der Trace je Tick
+/// heraus — und nur dann laesst sich der Lauf gegen `takt sim`
+/// vergleichen, was der Kern des M5-Exits ist.
+///
+/// Passt es nicht, wird ausgeduennt statt die Steuerung aufzuhalten
+/// (12.2: „wer nicht mitkommt, verwirft und zaehlt"). Ein Trace mit
+/// Luecken ist immer noch vergleichbar — `run::compare` prueft nur, was
+/// beide Seiten melden —, ein verpasster Tick waere ein Messfehler.
+const TRACE_EVERY: u64 = {
+    // Zeichen je Zeile, grosszuegig: Tickzahl, Name und Wert wachsen.
+    const CHARS: u64 = 32;
+    const NS_PER_LINE: u64 = CHARS * 10 * 1_000_000_000 / BAUD as u64;
+    // Mit Reserve: Die Leitung soll nicht am Anschlag laufen.
+    if TICK_NS as u64 >= NS_PER_LINE * 2 { 1 } else { 100 }
+};
 
 /// Der DWT-Stand beim vorigen Interrupt.
 static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
@@ -165,7 +181,7 @@ fn main() -> ! {
         }
     };
 
-    let Ok(uart) = Telemetry::new(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, 115_200) else {
+    let Ok(uart) = Telemetry::new(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, BAUD) else {
         led.on();
         loop {
             cortex_m::asm::wfi();

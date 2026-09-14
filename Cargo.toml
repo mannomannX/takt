@@ -27,6 +27,7 @@ members = [
     "crates/takt-sema",
     "crates/takt-cli",
     "crates/takt-flash-weact",
+    "crates/takt-trace-serial",
 ]
 
 [workspace.package]

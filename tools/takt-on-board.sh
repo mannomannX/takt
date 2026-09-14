@@ -13,8 +13,16 @@
 #      Telemetrie und laesst die Tickschleife laufen.
 #
 # Was dabei entsteht, ist der erste Lauf eines Takt-Programms auf
-# Hardware. Der Trace auf USART1 (PA9, 115200) laesst sich gegen
-# `takt sim` halten — das ist der Kern des M5-Exits.
+# Hardware. Der Trace auf USART1 (PA9, 115200) wird gegen `takt sim`
+# gehalten — das ist der Kern des M5-Exits, und `takt-trace-serial` macht
+# ihn. Dieses Skript flasht nur; den Vergleich ruft man danach:
+#
+#   cargo run -p takt-trace-serial -- <programm.takt> --port COM4
+#
+# **Der Black Pill hat keinen USB-Seriell-Wandler.** Sein USB geht direkt
+# an den STM32 (HID-Bootloader); PA9 braucht einen TTL-Adapter gegen GND.
+# Ohne ihn blinkt das Board, aber niemand kann pruefen, ob es richtig
+# rechnet — und genau das war der Zustand, den FB-142 festhaelt.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -69,3 +77,6 @@ cargo run -q -p takt-flash-weact --bin takt-flash-weact -- "$work/app.bin"
 
 echo
 echo "Fertig. Der Trace laeuft auf PA9 mit 115200 8N1."
+echo
+echo "Vergleich gegen den Interpreter (braucht einen TTL-Adapter an PA9):"
+echo "   cargo run -p takt-trace-serial -- $program --port <COMx|/dev/ttyUSBx>"

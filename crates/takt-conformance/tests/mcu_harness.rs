@@ -222,3 +222,49 @@ fn every_abi_buffer_is_aligned() {
         }
     }
 }
+
+/// **Der MCU-Trace ist mit dem Interpreter vergleichbar** (9.4.4, 13.8).
+///
+/// Das ist die Voraussetzung des M5-Exits, und sie war lange nicht
+/// erfuellt: Der Rahmen schrieb `out led 1` ohne Tickzahl, der
+/// Interpreter `t=0 out led false`. Ohne `t=` laesst sich keine Zeile
+/// zuordnen — `run::compare` verwirft sie —, und damit haette ein
+/// Hardwarelauf *immer* „kein Unterschied" gemeldet, egal was das Board
+/// rechnet. Ein Vergleich ohne gemeinsame Zeilen ist kein bestandener
+/// Vergleich, sondern gar keiner.
+#[test]
+fn the_mcu_trace_can_be_compared_with_the_interpreter() {
+    let p = corpus("29_heartbeat.takt");
+    let src = takt_conformance::mcu::build(&p).source;
+
+    assert!(src.contains(r#"takt_board_trace("t=")"#), "die Zeile beginnt mit der Tickzahl:\n{src}");
+    assert!(src.contains("takt_board_trace_i64(g_tick)"), "und zwar mit dem laufenden Tick");
+
+    // Die Gegenprobe am Vergleich selbst: Eine Zeile in der erzeugten
+    // Form muss ankommen, eine ohne `t=` nicht.
+    let want = "t=0 out led true\n";
+    assert!(takt_conformance::run::compare(want, "t=0 out led 1\n").is_empty(), "true gegen 1 ist gleich (9.3)");
+    assert!(!takt_conformance::run::compare(want, "t=0 out led 0\n").is_empty(), "true gegen 0 ist ein Unterschied");
+}
+
+/// Ein Enum-Ausgang traegt seinen Namen, nicht seine Diskriminante.
+///
+/// Der Interpreter schreibt den Variantennamen (9.3). `same_number`
+/// vergleicht Zahlen und gliche `CLOSED` gegen `0` nicht aus — der
+/// Unterschied waere einer der Schreibweise, und der Test faende ihn als
+/// Wertunterschied. Der Linux-Rahmen macht es seit je so; der MCU-Rahmen
+/// zog nach.
+#[test]
+fn an_enum_output_carries_its_name() {
+    let p = corpus("19_faults.takt");
+    let src = takt_conformance::mcu::build(&p).source;
+    let has_enum_output = p.channels.iter().any(|c| {
+        c.dir != takt_mir::program::Direction::Input
+            && matches!(p.types.list.get(c.ty.index()), Some(takt_mir::types::Type::Enum(_)))
+    });
+    if !has_enum_output {
+        eprintln!("kein Enum-Ausgang in diesem Programm; uebersprungen");
+        return;
+    }
+    assert!(src.contains("switch (*"), "ein Enum-Ausgang wird verzweigt, nicht als Zahl geschrieben:\n{src}");
+}

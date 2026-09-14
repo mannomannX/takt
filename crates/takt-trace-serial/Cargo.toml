@@ -1,0 +1,22 @@
+[package]
+name = "takt-trace-serial"
+version = "0.1.0"
+description = "Takt: Trace von einer seriellen Schnittstelle lesen und gegen den Interpreter halten"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# `serialport` spricht die serielle Schnittstelle ueber das
+# Betriebssystem. Es bringt `unsafe` in seinen eigenen Kisten mit (FFI auf
+# die Termios- beziehungsweise Win32-Schnittstelle); das workspace-weite
+# `forbid` (13.4) gilt fuer eigenen Code, und dieses Crate schreibt keines.
+serialport = "4.10"
+
+takt-conformance = { path = "../takt-conformance" }
+takt-diag = { path = "../takt-diag" }
+takt-interp = { path = "../takt-interp" }
+takt-sema = { path = "../takt-sema" }
+
+[lints]
+workspace = true
