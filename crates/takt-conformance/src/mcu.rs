@@ -222,22 +222,66 @@ fn telemetry(s: &mut String, _p: &Program, layout: &Layout) {
     }
     let _ = writeln!(s, "}}\n");
 
+    commit(s, layout);
     outputs(s, layout);
 }
 
-/// `takt_mcu_output`: einen Ausgang lesen, fuer die Treiberseite.
+/// `takt_mcu_commit`: den Latch an die Treiber geben (12.1).
 ///
-/// **Der Rahmen bindet keine Pins, und das ist Absicht.** Welcher Pfad aus
-/// `@ hw(...)` an welchem Pin haengt, weiss nur das Board; der Rahmen
-/// kennt nur Versaetze im Latch. Er gibt darum den Wert heraus und
-/// ueberlaesst das Schalten dem, der die Peripherie besitzt (9.5 fuehrt
-/// Treiber in der TCB, den Rahmen nicht).
+/// **Der Pfad aus `@ hw(...)` wird zum Symbolnamen.** 8.10 verlangt, dass
+/// die Abbildung auf Geraete ausserhalb des Programms steht — „gehoeren in
+/// die Hardware-Konfiguration, nicht in die Steuerlogik" —, und nennt den
+/// Pfad einen symbolischen Verweis dorthin. Der Rahmen loest ihn nicht
+/// auf: Er erzeugt aus `hw("ui/led")` einen Aufruf von
+/// `takt_out_ui_led(...)` und ueberlaesst die Peripherie dem, der sie
+/// besitzt (9.5 fuehrt Treiber in der TCB, den Rahmen nicht).
 ///
-/// Der Index ist die Stellung in `layout.outputs`; die Zuordnung von Namen
-/// zu Index steht im Kopf des erzeugten Textes, damit sie nachlesbar ist,
-/// ohne den Compiler zu fragen.
+/// **Warum ein Symbol und keine Tabelle.** Eine Registrierung zur Laufzeit
+/// waere flexibler, aber ein nicht eingetragener Ausgang fiele still aus —
+/// dieselbe Fehlerklasse, die FB-137 und FB-139 gekostet haben. Als Symbol
+/// prueft der Linker die Vollstaendigkeit: Wer einen Ausgang bindet und
+/// keinen Treiber stellt, bekommt einen Linkfehler mit dem Namen darin,
+/// und zwar bevor etwas laeuft.
+///
+/// Ausgaenge mit `sim(...)` oder ohne Bindung bekommen keinen Aufruf: Zu
+/// ihnen gehoert kein Geraet. Der Latch bleibt trotzdem lesbar, dafuer ist
+/// [`outputs`] da.
+fn commit(s: &mut String, layout: &Layout) {
+    let bound: Vec<(&crate::layout::Slot, String)> = layout
+        .outputs
+        .iter()
+        .filter_map(|slot| slot.address.as_ref().map(|a| (slot, format!("takt_out_{}", a.ident()))))
+        .collect();
+
+    let _ = writeln!(s, "/* Die Treiber, die das Board stellt (8.10, 12.1). */");
+    for (slot, fname) in &bound {
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let _ = writeln!(s, "void {fname}({ct} value); /* {} */", slot.name);
+    }
+    if bound.is_empty() {
+        let _ = writeln!(s, "/*   keine — kein Ausgang ist an Hardware gebunden */");
+    }
+
+    let _ = writeln!(s, "\n/* Schritt 10: der Latch geht an die Geraete (12.1). */");
+    let _ = writeln!(s, "void takt_mcu_commit(void) {{");
+    for (slot, fname) in &bound {
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let _ = writeln!(s, "    {fname}(*({ct} *)(latch + {}));", slot.offset);
+    }
+    let _ = writeln!(s, "}}\n");
+}
+
+/// `takt_mcu_output`: einen Ausgang lesen, nach Stellung.
+///
+/// **Fuer Diagnose, nicht fuer Treiber.** Das Stellen macht
+/// [`commit`] ueber benannte Symbole; diese Funktion ist der Weg, einen
+/// Latch-Wert anzusehen, ohne ihn zu stellen — der Bring-up nutzt sie,
+/// bevor ein Treiber existiert, und ein Testrahmen, der den Latch prueft.
+///
+/// Der Index ist die Stellung in `layout.outputs`; die Zuordnung steht im
+/// Kopf des erzeugten Textes, damit sie nachlesbar ist.
 fn outputs(s: &mut String, layout: &Layout) {
-    let _ = writeln!(s, "/* Die Ausgaenge fuer die Treiberseite (12.1, Schritt 10). */");
+    let _ = writeln!(s, "/* Die Ausgaenge nach Stellung, fuer Diagnose. */");
     for (i, slot) in layout.outputs.iter().enumerate() {
         let _ = writeln!(s, "/*   {i} = {} */", slot.name);
     }

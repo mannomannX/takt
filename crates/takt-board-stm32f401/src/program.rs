@@ -39,6 +39,12 @@ unsafe extern "C" {
 
     /// Ein Ausgang aus dem Latch, nach Stellung in der Speicherform.
     fn takt_mcu_output(index: i32) -> i64;
+
+    /// Gibt den Latch an die Treiber (12.1, Schritt 10).
+    ///
+    /// Ruft je gebundenem Ausgang `takt_out_<adresse>` — die Funktionen,
+    /// die das Board stellt.
+    fn takt_mcu_commit();
 }
 
 /// Das erzeugte Programm als [`Program`] der Tickschleife.
@@ -84,17 +90,29 @@ impl Generated {
         unsafe { takt_mcu_dump() };
     }
 
-    /// Liest einen Ausgang aus dem Latch (12.1, Schritt 10).
+    /// Gibt den Latch an die Treiber (12.1, Schritt 10).
     ///
     /// **Die Stelle, an der ein Takt-Programm die Welt erreicht.** Bis
-    /// hierher ist alles Rechnung; erst wer diesen Wert auf einen Pin
-    /// legt, macht aus dem Latch eine Wirkung. Das tut nicht dieses Crate
-    /// und nicht der Rahmen, sondern wer die Peripherie besitzt — die
-    /// Zuordnung `@ hw(...)` zu Pin ist Boardwissen.
+    /// hierher ist alles Rechnung; erst hier wird aus dem Latch eine
+    /// Wirkung. Der erzeugte Rahmen ruft je gebundenem Ausgang eine
+    /// Funktion, deren Name aus dem Pfad in `@ hw(...)` entsteht — aus
+    /// `hw("ui/led")` wird `takt_out_ui_led`. Wer die Peripherie besitzt,
+    /// stellt sie bereit; fehlt eine, meldet es der Linker (9.5).
+    pub fn commit(&self) {
+        unsafe { takt_mcu_commit() };
+    }
+
+    /// Liest einen Ausgang aus dem Latch, nach Stellung.
+    ///
+    /// **Fuer Diagnose, nicht fuers Stellen** — das macht [`commit`]. Hier
+    /// kommt man an einen Wert heran, ohne ihn auszugeben: beim Bring-up,
+    /// bevor ein Treiber existiert, oder wenn ein Test den Latch prueft.
     ///
     /// `index` ist die Stellung in der Speicherform; der erzeugte Rahmen
     /// schreibt die Namen dazu in seinen Kopf. Ein unbekannter Index gibt
     /// null zurueck, statt den Lauf anzuhalten (4.1).
+    ///
+    /// [`commit`]: Generated::commit
     pub fn output(&self, index: i32) -> i64 {
         unsafe { takt_mcu_output(index) }
     }

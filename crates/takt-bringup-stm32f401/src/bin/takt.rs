@@ -60,7 +60,7 @@ mod takt {
     include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
 }
 
-use takt::{OUT_LED, TICK_NS};
+use takt::TICK_NS;
 
 /// Wie viele Ticks zwischen zwei Trace-Zeilen liegen.
 ///
@@ -78,6 +78,13 @@ static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
 /// C-Symbol erwartet und das Board nicht weiss, wohin ein Trace gehen
 /// soll — USART, Ringpuffer oder nirgendwohin.
 static mut UART: Option<Telemetry> = None;
+
+/// Die LED, die der Treiber `takt_out_ui_led` schaltet.
+///
+/// **Sie steht hier aus demselben Grund wie [`UART`]**: Der erzeugte
+/// Rahmen ruft den Treiber als C-Symbol, und eine Funktion ohne
+/// Empfaenger kommt an nichts heran, was in `main` liegt.
+static mut LED: Option<Led> = None;
 
 /// Schreibt eine Zeichenkette (vom Rahmen gerufen).
 ///
@@ -109,6 +116,28 @@ pub extern "C" fn takt_board_trace_i64(value: i64) {
     let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
     uart.write_i64(value);
     uart.write_byte(b' ');
+}
+
+/// Der Treiber fuer `output led : bool @ hw("ui/led")`.
+///
+/// **Der Name ist keine Verabredung, sondern die Adresse.** Der erzeugte
+/// Rahmen bildet `hw("ui/led")` auf `takt_out_ui_led` ab und ruft die
+/// Funktion in Schritt 10 der Tickschleife (12.1). Wer sie nicht stellt,
+/// bekommt einen Linkfehler mit diesem Namen — 8.10 will die Zuordnung
+/// ausserhalb des Programms, und hier ist sie: eine Zeile, die sagt,
+/// welches Geraet hinter der Adresse steckt.
+///
+/// Die Umkehrung ist Boardwissen: Die LED der Black Pill liegt an PC13
+/// gegen 3V3, leuchtet also bei `low`. Das Programm sagt `true` und meint
+/// „an"; was das elektrisch heisst, weiss nur diese Zeile.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_ui_led(value: u8) {
+    let Some(led) = (unsafe { (*&raw mut LED).as_mut() }) else { return };
+    if value != 0 {
+        led.on();
+    } else {
+        led.off();
+    }
 }
 
 #[interrupt]
@@ -152,6 +181,10 @@ fn main() -> ! {
 
     banner(clock.nominal_ns());
 
+    // Erst hier erreichbar machen: Ein Treiberaufruf vor der Einrichtung
+    // schriebe in ein nicht konfiguriertes Register.
+    unsafe { LED = Some(led) };
+
     let mut program = Generated::init(false);
     let mut next_trace = TRACE_EVERY;
 
@@ -159,16 +192,8 @@ fn main() -> ! {
         clock.wait_for_tick();
         let k = clock.ticks();
         program.tick(k, k as i64 * TICK_NS);
-
-        // **Schritt 10: der Latch geht nach draussen** (12.1). Erst hier
-        // wird aus dem gerechneten Zustand eine Wirkung. `led` ist
-        // `active low`, darum die Umkehrung — das weiss das Board, nicht
-        // das Programm.
-        if program.output(OUT_LED) != 0 {
-            led.on();
-        } else {
-            led.off();
-        }
+        // Schritt 10: Der Rahmen gibt den Latch an die Treiber (12.1).
+        program.commit();
 
         if k >= next_trace {
             next_trace = k + TRACE_EVERY;

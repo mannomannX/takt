@@ -117,4 +117,36 @@ impl Address {
     pub fn simple(path: &str) -> Self {
         Address { segments: path.split('/').map(|s| AddressSegment { name: s.to_string(), range: None }).collect() }
     }
+
+    /// Die Adresse als Text, wie sie im Programm steht.
+    pub fn text(&self) -> String {
+        self.segments
+            .iter()
+            .map(|s| match s.range {
+                Some((a, b)) => format!("{}[{a}:{b}]", s.name),
+                None => s.name.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    /// Die Adresse als Bezeichner, fuer Symbolnamen am Treiberrand.
+    ///
+    /// **Warum aus der Adresse und nicht aus dem Channel-Namen.** 8.10
+    /// verlangt, dass die Abbildung auf Geraete ausserhalb des Programms
+    /// steht; der Pfad ist der symbolische Schluessel dorthin. Zwei
+    /// Programme, die denselben Ausgang bedienen, nennen ihn vielleicht
+    /// verschieden (`led`, `status_lamp`) — die Adresse ist dieselbe, und
+    /// damit passt derselbe Treiber auf beide.
+    ///
+    /// Alles ausser Buchstaben und Ziffern wird zu `_`: `"ui/led"` ergibt
+    /// `ui_led`, `"daq1/tc[0:16]"` ergibt `daq1_tc_0_16_`. Der Aufrufer
+    /// setzt sein Praefix davor.
+    pub fn ident(&self) -> String {
+        let mut s = String::new();
+        for c in self.text().chars() {
+            s.push(if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' });
+        }
+        s
+    }
 }

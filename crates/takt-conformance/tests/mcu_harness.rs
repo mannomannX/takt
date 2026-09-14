@@ -146,6 +146,60 @@ fn the_harness_is_freestanding() {
     assert!(src.contains("unsigned char image"), "das Prozessabbild steht statisch");
 }
 
+/// **Der Pfad aus `@ hw(...)` wird zum Namen einer Treiberfunktion.**
+///
+/// 8.10 verlangt, dass die Abbildung auf Geraete ausserhalb des Programms
+/// steht, und nennt den Pfad einen symbolischen Verweis dorthin. Der
+/// Rahmen loest ihn nicht auf — er macht daraus einen Aufruf, den das
+/// Board bedient. Dass der Name *aus der Adresse* entsteht und nicht aus
+/// dem Channel-Namen, ist der Punkt: Zwei Programme, die denselben
+/// Ausgang verschieden nennen, passen auf denselben Treiber.
+#[test]
+fn a_hardware_path_becomes_a_driver_call() {
+    let p = corpus("29_heartbeat.takt");
+    let src = takt_conformance::mcu::build(&p).source;
+
+    assert!(src.contains("void takt_out_ui_led(unsigned char value);"), "der Treiber ist deklariert:\n{src}");
+    assert!(src.contains("takt_out_ui_led(*(unsigned char *)(latch + 0));"), "und wird gerufen:\n{src}");
+    assert!(src.contains("void takt_mcu_commit(void)"), "Schritt 10 hat einen Namen (12.1)");
+}
+
+/// **Ein Ausgang ohne Hardware-Bindung bekommt keinen Treiberaufruf.**
+///
+/// `sim(...)` bindet an ein Streckenmodell, nicht an ein Geraet (8.3).
+/// Einen Treiber dafuer zu verlangen hiesse, den Sim-Bau unbaubar zu
+/// machen — und 8.3 will gerade, dass beide Baeuche dieselbe Logik tragen.
+#[test]
+fn an_unbound_output_needs_no_driver() {
+    let p = corpus("01_minimal.takt");
+    let src = takt_conformance::mcu::build(&p).source;
+    let calls = src.lines().filter(|l| l.contains("takt_out_")).count();
+    let bound = p
+        .channels
+        .iter()
+        .filter(|c| {
+            c.dir != takt_mir::program::Direction::Input && matches!(c.binding, takt_mir::program::Binding::Hw(_))
+        })
+        .count();
+    // Je gebundenem Ausgang eine Deklaration und ein Aufruf.
+    assert_eq!(calls, bound * 2, "nur gebundene Ausgaenge bekommen Treiber:\n{src}");
+}
+
+/// **Die Adresse wird zu einem Bezeichner, der in C gueltig ist.**
+///
+/// Adressen duerfen `/` und `[a:b]` enthalten (8.1); ein Symbolname darf
+/// das nicht. Die Abbildung steht in `Address::ident`, damit sie einmal
+/// existiert und nicht je Erzeuger neu.
+#[test]
+fn an_address_becomes_a_c_identifier() {
+    use takt_mir::pattern::{Address, AddressSegment};
+    assert_eq!(Address::simple("ui/led").ident(), "ui_led");
+    assert_eq!(Address::simple("daq1/ai0").ident(), "daq1_ai0");
+    let ranged = Address { segments: vec![AddressSegment { name: "tc".into(), range: Some((0, 16)) }] };
+    let id = ranged.ident();
+    assert!(id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "gueltig in C: {id}");
+}
+
 /// **Jeder ABI-Puffer ist auf acht Byte ausgerichtet.**
 ///
 /// Der erzeugte Code sieht diese Puffer als Strukturen mit `i64`-Feldern

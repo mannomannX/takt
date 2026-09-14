@@ -112,7 +112,8 @@ fn compile(path: &str) -> Option<takt_mir::Program> {
 /// abzuhaken und die Ursache zu behalten.
 fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
     let Some(takt) = find_takt() else {
-        panic!("Das Werkzeug takt fehlt; erst `cargo build -p takt-cli --release`");
+        let profile = env::var("PROFILE").unwrap_or_else(|_| "release".into());
+        panic!("Das Werkzeug takt fehlt; erst `cargo build -p takt-cli --{profile}`");
     };
     // **Auch das Werkzeug ist eine Quelle.** Ohne diese Zeile kennt Cargo
     // nur die `.takt`-Datei und baut nicht neu, wenn sich der Compiler
@@ -169,28 +170,31 @@ fn clang() -> Option<PathBuf> {
 /// ueber den PATH, weil dort ein fremdes `takt` stehen koennte — gesucht
 /// wird im Zielverzeichnis dieses Baus.
 ///
-/// **Das neueste, nicht das erstbeste.** Eine erste Fassung probierte
-/// `debug` vor `release` und nahm, was zuerst dalag: Ein altes
-/// `debug/takt.exe` kannte einen neuen Schalter nicht, `takt build` schlug
-/// fehl, und weil der Aufruf nur eine Warnung erzeugte, erschien der
-/// Fehler erst viel spaeter als fehlende Datei. Die Zeit zu vergleichen
-/// kostet zwei Zeilen und nimmt die Frage heraus, welches gerade gilt.
+/// **Dasselbe Profil, nicht das erstbeste und nicht das neueste.** Zwei
+/// Fassungen lagen vorher daneben: Die erste probierte `debug` vor
+/// `release` und nahm ein veraltetes Werkzeug, das einen neuen Schalter
+/// nicht kannte. Die zweite nahm das juengste — und band den Bau damit an
+/// einen Zufall, denn welches Binary gerade juenger ist, entscheidet, wer
+/// zuletzt `cargo test` gerufen hat.
+///
+/// `PROFILE` beantwortet es ohne Raten: Ein Release-Bau uebersetzt mit dem
+/// Release-Werkzeug. Findet sich keines, bricht der Bau ab und sagt, was
+/// zu tun ist — besser als ein Objekt aus einem fremden Stand.
 fn find_takt() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "takt.exe" } else { "takt" };
+    // Dasselbe Profil wie dieser Bau: `PROFILE` ist `debug` oder `release`.
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "release".into());
     // `OUT_DIR` ist `<target>/<triple>/<profil>/build/<crate>-<hash>/out`;
     // die CLI liegt fuer den *Wirt* gebaut, also ohne Triple daneben.
     let out = PathBuf::from(env::var("OUT_DIR").ok()?);
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
     let mut dir = out.as_path();
     for _ in 0..6 {
         let Some(parent) = dir.parent() else { break };
         dir = parent;
-        for candidate in [dir.join("debug").join(exe), dir.join("release").join(exe), dir.join(exe)] {
-            let Ok(at) = fs::metadata(&candidate).and_then(|m| m.modified()) else { continue };
-            if best.as_ref().is_none_or(|(known, _)| at > *known) {
-                best = Some((at, candidate));
-            }
+        let p = dir.join(&profile).join(exe);
+        if p.exists() {
+            return Some(p);
         }
     }
-    best.map(|(_, p)| p)
+    None
 }

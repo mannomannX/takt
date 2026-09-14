@@ -31,6 +31,12 @@ pub struct Slot {
     pub ty: LlvmType,
     /// Name des Channels oder Parameters, fuer Meldungen.
     pub name: String,
+    /// Die Hardware-Adresse, falls der Channel eine hat (8.1, 8.10).
+    ///
+    /// Sie ist der symbolische Schluessel auf ein Geraet — der Rahmen
+    /// baut daraus den Namen der Treiberfunktion. `None` heisst `sim(...)`
+    /// oder `none`: Dann gibt es nichts zu stellen.
+    pub address: Option<takt_mir::pattern::Address>,
 }
 
 /// Die Speicherform eines Programms.
@@ -66,6 +72,7 @@ pub fn of(p: &Program) -> Layout {
                     ty: value_ty.clone(),
                     signed: is_signed(c.ty, p),
                     name: c.name.clone(),
+                    address: hw_address(c),
                 });
                 out.image = out.image.max(offset + entry.size());
             }
@@ -76,13 +83,21 @@ pub fn of(p: &Program) -> Layout {
                 ty: value_ty.clone(),
                 signed: is_signed(c.ty, p),
                 name: c.name.clone(),
+                address: hw_address(c),
             });
             out.latch = out.latch.max(offset + value_ty.size());
         }
     }
     for (i, cmd) in p.commands.iter().enumerate() {
         if let Some(offset) = image::command_offset(takt_mir::CommandId(i as u32), p) {
-            out.commands.push(Slot { offset, size: 1, ty: LlvmType::Int(8), signed: false, name: cmd.name.clone() });
+            out.commands.push(Slot {
+                offset,
+                size: 1,
+                ty: LlvmType::Int(8),
+                signed: false,
+                name: cmd.name.clone(),
+                address: None,
+            });
             out.image = out.image.max(offset + 1);
         }
     }
@@ -95,6 +110,7 @@ pub fn of(p: &Program) -> Layout {
                 ty: t.clone(),
                 signed: is_signed(param.ty, p),
                 name: param.name.clone(),
+                address: None,
             });
             out.params = out.params.max(offset + t.size());
         }
@@ -106,6 +122,18 @@ pub fn of(p: &Program) -> Layout {
     out.latch = out.latch.max(1);
     out.params = out.params.max(1);
     out
+}
+
+/// Die Hardware-Adresse eines Channels, falls er eine hat.
+///
+/// `sim(...)` liefert `None`: Ein simulierter Channel hat kein Geraet, das
+/// ihn stellt — 8.3 nennt die Bindung als die eine Stelle, an der sich
+/// Sim- und HW-Bau unterscheiden duerfen.
+fn hw_address(c: &takt_mir::program::Channel) -> Option<takt_mir::pattern::Address> {
+    match &c.binding {
+        takt_mir::program::Binding::Hw(a) => Some(a.clone()),
+        takt_mir::program::Binding::Sim(_) | takt_mir::program::Binding::None => None,
+    }
 }
 
 /// Ist der Typ vorzeichenbehaftet (3.2)?
