@@ -225,6 +225,12 @@ machine epd_controller every 1 ms:
                 epd_cs_n = true
                 epd_dc = false
 
+            # BEFUND (im Sim-Lauf sichtbar geworden): Dieser Guard
+            # *konsumiert* die erste Zeile — „untersucht heisst konsumiert"
+            # (8.6) —, und `first_row` wird nirgends benutzt. Der Treiber
+            # bekommt darum nur 199 der 200 gesendeten Zeilen, `rows_written`
+            # erreicht nie 200 und `STREAMING_ROWS` laeuft in sein
+            # 10-s-Timeout nach SAFE_DISCHARGE.
             when display_stream as first_row: -> PREPARE_RAM_LOAD
             when cmd_deep_sleep: -> ENTER_SLEEP
 
@@ -369,3 +375,106 @@ machine epd_controller every 1 ms:
                 fault_counter += 1
 
         when cmd_clear_fault and vdd_sense >= 2.8 V: -> POWER_OFF
+
+# ==============================================================================
+# Streckenmodell fuer den Sim-Build (8.3)
+#
+# Ein Plant-Modell ist eine gewoehnliche Maschine: Es liest die `hw`-Outputs
+# des Treibers mit Unit-Delay und schreibt die `sim`-Outputs. Im
+# Hardware-Build wird es nicht gelinkt, die Steuerlogik bleibt byteidentisch.
+#
+# Was das Modell *nicht* sehen kann: die gesendeten Bytes. Ein Ausgabestrom
+# wird vom Treiberrand mit `max_rate` geleert (8.8), und das Modell liest
+# davon nur `spi_tx.free` — den freien Platz zu Tickbeginn. Ein Panel, das
+# auf `0x20` (Master Activation) reagieren muesste, ist so nicht
+# nachzubilden. Das Modell nimmt deshalb die Stelle, an der der Treiber
+# ohnehin auf BUSY wartet: Nach dem Reset und nach jedem `AWAIT_PANEL_BUSY`
+# haelt es BUSY fuer eine feste Dauer. Das genuegt fuer den Zweck — zu
+# pruefen, ob die Zustandskette laeuft — und es sagt ehrlich, wo die Grenze
+# liegt.
+# ==============================================================================
+
+output epd_busy_sim : bool             @ sim("gpio/epd_busy")
+output vdd_sim      : float[V]         @ sim("adc/vdd")
+output temp_sim     : float[degC]      @ sim("sensor/temp")
+
+machine epd_panel every 1 ms:
+    # Restlaufzeit der aktuellen Panel-Beschaeftigung.
+    var busy_left : Duration in 0 ms..20 s = 0 ms
+
+    initial UNPOWERED
+
+    loop:
+        # Versorgung und Temperatur sind hier konstant; ein Szenario, das
+        # Brownout oder Kaeltebetrieb prueft, wuerde genau diese beiden
+        # Zeilen ersetzen.
+        vdd_sim  = 3.3 V
+        temp_sim = 22.0 degC
+
+    state UNPOWERED:
+        enter:
+            epd_busy_sim = false
+        # Der Treiber zieht RST auf low und wieder auf high (POWER_ON_SEQ);
+        # das Panel meldet sich danach kurz beschaeftigt.
+        when epd_pwr_en and epd_rst_n:
+            busy_left = 20 ms
+            -> BUSY
+
+    state IDLE:
+        enter:
+            epd_busy_sim = false
+        # Ein Refresh laeuft ueber `EXECUTE_REFRESH` nach `AWAIT_PANEL_BUSY`.
+        # Das Modell erkennt ihn daran, dass der Treiber dort steht.
+        when epd_controller.status == REFRESHING:
+            busy_left = 1200 ms
+            -> BUSY
+        when not epd_pwr_en: -> UNPOWERED
+
+    state BUSY:
+        enter:
+            epd_busy_sim = true
+        loop:
+            if busy_left > 1 ms:
+                busy_left -= 1 ms
+            else:
+                busy_left = 0 ms
+        when busy_left == 0 ms: -> SETTLING
+        when not epd_pwr_en: -> UNPOWERED
+
+    # BUSY ist gefallen, der Treiber hat es aber noch nicht gesehen: Er
+    # steht bis zu seinem naechsten Tick in `REFRESHING`. Ohne diesen
+    # Zwischenschritt wuerde `IDLE` sofort einen neuen Refresh erkennen und
+    # das Panel endlos beschaeftigen.
+    state SETTLING:
+        enter:
+            epd_busy_sim = false
+        when epd_controller.status != REFRESHING: -> IDLE
+        when not epd_pwr_en: -> UNPOWERED
+
+# Bildgeber: speist `display_stream` mit 200 Zeilen, sobald der Treiber
+# bereit ist. Ein interner Stream wird per `send` gespeist (8.3); der
+# Kapazitaet von 16 wegen eine Zeile je Tick, was der Treiber mit einer
+# Zeile je Tick abholt.
+machine frame_source every 1 ms:
+    var next_row : int in 0..200 = 0
+
+    initial WAIT
+
+    state WAIT:
+        when epd_controller.status == READY: -> FEED
+
+    # Der Zaehler laeuft bis 200 und der Wechsel erst danach: Beim Stand 200
+    # ist die letzte Zeile gesendet, aber der Treiber holt sie erst im
+    # folgenden Tick ab (`on` je Aktivierung ein Element). Ein Wechsel bei
+    # `>= 200` wuerde den Bildgeber eine Zeile zu frueh stilllegen, und
+    # `STREAMING_ROWS` liefe in sein 10-s-Timeout.
+    state FEED:
+        loop:
+            if next_row < 200:
+                send display_stream, PixelRow(row_idx = next_row as u8, pixels = default)
+                next_row += 1
+        when epd_controller.rows_written >= 200: -> DONE
+
+    state DONE:
+        loop:
+            pass
