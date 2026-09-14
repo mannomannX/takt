@@ -1,0 +1,371 @@
+system:
+    language = 1
+    tick = 1 ms
+    target = baremetal
+    float = f32
+
+# ==============================================================================
+# Hardware-Schnittstellen und Protokoll-Definitionen für E-Ink Display (SSD1680)
+# Auflösung: 200x200 Pixel, 1-Bit Monochrom (25 Bytes pro Zeile, 5000 Bytes Frame)
+# ==============================================================================
+
+# --- Physische I/O Channels ---
+output epd_cs_n     : bool          @ hw("spi0/cs0")       with safe = true
+output epd_dc       : bool          @ hw("gpio/epd_dc")    with safe = false
+output epd_rst_n    : bool          @ hw("gpio/epd_rst")   with safe = true
+output epd_pwr_en   : bool          @ hw("gpio/epd_pwr")   with safe = false
+output spi_tx       : stream<u8>    @ hw("spi0/tx")        with max_rate = 2000000 Hz, capacity = 512
+
+input  epd_busy_raw : bool          @ hw("gpio/epd_busy")  with debounce = 3, max_age = 5 ms
+input  vdd_sense    : float[V] in 2.0..4.0 V       @ hw("adc/vdd")     with max_age = 50 ms
+input  ambient_temp : float[degC] in -30..70 degC @ hw("sensor/temp") with max_age = 500 ms
+
+# --- Operative Steuer-Kommandos ---
+command cmd_init
+command cmd_trigger_refresh
+command cmd_deep_sleep
+command cmd_clear_fault
+
+# --- Datenstrukturen für rasterbasiertes Frame-Streaming ---
+record PixelRow layout little:
+    row_idx : u8 in 0..199
+    pixels  : bytes<25>
+
+# Interner Zeilen-Stream zur Entkopplung ohne statischen 5-KB-Frame-Buffer
+stream<PixelRow> display_stream with capacity = 16
+
+enum EpdStatus:
+    OFF
+    BOOTING
+    READY
+    STREAMING
+    REFRESHING
+    SLEEPING
+    FAULT
+
+# ==============================================================================
+# Reine Hilfsfunktionen (Zero-Allocation, deterministische Puffer-Serialisierung)
+# ==============================================================================
+
+fn cmd1(c: u8) -> bytes<1>:
+    var b : bytes<1> = default
+    b.push(c)
+    return b
+
+fn make_driver_output(mux_gates: u8) -> bytes<3>:
+    var b : bytes<3> = default
+    b.push(mux_gates)
+    b.push(0x00)
+    b.push(0x00)
+    return b
+
+fn make_ram_x_window(x_start: u8, x_end: u8) -> bytes<2>:
+    var b : bytes<2> = default
+    b.push(x_start)
+    b.push(x_end)
+    return b
+
+fn make_ram_y_window(y_start: u16, y_end: u16) -> bytes<4>:
+    var b : bytes<4> = default
+    b.push((y_start & 0xFF) as u8)
+    b.push(((y_start >> 8) & 0x01) as u8)
+    b.push((y_end & 0xFF) as u8)
+    b.push(((y_end >> 8) & 0x01) as u8)
+    return b
+
+fn make_ram_y_counter(y: u16) -> bytes<2>:
+    var b : bytes<2> = default
+    b.push((y & 0xFF) as u8)
+    b.push(((y >> 8) & 0x01) as u8)
+    return b
+
+# ==============================================================================
+# Haupttreiber-Maschine: Zustandssteuerung, Booster-Schutz & Refresh-Sequenzierung
+# ==============================================================================
+
+machine epd_controller every 1 ms:
+    fault -> SAFE_DISCHARGE
+
+    # Lebensdauer- und Diagnose-Tracking.
+    # `persist` ist v1.1 (5.9) und wird heute mit SC-3 abgelehnt — die
+    # Zaehler stehen hier als das, was der Treiber wirklich braucht.
+    persist var total_refreshes : int in 0..1000000 = 0 with min_interval = 10 s
+    persist var fault_counter   : int in 0..10000   = 0 with min_interval = 5 s
+
+    pub var status        : EpdStatus = OFF
+    pub var rows_written  : int in 0..200 = 0
+    pub var last_duration : Duration = 0 ms
+
+    var refresh_start_time : Duration = 0 ms
+
+    initial POWER_OFF
+
+    # --------------------------------------------------------------------------
+    # Ruhezustand (Stromlos, Busse inaktiv)
+    # --------------------------------------------------------------------------
+    state POWER_OFF:
+        enter:
+            status = OFF
+            epd_cs_n = true
+            epd_dc = false
+            epd_rst_n = false
+            epd_pwr_en = false
+            rows_written = 0
+
+        when cmd_init: -> POWER_ON_SEQ
+
+    # --------------------------------------------------------------------------
+    # Operativer Überwachungszustand (Interlocks aktiv)
+    # --------------------------------------------------------------------------
+    state OPERATING:
+        initial POWER_ON_SEQ
+
+        loop:
+            # Spannungsüberwachung: Brownout während Display-Refresh zerstört Panel-Ladungen
+            check vdd_sense >= 2.7 V, "Brownout prevention: VDD < 2.7V"
+
+            # Physikalische Grenzen von elektrophoretischen Displays (Partikelkristallisation)
+            check ambient_temp >= 0 degC, "Operating temp too low (< 0 degC)"
+            check ambient_temp <= 50 degC, "Operating temp too high (> 50 degC)"
+
+            alert ambient_temp < 10 degC, "Low temp: update waveform requires extended timing"
+
+        # ----------------------------------------------------------------------
+        # Power-Up & Hardware-Reset-Timing
+        # ----------------------------------------------------------------------
+        state POWER_ON_SEQ:
+            enter:
+                status = BOOTING
+
+            sequence:
+                epd_pwr_en = true
+                wait 10 ms
+                epd_rst_n = false
+                wait 10 ms
+                epd_rst_n = true
+                wait 15 ms
+                until not epd_busy_raw timeout 100 ms -> SAFE_DISCHARGE
+                -> INIT_REGISTERS
+
+        # ----------------------------------------------------------------------
+        # Initialisierung der Controller-Register (SSD1680)
+        # ----------------------------------------------------------------------
+        state INIT_REGISTERS:
+            sequence:
+                # SW Reset (0x12)
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x12)
+                wait 1 ms
+                epd_cs_n = true
+                wait 5 ms
+                until not epd_busy_raw timeout 50 ms -> SAFE_DISCHARGE
+
+                # Driver Output Control (0x01): 200 MUX Gates (0xC7, 0x00, 0x00)
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x01)
+                wait 1 ms
+                epd_dc = true
+                send spi_tx, make_driver_output(199)
+                wait 1 ms
+                epd_cs_n = true
+                wait 1 ms
+
+                # Data Entry Mode (0x11): X-Increment, Y-Increment (0x03)
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x11)
+                wait 1 ms
+                epd_dc = true
+                send spi_tx, cmd1(0x03)
+                wait 1 ms
+                epd_cs_n = true
+                wait 1 ms
+
+                # Set RAM X-Address Range (0x44): 0x00 bis 0x18 (25 Bytes = 200 Pixel)
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x44)
+                wait 1 ms
+                epd_dc = true
+                send spi_tx, make_ram_x_window(0, 24)
+                wait 1 ms
+                epd_cs_n = true
+                wait 1 ms
+
+                # Set RAM Y-Address Range (0x45): 0x0000 bis 0x00C7 (200 Pixel)
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x45)
+                wait 1 ms
+                epd_dc = true
+                send spi_tx, make_ram_y_window(0, 199)
+                wait 1 ms
+                epd_cs_n = true
+                wait 1 ms
+
+                # Border Waveform Control (0x3C): VBD -> VSS
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x3C)
+                wait 1 ms
+                epd_dc = true
+                send spi_tx, cmd1(0x05)
+                wait 1 ms
+                epd_cs_n = true
+                -> READY
+
+        # ----------------------------------------------------------------------
+        # Betriebsbereiter Zustand (Warten auf Bilddaten oder Sleep)
+        # ----------------------------------------------------------------------
+        state READY:
+            enter:
+                status = READY
+                epd_cs_n = true
+                epd_dc = false
+
+            when display_stream as first_row: -> PREPARE_RAM_LOAD
+            when cmd_deep_sleep: -> ENTER_SLEEP
+
+        # ----------------------------------------------------------------------
+        # SRAM-Adress-Cursor auf Anfang setzen
+        # ----------------------------------------------------------------------
+        state PREPARE_RAM_LOAD:
+            enter:
+                status = STREAMING
+                rows_written = 0
+
+            sequence:
+                # Set RAM X Counter (0x4E) auf 0
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x4E)
+                wait 1 ms
+                epd_dc = true
+                send spi_tx, cmd1(0)
+                wait 1 ms
+                epd_cs_n = true
+                wait 1 ms
+
+                # Set RAM Y Counter (0x4F) auf 0
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x4F)
+                wait 1 ms
+                epd_dc = true
+                send spi_tx, make_ram_y_counter(0)
+                wait 1 ms
+                epd_cs_n = true
+                wait 1 ms
+
+                # Write Black/White RAM Command (0x24)
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x24)
+                wait 1 ms
+                epd_dc = true
+                -> STREAMING_ROWS
+
+        # ----------------------------------------------------------------------
+        # Zeilenweises Framebuffer-Streaming über Internal Stream
+        # ----------------------------------------------------------------------
+        state STREAMING_ROWS:
+            on display_stream as row:
+                send spi_tx, row.data.pixels
+                rows_written += 1
+
+            when rows_written >= 200: -> FINALIZE_TRANSFER
+            after 10 s: -> SAFE_DISCHARGE
+
+        state FINALIZE_TRANSFER:
+            enter:
+                epd_cs_n = true
+                epd_dc = false
+
+            when cmd_trigger_refresh: -> EXECUTE_REFRESH
+            after 50 ms: -> EXECUTE_REFRESH
+
+        # ----------------------------------------------------------------------
+        # Aktualisierungs-Wellenform auslösen (Master Activation)
+        # ----------------------------------------------------------------------
+        state EXECUTE_REFRESH:
+            enter:
+                status = REFRESHING
+                refresh_start_time = now
+
+            sequence:
+                # Display Update Control 2 (0x22): Enable Clock -> Enable Analog -> Display -> Disable
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x22)
+                wait 1 ms
+                epd_dc = true
+                send spi_tx, cmd1(0xF7)
+                wait 1 ms
+                epd_cs_n = true
+                wait 1 ms
+
+                # Master Activation (0x20)
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x20)
+                wait 1 ms
+                epd_cs_n = true
+                wait 10 ms
+                -> AWAIT_PANEL_BUSY
+
+        # ----------------------------------------------------------------------
+        # Warten auf Panel-Ladungspumpe und Partikel-Refresh
+        # ----------------------------------------------------------------------
+        state AWAIT_PANEL_BUSY:
+            loop:
+                # Hardware-Schutz: Hochspannungstransformatoren dürfen nie unbegrenzt feuern
+                check time_in_state < 15 s, "Booster charge-pump timeout (panel damaged or busy pin stuck)"
+                alert time_in_state > 4 s, "Panel refresh taking longer than nominal (waveform timing extended)"
+
+            when not epd_busy_raw:
+                last_duration = now - refresh_start_time
+                if total_refreshes < 1000000:
+                    total_refreshes += 1
+                -> READY
+
+        # ----------------------------------------------------------------------
+        # Geordnetes Herunterfahren des Displays in Deep Sleep
+        # ----------------------------------------------------------------------
+        state ENTER_SLEEP:
+            enter:
+                status = SLEEPING
+
+            sequence:
+                # Deep Sleep Command (0x10): Mode 1 (Preserve RAM, Power off analog)
+                epd_cs_n = false
+                epd_dc = false
+                send spi_tx, cmd1(0x10)
+                wait 1 ms
+                epd_dc = true
+                send spi_tx, cmd1(0x01)
+                wait 1 ms
+                epd_cs_n = true
+                wait 100 ms
+
+                # Rail Isolation
+                epd_rst_n = false
+                epd_dc = false
+                epd_pwr_en = false
+                -> POWER_OFF
+
+    # --------------------------------------------------------------------------
+    # Sicherheitszustand: Entladen der Hochspannungen & Pin-Isolierung
+    # --------------------------------------------------------------------------
+    state SAFE_DISCHARGE:
+        enter:
+            status = FAULT
+            epd_cs_n = true
+            epd_dc = false
+            epd_rst_n = false
+            epd_pwr_en = false
+            if fault_counter < 10000:
+                fault_counter += 1
+
+        when cmd_clear_fault and vdd_sense >= 2.8 V: -> POWER_OFF
