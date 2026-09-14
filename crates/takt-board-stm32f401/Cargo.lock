@@ -173,6 +173,7 @@ dependencies = [
  "stm32f4",
  "takt-board-support",
  "takt-rt-baremetal",
+ "takt-rt-core",
 ]
 
 [[package]]

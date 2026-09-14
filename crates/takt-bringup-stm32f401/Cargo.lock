@@ -86,6 +86,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
 
 [[package]]
+name = "libtaktm"
+version = "0.1.0"
+
+[[package]]
 name = "nb"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -179,6 +183,7 @@ dependencies = [
  "stm32f4",
  "takt-board-support",
  "takt-rt-baremetal",
+ "takt-rt-core",
 ]
 
 [[package]]
@@ -195,8 +200,72 @@ dependencies = [
  "stm32f4",
  "takt-board-stm32f401",
  "takt-board-support",
+ "takt-conformance",
+ "takt-diag",
+ "takt-llvm",
  "takt-rt-baremetal",
+ "takt-rt-core",
+ "takt-sema",
 ]
+
+[[package]]
+name = "takt-conformance"
+version = "0.1.0"
+dependencies = [
+ "takt-diag",
+ "takt-interp",
+ "takt-llvm",
+ "takt-mir",
+ "takt-sema",
+]
+
+[[package]]
+name = "takt-diag"
+version = "0.1.0"
+
+[[package]]
+name = "takt-hal"
+version = "0.1.0"
+dependencies = [
+ "takt-diag",
+ "takt-mir",
+]
+
+[[package]]
+name = "takt-interp"
+version = "0.1.0"
+dependencies = [
+ "libtaktm",
+ "takt-diag",
+ "takt-hal",
+ "takt-match",
+ "takt-mir",
+ "takt-native",
+ "takt-rt-core",
+]
+
+[[package]]
+name = "takt-llvm"
+version = "0.1.0"
+dependencies = [
+ "takt-diag",
+ "takt-mir",
+]
+
+[[package]]
+name = "takt-match"
+version = "0.1.0"
+
+[[package]]
+name = "takt-mir"
+version = "0.1.0"
+dependencies = [
+ "takt-diag",
+]
+
+[[package]]
+name = "takt-native"
+version = "0.1.0"
 
 [[package]]
 name = "takt-rt-baremetal"
@@ -208,6 +277,25 @@ dependencies = [
 [[package]]
 name = "takt-rt-core"
 version = "0.1.0"
+
+[[package]]
+name = "takt-sema"
+version = "0.1.0"
+dependencies = [
+ "libtaktm",
+ "takt-diag",
+ "takt-interp",
+ "takt-mir",
+ "takt-native",
+ "takt-syntax",
+]
+
+[[package]]
+name = "takt-syntax"
+version = "0.1.0"
+dependencies = [
+ "takt-diag",
+]
 
 [[package]]
 name = "unicode-ident"

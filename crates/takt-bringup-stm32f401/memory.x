@@ -25,6 +25,16 @@ MEMORY
  */
 _stack_start = ORIGIN(RAM) + LENGTH(RAM);
 
+/* **Zur Ausrichtungswarnung des Linkers.** Er meldet, dass `.text` bei
+ * 0x08004194 nicht auf 8 ausgerichtet ist — die Vektortabelle ist 404
+ * Byte lang, und 404 teilt nicht durch 8. Das ist folgenlos: Thumb-Code
+ * braucht 2 Byte Ausrichtung, Sprungtabellen 4, und beides ist erfuellt.
+ *
+ * Die 8 fordert der C-Rahmen (12.1) fuer seine statischen Puffer, weil
+ * Prozessabbild und Latch `long long` enthalten. Die liegen aber in
+ * `.bss`, wo der Linker sie ohnehin ausrichtet — nicht in `.text`.
+ */
+
 /* Der Schutzbereich aus 12.3.
  *
  * Das Kanarienwort steht als gewoehnliche `static` im Programm, nicht

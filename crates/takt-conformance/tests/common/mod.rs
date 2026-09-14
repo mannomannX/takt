@@ -1,12 +1,11 @@
 //! Was die Abnahmetests brauchen: bauen und ausfuehren.
 //!
 //! Jeder Test bindet dieses Modul einzeln ein, und keiner benutzt alles —
-//!  ist hier die Regel, nicht die Ausnahme.
+//! `dead_code` ist hier die Regel, nicht die Ausnahme.
 #![allow(dead_code)]
 
 use takt_conformance::harness;
 use takt_conformance::stimulus::Stimulus;
-use takt_llvm::emit::Module;
 use takt_llvm::toolchain::Clang;
 use takt_mir::program::Program;
 
@@ -21,41 +20,16 @@ pub fn ir_of(p: &Program) -> String {
 /// Bedingung, unter der Satz 9.4.4 eine Aussage ueber eine Uebersetzung
 /// ist und nicht ueber zwei Programme.
 pub fn ir_for(p: &Program, triple: &str) -> String {
-    let mut m = Module::new("abnahme", triple);
-    takt_llvm::abi::Abi::declare(&mut m);
-    takt_llvm::stream::Streams::declare(&mut m);
-    let methoden: Vec<_> = p.blocks.iter().flat_map(|b| b.step.iter().chain(&b.methods).copied()).collect();
-    for b in &p.blocks {
-        let Some(inst) = takt_llvm::block::instance_of(b, p) else { continue };
-        takt_llvm::block::declare(b, &inst, &mut m);
-        for fid in b.step.iter().chain(&b.methods) {
-            let Some(f) = p.fns.get(fid.index()) else { continue };
-            let _ = takt_llvm::fns::block_method(b, f, p, &mut m);
-        }
+    // Die Uebersetzung selbst steht in `takt-llvm::lower` — sie wird
+    // seit M5 auch ausserhalb der Abnahme gebraucht (das Bring-up-
+    // Programm bindet den erzeugten Code mit). Zwei Fassungen derselben
+    // Folge waeren eine Quelle dafuer, dass der Test etwas anderes
+    // prueft, als die Werkzeuge erzeugen.
+    let out = takt_llvm::lower::program(p, triple, "abnahme");
+    for s in &out.skipped {
+        eprintln!("{}_step fehlt: {}", s.machine, s.reason);
     }
-    for (i, f) in p.fns.iter().enumerate() {
-        if !methoden.contains(&takt_mir::FnId(i as u32)) {
-            let _ = takt_llvm::fns::function(f, p, &mut m);
-        }
-    }
-    for machine in &p.machines {
-        // Eine Vorlage hat keine eigene Schrittfunktion — nur ihre
-        // Instanzen laufen (5.9). Sie zu senken zu versuchen meldete
-        // „Maschine ohne Blattzustand", und das las sich wie ein Mangel.
-        if machine.kind == takt_mir::machine::MachineKind::Template {
-            continue;
-        }
-        let Some(st) = takt_llvm::machine::state_struct(machine, p) else { continue };
-        takt_llvm::machine::declare_state(machine, &st, &mut m);
-        let _ = takt_llvm::step::init_function(machine, &st, p, &mut m);
-        // Der Abbruchgrund gehoert in die IR, nicht in den Papierkorb:
-        // Ohne ihn fehlt die Schrittfunktion still, und der Linker meldet
-        // ein fehlendes Symbol statt des Konstrukts, das gefehlt hat.
-        if let Err(e) = takt_llvm::step::step_function(machine, &st, p, &mut m) {
-            eprintln!("{}_step fehlt: {}", machine.name, e.what);
-        }
-    }
-    m.finish()
+    out.ir
 }
 
 /// Uebersetzt ein Programm mit seinem Testrahmen und fuehrt es aus.

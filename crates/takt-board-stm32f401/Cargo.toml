@@ -25,6 +25,10 @@ rust-version = "1.85"
 [dependencies]
 takt-board-support = { path = "../takt-board-support" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }
+# Der Kern liefert den `Program`-Trait, den `program.rs` erfuellt. Direkt
+# und nicht ueber einen Re-Export von `takt-rt-baremetal`: Was dieses
+# Crate benutzt, soll in seinem eigenen Manifest stehen.
+takt-rt-core = { path = "../takt-rt-core" }
 
 # `cortex-m` liefert, was dem *Prozessorkern* gehoert: DWT-Zyklenzaehler
 # (12.3, Grundlage der Kalibrierung), `wfi` fuer den Schlaf (9.9), MPU

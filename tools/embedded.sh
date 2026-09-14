@@ -56,7 +56,12 @@ echo "== 2. Das Board-Crate (eigener Workspace, thumbv7em)"
 )
 
 echo
-echo "== 3. Das Bring-up-Programm, von aussen gebaut"
+echo "== 3. Die Bring-up-Programme, von aussen gebaut"
+#
+# Drei Binaries, drei Stufen der Fehlersuche: `blink` schaltet einen Pin
+# ohne PLL, `minimal` prueft die Tickquelle, `takt` fuehrt ein echtes
+# Takt-Programm aus. Jedes laesst weg, was das naechste braucht — so
+# halbiert ein Fehlerbild den Suchraum, statt ihn zu durchmustern.
 cargo build --release --target thumbv7em-none-eabihf \
     --manifest-path crates/takt-bringup-stm32f401/Cargo.toml "$@"
 
@@ -74,7 +79,7 @@ objcopy="$sysroot/lib/rustlib/$host/bin/llvm-objcopy"
 if [ -f "$bin" ] && { [ -x "$objcopy" ] || [ -x "$objcopy.exe" ]; }; then
     tmp="$(mktemp -t takt-bringup-XXXXXX)"
     "$objcopy" -O binary "$bin" "$tmp"
-    cargo run -q -p takt-flash-weact -- "$tmp" --dry-run
+    cargo run -q -p takt-flash-weact --bin takt-flash-weact -- "$tmp" --dry-run
     rm -f "$tmp"
 else
     echo "  (Abbildpruefung uebersprungen: Binaerdatei oder llvm-objcopy fehlt)"

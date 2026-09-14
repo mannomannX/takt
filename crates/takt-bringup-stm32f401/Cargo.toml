@@ -11,10 +11,22 @@ rust-version = "1.85"
 # laesst sich nicht lokal aufheben. Siehe `takt-board-stm32f401`.
 [workspace]
 
+# Der Bau uebersetzt das Takt-Programm mit: `takt-sema` macht die MIR,
+# `takt-llvm` die IR, `takt-conformance` den Rahmen. Sie laufen auf dem
+# *Wirt*, nicht auf dem Ziel — darum `build-dependencies` und nicht
+# `dependencies`.
+[build-dependencies]
+takt-conformance = { path = "../takt-conformance" }
+takt-diag = { path = "../takt-diag" }
+takt-llvm = { path = "../takt-llvm" }
+takt-sema = { path = "../takt-sema" }
+
 [dependencies]
 takt-board-stm32f401 = { path = "../takt-board-stm32f401" }
 takt-board-support = { path = "../takt-board-support" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }
+# Fuer den `Program`-Trait, den die Tickschleife ruft.
+takt-rt-core = { path = "../takt-rt-core" }
 
 # `critical-section-single-core` liefert die Implementierung, die die PAC
 # fuer `Peripherals::take()` braucht: Auf einem Einkern-System ohne

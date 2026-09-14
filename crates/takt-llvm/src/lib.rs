@@ -41,6 +41,7 @@ pub mod fns;
 pub mod format;
 pub mod image;
 pub mod inspect;
+pub mod lower;
 pub mod machine;
 pub mod reduce;
 pub mod scope;
