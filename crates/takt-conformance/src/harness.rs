@@ -78,6 +78,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let _ = writeln!(s, "#include <stdio.h>");
     let _ = writeln!(s, "#include <string.h>\n");
     let _ = writeln!(s, "static void takt_tx_commit(long long);");
+    let _ = writeln!(s, "static void takt_apply_scheduled(long long);");
 
     // Die Runtime-Aufrufe (`takt-llvm/src/abi.rs`). Sie schreiben in den
     // Trace, damit der Vergleich sie sieht.
@@ -100,7 +101,10 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let _ = writeln!(s, "void takt_verify(int m, int site, unsigned char ok) {{");
     let _ = writeln!(s, "    printf(\"t=%lld verify %d %d %d\\n\", g_tick, m, site, ok ? 1 : 0);");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_abort(int m, int site) {{ printf(\"t=%lld abort %d %d\\n\", g_tick, m, site); }}\n");
+    let _ = writeln!(s, "void takt_abort(int m, int site) {{ printf(\"t=%lld abort %d %d\\n\", g_tick, m, site); }}");
+    let _ = writeln!(s, "void takt_verdict(int m, int site, unsigned char pass) {{");
+    let _ = writeln!(s, "    printf(\"t=%lld verdict %d %d %d\\n\", g_tick, m, site, pass ? 1 : 0);");
+    let _ = writeln!(s, "}}\n");
 
     // Die Stroeme (`takt-llvm/src/stream.rs`): die drei Aufrufe ueber
     // dem Stimulus, der vor dem Lauf feststeht (`streams`).
@@ -144,6 +148,12 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let _ = writeln!(s, "static char params[{}];", layout.params.max(1));
     let _ = writeln!(s, "static char latch[{}];\n", layout.latch.max(1));
 
+    // 9.8: die geplanten Schreibvorgaenge. Sie gehoeren der Runtime —
+    // 11.2 nennt sie „feste Arrays im Runtime-Anteil des Outputs" —,
+    // und der Rahmen ist hier die Runtime. Hinter dem Latch, weil
+    // `apply_scheduled` ihn schreibt.
+    scheduled(&mut s, p, &layout);
+
     let _ = writeln!(s, "int main(void) {{");
     for m in &driven {
         let _ = writeln!(s, "    memset(state_{0}, 0, sizeof state_{0});", m.name);
@@ -179,6 +189,10 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     sim_bindings(&mut s, p, "    ");
     let _ = writeln!(s, "    dump(0);");
     let _ = writeln!(s, "    for (g_tick = 1; g_tick <= {ticks}; g_tick++) {{");
+    // 9.8: `apply_scheduled(k)` stellt zu Tick-Beginn, was faellig ist —
+    // vor jedem Maschinenschritt, damit die Maschinen den Wert im selben
+    // Tick lesen. Die Simulation wendet `T` im Tick `ceil(T / T0)` an.
+    let _ = writeln!(s, "        takt_apply_scheduled(g_tick * {}LL);", p.config.tick);
     // 8.5: Ein Command gilt einen Tick. Der Rahmen setzt es vor dem
     // Schritt und loescht es danach — wie die Runtime (12.1).
     for (name, slot) in layout.commands.iter().map(|c| (c.name.clone(), c.offset)) {
@@ -281,6 +295,78 @@ fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout) {
         let Some(text) = literal(safe) else { continue };
         let _ = writeln!(s, "    *({ct} *)(latch + {}) = {text}; /* {} auf safe (5.3) */", slot.offset, slot.name);
     }
+}
+
+/// Die geplanten Schreibvorgaenge (9.8).
+///
+/// **Der Rahmen ist hier die Runtime.** 11.2 legt `sched` in den
+/// Runtime-Anteil des Outputs, und 9.8 gibt die Regeln vor: sortiert
+/// nach `T`, hoechstens `K_o` Eintraege je Output, gleiche `T`
+/// ueberschreiben einander, und `apply_scheduled(k)` stellt zu
+/// Tick-Beginn, was faellig ist.
+///
+/// `takt_schedule` liefert `false`, wenn der Zeitpunkt nicht in der
+/// Zukunft liegt (`TimingFault`) oder die Warteschlange voll ist
+/// (`ScheduleOverflow`) — beides Faults der Maschine, die der erzeugte
+/// Code an seinem Fault-Pfad behandelt.
+fn scheduled(s: &mut String, p: &Program, layout: &Layout) {
+    // K_o aus 7.5; `takt size` rechnet mit derselben Zahl.
+    let _ = writeln!(s, "#define TAKT_K_O 4");
+    let _ = writeln!(s, "struct takt_sched {{ long long t; long long v; }};");
+    let n = p.channels.len().max(1);
+    let _ = writeln!(s, "static struct takt_sched g_sched[{n}][TAKT_K_O];");
+    let _ = writeln!(s, "static int g_sched_n[{n}];");
+    let _ = writeln!(s, "_Bool takt_schedule(int o, long long t, long long v) {{");
+    let _ = writeln!(s, "    if (o < 0 || o >= {n}) return 0;");
+    // 9.8: `T <= now` ist ein `TimingFault`; in der Simulation ist
+    // `guard` null.
+    let _ = writeln!(s, "    if (t <= g_tick * {}LL) return 0;", p.config.tick);
+    // Gleiche `T`: die spaetere Anweisung gewinnt (9.8).
+    let _ = writeln!(s, "    for (int i = 0; i < g_sched_n[o]; i++)");
+    let _ = writeln!(s, "        if (g_sched[o][i].t == t) {{ g_sched[o][i].v = v; return 1; }}");
+    let _ = writeln!(s, "    if (g_sched_n[o] >= TAKT_K_O) return 0;");
+    let _ = writeln!(s, "    g_sched[o][g_sched_n[o]].t = t;");
+    let _ = writeln!(s, "    g_sched[o][g_sched_n[o]].v = v;");
+    let _ = writeln!(s, "    g_sched_n[o]++;");
+    let _ = writeln!(s, "    return 1;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "void takt_cancel(int o) {{ if (o >= 0 && o < {n}) g_sched_n[o] = 0; }}");
+
+    // `apply_scheduled(k)`: Was faellig ist, geht in den Latch. Sind
+    // mehrere faellig, gewinnt der spaeteste Zeitpunkt (9.8).
+    let _ = writeln!(s, "static void takt_apply_scheduled(long long now) {{");
+    let _ = writeln!(s, "    for (int o = 0; o < {n}; o++) {{");
+    let _ = writeln!(s, "        long long best_t = -1; long long best_v = 0; int hit = 0;");
+    let _ = writeln!(s, "        int k = 0;");
+    let _ = writeln!(s, "        for (int i = 0; i < g_sched_n[o]; i++) {{");
+    let _ = writeln!(s, "            if (g_sched[o][i].t <= now) {{");
+    let _ = writeln!(s, "                if (!hit || g_sched[o][i].t > best_t) {{");
+    let _ = writeln!(s, "                    best_t = g_sched[o][i].t; best_v = g_sched[o][i].v; hit = 1;");
+    let _ = writeln!(s, "                }}");
+    let _ = writeln!(s, "            }} else {{");
+    let _ = writeln!(s, "                g_sched[o][k++] = g_sched[o][i];");
+    let _ = writeln!(s, "            }}");
+    let _ = writeln!(s, "        }}");
+    let _ = writeln!(s, "        g_sched_n[o] = k;");
+    let _ = writeln!(s, "        if (!hit) continue;");
+    let _ = writeln!(s, "        switch (o) {{");
+    for slot in &layout.outputs {
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let Some(id) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
+        // Der Wert kam als `i64` an; im Latch steht er in seinem Typ.
+        // Ein `double` traegt dieselben Bits, eine Ganzzahl wird
+        // verengt — beides genau die Umkehrung von `at` im Codegen.
+        let back = if slot.ty.is_float() {
+            format!("*({ct} *)(latch + {}) = ({ct})(*(double *)&best_v);", slot.offset)
+        } else {
+            format!("*({ct} *)(latch + {}) = ({ct})best_v;", slot.offset)
+        };
+        let _ = writeln!(s, "        case {id}: {back} break; /* {} */", slot.name);
+    }
+    let _ = writeln!(s, "        default: break;");
+    let _ = writeln!(s, "        }}");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}\n");
 }
 
 /// Speist die `sim`-Outputs in die `hw`-Inputs derselben Adresse (8.3).

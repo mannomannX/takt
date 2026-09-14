@@ -1,0 +1,37 @@
+# 28 — Geplante Ausgaben (9.8).
+#
+# `at T: o = v` stellt `o` zum Zeitpunkt `T`, nicht jetzt. Die
+# Warteschlange gehoert der Runtime (11.2: „feste Arrays im
+# Runtime-Anteil des Outputs"), und `apply_scheduled(k)` legt zu
+# Tick-Beginn ab, was faellig ist — die Simulation im Tick `ceil(T/T0)`.
+#
+# Zwei Faults koennen dabei entstehen (9.8): `TimingFault`, wenn `T`
+# nicht in der Zukunft liegt, und `ScheduleOverflow` bei mehr als K_o
+# Eintraegen. Beide entscheidet die Runtime, weil nur sie die
+# Warteschlange kennt.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output y : int in 0..9 @ sim("y")
+output z : int in 0..9 @ sim("z")
+
+machine m:
+    initial A
+
+    state A:
+        enter:
+            # Drei Zeitpunkte, aufsteigend: Der Trace zeigt sie nach-
+            # einander, nicht alle im Eintritts-Tick.
+            at 30 ms:
+                y = 1
+            at 60 ms:
+                y = 2
+            at 90 ms:
+                y = 3
+            # Ein zweiter Output, gleichzeitig mit dem ersten: Die
+            # Warteschlangen sind je Output getrennt (9.8).
+            at 30 ms:
+                z = 7
+        after 200 ms: -> A

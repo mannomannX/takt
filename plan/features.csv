@@ -102,6 +102,10 @@ CG-8.8-Send,Umsetzung,11.2,"`send` und Formatstrings im erzeugten Code (`takt-ll
 CG-8.9-Reduktionen,Umsetzung,11.2,"Reduktionen ueber Abtastfenster im erzeugten Code (`takt-llvm::reduce`): `min`, `max`, `mean`, `rms`, `count`, `last`; abgerollt, Summation von links nach rechts wie im Interpreter (4.2)",,M4 (Codegen),fertig
 CG-5.8-Every,Umsetzung,11.2,"`every d:` im erzeugten Code: ein `i64` je Aufrufstelle im Zustand (`Role::EveryNext`); Uhr ist `t_in_state` im Zustand, `now` im Maschinen-`loop:` (5.8)",,M4 (Codegen),fertig
 CG-13.2-Verdict,Umsetzung,11.2,"`verdict pass | fail` im erzeugten Code: eine Beobachtung wie `verify`, kein Fault (Leitentscheidung 14)",,M4 (Codegen),fertig
+CG-9.8-At,Umsetzung,11.2,"`at T:` und `cancel` im erzeugten Code: die Warteschlange gehoert der Runtime (11.2), `takt_schedule`/`takt_cancel` als ABI; `TimingFault` und `ScheduleOverflow` entscheidet sie (9.8)",,M4 (Codegen),fertig
+CG-11.2-Goto,Umsetzung,11.2,`->` als Anweisung: Zustandswechsel und Sprung ans Kettenende (11.2); im Entry-Tick wirkungslos (5.2 Regel 4). Teilt `enter_leaf` mit den Uebergaengen,,M4 (Codegen),fertig
+CG-8.7-Guard,Umsetzung,11.2,"Muster-Guard in Uebergaengen (`until … matches`): erstes passendes Element im Fenster, `examined` nur bis dorthin (8.7)",,M4 (Codegen),fertig
+CG-3.9-Text,Umsetzung,11.2,"Textliterale als Wert und Textvergleich nach Inhalt (3.9): was hinter der Laenge steht, zaehlt nicht",,M4 (Codegen),fertig
 SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedded),offen
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M5 (Embedded),offen
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig
@@ -123,7 +127,7 @@ SEM-14.2,Semantik/Abschnitt,14.2,Batterie-Thermozyklus mit Profil und Plant-Mode
 SEM-14.3,Semantik/Abschnitt,14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,M4 (Codegen),fertig
 SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig
 SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig
-SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),teilweise
+SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig
 SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),offen
 SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise
 G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),fertig
@@ -883,7 +887,7 @@ EX-14.2,Beispiel (Golden-Test),14.2,Batterie-Thermozyklus mit Profil und Plant-M
 EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Ventilregler mit Rückmeldung),,M4 (Codegen),fertig
 EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig
 EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig
-EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),teilweise
+EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig
 EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),offen
 EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise
 PRINC-1,Leitentscheidung,0.2,Synchron-zyklische Multirate-Ausführung.,,Doku/Rationale,rationale

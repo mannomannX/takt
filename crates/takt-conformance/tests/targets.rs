@@ -34,7 +34,7 @@ const KORPUS: [&str; 5] =
 /// „derselbe Trace auf jeder bis dahin unterstuetzten Zielklasse", und
 /// M4 traegt zwei. Ohne sie hier waere der Exit fuer die halbe
 /// Zielmenge behauptet statt belegt.
-const EXAMPLES: [&str; 5] = ["14_1", "14_2", "14_3", "14_4", "14_5"];
+const EXAMPLES: [&str; 6] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6"];
 
 const TICKS: u64 = 20;
 

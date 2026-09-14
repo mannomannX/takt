@@ -1,0 +1,18 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output y :int in 0..9 @sim("y"))
+(output z :int in 0..9 @sim("z"))
+(machine m
+  (initial A)
+  (state A
+    (enter
+      (at 30ms
+        (= y 1))
+      (at 60ms
+        (= y 2))
+      (at 90ms
+        (= y 3))
+      (at 30ms
+        (= z 7)))
+    (after 200ms -> A)))

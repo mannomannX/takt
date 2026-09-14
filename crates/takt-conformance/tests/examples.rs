@@ -28,7 +28,7 @@ mod common;
 /// 14.7 fehlt: Es laeuft auf Hardware (M5-Exit), und es gibt kein
 /// Programm dafuer im Korpus. 14.8 gehoert zu M6 (Flash-Modell-
 /// Kampagne) und hat seine Golden-Traces bereits.
-const EXAMPLES: [&str; 5] = ["14_1", "14_2", "14_3", "14_4", "14_5"];
+const EXAMPLES: [&str; 6] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6"];
 
 /// Die uebrigen, mit dem Konstrukt, an dem der Codegen abbricht.
 ///
@@ -36,7 +36,10 @@ const EXAMPLES: [&str; 5] = ["14_1", "14_2", "14_3", "14_4", "14_5"];
 /// soll: Was fehlt, ist Teil des Ergebnisses. Der Eintrag verschwindet,
 /// sobald das Konstrukt gesenkt wird — und dann faellt der Test auf, der
 /// ihn noch fuehrt.
-const OPEN: [(&str, &str); 1] = [("14_6", "Mustervergleich und `send` im Codegen (8.7, 8.8; FB-112)")];
+///
+/// Leer: Alle sechs Beispiele, die M4 traegt, laufen. 14.7 gehoert zu M5
+/// (Hardware), 14.8 zu M6.
+const OPEN: [(&str, &str); 0] = [];
 
 /// Wie viele Ticks verglichen werden.
 ///

@@ -62,6 +62,30 @@ impl Abi {
     /// Runtime reicht sie weiter.
     pub const VERDICT: &'static str = "takt_verdict";
 
+    /// `at T: o = v` (9.8): ein geplanter Schreibvorgang.
+    ///
+    /// **Die Warteschlange gehoert der Runtime, nicht dem Maschinen-
+    /// zustand.** 11.2 sagt es woertlich: „`sched`-Warteschlangen als
+    /// feste Arrays im Runtime-Anteil des Outputs". Das folgt der
+    /// Zustaendigkeit — `apply_scheduled(k)` laeuft zu Tick-Beginn ueber
+    /// *alle* Outputs, bevor irgendeine Maschine schreitet (9.8), und
+    /// der Tickschritt kann das nicht tun.
+    ///
+    /// Das Ergebnis sagt, ob geplant werden konnte: `false` heisst
+    /// `TimingFault` (der Zeitpunkt liegt nicht in der Zukunft) oder
+    /// `ScheduleOverflow` (K_o erreicht). Beide sind Faults der
+    /// Maschine, also nimmt der Aufrufer seinen Fault-Pfad.
+    ///
+    /// Der Wert geht als `i64`: Der Latch traegt je Output einen Wert
+    /// fester Groesse, und `double` passt bitgleich hinein
+    /// (`bitcast`). Eine zweite Signatur je Breite waere eine zweite
+    /// Gelegenheit, sie verschieden zu waehlen.
+    pub const SCHEDULE: &'static str = "takt_schedule";
+
+    /// `cancel o` (9.8): verwirft die geplanten Schreibvorgaenge eines
+    /// Outputs.
+    pub const CANCEL: &'static str = "takt_cancel";
+
     /// Das Fault-Flag einer reinen Funktion (4.1).
     ///
     /// Eine Funktion hat keinen eigenen Fault-Pfad — sie faultet den
@@ -87,6 +111,9 @@ impl Abi {
         m.declare(&format!("declare void @{}(i32, i32)", Abi::ABORT));
         m.declare(&format!("declare i64 @{}()", Abi::NOW));
         m.declare(&format!("declare void @{}(i32, i32, i1)", Abi::VERDICT));
+        // 9.8: `(channel, T, wert) -> konnte geplant werden`.
+        m.declare(&format!("declare i1 @{}(i32, i64, i64)", Abi::SCHEDULE));
+        m.declare(&format!("declare void @{}(i32)", Abi::CANCEL));
         // `append` kopiert eine ganze Folge in einem Zug (3.9); LLVM
         // kennt das als Intrinsic, und eine Schleife braeuchte eine
         // Schranke, die 4.1 ohnehin verlangt.

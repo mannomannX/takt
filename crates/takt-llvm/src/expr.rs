@@ -131,6 +131,11 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Int(n) => Ok(Lowered { value: n.to_string(), ty: want }),
         ExprKind::Duration(d) => Ok(Lowered { value: d.to_string(), ty: want }),
         ExprKind::Float(f) => Ok(Lowered { value: float_literal(*f, &want), ty: want }),
+        // Ein Textliteral (3.9): `{ i32 len, [N x i8] }`, wie `str<N>`.
+        // Es steht als Konstante in der IR — der Inhalt ist zur
+        // Uebersetzungszeit bekannt, und ein Puffer im Zustand waere
+        // Speicher fuer etwas, das sich nie aendert.
+        ExprKind::Str(s) => text_literal(s, &want),
         ExprKind::Var(id) => vars.var(*id, m).ok_or(NotYet { what: "unbekannte Variable" }),
         ExprKind::Default => default_of(&want),
         ExprKind::None => default_of(&want),
@@ -1226,6 +1231,18 @@ fn binary(
     let float = a.ty.is_float();
     let signed = int_is_signed(lhs.ty, p);
 
+    // Text vergleicht sich nach Inhalt, nicht als Bitmuster (3.9): Was
+    // hinter der Laenge steht, ist bei einem Capture Rest des vorigen
+    // Elements.
+    if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(a.ty, LlvmType::Struct(_)) && a.ty == b.ty {
+        let same = text_equal(&a, &b, m)?;
+        if op == BinaryOp::Eq {
+            return Ok(same);
+        }
+        let neg = m.inst(&format!("xor i1 {}, true", same.value));
+        return Ok(Lowered { value: neg.to_string(), ty: LlvmType::Int(1) });
+    }
+
     let text = match op {
         BinaryOp::Add if float => format!("fadd {} {}, {}", a.ty, a.value, b.value),
         BinaryOp::Sub if float => format!("fsub {} {}, {}", a.ty, a.value, b.value),
@@ -1267,6 +1284,56 @@ fn binary(
 }
 
 /// Ein Vergleich.
+/// Ein Textliteral als Wert (3.9).
+///
+/// Der Aufbau ist der von `str<N>`: Laenge, dann die Bytes. Laenger als
+/// `N` wird abgeschnitten — der Rand begrenzt, und das Sema hat es
+/// geprueft.
+fn text_literal(s: &str, want: &LlvmType) -> Result<Lowered, NotYet> {
+    let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "Textliteral ohne Texttyp" }) };
+    let Some(LlvmType::Array(_, cap)) = fields.get(1) else {
+        return Err(NotYet { what: "Textliteral ohne Puffer" });
+    };
+    let bytes = s.as_bytes();
+    let n = bytes.len().min(*cap as usize);
+    let mut inhalt: Vec<String> = bytes[..n].iter().map(|b| format!("i8 {b}")).collect();
+    inhalt.resize(*cap as usize, "i8 0".to_string());
+    // `line<N>` traegt hinter dem Puffer noch `truncated` (3.9).
+    let rest = if fields.len() > 2 { ", i1 false" } else { "" };
+    let value = format!("{{ i32 {n}, [{cap} x i8] [{}]{rest} }}", inhalt.join(", "));
+    Ok(Lowered { value, ty: want.clone() })
+}
+
+/// Gleichheit zweier Texte (3.9).
+///
+/// **Byteweise, nicht als Struct.** Ein `icmp eq` auf dem ganzen Wert
+/// verglich auch die Bytes hinter der Laenge, und die sind bei einem
+/// Capture Reste des vorigen Elements. Der Interpreter vergleicht den
+/// *Inhalt* (`Value::Str`), also tut es der Codegen auch.
+fn text_equal(a: &Lowered, b: &Lowered, m: &mut Module) -> Result<Lowered, NotYet> {
+    let LlvmType::Struct(fields) = &a.ty else { return Err(NotYet { what: "Textvergleich ohne Texttyp" }) };
+    let Some(LlvmType::Array(_, cap)) = fields.get(1) else {
+        return Err(NotYet { what: "Textvergleich ohne Puffer" });
+    };
+    let la = m.inst(&format!("extractvalue {} {}, 0", a.ty, a.value));
+    let lb = m.inst(&format!("extractvalue {} {}, 0", b.ty, b.value));
+    let mut same = m.inst(&format!("icmp eq i32 {la}, {lb}")).to_string();
+    // Die Bytes bis zur Laenge; darueber hinaus zaehlt nichts. `N` ist
+    // typisch klein, also abgerollt — eine Schleife braeuchte beide Werte
+    // im Speicher (4.1 verlangt ohnehin eine feste Schranke).
+    for i in 0..*cap {
+        let x = m.inst(&format!("extractvalue {} {}, 1, {i}", a.ty, a.value));
+        let y = m.inst(&format!("extractvalue {} {}, 1, {i}", b.ty, b.value));
+        let eq = m.inst(&format!("icmp eq i8 {x}, {y}"));
+        // Nur Positionen unterhalb der Laenge zaehlen.
+        let within = m.inst(&format!("icmp slt i32 {i}, {la}"));
+        let relevant = m.inst(&format!("xor i1 {within}, true"));
+        let ok = m.inst(&format!("or i1 {eq}, {relevant}"));
+        same = m.inst(&format!("and i1 {same}, {ok}")).to_string();
+    }
+    Ok(Lowered { value: same, ty: LlvmType::Int(1) })
+}
+
 fn compare(op: BinaryOp, a: &Lowered, b: &Lowered, float: bool, signed: bool) -> String {
     if float {
         let cc = match op {

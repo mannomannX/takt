@@ -86,6 +86,10 @@ fn write_step(
     module.void_inst(&format!("switch i8 {cur}, label %{end} [ {} ]", arms.join(" ")));
 
     let mut ctx = Ctx::new(m, st, p);
+    // 11.2: Ein `->` im Block springt ans Kettenende. Nur hier gesetzt —
+    // die Init-Funktion laeuft im Entry-Modus, und dort ist es
+    // wirkungslos (5.2 Regel 4).
+    ctx.end = Some(end.clone());
     for (i, id) in leaves.iter().enumerate() {
         module.label(&machine::label_of(m, *id));
         ctx.leaf = Some(*id);
@@ -160,9 +164,12 @@ fn transitions(
                 lower_expr(cond, ctx.program, m, &vars)?
             }
             TransTrigger::After(d) => after(d, ctx, m)?,
-            // Muster-Guards brauchen den Fensterzugriff (8.7); er kommt mit
-            // den Stroemen.
-            TransTrigger::When(_) => return Err(NotYet { what: "Uebergang mit Muster-Guard" }),
+            TransTrigger::When(Guard::Match { subject, kind, pattern, binding }) => {
+                match_guard(subject, *kind, pattern, *binding, ctx, m)?
+            }
+            // `s as e` ohne Muster (8.6): das naechste Element, wenn es
+            // eines gibt. Es kommt mit dem Bedarf; kein Beispiel nutzt es.
+            TransTrigger::When(Guard::Next { .. }) => return Err(NotYet { what: "Uebergang mit `s as e`" }),
         };
         // Die Marke muss je *erzeugter* Verzweigung eindeutig sein, nicht
         // je Zustand: Ein Blatt fuehrt auch die Uebergaenge seiner
@@ -215,22 +222,7 @@ fn transitions(
         // Zwischenebenen aus — und ein `enter:` auf einer Zwischenebene
         // ist genau die Stelle, an der ein Ablauf seine Vorbedingung
         // herstellt.
-        for id in machine::exiting(ctx.machine, leaves[from], leaf) {
-            block(&ctx.machine.states[id.index()].exit.clone(), ctx, m)?;
-        }
-        block(&t.actions, ctx, m)?;
-        for id in machine::entering(ctx.machine, leaves[from], leaf) {
-            block(&ctx.machine.states[id.index()].enter.clone(), ctx, m)?;
-        }
-        m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
-        reset_time(ctx, m);
-        // 5.8/5.6: Die `every`- und Bestaetigungszaehler der betretenen
-        // Zustaende beginnen neu. Vor den `loop:`-Bloecken darunter, weil
-        // die im selben Tick laufen (5.2 Regel 4) und das `every` dort
-        // steht — ein Reset danach setzte zurueck, was gerade feuerte.
-        for id in machine::entering(ctx.machine, leaves[from], leaf) {
-            reset_counters(ctx, Some(id), m);
-        }
+        enter_leaf(ctx, m, leaves[from], leaf, index, conf_slot, Some(&t.actions))?;
         // 5.2 Regel 4 (Entry-Tick): Die `loop:`-Bloecke der neu betretenen
         // Zustaende laufen noch in diesem Tick — die darueberliegenden
         // liefen bereits. `check`s wirken, `-> ZIEL` ist wirkungslos, und
@@ -239,9 +231,14 @@ fn transitions(
         // Ohne sie erreichte ein Zustand seine Invarianten einen Tick zu
         // spaet, und die Outputs des Ticks stuenden auf den Werten des
         // alten Zustands.
+        // 5.2 Regel 4: Im Entry-Tick ist `-> ZIEL` wirkungslos. Der
+        // Interpreter erreicht das mit `Mode::Entry`; hier wird das
+        // Sprungziel fuer die Dauer dieser Bloecke entfernt.
+        let saved = ctx.end.take();
         for id in machine::entering(ctx.machine, leaves[from], leaf) {
             block(&ctx.machine.states[id.index()].loop_block.clone(), ctx, m)?;
         }
+        ctx.end = saved;
         m.void_inst(&format!("br label %{end}"));
         m.label(&skip);
     }
@@ -329,6 +326,98 @@ fn leave_configuration(ctx: &Ctx<'_>, m: &mut Module, leaves: usize) {
     // Schrittfunktion kennt nur 0..leaves und trifft ihn nicht.
     m.void_inst(&format!("store i8 {leaves}, ptr {cell}"));
     reset_time(ctx, m);
+}
+
+/// Der Wechsel von einem Blatt zu einem anderen (5.2).
+///
+/// **Eine Stelle fuer beide Ausloeser.** Ein Uebergang (`when`/`after`)
+/// und ein `->` im Block tun dasselbe; 5.2 gibt die Reihenfolge vor, und
+/// zwei Kopien waeren zwei Gelegenheiten, sie verschieden auszulegen.
+///
+/// Die Reihenfolge: `exit:` vom verlassenen Blatt aufwaerts bis unter den
+/// gemeinsamen Vorfahren, dann der Aktionsblock (nur ein Uebergang hat
+/// einen), dann `enter:` von dort abwaerts bis zum neuen Blatt. Wer nur
+/// Blatt und Ziel nimmt, laesst die Zwischenebenen aus — und ein `enter:`
+/// dort ist genau die Stelle, an der ein Ablauf seine Vorbedingung
+/// herstellt.
+fn enter_leaf(
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+    from: StateId,
+    leaf: StateId,
+    index: usize,
+    conf_slot: &crate::emit::Reg,
+    actions: Option<&takt_mir::stmt::Block>,
+) -> Result<(), NotYet> {
+    for id in machine::exiting(ctx.machine, from, leaf) {
+        block(&ctx.machine.states[id.index()].exit.clone(), ctx, m)?;
+    }
+    if let Some(a) = actions {
+        block(&a.clone(), ctx, m)?;
+    }
+    for id in machine::entering(ctx.machine, from, leaf) {
+        block(&ctx.machine.states[id.index()].enter.clone(), ctx, m)?;
+    }
+    m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
+    reset_time(ctx, m);
+    // 5.8/5.6: Die `every`- und Bestaetigungszaehler der betretenen
+    // Zustaende beginnen neu. Vor den `loop:`-Bloecken darunter, weil die
+    // im selben Tick laufen (5.2 Regel 4) und das `every` dort steht —
+    // ein Reset danach setzte zurueck, was gerade feuerte.
+    for id in machine::entering(ctx.machine, from, leaf) {
+        reset_counters(ctx, Some(id), m);
+    }
+    Ok(())
+}
+
+/// `-> ZIEL` als Anweisung im Block (11.2).
+///
+/// 11.2 gibt die Form vor: „`->` → Setzen der Goto-Vormerkung + Sprung
+/// ans Kettenende." Der Sprung ist hier der an `end`: Was im Block
+/// danach steht, laeuft nicht mehr, und die Uebergaenge des verlassenen
+/// Zustands werden nicht mehr geprueft.
+///
+/// **Nur im Run-Modus.** Der Interpreter liefert `Out::Goto` nur dort
+/// (`exec`); im Entry-Modus ist ein `->` wirkungslos (5.2 Regel 4), weil
+/// der Zustand gerade erst betreten wurde. Der Codegen erzeugt die
+/// `loop:`-Bloecke des Entry-Ticks aus demselben MIR-Block — ein `->`
+/// darin duerfte also nicht wirken. Hier gilt darum dieselbe Regel wie
+/// bei `dispatch`: Der Entry-Zweig senkt den Block ohne Goto.
+pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYet> {
+    let leaves = machine::leaves(ctx.machine);
+    let from = ctx.leaf.ok_or(NotYet { what: "`->` ausserhalb eines Blattzweigs" })?;
+    let Some(from_index) = leaves.iter().position(|l| *l == from) else {
+        return Err(NotYet { what: "`->` aus einem unbekannten Blatt" });
+    };
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
+    let conf_i = ctx.state.index_of(Role::Conf, 0).ok_or(NotYet { what: "conf im Zustand" })?;
+    let conf = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+    let slot = m.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", ctx.state.depth));
+    match target {
+        Target::State(to) => {
+            let leaf = machine::initial_leaf(ctx.machine, to).ok_or(NotYet { what: "Zielzustand ohne `initial`" })?;
+            let Some(index) = leaves.iter().position(|l| *l == leaf) else {
+                return Err(NotYet { what: "Zielblatt" });
+            };
+            enter_leaf(ctx, m, leaves[from_index], leaf, index, &slot, None)?;
+        }
+        // `-> FAULTED` (5.3): die Konfiguration wird leer, die Outputs
+        // gehen auf `safe`. Wie beim Uebergang.
+        Target::Faulted => {
+            leave_configuration(ctx, m, leaves.len());
+            safe_outputs(ctx, m)?;
+        }
+        // Ein Fault-Ziel als Anweisung gibt es nicht: `Target::Fault`
+        // entsteht nur aus dem Timeout einer Sequenz (6.2), und der ist
+        // ein Uebergang, keine Anweisung.
+        Target::Fault(_) => return Err(NotYet { what: "`->` auf ein Fault-Ziel" }),
+    }
+    m.void_inst(&format!("br label %{end}"));
+    // Was nach dem Sprung kaeme, ist unerreichbar; LLVM verlangt fuer den
+    // folgenden Code trotzdem einen Block.
+    let k = ctx.next_label();
+    m.label(&format!("nach_goto{k}_{}", ctx.machine.name));
+    Ok(())
 }
 
 /// `t_in_state = 0` beim Eintritt in einen Zustand (5.2).
@@ -738,8 +827,14 @@ fn handler_chain(
                 crate::dfa::declare(id, dfa, m);
                 crate::dfa::run(id, dfa, text, m)?
             }
-            (_, true, _) => pattern_matches(pieces, text, h, ctx, m)?,
-            (_, false, _) => pattern_has(pieces, text, h, ctx, m)?,
+            (_, true, _) => {
+                let b = Binding::of(h, ctx);
+                pattern_matches(pieces, text, &b, ctx, m)?
+            }
+            (_, false, _) => {
+                let b = Binding::of(h, ctx);
+                pattern_has(pieces, text, &b, ctx, m)?
+            }
         };
         let (then_l, else_l) = (format!("handler{k}_{n}_{name}"), format!("handler{k}_{n}_{name}_sonst"));
         m.void_inst(&format!("br i1 {hit}, label %{then_l}, label %{else_l}"));
@@ -770,7 +865,12 @@ impl Binding {
     /// `None` heisst: keine Bindung, also nichts abzulegen — der
     /// Vergleich laeuft trotzdem.
     fn of(h: &takt_mir::machine::Handler, ctx: &Ctx<'_>) -> Option<Binding> {
-        let var = h.binding?;
+        Binding::of_var(h.binding?, ctx)
+    }
+
+    /// Dieselbe Rechnung fuer eine Bindung, die nicht an einem Handler
+    /// haengt — ein Muster-Guard in einem Uebergang bindet ebenso (8.7).
+    fn of_var(var: takt_mir::VarId, ctx: &Ctx<'_>) -> Option<Binding> {
         let ty = ctx.machine.vars.get(var.index())?.ty;
         let record = crate::ty::lower(ty, ctx.program)?;
         let crate::ty::LlvmType::Struct(fields) = &record else { return None };
@@ -805,16 +905,117 @@ fn target<'a>(
     }
 }
 
+/// Ein Muster-Guard in einem Uebergang (8.7, `until … matches`).
+///
+/// **Er sucht das erste passende Element und haelt dort an.** Der
+/// Interpreter tut es in `first_match`: ueber das Fenster laufen, beim
+/// ersten Treffer binden, `examined` auf dessen `seq` setzen und `true`
+/// liefern. Was danach kommt, bleibt *unkonsumiert* — anders als beim
+/// Handler-Dispatch, der jedes Element untersucht (9.7). Ein Guard ist
+/// eine Frage an das Fenster, keine Verarbeitung.
+///
+/// Der Cursor rueckt darum nur bis zum Treffer. Er wird hier
+/// geschrieben, weil `dispatch` fuer diesen Strom in diesem Tick schon
+/// gelaufen sein kann und seinen eigenen Stand hinterlassen hat: Das
+/// Maximum beider gilt (9.7, „`examined` ist das Maximum ueber alle
+/// Konstrukte der Aktivierung").
+fn match_guard(
+    subject: &takt_mir::expr::Expr,
+    kind: takt_mir::expr::MatchKind,
+    pattern: &takt_mir::pattern::Pattern,
+    binding: Option<takt_mir::VarId>,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::expr::Lowered, NotYet> {
+    // Derselbe Schluss wie `stream_of` im Interpreter: Ein Channel mit
+    // Stromtyp und ein interner Strom sind beide ein Fenster.
+    let stream = match &subject.kind {
+        takt_mir::expr::ExprKind::Input { channel, .. } => takt_mir::expr::StreamRef::Channel(*channel),
+        takt_mir::expr::ExprKind::Stream(s) => takt_mir::expr::StreamRef::Internal(*s),
+        // 8.7 laesst ein Muster auch auf einem gewoehnlichen Wert zu; der
+        // Fall braucht keinen Fensterzugriff und kommt mit dem Bedarf.
+        _ => return Err(NotYet { what: "Muster-Guard auf einem Nicht-Strom" }),
+    };
+    let takt_mir::pattern::Pattern::Text { pieces, .. } = pattern else {
+        return Err(NotYet { what: "Record-Muster in einem Guard" });
+    };
+    let cursor = cursor_index(ctx, stream).ok_or(NotYet { what: "Cursor eines Stroms" })?;
+    let sid = stream_id(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+    let b = match binding {
+        Some(v) => Binding::of_var(v, ctx),
+        None => None,
+    };
+    let slot = match binding {
+        Some(v) => ctx.field(Role::Var, v.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })?,
+        // Ohne Bindung braucht `takt_stream_at` trotzdem einen Platz.
+        None => m.inst("alloca i64"),
+    };
+
+    let k = ctx.next_label();
+    let name = &ctx.machine.name;
+    let state_ty = format!("%{}_state", crate::fns::sanitized(name));
+    let cur_ptr = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {cursor}"));
+    let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
+    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let i_ptr = m.inst("alloca i32");
+    m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
+    let hit_ptr = m.inst("alloca i1");
+    m.void_inst(&format!("store i1 false, ptr {hit_ptr}"));
+
+    let (head, body, done) =
+        (format!("guard{k}_{name}"), format!("guard{k}_{name}_rumpf"), format!("guard{k}_{name}_fertig"));
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&head);
+    let i = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let in_window = m.inst(&format!("icmp slt i32 {i}, {n}"));
+    let found = m.inst(&format!("load i1, ptr {hit_ptr}"));
+    let still = m.inst(&format!("xor i1 {found}, true"));
+    let go_on = m.inst(&format!("and i1 {in_window}, {still}"));
+    m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{done}"));
+
+    m.label(&body);
+    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {slot})", crate::stream::Streams::AT));
+    let text = m.inst(&format!("getelementptr inbounds i8, ptr {slot}, i64 0"));
+    let ok = match kind {
+        takt_mir::expr::MatchKind::Matches => pattern_matches(pieces, text, &b, ctx, m)?,
+        takt_mir::expr::MatchKind::Has => pattern_has(pieces, text, &b, ctx, m)?,
+    };
+    // 8.7: Nur das *passende* Element gilt als untersucht — der Guard
+    // haelt dort an, und die uebrigen bleiben im Fenster.
+    let (mark, next) = (format!("guard{k}_{name}_treffer"), format!("guard{k}_{name}_weiter"));
+    m.void_inst(&format!("br i1 {ok}, label %{mark}, label %{next}"));
+    m.label(&mark);
+    m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
+    // 9.7: `examined` ist das Maximum ueber die Aktivierung; ein
+    // `dispatch` in diesem Tick kann schon weiter sein.
+    let stand = m.inst(&format!("load i64, ptr {cur_ptr}"));
+    let past = m.inst(&format!("add i64 {seq}, 1"));
+    let weiter = m.inst(&format!("icmp sgt i64 {past}, {stand}"));
+    let neu = m.inst(&format!("select i1 {weiter}, i64 {past}, i64 {stand}"));
+    m.void_inst(&format!("store i64 {neu}, ptr {cur_ptr}"));
+    m.void_inst(&format!("store i1 true, ptr {hit_ptr}"));
+    m.void_inst(&format!("br label %{next}"));
+
+    m.label(&next);
+    let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let inc = m.inst(&format!("add i32 {cur_i}, 1"));
+    m.void_inst(&format!("store i32 {inc}, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
+
+    m.label(&done);
+    let result = m.inst(&format!("load i1, ptr {hit_ptr}"));
+    Ok(crate::expr::Lowered { value: result.to_string(), ty: crate::ty::LlvmType::Int(1) })
+}
+
 /// `matches P`: Das Muster muss den ganzen Text verbrauchen (8.7).
 fn pattern_matches(
     pieces: &[takt_mir::pattern::PatternPiece],
     text: crate::emit::Reg,
-    h: &takt_mir::machine::Handler,
+    b: &Option<Binding>,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<crate::emit::Reg, NotYet> {
-    let b = Binding::of(h, ctx);
-    let into = target(&b, ctx, m)?;
+    let into = target(b, ctx, m)?;
     let zero = m.inst("add i32 0, 0");
     let (ok, at) = crate::captures::walk(pieces, text, into.as_ref(), zero, m)?;
     // Der ganze Text: Was hinter dem Durchlauf steht, darf nicht sein.
@@ -832,12 +1033,11 @@ fn pattern_matches(
 fn pattern_has(
     pieces: &[takt_mir::pattern::PatternPiece],
     text: crate::emit::Reg,
-    h: &takt_mir::machine::Handler,
+    b: &Option<Binding>,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<crate::emit::Reg, NotYet> {
-    let b = Binding::of(h, ctx);
-    let into = target(&b, ctx, m)?;
+    let into = target(b, ctx, m)?;
     let k = m.next_label();
     let (head, body, done) = (format!("has{k}"), format!("has{k}_rumpf"), format!("has{k}_fertig"));
     let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
@@ -934,10 +1134,13 @@ fn fault_path(
         reset_counters(ctx, Some(id), m);
     }
     // Entry-Modus: Die `loop:`-Bloecke des Fault-Ziels laufen noch in
-    // diesem Tick (5.2 Regel 4 und 5).
+    // diesem Tick (5.2 Regel 4 und 5) — und ein `->` darin ist dort
+    // wirkungslos, wie in jedem Entry-Tick.
+    let saved = ctx.end.take();
     for id in machine::entering(machine_def, from, leaf) {
         block(&machine_def.states[id.index()].loop_block.clone(), ctx, m)?;
     }
+    ctx.end = saved;
     m.void_inst(&format!("br label %{end}"));
     Ok(())
 }

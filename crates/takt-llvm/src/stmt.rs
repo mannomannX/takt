@@ -50,13 +50,17 @@ pub struct Ctx<'a> {
     sites: u32,
     /// Sprungziele der laufenden Schleifen; `break` nimmt das oberste.
     breaks: Vec<String>,
+    /// Das Ende der Schrittfunktion; `->` als Anweisung springt dorthin
+    /// (11.2). `None` heisst: Der Block laeuft im Entry-Modus oder in
+    /// einer Funktion, wo ein `->` nicht wirkt (5.2 Regel 4).
+    pub end: Option<String>,
 }
 
 impl<'a> Ctx<'a> {
     /// Ein Kontext fuer eine Maschine.
     pub fn new(machine: &'a Machine, state: &'a StateStruct, program: &'a Program) -> Ctx<'a> {
         let machine_index = program.machines.iter().position(|m| m.name == machine.name).unwrap_or(0) as u32;
-        Ctx { machine, state, program, checks: 0, machine_index, leaf: None, sites: 0, breaks: Vec::new() }
+        Ctx { machine, state, program, checks: 0, machine_index, leaf: None, sites: 0, breaks: Vec::new(), end: None }
     }
 
     /// Eine frische Nummer fuer eine Meldungsstelle (9.3).
@@ -273,6 +277,19 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         StmtKind::Pass => Ok(()),
         StmtKind::Send { stream, value, len_max } => send(*stream, value, *len_max, ctx, m),
         StmtKind::Every { period, counter, body } => every(period, *counter, body, ctx, m),
+        StmtKind::At { time, body } => at(time, body, ctx, m),
+        // 11.2: „`->` → Setzen der Goto-Vormerkung + Sprung ans
+        // Kettenende." Ohne bekanntes Ende laeuft der Block im
+        // Entry-Modus, und dort ist ein `->` wirkungslos (5.2 Regel 4) —
+        // genau das, was `exec` mit `Mode::Entry` tut.
+        StmtKind::Goto(target) => match ctx.end.clone() {
+            Some(end) => crate::step::goto(*target, ctx, m, &end),
+            None => Ok(()),
+        },
+        StmtKind::Cancel(c) => {
+            m.void_inst(&format!("call void @{}(i32 {})", Abi::CANCEL, c.0));
+            Ok(())
+        }
         other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
 }
@@ -414,6 +431,57 @@ fn time_in_state_ns(ctx: &Ctx<'_>, m: &mut Module) -> Result<String, NotYet> {
     let ticks = m.inst(&format!("load i64, ptr {cell}"));
     let period_ns = i64::from(ctx.machine.period.max(1)).saturating_mul(ctx.program.config.tick);
     Ok(m.inst(&format!("mul i64 {ticks}, {period_ns}")).to_string())
+}
+
+/// `at T: o = v` (9.8): geplante Schreibvorgaenge.
+///
+/// **Was der Block enthaelt, ist eng begrenzt** — nur Zuweisungen an
+/// Outputs (9.8, `eval_writes`). Die rechten Seiten werden *jetzt*
+/// ausgewertet und der Wert zusammen mit `T` eingeplant; die Runtime
+/// stellt ihn zum Zeitpunkt, nicht der Tickschritt.
+///
+/// **Zwei Faults koennen dabei entstehen** (9.8): `TimingFault`, wenn
+/// `T` nicht in der Zukunft liegt, und `ScheduleOverflow`, wenn K_o
+/// erreicht ist. Beide entscheidet die Runtime, weil nur sie die
+/// Warteschlange kennt — der erzeugte Code prueft das Ergebnis und nimmt
+/// bei `false` seinen Fault-Pfad. Eine Pruefung hier waere eine zweite
+/// Meinung ueber eine Datenstruktur, die er nicht sieht.
+fn at(time: &Expr, body: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let vars = ctx.vars();
+    let t = lower_expr(time, ctx.program, m, &vars)?;
+    if t.ty != LlvmType::Int(64) {
+        return Err(NotYet { what: "`at` mit einem Zeitpunkt, der keine Dauer ist" });
+    }
+    for stmt in &body.stmts {
+        let StmtKind::Assign { target: Place::Output(c), value } = &stmt.kind else {
+            // 9.8 laesst nur Output-Zuweisungen zu; das Sema hat es
+            // geprueft, und alles andere waere hier ein Fehler im Lowering.
+            return Err(NotYet { what: "`at`-Block mit mehr als Output-Zuweisungen" });
+        };
+        let vars = ctx.vars();
+        let v = lower_expr(value, ctx.program, m, &vars)?;
+        // Der Aufruf nimmt den Wert als `i64`. Ein `double` traegt
+        // dieselben 64 Bit, ein schmalerer Ganzzahltyp wird erweitert —
+        // die Runtime legt ihn im Latch ab, dessen Typ sie am Channel
+        // kennt (11.2).
+        let word = match &v.ty {
+            LlvmType::Int(64) => v.value.clone(),
+            LlvmType::F64 => m.inst(&format!("bitcast double {} to i64", v.value)).to_string(),
+            LlvmType::F32 => {
+                let wide = m.inst(&format!("fpext float {} to double", v.value));
+                m.inst(&format!("bitcast double {wide} to i64")).to_string()
+            }
+            LlvmType::Int(1) => m.inst(&format!("zext i1 {} to i64", v.value)).to_string(),
+            LlvmType::Int(n) => m.inst(&format!("sext i{n} {} to i64", v.value)).to_string(),
+            _ => return Err(NotYet { what: "`at` mit einem zusammengesetzten Wert" }),
+        };
+        let ok = m.inst(&format!("call i1 @{}(i32 {}, i64 {}, i64 {word})", Abi::SCHEDULE, c.0, t.value));
+        ctx.checks += 1;
+        let go_on = format!("geplant{}_{}", ctx.checks, ctx.machine.name);
+        m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{}", ctx.trampoline()));
+        m.label(&go_on);
+    }
+    Ok(())
 }
 
 /// `for i in range(n)` im Rumpf einer Maschine (4.1).
