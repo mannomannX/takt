@@ -203,6 +203,7 @@ dependencies = [
  "takt-conformance",
  "takt-diag",
  "takt-llvm",
+ "takt-mir",
  "takt-rt-baremetal",
  "takt-rt-core",
  "takt-sema",

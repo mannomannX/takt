@@ -143,5 +143,28 @@ fn the_harness_is_freestanding() {
     for forbidden in ["stdio.h", "printf", "malloc", "stdlib.h"] {
         assert!(!src.contains(forbidden), "`{forbidden}` gehoert nicht in einen MCU-Rahmen (12.3)");
     }
-    assert!(src.contains("static unsigned char image"), "das Prozessabbild steht statisch");
+    assert!(src.contains("unsigned char image"), "das Prozessabbild steht statisch");
+}
+
+/// **Jeder ABI-Puffer ist auf acht Byte ausgerichtet.**
+///
+/// Der erzeugte Code sieht diese Puffer als Strukturen mit `i64`-Feldern
+/// und greift darauf mit `LDRD` zu. Ein `unsigned char[]` hat in C aber
+/// Ausrichtung 1, und der Linker legt es dahin, wo Platz ist: Auf einem
+/// STM32F401 landete `state_blink` so auf 0x2000_0036, und das erste
+/// `LDRD` loeste einen UsageFault aus, der zum HardFault eskalierte.
+///
+/// **Der Wirt kann diesen Fehler nicht finden**, weil x86-64
+/// unausgerichtete Zugriffe traegt — darum steht die Pruefung am Text des
+/// Rahmens und nicht an einem Lauf. 12.8 trennt die Zielklassen aus genau
+/// diesem Grund.
+#[test]
+fn every_abi_buffer_is_aligned() {
+    for name in ["16_timing.takt", "19_faults.takt", "29_heartbeat.takt"] {
+        let p = corpus(name);
+        let src = takt_conformance::mcu::build(&p).source;
+        for line in src.lines().filter(|l| l.starts_with("static") && l.contains('[')) {
+            assert!(line.contains("_Alignas(8)"), "{name}: unausgerichteter Puffer: {line}");
+        }
+    }
 }

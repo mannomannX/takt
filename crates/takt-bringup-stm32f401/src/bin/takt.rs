@@ -21,13 +21,16 @@
 //!
 //! ## Was man sieht
 //!
-//! Auf USART1 (PA9, 115200 8N1) erscheint je Tick, was der Latch
-//! enthaelt — dieselben `out`-Zeilen, die der Interpreter schreibt
+//! Auf USART1 (PA9, 115200 8N1) erscheint, was der Latch enthaelt —
+//! dieselben `out`-Zeilen, die der Interpreter schreibt
 //! (`grammar/trace.md`). Damit laesst sich der Hardwarelauf gegen
 //! `takt sim` halten, und das ist der Kern des M5-Exits.
 //!
-//! Die LED blinkt daneben im Sekundentakt: Sie sagt ohne Terminal, dass
-//! der Tick laeuft.
+//! **Die LED folgt dem Ausgang `led` des Programms**, nicht einem eigenen
+//! Zaehler. Das ist der Unterschied zwischen einer Demonstration und einem
+//! Ziel: Blinkt sie, dann weil eine Takt-Maschine den Zustand gewechselt
+//! hat. Eine frueher Fassung liess sie unabhaengig vom Latch blinken, und
+//! damit sagte sie ueber das Programm genau nichts.
 
 #![no_std]
 #![no_main]
@@ -42,13 +45,29 @@ use takt_board_stm32f401::{Board, CORE_HZ, Generated, Led, Telemetry, cycles, ti
 use takt_rt_baremetal::TickSource;
 use takt_rt_core::Program;
 
-/// Die Tickperiode. **Muss mit `system: tick` des Programms
-/// uebereinstimmen** — der Rahmen rechnet `now` aus der nominalen
-/// Periode, und zwei verschiedene Werte hiessen zwei verschiedene Uhren.
-const TICK_NS: i64 = 1_000_000;
+/// Die Konstanten des uebersetzten Programms (`takt build --emit consts-rs`).
+///
+/// **Sie stehen nicht hier, weil sie schon woanders stehen.** Die
+/// Tickperiode gehoert in `system: tick`, die Ausgangsindizes in die
+/// Kanalreihenfolge; beides von Hand nachzuschreiben war genau der Fehler,
+/// der die logische Zeit einmal zehnfach zu schnell laufen liess — das
+/// Programm sagte 10 ms, dieses Modul 1 ms, und niemand kannte beides.
+mod takt {
+    // Nicht jedes Programm braucht jede Konstante; `OUTPUTS` etwa nutzt
+    // nur, wer ueber alle Ausgaenge laeuft.
+    #![allow(dead_code)]
 
-/// Wie viele Ticks zwischen zwei LED-Wechseln liegen.
-const BLINK_EVERY: u64 = 500;
+    include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
+}
+
+use takt::{OUT_LED, TICK_NS};
+
+/// Wie viele Ticks zwischen zwei Trace-Zeilen liegen.
+///
+/// Nicht je Tick: Eine Zeile ueber UART dauert bei 115200 Baud rund
+/// 1,7 ms, laenger als die Tickperiode. 12.8 nennt `states` als
+/// Instrumentierungs-Default fuer `baremetal`, nicht `statements`.
+const TRACE_EVERY: u64 = 100;
 
 /// Der DWT-Stand beim vorigen Interrupt.
 static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
@@ -133,30 +152,26 @@ fn main() -> ! {
 
     banner(clock.nominal_ns());
 
-    // **Der Trace laeuft nicht je Tick, und das ist keine Sparsamkeit.**
-    // Eine Zeile ueber UART dauert bei 115200 Baud rund 1,7 ms — laenger
-    // als die Tickperiode. Wuerde sie je Tick geschrieben, kaeme die
-    // Schleife nie zum Warten: Jeder Tick waere schon vergangen, bevor
-    // der vorige fertig ausgegeben ist, und das Programm haenge im
-    // Senden statt zu rechnen (sichtbar daran, dass die LED dunkel
-    // bleibt).
-    //
-    // 12.8 sagt es voraus: „Instrumentierungs-Defaults: `statements` in
-    // `linux_rt`, `states` in `baremetal`." Die MCU traegt weniger, und
-    // der Trace folgt darum dem Blinktakt statt dem Tick.
     let mut program = Generated::init(false);
+    let mut next_trace = TRACE_EVERY;
 
-    let mut next_blink = BLINK_EVERY;
     loop {
         clock.wait_for_tick();
         let k = clock.ticks();
         program.tick(k, k as i64 * TICK_NS);
 
-        if k >= next_blink {
-            next_blink = k + BLINK_EVERY;
-            led.toggle();
-            // Der Latch alle 500 Ticks: genug fuer den Vergleich mit dem
-            // Interpreter, wenig genug fuer die Leitung.
+        // **Schritt 10: der Latch geht nach draussen** (12.1). Erst hier
+        // wird aus dem gerechneten Zustand eine Wirkung. `led` ist
+        // `active low`, darum die Umkehrung — das weiss das Board, nicht
+        // das Programm.
+        if program.output(OUT_LED) != 0 {
+            led.on();
+        } else {
+            led.off();
+        }
+
+        if k >= next_trace {
+            next_trace = k + TRACE_EVERY;
             program.dump();
         }
     }

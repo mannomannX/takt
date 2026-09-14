@@ -142,11 +142,11 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // seine genaue Groesse kennt nur der Codegen, und sie zu
     // ueberschaetzen kostet im Test nichts.
     for m in &driven {
-        let _ = writeln!(s, "static char state_{}[4096];", m.name);
+        let _ = writeln!(s, "{}", crate::layout::c_buffer(&format!("state_{}", m.name), 4096));
     }
-    let _ = writeln!(s, "static char image[{}];", layout.image.max(1));
-    let _ = writeln!(s, "static char params[{}];", layout.params.max(1));
-    let _ = writeln!(s, "static char latch[{}];\n", layout.latch.max(1));
+    let _ = writeln!(s, "{}", crate::layout::c_buffer("image", layout.image));
+    let _ = writeln!(s, "{}", crate::layout::c_buffer("params", layout.params));
+    let _ = writeln!(s, "{}\n", crate::layout::c_buffer("latch", layout.latch));
 
     // 9.8: die geplanten Schreibvorgaenge. Sie gehoeren der Runtime —
     // 11.2 nennt sie „feste Arrays im Runtime-Anteil des Outputs" —,

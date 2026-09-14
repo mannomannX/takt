@@ -19,6 +19,7 @@ rust-version = "1.85"
 takt-conformance = { path = "../takt-conformance" }
 takt-diag = { path = "../takt-diag" }
 takt-llvm = { path = "../takt-llvm" }
+takt-mir = { path = "../takt-mir" }
 takt-sema = { path = "../takt-sema" }
 
 [dependencies]

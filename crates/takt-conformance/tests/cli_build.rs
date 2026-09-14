@@ -33,7 +33,7 @@ fn cli() -> Option<std::path::PathBuf> {
 }
 
 fn program() -> String {
-    format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/16_timing.takt"))
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/16_timing.takt").to_string()
 }
 
 /// **Jedes Ziel der Abnahme laesst sich uebersetzen.**

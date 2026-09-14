@@ -36,6 +36,9 @@ unsafe extern "C" {
 
     /// Die Ausgaenge als Trace-Zeilen (`grammar/trace.md`).
     fn takt_mcu_dump();
+
+    /// Ein Ausgang aus dem Latch, nach Stellung in der Speicherform.
+    fn takt_mcu_output(index: i32) -> i64;
 }
 
 /// Das erzeugte Programm als [`Program`] der Tickschleife.
@@ -79,6 +82,21 @@ impl Generated {
     /// Instrumentierungs-Default fuer `baremetal`, nicht `statements`.
     pub fn dump(&self) {
         unsafe { takt_mcu_dump() };
+    }
+
+    /// Liest einen Ausgang aus dem Latch (12.1, Schritt 10).
+    ///
+    /// **Die Stelle, an der ein Takt-Programm die Welt erreicht.** Bis
+    /// hierher ist alles Rechnung; erst wer diesen Wert auf einen Pin
+    /// legt, macht aus dem Latch eine Wirkung. Das tut nicht dieses Crate
+    /// und nicht der Rahmen, sondern wer die Peripherie besitzt — die
+    /// Zuordnung `@ hw(...)` zu Pin ist Boardwissen.
+    ///
+    /// `index` ist die Stellung in der Speicherform; der erzeugte Rahmen
+    /// schreibt die Namen dazu in seinen Kopf. Ein unbekannter Index gibt
+    /// null zurueck, statt den Lauf anzuhalten (4.1).
+    pub fn output(&self, index: i32) -> i64 {
+        unsafe { takt_mcu_output(index) }
     }
 }
 

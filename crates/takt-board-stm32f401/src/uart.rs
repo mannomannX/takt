@@ -5,12 +5,16 @@
 //! einzige Weg, vom Board etwas zu erfahren: Ohne Debugger sieht man
 //! sonst nur, ob die LED blinkt.
 //!
-//! **Blockierend, und das ist hier richtig.** Ein `Sink` der Runtime darf
-//! nie blockieren (12.2: „wer nicht mitkommt, verwirft und zaehlt"), weil
-//! er sonst den naechsten Tick verschiebt. Dieses Modul ist kein `Sink`,
-//! sondern das Werkzeug fuer den Bring-up — dort will man jede Zeile
-//! sehen, auch die letzte vor einem Absturz. Wenn die Tickschleife steht,
-//! kommt der nicht-blockierende Aufsatz darueber.
+//! **Wartend, aber nicht unbegrenzt.** Eine erste Fassung wartete mit
+//! `while` auf das `TXE`-Flag. Spraenge der Sender nicht an, stuende das
+//! Programm dort still — ohne Zeichen nach aussen, denn wer nichts senden
+//! kann, kann auch nicht melden, dass er nichts senden kann.
+//!
+//! 12.2 sagt es fuer den `Sink` der Runtime: „wer nicht mitkommt,
+//! verwirft und zaehlt, statt die Steuerung aufzuhalten". Dasselbe gilt
+//! hier, aus demselben Grund — die Telemetrie ist Diagnose, nicht
+//! Steuerung, und ein verlorenes Byte ist besser als ein stehendes
+//! Programm. [`Telemetry::dropped`] sagt, wie viele es waren.
 //!
 //! Pins: PA9 (TX) und PA10 (RX), die Standardbelegung von USART1 auf
 //! diesem Board.
@@ -20,6 +24,8 @@ use stm32f4::stm32f401::{GPIOA, RCC, USART1};
 /// Der Telemetriekanal.
 pub struct Telemetry {
     usart: USART1,
+    /// Verworfene Bytes, siehe [`Telemetry::write_byte`].
+    dropped: u32,
 }
 
 impl Telemetry {
@@ -61,13 +67,44 @@ impl Telemetry {
             w.ue().set_bit()
         });
 
-        Ok(Telemetry { usart })
+        Ok(Telemetry { usart, dropped: 0 })
     }
 
     /// Schreibt ein Byte und wartet, bis es heraus ist.
+    ///
+    /// **Mit Schranke, nicht mit `while`.** Eine unbegrenzte Warteschleife
+    /// auf ein Hardware-Flag ist der sicherste Weg, ein Programm
+    /// stillzulegen: Setzt `TXE` nie — weil ein Register falsch steht, der
+    /// Takt nicht stimmt oder der Sender gar nicht laeuft —, haengt alles
+    /// danach, und man sieht nur, dass nichts passiert. Als das Board
+    /// einmal still stand, war die Schleife der zweite Verdaechtige; die
+    /// Ursache lag woanders (FB-139), die Schranke blieb trotzdem.
+    ///
+    /// Die Sprache erzwingt diese Regel ueberall (4.1: „beschraenkte
+    /// Schleifen"); in der TCB muss man sie von Hand einhalten. Ein
+    /// verlorenes Byte ist besser als ein stehendes Programm — die
+    /// Telemetrie ist Diagnose, nicht Steuerung.
     pub fn write_byte(&mut self, b: u8) {
-        while self.usart.sr().read().txe().bit_is_clear() {}
-        self.usart.dr().write(|w| unsafe { w.dr().bits(u16::from(b)) });
+        // Bei 115200 Baud dauert ein Byte rund 87 us, bei 84 MHz also
+        // etwa 7300 Zyklen. 100 000 Durchlaeufe sind ein Vielfaches
+        // davon und immer noch weniger als eine Millisekunde.
+        for _ in 0..100_000u32 {
+            if self.usart.sr().read().txe().bit_is_set() {
+                self.usart.dr().write(|w| unsafe { w.dr().bits(u16::from(b)) });
+                return;
+            }
+        }
+        // Aufgegeben: Das Byte ist weg, das Programm laeuft weiter.
+        self.dropped = self.dropped.saturating_add(1);
+    }
+
+    /// Wie viele Bytes die Telemetrie verworfen hat.
+    ///
+    /// Ein Zaehler statt eines stillen Verlusts: 12.2 verlangt fuer den
+    /// `Sink` der Runtime dasselbe — „wer nicht mitkommt, verwirft und
+    /// zaehlt, statt die Steuerung aufzuhalten".
+    pub fn dropped(&self) -> u32 {
+        self.dropped
     }
 
     /// Schreibt eine Zeichenkette.

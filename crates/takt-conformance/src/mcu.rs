@@ -127,15 +127,15 @@ fn runtime_abi(s: &mut String, p: &Program) {
 /// kommen aus `takt size` (11.5), also aus derselben Rechnung, die der
 /// Compiler gegen das Speicherbudget haelt.
 fn storage(s: &mut String, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
-    let _ = writeln!(s, "/* Statischer Zustand (12.3). */");
-    let _ = writeln!(s, "static unsigned char image[{}];", layout.image.max(1));
-    let _ = writeln!(s, "static unsigned char latch[{}];", layout.latch.max(1));
-    let _ = writeln!(s, "static unsigned char params[{}];", layout.params.max(1));
+    let _ = writeln!(s, "/* Statischer Zustand (12.3), ausgerichtet fuer die ABI. */");
+    let _ = writeln!(s, "{}", crate::layout::c_buffer("image", layout.image));
+    let _ = writeln!(s, "{}", crate::layout::c_buffer("latch", layout.latch));
+    let _ = writeln!(s, "{}", crate::layout::c_buffer("params", layout.params));
     for m in driven {
         // Die Zustandsgroesse kennt der Rahmen nicht genau; er nimmt die
         // Obergrenze aus dem Overlay (11.2). Zu gross ist verschwendeter
         // RAM, zu klein waere ein Ueberschreiben — darum grosszuegig.
-        let _ = writeln!(s, "static unsigned char state_{}[{}];", m.name, state_bytes(m));
+        let _ = writeln!(s, "{}", crate::layout::c_buffer(&format!("state_{}", m.name), state_bytes(m)));
     }
     let _ = writeln!(s);
 }
@@ -220,5 +220,38 @@ fn telemetry(s: &mut String, _p: &Program, layout: &Layout) {
         let _ = writeln!(s, "    takt_board_trace_i64((long long)*({ct} *)(latch + {}));", slot.offset);
         let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
     }
+    let _ = writeln!(s, "}}\n");
+
+    outputs(s, layout);
+}
+
+/// `takt_mcu_output`: einen Ausgang lesen, fuer die Treiberseite.
+///
+/// **Der Rahmen bindet keine Pins, und das ist Absicht.** Welcher Pfad aus
+/// `@ hw(...)` an welchem Pin haengt, weiss nur das Board; der Rahmen
+/// kennt nur Versaetze im Latch. Er gibt darum den Wert heraus und
+/// ueberlaesst das Schalten dem, der die Peripherie besitzt (9.5 fuehrt
+/// Treiber in der TCB, den Rahmen nicht).
+///
+/// Der Index ist die Stellung in `layout.outputs`; die Zuordnung von Namen
+/// zu Index steht im Kopf des erzeugten Textes, damit sie nachlesbar ist,
+/// ohne den Compiler zu fragen.
+fn outputs(s: &mut String, layout: &Layout) {
+    let _ = writeln!(s, "/* Die Ausgaenge fuer die Treiberseite (12.1, Schritt 10). */");
+    for (i, slot) in layout.outputs.iter().enumerate() {
+        let _ = writeln!(s, "/*   {i} = {} */", slot.name);
+    }
+    let _ = writeln!(s, "long long takt_mcu_output(int index) {{");
+    let _ = writeln!(s, "    switch (index) {{");
+    for (i, slot) in layout.outputs.iter().enumerate() {
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let _ = writeln!(s, "    case {i}: return (long long)*({ct} *)(latch + {});", slot.offset);
+    }
+    // Ein unbekannter Index ist kein Absturz: Der Aufrufer bekommt eine
+    // Null und der Lauf geht weiter. 4.1 verlangt Totalitaet, und ein
+    // Treiber, der nach einem entfallenen Ausgang fragt, ist ein
+    // Uebersetzungsfehler — keiner, der zur Laufzeit stehen bleiben darf.
+    let _ = writeln!(s, "    default: return 0;");
+    let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
 }

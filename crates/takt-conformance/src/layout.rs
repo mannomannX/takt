@@ -120,6 +120,27 @@ fn is_signed(ty: takt_mir::TypeId, p: &Program) -> bool {
     }
 }
 
+/// Deklariert einen ABI-Puffer mit der Ausrichtung, die der Codegen annimmt.
+///
+/// **Ein `unsigned char[]` ist die falsche Deklaration, und sie war lange
+/// unauffaellig.** Der erzeugte Code sieht denselben Speicher als Struktur
+/// mit `i64`-Feldern und greift mit `LDRD` darauf zu; ein Byte-Array hat in
+/// C aber Ausrichtung 1, und der Linker legt es dahin, wo Platz ist. Auf
+/// x86-64 kostet das nichts — die Architektur traegt unausgerichtete
+/// Zugriffe. Auf ARMv7-M ist `LDRD` ohne Wortausrichtung ein UsageFault,
+/// und weil `USGFAULTENA` nicht gesetzt ist, eskaliert er zum HardFault:
+/// Das Programm steht, ohne ein Zeichen zu geben.
+///
+/// Gefunden auf dem STM32F401, wo `state_blink` auf 0x2000_0036 landete.
+/// 12.8 nennt die Zielklassen aus genau diesem Grund verschieden: Was der
+/// Wirt verzeiht, entscheidet nicht, was richtig ist.
+///
+/// Acht Byte, weil `i64` und `f64` die breitesten Felder der ABI sind
+/// (3.2: Dauern sind `i64`-Nanosekunden).
+pub fn c_buffer(name: &str, bytes: u64) -> String {
+    format!("static _Alignas(8) unsigned char {name}[{}];", bytes.max(1))
+}
+
 /// Der C-Typ zu einem LLVM-Typ, fuer den Testrahmen.
 ///
 /// Das Vorzeichen steht nicht im LLVM-Typ (dort ist nur die Breite), also

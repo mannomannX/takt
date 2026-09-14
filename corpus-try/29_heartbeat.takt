@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+output led : bool @ hw("ui/led") with safe = false
+
+machine heartbeat:
+    initial ON
+
+    state ON:
+        enter:
+            led = true
+        after 500 ms: -> OFF
+
+    state OFF:
+        enter:
+            led = false
+        after 500 ms: -> ON

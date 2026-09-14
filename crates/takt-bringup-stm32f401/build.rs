@@ -44,86 +44,153 @@ fn main() {
 
 /// Uebersetzt das Takt-Programm und bindet es als Objekt ein.
 ///
-/// Scheitert es, bleibt es bei einer Warnung: Die anderen Binaries
-/// (`blink`, `minimal`) brauchen das Programm nicht, und ein harter
-/// Abbruch machte sie mit unbaubar.
+/// **Scheitert es, scheitert der Bau.** Eine erste Fassung begnuegte sich
+/// mit einer Warnung, weil `blink` und `minimal` das Programm nicht
+/// brauchen — und genau das verdeckte einen Ausfall: Das Build-Skript lief
+/// nicht mehr, niemand sah die Warnung im Rauschen, und gebaut wurde
+/// weiter gegen ein Objekt aus einem frueheren Lauf. Ein Binary, das
+/// reproduzierbar sein soll (13.8), darf nicht davon abhaengen, was
+/// zufaellig noch im Zielverzeichnis liegt.
+///
+/// `blink` und `minimal` bleiben baubar: Sie binden weder die Bibliothek
+/// noch die erzeugten Konstanten ein.
 fn build_takt_program(out: &Path) {
-    let program = env::var("TAKT_PROGRAM").unwrap_or_else(|_| {
-        format!("{}/../../corpus-try/16_timing.takt", env!("CARGO_MANIFEST_DIR"))
-    });
+    let program = env::var("TAKT_PROGRAM")
+        .unwrap_or_else(|_| format!("{}/../../corpus-try/16_timing.takt", env!("CARGO_MANIFEST_DIR")));
     println!("cargo:rerun-if-env-changed=TAKT_PROGRAM");
     println!("cargo:rerun-if-changed={program}");
 
-    let Ok(src) = fs::read_to_string(&program) else {
-        println!("cargo:warning=Takt-Programm nicht lesbar: {program}");
-        return;
-    };
-
-    // Uebersetzen und senken — dieselbe Folge, die die Abnahme nimmt.
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Hw, profile: None };
-    let checked = takt_sema::compile(&src, &options);
-    let Some(p) = checked.program else {
-        for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
-            println!("cargo:warning={program}: {d}");
-        }
-        return;
-    };
-
-    let target = takt_llvm::Target::THUMBV7EM;
-    let lowered = takt_llvm::lower::program(&p, target.triple, "takt");
-    for s in &lowered.skipped {
-        // Ein fehlender Schritt ist keine Warnung, sondern ein Loch: Der
-        // Linker meldete sonst nur ein unbekanntes Symbol.
-        println!("cargo:warning={}_step fehlt: {}", s.machine, s.reason);
+    if !Path::new(&program).exists() {
+        panic!("Takt-Programm nicht gefunden: {program}");
     }
 
-    let ll = out.join("takt.ll");
+    // Der Rahmen (12.1) entsteht hier, weil er an der Speicherform in
+    // `takt-conformance` haengt; `takt build` uebersetzt das Programm.
+    let Some(p) = compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let rahmen = out.join("takt_rahmen.c");
-    fs::write(&ll, &lowered.ir).expect("IR schreiben");
-    fs::write(&rahmen, takt_conformance::mcu::build(&p).source).expect("Rahmen schreiben");
+    if let Err(e) = fs::write(&rahmen, takt_conformance::mcu::build(&p).source) {
+        panic!("Rahmen nicht schreibbar: {e}");
+    }
 
-    // Beides uebersetzen und zu einem Objekt binden. `clang` steht in
-    // `takt-llvm::toolchain`, wo auch die Abnahme es sucht.
-    let takt_llvm::toolchain::Clang::At(clang) = takt_llvm::toolchain::find() else {
-        println!("cargo:warning=clang fehlt; das Takt-Programm wird nicht gebunden");
-        return;
-    };
     let obj = out.join("takt_programm.o");
-    let obj_rahmen = out.join("takt_rahmen.o");
-    for (src, dst) in [(&ll, &obj), (&rahmen, &obj_rahmen)] {
-        let ok = Command::new(&clang)
-            .args(["-Wno-override-module", "-O2", "-c", "-ffreestanding", "-nostdlib"])
-            .arg(format!("--target={}", target.triple))
-            .arg(src)
-            .arg("-o")
-            .arg(dst)
-            .status()
-            .is_ok_and(|s| s.success());
-        if !ok {
-            println!("cargo:warning={}: uebersetzt nicht", src.display());
-            return;
-        }
-    }
+    run_takt_build(&program, &["--emit", "obj"], &obj);
 
-    // Als statische Bibliothek, damit `rustc` sie wie jede andere
-    // einbindet. Ein loses Objekt ginge auch, aber `cargo` kennt den Weg
-    // ueber `-l static=` und raeumt ihn mit auf.
-    let lib = out.join("libtaktprogramm.a");
-    let _ = fs::remove_file(&lib);
-    let ar = clang.with_file_name(if cfg!(windows) { "llvm-ar.exe" } else { "llvm-ar" });
-    let ok = Command::new(&ar)
-        .arg("crs")
-        .arg(&lib)
-        .arg(&obj)
-        .arg(&obj_rahmen)
-        .status()
-        .is_ok_and(|s| s.success());
-    if !ok {
-        println!("cargo:warning=llvm-ar fehlt; das Takt-Programm wird nicht gebunden");
-        return;
-    }
+    // Die Tickperiode und die Ausgangsindizes kommen aus dem Programm,
+    // nicht aus der Hand: Beide standen schon einmal doppelt, und die
+    // logische Zeit lief darum zehnfach zu schnell.
+    run_takt_build(&program, &["--emit", "consts-rs"], &out.join("takt_consts.rs"));
+
+    let obj_rahmen = out.join("takt_rahmen.o");
+    compile_c(&rahmen, &obj_rahmen);
+    archive(out, &[&obj, &obj_rahmen]);
 
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=taktprogramm");
+}
+
+/// Uebersetzt das Programm, um den Rahmen dazu bauen zu koennen.
+fn compile(path: &str) -> Option<takt_mir::Program> {
+    let src = fs::read_to_string(path).ok()?;
+    let options =
+        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Hw, profile: None };
+    let checked = takt_sema::compile(&src, &options);
+    if checked.program.is_none() {
+        for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
+            println!("cargo:warning={path}: {d}");
+        }
+    }
+    checked.program
+}
+
+/// Ruft `takt build` — dasselbe Kommando, das ein Nutzer aufruft.
+///
+/// **Der Umweg ueber die Kommandozeile ist Absicht.** Eine `build.rs`,
+/// die `takt_llvm::lower` direkt ruft, uebersetzt anders als das
+/// Werkzeug — nicht heute, aber beim naechsten Schalter, den nur eines
+/// von beiden bekommt. FB-138 hielt fest, dass die Pipeline in ein
+/// Kommando gehoert; sie hier erneut zu schreiben hiesse, den Befund
+/// abzuhaken und die Ursache zu behalten.
+fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
+    let Some(takt) = find_takt() else {
+        panic!("Das Werkzeug takt fehlt; erst `cargo build -p takt-cli --release`");
+    };
+    // **Auch das Werkzeug ist eine Quelle.** Ohne diese Zeile kennt Cargo
+    // nur die `.takt`-Datei und baut nicht neu, wenn sich der Compiler
+    // geaendert hat — das erzeugte Objekt bliebe aus dem vorigen Stand.
+    println!("cargo:rerun-if-changed={}", takt.display());
+    let status = Command::new(&takt)
+        .args(["build", program, "--target", "thumbv7em", "--build", "hw"])
+        .args(emit)
+        .arg("--out")
+        .arg(out)
+        .status();
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(_) => panic!("takt build {} schlug fehl fuer {program}", emit.join(" ")),
+        Err(e) => panic!("takt nicht aufrufbar ({e}); ist `cargo build -p takt-cli` gelaufen?"),
+    }
+}
+
+/// Uebersetzt den C-Rahmen.
+fn compile_c(src: &Path, obj: &Path) {
+    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Rahmen") };
+    let ok = Command::new(&clang)
+        .args(["-O2", "-c", "-ffreestanding", "-nostdlib", "--target=thumbv7em-none-eabihf"])
+        .arg(src)
+        .arg("-o")
+        .arg(obj)
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(ok, "{}: uebersetzt nicht", src.display());
+}
+
+/// Bindet die Objekte zu einer statischen Bibliothek.
+fn archive(out: &Path, objs: &[&Path]) {
+    let lib = out.join("libtaktprogramm.a");
+    let _ = fs::remove_file(&lib);
+    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn auch kein llvm-ar") };
+    let ar = clang.with_file_name(if cfg!(windows) { "llvm-ar.exe" } else { "llvm-ar" });
+    let ok = Command::new(&ar).arg("crs").arg(&lib).args(objs).status().is_ok_and(|s| s.success());
+    assert!(ok, "llvm-ar schlug fehl; das Takt-Programm waere nicht gebunden");
+}
+
+/// Wo clang steckt — dieselbe Suche wie `takt-llvm::toolchain`.
+fn clang() -> Option<PathBuf> {
+    match takt_llvm::toolchain::find() {
+        takt_llvm::toolchain::Clang::At(p) => Some(p),
+        takt_llvm::toolchain::Clang::Missing => None,
+    }
+}
+
+/// Wo das Werkzeug `takt` liegt.
+///
+/// **Nicht ueber `CARGO_BIN_EXE_takt`**: Die Variable gibt es nur fuer
+/// Binaries desselben Crates, und `takt-cli` ist ein anderes. Und nicht
+/// ueber den PATH, weil dort ein fremdes `takt` stehen koennte — gesucht
+/// wird im Zielverzeichnis dieses Baus.
+///
+/// **Das neueste, nicht das erstbeste.** Eine erste Fassung probierte
+/// `debug` vor `release` und nahm, was zuerst dalag: Ein altes
+/// `debug/takt.exe` kannte einen neuen Schalter nicht, `takt build` schlug
+/// fehl, und weil der Aufruf nur eine Warnung erzeugte, erschien der
+/// Fehler erst viel spaeter als fehlende Datei. Die Zeit zu vergleichen
+/// kostet zwei Zeilen und nimmt die Frage heraus, welches gerade gilt.
+fn find_takt() -> Option<PathBuf> {
+    let exe = if cfg!(windows) { "takt.exe" } else { "takt" };
+    // `OUT_DIR` ist `<target>/<triple>/<profil>/build/<crate>-<hash>/out`;
+    // die CLI liegt fuer den *Wirt* gebaut, also ohne Triple daneben.
+    let out = PathBuf::from(env::var("OUT_DIR").ok()?);
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    let mut dir = out.as_path();
+    for _ in 0..6 {
+        let Some(parent) = dir.parent() else { break };
+        dir = parent;
+        for candidate in [dir.join("debug").join(exe), dir.join("release").join(exe), dir.join(exe)] {
+            let Ok(at) = fs::metadata(&candidate).and_then(|m| m.modified()) else { continue };
+            if best.as_ref().is_none_or(|(known, _)| at > *known) {
+                best = Some((at, candidate));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
 }

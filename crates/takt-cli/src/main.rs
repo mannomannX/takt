@@ -6,7 +6,8 @@
 //!                   [--build sim|hw] [--profile P]
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--profile P] [--order random:SEED]
-//! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac] [--emit ir|obj] [--out PFAD]
+//! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
+//!                   [--emit ir|obj|consts|consts-rs] [--out PFAD]
 //! takt size  DATEI… [--build sim|hw] [--profile P]
 //! takt cost  DATEI… [--build sim|hw] [--profile P]
 //! takt latency DATEI… [--build sim|hw] [--profile P]
@@ -222,7 +223,7 @@ fn graph(args: &Args) -> bool {
 /// `takt build`: ein Programm fuer ein Ziel uebersetzen (11.2, 12.8).
 ///
 /// ```text
-/// takt build DATEI [--target NAME] [--emit ir|obj] [--out PFAD]
+/// takt build DATEI [--target NAME] [--emit ir|obj|consts|consts-rs] [--out PFAD]
 /// ```
 ///
 /// **Warum es dieses Kommando gibt.** Bis M5 endete jeder Weg aus einer
@@ -288,11 +289,91 @@ fn build(args: &Args) -> bool {
             let out = args.value("--out").map_or_else(|| format!("{stem}.o"), str::to_string);
             emit_object(&lowered.ir, target, &out) && lowered.complete()
         }
+        "consts" | "consts-rs" => {
+            let rust = emit == "consts-rs";
+            let ext = if rust { "rs" } else { "h" };
+            let out = args.value("--out").map_or_else(|| format!("{stem}.{ext}"), str::to_string);
+            let text = if rust { constants_rust(&program) } else { constants_header(&program, stem) };
+            match std::fs::write(&out, &text) {
+                Ok(()) => {
+                    println!("{out}: Konstanten des Programms");
+                    true
+                }
+                Err(e) => {
+                    eprintln!("{out}: {e}");
+                    false
+                }
+            }
+        }
         other => {
-            eprintln!("Unbekannte Ausgabeart `{other}`. Bekannt: ir, obj");
+            eprintln!("Unbekannte Ausgabeart `{other}`. Bekannt: ir, obj, consts, consts-rs");
             false
         }
     }
+}
+
+/// Die Konstanten eines Programms als C-Header.
+///
+/// **Wogegen das hilft.** Die Tickperiode steht in `system: tick` und
+/// muss der Runtime bekannt sein — beim ersten Hardwarelauf stand sie an
+/// zwei Stellen, im Programm mit 10 ms und im Bring-up mit 1 ms. Die
+/// logische Zeit lief zehnfach zu schnell, und jedes `after` haette zu
+/// frueh gefeuert. Niemand hat es gemeldet, weil niemand beides kannte.
+///
+/// Ein Header statt einer Rust-Datei, weil der Rahmen (12.1) ohnehin C
+/// ist: So liest ihn beides, und die Zahl steht einmal.
+fn constants_header(p: &takt_mir::Program, stem: &str) -> String {
+    let guard = stem.to_uppercase().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+    let mut s = String::new();
+    s.push_str("/* Konstanten des Programms; erzeugt von `takt build --emit consts`. */\n");
+    s.push_str(&format!("#ifndef TAKT_{guard}_H\n#define TAKT_{guard}_H\n\n"));
+    s.push_str("/* Basis-Tick T0 in Nanosekunden (`system: tick`, 7.1). */\n");
+    s.push_str(&format!("#define TAKT_TICK_NS {}LL\n\n", p.config.tick));
+    s.push_str("/* Die Maschinen, in Deklarationsreihenfolge (9.4). */\n");
+    for m in p.machines.iter().filter(|m| m.kind != takt_mir::machine::MachineKind::Template) {
+        s.push_str(&format!("/*   {} — jeder {}. Tick */\n", m.name, m.period));
+    }
+    s.push_str(&format!("#define TAKT_MACHINES {}\n\n", p.machines.len()));
+    s.push_str("#endif\n");
+    s
+}
+
+/// Dieselben Konstanten als Rust, fuer die Bring-up-Seite.
+///
+/// **Warum zweimal dasselbe.** Der Rahmen (12.1) ist C, die Tickschleife
+/// ist Rust, und beide brauchen die Tickperiode. Sie an beiden Stellen von
+/// Hand zu schreiben war schon einmal falsch: Das Programm sagte 10 ms,
+/// das Bring-up 1 ms, und die logische Zeit lief zehnfach zu schnell.
+///
+/// Dazu die Stellung der Ausgaenge im Latch. Wer `takt_mcu_output` ruft,
+/// braucht einen Index, und ein handgeschriebener Index ist dieselbe
+/// Fehlerquelle in kleiner: Er stimmt, bis jemand einen Ausgang davor
+/// einfuegt.
+fn constants_rust(p: &takt_mir::Program) -> String {
+    let mut s = String::new();
+    // Regulaere Kommentare, keine `//!`: Die Datei wird per `include!` in
+    // ein Modul gezogen, und dort darf kein innerer Doc-Kommentar stehen.
+    s.push_str("// Konstanten des Programms; erzeugt von `takt build --emit consts-rs`.\n");
+    s.push_str("// Nicht von Hand aendern — die Quelle ist die `.takt`-Datei.\n\n");
+    s.push_str("/// Basis-Tick T0 in Nanosekunden (`system: tick`, 7.1).\n");
+    s.push_str(&format!("pub const TICK_NS: i64 = {};\n\n", p.config.tick));
+
+    s.push_str("/// Die Ausgaenge in der Reihenfolge, die `takt_mcu_output` erwartet.\n");
+    let mut index = 0;
+    for (i, c) in p.channels.iter().enumerate() {
+        let id = takt_mir::ChannelId(i as u32);
+        if c.dir == takt_mir::program::Direction::Input {
+            continue;
+        }
+        if takt_llvm::image::latch_offset(id, p).is_none() || takt_llvm::ty::lower(c.ty, p).is_none() {
+            continue;
+        }
+        let name = c.name.to_uppercase().replace(|ch: char| !ch.is_ascii_alphanumeric(), "_");
+        s.push_str(&format!("pub const OUT_{name}: i32 = {index};\n"));
+        index += 1;
+    }
+    s.push_str(&format!("\n/// Wie viele Ausgaenge das Programm hat.\npub const OUTPUTS: i32 = {index};\n"));
+    s
 }
 
 /// Der Modulname in der IR: der Dateiname ohne Endung.
