@@ -19,6 +19,7 @@ pub mod latency;
 pub mod narrow;
 pub mod prove;
 pub mod size;
+pub mod stack;
 pub mod walk;
 
 use std::collections::BTreeMap;

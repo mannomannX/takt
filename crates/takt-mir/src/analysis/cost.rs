@@ -166,7 +166,7 @@ fn expr_cost(e: &Expr, types: &[Type], natives: &[CostVec]) -> CostVec {
         _ => CostVec::default(),
     };
     // `children_mut` braucht `&mut`; hier reicht die lesende Entsprechung.
-    for child in children(e) {
+    for child in e.children() {
         c = c + expr_cost(child, types, natives);
     }
     c
@@ -206,38 +206,5 @@ fn capacity(iter: &Expr, types: &[Type]) -> u64 {
         Some(Type::Array { len, .. } | Type::Samples { len, .. }) => u64::from(*len),
         Some(Type::Vec { cap, .. } | Type::Bytes { cap } | Type::Map { cap, .. }) => u64::from(*cap),
         _ => 1,
-    }
-}
-
-/// Die unmittelbaren Teilausdruecke, lesend.
-fn children(e: &Expr) -> Vec<&Expr> {
-    match &e.kind {
-        ExprKind::Variant { fields, .. } | ExprKind::Record { fields, .. } => fields.iter().collect(),
-        ExprKind::Array(items) => items.iter().collect(),
-        ExprKind::Tuple(a, b) => vec![a, b],
-        ExprKind::BlockInit { args, .. }
-        | ExprKind::Call { args, .. }
-        | ExprKind::NativeCall { args, .. }
-        | ExprKind::MatOp { args, .. }
-        | ExprKind::Intrinsic { args, .. } => args.iter().collect(),
-        ExprKind::Field { base, .. } => vec![base],
-        ExprKind::Index { base, index } => vec![base, index],
-        ExprKind::Index2 { base, row, col } => vec![base, row, col],
-        ExprKind::Slice { base, from, to } => vec![base, from, to],
-        ExprKind::Accessor { base, args, .. } => {
-            let mut v: Vec<&Expr> = vec![base];
-            v.extend(args.iter());
-            v
-        }
-        ExprKind::Unary { expr, .. }
-        | ExprKind::Cast { expr, .. }
-        | ExprKind::Convert { expr, .. }
-        | ExprKind::Checked { expr, .. } => vec![expr],
-        ExprKind::Lift(x) | ExprKind::Ok(x) | ExprKind::Err(x) => vec![x],
-        ExprKind::Binary { lhs, rhs, .. } => vec![lhs, rhs],
-        ExprKind::Cond { cond, then, otherwise } => vec![cond, then, otherwise],
-        ExprKind::Matches { subject, .. } => vec![subject],
-        ExprKind::Decode { bytes, .. } => vec![bytes],
-        _ => Vec::new(),
     }
 }

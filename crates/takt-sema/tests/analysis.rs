@@ -518,3 +518,63 @@ machine m:
     let errors: Vec<&str> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code).collect();
     assert!(errors.is_empty(), "`sqrt` und `fma` sind kuratiert: {errors:?}");
 }
+
+/// 12.3: Die Stacktiefe ist der laengste Pfad im Aufrufgraphen.
+///
+/// Nicht die Summe aller Rahmen und nicht der tiefste einzelne: Zwei
+/// Funktionen, die sich nicht rufen, liegen nie gleichzeitig auf dem
+/// Stack. Hier ruft `outer` beide Zweige, und nur der teurere zaehlt.
+#[test]
+fn the_stack_depth_is_the_longest_path_not_the_sum() {
+    let (p, _, _) = compile(
+        "\
+fn leaf_small(x: int) -> int:
+    return x + 1
+
+fn leaf_big(x: int) -> int:
+    return x * 2
+
+fn outer(x: int) -> int:
+    return leaf_small(x) + leaf_big(x)
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = outer(1)
+",
+    );
+    let by_name = |name: &str| p.fns.iter().position(|f| f.name == name).expect(name);
+    let mut frames = vec![Some(0u32); p.fns.len()];
+    frames[by_name("outer")] = Some(32);
+    frames[by_name("leaf_small")] = Some(8);
+    frames[by_name("leaf_big")] = Some(48);
+
+    let d = takt_mir::analysis::stack::depth(&p, &frames).expect("Tiefe");
+    assert_eq!(d.bytes, 32 + 48, "der teurere Zweig zaehlt, nicht beide");
+    assert_eq!(d.path.first().map(String::as_str), Some("outer"));
+    assert!(d.path.iter().any(|f| f == "leaf_big"), "der Pfad nennt den teuren Zweig: {:?}", d.path);
+}
+
+/// Eine erreichbare Funktion ohne gemessenen Rahmen macht die Rechnung
+/// unbekannt.
+///
+/// Eine Schranke mit einer Luecke waere keine — lieber kein Wert als
+/// einer, dem man nicht ansieht, dass ihm etwas fehlt (11.5).
+#[test]
+fn an_unmeasured_frame_leaves_the_depth_unknown() {
+    let (p, _, _) = compile(
+        "\
+fn helper(x: int) -> int:
+    return x + 1
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = helper(1)
+",
+    );
+    let frames = vec![None; p.fns.len()];
+    assert!(takt_mir::analysis::stack::depth(&p, &frames).is_none(), "ohne Messung keine Schranke");
+}
