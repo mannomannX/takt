@@ -55,8 +55,8 @@ pub enum LineKind {
     Stream { name: String, dropped: u32, overflowed: u32, malformed: u32 },
     /// `verdict-final PASS|FAIL|INCONCLUSIVE`
     Final { verdict: String },
-    /// `reboot restart|deep_sleep`: der Lauf endet hier (12.7).
-    Reboot { reason: String },
+    /// `end restart|deep_sleep|boot_jump`: der Lauf endet hier (12.7).
+    End { reason: String },
 }
 
 /// Wert oder Qualitaet eines Inputs (3.5).
@@ -215,7 +215,7 @@ fn parse_line(line: &str) -> Result<TraceLine, String> {
                 malformed: counters[2],
             }
         }
-        "reboot" => LineKind::Reboot { reason: nonempty(args, "`reboot restart|deep_sleep`")?.to_string() },
+        "end" => LineKind::End { reason: nonempty(args, "`end restart|deep_sleep|boot_jump`")?.to_string() },
         "verdict-final" => {
             LineKind::Final { verdict: nonempty(args, "`verdict-final PASS|FAIL|INCONCLUSIVE`")?.to_string() }
         }
@@ -331,7 +331,7 @@ fn render_line(line: &TraceLine) -> String {
             }
         }
         LineKind::Final { verdict } => format!("t={t} verdict-final {verdict}"),
-        LineKind::Reboot { reason } => format!("t={t} reboot {reason}"),
+        LineKind::End { reason } => format!("t={t} end {reason}"),
     }
 }
 

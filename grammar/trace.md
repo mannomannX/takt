@@ -43,7 +43,7 @@ Leerzeichen, außer im Rest einer Meldung.
 | `verdict` | Golden | `verdict <maschine> pass\|fail ["<text>"]` |
 | `stream` | Golden | `stream <name> dropped=<n> overflowed=<n> malformed=<n>` — bei Änderung (8.6) |
 | `verdict-final` | Golden | `verdict-final PASS\|FAIL\|INCONCLUSIVE` — letzte Zeile (13.5) |
-| `reboot` | Golden | `reboot restart\|deep_sleep` — der Lauf endet hier (12.7); `deep_sleep` startet den naechsten mit `boot_reason = DEEP_SLEEP_WAKE` |
+| `end` | Golden | `end restart\|deep_sleep\|boot_jump` — der Lauf endet hier (12.7); `deep_sleep` startet den naechsten mit `boot_reason = DEEP_SLEEP_WAKE` |
 
 ## T2 Werte
 

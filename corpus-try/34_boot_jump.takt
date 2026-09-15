@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+output boot_jump : u8   @ hw("sys/jump") with safe = 0
+output led       : bool @ hw("ui/led")   with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            led = true
+        after 20 ms: -> JUMP
+    state JUMP:
+        enter:
+            boot_jump = 1

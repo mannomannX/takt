@@ -492,7 +492,7 @@ machine m:
     let out = run(&p, &Trace::default(), &RunOptions { ticks: 50, profile: None, order_seed: None }).expect("Lauf");
     assert_eq!(out.ended, takt_interp::Ended::DeepSleep);
     let text = out.trace.render();
-    assert!(text.contains("t=5 reboot deep_sleep"), "der Grund steht im Trace:\n{text}");
+    assert!(text.contains("t=5 end deep_sleep"), "der Grund steht im Trace:\n{text}");
     assert!(!text.contains("t=6 "), "nach dem Kommando laeuft nichts mehr:\n{text}");
 }
 
@@ -581,7 +581,7 @@ machine m:
     let out = run(&p, &Trace::default(), &RunOptions { ticks: 8, profile: None, order_seed: None }).expect("Lauf");
     assert_eq!(out.ended, takt_interp::Ended::DeepSleep);
     let text = out.trace.render();
-    assert!(text.contains("t=0 reboot deep_sleep"), "bei Tick 0, nicht spaeter:\n{text}");
+    assert!(text.contains("t=0 end deep_sleep"), "bei Tick 0, nicht spaeter:\n{text}");
     assert!(!text.contains("t=1 "), "kein Tick nach dem Kommando:\n{text}");
 }
 
@@ -606,7 +606,7 @@ machine m:
     );
     let out = run(&p, &Trace::default(), &RunOptions { ticks: 20, profile: None, order_seed: None }).expect("Lauf");
     let text = out.trace.render();
-    let nach = text.split("reboot deep_sleep").nth(1).unwrap_or("");
+    let nach = text.split("end deep_sleep").nth(1).unwrap_or("");
     assert!(nach.contains("out reboot NONE"), "der Befehl selbst faellt auf `safe` zurueck:\n{text}");
     assert!(nach.contains("out led false"), "und jeder andere Ausgang auch:\n{text}");
 }

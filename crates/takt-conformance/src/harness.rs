@@ -232,13 +232,19 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     if let Some(RebootSlot { slot, ct, commands }) = reboot_slot(p, &layout) {
         let _ = writeln!(s, "        switch (*({ct} *)(latch + {})) {{", slot.offset);
         for (d, name) in commands {
-            let _ = writeln!(s, "        case {d}: printf(\"t=%lld reboot {name}\\n\", g_tick); goto ende;");
+            let _ = writeln!(s, "        case {d}: printf(\"t=%lld end {name}\\n\", g_tick); goto ende;");
         }
         let _ = writeln!(s, "        default: break;");
         let _ = writeln!(s, "        }}");
     }
+    // 12.7: `sys/jump` beendet den Lauf ebenso, sobald der Slot nicht null ist.
+    if let Some((slot, ct)) = jump_slot(p, &layout) {
+        let _ = writeln!(s, "        if (*({ct} *)(latch + {})) {{", slot.offset);
+        let _ = writeln!(s, "            printf(\"t=%lld end boot_jump\\n\", g_tick); goto ende;");
+        let _ = writeln!(s, "        }}");
+    }
     let _ = writeln!(s, "    }}");
-    if reboot_slot(p, &layout).is_some() {
+    if reboot_slot(p, &layout).is_some() || jump_slot(p, &layout).is_some() {
         let _ = writeln!(s, "ende:");
         safe_outputs(&mut s, p, &layout);
         let _ = writeln!(s, "    dump(g_tick);");
@@ -470,6 +476,16 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
     let takt_mir::types::Type::Enum(e) = p.types.list.get(c.ty.index())? else { return None };
     let def = p.enums.get(e.index())?;
     Some(def.variants.iter().map(|v| (v.discriminant, v.name.clone())).collect())
+}
+
+/// Wo `sys/jump` im Latch steht (12.7).
+fn jump_slot<'a>(p: &Program, layout: &'a Layout) -> Option<(&'a crate::layout::Slot, &'static str)> {
+    let slot = layout.outputs.iter().find(|s| {
+        p.channels.iter().any(|c| {
+            c.name == s.name && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/jump")
+        })
+    })?;
+    Some((slot, c_type(&slot.ty, slot.signed)?))
 }
 
 /// Wo `sys/reboot` im Latch steht und welche Kommandos es kennt.

@@ -70,6 +70,8 @@ pub enum Ended {
     /// `reboot = DEEP_SLEEP`: kein virtueller Tick; der naechste Lauf
     /// beginnt mit `boot_reason = DEEP_SLEEP_WAKE`.
     DeepSleep,
+    /// `boot_jump = <slot>`: Sprung in einen anderen Slot.
+    BootJump,
 }
 
 impl Ended {
@@ -79,6 +81,7 @@ impl Ended {
             Ended::Ticks => "ticks",
             Ended::Restart => "restart",
             Ended::DeepSleep => "deep_sleep",
+            Ended::BootJump => "boot_jump",
         }
     }
 }
@@ -100,10 +103,10 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
     writer.initial(&sim);
 
     // Auch der Anfangszustand kann das Kommando setzen (12.7).
-    let mut ended = reboot_of(&sim).unwrap_or(Ended::Ticks);
+    let mut ended = end_of(&sim).unwrap_or(Ended::Ticks);
     let mut last = 0;
     if ended != Ended::Ticks {
-        writer.lines.push(TraceLine { tick: 0, kind: LineKind::Reboot { reason: ended.name().to_string() } });
+        writer.lines.push(TraceLine { tick: 0, kind: LineKind::End { reason: ended.name().to_string() } });
         sim.safe_all()?;
         writer.changes(&sim, 0);
     }
@@ -118,9 +121,9 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
         writer.changes(&sim, tick);
         last = tick;
         // 12.7: nach dem Commit, wenn alle Outputs stehen.
-        if let Some(e) = reboot_of(&sim) {
+        if let Some(e) = end_of(&sim) {
             ended = e;
-            writer.lines.push(TraceLine { tick, kind: LineKind::Reboot { reason: e.name().to_string() } });
+            writer.lines.push(TraceLine { tick, kind: LineKind::End { reason: e.name().to_string() } });
             // Die Zeile markiert die Entscheidung, das `safe` danach die
             // Ausfuehrung (12.7) — so liest der Trace sich von oben nach
             // unten wie der Ablauf.
@@ -133,6 +136,27 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
     let at = if ended == Ended::Ticks { options.ticks } else { last };
     writer.lines.push(TraceLine { tick: at, kind: LineKind::Final { verdict: final_verdict.name().to_string() } });
     Ok(RunResult { trace: Trace { lines: writer.lines }, verdict: final_verdict, ended })
+}
+
+/// Beendet ein System-Channel den Lauf (12.7)?
+///
+/// `sys/reboot` traegt `RESTART` und `DEEP_SLEEP`, `sys/jump` einen
+/// Slot ungleich null. Beide wirken nach dem Commit.
+fn end_of(sim: &Sim<'_>) -> Option<Ended> {
+    reboot_of(sim).or_else(|| boot_jump_of(sim))
+}
+
+/// `sys/jump`: ein Slot ungleich null beendet den Lauf (12.7).
+fn boot_jump_of(sim: &Sim<'_>) -> Option<Ended> {
+    let program = sim.loaded.program;
+    let (i, _) = program.channels.iter().enumerate().find(|(_, c)| {
+        c.dir == Direction::Output && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/jump")
+    })?;
+    match sim.image.outputs.get(i)? {
+        Value::Int(n) if *n != 0 => Some(Ended::BootJump),
+        Value::UInt(n) if *n != 0 => Some(Ended::BootJump),
+        _ => None,
+    }
 }
 
 /// Steht auf `sys/reboot` ein Kommando (12.7)?

@@ -16,9 +16,10 @@ fn roundtrip(kind: LineKind) {
 }
 
 #[test]
-fn a_reboot_line_reads_back() {
-    roundtrip(LineKind::Reboot { reason: "deep_sleep".into() });
-    roundtrip(LineKind::Reboot { reason: "restart".into() });
+fn an_end_line_reads_back() {
+    roundtrip(LineKind::End { reason: "deep_sleep".into() });
+    roundtrip(LineKind::End { reason: "boot_jump".into() });
+    roundtrip(LineKind::End { reason: "restart".into() });
 }
 
 #[test]
