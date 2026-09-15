@@ -49,7 +49,7 @@ pub fn build(p: &Program) -> McuHarness {
     storage(&mut s, &layout, &driven);
     declarations(&mut s, &driven);
     init(&mut s, p, &layout, &driven);
-    tick(&mut s, p, &driven);
+    tick(&mut s, p, &layout, &driven);
     telemetry(&mut s, p, &layout);
 
     McuHarness { source: s, layout }
@@ -206,7 +206,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
 }
 
 /// `takt_mcu_tick`: ein Tick, von der Schleife gerufen.
-fn tick(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine]) {
+fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Ein Tick (12.1, Schritte 2 bis 10). */");
     let _ = writeln!(s, "void takt_mcu_tick(long long k) {{");
     let _ = writeln!(s, "    g_tick = k;");
@@ -223,21 +223,29 @@ fn tick(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine]) {
     }
     let _ = writeln!(s, "}}\n");
 
-    sleep(s, p.config.tick, driven);
+    sleep(s, p.config.tick, layout, p, driven);
 }
 
 /// `takt_mcu_idle` und `takt_mcu_deadline`: darf geschlafen werden (9.9)?
 ///
-/// 9.9 nennt sechs Konjunkte. Vier beantwortet der erzeugte Code je
-/// Maschine (`idle`-Zustand, kein `pending`), die anderen beiden sind auf
-/// der MCU trivial: Der Rahmen kennt keine geplanten Ausgaben und keine
-/// Jobs. Die Wake-Fenster prueft das Board, das die Treiber besitzt.
-fn sleep(s: &mut String, tick: i64, driven: &[&takt_mir::machine::Machine]) {
+/// 9.9 nennt sechs Konjunkte. Je Maschine beantwortet der erzeugte Code
+/// zwei (`idle`-Zustand, kein `pending`); ein anliegendes Wake-Kommando
+/// prueft der Rahmen, weil er das Prozessabbild besitzt. Die uebrigen drei
+/// sind auf der MCU gegenstandslos: Es gibt dort keine geplanten Ausgaben,
+/// keine Jobs und keine Stroeme — also auch keine Wake-Fenster.
+fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Systemschlaf (9.9). */");
     let _ = writeln!(s, "_Bool takt_mcu_idle(void) {{");
     if driven.is_empty() {
         let _ = writeln!(s, "    return 0;");
     } else {
+        // Ein anliegendes Wake-Kommando beendet den Schlaf, bevor er
+        // beginnt — sonst schliefe das System darueber hinweg.
+        for slot in &layout.commands {
+            if p.commands.iter().any(|c| c.name == slot.name && c.wake) {
+                let _ = writeln!(s, "    if (image[{}]) return 0; /* {} weckt */", slot.offset, slot.name);
+            }
+        }
         for m in driven {
             let _ = writeln!(s, "    if (!{0}_idle(state_{0})) return 0;", m.name);
         }

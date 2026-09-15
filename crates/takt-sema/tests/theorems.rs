@@ -420,3 +420,49 @@ machine m:
     let out = run(&p, &Trace::default(), &RunOptions { ticks: 150, profile: None, order_seed: None }).expect("Lauf");
     assert!(out.trace.render().contains("out led true"), "die Frist wird erreicht:\n{}", out.trace.render());
 }
+
+/// **Was eine schlafende Maschine verpasst, zaehlt sie selbst** (5.10, 9.6).
+///
+/// 9.6 unterscheidet `dropped[s]` am Puffer — `drop_oldest` trifft alle
+/// Leser — von `dropped[s, m]` je Maschine: Nur die schlafende verliert
+/// die Elemente.
+#[test]
+fn a_sleeping_machine_counts_what_it_missed() {
+    let p = compile(
+        "\
+input  noise : stream<u8> @ hw(\"bus/noise\") with capacity = 4, max_rate = 2000 Hz
+output noise_sim : stream<u8> @ sim(\"bus/noise\")
+output led : bool @ hw(\"ui/led\") with safe = false
+
+machine feeder:
+    initial GO
+    state GO:
+        loop:
+            send noise_sim, 1
+
+machine m:
+    var seen : int in 0..999 = 0
+
+    initial SLEEP
+
+    state SLEEP idle:
+        enter:
+            led = false
+        after 20 ms: -> AWAKE
+
+    state AWAKE:
+        loop:
+            led = seen > 0
+        on noise as e:
+            seen = seen + 1
+",
+    );
+    let out = run(&p, &Trace::default(), &RunOptions { ticks: 30, profile: None, order_seed: None }).expect("Lauf");
+    let text = out.trace.render();
+    // 5.10 verlangt den Alert beim *Verlassen* des Zustands.
+    let alert = text.lines().find(|l| l.contains("StreamPaused")).unwrap_or_else(|| {
+        panic!("der Alert beim Aufwachen fehlt:\n{text}");
+    });
+    assert!(alert.starts_with("t=20 "), "beim Verlassen, nicht waehrend des Schlafs: {alert}");
+    assert!(!text.contains("STREAM_OVERFLOW"), "im Schlaf gibt es keinen Ueberlauf-Fault (9.6):\n{text}");
+}

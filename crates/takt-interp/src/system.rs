@@ -138,6 +138,15 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
         }
     }
 
+    /// `dropped[s, m]`: was diese Maschine im Schlaf verpasst hat (5.10).
+    pub fn dropped_of(&self, loaded: &Loaded<'_>, stream: StreamRef) -> u32 {
+        let m = &loaded.program.machines[self.id.index()];
+        match m.layout.cursors.iter().position(|r| *r == stream) {
+            Some(i) => self.state.dropped.get(i).copied().unwrap_or(0),
+            None => 0,
+        }
+    }
+
     /// Merkt ein Element als untersucht (9.6, „untersucht heisst
     /// konsumiert"): `examined` ist das Maximum ueber alle Konstrukte der
     /// Aktivierung.
@@ -458,7 +467,8 @@ impl Outer for MachineEnv<'_, '_> {
                 let cursor = self.cursor_of(self.loaded, r);
                 Value::Int(buf.count(cursor) as i64)
             }
-            Accessor::Dropped => Value::Int(i64::from(buf.dropped)),
+            // `dropped[s]` am Puffer plus `dropped[s, m]` dieser Maschine (9.6).
+            Accessor::Dropped => Value::Int(i64::from(buf.dropped) + i64::from(self.dropped_of(self.loaded, r))),
             Accessor::Overflowed => Value::Int(i64::from(buf.overflowed)),
             Accessor::Malformed => Value::Int(i64::from(buf.malformed)),
             _ => return Ok(None),
@@ -560,7 +570,13 @@ impl<'p> Sim<'p> {
         let name = program.channels[c.index()].name.clone();
         let span = program.channels[c.index()].span;
         let f = Fault::new(FaultKind::StreamOverflow, format!("Stream `{name}` uebergelaufen"), span, self.tick);
+        let wakes = program.channels[c.index()].attrs.wake;
         for id in self.order.clone() {
+            // 9.6: Einer schlafenden Maschine wird der Ueberlauf nicht
+            // zugestellt, solange der Strom sie nicht weckt (5.10).
+            if !wakes && self.is_idle(id) {
+                continue;
+            }
             let reads = program.machines[id.index()].layout.cursors.contains(&StreamRef::Channel(c));
             if reads && self.states[id.index()].pending.is_none() {
                 self.states[id.index()].pending = Some(f.clone());
@@ -666,9 +682,18 @@ impl<'p> Sim<'p> {
                 .map(|r| if idle && !self.wakes(*r) { self.stream_end(*r) } else { None })
                 .collect();
             let state = &mut self.states[id.index()];
+            // 5.10: Der Alert kommt beim *Verlassen* — wer aufwacht, soll
+            // erfahren, was er verpasst hat.
+            let aufgewacht = state.was_idle && !idle;
+            state.was_idle = idle;
+            let mut verpasst = 0u32;
             for (i, _) in m.layout.cursors.iter().enumerate() {
                 let examined = state.examined.get(i).copied().unwrap_or(-1);
                 if let Some(end) = ends[i] {
+                    let vorher = state.cursors.get(i).copied().unwrap_or(0);
+                    if let Some(d) = state.dropped.get_mut(i) {
+                        *d = d.saturating_add(u32::try_from(end - vorher).unwrap_or(u32::MAX));
+                    }
                     if let Some(c) = state.cursors.get_mut(i) {
                         *c = end;
                     }
@@ -680,6 +705,22 @@ impl<'p> Sim<'p> {
                 if let Some(e) = state.examined.get_mut(i) {
                     *e = -1;
                 }
+            }
+            if aufgewacht {
+                verpasst = state.dropped.iter().copied().fold(0u32, u32::saturating_add);
+            }
+            if aufgewacht && verpasst > 0 {
+                let span = m.states.first().map_or_else(takt_diag::Span::default, |s| s.span);
+                self.observations.push((
+                    id,
+                    Observation::Alert {
+                        span,
+                        index: Vec::new(),
+                        active: true,
+                        message: format!("StreamPaused: {verpasst} Elemente im Schlaf verworfen"),
+                        invalid: false,
+                    },
+                ));
             }
         }
         // Eviction: das Minimum ueber alle Konsumenten je Stream.

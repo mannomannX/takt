@@ -50,6 +50,16 @@ pub struct MachineState {
     /// `examined[s, m]` der laufenden Aktivierung: die groesste untersuchte
     /// Nummer je Stream, oder -1. Wird in `advance_cursors` verbraucht.
     pub examined: Vec<i64>,
+    /// `dropped[s, m]` (5.10): was diese Maschine im Schlaf verpasst hat.
+    ///
+    /// Getrennt von `Buffer::dropped`, weil nur sie die Elemente verliert
+    /// — eine wache Schwester liest sie weiter (9.6).
+    pub dropped: Vec<u32>,
+    /// War die Maschine im vorigen Tick in einem `idle`-Zustand?
+    ///
+    /// Fuer den Alert `StreamPaused`, den 5.10 beim *Verlassen* verlangt:
+    /// Wer schlaeft, soll beim Aufwachen erfahren, was er verpasst hat.
+    pub was_idle: bool,
     /// Ist die Maschine in `FAULTED`?
     pub faulted: bool,
 }
@@ -100,6 +110,8 @@ impl MachineState {
             raised_signals: vec![false; m.signals.len()],
             cursors: vec![0; m.layout.cursors.len()],
             examined: vec![-1; m.layout.cursors.len()],
+            dropped: vec![0; m.layout.cursors.len()],
+            was_idle: false,
             faulted: false,
         }
     }
