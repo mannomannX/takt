@@ -168,6 +168,7 @@ fn declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);
         let _ = writeln!(s, "long long {}_deadline(void *st);", m.name);
+        let _ = writeln!(s, "void {}_advance(void *st, long long n);", m.name);
     }
     let _ = writeln!(s);
 }
@@ -205,7 +206,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
 }
 
 /// `takt_mcu_tick`: ein Tick, von der Schleife gerufen.
-fn tick(s: &mut String, _p: &Program, driven: &[&takt_mir::machine::Machine]) {
+fn tick(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Ein Tick (12.1, Schritte 2 bis 10). */");
     let _ = writeln!(s, "void takt_mcu_tick(long long k) {{");
     let _ = writeln!(s, "    g_tick = k;");
@@ -222,7 +223,7 @@ fn tick(s: &mut String, _p: &Program, driven: &[&takt_mir::machine::Machine]) {
     }
     let _ = writeln!(s, "}}\n");
 
-    sleep(s, driven);
+    sleep(s, p.config.tick, driven);
 }
 
 /// `takt_mcu_idle` und `takt_mcu_deadline`: darf geschlafen werden (9.9)?
@@ -231,7 +232,7 @@ fn tick(s: &mut String, _p: &Program, driven: &[&takt_mir::machine::Machine]) {
 /// Maschine (`idle`-Zustand, kein `pending`), die anderen beiden sind auf
 /// der MCU trivial: Der Rahmen kennt keine geplanten Ausgaben und keine
 /// Jobs. Die Wake-Fenster prueft das Board, das die Treiber besitzt.
-fn sleep(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
+fn sleep(s: &mut String, tick: i64, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Systemschlaf (9.9). */");
     let _ = writeln!(s, "_Bool takt_mcu_idle(void) {{");
     if driven.is_empty() {
@@ -244,7 +245,10 @@ fn sleep(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
     }
     let _ = writeln!(s, "}}\n");
 
-    // Die frueheste Frist ueber alle Maschinen; -1 heisst „keine".
+    // Die frueheste Frist ueber alle Maschinen, als absoluter Zeitpunkt in
+    // Nanosekunden — so erwartet `Program::next_deadline` sie. Die
+    // Maschinen rechnen in Ticks, weil `t_in_state` sie zaehlt; die
+    // Umrechnung steht hier, wo `takt_now` ohnehin die Zeitquelle ist.
     let _ = writeln!(s, "long long takt_mcu_deadline(void) {{");
     let _ = writeln!(s, "    long long best = -1;");
     for m in driven {
@@ -253,7 +257,18 @@ fn sleep(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
         let _ = writeln!(s, "        if (d >= 0 && (best < 0 || d < best)) best = d;");
         let _ = writeln!(s, "    }}");
     }
-    let _ = writeln!(s, "    return best;");
+    let _ = writeln!(s, "    if (best < 0) return -1;");
+    let _ = writeln!(s, "    return takt_now() + best * {tick}LL;");
+    let _ = writeln!(s, "}}\n");
+
+    // 9.9: „fuer jede Maschine: time_in_state += n*T0". Ein
+    // uebersprungener Tick ruft kein `_step`; ohne das feuerte jede
+    // `after`-Frist um die geschlafenen Ticks zu spaet.
+    let _ = writeln!(s, "void takt_mcu_advance(long long n) {{");
+    let _ = writeln!(s, "    g_tick += n;");
+    for m in driven {
+        let _ = writeln!(s, "    {0}_advance(state_{0}, n);", m.name);
+    }
     let _ = writeln!(s, "}}\n");
 }
 

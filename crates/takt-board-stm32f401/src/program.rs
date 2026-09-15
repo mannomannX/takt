@@ -49,8 +49,11 @@ unsafe extern "C" {
     /// Sind alle Maschinen in `idle` und ohne vorgemerkten Fault (9.9)?
     fn takt_mcu_idle() -> bool;
 
-    /// Ticks bis zur fruehesten `after`-Frist; `-1` heisst keine.
+    /// Die fruehste `after`-Frist als absoluter Zeitpunkt in ns; `-1` heisst keine.
     fn takt_mcu_deadline() -> i64;
+
+    /// Traegt `n` uebersprungene Ticks nach (9.9).
+    fn takt_mcu_advance(n: i64);
 }
 
 /// Das erzeugte Programm als [`Program`] der Tickschleife.
@@ -133,8 +136,12 @@ impl Program for Generated {
     }
 
     fn next_deadline(&self) -> Option<i64> {
-        let ticks = unsafe { takt_mcu_deadline() };
-        (ticks >= 0).then_some(ticks)
+        let ns = unsafe { takt_mcu_deadline() };
+        (ns >= 0).then_some(ns)
+    }
+
+    fn advance(&mut self, ticks: u64) {
+        unsafe { takt_mcu_advance(ticks as i64) };
     }
 
     fn tick(&mut self, k: u64, _now: i64) {

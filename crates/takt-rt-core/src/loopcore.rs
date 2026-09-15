@@ -89,6 +89,13 @@ pub trait Program {
     fn next_deadline(&self) -> Option<i64> {
         None
     }
+
+    /// Traegt `n` uebersprungene Ticks nach (9.9).
+    ///
+    /// „fuer jede Maschine: time_in_state += n*T0". Ohne das feuerte jede
+    /// `after`-Frist um die geschlafenen Ticks zu spaet, und Satz 9.9.1
+    /// (Trace mit und ohne Schlaf gleich) waere verletzt.
+    fn advance(&mut self, _ticks: u64) {}
 }
 
 /// Die Schleife.
@@ -172,6 +179,9 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
 
         // maybe_sleep() (9.9)
         tick.slept = self.sleep(now);
+        if tick.slept > 0 {
+            self.program.advance(tick.slept);
+        }
         self.sink.record(&tick);
 
         self.k = self.k.saturating_add(1).saturating_add(tick.slept);
@@ -192,6 +202,11 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// Nummer des naechsten Ticks.
     pub fn tick_number(&self) -> u64 {
         self.k
+    }
+
+    /// Das Programm, das die Schleife treibt.
+    pub fn program(&self) -> &P {
+        &self.program
     }
 
     /// `maybe_sleep()` nach 9.9: Wie viele Ticks werden uebersprungen?

@@ -37,6 +37,8 @@ struct Counted<'a> {
     ticks: Vec<(u64, i64)>,
     overruns: u32,
     sleepy: Option<i64>,
+    /// Was `advance` nachgetragen bekam.
+    advanced: u64,
 }
 
 impl Program for Counted<'_> {
@@ -57,6 +59,10 @@ impl Program for Counted<'_> {
 
     fn next_deadline(&self) -> Option<i64> {
         self.sleepy
+    }
+
+    fn advance(&mut self, ticks: u64) {
+        self.advanced += ticks;
     }
 }
 
@@ -86,7 +92,7 @@ const T0: i64 = 1_000_000; // 1 ms
 #[test]
 fn logical_time_does_not_follow_the_clock() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![0, 700_000, 3_000_000, 0], waits: Vec::new() });
-    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, sleepy: None };
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
     rt.run(4);
@@ -98,7 +104,7 @@ fn logical_time_does_not_follow_the_clock() {
 #[test]
 fn an_overrun_never_skips_a_tick() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![5 * T0], waits: Vec::new() });
-    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, sleepy: None };
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
     rt.run(3);
@@ -110,7 +116,7 @@ fn an_overrun_never_skips_a_tick() {
 #[test]
 fn an_overrun_faults_in_the_following_tick() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![5 * T0, 0, 0], waits: Vec::new() });
-    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, sleepy: None };
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
     rt.step();
@@ -125,7 +131,7 @@ fn an_overrun_faults_in_the_following_tick() {
 #[test]
 fn the_alert_policy_raises_no_fault() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![5 * T0], waits: Vec::new() });
-    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, sleepy: None };
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Alert);
     rt.run(3);
@@ -138,7 +144,7 @@ fn the_alert_policy_raises_no_fault() {
 #[test]
 fn deadlines_are_absolute() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![0, 2_500_000, 0, 0], waits: Vec::new() });
-    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, sleepy: None };
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
     rt.run(4);
@@ -150,7 +156,7 @@ fn deadlines_are_absolute() {
 #[test]
 fn the_watchdog_is_kicked_once_per_tick() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
-    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, sleepy: None };
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
     rt.run(5);
@@ -165,7 +171,7 @@ fn the_watchdog_is_kicked_once_per_tick() {
 fn sleeping_advances_logical_time_exactly() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
     // Die naechste Frist liegt bei 10 ms; der erste Tick endet bei 1 ms.
-    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, sleepy: Some(10 * T0) };
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
     let first = rt.step();
@@ -180,7 +186,7 @@ fn sleeping_advances_logical_time_exactly() {
 #[test]
 fn a_program_that_does_not_allow_sleep_never_sleeps() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
-    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, sleepy: None };
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
     assert_eq!(rt.step().slept, 0);
@@ -190,7 +196,7 @@ fn a_program_that_does_not_allow_sleep_never_sleeps() {
 #[test]
 fn the_boot_profile_never_sleeps() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
-    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, sleepy: Some(10 * T0) };
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BOOT, T0, Policy::Fault);
     assert_eq!(rt.step().slept, 0);
@@ -200,7 +206,7 @@ fn the_boot_profile_never_sleeps() {
 #[test]
 fn a_deadline_in_the_next_tick_is_no_reason_to_sleep() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
-    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, sleepy: Some(2 * T0) };
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(2 * T0) };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
     assert_eq!(rt.step().slept, 0);
@@ -227,4 +233,31 @@ fn overrun_records_the_worst_case() {
     assert!(o.observe(2 * T0, T0).fault);
     assert_eq!(o.count, 2);
     assert_eq!(o.worst, 2 * T0, "die groesste Ueberschreitung, nicht die letzte");
+}
+
+/// **Die uebersprungenen Ticks werden nachgetragen** (9.9).
+///
+/// „fuer jede Maschine: time_in_state += n*T0". Ohne das bliebe der
+/// Zaehler beim Einschlafen stehen, und jede `after`-Frist feuerte um die
+/// geschlafenen Ticks zu spaet — Satz 9.9.1 waere verletzt.
+#[test]
+fn skipped_ticks_are_carried_over_to_the_program() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
+    let first = rt.step();
+    assert_eq!(first.slept, 8);
+    assert_eq!(rt.program().advanced, 8, "genau die uebersprungenen Ticks, nicht mehr und nicht weniger");
+}
+
+/// Ohne Schlaf wird nichts nachgetragen.
+#[test]
+fn a_tick_without_sleep_carries_nothing_over() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
+    rt.step();
+    assert_eq!(rt.program().advanced, 0);
 }

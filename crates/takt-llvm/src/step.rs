@@ -493,12 +493,37 @@ fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
     }
 }
 
-/// Schreibt die Eintrittsfunktion einer Maschine (9.4).
+/// `<maschine>_advance(st, n)`: `n` virtuelle Ticks nachtragen (9.9).
 ///
-/// 9.4: Der Anfangszustand wird betreten, *bevor* der erste Tick laeuft —
-/// sein `enter:` gehoert darum nicht in den Tickschritt, sondern in eine
-/// eigene Funktion, die die Runtime einmal ruft. Stuende es im Schritt,
-/// liefe es in jedem Tick.
+/// Ein uebersprungener Tick ruft kein `_step`; ohne diese Funktion bliebe
+/// `t_in_state` stehen und die `after`-Frist feuerte um die geschlafenen
+/// Ticks zu spaet. `n` kommt in Basis-Ticks und wird durch die Periode
+/// geteilt, weil der Zaehler Aktivierungen zaehlt (7.2).
+///
+/// Die `every`-Zaehler bleiben unberuehrt — 9.9 sagt es ausdruecklich,
+/// und in `idle` gibt es kein `loop:`, also auch kein `every`.
+pub fn advance_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
+    let period = i64::from(m.period.max(1));
+    module.begin(
+        &format!("{}_advance", m.name),
+        &crate::ty::LlvmType::Void,
+        &[crate::ty::LlvmType::Ptr, crate::ty::LlvmType::Int(64)],
+    );
+    let Some(t_i) = st.index_of(Role::TimeInState, 0) else {
+        module.end(None);
+        return Ok(());
+    };
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let base = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
+    let cell = module.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", st.depth));
+    let old = module.inst(&format!("load i64, ptr {cell}"));
+    let aktivierungen = module.inst(&format!("sdiv i64 %1, {period}"));
+    let new = module.inst(&format!("add i64 {old}, {aktivierungen}"));
+    module.void_inst(&format!("store i64 {new}, ptr {cell}"));
+    module.end(None);
+    Ok(())
+}
+
 /// `<maschine>_idle(st) -> i1`: Ist die Maschine bereit zu schlafen (9.9)?
 ///
 /// Zwei der sechs Konjunkte stehen im Zustandsblock: Das aktive Blatt ist
@@ -556,13 +581,19 @@ pub fn idle_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Resu
     Ok(())
 }
 
-/// `<maschine>_deadline(st) -> i64`: Ticks bis zur naechsten `after`-Frist.
+/// `<maschine>_deadline(st) -> i64`: Basis-Ticks bis zur naechsten
+/// `after`-Frist.
 ///
-/// `-1` heisst: keine Frist, es weckt nur ein Ereignis (9.9). Gerechnet
-/// wird in Ticks, weil `t_in_state` sie zaehlt (7.1).
+/// `-1` heisst: keine Frist, es weckt nur ein Ereignis (9.9). `t_in_state`
+/// zaehlt Aktivierungen, die Runtime springt Basis-Ticks — die Periode
+/// rechnet zwischen beiden um (7.2).
 pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     let leaves = machine::leaves(m);
-    // Je Blatt die kuerzeste `after`-Frist seiner Kette, in Ticks.
+    // Eine Aktivierung dauert `period` Basis-Ticks (7.2); `t_in_state`
+    // zaehlt Aktivierungen, nicht Ticks.
+    let period = u64::from(m.period.max(1));
+    let activation_ns = period.saturating_mul(p.config.tick.max(1) as u64);
+    // Je Blatt die kuerzeste `after`-Frist seiner Kette, in Aktivierungen.
     let fristen: Vec<Option<u64>> = leaves
         .iter()
         .map(|l| {
@@ -570,9 +601,11 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
                 .iter()
                 .flat_map(|id| &m.states[id.index()].transitions)
                 .filter_map(|t| match &t.trigger {
+                    // `after 0` feuert bei der ersten Aktivierung
+                    // (`elapsed > 0`), ist also eine Frist von eins.
                     TransTrigger::After(e) => match e.kind {
-                        takt_mir::expr::ExprKind::Duration(ns) if ns > 0 => {
-                            Some((ns as u64).div_ceil(p.config.tick.max(1) as u64))
+                        takt_mir::expr::ExprKind::Duration(ns) if ns >= 0 => {
+                            Some((ns as u64).div_ceil(activation_ns).max(1))
                         }
                         _ => None,
                     },
@@ -608,7 +641,9 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
         let Some(ticks) = frist else { continue };
         let rest = module.inst(&format!("sub i64 {ticks}, {seit}"));
         let positiv = module.inst(&format!("icmp sgt i64 {rest}, 0"));
-        let wert = module.inst(&format!("select i1 {positiv}, i64 {rest}, i64 0"));
+        let offen = module.inst(&format!("select i1 {positiv}, i64 {rest}, i64 0"));
+        // Die Runtime springt Basis-Ticks, nicht Aktivierungen.
+        let wert = module.inst(&format!("mul i64 {offen}, {period}"));
         let ist = module.inst(&format!("icmp eq i8 {cur}, {i}"));
         acc = module.inst(&format!("select i1 {ist}, i64 {wert}, i64 {acc}"));
     }

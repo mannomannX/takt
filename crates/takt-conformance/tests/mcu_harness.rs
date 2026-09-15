@@ -366,3 +366,40 @@ fn an_idle_state_reports_its_deadline() {
     assert!(dl.contains("sub i64 50,"), "die Frist steht in Ticks:\n{dl}");
     assert!(dl.contains("sub i64 20,"), "je Blatt die eigene");
 }
+
+/// **Die Frist ist ein absoluter Zeitpunkt in Nanosekunden** (9.9).
+///
+/// `Program::next_deadline` verlangt es so; die Maschinen rechnen aber in
+/// Ticks, weil `t_in_state` sie zaehlt. Die Umrechnung stand zuerst
+/// nirgends — `Runtime::sleep` bekam Ticks, zog `now` in Nanosekunden ab
+/// und erhielt eine tief negative Zahl. Ergebnis: Es wurde nie
+/// geschlafen, ohne Fehler und ohne Meldung.
+#[test]
+fn the_deadline_is_absolute_nanoseconds() {
+    let p = corpus("30_idle.takt");
+    let src = takt_conformance::mcu::build(&p).source;
+    assert!(
+        src.contains("return takt_now() + best * 10000000LL;"),
+        "Ticks mal Periode, auf `takt_now` bezogen:\n{src}"
+    );
+    assert!(src.contains("if (best < 0) return -1;"), "keine Frist bleibt keine Frist");
+}
+
+/// **Multirate: die Frist rechnet in Aktivierungen, nicht in Basis-Ticks.**
+///
+/// `after` vergleicht `t_in_state * period * T0` gegen die Dauer (7.2);
+/// `t_in_state` zaehlt also Aktivierungen. Eine erste Fassung teilte nur
+/// durch `T0` und war bei `period = 5` fuenfmal zu gross. Zurueck kommt
+/// die Zahl in Basis-Ticks, weil die Runtime darin springt.
+#[test]
+fn a_multirate_deadline_counts_activations() {
+    let p = corpus("31_idle_multirate.takt");
+    let ir = common::ir_for(&p, Target::THUMBV7EM.triple);
+    let at = ir.find("define i64 @m_deadline").expect("Fristabfrage");
+    let dl = &ir[at..ir[at..].find("\n}").map_or(ir.len(), |e| at + e)];
+    // `every 50 ms` bei 10 ms Tick: Periode 5. `after 500 ms` sind zehn
+    // Aktivierungen, `after 200 ms` vier.
+    assert!(dl.contains("sub i64 10,"), "500 ms sind zehn Aktivierungen:\n{dl}");
+    assert!(dl.contains("sub i64 4,"), "200 ms sind vier");
+    assert!(dl.contains("mul i64"), "und das Ergebnis geht in Basis-Ticks zurueck");
+}
