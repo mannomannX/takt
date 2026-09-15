@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+enum Mode: SLOW, FAST
+
+param MODE : Mode = FAST
+
+output picked : Mode @ hw("o/mode") with safe = SLOW
+output led    : bool @ hw("ui/led") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            picked = MODE
+            led = true
