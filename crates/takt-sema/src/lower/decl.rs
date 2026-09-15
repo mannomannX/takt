@@ -603,18 +603,19 @@ impl Lowerer<'_> {
         (out, meta)
     }
 
-    /// `with budget = {ram = …}` am Maschinenkopf (7.2).
+    /// `with budget = {ram = …, wcet = …}` am Maschinenkopf (7.2).
     ///
-    /// `wcet` ist grammatisch zugelassen, aber noch nicht pruefbar: Die
-    /// Umrechnung von Operationen in Zeit braucht die kalibrierte
-    /// Kostentabelle `c_target` (9.4.3, 13.8). Die Schreibweise steht damit
-    /// fest, bevor jemand sie anders erfindet, und der Compiler sagt, woran
-    /// es liegt — dasselbe Muster wie bei `map`, `mat` und `node`.
+    /// **`wcet` wird gelesen, nicht mehr abgelehnt.** Geprueft wird es erst
+    /// mit der kalibrierten Kostentabelle (`takt-sema::calibrated`, 13.8):
+    /// Ohne sie sind `B_m` und `F_m` Operationszahlen und keine Zeiten. Die
+    /// Deklaration festzuhalten kostet nichts und macht sie sichtbar — wer
+    /// sie schreibt, hat eine Erwartung, und die gehoert in die MIR, auch
+    /// wenn das Urteil auf eine Messung wartet.
     pub fn declared_budget(&mut self, attrs: &[ast::Attr]) -> Option<takt_mir::machine::DeclaredBudget> {
         let mut out: Option<takt_mir::machine::DeclaredBudget> = None;
         for a in attrs {
             let ast::AttrKind::Budget(items) = &a.kind else { continue };
-            let mut b = takt_mir::machine::DeclaredBudget { ram: None, span: a.span };
+            let mut b = takt_mir::machine::DeclaredBudget { ram: None, wcet_ns: None, span: a.span };
             for it in items {
                 match it.kind {
                     ast::BudgetKind::Ram => {
@@ -630,7 +631,21 @@ impl Lowerer<'_> {
                         b.ram = u64::try_from(v).ok();
                     }
                     ast::BudgetKind::Wcet => {
-                        self.stage(it.span, "`wcet` im Budget", Stage::V1_1);
+                        if b.wcet_ns.is_some() {
+                            self.error(SC3, it.span, "`wcet` doppelt im Budget");
+                            continue;
+                        }
+                        let dur = self.tys.duration;
+                        let Some(e) = self.check(&it.value, dur) else { continue };
+                        let takt_mir::expr::ExprKind::Duration(ns) = e.kind else {
+                            self.error(SC3, it.span, "`wcet` verlangt eine konstante Dauer");
+                            continue;
+                        };
+                        if ns <= 0 {
+                            self.error(SC3, it.span, "`wcet` verlangt eine positive Dauer");
+                            continue;
+                        }
+                        b.wcet_ns = Some(ns);
                     }
                 }
             }

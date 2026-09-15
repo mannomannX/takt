@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! takt check DATEI… [--warnings-as-errors] [--certification] [--format text|line]
+//!                   [--hardware DATEI.hw --target NAME]
 //!                   [--build sim|hw] [--profile P]
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--profile P] [--order random:SEED]
@@ -65,6 +66,7 @@ impl Args {
             "--emit",
             "--out",
             "--object",
+            "--hardware",
         ];
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
         let mut i = 0;
@@ -141,11 +143,25 @@ fn check(args: &Args) -> bool {
         let map = SourceMap::single(path.as_str(), src.as_str());
         let options = takt_sema::Options { policy, build: build_of(args), profile: profile_of(args) };
         let checked = takt_sema::compile(&src, &options);
-        for d in &checked.diagnostics {
+        // Mit Kalibrierung urteilt SC-12 gleich (siehe unten); sein
+        // Hinweis „noch nicht entscheidbar" waere daneben ein Widerspruch.
+        let kalibriert = calibration(args);
+        for d in checked.diagnostics.iter().filter(|d| !(kalibriert.is_some() && d.code == "SC-12")) {
             if line_format {
                 println!("{}", map.render_line(d));
             } else {
                 println!("{}", map.render(d));
+            }
+        }
+        // Pruefung 12 und 32 brauchen die Kalibrierung (13.8); ohne sie
+        // bleibt es beim Hinweis aus `checks.rs`.
+        if let (Some(program), Some(target)) = (&checked.program, &kalibriert) {
+            let span = takt_diag::Span::new(0, 0);
+            for d in takt_sema::calibrated::check(program, target, span) {
+                println!("{}", if line_format { map.render_line(&d) } else { map.render(&d) });
+                if d.is_error() {
+                    ok = false;
+                }
             }
         }
         if checked.has_errors() {
@@ -517,6 +533,40 @@ fn measure(args: &Args, p: &takt_mir::Program) -> takt_mir::analysis::size::Meas
         tools.stack_frames(path, &symbols).into_iter().map(|f| f.and_then(|n| u32::try_from(n).ok())).collect();
     out.stack = takt_mir::analysis::stack::depth(p, &frames);
     out
+}
+
+/// Die Kalibrierung aus `--hardware DATEI --target NAME` (8.10, 13.8).
+///
+/// **Beides oder nichts.** Eine Konfiguration ohne Ziel liesse offen,
+/// welche der Tabellen gilt, und ein Ziel ohne Konfiguration hat keine.
+/// Fehlt der Schalter, ist das kein Fehler: Ein `takt check` ohne
+/// Hardware-Konfiguration ist der Normalfall (Pruefung 60: „Fehlt die
+/// Konfiguration, entfaellt die Pruefung").
+fn calibration(args: &Args) -> Option<takt_mir::hardware::Target> {
+    let path = args.value("--hardware")?;
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{path}: {e}");
+            return None;
+        }
+    };
+    let hw = match takt_mir::hardware::parse(&text) {
+        Ok(hw) => hw,
+        Err(e) => {
+            eprintln!("{path}: {e}");
+            return None;
+        }
+    };
+    let name = args.value("--target").unwrap_or("x86_64");
+    match hw.target(name) {
+        Some(t) => Some(t.clone()),
+        None => {
+            let bekannt: Vec<&str> = hw.targets.keys().map(String::as_str).collect();
+            eprintln!("{path}: kein Ziel `{name}`; enthalten: {}", bekannt.join(", "));
+            None
+        }
+    }
 }
 
 /// Build aus `--build sim|hw` (Default `sim`).

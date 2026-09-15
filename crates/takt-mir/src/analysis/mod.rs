@@ -19,6 +19,7 @@ pub mod graph;
 pub mod latency;
 pub mod narrow;
 pub mod prove;
+pub mod schedulability;
 pub mod size;
 pub mod stack;
 pub mod walk;

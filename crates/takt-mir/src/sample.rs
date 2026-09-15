@@ -825,7 +825,7 @@ pub fn full_program() -> Program {
     let input_p = || e(ExprKind::Input { channel: ch_p, dominated: true }, t_bar);
     let msg = |s: &str| Format::text(s);
     // Deklariertes Budget (7.2); Formatversion 6 traegt das Feld.
-    m.declared_budget = Some(crate::machine::DeclaredBudget { ram: Some(4096), span: Span::default() });
+    m.declared_budget = Some(crate::machine::DeclaredBudget { ram: Some(4096), wcet_ns: None, span: Span::default() });
     m.loop_block = Block::new(vec![
         stmt(StmtKind::Check {
             cond: e(

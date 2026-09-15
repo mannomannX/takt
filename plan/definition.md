@@ -1405,6 +1405,7 @@ Bus-Mappings — Modbus-Registertabellen, CANopen-PDO/SDO-Zuordnungen, EtherCAT-
 | Channel | Adresse (`"modbus1/40001"`, `"can0/pdo/0x181/0"`), Richtung, Rohtyp, Skalierung/Kalibrierung (linear oder Tabelle), Einheit, Range, `safe`-Wert (Outputs), Rate/`max_rate`, Rahmung |
 | Anschluss | Was der Treibertyp braucht, um den Kanal zu erreichen — bei einem Bus steht es schon in der Adresse, bei direkt angeschlossener Peripherie nicht: Port und Pin, Polarität, Alternativfunktion, Timer-Kanal. Der Inhalt ist treiberspezifisch und für die Sprache undurchsichtig; der Compiler reicht ihn weiter, statt ihn zu deuten (9.5) |
 | Messwerte | `guard`, `jitter` je Output, Abtastlatenz je Input — aus der Konformitätsmessung (13.8) |
+| Kalibrierung je Ziel | `c_target[c]` über den sieben Operationsklassen (9.4.3), `T_IO` und der Tick-Jitter je Profil — aus `takt bench` (13.8). Sie hängt am Kern und seiner Frequenz, nicht am Channel: Zwei Boards derselben Zielklasse mit verschiedenem Takt haben verschiedene Tabellen. Ohne sie prüft der Compiler die Schedulability nicht, er rechnet sie nur (7.2, Prüfung 32) |
 | Speicher und Stack | `ram`, `flash`, ggf. `iram`; Stack-Reserven für Runtime, Treiber, ISRs, RTOS (11.5, 12.3) |
 | Topologie (v2) | Knoten, Verbindungen, `hops` (12.9) |
 | Formatversion | Schemaversion der Konfiguration (11.3) |

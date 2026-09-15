@@ -580,7 +580,7 @@ SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0`
 SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M6 (mit 8.10),definiert,
 SC-30,Statische Prüfung,10,"`mat`: Formprüfung bei `+ - *`, `inv`/`solve` nur quadratisch, R, C ≤ 16, Indizes in Range (3.11)",F,M3 (Gate),definiert,
 SC-31,Statische Prüfung,10,"Native Funktionen: nur die kuratierte Menge (v1), `cost`, `stack` und `total` deklariert, Argumente fester Größe (4.5)",F,M3 (Gate),definiert,
-SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration",F,M6 (mit 8.10),offen,
+SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration",F,M5 (Embedded),teilweise,
 SC-33,Statische Prüfung,10,"`follows`: Kanten azyklisch; Follower liest nur gefolgte Maschinen frisch; keine frischen Lesevorgänge in Aktionsblöcken der Abort-Phase (7.2). **Warnung**, wenn ein Follower eine gefolgte Größe liest, die auch auf seinem Fault-Pfad vorkommt: Dort gilt Ψ_k statt des frischen Werts, die Bedeutung wechselt also still zwischen Schritt- und Abort-Phase (5.4)",F / W,M3 (Gate),definiert,
 SC-34,Statische Prüfung,10,"Dimensionierte Matrizen: Einheitentupel passen (Produkt, Addition, Inverse), Literale bilden ein äußeres Produkt, variable Indizes nur bei gleichen Einheiten (3.11)",F,M3 (Gate),definiert,
 SC-35,Statische Prüfung,10,"`tunable param` nicht in Compile-Zeit-Konstanten (Array-Größen, Kapazitäten, `repeat`) (8.4)",F,M3 (Gate),definiert,
@@ -750,7 +750,7 @@ PAR-13.3-Umgebungsannahmen_assumption,Absatz/Regel,13.3,Umgebungsannahmen (`assu
 PAR-13.3-Kanal_Attribute_gelten_automatisch_als_Annahmen,Absatz/Regel,13.3,Kanal-Attribute gelten automatisch als Annahmen,,M6 (v1.1),offen,
 PAR-13.3-Kompositionalität,Absatz/Regel,13.3,Kompositionalität,,M6 (v1.1),offen,
 PAR-13.5-Lauf_Verdikt,Absatz/Regel,13.5,Lauf-Verdikt,,M4 (Codegen),fertig,
-PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M5 (Embedded),offen,TTL-Adapter (PA9)
+PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M5 (Embedded),offen,TTL-Adapter (PA9) — nur die Messung; Format und Leser stehen
 PAR-13.9-Klassifikation,Absatz/Regel,13.9,Klassifikation,,M7 (Werkzeuge),offen,
 PAR-13.9-Abbildungsregeln,Absatz/Regel,13.9,Abbildungsregeln,,M7 (Werkzeuge),offen,
 PAR-13.9-Grundregel_des_Importers,Absatz/Regel,13.9,Grundregel des Importers,,M7 (Werkzeuge),offen,

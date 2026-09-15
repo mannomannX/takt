@@ -20,6 +20,7 @@ pub mod dump;
 pub mod expr;
 pub mod fns;
 pub mod format;
+pub mod hardware;
 pub mod hash;
 pub mod ids;
 pub mod machine;

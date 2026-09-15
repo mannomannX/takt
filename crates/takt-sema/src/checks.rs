@@ -71,6 +71,8 @@ pub const SC61: &str = "SC-61";
 pub const SC62: &str = "SC-62";
 /// Kostenbudget je Maschine, Schedulability und Stack-Schranke (9.4.3, 7.2).
 pub const SC12: &str = "SC-12";
+/// Schedulability mit Abort-Phase, klassenweise (7.2).
+pub const SC32: &str = "SC-32";
 /// Lints: `alert`-Polaritaet, Profil-Vollstaendigkeit (5.6, 4.6).
 pub const SC63: &str = "SC-63";
 /// Lints zu Matrizen und Stroemen (3.11, 8.6).
@@ -417,8 +419,14 @@ impl Lowerer<'_> {
         // Nur wo jemand ein Budget deklariert hat: Wer keines nennt, hat
         // nichts erwartet, und ein Hinweis auf eine fehlende Pruefung
         // waere dort Rauschen.
-        let spans: Vec<(Span, String)> =
-            self.program.machines.iter().filter_map(|m| m.declared_budget.map(|b| (b.span, m.name.clone()))).collect();
+        // Nur wo ein `wcet` deklariert ist: `ram` prueft SC-62 ohne
+        // Kalibrierung, und ein Hinweis dort waere falsch.
+        let spans: Vec<(Span, String)> = self
+            .program
+            .machines
+            .iter()
+            .filter_map(|m| m.declared_budget.filter(|b| b.wcet_ns.is_some()).map(|b| (b.span, m.name.clone())))
+            .collect();
         for (span, name) in spans {
             self.diags.push(
                 Diagnostic::new(
@@ -428,7 +436,7 @@ impl Lowerer<'_> {
                     format!("`{name}`: Kostenbudget und Schedulability sind noch nicht entscheidbar"),
                 )
                 .with_suggestion(
-                    "Die Umrechnung von Operationen in Zeit braucht die kalibrierte Kostentabelle `c_target`                      (9.4.3, 13.8); `takt cost` zeigt die gerechneten Vektoren schon heute"
+                    "Die Umrechnung von Operationen in Zeit braucht die kalibrierte Kostentabelle `c_target` \n                     (9.4.3, 13.8); `takt cost` zeigt die gerechneten Vektoren schon heute"
                         .to_string(),
                 ),
             );

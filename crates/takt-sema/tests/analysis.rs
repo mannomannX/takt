@@ -652,11 +652,15 @@ machine m:
 /// niemand entscheiden. Bis hierher schwieg die Pruefung darum ganz — und
 /// ein Nutzer konnte nicht unterscheiden, ob sein Budget geprueft wurde
 /// oder ob es die Pruefung gar nicht gibt.
+///
+/// Gemeldet wird nur bei `wcet`: `ram` prueft SC-62 ohne Kalibrierung,
+/// und ein Hinweis dort waere falsch. Liegt eine Kalibrierung vor,
+/// urteilt SC-12 statt zu melden — das prueft `tests/calibrated.rs`.
 #[test]
-fn a_declared_budget_learns_why_it_cannot_be_judged() {
+fn a_declared_wcet_learns_why_it_cannot_be_judged() {
     let (_, _, warnings) = compile(
         "\
-machine m with budget = {ram = 256}:
+machine m with budget = {wcet = 1 ms}:
     initial S
 
     state S:
@@ -670,17 +674,18 @@ machine m with budget = {ram = 256}:
     assert!(hint.contains("c_target"), "die Meldung nennt die fehlende Eingabe: {hint}");
 }
 
-/// Ohne deklariertes Budget schweigt SC-12.
+/// Ohne deklariertes `wcet` schweigt SC-12.
 ///
-/// Wer kein Budget nennt, hat nichts erwartet; ein Hinweis auf eine
-/// fehlende Pruefung waere dort Rauschen. 3.4 haelt dieselbe Regel fuer
-/// die Performance-Lints fest — gewarnt wird, wo jemand eine Zusage
-/// gemacht hat.
+/// Wer keine Rechenzeit nennt, hat nichts erwartet; ein Hinweis auf eine
+/// fehlende Pruefung waere dort Rauschen. Ein `ram`-Budget prueft SC-62
+/// ohne Kalibrierung und braucht den Hinweis darum nicht. 3.4 haelt
+/// dieselbe Regel fuer die Performance-Lints fest — gewarnt wird, wo
+/// jemand eine Zusage gemacht hat.
 #[test]
-fn without_a_declared_budget_check_twelve_stays_quiet() {
+fn without_a_declared_wcet_check_twelve_stays_quiet() {
     let (_, _, warnings) = compile(
         "\
-machine m:
+machine m with budget = {ram = 256}:
     initial S
 
     state S:

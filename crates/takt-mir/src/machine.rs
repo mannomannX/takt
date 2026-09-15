@@ -369,6 +369,11 @@ pub struct Budget {
 pub struct DeclaredBudget {
     /// `ram = …` in Byte.
     pub ram: Option<u64>,
+    /// `wcet = …` in Nanosekunden, je Aktivierung (7.2, 9.4.3).
+    ///
+    /// Geprueft wird erst mit der kalibrierten Kostentabelle (13.8): Ohne
+    /// sie sind `B_m` und `F_m` Operationszahlen, keine Zeiten.
+    pub wcet_ns: Option<i64>,
     /// Position der Deklaration.
     pub span: Span,
 }

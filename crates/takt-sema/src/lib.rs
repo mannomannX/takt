@@ -6,6 +6,7 @@
 //! Fehler auftraten. Jede Diagnose traegt den Code ihrer Pruefung (`SC-n`),
 //! damit Inventur, Tests und Meldungen dieselbe Nummer haben.
 
+pub mod calibrated;
 pub mod checks;
 pub mod collect;
 pub mod edition;

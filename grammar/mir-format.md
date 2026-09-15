@@ -102,7 +102,7 @@ einem Versionssprung eingetragen.
 
 ```
 magic             8 Bytes  "TAKT-MIR"
-format_version    u16 LE   (3)
+format_version    u16 LE   (7)
 edition           u32 LE   (2.5; auch in Config.edition)
 compiler_version  Varint-Länge + UTF-8
 strings           Varint-Anzahl, je String Varint-Länge + UTF-8
@@ -110,7 +110,11 @@ body              Varint-Länge + Bytes eines Wurzelknotens mit Feld 1 = Program
 ```
 
 Versionen: 1 (Freeze), 2 (`ExprKind::Lift`, `Ok`, `Err`, `Intrinsic`; neue Varianten kann ein
-Leser der Version 1 nicht überspringen, daher der Sprung). Ein Leser mit kleinerer
+Leser der Version 1 nicht überspringen, daher der Sprung), 3 bis 6 (weitere Felder und
+Varianten, jeweils überspringbar), 7 (`DeclaredBudget.wcet_ns`, Feld 3 — optional, also für
+ältere Leser überspringbar; die Versionsnummer steigt trotzdem, weil ein Leser wissen muss,
+ob ein fehlendes `wcet` bedeutet „nicht deklariert“ oder „aus einer Datei, die es nicht
+kannte“). Ein Leser mit kleinerer
 `format_version` als die Datei lehnt sie ab (`UnsupportedVersion`);
 alles andere liest er, Unbekanntes überspringend. Der Kopf ist ohne Stringtabelle lesbar
 (`read_header`), damit Werkzeuge Edition und Compiler-Version ohne Vollparse zeigen.

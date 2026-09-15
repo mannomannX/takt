@@ -285,7 +285,7 @@ codec_struct!(Config {
     1 one edition, 2 one tick, 3 one output_timing, 4 one fault_is_fail, 5 one float_width, 6 metaopt tick_source,
     7 opt tick_tolerance, 8 metaopt target,
 });
-codec_struct!(DeclaredBudget { 1 opt ram, 2 meta span });
+codec_struct!(DeclaredBudget { 1 opt ram, 2 meta span, 3 opt wcet_ns });
 codec_struct!(Meta { 1 opt label, 2 opt display, 3 opt group, 4 opt doc });
 codec_unit_enum!(Direction { 0 Input, 1 Output });
 codec_enum!(Binding { 0 Hw(1 one a), 1 Sim(1 one a), 2 None });

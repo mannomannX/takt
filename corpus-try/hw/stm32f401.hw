@@ -1,0 +1,18 @@
+# takt-hw 1
+# Kalibrierung der WeAct Black Pill (STM32F401CCU6, Cortex-M4F).
+#
+# **Diese Zahlen sind geschaetzt, nicht gemessen.** Sie stammen aus den
+# Zyklenangaben des ARMv7E-M-Handbuchs bei 84 MHz (ein Zyklus = 11905 ps)
+# und dienen dazu, die Rechnung zu pruefen, nicht die Hardware. `takt
+# bench` ersetzt sie durch Messwerte, sobald der Rueckkanal steht
+# (FB-91); bis dahin ist jede Aussage daraus eine Ueberschlagsrechnung.
+[target.thumbv7em]
+core_hz = 84000000
+i32 = 11905
+i64 = 35715
+f32 = 11905
+f64 = 1190500
+mem = 23810
+call = 47620
+native = 0
+t_io = 120000
