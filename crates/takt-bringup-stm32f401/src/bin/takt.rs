@@ -81,8 +81,14 @@ const TRACE_EVERY: u64 = {
     // Zeichen je Zeile, grosszuegig: Tickzahl, Name und Wert wachsen.
     const CHARS: u64 = 32;
     const NS_PER_LINE: u64 = CHARS * 10 * 1_000_000_000 / BAUD as u64;
-    // Mit Reserve: Die Leitung soll nicht am Anschlag laufen.
-    if TICK_NS as u64 >= NS_PER_LINE * 2 { 1 } else { 100 }
+    // **Zehn Prozent, nicht fuenfzig.** Eine erste Fassung liess die
+    // Zeile die halbe Periode fuellen und uebersah, dass `write_byte`
+    // blockierend auf `TXE` wartet: Was auf der Leitung steht, steht auch
+    // in der Schleife. Bei 10 ms Tick und 1,74 ms je Zeile hiess das 17
+    // Prozent Auslastung allein fuer die Diagnose — und mit jedem
+    // verpassten Tick mehr. Am Board waren es sechs Sekunden je Zyklus
+    // statt einer.
+    if TICK_NS as u64 >= NS_PER_LINE * 10 { 1 } else { 100 }
 };
 
 /// Der DWT-Stand beim vorigen Interrupt.
@@ -208,6 +214,8 @@ fn main() -> ! {
     let mut program = Generated::init(false);
     let mut next_trace = TRACE_EVERY;
     let mut k: u64 = 0;
+    // Was zuletzt gemeldet wurde: verpasste Ticks, verworfene Bytes.
+    let mut reported = (0u64, 0u32);
 
     loop {
         // **Ueber `Clock::wait_until`, nicht ueber den Timer direkt.**
@@ -230,37 +238,43 @@ fn main() -> ! {
         if k >= next_trace {
             next_trace = k + TRACE_EVERY;
             program.dump();
-            report(&clock);
+            report(&clock, &mut reported);
         }
     }
 }
 
-/// Meldet, was die Schleife nicht geschafft hat.
+/// Meldet, was die Schleife nicht geschafft hat — einmal je Aenderung.
 ///
 /// **Zwei Zaehler, die bisher niemand las.** `TimerClock::missed` haelt
 /// fest, wie oft ein Schritt laenger dauerte als seine Periode (12.3),
-/// `Telemetry::dropped`, wie viele Bytes die Telemetrie verwarf, statt
-/// die Steuerung aufzuhalten (12.2). Beide zaehlten still, und genau
-/// darum blieb eine zu langsame Schleife unbemerkt: Sie sah aus wie eine
-/// falsche Tickperiode.
+/// `Telemetry::dropped`, wie viele Bytes die Telemetrie verwarf, statt die
+/// Steuerung aufzuhalten (12.2). Beide zaehlten still, und darum blieb
+/// eine zu langsame Schleife unbemerkt: Sie sah aus wie eine falsche
+/// Tickperiode.
 ///
-/// Gemeldet wird nur, was ungleich null ist — eine Zeile „0 verpasst" in
-/// jedem Bericht liest nach kurzer Zeit niemand mehr.
-fn report(clock: &takt_rt_baremetal::TimerClock<takt_board_stm32f401::tick::Tim2Tick>) {
+/// **Nur bei Aenderung, und das ist keine Sparsamkeit.** Eine erste
+/// Fassung meldete, solange `missed > 0` — und weil jede Meldung ueber
+/// UART blockiert, verpasste sie dabei weitere Ticks, was die Meldung
+/// wiederholte. Eine Diagnose, die verstaerkt, was sie misst, ist keine:
+/// Am Board wurden aus einer Sekunde je Blinkzyklus sechs.
+fn report(clock: &takt_rt_baremetal::TimerClock<takt_board_stm32f401::tick::Tim2Tick>, last: &mut (u64, u32)) {
     let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
     let missed = clock.missed();
-    if missed > 0 {
+    if missed > last.0 {
+        last.0 = missed;
         uart.write("  verpasste Ticks: ");
         uart.write_u64(missed);
         uart.newline();
     }
     let dropped = uart.dropped();
-    if dropped > 0 {
+    if dropped > last.1 {
+        last.1 = dropped;
         uart.write("  verworfene Bytes: ");
         uart.write_u64(u64::from(dropped));
         uart.newline();
     }
 }
+
 
 /// Was beim Start feststeht.
 fn banner(nominal_ns: i64) {
