@@ -1,8 +1,8 @@
 //! Ein Takt-Programm auf der MCU (M5, 12.1, 12.3).
 //!
-//! **Das erste Programm dieser Reihe, das wirklich Takt ausfuehrt.**
-//! `blink` schaltet einen Pin, `minimal` prueft die Tickquelle — beide
-//! sind Rust. Dieses hier fuehrt den Code aus, den `takt-llvm` aus einer
+//! **Das einzige Programm dieser Reihe, das wirklich Takt ausfuehrt.**
+//! `blink` schaltet einen Pin, `minimal` prueft die Tickquelle, `tick`
+//! misst sie — alle drei sind Rust. Dieses hier fuehrt den Code aus, den `takt-llvm` aus einer
 //! `.takt`-Datei erzeugt hat, unter der Tickschleife aus
 //! `takt-rt-core`.
 //!

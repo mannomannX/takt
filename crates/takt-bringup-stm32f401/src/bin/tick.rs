@@ -1,10 +1,22 @@
-//! Bring-up der Tickquelle auf dem STM32F401 (plan/m5.md, Schritt 4).
+//! Die Tickquelle messen (plan/m5.md, Schritt 4; Vorlaeufer von 13.8).
 //!
 //! **Was dieses Programm beantwortet.** Laeuft der Tick? Mit welcher
 //! Periode? Und stimmt sie mit dem ueberein, was der Compiler annimmt
 //! (7.1: „`tick` bleibt der nominale Wert der Semantik; die gemessene
 //! Periode wird aufgezeichnet")? Das ist die erste Frage, die auf echter
 //! Hardware zu stellen ist — alles Weitere von M5 setzt sie voraus.
+//!
+//! **Wozu es neben `minimal` bleibt.** `minimal` beantwortet eine Frage
+//! mit der LED und kommt ohne UART und DWT aus; dieses Programm misst und
+//! berichtet. Es ist damit der einzige Nutzer von `cycles::measure` —
+//! derselben Messung, aus der `takt bench` die Kostentabelle `c_target`
+//! gewinnt (13.8). Wer sie entfernt, muesste sie fuer die Kalibrierung neu
+//! schreiben.
+//!
+//! Es hiess frueher `main.rs` und sah dadurch aus wie das Hauptprogramm
+//! des Crates. Es ist eines von vier gleichrangigen: `blink` schaltet
+//! einen Pin, `minimal` prueft den Tick, `tick` misst ihn, `takt` fuehrt
+//! ein Takt-Programm aus.
 //!
 //! Es ist **kein Takt-Programm**: Es fuehrt keine Maschine aus, sondern
 //! prueft die Schicht darunter. Der erzeugte Code kommt spaeter, wenn
