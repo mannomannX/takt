@@ -42,7 +42,7 @@ use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
 use takt_board_stm32f401::{Board, CORE_HZ, Generated, Led, Telemetry, cycles, tick};
-use takt_rt_baremetal::TickSource;
+use takt_rt_core::Clock;
 use takt_rt_core::Program;
 
 /// Die Konstanten des uebersetzten Programms (`takt build --emit consts-rs`).
@@ -173,7 +173,7 @@ fn main() -> ! {
     let board = Board::WEACT_BLACKPILL;
     let led = Led::new(dp.GPIOC, &dp.RCC, board);
 
-    let Ok(mut clock) = takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, TICK_NS) else {
+    let Ok(timer) = takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, TICK_NS) else {
         // Ohne Takt keine Telemetrie: Die LED bleibt an.
         led.on();
         loop {
@@ -195,7 +195,11 @@ fn main() -> ! {
     cycles::enable(&mut dcb, &mut dwt);
     unsafe { cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::TIM2) };
 
-    banner(clock.nominal_ns());
+    banner(timer.nominal_ns());
+
+    // Die Tickquelle in die Uhr der Runtime: Sie zaehlt jeden Schritt
+    // einmal und haelt fest, wenn die Schleife nicht mitkam (12.3).
+    let mut clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS);
 
     // Erst hier erreichbar machen: Ein Treiberaufruf vor der Einrichtung
     // schriebe in ein nicht konfiguriertes Register.
@@ -203,10 +207,22 @@ fn main() -> ! {
 
     let mut program = Generated::init(false);
     let mut next_trace = TRACE_EVERY;
+    let mut k: u64 = 0;
 
     loop {
-        clock.wait_for_tick();
-        let k = clock.ticks();
+        // **Ueber `Clock::wait_until`, nicht ueber den Timer direkt.**
+        // Eine erste Fassung rief `wait_for_tick` an der Tickquelle und
+        // rechnete dann mit deren *echter* Tickzahl. Dauert ein Durchlauf
+        // laenger als eine Periode, springt diese Zahl — gerechnet wurde
+        // aber nur ein Schritt, und `after 500 ms` feuerte nach 50
+        // gerechneten Ticks, die laenger als 500 ms gebraucht hatten. Am
+        // Board sah das aus wie eine falsche Periode und war eine
+        // uebersprungene Rechnung.
+        //
+        // `TimerClock` zaehlt jeden Schritt einmal und haelt fest, wenn
+        // die Schleife nicht mitkam (12.3: „→ `Runtime(Overrun)`").
+        clock.wait_until(0);
+        k += 1;
         program.tick(k, k as i64 * TICK_NS);
         // Schritt 10: Der Rahmen gibt den Latch an die Treiber (12.1).
         program.commit();
@@ -214,7 +230,35 @@ fn main() -> ! {
         if k >= next_trace {
             next_trace = k + TRACE_EVERY;
             program.dump();
+            report(&clock);
         }
+    }
+}
+
+/// Meldet, was die Schleife nicht geschafft hat.
+///
+/// **Zwei Zaehler, die bisher niemand las.** `TimerClock::missed` haelt
+/// fest, wie oft ein Schritt laenger dauerte als seine Periode (12.3),
+/// `Telemetry::dropped`, wie viele Bytes die Telemetrie verwarf, statt
+/// die Steuerung aufzuhalten (12.2). Beide zaehlten still, und genau
+/// darum blieb eine zu langsame Schleife unbemerkt: Sie sah aus wie eine
+/// falsche Tickperiode.
+///
+/// Gemeldet wird nur, was ungleich null ist — eine Zeile „0 verpasst" in
+/// jedem Bericht liest nach kurzer Zeit niemand mehr.
+fn report(clock: &takt_rt_baremetal::TimerClock<takt_board_stm32f401::tick::Tim2Tick>) {
+    let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
+    let missed = clock.missed();
+    if missed > 0 {
+        uart.write("  verpasste Ticks: ");
+        uart.write_u64(missed);
+        uart.newline();
+    }
+    let dropped = uart.dropped();
+    if dropped > 0 {
+        uart.write("  verworfene Bytes: ");
+        uart.write_u64(u64::from(dropped));
+        uart.newline();
     }
 }
 
