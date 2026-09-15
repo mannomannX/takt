@@ -499,6 +499,130 @@ fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
 /// sein `enter:` gehoert darum nicht in den Tickschritt, sondern in eine
 /// eigene Funktion, die die Runtime einmal ruft. Stuende es im Schritt,
 /// liefe es in jedem Tick.
+/// `<maschine>_idle(st) -> i1`: Ist die Maschine bereit zu schlafen (9.9)?
+///
+/// Zwei der sechs Konjunkte stehen im Zustandsblock: Das aktive Blatt ist
+/// `idle` (oder liegt unter einem `idle`-Zustand), und `pending` ist leer.
+/// Die uebrigen vier kennt nur der Rahmen.
+pub fn idle_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
+    let leaves = machine::leaves(m);
+    let schlafend: Vec<usize> = leaves
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| machine::path_to(m, **l).iter().any(|id| m.states[id.index()].idle))
+        .map(|(i, _)| i)
+        .collect();
+
+    let mark = module.mark();
+    module.begin(&format!("{}_idle", m.name), &crate::ty::LlvmType::Int(1), &[crate::ty::LlvmType::Ptr]);
+
+    // Ohne `idle`-Zustand schlaeft die Maschine nie.
+    if schlafend.is_empty() {
+        module.end(Some((&crate::ty::LlvmType::Int(1), "0".into())));
+        return Ok(());
+    }
+
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let Some(conf_i) = st.index_of(Role::Conf, 0) else {
+        module.abort(mark);
+        return Err(NotYet { what: "conf im Zustand" });
+    };
+    let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+    let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
+    let cur = module.inst(&format!("load i8, ptr {slot}"));
+
+    let mut acc = None;
+    for i in &schlafend {
+        let eq = module.inst(&format!("icmp eq i8 {cur}, {i}"));
+        acc = Some(match acc {
+            None => eq,
+            Some(a) => module.inst(&format!("or i1 {a}, {eq}")),
+        });
+    }
+    let in_idle = acc.expect("mindestens ein Blatt");
+
+    // `pending`: Feld 0 des Fault-Records ist das Flag.
+    let Some(pending_i) = st.index_of(Role::Pending, 0) else {
+        module.abort(mark);
+        return Err(NotYet { what: "pending im Zustand" });
+    };
+    let pending = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {pending_i}"));
+    let flag = module.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {pending}, i32 0, i32 0"));
+    let raised = module.inst(&format!("load i1, ptr {flag}"));
+    let ruhig = module.inst(&format!("xor i1 {raised}, true"));
+    let out = module.inst(&format!("and i1 {in_idle}, {ruhig}"));
+
+    module.end(Some((&crate::ty::LlvmType::Int(1), out.to_string())));
+    Ok(())
+}
+
+/// `<maschine>_deadline(st) -> i64`: Ticks bis zur naechsten `after`-Frist.
+///
+/// `-1` heisst: keine Frist, es weckt nur ein Ereignis (9.9). Gerechnet
+/// wird in Ticks, weil `t_in_state` sie zaehlt (7.1).
+pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    let leaves = machine::leaves(m);
+    // Je Blatt die kuerzeste `after`-Frist seiner Kette, in Ticks.
+    let fristen: Vec<Option<u64>> = leaves
+        .iter()
+        .map(|l| {
+            machine::path_to(m, *l)
+                .iter()
+                .flat_map(|id| &m.states[id.index()].transitions)
+                .filter_map(|t| match &t.trigger {
+                    TransTrigger::After(e) => match e.kind {
+                        takt_mir::expr::ExprKind::Duration(ns) if ns > 0 => {
+                            Some((ns as u64).div_ceil(p.config.tick.max(1) as u64))
+                        }
+                        _ => None,
+                    },
+                    TransTrigger::When(_) => None,
+                })
+                .min()
+        })
+        .collect();
+
+    let mark = module.mark();
+    module.begin(&format!("{}_deadline", m.name), &crate::ty::LlvmType::Int(64), &[crate::ty::LlvmType::Ptr]);
+
+    if fristen.iter().all(Option::is_none) {
+        module.end(Some((&crate::ty::LlvmType::Int(64), "-1".into())));
+        return Ok(());
+    }
+
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let (Some(conf_i), Some(tis_i)) = (st.index_of(Role::Conf, 0), st.index_of(Role::TimeInState, 0)) else {
+        module.abort(mark);
+        return Err(NotYet { what: "conf oder t_in_state im Zustand" });
+    };
+    let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+    let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
+    let cur = module.inst(&format!("load i8, ptr {slot}"));
+    let tis = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {tis_i}"));
+    let tis0 = module.inst(&format!("getelementptr inbounds [{} x i64], ptr {tis}, i32 0, i32 0", st.depth));
+    let seit = module.inst(&format!("load i64, ptr {tis0}"));
+
+    // Kaskade statt Sprungtabelle: Ein Blatt ohne Frist liefert -1.
+    let mut acc = module.inst("select i1 true, i64 -1, i64 -1");
+    for (i, frist) in fristen.iter().enumerate() {
+        let Some(ticks) = frist else { continue };
+        let rest = module.inst(&format!("sub i64 {ticks}, {seit}"));
+        let positiv = module.inst(&format!("icmp sgt i64 {rest}, 0"));
+        let wert = module.inst(&format!("select i1 {positiv}, i64 {rest}, i64 0"));
+        let ist = module.inst(&format!("icmp eq i8 {cur}, {i}"));
+        acc = module.inst(&format!("select i1 {ist}, i64 {wert}, i64 {acc}"));
+    }
+
+    module.end(Some((&crate::ty::LlvmType::Int(64), acc.to_string())));
+    Ok(())
+}
+
+/// Schreibt die Eintrittsfunktion einer Maschine (9.4).
+///
+/// 9.4: Der Anfangszustand wird betreten, *bevor* der erste Tick laeuft —
+/// sein `enter:` gehoert darum nicht in den Tickschritt, sondern in eine
+/// eigene Funktion, die die Runtime einmal ruft. Stuende es im Schritt,
+/// liefe es in jedem Tick.
 pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     let leaves = machine::leaves(m);
     // 5.2: Auch der Anfangszustand kann zusammengesetzt sein; betreten

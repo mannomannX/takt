@@ -91,6 +91,8 @@ pub fn program(p: &Program, triple: &str, module_name: &str) -> Lowered {
         };
         crate::machine::declare_state(machine, &st, &mut m);
         let _ = crate::step::init_function(machine, &st, p, &mut m);
+        let _ = crate::step::idle_function(machine, &st, &mut m);
+        let _ = crate::step::deadline_function(machine, &st, p, &mut m);
         if let Err(e) = crate::step::step_function(machine, &st, p, &mut m) {
             skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.to_string() });
         }

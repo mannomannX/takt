@@ -166,6 +166,8 @@ fn declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
     for m in driven {
         let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);
+        let _ = writeln!(s, "long long {}_deadline(void *st);", m.name);
     }
     let _ = writeln!(s);
 }
@@ -218,6 +220,40 @@ fn tick(s: &mut String, _p: &Program, driven: &[&takt_mir::machine::Machine]) {
             let _ = writeln!(s, "    {0}_step(state_{0}, image, params, latch);", m.name);
         }
     }
+    let _ = writeln!(s, "}}\n");
+
+    sleep(s, driven);
+}
+
+/// `takt_mcu_idle` und `takt_mcu_deadline`: darf geschlafen werden (9.9)?
+///
+/// 9.9 nennt sechs Konjunkte. Vier beantwortet der erzeugte Code je
+/// Maschine (`idle`-Zustand, kein `pending`), die anderen beiden sind auf
+/// der MCU trivial: Der Rahmen kennt keine geplanten Ausgaben und keine
+/// Jobs. Die Wake-Fenster prueft das Board, das die Treiber besitzt.
+fn sleep(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
+    let _ = writeln!(s, "/* Systemschlaf (9.9). */");
+    let _ = writeln!(s, "_Bool takt_mcu_idle(void) {{");
+    if driven.is_empty() {
+        let _ = writeln!(s, "    return 0;");
+    } else {
+        for m in driven {
+            let _ = writeln!(s, "    if (!{0}_idle(state_{0})) return 0;", m.name);
+        }
+        let _ = writeln!(s, "    return 1;");
+    }
+    let _ = writeln!(s, "}}\n");
+
+    // Die frueheste Frist ueber alle Maschinen; -1 heisst „keine".
+    let _ = writeln!(s, "long long takt_mcu_deadline(void) {{");
+    let _ = writeln!(s, "    long long best = -1;");
+    for m in driven {
+        let _ = writeln!(s, "    {{");
+        let _ = writeln!(s, "        long long d = {0}_deadline(state_{0});", m.name);
+        let _ = writeln!(s, "        if (d >= 0 && (best < 0 || d < best)) best = d;");
+        let _ = writeln!(s, "    }}");
+    }
+    let _ = writeln!(s, "    return best;");
     let _ = writeln!(s, "}}\n");
 }
 

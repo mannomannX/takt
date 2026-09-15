@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+input  wake     : bool @ hw("gpio/btn")  with wake = true
+output wake_sim : bool @ sim("gpio/btn") with safe = false
+output led      : bool @ hw("ui/led")    with safe = false
+
+machine m:
+    initial SLEEP
+
+    state SLEEP idle:
+        enter:
+            led = false
+        when wake: -> RUN
+        after 500 ms: -> RUN
+
+    state RUN:
+        enter:
+            led = true
+        after 200 ms: -> SLEEP

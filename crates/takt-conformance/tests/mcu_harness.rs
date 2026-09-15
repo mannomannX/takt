@@ -316,3 +316,53 @@ fn every_observation_line_carries_its_tick() {
         assert!(davor.contains("takt_board_trace_i64(g_tick)"), "`{kind}` ohne Tickzahl:\n{davor}");
     }
 }
+
+/// **Der Rahmen beantwortet die Schlafbedingung** (9.9).
+///
+/// 9.9 nennt sechs Konjunkte. Vier liefert der erzeugte Code je Maschine,
+/// die anderen beiden — geplante Ausgaben und Jobs — kennt der MCU-Rahmen
+/// nicht; sie sind dort trivial wahr.
+#[test]
+fn the_harness_answers_the_sleep_condition() {
+    let p = corpus("29_heartbeat.takt");
+    let src = takt_conformance::mcu::build(&p).source;
+    assert!(src.contains("_Bool takt_mcu_idle(void)"), "die Bedingung hat einen Namen:\n{src}");
+    assert!(src.contains("long long takt_mcu_deadline(void)"), "und die Frist auch");
+    // Alle Maschinen muessen zustimmen: ein `return 0` je Maschine.
+    assert!(src.contains("if (!heartbeat_idle(state_heartbeat)) return 0;"), "je Maschine eine Abfrage:\n{src}");
+}
+
+/// Ohne `idle`-Zustand schlaeft eine Maschine nie.
+///
+/// Der Codegen schreibt dann `ret i1 0`, und der Optimierer entfernt den
+/// Aufruf — ein Programm, das nicht schlafen kann, zahlt nichts dafuer.
+#[test]
+fn a_machine_without_idle_never_sleeps() {
+    let p = corpus("29_heartbeat.takt");
+    let ir = common::ir_for(&p, Target::THUMBV7EM.triple);
+    let at = ir.find("define i1 @heartbeat_idle").expect("die Funktion wird erzeugt");
+    let body = &ir[at..at + 120];
+    assert!(body.contains("ret i1 0"), "ohne `idle` konstant falsch:\n{body}");
+}
+
+/// **Ein `idle`-Zustand schlaeft, und die Frist stimmt** (9.9).
+///
+/// Die beiden Funktionen zusammen sind die Antwort auf `sleep_allowed`
+/// und `next_deadline`: Ist das aktive Blatt `idle` und kein Fault
+/// vorgemerkt, darf die Schleife bis zur `after`-Frist ueberspringen.
+#[test]
+fn an_idle_state_reports_its_deadline() {
+    let p = corpus("30_idle.takt");
+    let ir = common::ir_for(&p, Target::THUMBV7EM.triple);
+
+    let at = ir.find("define i1 @m_idle").expect("Schlafabfrage");
+    let idle = &ir[at..ir[at..].find("\n}").map_or(ir.len(), |e| at + e)];
+    assert!(idle.contains("icmp eq i8"), "das aktive Blatt wird geprueft:\n{idle}");
+    assert!(idle.contains("xor i1"), "und `pending` negiert");
+
+    let at = ir.find("define i64 @m_deadline").expect("Fristabfrage");
+    let dl = &ir[at..ir[at..].find("\n}").map_or(ir.len(), |e| at + e)];
+    // `after 500 ms` bei 10 ms Tick sind 50 Ticks, `after 200 ms` 20.
+    assert!(dl.contains("sub i64 50,"), "die Frist steht in Ticks:\n{dl}");
+    assert!(dl.contains("sub i64 20,"), "je Blatt die eigene");
+}

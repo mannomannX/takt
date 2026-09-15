@@ -45,6 +45,12 @@ unsafe extern "C" {
     /// Ruft je gebundenem Ausgang `takt_out_<adresse>` — die Funktionen,
     /// die das Board stellt.
     fn takt_mcu_commit();
+
+    /// Sind alle Maschinen in `idle` und ohne vorgemerkten Fault (9.9)?
+    fn takt_mcu_idle() -> bool;
+
+    /// Ticks bis zur fruehesten `after`-Frist; `-1` heisst keine.
+    fn takt_mcu_deadline() -> i64;
 }
 
 /// Das erzeugte Programm als [`Program`] der Tickschleife.
@@ -119,6 +125,18 @@ impl Generated {
 }
 
 impl Program for Generated {
+    /// 9.9: Vier der sechs Konjunkte beantwortet der erzeugte Code. Die
+    /// geplanten Ausgaben und Jobs kennt der MCU-Rahmen nicht, und die
+    /// Wake-Fenster haetten nur Stroeme — beides gibt es dort noch nicht.
+    fn sleep_allowed(&self) -> bool {
+        unsafe { takt_mcu_idle() }
+    }
+
+    fn next_deadline(&self) -> Option<i64> {
+        let ticks = unsafe { takt_mcu_deadline() };
+        (ticks >= 0).then_some(ticks)
+    }
+
     fn tick(&mut self, k: u64, _now: i64) {
         // `now` kommt vom Rahmen, nicht von der Schleife: Er rechnet es
         // aus `k` und der nominalen Periode, die im erzeugten Code steht.
