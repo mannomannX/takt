@@ -193,10 +193,10 @@ fn the_generated_matcher_agrees_with_takt_match() {
 
     // Dasselbe durch `takt-match`, das Orakel.
     let expected = oracle(&pattern_of);
-    let ist: Vec<&str> = nativ.lines().filter(|l| !l.is_empty()).collect();
-    assert_eq!(ist.len(), expected.len(), "verschieden viele Zeilen");
+    let actual: Vec<&str> = nativ.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(actual.len(), expected.len(), "verschieden viele Zeilen");
     let mut differences = Vec::new();
-    for (i, (a, b)) in ist.iter().zip(expected.iter()).enumerate() {
+    for (i, (a, b)) in actual.iter().zip(expected.iter()).enumerate() {
         if a != b {
             let m = &pattern_of[i / TEXTS.len()];
             let t = TEXTS[i % TEXTS.len()];

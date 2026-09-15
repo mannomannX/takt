@@ -1,0 +1,17 @@
+(system
+  (language 1)
+  (tick 10ms))
+(input boot_reason :BootReason @hw("sys/boot_reason"))
+(output boot_sim :BootReason @sim("sys/boot_reason"))
+(output reboot :RebootCmd @hw("sys/reboot") safe=NONE)
+(output led :bool @hw("ui/led") safe=false)
+(machine m
+  (initial RUN)
+  (state RUN
+    (enter
+      (= led true))
+    (after 50ms -> OFF))
+  (state OFF
+    (enter
+      (= led false)
+      (= reboot DEEP_SLEEP))))

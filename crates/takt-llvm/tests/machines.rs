@@ -964,9 +964,9 @@ fn interp_keeps_the_operation_order_of_the_interpreter() {
     let p = corpus("02_units_and_data.takt");
     let ir = ir_of(&p);
     let at = ir.find("fdiv").expect("Division");
-    let vorher = &ir[..at];
+    let before = &ir[..at];
     assert!(
-        vorher.contains("fmul"),
+        before.contains("fmul"),
         "die Multiplikation steht nicht vor der Division:
 {ir}"
     );

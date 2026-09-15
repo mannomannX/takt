@@ -123,10 +123,10 @@ fn the_overflow_boundary_agrees() {
         let interp = match_text(&p, text);
         let eigen = takt_match::matches(&mp, text.as_bytes())
             .and_then(|m| takt_match::parse_int(m.spans[0].of(text.as_bytes())));
-        let interp_wert = interp.and_then(|c| match c.first() {
+        let interp_value = interp.and_then(|c| match c.first() {
             Some(Value::Int(i)) => Some(*i),
             _ => None,
         });
-        assert_eq!(interp_wert, eigen, "`{text}`: die Grenze weicht ab");
+        assert_eq!(interp_value, eigen, "`{text}`: die Grenze weicht ab");
     }
 }

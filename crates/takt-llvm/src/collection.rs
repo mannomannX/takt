@@ -54,7 +54,7 @@ pub fn layout_of(ty: &LlvmType) -> Option<Layout> {
 /// dem Sprung, damit der haeufige Weg (Platz vorhanden) der gerade ist.
 pub fn push(recv: Reg, l: &Layout, value: &Lowered, label: u32, m: &mut Module) -> Reg {
     let ty = &l.ty;
-    let vorher = m.block().to_string();
+    let before = m.block().to_string();
     let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {recv}, i32 0, i32 0"));
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
     let fits = m.inst(&format!("icmp ult i32 {len}, {}", l.cap));
@@ -70,13 +70,13 @@ pub fn push(recv: Reg, l: &Layout, value: &Lowered, label: u32, m: &mut Module) 
     m.label(&done);
     // `phi` statt eines Zwischenspeichers: Der Wert steht in den beiden
     // Vorgaengerbloecken fest, und LLVM erwartet ihn in dieser Form.
-    m.inst(&format!("phi i1 [ true, %{write} ], [ false, %{vorher} ]"))
+    m.inst(&format!("phi i1 [ true, %{write} ], [ false, %{before} ]"))
 }
 
 /// `c.append(src)` (3.9): haengt eine ganze Folge an, oder nichts.
 pub fn append(recv: Reg, src: Reg, l: &Layout, label: u32, m: &mut Module) -> Reg {
     let ty = &l.ty;
-    let vorher = m.block().to_string();
+    let before = m.block().to_string();
     let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {recv}, i32 0, i32 0"));
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
     let src_len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {src}, i32 0, i32 0"));
@@ -95,7 +95,7 @@ pub fn append(recv: Reg, src: Reg, l: &Layout, label: u32, m: &mut Module) -> Re
     m.void_inst(&format!("store i32 {sum}, ptr {len_ptr}"));
     m.void_inst(&format!("br label %{done}"));
     m.label(&done);
-    m.inst(&format!("phi i1 [ true, %{write} ], [ false, %{vorher} ]"))
+    m.inst(&format!("phi i1 [ true, %{write} ], [ false, %{before} ]"))
 }
 
 /// `c.clear()` (3.9): setzt die Laenge auf null.

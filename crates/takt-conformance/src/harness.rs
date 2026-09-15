@@ -206,19 +206,19 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
         if ticks_of.is_empty() {
             continue;
         }
-        let bedingung = ticks_of.iter().map(|t| format!("g_tick == {t}")).collect::<Vec<_>>().join(" || ");
-        let _ = writeln!(s, "        image[{slot}] = ({bedingung}) ? 1 : 0; /* {name} */");
+        let condition = ticks_of.iter().map(|t| format!("g_tick == {t}")).collect::<Vec<_>>().join(" || ");
+        let _ = writeln!(s, "        image[{slot}] = ({condition}) ? 1 : 0; /* {name} */");
     }
     // 7.2: Eine Maschine laeuft in jedem `period`-ten Tick. Ohne die
     // Bedingung liefe ein `every 50 ms`-Modell bei 10 ms Tick fuenfmal
     // zu oft, und sein Wert stuende im Trace an der falschen Stelle.
     for m in &driven {
-        let bedingung = match (m.period.max(1), m.phase) {
+        let condition = match (m.period.max(1), m.phase) {
             (1, _) => String::new(),
             (per, 0) => format!("if (g_tick % {per} == 0) "),
             (per, ph) => format!("if (g_tick % {per} == {ph}) "),
         };
-        let _ = writeln!(s, "        {bedingung}{0}_step(state_{0}, image, params, latch);", m.name);
+        let _ = writeln!(s, "        {condition}{0}_step(state_{0}, image, params, latch);", m.name);
     }
     // 8.3: Was ein Modell in diesem Tick auf einen `sim`-Output gestellt
     // hat, liest das Programm im naechsten — Unit-Delay wie bei Ψ.
@@ -228,7 +228,21 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // Zeile einen Tick spaeter als beim Interpreter.
     let _ = writeln!(s, "        takt_tx_commit(g_tick);");
     let _ = writeln!(s, "        dump(g_tick);");
+    // 12.7: `reboot` beendet den Lauf, danach stehen die Outputs auf `safe`.
+    if let Some(RebootSlot { slot, ct, commands }) = reboot_slot(p, &layout) {
+        let _ = writeln!(s, "        switch (*({ct} *)(latch + {})) {{", slot.offset);
+        for (d, name) in commands {
+            let _ = writeln!(s, "        case {d}: printf(\"t=%lld reboot {name}\\n\", g_tick); goto ende;");
+        }
+        let _ = writeln!(s, "        default: break;");
+        let _ = writeln!(s, "        }}");
+    }
     let _ = writeln!(s, "    }}");
+    if reboot_slot(p, &layout).is_some() {
+        let _ = writeln!(s, "ende:");
+        safe_outputs(&mut s, p, &layout);
+        let _ = writeln!(s, "    dump(g_tick);");
+    }
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
 
@@ -292,7 +306,7 @@ fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout) {
         let Some(i) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
         let Some(safe) = &p.channels[i].attrs.safe else { continue };
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let Some(text) = literal(safe) else { continue };
+        let Some(text) = literal(p, safe) else { continue };
         let _ = writeln!(s, "    *({ct} *)(latch + {}) = {text}; /* {} auf safe (5.3) */", slot.offset, slot.name);
     }
 }
@@ -421,16 +435,21 @@ fn sim_bindings(s: &mut String, p: &Program, indent: &str) {
 }
 
 pub(crate) fn param_literal(p: &Program, index: usize) -> Option<String> {
-    literal(&p.params.get(index)?.default)
+    literal(p, &p.params.get(index)?.default)
 }
 
 /// Ein Literal als C-Text; alles andere braeuchte den Interpreter.
-fn literal(e: &takt_mir::expr::Expr) -> Option<String> {
+fn literal(p: &Program, e: &takt_mir::expr::Expr) -> Option<String> {
     match &e.kind {
         takt_mir::expr::ExprKind::Int(n) => Some(n.to_string()),
         takt_mir::expr::ExprKind::Duration(d) => Some(d.to_string()),
         takt_mir::expr::ExprKind::Bool(b) => Some(u8::from(*b).to_string()),
         takt_mir::expr::ExprKind::Float(f) => Some(format!("{f:?}")),
+        // Eine feldlose Variante ist ihre Diskriminante — die kann
+        // explizit gesetzt sein und von der Nummer abweichen.
+        takt_mir::expr::ExprKind::Variant { enum_id, variant, fields } if fields.is_empty() => {
+            Some(p.enums.get(enum_id.index())?.variants.get(*variant as usize)?.discriminant.to_string())
+        }
         _ => None,
     }
 }
@@ -451,4 +470,44 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
     let takt_mir::types::Type::Enum(e) = p.types.list.get(c.ty.index())? else { return None };
     let def = p.enums.get(e.index())?;
     Some(def.variants.iter().map(|v| (v.discriminant, v.name.clone())).collect())
+}
+
+/// Wo `sys/reboot` im Latch steht und welche Kommandos es kennt.
+struct RebootSlot<'a> {
+    slot: &'a crate::layout::Slot,
+    ct: &'static str,
+    commands: Vec<(i64, &'static str)>,
+}
+
+/// Der Latch-Platz von `sys/reboot` mit seinen Kommandos (12.7).
+///
+/// `RESTART` und `DEEP_SLEEP` beenden den Lauf; die Namen stehen klein im
+/// Trace, wie der Interpreter sie schreibt.
+fn reboot_slot<'a>(p: &Program, layout: &'a Layout) -> Option<RebootSlot<'a>> {
+    let slot = layout.outputs.iter().find(|s| {
+        p.channels.iter().any(|c| {
+            c.name == s.name && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/reboot")
+        })
+    })?;
+    let ct = c_type(&slot.ty, slot.signed)?;
+    // 12.7: `RebootCmd` ist vordefiniert; ein fremdes Enum an derselben
+    // Adresse ist kein Kommando. Derselbe Test wie im Interpreter.
+    let takt_mir::types::Type::Enum(e) =
+        p.types.list.get(p.channels.iter().find(|c| c.name == slot.name)?.ty.index())?
+    else {
+        return None;
+    };
+    if p.enums.get(e.index())?.name != "RebootCmd" {
+        return None;
+    }
+    let variants = enum_variants(p, &slot.name)?;
+    let commands: Vec<(i64, &'static str)> = variants
+        .iter()
+        .filter_map(|(d, name)| match name.as_str() {
+            "RESTART" => Some((*d, "restart")),
+            "DEEP_SLEEP" => Some((*d, "deep_sleep")),
+            _ => None,
+        })
+        .collect();
+    (!commands.is_empty()).then_some(RebootSlot { slot, ct, commands })
 }

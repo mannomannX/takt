@@ -138,7 +138,7 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
         }
     }
 
-    /// `dropped[s, m]`: was diese Maschine im Schlaf verpasst hat (5.10).
+    /// `dropped[s, m]`: was diese Maschine im Schlaf missed hat (5.10).
     pub fn dropped_of(&self, loaded: &Loaded<'_>, stream: StreamRef) -> u32 {
         let m = &loaded.program.machines[self.id.index()];
         match m.layout.cursors.iter().position(|r| *r == stream) {
@@ -512,6 +512,15 @@ fn runnable(p: &Program) -> Vec<MachineId> {
 }
 
 impl<'p> Sim<'p> {
+    /// Setzt alle Outputs auf ihren `safe`-Wert (12.7).
+    ///
+    /// Vor `reboot` und Deep Sleep verlangt 12.7 genau das — die Anlage
+    /// bleibt in dem Zustand stehen, den sie ohne Programm haette.
+    pub fn safe_all(&mut self) -> Result<(), Trap> {
+        self.image.outputs = eval_safe_outputs(&self.loaded, &self.image.params)?;
+        Ok(())
+    }
+
     /// Neuer Lauf: Outputs auf `safe`, Parameter aus Defaults und Profil.
     pub fn new(program: &'p Program, profile: Option<&str>) -> Result<Sim<'p>, Trap> {
         let loaded = Loaded::load(program).map_err(|d| Trap::Bug(format!("{d}")))?;
@@ -683,16 +692,16 @@ impl<'p> Sim<'p> {
                 .collect();
             let state = &mut self.states[id.index()];
             // 5.10: Der Alert kommt beim *Verlassen* — wer aufwacht, soll
-            // erfahren, was er verpasst hat.
-            let aufgewacht = state.was_idle && !idle;
+            // erfahren, was er missed hat.
+            let woke_up = state.was_idle && !idle;
             state.was_idle = idle;
-            let mut verpasst = 0u32;
+            let mut missed = 0u32;
             for (i, _) in m.layout.cursors.iter().enumerate() {
                 let examined = state.examined.get(i).copied().unwrap_or(-1);
                 if let Some(end) = ends[i] {
-                    let vorher = state.cursors.get(i).copied().unwrap_or(0);
+                    let before = state.cursors.get(i).copied().unwrap_or(0);
                     if let Some(d) = state.dropped.get_mut(i) {
-                        *d = d.saturating_add(u32::try_from(end - vorher).unwrap_or(u32::MAX));
+                        *d = d.saturating_add(u32::try_from(end - before).unwrap_or(u32::MAX));
                     }
                     if let Some(c) = state.cursors.get_mut(i) {
                         *c = end;
@@ -706,10 +715,10 @@ impl<'p> Sim<'p> {
                     *e = -1;
                 }
             }
-            if aufgewacht {
-                verpasst = state.dropped.iter().copied().fold(0u32, u32::saturating_add);
+            if woke_up {
+                missed = state.dropped.iter().copied().fold(0u32, u32::saturating_add);
             }
-            if aufgewacht && verpasst > 0 {
+            if woke_up && missed > 0 {
                 let span = m.states.first().map_or_else(takt_diag::Span::default, |s| s.span);
                 self.observations.push((
                     id,
@@ -717,7 +726,7 @@ impl<'p> Sim<'p> {
                         span,
                         index: Vec::new(),
                         active: true,
-                        message: format!("StreamPaused: {verpasst} Elemente im Schlaf verworfen"),
+                        message: format!("StreamPaused: {missed} Elemente im Schlaf verworfen"),
                         invalid: false,
                     },
                 ));

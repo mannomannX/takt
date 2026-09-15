@@ -287,9 +287,9 @@ fn the_harness_does_no_floating_point_arithmetic() {
         let p = corpus(name);
         let src = takt_conformance::mcu::build(&p).source;
         for line in src.lines() {
-            let rechnung = line.contains(" * ") || line.contains(" / ") || line.contains(" + ");
+            let computation = line.contains(" * ") || line.contains(" / ") || line.contains(" + ");
             assert!(
-                !(rechnung && (line.contains("double") || line.contains(".0"))),
+                !(computation && (line.contains("double") || line.contains(".0"))),
                 "{name}: Fliesskomma-Rechnung im Rahmen: {line}"
             );
         }

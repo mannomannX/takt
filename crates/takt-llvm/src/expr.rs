@@ -639,7 +639,7 @@ fn runtime_check(
     vars: &dyn Vars,
 ) -> Result<(), NotYet> {
     use takt_mir::expr::CheckedKind as K;
-    let bedingung = match kind {
+    let condition = match kind {
         // Die Range steht am Knoten; beide Grenzen einschliesslich (3.4).
         K::Range(r) => match &value.ty {
             LlvmType::Int(bits) => {
@@ -704,7 +704,7 @@ fn runtime_check(
         return Err(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" });
     };
     let go_on = format!("geprueft_{}_{}", kind_name(kind), m.next_label());
-    m.void_inst(&format!("br i1 {bedingung}, label %{go_on}, label %{target}"));
+    m.void_inst(&format!("br i1 {condition}, label %{go_on}, label %{target}"));
     m.label(&go_on);
     Ok(())
 }

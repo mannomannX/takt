@@ -55,6 +55,32 @@ pub struct RunResult {
     pub trace: Trace,
     /// Lauf-Verdikt (13.5).
     pub verdict: Verdict,
+    /// Warum der Lauf endete (12.7).
+    pub ended: Ended,
+}
+
+/// Warum ein Lauf endete (12.7).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Ended {
+    /// Die gewuenschte Tickzahl ist erreicht.
+    #[default]
+    Ticks,
+    /// `reboot = RESTART`: Neustart nach dem Commit.
+    Restart,
+    /// `reboot = DEEP_SLEEP`: kein virtueller Tick; der naechste Lauf
+    /// beginnt mit `boot_reason = DEEP_SLEEP_WAKE`.
+    DeepSleep,
+}
+
+impl Ended {
+    /// Der Name fuer den Trace.
+    pub fn name(self) -> &'static str {
+        match self {
+            Ended::Ticks => "ticks",
+            Ended::Restart => "restart",
+            Ended::DeepSleep => "deep_sleep",
+        }
+    }
 }
 
 /// Fuehrt ein Programm mit einem Stimulus aus.
@@ -73,18 +99,64 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
     collect(&mut writer, &sim, 0, &mut verdict, &mut fail);
     writer.initial(&sim);
 
+    // Auch der Anfangszustand kann das Kommando setzen (12.7).
+    let mut ended = reboot_of(&sim).unwrap_or(Ended::Ticks);
+    let mut last = 0;
+    if ended != Ended::Ticks {
+        writer.lines.push(TraceLine { tick: 0, kind: LineKind::Reboot { reason: ended.name().to_string() } });
+        sim.safe_all()?;
+        writer.changes(&sim, 0);
+    }
     for tick in 1..=options.ticks {
+        if ended != Ended::Ticks {
+            break;
+        }
         sim.age();
         apply_stimulus(&mut sim, stimulus, tick)?;
         sim.step()?;
         collect(&mut writer, &sim, tick, &mut verdict, &mut fail);
         writer.changes(&sim, tick);
+        last = tick;
+        // 12.7: nach dem Commit, wenn alle Outputs stehen.
+        if let Some(e) = reboot_of(&sim) {
+            ended = e;
+            writer.lines.push(TraceLine { tick, kind: LineKind::Reboot { reason: e.name().to_string() } });
+            // Die Zeile markiert die Entscheidung, das `safe` danach die
+            // Ausfuehrung (12.7) — so liest der Trace sich von oben nach
+            // unten wie der Ablauf.
+            sim.safe_all()?;
+            writer.changes(&sim, tick);
+            break;
+        }
     }
     let final_verdict = if fail { Verdict::Fail } else { verdict };
-    writer
-        .lines
-        .push(TraceLine { tick: options.ticks, kind: LineKind::Final { verdict: final_verdict.name().to_string() } });
-    Ok(RunResult { trace: Trace { lines: writer.lines }, verdict: final_verdict })
+    let at = if ended == Ended::Ticks { options.ticks } else { last };
+    writer.lines.push(TraceLine { tick: at, kind: LineKind::Final { verdict: final_verdict.name().to_string() } });
+    Ok(RunResult { trace: Trace { lines: writer.lines }, verdict: final_verdict, ended })
+}
+
+/// Steht auf `sys/reboot` ein Kommando (12.7)?
+fn reboot_of(sim: &Sim<'_>) -> Option<Ended> {
+    let program = sim.loaded.program;
+    // Nur `hw`: Ein `sim`-Output speist den gleichnamigen `hw`-Input (8.3),
+    // und `sys/reboot` hat keinen — die Plattform fuehrt das Kommando aus.
+    let (i, c) = program.channels.iter().enumerate().find(|(_, c)| {
+        c.dir == Direction::Output
+            && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/reboot")
+    })?;
+    let takt_mir::types::Type::Enum(e) = program.types.list.get(c.ty.index())? else { return None };
+    let def = program.enums.get(e.index())?;
+    // 12.7: `RebootCmd` ist vordefiniert. Ein fremdes Enum mit einer
+    // zufaellig `RESTART` heissenden Variante ist kein Reboot-Kommando.
+    if def.name != "RebootCmd" {
+        return None;
+    }
+    let Value::Enum { variant, .. } = sim.image.outputs.get(i)? else { return None };
+    match def.variants.get(*variant as usize)?.name.as_str() {
+        "RESTART" => Some(Ended::Restart),
+        "DEEP_SLEEP" => Some(Ended::DeepSleep),
+        _ => None,
+    }
 }
 
 /// Speist die Stimuluszeilen eines Ticks ein.

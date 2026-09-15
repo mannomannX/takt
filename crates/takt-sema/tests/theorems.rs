@@ -466,3 +466,196 @@ machine m:
     assert!(alert.starts_with("t=20 "), "beim Verlassen, nicht waehrend des Schlafs: {alert}");
     assert!(!text.contains("STREAM_OVERFLOW"), "im Schlaf gibt es keinen Ueberlauf-Fault (9.6):\n{text}");
 }
+
+/// **`reboot = DEEP_SLEEP` beendet den Lauf** (12.7).
+///
+/// Anders als `idle` gibt es keinen virtuellen Tick: Satz 9.9.1 gilt nur
+/// fuer RAM-erhaltenden Schlaf.
+#[test]
+fn deep_sleep_ends_the_run() {
+    let p = compile(
+        "\
+output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
+output led    : bool      @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            led = true
+        after 5 ms: -> OFF
+    state OFF:
+        enter:
+            reboot = DEEP_SLEEP
+",
+    );
+    let out = run(&p, &Trace::default(), &RunOptions { ticks: 50, profile: None, order_seed: None }).expect("Lauf");
+    assert_eq!(out.ended, takt_interp::Ended::DeepSleep);
+    let text = out.trace.render();
+    assert!(text.contains("t=5 reboot deep_sleep"), "der Grund steht im Trace:\n{text}");
+    assert!(!text.contains("t=6 "), "nach dem Kommando laeuft nichts mehr:\n{text}");
+}
+
+/// `reboot = RESTART` endet ebenso, mit anderem Grund (12.7).
+#[test]
+fn restart_ends_the_run_with_its_own_reason() {
+    let p = compile(
+        "\
+output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
+
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            reboot = RESTART
+",
+    );
+    let out = run(&p, &Trace::default(), &RunOptions { ticks: 20, profile: None, order_seed: None }).expect("Lauf");
+    assert_eq!(out.ended, takt_interp::Ended::Restart);
+}
+
+/// Ohne Kommando laeuft der Lauf bis zur Tickzahl.
+#[test]
+fn without_a_reboot_command_the_run_uses_all_ticks() {
+    let p = compile(
+        "\
+output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
+output led    : bool      @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            led = true
+",
+    );
+    let out = run(&p, &Trace::default(), &RunOptions { ticks: 7, profile: None, order_seed: None }).expect("Lauf");
+    assert_eq!(out.ended, takt_interp::Ended::Ticks);
+    assert!(out.trace.render().contains("t=7 verdict-final"), "{}", out.trace.render());
+}
+
+/// **`boot_reason` schliesst den Kreis** (12.7).
+///
+/// Der naechste Lauf beginnt mit `DEEP_SLEEP_WAKE`; das Programm sieht
+/// es wie jeden anderen Input.
+#[test]
+fn a_woken_run_sees_its_boot_reason() {
+    let src = "\
+input  boot_reason : BootReason @ hw(\"sys/boot_reason\")
+output woke        : bool       @ hw(\"ui/woke\") with safe = false
+
+machine m:
+    initial START
+    state START:
+        enter:
+            woke = boot_reason == DEEP_SLEEP_WAKE
+";
+    let p = compile(src);
+    let kalt = run(&p, &Trace::default(), &RunOptions { ticks: 2, profile: None, order_seed: None }).expect("Lauf");
+    assert!(kalt.trace.render().contains("out woke false"), "{}", kalt.trace.render());
+
+    let stim = Trace::parse("t=0 in boot_reason DEEP_SLEEP_WAKE\n").expect("Stimulus");
+    let warm = run(&p, &stim, &RunOptions { ticks: 2, profile: None, order_seed: None }).expect("Lauf");
+    assert!(warm.trace.render().contains("out woke true"), "{}", warm.trace.render());
+}
+
+/// **Auch der Anfangszustand kann das Kommando setzen** (12.7).
+///
+/// `init` laeuft vor der Tickschleife; wer das uebersieht, laesst einen
+/// Tick laufen, den es nicht geben duerfte.
+#[test]
+fn a_reboot_in_the_initial_state_ends_the_run_at_once() {
+    let p = compile(
+        "\
+output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
+output led    : bool      @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial OFF
+    state OFF:
+        enter:
+            reboot = DEEP_SLEEP
+            led = true
+",
+    );
+    let out = run(&p, &Trace::default(), &RunOptions { ticks: 8, profile: None, order_seed: None }).expect("Lauf");
+    assert_eq!(out.ended, takt_interp::Ended::DeepSleep);
+    let text = out.trace.render();
+    assert!(text.contains("t=0 reboot deep_sleep"), "bei Tick 0, nicht spaeter:\n{text}");
+    assert!(!text.contains("t=1 "), "kein Tick nach dem Kommando:\n{text}");
+}
+
+/// **Danach stehen alle Outputs auf `safe`** (12.7).
+#[test]
+fn a_reboot_leaves_the_outputs_safe() {
+    let p = compile(
+        "\
+output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
+output led    : bool      @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            led = true
+        after 5 ms: -> OFF
+    state OFF:
+        enter:
+            reboot = DEEP_SLEEP
+",
+    );
+    let out = run(&p, &Trace::default(), &RunOptions { ticks: 20, profile: None, order_seed: None }).expect("Lauf");
+    let text = out.trace.render();
+    let nach = text.split("reboot deep_sleep").nth(1).unwrap_or("");
+    assert!(nach.contains("out reboot NONE"), "der Befehl selbst faellt auf `safe` zurueck:\n{text}");
+    assert!(nach.contains("out led false"), "und jeder andere Ausgang auch:\n{text}");
+}
+
+/// **Nur `RebootCmd` beendet den Lauf** (12.7).
+///
+/// 12.7 nennt die Enums `BootReason`, `ImageState` und `RebootCmd`
+/// ausdruecklich vordefiniert. Ein eigenes Enum mit einer zufaellig
+/// `RESTART` heissenden Variante ist kein Kommando.
+#[test]
+fn only_the_predefined_enum_triggers_a_reboot() {
+    let p = compile(
+        "\
+enum MyCmd: NONE, RESTART
+
+output reboot : MyCmd @ hw(\"sys/reboot\") with safe = NONE
+output led    : bool  @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            reboot = RESTART
+            led = true
+",
+    );
+    let out = run(&p, &Trace::default(), &RunOptions { ticks: 4, profile: None, order_seed: None }).expect("Lauf");
+    assert_eq!(out.ended, takt_interp::Ended::Ticks, "ein fremdes Enum ist kein Kommando");
+}
+
+/// Ein `sim`-gebundener Ausgang loest keinen Reboot aus (8.3).
+///
+/// Ein `sim`-Output speist den gleichnamigen `hw`-Input; `sys/reboot` hat
+/// keinen, und die Plattform fuehrt das Kommando aus, kein Modell.
+#[test]
+fn a_simulated_reboot_channel_does_not_end_the_run() {
+    let p = compile(
+        "\
+output reboot : RebootCmd @ sim(\"sys/reboot\")
+output led    : bool      @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            reboot = DEEP_SLEEP
+            led = true
+",
+    );
+    let out = run(&p, &Trace::default(), &RunOptions { ticks: 4, profile: None, order_seed: None }).expect("Lauf");
+    assert_eq!(out.ended, takt_interp::Ended::Ticks);
+}

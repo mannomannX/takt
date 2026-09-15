@@ -476,9 +476,9 @@ impl Lowerer<'_> {
                     } else {
                         continue;
                     };
-                    let stelle = if other == id { String::new() } else { format!(" ueber `{}`", o.name) };
+                    let site = if other == id { String::new() } else { format!(" ueber `{}`", o.name) };
                     diags.push(
-                        Diagnostic::error(SC22, s.span, format!("`idle`-Zustand `{}` hat{stelle} {was}", s.name))
+                        Diagnostic::error(SC22, s.span, format!("`idle`-Zustand `{}` hat{site} {was}", s.name))
                             .with_suggestion(
                                 "In `idle` ist der Schritt die Identitaet (Satz 9.9.1); was rechnet, gehoert in \
                              einen Betriebszustand"

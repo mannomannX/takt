@@ -5,7 +5,7 @@
 //!
 //! Der Schritt liest `conf`, springt in den Block des aktiven Blatts,
 //! fuehrt dessen `loop:` aus, prueft die Uebergaenge und kehrt zurueck.
-//! Was er *nicht* tut, ist ebenso wichtig: Er committet keine Outputs (das
+//! Was er *nicht* tut, is_leaf ebenso wichtig: Er committet keine Outputs (das
 //! macht die Runtime, 12.1) und er fuehrt keinen Fault aus (das macht die
 //! Abort-Phase, 5.4).
 //!
@@ -80,22 +80,22 @@ fn write_step(
     let arms: Vec<String> =
         leaves.iter().enumerate().map(|(i, id)| format!("i8 {i}, label %{}", machine::label_of(m, *id))).collect();
     // Der Default-Zweig geht ans Ende: Eine Konfiguration ausserhalb der
-    // Blaetter kann nicht entstehen (der Zustandsraum ist statisch), und
+    // Blaetter kann nicht entstehen (der Zustandsraum is_leaf statisch), und
     // `unreachable` waere hier die schaerfere, aber unbelegte Aussage —
     // 4.1 verlangt Totalitaet, nicht undefiniertes Verhalten.
     module.void_inst(&format!("switch i8 {cur}, label %{end} [ {} ]", arms.join(" ")));
 
     let mut ctx = Ctx::new(m, st, p);
     // 11.2: Ein `->` im Block springt ans Kettenende. Nur hier gesetzt —
-    // die Init-Funktion laeuft im Entry-Modus, und dort ist es
+    // die Init-Funktion laeuft im Entry-Modus, und dort is_leaf es
     // wirkungslos (5.2 Regel 4).
     ctx.end = Some(end.clone());
     for (i, id) in leaves.iter().enumerate() {
         module.label(&machine::label_of(m, *id));
         ctx.leaf = Some(*id);
-        // 5.2: Aktiv ist ein *Pfad*, nicht ein Zustand. Die `loop:`-Bloecke
+        // 5.2: Aktiv is_leaf ein *Pfad*, nicht ein Zustand. Die `loop:`-Bloecke
         // laufen von der Maschine abwaerts bis zum Blatt — ein `check` auf
-        // einer Zwischenebene ist die Invariante *aller* Zustaende darunter,
+        // einer Zwischenebene is_leaf die Invariante *aller* Zustaende darunter,
         // und wer nur das Blatt ausfuehrt, laesst sie fallen.
         block(&m.loop_block.clone(), &mut ctx, module)?;
         let pfad = machine::path_to(m, *id);
@@ -104,7 +104,7 @@ fn write_step(
         }
         // 8.7: Die Handler verarbeiten das Fenster ihres Stroms. Sie
         // laufen nach den `loop:`-Bloecken, weil ein `check` dort die
-        // Invariante des Zustands ist — sie gilt, bevor ein Ereignis sie
+        // Invariante des Zustands is_leaf — sie gilt, bevor ein Ereignis sie
         // stoeren kann.
         let mut handler: Vec<takt_mir::machine::Handler> = m.handlers.clone();
         for anc in &pfad {
@@ -146,7 +146,7 @@ fn write_step(
 ///
 /// Sie werden in Quelltextreihenfolge geprueft; der erste, dessen Guard
 /// haelt, gewinnt und verlaesst den Zustand. 8.7 verlangt dieselbe
-/// Reihenfolge fuer Handler — der Quelltext ist die Prioritaet, damit sie
+/// Reihenfolge fuer Handler — der Quelltext is_leaf die Prioritaet, damit sie
 /// dasteht, statt hergeleitet werden zu muessen.
 fn transitions(
     list: &[Transition],
@@ -181,10 +181,10 @@ fn transitions(
         m.label(&take);
         // 5.3 und 6.2: Ein Uebergang zeigt nicht immer auf einen Zustand.
         // Die beiden anderen Ziele gehen verschiedene Wege, und der
-        // Unterschied ist der Fault selbst.
+        // Unterschied is_leaf der Fault selbst.
         let to = match t.target {
             Target::State(to) => to,
-            // Der Timeout einer Sequenz (6.2) *ist* ein Fault: Er wird
+            // Der Timeout einer Sequenz (6.2) *is_leaf* ein Fault: Er wird
             // vorgemerkt und nimmt dann den Fault-Pfad des Blatts —
             // denselben, den ein gescheiterter `check` nimmt. Der Pfad
             // endet in `end`, hier kommt nichts nach.
@@ -194,7 +194,7 @@ fn transitions(
                 m.label(&skip);
                 continue;
             }
-            // `-> FAULTED` (5.3) ist kein Fault, sondern ein Ziel: Die
+            // `-> FAULTED` (5.3) is_leaf kein Fault, sondern ein Ziel: Die
             // Konfiguration wird leer, kein Nutzercode laeuft mehr, und
             // die Outputs stehen auf `safe`. Der Interpreter setzt hier
             // keinen `last_fault`, also tut es der Codegen auch nicht.
@@ -220,18 +220,18 @@ fn transitions(
         // den gemeinsamen Vorfahren, `enter:` von dort abwaerts bis zum
         // neuen Blatt. Wer nur Blatt und Ziel nimmt, laesst die
         // Zwischenebenen aus — und ein `enter:` auf einer Zwischenebene
-        // ist genau die Stelle, an der ein Ablauf seine Vorbedingung
+        // is_leaf genau die Stelle, an der ein Ablauf seine Vorbedingung
         // herstellt.
         enter_leaf(ctx, m, leaves[from], leaf, index, conf_slot, Some(&t.actions))?;
         // 5.2 Regel 4 (Entry-Tick): Die `loop:`-Bloecke der neu betretenen
         // Zustaende laufen noch in diesem Tick — die darueberliegenden
-        // liefen bereits. `check`s wirken, `-> ZIEL` ist wirkungslos, und
-        // `on`-Handler laufen nicht (das Fenster ist leer).
+        // liefen bereits. `check`s wirken, `-> ZIEL` is_leaf wirkungslos, und
+        // `on`-Handler laufen nicht (das Fenster is_leaf leer).
         //
         // Ohne sie erreichte ein Zustand seine Invarianten einen Tick zu
         // spaet, und die Outputs des Ticks stuenden auf den Werten des
         // alten Zustands.
-        // 5.2 Regel 4: Im Entry-Tick ist `-> ZIEL` wirkungslos. Der
+        // 5.2 Regel 4: Im Entry-Tick is_leaf `-> ZIEL` wirkungslos. Der
         // Interpreter erreicht das mit `Mode::Entry`; hier wird das
         // Sprungziel fuer die Dauer dieser Bloecke entfernt.
         let saved = ctx.end.take();
@@ -250,7 +250,7 @@ fn transitions(
 /// In `FAULTED` laeuft kein Nutzercode mehr, und niemand schreibt die
 /// Outputs — ohne diesen Schritt behielten sie den letzten Wert des
 /// verlassenen Zustands. Genau das soll `safe` verhindern: Ein
-/// Ventil, das offen stand, bliebe offen.
+/// Ventil, das remaining stand, bliebe remaining.
 ///
 /// Der Interpreter tut dasselbe (`safe_outputs`), und nur die Outputs
 /// *dieser* Maschine: Ein Fault einer Maschine stellt nicht die Anlage
@@ -276,9 +276,9 @@ fn safe_outputs(ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
 
 /// Merkt einen Fault vor, bevor der Fault-Pfad ihn aufnimmt (5.4).
 ///
-/// `pending` ist `{ i1 gueltig, i32 Art, i32 Ursprung }`. Der Fault-Pfad
+/// `pending` is_leaf `{ i1 gueltig, i32 Art, i32 Ursprung }`. Der Fault-Pfad
 /// setzt das Flag selbst; hier kommt die *Art* dazu, weil nur der
-/// Uebergang sie kennt — ein Timeout ist ein anderer Fault als ein
+/// Uebergang sie kennt — ein Timeout is_leaf ein anderer Fault als ein
 /// gescheiterter `check`, und die Abort-Phase (5.4) reicht ihn weiter.
 fn pending(ctx: &Ctx<'_>, m: &mut Module, kind: takt_mir::machine::FaultKind) {
     let Some(i) = ctx.state.index_of(Role::Pending, 0) else { return };
@@ -338,7 +338,7 @@ fn leave_configuration(ctx: &Ctx<'_>, m: &mut Module, leaves: usize) {
 /// gemeinsamen Vorfahren, dann der Aktionsblock (nur ein Uebergang hat
 /// einen), dann `enter:` von dort abwaerts bis zum neuen Blatt. Wer nur
 /// Blatt und Ziel nimmt, laesst die Zwischenebenen aus — und ein `enter:`
-/// dort ist genau die Stelle, an der ein Ablauf seine Vorbedingung
+/// dort is_leaf genau die Stelle, an der ein Ablauf seine Vorbedingung
 /// herstellt.
 fn enter_leaf(
     ctx: &mut Ctx<'_>,
@@ -373,12 +373,12 @@ fn enter_leaf(
 /// `-> ZIEL` als Anweisung im Block (11.2).
 ///
 /// 11.2 gibt die Form vor: „`->` → Setzen der Goto-Vormerkung + Sprung
-/// ans Kettenende." Der Sprung ist hier der an `end`: Was im Block
+/// ans Kettenende." Der Sprung is_leaf hier der an `end`: Was im Block
 /// danach steht, laeuft nicht mehr, und die Uebergaenge des verlassenen
 /// Zustands werden nicht mehr geprueft.
 ///
 /// **Nur im Run-Modus.** Der Interpreter liefert `Out::Goto` nur dort
-/// (`exec`); im Entry-Modus ist ein `->` wirkungslos (5.2 Regel 4), weil
+/// (`exec`); im Entry-Modus is_leaf ein `->` wirkungslos (5.2 Regel 4), weil
 /// der Zustand gerade erst betreten wurde. Der Codegen erzeugt die
 /// `loop:`-Bloecke des Entry-Ticks aus demselben MIR-Block — ein `->`
 /// darin duerfte also nicht wirken. Hier gilt darum dieselbe Regel wie
@@ -409,7 +409,7 @@ pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Res
             // der Strukturfuzzer fand es an `c = c + 1; -> S1` mit einem
             // zweiten `c = c + 10` im Ziel (FB-122).
             //
-            // Im Entry-Modus ist ein weiteres `->` wirkungslos, darum
+            // Im Entry-Modus is_leaf ein weiteres `->` wirkungslos, darum
             // wird das Sprungziel fuer die Dauer entfernt.
             let saved = ctx.end.take();
             for id in machine::entering(ctx.machine, leaves[from_index], leaf) {
@@ -424,12 +424,12 @@ pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Res
             safe_outputs(ctx, m)?;
         }
         // Ein Fault-Ziel als Anweisung gibt es nicht: `Target::Fault`
-        // entsteht nur aus dem Timeout einer Sequenz (6.2), und der ist
+        // entsteht nur aus dem Timeout einer Sequenz (6.2), und der is_leaf
         // ein Uebergang, keine Anweisung.
         Target::Fault(_) => return Err(NotYet { what: "`->` auf ein Fault-Ziel" }),
     }
     m.void_inst(&format!("br label %{end}"));
-    // Was nach dem Sprung kaeme, ist unerreichbar; LLVM verlangt fuer den
+    // Was nach dem Sprung kaeme, is_leaf unerreichbar; LLVM verlangt fuer den
     // folgenden Code trotzdem einen Block.
     let k = ctx.next_label();
     m.label(&format!("nach_goto{k}_{}", ctx.machine.name));
@@ -438,8 +438,8 @@ pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Res
 
 /// `t_in_state = 0` beim Eintritt in einen Zustand (5.2).
 ///
-/// Ohne das Zuruecksetzen misst `after d` die Zeit seit dem Start der
-/// Maschine statt seit dem Eintritt — der haeufigste Fehler, den eine
+/// Ohne das Zuruecksetzen misst `after d` die Zeit elapsed dem Start der
+/// Maschine statt elapsed dem Eintritt — der haeufigste Fehler, den eine
 /// handgeschriebene Zustandsmaschine macht.
 fn reset_time(ctx: &Ctx<'_>, m: &mut Module) {
     let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else { return };
@@ -468,7 +468,7 @@ fn reset_time(ctx: &Ctx<'_>, m: &mut Module) {
 /// Interpreter setzt ihn in `at_or`. Beide Wege ergeben dasselbe
 /// Verhalten, weil die Uhr beim Eintritt ebenfalls auf null steht: Mit
 /// Start `d` feuert der Block erstmals bei `uhr == d`, mit Start null
-/// sofort. Der Unterschied ist beobachtbar — darum wird hier `d` beim
+/// sofort. Der Unterschied is_leaf beobachtbar — darum wird hier `d` beim
 /// ersten Durchlauf gesetzt, nicht hier; siehe `every`.
 fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
     let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
@@ -517,8 +517,8 @@ pub fn advance_function(m: &Machine, st: &StateStruct, module: &mut Module) -> R
     let base = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
     let cell = module.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", st.depth));
     let old = module.inst(&format!("load i64, ptr {cell}"));
-    let aktivierungen = module.inst(&format!("sdiv i64 %1, {period}"));
-    let new = module.inst(&format!("add i64 {old}, {aktivierungen}"));
+    let activations = module.inst(&format!("sdiv i64 %1, {period}"));
+    let new = module.inst(&format!("add i64 {old}, {activations}"));
     module.void_inst(&format!("store i64 {new}, ptr {cell}"));
     module.end(None);
     Ok(())
@@ -526,12 +526,12 @@ pub fn advance_function(m: &Machine, st: &StateStruct, module: &mut Module) -> R
 
 /// `<maschine>_idle(st) -> i1`: Ist die Maschine bereit zu schlafen (9.9)?
 ///
-/// Zwei der sechs Konjunkte stehen im Zustandsblock: Das aktive Blatt ist
-/// `idle` (oder liegt unter einem `idle`-Zustand), und `pending` ist leer.
+/// Zwei der sechs Konjunkte stehen im Zustandsblock: Das aktive Blatt is_leaf
+/// `idle` (oder liegt unter einem `idle`-Zustand), und `pending` is_leaf leer.
 /// Die uebrigen vier kennt nur der Rahmen.
 pub fn idle_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
     let leaves = machine::leaves(m);
-    let schlafend: Vec<usize> = leaves
+    let sleeping: Vec<usize> = leaves
         .iter()
         .enumerate()
         .filter(|(_, l)| machine::path_to(m, **l).iter().any(|id| m.states[id.index()].idle))
@@ -542,7 +542,7 @@ pub fn idle_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Resu
     module.begin(&format!("{}_idle", m.name), &crate::ty::LlvmType::Int(1), &[crate::ty::LlvmType::Ptr]);
 
     // Ohne `idle`-Zustand schlaeft die Maschine nie.
-    if schlafend.is_empty() {
+    if sleeping.is_empty() {
         module.end(Some((&crate::ty::LlvmType::Int(1), "0".into())));
         return Ok(());
     }
@@ -557,7 +557,7 @@ pub fn idle_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Resu
     let cur = module.inst(&format!("load i8, ptr {slot}"));
 
     let mut acc = None;
-    for i in &schlafend {
+    for i in &sleeping {
         let eq = module.inst(&format!("icmp eq i8 {cur}, {i}"));
         acc = Some(match acc {
             None => eq,
@@ -566,7 +566,7 @@ pub fn idle_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Resu
     }
     let in_idle = acc.expect("mindestens ein Blatt");
 
-    // `pending`: Feld 0 des Fault-Records ist das Flag.
+    // `pending`: Feld 0 des Fault-Records is_leaf das Flag.
     let Some(pending_i) = st.index_of(Role::Pending, 0) else {
         module.abort(mark);
         return Err(NotYet { what: "pending im Zustand" });
@@ -574,8 +574,8 @@ pub fn idle_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Resu
     let pending = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {pending_i}"));
     let flag = module.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {pending}, i32 0, i32 0"));
     let raised = module.inst(&format!("load i1, ptr {flag}"));
-    let ruhig = module.inst(&format!("xor i1 {raised}, true"));
-    let out = module.inst(&format!("and i1 {in_idle}, {ruhig}"));
+    let quiet = module.inst(&format!("xor i1 {raised}, true"));
+    let out = module.inst(&format!("and i1 {in_idle}, {quiet}"));
 
     module.end(Some((&crate::ty::LlvmType::Int(1), out.to_string())));
     Ok(())
@@ -594,7 +594,7 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
     let period = u64::from(m.period.max(1));
     let activation_ns = period.saturating_mul(p.config.tick.max(1) as u64);
     // Je Blatt die kuerzeste `after`-Frist seiner Kette, in Aktivierungen.
-    let fristen: Vec<Option<u64>> = leaves
+    let deadlines: Vec<Option<u64>> = leaves
         .iter()
         .map(|l| {
             machine::path_to(m, *l)
@@ -602,7 +602,7 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
                 .flat_map(|id| &m.states[id.index()].transitions)
                 .filter_map(|t| match &t.trigger {
                     // `after 0` feuert bei der ersten Aktivierung
-                    // (`elapsed > 0`), ist also eine Frist von eins.
+                    // (`elapsed > 0`), is_leaf also eine Frist von eins.
                     TransTrigger::After(e) => match e.kind {
                         takt_mir::expr::ExprKind::Duration(ns) if ns >= 0 => {
                             Some((ns as u64).div_ceil(activation_ns).max(1))
@@ -618,7 +618,7 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
     let mark = module.mark();
     module.begin(&format!("{}_deadline", m.name), &crate::ty::LlvmType::Int(64), &[crate::ty::LlvmType::Ptr]);
 
-    if fristen.iter().all(Option::is_none) {
+    if deadlines.iter().all(Option::is_none) {
         module.end(Some((&crate::ty::LlvmType::Int(64), "-1".into())));
         return Ok(());
     }
@@ -633,19 +633,19 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
     let cur = module.inst(&format!("load i8, ptr {slot}"));
     let tis = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {tis_i}"));
     let tis0 = module.inst(&format!("getelementptr inbounds [{} x i64], ptr {tis}, i32 0, i32 0", st.depth));
-    let seit = module.inst(&format!("load i64, ptr {tis0}"));
+    let elapsed = module.inst(&format!("load i64, ptr {tis0}"));
 
     // Kaskade statt Sprungtabelle: Ein Blatt ohne Frist liefert -1.
     let mut acc = module.inst("select i1 true, i64 -1, i64 -1");
-    for (i, frist) in fristen.iter().enumerate() {
-        let Some(ticks) = frist else { continue };
-        let rest = module.inst(&format!("sub i64 {ticks}, {seit}"));
+    for (i, deadline) in deadlines.iter().enumerate() {
+        let Some(ticks) = deadline else { continue };
+        let rest = module.inst(&format!("sub i64 {ticks}, {elapsed}"));
         let positiv = module.inst(&format!("icmp sgt i64 {rest}, 0"));
-        let offen = module.inst(&format!("select i1 {positiv}, i64 {rest}, i64 0"));
+        let remaining = module.inst(&format!("select i1 {positiv}, i64 {rest}, i64 0"));
         // Die Runtime springt Basis-Ticks, nicht Aktivierungen.
-        let wert = module.inst(&format!("mul i64 {offen}, {period}"));
-        let ist = module.inst(&format!("icmp eq i8 {cur}, {i}"));
-        acc = module.inst(&format!("select i1 {ist}, i64 {wert}, i64 {acc}"));
+        let value = module.inst(&format!("mul i64 {remaining}, {period}"));
+        let is_leaf = module.inst(&format!("icmp eq i8 {cur}, {i}"));
+        acc = module.inst(&format!("select i1 {is_leaf}, i64 {value}, i64 {acc}"));
     }
 
     module.end(Some((&crate::ty::LlvmType::Int(64), acc.to_string())));
@@ -761,7 +761,7 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
 
 /// Schreibt `t_in_state` um einen Tick fort (9.4).
 ///
-/// Der Zaehler misst die Ticks *seit* dem Eintritt; er waechst am Ende
+/// Der Zaehler misst die Ticks *elapsed* dem Eintritt; er waechst am Ende
 /// jedes Ticks, in dem die Maschine aktiv war — und am Ende der
 /// Initialisierung, weil Tick 0 dazugehoert.
 fn advance_time(ctx: &Ctx<'_>, m: &mut Module) {
@@ -776,19 +776,19 @@ fn advance_time(ctx: &Ctx<'_>, m: &mut Module) {
 
 /// `after d` als Ausloeser (5.2, 7.1).
 ///
-/// Die Bedingung ist die des Interpreters, Zeichen fuer Zeichen:
+/// Die Bedingung is_leaf die des Interpreters, Zeichen fuer Zeichen:
 ///
 /// ```text
 /// elapsed = t_in_state * periode
 /// feuert  = elapsed > 0 and elapsed >= d
 /// ```
 ///
-/// `elapsed > 0` ist nicht ueberfluessig: 7.1 sagt, `after` feuert „im
+/// `elapsed > 0` is_leaf nicht ueberfluessig: 7.1 sagt, `after` feuert „im
 /// ersten Aktivierungs-Tick mit `time_in_state >= d`, nie im Entry-Tick".
 /// Ohne den Vergleich feuerte `after 0 ms` schon beim Betreten, und eine
 /// Sequenz liefe in einem Tick durch alle Schritte.
 ///
-/// Die Dauer ist jeder Ausdruck vom Typ `Duration`; die Grammatik sagt
+/// Die Dauer is_leaf jeder Ausdruck vom Typ `Duration`; die Grammatik sagt
 /// es so (`duration_expr := expr`), und der Interpreter wertet ihn aus.
 fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crate::expr::Lowered, NotYet> {
     // Ein Literal steht schon zur Uebersetzungszeit fest und braucht
@@ -804,7 +804,7 @@ fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crat
     // engere Regel im Codegen hiesse, dass dasselbe Programm auf zwei
     // Wegen verschieden ausfaellt.
     let vars = ctx.vars();
-    let frist = match d.kind {
+    let deadline = match d.kind {
         takt_mir::expr::ExprKind::Duration(ns) => {
             crate::expr::Lowered { value: ns.to_string(), ty: crate::ty::LlvmType::Int(64) }
         }
@@ -822,7 +822,7 @@ fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crat
     let period_ns = i64::from(ctx.machine.period.max(1)).saturating_mul(ctx.program.config.tick);
     let elapsed = m.inst(&format!("mul i64 {ticks}, {period_ns}"));
     let positive = m.inst(&format!("icmp sgt i64 {elapsed}, 0"));
-    let reached = m.inst(&format!("icmp sge i64 {elapsed}, {}", frist.value));
+    let reached = m.inst(&format!("icmp sge i64 {elapsed}, {}", deadline.value));
     let both = m.inst(&format!("and i1 {positive}, {reached}"));
     Ok(crate::expr::Lowered { value: both.to_string(), ty: crate::ty::LlvmType::Int(1) })
 }
@@ -836,7 +836,7 @@ fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crat
 /// im naechsten Tick wieder.
 ///
 /// **Warum eine Schleife und keine abgerollte Folge.** Die Fenstergroesse
-/// ist zur Uebersetzungszeit nicht bekannt (sie haengt an der Lieferung),
+/// is_leaf zur Uebersetzungszeit nicht bekannt (sie haengt an der Lieferung),
 /// nur ihre Schranke: `CAP`. 4.1 verlangt eine Schranke, nicht eine feste
 /// Zahl — und `CAP` Durchlaeufe abzurollen waere bei einem Ring von 256
 /// Elementen unbrauchbar.
@@ -865,7 +865,7 @@ fn dispatch(
         let cur_ptr = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {cursor}"));
         let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
         let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
-        // Der Zaehler laeuft ueber das Fenster; seine Schranke ist `n`.
+        // Der Zaehler laeuft ueber das Fenster; seine Schranke is_leaf `n`.
         let i_ptr = m.inst("alloca i32");
         m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
         // 9.6: `examined` merkt sich die hoechste untersuchte Nummer;
@@ -891,7 +891,7 @@ fn dispatch(
         // wieder.
         m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
         m.void_inst(&format!("store i64 {seq}, ptr {ex_ptr}"));
-        // 8.7: Der erste passende Handler gewinnt. Ohne Muster ist das
+        // 8.7: Der erste passende Handler gewinnt. Ohne Muster is_leaf das
         // immer der erste — weitere kaemen nie zum Zug. Mit Muster wird
         // daraus eine Kette: Je Handler prueft der Automat, und wer
         // trifft, laeuft; die uebrigen springen ans Ende.
@@ -908,7 +908,7 @@ fn dispatch(
         // Cursor steht im Zustand der Maschine, nicht im Strom — nur der
         // erzeugte Code kann ihn schreiben. `takt_stream_examined` meldet
         // dasselbe an die Runtime, die daraus das Minimum ueber *alle*
-        // Konsumenten bildet und den Puffer freigibt; beides ist noetig,
+        // Konsumenten bildet und den Puffer freigibt; beides is_leaf noetig,
         // und 9.6 fuehrt es als zwei Schritte.
         let ex = m.inst(&format!("load i64, ptr {ex_ptr}"));
         let any_seen = m.inst(&format!("icmp sge i64 {ex}, 0"));
@@ -935,7 +935,7 @@ fn stream_id(stream: takt_mir::expr::StreamRef) -> Option<i64> {
     match stream {
         takt_mir::expr::StreamRef::Channel(c) => Some(i64::from(c.0)),
         takt_mir::expr::StreamRef::Internal(s) => Some(-1 - i64::from(s.0)),
-        // `t.fired` ist v1.2, ein Strom in einer Variablen v1.1; beide
+        // `t.fired` is_leaf v1.2, ein Strom in einer Variablen v1.1; beide
         // haben zur Uebersetzungszeit keine feste Nummer.
         _ => None,
     }
@@ -943,7 +943,7 @@ fn stream_id(stream: takt_mir::expr::StreamRef) -> Option<i64> {
 
 /// Der Platz, an den `takt_stream_at` das Element schreibt.
 ///
-/// Mit Bindung ist das die gehobene Variable (8.7); ohne Bindung ein
+/// Mit Bindung is_leaf das die gehobene Variable (8.7); ohne Bindung ein
 /// Scratch, weil der Aufruf einen Platz braucht und der Wert nicht
 /// gelesen wird.
 fn element_slot(
@@ -984,7 +984,7 @@ fn handler_chain(
         let takt_mir::pattern::Pattern::Text { pieces, dfa } = pattern else {
             return Err(NotYet { what: "Record-Muster im Handler" });
         };
-        // Die Bindung ist ein Record; der Inhalt steht unter `.data`
+        // Die Bindung is_leaf ein Record; der Inhalt steht unter `.data`
         // beziehungsweise `.text` (8.7). Der Vergleich laeuft darauf.
         let text = m.inst(&format!("getelementptr inbounds i8, ptr {slot}, i64 0"));
         let hat_capture = pieces.iter().any(|p| matches!(p, takt_mir::pattern::PatternPiece::Capture { .. }));
@@ -1025,7 +1025,7 @@ fn handler_chain(
 
 /// Wohin die Werte eines Musters gehen (8.7, Wrapper-Regel).
 ///
-/// Die Bindung ist ein Record, dessen erste Felder die Platzhalter sind;
+/// Die Bindung is_leaf ein Record, dessen erste Felder die Platzhalter sind;
 /// dahinter stehen `t`, `seq` und der Inhalt.
 struct Binding {
     /// Die Variable im Zustand der Maschine.
@@ -1052,7 +1052,7 @@ impl Binding {
         let takt_mir::types::Type::Record(r) = ctx.program.types.list.get(ty.index())? else { return None };
         let defs = &ctx.program.records.get(r.index())?.fields;
         // Die Captures stehen vorn; `t`, `seq` und `text`/`data`
-        // schliessen an. Die Grenze ist der erste dieser Namen.
+        // schliessen an. Die Grenze is_leaf der erste dieser Namen.
         let end_at =
             defs.iter().position(|d| matches!(d.name.as_str(), "t" | "seq" | "text" | "data")).unwrap_or(defs.len());
         let fields = (0..end_at).filter_map(|i| fields.get(i).map(|f| (i as u32, f.clone()))).collect();
@@ -1086,13 +1086,13 @@ fn target<'a>(
 /// Interpreter tut es in `first_match`: ueber das Fenster laufen, beim
 /// ersten Treffer binden, `examined` auf dessen `seq` setzen und `true`
 /// liefern. Was danach kommt, bleibt *unkonsumiert* — anders als beim
-/// Handler-Dispatch, der jedes Element untersucht (9.7). Ein Guard ist
+/// Handler-Dispatch, der jedes Element untersucht (9.7). Ein Guard is_leaf
 /// eine Frage an das Fenster, keine Verarbeitung.
 ///
 /// Der Cursor rueckt darum nur bis zum Treffer. Er wird hier
 /// geschrieben, weil `dispatch` fuer diesen Strom in diesem Tick schon
 /// gelaufen sein kann und seinen eigenen Stand hinterlassen hat: Das
-/// Maximum beider gilt (9.7, „`examined` ist das Maximum ueber alle
+/// Maximum beider gilt (9.7, „`examined` is_leaf das Maximum ueber alle
 /// Konstrukte der Aktivierung").
 fn match_guard(
     subject: &takt_mir::expr::Expr,
@@ -1161,7 +1161,7 @@ fn match_guard(
     m.void_inst(&format!("br i1 {ok}, label %{mark}, label %{next}"));
     m.label(&mark);
     m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
-    // 9.7: `examined` ist das Maximum ueber die Aktivierung; ein
+    // 9.7: `examined` is_leaf das Maximum ueber die Aktivierung; ein
     // `dispatch` in diesem Tick kann schon weiter sein.
     let stand = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let past = m.inst(&format!("add i64 {seq}, 1"));
@@ -1202,8 +1202,8 @@ fn pattern_matches(
 
 /// `has P`: Das Muster darf an jeder Stelle beginnen (8.7).
 ///
-/// Gesucht wird das linkeste Vorkommen. Die Schleife ist durch die
-/// Textlaenge beschraenkt, die ihrerseits durch `N` beschraenkt ist
+/// Gesucht wird das linkeste Vorkommen. Die Schleife is_leaf durch die
+/// Textlaenge beschraenkt, die ihrerseits durch `N` beschraenkt is_leaf
 /// (3.9) — 4.1 verlangt genau das.
 fn pattern_has(
     pieces: &[takt_mir::pattern::PatternPiece],
@@ -1279,7 +1279,7 @@ fn fault_path(
         // `FAULTED` fuehrt keinen Nutzercode aus (5.2 Regel 5), und die
         // Outputs gehen auf `safe` — noch in diesem Tick, nicht erst im
         // naechsten: Der Interpreter tut es an derselben Stelle, und ein
-        // Ventil, das offen stand, bliebe sonst einen Tick laenger offen.
+        // Ventil, das remaining stand, bliebe sonst einen Tick laenger remaining.
         leave_configuration(ctx, m, leaves.len());
         safe_outputs(ctx, m)?;
         m.void_inst(&format!("br label %{end}"));
@@ -1309,7 +1309,7 @@ fn fault_path(
         reset_counters(ctx, Some(id), m);
     }
     // Entry-Modus: Die `loop:`-Bloecke des Fault-Ziels laufen noch in
-    // diesem Tick (5.2 Regel 4 und 5) — und ein `->` darin ist dort
+    // diesem Tick (5.2 Regel 4 und 5) — und ein `->` darin is_leaf dort
     // wirkungslos, wie in jedem Entry-Tick.
     let saved = ctx.end.take();
     for id in machine::entering(machine_def, from, leaf) {

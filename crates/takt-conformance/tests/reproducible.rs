@@ -61,11 +61,11 @@ fn the_same_source_yields_the_same_ir() {
     let b = common::ir_of(&p);
     assert_eq!(a.len(), b.len(), "die IR hat verschiedene Laenge");
     if a != b {
-        let zeile = a.lines().zip(b.lines()).position(|(x, y)| x != y).unwrap_or(0);
+        let line = a.lines().zip(b.lines()).position(|(x, y)| x != y).unwrap_or(0);
         panic!(
-            "die IR weicht ab, erste Abweichung in Zeile {zeile}:\n  a: {}\n  b: {}",
-            a.lines().nth(zeile).unwrap_or(""),
-            b.lines().nth(zeile).unwrap_or("")
+            "die IR weicht ab, erste Abweichung in Zeile {line}:\n  a: {}\n  b: {}",
+            a.lines().nth(line).unwrap_or(""),
+            b.lines().nth(line).unwrap_or("")
         );
     }
 }

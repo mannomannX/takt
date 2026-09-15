@@ -113,9 +113,9 @@ fn absolute_deadlines_do_not_accumulate_drift() {
 fn an_overdue_deadline_is_counted_not_awaited() {
     let mut c = RealtimeClock::new();
     std::thread::sleep(std::time::Duration::from_millis(2));
-    let vorher = c.now();
+    let before = c.now();
     c.wait_until(1_000);
-    assert!(c.now() - vorher < 1_000_000, "eine vergangene Frist wird nicht abgewartet");
+    assert!(c.now() - before < 1_000_000, "eine vergangene Frist wird nicht abgewartet");
     assert_eq!(c.late, 1, "sie wird gezaehlt");
 }
 
