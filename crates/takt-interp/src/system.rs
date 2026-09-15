@@ -610,6 +610,11 @@ impl<'p> Sim<'p> {
                     self.tick,
                 );
                 for id in self.order.clone() {
+                    // 9.6: Einer schlafenden Maschine wird der Ueberlauf
+                    // nicht zugestellt — sie hoert nicht hin (5.10).
+                    if self.is_idle(id) {
+                        continue;
+                    }
                     if def.readers.contains(&id) && self.states[id.index()].pending.is_none() {
                         self.states[id.index()].pending = Some(f.clone());
                     }
@@ -619,6 +624,31 @@ impl<'p> Sim<'p> {
         Ok(())
     }
 
+    /// Ist die Maschine in einem `idle`-Zustand (5.10)?
+    fn is_idle(&self, id: MachineId) -> bool {
+        let m = &self.loaded.program.machines[id.index()];
+        self.states[id.index()].conf.iter().any(|c| m.states[c.index()].idle)
+    }
+
+    /// Weckt dieser Strom aus dem Schlaf (5.10)?
+    fn wakes(&self, r: StreamRef) -> bool {
+        match r {
+            StreamRef::Channel(c) => self.loaded.program.channels[c.index()].attrs.wake,
+            // Interne Stroeme entstehen aus `send` und wecken nie. `fired`
+            // und Handles sind v1.2; bis dahin gilt dasselbe.
+            _ => false,
+        }
+    }
+
+    /// Hinter das letzte Element eines Stroms.
+    fn stream_end(&self, r: StreamRef) -> Option<i64> {
+        match r {
+            StreamRef::Channel(c) => self.image.channel_bufs.get(&c).map(crate::stream::Buffer::end),
+            StreamRef::Internal(i) => self.image.stream_bufs.get(i.index()).map(crate::stream::Buffer::end),
+            _ => None,
+        }
+    }
+
     /// `advance_cursors()` (9.6): der Cursor rueckt hinter das zuletzt
     /// untersuchte Element; danach faellt alles weg, was kein Konsument mehr
     /// sehen kann.
@@ -626,10 +656,23 @@ impl<'p> Sim<'p> {
         let program = self.loaded.program;
         for id in self.order.clone() {
             let m = &program.machines[id.index()];
+            // 5.10: Eine Maschine in `idle` hoert nicht; ihre
+            // Nicht-Wake-Stroeme werden verworfen statt zu ueberlaufen.
+            let idle = self.is_idle(id);
+            let ends: Vec<Option<i64>> = m
+                .layout
+                .cursors
+                .iter()
+                .map(|r| if idle && !self.wakes(*r) { self.stream_end(*r) } else { None })
+                .collect();
             let state = &mut self.states[id.index()];
             for (i, _) in m.layout.cursors.iter().enumerate() {
                 let examined = state.examined.get(i).copied().unwrap_or(-1);
-                if examined >= 0 {
+                if let Some(end) = ends[i] {
+                    if let Some(c) = state.cursors.get_mut(i) {
+                        *c = end;
+                    }
+                } else if examined >= 0 {
                     if let Some(c) = state.cursors.get_mut(i) {
                         *c = examined + 1;
                     }

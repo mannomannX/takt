@@ -396,9 +396,6 @@ impl Lowerer<'_> {
         self.mctx.as_mut().expect("Maschine").current = Some(id);
         self.scopes.push();
         self.facts.push(Vec::new());
-        if decl.idle {
-            self.stage(decl.span, "`idle`", Stage::V1_1);
-        }
         if decl.resume {
             self.stage(decl.span, "`resume`", Stage::V1_2);
         }

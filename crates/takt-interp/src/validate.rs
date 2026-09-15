@@ -448,9 +448,6 @@ pub fn check(p: &Program) -> Result<(), Diagnostic> {
             } else if !s.children.is_empty() {
                 return Err(err(s.span, format!("Zustand `{}` hat Kinder, aber kein initial", s.name)));
             }
-            if s.idle {
-                return Err(stage(s.span, "idle", Stage::V1_1));
-            }
             if s.resume {
                 return Err(stage(s.span, "resume", Stage::V1_2));
             }

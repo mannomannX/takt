@@ -352,3 +352,71 @@ machine m every 2 ms:
     };
     assert!(safe_at <= bound, "sicher nach {safe_at} Ticks, Schranke {bound}:\n{text}");
 }
+
+/// **In `idle` ist der Schritt die Identitaet** (5.10, Satz 9.9.1).
+///
+/// Nur darum darf die Runtime Ticks ueberspringen: Was sie auslaesst,
+/// haette nichts getan. Der Test prueft es am Trace — zwischen Eintritt
+/// und `after`-Frist aendert sich kein Ausgang.
+#[test]
+fn theorem_9_9_1_an_idle_step_changes_nothing() {
+    let p = compile(
+        "\
+input  wake : bool @ hw(\"gpio/btn\") with wake = true
+output wake_sim : bool @ sim(\"gpio/btn\") with safe = false
+output led  : bool @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial SLEEP
+    state SLEEP idle:
+        enter:
+            led = false
+        when wake: -> RUN
+        after 50 ms: -> RUN
+    state RUN:
+        enter:
+            led = true
+        after 20 ms: -> SLEEP
+",
+    );
+    let out = run(&p, &Trace::default(), &RunOptions { ticks: 200, profile: None, order_seed: None }).expect("Lauf");
+    let text = out.trace.render();
+    let wechsel: Vec<&str> = text.lines().filter(|l| l.contains(" out led ")).collect();
+    // Der Interpreter schreibt nur Aenderungen (9.3): In `idle` gibt es
+    // zwischen Eintritt und Frist keine.
+    assert!(wechsel.len() < 20, "zu viele Aenderungen fuer einen Schlafzustand:\n{}", wechsel.join("\n"));
+    assert!(text.contains("t=0 out led false"), "der Eintritt schreibt einmal:\n{text}");
+}
+
+/// Ein `idle`-Zustand verwirft Nicht-Wake-Stroeme, statt ueberzulaufen
+/// (5.10, 9.6).
+#[test]
+fn a_sleeping_machine_drops_non_waking_streams() {
+    let p = compile(
+        "\
+input  noise : stream<u8> @ hw(\"bus/noise\") with capacity = 4, max_rate = 2000 Hz
+output noise_sim : stream<u8> @ sim(\"bus/noise\")
+output led : bool @ hw(\"ui/led\") with safe = false
+
+machine feeder:
+    initial GO
+    state GO:
+        loop:
+            send noise_sim, 1
+
+machine m:
+    initial SLEEP
+    state SLEEP idle:
+        enter:
+            led = false
+        after 20 ms: -> DONE
+    state DONE:
+        enter:
+            led = true
+",
+    );
+    // Ohne die Verwerfung liefe der Puffer nach vier Ticks ueber und die
+    // Maschine faultete; mit ihr laeuft sie bis zur Frist durch.
+    let out = run(&p, &Trace::default(), &RunOptions { ticks: 150, profile: None, order_seed: None }).expect("Lauf");
+    assert!(out.trace.render().contains("out led true"), "die Frist wird erreicht:\n{}", out.trace.render());
+}

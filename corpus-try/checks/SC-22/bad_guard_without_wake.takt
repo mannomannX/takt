@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+input  other : bool         @ hw("gpio/x")
+output n     : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    initial SLEEP
+
+    state SLEEP idle:
+        enter:
+            n = 0
+        when other: -> RUN  # ~ SC-22
+
+    state RUN:
+        loop:
+            n = 2

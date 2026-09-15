@@ -73,6 +73,8 @@ pub const SC62: &str = "SC-62";
 pub const SC12: &str = "SC-12";
 /// Schedulability mit Abort-Phase, klassenweise (7.2).
 pub const SC32: &str = "SC-32";
+/// `idle`: kein `loop:`/Handler, Guards nur ueber Wake-Quellen (5.10).
+pub const SC22: &str = "SC-22";
 /// Lints: `alert`-Polaritaet, Profil-Vollstaendigkeit (5.6, 4.6).
 pub const SC63: &str = "SC-63";
 /// Lints zu Matrizen und Stroemen (3.11, 8.6).
@@ -98,6 +100,7 @@ impl Lowerer<'_> {
         self.check_latency();
         self.check_declared_budget();
         self.check_cost_budget();
+        self.check_idle_states();
         self.check_alert_polarity();
         self.check_profile_completeness();
         self.check_reachability();
@@ -441,6 +444,67 @@ impl Lowerer<'_> {
                 ),
             );
         }
+    }
+
+    /// Pruefung 22 (5.10): die statischen Regeln fuer `idle`.
+    ///
+    /// Sie sichern Satz 9.9.1 — in einem `idle`-Zustand ist der Schritt die
+    /// Identitaet, und nur darum darf die Runtime Ticks ueberspringen.
+    fn check_idle_states(&mut self) {
+        let mut diags = Vec::new();
+        for m in &self.program.machines {
+            if m.kind == MachineKind::Template {
+                continue;
+            }
+            for (i, s) in m.states.iter().enumerate() {
+                if !s.idle {
+                    continue;
+                }
+                let id = StateId(i as u32);
+                // Zustand, Vorfahren und Kinder: Ein `loop:` irgendwo in der
+                // Kette macht den Schritt nicht-leer.
+                for other in idle_scope(m, id) {
+                    let o = &m.states[other.index()];
+                    let was = if !o.loop_block.stmts.is_empty() {
+                        "`loop:`"
+                    } else if !o.handlers.is_empty() {
+                        "einen Handler"
+                    } else if o.sequence.is_some() {
+                        "eine Sequenz"
+                    } else if !o.instances.is_empty() {
+                        "gescopte Instanzen"
+                    } else {
+                        continue;
+                    };
+                    let stelle = if other == id { String::new() } else { format!(" ueber `{}`", o.name) };
+                    diags.push(
+                        Diagnostic::error(SC22, s.span, format!("`idle`-Zustand `{}` hat{stelle} {was}", s.name))
+                            .with_suggestion(
+                                "In `idle` ist der Schritt die Identitaet (Satz 9.9.1); was rechnet, gehoert in \
+                             einen Betriebszustand"
+                                    .to_string(),
+                            ),
+                    );
+                }
+                for t in &s.transitions {
+                    if let Some(bad) = non_wake_read(&self.program, t) {
+                        diags.push(
+                            Diagnostic::error(
+                                SC22,
+                                t.span,
+                                format!("Guard in `{}` liest `{bad}`, was im Schlaf nicht weckt", s.name),
+                            )
+                            .with_suggestion(
+                                "`with wake = true` am Channel oder Command deklarieren, oder den Uebergang \
+                                 nach `after` verlegen (5.10)"
+                                    .to_string(),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        self.diags.extend(diags);
     }
 
     /// Pruefung 62 (7.2): `with budget = {ram = …}` wird eingehalten.
@@ -1564,5 +1628,74 @@ fn comparison(e: &Expr) -> Option<(BinaryOp, &Expr, &Expr)> {
         // Ein impliziter Validitaetscheck steht vor dem Vergleich (3.5).
         ExprKind::Checked { expr, .. } => comparison(expr),
         _ => None,
+    }
+}
+
+/// Der Zustand selbst, seine Vorfahren und alle Nachfahren.
+///
+/// 5.10 nennt Zustand und Vorfahren; die Nachfahren gehoeren dazu, weil
+/// ein Kind mit `loop:` den Schritt genauso fuellt.
+fn idle_scope(m: &Machine, id: StateId) -> Vec<StateId> {
+    let mut out = vec![id];
+    let mut up = m.states[id.index()].parent;
+    while let Some(p) = up {
+        out.push(p);
+        up = m.states[p.index()].parent;
+    }
+    let mut stack = vec![id];
+    while let Some(cur) = stack.pop() {
+        for c in &m.states[cur.index()].children {
+            if !out.contains(c) {
+                out.push(*c);
+                stack.push(*c);
+            }
+        }
+    }
+    out
+}
+
+/// Der erste Guard-Leser, der im Schlaf nicht weckt.
+///
+/// Erlaubt sind Wake-Quellen, Konstanten, Params, Tunables und
+/// Maschinenvariablen (5.10).
+fn non_wake_read(p: &Program, t: &takt_mir::machine::Transition) -> Option<String> {
+    let TransTrigger::When(guard) = &t.trigger else { return None };
+    let mut bad = None;
+    let mut sehen = |e: &Expr| {
+        if bad.is_some() {
+            return;
+        }
+        match &e.kind {
+            ExprKind::Input { channel, .. } if !p.channels[channel.index()].attrs.wake => {
+                bad = Some(p.channels[channel.index()].name.clone());
+            }
+            ExprKind::Command(c) if !p.commands[c.index()].wake => {
+                bad = Some(p.commands[c.index()].name.clone());
+            }
+            ExprKind::Published { .. } => bad = Some("eine fremde `pub var`".to_string()),
+            ExprKind::StateOf(_) => bad = Some("den Zustand einer anderen Maschine".to_string()),
+            _ => {}
+        }
+    };
+    match guard {
+        Guard::Expr(e) => walk_guard(e, &mut sehen),
+        Guard::Match { subject, .. } => walk_guard(subject, &mut sehen),
+        // `s as e` liest den Strom direkt; ohne `wake` weckt er nicht.
+        Guard::Next { stream, .. } => {
+            if let StreamRef::Channel(c) = stream
+                && !p.channels[c.index()].attrs.wake
+            {
+                bad = Some(p.channels[c.index()].name.clone());
+            }
+        }
+    }
+    bad
+}
+
+/// Laeuft einen Ausdrucksbaum ab.
+fn walk_guard(e: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(e);
+    for c in e.children() {
+        walk_guard(c, f);
     }
 }
