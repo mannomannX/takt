@@ -559,6 +559,9 @@ pub struct Sim<'p> {
     pub tick: u64,
     /// Reihenfolge der Schritte (7.2; permutierbar fuer Satz 9.4.1).
     pub order: Vec<MachineId>,
+    /// Maschinen-Replay (12.5): die Maschinen, die nicht laufen; ihre
+    /// Anfangswerte kommen aus `init_vars`, alles Weitere aus der Scheibe.
+    pub foreign: Vec<MachineId>,
     /// Beobachtungen des laufenden Ticks je Maschine.
     pub observations: Vec<(MachineId, Observation)>,
     /// Nichtfluechtiger Speicher fuer `persist var` (5.9); vor `init()` zu
@@ -649,20 +652,43 @@ impl<'p> Sim<'p> {
         // ein Fehler der Pruefung 33 und kommt hier nicht an.
         let order =
             schedule::order_with(program, scenario).unwrap_or_else(|_| schedule::runnable_with(program, scenario));
-        Ok(Sim { loaded, states, image, tick: 0, order, observations: Vec::new(), nvm: Nvm::new() })
+        Ok(Sim {
+            loaded,
+            states,
+            image,
+            tick: 0,
+            order,
+            foreign: Vec::new(),
+            observations: Vec::new(),
+            nvm: Nvm::new(),
+        })
     }
 
     /// Tick 0: jede Maschine betritt ihren Anfangszustand (1.5). Wird nach
     /// dem Stimulus des Ticks 0 gerufen, damit `sample()` auch dort vor der
     /// Schrittphase liegt (9.4).
     pub fn init(&mut self) -> Result<(), Trap> {
+        self.init_with(|_| Ok(()))
+    }
+
+    /// Maschinen-Replay (12.5): nur `only` laeuft; die anderen behalten
+    /// ihre Anfangswerte und bekommen alles Weitere aus der Scheibe.
+    pub fn restrict(&mut self, only: MachineId) {
+        self.foreign = self.order.iter().copied().filter(|x| *x != only).collect();
+        self.order.retain(|x| *x == only);
+    }
+
+    /// Tick 0 mit einem Schritt zwischen den Anfangswerten und dem Eintritt:
+    /// Dort setzt die Scheibe, was die fremden Maschinen im Tick 0
+    /// veroeffentlichten (12.5).
+    pub fn init_with(&mut self, between: impl FnOnce(&mut Self) -> Result<(), Trap>) -> Result<(), Trap> {
         let program = self.loaded.program;
         let tick_ns = program.config.tick;
         self.observations.clear();
         self.image.apply_sim_bindings(program, 0);
         // Ψ traegt im Tick 0 die Anfangswerte der Variablen, damit die
         // `enter`- und Entry-`loop`-Bloecke sie schon lesen koennen (1.4).
-        for id in self.order.clone() {
+        for id in [self.order.clone(), self.foreign.clone()].concat() {
             let mut out = Vec::new();
             let mut env =
                 MachineEnv::new(&self.loaded, id, &mut self.states[id.index()], &mut self.image, &mut out, tick_ns);
@@ -671,7 +697,16 @@ impl<'p> Sim<'p> {
         }
         self.load_persist();
         self.publish_all();
+        for id in self.foreign.clone() {
+            self.publish_one(id);
+        }
         self.image.commit_published();
+        between(self)?;
+        // Die fremden Maschinen gelten als eingetreten (7.2): Was die
+        // Scheibe brachte, lesen Follower frisch.
+        for id in self.foreign.clone() {
+            self.image.set_fresh(id);
+        }
         for id in self.order.clone() {
             let mut out = Vec::new();
             let mut env =

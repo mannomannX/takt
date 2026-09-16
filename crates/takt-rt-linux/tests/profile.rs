@@ -184,6 +184,7 @@ fn the_guarantee_survives_the_recording() {
         runtime: g.header_lines(),
         natives: Vec::new(),
         irreversible: Vec::new(),
+        machine: None,
     };
     let text = header.render();
     assert!(text.contains("#! runtime echtzeit nein"), "der Befund fehlt: {text}");

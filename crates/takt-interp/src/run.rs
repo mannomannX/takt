@@ -57,6 +57,10 @@ pub struct RunOptions {
     /// Ueberlagerung des Parametervektors nach dem Profil: Name und
     /// Literal je Parameter (13.7, 12.5).
     pub overrides: Vec<(String, String)>,
+    /// Maschinen-Replay (12.5): nur diese Maschine laeuft; was sie von
+    /// fremden Maschinen liest, liefert der Stimulus als `out`-, `state`-,
+    /// `pub`- und `signal`-Zeilen.
+    pub only: Option<String>,
 }
 
 /// Ergebnis eines Laufs.
@@ -117,6 +121,17 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
     };
     let mut sim = Sim::new(program, options.profile.as_deref(), &options.overrides, scenario)?;
     let start_params = params_of(&sim);
+    let only = match &options.only {
+        Some(name) => {
+            let m = machine_by_name(program, name)?;
+            if !sim.order.contains(&m) {
+                return Err(Trap::Bug(format!("Maschine `{name}` laeuft nicht (Vorlage oder Szenario)")));
+            }
+            sim.restrict(m);
+            Some(m)
+        }
+        None => None,
+    };
     sim.nvm = options.nvm.clone();
     // Satz 9.4.1: jede lineare Erweiterung der `follows`-Kanten liefert
     // denselben Trace (7.2).
@@ -145,9 +160,16 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
         }
     }
     let mut echo = Vec::new();
-    apply_stimulus(&mut sim, stimulus, 0, &mut echo)?;
+    match only {
+        // Die Scheibe traegt, was die fremden Maschinen im Tick 0 nach
+        // ihrem Eintritt zeigten; ihre Anfangswerte rechnet `init` selbst.
+        Some(_) => sim.init_with(|s| apply_stimulus(s, stimulus, 0, &mut echo, only))?,
+        None => {
+            apply_stimulus(&mut sim, stimulus, 0, &mut echo, only)?;
+            sim.init()?;
+        }
+    }
     writer.lines.append(&mut echo);
-    sim.init()?;
     collect(&mut writer, &sim, 0, &mut verdict, &mut fail, &mut coverage);
     writer.initial(&sim);
 
@@ -164,7 +186,10 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
             break;
         }
         sim.age();
-        apply_stimulus(&mut sim, stimulus, tick, &mut echo)?;
+        if let Some(m) = only {
+            sim.image.carry_foreign(m);
+        }
+        apply_stimulus(&mut sim, stimulus, tick, &mut echo, only)?;
         writer.lines.append(&mut echo);
         sim.step()?;
         collect(&mut writer, &sim, tick, &mut verdict, &mut fail, &mut coverage);
@@ -274,10 +299,65 @@ fn reboot_of(sim: &Sim<'_>) -> Option<Ended> {
 }
 
 /// Speist die Stimuluszeilen eines Ticks ein.
-fn apply_stimulus(sim: &mut Sim<'_>, stimulus: &Trace, tick: u64, echo: &mut Vec<TraceLine>) -> Result<(), Trap> {
+fn apply_stimulus(
+    sim: &mut Sim<'_>,
+    stimulus: &Trace,
+    tick: u64,
+    echo: &mut Vec<TraceLine>,
+    only: Option<MachineId>,
+) -> Result<(), Trap> {
     let program = sim.loaded.program;
     for line in stimulus.at(tick) {
         match &line.kind {
+            // Maschinen-Replay (12.5): fremde Werte aus der Scheibe. Ohne
+            // `only` bleiben diese Zeilen, was sie waren — Beobachtungen.
+            LineKind::Output { channel, value } if only.is_some() => {
+                let Some(id) = channel_by_name(program, channel) else {
+                    return Err(Trap::Bug(format!("Stimulus: Channel `{channel}` gibt es nicht")));
+                };
+                let c = &program.channels[id.index()];
+                if c.dir != Direction::Output || c.owner == only {
+                    return Err(Trap::Bug(format!("Stimulus: `out {channel}` ist kein fremder Output")));
+                }
+                if matches!(program.types.list.get(c.ty.index()), Some(Type::Stream(_))) {
+                    return Err(Trap::Bug(format!("Stimulus: Ausgabestrom `{channel}` im Maschinen-Replay")));
+                }
+                *sim.image.output_mut(id) = parse_value(value, c.ty, program).map_err(Trap::Bug)?;
+            }
+            LineKind::State { machine, path } if only.is_some() => {
+                let m = foreign_machine(program, machine, only)?;
+                let leaf = path.rsplit('.').next().unwrap_or(path);
+                let variant = program
+                    .enums
+                    .iter()
+                    .find(|e| e.name == format!("{machine}.State"))
+                    .and_then(|e| e.variants.iter().position(|v| v.name == leaf))
+                    .unwrap_or(0);
+                let state = Value::Enum { variant: variant as u32, fields: Vec::new() };
+                sim.image.force_published(m, |e| e.state = Some(state));
+            }
+            LineKind::Published { machine, var, value } if only.is_some() => {
+                let m = foreign_machine(program, machine, only)?;
+                let def = &program.machines[m.index()];
+                let Some(i) = def.vars.iter().position(|v| v.name == *var && v.public) else {
+                    return Err(Trap::Bug(format!("Stimulus: `pub {machine} {var}` gibt es nicht")));
+                };
+                let v = parse_value(value, def.vars[i].ty, program).map_err(Trap::Bug)?;
+                sim.image.force_published(m, |e| {
+                    e.vars.insert(VarId(i as u32), v);
+                });
+            }
+            LineKind::Signal { machine, name } if only.is_some() => {
+                let m = foreign_machine(program, machine, only)?;
+                let Some(s) = program.machines[m.index()].signals.iter().position(|x| x.name == *name) else {
+                    return Err(Trap::Bug(format!("Stimulus: `signal {machine} {name}` gibt es nicht")));
+                };
+                sim.image.force_published(m, |e| {
+                    if let Some(slot) = e.signals.get_mut(s) {
+                        *slot = true;
+                    }
+                });
+            }
             // 8.4: Ein Tunable ist ein Input mit Halte-Semantik; der Satz
             // eines Ticks gilt vor dem Schritt. Ausserhalb der Range wird
             // die Zeile verworfen und als solche aufgezeichnet.
@@ -361,6 +441,23 @@ fn apply_stimulus(sim: &mut Sim<'_>, stimulus: &Trace, tick: u64, echo: &mut Vec
 
 fn channel_by_name(p: &Program, name: &str) -> Option<ChannelId> {
     p.channels.iter().position(|c| c.name == name).map(|i| ChannelId(i as u32))
+}
+
+fn machine_by_name(p: &Program, name: &str) -> Result<MachineId, Trap> {
+    p.machines
+        .iter()
+        .position(|m| m.name == name)
+        .map(|i| MachineId(i as u32))
+        .ok_or_else(|| Trap::Bug(format!("Maschine `{name}` gibt es nicht")))
+}
+
+/// Eine fremde Maschine der Scheibe: nicht die abgespielte selbst.
+fn foreign_machine(p: &Program, name: &str, only: Option<MachineId>) -> Result<MachineId, Trap> {
+    let m = machine_by_name(p, name)?;
+    if only == Some(m) {
+        return Err(Trap::Bug(format!("Stimulus: `{name}` ist die abgespielte Maschine selbst")));
+    }
+    Ok(m)
 }
 
 /// Sammelt die Beobachtungen eines Ticks in kanonischer Ordnung (T5).

@@ -20,9 +20,10 @@
 
 use std::fmt::Write as _;
 
+use takt_mir::MachineId;
 use takt_mir::program::Program;
 
-use crate::trace::Trace;
+use crate::trace::{LineKind, Trace};
 
 /// Formatversion der Aufzeichnung (11.3).
 ///
@@ -75,6 +76,9 @@ pub struct Header {
     pub natives: Vec<String>,
     /// Irreversible Outputs (12.7): der Lauf-Header nennt sie alle.
     pub irreversible: Vec<String>,
+    /// Die Scheibe einer Maschine (12.5): nur sie laeuft, die Zeilen
+    /// tragen, was sie liest.
+    pub machine: Option<String>,
 }
 
 impl Header {
@@ -92,6 +96,7 @@ impl Header {
             runtime: Vec::new(),
             natives: p.natives.iter().map(|n| n.name.clone()).collect(),
             irreversible: p.channels.iter().filter(|c| c.attrs.irreversible).map(|c| c.name.clone()).collect(),
+            machine: None,
         }
     }
 
@@ -125,6 +130,9 @@ impl Header {
         for o in &self.irreversible {
             let _ = writeln!(out, "#! irreversibel {o}");
         }
+        if let Some(m) = &self.machine {
+            let _ = writeln!(out, "#! maschine {m}");
+        }
         out
     }
 
@@ -148,6 +156,7 @@ impl Header {
             target: None,
             natives: Vec::new(),
             irreversible: Vec::new(),
+            machine: None,
         };
         let mut seen = false;
         for line in text.lines() {
@@ -167,6 +176,7 @@ impl Header {
                 "profil" => h.profile = Some(value.to_string()),
                 "target" => h.target = Some(value.to_string()),
                 "irreversibel" => h.irreversible.push(value.to_string()),
+                "maschine" => h.machine = Some(value.to_string()),
                 "param" => h.params.push((value.to_string(), w.collect::<Vec<_>>().join(" "))),
                 "runtime" => {
                     let rest: Vec<&str> = w.collect();
@@ -243,4 +253,64 @@ impl Recording {
         }
         Ok(())
     }
+}
+
+/// Die Scheibe einer Maschine (12.5, A2a): der Stimulus und alles, was
+/// sie von fremden Maschinen liest — deren Outputs, Zustaende, `pub var`
+/// und Signale aus dem Trace des Gesamtlaufs. `only` spielt sie allein ab.
+///
+/// Sie gilt ab Tick 0; ein Ausschnitt ab Tick k braeuchte einen
+/// Zustands-Schnappschuss der Maschine (plan/m6.md 7).
+pub fn machine_slice(p: &Program, recording: &Recording, trace: &Trace, m: MachineId) -> Recording {
+    let name = &p.machines[m.index()].name;
+    let mut header = recording.header.clone();
+    header.machine = Some(name.clone());
+    let mut lines = recording.inputs.lines.clone();
+    for line in &trace.lines {
+        let keep = match &line.kind {
+            LineKind::Output { channel, .. } => p
+                .channels
+                .iter()
+                .find(|c| c.name == *channel)
+                .is_some_and(|c| c.owner != Some(m) && !is_stream(p, c.ty)),
+            LineKind::State { machine, .. }
+            | LineKind::Published { machine, .. }
+            | LineKind::Signal { machine, .. } => machine != name,
+            _ => false,
+        };
+        if keep {
+            lines.push(line.clone());
+        }
+    }
+    lines.sort_by_key(|l| l.tick);
+    Recording { header, inputs: Trace { lines } }
+}
+
+/// Die Zeilen einer Maschine im Trace: ihre Outputs und Beobachtungen.
+pub fn machine_lines(p: &Program, trace: &Trace, m: MachineId) -> Trace {
+    let name = &p.machines[m.index()].name;
+    let lines = trace
+        .lines
+        .iter()
+        .filter(|l| match &l.kind {
+            LineKind::Output { channel, .. } => p.channels.iter().any(|c| c.name == *channel && c.owner == Some(m)),
+            LineKind::State { machine, .. }
+            | LineKind::Published { machine, .. }
+            | LineKind::Signal { machine, .. }
+            | LineKind::Job { machine, .. }
+            | LineKind::Fault { machine, .. }
+            | LineKind::Log { machine, .. }
+            | LineKind::Alert { machine, .. }
+            | LineKind::Measure { machine, .. }
+            | LineKind::Verify { machine, .. }
+            | LineKind::Verdict { machine, .. } => machine == name,
+            _ => false,
+        })
+        .cloned()
+        .collect();
+    Trace { lines }
+}
+
+fn is_stream(p: &Program, ty: takt_mir::TypeId) -> bool {
+    matches!(p.types.list.get(ty.index()), Some(takt_mir::types::Type::Stream(_)))
 }

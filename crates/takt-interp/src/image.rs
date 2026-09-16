@@ -398,6 +398,26 @@ impl Image {
         }
     }
 
+    /// Maschinen-Replay (12.5): Ψ einer fremden Maschine aus der
+    /// Aufzeichnung, nach `next` wie ein Schritt der Maschine.
+    pub fn force_published(&mut self, m: MachineId, f: impl FnOnce(&mut Published)) {
+        f(&mut self.next[m.index()]);
+    }
+
+    /// Maschinen-Replay: Der Schritt der fremden Maschinen kommt aus der
+    /// Scheibe — Werte und Zustand bleiben, Signale erloeschen (5.8), und
+    /// sie gelten als gelaufen, damit Follower sie frisch lesen (7.2).
+    pub fn carry_foreign(&mut self, only: MachineId) {
+        for m in 0..self.published.len() {
+            if m != only.index() {
+                let mut entry = self.published[m].clone();
+                entry.signals.iter_mut().for_each(|s| *s = false);
+                self.next[m] = entry;
+                self.set_fresh(MachineId(m as u32));
+            }
+        }
+    }
+
     /// Tauscht Ψ (Doppelpuffer, 11.2).
     pub fn commit_published(&mut self) {
         std::mem::swap(&mut self.published, &mut self.next);

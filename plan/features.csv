@@ -871,7 +871,7 @@ LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_f
 CLI-check,Werkzeug,11.1,takt check,,M0-M3,fertig,
 CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig,
 CLI-run,Werkzeug,11.1,takt run,,M4 (Codegen),fertig,
-CLI-replay,Werkzeug,11.1,takt replay,,M4 (Codegen),fertig,
+CLI-replay,Werkzeug,11.1,takt replay,,M4 (Codegen),fertig,"Maschinen-Replay `--machine M [--extract]` (12.5, A2a) seit M6 Schritt 13"
 CLI-test,Werkzeug,11.1,takt test,,M6 (v1.1),fertig,
 CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
 CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen,TTL-Adapter (PA9)

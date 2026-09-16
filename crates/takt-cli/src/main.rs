@@ -11,6 +11,9 @@
 //! takt campaign DATEI [NAME] --ticks N [--stim S.trace] [--profile P] [--scenario NAME]
 //!                   [--out DIR] [--hardware DATEI.hw]
 //! takt tune  DATEI --ticks N --save PROFIL [--stim S.trace] [--profile P] [--out DATEI]
+//! takt run   DATEI --ticks N [--stim S.trace] [--record R.trace] [--trace OUT.trace] [--profile P]
+//! takt replay DATEI --record R.trace [--golden G.trace] [--ticks N]
+//!                   [--machine M [--extract SCHEIBE.trace]]
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
 //! takt size  DATEI… [--build sim|hw] [--profile P] [--object DATEI.o] [--target NAME]
@@ -75,6 +78,8 @@ impl Args {
             "--scenario",
             "--save",
             "--coverage",
+            "--machine",
+            "--extract",
         ];
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
         let mut i = 0;
@@ -1077,6 +1082,25 @@ fn replay(args: &Args) -> bool {
         eprintln!("{record_path}: {e}");
         return false;
     }
+    // Eine Scheibe (12.5) spielt ihre Maschine allein ab; `--machine`
+    // waehlt sie sonst aus dem Gesamtlauf aus.
+    let machine = match (args.value("--machine"), &recording.header.machine) {
+        (Some(a), Some(b)) if a != b.as_str() => {
+            eprintln!("{record_path}: die Scheibe gehoert zu `{b}`, nicht zu `{a}`");
+            return false;
+        }
+        (a, b) => a.map(str::to_string).or_else(|| b.clone()),
+    };
+    let machine = match machine {
+        Some(name) => match program.machines.iter().position(|m| m.name == name) {
+            Some(i) => Some((name, takt_mir::MachineId(i as u32))),
+            None => {
+                eprintln!("{path}: Maschine `{name}` gibt es nicht");
+                return false;
+            }
+        },
+        None => None,
+    };
     // Die Zahl der Ticks steht im Kopf; `--ticks` darf sie ueberschreiben,
     // um einen Lauf abzukuerzen.
     let ticks = args.value("--ticks").and_then(|v| v.parse::<u64>().ok()).unwrap_or(recording.header.ticks);
@@ -1084,6 +1108,7 @@ fn replay(args: &Args) -> bool {
         ticks,
         profile: recording.header.profile.clone(),
         overrides: recording.header.overrides(),
+        only: recording.header.machine.clone(),
         ..Default::default()
     };
     let result = match takt_interp::run(&program, &recording.inputs, &options) {
@@ -1093,13 +1118,52 @@ fn replay(args: &Args) -> bool {
             return false;
         }
     };
-    let text = result.trace.render();
+    let mut text = result.trace.render();
+    if let Some((name, m)) = &machine {
+        if recording.header.machine.is_none() {
+            // A2a: Die Scheibe aus dem Gesamtlauf ziehen und allein
+            // abspielen — sie muss dasselbe zeigen (Satz 9.4.1).
+            let slice = takt_interp::record::machine_slice(&program, &recording, &result.trace, *m);
+            if let Some(out) = args.value("--extract") {
+                if let Err(e) = std::fs::write(out, slice.render()) {
+                    eprintln!("{out}: {e}");
+                    return false;
+                }
+                println!("{out}: Scheibe von `{name}` geschrieben");
+            }
+            let alone = RunOptions { only: Some(name.clone()), ..options.clone() };
+            let alone = match takt_interp::run(&program, &slice.inputs, &alone) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("{path}: Scheibe von `{name}`: {e:?}");
+                    return false;
+                }
+            };
+            let whole = takt_interp::record::machine_lines(&program, &result.trace, *m).render();
+            let sliced = takt_interp::record::machine_lines(&program, &alone.trace, *m).render();
+            if whole != sliced {
+                print!("{}", diff(&whole, &sliced));
+                eprintln!("Scheibe von `{name}` weicht vom Gesamtlauf ab — Fehler im Interpreter (12.5)");
+                return false;
+            }
+        }
+        text = takt_interp::record::machine_lines(&program, &result.trace, *m).render();
+    }
     // Mit `--golden` wird verglichen, sonst ausgegeben. Der Vergleich ist
     // der eigentliche Zweck: Er zeigt, ob Runtime und Treiber sich
     // gleich verhalten haben.
     match args.value("--golden") {
         Some(golden) => {
-            let Some(expected) = read(golden) else { return false };
+            let Some(mut expected) = read(golden) else { return false };
+            if let Some((_, m)) = &machine {
+                expected = match Trace::parse(&expected) {
+                    Ok(t) => takt_interp::record::machine_lines(&program, &t, *m).render(),
+                    Err(e) => {
+                        eprintln!("{golden}: {e}");
+                        return false;
+                    }
+                };
+            }
             if text != expected {
                 print!("{}", diff(&expected, &text));
                 eprintln!("{golden}: Trace weicht ab — Fehler in Runtime oder Treiber (12.5)");
