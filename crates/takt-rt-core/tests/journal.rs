@@ -5,8 +5,9 @@
 //! Sequenznummer", `min_interval` — und die Stromausfallsicherheit, die
 //! 8.11 mit `CUT_AT_BYTE` prueft.
 
-use takt_rt_core::journal::{FakeNvm, HEADER, Journal, Loaded};
-use takt_rt_core::loopcore::Nvm;
+use takt_native::crc::{crc32_final, crc32_start, crc32_update};
+use takt_rt_core::journal::{FakeNvm, HEADER, Journal, Loaded, MAGIC};
+use takt_rt_core::loopcore::{Nvm, NvmState};
 
 /// Slotgroesse der Tests; gross genug fuer Kopf und Nutzlast.
 const SLOT: usize = 128;
@@ -294,4 +295,31 @@ fn a_cut_during_the_first_write_leaves_no_half_entry() {
             assert_eq!(&buf[..length as usize], b"erster", "halber Eintrag bei Abbruch {cut}");
         }
     }
+}
+
+/// 11.3: Leser akzeptieren aeltere Versionen ihres Formats. Version 1 ist
+/// die erste; der Test schreibt denselben Slot mit Version 0 und
+/// passender Pruefsumme, und `load` nimmt ihn.
+#[test]
+fn an_older_slot_version_still_loads() {
+    let (j, _) = with_old(b"alt");
+    let mut nvm = j.into_inner();
+    let mut raw = [0u8; SLOT];
+    let slot = (0..2u8)
+        .find(|&s| nvm.read(s, 0, &mut raw) && raw[..4] == MAGIC.to_le_bytes())
+        .expect("ein beschriebener Slot");
+    raw[4..6].copy_from_slice(&0u16.to_le_bytes());
+    let len = u32::from_le_bytes(raw[24..28].try_into().expect("Laenge")) as usize;
+    let crc = crc32_final(crc32_update(crc32_update(crc32_start(), &raw[..28]), &raw[HEADER..HEADER + len]));
+    raw[28..32].copy_from_slice(&crc.to_le_bytes());
+    assert!(nvm.begin_write(slot, 0, &raw));
+    for _ in 0..64 {
+        if nvm.poll() == NvmState::Done {
+            break;
+        }
+    }
+    let mut buf = [0u8; SLOT];
+    let (_, got) = reopen(nvm, HASH, &mut buf);
+    assert!(matches!(got, Loaded::Found { length: 3, .. }), "{got:?}");
+    assert_eq!(&buf[..3], b"alt");
 }

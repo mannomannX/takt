@@ -66,6 +66,22 @@ fn size_lists_its_items_with_origin() {
     assert!(text.contains("exakt") || text.contains("offen"), "die Herkunft steht dabei:\n{text}");
 }
 
+/// `size --baseline` (11.5, D1): eine gespeicherte Rechnung ist die
+/// Messlatte; waechst RAM oder Flash, faellt der Aufruf.
+#[test]
+fn size_compares_with_a_baseline() {
+    let file = std::env::temp_dir().join(format!("takt-size-{}.baseline", std::process::id()));
+    let path = file.to_string_lossy().into_owned();
+    let saved = takt(&["size", "corpus-try/01_minimal.takt", "--save-baseline", &path]);
+    assert!(saved.status.success(), "{}", String::from_utf8_lossy(&saved.stderr));
+    let same = takt(&["size", "corpus-try/01_minimal.takt", "--baseline", &path]);
+    assert!(same.status.success() && stdout(&same).contains("keine Aenderung"), "{}", stdout(&same));
+    let bigger = takt(&["size", "corpus-try/13_framing.takt", "--baseline", &path]);
+    assert!(!bigger.status.success(), "ein groesseres Programm faellt gegen die Baseline:\n{}", stdout(&bigger));
+    assert!(stdout(&bigger).contains("gewachsen"), "{}", stdout(&bigger));
+    let _ = std::fs::remove_file(&file);
+}
+
 /// `mir --hash` liefert den Logik-Hash; er haengt nur an der Logik, also
 /// liefert derselbe Aufruf denselben Wert.
 #[test]

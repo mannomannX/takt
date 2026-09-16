@@ -884,7 +884,7 @@ CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
 CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen,TTL-Adapter (PA9)
 CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),fertig,"`--export DATEI.smt2 --depth k`, sonst Solver (`--solver`, `TAKT_SOLVER`, `z3`/`cvc5`): Eigenschaften bewiesen/verletzt/unbewiesen, Pruefstellen bewiesen unerreichbar/erreichbar mit Pfad/unentschieden, Gegenbeispiele als Stimulus im Interpreter bestaetigt (`takt-prove/src/solve.rs`)"
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig,
-CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig,
+CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig,"`--baseline DATEI` vergleicht die Posten mit einer gespeicherten Rechnung (RAM/Flash gewachsen = Fehler), `--save-baseline DATEI` schreibt sie (D1, Schritt 26)"
 CLI-latency,Werkzeug,11.1,takt latency,,M3 (Gate),fertig,
 CLI-graph,Werkzeug,11.1,takt graph,,M4 (Codegen),fertig,
 CLI-bench,Werkzeug,11.1,takt bench,,M5 (Embedded),offen,TTL-Adapter (PA9)
@@ -1077,10 +1077,13 @@ CON-System-Channels_sys/…,Konstrukt (2.4),2.4,System-Channels `sys/…`,,M0 (P
 CON-native_fn,Konstrukt (2.4),2.4,`native fn`,,M0 (Parser/MIR-Entwurf),definiert,
 CON-tick_source,Konstrukt (2.4),2.4,`tick_source`,,M0 (Parser/MIR-Entwurf),definiert,
 "CON-jitter,_max_slew",Konstrukt (2.4),2.4,"`jitter`, `max_slew`",,M0 (Parser/MIR-Entwurf),definiert,
-FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M0 (Parser/MIR-Entwurf),teilweise,
-FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M4 (Codegen),fertig,
-FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M6 (mit 8.10),fertig,
+FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M0 (Parser/MIR-Entwurf),teilweise,Version 7; jede aeltere Version lesbar (`takt-mir/tests/roundtrip.rs`)
+FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M4 (Codegen),fertig,"Version 2 (Parametervektor im Kopf); Version 1 lesbar (`takt-interp/tests/recording_versions.rs`, Schritt 26)"
+FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M6 (mit 8.10),fertig,Version 3; Version 1 lesbar (`takt-sema/tests/hardware.rs`)
 FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M5 (Embedded),offen,
+FMT-Journal-Slot,Versioniertes Format,11.3,"`persist`-Journal, Slot-Kopf (`TKPJ`, 5.9)",,M5 (Embedded),fertig,"Version 1; ein Slot der Version 0 mit gueltiger Pruefsumme laedt (`takt-rt-core/tests/journal.rs`, Schritt 26)"
+FMT-Coverage,Versioniertes Format,11.3,"Coverage-Datei (`# takt-coverage 1`, 13.2)",,M6,fertig,"nur Schreiber: `Coverage::render`; ein Leser kommt mit dem Werkzeug, das sie auswertet"
+FMT-Size-Baseline,Versioniertes Format,11.3,"Baseline von `takt size` (`# takt-size 1`, 11.5)",,M6,fertig,"Version 1; aeltere lesbar, neuere abgelehnt (`takt-mir/tests/size_baseline.rs`)"
 FMT-Lauf-Header,Versioniertes Format,11.3,Lauf-Header,,M4 (Codegen),fertig,
 STUFE-v1_(Kern),Stufe (Roadmap),15,v1 (Kern),,Doku/Rationale,rationale,
 STUFE-v1.1,Stufe (Roadmap),15,v1.1,,Doku/Rationale,rationale,

@@ -39,6 +39,25 @@ impl Origin {
             Origin::Open => "offen",
         }
     }
+
+    /// Die Herkunft zu ihrem Namen.
+    pub fn by_name(name: &str) -> Option<Origin> {
+        [Origin::Exact, Origin::Contract, Origin::Measured, Origin::Open].into_iter().find(|o| o.name() == name)
+    }
+}
+
+/// Formatversion der Baseline-Datei (11.3).
+pub const BASELINE_VERSION: u16 = 1;
+
+/// Ein Posten, der sich gegen die Baseline geaendert hat.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Delta {
+    /// Bezeichnung.
+    pub name: String,
+    /// Bytes in der Baseline; `None`, wenn der Posten dort fehlt.
+    pub before: Option<u64>,
+    /// Bytes jetzt; `None`, wenn der Posten weggefallen ist.
+    pub after: Option<u64>,
 }
 
 /// Ein Posten des Speicherbudgets.
@@ -78,6 +97,66 @@ impl Size {
     /// Belastbare RAM-Posten: alles, was nicht Flash ist.
     pub fn ram_total(&self) -> u64 {
         self.items.iter().filter(|i| i.origin != Origin::Open && !is_flash(&i.name)).map(|i| i.bytes).sum()
+    }
+
+    /// Die Posten als Baseline-Datei (`takt size --save-baseline`, D1):
+    /// `# takt-size <version>`, dann `posten;bytes;herkunft` je Zeile.
+    pub fn baseline(&self) -> String {
+        let mut out = format!("# takt-size {BASELINE_VERSION}\n");
+        for i in &self.items {
+            out.push_str(&format!("{};{};{}\n", i.name, i.bytes, i.origin.name()));
+        }
+        out
+    }
+
+    /// Liest eine Baseline; Leser akzeptieren aeltere Versionen (11.3).
+    pub fn from_baseline(text: &str) -> Result<Size, String> {
+        let mut lines = text.lines();
+        let head = lines.next().unwrap_or("").trim();
+        let version: u16 = head
+            .strip_prefix("# takt-size")
+            .and_then(|v| v.trim().parse().ok())
+            .ok_or("kein Kopf: erwartet `# takt-size <version>`")?;
+        if version > BASELINE_VERSION {
+            return Err(format!(
+                "Baseline der Version {version} ist neuer als diese Fassung ({BASELINE_VERSION}); \
+                 Leser akzeptieren nur aeltere Versionen (11.3)"
+            ));
+        }
+        let mut items = Vec::new();
+        for (n, line) in lines.enumerate() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut f = line.split(';');
+            let (Some(name), Some(bytes), Some(origin)) = (f.next(), f.next(), f.next()) else {
+                return Err(format!("Zeile {}: erwartet `posten;bytes;herkunft`", n + 2));
+            };
+            let bytes = bytes.trim().parse().map_err(|_| format!("Zeile {}: `{bytes}` ist keine Zahl", n + 2))?;
+            let origin = Origin::by_name(origin.trim())
+                .ok_or_else(|| format!("Zeile {}: unbekannte Herkunft `{origin}`", n + 2))?;
+            items.push(Item { name: name.trim().to_string(), bytes, origin });
+        }
+        Ok(Size { items })
+    }
+
+    /// Was sich gegen eine Baseline geaendert hat: erst die Posten in
+    /// Reportreihenfolge, dann die weggefallenen.
+    pub fn diff(&self, base: &Size) -> Vec<Delta> {
+        let find = |items: &[Item], name: &str| items.iter().find(|i| i.name == name).map(|i| i.bytes);
+        let mut out = Vec::new();
+        for i in &self.items {
+            let before = find(&base.items, &i.name);
+            if before != Some(i.bytes) {
+                out.push(Delta { name: i.name.clone(), before, after: Some(i.bytes) });
+            }
+        }
+        for b in &base.items {
+            if find(&self.items, &b.name).is_none() {
+                out.push(Delta { name: b.name.clone(), before: Some(b.bytes), after: None });
+            }
+        }
+        out
     }
 
     /// Der Report als Zeilen.

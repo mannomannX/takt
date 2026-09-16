@@ -19,7 +19,7 @@
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
 //!                   [--instrument statements|states|off]
 //! takt size  DATEI… [--build sim|hw] [--params-profile P] [--object DATEI.o] [--target NAME]
-//!                   [--hardware DATEI.hw]
+//!                   [--hardware DATEI.hw] [--baseline DATEI] [--save-baseline DATEI]
 //! takt cost  DATEI… [--build sim|hw] [--params-profile P]
 //! takt latency DATEI… [--build sim|hw] [--params-profile P]
 //! takt mir   DATEI [--dump] [--write OUT.mir] [--hash]
@@ -77,6 +77,8 @@ impl Args {
             "--out",
             "--object",
             "--hardware",
+            "--baseline",
+            "--save-baseline",
             "--scenario",
             "--export",
             "--depth",
@@ -594,6 +596,55 @@ fn size(args: &Args) -> bool {
             for line in report.lines() {
                 println!("{line}");
             }
+        }
+        if let Some(file) = args.value("--save-baseline") {
+            match std::fs::write(file, report.baseline()) {
+                Ok(()) => println!("  Baseline geschrieben: {file}"),
+                Err(e) => {
+                    eprintln!("{file}: {e}");
+                    ok = false;
+                }
+            }
+        }
+        if let Some(file) = args.value("--baseline") {
+            ok &= against_baseline(&report, file);
+        }
+    }
+    ok
+}
+
+/// `--baseline DATEI` (11.5, D1): die Posten gegen eine fruehere Rechnung.
+/// Waechst RAM oder Flash, ist das ein Fehler — eine Budget-Regression
+/// soll so sichtbar sein wie ein fehlgeschlagener Test.
+fn against_baseline(report: &takt_mir::analysis::size::Size, file: &str) -> bool {
+    let base = match std::fs::read_to_string(file).map_err(|e| e.to_string()) {
+        Ok(text) => match takt_mir::analysis::size::Size::from_baseline(&text) {
+            Ok(base) => base,
+            Err(e) => {
+                eprintln!("{file}: {e}");
+                return false;
+            }
+        },
+        Err(e) => {
+            eprintln!("{file}: {e}");
+            return false;
+        }
+    };
+    let deltas = report.diff(&base);
+    if deltas.is_empty() {
+        println!("  Baseline {file}: keine Aenderung");
+    }
+    let show = |b: Option<u64>| b.map_or("-".to_string(), |b| b.to_string());
+    for d in &deltas {
+        println!("  {}: {} -> {} (Baseline {file})", d.name, show(d.before), show(d.after));
+    }
+    let mut ok = true;
+    for (what, have, was) in
+        [("RAM", report.ram_total(), base.ram_total()), ("Flash", report.flash_total(), base.flash_total())]
+    {
+        if have > was {
+            println!("  {what}: {have} Byte, Baseline {was} — gewachsen");
+            ok = false;
         }
     }
     ok
