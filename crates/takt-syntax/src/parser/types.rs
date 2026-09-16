@@ -122,6 +122,21 @@ impl<'t, 's> Parser<'t, 's> {
         } else {
             return Err(self.error_here("einen Typ"));
         };
+        // 3.8: Die Huelle `?`/`!E` steht um jeden Typ; Skalare und Namen
+        // tragen sie in ihrer Variante, Puffer und Sammlungen hier (FB-94).
+        let kind = match kind {
+            TypeKind::Scalar { .. }
+            | TypeKind::Named { .. }
+            | TypeKind::TypeVar { .. }
+            | TypeKind::Array { .. }
+            | TypeKind::Stream(_) => kind,
+            inner => match self.parse_wrap()? {
+                Some(wrap) => {
+                    TypeKind::Wrapped { inner: Box::new(Type { kind: inner, span: self.span_from(start) }), wrap }
+                }
+                None => inner,
+            },
+        };
         Ok(Type { kind, span: self.span_from(start) })
     }
 

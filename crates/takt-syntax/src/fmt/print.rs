@@ -1880,6 +1880,10 @@ impl Emitter<'_, '_> {
                 }
                 self.fmt_wrap(wrap);
             }
+            TypeKind::Wrapped { inner, wrap } => {
+                self.fmt_type(inner);
+                self.fmt_wrap(&Some(wrap.clone()));
+            }
             TypeKind::Array { len, elem } => {
                 self.sp("[");
                 self.glue();

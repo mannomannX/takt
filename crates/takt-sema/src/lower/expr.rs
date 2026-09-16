@@ -508,6 +508,14 @@ impl Lowerer<'_> {
         hint: Option<TypeId>,
         span: Span,
     ) -> Option<Expr> {
+        // 3.12: Eine Konstantenvariable ist in ihrer Instanz eine Konstante
+        // — in Typen, in `range(N)` und in der Rechnung.
+        if args.is_none() {
+            if let Some(n) = self.env.const_value(&name.name) {
+                let int = self.tys.int;
+                return Some(Expr::new(ExprKind::Int(n), int, span));
+            }
+        }
         // typgefuehrt: Variante des erwarteten Enums oder OK/ERR eines T!E
         if let Some(h) = hint {
             match self.ty(h).clone() {

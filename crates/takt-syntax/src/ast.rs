@@ -1523,6 +1523,12 @@ pub enum TypeKind {
         name: Ident,
         wrap: Option<Wrap>,
     },
+    /// `bytes<N>?`, `vec<T, N>!E`: die Huelle um einen Puffer oder eine
+    /// Sammlung (3.8; FB-94).
+    Wrapped {
+        inner: Box<Type>,
+        wrap: Wrap,
+    },
 }
 
 /// `?` oder `!E`

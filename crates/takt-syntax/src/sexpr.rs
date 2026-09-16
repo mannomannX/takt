@@ -906,6 +906,7 @@ pub fn ty(t: &Type) -> String {
         }
         TypeKind::Array { len, elem } => format!("[{}]{}", expr(len), ty(elem)),
         TypeKind::Named { name, wrap } | TypeKind::TypeVar { name, wrap } => format!("{}{}", name.name, wrap_str(wrap)),
+        TypeKind::Wrapped { inner, wrap } => format!("{}{}", ty(inner), wrap_str(&Some(wrap.clone()))),
         TypeKind::Bytes(n) => format!("bytes<{}>", expr(n)),
         TypeKind::Vec { elem, len } => format!("vec<{}, {}>", ty(elem), expr(len)),
         TypeKind::Line(n) => format!("line<{}>", expr(n)),

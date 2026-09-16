@@ -403,11 +403,11 @@ unit_term      := ( IDENT | UPPER_IDENT | TYPE_IDENT ) [ "^" INT ]   (* Einheite
 (* ---------------------------------------------------------------- Typausdruecke *)
 
 type           := scalar_type [ "in" range ] [ "?" | "!" TYPE_IDENT ] | "[" const_expr "]" type | TYPE_IDENT [ "?" | "!" TYPE_IDENT ]   (* nach "<" schliesst das naechste ">" derselben Klammerebene den Typ, siehe cmp_expr *)   (* @check 30, 45, 57 *)
-                | "bytes" "<" const_expr ">" | "vec" "<" type "," const_expr ">" | "line" "<" const_expr ">"
-                | "stream" "<" elem_type ">" | "samples" "<" type "," const_expr ">" | "table" "<" type "," type ">"
-                | "mat" "<" const_expr "," const_expr ">" [ "[" unit_expr "]" ]                   (* 3.11, uniform *)
-                | "mat" "[" unit_tuple "," unit_tuple "]" | "vec" "[" unit_tuple "]"               (* 3.11, dimensioniert; v1.1 *)
-                | "map" "<" type "," type "," const_expr ">"                                       (* 3.9, v1.1 *)
+                | "bytes" "<" const_expr ">" [ "?" | "!" TYPE_IDENT ] | "vec" "<" type "," const_expr ">" [ "?" | "!" TYPE_IDENT ] | "line" "<" const_expr ">" [ "?" | "!" TYPE_IDENT ]   (* die Huelle um Puffer und Sammlungen, 3.8 *)
+                | "stream" "<" elem_type ">" | "samples" "<" type "," const_expr ">" [ "?" | "!" TYPE_IDENT ] | "table" "<" type "," type ">" [ "?" | "!" TYPE_IDENT ]
+                | "mat" "<" const_expr "," const_expr ">" [ "[" unit_expr "]" ] [ "?" | "!" TYPE_IDENT ]   (* 3.11, uniform *)
+                | "mat" "[" unit_tuple "," unit_tuple "]" [ "?" | "!" TYPE_IDENT ] | "vec" "[" unit_tuple "]" [ "?" | "!" TYPE_IDENT ]   (* 3.11, dimensioniert; v1.1 *)
+                | "map" "<" type "," type "," const_expr ">" [ "?" | "!" TYPE_IDENT ]              (* 3.9, v1.1 *)
                 | UPPER_IDENT [ "?" | "!" TYPE_IDENT ]                                             (* Typvariable, 3.12; v1.2 *)
 scalar_type    := "bool" | int_type [ "[" unit_expr "]" ]                                        (* Einheiten auf Integern: 3.2; v1.1 *)   (* @check 38 *)
                 | "float" [ "[" unit_expr "]" ] | "f32" [ "[" unit_expr "]" ] | "f64" [ "[" unit_expr "]" ]
@@ -683,7 +683,7 @@ match classify(ev):
 ```
 
 ### 3.8 Optionaltyp `T?`
-Werte sind `none` oder ein `T`; `T` wird bei Zuweisung implizit nach `T?` gehoben. Verfügbar: `.valid`, `.or(d)`. Unbewachte Verwendung fügt `check x.valid` ein (Fault `MissingValue`) — mit derselben Dominanzanalyse wie für Channels (3.5) und mit Warnung, damit explizite Behandlung (`if x.valid:` oder `.or(...)`) der Normalfall bleibt. `T?` entsteht aus Channel-Lesen, `decode`, `vec.get(i)` und Musterabgleich; es ist das einzige Modell für abwesende Werte.
+Werte sind `none` oder ein `T`; `T` wird bei Zuweisung implizit nach `T?` gehoben. Die Hülle steht um jeden Typ, auch um Puffer und Sammlungen (`bytes<N>?`, `vec<T, N>?`; 2.3). Verfügbar: `.valid`, `.or(d)`. Unbewachte Verwendung fügt `check x.valid` ein (Fault `MissingValue`) — mit derselben Dominanzanalyse wie für Channels (3.5) und mit Warnung, damit explizite Behandlung (`if x.valid:` oder `.or(...)`) der Normalfall bleibt. `T?` entsteht aus Channel-Lesen, `decode`, `vec.get(i)` und Musterabgleich; es ist das einzige Modell für abwesende Werte.
 
 Ein `check x.valid` (bzw. `check r.ok`) gilt für den Rest des Blocks oder Segments als Guard: Scheitert er, verlässt die Ausführung den Block (Fault), sonst ist `x` dominiert.
 
@@ -819,7 +819,7 @@ fn first[type T: pod, const N](v: vec<T, N>) -> T?                              
 fn sum[type T: numeric, const N in 1..4096](a: [N] T) -> T
 block window_mean[U, const N in 1..1024]()   step(x: float[U]) -> float[U]
 ```
-- Ein bloßer Bezeichner ist eine Einheitenvariable (3.2); `type T` eine Typvariable mit genau einer eingebauten Fähigkeit aus `{pod, eq, ord, numeric, integer, float}` (Default `pod`); `const N` eine Compile-Zeit-Konstante vom Typ `int` mit optionaler Range, die in Typen (`[N] T`, `bytes<N>`, `mat<R, C>`) und in `range(N)` stehen darf. Nutzerdefinierte Fähigkeiten (Traits) gibt es nicht. Stufen: Einheitenvariablen v1, Konstantenvariablen v1.1, weil die Standardbibliothek sie für `bytes<N>` braucht (11.4), Typvariablen v1.2.
+- Ein bloßer Bezeichner ist eine Einheitenvariable (3.2); `type T` eine Typvariable mit genau einer eingebauten Fähigkeit aus `{pod, eq, ord, numeric, integer, float}` (Default `pod`); `const N` eine Compile-Zeit-Konstante vom Typ `int` mit optionaler Range, die in Typen (`[N] T`, `bytes<N>`, `mat<R, C>`), in `range(N)` und als Konstante in der Rechnung ihrer Instanz stehen darf; die Range gilt bei der Instanziierung (Prüfung 52). Nutzerdefinierte Fähigkeiten (Traits) gibt es nicht. Stufen: Einheitenvariablen v1, Konstantenvariablen v1.1, weil die Standardbibliothek sie für `bytes<N>` braucht (11.4), Typvariablen v1.2.
 - Inferenz ist lokal aus den Argumenten: Jeder Parameter, dessen Typ genau eine noch offene Variable mit Exponent ±1 enthält, bestimmt sie aus dem Argument, in beliebiger Reihenfolge, bis nichts mehr offen ist. Eine Variable, die in keinem Parameter des Aufrufs oder Konstruktors vorkommt (`lowpass[U](tau: Duration)`, ein Rückgabetyp allein), wird explizit angegeben: `lowpass[bar](tau = 50 ms)`; der Compiler nennt diese Schreibweise. Jede Instanziierung ist statisch und wird **monomorphisiert**: eine eigene MIR-Funktion mit eigenem Budget (9.4.3). Es gibt keinen dynamischen Dispatch und keine Laufzeitkosten.
 - Der Instanziierungsgraph ist azyklisch (statisch geprüft); die Instanziierungstiefe ist damit endlich, und die Terminierungsargumente (9.4.2, T3) bleiben unverändert.
 - Warum kein Trait-System: Es zöge Auflösungsregeln, Dispatch und Fehlermeldungen nach sich, die weder die Bibliothek noch die Zielgruppe brauchen; sechs feste Fähigkeiten decken die Bibliothek ab.
@@ -1735,7 +1735,7 @@ sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereigni
 | 49 | Edition fehlt (2.5) | W (Zertifizierungsmodus: F) |
 | 50 | Reservierte Wörter als Bezeichner; reservierte Membernamen als Feld- oder Variantennamen (2.5) | F |
 | 51 | `match` über offene Enums ohne `case _` (2.5) | F |
-| 52 | Generics: genau eine Fähigkeit je Typvariable; Instanziierungsgraph azyklisch; `const`-Variablen nur in Typen und `range` (3.12) | F |
+| 52 | Generics: genau eine Fähigkeit je Typvariable; Instanziierungsgraph azyklisch; `const`-Variablen: der Wert jeder Instanz liegt in der deklarierten Range, aus der Kapazität des Arguments abgeleitet oder explizit (3.12) | F |
 | 53 | Gescopte Instanzen: Single-Writer global; keine Instanzen in `idle`-Zuständen; kein (mittelbares) Selbst-Scoping (5.11) | F |
 | 54 | `resume` nur an Zuständen mit Kindern; Fault-Ziele werden über `initial` betreten (5.12) | F |
 | 55 | Trigger: Guard und Outputs knotenlokal; `arm`/`disarm` nur aus der deklarierenden Maschine (7.5) | F |

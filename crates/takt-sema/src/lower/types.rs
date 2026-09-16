@@ -46,6 +46,14 @@ impl Lowerer<'_> {
     /// Einheitenname: generische Variable oder benannte Einheit.
     pub fn unit_name(&mut self, name: &ast::Ident) -> Option<Unit> {
         if let Some(i) = self.env.index(&name.name) {
+            if matches!(self.env.vars[i as usize], super::GenericVar::Const { .. }) {
+                self.error(
+                    SC3,
+                    name.span,
+                    format!("`{}` ist eine Konstantenvariable, keine Einheit (3.12)", name.name),
+                );
+                return None;
+            }
             return Some(match &self.env.units[i as usize] {
                 Some(u) => u.clone(),
                 None => Unit::var(i),
@@ -88,7 +96,7 @@ impl Lowerer<'_> {
         for (atom, e) in &unit.factors {
             let term = match atom {
                 Atom::Var(v) => {
-                    let name = format!("?{}", self.env.names.get(*v as usize).cloned().unwrap_or_default());
+                    let name = format!("?{}", self.env.name(*v).unwrap_or_default());
                     let id = match self.units.get(&name) {
                         Some(id) => id,
                         None => self
@@ -196,6 +204,10 @@ impl Lowerer<'_> {
                     }
                 };
                 Some(self.wrap(base, wrap.as_ref(), span))
+            }
+            ast::TypeKind::Wrapped { inner, wrap } => {
+                let t = self.resolve_type(inner)?;
+                Some(self.wrap(t, Some(wrap), span))
             }
             ast::TypeKind::Bytes(n) => {
                 let cap = self.const_cap(n)?;

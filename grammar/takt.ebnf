@@ -247,11 +247,11 @@ unit_term      := ( IDENT | UPPER_IDENT | TYPE_IDENT ) [ "^" INT ]   (* Einheite
 (* ---------------------------------------------------------------- Typausdruecke *)
 
 type           := scalar_type [ "in" range ] [ "?" | "!" TYPE_IDENT ] | "[" const_expr "]" type | TYPE_IDENT [ "?" | "!" TYPE_IDENT ]   (* nach "<" schliesst das naechste ">" derselben Klammerebene den Typ, siehe cmp_expr *)   (* @check 30, 45, 57 *)
-                | "bytes" "<" const_expr ">" | "vec" "<" type "," const_expr ">" | "line" "<" const_expr ">"
-                | "stream" "<" elem_type ">" | "samples" "<" type "," const_expr ">" | "table" "<" type "," type ">"
-                | "mat" "<" const_expr "," const_expr ">" [ "[" unit_expr "]" ]                   (* 3.11, uniform *)
-                | "mat" "[" unit_tuple "," unit_tuple "]" | "vec" "[" unit_tuple "]"               (* 3.11, dimensioniert; v1.1 *)
-                | "map" "<" type "," type "," const_expr ">"                                       (* 3.9, v1.1 *)
+                | "bytes" "<" const_expr ">" [ "?" | "!" TYPE_IDENT ] | "vec" "<" type "," const_expr ">" [ "?" | "!" TYPE_IDENT ] | "line" "<" const_expr ">" [ "?" | "!" TYPE_IDENT ]   (* die Huelle um Puffer und Sammlungen, 3.8 *)
+                | "stream" "<" elem_type ">" | "samples" "<" type "," const_expr ">" [ "?" | "!" TYPE_IDENT ] | "table" "<" type "," type ">" [ "?" | "!" TYPE_IDENT ]
+                | "mat" "<" const_expr "," const_expr ">" [ "[" unit_expr "]" ] [ "?" | "!" TYPE_IDENT ]   (* 3.11, uniform *)
+                | "mat" "[" unit_tuple "," unit_tuple "]" [ "?" | "!" TYPE_IDENT ] | "vec" "[" unit_tuple "]" [ "?" | "!" TYPE_IDENT ]   (* 3.11, dimensioniert; v1.1 *)
+                | "map" "<" type "," type "," const_expr ">" [ "?" | "!" TYPE_IDENT ]              (* 3.9, v1.1 *)
                 | UPPER_IDENT [ "?" | "!" TYPE_IDENT ]                                             (* Typvariable, 3.12; v1.2 *)
 scalar_type    := "bool" | int_type [ "[" unit_expr "]" ]                                        (* Einheiten auf Integern: 3.2; v1.1 *)   (* @check 38 *)
                 | "float" [ "[" unit_expr "]" ] | "f32" [ "[" unit_expr "]" ] | "f64" [ "[" unit_expr "]" ]

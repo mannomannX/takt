@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 52 (3.12): die Range einer Konstantenvariablen gilt bei der
+# Instanziierung; ein Array mit 16 Elementen passt nicht in `1..8`.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+fn first[const N in 1..8](a: [N] int in 0..9) -> int:
+    return a[0]
+
+machine m:
+    var big : [16] int in 0..9 = default
+    initial RUN
+    state RUN:
+        loop:
+            n = first(big)  # ~ SC-52

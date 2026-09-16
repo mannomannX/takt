@@ -29,13 +29,48 @@ use crate::Options;
 use crate::symbols::{Entity, Scopes, Symbol};
 use crate::units::{Unit, Units};
 
+/// Generische Variable einer Vorlage (3.12): Einheit (v1) oder Konstante
+/// (v1.1); Typvariablen sind v1.2.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GenericVar {
+    /// Einheitenvariable `U`.
+    Unit(String),
+    /// `const N in lo..hi`; ohne Range die ganze Breite von `int`.
+    Const {
+        /// Name.
+        name: String,
+        /// Untergrenze.
+        lo: i64,
+        /// Obergrenze.
+        hi: i64,
+    },
+}
+
+impl GenericVar {
+    /// Name der Variablen.
+    pub fn name(&self) -> &str {
+        match self {
+            GenericVar::Unit(n) | GenericVar::Const { name: n, .. } => n,
+        }
+    }
+}
+
+/// Bindung einer generischen Variablen bei der Instanziierung.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Binding {
+    /// Einheit.
+    Unit(Unit),
+    /// Konstante.
+    Const(i64),
+}
+
 /// Generische Vorlage einer Funktion (3.12).
 #[derive(Clone, Debug)]
 pub struct FnTemplate {
     /// Deklaration.
     pub decl: ast::FnDecl,
-    /// Namen der Einheitenvariablen.
-    pub generics: Vec<String>,
+    /// Generische Variablen.
+    pub generics: Vec<GenericVar>,
     /// Aus dem Prelude.
     pub prelude: bool,
 }
@@ -45,8 +80,8 @@ pub struct FnTemplate {
 pub struct BlockTemplate {
     /// Deklaration.
     pub decl: ast::BlockDecl,
-    /// Namen der Einheitenvariablen.
-    pub generics: Vec<String>,
+    /// Generische Variablen.
+    pub generics: Vec<GenericVar>,
     /// Aus dem Prelude.
     pub prelude: bool,
 }
@@ -78,16 +113,47 @@ pub struct Templates {
 /// Umgebung der generischen Variablen einer Instanziierung.
 #[derive(Clone, Debug, Default)]
 pub struct Env {
-    /// Namen der Einheitenvariablen (Index = `Atom::Var`).
-    pub names: Vec<String>,
-    /// Bindungen; `None` waehrend der generischen Pruefung.
+    /// Die Variablen (Index = `Atom::Var` fuer Einheiten).
+    pub vars: Vec<GenericVar>,
+    /// Einheitenbindungen; `None` waehrend der generischen Pruefung und
+    /// bei Konstantenvariablen.
     pub units: Vec<Option<Unit>>,
+    /// Konstantenbindungen; `None` waehrend der generischen Pruefung und
+    /// bei Einheitenvariablen.
+    pub consts: Vec<Option<i64>>,
 }
 
 impl Env {
+    /// Offene Umgebung (generische Pruefung).
+    pub fn open(vars: &[GenericVar]) -> Env {
+        Env { vars: vars.to_vec(), units: vec![None; vars.len()], consts: vec![None; vars.len()] }
+    }
+
+    /// Gebundene Umgebung einer Instanz.
+    pub fn bound(vars: &[GenericVar], bindings: &[Binding]) -> Env {
+        let units = bindings.iter().map(|b| if let Binding::Unit(u) = b { Some(u.clone()) } else { None }).collect();
+        let consts = bindings.iter().map(|b| if let Binding::Const(n) = b { Some(*n) } else { None }).collect();
+        Env { vars: vars.to_vec(), units, consts }
+    }
+
     /// Index einer Variablen.
     pub fn index(&self, name: &str) -> Option<u32> {
-        self.names.iter().position(|n| n == name).map(|i| i as u32)
+        self.vars.iter().position(|v| v.name() == name).map(|i| i as u32)
+    }
+
+    /// Name einer Variablen.
+    pub fn name(&self, i: u32) -> Option<&str> {
+        self.vars.get(i as usize).map(GenericVar::name)
+    }
+
+    /// Wert einer Konstantenvariablen: die Bindung, waehrend der generischen
+    /// Pruefung die Untergrenze ihrer Range (3.12).
+    pub fn const_value(&self, name: &str) -> Option<i64> {
+        let i = self.index(name)? as usize;
+        match &self.vars[i] {
+            GenericVar::Const { lo, .. } => Some(self.consts[i].unwrap_or(if *lo == i64::MIN { 1 } else { *lo })),
+            GenericVar::Unit(_) => None,
+        }
     }
 }
 
@@ -459,6 +525,12 @@ impl<'a> Lowerer<'a> {
 
     /// Konstante Ganzzahl (Array-Laengen, Kapazitaeten, `range(N)`).
     pub fn const_int(&mut self, e: &ast::Expr) -> Option<i64> {
+        // 3.12: eine Konstantenvariable steht in Typen und `range(N)`.
+        if let ast::ExprKind::Upper { name, args: None } = &e.kind {
+            if let Some(n) = self.env.const_value(&name.name) {
+                return Some(n);
+            }
+        }
         let ty = self.tys.int;
         let lowered = self.expr(e, Some(ty))?;
         let folded = self.fold(lowered)?;

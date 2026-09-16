@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 52 (3.12): `N` aus der Kapazitaet des Arguments, innerhalb
+# der Range; eine Instanz je Wert.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+fn first[const N in 1..8](a: [N] int in 0..9) -> int:
+    return a[0]
+
+machine m:
+    var four : [4] int in 0..9 = [7, 0, 0, 0]
+    initial RUN
+    state RUN:
+        loop:
+            n = first(four)

@@ -11,7 +11,7 @@ use takt_mir::types::{RecordDef, Type};
 use takt_mir::*;
 use takt_syntax::ast;
 
-use super::{BlockKind, Env, FnCtx, Lowerer, Memo, SC3};
+use super::{Binding, BlockKind, Env, FnCtx, GenericVar, Lowerer, Memo, SC3};
 use crate::symbols::Entity;
 use crate::units::{Atom, Unit};
 
@@ -19,27 +19,34 @@ use crate::units::{Atom, Unit};
 pub const SC52: &str = "SC-52";
 
 impl Lowerer<'_> {
-    /// Namen der Einheitenvariablen; Typ- und Konstantenvariablen sind spaetere Stufen.
-    pub fn generic_names(&mut self, gvars: &[ast::GenericVar]) -> Option<Vec<String>> {
-        let mut out = Vec::new();
+    /// Generische Variablen einer Vorlage: Einheiten (v1) und Konstanten
+    /// mit Range (v1.1); Typvariablen sind v1.2.
+    pub fn generic_names(&mut self, gvars: &[ast::GenericVar]) -> Option<Vec<GenericVar>> {
+        let mut out: Vec<GenericVar> = Vec::new();
         for g in gvars {
-            match g {
-                ast::GenericVar::Unit(name) => {
-                    if out.contains(&name.name) {
-                        self.error(SC52, name.span, format!("Variable `{}` doppelt", name.name));
-                        return None;
-                    }
-                    out.push(name.name.clone());
-                }
+            let (name, var) = match g {
+                ast::GenericVar::Unit(name) => (name, GenericVar::Unit(name.name.clone())),
                 ast::GenericVar::Type { name, .. } => {
                     self.stage(name.span, "Typvariablen", Stage::V1_2);
                     return None;
                 }
-                ast::GenericVar::Const { name, .. } => {
-                    self.stage(name.span, "Konstantenvariablen", Stage::V1_1);
-                    return None;
+                ast::GenericVar::Const { name, range } => {
+                    let (lo, hi) = match range {
+                        Some(r) => (self.const_int(&r.from)?, self.const_int(&r.to)?),
+                        None => (i64::MIN, i64::MAX),
+                    };
+                    if lo > hi {
+                        self.error(SC52, name.span, "Untergrenze groesser als Obergrenze");
+                        return None;
+                    }
+                    (name, GenericVar::Const { name: name.name.clone(), lo, hi })
                 }
+            };
+            if out.iter().any(|v| v.name() == name.name) {
+                self.error(SC52, name.span, format!("Variable `{}` doppelt", name.name));
+                return None;
             }
+            out.push(var);
         }
         Some(out)
     }
@@ -84,7 +91,7 @@ impl Lowerer<'_> {
             if t.prelude != self.prelude {
                 continue;
             }
-            let env = Env { names: t.generics.clone(), units: vec![None; t.generics.len()] };
+            let env = Env::open(&t.generics);
             self.in_scratch(|this| {
                 this.with_env(env, |this| {
                     let name = format!("{}[?]", t.decl.name.name);
@@ -97,7 +104,7 @@ impl Lowerer<'_> {
             if t.prelude != self.prelude {
                 continue;
             }
-            let env = Env { names: t.generics.clone(), units: vec![None; t.generics.len()] };
+            let env = Env::open(&t.generics);
             self.in_scratch(|this| {
                 this.with_env(env, |this| {
                     let name = format!("{}[?]", t.decl.name.name);
@@ -132,7 +139,7 @@ impl Lowerer<'_> {
         let id = match self.memo.get(&key) {
             Some(Memo::Fn(id)) => *id,
             _ => {
-                let env = Env { names: t.generics.clone(), units: bound.iter().cloned().map(Some).collect() };
+                let env = Env::bound(&t.generics, &bound);
                 let name = self.instance_name(&t.decl.name.name, &bound);
                 let id = self.with_env(env, |this| this.instantiate_fn(&t.decl, name))?;
                 self.memo.insert(key, Memo::Fn(id));
@@ -161,62 +168,90 @@ impl Lowerer<'_> {
         if let Some(Memo::Block(id)) = self.memo.get(&key) {
             return Some(*id);
         }
-        let env = Env { names: t.generics.clone(), units: bound.iter().cloned().map(Some).collect() };
+        let env = Env::bound(&t.generics, &bound);
         let name = self.instance_name(&t.decl.name.name, &bound);
         let id = self.with_env(env, |this| this.instantiate_block(&t.decl, name))?;
         self.memo.insert(key, Memo::Block(id));
         Some(id)
     }
 
-    fn memo_key(&self, kind: &str, name: &str, bound: &[Unit]) -> String {
-        let units: Vec<String> = bound.iter().map(|u| self.units.display(&self.program, u)).collect();
-        format!("{kind}:{name}[{}]", units.join(","))
+    fn memo_key(&self, kind: &str, name: &str, bound: &[Binding]) -> String {
+        format!("{kind}:{name}[{}]", self.binding_names(bound).join(","))
     }
 
-    fn instance_name(&self, name: &str, bound: &[Unit]) -> String {
-        let units: Vec<String> = bound.iter().map(|u| self.units.display(&self.program, u)).collect();
-        format!("{name}[{}]", units.join(", "))
+    fn instance_name(&self, name: &str, bound: &[Binding]) -> String {
+        format!("{name}[{}]", self.binding_names(bound).join(", "))
+    }
+
+    fn binding_names(&self, bound: &[Binding]) -> Vec<String> {
+        bound
+            .iter()
+            .map(|b| match b {
+                Binding::Unit(u) => self.units.display(&self.program, u),
+                Binding::Const(n) => n.to_string(),
+            })
+            .collect()
     }
 
     /// Sequentielles Loesen (3.12, Festlegung 1): explizite Argumente zuerst,
-    /// dann jeder Parameter mit genau einer offenen Variablen (Exponent ±1).
+    /// dann Konstanten aus den Kapazitaeten der Argumente, dann jeder
+    /// Parameter mit genau einer offenen Einheitenvariablen (Exponent ±1).
     fn solve_call(
         &mut self,
-        names: &[String],
+        vars: &[GenericVar],
         params: &[ast::Param],
         explicit: &[ast::GenericArg],
         args: &[ast::Arg],
         fname: &str,
         span: Span,
-    ) -> Option<Vec<Unit>> {
-        let mut bound: Vec<Option<Unit>> = vec![None; names.len()];
-        if explicit.len() > names.len() {
-            self.error(SC3, span, format!("`{fname}` hat {} generische Variablen", names.len()));
+    ) -> Option<Vec<Binding>> {
+        let mut bound: Vec<Option<Binding>> = vec![None; vars.len()];
+        if explicit.len() > vars.len() {
+            self.error(SC3, span, format!("`{fname}` hat {} generische Variablen", vars.len()));
             return None;
         }
         for (i, g) in explicit.iter().enumerate() {
-            match g {
-                ast::GenericArg::Unit(u) => bound[i] = Some(self.unit_expr(u)?),
-                ast::GenericArg::Type(t) => {
+            bound[i] = Some(match (&vars[i], g) {
+                (GenericVar::Unit(_), ast::GenericArg::Unit(u)) => Binding::Unit(self.unit_expr(u)?),
+                (GenericVar::Const { .. }, ast::GenericArg::Const(e)) => Binding::Const(self.const_int(e)?),
+                // `[SIZE]` liest der Parser als Einheit; an einer
+                // Konstantenvariablen ist es der Name einer Konstanten.
+                (GenericVar::Const { .. }, ast::GenericArg::Unit(u))
+                    if u.rest.is_empty()
+                        && u.first.exponent.is_none()
+                        && u.first.name.as_ref().is_some_and(|n| n.name.starts_with(char::is_uppercase)) =>
+                {
+                    let name = u.first.name.clone().expect("Name");
+                    let e =
+                        ast::Expr { kind: ast::ExprKind::Upper { name: name.clone(), args: None }, span: name.span };
+                    Binding::Const(self.const_int(&e)?)
+                }
+                (_, ast::GenericArg::Type(t)) => {
                     self.stage(t.span, "Typargumente", Stage::V1_2);
                     return None;
                 }
-                ast::GenericArg::Const(e) => {
-                    self.stage(e.span, "Konstantenargumente", Stage::V1_1);
+                (var, _) => {
+                    let what = match var {
+                        GenericVar::Unit(_) => "eine Einheit",
+                        GenericVar::Const { .. } => "eine Konstante",
+                    };
+                    self.error(SC52, span, format!("`{}` von `{fname}` verlangt {what} (3.12)", var.name()));
                     return None;
                 }
-            }
+            });
         }
         // Muster der Parameter mit offenen Variablen
-        let pattern_env = Env { names: names.to_vec(), units: vec![None; names.len()] };
-        let saved = std::mem::replace(&mut self.env, pattern_env);
+        let saved = std::mem::replace(&mut self.env, Env::open(vars));
         let mut patterns: Vec<Option<Unit>> = Vec::new();
+        let mut const_patterns: Vec<Option<u32>> = Vec::new();
         for p in params {
             patterns.push(self.type_unit_pattern(&p.ty));
+            const_patterns.push(self.type_const_pattern(&p.ty));
         }
         self.env = saved;
-        // Einheiten der Argumente (positional oder benannt)
+        // Einheiten und Kapazitaeten der Argumente (positional oder benannt)
         let mut arg_units: Vec<Option<Unit>> = vec![None; params.len()];
+        let mut arg_caps: Vec<Option<i64>> = vec![None; params.len()];
         let start = self.diags.len();
         for (i, a) in args.iter().enumerate() {
             let idx = match &a.name {
@@ -234,15 +269,25 @@ impl Lowerer<'_> {
             }
             if let Some(e) = self.expr(&a.value, None) {
                 arg_units[idx] = self.unit_of_type(e.ty);
+                arg_caps[idx] = self.capacity_of(e.ty);
             }
         }
         self.diags.truncate(start);
+        for (i, var) in const_patterns.iter().enumerate() {
+            if let (Some(v), Some(cap)) = (var, arg_caps[i]) {
+                if bound[*v as usize].is_none() {
+                    bound[*v as usize] = Some(Binding::Const(cap));
+                }
+            }
+        }
         let mut progress = true;
         while progress {
             progress = false;
+            let units: Vec<Option<Unit>> =
+                bound.iter().map(|b| if let Some(Binding::Unit(u)) = b { Some(u.clone()) } else { None }).collect();
             for (i, pattern) in patterns.iter().enumerate() {
                 let (Some(pattern), Some(arg)) = (pattern, &arg_units[i]) else { continue };
-                let current = pattern.substitute(&bound);
+                let current = pattern.substitute(&units);
                 let open: Vec<(u32, i8)> = current
                     .factors
                     .iter()
@@ -260,27 +305,33 @@ impl Lowerer<'_> {
                             overflow: current.overflow,
                         };
                         let solved = if *e == 1 { arg.div(&rest) } else { rest.div(arg) };
-                        bound[*v as usize] = Some(solved);
+                        bound[*v as usize] = Some(Binding::Unit(solved));
                         progress = true;
+                        break;
                     }
                 }
             }
         }
         let mut out = Vec::new();
         for (i, b) in bound.into_iter().enumerate() {
-            match b {
-                Some(u) => out.push(u),
-                None => {
+            match (b, &vars[i]) {
+                (Some(Binding::Const(n)), GenericVar::Const { name, lo, hi }) => {
+                    // Pruefung 52: die Range der Konstantenvariablen.
+                    if n < *lo || n > *hi {
+                        self.error(SC52, span, format!("`{name} = {n}` von `{fname}` ausserhalb {lo}..{hi} (3.12)"));
+                        return None;
+                    }
+                    out.push(Binding::Const(n));
+                }
+                (Some(b), _) => out.push(b),
+                (None, var) => {
                     self.error_hint(
                         SC3,
                         span,
-                        format!(
-                            "Einheitenvariable `{}` von `{fname}` ist nicht aus den Argumenten ableitbar",
-                            names[i]
-                        ),
+                        format!("Variable `{}` von `{fname}` ist nicht aus den Argumenten ableitbar", var.name()),
                         format!(
                             "explizit instanziieren: `{fname}[{}](…)` (3.12)",
-                            names.iter().map(|n| format!("<{n}>")).collect::<Vec<_>>().join(", ")
+                            vars.iter().map(|n| format!("<{}>", n.name())).collect::<Vec<_>>().join(", ")
                         ),
                     );
                     return None;
@@ -288,6 +339,30 @@ impl Lowerer<'_> {
             }
         }
         Some(out)
+    }
+
+    /// Konstantenvariable in einem Kapazitaetstyp (`bytes<N>`, `vec<T, N>`,
+    /// `[N] T`, `line<N>`, `samples<T, N>`): ihr Index.
+    fn type_const_pattern(&self, t: &ast::Type) -> Option<u32> {
+        let e = match &t.kind {
+            ast::TypeKind::Bytes(e) | ast::TypeKind::Line(e) => e,
+            ast::TypeKind::Vec { len, .. } | ast::TypeKind::Samples { len, .. } | ast::TypeKind::Array { len, .. } => {
+                len
+            }
+            _ => return None,
+        };
+        let ast::ExprKind::Upper { name, args: None } = &e.kind else { return None };
+        let i = self.env.index(&name.name)?;
+        matches!(self.env.vars[i as usize], GenericVar::Const { .. }).then_some(i)
+    }
+
+    /// Kapazitaet eines Puffertyps (fuer die Bindung einer Konstantenvariablen).
+    fn capacity_of(&self, ty: TypeId) -> Option<i64> {
+        Some(match self.ty(ty) {
+            Type::Bytes { cap } | Type::Vec { cap, .. } | Type::Line { cap } => i64::from(*cap),
+            Type::Array { len, .. } | Type::Samples { len, .. } => i64::from(*len),
+            _ => return None,
+        })
     }
 
     /// Einheit eines Parametertyps als Muster (nur numerische Skalare).
@@ -338,13 +413,19 @@ impl Lowerer<'_> {
 
     /// Argumente der aktuellen Instanziierung als `GenericArgVal`.
     fn generic_args(&mut self) -> Vec<GenericArgVal> {
-        let units = self.env.units.clone();
-        units
+        let env = self.env.clone();
+        env.vars
             .iter()
-            .map(|u| {
-                let id =
-                    u.as_ref().filter(|u| !u.has_vars()).and_then(|u| self.units.intern(&mut self.program, u).ok());
-                GenericArgVal::Unit(id.unwrap_or(UnitId(0)))
+            .enumerate()
+            .map(|(i, v)| match v {
+                GenericVar::Const { .. } => GenericArgVal::Const(env.consts[i].unwrap_or(0)),
+                GenericVar::Unit(_) => {
+                    let id = env.units[i]
+                        .as_ref()
+                        .filter(|u| !u.has_vars())
+                        .and_then(|u| self.units.intern(&mut self.program, u).ok());
+                    GenericArgVal::Unit(id.unwrap_or(UnitId(0)))
+                }
             })
             .collect()
     }
