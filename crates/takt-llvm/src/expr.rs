@@ -260,6 +260,9 @@ fn access(
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
     let x = lower(base, p, m, vars)?;
+    if let Some(Type::Map { key, value, cap }) = p.types.list.get(base.ty.index()) {
+        return map_access(x, (*key, *value, *cap), (which, args), want, p, m, vars);
+    }
     let arg = |i: usize, m: &mut Module| -> Result<Lowered, NotYet> {
         let e = args.get(i).ok_or(NotYet { what: "Argument fehlt" })?;
         lower(e, p, m, vars)
@@ -1066,6 +1069,51 @@ fn native_call(
 fn canonical_buffer(p: &Program, ty: TypeId, m: &mut Module) -> Result<crate::emit::Reg, NotYet> {
     let cap = takt_mir::bytes::max_size(p, ty).map_err(|_| NotYet { what: "Typ ohne Byteform" })?;
     Ok(m.inst(&format!("alloca [{cap} x i8]")))
+}
+
+/// `m.len` und `m.get(k)` einer `map` (3.9) ueber `takt_native_map_*`:
+/// Der Wert der Map wird abgelegt, die Native sondiert ueber den Slots.
+fn map_access(
+    x: Lowered,
+    (key, value, cap): (TypeId, TypeId, u32),
+    (which, args): (Accessor, &[Expr]),
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let (klen, vlen) = crate::persist::map_widths(p, key, value)?;
+    let slots = m.inst(&format!("alloca {}", x.ty));
+    m.void_inst(&format!("store {} {}, ptr {slots}", x.ty, x.value));
+    match which {
+        Accessor::Len => {
+            m.needs_intrinsic("i32 @takt_native_map_len(ptr, i32, i32, i32)");
+            let n = m.inst(&format!("call i32 @takt_native_map_len(ptr {slots}, i32 {cap}, i32 {klen}, i32 {vlen})"));
+            let wide = m.inst(&format!("sext i32 {n} to {want}"));
+            Ok(Lowered { value: wide.to_string(), ty: want.clone() })
+        }
+        Accessor::Get => {
+            let k = args.first().ok_or(NotYet { what: "`get` ohne Schluessel" })?;
+            let kbuf = crate::persist::encode_padded(k, klen, p, m, vars)?;
+            let out = m.inst(&format!("alloca [{vlen} x i8]"));
+            m.void_inst(&format!("store [{vlen} x i8] zeroinitializer, ptr {out}"));
+            m.needs_intrinsic("i1 @takt_native_map_get(ptr, i32, i32, i32, ptr, ptr)");
+            let hit = m.inst(&format!(
+                "call i1 @takt_native_map_get(ptr {slots}, i32 {cap}, i32 {klen}, i32 {vlen}, ptr {kbuf}, ptr {out})"
+            ));
+            // `V?` wie `wrap` es baut: Wert, dann das Flag.
+            let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`get` ohne Wrapper-Typ" }) };
+            let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
+            let dst = m.inst(&format!("alloca {inner}"));
+            m.void_inst(&format!("store {inner} zeroinitializer, ptr {dst}"));
+            crate::persist::decode_canonical(p, value, out, dst, m)?;
+            let v = m.inst(&format!("load {inner}, ptr {dst}"));
+            let with_value = m.inst(&format!("insertvalue {want} undef, {inner} {v}, 0"));
+            let r = m.inst(&format!("insertvalue {want} {with_value}, i1 {hit}, 1"));
+            Ok(Lowered { value: r.to_string(), ty: want.clone() })
+        }
+        _ => Err(NotYet { what: "Zugriff auf eine `map`" }),
+    }
 }
 
 /// `default` eines Typs (3.7): 0, `false`, leere Sammlung.

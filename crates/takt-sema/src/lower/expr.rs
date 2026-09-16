@@ -844,18 +844,11 @@ impl Lowerer<'_> {
         Some(Expr::new(ExprKind::Var(out), ret, span))
     }
 
-    /// Typ einer Blockinstanz: ein Handle-Typ je Block (Bloecke sind keine Werte).
+    /// Typ einer Blockinstanz: ein Handle je Block (Bloecke sind keine
+    /// Werte, 5.7); der Codegen liest die Identitaet zusaetzlich aus
+    /// `Layout::block_instances`.
     pub fn block_type(&mut self, block: BlockId) -> TypeId {
-        let name = format!("block:{}", block.0);
-        match self.peek(&name).cloned() {
-            Some(Entity::Type(t)) => t,
-            _ => {
-                let t = self.intern(Type::Handle(takt_mir::types::HandleKind::Job));
-                let t = self.intern(Type::Optional(t));
-                let _ = name;
-                t
-            }
-        }
+        self.intern(Type::Handle(HandleKind::Block(block)))
     }
 
     /// Nur was `libtaktm` korrekt gerundet rechnet, darf ins Programm (13.8).
@@ -1346,6 +1339,16 @@ impl Lowerer<'_> {
                     return None;
                 }
                 Some(Expr::new(ExprKind::Accessor { base: Box::new(b), accessor: acc, args: vec![] }, ty, span))
+            }
+            ("get", Type::Map { key, value, .. }) => {
+                let (key, value) = (*key, *value);
+                let k = self.one_arg(args, key, span)?;
+                let ty = self.intern(Type::Optional(value));
+                Some(Expr::new(
+                    ExprKind::Accessor { base: Box::new(b), accessor: Accessor::Get, args: vec![k] },
+                    ty,
+                    span,
+                ))
             }
             ("get", Type::Vec { elem, .. } | Type::Array { elem, .. }) => {
                 let int = self.tys.int;

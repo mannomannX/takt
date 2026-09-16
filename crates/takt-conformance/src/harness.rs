@@ -148,6 +148,9 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     if p.natives.iter().any(|n| n.name.starts_with("sha256") || n.name == "hmac_sha256") {
         s.push_str(SHA256_C);
     }
+    if p.types.list.iter().any(|t| matches!(t, takt_mir::types::Type::Map { .. })) {
+        s.push_str(MAP_C);
+    }
     for m in &driven {
         let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
@@ -966,5 +969,78 @@ static void takt_job_put32(unsigned char *b, unsigned int v) {
 static void takt_job_image(int i, int done, int ok, int err) {
     unsigned char *e = image + takt_job_at[i];
     e[0] = (unsigned char)done; e[1] = (unsigned char)ok; takt_job_put32(e + 4, (unsigned int)err);
+}
+"#;
+
+/// `map<K, V, N>` im Rahmen (3.9): dieselbe Sondierung wie `takt_native::map`
+/// — FNV-1a ueber den auf K Byte aufgefuellten Schluessel, lineare
+/// Sondierung, Entfernen per Rueckwaertsverschiebung. Der Slot ist
+/// `belegt, Schluessel, Wert`.
+const MAP_C: &str = r#"
+static unsigned int takt_map_hash(const unsigned char *key, int klen) {
+    unsigned int h = 0x811c9dc5u; int i;
+    for (i = 0; i < klen; i++) { h ^= key[i]; h *= 0x01000193u; }
+    return h;
+}
+static int takt_map_find(const unsigned char *s, int cap, int klen, int vlen, const unsigned char *key, unsigned int h) {
+    int size = 1 + klen + vlen, n, i;
+    if (cap <= 0) return -1;
+    i = (int)(h % (unsigned int)cap);
+    for (n = 0; n < cap; n++) {
+        const unsigned char *slot = s + i * size;
+        if (!slot[0]) return -1;
+        if (takt_map_hash(slot + 1, klen) == h && memcmp(slot + 1, key, (size_t)klen) == 0) return i;
+        i = (i + 1) % cap;
+    }
+    return -1;
+}
+static int takt_map_free(const unsigned char *s, int cap, int klen, int vlen, unsigned int h) {
+    int size = 1 + klen + vlen, n, i;
+    if (cap <= 0) return -1;
+    i = (int)(h % (unsigned int)cap);
+    for (n = 0; n < cap; n++) { if (!s[i * size]) return i; i = (i + 1) % cap; }
+    return -1;
+}
+int takt_native_map_len(const unsigned char *s, int cap, int klen, int vlen) {
+    int size = 1 + klen + vlen, n = 0, i;
+    for (i = 0; i < cap; i++) if (s[i * size]) n++;
+    return n;
+}
+unsigned char takt_native_map_insert(unsigned char *s, int cap, int klen, int vlen, const unsigned char *key, const unsigned char *val) {
+    int size = 1 + klen + vlen;
+    unsigned int h = takt_map_hash(key, klen);
+    int i = takt_map_find(s, cap, klen, vlen, key, h);
+    if (i < 0) i = takt_map_free(s, cap, klen, vlen, h);
+    if (i < 0) return 0;
+    s[i * size] = 1;
+    memcpy(s + i * size + 1, key, (size_t)klen);
+    memcpy(s + i * size + 1 + klen, val, (size_t)vlen);
+    return 1;
+}
+unsigned char takt_native_map_get(const unsigned char *s, int cap, int klen, int vlen, const unsigned char *key, unsigned char *out) {
+    int size = 1 + klen + vlen;
+    int i = takt_map_find(s, cap, klen, vlen, key, takt_map_hash(key, klen));
+    if (i < 0) return 0;
+    memcpy(out, s + i * size + 1 + klen, (size_t)vlen);
+    return 1;
+}
+unsigned char takt_native_map_remove(unsigned char *s, int cap, int klen, int vlen, const unsigned char *key) {
+    int size = 1 + klen + vlen, hole, j, n;
+    int i = takt_map_find(s, cap, klen, vlen, key, takt_map_hash(key, klen));
+    if (i < 0) return 0;
+    s[i * size] = 0;
+    hole = i; j = i;
+    for (n = 0; n < cap; n++) {
+        int home, stays;
+        j = (j + 1) % cap;
+        if (!s[j * size]) break;
+        home = (int)(takt_map_hash(s + j * size + 1, klen) % (unsigned int)cap);
+        stays = hole <= j ? (home > hole && home <= j) : (home > hole || home <= j);
+        if (stays) continue;
+        memcpy(s + hole * size, s + j * size, (size_t)size);
+        s[j * size] = 0;
+        hole = j;
+    }
+    return 1;
 }
 "#;

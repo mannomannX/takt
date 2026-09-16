@@ -102,6 +102,9 @@ pub enum HandleKind {
     Job,
     /// Trigger-Handle (7.5): `armed`, `fired`.
     Trigger,
+    /// Eine Blockinstanz (5.7): ihr Typ traegt den Block, damit zwei
+    /// Instanzen verschiedener Bloecke verschiedene Typen haben (FB-77).
+    Block(crate::BlockId),
 }
 
 /// Ein Typ (2.2 in plan/mir.md). Kanaltypen (`Stream`, `Samples`) kommen nur

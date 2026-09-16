@@ -109,9 +109,17 @@ pub fn display(v: &Value, spec: Option<&str>, ty: TypeId, ctx: &Ctx<'_, '_>) -> 
                 .collect();
             format!("[{}]", parts.join(", "))
         }
-        Value::Table(points) | Value::Map(points) => {
+        Value::Table(points) => {
             let parts: Vec<String> = points
                 .iter()
+                .map(|(a, b)| format!("({}, {})", display(a, None, ty, ctx), display(b, None, ty, ctx)))
+                .collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Map(slots) => {
+            let parts: Vec<String> = slots
+                .iter()
+                .flatten()
                 .map(|(a, b)| format!("({}, {})", display(a, None, ty, ctx), display(b, None, ty, ctx)))
                 .collect();
             format!("[{}]", parts.join(", "))

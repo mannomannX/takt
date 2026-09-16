@@ -557,7 +557,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
             (Accessor::Or, Value::Result(Err(_))) => self.eval(&args[0]),
             (Accessor::Len, Value::Bytes(b)) => Ok(Value::Int(b.len() as i64)),
             (Accessor::Len, Value::Vec(x) | Value::Array(x)) => Ok(Value::Int(x.len() as i64)),
-            (Accessor::Len, Value::Map(x)) => Ok(Value::Int(x.len() as i64)),
+            (Accessor::Len, Value::Map(x)) => Ok(Value::Int(x.iter().flatten().count() as i64)),
             (Accessor::Len, Value::Str(s) | Value::Line { text: s, .. }) => Ok(Value::Int(s.len() as i64)),
             (Accessor::Count, Value::Array(x) | Value::Samples(x)) => Ok(Value::Int(x.len() as i64)),
             (Accessor::Last, Value::Array(x) | Value::Samples(x)) => {
@@ -593,6 +593,10 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 } else {
                     None
                 }))
+            }
+            (Accessor::Get, Value::Map(mut slots)) => {
+                let key = self.eval(&args[0])?;
+                crate::maps::get(self.loaded.program, args[0].ty, &mut slots, &key)
             }
             (Accessor::Bit, v @ (Value::Int(_) | Value::UInt(_))) => {
                 let width = self.int_width(base.ty, span)?;

@@ -134,6 +134,13 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
         Type::Bytes { cap } | Type::Str { cap } => {
             LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), *cap)])
         }
+        // `map<K, V, N>` (3.9): `N` Slots zu je `1 + K + V` Byte — die Form,
+        // die `takt_native::map` sondiert und die `persist` kopiert (5.9).
+        Type::Map { key, value, cap } => {
+            let k = takt_mir::bytes::max_size(p, *key).ok()?;
+            let v = takt_mir::bytes::max_size(p, *value).ok()?;
+            LlvmType::Array(Box::new(LlvmType::Int(8)), (1 + k + v) * *cap)
+        }
         // `line<N>` ist `str<N>` plus `.truncated` (3.9): Nur dort hat
         // ein *anderer* — der Treiberrand — die Laenge begrenzt, und das
         // Programm koennte es sonst nicht merken (754).

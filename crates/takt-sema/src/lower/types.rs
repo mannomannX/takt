@@ -260,10 +260,20 @@ impl Lowerer<'_> {
                 let key = self.resolve_type(key)?;
                 let value = self.resolve_type(value)?;
                 let cap = self.const_cap(len)?;
-                // 15: `map<K, V, N>` ist v1.1.
-                let _ = self.intern(Type::Map { key, value, cap });
-                self.stage(span, "`map`", Stage::V1_1);
-                None
+                // Pruefung 57 (3.9): der Schluessel ist POD mit Gleichheit;
+                // Fliesskomma hat keine (NaN), und ein Hash darueber waere
+                // bitweise, was `==` nicht ist.
+                if !takt_mir::persist::is_pod(&self.program, key) || self.contains_float(key) {
+                    let n = self.type_name(key);
+                    self.error_hint(
+                        crate::checks::SC57,
+                        span,
+                        format!("`{n}` taugt nicht als Schluessel einer `map` (3.9)"),
+                        "Schluessel sind POD mit Gleichheit: Ganzzahlen, Enums, Records und Puffer daraus",
+                    );
+                    return None;
+                }
+                Some(self.intern(Type::Map { key, value, cap }))
             }
             ast::TypeKind::TypeVar { name, .. } => {
                 self.stage(name.span, "Typvariablen", Stage::V1_2);
@@ -592,5 +602,27 @@ fn const_name(c: &Const) -> String {
         Const::Float(f) => format!("{f}"),
         Const::Duration(d) => takt_mir::dump::duration(*d),
         Const::Bool(b) => b.to_string(),
+    }
+}
+
+impl Lowerer<'_> {
+    /// Traegt der Typ irgendwo eine Fliesskommazahl?
+    fn contains_float(&self, ty: TypeId) -> bool {
+        match self.ty(ty) {
+            Type::Float { .. } => true,
+            Type::Optional(inner) | Type::Array { elem: inner, .. } | Type::Vec { elem: inner, .. } => {
+                self.contains_float(*inner)
+            }
+            Type::Record(r) => {
+                let fields: Vec<TypeId> = self.program.records[r.index()].fields.iter().map(|f| f.ty).collect();
+                fields.into_iter().any(|f| self.contains_float(f))
+            }
+            Type::Enum(e) => {
+                let fields: Vec<TypeId> =
+                    self.program.enums[e.index()].variants.iter().flat_map(|v| v.fields.iter().map(|f| f.ty)).collect();
+                fields.into_iter().any(|f| self.contains_float(f))
+            }
+            _ => false,
+        }
     }
 }

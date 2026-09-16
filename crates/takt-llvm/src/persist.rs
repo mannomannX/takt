@@ -152,6 +152,14 @@ impl Writer<'_> {
                 }
                 off
             }
+            // Die Slots einer `map` sind ihre Byteform (3.9, 5.9): kopieren.
+            Type::Map { .. } => {
+                let n = u64::from(takt_mir::bytes::max_size(self.p, ty).map_err(|_| NotYet { what: "map-Typ" })?);
+                let dst = self.module.inst(&format!("getelementptr i8, ptr {}, i64 {off}", self.out));
+                self.module
+                    .void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {src}, i64 {n}, i1 false)"));
+                self.module.inst(&format!("add i64 {off}, {n}"))
+            }
             Type::Bytes { .. } | Type::Str { .. } => {
                 let lp = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {src}, i32 0, i32 0"));
                 let len = self.module.inst(&format!("load i32, ptr {lp}"));
@@ -376,6 +384,20 @@ impl Reader<'_> {
                 }
                 off
             }
+            Type::Map { .. } => {
+                let n = u64::from(takt_mir::bytes::max_size(self.p, ty).map_err(|_| NotYet { what: "map-Typ" })?);
+                let after = self.module.inst(&format!("add i64 {off}, {n}"));
+                if store {
+                    let src = self.module.inst(&format!("getelementptr i8, ptr {}, i64 {off}", self.input));
+                    self.module.void_inst(&format!(
+                        "call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {src}, i64 {n}, i1 false)"
+                    ));
+                } else {
+                    let inside = self.module.inst(&format!("icmp ule i64 {after}, {}", self.end));
+                    self.require(inside);
+                }
+                after
+            }
             Type::Bytes { cap } | Type::Str { cap } => {
                 let cap = *cap;
                 let len = self.load_at(off, "i32");
@@ -430,4 +452,29 @@ pub(crate) fn decode_canonical(
     let zero = module.inst("add i64 0, 0");
     let mut r = Reader { p, input, end: zero, labels: 0, prefix: "native".into(), module };
     r.decode(ty, dst, zero, true).map(|_| ())
+}
+
+/// Ein Wert in kanonischer Form, mit Nullen auf `len` Byte aufgefuellt —
+/// Schluessel und Wert einer `map` (3.9). Liefert den Puffer.
+pub(crate) fn encode_padded(
+    e: &takt_mir::expr::Expr,
+    len: u32,
+    p: &Program,
+    module: &mut Module,
+    vars: &dyn crate::expr::Vars,
+) -> Result<Reg, NotYet> {
+    let v = crate::expr::lower(e, p, module, vars)?;
+    let tmp = module.inst(&format!("alloca {}", v.ty));
+    module.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+    let buf = module.inst(&format!("alloca [{len} x i8]"));
+    module.void_inst(&format!("store [{len} x i8] zeroinitializer, ptr {buf}"));
+    encode_canonical(p, e.ty, tmp, buf, module)?;
+    Ok(buf)
+}
+
+/// Schluessel- und Wertbreite einer `map` in Byte (`bytes::max_size`).
+pub(crate) fn map_widths(p: &Program, key: TypeId, value: TypeId) -> Result<(u32, u32), NotYet> {
+    let k = takt_mir::bytes::max_size(p, key).map_err(|_| NotYet { what: "map-Schluessel ohne Byteform" })?;
+    let v = takt_mir::bytes::max_size(p, value).map_err(|_| NotYet { what: "map-Wert ohne Byteform" })?;
+    Ok((k, v))
 }

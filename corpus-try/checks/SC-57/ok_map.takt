@@ -1,0 +1,13 @@
+system:
+    language = 1
+
+output n : int in 0..8 @ hw("o/n") with safe = 0
+
+machine m:
+    var seen : map<int, int, 8> = default
+    var ok   : bool = false
+    initial RUN
+    state RUN:
+        loop:
+            ok = seen.insert(3, 30)
+            n = seen.len

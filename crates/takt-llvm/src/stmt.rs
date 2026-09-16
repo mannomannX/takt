@@ -15,6 +15,7 @@ use takt_mir::expr::{Expr, ExprKind, JobField};
 use takt_mir::machine::Machine;
 use takt_mir::program::Program;
 use takt_mir::stmt::{Block, Method, Observe, Place, Stmt, StmtKind};
+use takt_mir::types::Type;
 
 use crate::abi::Abi;
 use crate::collection;
@@ -773,6 +774,63 @@ fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet>
 /// `insertvalue` in einen geladenen Wert: Eine Zuweisung an `s.f` soll
 /// *das Feld* schreiben, nicht den ganzen Record neu bauen. Der Unterschied
 /// ist bei einem `bytes<256>` der zwischen einem Byte und 256.
+/// Der MIR-Typ einer Stelle, soweit er statisch feststeht.
+fn place_mir_type(target: &Place, ctx: &Ctx<'_>) -> Option<takt_mir::TypeId> {
+    match target {
+        Place::Var(id) => Some(ctx.machine.vars.get(id.index())?.ty),
+        Place::Output(c) => Some(ctx.program.channels.get(c.index())?.ty),
+        Place::Field(base, field) => {
+            let ty = place_mir_type(base, ctx)?;
+            let Type::Record(r) = ctx.program.types.list.get(ty.index())? else { return None };
+            Some(ctx.program.records.get(r.index())?.fields.get(*field as usize)?.ty)
+        }
+        _ => None,
+    }
+}
+
+/// `m.insert(k, v)`, `m.remove(k)` (3.9): Schluessel und Wert gehen in
+/// kanonischer, auf K bzw. V Byte aufgefuellter Form an
+/// `takt_native_map_*`, das ueber den Slots der Map sondiert — dieselbe
+/// Logik wie `takt_native::map`, die der Interpreter ruft.
+fn map_method_call(
+    target: Option<&Place>,
+    receiver: &Place,
+    (key, value, cap): (takt_mir::TypeId, takt_mir::TypeId, u32),
+    method: Method,
+    args: &[Expr],
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let p = ctx.program;
+    let (klen, vlen) = crate::persist::map_widths(p, key, value)?;
+    let (slots, _) = place(receiver, ctx, m)?;
+    let vars = ctx.vars();
+    let k = args.first().ok_or(NotYet { what: "map-Methode ohne Schluessel" })?;
+    let kbuf = crate::persist::encode_padded(k, klen, p, m, &vars)?;
+    let hit = match method {
+        Method::Insert => {
+            let v = args.get(1).ok_or(NotYet { what: "`insert` ohne Wert" })?;
+            let vbuf = crate::persist::encode_padded(v, vlen, p, m, &vars)?;
+            m.needs_intrinsic("i1 @takt_native_map_insert(ptr, i32, i32, i32, ptr, ptr)");
+            m.inst(&format!(
+                "call i1 @takt_native_map_insert(ptr {slots}, i32 {cap}, i32 {klen}, i32 {vlen}, ptr {kbuf}, ptr {vbuf})"
+            ))
+        }
+        Method::Remove => {
+            m.needs_intrinsic("i1 @takt_native_map_remove(ptr, i32, i32, i32, ptr)");
+            m.inst(&format!(
+                "call i1 @takt_native_map_remove(ptr {slots}, i32 {cap}, i32 {klen}, i32 {vlen}, ptr {kbuf})"
+            ))
+        }
+        other => return Err(collection::unsupported(other)),
+    };
+    if let Some(t) = target {
+        let (dst, _) = place(t, ctx, m)?;
+        m.void_inst(&format!("store i1 {hit}, ptr {dst}"));
+    }
+    Ok(())
+}
+
 fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, LlvmType), NotYet> {
     match target {
         Place::Var(id) => {
@@ -832,6 +890,11 @@ fn method_call(
         && let Some(block) = crate::machine::instance_block(ctx.machine, *id)
     {
         return block_method_call(target, *id, block, method, args, ctx, m);
+    }
+    if let Some(Type::Map { key, value, cap }) =
+        place_mir_type(receiver, ctx).and_then(|t| ctx.program.types.list.get(t.index()))
+    {
+        return map_method_call(target, receiver, (*key, *value, *cap), method, args, ctx, m);
     }
     if !collection::is_collection_method(method) {
         return Err(collection::unsupported(method));

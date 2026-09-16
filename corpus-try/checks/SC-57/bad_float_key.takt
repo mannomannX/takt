@@ -1,0 +1,12 @@
+system:
+    language = 1
+
+# Pruefung 57 (3.9): Schluessel sind POD mit Gleichheit — kein Fliesskomma.
+output n : int in 0..8 @ hw("o/n") with safe = 0
+
+machine m:
+    var by_temp : map<float[K], int, 8> = default  # ~ SC-57
+    initial RUN
+    state RUN:
+        loop:
+            n = by_temp.len

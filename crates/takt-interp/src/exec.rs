@@ -151,7 +151,7 @@ impl Ctx<'_, '_> {
                 }
                 let items: Vec<Value> = match self.eval(iter)? {
                     Value::Array(x) | Value::Vec(x) | Value::Samples(x) => x,
-                    Value::Map(pairs) => pairs.into_iter().map(|(k, v)| Value::Array(vec![k, v])).collect(),
+                    Value::Map(slots) => slots.into_iter().flatten().map(|(k, v)| Value::Array(vec![k, v])).collect(),
                     Value::Bytes(b) => b.into_iter().map(|x| Value::UInt(u64::from(x))).collect(),
                     other => return bug(format!("for ueber {}", other.kind_name())),
                 };
@@ -452,12 +452,32 @@ impl Ctx<'_, '_> {
                     Ok(Value::Bool(true))
                 }
                 Value::Map(m) => {
-                    m.clear();
+                    m.iter_mut().for_each(|slot| *slot = None);
                     Ok(Value::Bool(true))
                 }
                 other => bug(format!("clear auf {}", other.kind_name())),
             },
-            Method::Insert | Method::Remove => bug("map ab M6"),
+            // 3.9: dieselbe Sondierung wie im erzeugten Code (`maps`).
+            Method::Insert | Method::Remove => {
+                let p = self.loaded.program;
+                let ty = self.place_type(receiver)?;
+                let Type::Map { key, .. } = self.loaded.ty(ty) else {
+                    return bug(format!(
+                        "`{}` auf keiner map",
+                        if method == Method::Insert { "insert" } else { "remove" }
+                    ));
+                };
+                let key_ty = *key;
+                let mut args = args.into_iter();
+                let (k, v) = (args.next(), args.next());
+                let target = self.place_mut(receiver, span)?;
+                let Value::Map(slots) = target else { return bug(format!("map-Methode auf {}", target.kind_name())) };
+                match (method, k, v) {
+                    (Method::Insert, Some(k), Some(v)) => Ok(Value::Bool(crate::maps::insert(p, key_ty, slots, k, v)?)),
+                    (Method::Remove, Some(k), _) => Ok(Value::Bool(crate::maps::remove(p, key_ty, slots, &k)?)),
+                    _ => bug("map-Methode ohne Argument"),
+                }
+            }
         }
     }
 

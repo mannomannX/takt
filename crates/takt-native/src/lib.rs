@@ -27,6 +27,7 @@
 pub mod bytes;
 pub mod cost;
 pub mod crc;
+pub mod map;
 pub mod sha256;
 
 pub use cost::{Cost, cost_of};

@@ -1,0 +1,26 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# map<K, V, N> (3.9): Einfuegen, Lesen, Entfernen und die Zahl der
+# Eintraege — die Sondierung aus takt-native, im Interpreter wie im
+# erzeugten Code. Eine volle Map lehnt ab, ohne Fault.
+
+output n     : int in 0..8    @ hw("o/n")     with safe = 0
+output found : int in 0..1000 @ hw("o/found") with safe = 0
+output full  : bool           @ hw("o/full")  with safe = false
+
+machine m:
+    var seen : map<int, int, 4> = default
+    var k    : int in 0..100 = 0
+    var ok   : bool = false
+    initial RUN
+    state RUN:
+        loop:
+            k = k + 1
+            ok = seen.insert(k * 7 % 10, k)
+            full = not ok
+            if k % 3 == 0:
+                ok = seen.remove((k - 2) * 7 % 10)
+            n = seen.len
+            found = seen.get(7).or(0)

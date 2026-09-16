@@ -25,6 +25,7 @@ pub mod format;
 pub mod image;
 pub mod loaded;
 pub mod machine;
+pub mod maps;
 pub mod nvm;
 pub mod pattern;
 pub mod record;

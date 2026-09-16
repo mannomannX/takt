@@ -204,11 +204,11 @@ fn validate(p: &Program, v: &Value, ty: TypeId) -> Result<(), Reason> {
         }
         (Type::Bytes { cap }, Value::Bytes(b)) => (b.len() <= *cap as usize).then_some(()).ok_or(Reason::Shape),
         (Type::Str { cap }, Value::Str(s)) => (s.chars().count() <= *cap as usize).then_some(()).ok_or(Reason::Shape),
-        (Type::Map { key, value, cap }, Value::Map(items)) => {
-            if items.len() > *cap as usize {
+        (Type::Map { key, value, cap }, Value::Map(slots)) => {
+            if slots.len() != *cap as usize {
                 return Err(Reason::Shape);
             }
-            items.iter().try_for_each(|(k, val)| validate(p, k, *key).and_then(|()| validate(p, val, *value)))
+            slots.iter().flatten().try_for_each(|(k, val)| validate(p, k, *key).and_then(|()| validate(p, val, *value)))
         }
         _ => Err(Reason::Shape),
     }

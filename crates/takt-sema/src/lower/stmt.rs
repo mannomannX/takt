@@ -911,9 +911,13 @@ impl Lowerer<'_> {
             ("clear", Type::Vec { .. } | Type::Bytes { .. } | Type::Map { .. }) => {
                 (Method::Clear, None, self.method_args(args, &[], span)?)
             }
-            ("insert" | "remove", Type::Map { .. }) => {
-                self.stage(span, "`map`", Stage::V1_1);
-                return None;
+            ("insert", Type::Map { key, value, .. }) => {
+                let (key, value) = (*key, *value);
+                (Method::Insert, Some(self.tys.bool), self.method_args(args, &[key, value], span)?)
+            }
+            ("remove", Type::Map { key, .. }) => {
+                let key = *key;
+                (Method::Remove, Some(self.tys.bool), self.method_args(args, &[key], span)?)
             }
             (m, _) => {
                 let Some(block) = self.block_of_place(&receiver) else {

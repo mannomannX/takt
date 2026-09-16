@@ -23,7 +23,7 @@ codec_id!(
 codec_unit_enum!(IntWidth { 0 I8, 1 I16, 2 I32, 3 I64, 4 U8, 5 U16, 6 U32, 7 U64 });
 codec_unit_enum!(FloatWidth { 0 F32, 1 F64 });
 codec_unit_enum!(RangeOrigin { 0 Declared, 1 Proven });
-codec_unit_enum!(HandleKind { 0 Job, 1 Trigger });
+codec_enum!(HandleKind { 0 Job, 1 Trigger, 2 Block(1 one b) });
 codec_unit_enum!(JobField { 0 Done, 1 Result });
 codec_unit_enum!(Endian { 0 Little, 1 Big });
 codec_enum!(Const { 0 Int(1 one v), 1 Float(1 one v), 2 Duration(1 one v), 3 Bool(1 one v) });

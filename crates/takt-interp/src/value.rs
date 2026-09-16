@@ -144,7 +144,8 @@ pub enum Value {
     /// `table<A, B>`: Stuetzstellen.
     Table(Vec<(Value, Value)>),
     /// `map<K, V, N>` (v1.1).
-    Map(Vec<(Value, Value)>),
+    /// `map<K, V, N>` als `N` Slots in Sondierordnung (3.9); leer oder `(k, v)`.
+    Map(Vec<Option<(Value, Value)>>),
     /// `samples<T, N>` (M2).
     Samples(Vec<Value>),
     Block(Box<BlockState>),
@@ -193,7 +194,7 @@ impl Value {
                 };
                 Value::Mat { rows: *rows, cols: *cols, data: vec![zero; mat_len(*rows, *cols)] }
             }
-            Type::Map { .. } => Value::Map(Vec::new()),
+            Type::Map { cap, .. } => Value::Map(vec![None; *cap as usize]),
             Type::Optional(_) => Value::Optional(None),
             Type::Result { ok, .. } => Value::Result(Ok(Box::new(Value::default_for(*ok, p)))),
             Type::Stream(_) | Type::Capture { .. } => Value::Samples(Vec::new()),

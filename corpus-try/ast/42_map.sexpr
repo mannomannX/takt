@@ -1,0 +1,20 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output n :int in 0..8 @hw("o/n") safe=0)
+(output found :int in 0..1000 @hw("o/found") safe=0)
+(output full :bool @hw("o/full") safe=false)
+(machine m
+  (var seen :map<int, int, 4> default)
+  (var k :int in 0..100 0)
+  (var ok :bool false)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (+ k 1))
+      (= ok (.insert seen (% (* k 7) 10) k))
+      (= full (not ok))
+      (if (== (% k 3) 0)
+        (= ok (.remove seen (% (* (- k 2) 7) 10))))
+      (= n (.len seen))
+      (= found (.or (.get seen 7) 0)))))

@@ -6,7 +6,7 @@
 //! Bytes erzeugen (Satz 9.4.4).
 
 use takt_mir::TypeId;
-use takt_mir::bytes::{Decoder, Encoder, Error};
+use takt_mir::bytes::{Decoder, Encoder, Error, max_size};
 use takt_mir::program::Program;
 use takt_mir::types::{FloatWidth, Type};
 
@@ -95,14 +95,31 @@ fn write(p: &Program, v: &Value, ty: TypeId, out: &mut Encoder, depth: u32) -> R
                 write(p, i, *elem, out, depth + 1)?;
             }
         }
-        (Type::Map { key, value, cap }, Value::Map(items)) => {
-            if items.len() > *cap as usize {
+        // 3.9: die Slots selbst, je `belegt`, Schluessel und Wert auf ihre
+        // Schranke aufgefuellt — so behaelt `persist` die Sondierketten.
+        (Type::Map { key, value, cap }, Value::Map(slots)) => {
+            if slots.len() != *cap as usize {
                 return Err(Error::Malformed);
             }
-            out.len(items.len() as u32);
-            for (k, val) in items {
-                write(p, k, *key, out, depth + 1)?;
-                write(p, val, *value, out, depth + 1)?;
+            let (klen, vlen) = (max_size(p, *key)? as usize, max_size(p, *value)? as usize);
+            for slot in slots {
+                match slot {
+                    Some((k, val)) => {
+                        out.bool(true);
+                        let mut part = Encoder::new();
+                        write(p, k, *key, &mut part, depth + 1)?;
+                        part.bytes.resize(klen, 0);
+                        out.raw(&part.bytes);
+                        let mut part = Encoder::new();
+                        write(p, val, *value, &mut part, depth + 1)?;
+                        part.bytes.resize(vlen, 0);
+                        out.raw(&part.bytes);
+                    }
+                    None => {
+                        out.bool(false);
+                        out.raw(&vec![0u8; klen + vlen]);
+                    }
+                }
             }
         }
         _ => return Err(Error::NotPod),
@@ -173,14 +190,23 @@ fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32) -> Result<Valu
             Value::Vec(items)
         }
         Type::Map { key, value, cap } => {
-            let n = d.len(*cap)?;
-            let mut items = Vec::with_capacity(n as usize);
-            for _ in 0..n {
-                let k = read(p, *key, d, depth + 1)?;
-                let val = read(p, *value, d, depth + 1)?;
-                items.push((k, val));
+            let (klen, vlen) = (max_size(p, *key)? as usize, max_size(p, *value)? as usize);
+            let mut slots = Vec::with_capacity(*cap as usize);
+            for _ in 0..*cap {
+                if d.bool()? {
+                    let at = d.position();
+                    let k = read(p, *key, d, depth + 1)?;
+                    d.raw(klen.saturating_sub(d.position() - at))?;
+                    let at = d.position();
+                    let val = read(p, *value, d, depth + 1)?;
+                    d.raw(vlen.saturating_sub(d.position() - at))?;
+                    slots.push(Some((k, val)));
+                } else {
+                    d.raw(klen + vlen)?;
+                    slots.push(None);
+                }
             }
-            Value::Map(items)
+            Value::Map(slots)
         }
         _ => return Err(Error::NotPod),
     };

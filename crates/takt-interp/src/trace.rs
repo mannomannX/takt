@@ -459,10 +459,19 @@ pub fn value_text(v: &Value, ty: TypeId, p: &Program) -> String {
         Value::Mat { data, .. } => {
             format!("[{}]", data.iter().map(|x| value_text(x, ty, p)).collect::<Vec<_>>().join(", "))
         }
-        Value::Table(points) | Value::Map(points) => format!(
+        Value::Table(points) => format!(
             "[{}]",
             points
                 .iter()
+                .map(|(a, b)| format!("({}, {})", value_text(a, ty, p), value_text(b, ty, p)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Map(slots) => format!(
+            "[{}]",
+            slots
+                .iter()
+                .flatten()
                 .map(|(a, b)| format!("({}, {})", value_text(a, ty, p), value_text(b, ty, p)))
                 .collect::<Vec<_>>()
                 .join(", ")

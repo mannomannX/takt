@@ -137,9 +137,11 @@ fn size_at(p: &Program, ty: TypeId, depth: u32) -> Result<u32, Error> {
         Type::Array { elem, len } => Ok(size_at(p, *elem, depth + 1)? * len),
         Type::Bytes { cap } | Type::Str { cap } => Ok(4 + cap),
         Type::Vec { elem, cap } => Ok(4 + size_at(p, *elem, depth + 1)? * cap),
+        // 3.9: `N` Slots zu je `1 + K + V` Byte — die Slots selbst sind die
+        // Form, damit `persist` sie kopiert und die Sondierketten behaelt.
         Type::Map { key, value, cap } => {
             let pair = size_at(p, *key, depth + 1)? + size_at(p, *value, depth + 1)?;
-            Ok(4 + pair * cap)
+            Ok((1 + pair) * cap)
         }
         _ => Err(Error::NotPod),
     }

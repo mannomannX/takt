@@ -74,6 +74,9 @@ pub const SC12: &str = "SC-12";
 /// Native Funktionen: kuratierte Menge, Signatur, `cost`/`stack`/`total`,
 /// `duration` nur an Jobs (4.5).
 pub const SC31: &str = "SC-31";
+/// `map<K, V, N>`: der Schluessel ist POD mit Gleichheit — ohne
+/// Fliesskomma (3.9).
+pub const SC57: &str = "SC-57";
 /// `tunable param` steht nicht, wo eine Compile-Zeit-Konstante verlangt
 /// ist (8.4): Array-Groessen, Kapazitaeten, `repeat`.
 pub const SC35: &str = "SC-35";
