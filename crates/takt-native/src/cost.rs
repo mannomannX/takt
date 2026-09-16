@@ -46,5 +46,8 @@ pub fn cost_of(f: Native) -> Cost {
         // Dazu das Lesen und Schreiben der kanonischen Form (108 Byte).
         Native::Sha256Update => Cost { per_byte: 32, call: 240, stack: 512 },
         Native::Sha256Final => Cost { per_byte: 0, call: 3600, stack: 512 },
+        // Der Start eines Jobs (4.5): Argumente kopieren; die Pruefung
+        // selbst laeuft ausserhalb der Schrittphase in `takt-crypto`.
+        Native::EcdsaP256Verify => Cost { per_byte: 0, call: 300, stack: 2048 },
     }
 }

@@ -138,10 +138,17 @@ impl Ctx<'_, '_> {
         // Compiler ab (Pruefung 31); der Trap hier ist der Rueckhalt fuer
         // eine MIR, die daran vorbeikam.
         let Some(f) = Native::by_name(&n.name) else {
-            return bug(format!(
-                "`{}` gehoert nicht zur kuratierten Menge (4.5);                  ihre Vektoren stehen in grammar/takt-native.md",
-                n.name
-            ));
+            return match &n.from {
+                Some(file) => bug(format!(
+                    "Projekt-Native `{}` (from \"{file}\") laeuft nicht im Interpreter (4.5): ihre Implementierung \
+                     ist Rust des Projekts; die Simulation braucht eine kuratierte Funktion oder ein Modell",
+                    n.name
+                )),
+                None => bug(format!(
+                    "`{}` gehoert nicht zur kuratierten Menge (4.5); ihre Vektoren stehen in grammar/takt-native.md",
+                    n.name
+                )),
+            };
         };
         // Die Argumente in der Form der Grenze: `bytes<N>` als Byteblock,
         // ein Record in der kanonischen Byteform (5.9).
@@ -154,6 +161,21 @@ impl Ctx<'_, '_> {
             });
         }
         let inputs: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
+        if f == Native::EcdsaP256Verify {
+            let fixed = |i: usize, len: usize| inputs.get(i).copied().filter(|b| b.len() == len);
+            let (Some(key), Some(digest), Some(sig)) = (fixed(0, 64), fixed(1, 32), fixed(2, 64)) else {
+                return bug(format!("`{}`: Schluessel 64, Digest 32, Signatur 64 Byte erwartet", n.name));
+            };
+            let (Ok(key), Ok(digest), Ok(sig)) =
+                (<[u8; 64]>::try_from(key), <[u8; 32]>::try_from(digest), <[u8; 64]>::try_from(sig))
+            else {
+                return bug(format!("`{}`: Argumentlaenge", n.name));
+            };
+            return match takt_crypto::ecdsa_p256_verify(&key, &digest, &sig) {
+                Ok(b) => Ok(Value::Bool(b)),
+                Err(_) => bug("`ecdsa_p256_verify`: takt-crypto ohne Feature `ecdsa` gebaut (plan/m6.md 2.4)"),
+            };
+        }
         let ctx_value = |ctx: &takt_native::sha256::Ctx| {
             let mut buf = [0u8; takt_native::sha256::CTX_MAX_BYTES];
             let len = ctx.to_bytes(&mut buf).map_err(|_| Trap::Bug("Sha256Ctx: Puffer zu klein".into()))?;

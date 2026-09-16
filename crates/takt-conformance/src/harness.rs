@@ -947,7 +947,7 @@ fn job_case(n: &takt_mir::fns::Native) -> Option<String> {
         Kind::U16 => format!(
             "unsigned short v = {call}; j->out[0] = (unsigned char)v; j->out[1] = (unsigned char)(v >> 8); j->out_len = 2;"
         ),
-        Kind::U8 => format!("j->out[0] = {call}; j->out_len = 1;"),
+        Kind::U8 | Kind::Bool => format!("j->out[0] = {call}; j->out_len = 1;"),
         Kind::Digest => format!("takt_native_{}({}, j->out); j->out_len = 36;", n.name, args.join(", ")),
         Kind::Sha256Ctx => format!(
             "takt_native_{}({}, j->out); j->out_len = 44 + (int)takt_job_le32(j->out + 32);",

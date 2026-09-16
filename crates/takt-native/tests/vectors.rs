@@ -103,7 +103,7 @@ fn every_curated_function_has_vectors() {
     let vectors = load();
     let missing: Vec<&str> = Native::ALL
         .into_iter()
-        .filter(|f| !vectors.iter().any(|v| v.fun == f.vector_name()))
+        .filter(|f| !f.external() && !vectors.iter().any(|v| v.fun == f.vector_name()))
         .map(Native::name)
         .collect();
     assert!(missing.is_empty(), "kuratiert, aber ohne Vektor: {}", missing.join(", "));

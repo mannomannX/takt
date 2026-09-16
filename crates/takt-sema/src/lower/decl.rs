@@ -952,6 +952,7 @@ impl Lowerer<'_> {
             Kind::U32 => "u32",
             Kind::Digest => "bytes<32>",
             Kind::Sha256Ctx => "Sha256Ctx",
+            Kind::Bool => "bool",
         };
         let fits = |this: &Self, k: Kind, ty: TypeId| match (k, this.ty(ty)) {
             (Kind::Bytes, Type::Bytes { .. }) => true,
@@ -960,6 +961,7 @@ impl Lowerer<'_> {
             | (Kind::U16, Type::Int { width: IntWidth::U16, .. })
             | (Kind::U32, Type::Int { width: IntWidth::U32, .. }) => true,
             (Kind::Sha256Ctx, Type::Record(r)) => this.program.records[r.index()].name == "Sha256Ctx",
+            (Kind::Bool, Type::Bool) => true,
             _ => false,
         };
         let ok = params.len() == sig.params.len()

@@ -53,6 +53,10 @@ pub enum Native {
     Sha256Update,
     /// `sha256_final(ctx) -> bytes<32>`: der Digest.
     Sha256Final,
+    /// `ecdsa_p256_verify(key, digest, sig) -> bool`: ein Job (4.5); die
+    /// Implementierung liegt in `takt-crypto`, dieses Crate kennt nur
+    /// Namen und Signatur.
+    EcdsaP256Verify,
 }
 
 /// Die Art eines Arguments oder Ergebnisses an der Grenze (4.5).
@@ -70,6 +74,8 @@ pub enum Kind {
     Digest,
     /// Das Prelude-Record `Sha256Ctx` in kanonischer Byteform.
     Sha256Ctx,
+    /// `bool`, ein Byte.
+    Bool,
 }
 
 /// Parameter und Ergebnis, wie das Programm sie deklarieren muss
@@ -104,11 +110,18 @@ impl Native {
             Native::Sha256Init => "sha256_init",
             Native::Sha256Update => "sha256_update",
             Native::Sha256Final => "sha256_final",
+            Native::EcdsaP256Verify => "ecdsa_p256_verify",
         }
     }
 
+    /// Die Implementierung liegt ausserhalb dieses Crates (`takt-crypto`):
+    /// `call` liefert `None`, die Vektoren stehen im Block `takt-crypto`.
+    pub fn external(self) -> bool {
+        matches!(self, Native::EcdsaP256Verify)
+    }
+
     /// Alle Funktionen der Menge.
-    pub const ALL: [Native; 9] = [
+    pub const ALL: [Native; 10] = [
         Native::Crc32,
         Native::Crc32c,
         Native::Crc16,
@@ -118,6 +131,7 @@ impl Native {
         Native::Sha256Init,
         Native::Sha256Update,
         Native::Sha256Final,
+        Native::EcdsaP256Verify,
     ];
 
     /// Die Funktion zu einem Namen.
@@ -136,6 +150,7 @@ impl Native {
             Native::Sha256Init => Signature { params: &[], ret: Kind::Sha256Ctx },
             Native::Sha256Update => Signature { params: &[Kind::Sha256Ctx, Kind::Bytes], ret: Kind::Sha256Ctx },
             Native::Sha256Final => Signature { params: &[Kind::Sha256Ctx], ret: Kind::Digest },
+            Native::EcdsaP256Verify => Signature { params: &[Kind::Bytes, Kind::Digest, Kind::Bytes], ret: Kind::Bool },
         }
     }
 
@@ -157,6 +172,7 @@ impl Native {
 pub fn call(f: Native, inputs: &[&[u8]]) -> Option<Output> {
     let one = || inputs.first().copied().filter(|_| inputs.len() == 1);
     Some(match f {
+        Native::EcdsaP256Verify => return None,
         Native::Crc32 => Output::Scalar(u64::from(crc::crc32(one()?))),
         Native::Crc32c => Output::Scalar(u64::from(crc::crc32c(one()?))),
         Native::Crc16 => Output::Scalar(u64::from(crc::crc16(one()?))),

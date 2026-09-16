@@ -12,6 +12,7 @@ takt-diag = { path = "../takt-diag" }
 takt-hal = { path = "../takt-hal" }
 takt-mir = { path = "../takt-mir" }
 takt-native = { path = "../takt-native" }
+takt-crypto = { path = "../takt-crypto", features = ["ecdsa"] }
 takt-match = { path = "../takt-match" }
 takt-rt-core = { path = "../takt-rt-core" }
 

@@ -1,0 +1,19 @@
+[package]
+name = "takt-crypto"
+version = "0.1.0"
+description = "Takt: Kryptographie mit gepruefter Abhaengigkeit — ECDSA P-256 hinter dem Feature `ecdsa` (Referenz 4.5, 9.5)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# `takt-native` bleibt abhaengigkeitsfrei; was eine Abhaengigkeit braucht,
+# steht hier, hinter einem Feature und namentlich im TCB-Manifest des
+# Lauf-Headers (plan/m6.md 2.4).
+[features]
+ecdsa = ["dep:p256"]
+
+[dependencies]
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"], optional = true }
+
+[lints]
+workspace = true

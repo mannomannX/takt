@@ -62,3 +62,69 @@ fn the_chunked_digest_equals_the_one_shot() {
     assert!(t.contains("t=0 out chunked 3205920954"), "{t}");
     assert!(t.contains("t=0 out mac 1340929148"), "{t}");
 }
+
+/// Eine Takt-Funktion, die einen Byteblock aus einer Hexfolge baut.
+fn bytes_fn(name: &str, cap: usize, hex: &str) -> String {
+    let items: Vec<String> =
+        hex.as_bytes().chunks(2).map(|p| format!("0x{}", std::str::from_utf8(p).expect("ascii"))).collect();
+    format!(
+        "fn {name}() -> bytes<{cap}>:
+    var b : bytes<{cap}> = default
+    for x in [{}]:
+        b.push(x as u8)
+    return b
+",
+        items.join(", ")
+    )
+}
+
+const KEY: &str = "60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb67903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299";
+const DIGEST: &str = "af2bdbe1aa9b6ec1e2ade1d694f41fc71a831d0268e9891562113d8a62add1bf";
+const SIG: &str = "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8";
+
+/// `ecdsa_p256_verify` als Job (4.5): der Interpreter prueft die Signatur
+/// ueber `takt-crypto` — RFC 6979 A.2.5, und eine gekippte Signatur faellt.
+#[test]
+fn the_signature_job_verifies_through_takt_crypto() {
+    for (sig, want) in [(SIG.to_string(), "true"), (SIG.replacen("a8", "a9", 1), "false")] {
+        let body = format!(
+            "native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 2048, duration = 30 ms, total
+output ok : bool @ hw(\"o/ok\") with safe = false
+output done : bool @ hw(\"o/done\") with safe = false
+{}{}{}
+machine m:
+    initial RUN
+    state RUN:
+        sequence:
+            job v = ecdsa_p256_verify(key = key(), digest = digest(), sig = sig())
+            until v.done timeout 1 s -> FAILED
+            ok = v.result.or(false)
+            done = true
+            -> DONE
+    state DONE:
+        when false: -> RUN
+    state FAILED:
+        when false: -> RUN
+",
+            bytes_fn("key", 64, KEY),
+            bytes_fn("digest", 32, DIGEST),
+            bytes_fn("sig", 64, &sig)
+        );
+        let p = compile(&body).expect("uebersetzt");
+        let t =
+            run(&p, &Trace::default(), &RunOptions { ticks: 60, ..Default::default() }).expect("Lauf").trace.render();
+        assert!(t.contains("out done true"), "{t}");
+        assert!(
+            t.contains(&format!("out ok {want}")),
+            "{want}:
+{t}"
+        );
+    }
+}
+
+#[test]
+fn the_signature_job_must_match_its_curated_signature() {
+    let e = errors("native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<16>, sig: bytes<64>) -> bool with cost = 300, stack = 2048, duration = 30 ms, total
+");
+    assert!(e.contains("(bytes<N>, bytes<32>, bytes<N>) -> bool"), "{e}");
+}

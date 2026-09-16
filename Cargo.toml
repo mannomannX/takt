@@ -12,6 +12,7 @@ exclude = [
 members = [
     "crates/libtaktm",
     "crates/takt-native",
+    "crates/takt-crypto",
     "crates/takt-match",
     "crates/takt-diag",
     "crates/takt-syntax",

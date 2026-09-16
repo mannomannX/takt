@@ -62,7 +62,7 @@ fn the_same_input_gives_the_same_result() {
     for _ in 0..64 {
         let len = (rng.next() % 300) as usize;
         let block: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
-        for f in Native::ALL {
+        for f in Native::ALL.into_iter().filter(|f| !f.external()) {
             let first = every_call(f, &block);
             assert!(first.iter().any(Option::is_some), "{}: keine Signatur passt", f.name());
             assert_eq!(first, every_call(f, &block), "{}", f.name());
