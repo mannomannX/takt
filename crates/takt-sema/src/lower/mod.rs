@@ -647,6 +647,9 @@ pub fn run(file: &ast::File, edition: Edition, options: &Options) -> (Option<Pro
         return (None, diags);
     }
     lo.prelude = false;
+    // Die Datei bekommt ihren Bereich ueber dem Prelude; Vorlagen der
+    // Bibliothek sehen bei spaeter Instanziierung nur das Prelude.
+    lo.scopes.push();
     lo.collect(file);
     lo.lower_bodies(file);
     if !lo.has_errors() {

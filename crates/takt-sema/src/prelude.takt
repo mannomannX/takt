@@ -71,13 +71,17 @@ record Edge:
     rising : bool
 
 # --- Standardbibliothek: reine Funktionen (11.4) -----------------------
-# Zustandsbehaftete Bloecke (lowpass, pid, …) folgen mit den Beispielen
-# 14.4 in M1; sie brauchen nur die hier stehenden Regeln.
 fn clamp[U](x: float[U], lo: float[U], hi: float[U]) -> float[U]:
     return lo if x < lo else (hi if x > hi else x)
 
 fn lerp[U](a: float[U], b: float[U], t: float) -> float[U]:
     return a + (b - a) * t
+
+fn map_range[U, V](x: float[U], x0: float[U], x1: float[U], y0: float[V], y1: float[V]) -> float[V]:
+    return y0 + (y1 - y0) * ((x - x0) / (x1 - x0))
+
+fn deadband[U](x: float[U], w: float[U]) -> float[U]:
+    return 0 if abs(x) < w else x
 
 # --- Standardbibliothek: Bloecke (5.7, 11.4) ----------------------------
 block rising():
@@ -103,3 +107,237 @@ block integrate[U](limit: float[U*s]):
         elif acc < -limit:
             acc = -limit
         return acc
+
+block lowpass[U](tau: Duration):
+    var y    : float[U] = 0
+    var init : bool = false
+    step(x: float[U], dt: Duration in tick..1 h) -> float[U]:
+        if not init:
+            y = x
+            init = true
+        var a : float = dt.as(s) / (tau.as(s) + dt.as(s))
+        y = y + a * (x - y)
+        return y
+
+block hysteresis[U](lo: float[U], hi: float[U]):
+    var active : bool = false
+    step(x: float[U]) -> bool:
+        if x >= hi:
+            active = true
+        elif x <= lo:
+            active = false
+        return active
+
+block debounce(d: Duration):
+    var last    : bool = false
+    var settled : bool = false
+    var held    : Duration = 0 s
+    step(x: bool, dt: Duration in tick..1 h) -> bool:
+        if x == last:
+            held = held + dt
+        else:
+            last = x
+            held = 0 s
+        if held >= d:
+            settled = last
+        return settled
+
+block rate[U]():
+    var prev : float[U] = 0
+    var init : bool = false
+    step(x: float[U], dt: Duration in tick..1 h) -> float[U/s]:
+        if not init:
+            prev = x
+            init = true
+        var r : float[U/s] = (x - prev) / dt.as(s)
+        prev = x
+        return r
+
+block rate_limiter[U](max_rate: float[U/s]):
+    var y    : float[U] = 0
+    var init : bool = false
+    step(target: float[U], dt: Duration in tick..1 h) -> float[U]:
+        if not init:
+            y = target
+            init = true
+        var limit : float[U] = max_rate * dt.as(s)
+        y = clamp(target, y - limit, y + limit)
+        return y
+
+block pid[O, E](kp: float[O/E], ki: float[O/E/s], kd: float[O*s/E], lo: float[O], hi: float[O]):
+    var integral : float[O] = 0
+    var prev_err : float[E] = 0
+    step(err: float[E], dt: Duration in tick..1 h) -> float[O]:
+        var dts : float[s] = dt.as(s)
+        integral = clamp(integral + ki * err * dts, lo, hi)
+        var deriv : float[O] = kd * (err - prev_err) / dts
+        prev_err = err
+        return clamp(kp * err + integral + deriv, lo, hi)
+
+block stopwatch():
+    var acc : Duration = 0 s
+    var run : bool = false
+    step(dt: Duration in tick..1 h) -> Duration:
+        if run:
+            acc = acc + dt
+        return acc
+    start():
+        run = true
+    stop():
+        run = false
+    elapsed() -> Duration:
+        return acc
+
+block pulse_counter():
+    var n : int = 0
+    step(edges: int) -> int:
+        n = n + edges
+        return n
+
+block cross_check[U](tol: float[U]):
+    step(a: float[U], b: float[U]) -> float[U]?:
+        if abs(a - b) > tol:
+            return none
+        return (a + b) * 0.5
+
+block vote2oo3[U](tol: float[U]):
+    step(a: float[U], b: float[U], c: float[U]) -> float[U]?:
+        var ab : bool = abs(a - b) <= tol
+        var bc : bool = abs(b - c) <= tol
+        var ac : bool = abs(a - c) <= tol
+        if not (ab or bc or ac):
+            return none
+        var lo : float[U] = min(a, min(b, c))
+        var hi : float[U] = max(a, max(b, c))
+        return a + b + c - lo - hi
+
+block hold_last[U](max_hold: Duration):
+    var last : float[U] = 0
+    var have : bool = false
+    var held : Duration = 0 s
+    step(x: float[U]?, dt: Duration in tick..1 h) -> float[U]?:
+        if x.valid:
+            last = x.or(last)
+            have = true
+            held = 0 s
+            return x
+        held = held + dt
+        if have and held <= max_hold:
+            return last
+        return none
+
+block window_min[U, const N in 1..1024]():
+    var buf  : [N] float[U] = default
+    var next : int in 0..N-1 = 0
+    var fill : int in 0..N = 0
+    step(x: float[U]) -> float[U]:
+        buf[next] = x
+        next = 0 if next == N - 1 else next + 1
+        if fill < N:
+            fill = fill + 1
+        var m : float[U] = buf[0]
+        for i in range(N):
+            if i < fill and buf[i] < m:
+                m = buf[i]
+        return m
+
+block window_max[U, const N in 1..1024]():
+    var buf  : [N] float[U] = default
+    var next : int in 0..N-1 = 0
+    var fill : int in 0..N = 0
+    step(x: float[U]) -> float[U]:
+        buf[next] = x
+        next = 0 if next == N - 1 else next + 1
+        if fill < N:
+            fill = fill + 1
+        var m : float[U] = buf[0]
+        for i in range(N):
+            if i < fill and buf[i] > m:
+                m = buf[i]
+        return m
+
+block window_mean[U, const N in 1..1024]():
+    var buf  : [N] float[U] = default
+    var next : int in 0..N-1 = 0
+    var fill : int in 0..N = 0
+    step(x: float[U]) -> float[U]:
+        buf[next] = x
+        next = 0 if next == N - 1 else next + 1
+        if fill < N:
+            fill = fill + 1
+        var s : float[U] = 0
+        for i in range(N):
+            if i < fill:
+                s = s + buf[i]
+        return s / (fill as float)
+
+block window_rms[U, const N in 1..1024]():
+    var buf  : [N] float[U] = default
+    var next : int in 0..N-1 = 0
+    var fill : int in 0..N = 0
+    step(x: float[U]) -> float[U]:
+        buf[next] = x
+        next = 0 if next == N - 1 else next + 1
+        if fill < N:
+            fill = fill + 1
+        var s : float[U^2] = 0
+        for i in range(N):
+            if i < fill:
+                s = s + buf[i] * buf[i]
+        return sqrt(s / (fill as float))
+
+block reader[const N in 1..65536](b: bytes<N>):
+    var buf : bytes<N> = b
+    var pos : int in 0..N = 0
+    u8() -> u8?:
+        if pos >= buf.len:
+            return none
+        var v : u8 = buf[pos]
+        pos = pos + 1
+        return v
+    u16_le() -> u16?:
+        if pos + 2 > buf.len:
+            return none
+        var v : u16 = (buf[pos] as u16) | ((buf[pos + 1] as u16) << 8)
+        pos = pos + 2
+        return v
+    u32_le() -> u32?:
+        if pos + 4 > buf.len:
+            return none
+        var v : u32 = (buf[pos] as u32) | ((buf[pos + 1] as u32) << 8) | ((buf[pos + 2] as u32) << 16) | ((buf[pos + 3] as u32) << 24)
+        pos = pos + 4
+        return v
+    remaining() -> int:
+        return buf.len - pos
+
+block writer[const N in 1..65536]():
+    var buf : bytes<N> = default
+    u8(x: u8) -> bool:
+        var ok : bool = false
+        ok = buf.push(x)
+        return ok
+    u16_le(x: u16) -> bool:
+        if buf.len + 2 > N:
+            return false
+        buf.push((x & 0xFF) as u8)
+        buf.push((x >> 8) as u8)
+        return true
+    u32_le(x: u32) -> bool:
+        if buf.len + 4 > N:
+            return false
+        buf.push((x & 0xFF) as u8)
+        buf.push(((x >> 8) & 0xFF) as u8)
+        buf.push(((x >> 16) & 0xFF) as u8)
+        buf.push((x >> 24) as u8)
+        return true
+    bytes(b: bytes<N>) -> bool:
+        var ok : bool = false
+        ok = buf.append(b)
+        return ok
+    mark() -> int:
+        return buf.len
+    patch_u16(m: int in 0..N-1, v: u16):
+        buf[m] = (v & 0xFF) as u8
+        buf[m + 1] = (v >> 8) as u8
+    data() -> bytes<N>:
+        return buf

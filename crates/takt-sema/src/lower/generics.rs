@@ -52,18 +52,40 @@ impl Lowerer<'_> {
     }
 
     /// Fuehrt `f` mit gebundener generischer Umgebung und sauberem Kontext
-    /// aus (Datei-Sichtbereich, keine Maschine, keine Fakten).
-    pub fn with_env<T>(&mut self, env: Env, f: impl FnOnce(&mut Self) -> T) -> T {
+    /// aus: keine Maschine, keine Fakten, und als Sichtbereich die Ebene
+    /// der Vorlage — das Prelude fuer eine Vorlage der Bibliothek, sonst
+    /// die Datei.
+    pub fn with_env<T>(&mut self, env: Env, prelude: bool, f: impl FnOnce(&mut Self) -> T) -> T {
         let saved_env = std::mem::replace(&mut self.env, env);
+        let saved_prelude = std::mem::replace(&mut self.prelude, prelude);
         let saved_m = self.mctx.take();
         let saved_facts = std::mem::take(&mut self.facts);
-        let inner = self.scopes.detach_inner();
+        let keep = if prelude { 1 } else { 2 };
+        let inner = self.scopes.detach_inner(keep);
         let r = f(self);
-        self.scopes.attach_inner(inner);
+        self.scopes.attach_inner(keep, inner);
         self.facts = saved_facts;
         self.mctx = saved_m;
+        self.prelude = saved_prelude;
         self.env = saved_env;
         r
+    }
+
+    /// Diagnosen aus dem Rumpf einer Bibliotheksvorlage, die Nutzercode
+    /// instanziiert hat: Warnungen gehen den Nutzer nichts an, ein Fehler
+    /// ist einer der Bibliothek und steht an der Aufrufstelle.
+    fn library_diags(&mut self, prelude: bool, from: usize, name: &str, span: Span) {
+        if !prelude || self.prelude {
+            return;
+        }
+        let first = self.diags.drain(from..).find(|d| d.is_error()).map(|d| d.message);
+        if let Some(msg) = first {
+            self.error(
+                SC3,
+                span,
+                format!("interner Fehler: `{name}` aus der Standardbibliothek uebersetzt nicht (`{msg}`)"),
+            );
+        }
     }
 
     /// Fuehrt `f` gegen eine Kopie des Programms aus und verwirft sie;
@@ -93,7 +115,7 @@ impl Lowerer<'_> {
             }
             let env = Env::open(&t.generics);
             self.in_scratch(|this| {
-                this.with_env(env, |this| {
+                this.with_env(env, t.prelude, |this| {
                     let name = format!("{}[?]", t.decl.name.name);
                     this.instantiate_fn(&t.decl, name);
                 });
@@ -106,7 +128,7 @@ impl Lowerer<'_> {
             }
             let env = Env::open(&t.generics);
             self.in_scratch(|this| {
-                this.with_env(env, |this| {
+                this.with_env(env, t.prelude, |this| {
                     let name = format!("{}[?]", t.decl.name.name);
                     this.instantiate_block(&t.decl, name);
                 });
@@ -118,7 +140,7 @@ impl Lowerer<'_> {
                 continue;
             }
             self.in_scratch(|this| {
-                this.with_env(Env::default(), |this| {
+                this.with_env(Env::default(), t.prelude, |this| {
                     this.check_machine_template(&t);
                 });
             });
@@ -141,7 +163,10 @@ impl Lowerer<'_> {
             _ => {
                 let env = Env::bound(&t.generics, &bound);
                 let name = self.instance_name(&t.decl.name.name, &bound);
-                let id = self.with_env(env, |this| this.instantiate_fn(&t.decl, name))?;
+                let before = self.diags.len();
+                let id = self.with_env(env, t.prelude, |this| this.instantiate_fn(&t.decl, name));
+                self.library_diags(t.prelude, before, &t.decl.name.name, span);
+                let id = id?;
                 self.memo.insert(key, Memo::Fn(id));
                 id
             }
@@ -170,7 +195,10 @@ impl Lowerer<'_> {
         }
         let env = Env::bound(&t.generics, &bound);
         let name = self.instance_name(&t.decl.name.name, &bound);
-        let id = self.with_env(env, |this| this.instantiate_block(&t.decl, name))?;
+        let before = self.diags.len();
+        let id = self.with_env(env, t.prelude, |this| this.instantiate_block(&t.decl, name));
+        self.library_diags(t.prelude, before, &t.decl.name.name, span);
+        let id = id?;
         self.memo.insert(key, Memo::Block(id));
         Some(id)
     }

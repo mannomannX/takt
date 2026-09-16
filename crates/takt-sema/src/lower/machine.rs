@@ -772,7 +772,9 @@ impl Lowerer<'_> {
                 args,
                 array: decl.index.as_ref().map(|_| ((*i - indices[0].0) as u32, *len as u32)),
             });
-            self.with_env(super::Env::default(), |this| this.lower_machine(&t.decl, id, kind, &bindings, Some(idx)));
+            self.with_env(super::Env::default(), t.prelude, |this| {
+                this.lower_machine(&t.decl, id, kind, &bindings, Some(idx))
+            });
         }
         let entity = match &decl.index {
             None => Entity::Machine(first),

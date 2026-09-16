@@ -1,0 +1,110 @@
+system:
+    language = 1
+
+# Testmaschinen fuer die Bibliotheksbloecke aus 11.4: jede Instanz bekommt
+# ihre Anregung aus dem Stimulus, ihr Ergebnis geht auf einen Output und
+# damit in den Golden-Trace.
+
+input  x     : float[V] in -10..10 V @ hw("daq/x")     with max_age = 200 ms
+input  y     : float[V] in -10..10 V @ hw("daq/y")     with max_age = 200 ms
+input  z     : float[V] in -10..10 V @ hw("daq/z")     with max_age = 200 ms
+input  sw    : bool                  @ hw("gpio/sw")   with max_age = 200 ms
+input  edges : int in 0..100         @ hw("cnt/edges") with max_age = 200 ms
+
+output above    : bool                  @ hw("test/above")    with safe = false
+output settled  : bool                  @ hw("test/settled")  with safe = false
+output slope    : float[V/s]            @ hw("test/slope")    with safe = 0 V/s
+output slewed   : float[V]              @ hw("test/slewed")   with safe = 0 V
+output run_ms   : int in 0..100000      @ hw("test/run_ms")   with safe = 0
+output pulses   : int in 0..100000      @ hw("test/pulses")   with safe = 0
+output pair     : float[V]              @ hw("test/pair")     with safe = 0 V
+output pair_ok  : bool                  @ hw("test/pair_ok")  with safe = false
+output voted    : float[V]              @ hw("test/voted")    with safe = 0 V
+output voted_ok : bool                  @ hw("test/voted_ok") with safe = false
+output held     : float[V]              @ hw("test/held")     with safe = 0 V
+output held_ok  : bool                  @ hw("test/held_ok")  with safe = false
+output wmin     : float[V]              @ hw("test/wmin")     with safe = 0 V
+output wmax     : float[V]              @ hw("test/wmax")     with safe = 0 V
+output wmean    : float[V]              @ hw("test/wmean")    with safe = 0 V
+output wrms     : float[V]              @ hw("test/wrms")     with safe = 0 V
+output mapped   : float[pct]            @ hw("test/mapped")   with safe = 0 pct
+output dead     : float[V]              @ hw("test/dead")     with safe = 0 V
+output codec_ok : bool                  @ hw("test/codec_ok") with safe = false
+output decoded  : int in 0..0xFFFF_FFFF @ hw("test/decoded")  with safe = 0
+
+machine blocks every 10 ms:
+    var hyst     = hysteresis[V](lo = 2 V, hi = 4 V)
+    var deb      = debounce(d = 15 ms)
+    var slope_f  = rate[V]()
+    var slew     = rate_limiter[V](max_rate = 100 V/s)
+    var timer    = stopwatch()
+    var counter  = pulse_counter()
+    var xcheck   = cross_check[V](tol = 0.5 V)
+    var voter    = vote2oo3[V](tol = 0.5 V)
+    var holder   = hold_last[V](max_hold = 20 ms)
+    var w_min    = window_min[V, 4]()
+    var w_max    = window_max[V, 4]()
+    var w_mean   = window_mean[V, 4]()
+    var w_rms    = window_rms[V, 4]()
+    var on_edge  = rising()
+    var off_edge = falling()
+    initial RUN
+    state RUN:
+        loop:
+            above = hyst.step(x)
+            settled = deb.step(sw, 10 ms)
+            slope = slope_f.step(x, 10 ms)
+            slewed = slew.step(x, 10 ms)
+            var rose : bool = on_edge.step(sw)
+            var fell : bool = off_edge.step(sw)
+            if rose:
+                timer.start()
+            if fell:
+                timer.stop()
+            var t : Duration = timer.step(10 ms)
+            run_ms = t / 1 ms
+            pulses = counter.step(edges)
+            var p : float[V]? = xcheck.step(x, y)
+            pair = p.or(0 V)
+            pair_ok = p.valid
+            var v : float[V]? = voter.step(x, y, z)
+            voted = v.or(0 V)
+            voted_ok = v.valid
+            var h : float[V]? = holder.step(p, 10 ms)
+            held = h.or(0 V)
+            held_ok = h.valid
+            wmin = w_min.step(x)
+            wmax = w_max.step(x)
+            wmean = w_mean.step(x)
+            wrms = w_rms.step(x)
+            mapped = map_range(x, 0 V, 10 V, 0 pct, 100 pct)
+            dead = deadband(x, 2 V)
+
+# `writer` und `reader` im Rundlauf: der Rahmen entsteht in WRITE, READ
+# liest ihn ueber eine zustandslokale Instanz zurueck.
+machine codec every 10 ms:
+    var w     = writer[8]()
+    var frame : bytes<8> = default
+    var ok    : bool = false
+    var tag   : u8? = none
+    var len   : u16? = none
+    var crc   : u32? = none
+    var rest  : int = 0
+    initial WRITE
+    state WRITE:
+        enter:
+            w.reset()
+            ok = w.u8(0x01)
+            ok = w.u16_le(0xBEEF)
+            ok = w.u32_le(0xDEAD_BEEF)
+            frame = w.data()
+        when true: -> READ
+    state READ:
+        var r = reader(frame)
+        enter:
+            tag = r.u8()
+            len = r.u16_le()
+            crc = r.u32_le()
+            rest = r.remaining()
+            decoded = crc.or(0) as int
+            codec_ok = ok and tag.or(0) == 1 and len.or(0) == 0xBEEF and crc.or(0) == 0xDEAD_BEEF and rest == 0

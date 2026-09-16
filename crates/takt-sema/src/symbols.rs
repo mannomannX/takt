@@ -131,15 +131,16 @@ impl Scopes {
         }
     }
 
-    /// Loest alle Bereiche ausser dem Dateibereich ab (Vorlagen sehen nur
-    /// die Dateiebene, plan/m1.md 1.2).
-    pub fn detach_inner(&mut self) -> Vec<HashMap<String, Symbol>> {
-        self.frames.split_off(1.min(self.frames.len()))
+    /// Loest alle Bereiche ueber den `keep` aeusseren ab: eine Vorlage
+    /// sieht nur die Dateiebene, eine aus dem Prelude nur das Prelude
+    /// (plan/m1.md 1.2).
+    pub fn detach_inner(&mut self, keep: usize) -> Vec<HashMap<String, Symbol>> {
+        self.frames.split_off(keep.min(self.frames.len()))
     }
 
     /// Haengt abgeloeste Bereiche wieder an.
-    pub fn attach_inner(&mut self, inner: Vec<HashMap<String, Symbol>>) {
-        self.frames.truncate(1.min(self.frames.len()));
+    pub fn attach_inner(&mut self, keep: usize, inner: Vec<HashMap<String, Symbol>>) {
+        self.frames.truncate(keep.min(self.frames.len()));
         self.frames.extend(inner);
     }
 
