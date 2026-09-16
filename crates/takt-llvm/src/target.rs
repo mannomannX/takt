@@ -60,6 +60,46 @@ impl Class {
     }
 }
 
+/// Instrumentierungsstufe (11.2, 12.8): was `pc` im Zustand traegt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Instrument {
+    /// Ein Store je Anweisung: der Byte-Offset der Anweisung im Quelltext.
+    Statements,
+    /// Nur Zustandswechsel: die Nummer des betretenen Blatts.
+    States,
+    /// Nichts.
+    Off,
+}
+
+impl Instrument {
+    /// Der Name in `takt build --instrument …`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Instrument::Statements => "statements",
+            Instrument::States => "states",
+            Instrument::Off => "off",
+        }
+    }
+
+    /// Die Stufe zu einem Namen.
+    pub fn parse(name: &str) -> Option<Instrument> {
+        [Instrument::Statements, Instrument::States, Instrument::Off].into_iter().find(|i| i.name() == name)
+    }
+
+    /// Der Default (12.8): `statements` auf der Box, `states` auf MCUs,
+    /// nichts im Startprofil. Das Profil des Programms geht vor dem Ziel.
+    pub fn default_for(profile: Option<takt_mir::program::RuntimeProfile>, target: Target) -> Instrument {
+        use takt_mir::program::RuntimeProfile;
+        match profile {
+            Some(RuntimeProfile::LinuxRt) => Instrument::Statements,
+            Some(RuntimeProfile::Baremetal | RuntimeProfile::Rtos) => Instrument::States,
+            Some(RuntimeProfile::Boot) => Instrument::Off,
+            None if target.is_bare_metal() => Instrument::States,
+            None => Instrument::Statements,
+        }
+    }
+}
+
 /// Ein Ziel, fuer das der Codegen erzeugen kann (12.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Target {

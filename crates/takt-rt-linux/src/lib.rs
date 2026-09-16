@@ -31,7 +31,7 @@ pub mod jobs;
 pub mod nvm;
 pub mod tunables;
 
-pub use clock::RealtimeClock;
+pub use clock::{RealtimeClock, wall_clock_ns};
 pub use guarantee::{Guarantee, Scheduling, prepare};
 pub use jobs::ThreadJobs;
 pub use nvm::FileNvm;

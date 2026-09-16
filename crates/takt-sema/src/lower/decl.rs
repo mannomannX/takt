@@ -72,7 +72,17 @@ pub fn config_from(file: &ast::File, edition: u32, diags: &mut Vec<Diagnostic>) 
                         )),
                     }
                 }
-                ast::SystemItem::Target(t) => config.target = Some(t.name.clone()),
+                ast::SystemItem::Target(t) => {
+                    if RuntimeProfile::parse(&t.name).is_none() {
+                        let known: Vec<&str> = RuntimeProfile::ALL.iter().map(|p| p.name()).collect();
+                        diags.push(Diagnostic::error(
+                            SC3,
+                            t.span,
+                            format!("unbekanntes Laufzeitprofil `{}`; 12.8 kennt {}", t.name, known.join(", ")),
+                        ));
+                    }
+                    config.target = Some(t.name.clone());
+                }
                 ast::SystemItem::Float(w) => {
                     config.float_width = match w {
                         ast::FloatWidth::F32 => FloatWidth::F32,

@@ -4,23 +4,24 @@
 //! ```text
 //! takt check DATEI… [--warnings-as-errors] [--certification] [--format text|line]
 //!                   [--hardware DATEI.hw --target NAME]
-//!                   [--build sim|hw] [--profile P]
+//!                   [--build sim|hw] [--params-profile P]
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
-//!                   [--profile P] [--order random:SEED]
-//! takt test  DATEI [--ticks N] [--profile P] [--scenario NAME] [--coverage OUT.csv]
-//! takt campaign DATEI [NAME] --ticks N [--stim S.trace] [--profile P] [--scenario NAME]
+//!                   [--params-profile P] [--order random:SEED]
+//! takt test  DATEI [--ticks N] [--params-profile P] [--scenario NAME] [--coverage OUT.csv]
+//! takt campaign DATEI [NAME] --ticks N [--stim S.trace] [--params-profile P] [--scenario NAME]
 //!                   [--out DIR] [--hardware DATEI.hw]
-//! takt tune  DATEI --ticks N --save PROFIL [--stim S.trace] [--profile P] [--out DATEI]
-//! takt run   DATEI --ticks N [--stim S.trace] [--record R.trace] [--trace OUT.trace] [--profile P]
+//! takt tune  DATEI --ticks N --save PROFIL [--stim S.trace] [--params-profile P] [--out DATEI]
+//! takt run   DATEI --ticks N [--stim S.trace] [--record R.trace] [--trace OUT.trace] [--params-profile P]
 //! takt replay DATEI --record R.trace [--golden G.trace] [--ticks N]
 //!                   [--machine M [--extract SCHEIBE.trace]]
 //! takt verify-trace TRACE.trace --record R.trace
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
-//! takt size  DATEI… [--build sim|hw] [--profile P] [--object DATEI.o] [--target NAME]
+//!                   [--instrument statements|states|off]
+//! takt size  DATEI… [--build sim|hw] [--params-profile P] [--object DATEI.o] [--target NAME]
 //!                   [--hardware DATEI.hw]
-//! takt cost  DATEI… [--build sim|hw] [--profile P]
-//! takt latency DATEI… [--build sim|hw] [--profile P]
+//! takt cost  DATEI… [--build sim|hw] [--params-profile P]
+//! takt latency DATEI… [--build sim|hw] [--params-profile P]
 //! takt mir   DATEI [--dump] [--write OUT.mir] [--hash]
 //! takt fmt   DATEI… [--check] [--stdout] [--snippet] [--verify] [--edition]
 //! takt parse DATEI… [--ast] [--debug] [--snippet]
@@ -81,6 +82,8 @@ impl Args {
             "--coverage",
             "--machine",
             "--extract",
+            "--instrument",
+            "--params-profile",
         ];
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
         let mut i = 0;
@@ -302,7 +305,18 @@ fn build(args: &Args) -> bool {
     };
     let Some(program) = compile_file(path, args) else { return false };
 
-    let lowered = takt_llvm::lower::program(&program, target.triple, module_name(path));
+    let instrument = match args.value("--instrument") {
+        Some(name) => match takt_llvm::Instrument::parse(name) {
+            Some(i) => i,
+            None => {
+                eprintln!("--instrument: `{name}` unbekannt; statements, states oder off (11.2)");
+                return false;
+            }
+        },
+        None => takt_llvm::Instrument::default_for(program.config.runtime_profile(), target),
+    };
+    println!("Instrumentierung: {} (11.2)", instrument.name());
+    let lowered = takt_llvm::lower::program_with(&program, target.triple, module_name(path), instrument);
     for s in &lowered.skipped {
         // Ein fehlender Schritt ist ein Loch, kein Schoenheitsfehler: Ohne
         // ihn meldet der Linker spaeter ein unbekanntes Symbol statt des
@@ -661,8 +675,15 @@ fn build_of(args: &Args) -> takt_sema::Build {
 }
 
 /// Profil aus `--profile` (8.4).
+/// `--params-profile P` (8.4); `--profile` bleibt als Alias, weil das
+/// 12.8-Profil denselben Namen trug (plan/m6.md 2.13).
 fn profile_of(args: &Args) -> Option<String> {
-    args.value("--profile").map(str::to_string)
+    if let Some(p) = args.value("--params-profile") {
+        return Some(p.to_string());
+    }
+    let alias = args.value("--profile")?;
+    eprintln!("--profile heisst jetzt --params-profile (8.4)");
+    Some(alias.to_string())
 }
 
 /// Uebersetzt eine Datei und meldet die Diagnosen; `None` bei Fehlern.

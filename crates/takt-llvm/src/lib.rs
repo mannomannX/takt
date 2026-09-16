@@ -58,6 +58,6 @@ pub mod wire;
 pub use emit::{Module, Reg};
 pub use expr::Lowered;
 pub use machine::{StateStruct, state_struct};
-pub use target::Target;
+pub use target::{Instrument, Target};
 pub use toolchain::Clang;
 pub use ty::LlvmType;

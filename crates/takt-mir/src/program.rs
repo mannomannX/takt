@@ -53,7 +53,46 @@ pub struct Config {
     pub tcb_allowlist: Vec<String>,
 }
 
+/// Laufzeitprofil (12.8): `system: target = …`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeProfile {
+    /// PREEMPT_RT-Box (12.2).
+    LinuxRt,
+    /// `no_std` auf einem MCU (12.3).
+    Baremetal,
+    /// Takt als hoechstpriore Aufgabe unter einem RTOS.
+    Rtos,
+    /// Startprogramme mit minimaler Runtime.
+    Boot,
+}
+
+impl RuntimeProfile {
+    /// Alle vier, in der Reihenfolge von 12.8.
+    pub const ALL: [RuntimeProfile; 4] =
+        [RuntimeProfile::LinuxRt, RuntimeProfile::Baremetal, RuntimeProfile::Rtos, RuntimeProfile::Boot];
+
+    /// Der Name in `system: target = …`.
+    pub fn name(self) -> &'static str {
+        match self {
+            RuntimeProfile::LinuxRt => "linux_rt",
+            RuntimeProfile::Baremetal => "baremetal",
+            RuntimeProfile::Rtos => "rtos",
+            RuntimeProfile::Boot => "boot",
+        }
+    }
+
+    /// Das Profil zu einem Namen.
+    pub fn parse(name: &str) -> Option<RuntimeProfile> {
+        RuntimeProfile::ALL.into_iter().find(|p| p.name() == name)
+    }
+}
+
 impl Config {
+    /// Das Laufzeitprofil (12.8), wenn `target` gesetzt ist.
+    pub fn runtime_profile(&self) -> Option<RuntimeProfile> {
+        self.target.as_deref().and_then(RuntimeProfile::parse)
+    }
+
     /// Konfiguration mit Defaults (Edition 1, f64, asap, fault_is_fail).
     pub fn new(edition: u32, tick: i64) -> Self {
         Config {

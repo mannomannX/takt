@@ -60,6 +60,14 @@ enum BootReason open: POWER_ON, WATCHDOG, SOFTWARE, DEEP_SLEEP_WAKE, TRIAL
 enum ImageState open: CONFIRMED, TRIAL
 enum RebootCmd open: NONE, RESTART, DEEP_SLEEP
 
+# Start-Channels der Plattform (12.7): der eFuse-Block und sein Kommando.
+record EfuseBlock:
+    pubkey      : bytes<64>
+    min_version : u32
+    secure_boot : bool
+
+enum EfuseCmd open: NONE, BURN_MIN_VERSION(version: u32), BURN_SECURE_BOOT
+
 # --- eingebaute Records (5.3, 8.6) -------------------------------------
 record LastFault:
     kind    : FaultKind

@@ -30,6 +30,7 @@ pub mod persist;
 pub mod program;
 pub mod sample;
 pub mod stmt;
+pub mod sys;
 pub mod types;
 
 pub use desugar::desugar;

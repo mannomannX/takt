@@ -280,9 +280,19 @@ impl Vars for StateVars<'_> {
 /// Senkt einen Block (11.2: Straight-Line-Code).
 pub fn block(b: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     for s in &b.stmts {
+        if m.instrument == crate::target::Instrument::Statements {
+            mark(s.span.start, ctx, m);
+        }
         stmt(s, ctx, m)?;
     }
     Ok(())
+}
+
+/// Instrumentierung (11.2): `pc` bekommt, wo die Maschine steht.
+pub fn mark(at: u32, ctx: &mut Ctx<'_>, m: &mut Module) {
+    if let Some(ptr) = ctx.field(Role::Pc, 0, m) {
+        m.void_inst(&format!("store i32 {at}, ptr {ptr}"));
+    }
 }
 
 /// Senkt eine Anweisung.

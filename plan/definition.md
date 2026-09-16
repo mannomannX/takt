@@ -1128,7 +1128,7 @@ Alle Zeitangaben werden zu u64-Tick-Zählern der jeweiligen Maschine: n = ⌈d /
 Überschreitet ein Tick trotz Budget die Periode (Treiberstörung, Cache-Effekte auf Linux), erzeugt die Runtime `Runtime(Overrun)` als Fault für alle Maschinen im nächsten Tick (Policy konfigurierbar: `fault` (Default) oder `alert` für unkritische Systeme). Der Tick wird nie übersprungen; die logische Zeit bleibt konsistent, die physische Verzögerung wird protokolliert.
 
 ### 7.4 Wall-Clock
-Nur als Input-Channel (`input wall_time: Duration @ hw("sys/clock")`), damit die Semantik frei von Systemzeit bleibt. Zeitstempel für Recording setzt die Runtime außerhalb der Semantik.
+Nur als Input-Channel (`input wall_time: Duration @ hw("sys/clock")`), damit die Semantik frei von Systemzeit bleibt; der Kanal gehört zum eingebauten Gerät `sys` (12.7). In `takt-rt-linux` füllt der Treiberrand ihn aus `CLOCK_REALTIME` (`wall_clock_ns`), in der Simulation kommt er aus dem Stimulus. Zeitstempel für Recording setzt die Runtime außerhalb der Semantik.
 
 
 ### 7.5 Zeit unterhalb des Ticks
@@ -1219,7 +1219,7 @@ profile QUAL:
     CYCLE_COUNT = 50
 ```
 - `param` ist zur Compile-Zeit unbekannt, aber typ- und range-geprüft; die Intervallanalyse nutzt die Range.
-- Profile werden beim Laden gewählt (`takt run test.takt --profile QUAL`), gegen Ranges/Einheiten validiert und mit dem Programm-Hash im Lauf-Header aufgezeichnet.
+- Profile werden beim Laden gewählt (`takt run test.takt --params-profile QUAL`; `--profile` bleibt als Alias, weil das Laufzeitprofil aus 12.8 denselben Namen trägt), gegen Ranges/Einheiten validiert und mit dem Programm-Hash im Lauf-Header aufgezeichnet.
 - Während eines Laufs sind Params konstant (Determinismus). Änderung = neuer Lauf.
 
 **Tunables (v1.1).** `tunable param KP : float[pct/bar] in 0..10 pct/bar = 0.5 pct/bar` ist ein Parameter, der während eines Laufs geändert werden darf — semantisch ein Input mit Halte-Semantik: Der Wert in Tick k ist der zuletzt akzeptierte Wert (Start: Default). Änderungen sind Inputs (Teil von I_k), werden gegen Range und Einheit validiert, als *Satz* atomar an einer Tick-Grenze übernommen und mit Tick aufgezeichnet; `takt replay` reproduziert sie exakt (Satz 9.4.1 unverändert, der Lauf-Header enthält die Startwerte). Tunables haben keine Qualität und kein Alter und sind nie `Bad`; ihre Range bleibt Annahme der Intervallanalyse, weil das Setzen sie erzwingt. Sie sind überall erlaubt, wo Ausdrücke stehen (auch in Guards und `after`, dort jeden Tick neu gelesen), nicht aber, wo Compile-Zeit-Konstanten verlangt sind (Array-Größen, Kapazitäten, `repeat`). Die Bedienoberfläche erzeugt automatisch Regler mit Range; `takt tune DATEI --ticks N --save PROFILE [--stim S.trace]` schreibt den zuletzt übernommenen Satz als Profilblock. Im Trace steht eine Änderung als `tune <name> <wert>` (Stimulus wie Aufzeichnung); ein Wert außerhalb der Range wird verworfen und mit ` rejected` aufgezeichnet.
@@ -1805,7 +1805,7 @@ fn hotfire_step(s: &mut hotfire_state, i: &Inputs, psi: &Published, o: &mut OutL
 - **Statischer Scratch.** Temporärwerte eines Ausdrucks liegen nicht auf dem Stack, sondern in einem statischen Scratch je Maschine, dessen Größe der Compiler als Maximum der gleichzeitig lebenden Temporärwerte über alle Statements berechnet und in `.bss` reserviert; die Slots werden über Statements hinweg wiederverwendet. Operatoren mit Zuweisung (`+=`, `*=`) und `transpose()` als Zugriffsmuster reduzieren Temporärwerte weiter.
 - **Overlay exklusiver Zustandsspeicher.** Zustandslokale Variablen, gehobene Sequenz-Variablen, Captures, Bestätigungs- und `every`-Zähler von Geschwisterzuständen teilen sich denselben Speicher, rekursiv entlang des Zustandsbaums: Bedarf(Zustand) = eigene Variablen + max über Kinder. Semantik unverändert (Definite Assignment je Eintritt, T6); `persist`- und Maschinenvariablen werden nicht überlagert.
 - Ψ ist ein Doppelpuffer nur für `pub var` und Zustände, die eine andere Maschine oder ein Szenario liest (statisch bekannt); nur aufgezeichnete Größen existieren einfach. `publish` ist ein Zeigertausch, `fresh[m]` (7.2) ein Zeiger auf den Schreibpuffer der Maschine — O(1) pro Tick statt O(Größe aller `pub var`). Nur im Programm genutzte Channels liegen im Prozessabbild; reine Aufzeichnungs-Channels (8.2) laufen daran vorbei in den Recorder.
-- Instrumentierungsstufen: `--trace = statements` (ein Store pro Statement, Default auf der Box), `--trace = states` (nur Zustandswechsel, Default auf MCUs), `--trace = off`; das Laufzeitprofil (12.8) setzt den Default, der Lauf-Header hält die Stufe fest.
+- Instrumentierungsstufen: `--trace = statements` (ein Store pro Statement, Default auf der Box), `--trace = states` (nur Zustandswechsel, Default auf MCUs), `--trace = off`; das Laufzeitprofil (12.8) setzt den Default, der Lauf-Header hält die Stufe fest. `takt build --instrument statements|states|off` überschreibt ihn; `pc` trägt bei `statements` den Byte-Offset der Anweisung, bei `states` die Nummer des betretenen Blatts.
 - **DFA-Tabellen.** Bytes, die alle Muster eines Handler-Blocks gleich behandeln, bilden Alphabetklassen (typisch 10–25 statt 256 Spalten; dazu eine 256-Byte-Klassenabbildung je Block); alle Muster der Handler eines Zustands werden zu einem Produkt-DFA vereinigt (Priorität nach Quelltextreihenfolge, wie 8.7 verlangt), sodass jedes Element einmal durchlaufen wird. Beides ist semantikneutral; die Tabellen werden in `takt size` ausgewiesen und liegen auf Zielen mit XIP-Flash im RAM (12.3).
 
 ### 11.3 Sim-Build vs. HW-Build
@@ -1934,7 +1934,7 @@ input  reset_count   : int        @ hw("sys/reset_count")
 output image_confirm : bool       @ hw("sys/image_confirm") with safe = false
 output reboot        : RebootCmd  @ hw("sys/reboot")        with safe = NONE  # NONE, RESTART, DEEP_SLEEP
 ```
-Die Enums `BootReason`, `ImageState` und `RebootCmd` sind vordefiniert; welche Channels eine Plattform anbietet, steht in ihrer Hardware-Konfiguration (8.10).
+Die Enums `BootReason`, `ImageState` und `RebootCmd` sind vordefiniert, ebenso das Record `EfuseBlock` (`pubkey : bytes<64>`, `min_version : u32`, `secure_boot : bool`) und das Enum `EfuseCmd` (`NONE`, `BURN_MIN_VERSION(version)`, `BURN_SECURE_BOOT`). Das Gerät `sys` ist eingebaut: Prüfung 60 kennt seine Kanäle — die fünf oben, die vier Start-Channels und `sys/clock` (7.4) — mit Richtung und Typ ohne Hardware-Konfiguration, und eine Adresse `sys/…`, die es nicht gibt, ist ein Fehler; welche übrigen Channels eine Plattform anbietet, steht in ihrer Hardware-Konfiguration (8.10).
 - **Muster TRIAL → SELFTEST → CONFIRM.** Nach einem Update startet die Plattform das neue Image im Zustand TRIAL; das Programm läuft seinen Selbsttest; erreicht er PASS, setzt es `image_confirm = true`, und die Plattform markiert das Image als gut. Erreicht das Programm vorher `FAULTED` oder greift der Watchdog, bootet die Plattform das vorherige Image (Beispiel 14.7).
 - **Neustart aus sicherem Zustand.** `reboot = RESTART` wird nach dem Commit des Ticks ausgeführt, nachdem alle Outputs auf `safe` stehen.
 - **Tiefschlaf.** `reboot = DEEP_SLEEP` beendet den Lauf (kein virtueller Tick; Satz 9.9.1 gilt nur für RAM-erhaltenden Schlaf); der nächste Lauf beginnt mit `boot_reason = DEEP_SLEEP_WAKE` und s0 aus `persist` (5.9). Schemaänderungen über Firmware-Grenzen sind durch den Typ-Hash abgedeckt.
@@ -1949,7 +1949,7 @@ Die Enums `BootReason`, `ImageState` und `RebootCmd` sind vordefiniert; welche C
 - **Irreversible Outputs** (`irreversible = true`): Der Compiler verlangt, dass jede Zuweisung in einer Sequenz unmittelbar auf ein `expect` folgt, das die Voraussetzung prüft, und dass mindestens ein Szenario die Zuweisung abdeckt (13.2); der Lauf-Header nennt alle irreversiblen Outputs.
 
 ### 12.8 Laufzeitprofile (v1.1)
-`system: target = <profil>` wählt Runtime, Kostentabelle und Plattformregeln; das Profil steht im Lauf-Header.
+`system: target = <profil>` wählt Runtime, Kostentabelle und Plattformregeln; das Profil steht im Lauf-Header. Es gibt genau die vier Profile dieser Tabelle; ein anderes Wort ist ein Fehler.
 
 | Profil | Umgebung | Zeitgarantie |
 |---|---|---|
@@ -2081,7 +2081,7 @@ campaign brownout_scan:
 ```
 Der Laufraum ist das kartesische Produkt der Sweeps mal `repeat`; jeder Lauf ist eine deterministische Funktion seines Parametervektors und der Inputs (9.4.1); das Ergebnis ist eine Tabelle (Parametervektor, Verdikt, Messwerte, Lauf-ID). Ein fehlgeschlagener Lauf ist per `takt replay` exakt reproduzierbar (12.5). Die Runtime ignoriert `campaign`-Blöcke; sie sind Eingabe der CLI. Ein Sweep-Schritt für einen Parameter, der in einer `at`-Anweisung verwendet wird, muss mindestens `2 * jitter` des betroffenen Outputs betragen (7.5); sonst lehnt die CLI die Kampagne ab, weil die Messreihe unterhalb der Hardware-Präzision läge.
 
-`takt campaign DATEI [NAME] --ticks N [--stim S] [--profile P] [--out DIR]` bildet den Laufraum (erster Sweep außen, Wiederholungen innen), führt jeden Lauf in der Simulation aus — der Vektor überlagert das Profil — und druckt die Tabelle: Lauf-ID, gesweepte Parameter, Wiederholung, Verdikt (13.5), Messwerte (letzter Wert je `measure`-Name). Mit `--out DIR` schreibt sie je Lauf eine Aufzeichnung `NAME-ID.trace` (12.5), deren Kopf den Parametervektor trägt; `takt replay` wendet ihn an. `stop_on fail` bricht nach dem ersten FAIL ab. Ein `repeat` liefert in der Simulation identische Zeilen — das ist Satz 9.4.1, kein Fehler. Prüfung 29 rechnet die CLI, sobald eine Hardware-Konfiguration (`--hardware`) einen gemessenen `jitter` des Outputs trägt.
+`takt campaign DATEI [NAME] --ticks N [--stim S] [--params-profile P] [--out DIR]` bildet den Laufraum (erster Sweep außen, Wiederholungen innen), führt jeden Lauf in der Simulation aus — der Vektor überlagert das Profil — und druckt die Tabelle: Lauf-ID, gesweepte Parameter, Wiederholung, Verdikt (13.5), Messwerte (letzter Wert je `measure`-Name). Mit `--out DIR` schreibt sie je Lauf eine Aufzeichnung `NAME-ID.trace` (12.5), deren Kopf den Parametervektor trägt; `takt replay` wendet ihn an. `stop_on fail` bricht nach dem ersten FAIL ab. Ein `repeat` liefert in der Simulation identische Zeilen — das ist Satz 9.4.1, kein Fehler. Prüfung 29 rechnet die CLI, sobald eine Hardware-Konfiguration (`--hardware`) einen gemessenen `jitter` des Outputs trägt.
 
 
 ### 13.8 Treiber- und Native-Konformität

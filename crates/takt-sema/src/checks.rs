@@ -10,8 +10,9 @@ use std::collections::{HashMap, HashSet};
 use takt_diag::{Diagnostic, Span};
 use takt_mir::expr::{BinaryOp, Expr, ExprKind, StreamRef};
 use takt_mir::machine::*;
-use takt_mir::program::{Binding, Direction};
+use takt_mir::program::{Binding, Direction, RuntimeProfile};
 use takt_mir::stmt::*;
+use takt_mir::sys::{self, SysType};
 use takt_mir::types::Type;
 use takt_mir::*;
 
@@ -122,6 +123,7 @@ impl Lowerer<'_> {
         self.stream_capacities();
         self.check_send_budget();
         self.check_irreversible();
+        self.check_sys_channels();
         self.performance_lints();
         self.check_writers();
         self.check_scenarios();
@@ -424,7 +426,8 @@ impl Lowerer<'_> {
     fn performance_lints(&mut self) {
         // 12.8: `baremetal` und `boot` laufen auf MCUs. `linux_rt` und
         // `rtos` sagen ueber die Breite nichts, also schweigt der Lint dort.
-        let narrow_core = matches!(self.program.config.target.as_deref(), Some("baremetal" | "boot"));
+        let narrow_core =
+            matches!(self.program.config.runtime_profile(), Some(RuntimeProfile::Baremetal | RuntimeProfile::Boot));
         if !narrow_core {
             return;
         }
@@ -818,6 +821,76 @@ impl Lowerer<'_> {
                         .to_string(),
                 ),
             );
+        }
+    }
+
+    /// Pruefung 60 fuer das eingebaute Geraet `sys` (12.7, 7.4): Adresse,
+    /// Richtung und Typ der System-Channels kennt der Compiler selbst; eine
+    /// `sim`-Bindung darf nur einen `sys`-Input speisen (8.3).
+    fn check_sys_channels(&mut self) {
+        let mut diags = Vec::new();
+        for c in &self.program.channels {
+            let (address, simulated) = match &c.binding {
+                Binding::Hw(a) => (a.text(), false),
+                Binding::Sim(a) => (a.text(), true),
+                Binding::None => continue,
+            };
+            if !sys::is_sys(&address) {
+                continue;
+            }
+            let Some(entry) = sys::channel(&address) else {
+                let known: Vec<&str> = sys::SYS.iter().map(|s| s.address).collect();
+                diags.push(Diagnostic::error(
+                    SC60,
+                    c.span,
+                    format!("das Geraet `sys` kennt `{address}` nicht (12.7); Kanaele: {}", known.join(", ")),
+                ));
+                continue;
+            };
+            let dir_ok = if simulated {
+                c.dir == Direction::Output && entry.dir == Direction::Input
+            } else {
+                c.dir == entry.dir
+            };
+            if !dir_ok {
+                let side = if entry.dir == Direction::Input { "ein Input" } else { "ein Output" };
+                let message = if simulated {
+                    format!(
+                        "`{}`: eine `sim`-Bindung speist einen Input, `{address}` ist am Geraet `sys` {side} (8.3, 12.7)",
+                        c.name
+                    )
+                } else {
+                    format!("`{}`: `{address}` ist am Geraet `sys` {side} (12.7)", c.name)
+                };
+                diags.push(Diagnostic::error(SC60, c.span, message));
+                continue;
+            }
+            if !self.fits_sys(c.ty, entry.ty) {
+                diags.push(Diagnostic::error(
+                    SC60,
+                    c.span,
+                    format!(
+                        "`{}` hat Typ `{}`, `{address}` verlangt `{}` (12.7)",
+                        c.name,
+                        self.type_name(c.ty),
+                        entry.ty.name()
+                    ),
+                ));
+            }
+        }
+        self.diags.extend(diags);
+    }
+
+    fn fits_sys(&self, ty: TypeId, want: SysType) -> bool {
+        match (want, self.ty(ty)) {
+            (SysType::Enum(n), Type::Enum(e)) => self.program.enums[e.index()].name == n,
+            (SysType::Record(n), Type::Record(r)) => self.program.records[r.index()].name == n,
+            (SysType::Int, Type::Int { .. }) => true,
+            (SysType::U8, Type::Int { width: takt_mir::types::IntWidth::U8, .. }) => true,
+            (SysType::Bool, Type::Bool) => true,
+            (SysType::BoolArray(n), Type::Array { elem, len }) => *len == n && matches!(self.ty(*elem), Type::Bool),
+            (SysType::Duration, Type::Duration { .. }) => true,
+            _ => false,
         }
     }
 

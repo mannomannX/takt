@@ -143,6 +143,10 @@ pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
     for c in &p.channels {
         let Binding::Hw(addr) = &c.binding else { continue };
         let address = addr.text();
+        // Das Geraet `sys` ist eingebaut (12.7); `checks.rs` kennt es.
+        if takt_mir::sys::is_sys(&address) {
+            continue;
+        }
         let Some(entry) = hw.channel(&address) else {
             out.push(
                 Diagnostic::error(SC60, c.span, format!("die Konfiguration kennt `{address}` nicht"))

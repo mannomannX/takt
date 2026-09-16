@@ -630,55 +630,54 @@ machine m:
     assert!(nach.contains("out led false"), "und jeder andere Ausgang auch:\n{text}");
 }
 
-/// **Nur `RebootCmd` beendet den Lauf** (12.7).
+/// Die Fehler einer Uebersetzung, fuer Programme, die nicht durchgehen sollen.
+fn errors_of(body: &str) -> String {
+    let src = format!("{HEAD}{body}");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(&src, &options);
+    out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect::<Vec<_>>().join("\n")
+}
+
+/// **Nur `RebootCmd` gehoert an `sys/reboot`** (12.7).
 ///
 /// 12.7 nennt die Enums `BootReason`, `ImageState` und `RebootCmd`
-/// ausdruecklich vordefiniert. Ein eigenes Enum mit einer zufaellig
-/// `RESTART` heissenden Variante ist kein Kommando.
+/// vordefiniert, und Pruefung 60 kennt das Geraet `sys`: Ein eigenes Enum
+/// mit einer zufaellig `RESTART` heissenden Variante ist kein Kommando —
+/// es uebersetzt gar nicht erst. Der Interpreter prueft den Namen
+/// trotzdem (`reboot_of`), als Rueckhalt fuer eine MIR, die daran vorbeikam.
 #[test]
-fn only_the_predefined_enum_triggers_a_reboot() {
-    let p = compile(
+fn only_the_predefined_enum_belongs_on_the_reboot_channel() {
+    let e = errors_of(
         "\
 enum MyCmd: NONE, RESTART
 
 output reboot : MyCmd @ hw(\"sys/reboot\") with safe = NONE
-output led    : bool  @ hw(\"ui/led\") with safe = false
 
 machine m:
     initial RUN
     state RUN:
         enter:
             reboot = RESTART
-            led = true
 ",
     );
-    let out =
-        run(&p, &Trace::default(), &RunOptions { ticks: 4, profile: None, order_seed: None, ..Default::default() })
-            .expect("Lauf");
-    assert_eq!(out.ended, takt_interp::Ended::Ticks, "ein fremdes Enum ist kein Kommando");
+    assert!(e.contains("SC-60") && e.contains("verlangt `RebootCmd`"), "{e}");
 }
 
-/// Ein `sim`-gebundener Ausgang loest keinen Reboot aus (8.3).
-///
-/// Ein `sim`-Output speist den gleichnamigen `hw`-Input; `sys/reboot` hat
-/// keinen, und die Plattform fuehrt das Kommando aus, kein Modell.
+/// Ein `sim`-gebundener Ausgang speist einen `hw`-Input (8.3); `sys/reboot`
+/// ist ein Output des Programms und hat keinen. Pruefung 60 lehnt die
+/// Bindung ab, statt dass ein Modell den Neustart spielt.
 #[test]
-fn a_simulated_reboot_channel_does_not_end_the_run() {
-    let p = compile(
+fn a_simulated_reboot_channel_is_rejected() {
+    let e = errors_of(
         "\
 output reboot : RebootCmd @ sim(\"sys/reboot\")
-output led    : bool      @ hw(\"ui/led\") with safe = false
 
 machine m:
     initial RUN
     state RUN:
         enter:
             reboot = DEEP_SLEEP
-            led = true
 ",
     );
-    let out =
-        run(&p, &Trace::default(), &RunOptions { ticks: 4, profile: None, order_seed: None, ..Default::default() })
-            .expect("Lauf");
-    assert_eq!(out.ended, takt_interp::Ended::Ticks);
+    assert!(e.contains("SC-60") && e.contains("ist am Geraet `sys` ein Output"), "{e}");
 }

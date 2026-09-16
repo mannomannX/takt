@@ -39,6 +39,9 @@ pub struct Module {
     block: String,
     /// Zaehler fuer Marken, die aus Ausdruecken entstehen.
     labels: u32,
+    /// Instrumentierungsstufe (11.2): was die Schrittfunktionen in `pc`
+    /// schreiben.
+    pub instrument: crate::target::Instrument,
     /// Gerufene LLVM-Intrinsics mit ihrer Signatur.
     ///
     /// Sie sind je Breite eigene Symbole (`@llvm.smin.i8` ist nicht
@@ -72,11 +75,18 @@ impl Module {
             body: String::new(),
             next: 0,
             labels: 0,
+            instrument: crate::target::Instrument::Off,
             open: false,
             block: String::new(),
             intrinsics: std::collections::BTreeSet::new(),
             terminated: false,
         }
+    }
+
+    /// Dasselbe Modul mit dieser Instrumentierungsstufe.
+    pub fn with_instrument(mut self, instrument: crate::target::Instrument) -> Module {
+        self.instrument = instrument;
+        self
     }
 
     /// Beginnt eine Funktion.

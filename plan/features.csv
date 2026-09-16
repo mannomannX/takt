@@ -64,7 +64,7 @@ SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),ferti
 SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),fertig,
 SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig,
 SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),fertig,
-SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M6 (v1.1),offen,
+SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M6 (v1.1),fertig,`sys/clock` am eingebauten Geraet `sys` (Pruefung 60); `takt-rt-linux::wall_clock_ns` fuer den Treiberrand
 SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),fertig,
 SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M2 (Ströme),teilweise,
 SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M6 (mit 8.10),offen,
@@ -115,8 +115,8 @@ SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedde
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M5 (Embedded),teilweise,
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig,
 SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M5 (Embedded),teilweise,TTL-Adapter (PA9)
-SEM-12.7,Semantik/Abschnitt,12.7,"Plattformschnittstelle (System-Channels, v1.1)",v1.1,M6,offen,
-SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M6 (v1.1),teilweise,
+SEM-12.7,Semantik/Abschnitt,12.7,"Plattformschnittstelle (System-Channels, v1.1)",v1.1,M6,fertig,"Geraet `sys` mit zehn Kanaelen in Pruefung 60, `EfuseBlock`/`EfuseCmd` im Prelude, `sys/reboot` und `sys/jump` beenden den Lauf, irreversible Outputs im Kopf und in `takt test`"
+SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M6 (v1.1),teilweise,"`system: target` als Enum, Instrumentierungs-Default aus Profil und Ziel (`takt build --instrument`); `rtos` und `boot` blockiert (plan/m6.md 2.13)"
 SEM-12.9,Semantik/Abschnitt,12.9,"Verteilte Ausführung (v2): Regeln, die schon heute gelten",v2,M9 (v2),offen,
 SEM-13.1,Semantik/Abschnitt,13.1,Referenzinterpreter und differentielles Testen,,M4 (Codegen),fertig,
 SEM-13.2,Semantik/Abschnitt,13.2,Coverage aus der Simulation,,M6 (v1.1),fertig,
@@ -281,7 +281,7 @@ system-Eintrag-hw,system-Eintrag,2.3,"system_item: ""hw""",,M0 (Parser/MIR-Entwu
 system-Eintrag-tick_tolerance,system-Eintrag,2.3,"system_item: ""tick_tolerance""",,M0 (Parser/MIR-Entwurf),fertig,
 system-Eintrag-for,system-Eintrag,2.3,"system_item: ""for""",,M0 (Parser/MIR-Entwurf),fertig,
 system-Eintrag-ticks,system-Eintrag,2.3,"system_item: ""ticks""",,M0 (Parser/MIR-Entwurf),fertig,
-system-Eintrag-target,system-Eintrag,2.3,"system_item: ""target""",,M0 (Parser/MIR-Entwurf),fertig,
+system-Eintrag-target,system-Eintrag,2.3,"system_item: ""target""",,M0 (Parser/MIR-Entwurf),fertig,Enum der vier Laufzeitprofile (12.8); ein anderes Wort ist ein Fehler (M6 Schritt 16)
 system-Eintrag-float,system-Eintrag,2.3,"system_item: ""float""",,M0 (Parser/MIR-Entwurf),fertig,
 system-Eintrag-f32,system-Eintrag,2.3,"system_item: ""f32""",,M0 (Parser/MIR-Entwurf),fertig,
 system-Eintrag-f64,system-Eintrag,2.3,"system_item: ""f64""",,M0 (Parser/MIR-Entwurf),fertig,
@@ -1068,7 +1068,7 @@ CON-follows,Konstrukt (2.4),2.4,`follows`,,M0 (Parser/MIR-Entwurf),fertig,
 "CON-check_…_for_d,_alert_…_for_d",Konstrukt (2.4),2.4,"`check … for d`, `alert … for d`",,M0 (Parser/MIR-Entwurf),definiert,
 "CON-reader,_writer",Konstrukt (2.4),2.4,"`reader`, `writer`",,M0 (Parser/MIR-Entwurf),definiert,
 CON-len_field,Konstrukt (2.4),2.4,`len_field`,,M0 (Parser/MIR-Entwurf),definiert,
-CON-System-Channels_sys/…,Konstrukt (2.4),2.4,System-Channels `sys/…`,,M0 (Parser/MIR-Entwurf),definiert,
+CON-System-Channels_sys/…,Konstrukt (2.4),2.4,System-Channels `sys/…`,,M0 (Parser/MIR-Entwurf),fertig,Pruefung 60 kennt das Geraet `sys` ohne Konfiguration (M6 Schritt 16)
 CON-native_fn,Konstrukt (2.4),2.4,`native fn`,,M0 (Parser/MIR-Entwurf),definiert,
 CON-tick_source,Konstrukt (2.4),2.4,`tick_source`,,M0 (Parser/MIR-Entwurf),definiert,
 "CON-jitter,_max_slew",Konstrukt (2.4),2.4,"`jitter`, `max_slew`",,M0 (Parser/MIR-Entwurf),definiert,

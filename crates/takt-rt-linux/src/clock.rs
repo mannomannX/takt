@@ -103,3 +103,22 @@ impl Clock for RealtimeClock {
         }
     }
 }
+
+/// Die Wanduhr (7.4) fuer den Treiberrand von `sys/clock`: Nanosekunden
+/// seit der Unix-Epoche, ausserhalb der Semantik — ein Input wie jeder
+/// andere, den die Simulation aus dem Stimulus nimmt.
+#[cfg(target_os = "linux")]
+pub fn wall_clock_ns() -> i64 {
+    let t = rustix::time::clock_gettime(rustix::time::ClockId::Realtime);
+    t.tv_sec.saturating_mul(1_000_000_000).saturating_add(t.tv_nsec)
+}
+
+/// Ausserhalb von Linux aus `SystemTime`; dieselbe Auskunft, ohne die
+/// Zusage aus 12.2.
+#[cfg(not(target_os = "linux"))]
+pub fn wall_clock_ns() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}

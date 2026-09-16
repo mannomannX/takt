@@ -404,6 +404,9 @@ fn enter_leaf(
         block(&ctx.machine.states[id.index()].enter.clone(), ctx, m)?;
     }
     m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
+    if m.instrument != crate::target::Instrument::Off {
+        crate::stmt::mark(leaf.0, ctx, m);
+    }
     reset_time(ctx, m);
     // 5.8/5.6: Die `every`- und Bestaetigungszaehler der betretenen
     // Zustaende beginnen neu. Vor den `loop:`-Bloecken darunter, weil die
