@@ -659,6 +659,32 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
 /// eigene Funktion, die die Runtime einmal ruft. Stuende es im Schritt,
 /// liefe es in jedem Tick.
 pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    emit_init(m, st, p, module, "_init", true, true)
+}
+
+/// `<maschine>_init_vars`: nur Anfangszustand und s0-Defaults (5.9).
+///
+/// Ein Rahmen mit Journal ruft danach `_persist_restore` und erst dann
+/// `_enter` — dieselbe Reihenfolge, in der der Interpreter zwischen
+/// `init_vars` und `machine::init` laedt. Ohne Journal genuegt `_init`.
+pub fn init_vars_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    emit_init(m, st, p, module, "_init_vars", true, false)
+}
+
+/// `<maschine>_enter`: die `enter:`-Kette und der Entry-Tick (5.2).
+pub fn enter_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    emit_init(m, st, p, module, "_enter", false, true)
+}
+
+fn emit_init(
+    m: &Machine,
+    st: &StateStruct,
+    p: &Program,
+    module: &mut Module,
+    suffix: &str,
+    vars: bool,
+    enter: bool,
+) -> Result<(), NotYet> {
     let leaves = machine::leaves(m);
     // 5.2: Auch der Anfangszustand kann zusammengesetzt sein; betreten
     // wird sein `initial`-Pfad bis zum Blatt.
@@ -669,7 +695,7 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     let mark = module.mark();
     let ptr = crate::ty::LlvmType::Ptr;
     module.begin(
-        &format!("{}_init", m.name),
+        &format!("{}{suffix}", m.name),
         &crate::ty::LlvmType::Void,
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
     );
@@ -680,81 +706,87 @@ pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     };
     let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
     let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
-    module.void_inst(&format!("store i8 {index}, ptr {slot}"));
+    if vars {
+        module.void_inst(&format!("store i8 {index}, ptr {slot}"));
+    }
 
     let mut ctx = Ctx::new(m, st, p);
     ctx.leaf = Some(leaf);
     // 9.4: `s0` sind die Anfangswerte der Variablen. Sie stehen *vor*
     // jedem `enter:`, weil ein `enter:`-Block sie schon lesen darf (1.4)
     // — und ohne sie stuende dort die Null, die der Speicher mitbringt.
-    for (i, v) in m.vars.iter().enumerate() {
-        let Some(init) = v.init.clone() else { continue };
-        let id = takt_mir::VarId(i as u32);
-        // Eine Blockinstanz wird nicht zugewiesen; ihr Zustand entsteht
-        // aus den Initialwerten des Blocks (5.7).
-        if machine::instance_block(m, id).is_some() {
-            continue;
+    if vars {
+        for (i, v) in m.vars.iter().enumerate() {
+            let Some(init) = v.init.clone() else { continue };
+            let id = takt_mir::VarId(i as u32);
+            // Eine Blockinstanz wird nicht zugewiesen; ihr Zustand entsteht
+            // aus den Initialwerten des Blocks (5.7).
+            if machine::instance_block(m, id).is_some() {
+                continue;
+            }
+            let vars = ctx.vars();
+            let value = match crate::expr::lower(&init, p, module, &vars) {
+                Ok(v) => v,
+                Err(e) => {
+                    module.abort(mark);
+                    return Err(e);
+                }
+            };
+            let Some(ptr) = ctx.field(Role::Var, i, module) else {
+                module.abort(mark);
+                return Err(NotYet { what: "Variable im Zustand" });
+            };
+            module.void_inst(&format!("store {} {}, ptr {ptr}", value.ty, value.value));
         }
-        let vars = ctx.vars();
-        let value = match crate::expr::lower(&init, p, module, &vars) {
-            Ok(v) => v,
-            Err(e) => {
+    }
+    if enter {
+        // Die ganze Kette von der Wurzel bis zum Blatt wird betreten (5.2).
+        for id in machine::path_to(m, leaf) {
+            let enter = m.states[id.index()].enter.clone();
+            if let Err(e) = block(&enter, &mut ctx, module) {
                 module.abort(mark);
                 return Err(e);
             }
-        };
-        let Some(ptr) = ctx.field(Role::Var, i, module) else {
-            module.abort(mark);
-            return Err(NotYet { what: "Variable im Zustand" });
-        };
-        module.void_inst(&format!("store {} {}, ptr {ptr}", value.ty, value.value));
-    }
-    // Die ganze Kette von der Wurzel bis zum Blatt wird betreten (5.2).
-    for id in machine::path_to(m, leaf) {
-        let enter = m.states[id.index()].enter.clone();
-        if let Err(e) = block(&enter, &mut ctx, module) {
+        }
+        // 5.2 Regel 4: Der Anfangszustand laeuft im Tick 0 im Entry-Modus —
+        // „wie eine Maschine bei Tick 0" (1012). Seine `check`s wirken also
+        // schon dort, und ein Fault fuehrt vor dem ersten Commit zum
+        // Fault-Ziel. Ohne das stuenden die Outputs des Ticks 0 auf den
+        // Werten eines Zustands, den die Maschine bereits verlassen hat.
+        let kette: Vec<takt_mir::StateId> = machine::path_to(m, leaf);
+        // Die Zaehler der betretenen Zustaende und die der Maschinenebene
+        // beginnen bei `-1` („noch nicht gesetzt", 5.8). Der Speicher kommt
+        // genullt, und die Null waere ein gueltiger Zeitpunkt — das `every`
+        // liefe dann schon im Tick 0 statt nach `d`.
+        reset_counters(&ctx, None, module);
+        for id in &kette {
+            reset_counters(&ctx, Some(*id), module);
+        }
+        let mut koerper = vec![m.loop_block.clone()];
+        koerper.extend(kette.iter().map(|id| m.states[id.index()].loop_block.clone()));
+        let end_at = format!("init_ende_{}", m.name);
+        for b in &koerper {
+            if let Err(e) = block(b, &mut ctx, module) {
+                module.abort(mark);
+                return Err(e);
+            }
+        }
+        module.void_inst(&format!("br label %{end_at}"));
+        // Der Fault-Pfad des Anfangszustands: Ein `check`, der schon im
+        // Tick 0 scheitert, fuehrt zum Fault-Ziel (5.2 Regel 5). Ohne ihn
+        // spraenge der Zweig ins Leere — die Marke steht nur im Schritt.
+        if let Err(e) = fault_path(st, leaf, &Jump { leaves: &leaves, end: &end_at, conf: &slot }, &mut ctx, module) {
             module.abort(mark);
             return Err(e);
         }
+        module.label(&end_at);
+        // 9.4: Tick 0 schreibt den Zaehler fort „wie am Ende jedes Ticks"
+        // (`System::init` ruft `advance_counters`). Ohne das misst der
+        // erzeugte Code eine Frist um einen Tick zu lang: Der Interpreter
+        // steht zu Beginn von Tick 1 bei `t_in_state == 1`, der Code bei 0,
+        // und `after 30 ms` feuert bei 10 ms Tick erst in Tick 4 statt 3.
+        advance_time(&ctx, module);
     }
-    // 5.2 Regel 4: Der Anfangszustand laeuft im Tick 0 im Entry-Modus —
-    // „wie eine Maschine bei Tick 0" (1012). Seine `check`s wirken also
-    // schon dort, und ein Fault fuehrt vor dem ersten Commit zum
-    // Fault-Ziel. Ohne das stuenden die Outputs des Ticks 0 auf den
-    // Werten eines Zustands, den die Maschine bereits verlassen hat.
-    let kette: Vec<takt_mir::StateId> = machine::path_to(m, leaf);
-    // Die Zaehler der betretenen Zustaende und die der Maschinenebene
-    // beginnen bei `-1` („noch nicht gesetzt", 5.8). Der Speicher kommt
-    // genullt, und die Null waere ein gueltiger Zeitpunkt — das `every`
-    // liefe dann schon im Tick 0 statt nach `d`.
-    reset_counters(&ctx, None, module);
-    for id in &kette {
-        reset_counters(&ctx, Some(*id), module);
-    }
-    let mut koerper = vec![m.loop_block.clone()];
-    koerper.extend(kette.iter().map(|id| m.states[id.index()].loop_block.clone()));
-    let end_at = format!("init_ende_{}", m.name);
-    for b in &koerper {
-        if let Err(e) = block(b, &mut ctx, module) {
-            module.abort(mark);
-            return Err(e);
-        }
-    }
-    module.void_inst(&format!("br label %{end_at}"));
-    // Der Fault-Pfad des Anfangszustands: Ein `check`, der schon im
-    // Tick 0 scheitert, fuehrt zum Fault-Ziel (5.2 Regel 5). Ohne ihn
-    // spraenge der Zweig ins Leere — die Marke steht nur im Schritt.
-    if let Err(e) = fault_path(st, leaf, &Jump { leaves: &leaves, end: &end_at, conf: &slot }, &mut ctx, module) {
-        module.abort(mark);
-        return Err(e);
-    }
-    module.label(&end_at);
-    // 9.4: Tick 0 schreibt den Zaehler fort „wie am Ende jedes Ticks"
-    // (`System::init` ruft `advance_counters`). Ohne das misst der
-    // erzeugte Code eine Frist um einen Tick zu lang: Der Interpreter
-    // steht zu Beginn von Tick 1 bei `t_in_state == 1`, der Code bei 0,
-    // und `after 30 ms` feuert bei 10 ms Tick erst in Tick 4 statt 3.
-    advance_time(&ctx, module);
     module.end(None);
     Ok(())
 }

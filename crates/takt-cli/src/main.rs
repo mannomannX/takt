@@ -284,6 +284,11 @@ fn build(args: &Args) -> bool {
         // Konstrukts, das gefehlt hat (FB-104).
         eprintln!("{}_step fehlt: {}", s.machine, s.reason);
     }
+    for name in &lowered.without_persist {
+        // Der Code laeuft, aber ohne Lesepfad startet jeder Lauf beim
+        // Default — ein Typ, den der Codegen noch nicht abbildet (5.9).
+        eprintln!("{name}: `persist var` ohne Lesepfad im erzeugten Code — jeder Start beginnt beim Default (5.9)");
+    }
 
     let emit = args.value("--emit").unwrap_or("obj");
     let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("programm");
@@ -637,7 +642,7 @@ fn sim(args: &Args) -> bool {
         },
         None => None,
     };
-    let options = RunOptions { ticks, profile: profile_of(args), order_seed };
+    let options = RunOptions { ticks, profile: profile_of(args), order_seed, ..Default::default() };
     let result = match takt_interp::run(&program, &stimulus, &options) {
         Ok(r) => r,
         Err(e) => {
@@ -688,7 +693,7 @@ fn run_cmd(args: &Args) -> bool {
     let Some(ticks) = ticks_of(args) else { return false };
     let Some(stimulus) = stimulus_of(args) else { return false };
 
-    let options = RunOptions { ticks, profile: profile_of(args), order_seed: None };
+    let options = RunOptions { ticks, profile: profile_of(args), order_seed: None, ..Default::default() };
     let result = match takt_interp::run(&program, &stimulus, &options) {
         Ok(r) => r,
         Err(e) => {
@@ -754,7 +759,8 @@ fn replay(args: &Args) -> bool {
     // Die Zahl der Ticks steht im Kopf; `--ticks` darf sie ueberschreiben,
     // um einen Lauf abzukuerzen.
     let ticks = args.value("--ticks").and_then(|v| v.parse::<u64>().ok()).unwrap_or(recording.header.ticks);
-    let options = RunOptions { ticks, profile: recording.header.profile.clone(), order_seed: None };
+    let options =
+        RunOptions { ticks, profile: recording.header.profile.clone(), order_seed: None, ..Default::default() };
     let result = match takt_interp::run(&program, &recording.inputs, &options) {
         Ok(r) => r,
         Err(e) => {

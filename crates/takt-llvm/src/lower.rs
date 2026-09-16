@@ -39,6 +39,12 @@ pub struct Lowered {
     /// Ergebnis zwar binden, aber nicht ausfuehren — und der Grund steht
     /// hier statt in einer Linker-Meldung.
     pub skipped: Vec<Skipped>,
+    /// Maschinen mit `persist var`, fuer die kein Lesepfad entstand.
+    ///
+    /// Ihr Code laeuft, startet aber immer mit dem Default — der Typ ist
+    /// im Codegen noch nicht abgebildet. Still waere das ein Bruch von
+    /// 5.9, sobald der Speicher gefuellt ist.
+    pub without_persist: Vec<String>,
 }
 
 impl Lowered {
@@ -57,6 +63,7 @@ impl Lowered {
 pub fn program(p: &Program, triple: &str, module_name: &str) -> Lowered {
     let mut m = Module::new(module_name, triple);
     let mut skipped = Vec::new();
+    let mut without_persist = Vec::new();
 
     crate::abi::Abi::declare(&mut m);
     crate::stream::Streams::declare(&mut m);
@@ -91,6 +98,15 @@ pub fn program(p: &Program, triple: &str, module_name: &str) -> Lowered {
         };
         crate::machine::declare_state(machine, &st, &mut m);
         let _ = crate::step::init_function(machine, &st, p, &mut m);
+        if !machine.persist.is_empty() {
+            let vars = crate::step::init_vars_function(machine, &st, p, &mut m);
+            let enter = crate::step::enter_function(machine, &st, p, &mut m);
+            let snapshot = crate::persist::snapshot_function(machine, &st, p, &mut m);
+            let restore = crate::persist::restore_function(machine, &st, p, &mut m);
+            if vars.is_err() || enter.is_err() || snapshot.is_err() || restore.is_err() {
+                without_persist.push(machine.name.clone());
+            }
+        }
         let _ = crate::step::idle_function(machine, &st, &mut m);
         let _ = crate::step::advance_function(machine, &st, &mut m);
         let _ = crate::step::deadline_function(machine, &st, p, &mut m);
@@ -99,5 +115,5 @@ pub fn program(p: &Program, triple: &str, module_name: &str) -> Lowered {
         }
     }
 
-    Lowered { ir: m.finish(), skipped }
+    Lowered { ir: m.finish(), skipped, without_persist }
 }

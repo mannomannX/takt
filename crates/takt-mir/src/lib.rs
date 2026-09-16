@@ -25,6 +25,7 @@ pub mod hash;
 pub mod ids;
 pub mod machine;
 pub mod pattern;
+pub mod persist;
 pub mod program;
 pub mod sample;
 pub mod stmt;

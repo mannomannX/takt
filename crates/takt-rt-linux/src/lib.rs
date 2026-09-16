@@ -27,6 +27,8 @@
 
 pub mod clock;
 pub mod guarantee;
+pub mod nvm;
 
 pub use clock::RealtimeClock;
 pub use guarantee::{Guarantee, Scheduling, prepare};
+pub use nvm::FileNvm;

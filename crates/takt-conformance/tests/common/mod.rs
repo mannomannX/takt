@@ -45,7 +45,7 @@ pub fn run_native(clang: &Clang, p: &Program, name: &str, machine: &str, ticks: 
 /// gewoehnliche Maschine, und ohne sie bleiben die Eingaenge `Bad`.
 #[allow(dead_code)]
 pub fn run_native_all(clang: &Clang, p: &Program, name: &str, ticks: u64) -> Result<String, String> {
-    run_native_inner(clang, p, name, None, ticks, &[])
+    run_native_inner(clang, p, name, None, ticks, &[], &[])
 }
 
 pub fn run_native_with(
@@ -56,7 +56,18 @@ pub fn run_native_with(
     ticks: u64,
     inputs: &[Stimulus],
 ) -> Result<String, String> {
-    run_native_inner(clang, p, name, Some(machine), ticks, inputs)
+    run_native_inner(clang, p, name, Some(machine), ticks, inputs, &[])
+}
+
+/// Alle Maschinen, mit einer Journal-Nutzlast beim Start (5.9).
+pub fn run_native_persist(
+    clang: &Clang,
+    p: &Program,
+    name: &str,
+    ticks: u64,
+    payload: &[u8],
+) -> Result<String, String> {
+    run_native_inner(clang, p, name, None, ticks, &[], payload)
 }
 
 /// Der gemeinsame Rumpf: `Some(name)` fuehrt eine Maschine, `None` alle.
@@ -67,6 +78,7 @@ fn run_native_inner(
     machine: Option<&str>,
     ticks: u64,
     inputs: &[Stimulus],
+    payload: &[u8],
 ) -> Result<String, String> {
     let dir = std::env::temp_dir().join(format!("takt-abnahme-{}", name.replace('.', "_")));
     let _ = std::fs::remove_dir_all(&dir);
@@ -75,10 +87,7 @@ fn run_native_inner(
     let c = dir.join("rahmen.c");
     let exe = dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" });
     std::fs::write(&ll, ir_of(p)).map_err(|e| e.to_string())?;
-    let h = match machine {
-        Some(name) => harness::build_with(p, name, ticks, inputs),
-        None => harness::build_all(p, ticks, inputs),
-    };
+    let h = harness::build_restoring(p, machine, ticks, inputs, payload);
     std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
     let path = clang.path().ok_or("clang")?;
     let mut cmd = std::process::Command::new(path);

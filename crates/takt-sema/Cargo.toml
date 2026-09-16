@@ -14,5 +14,9 @@ takt-mir = { path = "../takt-mir" }
 takt-native = { path = "../takt-native" }
 takt-interp = { path = "../takt-interp" }
 
+# Nur fuer den Test, der Byte-Form und Journal zusammen prueft (5.9).
+[dev-dependencies]
+takt-rt-core = { path = "../takt-rt-core" }
+
 [lints]
 workspace = true

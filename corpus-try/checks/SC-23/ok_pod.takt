@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Skalar, Record und Array sind POD (5.9); `min_interval` ist optional.
+
+record Result:
+    passed : bool
+    code   : int in 0..255
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    persist var c     : int in 0..99 = 0 with min_interval = 10 s
+    persist var last  : Result = Result(passed = false, code = 0)
+    persist var tries : [2] int in 0..5 = [0, 0]
+    initial RUN
+    state RUN:
+        loop:
+            n = c + tries[0] + last.code

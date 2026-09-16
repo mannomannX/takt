@@ -57,6 +57,10 @@ pub enum LineKind {
     Final { verdict: String },
     /// `end restart|deep_sleep|boot_jump`: der Lauf endet hier (12.7).
     End { reason: String },
+    /// `persist <hex>`: die kanonische Form aller `persist`-Variablen am
+    /// Ende des Laufs (5.9). Beobachtung, keine Semantik — aber genau die
+    /// Bytes, die der erzeugte Code liefern muss (Satz 9.4.4).
+    Persist { hex: String },
 }
 
 /// Wert oder Qualitaet eines Inputs (3.5).
@@ -216,6 +220,13 @@ fn parse_line(line: &str) -> Result<TraceLine, String> {
             }
         }
         "end" => LineKind::End { reason: nonempty(args, "`end restart|deep_sleep|boot_jump`")?.to_string() },
+        "persist" => {
+            let hex = args.trim();
+            if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err("`persist <hex>` erwartet gerade viele Hexziffern".into());
+            }
+            LineKind::Persist { hex: hex.to_ascii_lowercase() }
+        }
         "verdict-final" => {
             LineKind::Final { verdict: nonempty(args, "`verdict-final PASS|FAIL|INCONCLUSIVE`")?.to_string() }
         }
@@ -332,6 +343,7 @@ fn render_line(line: &TraceLine) -> String {
         }
         LineKind::Final { verdict } => format!("t={t} verdict-final {verdict}"),
         LineKind::End { reason } => format!("t={t} end {reason}"),
+        LineKind::Persist { hex } => format!("t={t} persist {hex}"),
     }
 }
 

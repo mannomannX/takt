@@ -50,7 +50,17 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
 /// Bindung `sim` -> `hw` (8.3). Das Modell braucht dann nichts, was ein
 /// gewoehnliches Programm nicht auch braucht.
 pub fn build_all(p: &Program, ticks: u64, inputs: &[Stimulus]) -> Harness {
-    build_inner(p, None, ticks, inputs)
+    build_inner(p, None, ticks, inputs, &[])
+}
+
+/// Baut den Rahmen mit einer Journal-Nutzlast (5.9).
+///
+/// `payload` ist die kanonische Form, die der Interpreter ueber
+/// `RunOptions::nvm` sieht; der Rahmen reicht sie nach `_init` an
+/// `_persist_restore`. Am Ende schreibt er `persist <hex>` — dieselben
+/// Bytes, die der Interpreter in seine Zeile schreibt (Satz 9.4.4).
+pub fn build_restoring(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulus], payload: &[u8]) -> Harness {
+    build_inner(p, machine, ticks, inputs, payload)
 }
 
 /// Baut den Rahmen mit Eingaben (12.5).
@@ -60,11 +70,11 @@ pub fn build_all(p: &Program, ticks: u64, inputs: &[Stimulus]) -> Harness {
 /// prueft die Abnahme die *Reaktion* auf Lieferungen und nicht nur den
 /// Anfangszustand.
 pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[Stimulus]) -> Harness {
-    build_inner(p, Some(machine), ticks, inputs)
+    build_inner(p, Some(machine), ticks, inputs, &[])
 }
 
 /// Der gemeinsame Rumpf: `Some(name)` tickt eine Maschine, `None` alle.
-fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulus]) -> Harness {
+fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulus], payload: &[u8]) -> Harness {
     let layout = crate::layout::of(p);
     // Die Maschinen, die der Rahmen fuehrt, in Deklarationsreihenfolge —
     // dieselbe, die der Interpreter nimmt (9.4: ohne `follows` ist sie
@@ -134,8 +144,25 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     for m in &driven {
         let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
+        if !m.persist.is_empty() {
+            let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
+            let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
+            let _ = writeln!(s, "int {}_persist_snapshot(void *st, void *out, int cap);", m.name);
+            let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
+        }
     }
     let _ = writeln!(s);
+    let persisting: Vec<&takt_mir::machine::Machine> =
+        driven.iter().copied().filter(|m| !m.persist.is_empty()).collect();
+    if !persisting.is_empty() {
+        let bound = takt_mir::persist::max_payload(p).unwrap_or(0).max(1);
+        let _ = writeln!(s, "static unsigned char persist_out[{bound}];");
+        let bytes: Vec<String> = payload.iter().map(|b| b.to_string()).collect();
+        let _ =
+            writeln!(s, "static const unsigned char persist_in[{}] = {{{}}};", payload.len().max(1), bytes.join(","));
+        let _ = writeln!(s, "static const int persist_in_len = {};", payload.len());
+        let _ = writeln!(s);
+    }
 
     // Je Maschine ein eigener Zustand: Sie teilen das Abbild und den
     // Latch, nicht ihren Zustand. Der Struct ist gross genug bemessen;
@@ -184,7 +211,19 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     safe_outputs(&mut s, p, &layout);
     sim_bindings(&mut s, p, "    ");
     for m in &driven {
-        let _ = writeln!(s, "    {0}_init(state_{0}, image, params, latch);", m.name);
+        if m.persist.is_empty() {
+            let _ = writeln!(s, "    {0}_init(state_{0}, image, params, latch);", m.name);
+        } else {
+            let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
+        }
+    }
+    // 5.9: Defaults, dann die geladenen Werte, dann erst enter: — der
+    // Interpreter laedt zwischen init_vars und machine::init.
+    for m in &persisting {
+        let _ = writeln!(s, "    {0}_persist_restore(state_{0}, persist_in, persist_in_len);", m.name);
+    }
+    for m in &persisting {
+        let _ = writeln!(s, "    {0}_enter(state_{0}, image, params, latch);", m.name);
     }
     sim_bindings(&mut s, p, "    ");
     let _ = writeln!(s, "    dump(0);");
@@ -248,6 +287,20 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
         let _ = writeln!(s, "ende:");
         safe_outputs(&mut s, p, &layout);
         let _ = writeln!(s, "    dump(g_tick);");
+    }
+    if !persisting.is_empty() {
+        let _ = writeln!(s, "    printf(\"t=%lld persist \", g_tick);");
+        for m in &persisting {
+            let _ = writeln!(s, "    {{");
+            let _ = writeln!(
+                s,
+                "        int n = {0}_persist_snapshot(state_{0}, persist_out, sizeof persist_out);",
+                m.name
+            );
+            let _ = writeln!(s, "        for (int i = 0; i < n; i++) printf(\"%02x\", persist_out[i]);");
+            let _ = writeln!(s, "    }}");
+        }
+        let _ = writeln!(s, "    printf(\"\\n\");");
     }
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");

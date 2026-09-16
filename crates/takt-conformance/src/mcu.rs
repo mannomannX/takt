@@ -166,6 +166,12 @@ fn declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
     for m in driven {
         let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
+        if !m.persist.is_empty() {
+            let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
+            let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
+            let _ = writeln!(s, "int {}_persist_snapshot(void *st, void *out, int cap);", m.name);
+            let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
+        }
         let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);
         let _ = writeln!(s, "long long {}_deadline(void *st);", m.name);
         let _ = writeln!(s, "void {}_advance(void *st, long long n);", m.name);
@@ -176,7 +182,8 @@ fn declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
 /// `takt_mcu_init`: einmal vor dem ersten Tick.
 fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Einmal vor dem ersten Tick (12.1, Schritt 1). */");
-    let _ = writeln!(s, "void takt_mcu_init(void) {{");
+    let _ = writeln!(s, "int takt_mcu_persist_restore(const void *in, int len);");
+    let _ = writeln!(s, "void takt_mcu_init_with(const void *persist, int persist_len) {{");
     let _ = writeln!(s, "    for (unsigned i = 0; i < sizeof image; i++) image[i] = 0;");
     let _ = writeln!(s, "    for (unsigned i = 0; i < sizeof latch; i++) latch[i] = 0;");
     let _ = writeln!(s, "    for (unsigned i = 0; i < sizeof params; i++) params[i] = 0;");
@@ -199,8 +206,18 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let _ = writeln!(s, "    *({ct} *)(params + {}) = {value}; /* {} */", slot.offset, slot.name);
     }
 
+    // 5.9: Defaults, dann die geladenen Werte, dann erst enter: — wie
+    // der Interpreter zwischen init_vars und machine::init laedt.
     for m in driven {
-        let _ = writeln!(s, "    {0}_init(state_{0}, image, params, latch);", m.name);
+        if m.persist.is_empty() {
+            let _ = writeln!(s, "    {0}_init(state_{0}, image, params, latch);", m.name);
+        } else {
+            let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
+        }
+    }
+    let _ = writeln!(s, "    takt_mcu_persist_restore(persist, persist_len);");
+    for m in driven.iter().filter(|m| !m.persist.is_empty()) {
+        let _ = writeln!(s, "    {0}_enter(state_{0}, image, params, latch);", m.name);
     }
     let _ = writeln!(s, "}}\n");
 }
@@ -272,12 +289,43 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     // 9.9: „fuer jede Maschine: time_in_state += n*T0". Ein
     // uebersprungener Tick ruft kein `_step`; ohne das feuerte jede
     // `after`-Frist um die geschlafenen Ticks zu spaet.
+    let _ = writeln!(s, "void takt_mcu_init(void) {{ takt_mcu_init_with(0, 0); }}\n");
     let _ = writeln!(s, "void takt_mcu_advance(long long n) {{");
     let _ = writeln!(s, "    g_tick += n;");
     for m in driven {
         let _ = writeln!(s, "    {0}_advance(state_{0}, n);", m.name);
     }
     let _ = writeln!(s, "}}\n");
+
+    // 5.9: Der Board-Treiber sieht nur Bytes. Snapshot reiht die Nutzlast
+    // aller Maschinen, Restore verteilt sie; die Rueckgabe zaehlt die
+    // uebernommenen Eintraege, der Rest ist PersistReset.
+    let persisting: Vec<&takt_mir::machine::Machine> =
+        driven.iter().copied().filter(|m| !m.persist.is_empty()).collect();
+    let _ = writeln!(s, "int takt_mcu_persist_snapshot(void *out, int cap) {{");
+    let _ = writeln!(s, "    int n = 0;");
+    for m in &persisting {
+        let _ = writeln!(s, "    {{");
+        let _ =
+            writeln!(s, "        int k = {0}_persist_snapshot(state_{0}, (unsigned char *)out + n, cap - n);", m.name);
+        let _ = writeln!(s, "        if (k == 0) return 0;");
+        let _ = writeln!(s, "        n += k;");
+        let _ = writeln!(s, "    }}");
+    }
+    let _ = writeln!(s, "    (void)out; (void)cap;");
+    let _ = writeln!(s, "    return n;");
+    let _ = writeln!(s, "}}\n");
+    let _ = writeln!(s, "int takt_mcu_persist_restore(const void *in, int len) {{");
+    let _ = writeln!(s, "    int n = 0;");
+    for m in &persisting {
+        let _ = writeln!(s, "    n += {0}_persist_restore(state_{0}, in, len);", m.name);
+    }
+    let _ = writeln!(s, "    (void)in; (void)len;");
+    let _ = writeln!(s, "    return n;");
+    let _ = writeln!(s, "}}\n");
+    let entries: usize = persisting.iter().map(|m| m.persist.len()).sum();
+    let _ = writeln!(s, "const int takt_mcu_persist_entries = {entries};");
+    let _ = writeln!(s, "const int takt_mcu_persist_bound = {};\n", takt_mir::persist::max_payload(p).unwrap_or(0));
 }
 
 /// `takt_mcu_dump`: den Latch ausgeben, fuer den Vergleich.

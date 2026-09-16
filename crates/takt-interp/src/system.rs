@@ -17,6 +17,7 @@ use crate::eval::Ctx;
 use crate::image::Image;
 use crate::loaded::Loaded;
 use crate::machine::{self, MachineState};
+use crate::nvm::{Load, Nvm};
 use crate::stream::{Delivery, Element};
 use crate::value::{EvalResult, Fault, Sample, Trap, Value, bug};
 
@@ -499,6 +500,10 @@ pub struct Sim<'p> {
     pub order: Vec<MachineId>,
     /// Beobachtungen des laufenden Ticks je Maschine.
     pub observations: Vec<(MachineId, Observation)>,
+    /// Nichtfluechtiger Speicher fuer `persist var` (5.9); vor `init()` zu
+    /// fuellen, danach unveraendert — das Schreiben liegt ausserhalb der
+    /// Semantik.
+    pub nvm: Nvm,
 }
 
 /// Laufende Maschinen: Vorlagen und Szenarien laufen nicht mit (5.8, 13.6).
@@ -521,6 +526,56 @@ impl<'p> Sim<'p> {
         Ok(())
     }
 
+    /// Ueberschreibt die Defaults der `persist`-Variablen mit den geladenen,
+    /// gueltigen Werten (5.9, 9.10).
+    ///
+    /// Ein verworfener Eintrag meldet `PersistReset`; ein fehlender nicht —
+    /// der erste Start eines Geraets ist kein Fehler.
+    fn load_persist(&mut self) {
+        let program = self.loaded.program;
+        for id in self.order.clone() {
+            let m = &program.machines[id.index()];
+            for pv in &m.persist {
+                let def = &m.vars[pv.var.index()];
+                let (result, value) = self.nvm.load(program, pv.type_hash, def.ty);
+                if let Some(v) = value {
+                    self.states[id.index()].vars[pv.var.index()] = v;
+                }
+                if let Load::Reset(reason) = result {
+                    self.observations.push((
+                        id,
+                        Observation::Alert {
+                            span: def.span,
+                            index: Vec::new(),
+                            active: true,
+                            message: format!("PersistReset: `{}` verworfen ({})", def.name, reason.text()),
+                            invalid: false,
+                        },
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Die kanonische Form aller `persist`-Variablen (5.9): Maschinen in
+    /// Deklarationsreihenfolge, darin nach Typ-Hash — dieselbe Ordnung,
+    /// die der erzeugte Code schreibt. Nicht `self.order`: Die ist unter
+    /// Satz 9.4.1 permutierbar, und die Zeile gehoert zum Trace.
+    pub fn persist_payload(&self) -> Option<Vec<u8>> {
+        let program = self.loaded.program;
+        let mut out = Vec::new();
+        for id in &runnable(program) {
+            let m = &program.machines[id.index()];
+            let values: Vec<(u64, &Value, TypeId)> = m
+                .persist
+                .iter()
+                .map(|pv| (pv.type_hash, &self.states[id.index()].vars[pv.var.index()], m.vars[pv.var.index()].ty))
+                .collect();
+            out.extend(Nvm::payload(program, &values)?);
+        }
+        Some(out)
+    }
+
     /// Neuer Lauf: Outputs auf `safe`, Parameter aus Defaults und Profil.
     pub fn new(program: &'p Program, profile: Option<&str>) -> Result<Sim<'p>, Trap> {
         let loaded = Loaded::load(program).map_err(|d| Trap::Bug(format!("{d}")))?;
@@ -529,7 +584,7 @@ impl<'p> Sim<'p> {
         let image = Image::new(program, outputs, params);
         let states = program.machines.iter().map(MachineState::new).collect();
         let order = runnable(program);
-        Ok(Sim { loaded, states, image, tick: 0, order, observations: Vec::new() })
+        Ok(Sim { loaded, states, image, tick: 0, order, observations: Vec::new(), nvm: Nvm::new() })
     }
 
     /// Tick 0: jede Maschine betritt ihren Anfangszustand (1.5). Wird nach
@@ -549,6 +604,7 @@ impl<'p> Sim<'p> {
             env.init_vars(&self.loaded, 0)?;
             self.observations.extend(out.into_iter().map(|o| (id, o)));
         }
+        self.load_persist();
         self.publish_all();
         self.image.commit_published();
         for id in self.order.clone() {

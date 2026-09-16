@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# `persist var` nur mit POD-Typ (5.9): ein Optional hat keine stabile
+# Byte-Form ueber Firmware-Grenzen.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    persist var c : int? = none  # ~ SC-23
+    initial RUN
+    state RUN:
+        loop:
+            n = c.or(0)

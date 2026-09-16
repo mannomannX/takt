@@ -314,6 +314,9 @@ dependencies = [
 [[package]]
 name = "takt-rt-core"
 version = "0.1.0"
+dependencies = [
+ "takt-native",
+]
 
 [[package]]
 name = "takt-rt-linux"
@@ -333,6 +336,7 @@ dependencies = [
  "takt-interp",
  "takt-mir",
  "takt-native",
+ "takt-rt-core",
  "takt-syntax",
 ]
 

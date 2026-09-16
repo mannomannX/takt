@@ -27,9 +27,33 @@ pub fn crc32c(bytes: &[u8]) -> u32 {
     reflected(bytes, 0x82F6_3B78, 0xFFFF_FFFF) ^ 0xFFFF_FFFF
 }
 
+/// CRC-32 ueber mehrere Abschnitte.
+///
+/// Wer eine Nachricht aus Teilen zusammensetzt — etwa einen Kopf und seine
+/// Nutzlast —, rechnet nicht zwei CRCs, sondern fuehrt den Zustand fort.
+/// `crc32_start()` liefert den Anfang, `crc32_final` das Ergebnis; dazwischen
+/// beliebig viele `crc32_update`.
+pub fn crc32_start() -> u32 {
+    0xFFFF_FFFF
+}
+
+/// Schreibt Bytes in einen laufenden CRC-32 fort.
+pub fn crc32_update(state: u32, bytes: &[u8]) -> u32 {
+    step(state, bytes, 0xEDB8_8320)
+}
+
+/// Schliesst einen laufenden CRC-32 ab.
+pub fn crc32_final(state: u32) -> u32 {
+    state ^ 0xFFFF_FFFF
+}
+
 /// Der gemeinsame Kern der beiden CRC-32.
 fn reflected(bytes: &[u8], poly: u32, init: u32) -> u32 {
-    let mut crc = init;
+    step(init, bytes, poly)
+}
+
+/// Eine Runde ueber `bytes` ab `crc`.
+fn step(mut crc: u32, bytes: &[u8], poly: u32) -> u32 {
     for b in bytes {
         crc ^= u32::from(*b);
         for _ in 0..8 {

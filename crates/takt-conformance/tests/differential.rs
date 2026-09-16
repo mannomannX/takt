@@ -16,7 +16,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 24] = [
+const KORPUS: [&str; 25] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -41,6 +41,9 @@ const KORPUS: [&str; 24] = [
     "32_reboot.takt",
     "33_enum_param.takt",
     "34_boot_jump.takt",
+    // Hier mit leerem Speicher; das Laden einer Nutzlast auf beiden Seiten
+    // prueft `persist_native.rs` (5.9).
+    "35_persist.takt",
 ];
 
 /// Wie viele Ticks verglichen werden.
@@ -63,7 +66,7 @@ fn corpus(name: &str) -> Program {
 
 /// Fuehrt dasselbe Programm im Interpreter aus.
 fn run_interpreted(p: &Program) -> String {
-    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None };
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     match takt_interp::run(p, &takt_interp::Trace::default(), &options) {
         Ok(r) => r.trace.render(),
         Err(e) => panic!("Interpreter: {e:?}"),
@@ -158,7 +161,7 @@ t=40 cmd go
 
     let native =
         common::run_native_with(&clang, &p, "eingaben", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
-    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None };
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
 
     let diffs = compare(&interpreted, &native);
@@ -228,7 +231,7 @@ t=11 in rx_log Erasing sector 7
 
     let native =
         common::run_native_with(&clang, &p, "stroeme", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
-    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None };
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
 
     // Der Handler muss gelaufen sein: `y = 7` steht nur im Trace, wenn
@@ -290,7 +293,7 @@ t=8 in rx all good
 
     let native =
         common::run_native_with(&clang, &p, "has_send", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
-    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None };
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
 
     // Drei der vier Zeilen tragen `ERR`; stuende hier eine andere Zahl,

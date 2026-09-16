@@ -20,6 +20,7 @@ fn an_end_line_reads_back() {
     roundtrip(LineKind::End { reason: "deep_sleep".into() });
     roundtrip(LineKind::End { reason: "boot_jump".into() });
     roundtrip(LineKind::End { reason: "restart".into() });
+    roundtrip(LineKind::Persist { hex: "0a0bff".into() });
 }
 
 #[test]

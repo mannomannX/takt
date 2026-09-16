@@ -9,6 +9,7 @@ use takt_mir::types::Type;
 use takt_mir::{ChannelId, MachineId, VarId};
 
 use crate::env::Observation;
+use crate::nvm::Nvm;
 use crate::stream::Delivery;
 use crate::system::Sim;
 use crate::trace::{LineKind, Trace, TraceLine, parse_value, sample_from_text, value_text};
@@ -46,6 +47,9 @@ pub struct RunOptions {
     pub profile: Option<String>,
     /// Reihenfolge der Schritte permutieren (Test zu Satz 9.4.1).
     pub order_seed: Option<u64>,
+    /// Inhalt des nichtfluechtigen Speichers beim Start (5.9); leer heisst
+    /// erster Start, alle `persist`-Variablen behalten ihren Default.
+    pub nvm: Nvm,
 }
 
 /// Ergebnis eines Laufs.
@@ -89,6 +93,7 @@ impl Ended {
 /// Fuehrt ein Programm mit einem Stimulus aus.
 pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<RunResult, Trap> {
     let mut sim = Sim::new(program, options.profile.as_deref())?;
+    sim.nvm = options.nvm.clone();
     if let Some(seed) = options.order_seed {
         permute(&mut sim.order, seed);
     }
@@ -134,6 +139,12 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
     }
     let final_verdict = if fail { Verdict::Fail } else { verdict };
     let at = if ended == Ended::Ticks { options.ticks } else { last };
+    if takt_mir::persist::any(program) {
+        if let Some(bytes) = sim.persist_payload() {
+            let hex = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            writer.lines.push(TraceLine { tick: at, kind: LineKind::Persist { hex } });
+        }
+    }
     writer.lines.push(TraceLine { tick: at, kind: LineKind::Final { verdict: final_verdict.name().to_string() } });
     Ok(RunResult { trace: Trace { lines: writer.lines }, verdict: final_verdict, ended })
 }

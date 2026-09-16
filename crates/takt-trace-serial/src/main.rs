@@ -73,7 +73,7 @@ fn run(args: &[String]) -> Result<bool, String> {
     }
     let program = checked.program.ok_or_else(|| format!("{path}: uebersetzt nicht"))?;
 
-    let run_options = RunOptions { ticks, profile: None, order_seed: None };
+    let run_options = RunOptions { ticks, profile: None, order_seed: None, ..Default::default() };
     let expected = takt_interp::run(&program, &takt_interp::Trace::default(), &run_options)
         .map_err(|e| format!("{path}: {e:?}"))?;
     let want = expected.trace.render();

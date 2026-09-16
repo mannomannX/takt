@@ -1,0 +1,42 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# `persist var` (5.9): Skalar, Record und Array. Der Interpreter laedt s0
+# aus dem nichtfluechtigen Speicher; ohne Eintrag gilt der Default, und
+# genau den muss der erzeugte Code auch zeigen (Satz 9.4.4).
+
+record Health:
+    healthy : bool
+    code    : int in 0..255
+
+output count : int in 0..1000 @ hw("o/count") with safe = 0
+output code  : int in 0..255  @ hw("o/code")  with safe = 0
+output first : int in 0..9    @ hw("o/first") with safe = 0
+
+machine device:
+    persist var cycles : int in 0..1000 = 3 with min_interval = 10 s
+    persist var health : Health = Health(healthy = true, code = 42)
+    persist var trials : [2] int in 0..9 = [1, 2]
+
+    initial RUN
+
+    state RUN:
+        loop:
+            count = cycles
+            code = health.code
+            first = trials[0]
+
+        after 100 ms: -> BUMP
+
+    state BUMP:
+        enter:
+            if cycles < 1000:
+                cycles = cycles + 1
+
+        loop:
+            count = cycles
+            code = health.code
+            first = trials[0]
+
+        after 100 ms: -> RUN

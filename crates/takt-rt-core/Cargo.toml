@@ -8,6 +8,10 @@ rust-version.workspace = true
 
 # Kein `takt-mir`: Der Kern laeuft auf dem Target und darf die IR nicht
 # kennen. Was er vom Programm braucht, bekommt er als Zahlen (plan/m4.md 5.4).
+# `takt-native` ist etwas anderes: `no_std`, abhaengigkeitsfrei, und das
+# Journal braucht seinen CRC32 (5.9).
+[dependencies]
+takt-native = { path = "../takt-native" }
 
 [lints]
 workspace = true

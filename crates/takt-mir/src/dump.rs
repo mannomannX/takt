@@ -43,10 +43,17 @@ impl Dumper<'_> {
             format!("machine {} every {}:", m.name, m.period)
         };
         self.line(0, &head);
-        for v in &m.vars {
+        for (i, v) in m.vars.iter().enumerate() {
             if matches!(v.scope, VarScope::Machine) {
                 let text = self.var_decl(v);
-                self.line(1, &text);
+                // `persist` sieht man einer Maschinenvariablen sonst nicht an
+                // (5.9), obwohl sie Neustarts ueberlebt.
+                match m.persist.iter().find(|p| p.var.index() == i) {
+                    Some(p) => {
+                        self.line(1, &format!("persist {text}  # Schluessel {:#018x}", p.type_hash));
+                    }
+                    None => self.line(1, &text),
+                }
             }
         }
         if !m.loop_block.stmts.is_empty() {

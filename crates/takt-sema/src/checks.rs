@@ -75,6 +75,8 @@ pub const SC12: &str = "SC-12";
 pub const SC32: &str = "SC-32";
 /// `idle`: kein `loop:`/Handler, Guards nur ueber Wake-Quellen (5.10).
 pub const SC22: &str = "SC-22";
+/// `persist var`: POD-Typ, Maschinenebene, nicht in Szenarien (5.9).
+pub const SC23: &str = "SC-23";
 /// Lints: `alert`-Polaritaet, Profil-Vollstaendigkeit (5.6, 4.6).
 pub const SC63: &str = "SC-63";
 /// Lints zu Matrizen und Stroemen (3.11, 8.6).
@@ -101,6 +103,7 @@ impl Lowerer<'_> {
         self.check_declared_budget();
         self.check_cost_budget();
         self.check_idle_states();
+        self.check_persist();
         self.check_alert_polarity();
         self.check_profile_completeness();
         self.check_reachability();
@@ -503,6 +506,68 @@ impl Lowerer<'_> {
                     }
                 }
             }
+        }
+        self.diags.extend(diags);
+    }
+
+    /// Pruefung 23 (5.9): `persist var` — POD-Typ, Maschinenebene, nicht in
+    /// Szenarien, Typ-Hash eindeutig.
+    ///
+    /// Der Hash ist per Konstruktion stabil (er faellt aus Name und
+    /// Typstruktur, [`takt_mir::persist::type_hash`]); pruefbar ist seine
+    /// Eindeutigkeit im Programm. Zwei Variablen mit demselben Schluessel
+    /// laesen einander still.
+    ///
+    /// Die Kollisionspruefung hat absichtlich keinen Korpusfall: Gleiche
+    /// Namen verbietet schon die Namensaufloesung, also braeuchte es eine
+    /// SHA-256-Kollision. Sie steht hier als Netz fuer einen kuenftigen
+    /// Fehler im Hash, nicht fuer ein erreichbares Programm.
+    fn check_persist(&mut self) {
+        let mut diags = Vec::new();
+        let mut non_pod = Vec::new();
+        let mut seen: HashMap<u64, String> = HashMap::new();
+        for m in &self.program.machines {
+            if m.kind == MachineKind::Template {
+                continue;
+            }
+            for pv in &m.persist {
+                let v = &m.vars[pv.var.index()];
+                // Noch nicht erreichbar: Szenarien sind selbst v1.1-gestuft
+                // (SC-26), und die Stufenmeldung stoppt vor den MIR-Pruefungen.
+                if m.kind == MachineKind::Scenario {
+                    diags.push(
+                        Diagnostic::error(SC23, v.span, format!("`persist var {}` in einem Szenario", v.name))
+                            .with_suggestion(
+                                "Szenarien beschreiben einen Lauf, nicht das Geraet; `persist` gehoert in die \
+                                 Maschine (5.9)"
+                                    .to_string(),
+                            ),
+                    );
+                    continue;
+                }
+                if !takt_mir::persist::is_pod(&self.program, v.ty) {
+                    non_pod.push((v.ty, v.span, v.name.clone()));
+                }
+                let key = format!("{}.{}", m.name, v.name);
+                if let Some(other) = seen.insert(pv.type_hash, key.clone()) {
+                    diags.push(Diagnostic::error(
+                        SC23,
+                        v.span,
+                        format!("`{key}` und `{other}` teilen denselben persist-Schluessel"),
+                    ));
+                }
+            }
+        }
+        for (ty, span, name) in non_pod {
+            let what = self.type_name(ty);
+            diags.push(
+                Diagnostic::error(SC23, span, format!("`persist var {name}` hat den Nicht-POD-Typ {what}"))
+                    .with_suggestion(
+                        "Erlaubt sind Skalare, Records, Arrays und Enums; Streams, Bloecke und Optionale haben \
+                         keine stabile Byte-Form (5.9)"
+                            .to_string(),
+                    ),
+            );
         }
         self.diags.extend(diags);
     }

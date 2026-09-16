@@ -129,6 +129,18 @@ pub fn size(p: &Program) -> Size {
     let native_stack: u64 = p.natives.iter().map(|n| u64::from(n.stack)).sum();
     items.push(Item { name: "Stack nativer Funktionen".into(), bytes: native_stack, origin: Origin::Contract });
 
+    // 5.9: Das Journal haelt den Schreibpuffer und den Vergleichsstand —
+    // zweimal die Nutzlast. Der Flash-Anteil braucht die Sektorgroesse aus
+    // 8.10 und steht darum in [`with_hardware`].
+    if crate::persist::any(p) {
+        let (bytes, origin) = match crate::persist::max_payload(p) {
+            Some(n) => (u64::from(n) * 2, Origin::Exact),
+            None => (0, Origin::Open),
+        };
+        items.push(Item { name: "persist-Journal (RAM)".into(), bytes, origin });
+        items.push(Item { name: "persist-Journal (Flash)".into(), bytes: 0, origin: Origin::Open });
+    }
+
     // Was ohne Hardware-Konfiguration (8.10) und Kalibrierung (13.8) fehlt.
     items.push(Item { name: "Runtime-Reserven je Profil".into(), bytes: 0, origin: Origin::Open });
 
@@ -170,6 +182,24 @@ impl Size {
             if let Some(bytes) = value {
                 item.bytes = bytes;
                 item.origin = Origin::Measured;
+            }
+        }
+        self
+    }
+
+    /// Fuellt die Posten, die an der Hardware-Konfiguration haengen (8.10).
+    ///
+    /// Heute ist das der Flash-Anteil des `persist`-Journals: Zwei Slots
+    /// belegen ganze Sektoren, und wie gross die sind, weiss nur das Ziel.
+    pub fn with_hardware(mut self, t: &crate::hardware::Target) -> Size {
+        let Some(nvm) = t.nvm else { return self };
+        if nvm.sector_bytes == 0 || nvm.sectors == 0 {
+            return self;
+        }
+        for item in &mut self.items {
+            if item.name == "persist-Journal (Flash)" {
+                item.bytes = u64::from(nvm.sector_bytes) * u64::from(nvm.sectors);
+                item.origin = Origin::Exact;
             }
         }
         self

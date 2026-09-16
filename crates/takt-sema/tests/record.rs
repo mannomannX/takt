@@ -29,7 +29,7 @@ const QUELLE: &str = "system:\n    language = 1\n    tick     = 10 ms\n\n\
 fn replaying_a_recording_reproduces_the_run() {
     let p = program(QUELLE);
     let stimulus = Trace::parse("t=3 cmd go\n").expect("Stimulus");
-    let options = RunOptions { ticks: 10, profile: None, order_seed: None };
+    let options = RunOptions { ticks: 10, profile: None, order_seed: None, ..Default::default() };
     let erst = run(&p, &stimulus, &options).expect("Lauf");
 
     let recording = Recording { header: Header::of(&p, None, 10), inputs: stimulus };

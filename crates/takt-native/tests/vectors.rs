@@ -116,6 +116,18 @@ fn the_catalogue_check_values_match() {
     assert_eq!(takt_native::crc::crc16(msg), 0xBB3D, "CRC-16/ARC");
 }
 
+/// Abschnittsweise gerechnet ergibt denselben Wert wie in einem Zug.
+#[test]
+fn a_split_crc32_matches_the_whole() {
+    use takt_native::crc::{crc32, crc32_final, crc32_start, crc32_update};
+    let msg = b"123456789";
+    for split in 0..=msg.len() {
+        let (a, b) = msg.split_at(split);
+        let state = crc32_update(crc32_update(crc32_start(), a), b);
+        assert_eq!(crc32_final(state), crc32(msg), "Trennung nach {split} Byte");
+    }
+}
+
 /// 4.5: Jede Funktion traegt einen Kostenvertrag.
 #[test]
 fn every_function_declares_its_cost() {

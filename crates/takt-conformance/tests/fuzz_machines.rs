@@ -184,7 +184,7 @@ fn generated_machines_agree() {
                 continue;
             }
         };
-        let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None };
+        let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
         let interpreted = match takt_interp::run(&p, &takt_interp::Trace::default(), &options) {
             Ok(r) => r.trace.render(),
             Err(e) => {

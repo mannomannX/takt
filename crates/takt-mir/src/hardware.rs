@@ -52,7 +52,9 @@ use crate::fns::{CostClass, CostVec};
 ///
 /// Leser akzeptieren jede Version bis zu ihrer eigenen; Schreiber
 /// schreiben die neueste. Dieselbe Regel wie beim MIR-Format.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// 2: NVM-Geometrie fuer das `persist`-Journal (5.9).
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -132,6 +134,31 @@ pub struct Target {
     /// Referenz nicht; gemessen wird die Differenz zwischen Tickperiode
     /// und dem, was das Programm davon nutzt (13.8).
     pub t_io_ps: u64,
+    /// Die NVM-Geometrie hinter `persist var`, falls das Ziel eine hat.
+    pub nvm: Option<NvmGeometry>,
+}
+
+/// Was das Journal vom nichtfluechtigen Speicher wissen muss (5.9, 11.5).
+///
+/// Sie gehoert zum Ziel, nicht zur Sprache: Ein Flash mit 10^5 Zyklen
+/// vertraegt haeufigeres Schreiben als einer mit 10^4, und die Sektorgroesse
+/// entscheidet, wie viel Flash `takt size` fuer die zwei Slots ausweist.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NvmGeometry {
+    /// Groesse eines Sektors in Byte; ein Slot belegt ganze Sektoren.
+    pub sector_bytes: u32,
+    /// Wie viele Sektoren fuer das Journal bereitstehen, beide Slots
+    /// zusammen.
+    pub sectors: u32,
+    /// Schreibabstand, wenn kein `min_interval` deklariert ist.
+    pub default_min_interval_ns: i64,
+}
+
+impl NvmGeometry {
+    /// Groesse eines Slots in Byte: die Haelfte der Sektoren, abgerundet.
+    pub fn slot_bytes(&self) -> u32 {
+        self.sector_bytes.saturating_mul(self.sectors / 2)
+    }
 }
 
 /// Die Hardware-Konfiguration, soweit gelesen (8.10).
@@ -257,11 +284,15 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
                 })?);
             }
             "t_io" => target.t_io_ps = number,
+            "nvm_sector_bytes" => nvm_of(target).sector_bytes = number as u32,
+            "nvm_sectors" => nvm_of(target).sectors = number as u32,
+            "nvm_min_interval" => nvm_of(target).default_min_interval_ns = number as i64,
             _ => {
                 let class = CostClass::ALL.iter().find(|c| c.name() == key).ok_or_else(|| ParseError {
                     line: line_no,
                     message: format!(
-                        "unbekannter Schluessel `{key}`; bekannt: core_hz, t_io und die Klassen {}",
+                        "unbekannter Schluessel `{key}`; bekannt: core_hz, t_io, nvm_sector_bytes, nvm_sectors, \
+                         nvm_min_interval und die Klassen {}",
                         CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
                     ),
                 })?;
@@ -274,6 +305,11 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
         return Err(ParseError { line: 1, message: format!("die Datei muss mit `# {MAGIC} <version>` beginnen") });
     }
     Ok(out)
+}
+
+/// Die NVM-Geometrie eines Ziels, bei Bedarf angelegt.
+fn nvm_of(target: &mut Target) -> &mut NvmGeometry {
+    target.nvm.get_or_insert_with(NvmGeometry::default)
 }
 
 /// Die Version aus `# takt-hw <n>`.
@@ -299,6 +335,11 @@ pub fn render(hw: &Hardware) -> String {
             s.push_str(&format!("{} = {}\n", c.name(), target.c_target.of(c)));
         }
         s.push_str(&format!("t_io = {}\n", target.t_io_ps));
+        if let Some(nvm) = target.nvm {
+            s.push_str(&format!("nvm_sector_bytes = {}\n", nvm.sector_bytes));
+            s.push_str(&format!("nvm_sectors = {}\n", nvm.sectors));
+            s.push_str(&format!("nvm_min_interval = {}\n", nvm.default_min_interval_ns));
+        }
     }
     s
 }

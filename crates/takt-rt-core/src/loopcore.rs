@@ -36,6 +36,51 @@ pub trait Sink {
     fn record(&mut self, tick: &Tick);
 }
 
+/// Wie weit ein begonnener NVM-Vorgang ist.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NvmState {
+    /// Kein Vorgang laeuft.
+    #[default]
+    Idle,
+    /// Ein Vorgang laeuft noch.
+    Busy,
+    /// Der letzte Vorgang ist fertig.
+    Done,
+    /// Der letzte Vorgang ist gescheitert.
+    Failed,
+}
+
+/// Der nichtfluechtige Speicher hinter `persist var` (5.9, 12.3).
+///
+/// **Warum ein Zustandsautomat und kein `write(…) -> Result`.** Eine
+/// Sektorloeschung kostet zweistellige Millisekunden; bei 10 ms Tick sind
+/// das mehrere verpasste Ticks. 12.3 verlangt fuer XIP-Targets darum
+/// ausdruecklich, dass das Journal „eine niedrig priorisierte Aufgabe"
+/// schreibt, „waehrend der Tick aus dem RAM weiterlaeuft". Ein Trait, der
+/// das Ergebnis zurueckgibt, laedt zum Blockieren ein — dieser kann es
+/// nur in `begin_*` tun, und das zeigt die Tickdauer (13.8).
+///
+/// FB-149 ist derselbe Fehler eine Stufe kleiner: Die Telemetrie sass an
+/// derselben Stelle im Tick, wartete auf `TXE` und machte aus 1,0 s
+/// Blinkzyklus 6,0 s.
+pub trait Nvm {
+    /// Groesse eines Slots in Byte; beide Slots sind gleich gross.
+    fn slot_size(&self) -> u32;
+
+    /// Beginnt, einen Slot zu loeschen. `false`, wenn gerade etwas laeuft.
+    fn begin_erase(&mut self, slot: u8) -> bool;
+
+    /// Beginnt, `bytes` ab `offset` in den Slot zu schreiben.
+    fn begin_write(&mut self, slot: u8, offset: u32, bytes: &[u8]) -> bool;
+
+    /// Fragt den laufenden Vorgang ab; treibt ihn voran.
+    fn poll(&mut self) -> NvmState;
+
+    /// Liest aus einem Slot. Laeuft einmal vor dem ersten Tick, darf also
+    /// blockieren — dort gibt es keine Deadline.
+    fn read(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> bool;
+}
+
 /// Was ein Tick gekostet hat und was er ergab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Tick {
@@ -96,6 +141,18 @@ pub trait Program {
     /// `after`-Frist um die geschlafenen Ticks zu spaet, und Satz 9.9.1
     /// (Trace mit und ohne Schlaf gleich) waere verletzt.
     fn advance(&mut self, _ticks: u64) {}
+
+    /// Schreibt die kanonische Form aller `persist`-Variablen nach `out`
+    /// und liefert die Laenge (5.9); 0 heisst: nichts zu sichern.
+    fn persist_snapshot(&mut self, _out: &mut [u8]) -> usize {
+        0
+    }
+
+    /// Uebernimmt eine Journal-Nutzlast und liefert die Zahl der
+    /// gueltigen Eintraege; der Rest ist `PersistReset` (5.9).
+    fn persist_restore(&mut self, _bytes: &[u8]) -> usize {
+        0
+    }
 }
 
 /// Die Schleife.
@@ -196,6 +253,26 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     pub fn run(&mut self, n: u64) {
         for _ in 0..n {
             self.step();
+        }
+    }
+
+    /// Ein Tick mit Journal (5.9, 12.1).
+    ///
+    /// Das Journal laeuft *nach* dem Schritt, also auch nach einem Schlaf:
+    /// Ein begonnener Flash-Vorgang laeuft in der Hardware weiter, und die
+    /// Runtime fragt beim naechsten Wachwerden nach. Vor dem Schlaf zu
+    /// schreiben hiesse, auf ihn zu warten — genau das Blockieren, das der
+    /// `Nvm`-Trait ausschliesst.
+    pub fn step_persisting<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) -> Tick {
+        let tick = self.step();
+        persist.poll(tick.now, &mut self.program);
+        tick
+    }
+
+    /// `n` Ticks mit Journal.
+    pub fn run_persisting<N: Nvm>(&mut self, n: u64, persist: &mut crate::journal::Persist<'_, N>) {
+        for _ in 0..n {
+            self.step_persisting(persist);
         }
     }
 

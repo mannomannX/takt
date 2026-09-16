@@ -417,8 +417,8 @@ pub fn check(p: &Program) -> Result<(), Diagnostic> {
                 c.expr(init)?;
             }
         }
-        if !m.persist.is_empty() {
-            return Err(stage(m.span, "persist", Stage::V1_1));
+        for pv in &m.persist {
+            c.index(&m.vars, pv.var.index(), "Variable", m.span)?;
         }
         if !m.follows.is_empty() {
             return Err(stage(m.span, "follows", Stage::V1_1));

@@ -379,7 +379,9 @@ machine m:
         after 20 ms: -> SLEEP
 ",
     );
-    let out = run(&p, &Trace::default(), &RunOptions { ticks: 200, profile: None, order_seed: None }).expect("Lauf");
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 200, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     let text = out.trace.render();
     let wechsel: Vec<&str> = text.lines().filter(|l| l.contains(" out led ")).collect();
     // Der Interpreter schreibt nur Aenderungen (9.3): In `idle` gibt es
@@ -417,7 +419,9 @@ machine m:
     );
     // Ohne die Verwerfung liefe der Puffer nach vier Ticks ueber und die
     // Maschine faultete; mit ihr laeuft sie bis zur Frist durch.
-    let out = run(&p, &Trace::default(), &RunOptions { ticks: 150, profile: None, order_seed: None }).expect("Lauf");
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 150, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     assert!(out.trace.render().contains("out led true"), "die Frist wird erreicht:\n{}", out.trace.render());
 }
 
@@ -457,7 +461,9 @@ machine m:
             seen = seen + 1
 ",
     );
-    let out = run(&p, &Trace::default(), &RunOptions { ticks: 30, profile: None, order_seed: None }).expect("Lauf");
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 30, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     let text = out.trace.render();
     // 5.10 verlangt den Alert beim *Verlassen* des Zustands.
     let alert = text.lines().find(|l| l.contains("StreamPaused")).unwrap_or_else(|| {
@@ -489,7 +495,9 @@ machine m:
             reboot = DEEP_SLEEP
 ",
     );
-    let out = run(&p, &Trace::default(), &RunOptions { ticks: 50, profile: None, order_seed: None }).expect("Lauf");
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 50, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     assert_eq!(out.ended, takt_interp::Ended::DeepSleep);
     let text = out.trace.render();
     assert!(text.contains("t=5 end deep_sleep"), "der Grund steht im Trace:\n{text}");
@@ -510,7 +518,9 @@ machine m:
             reboot = RESTART
 ",
     );
-    let out = run(&p, &Trace::default(), &RunOptions { ticks: 20, profile: None, order_seed: None }).expect("Lauf");
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 20, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     assert_eq!(out.ended, takt_interp::Ended::Restart);
 }
 
@@ -529,7 +539,9 @@ machine m:
             led = true
 ",
     );
-    let out = run(&p, &Trace::default(), &RunOptions { ticks: 7, profile: None, order_seed: None }).expect("Lauf");
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 7, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     assert_eq!(out.ended, takt_interp::Ended::Ticks);
     assert!(out.trace.render().contains("t=7 verdict-final"), "{}", out.trace.render());
 }
@@ -551,11 +563,14 @@ machine m:
             woke = boot_reason == DEEP_SLEEP_WAKE
 ";
     let p = compile(src);
-    let kalt = run(&p, &Trace::default(), &RunOptions { ticks: 2, profile: None, order_seed: None }).expect("Lauf");
+    let kalt =
+        run(&p, &Trace::default(), &RunOptions { ticks: 2, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     assert!(kalt.trace.render().contains("out woke false"), "{}", kalt.trace.render());
 
     let stim = Trace::parse("t=0 in boot_reason DEEP_SLEEP_WAKE\n").expect("Stimulus");
-    let warm = run(&p, &stim, &RunOptions { ticks: 2, profile: None, order_seed: None }).expect("Lauf");
+    let warm =
+        run(&p, &stim, &RunOptions { ticks: 2, profile: None, order_seed: None, ..Default::default() }).expect("Lauf");
     assert!(warm.trace.render().contains("out woke true"), "{}", warm.trace.render());
 }
 
@@ -578,7 +593,9 @@ machine m:
             led = true
 ",
     );
-    let out = run(&p, &Trace::default(), &RunOptions { ticks: 8, profile: None, order_seed: None }).expect("Lauf");
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 8, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     assert_eq!(out.ended, takt_interp::Ended::DeepSleep);
     let text = out.trace.render();
     assert!(text.contains("t=0 end deep_sleep"), "bei Tick 0, nicht spaeter:\n{text}");
@@ -604,7 +621,9 @@ machine m:
             reboot = DEEP_SLEEP
 ",
     );
-    let out = run(&p, &Trace::default(), &RunOptions { ticks: 20, profile: None, order_seed: None }).expect("Lauf");
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 20, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     let text = out.trace.render();
     let nach = text.split("end deep_sleep").nth(1).unwrap_or("");
     assert!(nach.contains("out reboot NONE"), "der Befehl selbst faellt auf `safe` zurueck:\n{text}");
@@ -633,7 +652,9 @@ machine m:
             led = true
 ",
     );
-    let out = run(&p, &Trace::default(), &RunOptions { ticks: 4, profile: None, order_seed: None }).expect("Lauf");
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 4, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     assert_eq!(out.ended, takt_interp::Ended::Ticks, "ein fremdes Enum ist kein Kommando");
 }
 
@@ -656,6 +677,8 @@ machine m:
             led = true
 ",
     );
-    let out = run(&p, &Trace::default(), &RunOptions { ticks: 4, profile: None, order_seed: None }).expect("Lauf");
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 4, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
     assert_eq!(out.ended, takt_interp::Ended::Ticks);
 }

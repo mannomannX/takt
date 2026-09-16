@@ -1,0 +1,29 @@
+(system
+  (language 1)
+  (tick 10ms))
+(record Health
+  (healthy: bool)
+  (code: int in 0..255))
+(output count :int in 0..1000 @hw("o/count") safe=0)
+(output code :int in 0..255 @hw("o/code") safe=0)
+(output first :int in 0..9 @hw("o/first") safe=0)
+(machine device
+  (persist cycles :int in 0..1000 3 min_interval=10s)
+  (persist health :Health (Health healthy=true code=42))
+  (persist trials :[2]int in 0..9 (array 1 2))
+  (initial RUN)
+  (state RUN
+    (loop
+      (= count cycles)
+      (= code (.code health))
+      (= first (index trials 0)))
+    (after 100ms -> BUMP))
+  (state BUMP
+    (enter
+      (if (< cycles 1000)
+        (= cycles (+ cycles 1))))
+    (loop
+      (= count cycles)
+      (= code (.code health))
+      (= first (index trials 0)))
+    (after 100ms -> RUN)))

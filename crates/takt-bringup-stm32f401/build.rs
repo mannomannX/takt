@@ -15,10 +15,8 @@
 //! `.takt`-Datei uebersetzt und der MCU-Rahmen erzeugt wurde. Beides
 //! passiert hier, damit `cargo build` genuegt.
 //!
-//! **Welches Programm?** `TAKT_PROGRAM` nennt den Pfad; ohne die Variable
-//! nimmt der Bau `corpus-try/16_timing.takt`. Ein Default ist hier
-//! richtig, weil das Binary sonst gar nicht baut und der Fehler dann wie
-//! ein Defekt aussaehe statt wie eine fehlende Angabe.
+//! **Welches Programm?** `takt.toml` neben `Cargo.toml` nennt den Pfad
+//! (FB-141); `TAKT_PROGRAM` sticht nur fuer einen einmaligen Versuch.
 
 use std::env;
 use std::fs;

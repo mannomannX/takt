@@ -266,7 +266,7 @@ impl Lowerer<'_> {
                     self.machine_var(v, VarScope::Machine);
                 }
                 ast::MachinePrelude::Persist(p) => {
-                    self.stage(p.span, "`persist`", Stage::V1_1);
+                    self.persist_var(p);
                 }
                 ast::MachinePrelude::Signal(name) => {
                     let m = self.mctx.as_mut().expect("Maschine");
@@ -387,6 +387,32 @@ impl Lowerer<'_> {
             return None;
         }
         Some(id)
+    }
+
+    /// `persist var` (5.9): eine gewoehnliche Maschinenvariable plus
+    /// Eintrag in `machine.persist`. Der Default steht in `init`; geladene
+    /// Werte ueberschreiben ihn beim Start (9.10).
+    fn persist_var(&mut self, p: &ast::PersistDecl) {
+        let Some(ty) = self.resolve_type(&p.ty) else { return };
+        let Some(value) = self.check(&p.value, ty) else { return };
+        let init = self.range_checked(value, ty, p.span);
+        let id = self.new_var(VarDef {
+            name: p.name.name.clone(),
+            ty,
+            init: Some(init),
+            scope: VarScope::Machine,
+            public: false,
+            span: p.span,
+        });
+        if !self.declare(&p.name, Entity::Var(id, ty)) {
+            return;
+        }
+        // Instanznamen tragen ihren Index schon (`cells[0]`), der Scope ist
+        // deshalb leer; gescopte Instanzen (5.11) gibt es noch nicht.
+        let name = self.mctx.as_ref().expect("Maschine").machine.name.clone();
+        let type_hash = takt_mir::persist::type_hash(&self.program, &name, "", &p.name.name, ty);
+        let m = self.mctx.as_mut().expect("Maschine");
+        m.machine.persist.push(PersistVar { var: id, min_interval: p.min_interval.as_ref().map(|d| d.ns), type_hash });
     }
 
     /// Rumpf eines Zustands.

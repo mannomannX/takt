@@ -26,11 +26,13 @@
 
 #![no_std]
 
+pub mod journal;
 pub mod loopcore;
 pub mod overrun;
 pub mod profile;
 pub mod stream;
 
-pub use loopcore::{Clock, Program, Runtime, Sink, Tick, Watchdog};
+pub use journal::{FakeNvm, Journal, Loaded, Persist};
+pub use loopcore::{Clock, Nvm, NvmState, Program, Runtime, Sink, Tick, Watchdog};
 pub use overrun::{Overrun, Policy, Seen};
 pub use profile::Profile;

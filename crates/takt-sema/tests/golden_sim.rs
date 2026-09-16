@@ -84,7 +84,8 @@ fn golden_traces_match() {
         let stimulus = Trace::parse(&stim_text).unwrap_or_else(|e| panic!("{}: {e}", stim_path.display()));
 
         let p = program(&case.example, case.profile.as_deref());
-        let options = RunOptions { ticks: case.ticks, profile: case.profile.clone(), order_seed: None };
+        let options =
+            RunOptions { ticks: case.ticks, profile: case.profile.clone(), order_seed: None, ..Default::default() };
         let result =
             run(&p, &stimulus, &options).unwrap_or_else(|e| panic!("{}/{}: {e:?}", case.example, case.scenario));
         let text = result.trace.render();
@@ -109,16 +110,24 @@ fn step_order_does_not_change_any_golden_trace() {
         let stim_text = std::fs::read_to_string(dir.join(format!("{}.stim.trace", case.scenario))).unwrap_or_default();
         let stimulus = Trace::parse(&stim_text).expect("Stimulus lesbar");
         let p = program(&case.example, case.profile.as_deref());
-        let base =
-            run(&p, &stimulus, &RunOptions { ticks: case.ticks, profile: case.profile.clone(), order_seed: None })
-                .expect("Lauf")
-                .trace
-                .render();
+        let base = run(
+            &p,
+            &stimulus,
+            &RunOptions { ticks: case.ticks, profile: case.profile.clone(), order_seed: None, ..Default::default() },
+        )
+        .expect("Lauf")
+        .trace
+        .render();
         for seed in [3u64, 17, 9001] {
             let permuted = run(
                 &p,
                 &stimulus,
-                &RunOptions { ticks: case.ticks, profile: case.profile.clone(), order_seed: Some(seed) },
+                &RunOptions {
+                    ticks: case.ticks,
+                    profile: case.profile.clone(),
+                    order_seed: Some(seed),
+                    ..Default::default()
+                },
             )
             .expect("Lauf")
             .trace
