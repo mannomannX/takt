@@ -195,6 +195,16 @@ impl Vars for StateVars<'_> {
         }
     }
 
+    fn stream_slots(&self, stream: takt_mir::expr::StreamRef, m: &mut Module) -> Option<(Reg, Reg)> {
+        let nth = self.machine.layout.cursors.iter().position(|c| *c == stream)?;
+        let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
+        let mut at = |role: Role| {
+            let i = self.state.index_of(role, nth)?;
+            Some(m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}")))
+        };
+        Some((at(Role::Cursor)?, at(Role::Examined)?))
+    }
+
     fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<Lowered> {
         let def = self.machine.vars.get(id.index())?;
         let ty = ty::lower(def.ty, self.program)?;

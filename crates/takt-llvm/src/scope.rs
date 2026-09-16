@@ -246,7 +246,7 @@ fn expr(e: &Expr, c: &mut Coverage) {
             let auf_wrapper = matches!(accessor, Accessor::Valid | Accessor::Or | Accessor::Ok | Accessor::Err);
             let ok = matches!(
                 accessor,
-                Accessor::Bit | Accessor::Bits | Accessor::WithBit | Accessor::Len | Accessor::Encode
+                Accessor::Bit | Accessor::Bits | Accessor::WithBit | Accessor::Len | Accessor::Encode | Accessor::Peek
             ) || (quality && on_channel)
                 || auf_wrapper;
             c.note(if ok { "Zugriff" } else { "Zugriff (`.len`, `.count`, ...)" }, ok);

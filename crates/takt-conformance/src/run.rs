@@ -103,6 +103,13 @@ pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
 /// dasselbe Bit, und eine Toleranz waere genau die Abweichung, die zu
 /// finden der Test da ist.
 fn same_number(interpreter: &str, native: &str) -> bool {
+    // Arrays elementweise (T2): der Interpreter schreibt `[3.75 V, …]`,
+    // der Rahmen `[3.75, …]`.
+    if let (Some(x), Some(y)) = (interpreter.strip_prefix('['), native.strip_prefix('[')) {
+        let items = |s: &str| s.trim_end_matches(']').split(',').map(str::trim).map(String::from).collect::<Vec<_>>();
+        let (xs, ys) = (items(x), items(y));
+        return xs.len() == ys.len() && xs.iter().zip(&ys).all(|(a, b)| same_number(a, b));
+    }
     let a = interpreter.split_whitespace().next().unwrap_or(interpreter);
     let b = native.split_whitespace().next().unwrap_or(native);
     if a == b {

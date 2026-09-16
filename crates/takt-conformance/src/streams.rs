@@ -32,6 +32,7 @@
 
 use std::fmt::Write as _;
 
+use takt_mir::TypeId;
 use takt_mir::program::{Channel, Direction, Program};
 use takt_mir::types::Type;
 
@@ -51,7 +52,8 @@ struct Stream {
     id: i64,
     /// Name des Kanals, fuer den Kommentar im C.
     name: String,
-    /// Kapazitaet des Elementtyps in Byte (`line<N>` → N).
+    /// Kapazitaet der Bytes eines Elements: `line<N>` → N, ein Record →
+    /// seine kanonische Byteform.
     cap: u32,
     /// Die Elemente in Reihenfolge, nach der Schrankenpruefung.
     elements: Vec<Element>,
@@ -75,7 +77,7 @@ fn collect_streams(p: &Program, stimulus: &[Stimulus]) -> Vec<Stream> {
         if c.dir != Direction::Input {
             continue;
         }
-        let Some(cap) = element_cap(c, p) else { continue };
+        let Some((elem, cap)) = element_cap(c, p) else { continue };
         // Die Schranken wie im Interpreter (`Image::new`): ohne Angabe
         // 16 Elemente, und die Bytegrenze das 256-fache davon.
         let bound = c.attrs.capacity.unwrap_or(16);
@@ -88,8 +90,18 @@ fn collect_streams(p: &Program, stimulus: &[Stimulus]) -> Vec<Stream> {
                 continue;
             }
             // 3.9: Der Rand begrenzt die Laenge; was darueber steht, ist
-            // abgeschnitten und nicht verworfen.
-            let mut bytes = text.as_bytes().to_vec();
+            // abgeschnitten und nicht verworfen. Ein Record steht im
+            // Stimulus wie im Trace und geht als kanonische Byteform in
+            // den Ring (plan/m6.md 2.2).
+            let mut bytes = if textual(p, elem) {
+                text.as_bytes().to_vec()
+            } else {
+                let value = takt_interp::trace::parse_value(text, elem, p);
+                match value.map(|v| takt_interp::bytes::encode(p, &v, elem)) {
+                    Ok(Ok(b)) => b,
+                    _ => continue,
+                }
+            };
             bytes.truncate(cap as usize);
             if per_tick.0 != *tick {
                 per_tick = (*tick, 0, 0);
@@ -111,14 +123,21 @@ fn collect_streams(p: &Program, stimulus: &[Stimulus]) -> Vec<Stream> {
     streams
 }
 
-/// Die Kapazitaet des Elementtyps in Byte, falls der Kanal ein Strom
-/// mit textartigem Element ist (8.6, 3.9).
-fn element_cap(c: &Channel, p: &Program) -> Option<u32> {
+/// Elementtyp und Kapazitaet seiner Bytes, falls der Kanal ein Strom ist
+/// (8.6, 3.9): `N` bei Text, sonst die kanonische Byteform — dieselbe
+/// Rechnung wie `takt_llvm::stream::scratch`.
+fn element_cap(c: &Channel, p: &Program) -> Option<(TypeId, u32)> {
     let Some(Type::Stream(elem)) = p.types.list.get(c.ty.index()) else { return None };
-    match p.types.list.get(elem.index()) {
-        Some(Type::Line { cap } | Type::Str { cap } | Type::Bytes { cap }) => Some(*cap),
-        _ => None,
-    }
+    let cap = match p.types.list.get(elem.index()) {
+        Some(Type::Line { cap } | Type::Str { cap } | Type::Bytes { cap }) => *cap,
+        _ => takt_mir::bytes::max_size(p, *elem).ok()?,
+    };
+    Some((*elem, cap))
+}
+
+/// Text kommt als Bytes, wie er im Stimulus steht.
+fn textual(p: &Program, elem: TypeId) -> bool {
+    matches!(p.types.list.get(elem.index()), Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }))
 }
 
 /// Schreibt die drei Aufrufe aus `takt-llvm/src/stream.rs` als C.
@@ -161,8 +180,8 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
     let _ = writeln!(s, "}};");
     let _ = writeln!(s, "static const int g_elem_count = (int)(sizeof g_elems / sizeof g_elems[0]);\n");
 
-    // Die Kapazitaet je Strom: `takt_stream_at` schreibt `line<N>` als
-    // `{{ i32 len, [N x i8], i1 truncated }}` (takt-llvm/src/ty.rs).
+    // Die Kapazitaet je Strom: so viele Bytes schreibt `takt_stream_at`
+    // hinter `t` und die Laenge.
     let _ = writeln!(s, "static int takt_stream_cap(int s) {{");
     let _ = writeln!(s, "    switch (s) {{");
     for st in &streams {
@@ -183,9 +202,9 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
     let _ = writeln!(s, "    return n;");
     let _ = writeln!(s, "}}\n");
 
-    // Das `i`-te Element des Fensters an den uebergebenen Platz. Der
-    // Aufbau ist der von `line<N>`/`str<N>`: Laenge, Bytes, und bei
-    // `line` das Flag `truncated` (3.9).
+    // Das `i`-te Element des Fensters an den uebergebenen Platz, im
+    // Aufbau von `takt_llvm::stream::Streams::AT`: `t` in Nanosekunden
+    // (i64), die Laenge (i32 bei 8), die Bytes ab 12.
     let _ = writeln!(s, "long long takt_stream_at(int s, long long cur, int i, void *out) {{");
     let _ = writeln!(s, "    int seen = 0;");
     let _ = writeln!(s, "    for (int k = 0; k < g_elem_count; k++) {{");
@@ -194,9 +213,11 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
     let _ = writeln!(s, "        if (seen++ != i) continue;");
     let _ = writeln!(s, "        int cap = takt_stream_cap(s);");
     let _ = writeln!(s, "        unsigned char *p = (unsigned char *)out;");
-    let _ = writeln!(s, "        memset(p, 0, (size_t)cap + 8);");
-    let _ = writeln!(s, "        *(int *)p = e->len;");
-    let _ = writeln!(s, "        memcpy(p + 4, e->bytes, (size_t)e->len);");
+    let _ = writeln!(s, "        long long t = e->tick * {}LL;", p.config.tick);
+    let _ = writeln!(s, "        memset(p, 0, (size_t)cap + 12);");
+    let _ = writeln!(s, "        memcpy(p, &t, sizeof t);");
+    let _ = writeln!(s, "        memcpy(p + 8, &e->len, sizeof e->len);");
+    let _ = writeln!(s, "        memcpy(p + 12, e->bytes, (size_t)e->len);");
     let _ = writeln!(s, "        return e->seq;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    (void)out;");

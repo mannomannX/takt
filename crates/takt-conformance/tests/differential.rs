@@ -16,7 +16,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 34] = [
+const KORPUS: [&str; 35] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -53,6 +53,7 @@ const KORPUS: [&str; 34] = [
     "43_sent.takt",
     "46_matrices.takt",
     "47_monitors.takt",
+    "49_record_streams.takt",
 ];
 
 /// Wie viele Ticks verglichen werden.
@@ -406,5 +407,65 @@ t=8 tune GAIN 7
             "
 "
         )
+    );
+}
+
+/// Record-Elemente auf Stroemen (8.6, 8.7, plan/m6.md 2.14) und `peek`
+/// (FB-15) nativ: Der Rahmen liefert `Pulse(...)` als kanonische
+/// Byteform, Handler und Guard vergleichen die Felder, die Bindung
+/// traegt `t`, `seq` und `data`/`text` — und ein `peek` laesst den
+/// Handler desselben Ticks das Element noch sehen.
+#[test]
+fn the_two_implementations_agree_on_record_elements_and_peek() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("49_record_streams.takt");
+    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
+    let stimulus = takt_interp::Trace::parse(
+        "t=2 in edges Pulse(true, 3)
+t=4 in edges Pulse(false, 5)
+t=6 in edges Pulse(true, 9)
+t=8 in edges Pulse(false, 7)
+t=10 in rx go 42
+t=12 in rx stop
+t=14 in edges Pulse(true, 1)
+",
+    )
+    .expect("Stimulus");
+    let inputs: Vec<Stimulus> = stimulus
+        .lines
+        .iter()
+        .filter_map(|l| match &l.kind {
+            takt_interp::trace::LineKind::Input { channel, sample } => {
+                Some(Stimulus::element(l.tick, channel, sample.value.as_deref().unwrap_or_default()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inputs.len(), 7, "der Stimulus traegt sieben Elemente");
+
+    let native =
+        common::run_native_with(&clang, &p, "records", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+
+    // Jede Zusicherung belegt ein Konstrukt: das Record-Muster im Handler
+    // (`rises`, `pin` aus `data`), der Guard mit zwei Feldern (`armed`),
+    // `peek` (`peeked`), und `seq`/`t`/`text` der Textbindung.
+    for line in ["out rises 3", "out pin 9", "out armed true", "out peeked true", "out late true", "out width 5"] {
+        assert!(interpreted.contains(line), "`{line}` fehlt im Interpreter-Trace:\n{interpreted}");
+    }
+
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen mit Record-Elementen:\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
+        diffs.len(),
+        diffs.iter().take(6).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n"),
+        interpreted,
+        native
     );
 }

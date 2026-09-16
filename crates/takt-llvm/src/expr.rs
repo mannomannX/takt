@@ -77,6 +77,16 @@ pub trait Vars {
         None
     }
 
+    /// Cursor und `examined` eines Stroms im Zustand der Maschine (9.6),
+    /// als Zeiger; `None` ausserhalb einer Maschine.
+    fn stream_slots(
+        &self,
+        _stream: takt_mir::expr::StreamRef,
+        _m: &mut Module,
+    ) -> Option<(crate::emit::Reg, crate::emit::Reg)> {
+        None
+    }
+
     /// Eine eingebaute Groesse (3.3, 5.3).
     ///
     /// Sie haengt an der Quelle: `now` kommt von der Runtime, die die
@@ -263,6 +273,9 @@ fn access(
 ) -> Result<Lowered, NotYet> {
     if which == Accessor::Sent {
         return stream_sent(base, want, m);
+    }
+    if which == Accessor::Peek {
+        return stream_peek(base, want, p, m, vars);
     }
     let x = lower(base, p, m, vars)?;
     if let Some(Type::Map { key, value, cap }) = p.types.list.get(base.ty.index()) {
@@ -1087,6 +1100,41 @@ fn stream_sent(base: &Expr, want: &LlvmType, m: &mut Module) -> Result<Lowered, 
     let n = m.inst(&format!("call i32 @{}(i32 {}, ptr {buf})", crate::stream::Streams::SENT, c.0));
     let v = m.inst(&format!("load {inner}, ptr {buf}"));
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
+    let with_value = m.inst(&format!("insertvalue {want} undef, {inner} {v}, 0"));
+    let r = m.inst(&format!("insertvalue {want} {with_value}, i1 {some}, 1"));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
+}
+
+/// `s.peek()` (8.6, FB-15): das naechste Element als `E?`. Es gilt als
+/// untersucht; der Cursor rueckt am Ende des Schritts (Lemma 9.6.1).
+fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
+    let stream = match &base.kind {
+        ExprKind::Input { channel, .. } => takt_mir::expr::StreamRef::Channel(*channel),
+        ExprKind::Stream(s) => takt_mir::expr::StreamRef::Internal(*s),
+        _ => return Err(NotYet { what: "`peek` ohne festen Strom" }),
+    };
+    let elem = crate::stream::element(p, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
+    let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+    let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`peek` ohne Wrapper-Typ" }) };
+    let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
+    let (cur_ptr, ex_ptr) = vars.stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
+    let out = m.inst(&format!("alloca {inner}"));
+    m.void_inst(&format!("store {inner} zeroinitializer, ptr {out}"));
+    let buf = crate::stream::scratch(p, elem, m)?;
+    let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
+    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
+    let k = m.next_label();
+    let (read, done) = (format!("peek{k}_lesen"), format!("peek{k}_fertig"));
+    m.void_inst(&format!("br i1 {some}, label %{read}, label %{done}"));
+    m.label(&read);
+    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 0, ptr {buf})", crate::stream::Streams::AT));
+    m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
+    crate::stream::note_examined(ex_ptr, seq, m);
+    crate::stream::copy_payload(buf, out, elem, p, m)?;
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
+    let v = m.inst(&format!("load {inner}, ptr {out}"));
     let with_value = m.inst(&format!("insertvalue {want} undef, {inner} {v}, 0"));
     let r = m.inst(&format!("insertvalue {want} {with_value}, i1 {some}, 1"));
     Ok(Lowered { value: r.to_string(), ty: want.clone() })

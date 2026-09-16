@@ -616,6 +616,22 @@ pub fn parse_value(text: &str, ty: TypeId, p: &Program) -> Result<Value, String>
             }
             Ok(Value::Samples(parts.iter().map(|x| parse_value(x, *elem, p)).collect::<Result<Vec<_>, _>>()?))
         }
+        // Wie `value_text` ihn schreibt: `Name(feld, feld, ...)`.
+        Type::Record(r) => {
+            let def = &p.records[r.index()];
+            let inner = text
+                .strip_prefix(def.name.as_str())
+                .map(str::trim)
+                .and_then(|s| s.strip_prefix('('))
+                .and_then(|s| s.strip_suffix(')'))
+                .ok_or_else(|| format!("`{}(...)` erwartet, `{text}` gefunden", def.name))?;
+            let parts: Vec<&str> = if inner.trim().is_empty() { Vec::new() } else { split_top(inner) };
+            if parts.len() != def.fields.len() {
+                return Err(format!("{} Felder erwartet, {} gefunden", def.fields.len(), parts.len()));
+            }
+            let fields = parts.iter().zip(&def.fields).map(|(x, f)| parse_value(x, f.ty, p));
+            Ok(Value::Record(fields.collect::<Result<Vec<_>, _>>()?))
+        }
         other => Err(format!("Wert vom Typ {other:?} kann der Trace nicht lesen")),
     }
 }

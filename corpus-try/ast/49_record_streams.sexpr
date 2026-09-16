@@ -1,0 +1,37 @@
+(system
+  (language 1)
+  (tick 10ms))
+(record Pulse
+  (rising: bool)
+  (pin: u8))
+(input edges :stream<Pulse> @hw("gpio/edges") max_rate=100[Hz])
+(input rx :stream<line<16>> @hw("u/rx") max_rate=100[Hz])
+(output rises :int in 0..99 @sim("r"))
+(output pin :u8 @sim("p"))
+(output armed :bool @sim("a"))
+(output peeked :bool @sim("k"))
+(output number :int in 0..99 @sim("s"))
+(output late :bool @sim("l"))
+(output width :int in 0..16 @sim("w"))
+(machine m
+  (var n :int in 0..99 0)
+  (initial IDLE)
+  (state IDLE
+    (loop
+      (var next :Pulse? (.peek edges))
+      (= peeked (.valid next)))
+    (on edges matches (Pulse rising=true) as e
+      (= n (+ n 1))
+      (= rises n)
+      (= pin (.pin (.data e))))
+    (on edges as other
+      (= pin 0))
+    (when (matches edges (Pulse rising=false pin=7) as f) -> ARMED))
+  (state ARMED
+    (enter
+      (= armed true))
+    (on rx matches "go {k:int}" as l
+      (= number (.seq l))
+      (= late (>= (.t l) 100ms))
+      (= width (.len (.text l))))
+    (when (has rx "stop") -> IDLE)))

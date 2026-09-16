@@ -25,10 +25,9 @@ mod common;
 
 /// Die Beispiele, die der M4-Exit nennt.
 ///
-/// 14.7 und 14.8 laufen im Interpreter mit Golden-Traces; nativ fehlt
-/// dem einen das Record-Muster auf einem Strom, dem anderen die
+/// 14.8 laeuft im Interpreter mit Golden-Trace; nativ fehlt die
 /// Signaturpruefung im Rahmen (unten).
-const EXAMPLES: [&str; 6] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6"];
+const EXAMPLES: [&str; 7] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6", "14_7"];
 
 /// Die uebrigen, mit dem Konstrukt, an dem der Codegen abbricht.
 ///
@@ -37,15 +36,11 @@ const EXAMPLES: [&str; 6] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6"];
 /// sobald das Konstrukt gesenkt wird — und dann faellt der Test auf, der
 /// ihn noch fuehrt.
 ///
-/// 14.7: `when button matches Edge(rising = true) as e` — ein
-/// Record-Muster auf einem Strom. Der Codegen senkt Muster nur als Text
-/// (DFA); Record-Elemente haben im Strom noch keine Byte-Form.
-///
 /// 14.8: `ecdsa_p256_verify` liegt in `takt-crypto` (plan/m6.md 2.4). Der
 /// C-Rahmen hat keine Signaturpruefung, und ein Rust-Symbol mit
 /// C-Schnittstelle braeuchte `unsafe` — das der Workspace verbietet. Der
 /// Interpreter prueft die Signatur; der Rahmen bindet das Programm nicht.
-const OPEN: [(&str, &str); 2] = [("14_7", "Record-Muster in einem Guard"), ("14_8", "ecdsa_p256_verify ohne C-Rahmen")];
+const OPEN: [(&str, &str); 1] = [("14_8", "ecdsa_p256_verify ohne C-Rahmen")];
 
 /// Wie viele Ticks verglichen werden.
 ///

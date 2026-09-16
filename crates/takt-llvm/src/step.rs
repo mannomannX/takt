@@ -155,7 +155,7 @@ fn write_step(
         for anc in &pfad {
             handler.extend(m.states[anc.index()].handlers.iter().cloned());
         }
-        dispatch(&handler, &mut ctx, module, &end)?;
+        dispatch(&handler, &mut ctx, module)?;
         // Dann die Uebergaenge, vom Blatt aufwaerts: Der innerste Zustand
         // entscheidet zuerst (5.2), und innerhalb einer Ebene gewinnt der
         // erste passende in Quelltextreihenfolge.
@@ -182,6 +182,21 @@ fn write_step(
         let old = module.inst(&format!("load i64, ptr {cell}"));
         let new = module.inst(&format!("add i64 {old}, 1"));
         module.void_inst(&format!("store i64 {new}, ptr {cell}"));
+    }
+    // 9.6, `advance_cursors()`: `cur[s, m] = examined + 1`. Der Cursor
+    // steht im Zustand der Maschine, nicht im Strom — nur der erzeugte
+    // Code kann ihn schreiben; `takt_stream_examined` meldet dasselbe
+    // an die Runtime, die daraus das Minimum ueber alle Konsumenten
+    // bildet. Ohne untersuchtes Element bleibt der Cursor, wo er stand.
+    for i in 0..m.layout.cursors.len() {
+        let (Some(c), Some(e)) = (st.index_of(Role::Cursor, i), st.index_of(Role::Examined, i)) else { continue };
+        let cur_ptr = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {c}"));
+        let ex_ptr = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {e}"));
+        let cur = module.inst(&format!("load i64, ptr {cur_ptr}"));
+        let next = module.inst(&format!("load i64, ptr {ex_ptr}"));
+        let ahead = module.inst(&format!("icmp sgt i64 {next}, {cur}"));
+        let new = module.inst(&format!("select i1 {ahead}, i64 {next}, i64 {cur}"));
+        module.void_inst(&format!("store i64 {new}, ptr {cur_ptr}"));
     }
     module.end(None);
     Ok(())
@@ -924,12 +939,7 @@ fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crat
 /// nur ihre Schranke: `CAP`. 4.1 verlangt eine Schranke, nicht eine feste
 /// Zahl — und `CAP` Durchlaeufe abzurollen waere bei einem Ring von 256
 /// Elementen unbrauchbar.
-fn dispatch(
-    handlers: &[takt_mir::machine::Handler],
-    ctx: &mut Ctx<'_>,
-    m: &mut Module,
-    end: &str,
-) -> Result<(), NotYet> {
+fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     if handlers.is_empty() {
         return Ok(());
     }
@@ -942,21 +952,18 @@ fn dispatch(
         }
     }
     for stream in streams {
-        let cursor = cursor_index(ctx, stream).ok_or(NotYet { what: "Cursor eines Stroms" })?;
-        let sid = stream_id(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+        let (cur_ptr, ex_ptr) = ctx.vars().stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
+        let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+        let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
         let k = ctx.next_label();
-        let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
-        let cur_ptr = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {cursor}"));
         let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
         let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
         // Der Zaehler laeuft ueber das Fenster; seine Schranke ist `n`.
         let i_ptr = m.inst("alloca i32");
         m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
-        // 9.6: `examined` merkt sich die hoechste untersuchte Nummer;
-        // daraus wird am Ende `cur[s, m] = examined + 1`. Der Anfangswert
-        // `-1` heisst „nichts untersucht" — dann bleibt der Cursor stehen.
-        let ex_ptr = m.inst("alloca i64");
-        m.void_inst(&format!("store i64 -1, ptr {ex_ptr}"));
+        // Das Element kommt in einen Scratch; die Bindungen fuellt
+        // `bind_element` je Handler (8.7).
+        let buf = crate::stream::scratch(ctx.program, elem, m)?;
         let (head, body, end_at) = (format!("strom{k}"), format!("strom{k}_rumpf"), format!("strom{k}_ende"));
         m.void_inst(&format!("br label %{head}"));
         m.label(&head);
@@ -964,83 +971,103 @@ fn dispatch(
         let go_on = m.inst(&format!("icmp slt i32 {i}, {n}"));
         m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{end_at}"));
         m.label(&body);
-        // Das Element wird in die Bindung geschrieben; ohne Bindung in
-        // einen Scratch, weil `takt_stream_at` einen Platz braucht.
-        let hs: Vec<&takt_mir::machine::Handler> = handlers.iter().filter(|h| h.stream == stream).collect();
-        let slot = element_slot(&hs, ctx, m)?;
         let seq =
-            m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {slot})", crate::stream::Streams::AT));
+            m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT));
         // 9.6: Auch ein Element ohne passenden Handler gilt als
         // untersucht — sonst saehe die Maschine es im naechsten Tick
         // wieder.
         m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
-        m.void_inst(&format!("store i64 {seq}, ptr {ex_ptr}"));
+        crate::stream::note_examined(ex_ptr, seq, m);
         // 8.7: Der erste passende Handler gewinnt. Ohne Muster ist das
         // immer der erste — weitere kaemen nie zum Zug. Mit Muster wird
         // daraus eine Kette: Je Handler prueft der Automat, und wer
         // trifft, laeuft; die uebrigen springen ans Ende.
-        if hs.is_empty() {
-            continue;
-        }
-        handler_chain(&hs, slot, ctx, m)?;
+        let hs: Vec<&takt_mir::machine::Handler> = handlers.iter().filter(|h| h.stream == stream).collect();
+        handler_chain(&hs, buf, seq, elem, ctx, m)?;
         let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
         let next = m.inst(&format!("add i32 {cur_i}, 1"));
         m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
         m.void_inst(&format!("br label %{head}"));
         m.label(&end_at);
-        // 9.6, `advance_cursors()`: `cur[s, m] = examined + 1`. Der
-        // Cursor steht im Zustand der Maschine, nicht im Strom — nur der
-        // erzeugte Code kann ihn schreiben. `takt_stream_examined` meldet
-        // dasselbe an die Runtime, die daraus das Minimum ueber *alle*
-        // Konsumenten bildet und den Puffer freigibt; beides ist noetig,
-        // und 9.6 fuehrt es als zwei Schritte.
-        let ex = m.inst(&format!("load i64, ptr {ex_ptr}"));
-        let any_seen = m.inst(&format!("icmp sge i64 {ex}, 0"));
-        let next_cursor = m.inst(&format!("add i64 {ex}, 1"));
-        // Ohne untersuchtes Element bleibt der Cursor, wo er stand.
-        let new_val = m.inst(&format!("select i1 {any_seen}, i64 {next_cursor}, i64 {cur}"));
-        m.void_inst(&format!("store i64 {new_val}, ptr {cur_ptr}"));
-        let _ = end;
     }
     Ok(())
 }
 
-/// Der Index des Cursors eines Stroms im Zustands-Struct (9.6).
-fn cursor_index(ctx: &Ctx<'_>, stream: takt_mir::expr::StreamRef) -> Option<u32> {
-    let nth = ctx.machine.layout.cursors.iter().position(|c| *c == stream)?;
-    ctx.state.index_of(Role::Cursor, nth)
-}
-
-/// Die Nummer eines Stroms fuer die Runtime.
-///
-/// Channel und interner Strom haben je eigene Nummern; die Runtime
-/// unterscheidet sie am Vorzeichen, damit ein Aufruf genuegt.
-fn stream_id(stream: takt_mir::expr::StreamRef) -> Option<i64> {
-    match stream {
-        takt_mir::expr::StreamRef::Channel(c) => Some(i64::from(c.0)),
-        takt_mir::expr::StreamRef::Internal(s) => Some(-1 - i64::from(s.0)),
-        // `t.fired` ist v1.2, ein Strom in einer Variablen v1.1; beide
-        // haben zur Uebersetzungszeit keine feste Nummer.
-        _ => None,
+/// Legt das Element aus dem Scratch in die Bindung (8.7, Wrapper-Regel):
+/// `t` und `seq` hinter den Captures, dann der Inhalt als `text`
+/// beziehungsweise `data`. Die Captures schreibt `captures::walk`.
+fn bind_element(
+    var: takt_mir::VarId,
+    buf: crate::emit::Reg,
+    seq: crate::emit::Reg,
+    elem: takt_mir::TypeId,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let p = ctx.program;
+    let ty = ctx.machine.vars.get(var.index()).map(|v| v.ty).ok_or(NotYet { what: "Bindung ohne Typ" })?;
+    let record = crate::ty::lower(ty, p).ok_or(NotYet { what: "Typ der Bindung" })?;
+    let Some(takt_mir::types::Type::Record(r)) = p.types.list.get(ty.index()) else {
+        return Err(NotYet { what: "Bindung ohne Record" });
+    };
+    let slot = ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })?;
+    for (i, def) in p.records[r.index()].fields.iter().enumerate() {
+        let at = |m: &mut Module| m.inst(&format!("getelementptr inbounds {record}, ptr {slot}, i32 0, i32 {i}"));
+        match def.name.as_str() {
+            "t" => {
+                let t = m.inst(&format!("load i64, ptr {buf}"));
+                let dst = at(m);
+                m.void_inst(&format!("store i64 {t}, ptr {dst}"));
+            }
+            "seq" => {
+                let dst = at(m);
+                m.void_inst(&format!("store i64 {seq}, ptr {dst}"));
+            }
+            "text" | "data" => {
+                let dst = at(m);
+                crate::stream::copy_payload(buf, dst, elem, p, m)?;
+            }
+            _ => {}
+        }
     }
+    Ok(())
 }
 
-/// Der Platz, an den `takt_stream_at` das Element schreibt.
-///
-/// Mit Bindung ist das die gehobene Variable (8.7); ohne Bindung ein
-/// Scratch, weil der Aufruf einen Platz braucht und der Wert nicht
-/// gelesen wird.
-fn element_slot(
-    hs: &[&takt_mir::machine::Handler],
+/// Ein Record-Muster (8.7): die Felder des dekodierten Elements gegen die
+/// konstanten Werte des Musters.
+fn record_hit(
+    record: takt_mir::RecordId,
+    fields: &[(u32, Expr)],
+    buf: crate::emit::Reg,
+    elem: takt_mir::TypeId,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<crate::emit::Reg, NotYet> {
-    for h in hs {
-        if let Some(var) = h.binding {
-            return ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" });
-        }
+    let p = ctx.program;
+    let rec = crate::ty::lower(elem, p).ok_or(NotYet { what: "Typ des Elements" })?;
+    let tmp = m.inst(&format!("alloca {rec}"));
+    let src = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {}", crate::stream::Streams::BYTES_AT));
+    crate::persist::decode_canonical(p, elem, src, tmp, m)?;
+    let mut hit: Option<crate::emit::Reg> = None;
+    for (i, e) in fields {
+        let def = p.records.get(record.index()).and_then(|r| r.fields.get(*i as usize));
+        let fty = crate::ty::lower(def.ok_or(NotYet { what: "Feld des Musters" })?.ty, p)
+            .ok_or(NotYet { what: "Feldtyp des Musters" })?;
+        let cmp = match fty {
+            crate::ty::LlvmType::Int(_) => "icmp eq",
+            crate::ty::LlvmType::F32 | crate::ty::LlvmType::F64 => "fcmp oeq",
+            _ => return Err(NotYet { what: "Record-Muster auf einem zusammengesetzten Feld" }),
+        };
+        let at = m.inst(&format!("getelementptr inbounds {rec}, ptr {tmp}, i32 0, i32 {i}"));
+        let have = m.inst(&format!("load {fty}, ptr {at}"));
+        let want = lower_expr(e, p, m, &ctx.vars())?;
+        let eq = m.inst(&format!("{cmp} {fty} {have}, {}", want.value));
+        hit = Some(match hit {
+            Some(h) => m.inst(&format!("and i1 {h}, {eq}")),
+            None => eq,
+        });
     }
-    Ok(m.inst("alloca i64"))
+    Ok(hit.unwrap_or_else(|| m.inst("and i1 true, true")))
 }
 
 /// Die Handler eines Stroms als Kette (8.7).
@@ -1050,7 +1077,9 @@ fn element_slot(
 /// Ein Catch-all beendet sie — was danach kaeme, liefe nie.
 fn handler_chain(
     hs: &[&takt_mir::machine::Handler],
-    slot: crate::emit::Reg,
+    buf: crate::emit::Reg,
+    seq: crate::emit::Reg,
+    elem: takt_mir::TypeId,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
@@ -1058,6 +1087,9 @@ fn handler_chain(
     let name = &ctx.machine.name;
     let end_at = format!("handler{k}_{name}_ende");
     for (n, h) in hs.iter().enumerate() {
+        if let Some(v) = h.binding {
+            bind_element(v, buf, seq, elem, ctx, m)?;
+        }
         let Some((kind, pattern)) = &h.pattern else {
             // Catch-all: Er laeuft immer, und die Kette endet hier — es
             // sei denn, ein Guard (FB-14) laesst das Element weiter.
@@ -1076,34 +1108,38 @@ fn handler_chain(
             m.label(&end_at);
             return Ok(());
         };
-        let takt_mir::pattern::Pattern::Text { pieces, dfa } = pattern else {
-            return Err(NotYet { what: "Record-Muster im Handler" });
-        };
-        // Die Bindung ist ein Record; der Inhalt steht unter `.data`
-        // beziehungsweise `.text` (8.7). Der Vergleich laeuft darauf.
-        let text = m.inst(&format!("getelementptr inbounds i8, ptr {slot}, i64 0"));
-        let hat_capture = pieces.iter().any(|p| matches!(p, takt_mir::pattern::PatternPiece::Capture { .. }));
-        // 8.7: `matches` verlangt den ganzen Text, `has` ein Vorkommen.
-        //
-        // Ohne Platzhalter genuegt der Automat: Er liest jedes Byte
-        // einmal und sagt, ob das Muster traegt (11.2). Mit Platzhaltern
-        // braucht es den Durchlauf, denn ein Automat ueber Zeichenklassen
-        // kennt die Grenzen, aber nicht die Werte — und ihn zusaetzlich
-        // laufen zu lassen hiesse, denselben Text zweimal zu lesen.
-        let ist_matches = *kind == takt_mir::expr::MatchKind::Matches;
-        let hit = match (hat_capture, ist_matches, dfa) {
-            (false, true, Some(dfa)) => {
-                let id = m.next_label();
-                crate::dfa::declare(id, dfa, m);
-                crate::dfa::run(id, dfa, text, m)?
-            }
-            (_, true, _) => {
-                let b = Binding::of(h, ctx);
-                pattern_matches(pieces, text, &b, ctx, m)?
-            }
-            (_, false, _) => {
-                let b = Binding::of(h, ctx);
-                pattern_has(pieces, text, &b, ctx, m)?
+        let hit = match pattern {
+            takt_mir::pattern::Pattern::Record { record, fields } => record_hit(*record, fields, buf, elem, ctx, m)?,
+            takt_mir::pattern::Pattern::Text { pieces, dfa } => {
+                // Der Text steht im Scratch als `{ i32 len, [N x i8] }`;
+                // der Vergleich laeuft darauf, die Captures gehen in die
+                // Bindung (8.7).
+                let text =
+                    m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {}", crate::stream::Streams::LEN_AT));
+                let hat_capture = pieces.iter().any(|p| matches!(p, takt_mir::pattern::PatternPiece::Capture { .. }));
+                // 8.7: `matches` verlangt den ganzen Text, `has` ein Vorkommen.
+                //
+                // Ohne Platzhalter genuegt der Automat: Er liest jedes Byte
+                // einmal und sagt, ob das Muster traegt (11.2). Mit Platzhaltern
+                // braucht es den Durchlauf, denn ein Automat ueber Zeichenklassen
+                // kennt die Grenzen, aber nicht die Werte — und ihn zusaetzlich
+                // laufen zu lassen hiesse, denselben Text zweimal zu lesen.
+                let ist_matches = *kind == takt_mir::expr::MatchKind::Matches;
+                match (hat_capture, ist_matches, dfa) {
+                    (false, true, Some(dfa)) => {
+                        let id = m.next_label();
+                        crate::dfa::declare(id, dfa, m);
+                        crate::dfa::run(id, dfa, text, m)?
+                    }
+                    (_, true, _) => {
+                        let b = Binding::of(h, ctx);
+                        pattern_matches(pieces, text, &b, ctx, m)?
+                    }
+                    (_, false, _) => {
+                        let b = Binding::of(h, ctx);
+                        pattern_has(pieces, text, &b, ctx, m)?
+                    }
+                }
             }
         };
         let (then_l, else_l) = (format!("handler{k}_{n}_{name}"), format!("handler{k}_{n}_{name}_sonst"));
@@ -1192,11 +1228,9 @@ fn target<'a>(
 /// Handler-Dispatch, der jedes Element untersucht (9.7). Ein Guard ist
 /// eine Frage an das Fenster, keine Verarbeitung.
 ///
-/// Der Cursor rueckt darum nur bis zum Treffer. Er wird hier
-/// geschrieben, weil `dispatch` fuer diesen Strom in diesem Tick schon
-/// gelaufen sein kann und seinen eigenen Stand hinterlassen hat: Das
-/// Maximum beider gilt (9.7, „`examined` ist das Maximum ueber alle
-/// Konstrukte der Aktivierung").
+/// `examined` rueckt darum nur bis zum Treffer; am Ende des Schritts
+/// wird das Maximum ueber alle Konstrukte der Aktivierung zum Cursor
+/// (9.7), und das Fenster bleibt fuer den ganzen Tick dasselbe.
 fn match_guard(
     subject: &takt_mir::expr::Expr,
     kind: takt_mir::expr::MatchKind,
@@ -1214,25 +1248,14 @@ fn match_guard(
         // Fall braucht keinen Fensterzugriff und kommt mit dem Bedarf.
         _ => return Err(NotYet { what: "Muster-Guard auf einem Nicht-Strom" }),
     };
-    let takt_mir::pattern::Pattern::Text { pieces, .. } = pattern else {
-        return Err(NotYet { what: "Record-Muster in einem Guard" });
-    };
-    let cursor = cursor_index(ctx, stream).ok_or(NotYet { what: "Cursor eines Stroms" })?;
-    let sid = stream_id(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
-    let b = match binding {
-        Some(v) => Binding::of_var(v, ctx),
-        None => None,
-    };
-    let slot = match binding {
-        Some(v) => ctx.field(Role::Var, v.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })?,
-        // Ohne Bindung braucht `takt_stream_at` trotzdem einen Platz.
-        None => m.inst("alloca i64"),
-    };
+    let (cur_ptr, ex_ptr) = ctx.vars().stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
+    let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+    let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
+    let b = binding.and_then(|v| Binding::of_var(v, ctx));
+    let buf = crate::stream::scratch(ctx.program, elem, m)?;
 
     let k = ctx.next_label();
     let name = &ctx.machine.name;
-    let state_ty = format!("%{}_state", crate::fns::sanitized(name));
-    let cur_ptr = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {cursor}"));
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
     let i_ptr = m.inst("alloca i32");
@@ -1252,11 +1275,19 @@ fn match_guard(
     m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{done}"));
 
     m.label(&body);
-    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {slot})", crate::stream::Streams::AT));
-    let text = m.inst(&format!("getelementptr inbounds i8, ptr {slot}, i64 0"));
-    let ok = match kind {
-        takt_mir::expr::MatchKind::Matches => pattern_matches(pieces, text, &b, ctx, m)?,
-        takt_mir::expr::MatchKind::Has => pattern_has(pieces, text, &b, ctx, m)?,
+    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT));
+    if let Some(v) = binding {
+        bind_element(v, buf, seq, elem, ctx, m)?;
+    }
+    let text = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {}", crate::stream::Streams::LEN_AT));
+    let ok = match (pattern, kind) {
+        (takt_mir::pattern::Pattern::Record { record, fields }, _) => record_hit(*record, fields, buf, elem, ctx, m)?,
+        (takt_mir::pattern::Pattern::Text { pieces, .. }, takt_mir::expr::MatchKind::Matches) => {
+            pattern_matches(pieces, text, &b, ctx, m)?
+        }
+        (takt_mir::pattern::Pattern::Text { pieces, .. }, takt_mir::expr::MatchKind::Has) => {
+            pattern_has(pieces, text, &b, ctx, m)?
+        }
     };
     // 8.7: Nur das *passende* Element gilt als untersucht — der Guard
     // haelt dort an, und die uebrigen bleiben im Fenster.
@@ -1264,13 +1295,7 @@ fn match_guard(
     m.void_inst(&format!("br i1 {ok}, label %{mark}, label %{next}"));
     m.label(&mark);
     m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
-    // 9.7: `examined` ist das Maximum ueber die Aktivierung; ein
-    // `dispatch` in diesem Tick kann schon weiter sein.
-    let stand = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let past = m.inst(&format!("add i64 {seq}, 1"));
-    let weiter = m.inst(&format!("icmp sgt i64 {past}, {stand}"));
-    let neu = m.inst(&format!("select i1 {weiter}, i64 {past}, i64 {stand}"));
-    m.void_inst(&format!("store i64 {neu}, ptr {cur_ptr}"));
+    crate::stream::note_examined(ex_ptr, seq, m);
     m.void_inst(&format!("store i1 true, ptr {hit_ptr}"));
     m.void_inst(&format!("br label %{next}"));
 

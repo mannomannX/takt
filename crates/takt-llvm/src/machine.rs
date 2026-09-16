@@ -70,6 +70,8 @@ pub enum Role {
     Viol,
     /// `cur[s]`: Cursor eines gelesenen Stroms (9.6).
     Cursor,
+    /// `examined[s] + 1`: hinter dem hoechsten untersuchten Element (9.6).
+    Examined,
     /// `pending`: vorgemerkter Fault (5.4).
     Pending,
     /// `last_fault`.
@@ -125,6 +127,9 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     }
     for (i, _) in m.layout.cursors.iter().enumerate() {
         fields.push(Field { name: format!("cur{i}"), ty: LlvmType::Int(64), role: Role::Cursor });
+    }
+    for (i, _) in m.layout.cursors.iter().enumerate() {
+        fields.push(Field { name: format!("examined{i}"), ty: LlvmType::Int(64), role: Role::Examined });
     }
     // `pending` ist ein Fault mit Gueltigkeitsflag; der Fault selbst ist
     // seine Art und sein Ursprung (5.3). Als Struct, damit 5.4 ihn im

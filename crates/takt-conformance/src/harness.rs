@@ -375,6 +375,19 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let mut dump = String::new();
     let _ = writeln!(dump, "\nstatic void dump(long long t) {{");
     for slot in &layout.outputs {
+        // Ein Array als Liste, wie der Interpreter ihn schreibt (T2).
+        if let takt_llvm::ty::LlvmType::Array(elem, n) = &slot.ty {
+            let Some(ct) = c_type(elem, slot.signed) else { continue };
+            let (fmt, cast) = number_format(elem, slot.signed);
+            let _ = writeln!(dump, "    printf(\"t=%lld out {} [\", t);", slot.name);
+            let _ = writeln!(
+                dump,
+                "    for (int k = 0; k < {n}; k++) printf(k ? \", {fmt}\" : \"{fmt}\", {cast}(({ct} *)(latch + {}))[k]);",
+                slot.offset
+            );
+            let _ = writeln!(dump, "    printf(\"]\\n\");");
+            continue;
+        }
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
         // Ein Enum wird mit seinem Variantennamen ausgegeben, nicht mit
         // der Diskriminante: Der Interpreter schreibt den Namen (9.3), und
@@ -392,11 +405,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
         // Vorzeichenlose Werte werden vorzeichenlos ausgegeben: Der
         // Interpreter schreibt die Zahl, die der Typ meint, und `%lld`
         // auf einem `u32` gaebe 2286445522 als -2008521774.
-        let (fmt, cast) = match (&slot.ty, slot.signed) {
-            (takt_llvm::ty::LlvmType::F32 | takt_llvm::ty::LlvmType::F64, _) => ("%.17g", "(double)"),
-            (_, true) => ("%lld", "(long long)"),
-            (_, false) => ("%llu", "(unsigned long long)"),
-        };
+        let (fmt, cast) = number_format(&slot.ty, slot.signed);
         let _ = writeln!(
             dump,
             "    printf(\"t=%lld out {} {fmt}\\n\", t, {cast}(*({ct} *)(latch + {})));",
@@ -410,6 +419,16 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     s.push_str(&dump);
 
     Harness { source: s, layout }
+}
+
+/// `printf`-Format und Cast fuer einen Skalar: Fliesskomma mit 17
+/// Stellen, damit der Vergleich das Bit trifft (Satz 9.4.4).
+fn number_format(ty: &takt_llvm::ty::LlvmType, signed: bool) -> (&'static str, &'static str) {
+    match (ty, signed) {
+        (takt_llvm::ty::LlvmType::F32 | takt_llvm::ty::LlvmType::F64, _) => ("%.17g", "(double)"),
+        (_, true) => ("%lld", "(long long)"),
+        (_, false) => ("%llu", "(unsigned long long)"),
+    }
 }
 
 /// Der Wert eines Parameters als C-Literal (8.4).
@@ -430,6 +449,21 @@ fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout) {
     for slot in &layout.outputs {
         let Some(i) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
         let Some(safe) = &p.channels[i].attrs.safe else { continue };
+        // Ein Array elementweise; sein `safe` ist ein Array-Literal (3.6).
+        if let (takt_llvm::ty::LlvmType::Array(elem, _), takt_mir::expr::ExprKind::Array(items)) =
+            (&slot.ty, &safe.kind)
+        {
+            let Some(ct) = c_type(elem, slot.signed) else { continue };
+            for (k, item) in items.iter().enumerate() {
+                let Some(text) = literal(p, item) else { continue };
+                let _ = writeln!(
+                    s,
+                    "    (({ct} *)(latch + {}))[{k}] = {text}; /* {}[{k}] auf safe */",
+                    slot.offset, slot.name
+                );
+            }
+            continue;
+        }
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
         let Some(text) = literal(p, safe) else { continue };
         let _ = writeln!(s, "    *({ct} *)(latch + {}) = {text}; /* {} auf safe (5.3) */", slot.offset, slot.name);

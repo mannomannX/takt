@@ -1,0 +1,52 @@
+# 49 — Record-Elemente auf Stroemen (8.6, 8.7) und `peek` (FB-15).
+#
+# Ein `stream<Pulse>` traegt je Element die kanonische Byteform des
+# Records (plan/m6.md 2.2); Handler und Guard vergleichen Felder, die
+# Bindung traegt `t`, `seq` und `data`. Der Textstrom daneben zeigt
+# dieselbe Bindung mit `text`.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+record Pulse:
+    rising : bool
+    pin    : u8
+
+input  edges  : stream<Pulse>    @ hw("gpio/edges") with max_rate = 100 Hz
+input  rx     : stream<line<16>> @ hw("u/rx")       with max_rate = 100 Hz
+output rises  : int in 0..99     @ sim("r")
+output pin    : u8               @ sim("p")
+output armed  : bool             @ sim("a")
+output peeked : bool             @ sim("k")
+output number : int in 0..99     @ sim("s")
+output late   : bool             @ sim("l")
+output width  : int in 0..16     @ sim("w")
+
+machine m:
+    var n : int in 0..99 = 0
+
+    initial IDLE
+
+    state IDLE:
+        loop:
+            # `peek` untersucht das Element; der Handler unten sieht es im
+            # selben Tick noch (Lemma 9.6.1).
+            var next : Pulse? = edges.peek()
+            peeked = next.valid
+        on edges matches Pulse(rising = true) as e:
+            n = n + 1
+            rises = n
+            pin = e.data.pin
+        on edges as other:
+            pin = 0
+        when edges matches Pulse(rising = false, pin = 7) as f: -> ARMED
+
+    state ARMED:
+        enter:
+            armed = true
+        on rx matches "go {k:int}" as l:
+            number = l.seq
+            late = l.t >= 100 ms
+            width = l.text.len
+        when rx has "stop": -> IDLE

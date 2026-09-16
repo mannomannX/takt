@@ -116,12 +116,12 @@ fn number(
         n => m.inst(&format!("sext i{n} {} to i64", value_of.value)).to_string(),
     };
     match spec {
-        Some("hex") => digits(&v, 16, false, buffer, at_ptr, cap, m),
+        Some("hex") => digits(&v, 16, false, false, buffer, at_ptr, cap, m),
         Some(s) if s.starts_with('0') => {
             let width: u32 = s.parse().unwrap_or(0);
             digits_padded(&v, width, buffer, at_ptr, cap, m);
         }
-        None => digits(&v, 10, true, buffer, at_ptr, cap, m),
+        None => digits(&v, 10, true, true, buffer, at_ptr, cap, m),
         Some(_) => return Err(NotYet { what: "Formatangabe" }),
     }
     Ok(())
@@ -132,8 +132,10 @@ fn number(
 /// **Rueckwaerts in einen Zwischenpuffer, dann umgedreht.** Die Zahl der
 /// Stellen steht erst fest, wenn man sie gerechnet hat; vorwaerts
 /// muesste man sie zweimal rechnen. Zwanzig Byte reichen fuer jeden
-/// `i64` samt Vorzeichen.
-fn digits(v: &str, base: u32, signed: bool, buffer: Reg, at_ptr: Reg, cap: u32, m: &mut Module) {
+/// `i64` samt Vorzeichen. `with_sign` schreibt das Minus; `digits_padded`
+/// hat es schon vor die Nullen gesetzt.
+#[allow(clippy::too_many_arguments)]
+fn digits(v: &str, base: u32, signed: bool, with_sign: bool, buffer: Reg, at_ptr: Reg, cap: u32, m: &mut Module) {
     let k = m.next_label();
     let tmp = m.inst("alloca [24 x i8]");
     let n_ptr = m.inst("alloca i32");
@@ -202,8 +204,9 @@ fn digits(v: &str, base: u32, signed: bool, buffer: Reg, at_ptr: Reg, cap: u32, 
     m.label(&weiter2);
 
     // Das Vorzeichen, dann die Ziffern rueckwaerts.
+    let show = if with_sign { is_neg } else { m.inst("and i1 false, false") };
     let (minus, ohne) = (format!("zi{k}_minus"), format!("zi{k}_ohne"));
-    m.void_inst(&format!("br i1 {is_neg}, label %{minus}, label %{ohne}"));
+    m.void_inst(&format!("br i1 {show}, label %{minus}, label %{ohne}"));
     m.label(&minus);
     text(b"-", buffer, at_ptr, cap, m);
     m.void_inst(&format!("br label %{ohne}"));
@@ -219,6 +222,15 @@ fn digits(v: &str, base: u32, signed: bool, buffer: Reg, at_ptr: Reg, cap: u32, 
 fn digits_padded(v: &str, width: u32, buffer: Reg, at_ptr: Reg, cap: u32, m: &mut Module) {
     let places = digit_count(v, m);
     let k = m.next_label();
+    // Das Vorzeichen steht vor den Nullen: `{x:04}` von -2 ist `-002`,
+    // wie der Interpreter es schreibt (FB-172).
+    let neg = m.inst(&format!("icmp slt i64 {v}, 0"));
+    let (minus, ohne) = (format!("br{k}_minus"), format!("br{k}_ohne"));
+    m.void_inst(&format!("br i1 {neg}, label %{minus}, label %{ohne}"));
+    m.label(&minus);
+    text(b"-", buffer, at_ptr, cap, m);
+    m.void_inst(&format!("br label %{ohne}"));
+    m.label(&ohne);
     let (head, body, done) = (format!("br{k}"), format!("br{k}_rumpf"), format!("br{k}_fertig"));
     let i_ptr = m.inst("alloca i32");
     m.void_inst(&format!("store i32 {places}, ptr {i_ptr}"));
@@ -234,7 +246,7 @@ fn digits_padded(v: &str, width: u32, buffer: Reg, at_ptr: Reg, cap: u32, m: &mu
     m.void_inst(&format!("store i32 {i3}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
     m.label(&done);
-    digits(v, 10, true, buffer, at_ptr, cap, m);
+    digits(v, 10, true, false, buffer, at_ptr, cap, m);
 }
 
 /// Wie viele Zeichen die Dezimaldarstellung braucht, das Vorzeichen
