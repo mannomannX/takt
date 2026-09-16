@@ -68,6 +68,25 @@ pub struct Goal {
     pub formula: Term,
 }
 
+/// Eine Pruefstelle (`check`/`expect`) als Beweisziel (plan/m6.md 2.8, B3):
+/// „sie feuert nie".
+#[derive(Clone, Debug)]
+pub struct CheckSite {
+    /// Anfang der Anweisung im Quelltext; so heisst die Stelle auch in der
+    /// Coverage (`check @<start>`).
+    pub start: u32,
+    /// Position.
+    pub span: Span,
+    /// Die Maschine.
+    pub machine: String,
+    /// `check` oder `expect`.
+    pub kind: String,
+    /// Feuert im Tick 0, ueber den Eingaben des Ticks 0.
+    pub init: Term,
+    /// Feuert im Uebergang, ueber dem Zustand davor und den Eingaben danach.
+    pub fires: Term,
+}
+
 /// Das Transitionssystem.
 #[derive(Clone, Debug, Default)]
 pub struct Model {
@@ -77,8 +96,14 @@ pub struct Model {
     pub inputs: Vec<(String, Sort)>,
     /// Annahmen je Tick: Kanal-Ranges und `assumption`-Formeln (13.3).
     pub assumptions: Vec<Term>,
+    /// Invarianten des Zustands aus den Typen (3.4): Ranges, Enums, Blaetter,
+    /// Zaehler — sie gelten in jedem erreichbaren Zustand, weil ein Wert
+    /// ausserhalb faultet statt gespeichert zu werden.
+    pub invariants: Vec<Term>,
     /// Beweisziele.
     pub properties: Vec<Goal>,
+    /// Pruefstellen als Beweisziele (B3).
+    pub checks: Vec<CheckSite>,
     /// Was die Kodierung annimmt oder auslaesst.
     pub notes: Vec<String>,
     /// Je Maschine die Zustandscodes mit Namen.
@@ -200,16 +225,43 @@ struct Enc<'p> {
     notes: Vec<String>,
     /// `abort` in diesem Tick, je Stelle.
     aborts: Vec<Term>,
+    /// Feuerbedingungen der Pruefstellen der laufenden Phase, je Anfang.
+    sites: BTreeMap<u32, Vec<Term>>,
+    /// Position, Maschine und Art je Pruefstelle.
+    site_info: BTreeMap<u32, (Span, String, String)>,
 }
 
 /// Kodiert ein Programm.
 pub fn encode(p: &Program) -> R<Model> {
     let order = takt_mir::analysis::schedule::order(p).unwrap_or_else(|_| takt_mir::analysis::schedule::runnable(p));
-    let mut enc = Enc { p, order, inputs: BTreeMap::new(), notes: Vec::new(), aborts: Vec::new() };
+    let mut enc = Enc {
+        p,
+        order,
+        inputs: BTreeMap::new(),
+        notes: Vec::new(),
+        aborts: Vec::new(),
+        sites: BTreeMap::new(),
+        site_info: BTreeMap::new(),
+    };
     enc.check_reach()?;
     let init = enc.init()?;
+    let init_sites = std::mem::take(&mut enc.sites);
     let pre: Env = init.keys().map(|k| (k.clone(), Term::var(k.clone(), init[k].sort()))).collect();
     let next = enc.tick(&pre)?;
+    let tick_sites = std::mem::take(&mut enc.sites);
+    let invariants = enc.state_invariants(&pre);
+    let checks: Vec<CheckSite> = enc
+        .site_info
+        .iter()
+        .map(|(start, (span, machine, kind))| CheckSite {
+            start: *start,
+            span: *span,
+            machine: machine.clone(),
+            kind: kind.clone(),
+            init: Term::or(init_sites.get(start).cloned().unwrap_or_default()),
+            fires: Term::or(tick_sites.get(start).cloned().unwrap_or_default()),
+        })
+        .collect();
     let mut properties = Vec::new();
     let mut assumptions = enc.channel_assumptions()?;
     for prop in &p.properties {
@@ -242,7 +294,16 @@ pub fn encode(p: &Program) -> R<Model> {
     let mut notes = enc.notes;
     notes.sort();
     notes.dedup();
-    Ok(Model { state, inputs: enc.inputs.into_iter().collect(), assumptions, properties, notes, leaves })
+    Ok(Model {
+        state,
+        inputs: enc.inputs.into_iter().collect(),
+        assumptions,
+        invariants,
+        properties,
+        checks,
+        notes,
+        leaves,
+    })
 }
 
 impl Enc<'_> {
@@ -770,12 +831,15 @@ impl Enc<'_> {
                     let old = env.get(&loc).cloned().ok_or_else(|| Unsupported { what: "Ort".into(), span })?;
                     env.insert(loc, Term::ite(flow.alive.clone(), v, old));
                 }
-                StmtKind::Check { cond, confirm, within, target, .. } => {
+                StmtKind::Check { cond, confirm, within, target, kind, .. } => {
                     if confirm.is_some() || within.is_some() {
                         return no("`check … for` oder `within`", span);
                     }
                     let c = self.expr(cond, cx, env, flow)?;
                     let fail = Term::and(vec![flow.alive.clone(), c.clone().not()]);
+                    let word = if *kind == takt_mir::stmt::CheckKind::Check { "check" } else { "expect" };
+                    self.sites.entry(span.start).or_default().push(fail.clone());
+                    self.site_info.insert(span.start, (span, self.machine(m).name.clone(), word.to_string()));
                     flow.exits.push(Exit { cond: fail, kind: ExitKind::Fault(*target) });
                     flow.alive = Term::and(vec![flow.alive.clone(), c]);
                 }
@@ -854,7 +918,17 @@ impl Enc<'_> {
     /// innen, Timer und zustandslokale Variablen frisch, Entry-Schleifen.
     /// Ein Fault in einem dieser Bloecke wird vom neuen Blatt aus
     /// aufgeloest, wie `resolve_m` es tut (Lemma 9.3.1 begrenzt die Tiefe).
-    fn switch(&mut self, cx: &Cx<'_>, from: Option<StateId>, target: Target, env: &mut Env, depth: u32) -> R<()> {
+    /// `under`: die Bedingung, unter der der Wechsel stattfindet — sie
+    /// gehoert in jede Feuerbedingung, die seine Bloecke aufzeichnen.
+    fn switch(
+        &mut self,
+        cx: &Cx<'_>,
+        from: Option<StateId>,
+        target: Target,
+        env: &mut Env,
+        depth: u32,
+        under: &Term,
+    ) -> R<()> {
         let m = cx.m.expect("Maschine");
         let machine = self.machine(m).clone();
         if depth > machine.states.len() as u32 + 2 {
@@ -884,7 +958,7 @@ impl Enc<'_> {
             }
         }
         let entry = cx.entry();
-        let mut flow = Flow::new(Term::bool(true));
+        let mut flow = Flow::new(under.clone());
         for s in old[common..].iter().rev() {
             self.block(&machine.states[s.index()].exit, &entry, env, &mut flow)?;
         }
@@ -960,17 +1034,18 @@ impl Enc<'_> {
                 out.insert(self.loc_latched(m), Term::bool(false));
                 // Der Timeout einer Sequenz nimmt den Fault-Pfad des Zustands (6.2).
                 let t = if matches!(t, Target::Fault(_)) { fault_target } else { *t };
-                self.switch(cx, leaf, t, &mut out, depth)?;
+                self.switch(cx, leaf, t, &mut out, depth, &exit.cond)?;
             }
             ExitKind::Fault(explicit) => {
                 let t = explicit.unwrap_or(fault_target);
-                self.switch(cx, leaf, t, &mut out, depth)?;
+                self.switch(cx, leaf, t, &mut out, depth, &exit.cond)?;
             }
             ExitKind::Abort => {
                 let latched = env[&self.loc_latched(m)].clone();
                 let mut sw = env.clone();
                 sw.insert(self.loc_latched(m), Term::bool(true));
-                self.switch(cx, leaf, fault_target, &mut sw, depth)?;
+                let under = Term::and(vec![exit.cond.clone(), !latched.clone()]);
+                self.switch(cx, leaf, fault_target, &mut sw, depth, &under)?;
                 out = ite_env(&latched, env, &sw);
             }
         }
@@ -1057,7 +1132,7 @@ impl Enc<'_> {
                 let mut env = base.clone();
                 env.insert(self.loc_latched(m), Term::bool(true));
                 let t = self.fault_target(m, leaf);
-                self.switch(&cx, Some(leaf), t, &mut env, 0)?;
+                self.switch(&cx, Some(leaf), t, &mut env, 0, &is)?;
                 merged = ite_env(&is, &env, &merged);
             }
             *cur = merged;
@@ -1185,13 +1260,77 @@ impl Enc<'_> {
             let machine = self.machine(m).clone();
             let pre = env.clone();
             let cx = Cx { m: Some(m), leaf: None, mode: Mode::Entry, pre: &pre, active: &actives, locals: None };
-            self.switch(&cx, None, Target::State(machine.initial), &mut env, 0)?;
+            self.switch(&cx, None, Target::State(machine.initial), &mut env, 0, &Term::bool(true))?;
         }
         self.advance(&actives, &mut env);
         Ok(env)
     }
 
     // ------------------------------------------------------------ Eigenschaften
+
+    /// Die Invariante eines typisierten Orts (3.4): Range, Endlichkeit, Enum.
+    fn type_invariant(&self, x: Term, ty: TypeId) -> Option<Term> {
+        Some(match self.p.types.get(ty) {
+            Type::Int { range: Some(r), .. } | Type::Duration { range: Some(r) } => {
+                let (lo, hi) = (self.bound(&r.lo, Sort::Int), self.bound(&r.hi, Sort::Int));
+                Term::and(vec![Term::bin(Op::Ge, x.clone(), lo), Term::bin(Op::Le, x, hi)])
+            }
+            Type::Float { range: Some(r), .. } => {
+                let s = x.sort();
+                let (lo, hi) = (self.bound(&r.lo, s), self.bound(&r.hi, s));
+                Term::and(vec![Term::bin(Op::FGe, x.clone(), lo), Term::bin(Op::FLe, x, hi)])
+            }
+            Type::Float { .. } => Term::app(Op::IsFinite, vec![x]),
+            Type::Enum(e) => {
+                let n = self.p.enums[e.index()].variants.len() as i64;
+                Term::and(vec![Term::bin(Op::Ge, x.clone(), Term::int(0)), Term::bin(Op::Lt, x, Term::int(n))])
+            }
+            _ => return None,
+        })
+    }
+
+    /// Invarianten des Zustands aus den Typen (3.4): Blaetter, Zaehler,
+    /// Variablen und Outputs in ihren Ranges.
+    fn state_invariants(&mut self, pre: &Env) -> Vec<Term> {
+        let mut out = Vec::new();
+        for &m in &self.order.clone() {
+            let machine = self.machine(m).clone();
+            let leaf = pre[&self.loc_leaf(m)].clone();
+            let mut codes: Vec<Term> =
+                self.leaves(m).into_iter().map(|l| Term::eq(leaf.clone(), Term::int(self.code(m, l)))).collect();
+            if let Some(c) = self.faulted_code(m) {
+                codes.push(Term::eq(leaf.clone(), Term::int(c)));
+            }
+            out.push(Term::or(codes));
+            for i in 0..machine.states.len() {
+                let t = pre[&self.loc_timer(m, StateId(i as u32))].clone();
+                out.push(Term::bin(Op::Ge, t, Term::int(0)));
+            }
+            if machine.period > 1 {
+                let c = pre[&self.loc_countdown(m)].clone();
+                out.push(Term::and(vec![
+                    Term::bin(Op::Ge, c.clone(), Term::int(0)),
+                    Term::bin(Op::Lt, c, Term::int(i64::from(machine.period))),
+                ]));
+            }
+            for (i, v) in machine.vars.iter().enumerate() {
+                let loc = self.loc_var(m, VarId(i as u32));
+                if let Some(t) = pre.get(&loc).cloned().and_then(|x| self.type_invariant(x, v.ty)) {
+                    out.push(t);
+                }
+            }
+        }
+        for (i, c) in self.p.channels.iter().enumerate() {
+            if c.dir != Direction::Output {
+                continue;
+            }
+            let loc = self.loc_out(ChannelId(i as u32));
+            if let Some(t) = pre.get(&loc).cloned().and_then(|x| self.type_invariant(x, c.ty)) {
+                out.push(t);
+            }
+        }
+        out
+    }
 
     /// Kanal-Ranges als Annahmen ueber die Eingaben (13.3).
     fn channel_assumptions(&mut self) -> R<Vec<Term>> {
@@ -1204,9 +1343,14 @@ impl Enc<'_> {
                 Type::Int { range, .. } | Type::Float { range, .. } | Type::Duration { range } => *range,
                 _ => None,
             };
-            let Some(r) = range else { continue };
             let sort = self.sort_of(c.ty, c.span)?;
             let x = self.input(format!("i.{}", c.name), sort);
+            // 4.1: NaN und Unendlich gibt es in der Sprache nicht; der Rand
+            // liefert sie nicht.
+            if matches!(sort, Sort::F32 | Sort::F64) {
+                out.push(Term::app(Op::IsFinite, vec![x.clone()]));
+            }
+            let Some(r) = range else { continue };
             let (lo, hi) = (self.bound(&r.lo, sort), self.bound(&r.hi, sort));
             let (ge, le) = if sort == Sort::Int { (Op::Ge, Op::Le) } else { (Op::FGe, Op::FLe) };
             out.push(Term::and(vec![Term::bin(ge, x.clone(), lo), Term::bin(le, x, hi)]));

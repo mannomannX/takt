@@ -9,9 +9,10 @@ rust-version.workspace = true
 [dependencies]
 takt-diag = { path = "../takt-diag" }
 takt-mir = { path = "../takt-mir" }
+# Ein Gegenbeispiel wird im Interpreter nachgespielt (plan/m6.md 2.8).
+takt-interp = { path = "../takt-interp" }
 
 [dev-dependencies]
-takt-interp = { path = "../takt-interp" }
 takt-sema = { path = "../takt-sema" }
 
 [lints]

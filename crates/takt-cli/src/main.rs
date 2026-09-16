@@ -80,6 +80,8 @@ impl Args {
             "--scenario",
             "--export",
             "--depth",
+            "--solver",
+            "--timeout",
             "--save",
             "--coverage",
             "--machine",
@@ -905,7 +907,9 @@ fn test(args: &Args) -> bool {
 }
 
 /// `takt prove`: die Schrittfunktion als Transitionssystem; `--export
-/// DATEI.smt2` schreibt BMC und Induktionsschritt bis `--depth` (13.3).
+/// DATEI.smt2` schreibt BMC und Induktionsschritt bis `--depth`, sonst
+/// prueft ein Solver (`--solver`, `TAKT_SOLVER`, `z3`/`cvc5` auf dem PATH)
+/// jede Eigenschaft; ein Gegenbeispiel landet als Stimulus in `--out` (13.3).
 fn prove(args: &Args) -> bool {
     let Some(path) = args.files.first() else {
         eprintln!("{USAGE}");
@@ -947,8 +951,79 @@ fn prove(args: &Args) -> bool {
             true
         }
         None => {
-            eprintln!("{path}: `--export DATEI.smt2` angeben; ein Solver ist noch nicht angebunden (Schritt 21)");
-            false
+            let solver = match args.value("--solver") {
+                Some(p) => takt_prove::Solver::At(p.into()),
+                None => takt_prove::find(),
+            };
+            if !solver.works() {
+                eprintln!(
+                    "{path}: kein Solver — `z3` oder `cvc5` auf den PATH, `TAKT_SOLVER` oder `--solver` setzen (13.3)"
+                );
+                return false;
+            }
+            let timeout = match args.value("--timeout").map(str::parse::<u64>) {
+                Some(Ok(n)) => n,
+                Some(Err(e)) => {
+                    eprintln!("--timeout: {e}");
+                    return false;
+                }
+                None => 60,
+            };
+            let reports = match takt_prove::prove(&model, &program, depth, &solver, timeout) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("{path}: {e}");
+                    return false;
+                }
+            };
+            let mut ok = true;
+            // B3: jede Pruefstelle klassifiziert — bewiesen unerreichbar,
+            // erreichbar mit Pfad, unentschieden; ohne Budget-Effekt (FB-49).
+            if !model.checks.is_empty() {
+                let checks = match takt_prove::classify(&model, &program, depth, &solver, timeout) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("{path}: {e}");
+                        return false;
+                    }
+                };
+                let count = |f: fn(&takt_prove::CheckVerdict) -> bool| checks.iter().filter(|c| f(&c.verdict)).count();
+                println!(
+                    "  Pruefstellen: {} bewiesen unerreichbar, {} erreichbar mit Pfad, {} unentschieden",
+                    count(|v| matches!(v, takt_prove::CheckVerdict::Unreachable { .. })),
+                    count(|v| matches!(v, takt_prove::CheckVerdict::Reachable { .. })),
+                    count(|v| matches!(v, takt_prove::CheckVerdict::Undecided { .. }))
+                );
+                let map = read(path).map(|src| SourceMap::single(path.as_str(), src.as_str()));
+                for c in &checks {
+                    let (line, col) = map.as_ref().map_or((0, 0), |m| m.line_col(c.span));
+                    println!("    {} {}:{line}:{col}: {}", c.kind, c.machine, c.verdict.text());
+                }
+            }
+            for r in &reports {
+                let word = if r.assumption { "assumption" } else { "property" };
+                println!("  {word} {}: {}", r.name, r.verdict.text());
+                if let takt_prove::Verdict::Violated { stimulus, .. } = &r.verdict {
+                    ok = false;
+                    match args.value("--out") {
+                        Some(dir) => {
+                            let file = std::path::Path::new(dir).join(format!("{}.stim.trace", r.name));
+                            if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&file, stimulus))
+                            {
+                                eprintln!("{}: {e}", file.display());
+                                return false;
+                            }
+                            println!("    Gegenbeispiel: {}", file.display());
+                        }
+                        None => {
+                            for line in stimulus.lines() {
+                                println!("    {line}");
+                            }
+                        }
+                    }
+                }
+            }
+            ok
         }
     }
 }

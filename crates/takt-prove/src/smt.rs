@@ -1,7 +1,9 @@
 //! SMT-LIB2-Ausgabe (plan/m6.md 2.8): Zustand und Eingaben je Schritt als
 //! Konstanten, jeder innere Term einmal als `define-fun` (der Graph bleibt
-//! ein Graph), dazu zwei Anfragen je Eigenschaft — BMC bis zur Tiefe und
-//! der Induktionsschritt ohne Anfangszustand.
+//! ein Graph), dazu je Eigenschaft die BMC-Anfrage bis zur Tiefe und der
+//! Induktionsschritt ohne Anfangszustand (k-Induktion mit k = Tiefe). Eine
+//! Pruefstelle (`check`, B3) ist ein Ziel ueber den Uebergaengen: Sie
+//! feuert nie.
 
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -20,11 +22,11 @@ fn sort_text(s: Sort) -> &'static str {
 }
 
 /// Ein Variablenname mit Schritt: `|s.m.x@3|`.
-fn at(name: &str, step: u32, tag: &str) -> String {
+pub fn at(name: &str, step: u32, tag: &str) -> String {
     format!("|{name}{tag}{step}|")
 }
 
-/// Bitmuster eines `f64` als `(fp …)`.
+/// Bitmuster eines Fliesskommawerts als `(fp …)`.
 fn fp_literal(bits: u64, exp: u32, mant: u32) -> String {
     let sign = (bits >> (exp + mant)) & 1;
     let e = (bits >> mant) & ((1u64 << exp) - 1);
@@ -120,63 +122,146 @@ fn app_text(op: Op, a: &[String]) -> String {
     }
 }
 
-/// Schreibt das Modell bis zur Tiefe `depth`: BMC (mit Anfangszustand) und
-/// den Induktionsschritt (ohne), je Eigenschaft eine `check-sat`-Anfrage.
-pub fn export(model: &Model, depth: u32) -> String {
+/// Die Anfrage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Query {
+    /// Anfangszustand, `depth` Schritte, das Ziel irgendwo verletzt.
+    Bmc,
+    /// Beliebiger Zustand, das Ziel `depth` Schritte lang gueltig, im
+    /// naechsten verletzt.
+    Induction,
+}
+
+/// Was geprueft wird.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// Eine Eigenschaft (Index in `Model::properties`).
+    Property(usize),
+    /// Eine Pruefstelle (Index in `Model::checks`).
+    Check(usize),
+}
+
+/// Ein Block mit Deklarationen, Uebergaengen und den Anfragen der Ziele.
+fn block(
+    out: &mut String,
+    model: &Model,
+    tag: &'static str,
+    kind: Query,
+    depth: u32,
+    targets: &[Target],
+    values: bool,
+) {
+    let steps = depth;
+    let _ = writeln!(out, "(push 1)");
+    let _ = writeln!(out, "; {}", if kind == Query::Induction { "Induktionsschritt" } else { "BMC" });
+    for k in 0..=steps {
+        for v in &model.state {
+            let _ = writeln!(out, "(declare-const {} {})", at(&v.name, k, tag), sort_text(v.sort));
+        }
+        for (name, sort) in &model.inputs {
+            let _ = writeln!(out, "(declare-const {} {})", at(name, k, tag), sort_text(*sort));
+        }
+    }
+    let mut p = Printer { out, tag, defs: HashMap::new(), next: 0 };
+    if kind == Query::Bmc {
+        for v in &model.state {
+            let init = p.name(&v.init, 0, 0);
+            let _ = writeln!(p.out, "(assert (= {} {init}))", at(&v.name, 0, tag));
+        }
+    }
+    for k in 0..steps {
+        for v in &model.state {
+            let next = p.name(&v.next, k, k + 1);
+            let _ = writeln!(p.out, "(assert (= {} {next}))", at(&v.name, k + 1, tag));
+        }
+    }
+    for k in 0..=steps {
+        for a in model.assumptions.iter().chain(&model.invariants) {
+            let t = p.name(a, k, k);
+            let _ = writeln!(p.out, "(assert {t})");
+        }
+    }
+    for &target in targets {
+        // `holds[k]`: das Ziel gilt an Position k — eine Eigenschaft ueber
+        // Zustand und Eingaben des Ticks, eine Pruefstelle ueber dem
+        // Uebergang k → k+1 (an Position 0 ueber dem Anfangszustand).
+        let (label, holds): (String, Vec<String>) = match target {
+            Target::Property(i) => {
+                let prop = &model.properties[i];
+                let word = if prop.assumption { "Annahme" } else { "Eigenschaft" };
+                (format!("{word} `{}`", prop.name), (0..=steps).map(|k| p.name(&prop.formula, k, k)).collect())
+            }
+            Target::Check(i) => {
+                let site = &model.checks[i];
+                let mut holds = Vec::new();
+                if kind == Query::Bmc {
+                    let fires = p.name(&site.init, 0, 0);
+                    holds.push(format!("(not {fires})"));
+                }
+                for k in 0..steps {
+                    let fires = p.name(&site.fires, k, k + 1);
+                    holds.push(format!("(not {fires})"));
+                }
+                (format!("Pruefstelle `{}` @{}", site.kind, site.start), holds)
+            }
+        };
+        let _ = writeln!(p.out, "(push 1)");
+        let _ = writeln!(p.out, "; {label}");
+        if holds.is_empty() {
+            let _ = writeln!(p.out, "(assert false)");
+        } else if kind == Query::Induction {
+            for h in &holds[..holds.len() - 1] {
+                let _ = writeln!(p.out, "(assert {h})");
+            }
+            let _ = writeln!(p.out, "(assert (not {}))", holds[holds.len() - 1]);
+        } else {
+            let _ = writeln!(p.out, "(assert (not (and {})))", holds.join(" "));
+        }
+        let _ = writeln!(p.out, "(check-sat)");
+        if values {
+            let names: Vec<String> =
+                (0..=steps).flat_map(|k| model.inputs.iter().map(move |(n, _)| at(n, k, tag))).collect();
+            if !names.is_empty() {
+                let _ = writeln!(p.out, "(get-value ({}))", names.join(" "));
+            }
+        }
+        let _ = writeln!(p.out, "(pop 1)");
+    }
+    let _ = writeln!(out, "(pop 1)");
+}
+
+fn head(model: &Model) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "; takt prove --export (Referenz 13.3, plan/m6.md 2.8)");
+    let _ = writeln!(out, "; takt prove (Referenz 13.3, plan/m6.md 2.8)");
     let _ = writeln!(out, "; Zustand `s.…`, Eingaben `i.…`, Schritt hinter `@` (BMC) bzw. `#` (Induktion).");
     for n in &model.notes {
         let _ = writeln!(out, "; Reichweite: {n}");
     }
     let _ = writeln!(out, "(set-logic ALL)");
-    for (tag, induction) in [("@", false), ("#", true)] {
-        let _ = writeln!(out, "\n(push 1)");
-        let _ = writeln!(out, "; {}", if induction { "Induktionsschritt" } else { "BMC" });
-        let steps = if induction { depth + 1 } else { depth };
-        for k in 0..=steps {
-            for v in &model.state {
-                let _ = writeln!(out, "(declare-const {} {})", at(&v.name, k, tag), sort_text(v.sort));
-            }
-            for (name, sort) in &model.inputs {
-                let _ = writeln!(out, "(declare-const {} {})", at(name, k, tag), sort_text(*sort));
-            }
-        }
-        let mut p = Printer { out: &mut out, tag, defs: HashMap::new(), next: 0 };
-        if !induction {
-            for v in &model.state {
-                let init = p.name(&v.init, 0, 0);
-                let _ = writeln!(p.out, "(assert (= {} {init}))", at(&v.name, 0, tag));
-            }
-        }
-        for k in 0..steps {
-            for v in &model.state {
-                let next = p.name(&v.next, k, k + 1);
-                let _ = writeln!(p.out, "(assert (= {} {next}))", at(&v.name, k + 1, tag));
-            }
-        }
-        for k in 0..=steps {
-            for a in &model.assumptions {
-                let t = p.name(a, k, k);
-                let _ = writeln!(p.out, "(assert {t})");
-            }
-        }
-        for prop in &model.properties {
-            let holds: Vec<String> = (0..=steps).map(|k| p.name(&prop.formula, k, k)).collect();
-            let _ = writeln!(p.out, "(push 1)");
-            let _ = writeln!(p.out, "; {} `{}`", if prop.assumption { "Annahme" } else { "Eigenschaft" }, prop.name);
-            if induction {
-                for h in &holds[..steps as usize] {
-                    let _ = writeln!(p.out, "(assert {h})");
-                }
-                let _ = writeln!(p.out, "(assert (not {}))", holds[steps as usize]);
-            } else {
-                let _ = writeln!(p.out, "(assert (not (and {})))", holds.join(" "));
-            }
-            let _ = writeln!(p.out, "(check-sat)");
-            let _ = writeln!(p.out, "(pop 1)");
-        }
-        let _ = writeln!(out, "(pop 1)");
-    }
+    out
+}
+
+/// Schreibt das Modell bis zur Tiefe `depth`: BMC und Induktionsschritt,
+/// je Eigenschaft und Pruefstelle eine `check-sat`-Anfrage.
+pub fn export(model: &Model, depth: u32) -> String {
+    let mut out = head(model);
+    let all: Vec<Target> =
+        (0..model.properties.len()).map(Target::Property).chain((0..model.checks.len()).map(Target::Check)).collect();
+    let _ = writeln!(out);
+    block(&mut out, model, "@", Query::Bmc, depth, &all, false);
+    let _ = writeln!(out);
+    block(&mut out, model, "#", Query::Induction, depth, &all, false);
+    out
+}
+
+/// Die Anfrage eines Ziels fuer den Solver; BMC fragt nach den Eingaben
+/// des Gegenbeispiels.
+pub fn query(model: &Model, depth: u32, target: Target, kind: Query) -> String {
+    let mut out = head(model);
+    let (tag, values) = match kind {
+        Query::Bmc => ("@", true),
+        Query::Induction => ("#", false),
+    };
+    block(&mut out, model, tag, kind, depth, &[target], values);
     out
 }

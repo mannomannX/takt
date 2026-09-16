@@ -26,13 +26,14 @@ fn the_export_writes_both_queries_and_names_the_reach() {
     let text = std::fs::read_to_string(&file).expect("Export");
     assert!(text.contains("; BMC") && text.contains("; Induktionsschritt"), "{text}");
     assert!(text.contains("; Eigenschaft `pump_off_when_high`"), "{text}");
-    assert_eq!(text.matches("(check-sat)").count(), 2, "{text}");
+    // Eine Eigenschaft und eine Pruefstelle (B3), je BMC und Induktion.
+    assert_eq!(text.matches("(check-sat)").count(), 4, "{text}");
     let _ = std::fs::remove_dir_all(&out_dir);
 }
 
 #[test]
-fn without_export_the_missing_solver_is_named() {
-    let out = takt(&["prove", "corpus-try/01_minimal.takt"]);
+fn a_missing_solver_is_named() {
+    let out = takt(&["prove", "corpus-try/01_minimal.takt", "--solver", "takt-kein-solver"]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("Solver"), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("kein Solver"), "{}", String::from_utf8_lossy(&out.stderr));
 }

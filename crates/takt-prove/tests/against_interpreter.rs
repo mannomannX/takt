@@ -173,6 +173,6 @@ fn the_export_is_smtlib_with_both_queries() {
     let text = takt_prove::export(&model, 3);
     assert!(text.contains("(set-logic ALL)"));
     assert!(text.contains("(declare-const |s.blink.leaf@0| (_ BitVec 64))"), "{text}");
-    assert!(text.contains("(declare-const |i.cmd.go#4| Bool)"), "{text}");
+    assert!(text.contains("(declare-const |i.cmd.go#3| Bool)"), "{text}");
     assert_eq!(text.matches("(check-sat)").count(), 0, "ohne Eigenschaft keine Anfrage");
 }

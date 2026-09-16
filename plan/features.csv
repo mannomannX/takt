@@ -122,7 +122,7 @@ SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M6 (v1.1),teilweise
 SEM-12.9,Semantik/Abschnitt,12.9,"Verteilte Ausführung (v2): Regeln, die schon heute gelten",v2,M9 (v2),offen,
 SEM-13.1,Semantik/Abschnitt,13.1,Referenzinterpreter und differentielles Testen,,M4 (Codegen),fertig,
 SEM-13.2,Semantik/Abschnitt,13.2,Coverage aus der Simulation,,M6 (v1.1),fertig,
-SEM-13.3,Semantik/Abschnitt,13.3,Eigenschaftsprüfung (v1.1),v1.1,M6,teilweise,"Monitore im Interpreter und nativ (Schritt 19), Kodierung und SMT-LIB2-Export (Schritt 20); Solver (Schritt 21) offen"
+SEM-13.3,Semantik/Abschnitt,13.3,Eigenschaftsprüfung (v1.1),v1.1,M6,fertig,"Monitore im Interpreter und nativ (Schritt 19), Kodierung, Export, Solver und Pruefstellen-Klassifikation (Schritte 20-22); Reichweite: Invarianten ohne Zeitoperatoren, kein Strom/Handler/Job in der Kodierung"
 SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M5 (Embedded),offen,
 SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4 (Codegen),fertig,
 SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,fertig,
@@ -748,7 +748,7 @@ PAR-12.7-Irreversible_Outputs,Absatz/Regel,12.7,Irreversible Outputs,,M6 (v1.1),
 PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M5 (Embedded),teilweise,Board 2 (RV32IMAC)
 PAR-13.3-Sprache,Absatz/Regel,13.3,Sprache,,M6 (v1.1),fertig,`TProp` aus dem AST (`lower/property.rs`)
 PAR-13.3-Semantik,Absatz/Regel,13.3,Semantik,,M6 (v1.1),fertig,"`takt-interp/src/property.rs`: Tick-Rand-Snapshots, dreiwertig auf dem endlichen Lauf, Entscheidung bei geschlossenem Fenster"
-PAR-13.3-Verwendung,Absatz/Regel,13.3,Verwendung,,M6 (v1.1),teilweise,"Monitor in `takt test`/`RunResult.properties`, nativ mit `with monitor = true`; Beweisziel als Invariante im Export (`takt prove --export`); Solver offen (Schritt 21)"
+PAR-13.3-Verwendung,Absatz/Regel,13.3,Verwendung,,M6 (v1.1),fertig,"Monitor in `takt test`/`RunResult.properties`, nativ mit `with monitor = true`; `takt prove` mit Export und Solver (k-Induktion/BMC), Gegenbeispiel als Stimulus"
 PAR-13.3-Umgebungsannahmen_assumption,Absatz/Regel,13.3,Umgebungsannahmen (`assumption`),,M6 (v1.1),fertig,"derselbe Monitor, Verletzung ist FAIL-Befund (`assumption <name> violated <tick>`)"
 PAR-13.3-Kanal_Attribute_gelten_automatisch_als_Annahmen,Absatz/Regel,13.3,Kanal-Attribute gelten automatisch als Annahmen,,M6 (v1.1),teilweise,Kanal-Ranges sind Annahmen je Tick im Export (`takt-prove/src/encode.rs`); `max_slew`/`debounce`/`max_age` noch nicht
 PAR-13.3-Kompositionalität,Absatz/Regel,13.3,Kompositionalität,,M6 (v1.1),offen,
@@ -879,7 +879,7 @@ CLI-verify-trace,Werkzeug,11.1,takt verify-trace,,M6 (v1.1),fertig,"Hashkette h_
 CLI-test,Werkzeug,11.1,takt test,,M6 (v1.1),fertig,
 CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
 CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen,TTL-Adapter (PA9)
-CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),teilweise,"`--export DATEI.smt2 --depth k` (Schritt 20, `takt-prove`); Solver-Anbindung, k-Induktion und Gegenbeispiel als Stimulus offen (Schritt 21)"
+CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),fertig,"`--export DATEI.smt2 --depth k`, sonst Solver (`--solver`, `TAKT_SOLVER`, `z3`/`cvc5`): Eigenschaften bewiesen/verletzt/unbewiesen, Pruefstellen bewiesen unerreichbar/erreichbar mit Pfad/unentschieden, Gegenbeispiele als Stimulus im Interpreter bestaetigt (`takt-prove/src/solve.rs`)"
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig,
 CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig,
 CLI-latency,Werkzeug,11.1,takt latency,,M3 (Gate),fertig,
