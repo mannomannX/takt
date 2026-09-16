@@ -107,8 +107,13 @@ impl Lowerer<'_> {
             // Felder des Elements.
             None => (None, self.bind_none(h.binding.as_ref(), elem, h.span)?),
         };
+        // FB-14: Der Guard sieht die Bindung und laeuft nach dem Muster.
+        let guard = match &h.guard {
+            Some(g) => Some(self.check_bool(g)?),
+            None => None,
+        };
         let body = self.block(&h.body, BlockKind::Loop);
-        Some(Handler { stream, pattern, binding, body, span: h.span })
+        Some(Handler { stream, pattern, binding, guard, body, span: h.span })
     }
 
     /// Bindung eines Musters mit Captures.

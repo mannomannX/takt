@@ -279,6 +279,9 @@ pub struct Lowerer<'a> {
     pub checking: u32,
     /// Prelude wird gelowert.
     pub prelude: bool,
+    /// Der Segment-Default `sequence with timeout = …` der Sequenz, die
+    /// gerade gesenkt wird (6.2, FB-13).
+    pub seq_timeout: Option<ast::Timeout>,
     /// Untergrenze einer Range: ein einheitenloses Literal erbt die Einheit
     /// der Obergrenze (3.4, die einzige Ausnahme von 3.6).
     pub in_range_bound: bool,
@@ -338,6 +341,7 @@ impl<'a> Lowerer<'a> {
             facts: Vec::new(),
             checking: 0,
             prelude: false,
+            seq_timeout: None,
             in_range_bound: false,
             tys: Builtins {
                 bool,

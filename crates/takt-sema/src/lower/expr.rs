@@ -1497,6 +1497,25 @@ impl Lowerer<'_> {
                 let ty = self.tys.int;
                 Some(Expr::new(ExprKind::Accessor { base: Box::new(b), accessor: acc, args: vec![] }, ty, span))
             }
+            // `peek` untersucht das naechste Element, ohne es zu konsumieren
+            // (8.6, FB-15): die Maschine wird Leser des Stroms.
+            ("peek", Type::Stream(elem)) => {
+                let elem = *elem;
+                if args.is_none() {
+                    self.error(SC3, span, "`peek()` ist ein Aufruf");
+                    return None;
+                }
+                if !no_args(self) {
+                    return None;
+                }
+                self.cursor_for(&b, span)?;
+                let ty = self.intern(Type::Optional(elem));
+                Some(Expr::new(
+                    ExprKind::Accessor { base: Box::new(b), accessor: Accessor::Peek, args: vec![] },
+                    ty,
+                    span,
+                ))
+            }
             ("free", Type::Stream(_)) => {
                 if !no_args(self) {
                     return None;

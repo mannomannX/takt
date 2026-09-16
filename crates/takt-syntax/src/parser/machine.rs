@@ -286,7 +286,9 @@ impl<'t, 's> Parser<'t, 's> {
                 if body.sequence.is_some() {
                     return Err(duplicate(self, "sequence"));
                 }
-                body.sequence = Some(self.parse_sequence_block()?);
+                let (timeout, items) = self.parse_sequence_block()?;
+                body.sequence_timeout = timeout;
+                body.sequence = Some(items);
             }
             Phase::Transition => body.transitions.push(self.parse_transition()?),
             Phase::Exit => {
@@ -338,9 +340,10 @@ impl<'t, 's> Parser<'t, 's> {
             None
         };
         let binding = if self.eat_kw("as") { Some(self.ident()?) } else { None };
+        let guard = if self.eat_kw("when") { Some(self.parse_expr()?) } else { None };
         self.expect_op(":")?;
         let body = self.parse_block()?;
-        Ok(OnHandler { stream, pattern, binding, body, span: self.span_from(start) })
+        Ok(OnHandler { stream, pattern, binding, guard, body, span: self.span_from(start) })
     }
 
     /// `transition`
@@ -405,10 +408,23 @@ impl<'t, 's> Parser<'t, 's> {
     }
 
     /// `sequence_block`
-    pub(super) fn parse_sequence_block(&mut self) -> PResult<Vec<SeqItem>> {
+    pub(super) fn parse_sequence_block(&mut self) -> PResult<(Option<Timeout>, Vec<SeqItem>)> {
         self.expect_kw("sequence")?;
+        // Segment-Default (6.2): `with timeout = d [-> X]`.
+        let timeout = if self.eat_kw("with") {
+            if !self.eat_word("timeout") {
+                return Err(self.error_here("`timeout`"));
+            }
+            self.expect_op("=")?;
+            let duration = self.parse_duration_expr()?;
+            let action =
+                if self.at_op("->") { TimeoutAction::Goto(self.parse_goto_stmt()?) } else { TimeoutAction::Fault };
+            Some(Timeout { duration, action })
+        } else {
+            None
+        };
         self.expect_op(":")?;
-        self.parse_seq_items()
+        Ok((timeout, self.parse_seq_items()?))
     }
 
     /// `NEWLINE INDENT { seq_item } DEDENT`

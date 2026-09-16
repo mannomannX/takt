@@ -372,7 +372,14 @@ impl Printer {
                 p.on_handler(h);
             }
             if let Some(seq) = &b.sequence {
-                p.node("sequence", "", |p| p.seq_items(seq));
+                let head = match &b.sequence_timeout {
+                    Some(Timeout { duration, action: TimeoutAction::Goto(t) }) => {
+                        format!("timeout={} -> {}", expr(duration), t.name)
+                    }
+                    Some(Timeout { duration, .. }) => format!("timeout={}", expr(duration)),
+                    None => String::new(),
+                };
+                p.node("sequence", &head, |p| p.seq_items(seq));
             }
             for t in &b.transitions {
                 p.transition(t);
@@ -393,6 +400,9 @@ impl Printer {
         }
         if let Some(b) = &h.binding {
             let _ = write!(head, " as {}", b.name);
+        }
+        if let Some(g) = &h.guard {
+            let _ = write!(head, " when {}", expr(g));
         }
         self.node("on", &head, |p| p.block(&h.body));
     }

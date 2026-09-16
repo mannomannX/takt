@@ -525,6 +525,15 @@ pub fn dispatch(
                     let value = env.element_record(loaded, var, &element, caps)?;
                     *env.state.vars.get_mut(var.index()).ok_or_else(|| Trap::Bug("Bindung fehlt".into()))? = value;
                 }
+                // FB-14: Ein Guard nach dem Muster; `false` heisst „passt
+                // nicht" — der naechste Handler ist dran, das Element gilt
+                // am Ende als untersucht.
+                if let Some(g) = &h.guard {
+                    let mut ctx = env.ctx(loaded, tick);
+                    if !matches!(ctx.eval(g)?, Value::Bool(true)) {
+                        continue;
+                    }
+                }
                 env.mark_examined(loaded, stream, element.seq);
                 env.out.push(Observation::Cover { kind: CoverKind::Handler, name: format!("on @{}", h.span.start) });
                 let body = h.body.clone();

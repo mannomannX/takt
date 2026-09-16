@@ -292,12 +292,12 @@ fault_clause   := "fault" "->" UPPER_IDENT NEWLINE   (* @check 9 *)
 enter_block    := "enter" ":" action_block
 exit_block     := "exit" ":" action_block
 loop_block     := "loop" ":" block
-on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] ":" block   (* die Bindung ist ein Wrapper: .t, .seq und der Inhalt unter .data bzw. .text; Elementfelder darunter (8.6, 8.7) *)   (* @check 27 *)
+on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] [ "when" expr ] ":" block   (* when: Guard nach dem Muster, false konsumiert (FB-14) *)   (* die Bindung ist ein Wrapper: .t, .seq und der Inhalt unter .data bzw. .text; Elementfelder darunter (8.6, 8.7) *)   (* @check 27 *)
 transition     := ( "when" guard | "after" duration_expr ) ":" trans_block   (* @check 14 *)
 guard          := expr | postfix ( "matches" | "has" ) pattern [ "as" IDENT ] | postfix "as" IDENT   (* letzteres: naechstes Element, 8.7; postfix auch fuer m.fired, cells[i].done. "as" IDENT ist Bindung, ausser IDENT ist ein Skalartypname: dann Cast *)
 trans_block    := goto_stmt NEWLINE | NEWLINE INDENT { stmt } goto_stmt NEWLINE DEDENT   (* @check 8 *)
 
-sequence_block := "sequence" ":" NEWLINE INDENT { seq_item } DEDENT
+sequence_block := "sequence" [ "with" "timeout" "=" duration_expr [ "->" UPPER_IDENT ] ] ":" NEWLINE INDENT { seq_item } DEDENT   (* Segment-Default: jedes until ohne timeout erbt ihn (FB-13) *)
 seq_item       := stmt   (* @check 14 *)
                 | "wait" duration_expr NEWLINE
                 | "until" guard [ "timeout" duration_expr [ "->" UPPER_IDENT ] ] NEWLINE
@@ -1069,6 +1069,7 @@ Eine Sequenz ist eine Liste von Items. Sie wird von links nach rechts in Segment
 | `until g as m` | Captures von `m` werden wie gehobene Variablen gespeichert und sind in allen folgenden Segmenten sichtbar; bei Stream-Guards (8.7) gilt das erste passende Element des Fensters als untersucht |
 | `until c timeout d -> X` | wie `until`, Timeout führt per schwacher Transition nach `X` statt zum Fault-Ziel |
 | `until c timeout d else:` | Timeout führt den Aktionsblock aus; endet er mit `->`, ist das die Transition; sonst geht die Sequenz mit S_{i+1} weiter („weicher Timeout") |
+| `sequence with timeout = d [-> X]:` | Segment-Default (v1.1): jedes `until` ohne eigenen `timeout` erbt `timeout d [-> X]`; ein eigener `timeout` geht vor |
 | `measure`, `verify`, `verdict`, `send`, `at`, `job` | Aktionsblock-Statements: Teil von `enter:` des Segments (5.5) |
 
 `check` an Segmentanfängen ist damit kontinuierlich (Ablaufinvariante ab dem Zeitpunkt), `expect` punktuell. Beide Wörter haben in `loop:` und `sequence:` konsistente Bedeutung: „gilt, solange der Scope aktiv ist" bzw. „gilt an dieser Stelle".
@@ -1290,6 +1291,8 @@ machine flasher:  # Leser, Cursor je Konsument
 ```
 Elemente, die in Tick k gesendet werden, sind für Leser ab Tick k+1 sichtbar (Unit-Delay wie Ψ; die Ordnungsunabhängigkeit aus Satz 9.4.1 bleibt); `.t` ist die logische Sendezeit, `seq` läuft je Stream; ein `follows`-Leser (7.2) sieht die Elemente desselben Ticks frisch. Überlauf trifft den Schreiber (`send` → `StreamOverflow`, wie bei Ausgabeströmen 8.8). Budget und Speicher wie oben (Byte-Ring bei variabler Länge). Damit wird „Task → Maschine, Queue → interner Stream" zur mechanischen Übersetzungsregel (13.9).
 
+**`peek` (v1.1).** `s.peek() -> E?` liefert das nächste Element des Fensters, ohne den Lesecursor zu bewegen — oder `none`, wenn das Fenster leer ist. Das Element gilt damit als *untersucht* (Lemma 9.6.1): Es zählt für das Fenster, und am Tick-Ende rückt der Cursor wie nach jedem untersuchten Element. Wer nur `peek`t, verliert Elemente durch Überlauf, nie Speicher. Die Maschine wird durch `peek` Leser des Stroms.
+
 ### 8.7 Muster, Captures, Handler
 
 **Motivation.** Logzeilen und Textprotokolle brauchen Erkennung mit Werteextraktion. Reguläre Ausdrücke wären mächtig, aber kryptisch und — mit Backtracking — nicht linear. Die Lösung sind **typisierte Muster**: Sie beschreiben eine reguläre Sprache und werden zur Compile-Zeit in einen deterministischen endlichen Automaten übersetzt; Matching ist pro Zeichen O(1), speicherfest und total.
@@ -1362,6 +1365,8 @@ when can_rx matches CanFrame(id = 0x7E8) as f: -> GOT_RESPONSE
 Ein Stream-Guard sucht das erste passende Element in W und setzt `examined` auf dessen `seq`; Elemente danach bleiben unkonsumiert. `for ev in s:` iteriert über W (beschränkt durch CAP), `break` erlaubt.
 
 **Garantien und Budget.** Matching ist total und O(Zeilenlänge); Captures sind beschränkte Werte; Handler-Körper sind gewöhnliche Statements. Budget pro Zustand mit Handlern: `CAP * (max_len + max_h cost(h.body))`.
+
+**Handler-Guard (v1.1).** `on s [matches P | has P] [as e] when g:` prüft `g` nach dem Muster, mit der Bindung im Sichtbereich; `g` ist ein Ausdruck (4.4: seiteneffektfrei) und läuft *nach* dem Muster-DFA, den er unangetastet lässt. Liefert `g` `false`, ist der nächste Handler des Stroms dran; trifft keiner, gilt das Element wie jedes andere als untersucht und konsumiert.
 
 ### 8.8 Ausgabeströme
 ```

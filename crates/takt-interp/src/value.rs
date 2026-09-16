@@ -356,3 +356,14 @@ pub fn bug<T>(msg: impl Into<String>) -> EvalResult<T> {
 pub fn mat_len(rows: u32, cols: u32) -> usize {
     usize::try_from(u64::from(rows) * u64::from(cols)).unwrap_or(usize::MAX)
 }
+
+/// Gleichheit von Werten (4.4): Eine `line` ist ihr Text — das Flag
+/// `truncated` gehoert zur Lieferung, nicht zum Wert (8.6), und ein
+/// `str`-Literal vergleicht sich mit ihr ueber den Text.
+pub fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Line { text: x, .. }, Value::Str(y)) | (Value::Str(x), Value::Line { text: y, .. }) => x == y,
+        (Value::Line { text: x, .. }, Value::Line { text: y, .. }) => x == y,
+        _ => a == b,
+    }
+}

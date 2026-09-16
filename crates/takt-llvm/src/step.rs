@@ -1056,7 +1056,18 @@ fn handler_chain(
     let end_at = format!("handler{k}_{name}_ende");
     for (n, h) in hs.iter().enumerate() {
         let Some((kind, pattern)) = &h.pattern else {
-            // Catch-all: Er laeuft immer, und die Kette endet hier.
+            // Catch-all: Er laeuft immer, und die Kette endet hier — es
+            // sei denn, ein Guard (FB-14) laesst das Element weiter.
+            if let Some(g) = &h.guard {
+                let ok = lower_expr(g, ctx.program, m, &ctx.vars())?;
+                let (then_l, else_l) = (format!("handler{k}_{n}_{name}"), format!("handler{k}_{n}_{name}_sonst"));
+                m.void_inst(&format!("br i1 {}, label %{then_l}, label %{else_l}", ok.value));
+                m.label(&then_l);
+                block(&h.body.clone(), ctx, m)?;
+                m.void_inst(&format!("br label %{end_at}"));
+                m.label(&else_l);
+                continue;
+            }
             block(&h.body.clone(), ctx, m)?;
             m.void_inst(&format!("br label %{end_at}"));
             m.label(&end_at);
@@ -1095,6 +1106,14 @@ fn handler_chain(
         let (then_l, else_l) = (format!("handler{k}_{n}_{name}"), format!("handler{k}_{n}_{name}_sonst"));
         m.void_inst(&format!("br i1 {hit}, label %{then_l}, label %{else_l}"));
         m.label(&then_l);
+        // FB-14: Der Guard sieht die Bindung; `false` reicht das Element
+        // an den naechsten Handler weiter.
+        if let Some(g) = &h.guard {
+            let ok = lower_expr(g, ctx.program, m, &ctx.vars())?;
+            let body_l = format!("handler{k}_{n}_{name}_rumpf");
+            m.void_inst(&format!("br i1 {}, label %{body_l}, label %{else_l}", ok.value));
+            m.label(&body_l);
+        }
         block(&h.body.clone(), ctx, m)?;
         m.void_inst(&format!("br label %{end_at}"));
         m.label(&else_l);

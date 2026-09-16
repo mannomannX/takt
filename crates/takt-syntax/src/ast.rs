@@ -835,6 +835,8 @@ pub struct StateBody {
     pub handlers: Vec<OnHandler>,
     /// `sequence:`
     pub sequence: Option<Vec<SeqItem>>,
+    /// `sequence with timeout = d [-> X]`: der Segment-Default (6.2).
+    pub sequence_timeout: Option<Timeout>,
     /// Uebergaenge.
     pub transitions: Vec<Transition>,
     /// `exit:`
@@ -861,6 +863,8 @@ pub struct OnHandler {
     pub pattern: Option<(MatchKind, Pattern)>,
     /// Bindung.
     pub binding: Option<Ident>,
+    /// `when g`: Guard nach dem Muster; `false` konsumiert das Element (8.7).
+    pub guard: Option<Expr>,
     /// Rumpf.
     pub body: Block,
     /// Position.

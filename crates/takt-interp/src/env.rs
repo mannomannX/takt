@@ -164,6 +164,12 @@ pub trait Outer {
     fn published(&self, _m: MachineId, _v: VarId) -> EvalResult<&Value> {
         bug("Veroeffentlichung ausserhalb eines Laufs")
     }
+    /// `s.peek()` (8.6, FB-15): das naechste Element des Fensters, untersucht,
+    /// nicht konsumiert; `none` bei leerem Fenster.
+    fn stream_peek(&mut self, _s: StreamRef) -> EvalResult<Value> {
+        bug("peek ausserhalb einer Maschine")
+    }
+
     /// `v.done` / `v.result` eines Job-Handles (4.5).
     fn job(&self, _handle: VarId, _field: JobField) -> EvalResult<Value> {
         bug("Job ausserhalb einer Maschine")

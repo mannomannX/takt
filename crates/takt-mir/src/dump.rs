@@ -121,6 +121,9 @@ impl Dumper<'_> {
             if let Some(b) = h.binding {
                 write!(head, " as {}", self.var_name(b)).expect("String");
             }
+            if let Some(g) = &h.guard {
+                write!(head, " when {}", self.expr(g)).expect("String");
+            }
             head.push(':');
             self.block(depth + 1, &head, &h.body);
         }

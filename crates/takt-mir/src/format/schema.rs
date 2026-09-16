@@ -84,6 +84,7 @@ codec_enum!(Accessor {
     13 Count, 14 Dropped, 15 Malformed, 16 Overflowed, 17 Free, 18 Jitter, 19 TimeWarped, 20 Done, 21 Result,
     22 Bit, 23 Bits, 24 WithBit, 25 Wrap(1 one w), 26 Min, 27 Max, 28 Mean, 29 Rms, 30 Last, 31 Encode, 32 Get,
     33 StartsWith, 34 Contains, 35 Armed, 36 Pre, 37 Post, 38 Samples, 39 Rate, 40 Remaining, 41 Truncated,
+    42 Peek,
 });
 codec_unit_enum!(UnaryOp { 0 Neg, 1 Not, 2 BitNot });
 codec_unit_enum!(BinaryOp {
@@ -243,7 +244,7 @@ codec_enum!(Guard {
 codec_enum!(TransTrigger { 0 When(1 one g), 1 After(1 one d) });
 codec_unit_enum!(TransKind { 0 Strong, 1 Weak });
 codec_struct!(Transition { 1 one trigger, 2 one actions, 3 one target, 4 one kind, 5 meta span });
-codec_struct!(Handler { 1 one stream, 2 opt pattern, 3 opt binding, 4 one body, 5 meta span });
+codec_struct!(Handler { 1 one stream, 2 opt pattern, 3 opt binding, 4 one body, 5 meta span, 6 opt guard });
 codec_enum!(TimeoutAction { 0 Fault, 1 Goto(1 one t), 2 Else(1 one b) });
 codec_struct!(Timeout { 1 one duration, 2 one action });
 codec_enum!(SeqItem {

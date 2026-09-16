@@ -487,6 +487,14 @@ impl Outer for MachineEnv<'_, '_> {
         self.element_record(self.loaded, v, e, caps)
     }
 
+    fn stream_peek(&mut self, s: StreamRef) -> EvalResult<Value> {
+        let Some(first) = self.window(self.loaded, s).into_iter().next() else {
+            return Ok(Value::Optional(None));
+        };
+        self.mark_examined(self.loaded, s, first.seq);
+        Ok(Value::Optional(Some(Box::new(first.value))))
+    }
+
     fn stream_examined(&mut self, s: StreamRef, seq: i64) -> EvalResult<()> {
         self.mark_examined(self.loaded, s, seq);
         Ok(())

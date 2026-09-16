@@ -387,8 +387,8 @@ impl<'p, 'o> Ctx<'p, 'o> {
             }
             (Value::Duration(_), _) | (_, Value::Duration(_)) => arith::duration_binary(op, &a, &b, span, self.tick),
             _ => match op {
-                BinaryOp::Eq => Ok(Value::Bool(a == b)),
-                BinaryOp::Ne => Ok(Value::Bool(a != b)),
+                BinaryOp::Eq => Ok(Value::Bool(crate::value::same(&a, &b))),
+                BinaryOp::Ne => Ok(Value::Bool(!crate::value::same(&a, &b))),
                 BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                     let ord = a
                         .compare(&b)
@@ -507,6 +507,9 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 _ => None,
             };
             if let Some(r) = r {
+                if acc == Accessor::Peek {
+                    return self.outer.stream_peek(r);
+                }
                 if let Some(v) = self.outer.stream_stat(r, acc)? {
                     return Ok(v);
                 }

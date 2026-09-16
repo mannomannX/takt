@@ -854,6 +854,7 @@ pub fn full_program() -> Program {
         })),
     ]);
     m.handlers.push(Handler {
+        guard: None,
         stream: StreamRef::Channel(ch_can),
         pattern: Some((
             MatchKind::Matches,
@@ -1056,6 +1057,7 @@ pub fn full_program() -> Program {
         }),
     ]);
     run.handlers.push(Handler {
+        guard: None,
         stream: StreamRef::Channel(ch_log),
         pattern: Some((
             MatchKind::Has,
@@ -1073,6 +1075,7 @@ pub fn full_program() -> Program {
         span: sp(57),
     });
     run.handlers.push(Handler {
+        guard: None,
         stream: StreamRef::Channel(ch_wave),
         pattern: None,
         binding: None,

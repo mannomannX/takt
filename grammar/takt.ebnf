@@ -136,12 +136,12 @@ fault_clause   := "fault" "->" UPPER_IDENT NEWLINE   (* @check 9 *)
 enter_block    := "enter" ":" action_block
 exit_block     := "exit" ":" action_block
 loop_block     := "loop" ":" block
-on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] ":" block   (* die Bindung ist ein Wrapper: .t, .seq und der Inhalt unter .data bzw. .text; Elementfelder darunter (8.6, 8.7) *)   (* @check 27 *)
+on_handler     := "on" IDENT [ ( "matches" | "has" ) pattern ] [ "as" IDENT ] [ "when" expr ] ":" block   (* when: Guard nach dem Muster, false konsumiert (FB-14) *)   (* die Bindung ist ein Wrapper: .t, .seq und der Inhalt unter .data bzw. .text; Elementfelder darunter (8.6, 8.7) *)   (* @check 27 *)
 transition     := ( "when" guard | "after" duration_expr ) ":" trans_block   (* @check 14 *)
 guard          := expr | postfix ( "matches" | "has" ) pattern [ "as" IDENT ] | postfix "as" IDENT   (* letzteres: naechstes Element, 8.7; postfix auch fuer m.fired, cells[i].done. "as" IDENT ist Bindung, ausser IDENT ist ein Skalartypname: dann Cast *)
 trans_block    := goto_stmt NEWLINE | NEWLINE INDENT { stmt } goto_stmt NEWLINE DEDENT   (* @check 8 *)
 
-sequence_block := "sequence" ":" NEWLINE INDENT { seq_item } DEDENT
+sequence_block := "sequence" [ "with" "timeout" "=" duration_expr [ "->" UPPER_IDENT ] ] ":" NEWLINE INDENT { seq_item } DEDENT   (* Segment-Default: jedes until ohne timeout erbt ihn (FB-13) *)
 seq_item       := stmt   (* @check 14 *)
                 | "wait" duration_expr NEWLINE
                 | "until" guard [ "timeout" duration_expr [ "->" UPPER_IDENT ] ] NEWLINE

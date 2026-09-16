@@ -60,6 +60,9 @@ pub fn narrow(program: &mut Program) -> (u32, u32) {
         }
         narrow_block(&mut m.loop_block, &types, &mut n);
         for h in &mut m.handlers {
+            if let Some(g) = &h.guard {
+                n.calls_in(g);
+            }
             narrow_block(&mut h.body, &types, &mut n);
         }
         for t in &mut m.faulted.transitions {
@@ -70,6 +73,9 @@ pub fn narrow(program: &mut Program) -> (u32, u32) {
             narrow_block(&mut s.exit, &types, &mut n);
             narrow_block(&mut s.loop_block, &types, &mut n);
             for h in &mut s.handlers {
+                if let Some(g) = &h.guard {
+                    n.calls_in(g);
+                }
                 narrow_block(&mut h.body, &types, &mut n);
             }
             for t in &mut s.transitions {

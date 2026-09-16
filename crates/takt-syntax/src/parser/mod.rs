@@ -900,7 +900,7 @@ impl<'t, 's> Parser<'t, 's> {
                 "exit" => return Ok(SnippetItem::Exit(self.parse_exit_block()?)),
                 "loop" => return Ok(SnippetItem::Loop(self.parse_loop_block()?)),
                 "on" => return Ok(SnippetItem::On(self.parse_on_handler()?)),
-                "sequence" => return Ok(SnippetItem::Sequence(self.parse_sequence_block()?)),
+                "sequence" => return Ok(SnippetItem::Sequence(self.parse_sequence_block()?.1)),
                 "when" | "after" => return Ok(SnippetItem::Transition(self.parse_transition()?)),
                 "state" => return Ok(SnippetItem::State(self.parse_state_decl()?)),
                 "instance" => return Ok(SnippetItem::Instance(self.parse_instance_decl()?)),

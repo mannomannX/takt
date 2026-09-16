@@ -502,7 +502,9 @@ impl Lowerer<'_> {
             if !decl.body.states.is_empty() {
                 self.error(SC8, decl.span, "Zustand mit Sequenz und Kindzustaenden (6.2)");
             } else {
+                self.seq_timeout = decl.body.sequence_timeout.clone();
                 let s = self.sequence(seq, id, decl.span);
+                self.seq_timeout = None;
                 self.mctx.as_mut().expect("Maschine").machine.states[id.index()].sequence = Some(s);
             }
         }
@@ -662,7 +664,9 @@ impl Lowerer<'_> {
             }
             ast::SeqItem::Until { guard, timeout, span } => {
                 let g = self.guard(guard)?;
-                let timeout = match timeout {
+                // FB-13: ohne eigenen Timeout gilt der des Segments.
+                let timeout = timeout.clone().or_else(|| self.seq_timeout.clone());
+                let timeout = match &timeout {
                     None => {
                         self.warn_hint(
                             SC14,

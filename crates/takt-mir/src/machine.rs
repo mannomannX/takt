@@ -192,6 +192,9 @@ pub struct Handler {
     pub pattern: Option<(MatchKind, Pattern)>,
     /// Bindung (gehobene Variable).
     pub binding: Option<VarId>,
+    /// `when g`: laeuft nach dem Muster mit der Bindung; `false` heisst
+    /// „passt nicht", das Element gilt als untersucht (8.7, FB-14).
+    pub guard: Option<Expr>,
     /// Rumpf.
     pub body: Block,
     /// Position.

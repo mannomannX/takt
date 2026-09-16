@@ -237,6 +237,8 @@ pub enum Accessor {
     Rate,
     Remaining,
     Truncated,
+    /// `s.peek() -> E?`: das naechste Element, untersucht, nicht konsumiert (8.6, FB-15).
+    Peek,
 }
 
 impl Accessor {
@@ -285,6 +287,7 @@ impl Accessor {
             Accessor::Rate => "rate",
             Accessor::Remaining => "remaining",
             Accessor::Truncated => "truncated",
+            Accessor::Peek => "peek",
         }
         .to_string()
     }

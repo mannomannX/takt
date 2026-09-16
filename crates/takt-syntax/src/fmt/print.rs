@@ -42,7 +42,7 @@ impl Emitter<'_, '_> {
                 SnippetItem::Exit(b) => self.fmt_exit_block(b),
                 SnippetItem::Loop(b) => self.fmt_loop_block(b),
                 SnippetItem::On(h) => self.fmt_on_handler(h),
-                SnippetItem::Sequence(items) => self.fmt_sequence_block(items),
+                SnippetItem::Sequence(items) => self.fmt_sequence_block(None, items),
                 SnippetItem::Transition(t) => self.fmt_transition(t),
                 SnippetItem::State(s) => self.fmt_state_decl(s),
                 SnippetItem::Step(s) => self.fmt_step_decl(s),
@@ -880,7 +880,7 @@ impl Emitter<'_, '_> {
             self.fmt_on_handler(h);
         }
         if let Some(seq) = &b.sequence {
-            self.fmt_sequence_block(seq);
+            self.fmt_sequence_block(b.sequence_timeout.as_ref(), seq);
         }
         for t in &b.transitions {
             self.fmt_transition(t);
@@ -934,6 +934,10 @@ impl Emitter<'_, '_> {
             self.sp("as");
             self.name();
         }
+        if let Some(g) = &h.guard {
+            self.sp("when");
+            self.fmt_expr(g);
+        }
         self.op(":");
         self.fmt_block(&h.body);
     }
@@ -984,8 +988,17 @@ impl Emitter<'_, '_> {
     }
 
     /// `sequence_block`
-    fn fmt_sequence_block(&mut self, items: &[SeqItem]) {
+    fn fmt_sequence_block(&mut self, timeout: Option<&Timeout>, items: &[SeqItem]) {
         self.sp("sequence");
+        if let Some(Timeout { duration, action }) = timeout {
+            self.sp("with");
+            self.sp("timeout");
+            self.op("=");
+            self.fmt_duration_expr(duration);
+            if let TimeoutAction::Goto(_) = action {
+                self.fmt_goto_stmt();
+            }
+        }
         self.op(":");
         self.fmt_seq_items(items);
     }
