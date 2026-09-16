@@ -502,7 +502,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
         // Wert des Ausdrucks (8.6, 8.8).
         if matches!(self.loaded.ty(base.ty), Type::Stream(_)) {
             let r = match &base.kind {
-                ExprKind::Input { channel, .. } => Some(StreamRef::Channel(*channel)),
+                ExprKind::Input { channel, .. } | ExprKind::Output(channel) => Some(StreamRef::Channel(*channel)),
                 ExprKind::Stream(s) => Some(StreamRef::Internal(*s)),
                 _ => None,
             };

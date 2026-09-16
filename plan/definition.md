@@ -1380,6 +1380,8 @@ Ein Ausgabestrom hat einen Sendepuffer (`capacity`, Default 256 Bytes), den der 
 
 Das ist kein Mangel des Commits, sondern die Grenze eines synchronen Modells an einem asynchronen Bus: Ein Tick ist die kleinste Einheit, in der die Sprache Reihenfolge zusagt, und ein SPI-Transfer ist kürzer als einer. Ein Treiber, der Steuerleitungen zu einzelnen Bytes moduliert, braucht darum je Phase einen Tick (oder einen Bus-Treiber, der die Leitung selbst führt — das ist die Aufgabe von `port`, 15). Der Compiler warnt nicht: Welche Leitung zu welchem Byte gehört, steht nicht im Typsystem.
 
+**`sent` (v1.1).** `o.sent : bytes<CAP>?` ist der Ausschnitt, den der Treiber beim letzten Commit aus dem Sendepuffer geholt hat — `none`, wenn nichts gesendet wurde —, mit demselben Unit-Delay wie jeder Output und statischer Höchstlänge `CAP = max_rate · T₀` (ohne `max_rate` die Kapazität). Damit sieht ein Simulationsmodell (8.3) *was* gesendet wurde, nicht nur *dass*; ein Fenster wäre ein zweiter Cursor-Begriff.
+
 ### 8.9 Oversampelte Kanäle, Register, Capture-Fenster
 ```
 input  i_dut : samples<float[A], 100> @ hw("daq1/ai2") with rate = 100 kHz  # 100 Samples je 1-ms-Tick

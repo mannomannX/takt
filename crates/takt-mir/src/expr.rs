@@ -239,6 +239,9 @@ pub enum Accessor {
     Truncated,
     /// `s.peek() -> E?`: das naechste Element, untersucht, nicht konsumiert (8.6, FB-15).
     Peek,
+    /// `o.sent -> bytes<CAP>?`: der im letzten Tick gesendete Ausschnitt eines
+    /// Ausgabestroms, mit Unit-Delay (8.8, FB-132).
+    Sent,
 }
 
 impl Accessor {
@@ -288,6 +291,7 @@ impl Accessor {
             Accessor::Remaining => "remaining",
             Accessor::Truncated => "truncated",
             Accessor::Peek => "peek",
+            Accessor::Sent => "sent",
         }
         .to_string()
     }

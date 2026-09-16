@@ -1,0 +1,35 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# o.sent (8.8): Ein Modell liest, was der Treiber im letzten Tick aus dem
+# Sendepuffer geholt hat — hier ein Byte je Tick (100 Hz bei 10 ms).
+
+output tx  : stream<u8>    @ hw("uart0/tx") with max_rate = 100 Hz, capacity = 16
+output got : int in 0..255 @ hw("o/got")    with safe = 0
+output any : bool          @ hw("o/any")    with safe = false
+
+command go
+
+machine dut:
+    var msg : bytes<8> = default
+    initial IDLE
+    state IDLE:
+        enter:
+            msg.push(0x61)
+            msg.push(0x62)
+            msg.push(0x63)
+        when go:
+            send tx, msg
+            -> SENT
+    state SENT:
+        when false: -> IDLE
+
+machine model:
+    var last : bytes<1>? = none
+    initial WATCH
+    state WATCH:
+        loop:
+            last = tx.sent
+            any = last.valid
+            got = last.or(default).len

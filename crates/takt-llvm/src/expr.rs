@@ -259,6 +259,9 @@ fn access(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
+    if which == Accessor::Sent {
+        return stream_sent(base, want, m);
+    }
     let x = lower(base, p, m, vars)?;
     if let Some(Type::Map { key, value, cap }) = p.types.list.get(base.ty.index()) {
         return map_access(x, (*key, *value, *cap), (which, args), want, p, m, vars);
@@ -1069,6 +1072,22 @@ fn native_call(
 fn canonical_buffer(p: &Program, ty: TypeId, m: &mut Module) -> Result<crate::emit::Reg, NotYet> {
     let cap = takt_mir::bytes::max_size(p, ty).map_err(|_| NotYet { what: "Typ ohne Byteform" })?;
     Ok(m.inst(&format!("alloca [{cap} x i8]")))
+}
+
+/// `o.sent` (8.8): der Treiber schreibt den zuletzt abgeholten Ausschnitt
+/// in den Puffer des Aufrufers; leer heisst `none`.
+fn stream_sent(base: &Expr, want: &LlvmType, m: &mut Module) -> Result<Lowered, NotYet> {
+    let ExprKind::Input { channel: c, .. } = base.kind else { return Err(NotYet { what: "`sent` ohne Ausgabestrom" }) };
+    let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`sent` ohne Wrapper-Typ" }) };
+    let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
+    let buf = m.inst(&format!("alloca {inner}"));
+    m.void_inst(&format!("store {inner} zeroinitializer, ptr {buf}"));
+    let n = m.inst(&format!("call i32 @{}(i32 {}, ptr {buf})", crate::stream::Streams::SENT, c.0));
+    let v = m.inst(&format!("load {inner}, ptr {buf}"));
+    let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
+    let with_value = m.inst(&format!("insertvalue {want} undef, {inner} {v}, 0"));
+    let r = m.inst(&format!("insertvalue {want} {with_value}, i1 {some}, 1"));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
 }
 
 /// `m.len` und `m.get(k)` einer `map` (3.9) ueber `takt_native_map_*`:

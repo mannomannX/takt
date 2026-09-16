@@ -503,6 +503,14 @@ impl Outer for MachineEnv<'_, '_> {
     fn stream_stat(&self, r: StreamRef, acc: Accessor) -> EvalResult<Option<Value>> {
         // `count` zaehlt das Fenster dieser Maschine, die uebrigen Zaehler
         // gehoeren dem Strom (8.6).
+        // `o.sent` (8.8): was der Treiber beim letzten Commit abgeholt hat.
+        if acc == Accessor::Sent {
+            let sent = match r {
+                StreamRef::Channel(c) => self.image.tx.get(&c).map(|t| t.sent.clone()).unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            return Ok(Some(Value::Optional((!sent.is_empty()).then(|| Box::new(Value::Bytes(sent))))));
+        }
         if acc == Accessor::Free {
             let free = match r {
                 StreamRef::Channel(c) => self.image.tx.get(&c).map_or(0, |t| t.free()),

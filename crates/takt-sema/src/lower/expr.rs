@@ -1519,6 +1519,35 @@ impl Lowerer<'_> {
                     span,
                 ))
             }
+            // `o.sent` (8.8, FB-132): was der Treiber im letzten Tick abgeholt
+            // hat, hoechstens `max_rate * T0` Byte — ein Wert mit Unit-Delay,
+            // kein Fenster.
+            ("sent", Type::Stream(_)) => {
+                if !no_args(self) {
+                    return None;
+                }
+                // Ein Strom ist als Ausdruck immer `Input { channel }` (8.6);
+                // die Richtung steht am Channel.
+                let c = match b.kind {
+                    ExprKind::Input { channel, .. }
+                        if self.program.channels[channel.index()].dir == takt_mir::program::Direction::Output =>
+                    {
+                        channel
+                    }
+                    _ => {
+                        self.error(SC3, span, "`sent` gibt es nur an einem Ausgabestrom (8.8)");
+                        return None;
+                    }
+                };
+                let cap = self.sent_per_tick(c);
+                let bytes = self.intern(Type::Bytes { cap });
+                let ty = self.intern(Type::Optional(bytes));
+                Some(Expr::new(
+                    ExprKind::Accessor { base: Box::new(b), accessor: Accessor::Sent, args: vec![] },
+                    ty,
+                    span,
+                ))
+            }
             ("free", Type::Stream(_)) => {
                 if !no_args(self) {
                     return None;
@@ -1728,6 +1757,25 @@ impl Lowerer<'_> {
                 self.error(SC3, span, format!("kein Zugriff `{member}` auf `{n}`"));
                 None
             }
+        }
+    }
+
+    /// Wie viele Byte der Treiber je Tick abholt (8.8): `max_rate * T0`,
+    /// mindestens eines; ohne `max_rate` die ganze Kapazitaet. Dieselbe
+    /// Rechnung wie `TxBuffer::per_tick` im Interpreter.
+    fn sent_per_tick(&self, c: ChannelId) -> u32 {
+        let ch = &self.program.channels[c.index()];
+        let hz = match ch.attrs.max_rate.as_ref().map(|e| &e.kind) {
+            Some(ExprKind::Int(n)) => u64::try_from(*n).ok(),
+            Some(ExprKind::Float(f)) if *f >= 0.0 => Some(*f as u64),
+            _ => None,
+        };
+        match hz {
+            Some(hz) => {
+                let bytes = hz.saturating_mul(self.program.config.tick as u64) / 1_000_000_000;
+                u32::try_from(bytes.max(1)).unwrap_or(u32::MAX)
+            }
+            None => ch.attrs.capacity.unwrap_or(256),
         }
     }
 

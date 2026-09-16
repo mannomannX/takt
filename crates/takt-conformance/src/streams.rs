@@ -232,6 +232,10 @@ fn emit_send(s: &mut String, p: &Program) {
     let _ = writeln!(s, "#define TAKT_TX_MAX 4096");
     let _ = writeln!(s, "static unsigned char g_tx[{}][TAKT_TX_MAX];", streams.len().max(1));
     let _ = writeln!(s, "static int g_tx_n[{}];", streams.len().max(1));
+    // 8.8, FB-132: was der letzte Commit abgeholt hat, liest `o.sent` im
+    // naechsten Tick — der Unit-Delay eines Outputs.
+    let _ = writeln!(s, "static unsigned char g_tx_sent[{}][TAKT_TX_MAX];", streams.len().max(1));
+    let _ = writeln!(s, "static int g_tx_sent_n[{}];", streams.len().max(1));
     let _ = writeln!(s, "static int takt_tx_slot(int s) {{");
     let _ = writeln!(s, "    switch (s) {{");
     for (slot, (i, c)) in streams.iter().enumerate() {
@@ -277,10 +281,26 @@ fn emit_send(s: &mut String, p: &Program) {
         let _ = writeln!(s, "        for (int i = 0; i < n; i++)");
         let _ = writeln!(s, "            printf(i ? \", 0x%02x\" : \"0x%02x\", g_tx[{slot}][i]);");
         let _ = writeln!(s, "        printf(\"]\\n\");");
+        let _ = writeln!(s, "        memcpy(g_tx_sent[{slot}], g_tx[{slot}], (size_t)n);");
+        let _ = writeln!(s, "        g_tx_sent_n[{slot}] = n;");
         let _ = writeln!(s, "        memmove(g_tx[{slot}], g_tx[{slot}] + n, (size_t)(g_tx_n[{slot}] - n));");
         let _ = writeln!(s, "        g_tx_n[{slot}] -= n;");
+        let _ = writeln!(s, "    }} else {{");
+        let _ = writeln!(s, "        g_tx_sent_n[{slot}] = 0;");
         let _ = writeln!(s, "    }}");
     }
+    let _ = writeln!(s, "}}\n");
+    // `o.sent` (8.8): `{ i32 len, [CAP x i8] }` an die uebergebene Stelle.
+    let _ = writeln!(s, "int takt_stream_sent(int s, void *out) {{");
+    let _ = writeln!(s, "    int k = takt_tx_slot(s);");
+    let _ = writeln!(s, "    unsigned char *o = (unsigned char *)out;");
+    let _ = writeln!(s, "    int n = k < 0 ? 0 : g_tx_sent_n[k];");
+    let _ = writeln!(
+        s,
+        "    o[0] = (unsigned char)n; o[1] = (unsigned char)(n >> 8); o[2] = (unsigned char)(n >> 16); o[3] = (unsigned char)(n >> 24);"
+    );
+    let _ = writeln!(s, "    if (n > 0) memcpy(o + 4, g_tx_sent[k], (size_t)n);");
+    let _ = writeln!(s, "    return n;");
     let _ = writeln!(s, "}}\n");
 }
 

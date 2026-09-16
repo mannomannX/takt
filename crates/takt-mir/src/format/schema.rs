@@ -84,7 +84,7 @@ codec_enum!(Accessor {
     13 Count, 14 Dropped, 15 Malformed, 16 Overflowed, 17 Free, 18 Jitter, 19 TimeWarped, 20 Done, 21 Result,
     22 Bit, 23 Bits, 24 WithBit, 25 Wrap(1 one w), 26 Min, 27 Max, 28 Mean, 29 Rms, 30 Last, 31 Encode, 32 Get,
     33 StartsWith, 34 Contains, 35 Armed, 36 Pre, 37 Post, 38 Samples, 39 Rate, 40 Remaining, 41 Truncated,
-    42 Peek,
+    42 Peek, 43 Sent,
 });
 codec_unit_enum!(UnaryOp { 0 Neg, 1 Not, 2 BitNot });
 codec_unit_enum!(BinaryOp {

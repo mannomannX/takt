@@ -1,0 +1,27 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output tx :stream<u8> @hw("uart0/tx") max_rate=100[Hz] capacity=16)
+(output got :int in 0..255 @hw("o/got") safe=0)
+(output any :bool @hw("o/any") safe=false)
+(command go)
+(machine dut
+  (var msg :bytes<8> default)
+  (initial IDLE)
+  (state IDLE
+    (enter
+      (.push msg 0x61)
+      (.push msg 0x62)
+      (.push msg 0x63))
+    (when go -> SENT
+      (send tx msg)))
+  (state SENT
+    (when false -> IDLE)))
+(machine model
+  (var last :bytes<1>? none)
+  (initial WATCH)
+  (state WATCH
+    (loop
+      (= last (.sent tx))
+      (= any (.valid last))
+      (= got (.len (.or last default))))))
