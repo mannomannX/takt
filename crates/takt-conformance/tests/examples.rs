@@ -25,9 +25,9 @@ mod common;
 
 /// Die Beispiele, die der M4-Exit nennt.
 ///
-/// 14.7 laeuft im Interpreter mit Golden-Traces; nativ fehlt ihm das
-/// Record-Muster auf einem Strom (unten). 14.8 gehoert zu M6
-/// (Flash-Modell-Kampagne) und hat seine Golden-Traces bereits.
+/// 14.7 und 14.8 laufen im Interpreter mit Golden-Traces; nativ fehlt
+/// dem einen das Record-Muster auf einem Strom, dem anderen die
+/// Signaturpruefung im Rahmen (unten).
 const EXAMPLES: [&str; 6] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6"];
 
 /// Die uebrigen, mit dem Konstrukt, an dem der Codegen abbricht.
@@ -40,7 +40,12 @@ const EXAMPLES: [&str; 6] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6"];
 /// 14.7: `when button matches Edge(rising = true) as e` — ein
 /// Record-Muster auf einem Strom. Der Codegen senkt Muster nur als Text
 /// (DFA); Record-Elemente haben im Strom noch keine Byte-Form.
-const OPEN: [(&str, &str); 1] = [("14_7", "Record-Muster in einem Guard")];
+///
+/// 14.8: `ecdsa_p256_verify` liegt in `takt-crypto` (plan/m6.md 2.4). Der
+/// C-Rahmen hat keine Signaturpruefung, und ein Rust-Symbol mit
+/// C-Schnittstelle braeuchte `unsafe` — das der Workspace verbietet. Der
+/// Interpreter prueft die Signatur; der Rahmen bindet das Programm nicht.
+const OPEN: [(&str, &str); 2] = [("14_7", "Record-Muster in einem Guard"), ("14_8", "ecdsa_p256_verify ohne C-Rahmen")];
 
 /// Wie viele Ticks verglichen werden.
 ///
@@ -127,5 +132,5 @@ fn the_remaining_examples_name_what_is_missing() {
         }
     }
     assert!(unerwartet.is_empty(), "{}", unerwartet.join("\n"));
-    assert_eq!(EXAMPLES.len() + OPEN.len(), 7, "die sechs Beispiele des M4-Exits und 14.7");
+    assert_eq!(EXAMPLES.len() + OPEN.len(), 8, "die sechs Beispiele des M4-Exits, 14.7 und 14.8");
 }

@@ -16,6 +16,8 @@ input  flash_status     : FlashStatus         @ hw(\"flash/status\") with max_ag
 input  flash_rx         : stream<bytes<4096>> @ hw(\"flash/rx\")     with max_rate = 200 Hz, capacity = 2
 output flash_status_sim : FlashStatus         @ sim(\"flash/status\")
 output flash_rx_sim     : stream<bytes<4096>> @ sim(\"flash/rx\")     with capacity = 4096
+input  flash_seed       : stream<u8>          @ hw(\"flash/seed\")   with max_rate = 200 kHz, capacity = 256
+input  flash_seed_addr  : int in 0..4194304   @ hw(\"flash/seed_addr\")
 output got   : int in 0..4096 @ hw(\"o/got\")   with safe = 0
 output first : int in 0..255  @ hw(\"o/first\") with safe = 0
 output phase : int in 0..9    @ hw(\"o/phase\") with safe = 0
@@ -47,7 +49,7 @@ fn trace(p: &Program, ticks: u64) -> String {
 fn erase_program_and_read_back() {
     let p = compile(
         "
-instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, sectors = 4, t_erase = 3 ms, t_program = 1 ms, cut_at_byte = 0)
+instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, seed = flash_seed, seed_addr = flash_seed_addr, sectors = 4, t_erase = 3 ms, t_program = 1 ms, cut_at_byte = 0)
 
 machine dut:
     var msg : bytes<8> = default
@@ -101,7 +103,7 @@ fn byte_at(b: bytes<4096>, pos: int) -> int:
             v = x as int
         i = i + 1
     return v
-instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, sectors = 4, t_erase = 3 ms, t_program = 1 ms, cut_at_byte = 2)
+instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, seed = flash_seed, seed_addr = flash_seed_addr, sectors = 4, t_erase = 3 ms, t_program = 1 ms, cut_at_byte = 2)
 
 machine dut:
     var msg : bytes<8> = default
@@ -143,7 +145,7 @@ machine dut:
 fn an_address_outside_the_sectors_is_rejected() {
     let p = compile(
         "
-instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, sectors = 4, t_erase = 3 ms, t_program = 1 ms, cut_at_byte = 0)
+instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, seed = flash_seed, seed_addr = flash_seed_addr, sectors = 4, t_erase = 3 ms, t_program = 1 ms, cut_at_byte = 0)
 
 machine dut:
     initial START
@@ -171,7 +173,7 @@ fn the_library_template_appears_only_when_instantiated() {
     assert_eq!(without.machines[0].name, "dut");
     let with = compile(
         "
-instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, sectors = 4, t_erase = 3 ms, t_program = 1 ms, cut_at_byte = 0)
+instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, seed = flash_seed, seed_addr = flash_seed_addr, sectors = 4, t_erase = 3 ms, t_program = 1 ms, cut_at_byte = 0)
 ",
     );
     let names: Vec<&str> = with.machines.iter().map(|m| m.name.as_str()).collect();

@@ -1942,7 +1942,7 @@ Die Enums `BootReason`, `ImageState` und `RebootCmd` sind vordefiniert, ebenso d
   ```
   input  efuse           : EfuseBlock @ hw("sys/efuse")                                             # Schluessel-Hashes/-Werte, min_version, Secure-Boot-Flags (vordefiniertes Record)
   input  image_confirmed : [2] bool   @ hw("sys/image_confirmed")                                   # je Slot: vom Anwendungsimage bestaetigt
-  output boot_jump       : u8         @ hw("sys/jump")       with safe = NONE                       # Sprung in den Slot; beendet den Lauf nach dem Commit
+  output boot_jump       : u8         @ hw("sys/jump")       with safe = 0                          # Sprung in Slot k als k + 1, 0 heisst kein Sprung; beendet den Lauf nach dem Commit
   output efuse_burn      : EfuseCmd   @ hw("sys/efuse_burn") with safe = NONE, irreversible = true  # einmalig programmierbare Bits
   ```
   Vor `boot_jump`, `reboot` und Deep Sleep schreibt die Runtime ausstehende `persist`-Änderungen synchron (5.9), danach stehen alle Outputs auf `safe`.
@@ -2595,17 +2595,15 @@ system:
     target = boot
     float  = f32
 
-unit sector = 4 KiB
-
-enum FlashCmd: NONE, ERASE(sector: u32), PROGRAM(addr: u32[B], len: u32[B] in 1 B..4096 B), READ(addr: u32[B], len: u32[B] in 1 B..4096 B)
-enum FlashStatus: IDLE, BUSY, DONE, ERROR(code: u8)
+# FlashCmd, FlashStatus (8.11) und EfuseBlock (12.7) sind vordefiniert;
+# Adressen und Laengen des Flash-Geraets zaehlen Bytes ohne Einheit.
 enum HeaderErr: MAGIC, SIZE, VERSION
 
 record ImageHeader layout little:
     magic   : u8 = 0xE9
     version : u32
-    size    : u32[B]
-    entry   : u32[B]
+    size    : u32
+    entry   : u32
     hash    : bytes<32>
     sig     : bytes<64>
 
@@ -2614,17 +2612,17 @@ input  flash_rx        : stream<bytes<4096>> @ hw("flash/rx")     with max_rate 
 output flash_cmd       : FlashCmd            @ hw("flash/cmd")    with safe = NONE
 input  efuse           : EfuseBlock          @ hw("sys/efuse")  # pubkey: bytes<64>, min_version: u32, ... (12.7)
 input  image_confirmed : [2] bool            @ hw("sys/image_confirmed")
-output boot_jump       : u8                  @ hw("sys/jump")     with safe = NONE
+output boot_jump       : u8                  @ hw("sys/jump")     with safe = 0
 # log geht im Startprofil an die UART der Runtime (12.8)
 
-const SLOT_BASE  : [2] u32[B] = [0x10000 B, 0x110000 B]
-const HEADER_LEN : u32[B] = 109 B
+const SLOT_BASE  : [2] u32 = [0x10000, 0x110000]
+const HEADER_LEN : u32 = 109
 param MAX_TRIALS : int in 1..5 = 3
 
 fn parse_header(b: bytes<4096>, min_version: u32) -> ImageHeader!HeaderErr:
     var h = ImageHeader.decode(b)
     if not h.valid: return ERR(MAGIC)
-    if h.size > 1 MiB: return ERR(SIZE)
+    if h.size > 1048576: return ERR(SIZE)
     if h.version < min_version: return ERR(VERSION)
     return OK(h)
 
@@ -2636,7 +2634,7 @@ machine bootloader:
     var hdr            : ImageHeader!HeaderErr = ERR(MAGIC)
     var img            : ImageHeader = default
     var ctx            : Sha256Ctx = sha256_init()
-    var done           : u32[B] = 0 B
+    var done           : u32 = 0
     initial SELECT
 
     state SELECT:
@@ -2654,7 +2652,7 @@ machine bootloader:
 
     state READ_HEADER:
         enter:
-            flash_cmd = READ(addr = SLOT_BASE[idx], len = 4096 B)
+            flash_cmd = READ(addr = SLOT_BASE[idx], size = 4096)
         when flash_rx as c:
             hdr = parse_header(c.data, efuse.min_version)
             flash_cmd = NONE
@@ -2665,7 +2663,7 @@ machine bootloader:
         when hdr.ok:
             img = hdr  # durch hdr.ok dominiert: implizites Auspacken
             ctx = sha256_init()
-            done = 0 B
+            done = 0
             -> HASHING
         when true:
             log "slot {idx}: bad header ({hdr.err})"
@@ -2674,10 +2672,10 @@ machine bootloader:
     state HASHING:  # ein Chunk je Tick; Budget statisch
         loop:
             if flash_status == IDLE and done < img.size:
-                flash_cmd = READ(addr = SLOT_BASE[idx] + HEADER_LEN + done, len = min(4096 B, img.size - done))
+                flash_cmd = READ(addr = SLOT_BASE[idx] + HEADER_LEN + done, size = min(4096, img.size - done))
         on flash_rx as c:
             ctx = sha256_update(ctx, c.data)
-            done += (c.data.len as u32) * (1 B)
+            done += c.data.len as u32
             flash_cmd = NONE
         when done >= img.size: -> VERIFY
         after 5 s: -> SLOT_FAILED
@@ -2696,7 +2694,7 @@ machine bootloader:
         enter:
             active = idx
             log "booting slot {idx}, version {img.version}"
-            boot_jump = idx as u8  # beendet den Lauf nach dem Commit; persist zuvor synchron geschrieben
+            boot_jump = (idx + 1) as u8  # Slot + 1, 0 heisst kein Sprung; beendet den Lauf nach dem Commit; persist zuvor synchron geschrieben
 
     state SLOT_FAILED:
         enter:

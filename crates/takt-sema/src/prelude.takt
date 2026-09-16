@@ -389,7 +389,11 @@ block writer[const N in 1..65536]():
 # Instanziieren an das Modell:
 #   instance flash = flash_model(cmd = flash_cmd, data = flash_data,
 #       status = flash_status_sim, rx = flash_rx_sim,
+#       seed = flash_seed, seed_addr = flash_seed_addr,
 #       sectors = 16, t_erase = 20 ms, t_program = 2 ms, cut_at_byte = 0)
+# `seed` und `seed_addr` fuellen den Flash vor dem Test: Ein Szenario stellt
+# `seed_addr` und sendet die Bytes, das Modell schreibt sie sofort ab dieser
+# Adresse (ohne Busy, ohne Zaehlung fuer `cut_at_byte`).
 enum FlashCmd: NONE, ERASE(sector: u32), PROGRAM(addr: u32, size: u32), READ(addr: u32, size: u32)
 enum FlashStatus: IDLE, BUSY, DONE, ERROR(code: u8)
 
@@ -407,8 +411,10 @@ fn flash_blank() -> bytes<256>:
 # mit ERROR(1) ab; geschrieben ist, was davor kam, der Rest bleibt
 # geloescht. `data.sent` sind die im Tick gesendeten Bytes (8.8), `cmd`
 # liest das Modell mit Unit-Delay.
-machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: output FlashStatus, rx: output stream<bytes<4096>>, sectors: int in 1..64, t_erase: Duration, t_program: Duration, cut_at_byte: int in 0..1_000_000):
+machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: output FlashStatus, rx: output stream<bytes<4096>>, seed: input stream<u8>, seed_addr: input int, sectors: int in 1..4096, t_erase: Duration, t_program: Duration, cut_at_byte: int in 0..1_000_000):
     var mem     : map<int, bytes<256>, 256> = default
+    var seed_at : int in 0..0xFFFF_FFFF = 0
+    var seeded  : int in 0..0xFFFF_FFFF = 0
     var addr    : int in 0..0xFFFF_FFFF = 0
     var size    : int in 0..0xFFFF_FFFF = 0
     var written : int in 0..0xFFFF_FFFF = 0
@@ -416,11 +422,22 @@ machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: outpu
     var cut     : bool = false
     var cut_done : bool = false
     var chunk   : bytes<256> = default
-    var page    : bytes<4096> = default
+    var page    : bytes<4352> = default
+    var out     : bytes<4096> = default
     var code    : u8 = 0
     var op      : int in 0..2 = 0
     var ok      : bool = false
     initial IDLE
+
+    loop:
+        if seed_addr.or(0) != seed_at:
+            seed_at = seed_addr.or(0)
+            seeded = 0
+        for x in seed:
+            chunk = mem.get((seed_at + seeded) / 256).or(flash_blank())
+            chunk[(seed_at + seeded) % 256] = x.data
+            ok = mem.insert((seed_at + seeded) / 256, chunk)
+            seeded = seeded + 1
 
     state IDLE:
         enter:
@@ -487,14 +504,20 @@ machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: outpu
             status = ERROR(code = code)
         when cmd == NONE: -> IDLE
 
+    # Lesen ab jeder Adresse: die Chunks ab `addr / 256`, dann der
+    # Ausschnitt ab `addr % 256`.
     state READING:
         enter:
             status = BUSY
             page = default
-            for i in range(16):
-                if page.len < size:
+            for i in range(17):
+                if page.len < addr % 256 + size:
                     ok = page.append(mem.get(addr / 256 + i).or(flash_blank()))
-            send rx, page[0..size]
+            out = default
+            for i in range(4096):
+                if i < size:
+                    out.push(page[addr % 256 + i])
+            send rx, out
         when true: -> DONE_WAIT
 
     state DONE_WAIT:

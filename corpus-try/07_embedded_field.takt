@@ -12,9 +12,7 @@ system:
 
 unit sector = 4096 B  # B, KiB, MiB sind vordefiniert (3.2)
 
-enum FlashCmd: NONE, ERASE(sector_no: u32), PROGRAM(addr: u32[B], size: u32[B]), READ(addr: u32[B], size: u32[B])
-enum FlashStatus: IDLE, BUSY, DONE, ERROR(code: u8)
-# ImageState (CONFIRMED, TRIAL) ist als System-Enum vordefiniert (12.7)
+# FlashCmd, FlashStatus (8.11) und ImageState (12.7) sind vordefiniert.
 
 record SelftestResult:
     passed : bool
@@ -24,7 +22,7 @@ native fn crc32c(b: bytes<256>) -> u32 with cost = {i32: 4000}, stack = 64, tota
 native fn sha256_init() -> Sha256Ctx with cost = 200, stack = 64, total
 native fn sha256_update(ctx: Sha256Ctx, chunk: bytes<256>) -> Sha256Ctx with cost = {i32: 90000}, stack = 256, total
 native fn sha256_final(ctx: Sha256Ctx) -> bytes<32> with cost = 3000, stack = 256, total
-native job verify_sig(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 2048, duration = 120 ms, total
+native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 2048, duration = 120 ms, total
 
 input  cell_mv       : u16[mV] in 2000 mV..4500 mV @ hw("afe/cell0")         with max_age = 100 ms, max_slew = 200 mV/s
 input  charger       : bool                        @ hw("gpio/vbus")         with wake = true
@@ -125,7 +123,7 @@ machine updater every 100 ms:
             flash_cmd = NONE
         loop:
             if flash_status == IDLE and done_bytes < IMAGE_SIZE:
-                flash_cmd = READ(addr = done_bytes, size = 256 B)
+                flash_cmd = READ(addr = (done_bytes / (1 B)) as u32, size = 256)
         on flash_rx as chunk:
             ctx = sha256_update(ctx, chunk.data)
             done_bytes += 256 B
@@ -136,7 +134,7 @@ machine updater every 100 ms:
     state VERIFYING:
         sequence:
             digest = sha256_final(ctx)
-            job sig = verify_sig(key = pubkey_bytes(), digest = digest, sig = signature_bytes())
+            job sig = ecdsa_p256_verify(key = pubkey_bytes(), digest = digest, sig = signature_bytes())
             until sig.done timeout 500 ms -> UPD_FAILED
             expect sig.result, "signature invalid"
             -> UPD_OK

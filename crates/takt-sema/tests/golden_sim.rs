@@ -71,6 +71,16 @@ fn program(example: &str, profile: Option<&str>) -> takt_mir::Program {
     out.program.unwrap_or_else(|| panic!("{example}: kein Programm"))
 }
 
+/// 13.6: Heisst eine Szenario-Maschine wie der Fall (Leerzeichen als `_`),
+/// laeuft sie mit; sonst kommt alles aus dem Stimulus.
+fn scenario_machine(p: &takt_mir::Program, case: &str) -> Option<String> {
+    p.machines
+        .iter()
+        .filter(|m| m.kind == takt_mir::machine::MachineKind::Scenario)
+        .find(|m| m.name.replace(' ', "_") == case || m.name == case)
+        .map(|m| m.name.clone())
+}
+
 #[test]
 fn golden_traces_match() {
     let update = std::env::var("UPDATE_GOLDEN").is_ok();
@@ -84,8 +94,13 @@ fn golden_traces_match() {
         let stimulus = Trace::parse(&stim_text).unwrap_or_else(|e| panic!("{}: {e}", stim_path.display()));
 
         let p = program(&case.example, case.profile.as_deref());
-        let options =
-            RunOptions { ticks: case.ticks, profile: case.profile.clone(), order_seed: None, ..Default::default() };
+        let options = RunOptions {
+            ticks: case.ticks,
+            profile: case.profile.clone(),
+            order_seed: None,
+            scenario: scenario_machine(&p, &case.scenario),
+            ..Default::default()
+        };
         let result =
             run(&p, &stimulus, &options).unwrap_or_else(|e| panic!("{}/{}: {e:?}", case.example, case.scenario));
         let text = result.trace.render();

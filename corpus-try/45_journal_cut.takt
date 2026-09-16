@@ -20,10 +20,12 @@ input  flash_status     : FlashStatus         @ hw("flash/status") with max_age 
 input  flash_rx         : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
 output flash_status_sim : FlashStatus         @ sim("flash/status")
 output flash_rx_sim     : stream<bytes<4096>> @ sim("flash/rx")    with capacity = 4096
+input  flash_seed       : stream<u8>          @ hw("flash/seed")   with max_rate = 200 kHz, capacity = 256
+input  flash_seed_addr  : int in 0..4194304   @ hw("flash/seed_addr")
 output found            : int in 0..3         @ hw("o/found")      with safe = 0
 output cut_in           : int in 0..2         @ hw("o/cut_in")     with safe = 0
 
-instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, sectors = 2, t_erase = 2 ms, t_program = 1 ms, cut_at_byte = CUT)
+instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, seed = flash_seed, seed_addr = flash_seed_addr, sectors = 2, t_erase = 2 ms, t_program = 1 ms, cut_at_byte = CUT)
 
 # Was ein Slot beim Start hergibt: 1 alter Stand, 2 neuer Stand, 3 etwas anderes.
 record Entry:

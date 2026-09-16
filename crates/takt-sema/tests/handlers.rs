@@ -646,7 +646,7 @@ machine watch:
 #[test]
 fn an_output_stream_appears_as_the_driver_takes_it() {
     // 8.8: „die Simulation leert exakt `max_rate * T0` Bytes pro Tick"; bei
-    // 1 kHz und 1 ms ist das ein Byte je Tick.
+    // 1 kHz und 1 ms ist das ein Byte je Tick — auch im Tick 0 (FB-168).
     let trace = driven(
         "\
 output dut_tx : stream<line<64>> @ hw(\"uart0/tx\") with max_rate = 1000 Hz, capacity = 256
@@ -660,8 +660,8 @@ machine talker:
         "",
         3,
     );
-    assert!(trace.contains("t=1 out dut_tx [0x50]\n"), "erst `P`: {trace}");
-    assert!(trace.contains("t=2 out dut_tx [0x49]\n"), "dann `I`: {trace}");
+    assert!(trace.contains("t=0 out dut_tx [0x50]\n"), "erst `P`: {trace}");
+    assert!(trace.contains("t=1 out dut_tx [0x49]\n"), "dann `I`: {trace}");
 }
 
 #[test]

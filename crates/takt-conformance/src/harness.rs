@@ -242,6 +242,8 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     }
     psi_commit(&mut s, p, &driven, "    ");
     sim_bindings(&mut s, p, "    ");
+    // 8.8: Auch im Tick 0 holt der Treiber ab, was `enter` gesendet hat.
+    let _ = writeln!(s, "    takt_tx_commit(0);");
     let _ = writeln!(s, "    dump(0);");
     let _ = writeln!(s, "    for (g_tick = 1; g_tick <= {ticks}; g_tick++) {{");
     // 9.8: `apply_scheduled(k)` stellt zu Tick-Beginn, was faellig ist —

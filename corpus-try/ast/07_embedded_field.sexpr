@@ -6,16 +6,6 @@
   (tick_source "gptimer0")
   (tick_tolerance 2[pct] for=10))
 (unit sector 4096 B)
-(enum FlashCmd
-  (NONE)
-  (ERASE (sector_no: u32))
-  (PROGRAM (addr: u32[B]) (size: u32[B]))
-  (READ (addr: u32[B]) (size: u32[B])))
-(enum FlashStatus
-  (IDLE)
-  (BUSY)
-  (DONE)
-  (ERROR (code: u8)))
 (record SelftestResult
   (passed: bool)
   (code: int in 0..255))
@@ -23,7 +13,7 @@
 (native-fn sha256_init () -> Sha256Ctx cost=200 stack=64)
 (native-fn sha256_update (ctx:Sha256Ctx chunk:bytes<256>) -> Sha256Ctx cost={i32:90000} stack=256)
 (native-fn sha256_final (ctx:Sha256Ctx) -> bytes<32> cost=3000 stack=256)
-(native-job verify_sig (key:bytes<64> digest:bytes<32> sig:bytes<64>) -> bool cost=300 stack=2048 duration=120ms)
+(native-job ecdsa_p256_verify (key:bytes<64> digest:bytes<32> sig:bytes<64>) -> bool cost=300 stack=2048 duration=120ms)
 (input cell_mv :u16[mV] in 2000[mV]..4500[mV] @hw("afe/cell0") max_age=100ms max_slew=200[mV/s])
 (input charger :bool @hw("gpio/vbus") wake=true)
 (input button :stream<Edge> @hw("gpio/btn") max_rate=50[Hz] wake=true)
@@ -107,7 +97,7 @@
       (= flash_cmd NONE))
     (loop
       (if (and (== flash_status IDLE) (< done_bytes IMAGE_SIZE))
-        (= flash_cmd (READ addr=done_bytes size=256[B]))))
+        (= flash_cmd (READ addr=(as (/ done_bytes 1[B]) u32) size=256))))
     (on flash_rx as chunk
       (= ctx (call sha256_update ctx (.data chunk)))
       (+= done_bytes 256[B])
@@ -117,7 +107,7 @@
   (state VERIFYING
     (sequence
       (= digest (call sha256_final ctx))
-      (job sig verify_sig key=(call pubkey_bytes) digest=digest sig=(call signature_bytes))
+      (job sig ecdsa_p256_verify key=(call pubkey_bytes) digest=digest sig=(call signature_bytes))
       (until (.done sig) timeout=500ms -> UPD_FAILED)
       (expect (.result sig) "signature invalid")
       (-> UPD_OK)))

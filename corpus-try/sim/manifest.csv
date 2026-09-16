@@ -17,3 +17,6 @@ beispiel,szenario,ticks,profil,verdikt,beschreibung
 14_7,charge,1200,,INCONCLUSIVE,"Selbsttest, Laden mit Zyklenzaehler ueber die Ladegeraet-Flanke, Abziehen nach IDLE_WAIT (5.9, 5.7)"
 14_7,protect,1600,,FAIL,"Zelle 2 ueber V_MAX: Interlock, PROTECT, nach 10 s zurueck in den Selbsttest (5.3)"
 11_4,blocks,200,,INCONCLUSIVE,"Die Bloecke der Bibliothek an festen Anregungen, writer und reader im Rundlauf (11.4)"
+14_8,slot0,600,,INCONCLUSIVE,"Slot 0 traegt ein gueltiges Image: Kopf, Chunk-Hash, Signatur als Job, Sprung; boot_jump beendet den Lauf vor dem Verdikt (12.7)"
+14_8,fallback,600,,INCONCLUSIVE,"Slot 0 mit falschem Digest, Slot 1 gueltig: SLOT_FAILED, dann Sprung in Slot 1"
+14_8,no_image,600,,PASS,"Kein Image in beiden Slots: SLOT_FAILED je Versuch, dann HALT"

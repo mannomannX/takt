@@ -724,8 +724,31 @@ impl<'p> Sim<'p> {
         self.advance_counters(&active);
         self.publish_all();
         self.image.commit_published();
+        self.drain_tx(0);
         self.image.commit_outputs();
         Ok(())
+    }
+
+    /// Der Treiber holt die gesendeten Bytes ab (8.8) — in jedem Tick, auch
+    /// im Tick 0. Ein Modell liest den Ausgabestrom mit Unit-Delay (8.3):
+    /// was der Treiber jetzt abgeholt hat, steht im naechsten Tick im Fenster.
+    fn drain_tx(&mut self, now: i64) {
+        let program = self.loaded.program;
+        for tx in self.image.tx.values_mut() {
+            tx.drain();
+        }
+        let taken: Vec<(ChannelId, Vec<u8>)> = self
+            .image
+            .tx
+            .iter()
+            .filter(|(c, t)| !t.sent.is_empty() && self.image.channel_bufs.contains_key(c))
+            .map(|(c, t)| (*c, t.sent.clone()))
+            .collect();
+        for (c, bytes) in taken {
+            let value = crate::image::element_of(&bytes, program.channels[c.index()].ty, program);
+            let drop_oldest = matches!(program.channels[c.index()].attrs.overflow, Some(Overflow::DropOldest));
+            self.image.push_element(c, now, value, drop_oldest);
+        }
     }
 
     /// `deliver(D_k)` (9.6): die im vorigen Tick gesendeten Elemente eines
@@ -1010,24 +1033,7 @@ impl<'p> Sim<'p> {
         // Commit (9.4, 9.8).
         let now = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(tick_ns);
         self.image.apply_scheduled(now);
-        // Der Treiber holt die gesendeten Bytes ab (8.8).
-        for tx in self.image.tx.values_mut() {
-            tx.drain();
-        }
-        // Ein Modell liest den Ausgabestrom mit Unit-Delay (8.3): was der
-        // Treiber jetzt abgeholt hat, steht im naechsten Tick im Fenster.
-        let taken: Vec<(ChannelId, Vec<u8>)> = self
-            .image
-            .tx
-            .iter()
-            .filter(|(c, t)| !t.sent.is_empty() && self.image.channel_bufs.contains_key(c))
-            .map(|(c, t)| (*c, t.sent.clone()))
-            .collect();
-        for (c, bytes) in taken {
-            let value = crate::image::element_of(&bytes, program.channels[c.index()].ty, program);
-            let drop_oldest = matches!(program.channels[c.index()].attrs.overflow, Some(Overflow::DropOldest));
-            self.image.push_element(c, now, value, drop_oldest);
-        }
+        self.drain_tx(now);
         self.image.commit_outputs();
         self.image.clear_commands();
         for state in &mut self.states {

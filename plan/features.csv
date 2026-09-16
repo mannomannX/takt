@@ -134,7 +134,7 @@ SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil
 SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig,
 SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig,
 SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),offen,Board 2 (RV32IMAC)
-SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise,
+SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),fertig,Wortlaut in `corpus-try/sim/14_8/program.takt` mit den kuratierten Namen (FB-166); im Interpreter mit Flash-Modell und Signaturpruefung
 G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),fertig,
 G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),fertig,
 G-system_decl,Grammatik,2.3,system_decl,,M0 (Parser/MIR-Entwurf),fertig,
@@ -896,7 +896,7 @@ EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-S
 EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig,
 EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig,
 EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),teilweise,Board 2 (RV32IMAC)
-EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise,
+EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise,`corpus-try/sim/14_8/` mit drei Szenarien und Golden-Traces (M6 Schritt 17); differentiell offen: `ecdsa_p256_verify` hat keinen C-Rahmen (examples.rs OPEN)
 PRINC-1,Leitentscheidung,0.2,Synchron-zyklische Multirate-Ausführung.,,Doku/Rationale,rationale,
 PRINC-2,Leitentscheidung,0.2,Drei Konstruktebenen.,,Doku/Rationale,rationale,
 PRINC-3,Leitentscheidung,0.2,"Hierarchische Zustände, Parallelität nur zwischen Maschinen.",,Doku/Rationale,rationale,

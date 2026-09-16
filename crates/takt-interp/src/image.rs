@@ -443,10 +443,11 @@ impl Image {
             if matches!(p.types.list.get(p.channels[inp.index()].ty.index()), Some(Type::Stream(_))) {
                 let sent = self.tx.get_mut(&out).map(|t| std::mem::take(&mut t.sent)).unwrap_or_default();
                 if !sent.is_empty() {
-                    let value = element_of(&sent, p.channels[inp.index()].ty, p);
                     let drop_oldest =
                         matches!(p.channels[inp.index()].attrs.overflow, Some(takt_mir::program::Overflow::DropOldest));
-                    self.push_element(inp, now, value, drop_oldest);
+                    for value in elements_of(&sent, p.channels[inp.index()].ty, p) {
+                        self.push_element(inp, now, value, drop_oldest);
+                    }
                 }
                 continue;
             }
@@ -567,6 +568,22 @@ pub fn element_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Value {
         }
         Some(Type::Str { .. }) => Value::Str(String::from_utf8_lossy(bytes).to_string()),
         _ => Value::Bytes(bytes.to_vec()),
+    }
+}
+
+/// Die Elemente, die ein Byteblock in einem Strom ergibt: je Byte eines in
+/// einem `stream<u8>` — `send` eines `bytes<N>` schickt N Elemente (8.8) —,
+/// sonst ein Element.
+pub fn elements_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Vec<Value> {
+    let elem = match p.types.list.get(ty.index()) {
+        Some(Type::Stream(e)) => *e,
+        _ => return vec![Value::Bytes(bytes.to_vec())],
+    };
+    match p.types.list.get(elem.index()) {
+        Some(Type::Int { width: takt_mir::types::IntWidth::U8, .. }) => {
+            bytes.iter().map(|b| Value::UInt(u64::from(*b))).collect()
+        }
+        _ => vec![element_of(bytes, ty, p)],
     }
 }
 

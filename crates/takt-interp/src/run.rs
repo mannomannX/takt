@@ -601,6 +601,8 @@ impl<'p> Writer<'p> {
             self.lines.push(TraceLine { tick: 0, kind: LineKind::Output { channel: c.name.clone(), value: text } });
         }
         self.publish(sim, 0);
+        // 8.8: Auch im Tick 0 holt der Treiber ab, was `enter` gesendet hat.
+        self.sent(sim, 0);
         // Die Zaehler stehen in Tick 0 auf null; nur ihre Aenderungen sind
         // eine Beobachtung, darum den Anfangsstand nur merken.
         self.stream_counters(sim, 0);
