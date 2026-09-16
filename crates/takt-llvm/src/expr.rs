@@ -994,30 +994,71 @@ fn native_call(
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
     let n = p.natives.get(native.index()).ok_or(NotYet { what: "native Funktion" })?;
-    let mut ops = Vec::with_capacity(args.len());
-    let mut sig = Vec::with_capacity(args.len());
+    let mut ops = Vec::with_capacity(args.len() + 1);
+    let mut sig = Vec::with_capacity(args.len() + 1);
     for a in args {
         let v = lower(a, p, m, vars)?;
-        // Ein Byteblock geht als Zeiger und Laenge; sein Wert waere eine
-        // Kopie von bis zu mehreren KiB je Aufruf.
-        if let LlvmType::Struct(_) = &v.ty {
-            let tmp = m.inst(&format!("alloca {}", v.ty));
-            m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
-            let len = m.inst(&format!("extractvalue {} {}, 0", v.ty, v.value));
-            let data = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", v.ty));
-            ops.push(format!("ptr {data}"));
-            ops.push(format!("i32 {len}"));
-            sig.push("ptr".to_string());
-            sig.push("i32".to_string());
-            continue;
+        match p.types.list.get(a.ty.index()) {
+            // Ein Byteblock geht als Zeiger und Laenge; sein Wert waere eine
+            // Kopie von bis zu mehreren KiB je Aufruf.
+            Some(Type::Bytes { .. }) => {
+                let tmp = m.inst(&format!("alloca {}", v.ty));
+                m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+                let len = m.inst(&format!("extractvalue {} {}, 0", v.ty, v.value));
+                let data = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", v.ty));
+                ops.push(format!("ptr {data}"));
+                ops.push(format!("i32 {len}"));
+                sig.push("ptr".to_string());
+                sig.push("i32".to_string());
+            }
+            // Ein Record geht in kanonischer Byteform (5.9): die TCB kennt
+            // kein Ziel-Layout.
+            Some(Type::Record(_)) => {
+                let tmp = m.inst(&format!("alloca {}", v.ty));
+                m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+                let buf = canonical_buffer(p, a.ty, m)?;
+                let len = crate::persist::encode_canonical(p, a.ty, tmp, buf, m)?;
+                let len32 = m.inst(&format!("trunc i64 {len} to i32"));
+                ops.push(format!("ptr {buf}"));
+                ops.push(format!("i32 {len32}"));
+                sig.push("ptr".to_string());
+                sig.push("i32".to_string());
+            }
+            _ => {
+                ops.push(format!("{} {}", v.ty, v.value));
+                sig.push(v.ty.to_string());
+            }
         }
-        ops.push(format!("{} {}", v.ty, v.value));
-        sig.push(v.ty.to_string());
     }
     let symbol = format!("takt_native_{}", crate::fns::sanitized(&n.name));
-    m.needs_intrinsic(&format!("{want} @{symbol}({})", sig.join(", ")));
-    let r = m.inst(&format!("call {want} @{symbol}({})", ops.join(", ")));
-    Ok(Lowered { value: r.to_string(), ty: want.clone() })
+    // Ein Skalar kommt als Wert zurueck; einen Byteblock oder ein Record
+    // schreibt die Funktion in kanonischer Form in einen Puffer des
+    // Aufrufers.
+    match p.types.list.get(n.ret.index()) {
+        Some(Type::Bytes { .. } | Type::Record(_)) => {
+            let buf = canonical_buffer(p, n.ret, m)?;
+            ops.push(format!("ptr {buf}"));
+            sig.push("ptr".to_string());
+            m.needs_intrinsic(&format!("void @{symbol}({})", sig.join(", ")));
+            m.void_inst(&format!("call void @{symbol}({})", ops.join(", ")));
+            let dst = m.inst(&format!("alloca {want}"));
+            crate::persist::decode_canonical(p, n.ret, buf, dst, m)?;
+            let v = m.inst(&format!("load {want}, ptr {dst}"));
+            Ok(Lowered { value: v.to_string(), ty: want.clone() })
+        }
+        _ => {
+            m.needs_intrinsic(&format!("{want} @{symbol}({})", sig.join(", ")));
+            let r = m.inst(&format!("call {want} @{symbol}({})", ops.join(", ")));
+            Ok(Lowered { value: r.to_string(), ty: want.clone() })
+        }
+    }
+}
+
+/// Ein Puffer fuer die kanonische Form eines Typs, in seiner oberen
+/// Schranke (`bytes::max_size`).
+fn canonical_buffer(p: &Program, ty: TypeId, m: &mut Module) -> Result<crate::emit::Reg, NotYet> {
+    let cap = takt_mir::bytes::max_size(p, ty).map_err(|_| NotYet { what: "Typ ohne Byteform" })?;
+    Ok(m.inst(&format!("alloca [{cap} x i8]")))
 }
 
 /// `default` eines Typs (3.7): 0, `false`, leere Sammlung.

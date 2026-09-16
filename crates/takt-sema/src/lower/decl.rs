@@ -15,6 +15,7 @@ use takt_syntax::ast;
 use takt_syntax::subtext::address_text;
 
 use super::{BlockKind, FnCtx, Lowerer, SC2, SC3};
+use crate::checks::SC31;
 use crate::symbols::Entity;
 use crate::units::{Unit, rational_from_text};
 
@@ -845,6 +846,44 @@ impl Lowerer<'_> {
         Some((ctx.locals, result))
     }
 
+    /// Pruefung 31: Die Deklaration passt zur kuratierten Signatur — Zahl
+    /// und Art der Parameter, Art des Ergebnisses (4.5). Sonst braeche
+    /// die Grenze erst beim Aufruf.
+    fn native_signature(&mut self, f: takt_native::Native, params: &[FnParam], ret: TypeId, span: Span) -> bool {
+        use takt_native::Kind;
+        let sig = f.signature();
+        let describe = |k: Kind| match k {
+            Kind::Bytes => "bytes<N>",
+            Kind::U8 => "u8",
+            Kind::U16 => "u16",
+            Kind::U32 => "u32",
+            Kind::Digest => "bytes<32>",
+            Kind::Sha256Ctx => "Sha256Ctx",
+        };
+        let fits = |this: &Self, k: Kind, ty: TypeId| match (k, this.ty(ty)) {
+            (Kind::Bytes, Type::Bytes { .. }) => true,
+            (Kind::Digest, Type::Bytes { cap }) => *cap == 32,
+            (Kind::U8, Type::Int { width: IntWidth::U8, .. })
+            | (Kind::U16, Type::Int { width: IntWidth::U16, .. })
+            | (Kind::U32, Type::Int { width: IntWidth::U32, .. }) => true,
+            (Kind::Sha256Ctx, Type::Record(r)) => this.program.records[r.index()].name == "Sha256Ctx",
+            _ => false,
+        };
+        let ok = params.len() == sig.params.len()
+            && params.iter().zip(sig.params).all(|(p, k)| fits(self, *k, p.ty))
+            && fits(self, sig.ret, ret);
+        if !ok {
+            let want: Vec<&str> = sig.params.iter().map(|k| describe(*k)).collect();
+            self.error_hint(
+                SC31,
+                span,
+                format!("`{}` hat die Signatur ({}) -> {} (4.5)", f.name(), want.join(", "), describe(sig.ret)),
+                "die Deklaration muss der kuratierten Funktion entsprechen (grammar/takt-native.md)",
+            );
+        }
+        ok
+    }
+
     /// `native fn`/`native job` mit Kostenvertrag (4.5).
     pub fn native_decl(&mut self, decl: &ast::NativeDecl) {
         if !decl.generics.is_empty() {
@@ -865,12 +904,43 @@ impl Lowerer<'_> {
                 SC3,
                 decl.span,
                 format!("`{}` gehoert nicht zur kuratierten Menge nativer Funktionen (4.5)", decl.name.name),
-                "verfuegbar sind: crc32, crc32c, crc16, sum8 (grammar/takt-native.md);                  Projekt-Natives sind v1.1",
+                format!(
+                    "verfuegbar sind: {} (grammar/takt-native.md); Projekt-Natives sind v1.1",
+                    takt_native::Native::ALL.map(takt_native::Native::name).join(", ")
+                ),
             );
             return;
         }
         let Some(params) = self.params(&decl.params) else { return };
         let Some(ret) = self.resolve_type(&decl.ret) else { return };
+        if let Some(f) = takt_native::Native::by_name(&decl.name.name) {
+            if !self.native_signature(f, &params, ret, decl.span) {
+                return;
+            }
+        }
+        // 4.5: `duration` ist die Zusage eines Jobs — ein `fn` laeuft im
+        // Tick und hat keine, ein `job` hat immer eine.
+        match (decl.kind, &decl.duration) {
+            (ast::NativeKind::Fn, Some(_)) => {
+                self.error_hint(
+                    SC31,
+                    decl.span,
+                    "`duration` nur an einem `native job` (4.5)",
+                    "`native job` oder ohne `duration`",
+                );
+                return;
+            }
+            (ast::NativeKind::Job, None) => {
+                self.error_hint(
+                    SC31,
+                    decl.span,
+                    "ein `native job` nennt seine `duration` (4.5)",
+                    "`duration = 120 ms` in der `with`-Klausel",
+                );
+                return;
+            }
+            _ => {}
+        }
         let mut cost = CostVec::default();
         match &decl.cost {
             ast::CostSpec::Single(n) => cost.i32 = super::expr::parse_int(&n.text).unwrap_or(0) as u64,

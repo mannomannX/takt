@@ -1,0 +1,50 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Native Funktionen ueber die Grenze zur TCB (4.5): ein Digest am Stueck,
+# derselbe in Chunks ueber das opake Record `Sha256Ctx` (kanonische
+# Byteform, 5.9) und ein HMAC. Je das erste Wort des Digests, damit der
+# Trace es zeigt.
+
+native fn sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, total
+native fn sha256_init() -> Sha256Ctx with cost = 8, stack = 32, total
+native fn sha256_update(ctx: Sha256Ctx, chunk: bytes<64>) -> Sha256Ctx with cost = 2300, stack = 512, total
+native fn sha256_final(ctx: Sha256Ctx) -> bytes<32> with cost = 3600, stack = 512, total
+native fn hmac_sha256(key: bytes<64>, msg: bytes<64>) -> bytes<32> with cost = 90000, stack = 768, total
+
+output one_shot : u32 @ hw("o/one_shot") with safe = 0
+output chunked  : u32 @ hw("o/chunked")  with safe = 0
+output mac      : u32 @ hw("o/mac")      with safe = 0
+
+fn word(d: bytes<32>) -> u32:
+    return (d[0] as u32) | ((d[1] as u32) << 8) | ((d[2] as u32) << 16) | ((d[3] as u32) << 24)
+
+machine m:
+    var msg  : bytes<64> = default
+    var head : bytes<64> = default
+    var tail : bytes<64> = default
+    var key  : bytes<64> = default
+    var ctx  : Sha256Ctx = sha256_init()
+    var d    : bytes<32> = default
+    initial RUN
+    state RUN:
+        enter:
+            msg.push(0x61)
+            msg.push(0x62)
+            msg.push(0x63)
+            head.push(0x61)
+            tail.push(0x62)
+            tail.push(0x63)
+            key.push(0x4A)
+            key.push(0x65)
+            key.push(0x66)
+            key.push(0x65)
+            d = sha256(msg)
+            one_shot = word(d)
+            ctx = sha256_update(ctx, head)
+            ctx = sha256_update(ctx, tail)
+            d = sha256_final(ctx)
+            chunked = word(d)
+            d = hmac_sha256(key, msg)
+            mac = word(d)

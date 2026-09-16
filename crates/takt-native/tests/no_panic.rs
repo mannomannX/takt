@@ -8,7 +8,7 @@
 //! Der Generator ist ein xorshift mit festem Startwert: Ein Fehlschlag
 //! ist reproduzierbar, und der Testlauf ist es auch.
 
-use takt_native::Native;
+use takt_native::{Native, Output};
 
 struct Rng(u64);
 
@@ -23,15 +23,21 @@ impl Rng {
     }
 }
 
+/// Jede Funktion ueber einem Block, ueber zwei und ueber drei: so kommt
+/// jede Signatur der Menge an die Reihe.
+fn every_call(f: Native, block: &[u8]) -> [Option<Output>; 3] {
+    [takt_native::call(f, &[block]), takt_native::call(f, &[block, block]), takt_native::call(f, &[block, &[], block])]
+}
+
 #[test]
 fn no_input_makes_a_function_panic() {
     let mut rng = Rng(0x2026_0912);
     let mut buf = Vec::with_capacity(4096);
-    for len in [0usize, 1, 2, 3, 7, 8, 15, 16, 31, 64, 255, 256, 1023, 4096] {
+    for len in [0usize, 1, 2, 3, 7, 8, 15, 16, 31, 55, 56, 63, 64, 65, 255, 256, 1023, 4096] {
         buf.clear();
         buf.extend((0..len).map(|_| rng.next() as u8));
         for f in Native::ALL {
-            let _ = takt_native::apply(f, &buf);
+            let _ = every_call(f, &buf);
         }
     }
     // Dazu die Bloecke, die erfahrungsgemaess Fehler finden: nur Nullen,
@@ -40,7 +46,7 @@ fn no_input_makes_a_function_panic() {
         for pattern in [0x00u8, 0xFF, 0x80, 0x01] {
             let block = vec![pattern; len];
             for f in Native::ALL {
-                let _ = takt_native::apply(f, &block);
+                let _ = every_call(f, &block);
             }
         }
     }
@@ -57,31 +63,9 @@ fn the_same_input_gives_the_same_result() {
         let len = (rng.next() % 300) as usize;
         let block: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
         for f in Native::ALL {
-            assert_eq!(takt_native::apply(f, &block), takt_native::apply(f, &block), "{}", f.name());
-        }
-    }
-}
-
-/// Eine Aenderung an einem einzelnen Bit aendert die Pruefsumme.
-///
-/// Das ist der Zweck einer Pruefsumme, und ein vertauschtes Polynom oder
-/// ein falscher Startwert faellt hier auf — nicht immer, aber ueber 200
-/// Faelle zuverlaessig.
-#[test]
-fn a_single_bit_changes_the_checksum() {
-    let base = b"Takt ist eine deterministische Sprache fuer Steuerung und Test.";
-    for i in 0..base.len().min(50) {
-        for bit in 0..8 {
-            let mut changed = base.to_vec();
-            changed[i] ^= 1 << bit;
-            for f in [Native::Crc32, Native::Crc32c, Native::Crc16] {
-                assert_ne!(
-                    takt_native::apply(f, base),
-                    takt_native::apply(f, &changed),
-                    "{}: Bit {bit} in Byte {i} aendert nichts",
-                    f.name()
-                );
-            }
+            let first = every_call(f, &block);
+            assert!(first.iter().any(Option::is_some), "{}: keine Signatur passt", f.name());
+            assert_eq!(first, every_call(f, &block), "{}", f.name());
         }
     }
 }

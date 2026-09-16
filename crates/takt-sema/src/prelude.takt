@@ -70,6 +70,13 @@ record LastFault:
 record Edge:
     rising : bool
 
+# Zustand der Chunk-Natives sha256_init/update/final (4.5): opak heisst,
+# ein Programm liest und schreibt seine Felder nicht.
+record Sha256Ctx:
+    h     : [8] u32
+    buf   : bytes<64>
+    total : u64
+
 # --- Standardbibliothek: reine Funktionen (11.4) -----------------------
 fn clamp[U](x: float[U], lo: float[U], hi: float[U]) -> float[U]:
     return lo if x < lo else (hi if x > hi else x)

@@ -402,3 +402,32 @@ impl Reader<'_> {
         })
     }
 }
+
+/// Die kanonische Form eines Werts fuer die Grenze zu einer nativen
+/// Funktion (4.5): schreibt den Wert unter `src` nach `out` und liefert
+/// die Laenge.
+pub(crate) fn encode_canonical(
+    p: &Program,
+    ty: TypeId,
+    src: Reg,
+    out: Reg,
+    module: &mut Module,
+) -> Result<Reg, NotYet> {
+    let zero = module.inst("add i64 0, 0");
+    let mut w = Writer { p, out, module };
+    w.encode(ty, src, zero)
+}
+
+/// Liest die kanonische Form ab `input` in den Wert unter `dst`. Die
+/// Native gehoert zur TCB; ihre Bytes gelten ohne Pruefung.
+pub(crate) fn decode_canonical(
+    p: &Program,
+    ty: TypeId,
+    input: Reg,
+    dst: Reg,
+    module: &mut Module,
+) -> Result<(), NotYet> {
+    let zero = module.inst("add i64 0, 0");
+    let mut r = Reader { p, input, end: zero, labels: 0, prefix: "native".into(), module };
+    r.decode(ty, dst, zero, true).map(|_| ())
+}

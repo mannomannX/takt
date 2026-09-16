@@ -71,6 +71,9 @@ pub const SC61: &str = "SC-61";
 pub const SC62: &str = "SC-62";
 /// Kostenbudget je Maschine, Schedulability und Stack-Schranke (9.4.3, 7.2).
 pub const SC12: &str = "SC-12";
+/// Native Funktionen: kuratierte Menge, Signatur, `cost`/`stack`/`total`,
+/// `duration` nur an Jobs (4.5).
+pub const SC31: &str = "SC-31";
 /// Schedulability mit Abort-Phase, klassenweise (7.2).
 pub const SC32: &str = "SC-32";
 /// `idle`: kein `loop:`/Handler, Guards nur ueber Wake-Quellen (5.10).

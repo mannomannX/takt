@@ -35,5 +35,16 @@ pub fn cost_of(f: Native) -> Cost {
         Native::Crc16 => Cost { per_byte: 25, call: 2, stack: 16 },
         // Eine Addition je Byte.
         Native::Sum8 => Cost { per_byte: 1, call: 1, stack: 8 },
+        // Je 64-Byte-Block 64 Runden zu rund 20 Operationen und 48
+        // Schedule-Schritte zu rund 10, dazu die Byteschleife: 32 je Byte.
+        // Das Finale fuellt bis zu zwei Bloecke; der Schedule braucht 256
+        // Byte Stack, der Zustand 112.
+        Native::Sha256 => Cost { per_byte: 32, call: 3600, stack: 512 },
+        // Zwei Hashes: innen 64 Byte Pad plus Nachricht, aussen 64 plus 32.
+        Native::HmacSha256 => Cost { per_byte: 32, call: 7200, stack: 768 },
+        Native::Sha256Init => Cost { per_byte: 0, call: 8, stack: 32 },
+        // Dazu das Lesen und Schreiben der kanonischen Form (108 Byte).
+        Native::Sha256Update => Cost { per_byte: 32, call: 240, stack: 512 },
+        Native::Sha256Final => Cost { per_byte: 0, call: 3600, stack: 512 },
     }
 }

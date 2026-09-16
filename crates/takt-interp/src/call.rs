@@ -131,29 +131,59 @@ impl Ctx<'_, '_> {
 
     /// Native Funktionen (4.5): die kuratierte Menge kommt mit `takt-native` (M4).
     pub fn call_native(&mut self, id: NativeId, args: Vec<Value>, _span: Span) -> EvalResult<Value> {
-        let n = &self.loaded.program.natives[id.index()];
+        use takt_native::{Native, Output};
+        let p = self.loaded.program;
+        let n = &p.natives[id.index()];
         // 4.5: Nur die kuratierte Menge. Was nicht darin ist, lehnt der
-        // Compiler ab (Pruefung im Sema); der Trap hier ist der Rueckhalt
-        // fuer eine MIR, die daran vorbeikam.
-        let Some(f) = takt_native::Native::by_name(&n.name) else {
+        // Compiler ab (Pruefung 31); der Trap hier ist der Rueckhalt fuer
+        // eine MIR, die daran vorbeikam.
+        let Some(f) = Native::by_name(&n.name) else {
             return bug(format!(
-                "`{}` gehoert nicht zur kuratierten Menge (4.5); \
-                 ihre Vektoren stehen in grammar/takt-native.md",
+                "`{}` gehoert nicht zur kuratierten Menge (4.5);                  ihre Vektoren stehen in grammar/takt-native.md",
                 n.name
             ));
         };
-        // Die Pruefsummen nehmen einen Byteblock. Andere Signaturen kommen
-        // mit den Funktionen, die sie brauchen.
-        let Some(Value::Bytes(bytes)) = args.first() else {
-            return bug(format!("`{}` erwartet `bytes<N>`", n.name));
+        // Die Argumente in der Form der Grenze: `bytes<N>` als Byteblock,
+        // ein Record in der kanonischen Byteform (5.9).
+        let mut blocks: Vec<Vec<u8>> = Vec::with_capacity(args.len());
+        for (v, param) in args.iter().zip(&n.params) {
+            blocks.push(match v {
+                Value::Bytes(b) => b.clone(),
+                other => crate::bytes::encode(p, other, param.ty)
+                    .map_err(|e| Trap::Bug(format!("`{}`: Argument ohne Byteform ({e:?})", n.name)))?,
+            });
+        }
+        let inputs: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
+        let ctx_value = |ctx: &takt_native::sha256::Ctx| {
+            let mut buf = [0u8; takt_native::sha256::CTX_MAX_BYTES];
+            let len = ctx.to_bytes(&mut buf).map_err(|_| Trap::Bug("Sha256Ctx: Puffer zu klein".into()))?;
+            crate::bytes::decode(p, &buf[..len], n.ret).map_err(|e| Trap::Bug(format!("Sha256Ctx: {e:?}")))
         };
-        let raw = takt_native::apply(f, bytes);
-        // Die Breite steht im Rueckgabetyp; `apply` liefert `u64`, weil
-        // die Funktionen sich darin unterscheiden.
-        Ok(match self.loaded.ty(n.ret) {
-            Type::Int { width, .. } if width.signed() => Value::Int(raw as i64),
-            _ => Value::UInt(raw),
-        })
+        let ctx_arg = |i: usize| {
+            inputs
+                .get(i)
+                .and_then(|b| takt_native::sha256::Ctx::from_bytes(b))
+                .ok_or_else(|| Trap::Bug(format!("`{}`: Argument {i} ist kein Sha256Ctx", n.name)))
+        };
+        match f {
+            Native::Sha256Init => ctx_value(&takt_native::sha256::Ctx::new()),
+            Native::Sha256Update => {
+                let mut ctx = ctx_arg(0)?;
+                ctx.update(inputs.get(1).copied().unwrap_or(&[]));
+                ctx_value(&ctx)
+            }
+            Native::Sha256Final => Ok(Value::Bytes(ctx_arg(0)?.finish().to_vec())),
+            _ => match takt_native::call(f, &inputs) {
+                // Die Breite steht im Rueckgabetyp; `call` liefert `u64`,
+                // weil die Pruefsummen sich darin unterscheiden.
+                Some(Output::Scalar(raw)) => Ok(match self.loaded.ty(n.ret) {
+                    Type::Int { width, .. } if width.signed() => Value::Int(raw as i64),
+                    _ => Value::UInt(raw),
+                }),
+                Some(Output::Digest(d)) => Ok(Value::Bytes(d.to_vec())),
+                None => bug(format!("`{}`: {} Argumente passen nicht zur Signatur", n.name, inputs.len())),
+            },
+        }
     }
 
     /// Primitive (4.1, 3.9, 3.10).
