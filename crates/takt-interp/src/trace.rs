@@ -38,6 +38,9 @@ pub enum LineKind {
     Published { machine: String, var: String, value: String },
     /// `signal <maschine> <name>`
     Signal { machine: String, name: String },
+    /// `job <maschine> <handle> done`: Fertigstellung eines Jobs (4.5);
+    /// als Stimulus verlegt sie den Tick des Modells.
+    Job { machine: String, handle: String },
     /// `fault <maschine> <art> "<meldung>" -> <ziel>`
     Fault { machine: String, kind: String, message: String, target: String },
     /// `log <maschine> "<text>"`
@@ -166,6 +169,17 @@ fn parse_line(line: &str) -> Result<TraceLine, String> {
             LineKind::Signal {
                 machine: nonempty(machine, "`signal <maschine> <name>`")?.to_string(),
                 name: nonempty(name, "`signal <maschine> <name>`")?.to_string(),
+            }
+        }
+        "job" => {
+            let (machine, rest) = split_first(args);
+            let (handle, done) = split_first(rest);
+            if done.trim() != "done" {
+                return Err("`job <maschine> <handle> done` erwartet".into());
+            }
+            LineKind::Job {
+                machine: nonempty(machine, "`job <maschine> <handle> done`")?.to_string(),
+                handle: nonempty(handle, "`job <maschine> <handle> done`")?.to_string(),
             }
         }
         "fault" => {
@@ -320,6 +334,7 @@ fn render_line(line: &TraceLine) -> String {
         LineKind::State { machine, path } => format!("t={t} state {machine} {path}"),
         LineKind::Published { machine, var, value } => format!("t={t} pub {machine} {var} {value}"),
         LineKind::Signal { machine, name } => format!("t={t} signal {machine} {name}"),
+        LineKind::Job { machine, handle } => format!("t={t} job {machine} {handle} done"),
         LineKind::Fault { machine, kind, message, target } => {
             format!("t={t} fault {machine} {kind} \"{message}\" -> {target}")
         }

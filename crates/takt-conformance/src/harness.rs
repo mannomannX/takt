@@ -182,6 +182,8 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let _ = writeln!(s, "{}", crate::layout::c_buffer("image", layout.image));
     let _ = writeln!(s, "{}", crate::layout::c_buffer("params", layout.params));
     let _ = writeln!(s, "{}\n", crate::layout::c_buffer("latch", layout.latch));
+    // 4.5: Die Jobs des Rahmens, hinter den Puffern, weil sie das Abbild schreiben.
+    jobs(&mut s, p);
 
     // 9.8: die geplanten Schreibvorgaenge. Sie gehoeren der Runtime —
     // 11.2 nennt sie „feste Arrays im Runtime-Anteil des Outputs" —,
@@ -196,6 +198,9 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let _ = writeln!(s, "    memset(image, 0, sizeof image);");
     let _ = writeln!(s, "    memset(params, 0, sizeof params);");
     let _ = writeln!(s, "    memset(latch, 0, sizeof latch);");
+    if p.machines.iter().any(|m| !m.layout.job_slots.is_empty()) {
+        let _ = writeln!(s, "    takt_jobs_init();");
+    }
     // 3.5: Ein Input ohne Treiber ist `Bad`. Ein genullter Abbild-Eintrag
     // hiesse `Good` (die Skala beginnt dort), und der Vergleich pruefte
     // dann einen Lauf, den es nicht gibt — der Interpreter faultet in
@@ -240,6 +245,10 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // vor jedem Maschinenschritt, damit die Maschinen den Wert im selben
     // Tick lesen. Die Simulation wendet `T` im Tick `ceil(T / T0)` an.
     let _ = writeln!(s, "        takt_apply_scheduled(g_tick * {}LL);", p.config.tick);
+    // 4.5: Faellige Jobs werden zu Tick-Beginn sichtbar, wie `poll_jobs` im Interpreter.
+    if p.machines.iter().any(|m| !m.layout.job_slots.is_empty()) {
+        let _ = writeln!(s, "        takt_jobs_poll();");
+    }
     // 8.5: Ein Command gilt einen Tick. Der Rahmen setzt es vor dem
     // Schritt und loescht es danach — wie die Runtime (12.1).
     for (name, slot) in layout.commands.iter().map(|c| (c.name.clone(), c.offset)) {
@@ -770,5 +779,149 @@ void takt_native_sha256_update(const unsigned char *cb, int cn, const unsigned c
 void takt_native_sha256_final(const unsigned char *cb, int cn, unsigned char *out) {
     takt_sha c; unsigned char d[32];
     takt_sha_from(&c, cb, cn); takt_sha_final(&c, d); takt_put_digest(out, d);
+}
+"#;
+
+/// 4.5: Jobs im Rahmen. Das Ergebnis der reinen Funktion steht beim Start
+/// fest; der Slot im Abbild wird `done`, sobald `duration` in Ticks
+/// vergangen ist — wie das Modell des Interpreters. Ein Argument kommt als
+/// Folge kanonischer Bloecke (`u32` Laenge, Bytes), ein `bytes<N>` darin
+/// als Laenge und Daten (5.9).
+fn jobs(s: &mut String, p: &Program) {
+    use takt_mir::fns::NativeKind;
+    let slots: Vec<(usize, usize, takt_mir::NativeId)> = p
+        .machines
+        .iter()
+        .enumerate()
+        .flat_map(|(mi, m)| m.layout.job_slots.iter().enumerate().map(move |(j, s)| (mi, j, s.native)))
+        .collect();
+    if slots.is_empty() || !p.natives.iter().any(|n| n.kind == NativeKind::Job) {
+        return;
+    }
+    let t0 = p.config.tick.max(1);
+    let out_max = slots
+        .iter()
+        .filter_map(|(_, _, n)| takt_llvm::image::job_entry_size(*n, p))
+        .map(|e| e.saturating_sub(8))
+        .max()
+        .unwrap_or(8)
+        .max(8);
+    let at: Vec<String> = slots
+        .iter()
+        .map(|(mi, j, _)| takt_llvm::image::job_offset(takt_mir::MachineId(*mi as u32), *j, p).unwrap_or(0).to_string())
+        .collect();
+    let ticks: Vec<String> = slots
+        .iter()
+        .map(|(_, _, n)| {
+            let d = p.natives[n.index()].duration.unwrap_or(0).max(0);
+            (d.saturating_add(t0 - 1) / t0).to_string()
+        })
+        .collect();
+    let mut base = Vec::new();
+    let mut acc = 0usize;
+    for m in &p.machines {
+        base.push(acc.to_string());
+        acc += m.layout.job_slots.len();
+    }
+    let _ = writeln!(
+        s,
+        "typedef struct {{ int active; long long due; int out_len; unsigned char out[{out_max}]; }} takt_job;"
+    );
+    let _ = writeln!(s, "static takt_job g_jobs[{}];", slots.len());
+    let _ = writeln!(s, "static const long long takt_job_at[{}] = {{ {} }};", slots.len(), at.join(", "));
+    let _ = writeln!(s, "static const int takt_job_ticks[{}] = {{ {} }};", slots.len(), ticks.join(", "));
+    let _ = writeln!(s, "static const int takt_job_base[{}] = {{ {} }};", base.len().max(1), base.join(", "));
+    s.push_str(JOBS_C);
+    let _ = writeln!(s, "void takt_job_begin(int m, int slot, int native, const unsigned char *args, int len) {{");
+    let _ = writeln!(s, "    int i = takt_job_base[m] + slot; takt_job *j = &g_jobs[i];");
+    let _ = writeln!(s, "    const unsigned char *a[8]; int n[8]; int k = 0, p = 0;");
+    let _ = writeln!(s, "    for (k = 0; k < 8; k++) {{ a[k] = args; n[k] = 0; }}");
+    let _ = writeln!(
+        s,
+        "    for (k = 0; k < 8 && p + 4 <= len; k++) {{ n[k] = (int)takt_job_le32(args + p); a[k] = args + p + 4; p += 4 + n[k]; }}"
+    );
+    let _ = writeln!(s, "    j->out_len = 0;");
+    let _ = writeln!(s, "    switch (native) {{");
+    for (idx, n) in p.natives.iter().enumerate() {
+        if n.kind != NativeKind::Job {
+            continue;
+        }
+        if let Some(case) = job_case(n) {
+            let _ = writeln!(s, "    case {idx}: {{ {case} }} break;");
+        }
+    }
+    let _ = writeln!(s, "    default: break;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    j->active = 1; j->due = g_tick + takt_job_ticks[i];");
+    let _ = writeln!(s, "    takt_job_image(i, 0, 0, 2); /* Err(PENDING) */");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "void takt_job_cancel(int m, int slot) {{");
+    let _ = writeln!(s, "    int i = takt_job_base[m] + slot;");
+    let _ = writeln!(
+        s,
+        "    if (g_jobs[i].active) {{ g_jobs[i].active = 0; takt_job_image(i, 1, 0, 0); /* Err(CANCELLED) */ }}"
+    );
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "static void takt_jobs_poll(void) {{");
+    let _ = writeln!(s, "    int i, b;");
+    let _ = writeln!(s, "    for (i = 0; i < {}; i++) {{", slots.len());
+    let _ = writeln!(s, "        if (!g_jobs[i].active || g_jobs[i].due > g_tick) continue;");
+    let _ = writeln!(s, "        g_jobs[i].active = 0; takt_job_image(i, 1, 1, 0);");
+    let _ = writeln!(
+        s,
+        "        for (b = 0; b < g_jobs[i].out_len; b++) image[takt_job_at[i] + 8 + b] = g_jobs[i].out[b];"
+    );
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(
+        s,
+        "static void takt_jobs_init(void) {{ int i; for (i = 0; i < {}; i++) takt_job_image(i, 0, 0, 2); }}",
+        slots.len()
+    );
+    let _ = writeln!(s);
+}
+
+/// Der Aufruf einer `native job` im Rahmen: Argumente nach Art, das
+/// Ergebnis in kanonischer Form nach `j->out`.
+fn job_case(n: &takt_mir::fns::Native) -> Option<String> {
+    use takt_native::Kind;
+    let sig = takt_native::Native::by_name(&n.name)?.signature();
+    let args: Vec<String> = sig
+        .params
+        .iter()
+        .enumerate()
+        .map(|(k, kind)| match kind {
+            Kind::Bytes => format!("a[{k}] + 4, (int)takt_job_le32(a[{k}])"),
+            _ => format!("a[{k}], n[{k}]"),
+        })
+        .collect();
+    let call = format!("takt_native_{}({})", n.name, args.join(", "));
+    Some(match sig.ret {
+        Kind::U32 => format!("unsigned int v = {call}; takt_job_put32(j->out, v); j->out_len = 4;"),
+        Kind::U16 => format!(
+            "unsigned short v = {call}; j->out[0] = (unsigned char)v; j->out[1] = (unsigned char)(v >> 8); j->out_len = 2;"
+        ),
+        Kind::U8 => format!("j->out[0] = {call}; j->out_len = 1;"),
+        Kind::Digest => format!("takt_native_{}({}, j->out); j->out_len = 36;", n.name, args.join(", ")),
+        Kind::Sha256Ctx => format!(
+            "takt_native_{}({}, j->out); j->out_len = 44 + (int)takt_job_le32(j->out + 32);",
+            n.name,
+            args.join(", ")
+        ),
+        Kind::Bytes => return None,
+    })
+}
+
+const JOBS_C: &str = r#"
+static unsigned int takt_job_le32(const unsigned char *b) {
+    return (unsigned int)b[0] | ((unsigned int)b[1] << 8) | ((unsigned int)b[2] << 16) | ((unsigned int)b[3] << 24);
+}
+static void takt_job_put32(unsigned char *b, unsigned int v) {
+    b[0] = (unsigned char)v; b[1] = (unsigned char)(v >> 8); b[2] = (unsigned char)(v >> 16); b[3] = (unsigned char)(v >> 24);
+}
+/* done, ok, err (Diskriminante von JobErr: CANCELLED 0, FAILED 1, PENDING 2) */
+static void takt_job_image(int i, int done, int ok, int err) {
+    unsigned char *e = image + takt_job_at[i];
+    e[0] = (unsigned char)done; e[1] = (unsigned char)ok; takt_job_put32(e + 4, (unsigned int)err);
 }
 "#;

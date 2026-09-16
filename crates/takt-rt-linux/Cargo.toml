@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 takt-rt-core = { path = "../takt-rt-core" }
+takt-native = { path = "../takt-native" }
 
 # `rustix` liefert die drei Syscalls aus 12.2 als *sichere* Funktionen:
 # `clock_nanosleep_absolute`, `mlockall`, `sched_setaffinity`. Damit bleibt

@@ -1,0 +1,35 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Jobs (4.5): `job v = f(args)` startet eine native Funktion ausserhalb der
+# Schrittphase; `v.done` und `v.result` sind Inputs. Das Modell liefert das
+# Ergebnis nach `duration`, hier drei Ticks nach dem Start.
+
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, duration = 25 ms, total
+
+output word  : u32  @ hw("o/word")  with safe = 0
+output ready : bool @ hw("o/ready") with safe = false
+
+fn first(d: bytes<32>) -> u32:
+    return (d[0] as u32) | ((d[1] as u32) << 8) | ((d[2] as u32) << 16) | ((d[3] as u32) << 24)
+
+machine m:
+    var msg : bytes<64> = default
+    var d   : bytes<32> = default
+    initial RUN
+    state RUN:
+        sequence:
+            msg.push(0x61)
+            msg.push(0x62)
+            msg.push(0x63)
+            job v = sha256(msg)
+            until v.done timeout 1 s -> FAILED
+            d = v.result.or(default)
+            word = first(d)
+            ready = true
+            -> DONE
+    state DONE:
+        when false: -> RUN
+    state FAILED:
+        when false: -> RUN

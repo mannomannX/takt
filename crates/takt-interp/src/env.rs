@@ -5,7 +5,7 @@
 //! weil das Sema Konstanten vorher auf Konstanz prueft.
 
 use takt_diag::Span;
-use takt_mir::expr::{Accessor, Builtin, StreamRef};
+use takt_mir::expr::{Accessor, Builtin, JobField, StreamRef};
 use takt_mir::machine::FaultKind;
 use takt_mir::{ChannelId, CommandId, CounterId, MachineId, ParamId, SignalId, SiteId, TypeId, VarId};
 
@@ -78,6 +78,11 @@ pub enum Observation {
     Signal {
         /// Name des Signals.
         name: String,
+    },
+    /// Ein Job ist fertig (4.5): `job <maschine> <handle> done`.
+    Job {
+        /// Name des Handles.
+        handle: String,
     },
     /// Coverage (13.2): ein Zustand betreten, eine Transition genommen, ein
     /// `check` ausgewertet, ein Handler gefeuert, ein irreversibler Output
@@ -159,6 +164,16 @@ pub trait Outer {
     fn published(&self, _m: MachineId, _v: VarId) -> EvalResult<&Value> {
         bug("Veroeffentlichung ausserhalb eines Laufs")
     }
+    /// `v.done` / `v.result` eines Job-Handles (4.5).
+    fn job(&self, _handle: VarId, _field: JobField) -> EvalResult<Value> {
+        bug("Job ausserhalb einer Maschine")
+    }
+
+    /// `job v = f(args)`: der Lauf beginnt, `value` gilt ab Tick `due`.
+    fn job_start(&mut self, _handle: VarId, _value: Value, _due: u64) -> EvalResult<()> {
+        bug("Job ausserhalb einer Maschine")
+    }
+
     /// `m.state` aus Ψ.
     fn state_of(&self, _m: MachineId) -> EvalResult<Value> {
         bug("Zustand ausserhalb eines Laufs")

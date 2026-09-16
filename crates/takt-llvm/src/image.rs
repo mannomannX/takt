@@ -25,8 +25,8 @@
 //! beiden Seiten ansieht. Ein Byte ist die Form, die beide ohne Absprache
 //! richtig treffen.
 
-use takt_mir::ChannelId;
 use takt_mir::program::Program;
+use takt_mir::{ChannelId, MachineId, NativeId};
 
 use crate::ty::{self, LlvmType};
 
@@ -121,4 +121,35 @@ pub fn command_offset(id: takt_mir::CommandId, p: &Program) -> Option<u64> {
         sum += entry_type(ChannelId(i as u32), p).map_or(0, |t| t.size());
     }
     Some(sum + id.index() as u64)
+}
+
+/// Die Groesse eines Job-Slots im Abbild (4.5): `done: i8`, `ok: i8`, zwei
+/// Byte frei, `err: i32` (die Diskriminante von `JobErr`), dann der Wert in
+/// kanonischer Byteform (`bytes::max_size`); jeder Slot beginnt
+/// 8-Byte-ausgerichtet. Die Runtime schreibt ihn, der erzeugte Code liest.
+pub fn job_entry_size(native: NativeId, p: &Program) -> Option<u64> {
+    let n = p.natives.get(native.index())?;
+    let value = u64::from(takt_mir::bytes::max_size(p, n.ret).ok()?);
+    Some((8 + value).div_ceil(8) * 8)
+}
+
+/// Der Versatz eines Job-Slots: Die Slots liegen hinter den Ψ-Baenken, in
+/// der Reihenfolge der Maschinen und ihrer `Layout::job_slots`.
+pub fn job_offset(machine: MachineId, slot: usize, p: &Program) -> Option<u64> {
+    let mut off = crate::psi::image_size(p);
+    for (i, m) in p.machines.iter().enumerate() {
+        for (j, s) in m.layout.job_slots.iter().enumerate() {
+            if i == machine.index() && j == slot {
+                return Some(off);
+            }
+            off += job_entry_size(s.native, p)?;
+        }
+    }
+    None
+}
+
+/// Das Ende des Abbilds mit allen Job-Slots.
+pub fn jobs_end(p: &Program) -> u64 {
+    let slots = p.machines.iter().flat_map(|m| m.layout.job_slots.iter());
+    slots.fold(crate::psi::image_size(p), |off, s| off + job_entry_size(s.native, p).unwrap_or(0))
 }

@@ -806,6 +806,7 @@ pub fn full_program() -> Program {
         viol_sites: vec![CounterSite { state: None, span: sp(51) }],
         block_instances: vec![BlockInstance { var: v_filter, block: bl_lowpass, count: 8 }],
         jobs_max: 2,
+        job_slots: Vec::new(),
         saved_paths: vec![s_manual],
         trigger_flags: vec![tr_cut],
         output_queues: vec![ch_valve, ch_tx],

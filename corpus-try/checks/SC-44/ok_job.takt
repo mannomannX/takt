@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, duration = 25 ms, total
+
+output ready : bool @ hw("o/ready") with safe = false
+
+machine m:
+    var msg : bytes<64> = default
+    var d   : bytes<32> = default
+    initial RUN
+    state RUN:
+        sequence:
+            job v = sha256(msg)
+            until v.done timeout 1 s -> FAILED
+            d = v.result.or(default)
+            ready = true
+            -> DONE
+    state DONE:
+        when false: -> RUN
+    state FAILED:
+        when false: -> RUN

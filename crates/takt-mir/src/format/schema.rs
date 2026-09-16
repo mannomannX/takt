@@ -24,6 +24,7 @@ codec_unit_enum!(IntWidth { 0 I8, 1 I16, 2 I32, 3 I64, 4 U8, 5 U16, 6 U32, 7 U64
 codec_unit_enum!(FloatWidth { 0 F32, 1 F64 });
 codec_unit_enum!(RangeOrigin { 0 Declared, 1 Proven });
 codec_unit_enum!(HandleKind { 0 Job, 1 Trigger });
+codec_unit_enum!(JobField { 0 Done, 1 Result });
 codec_unit_enum!(Endian { 0 Little, 1 Big });
 codec_enum!(Const { 0 Int(1 one v), 1 Float(1 one v), 2 Duration(1 one v), 3 Bool(1 one v) });
 codec_struct!(Range { 1 one lo, 2 one hi, 3 one origin });
@@ -140,6 +141,7 @@ codec_enum!(ExprKind {
     40 Intrinsic { 1 one op, 2 rep args },
     41 Stream(1 one s),
     42 Format(1 one f),
+    43 JobState { 1 one handle, 2 one field },
 });
 codec_unit_enum!(Intrinsic {
     0 Abs, 1 Min, 2 Max, 3 Sqrt, 4 Sin, 5 Cos, 6 Tan, 7 Asin, 8 Acos, 9 Atan, 10 Atan2, 11 Exp, 12 Log, 13 Pow,
@@ -264,9 +266,10 @@ codec_struct!(Budget { 1 one activation, 2 one fault_path });
 codec_struct!(Timer { 1 one state, 2 one width });
 codec_struct!(CounterSite { 1 opt state, 2 meta span });
 codec_struct!(BlockInstance { 1 one var, 2 one block, 3 one count });
+codec_struct!(JobSlot { 1 one handle, 2 one native });
 codec_struct!(Layout {
     1 rep timers, 2 rep every_counters, 3 rep viol_sites, 4 rep block_instances, 5 one jobs_max, 6 rep saved_paths,
-    7 rep trigger_flags, 8 rep output_queues, 9 rep cursors, 10 opt scratch_bytes,
+    7 rep trigger_flags, 8 rep output_queues, 9 rep cursors, 10 opt scratch_bytes, 11 rep job_slots,
 });
 codec_struct!(InstanceInfo { 1 one template, 2 rep args, 3 opt array });
 codec_enum!(MachineKind { 0 Regular, 1 Template, 2 Instance(1 one i), 3 Scenario });

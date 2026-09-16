@@ -11,7 +11,7 @@
 //! selbst entscheidet das nicht — er waere dabei schlechter als LLVM und
 //! muesste die Entscheidung gegen jede Optimierung verteidigen.
 
-use takt_mir::expr::{Expr, ExprKind};
+use takt_mir::expr::{Expr, ExprKind, JobField};
 use takt_mir::machine::Machine;
 use takt_mir::program::Program;
 use takt_mir::stmt::{Block, Method, Observe, Place, Stmt, StmtKind};
@@ -146,6 +146,41 @@ impl StateVars<'_> {
 impl Vars for StateVars<'_> {
     fn fault_label(&self) -> Option<String> {
         Some(format!("fault_{}_{}", self.machine.name, self.leaf?.index()))
+    }
+
+    fn job(&self, handle: takt_mir::VarId, field: JobField, p: &Program, m: &mut Module) -> Option<Lowered> {
+        let mi = p.machines.iter().position(|x| x.name == self.machine.name)?;
+        let slot = self.machine.layout.job_slots.iter().position(|s| s.handle == handle)?;
+        let off = crate::image::job_offset(takt_mir::MachineId(mi as u32), slot, p)?;
+        let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {off}"));
+        match field {
+            JobField::Done => {
+                let b = m.inst(&format!("load i8, ptr {at}"));
+                let v = m.inst(&format!("icmp ne i8 {b}, 0"));
+                Some(Lowered { value: v.to_string(), ty: LlvmType::Int(1) })
+            }
+            // `T!JobErr` wie `wrap` es baut: Wert, Diskriminante, Flag.
+            JobField::Result => {
+                let ret = p.natives.get(self.machine.layout.job_slots[slot].native.index())?.ret;
+                let ok_ty = ty::lower(ret, p)?;
+                let res_ty = LlvmType::Struct(vec![ok_ty, LlvmType::Int(32), LlvmType::Int(1)]);
+                let dst = m.inst(&format!("alloca {res_ty}"));
+                let okp = m.inst(&format!("getelementptr inbounds i8, ptr {at}, i64 1"));
+                let ok8 = m.inst(&format!("load i8, ptr {okp}"));
+                let ok = m.inst(&format!("icmp ne i8 {ok8}, 0"));
+                let f2 = m.inst(&format!("getelementptr inbounds {res_ty}, ptr {dst}, i32 0, i32 2"));
+                m.void_inst(&format!("store i1 {ok}, ptr {f2}"));
+                let errp = m.inst(&format!("getelementptr inbounds i8, ptr {at}, i64 4"));
+                let err = m.inst(&format!("load i32, ptr {errp}, align 1"));
+                let f1 = m.inst(&format!("getelementptr inbounds {res_ty}, ptr {dst}, i32 0, i32 1"));
+                m.void_inst(&format!("store i32 {err}, ptr {f1}"));
+                let valp = m.inst(&format!("getelementptr inbounds i8, ptr {at}, i64 8"));
+                let f0 = m.inst(&format!("getelementptr inbounds {res_ty}, ptr {dst}, i32 0, i32 0"));
+                crate::persist::decode_canonical(p, ret, valp, f0, m).ok()?;
+                let v = m.inst(&format!("load {res_ty}, ptr {dst}"));
+                Some(Lowered { value: v.to_string(), ty: res_ty })
+            }
+        }
     }
 
     fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<Lowered> {
@@ -297,8 +332,53 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         }
         StmtKind::Raise(s) => crate::psi::raise(takt_mir::MachineId(ctx.machine_index), *s, ctx.program, m)
             .ok_or(NotYet { what: "`raise`" }),
+        StmtKind::Job { handle, native, args } => job_begin(*handle, *native, args, ctx, m),
         other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
+}
+
+/// `job v = f(args)` (4.5): Die Argumente gehen als Folge kanonischer
+/// Bloecke (je `u32` Laenge, dann die Bytes) an die Runtime, die den Job
+/// fuehrt und den Slot im Abbild schreibt.
+fn job_begin(
+    handle: takt_mir::VarId,
+    native: takt_mir::NativeId,
+    args: &[Expr],
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let p = ctx.program;
+    let slot =
+        ctx.machine.layout.job_slots.iter().position(|s| s.handle == handle).ok_or(NotYet { what: "Job-Slot" })?;
+    let n = p.natives.get(native.index()).ok_or(NotYet { what: "native Funktion" })?;
+    let mut cap = 0u64;
+    for q in &n.params {
+        let size = takt_mir::bytes::max_size(p, q.ty).map_err(|_| NotYet { what: "Job-Argument ohne Byteform" })?;
+        cap += 4 + u64::from(size);
+    }
+    let buf = m.inst(&format!("alloca [{} x i8]", cap.max(1)));
+    let vars = ctx.vars();
+    let mut off = m.inst("add i64 0, 0");
+    for a in args {
+        let v = lower_expr(a, p, m, &vars)?;
+        let tmp = m.inst(&format!("alloca {}", v.ty));
+        m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+        let body = m.inst(&format!("add i64 {off}, 4"));
+        let dst = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {body}"));
+        let len = crate::persist::encode_canonical(p, a.ty, tmp, dst, m)?;
+        let len32 = m.inst(&format!("trunc i64 {len} to i32"));
+        let lenp = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {off}"));
+        m.void_inst(&format!("store i32 {len32}, ptr {lenp}, align 1"));
+        off = m.inst(&format!("add i64 {body}, {len}"));
+    }
+    let total = m.inst(&format!("trunc i64 {off} to i32"));
+    m.void_inst(&format!(
+        "call void @{}(i32 {}, i32 {slot}, i32 {}, ptr {buf}, i32 {total})",
+        Abi::JOB_BEGIN,
+        ctx.machine_index,
+        native.index()
+    ));
+    Ok(())
 }
 
 /// `send o, e` (8.8): Der Wert geht in den Sendepuffer des Stroms.

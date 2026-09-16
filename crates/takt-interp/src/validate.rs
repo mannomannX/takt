@@ -205,6 +205,7 @@ impl Checker<'_> {
                 self.index(&self.p.natives, native.index(), "native Funktion", span)?;
                 self.exprs(args)
             }
+            ExprKind::JobState { handle, .. } => self.var(*handle, span),
             ExprKind::MatOp { .. } => Err(stage(span, "Matrixoperation", Stage::V1_1)),
             ExprKind::Decode { record, bytes } => {
                 self.index(&self.p.records, record.index(), "Record", span)?;
@@ -272,7 +273,11 @@ impl Checker<'_> {
                 self.index(&m.signals, sig.index(), "Signal", span)
             }
             StmtKind::Skip(s) => self.stream(*s, span),
-            StmtKind::Job { .. } => Err(stage(span, "job", Stage::V1_1)),
+            StmtKind::Job { handle, native, args } => {
+                self.var(*handle, span)?;
+                self.index(&self.p.natives, native.index(), "native Funktion", span)?;
+                self.exprs(args)
+            }
             StmtKind::Every { period, counter, body } => {
                 self.expr(period)?;
                 let m = self.machine.ok_or_else(|| err(span, "every ausserhalb einer Maschine"))?;

@@ -244,6 +244,7 @@ dependencies = [
  "takt-interp",
  "takt-llvm",
  "takt-mir",
+ "takt-native",
  "takt-sema",
 ]
 
@@ -324,6 +325,7 @@ version = "0.1.0"
 dependencies = [
  "rustix",
  "takt-interp",
+ "takt-native",
  "takt-rt-core",
 ]
 

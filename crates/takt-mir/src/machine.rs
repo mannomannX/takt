@@ -407,6 +407,16 @@ pub struct BlockInstance {
     pub count: u32,
 }
 
+/// Ein Job-Slot (4.5): das Handle und die Native, die es traegt. Der
+/// Slot-Index ist die Position in `Layout::job_slots`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JobSlot {
+    /// Die Handle-Variable.
+    pub handle: VarId,
+    /// Die native Funktion (`native job`).
+    pub native: crate::NativeId,
+}
+
 /// Beschreibung von Σ je Maschine (9.1, 11.2, 11.5): alles, was neben den
 /// Variablen Speicher braucht. `takt size` liest nur dies.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -421,6 +431,8 @@ pub struct Layout {
     pub block_instances: Vec<BlockInstance>,
     /// Hoechstzahl gleichzeitiger Jobs `K_j` (4.5).
     pub jobs_max: u32,
+    /// Die Job-Handles der Maschine in Slot-Reihenfolge (4.5).
+    pub job_slots: Vec<JobSlot>,
     /// `resume`-Zustaende mit gespeichertem Pfad (5.12).
     pub saved_paths: Vec<StateId>,
     /// Trigger mit `armed`-Flag (7.5).
@@ -531,7 +543,8 @@ impl Machine {
             loop_block: Block::default(),
             handlers: Vec::new(),
             faulted: FaultedState::default(),
-            layout: Layout::default(),
+            // 4.5: hoechstens K_j gleichzeitige Jobs je Maschine, Default 2.
+            layout: Layout { jobs_max: 2, ..Layout::default() },
             budget: None,
             declared_budget: None,
             meta: Meta::default(),

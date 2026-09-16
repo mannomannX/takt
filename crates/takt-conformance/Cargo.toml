@@ -10,6 +10,7 @@ rust-version.workspace = true
 takt-diag = { path = "../takt-diag" }
 takt-interp = { path = "../takt-interp" }
 takt-llvm = { path = "../takt-llvm" }
+takt-native = { path = "../takt-native" }
 takt-mir = { path = "../takt-mir" }
 takt-sema = { path = "../takt-sema" }
 

@@ -216,6 +216,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 self.machine_index(m)?;
                 self.outer.state_of(m.machine)
             }
+            ExprKind::JobState { handle, field } => self.outer.job(*handle, *field),
             ExprKind::Signal { machine, signal } => {
                 self.machine_index(machine)?;
                 Ok(Value::Bool(self.outer.signal(machine.machine, *signal)?))

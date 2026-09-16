@@ -265,7 +265,18 @@ impl Ctx<'_, '_> {
                 self.outer.raise(*sig)?;
                 Ok(Out::Normal)
             }
-            StmtKind::Job { .. } => bug("job ab M6"),
+            StmtKind::Job { handle, native, args } => {
+                // 4.5: Die Argumente werden kopiert, das Ergebnis der reinen
+                // Funktion steht fest; das Modell liefert es nach `duration`.
+                let args = args.iter().map(|a| self.eval(a)).collect::<EvalResult<Vec<_>>>()?;
+                let value = self.call_native(*native, args, span)?;
+                let t0 = self.loaded.program.config.tick.max(1);
+                let d = self.loaded.program.natives[native.index()].duration.unwrap_or(0).max(0);
+                let ticks = d.saturating_add(t0 - 1) / t0;
+                let due = self.tick.saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX));
+                self.outer.job_start(*handle, value, due)?;
+                Ok(Out::Normal)
+            }
             StmtKind::Every { period, counter, body } => {
                 let d = self.eval_duration(period)?;
                 let t = match self.outer.every_clock(*counter)? {

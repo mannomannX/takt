@@ -10,7 +10,7 @@
 //! traegt ein Flag; `emit` bietet dafuer keine Moeglichkeit (4.2).
 
 use takt_mir::TypeId;
-use takt_mir::expr::{Accessor, BinaryOp, ConvertKind, Expr, ExprKind, Intrinsic, UnaryOp};
+use takt_mir::expr::{Accessor, BinaryOp, ConvertKind, Expr, ExprKind, Intrinsic, JobField, UnaryOp};
 use takt_mir::program::Program;
 use takt_mir::types::{IntWidth, Type};
 
@@ -100,6 +100,12 @@ pub trait Vars {
         None
     }
 
+    /// `v.done` / `v.result` eines Job-Handles (4.5): nur die Maschine
+    /// liest sie, aus ihrem Slot im Abbild.
+    fn job(&self, _handle: takt_mir::VarId, _field: JobField, _p: &Program, _m: &mut Module) -> Option<Lowered> {
+        None
+    }
+
     /// `m.x`, `m.state` oder ein Signal einer anderen Maschine aus Ψ (7.2).
     fn published(&self, _target: takt_mir::MachineId, _field: crate::psi::Field, _m: &mut Module) -> Option<Lowered> {
         None
@@ -160,6 +166,7 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::StateOf(machine) => psi_read(machine, crate::psi::Field::State, vars, m),
         ExprKind::Signal { machine, signal } => psi_read(machine, crate::psi::Field::Signal(*signal), vars, m),
         ExprKind::Command(id) => vars.command(*id, m).ok_or(NotYet { what: "Command" }),
+        ExprKind::JobState { handle, field } => vars.job(*handle, *field, p, m).ok_or(NotYet { what: "Job-Zustand" }),
         ExprKind::Builtin(b) => vars.builtin(*b, p, m).ok_or(NotYet { what: crate::scope::builtin_name(*b) }),
         ExprKind::Unary { op, expr } => unary(*op, expr, &want, p, m, vars),
         ExprKind::Binary { op, lhs, rhs } => binary(*op, lhs, rhs, &want, p, m, vars),

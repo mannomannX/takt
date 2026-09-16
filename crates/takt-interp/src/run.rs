@@ -120,6 +120,21 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
     let mut coverage = Coverage::default();
 
     // Tick 0: Stimulus, dann Anfangszustand und Anfangsausgaben (9.4)
+    // 4.5: Aufgezeichnete Fertigstellungen ersetzen das Modell `duration`;
+    // ein Job liest sie beim Start, darum stehen sie vorab im Abbild.
+    for line in &stimulus.lines {
+        if let LineKind::Job { machine, handle } = &line.kind {
+            let Some(m) = program.machines.iter().position(|m| m.name == *machine) else {
+                return Err(Trap::Bug(format!("Stimulus: Maschine `{machine}` gibt es nicht")));
+            };
+            let def = &program.machines[m];
+            let slot = def.layout.job_slots.iter().position(|s| def.vars[s.handle.index()].name == *handle);
+            let Some(slot) = slot else {
+                return Err(Trap::Bug(format!("Stimulus: `{machine}` hat kein Job-Handle `{handle}`")));
+            };
+            sim.image.job_records.push((MachineId(m as u32), slot, line.tick));
+        }
+    }
     apply_stimulus(&mut sim, stimulus, 0)?;
     sim.init()?;
     collect(&mut writer, &sim, 0, &mut verdict, &mut fail, &mut coverage);
@@ -275,6 +290,8 @@ fn apply_stimulus(sim: &mut Sim<'_>, stimulus: &Trace, tick: u64) -> Result<(), 
                 };
                 sim.image.set_command(takt_mir::CommandId(i as u32));
             }
+            // Aufgezeichnete Fertigstellungen stehen schon im Abbild (`job_records`).
+            LineKind::Job { .. } => {}
             LineKind::Abort => {
                 for state in &mut sim.states {
                     if !state.faulted {
@@ -356,6 +373,7 @@ fn collect(
                 LineKind::Fault { machine, kind: fault_name(*kind), message: message.clone(), target: target.clone() }
             }
             Observation::Signal { name } => LineKind::Signal { machine, name: name.clone() },
+            Observation::Job { handle } => LineKind::Job { machine, handle: handle.clone() },
         };
         writer.lines.push(TraceLine { tick, kind });
     }

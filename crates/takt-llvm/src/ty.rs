@@ -128,6 +128,9 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
         // `T!E` (3.8): Wert, Fehlerdiskriminante, Flag. Der Fehler ist
         // ein Enum ohne Felder, also eine Zahl.
         Type::Result { ok, .. } => LlvmType::Struct(vec![lower(*ok, p)?, LlvmType::Int(32), LlvmType::Int(1)]),
+        // Ein Handle traegt keinen Wert: Der Slot eines Jobs ist statisch
+        // (`Layout::job_slots`), sein Zustand liegt im Abbild (4.5).
+        Type::Handle(_) => LlvmType::Int(8),
         Type::Bytes { cap } | Type::Str { cap } => {
             LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), *cap)])
         }

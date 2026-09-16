@@ -81,6 +81,47 @@ pub trait Nvm {
     fn read(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> bool;
 }
 
+/// Wie weit ein Job ist (4.5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JobState {
+    /// Kein Lauf im Slot.
+    #[default]
+    Idle,
+    /// Der Lauf ist noch nicht fertig.
+    Running,
+    /// Das Ergebnis liegt bereit (`take`).
+    Done,
+    /// Der Lauf ist gescheitert: `Err(FAILED)`.
+    Failed,
+}
+
+/// Die Jobs hinter `job v = f(args)` (4.5, 12.1), in derselben Form wie
+/// [`Nvm`]: `begin` uebergibt die Argumente als Folge kanonischer Bloecke
+/// (je `u32` Laenge, dann die Bytes; 5.9), `poll` fragt ohne zu warten,
+/// `take` holt das Ergebnis in kanonischer Form. Wo der Lauf stattfindet,
+/// entscheidet der Aufsatz: `takt-rt-linux` auf einem Arbeiter-Thread mit
+/// dem deklarierten `stack`, `baremetal` in der Hauptschleife zwischen den
+/// Ticks. Ein Job wird nie unterbrochen — Natives sind `total` —; `cancel`
+/// verwirft nur sein Ergebnis (5.3).
+pub trait Jobs {
+    /// Zahl der Slots.
+    fn slots(&self) -> u32;
+
+    /// Beginnt einen Lauf im Slot; `false`, wenn er nicht angenommen wurde
+    /// (Slot belegt, Native unbekannt).
+    fn begin(&mut self, slot: u32, native: &str, args: &[u8]) -> bool;
+
+    /// Fragt den Slot ab; treibt den Lauf voran, wo er im Tick laeuft.
+    fn poll(&mut self, slot: u32) -> JobState;
+
+    /// Holt das Ergebnis eines fertigen Slots nach `into`; liefert die
+    /// Laenge, 0 ohne Ergebnis. Danach ist der Slot `Idle`.
+    fn take(&mut self, slot: u32, into: &mut [u8]) -> usize;
+
+    /// Verwirft den Lauf des Slots; sein Ergebnis erreicht das Programm nicht.
+    fn cancel(&mut self, slot: u32);
+}
+
 /// Was ein Tick gekostet hat und was er ergab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Tick {
@@ -153,6 +194,11 @@ pub trait Program {
     fn persist_restore(&mut self, _bytes: &[u8]) -> usize {
         0
     }
+
+    /// Ein Job ist fertig (4.5): das Ergebnis in kanonischer Byteform, oder
+    /// `None`, wenn der Lauf gescheitert ist. Es geht als `done`/`result`
+    /// in das Eingangsbild des naechsten Schritts.
+    fn job_done(&mut self, _slot: u32, _result: Option<&[u8]>) {}
 }
 
 /// Die Schleife.
@@ -247,6 +293,27 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         // verschiebt (12.2). Der Tick wird nie uebersprungen (7.3).
         self.deadline = self.deadline.saturating_add(self.tick_ns.saturating_mul(1 + tick.slept as i64));
         tick
+    }
+
+    /// Ein Tick mit Jobs (4.5): Vor dem Schritt gehen die fertigen Slots
+    /// in das Programm — die Fertigstellung ist ein Input von I_k. `buf`
+    /// nimmt das Ergebnis auf; er ist Sache des Aufsatzes, weil der Kern
+    /// keinen Heap hat.
+    pub fn step_with_jobs<J: Jobs>(&mut self, jobs: &mut J, buf: &mut [u8]) -> Tick {
+        for slot in 0..jobs.slots() {
+            match jobs.poll(slot) {
+                JobState::Done => {
+                    let n = jobs.take(slot, buf);
+                    self.program.job_done(slot, Some(&buf[..n.min(buf.len())]));
+                }
+                JobState::Failed => {
+                    jobs.take(slot, buf);
+                    self.program.job_done(slot, None);
+                }
+                JobState::Idle | JobState::Running => {}
+            }
+        }
+        self.step()
     }
 
     /// Laesst die Schleife `n` Ticks laufen.

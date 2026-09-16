@@ -1,0 +1,12 @@
+system:
+    language = 1
+
+# `job` verlangt eine `native job`; eine `native fn` laeuft im Tick (4.5).
+native fn crc32(b: bytes<8>) -> u32 with cost = 1600, stack = 16, total
+
+machine m:
+    var msg : bytes<8> = default
+    initial RUN
+    state RUN:
+        sequence:
+            job v = crc32(msg)  # ~ SC-44

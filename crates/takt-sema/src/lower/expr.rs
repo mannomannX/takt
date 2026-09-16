@@ -6,14 +6,14 @@ use takt_diag::{Span, Stage};
 use takt_mir::expr::*;
 use takt_mir::machine::{BlockInstance, VarDef, VarScope};
 use takt_mir::stmt::{Method, Place, Stmt, StmtKind};
-use takt_mir::types::{FloatWidth, IntWidth, Type};
+use takt_mir::types::{FloatWidth, HandleKind, IntWidth, Type};
 use takt_mir::*;
 use takt_syntax::ast;
 
 use takt_mir::pattern::Pattern;
 
 use super::{Lowerer, SC2, SC3, SC38, is_literal};
-use crate::checks::{SC18, SC45, SC47};
+use crate::checks::{SC18, SC44, SC45, SC47};
 use crate::symbols::Entity;
 use crate::units::Unit;
 
@@ -1096,6 +1096,11 @@ impl Lowerer<'_> {
             if let Some(Entity::Machine(m)) = self.peek(&id.name).cloned() {
                 return self.machine_member(m, name, args, span);
             }
+            if let Some(Entity::Var(v, t)) = self.peek(&id.name).cloned() {
+                if matches!(self.ty(t), Type::Handle(HandleKind::Job)) {
+                    return self.job_member(v, id, name, args, span);
+                }
+            }
             if let Some(Entity::Channel(c)) = self.peek(&id.name).cloned() {
                 if self.program.channels[c.index()].dir == takt_mir::program::Direction::Input && is_wrapper(member) {
                     let raw = self.input_read(c, base.span, true);
@@ -1473,8 +1478,8 @@ impl Lowerer<'_> {
                 self.stage(span, "Matrizen", Stage::V1_1);
                 None
             }
-            ("done" | "result" | "armed" | "fired", _) => {
-                self.stage(span, "Jobs und Trigger", Stage::V1_1);
+            ("armed" | "fired", _) => {
+                self.stage(span, "Trigger", Stage::V1_2);
                 None
             }
             // Zaehler und freier Platz eines Stroms (8.6, 8.8): lesen, ohne
@@ -1699,6 +1704,51 @@ impl Lowerer<'_> {
             _ => {
                 let n = self.type_name(base.ty);
                 self.error(SC3, span, format!("kein Zugriff `{member}` auf `{n}`"));
+                None
+            }
+        }
+    }
+
+    /// `v.done`, `v.result` eines Job-Handles (4.5): Inputs, Teil von I_k.
+    fn job_member(
+        &mut self,
+        handle: VarId,
+        base: &ast::Ident,
+        name: &ast::Ident,
+        args: Option<&[ast::Arg]>,
+        span: Span,
+    ) -> Option<Expr> {
+        if args.is_some() {
+            self.error(SC3, span, format!("`{}` nimmt keine Argumente", name.name));
+            return None;
+        }
+        let slot =
+            self.mctx.as_ref().and_then(|m| m.machine.layout.job_slots.iter().find(|s| s.handle == handle).cloned());
+        let Some(slot) = slot else {
+            self.error(SC44, span, format!("`{}` ist noch keinem `job` zugewiesen (4.5)", base.name));
+            return None;
+        };
+        match name.name.as_str() {
+            "done" => {
+                let ty = self.tys.bool;
+                Some(Expr::new(ExprKind::JobState { handle, field: JobField::Done }, ty, span))
+            }
+            "result" => {
+                let ok = self.program.natives[slot.native.index()].ret;
+                let Some(Entity::Enum(err)) = self.peek("JobErr").cloned() else {
+                    self.error(SC3, span, "`JobErr` fehlt im Prelude");
+                    return None;
+                };
+                let ty = self.intern(Type::Result { ok, err });
+                Some(Expr::new(ExprKind::JobState { handle, field: JobField::Result }, ty, span))
+            }
+            other => {
+                self.error_hint(
+                    SC3,
+                    name.span,
+                    format!("kein Zugriff `{other}` auf ein Job-Handle"),
+                    "`done` oder `result` (4.5)",
+                );
                 None
             }
         }

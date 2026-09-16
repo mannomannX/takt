@@ -16,6 +16,65 @@ use crate::loaded::Loaded;
 use crate::stream::Element;
 use crate::value::{EvalResult, Fault, Trap, Value, bug};
 
+/// Ein Job-Slot im Modell (4.5): Der Lauf endet `ceil(duration / T0)`
+/// Ticks nach dem Start mit dem Ergebnis der reinen Funktion; eine
+/// Aufzeichnung im Stimulus verlegt den Tick.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JobRun {
+    /// `done`: das Ergebnis gilt.
+    pub done: bool,
+    /// Tick der Fertigstellung, solange der Job laeuft.
+    pub due: Option<u64>,
+    /// `Ok(wert)` nach der Fertigstellung, `Err(PENDING)` davor,
+    /// `Err(CANCELLED)` nach einem Fault-Uebergang (5.3).
+    pub result: Value,
+    /// Das schon berechnete Ergebnis, bis der Job endet.
+    pub pending: Option<Value>,
+}
+
+impl JobRun {
+    /// `JobErr` aus dem Prelude: CANCELLED = 0, FAILED = 1, PENDING = 2.
+    fn err(variant: u32) -> Value {
+        Value::Result(Err(Box::new(Value::Enum { variant, fields: Vec::new() })))
+    }
+
+    /// Ein Slot ohne Lauf.
+    pub fn idle() -> JobRun {
+        JobRun { done: false, due: None, result: JobRun::err(2), pending: None }
+    }
+
+    /// `job v = f(args)`: ein neuer Lauf ersetzt einen laufenden.
+    pub fn start(&mut self, value: Value, due: u64) {
+        self.done = false;
+        self.due = Some(due);
+        self.result = JobRun::err(2);
+        self.pending = Some(value);
+    }
+
+    /// Faellig? Dann gilt `done`, und `result` ist `Ok`.
+    pub fn poll(&mut self, tick: u64) -> bool {
+        match self.due {
+            Some(due) if tick >= due => {
+                self.due = None;
+                self.done = true;
+                self.result = Value::Result(Ok(Box::new(self.pending.take().unwrap_or(Value::Handle))));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Bricht einen laufenden Job ab: `done` mit `Err(CANCELLED)`.
+    pub fn cancel(&mut self) {
+        if self.due.is_some() {
+            self.due = None;
+            self.pending = None;
+            self.done = true;
+            self.result = JobRun::err(0);
+        }
+    }
+}
+
 /// Laufzeitzustand einer Maschine (Σ_m, 9.1).
 #[derive(Clone, Debug)]
 pub struct MachineState {
@@ -44,6 +103,8 @@ pub struct MachineState {
     pub countdown: u32,
     /// Signale, die in diesem Tick erhoben wurden.
     pub raised_signals: Vec<bool>,
+    /// Die Job-Slots (4.5), in der Reihenfolge von `Layout::job_slots`.
+    pub jobs: Vec<JobRun>,
     /// `cur[s, m]` je gelesenem Stream (9.6), in der Reihenfolge von
     /// `Layout::cursors`.
     pub cursors: Vec<i64>,
@@ -108,6 +169,7 @@ impl MachineState {
             last_fault: None,
             countdown: m.phase,
             raised_signals: vec![false; m.signals.len()],
+            jobs: vec![JobRun::idle(); m.layout.job_slots.len()],
             cursors: vec![0; m.layout.cursors.len()],
             examined: vec![-1; m.layout.cursors.len()],
             dropped: vec![0; m.layout.cursors.len()],
@@ -208,6 +270,9 @@ pub fn step_m(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) -> R
     let m = env.machine(loaded);
     // Jede Blockinstanz darf je Aktivierung einmal `step` ausfuehren (5.1).
     clear_stepped(&mut env.state.vars);
+    // 4.5: Die Fertigstellung eines Jobs ist ein Input — sie wird zu Beginn
+    // der Aktivierung sichtbar und im Trace vermerkt.
+    poll_jobs(loaded, env, tick);
     let mut out = Ok(Out::Normal);
     if !env.state.faulted {
         // Vorgemerkte Faults zustellen (Operator-Abort, Runtime, 9.6)
@@ -537,6 +602,7 @@ pub fn resolve_m(
                     env.state.abort_latched = true;
                 }
                 env.state.last_fault = Some(f.clone());
+                cancel_jobs(env);
                 let leaf = env.state.leaf();
                 let target = f.target.unwrap_or(match fault_target(env.machine(loaded), leaf) {
                     FaultTarget::State(s) => Target::State(s),
@@ -656,6 +722,23 @@ pub fn switch(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, target: Target,
         }
     }
     exec_chain(loaded, env, &entered, Mode::Entry, tick)
+}
+
+/// Faellige Jobs der Maschine abschliessen (4.5).
+fn poll_jobs(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) {
+    let m = env.machine(loaded);
+    for (i, slot) in m.layout.job_slots.iter().enumerate() {
+        if env.state.jobs.get_mut(i).is_some_and(|j| j.poll(tick)) {
+            env.out.push(Observation::Job { handle: m.vars[slot.handle.index()].name.clone() });
+        }
+    }
+}
+
+/// 5.3: Ein Fault-Uebergang bricht die laufenden Jobs der Maschine ab.
+fn cancel_jobs(env: &mut MachineEnv<'_, '_>) {
+    for job in &mut env.state.jobs {
+        job.cancel();
+    }
 }
 
 /// Setzt das `step`-Flag jeder Blockinstanz zurueck (5.1).

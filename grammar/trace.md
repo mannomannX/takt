@@ -35,6 +35,7 @@ Leerzeichen, außer im Rest einer Meldung.
 | `state` | Golden | `state <maschine> <pfad>` — Blattpfad mit `.`, nur bei Änderung und in Tick 0 |
 | `pub` | Golden | `pub <maschine> <variable> <wert>` — bei Änderung |
 | `signal` | Golden | `signal <maschine> <name>` — im Tick des Pulses (5.8) |
+| `job` | Golden, Stimulus | `job <maschine> <handle> done` — Fertigstellung eines Jobs (4.5); als Stimulus ersetzt sie den Tick des Modells |
 | `fault` | Golden | `fault <maschine> <art> "<meldung>" -> <ziel>` |
 | `log` | Golden | `log <maschine> "<text>"` |
 | `alert` | Golden | `alert <maschine> on\|off "<text>"` — nur Flanken (5.6) |

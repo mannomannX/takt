@@ -1,0 +1,27 @@
+(system
+  (language 1)
+  (tick 10ms))
+(native-job sha256 (b:bytes<64>) -> bytes<32> cost=60000 stack=512 duration=25ms)
+(output word :u32 @hw("o/word") safe=0)
+(output ready :bool @hw("o/ready") safe=false)
+(fn first (d:bytes<32>) -> u32
+  (return (| (| (| (as (index d 0) u32) (<< (as (index d 1) u32) 8)) (<< (as (index d 2) u32) 16)) (<< (as (index d 3) u32) 24))))
+(machine m
+  (var msg :bytes<64> default)
+  (var d :bytes<32> default)
+  (initial RUN)
+  (state RUN
+    (sequence
+      (.push msg 0x61)
+      (.push msg 0x62)
+      (.push msg 0x63)
+      (job v sha256 msg)
+      (until (.done v) timeout=1s -> FAILED)
+      (= d (.or (.result v) default))
+      (= word (call first d))
+      (= ready true)
+      (-> DONE)))
+  (state DONE
+    (when false -> RUN))
+  (state FAILED
+    (when false -> RUN)))

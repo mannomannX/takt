@@ -4,14 +4,15 @@
 
 use takt_diag::{Span, Stage};
 use takt_mir::expr::{BinaryOp, CheckedKind, Expr, ExprKind};
-use takt_mir::machine::{CounterSite, FaultTarget, Target, VarDef, VarScope};
+use takt_mir::fns::NativeKind;
+use takt_mir::machine::{CounterSite, FaultTarget, JobSlot, Target, VarDef, VarScope};
 use takt_mir::stmt::*;
-use takt_mir::types::Type;
+use takt_mir::types::{HandleKind, Type};
 use takt_mir::*;
 use takt_syntax::ast;
 
-use super::{BlockKind, Lowerer, SC3, SC8, is_literal};
-use crate::checks::SC7;
+use super::{BlockKind, Lowerer, SC2, SC3, SC8, is_literal};
+use crate::checks::{SC7, SC44};
 
 /// Methoden der eingebauten Typen, die ihren Empfaenger veraendern: sie
 /// sind Anweisungen, nie Teil eines Ausdrucks (4.4, 5.7).
@@ -81,10 +82,7 @@ impl Lowerer<'_> {
         let mir = match &s.kind {
             ast::StmtKind::Assign { target, op, value } => return self.assign(target, *op, value, kind, span),
             ast::StmtKind::Var(decl) => self.var_stmt(decl, kind)?,
-            ast::StmtKind::Job { .. } => {
-                self.stage(span, "Jobs", Stage::V1_1);
-                return None;
-            }
+            ast::StmtKind::Job { handle, callee, args } => self.job_stmt(handle, callee, args, kind, span)?,
             ast::StmtKind::Arm { .. } => {
                 self.stage(span, "Trigger", Stage::V1_2);
                 return None;
@@ -695,6 +693,108 @@ impl Lowerer<'_> {
         let id = self.declare_var(decl, kind, ty)?;
         let value = self.range_checked(value, ty, decl.span);
         Some(StmtKind::Assign { target: Place::Var(id), value })
+    }
+
+    /// `job v = f(args)` (4.5, Pruefung 44): `f` ist ein `native job`, das
+    /// Handle eine Variable der Maschine mit statischem Slot, und ein
+    /// Handle gehoert zu genau einer Native — sonst haette `v.result`
+    /// zwei Typen.
+    fn job_stmt(
+        &mut self,
+        handle: &ast::Ident,
+        callee: &ast::Ident,
+        args: &[ast::Arg],
+        kind: BlockKind,
+        span: Span,
+    ) -> Option<StmtKind> {
+        let native = match self.peek(&callee.name).cloned() {
+            Some(Entity::Native(n)) => n,
+            Some(_) => {
+                self.error_hint(
+                    SC44,
+                    callee.span,
+                    format!("`{}` ist kein `native job` (4.5)", callee.name),
+                    "`native job f(...) -> T with cost = ..., stack = ..., duration = ..., total` deklarieren",
+                );
+                return None;
+            }
+            None => {
+                self.lookup(callee);
+                return None;
+            }
+        };
+        if self.program.natives[native.index()].kind != NativeKind::Job {
+            self.error_hint(
+                SC44,
+                callee.span,
+                format!("`{}` ist ein `native fn`, kein `native job` (4.5)", callee.name),
+                "als `native job` mit `duration` deklarieren oder direkt aufrufen",
+            );
+            return None;
+        }
+        if self.mctx.is_none() || kind == BlockKind::Fn {
+            self.error(SC44, span, "`job` nur in einer Maschine (4.5)");
+            return None;
+        }
+        let params: Vec<(String, TypeId, Option<Expr>)> = self.program.natives[native.index()]
+            .params
+            .iter()
+            .map(|p| (p.name.clone(), p.ty, p.default.clone()))
+            .collect();
+        let args = self.args(&params, args, span)?;
+        let ty = self.intern(Type::Handle(HandleKind::Job));
+        let id = match self.peek(&handle.name).cloned() {
+            Some(Entity::Var(id, t)) if t == ty => id,
+            Some(_) => {
+                self.error(SC2, handle.span, format!("`{}` ist schon definiert", handle.name));
+                return None;
+            }
+            None => {
+                let scope = self.var_scope(kind);
+                let id = self.new_var(VarDef {
+                    name: handle.name.clone(),
+                    ty,
+                    init: None,
+                    scope,
+                    public: false,
+                    span: handle.span,
+                });
+                if !self.declare(handle, Entity::Var(id, ty)) {
+                    return None;
+                }
+                id
+            }
+        };
+        let m = self.mctx.as_mut().expect("Maschine");
+        let slots = &mut m.machine.layout.job_slots;
+        match slots.iter().find(|s| s.handle == id) {
+            Some(s) if s.native != native => {
+                let other = self.program.natives[s.native.index()].name.clone();
+                self.error_hint(
+                    SC44,
+                    handle.span,
+                    format!("`{}` traegt schon `{other}`", handle.name),
+                    "ein Handle gehoert zu einer Native; fuer eine zweite ein zweites Handle",
+                );
+                return None;
+            }
+            Some(_) => {}
+            None => {
+                slots.push(JobSlot { handle: id, native });
+                let (n, max) = (slots.len() as u32, m.machine.layout.jobs_max);
+                if n > max {
+                    let name = m.machine.name.clone();
+                    self.error_hint(
+                        SC44,
+                        span,
+                        format!("`{name}` hat mehr als K_j = {max} Job-Handles (4.5)"),
+                        "ein Handle je gleichzeitigem Job; ein `job` auf ein bestehendes Handle ersetzt den Lauf",
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(StmtKind::Job { handle: id, native, args })
     }
 
     /// Typ und Initialwert einer Variablendeklaration.

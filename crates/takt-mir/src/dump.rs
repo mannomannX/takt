@@ -506,6 +506,14 @@ impl Dumper<'_> {
                 )
             }
             ExprKind::StateOf(m) => format!("{}.state", self.machine_ref(m)),
+            ExprKind::JobState { handle, field } => format!(
+                "{}.{}",
+                self.var_name(*handle),
+                match field {
+                    crate::expr::JobField::Done => "done",
+                    crate::expr::JobField::Result => "result",
+                }
+            ),
             ExprKind::Signal { machine, signal } => {
                 format!(
                     "{}.{}",

@@ -1355,6 +1355,10 @@ fn fault_path(
         let flag = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 0"));
         m.void_inst(&format!("store i1 true, ptr {flag}"));
     }
+    // 5.3: Ein Fault-Uebergang bricht die laufenden Jobs der Maschine ab.
+    for slot in 0..machine_def.layout.job_slots.len() {
+        m.void_inst(&format!("call void @{}(i32 {}, i32 {slot})", crate::abi::Abi::JOB_CANCEL, ctx.machine_index));
+    }
     let target = machine_def.fault_target_of(from);
     let takt_mir::machine::FaultTarget::State(to) = target else {
         // `FAULTED` fuehrt keinen Nutzercode aus (5.2 Regel 5), und die

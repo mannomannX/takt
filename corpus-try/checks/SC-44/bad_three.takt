@@ -1,0 +1,14 @@
+system:
+    language = 1
+
+# Hoechstens K_j = 2 Job-Handles je Maschine (4.5).
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, duration = 25 ms, total
+
+machine m:
+    var msg : bytes<64> = default
+    initial RUN
+    state RUN:
+        sequence:
+            job a = sha256(msg)
+            job b = sha256(msg)
+            job c = sha256(msg)  # ~ SC-44

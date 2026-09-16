@@ -535,6 +535,12 @@ pub enum ExprKind {
     /// Ein Literal ohne Platzhalter bleibt `Str`; erst die Interpolation
     /// braucht die Teilausdruecke.
     Format(crate::pattern::Format),
+    /// `v.done` / `v.result` eines Job-Handles (4.5): ein Input, gelesen
+    /// ueber den Slot des Handles (`Layout::job_slots`).
+    JobState {
+        handle: VarId,
+        field: JobField,
+    },
     /// Ein interner Stream als Wert (8.6): Subjekt eines Guards und Traeger
     /// der Zaehler `.count`, `.dropped`, `.overflowed`, `.malformed`. Ein
     /// Stream-Channel steht als `Input` da; hier fehlt die `ChannelId`.
@@ -725,4 +731,13 @@ pub enum TProp {
     Not(Box<TProp>),
     /// Vergleichsausdruck.
     Atom(Expr),
+}
+
+/// Was von einem Job gelesen wird (4.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobField {
+    /// `v.done : bool`.
+    Done,
+    /// `v.result : T!JobErr`.
+    Result,
 }

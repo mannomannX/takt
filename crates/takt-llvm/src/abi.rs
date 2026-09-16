@@ -55,6 +55,16 @@ impl Abi {
     /// eine zweite Quelle fuer dieselbe Zahl.
     pub const NOW: &'static str = "takt_now";
 
+    /// `job v = f(args)` (4.5): `(machine, slot, native, args, len)` — die
+    /// Argumente als Folge kanonischer Bloecke (je `u32` Laenge, dann die
+    /// Bytes). Die Runtime fuehrt den Job und schreibt `done`/`result` in
+    /// den Slot des Abbilds (`image::job_offset`).
+    pub const JOB_BEGIN: &'static str = "takt_job_begin";
+
+    /// Ein Fault-Uebergang bricht die Jobs der Maschine ab (5.3):
+    /// `(machine, slot)`; der Slot wird `done` mit `Err(CANCELLED)`.
+    pub const JOB_CANCEL: &'static str = "takt_job_cancel";
+
     /// `verdict pass | fail` (13.2): das Urteil eines Tests.
     ///
     /// Wie `verify` eine reine Beobachtung — sie kann nie einen Fault
@@ -114,6 +124,8 @@ impl Abi {
         // 9.8: `(channel, T, wert) -> konnte geplant werden`.
         m.declare(&format!("declare i1 @{}(i32, i64, i64)", Abi::SCHEDULE));
         m.declare(&format!("declare void @{}(i32)", Abi::CANCEL));
+        m.declare(&format!("declare void @{}(i32, i32, i32, ptr, i32)", Abi::JOB_BEGIN));
+        m.declare(&format!("declare void @{}(i32, i32)", Abi::JOB_CANCEL));
         // `append` kopiert eine ganze Folge in einem Zug (3.9); LLVM
         // kennt das als Intrinsic, und eine Schleife braeuchte eine
         // Schranke, die 4.1 ohnehin verlangt.

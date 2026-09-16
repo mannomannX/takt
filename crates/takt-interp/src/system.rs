@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use takt_diag::Span;
 
-use takt_mir::expr::{Accessor, Builtin, StreamRef};
+use takt_mir::expr::{Accessor, Builtin, JobField, StreamRef};
 use takt_mir::machine::{FaultKind, Machine, VarScope};
 use takt_mir::program::{OutputTiming, Overflow, Program};
 use takt_mir::types::Type;
@@ -193,6 +193,16 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
         Ok(Value::Record(fields))
     }
 
+    /// Der Slot eines Job-Handles (`Layout::job_slots`).
+    fn job_slot(&self, handle: VarId) -> EvalResult<usize> {
+        self.machine(self.loaded)
+            .layout
+            .job_slots
+            .iter()
+            .position(|s| s.handle == handle)
+            .ok_or_else(|| Trap::Bug(format!("Job-Handle {} ohne Slot", handle.0)))
+    }
+
     /// Meldet einen Fault als Beobachtung.
     pub fn observe_fault(&mut self, f: &Fault, target: String) {
         self.out.push(Observation::Fault { kind: f.kind, message: f.message.clone(), target });
@@ -302,6 +312,26 @@ impl Outer for MachineEnv<'_, '_> {
         self.image
             .published_var(m, v, fresh)
             .ok_or_else(|| Trap::Bug(format!("`pub var` {} von Maschine {} fehlt", v.0, m.0)))
+    }
+
+    fn job(&self, handle: VarId, field: JobField) -> EvalResult<Value> {
+        let slot = self.job_slot(handle)?;
+        let job = self.state.jobs.get(slot).ok_or_else(|| Trap::Bug(format!("Job-Slot {slot} fehlt")))?;
+        Ok(match field {
+            JobField::Done => Value::Bool(job.done),
+            JobField::Result => job.result.clone(),
+        })
+    }
+
+    fn job_start(&mut self, handle: VarId, value: Value, due: u64) -> EvalResult<()> {
+        let slot = self.job_slot(handle)?;
+        // 4.5: Eine Aufzeichnung ersetzt den Tick des Modells.
+        let (id, tick) = (self.id, self.tick);
+        let recorded =
+            self.image.job_records.iter().filter(|(m, s, t)| *m == id && *s == slot && *t >= tick).map(|r| r.2).min();
+        let due = recorded.unwrap_or(due);
+        self.state.jobs.get_mut(slot).ok_or_else(|| Trap::Bug(format!("Job-Slot {slot} fehlt")))?.start(value, due);
+        Ok(())
     }
 
     fn state_of(&self, m: MachineId) -> EvalResult<Value> {

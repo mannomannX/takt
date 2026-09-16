@@ -45,6 +45,9 @@ pub struct Image {
     fresh: Vec<bool>,
     /// Parameterwerte des Laufs (8.4).
     pub params: Vec<Value>,
+    /// Aufgezeichnete Fertigstellungen aus dem Stimulus (4.5): Maschine,
+    /// Slot, Tick — sie ersetzen das Modell `duration`.
+    pub job_records: Vec<(MachineId, usize, u64)>,
     /// Adresse → `sim`-Output, der einen `hw`-Input speist (8.3).
     sim_sources: HashMap<String, ChannelId>,
     /// Adresse → `hw`-Input.
@@ -207,6 +210,7 @@ impl Image {
             gates: vec![takt_hal::quality::Gate::default(); p.channels.len()],
             limits: p.channels.iter().map(|c| limits_of(c, p)).collect(),
             last_good: vec![None; p.channels.len()],
+            job_records: Vec::new(),
         }
     }
 
