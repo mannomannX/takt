@@ -15,6 +15,7 @@
 //! MIR beim Laden ab.
 
 pub mod arith;
+pub mod bytes;
 pub mod call;
 pub mod coverage;
 pub mod env;
@@ -26,7 +27,6 @@ pub mod loaded;
 pub mod machine;
 pub mod nvm;
 pub mod pattern;
-pub mod persist;
 pub mod record;
 pub mod run;
 pub mod stream;

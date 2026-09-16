@@ -14,6 +14,7 @@
 #![allow(clippy::large_enum_variant)]
 
 pub mod analysis;
+pub mod bytes;
 pub mod desugar;
 pub mod dfa;
 pub mod dump;

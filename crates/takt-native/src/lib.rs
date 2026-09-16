@@ -24,6 +24,7 @@
 
 #![no_std]
 
+pub mod bytes;
 pub mod cost;
 pub mod crc;
 

@@ -95,7 +95,7 @@ impl Nvm {
         sorted.sort_by_key(|(h, _, _)| *h);
         let mut out = Vec::new();
         for (hash, value, ty) in sorted {
-            let bytes = crate::persist::encode(p, value, *ty).ok()?;
+            let bytes = crate::bytes::encode(p, value, *ty).ok()?;
             out.extend_from_slice(&hash.to_le_bytes());
             out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
             out.extend_from_slice(&bytes);
@@ -129,7 +129,7 @@ impl Nvm {
             let Some(slice) = bytes.get(at..at + len) else { return };
             at += len;
             if let Some(ty) = types.get(&hash) {
-                if let Ok(v) = crate::persist::decode(p, slice, *ty) {
+                if let Ok(v) = crate::bytes::decode(p, slice, *ty) {
                     self.entries.insert(hash, v);
                 }
             }

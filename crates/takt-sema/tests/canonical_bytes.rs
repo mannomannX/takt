@@ -1,4 +1,5 @@
-//! Die kanonische Byte-Form eines `persist`-Werts (5.9).
+//! Die kanonische Byteform (5.9; plan/m6.md 2.2): entstanden fuer
+//! `persist`, die Form aller Grenzen zwischen Interpreter und nativem Code.
 //!
 //! Zwei Eigenschaften traegt jeder Test: `decode(encode(v)) == v`, und
 //! dieselbe Eingabe ergibt dieselben Bytes. Ohne die zweite waere der
@@ -6,8 +7,9 @@
 
 use takt_diag::Policy;
 use takt_interp::Value;
-use takt_interp::persist::{decode, encode};
-use takt_mir::persist::value::{Error, max_size};
+use takt_interp::bytes::{decode, encode};
+use takt_mir::bytes::{Error, max_size};
+use takt_mir::types::{FloatWidth, IntWidth};
 use takt_mir::{Program, TypeId};
 use takt_sema::{Build, Options};
 
@@ -401,4 +403,32 @@ machine m:
 
     let p = with_var("", "persist var k : u32 = 0");
     assert_eq!(takt_mir::persist::min_interval_ns(&p), None, "ohne Deklaration entscheidet das Ziel");
+}
+
+#[test]
+fn the_tcb_encoder_writes_the_same_bytes() {
+    // plan/m6.md 2.2: `takt_native::bytes` ist das `no_std`-Gegenstueck —
+    // dieselbe Folge, dieselben Bytes.
+    let mut host = takt_mir::bytes::Encoder::new();
+    host.bool(true);
+    host.int(-2, IntWidth::I16);
+    host.int(7, IntWidth::U32);
+    host.float(0x3f80_0000, FloatWidth::F32);
+    host.float(0x3ff0_0000_0000_0000, FloatWidth::F64);
+    host.duration(1);
+    host.len(3);
+    host.discriminant(-1);
+    host.raw(&[0xaa, 0xbb]);
+    let mut buf = [0u8; 64];
+    let mut tcb = takt_native::bytes::Encoder::new(&mut buf);
+    tcb.bool(true).expect("Platz");
+    tcb.int(-2, 2).expect("Platz");
+    tcb.int(7, 4).expect("Platz");
+    tcb.f32(0x3f80_0000).expect("Platz");
+    tcb.f64(0x3ff0_0000_0000_0000).expect("Platz");
+    tcb.duration(1).expect("Platz");
+    tcb.len(3).expect("Platz");
+    tcb.discriminant(-1).expect("Platz");
+    tcb.raw(&[0xaa, 0xbb]).expect("Platz");
+    assert_eq!(host.bytes, tcb.written());
 }

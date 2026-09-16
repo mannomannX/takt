@@ -14,8 +14,6 @@
 //! SHA-256 statt des FNV-1a aus 3.9: hier zaehlt Kollisionsfreiheit ueber
 //! Firmware-Staende, nicht Geschwindigkeit.
 
-pub mod value;
-
 use crate::program::Program;
 use crate::types::{Const, Range, Type};
 use crate::{EnumId, RecordId, TypeId, UnitId};
@@ -53,7 +51,7 @@ pub fn max_payload(p: &Program) -> Option<u32> {
     for m in &p.machines {
         for pv in &m.persist {
             let ty = m.vars.get(pv.var.index())?.ty;
-            total = total.checked_add(12)?.checked_add(value::max_size(p, ty).ok()?)?;
+            total = total.checked_add(12)?.checked_add(crate::bytes::max_size(p, ty).ok()?)?;
         }
     }
     Some(total)

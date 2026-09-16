@@ -1,12 +1,12 @@
-//! `Value` in die kanonische Byte-Form und zurueck (5.9).
+//! `Value` in die kanonische Byteform und zurueck (5.9).
 //!
-//! Die Form selbst steht in `takt_mir::persist::value`; hier steht nur,
+//! Die Form selbst steht in `takt_mir::bytes`; hier steht nur,
 //! wie ein `Value` sich in ihre Bestandteile zerlegt. Der Codegen zerlegt
 //! dieselbe Struktur ueber LLVM-Register, damit beide Seiten dieselben
 //! Bytes erzeugen (Satz 9.4.4).
 
 use takt_mir::TypeId;
-use takt_mir::persist::value::{Decoder, Encoder, Error};
+use takt_mir::bytes::{Decoder, Encoder, Error};
 use takt_mir::program::Program;
 use takt_mir::types::{FloatWidth, Type};
 

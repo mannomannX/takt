@@ -12,8 +12,8 @@
 //! `PersistReset`; den Alert meldet der Rahmen aus dem Rueckgabewert).
 
 use takt_mir::TypeId;
+use takt_mir::bytes::max_size;
 use takt_mir::machine::Machine;
-use takt_mir::persist::value::max_size;
 use takt_mir::program::Program;
 use takt_mir::types::{Const, FloatWidth, Range, Type};
 

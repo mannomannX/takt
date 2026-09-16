@@ -1,4 +1,10 @@
-//! Die kanonische Byte-Form eines `persist`-Werts (5.9).
+//! Die kanonische Byteform eines Werts (5.9; plan/m6.md 2.2).
+//!
+//! Sie entstand fuer `persist` und ist die Form aller Grenzen, die
+//! Interpreter und nativer Code gleich bilden muessen: das Journal,
+//! `map`-Schluessel (3.9), Job-Argumente (4.5), Record-Elemente auf
+//! Stroemen (8.6) und Records an nativen Funktionen. `takt-native` traegt
+//! das `no_std`-Gegenstueck (`takt_native::bytes`).
 //!
 //! **Warum eine eigene Form.** `wire::encode` braucht `layout`, und 3.7
 //! sagt dazu „Ohne `layout` gibt es keine Byte-Repraesentation" — aber
