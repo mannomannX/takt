@@ -729,9 +729,12 @@ impl<'t, 's> Parser<'t, 's> {
         let params = self.parse_param_list()?;
         self.expect_op("->")?;
         let ret = self.parse_type()?;
+        let requires = if self.eat_kw("requires") { Some(self.parse_expr()?) } else { None };
+        // `result` ist ein gewoehnlicher Name; die Sema kennt ihn nur hier (5.7).
+        let ensures = if self.eat_kw("ensures") { Some(self.parse_expr()?) } else { None };
         self.expect_op(":")?;
         let body = self.parse_block()?;
-        Ok(StepDecl { params, ret, body, span: self.span_from(start) })
+        Ok(StepDecl { params, ret, requires, ensures, body, span: self.span_from(start) })
     }
 
     /// `method_decl`

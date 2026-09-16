@@ -296,7 +296,14 @@ impl Printer {
     }
 
     fn step(&mut self, s: &StepDecl) {
-        self.node("step", &format!("{} -> {}", params(&s.params), ty(&s.ret)), |p| p.block(&s.body));
+        let mut head = format!("{} -> {}", params(&s.params), ty(&s.ret));
+        if let Some(r) = &s.requires {
+            let _ = write!(head, " requires {}", expr(r));
+        }
+        if let Some(e) = &s.ensures {
+            let _ = write!(head, " ensures {}", expr(e));
+        }
+        self.node("step", &head, |p| p.block(&s.body));
     }
 
     fn instance(&mut self, i: &InstanceDecl) {

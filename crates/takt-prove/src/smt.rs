@@ -57,7 +57,9 @@ impl Printer<'_> {
             Node::F32(f) => fp_literal(u64::from(f.to_bits()), 8, 23),
             Node::F64(f) => fp_literal(f.to_bits(), 11, 52),
             Node::Var(v, _) => {
-                if v.starts_with("i.") {
+                if v.starts_with("c.") {
+                    format!("|{v}|")
+                } else if v.starts_with("i.") {
                     at(v, input, self.tag)
                 } else {
                     at(v, state, self.tag)
@@ -251,6 +253,26 @@ pub fn export(model: &Model, depth: u32) -> String {
     block(&mut out, model, "@", Query::Bmc, depth, &all, false);
     let _ = writeln!(out);
     block(&mut out, model, "#", Query::Induction, depth, &all, false);
+    out
+}
+
+/// Die Anfrage eines Block-Vertrags (5.7, B2): freie Variablen, die
+/// Verletzung als Formel, die Belegung bei `sat`.
+pub fn contract_query(goal: &crate::encode::ContractGoal) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "; takt prove — Vertrag von `{}` (5.7)", goal.block);
+    let _ = writeln!(out, "(set-logic ALL)");
+    for (name, sort) in &goal.vars {
+        let _ = writeln!(out, "(declare-const |{name}| {})", sort_text(*sort));
+    }
+    let mut p = Printer { out: &mut out, tag: "@", defs: HashMap::new(), next: 0 };
+    let v = p.name(&goal.violation, 0, 0);
+    let _ = writeln!(p.out, "(assert {v})");
+    let _ = writeln!(p.out, "(check-sat)");
+    let names: Vec<String> = goal.vars.iter().map(|(n, _)| format!("|{n}|")).collect();
+    if !names.is_empty() {
+        let _ = writeln!(p.out, "(get-value ({}))", names.join(" "));
+    }
     out
 }
 

@@ -1,0 +1,16 @@
+(system
+  (language 1)
+  (tick 10ms))
+(input level :float in (- 10)..10 @hw("s/level") max_age=50ms)
+(output out :float @hw("o/out") safe=0)
+(block limiter (hi:float)
+  (var last :float 0)
+  (step (x:float) -> float requires (>= x 0) ensures (<= result hi)
+    (= last (if (< x hi) x hi))
+    (return last)))
+(machine m
+  (var lim (call limiter hi=5))
+  (initial RUN)
+  (state RUN
+    (loop
+      (= out (.step lim level)))))

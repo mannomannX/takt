@@ -672,6 +672,10 @@ pub struct StepDecl {
     pub params: Vec<Param>,
     /// Rueckgabetyp.
     pub ret: Type,
+    /// `requires`: Beweisverpflichtung ueber Parametern und Zustand (5.7).
+    pub requires: Option<Expr>,
+    /// `ensures`: ueber `result`, Parametern und dem Zustand danach (5.7).
+    pub ensures: Option<Expr>,
     /// Rumpf.
     pub body: Block,
     /// Position.

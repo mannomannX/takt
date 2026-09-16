@@ -139,7 +139,7 @@ system import type enum record unit const param profile stream port node unitvec
 input output command fn native block machine instance scenario campaign trigger
 var pub persist signal tunable driver
 initial state enter loop exit on when after fault sequence wait until expect repeat step every
-check alert log abort measure verify verdict send at pulse cancel raise job arm disarm then bound
+check alert log abort measure verify verdict send at pulse cancel raise job arm disarm then bound requires ensures
 program sweep stop_on
 match case if elif else for in range break return pass
 and or not as matches has implies always never eventually stable once
@@ -949,6 +949,8 @@ Auf demselben Weg wirken der Operator-Befehl `abort` (als Input gesampelt, `pend
 ### 5.7 Blöcke innerhalb von Maschinen
 Ein `block`-Aufruf an einer Stelle des Codes ist eine Instanz (wie ein Operator in synchronen Dataflow-Werkzeugen): `var f = lowpass[bar](tau = 50 ms)` benannt, `if rose(start):` anonym pro Aufrufstelle (die Einheit `bar` steht explizit, weil kein Konstruktorparameter sie bestimmt, 3.12). Jede Instanz darf pro Aktivierungs-Tick höchstens einmal `step` ausführen (statisch geprüft: kein Aufruf in `for`-Schleifen, außer über Arrays von Instanzen `var filters = [8] lowpass[bar](tau = 50 ms)`). Nicht gesteppte Instanzen behalten ihren Zustand.
 
+
+**Verträge (v1.1).** `step(x: float[U]) -> float[U] requires x >= 0 U ensures result <= x:` — `requires` ist eine Bedingung über den Parametern des Schritts und dem Zustand des Blocks, `ensures` eine über `result`, den Parametern und dem Zustand *nach* dem Schritt. Beide sind **Beweisverpflichtungen, keine Laufzeitprüfungen**: Ein `requires`, das zur Laufzeit prüfte, wäre ein verstecktes `check` mit unklarem Fault-Ziel. `takt prove` zeigt `ensures` unter `requires` für einen Schritt aus jedem typkonformen Zustand des Blocks — ein Block ist geschlossen, also für sich beweisbar — und klassifiziert jede Aufrufstelle `b.step(args)` wie eine Prüfstelle: Kann `requires` dort verletzt sein, nennt der Bericht den Pfad. Ein Block ohne Vertrag ist erlaubt; der Beweis rechnet dann mit seinem Rumpf.
 
 ### 5.8 Ergonomie in Maschinen
 

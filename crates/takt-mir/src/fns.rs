@@ -226,6 +226,12 @@ pub struct BlockDef {
     pub step: Option<FnId>,
     /// Weitere Methoden.
     pub methods: Vec<FnId>,
+    /// `requires` des `step` (5.7): Beweisverpflichtungen ueber den
+    /// Parametern des Schritts und dem Zustand, im Rahmen des `step`.
+    pub requires: Vec<Expr>,
+    /// `ensures` des `step`: ueber `result` (die Lokale hinter den
+    /// Parametern), den Parametern und dem Zustand danach.
+    pub ensures: Vec<Expr>,
     /// Generische Vorlage und Argumente.
     pub origin: Option<GenericOrigin>,
     /// Position.

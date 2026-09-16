@@ -166,6 +166,16 @@ fn the_hotfire_example_agrees_over_its_scenarios() {
     }
 }
 
+/// Ein Block mit Zustand (5.7): `step` eingebettet, der Zustand in Feldern.
+#[test]
+fn a_block_step_is_inlined_faithfully() {
+    let mut stim = String::new();
+    for k in 0..=12 {
+        stim.push_str(&format!("t={k} in level {}\n", (k as f64) - 4.0));
+    }
+    agree("48_contracts.takt", &stim, 12);
+}
+
 #[test]
 fn the_export_is_smtlib_with_both_queries() {
     let p = corpus("16_timing.takt");

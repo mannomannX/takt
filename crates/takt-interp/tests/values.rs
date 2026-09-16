@@ -566,6 +566,8 @@ fn block_instances_keep_state_between_steps() {
             span: Span::default(),
         }],
         step: Some(FnId(0)),
+        requires: Vec::new(),
+        ensures: Vec::new(),
         methods: vec![],
         origin: None,
         span: Span::default(),

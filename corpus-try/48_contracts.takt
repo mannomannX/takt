@@ -1,0 +1,24 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Block-Vertraege (5.7, B2): `requires`/`ensures` sind Beweisverpflichtungen
+# fuer `takt prove`, keine Laufzeitpruefungen. Der Begrenzer haelt sein
+# `ensures` aus jedem typkonformen Zustand; sein `requires` kann an der
+# Aufrufstelle verletzt sein, weil `level` negativ werden darf.
+
+input  level : float in -10..10 @ hw("s/level") with max_age = 50 ms
+output out   : float            @ hw("o/out")   with safe = 0
+
+block limiter(hi: float):
+    var last : float = 0
+    step(x: float) -> float requires x >= 0 ensures result <= hi:
+        last = x if x < hi else hi
+        return last
+
+machine m:
+    var lim = limiter(hi = 5)
+    initial RUN
+    state RUN:
+        loop:
+            out = lim.step(level)

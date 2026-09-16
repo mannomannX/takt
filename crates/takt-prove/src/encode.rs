@@ -20,11 +20,12 @@ use takt_diag::Span;
 use takt_mir::expr::{
     BinaryOp, Builtin, CheckedKind, ConvertKind, Expr, ExprKind, Intrinsic, TProp, TemporalOp, UnaryOp,
 };
+use takt_mir::fns::BlockDef;
 use takt_mir::machine::{FaultTarget, Machine, Target, TransTrigger};
 use takt_mir::program::{Direction, Program, Property};
-use takt_mir::stmt::{ArmPattern, Block, Place, StmtKind};
-use takt_mir::types::{Const, FloatWidth, Type};
-use takt_mir::{ChannelId, CommandId, MachineId, StateId, TypeId, VarId};
+use takt_mir::stmt::{ArmPattern, Block, Method, Place, StmtKind};
+use takt_mir::types::{Const, FloatWidth, HandleKind, Type};
+use takt_mir::{BlockId, ChannelId, CommandId, MachineId, StateId, TypeId, VarId};
 
 use crate::eval;
 use crate::term::{Node, Op, Sort, Term};
@@ -87,6 +88,20 @@ pub struct CheckSite {
     pub fires: Term,
 }
 
+/// Der Vertrag eines Blocks als Beweisziel (5.7, B2): aus jedem
+/// typkonformen Zustand haelt ein Schritt unter `requires` sein `ensures`.
+#[derive(Clone, Debug)]
+pub struct ContractGoal {
+    /// Der Block.
+    pub block: String,
+    /// Position des `step`.
+    pub span: Span,
+    /// Freie Variablen `c.…`: Parameter, Zustand, Schrittparameter.
+    pub vars: Vec<(String, Sort)>,
+    /// Erfuellbar genau dann, wenn der Vertrag verletzt sein kann.
+    pub violation: Term,
+}
+
 /// Das Transitionssystem.
 #[derive(Clone, Debug, Default)]
 pub struct Model {
@@ -104,6 +119,8 @@ pub struct Model {
     pub properties: Vec<Goal>,
     /// Pruefstellen als Beweisziele (B3).
     pub checks: Vec<CheckSite>,
+    /// Block-Vertraege als Beweisziele (B2).
+    pub contracts: Vec<ContractGoal>,
     /// Was die Kodierung annimmt oder auslaesst.
     pub notes: Vec<String>,
     /// Je Maschine die Zustandscodes mit Namen.
@@ -250,6 +267,7 @@ pub fn encode(p: &Program) -> R<Model> {
     let next = enc.tick(&pre)?;
     let tick_sites = std::mem::take(&mut enc.sites);
     let invariants = enc.state_invariants(&pre);
+    let contracts = enc.contract_goals()?;
     let checks: Vec<CheckSite> = enc
         .site_info
         .iter()
@@ -301,6 +319,7 @@ pub fn encode(p: &Program) -> R<Model> {
         invariants,
         properties,
         checks,
+        contracts,
         notes,
         leaves,
     })
@@ -905,11 +924,226 @@ impl Enc<'_> {
                     let old = env.get(&loc).cloned().unwrap_or_else(|| Term::bool(false));
                     env.insert(loc, Term::ite(flow.alive.clone(), Term::bool(true), old));
                 }
+                StmtKind::MethodCall { target, receiver, method, args } => {
+                    self.method_call(target.as_ref(), receiver, *method, args, cx, env, flow, span)?;
+                }
                 StmtKind::Observe(_) | StmtKind::Pass => {}
                 other => return no(format!("Anweisung {}", stmt_name(other)), span),
             }
         }
         Ok(())
+    }
+
+    // ------------------------------------------------------------ Bloecke (5.7)
+
+    /// Block und Felder (`s.<m>.v.<instanz>.<feld>`: Parameter, dann
+    /// Zustand) einer Instanz; keine bei Instanz-Arrays.
+    fn block_fields(&self, m: MachineId, inst: VarId) -> Option<(BlockId, Vec<(String, TypeId)>)> {
+        let machine = self.machine(m);
+        let bi = machine.layout.block_instances.iter().find(|b| b.var == inst)?;
+        if bi.count > 1 {
+            return None;
+        }
+        let def = &self.p.blocks[bi.block.index()];
+        let base = format!("s.{}.v.{}", machine.name, machine.vars[inst.index()].name);
+        let fields = def
+            .params
+            .iter()
+            .map(|p| (format!("{base}.{}", p.name), p.ty))
+            .chain(def.state_vars.iter().map(|v| (format!("{base}.{}", v.name), v.ty)))
+            .collect();
+        Some((bi.block, fields))
+    }
+
+    /// Setzt den Zustand einer Instanz aus ihren Parametern (`reset`, 5.7).
+    fn block_reset(
+        &mut self,
+        def: &BlockDef,
+        fields: &[(String, TypeId)],
+        cx: &Cx<'_>,
+        env: &mut Env,
+        flow: &mut Flow,
+    ) -> R<()> {
+        let mut locals: BTreeMap<VarId, Term> = BTreeMap::new();
+        for i in 0..def.params.len() {
+            locals.insert(VarId(i as u32), env[&fields[i].0].clone());
+        }
+        for (j, sv) in def.state_vars.iter().enumerate() {
+            let icx = Cx {
+                m: cx.m,
+                leaf: cx.leaf,
+                mode: cx.mode,
+                pre: cx.pre,
+                active: cx.active,
+                locals: Some(locals.clone()),
+            };
+            let v = match &sv.init {
+                Some(e) => self.expr(e, &icx, env, flow)?,
+                None => Enc::zero(self.sort_of(sv.ty, sv.span)?),
+            };
+            let id = VarId((def.params.len() + j) as u32);
+            locals.insert(id, v.clone());
+            let loc = fields[def.params.len() + j].0.clone();
+            let old = env[&loc].clone();
+            env.insert(loc, Term::ite(flow.alive.clone(), v, old));
+        }
+        Ok(())
+    }
+
+    /// `b.step(args)`, `b.reset()`, `b.<methode>(args)`: der Rumpf eingebettet,
+    /// der Zustand der Instanz in den Feldern; `requires` des `step` ist eine
+    /// Pruefstelle ohne Laufzeitpruefung (5.7).
+    #[allow(clippy::too_many_arguments)]
+    fn method_call(
+        &mut self,
+        target: Option<&Place>,
+        receiver: &Place,
+        method: Method,
+        args: &[Expr],
+        cx: &Cx<'_>,
+        env: &mut Env,
+        flow: &mut Flow,
+        span: Span,
+    ) -> R<()> {
+        let m = cx.m.expect("Maschine");
+        let Place::Var(inst) = receiver else { return no("Methodenaufruf auf diesem Ziel", span) };
+        let Some((bid, fields)) = self.block_fields(m, *inst) else { return no("Methodenaufruf", span) };
+        let def = self.p.blocks[bid.index()].clone();
+        let mut arg_terms = Vec::new();
+        for a in args {
+            arg_terms.push(self.expr(a, cx, env, flow)?);
+        }
+        let fid = match method {
+            Method::Reset => return self.block_reset(&def, &fields, cx, env, flow),
+            Method::Step => def.step.ok_or_else(|| Unsupported { what: "`step`".into(), span })?,
+            Method::Block(f) => f,
+            _ => return no("Sammlungsmethode", span),
+        };
+        let f = self.p.fns[fid.index()].clone();
+        let base = fields.len() as u32;
+        let mut locals: BTreeMap<VarId, Term> = BTreeMap::new();
+        for (i, (loc, _)) in fields.iter().enumerate() {
+            locals.insert(VarId(i as u32), env[loc].clone());
+        }
+        for (i, local) in f.locals.iter().enumerate() {
+            let value = match arg_terms.get(i) {
+                Some(a) => a.clone(),
+                None => Enc::zero(self.sort_of(local.ty, local.span)?),
+            };
+            locals.insert(VarId(base + i as u32), value);
+        }
+        let call_alive = flow.alive.clone();
+        if method == Method::Step {
+            let rcx = Cx {
+                m: cx.m,
+                leaf: cx.leaf,
+                mode: cx.mode,
+                pre: cx.pre,
+                active: cx.active,
+                locals: Some(locals.clone()),
+            };
+            for r in &def.requires {
+                let mut rflow = Flow::new(call_alive.clone());
+                let c = self.expr(r, &rcx, env, &mut rflow)?;
+                let fail = Term::and(vec![call_alive.clone(), !c]);
+                self.sites.entry(span.start).or_default().push(fail);
+                self.site_info.insert(span.start, (span, self.machine(m).name.clone(), "requires".to_string()));
+            }
+        }
+        let mut icx =
+            Cx { m: cx.m, leaf: cx.leaf, mode: Mode::Entry, pre: cx.pre, active: cx.active, locals: Some(locals) };
+        let mut sub = Flow::new(call_alive.clone());
+        let mut ret = match f.ret {
+            Some(t) => Enc::zero(self.sort_of(t, span)?),
+            None => Term::bool(false),
+        };
+        self.fn_block(&f.body, &mut icx, env, &mut sub, &mut ret)?;
+        let faults = Term::or(sub.exits.iter().map(|x| x.cond.clone()).collect());
+        flow.exits.extend(sub.exits);
+        // Der Zustand bleibt, was der Rumpf bis zu einem Fault schrieb.
+        let locals = icx.locals.expect("Lokale");
+        for (i, (loc, _)) in fields.iter().enumerate().skip(def.params.len()) {
+            let v = locals[&VarId(i as u32)].clone();
+            let old = env[loc].clone();
+            env.insert(loc.clone(), Term::ite(call_alive.clone(), v, old));
+        }
+        flow.alive = Term::and(vec![call_alive, !faults]);
+        if let Some(t) = target {
+            let loc = match t {
+                Place::Var(id) => self.loc_var(m, *id),
+                Place::Output(c) => self.loc_out(*c),
+                _ => return no("Ziel eines Methodenaufrufs", span),
+            };
+            let old = env[&loc].clone();
+            env.insert(loc, Term::ite(flow.alive.clone(), ret, old));
+        }
+        Ok(())
+    }
+
+    /// Die Vertraege aller Bloecke als Ziele (5.7, B2).
+    fn contract_goals(&mut self) -> R<Vec<ContractGoal>> {
+        let mut out = Vec::new();
+        for def in self.p.blocks.clone() {
+            let (Some(fid), false) = (def.step, def.ensures.is_empty()) else { continue };
+            let f = self.p.fns[fid.index()].clone();
+            let mut vars: Vec<(String, Sort)> = Vec::new();
+            let mut locals: BTreeMap<VarId, Term> = BTreeMap::new();
+            let mut assume = Vec::new();
+            let mut typed = |this: &mut Self, name: String, ty: TypeId, id: VarId| -> R<()> {
+                let sort = this.sort_of(ty, def.span)?;
+                let t = Term::var(name.clone(), sort);
+                if let Some(inv) = this.type_invariant(t.clone(), ty) {
+                    assume.push(inv);
+                }
+                vars.push((name, sort));
+                locals.insert(id, t);
+                Ok(())
+            };
+            let mut ok = true;
+            for (i, p) in def.params.iter().enumerate() {
+                ok &= typed(self, format!("c.{}.{}", def.name, p.name), p.ty, VarId(i as u32)).is_ok();
+            }
+            for (j, v) in def.state_vars.iter().enumerate() {
+                ok &= typed(self, format!("c.{}.{}", def.name, v.name), v.ty, VarId((def.params.len() + j) as u32))
+                    .is_ok();
+            }
+            let base = (def.params.len() + def.state_vars.len()) as u32;
+            for (i, p) in f.params.iter().enumerate() {
+                ok &= typed(self, format!("c.{}.step.{}", def.name, p.name), p.ty, VarId(base + i as u32)).is_ok();
+            }
+            if !ok {
+                self.note(&format!("Vertrag von `{}` nicht kodiert: ein Typ ausserhalb der Reichweite", def.name));
+                continue;
+            }
+            for (i, local) in f.locals.iter().enumerate().skip(f.params.len()) {
+                let Ok(sort) = self.sort_of(local.ty, local.span) else { continue };
+                locals.insert(VarId(base + i as u32), Enc::zero(sort));
+            }
+            let pre = Env::new();
+            let actives = BTreeMap::new();
+            let mut cx =
+                Cx { m: None, leaf: None, mode: Mode::Entry, pre: &pre, active: &actives, locals: Some(locals) };
+            let mut flow = Flow::new(Term::bool(true));
+            let mut env = Env::new();
+            for r in &def.requires {
+                let t = self.expr(r, &cx, &env, &mut flow)?;
+                assume.push(t);
+            }
+            let Some(ret_ty) = f.ret else { continue };
+            let mut ret = Enc::zero(self.sort_of(ret_ty, f.span)?);
+            self.fn_block(&f.body, &mut cx, &mut env, &mut flow, &mut ret)?;
+            let faults = Term::or(flow.exits.iter().map(|x| x.cond.clone()).collect());
+            // `result` ist die Lokale hinter den Schrittparametern.
+            cx.locals.as_mut().expect("Lokale").insert(VarId(base + f.params.len() as u32), ret);
+            let mut ensures = Vec::new();
+            for e in &def.ensures {
+                let mut eflow = Flow::new(Term::bool(true));
+                ensures.push(self.expr(e, &cx, &env, &mut eflow)?);
+            }
+            let violation = Term::and(vec![Term::and(assume), !faults, !Term::and(ensures)]);
+            out.push(ContractGoal { block: def.name.clone(), span: def.span, vars, violation });
+        }
+        Ok(out)
     }
 
     // ------------------------------------------------------------ Zustandswechsel
@@ -1225,6 +1459,15 @@ impl Enc<'_> {
                 env.insert(self.loc_timer(m, StateId(i as u32)), Term::int(0));
             }
             for (i, v) in machine.vars.iter().enumerate() {
+                if matches!(self.p.types.get(v.ty), Type::Handle(HandleKind::Block(_))) {
+                    let Some((_, fields)) = self.block_fields(m, VarId(i as u32)) else {
+                        return no("Instanz-Array eines Blocks", v.span);
+                    };
+                    for (loc, ty) in fields {
+                        env.insert(loc, Enc::zero(self.sort_of(ty, v.span)?));
+                    }
+                    continue;
+                }
                 env.insert(self.loc_var(m, VarId(i as u32)), Enc::zero(self.sort_of(v.ty, v.span)?));
             }
             for i in 0..machine.signals.len() {
@@ -1249,6 +1492,19 @@ impl Enc<'_> {
             let pre = env.clone();
             let cx = Cx { m: Some(m), leaf: None, mode: Mode::Entry, pre: &pre, active: &actives, locals: None };
             for (i, v) in machine.vars.iter().enumerate() {
+                if let Some(Expr { kind: ExprKind::BlockInit { block, args, .. }, .. }) = &v.init {
+                    // Eine Instanz (5.7): Parameter aus den Argumenten, Zustand aus
+                    // seinen Initialwerten — wie `instantiate_block`.
+                    let Some((_, fields)) = self.block_fields(m, VarId(i as u32)) else { continue };
+                    let def = self.p.blocks[block.index()].clone();
+                    let mut flow = Flow::new(Term::bool(true));
+                    for (k, a) in args.iter().enumerate() {
+                        let t = self.expr(a, &cx, &env, &mut flow)?;
+                        env.insert(fields[k].0.clone(), t);
+                    }
+                    self.block_reset(&def, &fields, &cx, &mut env, &mut flow)?;
+                    continue;
+                }
                 if let Some(e) = &v.init {
                     let mut flow = Flow::new(Term::bool(true));
                     let t = self.expr(e, &cx, &env, &mut flow)?;
@@ -1314,6 +1570,14 @@ impl Enc<'_> {
                 ]));
             }
             for (i, v) in machine.vars.iter().enumerate() {
+                if let Some((_, fields)) = self.block_fields(m, VarId(i as u32)) {
+                    for (loc, ty) in fields {
+                        if let Some(t) = pre.get(&loc).cloned().and_then(|x| self.type_invariant(x, ty)) {
+                            out.push(t);
+                        }
+                    }
+                    continue;
+                }
                 let loc = self.loc_var(m, VarId(i as u32));
                 if let Some(t) = pre.get(&loc).cloned().and_then(|x| self.type_invariant(x, v.ty)) {
                     out.push(t);

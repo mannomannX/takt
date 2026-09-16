@@ -508,6 +508,8 @@ pub fn full_program() -> Program {
         }],
         step: Some(fn_clamp),
         methods: vec![fn_reset],
+        requires: Vec::new(),
+        ensures: Vec::new(),
         origin: Some(GenericOrigin { template: "lowpass".into(), args: vec![GenericArgVal::Unit(bar)] }),
         span: sp(28),
     });

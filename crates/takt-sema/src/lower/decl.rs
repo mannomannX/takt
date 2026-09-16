@@ -1121,6 +1121,8 @@ impl Lowerer<'_> {
             state_vars: Vec::new(),
             step: None,
             methods: Vec::new(),
+            requires: Vec::new(),
+            ensures: Vec::new(),
             origin: None,
             span: decl.span,
         });
@@ -1247,6 +1249,51 @@ impl Lowerer<'_> {
                 f.body = body;
             }
             self.program.blocks[id.index()].step = Some(fid);
+            // Vertraege (5.7): im Rahmen des `step`, `result` als Lokale
+            // hinter den Parametern — Beweisverpflichtungen, kein Code.
+            if step.requires.is_some() || step.ensures.is_some() {
+                let result = VarId(base + sparams.len() as u32);
+                let locals: Vec<VarDef> = sparams
+                    .iter()
+                    .map(|p| VarDef {
+                        name: p.name.clone(),
+                        ty: p.ty,
+                        init: None,
+                        scope: VarScope::Param,
+                        public: false,
+                        span: p.span,
+                    })
+                    .collect();
+                self.fn_ctx.push(FnCtx { locals, base, ret: Some(ret), block: Some(id) });
+                let (req, ens) = self.scoped(|this| {
+                    declare_instance_vars(this);
+                    for (i, p) in sparams.iter().enumerate() {
+                        let ident = ast::Ident { name: p.name.clone(), span: p.span };
+                        this.declare(&ident, Entity::Var(VarId(base + i as u32), p.ty));
+                    }
+                    let req = step.requires.as_ref().and_then(|e| this.check_bool(e));
+                    let ens = step.ensures.as_ref().and_then(|e| {
+                        let ident = ast::Ident { name: "result".into(), span: e.span };
+                        this.declare(&ident, Entity::Var(result, ret));
+                        this.check_bool(e)
+                    });
+                    (req, ens)
+                });
+                self.fn_ctx.pop();
+                let def = &mut self.program.blocks[id.index()];
+                def.requires.extend(req);
+                def.ensures.extend(ens);
+                if step.ensures.is_some() {
+                    self.program.fns[fid.index()].locals.push(VarDef {
+                        name: "result".into(),
+                        ty: ret,
+                        init: None,
+                        scope: VarScope::Local,
+                        public: false,
+                        span: step.span,
+                    });
+                }
+            }
         }
         for m in &decl.methods {
             let Some(mparams) = self.params(&m.params) else { continue };

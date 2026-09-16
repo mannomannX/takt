@@ -659,6 +659,14 @@ impl Emitter<'_, '_> {
         self.fmt_params(&s.params);
         self.sp("->");
         self.fmt_type(&s.ret);
+        if let Some(r) = &s.requires {
+            self.sp("requires");
+            self.fmt_expr(r);
+        }
+        if let Some(e) = &s.ensures {
+            self.sp("ensures");
+            self.fmt_expr(e);
+        }
         self.op(":");
         self.fmt_block(&s.body);
     }

@@ -977,6 +977,23 @@ fn prove(args: &Args) -> bool {
                 }
             };
             let mut ok = true;
+            // B2: die Vertraege der Bloecke — aus jedem typkonformen Zustand.
+            if !model.contracts.is_empty() {
+                let contracts = match takt_prove::verify_contracts(&model, &solver, timeout) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("{path}: {e}");
+                        return false;
+                    }
+                };
+                let map = read(path).map(|src| SourceMap::single(path.as_str(), src.as_str()));
+                println!("  Vertraege: {}", contracts.len());
+                for c in &contracts {
+                    let (line, col) = map.as_ref().map_or((0, 0), |m| m.line_col(c.span));
+                    println!("    {}.step {line}:{col}: {}", c.block, c.verdict.text());
+                    ok &= !matches!(c.verdict, takt_prove::ContractVerdict::Violated { .. });
+                }
+            }
             // B3: jede Pruefstelle klassifiziert — bewiesen unerreichbar,
             // erreichbar mit Pfad, unentschieden; ohne Budget-Effekt (FB-49).
             if !model.checks.is_empty() {
@@ -997,7 +1014,7 @@ fn prove(args: &Args) -> bool {
                 let map = read(path).map(|src| SourceMap::single(path.as_str(), src.as_str()));
                 for c in &checks {
                     let (line, col) = map.as_ref().map_or((0, 0), |m| m.line_col(c.span));
-                    println!("    {} {}:{line}:{col}: {}", c.kind, c.machine, c.verdict.text());
+                    println!("    {} {}:{line}:{col}: {}", c.kind, c.machine, c.text());
                 }
             }
             for r in &reports {

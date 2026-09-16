@@ -18,7 +18,7 @@ use takt_mir::types::Type;
 
 use crate::encode::Model;
 use crate::eval::Val;
-use crate::smt::{Query, Target, at, query};
+use crate::smt::{Query, Target, at, contract_query, query};
 
 /// Der gefundene Solver.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,11 +170,15 @@ pub struct CheckReport {
     pub verdict: CheckVerdict,
 }
 
-impl CheckVerdict {
-    /// Der Text fuer den Bericht.
+impl CheckReport {
+    /// Der Text fuer den Bericht; ein `requires` bestaetigt das Modell,
+    /// weil der Interpreter Vertraege nicht prueft (5.7).
     pub fn text(&self) -> String {
-        match self {
+        match &self.verdict {
             CheckVerdict::Unreachable { k } => format!("bewiesen unerreichbar (k-Induktion, k = {k})"),
+            CheckVerdict::Reachable { at, .. } if self.kind == "requires" => format!(
+                "erreichbar mit Pfad (verletzt bei t={at}; Vertraege prueft der Interpreter nicht, der Pfad ist aus dem Modell)"
+            ),
             CheckVerdict::Reachable { at, .. } => {
                 format!("erreichbar mit Pfad (Fault bei t={at}, im Interpreter bestaetigt)")
             }
@@ -199,7 +203,12 @@ pub fn classify(
             "sat" => {
                 let values = parse_values(&bmc, "@");
                 let stimulus = stimulus(&values, program, depth);
-                match confirm_check(program, site, &stimulus, depth) {
+                let confirmed = if site.kind == "requires" {
+                    confirm_requires(model, site, &values, depth)
+                } else {
+                    confirm_check(program, site, &stimulus, depth)
+                };
+                match confirmed {
                     Some(at) => CheckVerdict::Reachable { at, stimulus },
                     None => CheckVerdict::Undecided {
                         reason: format!(
@@ -230,6 +239,129 @@ pub fn classify(
         });
     }
     Ok(out)
+}
+
+/// Das Urteil ueber einen Block-Vertrag (5.7, B2).
+#[derive(Clone, Debug, PartialEq)]
+pub enum ContractVerdict {
+    /// Aus jedem typkonformen Zustand gilt `ensures` unter `requires`.
+    Proven,
+    /// Eine Belegung, unter der der Schritt sein `ensures` bricht.
+    Violated {
+        /// Die Belegung als `name = wert`.
+        values: String,
+    },
+    /// Weder noch.
+    Unknown {
+        /// Warum.
+        reason: String,
+    },
+}
+
+/// Ein Block mit Urteil.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractReport {
+    /// Der Block.
+    pub block: String,
+    /// Position.
+    pub span: takt_diag::Span,
+    /// Urteil.
+    pub verdict: ContractVerdict,
+}
+
+impl ContractVerdict {
+    /// Der Text fuer den Bericht.
+    pub fn text(&self) -> String {
+        match self {
+            ContractVerdict::Proven => "bewiesen (jeder typkonforme Zustand, ein Schritt)".to_string(),
+            ContractVerdict::Violated { values } => format!("verletzbar: {values}"),
+            ContractVerdict::Unknown { reason } => format!("unentschieden: {reason}"),
+        }
+    }
+}
+
+/// Prueft die Vertraege der Bloecke.
+pub fn verify_contracts(model: &Model, solver: &Solver, timeout_s: u64) -> Result<Vec<ContractReport>, String> {
+    let mut out = Vec::new();
+    for goal in &model.contracts {
+        let text = solver.run(&contract_query(goal), timeout_s, "contract")?;
+        let verdict = match answer(&text) {
+            "unsat" => ContractVerdict::Proven,
+            "sat" => {
+                let values = parse_plain_values(&text);
+                let shown: Vec<String> = goal
+                    .vars
+                    .iter()
+                    .filter_map(|(n, _)| {
+                        values.get(n).map(|v| format!("{} = {}", n.trim_start_matches("c."), val_text(*v)))
+                    })
+                    .collect();
+                ContractVerdict::Violated { values: shown.join(", ") }
+            }
+            other => ContractVerdict::Unknown { reason: format!("Solver sagt `{other}`") },
+        };
+        out.push(ContractReport { block: goal.block.clone(), span: goal.span, verdict });
+    }
+    Ok(out)
+}
+
+fn val_text(v: Val) -> String {
+    match v {
+        Val::Bool(b) => b.to_string(),
+        Val::Int(i) => i.to_string(),
+        Val::F32(f) => format!("{f:?}"),
+        Val::F64(f) => format!("{f:?}"),
+    }
+}
+
+/// `(get-value …)` ohne Schrittsuffix: Name → Wert.
+fn parse_plain_values(text: &str) -> BTreeMap<String, Val> {
+    let mut out = BTreeMap::new();
+    let Some(start) = text.find("((") else { return out };
+    let toks = tokens(&text[start..]);
+    let mut pos = 0;
+    let Some(Sx::List(pairs)) = parse_sx(&toks, &mut pos) else { return out };
+    for pair in pairs {
+        let Sx::List(items) = pair else { continue };
+        let [Sx::Atom(name), value] = items.as_slice() else { continue };
+        if let Some(v) = value_of(value) {
+            out.insert(name.trim_matches('|').to_string(), v);
+        }
+    }
+    out
+}
+
+/// Ein `requires` an der Aufrufstelle prueft der Interpreter nicht (5.7);
+/// den Pfad bestaetigt das Modell selbst: der erste Schritt, in dem die
+/// Stelle feuert.
+fn confirm_requires(
+    model: &Model,
+    site: &crate::encode::CheckSite,
+    values: &BTreeMap<(u32, String), Val>,
+    depth: u32,
+) -> Option<u64> {
+    let states = model.simulate(u64::from(depth), &|k, n| values.get(&(k as u32, n.to_string())).copied());
+    let mut env: crate::eval::Env = BTreeMap::new();
+    for (name, _) in &model.inputs {
+        if let Some(v) = values.get(&(0, name.clone())) {
+            env.insert(name.clone(), *v);
+        }
+    }
+    if crate::eval::eval(&site.init, &env) == Val::Bool(true) {
+        return Some(0);
+    }
+    for k in 0..depth {
+        let mut env = states[k as usize].clone();
+        for (name, _) in &model.inputs {
+            if let Some(v) = values.get(&(k + 1, name.clone())) {
+                env.insert(name.clone(), *v);
+            }
+        }
+        if crate::eval::eval(&site.fires, &env) == Val::Bool(true) {
+            return Some(u64::from(k + 1));
+        }
+    }
+    None
 }
 
 /// Spielt den Pfad nach: der Tick, in dem die Stelle im Interpreter feuert.

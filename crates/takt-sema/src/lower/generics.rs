@@ -468,6 +468,8 @@ impl Lowerer<'_> {
             state_vars: Vec::new(),
             step: None,
             methods: Vec::new(),
+            requires: Vec::new(),
+            ensures: Vec::new(),
             origin: Some(origin),
             span: decl.span,
         });

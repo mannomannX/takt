@@ -3,7 +3,7 @@
 //! ueberspringen sich ohne Solver (`TAKT_SOLVER`, `z3`, `cvc5`).
 
 use takt_mir::Program;
-use takt_prove::{CheckVerdict, Solver, Verdict, classify, encode, find, prove};
+use takt_prove::{CheckVerdict, ContractVerdict, Solver, Verdict, classify, encode, find, prove, verify_contracts};
 
 fn compile(src: &str) -> Program {
     let options =
@@ -92,6 +92,34 @@ machine f:
     let model = encode(&p).expect("kodierbar");
     let reports = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
     assert_eq!(reports[0].verdict, CheckVerdict::Unreachable { k: 2 }, "{:?}", reports[0]);
+}
+
+/// B2: das `ensures` des Begrenzers haelt aus jedem typkonformen Zustand;
+/// sein `requires` kann an der Aufrufstelle verletzt sein — der Pfad kommt
+/// aus dem Modell, weil der Interpreter Vertraege nicht prueft.
+#[test]
+fn block_contracts_are_proven_and_their_call_sites_classified() {
+    let Some(solver) = solver() else { return };
+    let p = corpus_with("48_contracts.takt", "");
+    let model = encode(&p).expect("kodierbar");
+    let contracts = verify_contracts(&model, &solver, 60).expect("Solver laeuft");
+    assert_eq!(contracts.len(), 1);
+    assert_eq!(contracts[0].verdict, ContractVerdict::Proven, "{:?}", contracts[0]);
+    let sites = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let site = sites.iter().find(|s| s.kind == "requires").expect("requires-Stelle");
+    let CheckVerdict::Reachable { at, stimulus } = &site.verdict else { panic!("{site:?}") };
+    assert!(*at <= 2 && stimulus.contains("in level -"), "{at} {stimulus}");
+    // Ein Vertrag, der nicht haelt: das Ergebnis ist nicht immer kleiner als `x`.
+    let p = corpus_with("48_contracts.takt", "").clone();
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/48_contracts.takt"))
+        .expect("Korpus")
+        .replace("ensures result <= hi", "ensures result < x");
+    let bad = compile(&src);
+    let model = encode(&bad).expect("kodierbar");
+    let contracts = verify_contracts(&model, &solver, 60).expect("Solver laeuft");
+    let ContractVerdict::Violated { values } = &contracts[0].verdict else { panic!("{:?}", contracts[0]) };
+    assert!(values.contains("limiter.step.x = "), "{values}");
+    let _ = p;
 }
 
 #[test]

@@ -166,7 +166,8 @@ G-native_decl,Grammatik,2.3,native_decl,v1.1,M0 (Parser) / M6,fertig,
 G-cost_spec,Grammatik,2.3,cost_spec,,M0 (Parser/MIR-Entwurf),fertig,
 G-cost_class,Grammatik,2.3,cost_class,,M0 (Parser/MIR-Entwurf),fertig,
 G-block_decl,Grammatik,2.3,block_decl,,M0 (Parser/MIR-Entwurf),fertig,
-G-step_decl,Grammatik,2.3,step_decl,,M0 (Parser/MIR-Entwurf),fertig,
+G-step_decl,Grammatik,2.3,step_decl,,M0 (Parser/MIR-Entwurf),fertig,"seit M6 mit `requires`/`ensures` (5.7, Schritt 22)"
+PAR-5.7-Vertraege_v1.1,Absatz/Regel,5.7,Verträge (v1.1),v1.1,M6,fertig,"`requires`/`ensures` am `step` als Beweisverpflichtungen: Sema `lower/decl.rs`, Beweis `takt-prove` (Vertragsziel je Block, `requires` als Pruefstelle an der Aufrufstelle)"
 G-method_decl,Grammatik,2.3,method_decl,,M0 (Parser/MIR-Entwurf),fertig,
 G-generic_vars,Grammatik,2.3,generic_vars,v1.1,M0 (Parser) / M6 (const) / M8 (type),fertig,
 G-gvar,Grammatik,2.3,gvar,,M0 (Parser) / M6 (const) / M8 (type),fertig,

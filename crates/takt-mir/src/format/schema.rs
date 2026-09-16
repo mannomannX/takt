@@ -220,7 +220,7 @@ codec_struct!(Native {
     1 one kind, 2 one name, 3 rep params, 4 one ret, 5 one cost, 6 one stack, 7 opt duration, 8 one total,
     9 opt from, 10 opt origin, 11 meta span,
 });
-codec_struct!(BlockDef { 1 one name, 2 rep params, 3 rep state_vars, 4 opt step, 5 rep methods, 6 opt origin, 7 meta span });
+codec_struct!(BlockDef { 1 one name, 2 rep params, 3 rep state_vars, 4 opt step, 5 rep methods, 6 opt origin, 7 meta span, 8 rep requires, 9 rep ensures });
 
 // ---------------------------------------------------------------- Maschinen
 
