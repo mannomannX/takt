@@ -6,7 +6,7 @@
 //! Kontrollflusses; sie zweimal zu durchlaufen waere doppelte Arbeit und
 //! eine doppelte Fehlerquelle.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::VarId;
 use crate::analysis::domain::{Domain, Interval};
@@ -24,11 +24,21 @@ pub struct Facts {
     /// Ist die Stelle erreichbar? Nach `abort` oder in einem toten Zweig
     /// nicht.
     reachable: bool,
+    /// Variablenpaare, die ein dominierender Vergleich in Beziehung gesetzt
+    /// hat — nur die Kennzahl der Oktagon-Kandidaten liest sie
+    /// (plan/m6.md 2.12); die Intervalle wissen nichts davon.
+    relations: BTreeSet<(u32, u32)>,
 }
 
 impl Default for Facts {
     fn default() -> Self {
-        Facts { vars: BTreeMap::new(), assigned: BTreeMap::new(), dominated: BTreeMap::new(), reachable: true }
+        Facts {
+            vars: BTreeMap::new(),
+            assigned: BTreeMap::new(),
+            dominated: BTreeMap::new(),
+            reachable: true,
+            relations: BTreeSet::new(),
+        }
     }
 }
 
@@ -51,6 +61,18 @@ impl Facts {
     /// Markiert alles Folgende als unerreichbar.
     pub fn cut(&mut self) {
         self.reachable = false;
+    }
+
+    // ------------------------------------------------------------ Relationen
+
+    /// Ein Vergleich zweier Variablen dominiert ab hier.
+    pub fn relate(&mut self, a: VarId, b: VarId) {
+        self.relations.insert((a.0.min(b.0), a.0.max(b.0)));
+    }
+
+    /// Steht die Variable in einer dominierenden Relation?
+    pub fn related(&self, v: VarId) -> bool {
+        self.relations.iter().any(|(a, b)| *a == v.0 || *b == v.0)
     }
 
     // ------------------------------------------------------------ Intervalle
@@ -126,7 +148,8 @@ impl Facts {
             a.assigned.iter().filter(|(k, v)| **v && b.is_assigned_raw(**k)).map(|(k, _)| (*k, true)).collect();
         let dominated =
             a.dominated.iter().filter(|(k, v)| **v && b.dominates(k)).map(|(k, _)| (k.clone(), true)).collect();
-        Facts { vars, assigned, dominated, reachable: true }
+        let relations = a.relations.intersection(&b.relations).copied().collect();
+        Facts { vars, assigned, dominated, reachable: true, relations }
     }
 
     /// Weitung an einer nicht abgerollten Schleife (3.4): Variablen, die der
@@ -143,6 +166,7 @@ impl Facts {
             };
             self.vars.insert(v.0, wide);
         }
+        self.relations.retain(|(a, b)| !written.iter().any(|w| w.0 == *a || w.0 == *b));
     }
 
     fn is_assigned_raw(&self, k: u32) -> bool {

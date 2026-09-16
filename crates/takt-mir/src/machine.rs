@@ -617,3 +617,9 @@ impl Machine {
         self.states.iter().all(|s| s.sequence.is_none())
     }
 }
+
+/// Der Maschinenname eines Szenarios (13.6): der String der Deklaration
+/// mit `_` statt Leerraum, damit er in Trace-Zeilen ein Feld bleibt (T1).
+pub fn scenario_name(label: &str) -> String {
+    label.split_whitespace().collect::<Vec<_>>().join("_")
+}

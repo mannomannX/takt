@@ -55,6 +55,11 @@ pub struct ImplicitCheck {
     /// Steht sie in einer `for`-Schleife oder einem Aktionsblock? Nur dann
     /// entsteht eine Warnung im engeren Sinn (3.4, Warnpolitik).
     pub warns: bool,
+    /// Ein Oktagon-Kandidat (plan/m6.md 2.12): Der Ausdruck haengt an zwei
+    /// Variablen, oder ein dominierender Vergleich hat seine Variable zu
+    /// einer anderen in Beziehung gesetzt — nur dort koennte `±x ± y <= c`
+    /// beweisen, was ein Intervall nicht kann.
+    pub relational: bool,
 }
 
 /// Der Zustand eines Durchlaufs.
@@ -299,6 +304,9 @@ impl<'p> Walk<'p> {
             self.refine(rhs, true, f);
             return;
         }
+        if let (ExprKind::Var(a), ExprKind::Var(b)) = (&lhs.kind, &rhs.kind) {
+            f.relate(*a, *b);
+        }
         let (l, r) = (self.eval_only(lhs, f), self.eval_only(rhs, f));
         if let (ExprKind::Var(v), Interval::Int { lo, hi }) = (&lhs.kind, r) {
             f.refine(*v, bound(op, lo, hi));
@@ -381,7 +389,8 @@ impl<'p> Walk<'p> {
             }
             ExprKind::Checked { expr, kind } => {
                 let i = self.expr(expr, f);
-                self.checked(i, kind, e.span, f)
+                let relational = relational(expr, f);
+                self.checked(i, kind, e.span, relational)
             }
             ExprKind::Index { base, index } => {
                 self.expr(base, f);
@@ -420,7 +429,7 @@ impl<'p> Walk<'p> {
     }
 
     /// Eine implizite Pruefung: entfaellt sie, oder bleibt sie stehen?
-    fn checked(&mut self, i: Interval, kind: &crate::expr::CheckedKind, span: Span, _f: &mut Facts) -> Interval {
+    fn checked(&mut self, i: Interval, kind: &crate::expr::CheckedKind, span: Span, relational: bool) -> Interval {
         use crate::expr::CheckedKind;
         let (cause, proven, result) = match kind {
             CheckedKind::Range(r) => (CheckCause::Declared, i.fits(r), Interval::from_range(r)),
@@ -438,7 +447,7 @@ impl<'p> Walk<'p> {
             self.proven.push(span);
         } else {
             let warns = self.loop_depth > 0 || self.in_action;
-            self.checks.push(ImplicitCheck { cause, span, warns });
+            self.checks.push(ImplicitCheck { cause, span, warns, relational });
         }
         result
     }
@@ -599,6 +608,27 @@ fn walk_children(k: &ExprKind, f: &mut impl FnMut(&Expr)) {
         ExprKind::Decode { bytes, .. } => f(bytes),
         _ => {}
     }
+}
+
+/// Die Kennzahl aus plan/m6.md 2.12: Koennte eine Relation zweier Variablen
+/// diese Pruefung beweisen? Ja, wenn der Ausdruck zwei Variablen oder
+/// Inputs nennt oder seine Variable in einer dominierenden Relation steht.
+fn relational(e: &Expr, f: &Facts) -> bool {
+    let mut names = std::collections::BTreeSet::new();
+    let mut stack = vec![e];
+    while let Some(x) = stack.pop() {
+        match &x.kind {
+            ExprKind::Var(v) => {
+                names.insert((0u8, v.0));
+            }
+            ExprKind::Input { channel, .. } => {
+                names.insert((1u8, channel.0));
+            }
+            _ => {}
+        }
+        stack.extend(x.children());
+    }
+    names.len() >= 2 || names.iter().any(|(kind, v)| *kind == 0 && f.related(VarId(*v)))
 }
 
 /// Die Konstante eines Ausdrucks, wenn er eine ist.

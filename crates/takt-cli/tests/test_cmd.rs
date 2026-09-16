@@ -20,7 +20,7 @@ fn every_scenario_runs_and_the_coverage_lands_in_a_file() {
     let out = takt(&["test", "corpus-try/38_scenarios.takt", "--coverage", coverage.to_str().expect("Pfad")]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
-    assert!(stdout.contains("pressure rises: PASS") && stdout.contains("stays closed: PASS"), "{stdout}");
+    assert!(stdout.contains("pressure_rises: PASS") && stdout.contains("stays_closed: PASS"), "{stdout}");
     assert!(stdout.contains("Coverage: Zustaende"), "{stdout}");
     let text = std::fs::read_to_string(&coverage).expect("Coverage-Datei");
     assert!(text.starts_with("# takt-coverage 1\n"), "{text}");
@@ -33,7 +33,7 @@ fn a_single_scenario_can_be_chosen() {
     let out = takt(&["test", "corpus-try/38_scenarios.takt", "--scenario", "stays closed"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}");
-    assert!(stdout.contains("stays closed: PASS") && !stdout.contains("pressure rises"), "{stdout}");
+    assert!(stdout.contains("stays_closed: PASS") && !stdout.contains("pressure_rises"), "{stdout}");
 }
 
 #[test]

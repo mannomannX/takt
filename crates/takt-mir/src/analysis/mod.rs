@@ -45,6 +45,9 @@ pub struct Report {
     pub checks: BTreeMap<&'static str, u32>,
     /// Davon in Schleifen oder Aktionsbloecken — nur diese warnen.
     pub warned: u32,
+    /// Davon Oktagon-Kandidaten: eine Relation zweier Variablen koennte sie
+    /// beweisen (plan/m6.md 2.12, Kennzahl vor der Entscheidung).
+    pub relational: u32,
     /// Ausdruecke, deren Darstellung auf 32 Bit verengt wurde (Lemma 3.4).
     pub narrowed: u32,
     /// Ausdruecke mit Integer-Darstellung insgesamt.
@@ -63,6 +66,7 @@ impl Report {
         let by_cause: Vec<String> = self.checks.iter().map(|(k, v)| format!("{k} {v}")).collect();
         out.push(format!("implizite Pruefungen: {} ({})", self.total_checks(), by_cause.join(", ")));
         out.push(format!("davon mit Warnung:    {}", self.warned));
+        out.push(format!("davon relational:     {} (Oktagon-Kandidaten, plan/m6.md 2.12)", self.relational));
         out.push(format!("Darstellung:          {} von {} Ausdruecken in i32", self.narrowed, self.integer_exprs));
         out
     }
@@ -91,10 +95,18 @@ pub fn analyze(program: &mut Program) -> (Vec<Diagnostic>, Report) {
     let mut seen: BTreeMap<(u32, u32), ImplicitCheck> = BTreeMap::new();
     for c in &all {
         let key = (c.span.file.0, c.span.start);
-        seen.entry(key).and_modify(|e| e.warns |= c.warns).or_insert(*c);
+        seen.entry(key)
+            .and_modify(|e| {
+                e.warns |= c.warns;
+                e.relational |= c.relational;
+            })
+            .or_insert(*c);
     }
     for c in seen.values() {
         *report.checks.entry(c.cause.name()).or_default() += 1;
+        if c.relational {
+            report.relational += 1;
+        }
         if c.warns {
             report.warned += 1;
             diags.push(Diagnostic::warning(SC24, c.span, message(c.cause)).with_suggestion(

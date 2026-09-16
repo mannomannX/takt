@@ -2078,7 +2078,7 @@ scenario "erase interrupted at sector 3" every 1 ms:
             verify brownout_test.result == RECOVERED, "expected recovery"
             verdict pass
 ```
-`takt test` führt jedes Szenario als eigenen Sim-Lauf aus, sammelt Verdikte und Coverage (13.2: Zustände, Transitionen, Checks, Handler). Ein Lauf endet, sobald das Szenario einen Zustand ohne Ausgang oder `FAULTED` erreicht hat, sonst mit der Tickgrenze des Aufrufs; ohne Aussage ist er `INCONCLUSIVE` (13.5). Szenarien schreiben nur `sim`-Outputs, die kein Modell stellt (Prüfung 26); zwei Szenarien dürfen denselben Output stellen, weil sie nie zusammen laufen.
+Der Name ist ein String; als Maschinenname — in Trace-Zeilen (T1), in `takt test` und für `--scenario` — steht er mit `_` statt Leerraum (`erase_interrupted_at_sector_3`), damit die Felder einer Trace-Zeile getrennt bleiben (FB-167). `takt test` führt jedes Szenario als eigenen Sim-Lauf aus, sammelt Verdikte und Coverage (13.2: Zustände, Transitionen, Checks, Handler). Ein Lauf endet, sobald das Szenario einen Zustand ohne Ausgang oder `FAULTED` erreicht hat, sonst mit der Tickgrenze des Aufrufs; ohne Aussage ist er `INCONCLUSIVE` (13.5). Szenarien schreiben nur `sim`-Outputs, die kein Modell stellt (Prüfung 26); zwei Szenarien dürfen denselben Output stellen, weil sie nie zusammen laufen.
 
 ### 13.7 Kampagnen (v1.1)
 ```

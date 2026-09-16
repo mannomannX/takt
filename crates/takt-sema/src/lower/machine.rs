@@ -917,7 +917,7 @@ impl Lowerer<'_> {
     /// `scenario "name" [every d]:` als Maschine (13.6).
     pub fn scenario_decl(&mut self, decl: &ast::ScenarioDecl) {
         let id = MachineId(self.program.machines.len() as u32);
-        let name = decl.name.value.clone();
+        let name = takt_mir::machine::scenario_name(&decl.name.value);
         self.program.machines.push(Machine::new(name.clone()));
         let state_enum = self.state_enum(&name, &decl.body);
         self.state_enums.insert(id, state_enum);

@@ -48,6 +48,8 @@ Leerzeichen, außer im Rest einer Meldung.
 | `verdict-final` | Golden | `verdict-final PASS\|FAIL\|INCONCLUSIVE` — letzte Zeile (13.5) |
 | `end` | Golden | `end restart\|deep_sleep\|boot_jump` — der Lauf endet hier (12.7); `deep_sleep` startet den naechsten mit `boot_reason = DEEP_SLEEP_WAKE` |
 
+Maschinennamen sind ein Wort: Ein Szenario `scenario "no image"` heißt in der Trace `no_image` (13.6, FB-167).
+
 ## T2 Werte
 
 Werte stehen in der Literalschreibweise der Sprache (2.3): `true`, `42`,

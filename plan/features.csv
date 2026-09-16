@@ -661,7 +661,7 @@ PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M1 (Kernsemantik),te
 PAR-3.3-Lexikalische_Regel,Absatz/Regel,3.3,Lexikalische Regel,,M1 (Kernsemantik),fertig,
 PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M1 (Kernsemantik),teilweise,
 PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M1 (Kernsemantik),teilweise,
-PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M6,offen,
+PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M6,zurueckgestellt,"Kennzahl aus M6 Schritt 27 (`takt check --report`, `davon relational`): 8 von 116 verbliebenen impliziten Pruefungen sind Oktagon-Kandidaten (7 %, in 45, 14.7, 14.8); die Domaene wird nicht gebaut, bis die Zahl es traegt (FB-175)"
 PAR-3.4-Darstellungsverengung,Absatz/Regel,3.4,Darstellungsverengung,,M1 (Kernsemantik),fertig,
 PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Absatz/Regel,3.5,Implizite Validitätsprüfung (Entscheidung),,M1 (Kernsemantik),teilweise,
 PAR-3.5-Rand_Durchsetzung,Absatz/Regel,3.5,Rand-Durchsetzung,,M1 (Kernsemantik),fertig,

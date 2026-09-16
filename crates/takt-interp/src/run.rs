@@ -354,7 +354,9 @@ fn finish_properties(
 pub fn scenario_by_name(p: &Program, name: &str) -> Option<MachineId> {
     p.machines
         .iter()
-        .position(|m| m.kind == takt_mir::machine::MachineKind::Scenario && m.name == name)
+        .position(|m| {
+            m.kind == takt_mir::machine::MachineKind::Scenario && m.name == takt_mir::machine::scenario_name(name)
+        })
         .map(|i| MachineId(i as u32))
 }
 

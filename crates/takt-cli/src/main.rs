@@ -912,7 +912,7 @@ fn test(args: &Args) -> bool {
         .iter()
         .filter(|m| m.kind == takt_mir::machine::MachineKind::Scenario)
         .map(|m| m.name.clone())
-        .filter(|n| args.value("--scenario").is_none_or(|s| s == n))
+        .filter(|n| args.value("--scenario").is_none_or(|s| takt_mir::machine::scenario_name(s) == *n))
         .collect();
     if scenarios.is_empty() {
         eprintln!("{path}: kein Szenario (13.6)");
