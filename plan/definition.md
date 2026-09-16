@@ -1440,6 +1440,8 @@ sequence:
 ```
 Der Treiber (TCB) führt das Kommando aus; das Programm sieht nur Zustände — genau wie beim Ventil. Die Bibliothek der Simulationsmodelle liefert ein **Flash-Modell** als Maschine (Sektorzeiten, Busy-Verhalten, Rücklesen) mit **Stromausfall-Injektion**: ein Parameter `CUT_AT_BYTE` bricht einen Programmiervorgang mitten im Sektor ab und lässt den Rest unbestimmt. Ein `campaign`-Sweep darüber prüft die Stromausfallsicherheit eines Schreibpfads oder des `persist`-Journals (5.9) deterministisch und reproduzierbar — dieselbe Methodik wie die Versorgungsunterbrechung in Beispiel 14.6.
 
+`FlashCmd` und `FlashStatus` stehen im Prelude, ebenso das Modell als Maschinenvorlage `flash_model(cmd, data, status, rx, sectors, t_erase, t_program, cut_at_byte)`: Das Programm bindet seine Channels beim Instanziieren — `cmd` und `data` sind seine `hw`-Outputs, `status` und `rx` seine `sim`-Outputs an den Adressen von `flash_status` und `flash_rx` (8.3). Sektoren haben 4096 Byte in Chunks zu 256 (Adressen Vielfache von 256), gelöscht liest `0xFF`; `PROGRAM` nimmt die Bytes aus `data.sent` (8.8), `READ` liefert den Bereich als ein Element von `rx`; `cut_at_byte > 0` bricht `PROGRAM` nach so vielen Bytes mit `ERROR(code = 1)` ab und lässt den Rest gelöscht; ein Bereich außerhalb der `sectors` meldet `ERROR(code = 2)`.
+
 ---
 
 ## 9. Formale Semantik
@@ -1839,7 +1841,7 @@ block lowpass_i[U](tau)             step(x: int[U], dt) -> int[U]              #
 block pid_i[O, E](kp, ki, kd, lo, hi) step(err: int[E]) -> int[O]             # Verstaerkungen je Schritt in int[O/E]; keine Zeitbasis, weil int[s] aus einer Duration nicht entsteht (3.3)
 native fn sha256_init / sha256_update(ctx, chunk) / sha256_final      Chunk-Natives mit opakem Sha256Ctx (4.5)
 native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration (4.5)
-machine flash_model(sectors, t_erase, t_program, CUT_AT_BYTE)          Simulationsmodell (Maschine mit sim-Outputs) mit Stromausfall-Injektion (8.11)
+machine flash_model(cmd, data, status, rx, sectors, t_erase, t_program, cut_at_byte)   Simulationsmodell mit Stromausfall-Injektion (8.11); die Channels bindet die Instanz
 fn solve(A, b) / inv / det / cholesky / transpose   (3.11; Einheitsmatrizen als Literale)
 fn fma[U, V](a: float[U], b: float[V], c: float[U*V]) -> float[U*V]      korrekt gerundet, bitidentisch (4.2)
 fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke (4.2)

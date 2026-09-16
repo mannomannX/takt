@@ -91,8 +91,9 @@ pub struct BlockTemplate {
 pub struct MachineTemplate {
     /// Deklaration.
     pub decl: ast::MachineDecl,
-    /// Eintrag `MachineKind::Template` im Programm.
-    pub id: MachineId,
+    /// Eintrag `MachineKind::Template` im Programm; eine Vorlage aus dem
+    /// Prelude bekommt ihn erst mit der ersten Instanz.
+    pub id: Option<MachineId>,
     /// Zustandstyp der Vorlage und ihrer Instanzen.
     pub state_enum: EnumId,
     /// Aus dem Prelude.

@@ -141,9 +141,10 @@ impl Lowerer<'_> {
                 }
                 ast::Item::Machine(m) => {
                     if let Some(Entity::MachineTemplate(idx)) = self.peek(&m.name.name).cloned() {
-                        let params = self.template_params(m);
-                        let id = self.templates.machines[idx].id;
-                        self.program.machines[id.index()].params = params;
+                        if let Some(id) = self.templates.machines[idx].id {
+                            let params = self.template_params(m);
+                            self.program.machines[id.index()].params = params;
+                        }
                     }
                 }
                 _ => {}

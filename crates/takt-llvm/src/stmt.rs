@@ -901,7 +901,7 @@ fn method_call(
     }
     let (recv, ty) = place(receiver, ctx, m)?;
     let layout = collection::layout_of(&ty).ok_or(NotYet { what: "Methode auf einer Nicht-Sammlung" })?;
-    let label = ctx.next_label();
+    let label = m.next_label();
     let ok = match method {
         Method::Push => {
             let vars = ctx.vars();
@@ -1113,7 +1113,7 @@ fn block_method_call(
     };
     // 5.7: hoechstens einmal je Aktivierung. Der Zweig ueberspringt den
     // zweiten Aufruf, statt ihn zu wiederholen.
-    let label = ctx.next_label();
+    let label = m.next_label();
     let flag = m.inst(&format!(
         "getelementptr inbounds {}, ptr {ptr}, i32 0, i32 {}",
         LlvmType::Struct(inst.fields.clone()),

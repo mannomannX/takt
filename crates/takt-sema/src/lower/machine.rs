@@ -39,17 +39,23 @@ impl Lowerer<'_> {
             self.state_enums.insert(id, state_enum);
             self.declare(&decl.name, Entity::Machine(id));
         } else {
-            let id = MachineId(self.program.machines.len() as u32);
-            let mut m = Machine::new(decl.name.name.clone());
-            m.kind = MachineKind::Template;
-            m.span = decl.span;
-            self.declare_interface(&mut m, &decl.body);
-            self.program.machines.push(m);
-            self.state_enums.insert(id, state_enum);
+            let id = if self.prelude { None } else { Some(self.template_entry(decl, state_enum)) };
             let idx = self.templates.machines.len();
             self.templates.machines.push(MachineTemplate { decl: decl.clone(), id, state_enum, prelude: self.prelude });
             self.declare(&decl.name, Entity::MachineTemplate(idx));
         }
+    }
+
+    /// Der Eintrag `MachineKind::Template` einer Vorlage.
+    fn template_entry(&mut self, decl: &ast::MachineDecl, state_enum: EnumId) -> MachineId {
+        let id = MachineId(self.program.machines.len() as u32);
+        let mut m = Machine::new(decl.name.name.clone());
+        m.kind = MachineKind::Template;
+        m.span = decl.span;
+        self.declare_interface(&mut m, &decl.body);
+        self.program.machines.push(m);
+        self.state_enums.insert(id, state_enum);
+        id
     }
 
     /// Traegt `pub var` und Signale einer Maschine ein, bevor irgendein
@@ -743,6 +749,15 @@ impl Lowerer<'_> {
             self.stage(decl.span, "`resume`", Stage::V1_2);
         }
         let t = self.templates.machines[idx].clone();
+        let template = match t.id {
+            Some(id) => id,
+            None => self.with_env(super::Env::default(), t.prelude, |this| {
+                let id = this.template_entry(&t.decl, t.state_enum);
+                this.program.machines[id.index()].params = this.template_params(&t.decl);
+                this.templates.machines[idx].id = Some(id);
+                id
+            }),
+        };
         let indices: Vec<(i64, i64)> = match &decl.index {
             None => vec![(0, 1)],
             Some((_, range)) => {
@@ -772,7 +787,7 @@ impl Lowerer<'_> {
             });
             let Some((bindings, args)) = bindings else { continue };
             let kind = MachineKind::Instance(InstanceInfo {
-                template: t.id,
+                template,
                 args,
                 array: decl.index.as_ref().map(|_| ((*i - indices[0].0) as u32, *len as u32)),
             });

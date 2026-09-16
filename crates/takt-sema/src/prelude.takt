@@ -374,3 +374,114 @@ block writer[const N in 1..65536]():
         buf[m + 1] = (v >> 8) as u8
     data() -> bytes<N>:
         return buf
+
+# --- Simulationsmodelle (8.11) ------------------------------------------
+# Geraete mit Kommando und Status: Das Programm deklariert `flash_cmd`,
+# `flash_data`, `flash_status`, `flash_rx` wie in 8.11 und bindet sie beim
+# Instanziieren an das Modell:
+#   instance flash = flash_model(cmd = flash_cmd, data = flash_data,
+#       status = flash_status_sim, rx = flash_rx_sim,
+#       sectors = 16, t_erase = 20 ms, t_program = 2 ms, cut_at_byte = 0)
+enum FlashCmd: NONE, ERASE(sector: u32), PROGRAM(addr: u32, size: u32), READ(addr: u32, size: u32)
+enum FlashStatus: IDLE, BUSY, DONE, ERROR(code: u8)
+
+# Ein geloeschter Chunk liest 0xFF.
+fn flash_blank() -> bytes<256>:
+    var b : bytes<256> = default
+    for i in range(256):
+        b.push(0xFF)
+    return b
+
+# Flash-Modell: Sektoren zu 4096 Byte in Chunks zu 256 Byte (Adressen
+# vielfache von 256), Busy-Zeiten, Ruecklesen als ein Element von `rx`,
+# Stromausfall-Injektion: `cut_at_byte > 0` bricht PROGRAM nach so vielen
+# Bytes mit ERROR(1) ab und laesst den Rest geloescht. `data.sent` sind die
+# im Tick gesendeten Bytes (8.8), `cmd` liest das Modell mit Unit-Delay.
+machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: output FlashStatus, rx: output stream<bytes<4096>>, sectors: int in 1..64, t_erase: Duration, t_program: Duration, cut_at_byte: int in 0..1_000_000):
+    var mem     : map<int, bytes<256>, 256> = default
+    var addr    : int in 0..0xFFFF_FFFF = 0
+    var size    : int in 0..0xFFFF_FFFF = 0
+    var written : int in 0..0xFFFF_FFFF = 0
+    var chunk   : bytes<256> = default
+    var page    : bytes<4096> = default
+    var code    : u8 = 0
+    var op      : int in 0..2 = 0
+    var ok      : bool = false
+    initial IDLE
+
+    state IDLE:
+        enter:
+            status = IDLE
+        loop:
+            match cmd:
+                case ERASE(s):
+                    addr = (s as int) * 4096
+                    size = 4096
+                    op = 0
+                case PROGRAM(a, n):
+                    addr = a as int
+                    size = n as int
+                    written = 0
+                    chunk = default
+                    op = 1
+                case READ(a, n):
+                    addr = a as int
+                    size = n as int
+                    op = 2
+                case _:
+                    pass
+            if cmd != NONE:
+                if addr + size > sectors * 4096:
+                    code = 2
+                    -> FAILED
+                elif op == 0:
+                    -> ERASING
+                elif op == 1:
+                    -> PROGRAMMING
+                else:
+                    -> READING
+
+    state ERASING:
+        enter:
+            status = BUSY
+            for i in range(16):
+                ok = mem.remove(addr / 256 + i)
+        after t_erase: -> DONE_WAIT
+
+    state PROGRAMMING:
+        enter:
+            status = BUSY
+            code = 1
+        loop:
+            for x in data.sent.or(default):
+                if written < size and (cut_at_byte == 0 or written < cut_at_byte):
+                    chunk.push(x)
+                    written = written + 1
+                    if chunk.len == 256 or written == size:
+                        ok = mem.insert((addr + written - chunk.len) / 256, chunk)
+                        chunk = default
+        when cut_at_byte > 0 and written >= cut_at_byte: -> FAILED
+        when written >= size: -> PROGRAM_DONE
+
+    state PROGRAM_DONE:
+        after t_program: -> DONE_WAIT
+
+    state FAILED:
+        enter:
+            status = ERROR(code = code)
+        when cmd == NONE: -> IDLE
+
+    state READING:
+        enter:
+            status = BUSY
+            page = default
+            for i in range(16):
+                if page.len < size:
+                    ok = page.append(mem.get(addr / 256 + i).or(flash_blank()))
+            send rx, page[0..size]
+        when true: -> DONE_WAIT
+
+    state DONE_WAIT:
+        enter:
+            status = DONE
+        when cmd == NONE: -> IDLE

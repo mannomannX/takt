@@ -6,7 +6,7 @@
 //! Geschaetztes einrechnet, ist schlechter als keine, weil ihr niemand
 //! ansieht, welchem Teil er trauen kann (11.5).
 
-use crate::machine::{Guard, Machine, TransTrigger};
+use crate::machine::{Guard, Machine, MachineKind, TransTrigger};
 use crate::pattern::Pattern;
 use crate::types::{FloatWidth, IntWidth, Type};
 use crate::{Program, TypeId};
@@ -102,7 +102,9 @@ fn is_flash(name: &str) -> bool {
 pub fn size(p: &Program) -> Size {
     let mut items = Vec::new();
 
-    let states: u64 = p.machines.iter().map(|m| machine_bytes(p, m)).sum();
+    // Eine Vorlage liegt nicht im Speicher; ihr Rumpf steht in den Instanzen.
+    let allocated = p.machines.iter().filter(|m| m.kind != MachineKind::Template);
+    let states: u64 = allocated.clone().map(|m| machine_bytes(p, m)).sum();
     items.push(Item { name: "Maschinenzustaende (Overlay)".into(), bytes: states, origin: Origin::Exact });
 
     let streams: u64 = p
@@ -120,15 +122,11 @@ pub fn size(p: &Program) -> Size {
     let image: u64 = p.channels.iter().map(|c| u64::from(type_bytes(p, c.ty)) * 2).sum();
     items.push(Item { name: "Prozessabbild und Psi".into(), bytes: image, origin: Origin::Exact });
 
-    let sched: u64 = p
-        .machines
-        .iter()
-        // K_o: hoechstens vier geplante Schreibvorgaenge je Output (9.8).
-        .map(|m| m.layout.output_queues.len() as u64 * 4 * 16)
-        .sum();
+    // K_o: hoechstens vier geplante Schreibvorgaenge je Output (9.8).
+    let sched: u64 = allocated.clone().map(|m| m.layout.output_queues.len() as u64 * 4 * 16).sum();
     items.push(Item { name: "sched-Warteschlangen".into(), bytes: sched, origin: Origin::Exact });
 
-    let scratch: u64 = p.machines.iter().map(|m| u64::from(m.layout.scratch_bytes.unwrap_or(0))).sum();
+    let scratch: u64 = allocated.map(|m| u64::from(m.layout.scratch_bytes.unwrap_or(0))).sum();
     items.push(Item { name: "Scratch je Maschine".into(), bytes: scratch, origin: Origin::Exact });
 
     // 11.5: die vorkompilierten Automaten der Muster (8.7). Die Rechnung
