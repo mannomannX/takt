@@ -455,6 +455,7 @@ dependencies = [
  "takt-interp",
  "takt-llvm",
  "takt-mir",
+ "takt-prove",
  "takt-sema",
  "takt-syntax",
 ]
@@ -535,6 +536,16 @@ dependencies = [
 [[package]]
 name = "takt-native"
 version = "0.1.0"
+
+[[package]]
+name = "takt-prove"
+version = "0.1.0"
+dependencies = [
+ "takt-diag",
+ "takt-interp",
+ "takt-mir",
+ "takt-sema",
+]
 
 [[package]]
 name = "takt-rt-baremetal"

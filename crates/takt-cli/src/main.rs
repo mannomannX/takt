@@ -37,7 +37,7 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|test|campaign|tune|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -78,6 +78,8 @@ impl Args {
             "--object",
             "--hardware",
             "--scenario",
+            "--export",
+            "--depth",
             "--save",
             "--coverage",
             "--machine",
@@ -119,6 +121,7 @@ fn main() -> ExitCode {
         "sim" => sim(&args),
         "test" => test(&args),
         "campaign" => campaign(&args),
+        "prove" => prove(&args),
         "tune" => tune(&args),
         "run" => run_cmd(&args),
         "replay" => replay(&args),
@@ -899,6 +902,55 @@ fn test(args: &Args) -> bool {
         }
     }
     ok
+}
+
+/// `takt prove`: die Schrittfunktion als Transitionssystem; `--export
+/// DATEI.smt2` schreibt BMC und Induktionsschritt bis `--depth` (13.3).
+fn prove(args: &Args) -> bool {
+    let Some(path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let Some(program) = compile_file(path, args) else { return false };
+    let depth = match args.value("--depth").map(str::parse::<u32>) {
+        Some(Ok(n)) => n,
+        Some(Err(e)) => {
+            eprintln!("--depth: {e}");
+            return false;
+        }
+        None => 5,
+    };
+    let model = match takt_prove::encode(&program) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("{path}: nicht kodierbar: {} (plan/m6.md 2.8)", e.what);
+            return false;
+        }
+    };
+    println!(
+        "{path}: {} Zustandsvariablen, {} Eingaben, {} Annahmen, {} Beweisziele",
+        model.state.len(),
+        model.inputs.len(),
+        model.assumptions.len(),
+        model.properties.len()
+    );
+    for n in &model.notes {
+        println!("  Reichweite: {n}");
+    }
+    match args.value("--export") {
+        Some(out) => {
+            if let Err(e) = std::fs::write(out, takt_prove::export(&model, depth)) {
+                eprintln!("{out}: {e}");
+                return false;
+            }
+            println!("  {out}: BMC und Induktionsschritt bis Tiefe {depth}");
+            true
+        }
+        None => {
+            eprintln!("{path}: `--export DATEI.smt2` angeben; ein Solver ist noch nicht angebunden (Schritt 21)");
+            false
+        }
+    }
 }
 
 /// `takt campaign`: der Laufraum einer Kampagne als Tabelle, je Lauf eine

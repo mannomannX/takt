@@ -1,0 +1,18 @@
+[package]
+name = "takt-prove"
+version = "0.1.0"
+description = "Takt: Kodierung der Schrittfunktion als Transitionssystem, SMT-LIB2-Export und k-Induktion (Referenz 13.3)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+takt-diag = { path = "../takt-diag" }
+takt-mir = { path = "../takt-mir" }
+
+[dev-dependencies]
+takt-interp = { path = "../takt-interp" }
+takt-sema = { path = "../takt-sema" }
+
+[lints]
+workspace = true
