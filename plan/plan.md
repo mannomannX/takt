@@ -172,6 +172,19 @@ und ohne Schlaf gleich). M5 liefert beiden die Hardware. Die Ausnahme ist
 strikt auf diese zwei Konstrukte begrenzt; jede Erweiterung wäre eine neue
 Entscheidung. Begründung ausführlich in `plan/m5.md` 3.6.
 
+**Entscheidung (2026-09-16): M6 ist geplant — `plan/m6.md`.** Zwei
+Korrekturen an diesem Plan folgen daraus. Erstens: Die Begründung in
+Abschnitt 4, M6 bestehe aus unabhängigen Vertikalen, gilt für die
+Sprachstufe, nicht für die Arbeit — Referenz und Code zeigen sechs
+Abhängigkeitsketten (FB-155), und M6 wird darum in fünf Strängen gebaut,
+innerhalb geordnet, untereinander parallel. Zweitens: Vier der fünf
+Exit-Kriterien haben einen Hardware-Anteil, und der hängt an denselben
+zwei Dingen wie der M5-Exit (Board 2, TTL-Adapter). `plan/m6.md` 0
+definiert darum einen Zwischen-Exit „M6 auf Linux" — jede Vertikale
+Ende-zu-Ende bis x86-64, 14.8 differentiell — und bündelt den
+Hardwareteil beider Meilensteine in einem Schritt. Der erste Schritt ist
+die Bewertung aus FB-55: Einheiten auf Ganzzahlen.
+
 Unverändert bleibt: Nichts an v1.1 ist ein Breaking Change. Das
 Reservierungspaket aus M0 (Grammatik, MIR-Platzhalter, reservierte Namen,
 Editionen) hält alle diese Konstrukte offen, und jedes v1-Programm bleibt

@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 38 (3.2): von mV nach uV ist der Faktor 1000, also ganzzahlig;
+# die Gegenrichtung liefert `.to_float(mV)` als Fliesskomma.
+
+output n : int[uV]   @ hw("o/n") with safe = 0
+output f : float[mV] @ hw("o/f") with safe = 0
+
+machine m:
+    var v : int[mV] = 3300 mV
+    var w : int[uV] = 5 uV
+    initial RUN
+    state RUN:
+        loop:
+            n = v.to(uV)
+            f = w.to_float(mV)

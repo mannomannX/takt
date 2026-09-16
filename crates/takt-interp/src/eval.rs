@@ -715,24 +715,34 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 let b = Value::float_from_int(width, per);
                 arith::float_binary(BinaryOp::Div, &a, &b, span, self.tick)
             }
-            ConvertKind::To => {
-                let src_unit = match self.loaded.ty(from_ty) {
-                    Type::Float { unit: Some(u), .. } => self.loaded.unit(*u),
-                    Type::Int { .. } => return bug("Einheiten auf Ganzzahlen ab M6"),
+            // `to` auf Ganzzahlen loest das Sema in eine Multiplikation auf;
+            // `to_float` rechnet ab dem exakten Ganzzahlwert wie `to` auf Fliesskomma.
+            ConvertKind::To | ConvertKind::ToFloat => {
+                let (factor, offset) = match (kind, self.loaded.ty(from_ty)) {
+                    (_, Type::Float { unit: Some(u), .. })
+                    | (ConvertKind::ToFloat, Type::Int { unit: Some(u), .. }) => {
+                        let src = self.loaded.unit(*u);
+                        (src.factor, src.affine_offset)
+                    }
+                    (ConvertKind::ToFloat, Type::Int { unit: None, .. }) => (takt_mir::types::Rational::int(1), None),
                     _ => return bug("to(U) ohne Quelleinheit"),
                 };
                 let width = self.float_width(to_ty);
-                if v.as_f64().is_none() {
-                    return bug(format!("to(U) auf {}", v.kind_name()));
-                }
+                let mut x = match kind {
+                    ConvertKind::ToFloat => {
+                        let i = v.as_int().ok_or_else(|| Trap::Bug(format!("to_float(U) auf {}", v.kind_name())))?;
+                        Value::float_from_int(width, i)
+                    }
+                    _ if v.as_f64().is_none() => return bug(format!("to(U) auf {}", v.kind_name())),
+                    _ => v,
+                };
                 // Basiswert = (x + off_src) * f_src; Ergebnis = Basiswert / f_dst - off_dst
-                let mut x = v;
-                if let Some(off) = src_unit.affine_offset {
+                if let Some(off) = offset {
                     let o = rational(width, off.num, off.den);
                     x = arith::float_binary(BinaryOp::Add, &x, &o, span, self.tick)?;
                 }
-                let num = i128::from(src_unit.factor.num) * i128::from(dst.factor.den);
-                let den = i128::from(src_unit.factor.den) * i128::from(dst.factor.num);
+                let num = i128::from(factor.num) * i128::from(dst.factor.den);
+                let den = i128::from(factor.den) * i128::from(dst.factor.num);
                 let p = Value::float_from_int(width, num);
                 let q = Value::float_from_int(width, den);
                 x = arith::float_binary(BinaryOp::Mul, &x, &p, span, self.tick)?;
@@ -743,7 +753,6 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 }
                 Ok(x)
             }
-            ConvertKind::ToFloat => bug("to_float ab M6"),
         }
     }
 

@@ -50,8 +50,8 @@ machine battery_cycle every 100 ms:
             charger = false
 
 # Plant-Modell für die Simulation: nur im Sim-Build gelinkt
-output chamber_t_sim : float[degC] @ sim("chamber/pv")
-output cell_v_sim    : float[V]    @ sim("daq2/ai0")
+output chamber_t_sim : float[degC] @ sim("chamber/pv") with safe = 22 degC
+output cell_v_sim    : float[V]    @ sim("daq2/ai0")   with safe = 3.9 V
 
 const LEAK_COEF : float[1/s] = 0.0005 1/s
 

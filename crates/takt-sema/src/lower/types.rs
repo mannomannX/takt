@@ -127,8 +127,28 @@ impl Lowerer<'_> {
 
     /// Typ mit Einheit und Range in Normalform interniert.
     pub fn float_type(&mut self, width: FloatWidth, unit: &Unit, range: Option<Range>, span: Span) -> Option<TypeId> {
-        // Ein geklemmter Exponent machte zwei nominal verschiedene Einheiten
-        // identisch (3.2); die MIR traegt ihn als `i8`.
+        let unit = self.checked_unit_id(unit, span)?;
+        Some(self.intern(Type::Float { width, unit, range }))
+    }
+
+    /// Ganzzahltyp mit Einheit (3.2, v1.1) in Normalform interniert.
+    pub fn int_type(&mut self, width: IntWidth, unit: &Unit, range: Option<Range>, span: Span) -> Option<TypeId> {
+        let unit = self.checked_unit_id(unit, span)?;
+        Some(self.intern(Type::Int { width, unit, range }))
+    }
+
+    /// Derselbe numerische Typ (Breite, Art) mit einer anderen Einheit.
+    pub fn numeric_type(&mut self, like: TypeId, unit: &Unit, span: Span) -> Option<TypeId> {
+        match self.ty(like).clone() {
+            Type::Float { width, .. } => self.float_type(width, unit, None, span),
+            Type::Int { width, .. } => self.int_type(width, unit, None, span),
+            _ => None,
+        }
+    }
+
+    /// Ein geklemmter Exponent machte zwei nominal verschiedene Einheiten
+    /// identisch (3.2); die MIR traegt ihn als `i8`.
+    fn checked_unit_id(&mut self, unit: &Unit, span: Span) -> Option<Option<UnitId>> {
         if unit.overflow {
             self.error_hint(
                 SC3,
@@ -138,8 +158,7 @@ impl Lowerer<'_> {
             );
             return None;
         }
-        let unit = self.unit_id(unit, span);
-        Some(self.intern(Type::Float { width, unit, range }))
+        Some(self.unit_id(unit, span))
     }
 
     /// `ast::Type` → `TypeId`.
@@ -297,14 +316,13 @@ impl Lowerer<'_> {
                     ast::IntType::U32 => IntWidth::U32,
                     ast::IntType::U64 => IntWidth::U64,
                 };
-                let unit = match unit {
+                match unit {
                     Some(u) => {
-                        self.stage(u.span, "Einheiten auf Ganzzahlen", Stage::V1_1);
-                        return None;
+                        let unit = self.unit_expr(u)?;
+                        self.int_type(width, &unit, None, u.span)
                     }
-                    None => None,
-                };
-                Some(self.intern(Type::Int { width, unit, range: None }))
+                    None => Some(self.intern(Type::Int { width, unit: None, range: None })),
+                }
             }
             ast::ScalarType::Float { width, unit } => {
                 let width = match width {
@@ -372,12 +390,15 @@ impl Lowerer<'_> {
     /// Basistyp und Typ der Obergrenze zusammenfuehren: nur eine Einheit darf
     /// hinzukommen, alles andere ist ein Fehler (3.4).
     fn unify_range_type(&mut self, base: TypeId, bound: TypeId, span: Span) -> Option<TypeId> {
-        let base_unit = self.unit_of_type(base);
-        let bound_unit = self.unit_of_type(bound);
+        let unitless_base = self.unit_of_type(base).is_some_and(|u| u.is_one());
+        let bound_has_unit = self.unit_of_type(bound).is_some();
         match (self.ty(base).clone(), self.ty(bound).clone()) {
             (Type::Float { width: a, .. }, Type::Float { width: b, .. })
-                if a == b && base_unit.is_some_and(|u| u.is_one()) && bound_unit.is_some() =>
+                if a == b && unitless_base && bound_has_unit =>
             {
+                Some(self.base(bound))
+            }
+            (Type::Int { width: a, .. }, Type::Int { width: b, .. }) if a == b && unitless_base && bound_has_unit => {
                 Some(self.base(bound))
             }
             _ => {
@@ -399,6 +420,16 @@ impl Lowerer<'_> {
             Type::Int { width, unit, .. } => Type::Int { width, unit, range },
             Type::Float { width, unit, .. } => Type::Float { width, unit, range },
             Type::Duration { .. } => Type::Duration { range },
+            other => other,
+        };
+        self.intern(t)
+    }
+
+    /// Numerischer Typ mit anderer Einheit, ohne Range.
+    pub fn with_unit(&mut self, base: TypeId, unit: Option<UnitId>) -> TypeId {
+        let t = match self.ty(base).clone() {
+            Type::Int { width, .. } => Type::Int { width, unit, range: None },
+            Type::Float { width, .. } => Type::Float { width, unit, range: None },
             other => other,
         };
         self.intern(t)

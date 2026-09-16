@@ -486,11 +486,45 @@ fn sim_bindings(s: &mut String, p: &Program, indent: &str) {
         };
         let Some(size) = takt_llvm::ty::lower(inp.ty, p).map(|t| t.size()) else { continue };
         let _ = writeln!(s, "{indent}memcpy(image + {dst}, latch + {src}, {size}); /* {} -> {} */", out.name, inp.name);
-        // Qualitaet `Good` (3.5): Der Eingang hat jetzt eine Quelle.
-        if let Some(q) = quality_offset(p, &inp.name) {
-            let _ = writeln!(s, "{indent}image[{q}] = 0;");
+        // Qualitaet `Good` (3.5): Der Eingang hat jetzt eine Quelle — sofern
+        // der Wert in der deklarierten Range liegt; sonst `Bad` (12.6). Der
+        // Interpreter prueft am Rand auch `max_slew` und `debounce`; das
+        // bleibt hier aussen vor (LIMITS).
+        let Some(q) = quality_offset(p, &inp.name) else { continue };
+        match range_check(p, inp.ty) {
+            Some((ct, lo, hi)) => {
+                let _ = writeln!(
+                    s,
+                    "{indent}{{ {ct} v = *({ct} *)(image + {dst}); image[{q}] = (v < {lo} || v > {hi}) ? 3 : 0; }}"
+                );
+            }
+            None => {
+                let _ = writeln!(s, "{indent}image[{q}] = 0;");
+            }
         }
     }
+}
+
+/// C-Typ und Grenzen eines Skalars mit deklarierter Range (3.4).
+fn range_check(p: &Program, ty: takt_mir::TypeId) -> Option<(&'static str, String, String)> {
+    use takt_llvm::ty::LlvmType;
+    use takt_mir::types::{Const, FloatWidth, Type};
+    let literal = |c: &Const| match c {
+        Const::Int(i) | Const::Duration(i) => format!("{i}LL"),
+        Const::Float(f) => format!("{f:?}"),
+        Const::Bool(b) => u8::from(*b).to_string(),
+    };
+    let (ct, r) = match p.types.list.get(ty.index())? {
+        Type::Int { width, range: Some(r), .. } => {
+            (crate::layout::c_type(&LlvmType::Int(width.bits()), width.signed())?, r)
+        }
+        Type::Float { width, range: Some(r), .. } => {
+            let t = if *width == FloatWidth::F32 { LlvmType::F32 } else { LlvmType::F64 };
+            (crate::layout::c_type(&t, true)?, r)
+        }
+        _ => return None,
+    };
+    Some((ct, literal(&r.lo), literal(&r.hi)))
 }
 
 pub(crate) fn param_literal(p: &Program, index: usize) -> Option<String> {

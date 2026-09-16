@@ -1185,19 +1185,31 @@ fn convert(
             let r = m.inst(&format!("fdiv {want} {as_float}, {divisor}"));
             Ok(Lowered { value: r.to_string(), ty: want.clone() })
         }
-        ConvertKind::To => {
-            let src = match p.types.list.get(e.ty.index()) {
-                Some(Type::Float { unit: Some(u), .. }) => p.units.get(u.index()).ok_or(NotYet { what: "Einheit" })?,
-                // 3.2: Einheiten auf Ganzzahlen sind M6.
+        // `to` auf Ganzzahlen loest das Sema in eine Multiplikation auf (3.2);
+        // `to_float` rechnet ab dem exakten Ganzzahlwert wie `to` auf Fliesskomma.
+        ConvertKind::To | ConvertKind::ToFloat => {
+            let to_float = matches!(kind, ConvertKind::ToFloat);
+            let src = match (to_float, p.types.list.get(e.ty.index())) {
+                (_, Some(Type::Float { unit: Some(u), .. })) | (true, Some(Type::Int { unit: Some(u), .. })) => {
+                    Some(p.units.get(u.index()).ok_or(NotYet { what: "Einheit" })?)
+                }
+                (true, Some(Type::Int { unit: None, .. })) => None,
                 _ => return Err(NotYet { what: "`to(U)` ohne Quelleinheit" }),
             };
-            let mut cur = x.value;
-            if let Some(off) = src.affine_offset {
+            let mut cur = if to_float {
+                let op = if int_is_signed_ty(e.ty, p) { "sitofp" } else { "uitofp" };
+                m.inst(&format!("{op} {} {} to {want}", x.ty, x.value)).to_string()
+            } else {
+                x.value
+            };
+            let (factor, offset) =
+                src.map_or((takt_mir::types::Rational::int(1), None), |u| (u.factor, u.affine_offset));
+            if let Some(off) = offset {
                 let o = float_literal(off.num as f64 / off.den as f64, want);
                 cur = m.inst(&format!("fadd {want} {cur}, {o}")).to_string();
             }
-            let num = i128::from(src.factor.num) * i128::from(dst.factor.den);
-            let den = i128::from(src.factor.den) * i128::from(dst.factor.num);
+            let num = i128::from(factor.num) * i128::from(dst.factor.den);
+            let den = i128::from(factor.den) * i128::from(dst.factor.num);
             cur = m.inst(&format!("fmul {want} {cur}, {}", float_literal(num as f64, want))).to_string();
             cur = m.inst(&format!("fdiv {want} {cur}, {}", float_literal(den as f64, want))).to_string();
             if let Some(off) = dst.affine_offset {
@@ -1206,7 +1218,6 @@ fn convert(
             }
             Ok(Lowered { value: cur, ty: want.clone() })
         }
-        ConvertKind::ToFloat => Err(NotYet { what: "`to_float(U)` (M6)" }),
     }
 }
 

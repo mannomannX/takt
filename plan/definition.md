@@ -111,7 +111,7 @@ Diese Trennung ist der Kern der Wiederverwendbarkeit: `fn` und `block` sind ohne
 - **Tunables** (8.4): `tunable param` sind Inputs mit Halte-Semantik — Änderungen werden an Tick-Grenzen atomar übernommen und aufgezeichnet.
 
 ### 1.5 Lebenszyklus
-Vor dem ersten Commit stehen alle Outputs auf ihren `safe`-Werten (Runtime und I/O-Geräte). Tick 0: alle Maschinen betreten ihren Initialzustand (Eintrittsaktionen, Entry-Tick-Regel); `persist`-Variablen (5.9) sind zu diesem Zeitpunkt bereits geladen. Das Programm läuft bis zum Stopp durch die Runtime; beim Stopp und bei jedem Runtime-Fault gehen alle Outputs auf `safe`. Programmwechsel nur zwischen Läufen.
+Vor dem ersten Commit stehen alle Outputs auf ihren `safe`-Werten (Runtime und I/O-Geräte). Tick 0: alle Maschinen betreten ihren Initialzustand (Eintrittsaktionen, Entry-Tick-Regel — sie gilt dort auch für den maschinenweiten `loop:`, weil `root` Teil der Kette ist (5.1) und über ihm in diesem Tick nichts lief); `persist`-Variablen (5.9) sind zu diesem Zeitpunkt bereits geladen. Das Programm läuft bis zum Stopp durch die Runtime; beim Stopp und bei jedem Runtime-Fault gehen alle Outputs auf `safe`. Programmwechsel nur zwischen Läufen.
 
 ---
 
@@ -2234,9 +2234,10 @@ machine battery_cycle every 100 ms:
         enter:
             charger = false
 
-# Plant-Modell für die Simulation: nur im Sim-Build gelinkt
-output chamber_t_sim : float[degC] @ sim("chamber/pv")
-output cell_v_sim    : float[V]    @ sim("daq2/ai0")
+# Plant-Modell für die Simulation: nur im Sim-Build gelinkt; `safe` ist der
+# Anfangszustand der Strecke, den Tick 0 vor dem ersten Commit abtastet (1.5)
+output chamber_t_sim : float[degC] @ sim("chamber/pv") with safe = 22 degC
+output cell_v_sim    : float[V]    @ sim("daq2/ai0")   with safe = 3.9 V
 
 const LEAK_COEF : float[1/s] = 0.0005 1/s
 

@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 38 (3.2): `.to(U)` auf Ganzzahlen nur bei ganzzahligem Faktor.
+# Von uV nach mV ist er 1/1000 — dafuer gibt es `.to_float(mV)`.
+
+output n : int[mV] @ hw("o/n") with safe = 0
+
+machine m:
+    var v : int[uV] = 3_300_000 uV
+    initial RUN
+    state RUN:
+        loop:
+            n = v.to(mV)  # ~ SC-38

@@ -242,6 +242,8 @@ pub const SC2: &str = "SC-2";
 pub const SC3: &str = "SC-3";
 /// Code der Maschinenregeln.
 pub const SC8: &str = "SC-8";
+/// Code der Einheiten auf Ganzzahlen (3.2).
+pub const SC38: &str = "SC-38";
 
 impl<'a> Lowerer<'a> {
     /// Neuer Elaborator; die Konfiguration kommt aus dem `system:`-Block.

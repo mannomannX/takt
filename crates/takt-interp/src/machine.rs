@@ -603,6 +603,7 @@ pub fn switch(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, target: Target,
         let depth = chain_to(env.machine(loaded), s).len();
         common = common.min(depth - 1);
     }
+    let first_entry = old.is_empty() && !env.state.faulted;
     env.state.conf = new.clone();
     env.state.faulted = matches!(target, Target::Faulted);
     // (2) exit-Bloecke der verlassenen Zustaende, innen nach aussen
@@ -635,7 +636,17 @@ pub fn switch(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, target: Target,
             Err(e) => return Err(e),
         }
     }
-    // Entry-Tick-Regel: `loop:` der neu betretenen Zustaende im Modus ENTRY (5.2)
+    // Entry-Tick-Regel: `loop:` der neu betretenen Zustaende im Modus ENTRY (5.2).
+    // Beim ersten Eintritt gehoert die Maschinenebene dazu: `root` ist Teil
+    // der Kette (5.1), und ueber ihr lief in diesem Tick noch nichts.
+    if first_entry {
+        let block = env.machine(loaded).loop_block.clone();
+        let mut ctx = env.ctx(loaded, tick);
+        match ctx.exec_block(&block, Mode::Entry)? {
+            Out::Normal => {}
+            other => return Ok(other),
+        }
+    }
     exec_chain(loaded, env, &entered, Mode::Entry, tick)
 }
 

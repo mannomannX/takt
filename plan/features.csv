@@ -512,7 +512,7 @@ MEM-done,Reservierter Membername,2.5,done,,M0 (Parser/MIR-Entwurf),definiert,
 MEM-result,Reservierter Membername,2.5,result,,M0 (Parser/MIR-Entwurf),definiert,
 MEM-state,Reservierter Membername,2.5,state,,M0 (Parser/MIR-Entwurf),fertig,
 MEM-to,Reservierter Membername,2.5,to,,M0 (Parser/MIR-Entwurf),fertig,
-MEM-to_float,Reservierter Membername,2.5,to_float,,M0 (Parser/MIR-Entwurf),definiert,
+MEM-to_float,Reservierter Membername,2.5,to_float,,M0 (Parser/MIR-Entwurf),fertig,
 MEM-as,Reservierter Membername,2.5,as,,M0 (Parser/MIR-Entwurf),fertig,
 MEM-bit,Reservierter Membername,2.5,bit,,M0 (Parser/MIR-Entwurf),fertig,
 MEM-bits,Reservierter Membername,2.5,bits,,M0 (Parser/MIR-Entwurf),fertig,
@@ -577,7 +577,7 @@ SC-25,Statische Prüfung,10,"Zustandslokale und gehobene Variablen (Sequenz-`var
 SC-26,Statische Prüfung,10,Szenarien schreiben nur `sim`-Outputs; Single-Writer gegenüber Modellmaschinen,F,M3 (Gate),definiert,
 SC-27,Statische Prüfung,10,`every d:` nur in `loop:`; `on`-Handler nur auf deklarierten Streams,F,M3 (Gate),fertig,
 SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0` („tick-granular"", 7.5); deklarierte `jitter`-Anforderung größer als gemessener Wert erfüllt, sonst Fehler (8.1)",W / F,M6 (mit 8.10),teilweise,TTL-Adapter (PA9) — nur die Messung; die Rechnung steht
-SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M6 (mit 8.10),definiert,
+SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M6 (mit 8.10),definiert,TTL-Adapter (PA9) — nur die Messung; die Rechnung kommt mit den Kampagnen (plan/m6.md Schritt 13)
 SC-30,Statische Prüfung,10,"`mat`: Formprüfung bei `+ - *`, `inv`/`solve` nur quadratisch, R, C ≤ 16, Indizes in Range (3.11)",F,M3 (Gate),definiert,
 SC-31,Statische Prüfung,10,"Native Funktionen: nur die kuratierte Menge (v1), `cost`, `stack` und `total` deklariert, Argumente fester Größe (4.5)",F,M3 (Gate),definiert,
 SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration",F,M5 (Embedded),teilweise,TTL-Adapter (PA9) — nur die Messung; die Rechnung steht
@@ -586,7 +586,7 @@ SC-34,Statische Prüfung,10,"Dimensionierte Matrizen: Einheitentupel passen (Pro
 SC-35,Statische Prüfung,10,"`tunable param` nicht in Compile-Zeit-Konstanten (Array-Größen, Kapazitäten, `repeat`) (8.4)",F,M3 (Gate),definiert,
 SC-36,Statische Prüfung,10,`check … for d` / `alert … for d`: `d >= P_m`; Rundung auf Perioden mit effektivem Wert (5.6),W,M3 (Gate),fertig,
 SC-37,Statische Prüfung,10,`len_field`: verweist auf ein vorangehendes Integer-Feld; statische Obergrenze des Feldes (3.7),F,M3 (Gate),fertig,
-SC-38,Statische Prüfung,10,"Einheiten auf Integern: `.to()` nur bei ganzzahligem Faktor, sonst `.to_float()` (3.2)",F,M6 (frueh),definiert,
+SC-38,Statische Prüfung,10,"Einheiten auf Integern: `.to()` nur bei ganzzahligem Faktor, sonst `.to_float()` (3.2)",F,M6 (frueh),fertig,
 SC-39,Statische Prüfung,10,"Speicherbudget aller `baremetal`- und `rtos`-Profile: `takt size` (11.5) ≤ `ram`/`flash`/`iram` der Hardware-Konfiguration, aufgeschlüsselt; auf Targets mit XIP-Flash zusätzlich RAM-Residenz von Code und tick-gelesenen Konstanten (12.3); `debounce`-Haltedauer im Report",F,M6 (mit 8.10),teilweise,
 SC-40,Statische Prüfung,10,"Performance-Lint: `int` ohne Range in Schleifen und Regelpfaden auf 32-Bit-Zielen, mit Kostenanteil (3.4)",W,M3 (Gate),fertig,
 SC-41,Statische Prüfung,10,"Performance-Lint: `float = f64` auf Zielen ohne f64-Hardware, mit Kostenanteil der f64-Operationen; Vorschlag `system: float = f32` (4.2)",W,M3 (Gate),fertig,
@@ -649,7 +649,7 @@ PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M1 (Kernsemantik),teilweise,
 PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M1 (Kernsemantik),teilweise,
 PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M1 (Kernsemantik),teilweise,
 PAR-3.2-Entdimensionieren,Absatz/Regel,3.2,Entdimensionieren,,M1 (Kernsemantik),fertig,
-PAR-3.2-Einheiten_auf_Integern_v1.1,Absatz/Regel,3.2,Einheiten auf Integern (v1.1),v1.1,M6,offen,
+PAR-3.2-Einheiten_auf_Integern_v1.1,Absatz/Regel,3.2,Einheiten auf Integern (v1.1),v1.1,M6,fertig,
 PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymorphie in Funktionen und Blöcken,,M1 (Kernsemantik),teilweise,
 PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M1 (Kernsemantik),teilweise,
 PAR-3.3-Lexikalische_Regel,Absatz/Regel,3.3,Lexikalische Regel,,M1 (Kernsemantik),fertig,
@@ -823,8 +823,8 @@ RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat z
 RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M5 (Embedded),teilweise,TTL-Adapter (PA9)
 PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4 (Codegen),fertig,
 PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M5 (Embedded),teilweise,
-PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M6 (v1.1),offen,
-PROFIL-boot,Profil/Eintrag,12.8,boot,,M6 (v1.1),offen,
+PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M6 (v1.1),offen,RTOS auf Board 1 + TTL-Adapter (PA9); Schnitt in plan/m6.md 2.13
+PROFIL-boot,Profil/Eintrag,12.8,boot,,M6 (v1.1),offen,Startpartition auf einem Board + TTL-Adapter (PA9); Schnitt in plan/m6.md 2.13
 FAULT-CheckFailed,Fault-Art,5.3,CheckFailed,,M1 (Kernsemantik),fertig,
 FAULT-Expect,Fault-Art,5.3,Expect,,M1 (Kernsemantik),fertig,
 FAULT-Timeout,Fault-Art,5.3,Timeout,,M1 (Kernsemantik),fertig,

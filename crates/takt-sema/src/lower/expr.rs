@@ -12,7 +12,7 @@ use takt_syntax::ast;
 
 use takt_mir::pattern::Pattern;
 
-use super::{Lowerer, SC2, SC3, is_literal};
+use super::{Lowerer, SC2, SC3, SC38, is_literal};
 use crate::checks::{SC18, SC45, SC47};
 use crate::symbols::Entity;
 use crate::units::Unit;
@@ -304,7 +304,17 @@ impl Lowerer<'_> {
         let hint_ty = hint.map(|h| self.ty(h).clone());
         // Ganzzahlliteral in Ganzzahlkontext
         if is_int && unit.is_none() {
-            if let Some(Type::Int { width, range, .. }) = hint_ty {
+            if let Some(Type::Int { width, range, unit: hu }) = hint_ty {
+                if let Some(id) = hu.filter(|_| !is_zero(&text) && !self.in_range_bound) {
+                    let name = self.program.units[id.index()].name.clone();
+                    self.error_hint(
+                        SC3,
+                        span,
+                        "einheitenloses Literal in Einheitenkontext (3.6)",
+                        format!("meinst du `{text} {name}`?"),
+                    );
+                    return None;
+                }
                 let v = parse_int(&text).or_else(|| {
                     self.error(SC3, span, "Ganzzahlliteral nicht darstellbar");
                     None
@@ -329,6 +339,35 @@ impl Lowerer<'_> {
                 })?;
                 return Some(Expr::new(ExprKind::Int(v as i64), self.tys.int, span));
             }
+        }
+        // Ganzzahlliteral mit Einheit in Ganzzahlkontext (3.2, v1.1)
+        if let (Some(Type::Int { width, unit: hu, range }), Some(u)) = (&hint_ty, &unit) {
+            if !is_int {
+                self.error(SC3, span, "Ganzzahlliteral erwartet");
+                return None;
+            }
+            let v = parse_int(&text).or_else(|| {
+                self.error(SC3, span, "Ganzzahlliteral nicht darstellbar");
+                None
+            })?;
+            let (lo, hi) = takt_interp::arith::bounds(*width);
+            if v < lo || v > hi {
+                self.error(SC3, span, format!("Literal passt nicht in `{}`", takt_interp::arith::name(*width)));
+                return None;
+            }
+            let hunit = hu.map(|id| self.units.unit_of(id)).unwrap_or_else(Unit::one);
+            let ty = if hunit == *u {
+                if let Some(r) = range {
+                    if !takt_interp::eval::in_range(&takt_interp::Value::Int(v as i64), r) {
+                        self.error(SC3, span, "Literal ausserhalb der Range");
+                        return None;
+                    }
+                }
+                hint.expect("Hinweis")
+            } else {
+                self.int_type(*width, u, None, span)?
+            };
+            return Some(Expr::new(ExprKind::Int(v as i64), ty, span));
         }
         // Fliesskomma (auch Ganzzahltext in Fliesskommakontext)
         if is_int && unit.is_none() && matches!(hint_ty, Some(Type::Int { .. })) {
@@ -358,10 +397,6 @@ impl Lowerer<'_> {
                     let ty = self.float_type(w, u, None, span)?;
                     (w, u.clone(), ty)
                 }
-            }
-            (Some(Type::Int { .. }), Some(_)) => {
-                self.stage(span, "Einheiten auf Ganzzahlen", Stage::V1_1);
-                return None;
             }
             (Some(Type::Duration { .. }), _) => {
                 self.error_hint(SC3, span, "Dauer erwartet", "Zeiteinheit anfuegen, etwa `100 ms`");
@@ -1108,20 +1143,67 @@ impl Lowerer<'_> {
             ("to", Type::Float { width, .. }) => {
                 let unit = self.unit_arg(args, span)?;
                 let src = self.unit_of_type(b.ty).expect("float");
-                let (ds, dd) = (self.units.dimension(&self.program, &src), self.units.dimension(&self.program, &unit));
-                if ds != dd {
-                    let (a, c) = (self.units.display(&self.program, &src), self.units.display(&self.program, &unit));
-                    self.error(SC3, span, format!("`.to({c})`: `{a}` hat eine andere Dimension"));
-                    return None;
-                }
+                self.check_dimension(&src, &unit, span)?;
                 let uid = self.unit_id(&unit, span)?;
                 let width = *width;
                 let ty = self.intern(Type::Float { width, unit: Some(uid), range: None });
                 Some(Expr::new(ExprKind::Convert { expr: Box::new(b), kind: ConvertKind::To, unit: uid }, ty, span))
             }
-            ("to" | "to_float", Type::Int { .. }) => {
-                self.stage(span, "Einheiten auf Ganzzahlen", Stage::V1_1);
-                None
+            // 3.2: Auf Ganzzahlen ist `.to(U)` eine Multiplikation mit dem
+            // ganzzahligen Faktor (Pruefung 38); Overflow ist ein Fault wie 4.1.
+            ("to", Type::Int { width, .. }) => {
+                let unit = self.unit_arg(args, span)?;
+                let src = self.unit_of_type(b.ty).expect("int");
+                self.check_dimension(&src, &unit, span)?;
+                let c = self.units.display(&self.program, &unit);
+                if self.units.is_affine(&self.program, &src) || self.units.is_affine(&self.program, &unit) {
+                    self.error_hint(
+                        SC38,
+                        span,
+                        format!("`.to({c})`: affine Einheiten haben keinen ganzzahligen Versatz"),
+                        format!("`.to_float({c})` (3.2)"),
+                    );
+                    return None;
+                }
+                let Some(k) = self.integral_factor(&src, &unit) else {
+                    let a = self.units.display(&self.program, &src);
+                    self.error_hint(
+                        SC38,
+                        span,
+                        format!("`.to({c})`: der Faktor von `{a}` nach `{c}` ist nicht ganzzahlig"),
+                        format!("`.to_float({c})` liefert das Ergebnis als Fliesskomma (3.2)"),
+                    );
+                    return None;
+                };
+                let width = *width;
+                let ty = self.int_type(width, &unit, None, span)?;
+                if k == 1 {
+                    return Some(Expr::new(ExprKind::Cast { expr: Box::new(b), to: ty }, ty, span));
+                }
+                if k > takt_interp::arith::bounds(width).1 {
+                    self.error(SC38, span, format!("Faktor {k} passt nicht in `{}`", takt_interp::arith::name(width)));
+                    return None;
+                }
+                let scalar = self.without_unit(b.ty);
+                let factor = Expr::new(ExprKind::Int(k as i64), scalar, span);
+                Some(Expr::new(
+                    ExprKind::Binary { op: BinaryOp::Mul, lhs: Box::new(b), rhs: Box::new(factor) },
+                    ty,
+                    span,
+                ))
+            }
+            ("to_float", Type::Int { .. }) => {
+                let unit = self.unit_arg(args, span)?;
+                let src = self.unit_of_type(b.ty).expect("int");
+                self.check_dimension(&src, &unit, span)?;
+                let uid = self.unit_id(&unit, span)?;
+                let width = self.float_width();
+                let ty = self.intern(Type::Float { width, unit: Some(uid), range: None });
+                Some(Expr::new(
+                    ExprKind::Convert { expr: Box::new(b), kind: ConvertKind::ToFloat, unit: uid },
+                    ty,
+                    span,
+                ))
             }
             ("bit", Type::Int { .. }) => {
                 let int = self.tys.int;
@@ -1877,18 +1959,15 @@ impl Lowerer<'_> {
                 return None;
             }
         };
+        // `as` wechselt die Darstellung, nicht die Groesse: Die Einheit bleibt.
+        let unit = match self.ty(x.ty) {
+            Type::Int { unit, .. } | Type::Float { unit, .. } => *unit,
+            _ => None,
+        };
+        let target = if unit.is_some() { self.with_unit(target, unit) } else { target };
         let (from_t, to_t) = (self.ty(x.ty).clone(), self.ty(target).clone());
         let checked = match (&from_t, &to_t) {
             (Type::Int { width: a, .. }, Type::Int { width: b, .. }) => {
-                if self.unit_of_type(x.ty).is_some_and(|u| !u.is_one()) {
-                    self.error_hint(
-                        SC3,
-                        span,
-                        "`as` verwirft keine Einheit",
-                        "erst `.to(U)` oder ohne Einheit rechnen",
-                    );
-                    return None;
-                }
                 let (la, ha) = takt_interp::arith::bounds(*a);
                 let (lb, hb) = takt_interp::arith::bounds(*b);
                 !(la >= lb && ha <= hb)
@@ -2085,7 +2164,8 @@ impl Lowerer<'_> {
                         );
                         return None;
                     }
-                    self.base(a.ty)
+                    let (ua, ub) = (self.unit_of_type(a.ty).expect("int"), self.unit_of_type(b.ty).expect("int"));
+                    self.affine_result(mop, &ua, &ub, a.ty, span)?
                 }
                 (Type::Float { width: wa, .. }, Type::Float { width: wb, .. }) => {
                     if wa != wb {
@@ -2094,7 +2174,7 @@ impl Lowerer<'_> {
                         return None;
                     }
                     let (ua, ub) = (self.unit_of_type(a.ty).expect("float"), self.unit_of_type(b.ty).expect("float"));
-                    self.affine_result(mop, &ua, &ub, *wa, a.ty, span)?
+                    self.affine_result(mop, &ua, &ub, a.ty, span)?
                 }
                 _ => {
                     let (x, y) = names(self);
@@ -2121,7 +2201,16 @@ impl Lowerer<'_> {
                         );
                         return None;
                     }
-                    self.base(a.ty)
+                    let (ua, ub) = (self.unit_of_type(a.ty).expect("int"), self.unit_of_type(b.ty).expect("int"));
+                    if mop == BinaryOp::Rem {
+                        if ua != ub {
+                            self.error(SC3, span, "`%` verlangt gleiche Einheiten (3.2)");
+                            return None;
+                        }
+                        self.base(a.ty)
+                    } else {
+                        self.product_type(mop, &ua, &ub, a.ty, span)?
+                    }
                 }
                 (Type::Float { width: wa, .. }, Type::Float { width: wb, .. }) => {
                     if mop == BinaryOp::Rem {
@@ -2134,17 +2223,7 @@ impl Lowerer<'_> {
                         return None;
                     }
                     let (ua, ub) = (self.unit_of_type(a.ty).expect("float"), self.unit_of_type(b.ty).expect("float"));
-                    if self.units.is_affine(&self.program, &ua) || self.units.is_affine(&self.program, &ub) {
-                        self.error_hint(
-                            SC3,
-                            span,
-                            "affine Einheit in einem Produkt (3.2)",
-                            "Differenzen in `K` rechnen",
-                        );
-                        return None;
-                    }
-                    let unit = if mop == BinaryOp::Mul { ua.mul(&ub) } else { ua.div(&ub) };
-                    self.float_type(*wa, &unit, None, span)?
+                    self.product_type(mop, &ua, &ub, a.ty, span)?
                 }
                 _ => {
                     let (x, y) = names(self);
@@ -2199,16 +2278,9 @@ impl Lowerer<'_> {
         self.same_base(a, b)
     }
 
-    /// Ergebnis von `+`/`-` auf Fliesskomma mit affinen Regeln (3.2).
-    fn affine_result(
-        &mut self,
-        op: BinaryOp,
-        ua: &Unit,
-        ub: &Unit,
-        width: FloatWidth,
-        a_ty: TypeId,
-        span: Span,
-    ) -> Option<TypeId> {
+    /// Ergebnis von `+`/`-` mit affinen Regeln (3.2); Breite und Art
+    /// kommen vom linken Operanden.
+    fn affine_result(&mut self, op: BinaryOp, ua: &Unit, ub: &Unit, a_ty: TypeId, span: Span) -> Option<TypeId> {
         let (aff_a, aff_b) = (self.units.is_affine(&self.program, ua), self.units.is_affine(&self.program, ub));
         if !aff_a && !aff_b {
             if ua != ub {
@@ -2243,13 +2315,10 @@ impl Lowerer<'_> {
         match (aff_a, aff_b, op) {
             (true, true, BinaryOp::Sub) if ua == ub => {
                 let k = base_of(self, ua);
-                self.float_type(width, &k, None, span)
+                self.numeric_type(a_ty, &k, span)
             }
             (true, false, _) if base_of(self, ua) == *ub => Some(self.base(a_ty)),
-            (false, true, BinaryOp::Add) if base_of(self, ub) == *ua => {
-                let t = self.float_type(width, ub, None, span)?;
-                Some(t)
-            }
+            (false, true, BinaryOp::Add) if base_of(self, ub) == *ua => self.numeric_type(a_ty, ub, span),
             _ => {
                 let (x, y) = (self.units.display(&self.program, ua), self.units.display(&self.program, ub));
                 self.error_hint(
@@ -2261,6 +2330,36 @@ impl Lowerer<'_> {
                 None
             }
         }
+    }
+
+    /// Ergebnis von `*`/`/`: Einheiten kombinieren; affine Einheiten sind
+    /// in Produkten ausgeschlossen (3.2).
+    fn product_type(&mut self, op: BinaryOp, ua: &Unit, ub: &Unit, a_ty: TypeId, span: Span) -> Option<TypeId> {
+        if self.units.is_affine(&self.program, ua) || self.units.is_affine(&self.program, ub) {
+            self.error_hint(SC3, span, "affine Einheit in einem Produkt (3.2)", "Differenzen in `K` rechnen");
+            return None;
+        }
+        let unit = if op == BinaryOp::Mul { ua.mul(ub) } else { ua.div(ub) };
+        self.numeric_type(a_ty, &unit, span)
+    }
+
+    /// `.to(U)` verlangt gleiche Dimension (3.2).
+    fn check_dimension(&mut self, src: &Unit, dst: &Unit, span: Span) -> Option<()> {
+        if self.units.dimension(&self.program, src) == self.units.dimension(&self.program, dst) {
+            return Some(());
+        }
+        let (a, c) = (self.units.display(&self.program, src), self.units.display(&self.program, dst));
+        self.error(SC3, span, format!("`.to({c})`: `{a}` hat eine andere Dimension"));
+        None
+    }
+
+    /// Faktor von `src` nach `dst`, wenn er ganzzahlig ist (Pruefung 38).
+    fn integral_factor(&self, src: &Unit, dst: &Unit) -> Option<i128> {
+        let (fs, fd) = (self.units.factor(&self.program, src)?, self.units.factor(&self.program, dst)?);
+        let num = i128::from(fs.num) * i128::from(fd.den);
+        let den = u128::from(fs.den) * u128::from(fd.num.unsigned_abs());
+        let r = crate::units::rat_reduce(num, den)?;
+        (r.den == 1 && r.num > 0).then_some(i128::from(r.num))
     }
 }
 
@@ -2278,8 +2377,12 @@ fn is_comparison(op: BinaryOp) -> bool {
 }
 
 fn unit_hint(this: &Lowerer<'_>, a: TypeId, b: TypeId, rhs: &Expr) -> String {
-    match (this.ty(a), this.ty(b)) {
-        (Type::Float { unit: Some(u), .. }, Type::Float { unit: None, .. }) if is_literal(rhs) => {
+    let unit_of = |t: &Type| match t {
+        Type::Float { unit, .. } | Type::Int { unit, .. } => Some(*unit),
+        _ => None,
+    };
+    match (unit_of(this.ty(a)), unit_of(this.ty(b))) {
+        (Some(Some(u)), Some(None)) if is_literal(rhs) => {
             let text = match &rhs.kind {
                 ExprKind::Int(i) => i.to_string(),
                 ExprKind::Float(f) => format!("{f}"),
@@ -2289,7 +2392,7 @@ fn unit_hint(this: &Lowerer<'_>, a: TypeId, b: TypeId, rhs: &Expr) -> String {
         }
         // 3.2: „Es gibt keine implizite Konversion" — bei gleicher Dimension
         // ist `.to(U)` die Umrechnung, die der Techniker sehen soll.
-        (Type::Float { unit: Some(x), .. }, Type::Float { unit: Some(y), .. }) if same_dimension(this, *x, *y) => {
+        (Some(Some(x)), Some(Some(y))) if same_dimension(this, x, y) => {
             format!("`.to({})` umrechnen (3.2)", this.program.units[x.index()].name)
         }
         _ => "beide Seiten muessen denselben Typ haben".into(),
