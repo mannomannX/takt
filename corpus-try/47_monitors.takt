@@ -1,0 +1,35 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Laufzeitmonitore (13.3): `with monitor = true` senkt die Eigenschaft als
+# eigene Schrittfunktion ueber den Tick-Rand-Snapshot; Interpreter und
+# erzeugter Code melden dieselbe Verletzung im selben Tick.
+
+command go
+
+output valve : bool           @ hw("o/valve") with safe = false
+output armed : bool           @ hw("o/armed") with safe = false
+output count : int in 0..1000 @ hw("o/count") with safe = 0
+
+machine v:
+    var n : int in 0..1000 = 0
+    initial CLOSED
+
+    state CLOSED:
+        enter:
+            valve = false
+        when go:
+            n = n + 1
+            count = n
+            -> OPEN
+
+    state OPEN:
+        enter:
+            valve = true
+            armed = true
+        after 30 ms: -> CLOSED
+
+property opens: always(go implies eventually[30 ms](valve)) with monitor = true
+property disarms: always(valve implies eventually[50 ms](not armed)) with monitor = true
+assumption rare: always(go implies not once[100 ms](count > 1)) with monitor = true

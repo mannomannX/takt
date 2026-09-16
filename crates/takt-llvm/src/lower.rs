@@ -126,5 +126,12 @@ pub fn program_with(p: &Program, triple: &str, module_name: &str, instrument: cr
         }
     }
 
+    // 13.3: Laufzeitmonitore hinter den Maschinen; sie lesen nur das Abbild.
+    for (i, prop) in p.properties.iter().enumerate().filter(|(_, prop)| prop.monitor) {
+        if let Err(e) = crate::monitor::monitor_function(i, prop, p, &mut m) {
+            skipped.push(Skipped { machine: format!("monitor {}", prop.name), reason: e.what.to_string() });
+        }
+    }
+
     Lowered { ir: m.finish(), skipped, without_persist }
 }

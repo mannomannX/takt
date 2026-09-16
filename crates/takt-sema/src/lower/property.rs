@@ -20,6 +20,14 @@ impl Lowerer<'_> {
             return;
         }
         let Some(formula) = self.tprop(&decl.prop, true) else { return };
+        if decl.monitor && !monitorable(&formula) {
+            self.error(
+                SC56,
+                decl.span,
+                "ein Laufzeitmonitor verlangt `always(…)`/`never(…)` aussen und innen nur beschraenkte Operatoren (13.3)",
+            );
+            return;
+        }
         self.program.properties.push(Property {
             name: decl.name.name.clone(),
             formula,
@@ -91,4 +99,18 @@ impl Lowerer<'_> {
         }
         Some(d.ns)
     }
+}
+
+/// `always`/`never` aussen, darunter nur beschraenkte Operatoren: die Form,
+/// die ein Monitor mit Ringpuffer ueberwacht (13.3).
+fn monitorable(f: &TProp) -> bool {
+    fn bounded_only(f: &TProp) -> bool {
+        match f {
+            TProp::Temporal { op: TemporalOp::Always | TemporalOp::Never, .. } => false,
+            TProp::Temporal { inner, .. } | TProp::Not(inner) => bounded_only(inner),
+            TProp::And(a, b) | TProp::Or(a, b) | TProp::Implies(a, b) => bounded_only(a) && bounded_only(b),
+            TProp::Atom(_) => true,
+        }
+    }
+    matches!(f, TProp::Temporal { op: TemporalOp::Always | TemporalOp::Never, inner, .. } if bounded_only(inner))
 }

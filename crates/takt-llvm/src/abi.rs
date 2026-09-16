@@ -96,6 +96,13 @@ impl Abi {
     /// Outputs.
     pub const CANCEL: &'static str = "takt_cancel";
 
+    /// Ein Laufzeitmonitor meldet eine Verletzung (13.3): `(index, position)`.
+    ///
+    /// Der Index zaehlt die Eigenschaften des Programms; die Position ist
+    /// der Tick, an dem die Formel falsch ist — die Runtime traegt beides
+    /// in den Trace, wie der Interpreter.
+    pub const PROPERTY: &'static str = "takt_property";
+
     /// Das Fault-Flag einer reinen Funktion (4.1).
     ///
     /// Eine Funktion hat keinen eigenen Fault-Pfad — sie faultet den
@@ -121,6 +128,7 @@ impl Abi {
         m.declare(&format!("declare void @{}(i32, i32)", Abi::ABORT));
         m.declare(&format!("declare i64 @{}()", Abi::NOW));
         m.declare(&format!("declare void @{}(i32, i32, i1)", Abi::VERDICT));
+        m.declare(&format!("declare void @{}(i32, i64)", Abi::PROPERTY));
         // 9.8: `(channel, T, wert) -> konnte geplant werden`.
         m.declare(&format!("declare i1 @{}(i32, i64, i64)", Abi::SCHEDULE));
         m.declare(&format!("declare void @{}(i32)", Abi::CANCEL));

@@ -105,6 +105,7 @@ CG-13.2-Verdict,Umsetzung,11.2,"`verdict pass | fail` im erzeugten Code: eine Be
 CG-9.8-At,Umsetzung,11.2,"`at T:` und `cancel` im erzeugten Code: die Warteschlange gehoert der Runtime (11.2), `takt_schedule`/`takt_cancel` als ABI; `TimingFault` und `ScheduleOverflow` entscheidet sie (9.8)",,M4 (Codegen),fertig,
 CG-11.2-Goto,Umsetzung,11.2,`->` als Anweisung: Zustandswechsel und Sprung ans Kettenende (11.2); im Entry-Tick wirkungslos (5.2 Regel 4). Teilt `enter_leaf` mit den Uebergaengen,,M4 (Codegen),fertig,
 CG-3.11-Matrizen,Umsetzung,11.2,"Matrizen im erzeugten Code (`takt-llvm::matrix`): dieselben Rechenwege wie `libtaktm::mat`, ausgerollt, `fma`-Ketten ab null, LU mit Laufzeit-Pivotzeile im Scratch; singulaer springt in den Fault-Pfad, `det` gibt null, `cholesky` `none`; Scratch als `alloca` (Punkt 19 in plan/m6.md 7)",,M6,fertig,
+CG-13.3-Monitore,Umsetzung,11.2,"Laufzeitmonitore im erzeugten Code (`takt-llvm::monitor`): je Eigenschaft `takt_monitor_<i>` ueber den Tick-Rand-Snapshot, Ring je Atom, Fenster als Schleifen, Entscheidung der Position `k - F` im Tick `k` wie der Interpreter; `takt_property(i, at)` als ABI; Abnahme `monitors.rs`",,M6,fertig,
 CG-8.7-Guard,Umsetzung,11.2,"Muster-Guard in Uebergaengen (`until … matches`): erstes passendes Element im Fenster, `examined` nur bis dorthin (8.7)",,M4 (Codegen),fertig,
 CG-3.9-Text,Umsetzung,11.2,"Textliterale als Wert und Textvergleich nach Inhalt (3.9): was hinter der Laenge steht, zaehlt nicht",,M4 (Codegen),fertig,
 CG-11.5-Inspect,Umsetzung,11.5,"Messung am erzeugten Objekt (`takt-llvm::inspect`): Abschnitte, Symbole und Stackrahmen ueber die Binutils der jeweiligen Zielkette; ELF und PE/COFF",,M4 (Codegen),fertig,
@@ -121,7 +122,7 @@ SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M6 (v1.1),teilweise
 SEM-12.9,Semantik/Abschnitt,12.9,"Verteilte Ausführung (v2): Regeln, die schon heute gelten",v2,M9 (v2),offen,
 SEM-13.1,Semantik/Abschnitt,13.1,Referenzinterpreter und differentielles Testen,,M4 (Codegen),fertig,
 SEM-13.2,Semantik/Abschnitt,13.2,Coverage aus der Simulation,,M6 (v1.1),fertig,
-SEM-13.3,Semantik/Abschnitt,13.3,Eigenschaftsprüfung (v1.1),v1.1,M6,teilweise,Monitore im Interpreter mit drei Ausgaengen (Schritt 19a); native Monitore (`with monitor = true`) und `takt prove` offen
+SEM-13.3,Semantik/Abschnitt,13.3,Eigenschaftsprüfung (v1.1),v1.1,M6,teilweise,Monitore im Interpreter und nativ (Schritt 19); `takt prove` (Schritte 20/21) offen
 SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M5 (Embedded),offen,
 SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4 (Codegen),fertig,
 SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,fertig,
@@ -747,7 +748,7 @@ PAR-12.7-Irreversible_Outputs,Absatz/Regel,12.7,Irreversible Outputs,,M6 (v1.1),
 PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M5 (Embedded),teilweise,Board 2 (RV32IMAC)
 PAR-13.3-Sprache,Absatz/Regel,13.3,Sprache,,M6 (v1.1),fertig,`TProp` aus dem AST (`lower/property.rs`)
 PAR-13.3-Semantik,Absatz/Regel,13.3,Semantik,,M6 (v1.1),fertig,"`takt-interp/src/property.rs`: Tick-Rand-Snapshots, dreiwertig auf dem endlichen Lauf, Entscheidung bei geschlossenem Fenster"
-PAR-13.3-Verwendung,Absatz/Regel,13.3,Verwendung,,M6 (v1.1),teilweise,Monitor in `takt test` und `RunResult.properties`; `takt prove` (Schritte 20/21) und `with monitor = true` nativ offen
+PAR-13.3-Verwendung,Absatz/Regel,13.3,Verwendung,,M6 (v1.1),teilweise,"Monitor in `takt test` und `RunResult.properties`, nativ mit `with monitor = true` (`takt-llvm/src/monitor.rs`); `takt prove` (Schritte 20/21) offen"
 PAR-13.3-Umgebungsannahmen_assumption,Absatz/Regel,13.3,Umgebungsannahmen (`assumption`),,M6 (v1.1),fertig,"derselbe Monitor, Verletzung ist FAIL-Befund (`assumption <name> violated <tick>`)"
 PAR-13.3-Kanal_Attribute_gelten_automatisch_als_Annahmen,Absatz/Regel,13.3,Kanal-Attribute gelten automatisch als Annahmen,,M6 (v1.1),offen,
 PAR-13.3-Kompositionalität,Absatz/Regel,13.3,Kompositionalität,,M6 (v1.1),offen,

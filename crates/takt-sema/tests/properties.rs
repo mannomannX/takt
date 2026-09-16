@@ -106,4 +106,7 @@ fn check_56_rejects_unbounded_operators_under_bounded_ones_and_odd_windows() {
     }
     let e = compile(&format!("{VALVE}\nproperty p: always(valve)\nproperty p: always(armed)\n")).expect_err("doppelt");
     assert!(e.join("\n").contains("SC-2"), "{e:?}");
+    let e =
+        compile(&format!("{VALVE}\nproperty p: eventually[20 ms](valve) with monitor = true\n")).expect_err("Monitor");
+    assert!(e.join("\n").contains("Laufzeitmonitor"), "{e:?}");
 }

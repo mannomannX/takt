@@ -118,6 +118,11 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let _ = writeln!(s, "void takt_abort(int m, int site) {{ printf(\"t=%lld abort %d %d\\n\", g_tick, m, site); }}");
     let _ = writeln!(s, "void takt_verdict(int m, int site, unsigned char pass) {{");
     let _ = writeln!(s, "    printf(\"t=%lld verdict %d %d %d\\n\", g_tick, m, site, pass ? 1 : 0);");
+    let _ = writeln!(s, "}}");
+    // 13.3: Ein Monitor meldet Index und Position; der Vergleich bildet
+    // den Namen aus dem Programm.
+    let _ = writeln!(s, "void takt_property(int i, long long at) {{");
+    let _ = writeln!(s, "    printf(\"t=%lld property %d %lld\\n\", g_tick, i, at);");
     let _ = writeln!(s, "}}\n");
 
     // Die Stroeme (`takt-llvm/src/stream.rs`): die drei Aufrufe ueber
@@ -162,6 +167,15 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
             let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
         }
     }
+    // 13.3: Laufzeitmonitore laufen nur, wenn der Rahmen alle Maschinen
+    // fuehrt — eine Eigenschaft liest jede.
+    let monitors: Vec<(usize, &takt_mir::program::Property)> = match machine {
+        None => p.properties.iter().enumerate().filter(|(_, prop)| prop.monitor).collect(),
+        Some(_) => Vec::new(),
+    };
+    for (i, _) in &monitors {
+        let _ = writeln!(s, "void takt_monitor_{i}(void *st, void *in, void *par, void *out, long long tick);");
+    }
     let _ = writeln!(s);
     let persisting: Vec<&takt_mir::machine::Machine> =
         driven.iter().copied().filter(|m| !m.persist.is_empty()).collect();
@@ -184,7 +198,12 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     }
     let _ = writeln!(s, "{}", crate::layout::c_buffer("image", layout.image));
     let _ = writeln!(s, "{}", crate::layout::c_buffer("params", layout.params));
-    let _ = writeln!(s, "{}\n", crate::layout::c_buffer("latch", layout.latch));
+    let _ = writeln!(s, "{}", crate::layout::c_buffer("latch", layout.latch));
+    for (i, prop) in &monitors {
+        let size = takt_llvm::monitor::state_size(prop, p).unwrap_or(1);
+        let _ = writeln!(s, "{}", crate::layout::c_buffer(&format!("monitor_{i}"), size));
+    }
+    let _ = writeln!(s);
     // 4.5: Die Jobs des Rahmens, hinter den Puffern, weil sie das Abbild schreiben.
     jobs(&mut s, p);
 
@@ -245,6 +264,9 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // 8.8: Auch im Tick 0 holt der Treiber ab, was `enter` gesendet hat.
     let _ = writeln!(s, "    takt_tx_commit(0);");
     let _ = writeln!(s, "    dump(0);");
+    for (i, _) in &monitors {
+        let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, 0);");
+    }
     let _ = writeln!(s, "    for (g_tick = 1; g_tick <= {ticks}; g_tick++) {{");
     // 9.8: `apply_scheduled(k)` stellt zu Tick-Beginn, was faellig ist —
     // vor jedem Maschinenschritt, damit die Maschinen den Wert im selben
@@ -307,6 +329,10 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // Zeile einen Tick spaeter als beim Interpreter.
     let _ = writeln!(s, "        takt_tx_commit(g_tick);");
     let _ = writeln!(s, "        dump(g_tick);");
+    // 13.3: nach dem Commit, wie `observe_properties` im Interpreter.
+    for (i, _) in &monitors {
+        let _ = writeln!(s, "        takt_monitor_{i}(monitor_{i}, image, params, latch, g_tick);");
+    }
     // 12.7: `reboot` beendet den Lauf, danach stehen die Outputs auf `safe`.
     if let Some(RebootSlot { slot, ct, commands }) = reboot_slot(p, &layout) {
         let _ = writeln!(s, "        switch (*({ct} *)(latch + {})) {{", slot.offset);

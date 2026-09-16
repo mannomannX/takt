@@ -59,6 +59,18 @@ pub fn run_native_with(
     run_native_inner(clang, p, name, Some(machine), ticks, inputs, &[])
 }
 
+/// Alle Maschinen mit Eingaben (12.5).
+#[allow(dead_code)]
+pub fn run_native_all_with(
+    clang: &Clang,
+    p: &Program,
+    name: &str,
+    ticks: u64,
+    inputs: &[Stimulus],
+) -> Result<String, String> {
+    run_native_inner(clang, p, name, None, ticks, inputs, &[])
+}
+
 /// Alle Maschinen, mit einer Journal-Nutzlast beim Start (5.9).
 pub fn run_native_persist(
     clang: &Clang,

@@ -131,6 +131,23 @@ pub fn load(reader: &Machine, target: MachineId, field: Field, p: &Program, m: &
     })
 }
 
+/// Ψ_k eines Feldes ohne Frischepruefung: fuer die Monitore nach dem
+/// Commit des Ticks (13.3), wenn die erste Bank das Veroeffentlichte traegt.
+pub fn load_bank(target: MachineId, field: Field, p: &Program, m: &mut Module) -> Option<Lowered> {
+    let fty = field_type(target, field, p)?;
+    let off = field_offset(target, field, p)?;
+    let psi = region_offset(target, false, p)? + off;
+    let ptr = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {psi}"));
+    let raw = m.inst(&format!("load {fty}, ptr {ptr}"));
+    Some(match field {
+        Field::Signal(_) => {
+            let b = m.inst(&format!("icmp ne i8 {raw}, 0"));
+            Lowered { value: b.to_string(), ty: LlvmType::Int(1) }
+        }
+        _ => Lowered { value: raw.to_string(), ty: fty },
+    })
+}
+
 /// `raise s` (5.8): das Signal steht ab jetzt in Ψ_{k+1} der eigenen Maschine.
 pub fn raise(machine: MachineId, signal: SignalId, p: &Program, m: &mut Module) -> Option<()> {
     let off = region_offset(machine, true, p)? + field_offset(machine, Field::Signal(signal), p)?;

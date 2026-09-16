@@ -1,0 +1,24 @@
+(system
+  (language 1)
+  (tick 10ms))
+(command go)
+(output valve :bool @hw("o/valve") safe=false)
+(output armed :bool @hw("o/armed") safe=false)
+(output count :int in 0..1000 @hw("o/count") safe=0)
+(machine v
+  (var n :int in 0..1000 0)
+  (initial CLOSED)
+  (state CLOSED
+    (enter
+      (= valve false))
+    (when go -> OPEN
+      (= n (+ n 1))
+      (= count n)))
+  (state OPEN
+    (enter
+      (= valve true)
+      (= armed true))
+    (after 30ms -> CLOSED)))
+(property opens monitor (always (implies go (eventually[30ms] valve))))
+(property disarms monitor (always (implies valve (eventually[50ms] (not armed)))))
+(assumption rare monitor (always (implies go (not (once[100ms] (> count 1))))))

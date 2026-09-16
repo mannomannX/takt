@@ -131,17 +131,28 @@ impl StateVars<'_> {
     /// zu waehlen.
     /// Ein Feld des Abbild-Eintrags eines Channels (`crate::image`).
     fn image_slot(&self, channel: takt_mir::ChannelId, slot: crate::image::Slot, m: &mut Module) -> Option<Lowered> {
-        let entry = crate::image::entry_type(channel, self.program)?;
-        let LlvmType::Struct(fields) = &entry else { return None };
-        let ty = fields.get(slot as usize)?.clone();
-        let off = crate::image::offset_of(channel, self.program)?;
-        // Der Versatz wird aufsummiert, weil die Eintraege verschieden
-        // gross sind; `image` begruendet das.
-        let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {off}"));
-        let field = m.inst(&format!("getelementptr inbounds {entry}, ptr {at}, i32 0, i32 {}", slot as usize));
-        let v = m.inst(&format!("load {ty}, ptr {field}"));
-        Some(Lowered { value: v.to_string(), ty })
+        image_slot(self.program, channel, slot, m)
     }
+}
+
+/// Ein Feld des Abbild-Eintrags eines Channels (`crate::image`); `%1` ist
+/// das Prozessabbild.
+pub fn image_slot(
+    program: &Program,
+    channel: takt_mir::ChannelId,
+    slot: crate::image::Slot,
+    m: &mut Module,
+) -> Option<Lowered> {
+    let entry = crate::image::entry_type(channel, program)?;
+    let LlvmType::Struct(fields) = &entry else { return None };
+    let ty = fields.get(slot as usize)?.clone();
+    let off = crate::image::offset_of(channel, program)?;
+    // Der Versatz wird aufsummiert, weil die Eintraege verschieden
+    // gross sind; `image` begruendet das.
+    let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {off}"));
+    let field = m.inst(&format!("getelementptr inbounds {entry}, ptr {at}, i32 0, i32 {}", slot as usize));
+    let v = m.inst(&format!("load {ty}, ptr {field}"));
+    Some(Lowered { value: v.to_string(), ty })
 }
 
 impl Vars for StateVars<'_> {
