@@ -1,0 +1,48 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Szenarien (13.6, v1.1): eine Maschine fuer den Simulations-Build, die
+# `sim`-Outputs stellt, alles liest und Verdikte setzt. `takt test` fuehrt
+# jedes Szenario als eigenen Lauf aus und sammelt Coverage (13.2).
+
+input  p     : float[bar] in 0..100 bar @ hw("daq/p")   with max_age = 10 ms
+output valve : bool                     @ hw("o/valve") with safe = false
+output p_sim : float[bar]               @ sim("daq/p")  with safe = 1 bar
+
+machine dut:
+    initial CLOSED
+
+    state CLOSED:
+        loop:
+            check p < 50 bar, "overpressure"
+
+        when p > 5 bar: -> OPEN
+
+    state OPEN:
+        enter:
+            valve = true
+
+        when p < 2 bar: -> CLOSED
+
+scenario "pressure rises" every 1 ms:
+    initial RUN
+
+    state RUN:
+        sequence:
+            p_sim = 1 bar
+            wait 3 ms
+            p_sim = 10 bar
+            until dut.state == OPEN timeout 10 ms
+            verify valve, "valve should open"
+            verdict pass "opened"
+
+scenario "stays closed" every 1 ms:
+    initial RUN
+
+    state RUN:
+        sequence:
+            p_sim = 1 bar
+            wait 5 ms
+            expect dut.state == CLOSED, "must stay closed"
+            verdict pass "closed"

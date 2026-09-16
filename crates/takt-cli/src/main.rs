@@ -7,6 +7,7 @@
 //!                   [--build sim|hw] [--profile P]
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--profile P] [--order random:SEED]
+//! takt test  DATEI [--ticks N] [--profile P] [--scenario NAME] [--coverage OUT.csv]
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
 //! takt size  DATEI… [--build sim|hw] [--profile P] [--object DATEI.o] [--target NAME]
@@ -68,6 +69,8 @@ impl Args {
             "--out",
             "--object",
             "--hardware",
+            "--scenario",
+            "--coverage",
         ];
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
         let mut i = 0;
@@ -101,6 +104,7 @@ fn main() -> ExitCode {
     let ok = match command.as_str() {
         "check" => check(&args),
         "sim" => sim(&args),
+        "test" => test(&args),
         "run" => run_cmd(&args),
         "replay" => replay(&args),
         "mir" => mir(&args),
@@ -735,6 +739,69 @@ fn sim(args: &Args) -> bool {
         }
     }
     println!("{path}: {} nach {ticks} Ticks", result.verdict.name());
+    ok
+}
+
+/// `takt test`: jedes Szenario als eigener Sim-Lauf (13.6); Verdikte je
+/// Szenario, Coverage als Vereinigung (13.2), und jeder irreversible Output
+/// muss von einem Szenario abgedeckt sein (12.7).
+fn test(args: &Args) -> bool {
+    let Some(path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let Some(program) = compile_file(path, args) else { return false };
+    let ticks = match args.value("--ticks").map(str::parse::<u64>) {
+        Some(Ok(n)) => n,
+        Some(Err(e)) => {
+            eprintln!("--ticks: {e}");
+            return false;
+        }
+        None => 100_000,
+    };
+    let scenarios: Vec<String> = program
+        .machines
+        .iter()
+        .filter(|m| m.kind == takt_mir::machine::MachineKind::Scenario)
+        .map(|m| m.name.clone())
+        .filter(|n| args.value("--scenario").is_none_or(|s| s == n))
+        .collect();
+    if scenarios.is_empty() {
+        eprintln!("{path}: kein Szenario (13.6)");
+        return false;
+    }
+    let universe = takt_interp::coverage::universe(&program);
+    let mut coverage = takt_interp::Coverage::default();
+    let mut ok = true;
+    for name in &scenarios {
+        let options =
+            RunOptions { ticks, profile: profile_of(args), scenario: Some(name.clone()), ..Default::default() };
+        let result = match takt_interp::run(&program, &Trace::default(), &options) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("{path}: {name}: {e:?}");
+                return false;
+            }
+        };
+        let last = result.trace.lines.iter().map(|l| l.tick).max().unwrap_or(0);
+        println!("{name}: {} nach {last} Ticks ({})", result.verdict.name(), result.ended.name());
+        ok &= result.verdict != Verdict::Fail;
+        coverage.merge(&result.coverage);
+    }
+    println!("Coverage: {}", coverage.summary(universe));
+    for c in program.channels.iter().filter(|c| c.attrs.irreversible) {
+        let covered = coverage.hits.keys().any(|(k, _, n)| *k == takt_interp::CoverKind::Irreversible && *n == c.name);
+        if !covered {
+            println!("FAIL: irreversibler Output `{}` von keinem Szenario abgedeckt (12.7)", c.name);
+            ok = false;
+        }
+    }
+    if let Some(out) = args.value("--coverage") {
+        if let Err(e) = std::fs::write(out, coverage.render()) {
+            eprintln!("{out}: {e}");
+            return false;
+        }
+    }
     ok
 }
 

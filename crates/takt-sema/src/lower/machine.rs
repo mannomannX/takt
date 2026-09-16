@@ -898,7 +898,6 @@ impl Lowerer<'_> {
             body: decl.body.clone(),
             span: decl.span,
         };
-        self.stage(decl.span, "Szenarien", Stage::V1_1);
         self.lower_machine(&machine, id, MachineKind::Scenario, &HashMap::new(), None);
     }
 

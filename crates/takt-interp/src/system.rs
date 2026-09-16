@@ -353,6 +353,10 @@ impl Outer for MachineEnv<'_, '_> {
         m.vars.get(v.index()).map(|d| d.ty).ok_or_else(|| Trap::Bug(format!("Variable {} fehlt", v.0)))
     }
 
+    fn cover(&mut self, kind: crate::env::CoverKind, name: String) {
+        self.out.push(Observation::Cover { kind, name });
+    }
+
     fn observe(&mut self, o: Observation) -> EvalResult<()> {
         self.out.push(o);
         Ok(())
@@ -582,8 +586,9 @@ impl<'p> Sim<'p> {
         Some(out)
     }
 
-    /// Neuer Lauf: Outputs auf `safe`, Parameter aus Defaults und Profil.
-    pub fn new(program: &'p Program, profile: Option<&str>) -> Result<Sim<'p>, Trap> {
+    /// Neuer Lauf: Outputs auf `safe`, Parameter aus Defaults und Profil;
+    /// `scenario` waehlt das Szenario, das mitlaeuft (13.6).
+    pub fn new(program: &'p Program, profile: Option<&str>, scenario: Option<MachineId>) -> Result<Sim<'p>, Trap> {
         let loaded = Loaded::load(program).map_err(|d| Trap::Bug(format!("{d}")))?;
         let params = eval_params(&loaded, profile)?;
         let outputs = eval_safe_outputs(&loaded, &params)?;
@@ -591,7 +596,8 @@ impl<'p> Sim<'p> {
         let states = program.machines.iter().map(MachineState::new).collect();
         // 7.2: topologisch nach `follows`, sonst Prioritaet; ein Zyklus ist
         // ein Fehler der Pruefung 33 und kommt hier nicht an.
-        let order = schedule::order(program).unwrap_or_else(|_| runnable(program));
+        let order =
+            schedule::order_with(program, scenario).unwrap_or_else(|_| schedule::runnable_with(program, scenario));
         Ok(Sim { loaded, states, image, tick: 0, order, observations: Vec::new(), nvm: Nvm::new() })
     }
 

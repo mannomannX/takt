@@ -8,7 +8,7 @@ use takt_mir::machine::{FaultKind, Target};
 use takt_mir::stmt::*;
 use takt_mir::types::Type;
 
-use crate::env::Observation;
+use crate::env::{CoverKind, Observation};
 use crate::eval::Ctx;
 use crate::format::render;
 use crate::loaded::Loaded;
@@ -55,10 +55,23 @@ impl Ctx<'_, '_> {
             StmtKind::Assign { target, value } => {
                 let v = self.eval(value)?;
                 self.assign(target, v, span)?;
+                // 12.7: ein irreversibler Output zaehlt fuer die Abdeckung durch Szenarien.
+                if let Place::Output(c) = target {
+                    let channel = &self.loaded.program.channels[c.index()];
+                    if channel.attrs.irreversible {
+                        let name = channel.name.clone();
+                        self.outer.cover(CoverKind::Irreversible, name);
+                    }
+                }
                 Ok(Out::Normal)
             }
             StmtKind::Check { cond, message, confirm, target, kind, .. } => {
                 let ok = self.eval_bool(cond)?;
+                let site = format!("{} @{}", if *kind == CheckKind::Check { "check" } else { "expect" }, span.start);
+                self.outer.cover(CoverKind::Check, site.clone());
+                if !ok {
+                    self.outer.cover(CoverKind::CheckFailed, site);
+                }
                 let fault_kind = match kind {
                     CheckKind::Check => FaultKind::CheckFailed,
                     CheckKind::Expect => FaultKind::Expect,

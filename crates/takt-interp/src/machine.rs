@@ -10,7 +10,7 @@ use takt_mir::machine::*;
 use takt_mir::stmt::Block;
 use takt_mir::*;
 
-use crate::env::{MachineEnv, Observation};
+use crate::env::{CoverKind, MachineEnv, Observation};
 use crate::exec::{Mode, Out};
 use crate::loaded::Loaded;
 use crate::stream::Element;
@@ -272,6 +272,9 @@ fn take_transition(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64)
                 Out::Normal => {}
                 other => return Ok(other),
             }
+            let name =
+                format!("{}->{} @{}", m.states[state.index()].name, target_name(loaded, env, t.target), t.span.start);
+            env.out.push(Observation::Cover { kind: CoverKind::Transition, name });
             return Ok(Out::Goto(t.target));
         }
     }
@@ -292,6 +295,8 @@ fn faulted_transition(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u
                 Out::Normal => {}
                 other => return Ok(other),
             }
+            let name = format!("FAULTED->{} @{}", target_name(loaded, env, t.target), t.span.start);
+            env.out.push(Observation::Cover { kind: CoverKind::Transition, name });
             return Ok(Out::Goto(t.target));
         }
     }
@@ -456,6 +461,7 @@ pub fn dispatch(
                     *env.state.vars.get_mut(var.index()).ok_or_else(|| Trap::Bug("Bindung fehlt".into()))? = value;
                 }
                 env.mark_examined(loaded, stream, element.seq);
+                env.out.push(Observation::Cover { kind: CoverKind::Handler, name: format!("on @{}", h.span.start) });
                 let body = h.body.clone();
                 let mut ctx = env.ctx(loaded, tick);
                 let out = ctx.exec_block(&body, Mode::Run)?;
@@ -625,6 +631,8 @@ pub fn switch(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, target: Target,
     let entered: Vec<StateId> = new[common..].to_vec();
     for s in &entered {
         env.enter_state(loaded, *s, tick)?;
+        let name = env.machine(loaded).states[s.index()].name.clone();
+        env.out.push(Observation::Cover { kind: CoverKind::State, name });
     }
     // (4) enter-Bloecke aussen nach innen
     for s in &entered {

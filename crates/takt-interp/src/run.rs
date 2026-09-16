@@ -8,6 +8,7 @@ use takt_mir::program::{Direction, Overflow, Program};
 use takt_mir::types::Type;
 use takt_mir::{ChannelId, MachineId, VarId};
 
+use crate::coverage::Coverage;
 use crate::env::Observation;
 use crate::nvm::Nvm;
 use crate::stream::Delivery;
@@ -50,6 +51,9 @@ pub struct RunOptions {
     /// Inhalt des nichtfluechtigen Speichers beim Start (5.9); leer heisst
     /// erster Start, alle `persist`-Variablen behalten ihren Default.
     pub nvm: Nvm,
+    /// Das Szenario, das mitlaeuft (13.6); der Lauf endet, sobald es seinen
+    /// letzten Zustand erreicht hat.
+    pub scenario: Option<String>,
 }
 
 /// Ergebnis eines Laufs.
@@ -61,6 +65,8 @@ pub struct RunResult {
     pub verdict: Verdict,
     /// Warum der Lauf endete (12.7).
     pub ended: Ended,
+    /// Coverage des Laufs (13.2).
+    pub coverage: Coverage,
 }
 
 /// Warum ein Lauf endete (12.7).
@@ -76,6 +82,8 @@ pub enum Ended {
     DeepSleep,
     /// `boot_jump = <slot>`: Sprung in einen anderen Slot.
     BootJump,
+    /// Das Szenario hat seinen letzten Zustand erreicht (13.6).
+    Scenario,
 }
 
 impl Ended {
@@ -86,27 +94,35 @@ impl Ended {
             Ended::Restart => "restart",
             Ended::DeepSleep => "deep_sleep",
             Ended::BootJump => "boot_jump",
+            Ended::Scenario => "scenario",
         }
     }
 }
 
 /// Fuehrt ein Programm mit einem Stimulus aus.
 pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<RunResult, Trap> {
-    let mut sim = Sim::new(program, options.profile.as_deref())?;
+    let scenario = match &options.scenario {
+        Some(name) => {
+            Some(scenario_by_name(program, name).ok_or_else(|| Trap::Bug(format!("Szenario `{name}` gibt es nicht")))?)
+        }
+        None => None,
+    };
+    let mut sim = Sim::new(program, options.profile.as_deref(), scenario)?;
     sim.nvm = options.nvm.clone();
     // Satz 9.4.1: jede lineare Erweiterung der `follows`-Kanten liefert
     // denselben Trace (7.2).
     if let Some(seed) = options.order_seed {
-        sim.order = takt_mir::analysis::schedule::linear_extension(program, seed);
+        sim.order = takt_mir::analysis::schedule::linear_extension(program, seed, scenario);
     }
     let mut writer = Writer::new(program);
     let mut verdict = Verdict::Inconclusive;
     let mut fail = false;
+    let mut coverage = Coverage::default();
 
     // Tick 0: Stimulus, dann Anfangszustand und Anfangsausgaben (9.4)
     apply_stimulus(&mut sim, stimulus, 0)?;
     sim.init()?;
-    collect(&mut writer, &sim, 0, &mut verdict, &mut fail);
+    collect(&mut writer, &sim, 0, &mut verdict, &mut fail, &mut coverage);
     writer.initial(&sim);
 
     // Auch der Anfangszustand kann das Kommando setzen (12.7).
@@ -124,7 +140,7 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
         sim.age();
         apply_stimulus(&mut sim, stimulus, tick)?;
         sim.step()?;
-        collect(&mut writer, &sim, tick, &mut verdict, &mut fail);
+        collect(&mut writer, &sim, tick, &mut verdict, &mut fail, &mut coverage);
         writer.changes(&sim, tick);
         last = tick;
         // 12.7: nach dem Commit, wenn alle Outputs stehen.
@@ -138,6 +154,13 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
             writer.changes(&sim, tick);
             break;
         }
+        // 13.6: Der Lauf endet mit dem Szenario — in einem Zustand ohne
+        // Ausgang oder in `FAULTED`.
+        if scenario.is_some_and(|s| scenario_done(&sim, s)) {
+            ended = Ended::Scenario;
+            writer.lines.push(TraceLine { tick, kind: LineKind::End { reason: ended.name().to_string() } });
+            break;
+        }
     }
     let final_verdict = if fail { Verdict::Fail } else { verdict };
     let at = if ended == Ended::Ticks { options.ticks } else { last };
@@ -148,7 +171,26 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
         }
     }
     writer.lines.push(TraceLine { tick: at, kind: LineKind::Final { verdict: final_verdict.name().to_string() } });
-    Ok(RunResult { trace: Trace { lines: writer.lines }, verdict: final_verdict, ended })
+    Ok(RunResult { trace: Trace { lines: writer.lines }, verdict: final_verdict, ended, coverage })
+}
+
+/// Das Szenario mit diesem Namen (13.6).
+pub fn scenario_by_name(p: &Program, name: &str) -> Option<MachineId> {
+    p.machines
+        .iter()
+        .position(|m| m.kind == takt_mir::machine::MachineKind::Scenario && m.name == name)
+        .map(|i| MachineId(i as u32))
+}
+
+/// Hat das Szenario seinen letzten Zustand erreicht: `FAULTED` oder ein
+/// Blatt, aus dem keine Transition der Kette mehr fuehrt (13.6)?
+fn scenario_done(sim: &Sim<'_>, s: MachineId) -> bool {
+    let state = &sim.states[s.index()];
+    if state.faulted {
+        return true;
+    }
+    let m = &sim.loaded.program.machines[s.index()];
+    !state.conf.is_empty() && state.conf.iter().all(|st| m.states[st.index()].transitions.is_empty())
 }
 
 /// Beendet ein System-Channel den Lauf (12.7)?
@@ -256,7 +298,14 @@ fn channel_by_name(p: &Program, name: &str) -> Option<ChannelId> {
 }
 
 /// Sammelt die Beobachtungen eines Ticks in kanonischer Ordnung (T5).
-fn collect(writer: &mut Writer, sim: &Sim<'_>, tick: u64, verdict: &mut Verdict, fail: &mut bool) {
+fn collect(
+    writer: &mut Writer,
+    sim: &Sim<'_>,
+    tick: u64,
+    verdict: &mut Verdict,
+    fail: &mut bool,
+    coverage: &mut Coverage,
+) {
     let program = sim.loaded.program;
     let fault_is_fail = program.config.fault_is_fail;
     let mut by_machine: Vec<(MachineId, &Observation)> = sim.observations.iter().map(|(m, o)| (*m, o)).collect();
@@ -264,6 +313,10 @@ fn collect(writer: &mut Writer, sim: &Sim<'_>, tick: u64, verdict: &mut Verdict,
     for (id, obs) in by_machine {
         let machine = program.machines[id.index()].name.clone();
         let kind = match obs {
+            Observation::Cover { kind, name } => {
+                coverage.hit(*kind, &machine, name);
+                continue;
+            }
             Observation::Log(text) => LineKind::Log { machine, text: text.clone() },
             Observation::Alert { span, index, active, message, invalid } => {
                 if !writer.alert_edge(id, *span, index, *active) {

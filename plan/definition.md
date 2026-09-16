@@ -2054,7 +2054,7 @@ scenario "erase interrupted at sector 3" every 1 ms:
             verify brownout_test.result == RECOVERED, "expected recovery"
             verdict pass
 ```
-`takt test` führt jedes Szenario als eigenen Sim-Lauf aus, sammelt Verdikte und Coverage (13.2: Zustände, Transitionen, Checks, Handler).
+`takt test` führt jedes Szenario als eigenen Sim-Lauf aus, sammelt Verdikte und Coverage (13.2: Zustände, Transitionen, Checks, Handler). Ein Lauf endet, sobald das Szenario einen Zustand ohne Ausgang oder `FAULTED` erreicht hat, sonst mit der Tickgrenze des Aufrufs; ohne Aussage ist er `INCONCLUSIVE` (13.5). Szenarien schreiben nur `sim`-Outputs, die kein Modell stellt (Prüfung 26); zwei Szenarien dürfen denselben Output stellen, weil sie nie zusammen laufen.
 
 ### 13.7 Kampagnen (v1.1)
 ```

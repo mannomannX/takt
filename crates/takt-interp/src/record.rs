@@ -71,6 +71,8 @@ pub struct Header {
     /// sichtbar bleibt". Bei der kuratierten Menge ist die Liste kurz;
     /// bei Projekt-Natives (v1.1) ist sie der Punkt.
     pub natives: Vec<String>,
+    /// Irreversible Outputs (12.7): der Lauf-Header nennt sie alle.
+    pub irreversible: Vec<String>,
 }
 
 impl Header {
@@ -91,6 +93,7 @@ impl Header {
             target: p.config.target.clone(),
             runtime: Vec::new(),
             natives: p.natives.iter().map(|n| n.name.clone()).collect(),
+            irreversible: p.channels.iter().filter(|c| c.attrs.irreversible).map(|c| c.name.clone()).collect(),
         }
     }
 
@@ -121,6 +124,9 @@ impl Header {
         for n in &self.natives {
             let _ = writeln!(out, "#! native {n}");
         }
+        for o in &self.irreversible {
+            let _ = writeln!(out, "#! irreversibel {o}");
+        }
         out
     }
 
@@ -137,6 +143,7 @@ impl Header {
             params: Vec::new(),
             target: None,
             natives: Vec::new(),
+            irreversible: Vec::new(),
         };
         let mut seen = false;
         for line in text.lines() {
@@ -155,6 +162,7 @@ impl Header {
                 "ticks" => h.ticks = value.parse().unwrap_or(0),
                 "profil" => h.profile = Some(value.to_string()),
                 "target" => h.target = Some(value.to_string()),
+                "irreversibel" => h.irreversible.push(value.to_string()),
                 "param" => h.params.push((value.to_string(), w.collect::<Vec<_>>().join(" "))),
                 "runtime" => {
                     let rest: Vec<&str> = w.collect();

@@ -16,6 +16,7 @@
 
 pub mod arith;
 pub mod call;
+pub mod coverage;
 pub mod env;
 pub mod eval;
 pub mod exec;
@@ -35,7 +36,8 @@ pub mod validate;
 pub mod value;
 pub mod wire;
 
-pub use env::{ConstEnv, MachineEnv, Observation, Outer};
+pub use coverage::Coverage;
+pub use env::{ConstEnv, CoverKind, MachineEnv, Observation, Outer};
 pub use eval::Ctx;
 pub use exec::{Mode, Out};
 pub use image::Image;

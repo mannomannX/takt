@@ -79,6 +79,46 @@ pub enum Observation {
         /// Name des Signals.
         name: String,
     },
+    /// Coverage (13.2): ein Zustand betreten, eine Transition genommen, ein
+    /// `check` ausgewertet, ein Handler gefeuert, ein irreversibler Output
+    /// geschrieben (12.7). Kein Trace-Eintrag, sondern ein Zaehler.
+    Cover {
+        /// Art.
+        kind: CoverKind,
+        /// Schluessel: Zustandspfad, Transition, Stelle, Output.
+        name: String,
+    },
+}
+
+/// Art eines Coverage-Treffers (13.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CoverKind {
+    /// Ein Zustand wurde betreten.
+    State,
+    /// Eine Transition wurde genommen.
+    Transition,
+    /// Ein `check` wurde ausgewertet.
+    Check,
+    /// Ein `check` war verletzt.
+    CheckFailed,
+    /// Ein Handler hat gefeuert.
+    Handler,
+    /// Ein irreversibler Output wurde geschrieben (12.7).
+    Irreversible,
+}
+
+impl CoverKind {
+    /// Name in Bericht und Datei.
+    pub fn name(self) -> &'static str {
+        match self {
+            CoverKind::State => "state",
+            CoverKind::Transition => "transition",
+            CoverKind::Check => "check",
+            CoverKind::CheckFailed => "check_failed",
+            CoverKind::Handler => "handler",
+            CoverKind::Irreversible => "irreversible",
+        }
+    }
 }
 
 /// Umgebung einer Maschine (9.1) aus Sicht von `eval` und `exec`.
@@ -157,6 +197,8 @@ pub trait Outer {
     fn observe(&mut self, _o: Observation) -> EvalResult<()> {
         bug("Beobachtung ausserhalb einer Maschine")
     }
+    /// Coverage-Treffer (13.2); ausserhalb einer Maschine zaehlt nichts.
+    fn cover(&mut self, _kind: CoverKind, _name: String) {}
     /// `abort`: Vormerkung fuer alle anderen Maschinen (5.4).
     fn abort(&mut self) -> EvalResult<()> {
         bug("abort ausserhalb einer Maschine")

@@ -1,0 +1,34 @@
+(system
+  (language 1)
+  (tick 1ms))
+(input p :float[bar] in 0..100[bar] @hw("daq/p") max_age=10ms)
+(output valve :bool @hw("o/valve") safe=false)
+(output p_sim :float[bar] @sim("daq/p") safe=1[bar])
+(machine dut
+  (initial CLOSED)
+  (state CLOSED
+    (loop
+      (check (< p 50[bar]) "overpressure"))
+    (when (> p 5[bar]) -> OPEN))
+  (state OPEN
+    (enter
+      (= valve true))
+    (when (< p 2[bar]) -> CLOSED)))
+(scenario "pressure rises" every=1ms
+  (initial RUN)
+  (state RUN
+    (sequence
+      (= p_sim 1[bar])
+      (wait 3ms)
+      (= p_sim 10[bar])
+      (until (== (.state dut) OPEN) timeout=10ms)
+      (verify valve "valve should open")
+      (verdict pass "opened"))))
+(scenario "stays closed" every=1ms
+  (initial RUN)
+  (state RUN
+    (sequence
+      (= p_sim 1[bar])
+      (wait 5ms)
+      (expect (== (.state dut) CLOSED) "must stay closed")
+      (verdict pass "closed"))))

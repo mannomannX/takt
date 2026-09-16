@@ -87,6 +87,9 @@ pub const SC60: &str = "SC-60";
 pub const SC63: &str = "SC-63";
 /// `follows` (7.2): Kanten azyklisch; zwei Warnungen (FB-18, FB-38).
 pub const SC33: &str = "SC-33";
+/// Szenarien schreiben nur `sim`-Outputs; Single-Writer gegenueber
+/// Modellmaschinen (13.6).
+pub const SC26: &str = "SC-26";
 /// Lints zu Matrizen und Stroemen (3.11, 8.6).
 pub const SC42: &str = "SC-42";
 /// Ungenutzte Channels.
@@ -106,6 +109,7 @@ impl Lowerer<'_> {
         self.check_irreversible();
         self.performance_lints();
         self.check_writers();
+        self.check_scenarios();
         self.check_fault_forest();
         self.check_follows();
         self.check_latency();
@@ -168,7 +172,8 @@ impl Lowerer<'_> {
             }
             let mut seen = HashSet::new();
             for (b, name, span) in &reads {
-                if *b == id || a.follows.contains(b) {
+                // 13.6: ein Szenario liest mit Unit-Delay, das ist sein Vertrag.
+                if *b == id || a.follows.contains(b) || a.kind == MachineKind::Scenario {
                     continue;
                 }
                 let bm = &p.machines[b.index()];
@@ -939,19 +944,63 @@ impl Lowerer<'_> {
             });
         }
         let mut diags = Vec::new();
+        let is_scenario = |m: MachineId| self.program.machines[m.index()].kind == MachineKind::Scenario;
         for (c, list) in &writers {
-            if list.len() > 1 {
+            // 13.6: Szenarien laufen je einzeln; zwei Szenarien duerfen
+            // denselben `sim`-Output stellen, ein Szenario und ein Modell nicht.
+            let scenarios = list.iter().filter(|(m, _)| is_scenario(*m)).count();
+            if list.len() > 1 && scenarios < list.len() {
+                let (second, first) = if scenarios > 0 && !is_scenario(list[1].0) && is_scenario(list[0].0) {
+                    (&list[0], &list[1])
+                } else {
+                    (&list[1], &list[0])
+                };
                 let name = self.program.channels[c.index()].name.clone();
-                let first = &self.program.machines[list[0].0.index()].name;
-                let mut d = Diagnostic::error(SC7, list[1].1, format!("Output `{name}` hat mehrere Schreiber"))
-                    .with_note(list[0].1, format!("auch in `{first}` geschrieben"))
-                    .with_suggestion("jeder Output gehoert genau einer Maschine (1.4)");
-                d.span = list[1].1;
+                let code = if scenarios > 0 { SC26 } else { SC7 };
+                let other = &self.program.machines[first.0.index()].name;
+                let mut d = Diagnostic::error(code, second.1, format!("Output `{name}` hat mehrere Schreiber"))
+                    .with_note(first.1, format!("auch in `{other}` geschrieben"))
+                    .with_suggestion("jeder Output gehoert genau einer Maschine (1.4); ein Szenario stellt nur, was kein Modell stellt (13.6)");
+                d.span = second.1;
                 diags.push(d);
             }
         }
         for (c, list) in writers {
-            self.program.channels[c.index()].owner = Some(list[0].0);
+            // Der Besitzer ist die Maschine, nicht das Szenario — es laeuft
+            // nur in seinem eigenen Lauf.
+            let owner = list.iter().find(|(m, _)| !is_scenario(*m)).unwrap_or(&list[0]).0;
+            self.program.channels[c.index()].owner = Some(owner);
+        }
+        self.diags.extend(diags);
+    }
+
+    /// Pruefung 26 (13.6): ein Szenario schreibt nur `sim`-Outputs.
+    fn check_scenarios(&mut self) {
+        let mut diags = Vec::new();
+        for m in &self.program.machines {
+            if m.kind != MachineKind::Scenario {
+                continue;
+            }
+            for_each_stmt(m, &mut |s| {
+                let target = match &s.kind {
+                    StmtKind::Assign { target, .. } => output_of(target),
+                    StmtKind::Send { stream: StreamRef::Channel(c), .. } => Some(*c),
+                    StmtKind::MethodCall { target: Some(t), .. } => output_of(t),
+                    _ => None,
+                };
+                let Some(c) = target else { return };
+                let channel = &self.program.channels[c.index()];
+                if !matches!(channel.binding, Binding::Sim(_)) {
+                    diags.push(
+                        Diagnostic::error(
+                            SC26,
+                            s.span,
+                            format!("Szenario `{}` schreibt `{}`, keinen `sim`-Output", m.name, channel.name),
+                        )
+                        .with_suggestion("ein Szenario stellt die Umgebung, nicht die Anlage (13.6)".to_string()),
+                    );
+                }
+            });
         }
         self.diags.extend(diags);
     }

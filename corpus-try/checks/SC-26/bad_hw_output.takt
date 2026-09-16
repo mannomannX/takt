@@ -1,0 +1,24 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 26 (13.6): ein Szenario schreibt nur `sim`-Outputs. `valve` ist
+# ein `hw`-Output der Anlage.
+
+input  p     : float[bar] in 0..100 bar @ hw("daq/p")   with max_age = 10 ms
+output valve : bool                     @ hw("o/valve") with safe = false
+output p_sim : float[bar]               @ sim("daq/p")  with safe = 1 bar
+
+machine dut:
+    initial RUN
+    state RUN:
+        loop:
+            valve = p > 5 bar
+
+scenario "opens the valve itself" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            valve = true  # ~ SC-26
+            p_sim = 10 bar
+            verdict pass "done"
