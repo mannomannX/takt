@@ -141,3 +141,13 @@ Innerhalb eines Ticks:
 Die Ordnung hängt nicht davon ab, in welcher Reihenfolge die Maschinen
 geschritten sind; damit prüft ein Trace-Vergleich die Ordnungsunabhängigkeit
 aus Satz 9.4.1 unmittelbar.
+
+## T6 Hashkette
+
+Über dem kanonischen Trace liegt eine Hashkette (Referenz 12.5): `H` ist
+SHA-256, `h_0 = H("takt-kette 1" LF Logik-Hash LF)`, und für jeden Tick `k`,
+der Zeilen hat, in aufsteigender Folge `h_k = H(h_{k-1} ‖ Zeile_1 LF ‖ … ‖
+Zeile_n LF)` mit den Zeilen des Ticks in der Ordnung von T5. Das Kettenende
+`h_n` steht als Hex im Kopf der Aufzeichnung (`#! kette h_n`);
+`takt verify-trace TRACE --record R` rechnet es nach. Ticks ohne Zeilen
+tragen nichts bei — ihre Nummer steht in den Zeilen der anderen.

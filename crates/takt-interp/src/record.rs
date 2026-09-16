@@ -79,6 +79,8 @@ pub struct Header {
     /// Die Scheibe einer Maschine (12.5): nur sie laeuft, die Zeilen
     /// tragen, was sie liest.
     pub machine: Option<String>,
+    /// Kettenende der Hashkette ueber den Trace des Laufs (12.5, A3).
+    pub chain: Option<String>,
 }
 
 impl Header {
@@ -97,6 +99,7 @@ impl Header {
             natives: p.natives.iter().map(|n| n.name.clone()).collect(),
             irreversible: p.channels.iter().filter(|c| c.attrs.irreversible).map(|c| c.name.clone()).collect(),
             machine: None,
+            chain: None,
         }
     }
 
@@ -133,6 +136,9 @@ impl Header {
         if let Some(m) = &self.machine {
             let _ = writeln!(out, "#! maschine {m}");
         }
+        if let Some(c) = &self.chain {
+            let _ = writeln!(out, "#! kette {c}");
+        }
         out
     }
 
@@ -157,6 +163,7 @@ impl Header {
             natives: Vec::new(),
             irreversible: Vec::new(),
             machine: None,
+            chain: None,
         };
         let mut seen = false;
         for line in text.lines() {
@@ -177,6 +184,7 @@ impl Header {
                 "target" => h.target = Some(value.to_string()),
                 "irreversibel" => h.irreversible.push(value.to_string()),
                 "maschine" => h.machine = Some(value.to_string()),
+                "kette" => h.chain = Some(value.to_string()),
                 "param" => h.params.push((value.to_string(), w.collect::<Vec<_>>().join(" "))),
                 "runtime" => {
                     let rest: Vec<&str> = w.collect();
@@ -227,6 +235,28 @@ impl Recording {
         }
         let inputs = Trace::parse(text)?;
         Ok(Recording { header, inputs })
+    }
+
+    /// Versiegelt die Aufzeichnung mit dem Kettenende des Traces (A3).
+    pub fn seal(mut self, trace: &Trace) -> Recording {
+        self.header.chain = Some(chain(trace, &self.header.logic));
+        self
+    }
+
+    /// Rechnet die Hashkette eines Traces nach und vergleicht sie mit dem
+    /// Kettenende im Kopf (12.5, A3); liefert das Kettenende.
+    pub fn verify(&self, trace: &Trace) -> Result<String, String> {
+        let Some(want) = &self.header.chain else {
+            return Err("die Aufzeichnung traegt kein Kettenende (`#! kette`)".to_string());
+        };
+        let have = chain(trace, &self.header.logic);
+        if have != *want {
+            return Err(format!(
+                "die Hashkette weicht ab:\n  aufgezeichnet {want}\n  gerechnet     {have}\n  \
+                 (12.5: der Trace ist nicht der des aufgezeichneten Laufs, oder er wurde veraendert)"
+            ));
+        }
+        Ok(have)
     }
 
     /// Prueft, ob diese Aufzeichnung zu einem Programm gehoert (12.5).
@@ -313,4 +343,28 @@ pub fn machine_lines(p: &Program, trace: &Trace, m: MachineId) -> Trace {
 
 fn is_stream(p: &Program, ty: takt_mir::TypeId) -> bool {
     matches!(p.types.list.get(ty.index()), Some(takt_mir::types::Type::Stream(_)))
+}
+
+/// Die Hashkette eines Traces (12.5, A3; `grammar/trace.md` T6):
+/// `h_0 = H("takt-kette 1\n" ‖ Logik-Hash ‖ "\n")`, je Tick k mit Zeilen
+/// `h_k = H(h_{k-1} ‖ Zeilen des Ticks in kanonischer Ordnung, je mit
+/// Zeilenende)`; das Ergebnis ist das Kettenende als Hex.
+///
+/// Sie beruehrt die Semantik nicht: Wer dasselbe Binaer mit denselben
+/// Eingaben laufen laesst, bekommt denselben Trace und dieselbe Kette
+/// (Satz 9.4.4). Wer sie signiert und womit, liegt ausserhalb.
+pub fn chain(trace: &Trace, logic: &str) -> String {
+    let mut h = takt_native::sha256::sha256(format!("takt-kette 1\n{logic}\n").as_bytes());
+    let mut ticks: Vec<u64> = trace.lines.iter().map(|l| l.tick).collect();
+    ticks.sort_unstable();
+    ticks.dedup();
+    for tick in ticks {
+        let mut data = h.to_vec();
+        for line in trace.at(tick) {
+            data.extend_from_slice(crate::trace::render_line(line).as_bytes());
+            data.push(b'\n');
+        }
+        h = takt_native::sha256::sha256(&data);
+    }
+    h.iter().map(|b| format!("{b:02x}")).collect()
 }

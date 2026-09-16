@@ -872,6 +872,7 @@ CLI-check,Werkzeug,11.1,takt check,,M0-M3,fertig,
 CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig,
 CLI-run,Werkzeug,11.1,takt run,,M4 (Codegen),fertig,
 CLI-replay,Werkzeug,11.1,takt replay,,M4 (Codegen),fertig,"Maschinen-Replay `--machine M [--extract]` (12.5, A2a) seit M6 Schritt 13"
+CLI-verify-trace,Werkzeug,11.1,takt verify-trace,,M6 (v1.1),fertig,"Hashkette h_k = H(h_{k-1} ‖ Zeilen des Ticks k) im Kopf der Aufzeichnung (`#! kette`), T6 in grammar/trace.md (A3)"
 CLI-test,Werkzeug,11.1,takt test,,M6 (v1.1),fertig,
 CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
 CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen,TTL-Adapter (PA9)

@@ -14,6 +14,7 @@
 //! takt run   DATEI --ticks N [--stim S.trace] [--record R.trace] [--trace OUT.trace] [--profile P]
 //! takt replay DATEI --record R.trace [--golden G.trace] [--ticks N]
 //!                   [--machine M [--extract SCHEIBE.trace]]
+//! takt verify-trace TRACE.trace --record R.trace
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
 //! takt size  DATEI… [--build sim|hw] [--profile P] [--object DATEI.o] [--target NAME]
@@ -35,7 +36,7 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|build|sim|run|replay|test|campaign|tune|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|test|campaign|tune|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -118,6 +119,7 @@ fn main() -> ExitCode {
         "tune" => tune(&args),
         "run" => run_cmd(&args),
         "replay" => replay(&args),
+        "verify-trace" => verify_trace(&args),
         "mir" => mir(&args),
         "fmt" => fmt(&args),
         "build" => build(&args),
@@ -953,7 +955,7 @@ fn campaign(args: &Args) -> bool {
         if let Some(dir) = args.value("--out") {
             let file = std::path::Path::new(dir).join(format!("{}-{:03}.trace", campaign.name, run.id));
             let header = takt_interp::record::Header::of(&program, profile.as_deref(), &result.start_params, ticks);
-            let recording = takt_interp::record::Recording { header, inputs: stimulus.clone() };
+            let recording = takt_interp::record::Recording { header, inputs: stimulus.clone() }.seal(&result.trace);
             if let Err(e) = std::fs::write(&file, recording.render()) {
                 eprintln!("{}: {e}", file.display());
                 return false;
@@ -1028,10 +1030,9 @@ fn run_cmd(args: &Args) -> bool {
         }
     };
     if let Some(out) = args.value("--record") {
-        let recording = takt_interp::record::Recording {
-            header: takt_interp::record::Header::of(&program, profile_of(args).as_deref(), &result.start_params, ticks),
-            inputs: stimulus,
-        };
+        let header =
+            takt_interp::record::Header::of(&program, profile_of(args).as_deref(), &result.start_params, ticks);
+        let recording = takt_interp::record::Recording { header, inputs: stimulus }.seal(&result.trace);
         if let Err(e) = std::fs::write(out, recording.render()) {
             eprintln!("{out}: {e}");
             return false;
@@ -1174,6 +1175,43 @@ fn replay(args: &Args) -> bool {
         None => print!("{text}"),
     }
     result.verdict != Verdict::Fail
+}
+
+/// `takt verify-trace`: rechnet die Hashkette eines Traces nach (12.5, A3).
+fn verify_trace(args: &Args) -> bool {
+    let Some(trace_path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let Some(record_path) = args.value("--record") else {
+        eprintln!("--record fehlt: `takt verify-trace TRACE --record AUFZEICHNUNG`");
+        return false;
+    };
+    let (Some(record_text), Some(trace_text)) = (read(record_path), read(trace_path)) else { return false };
+    let recording = match takt_interp::record::Recording::parse(&record_text) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{record_path}: {e}");
+            return false;
+        }
+    };
+    let trace = match Trace::parse(&trace_text) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{trace_path}: {e}");
+            return false;
+        }
+    };
+    match recording.verify(&trace) {
+        Ok(h) => {
+            println!("{trace_path}: Kette stimmt, {h}");
+            true
+        }
+        Err(e) => {
+            eprintln!("{trace_path}: {e}");
+            false
+        }
+    }
 }
 
 /// `--ticks` lesen; die Meldung nennt, was fehlt.

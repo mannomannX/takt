@@ -324,7 +324,7 @@ fn parse_sample(s: &str) -> Result<SampleText, String> {
     Ok(SampleText { value, quality, reason, age })
 }
 
-fn render_line(line: &TraceLine) -> String {
+pub(crate) fn render_line(line: &TraceLine) -> String {
     let t = line.tick;
     match &line.kind {
         LineKind::Input { channel, sample } => {
