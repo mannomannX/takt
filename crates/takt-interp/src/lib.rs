@@ -38,7 +38,7 @@ pub mod wire;
 
 pub use coverage::Coverage;
 pub use env::{ConstEnv, CoverKind, MachineEnv, Observation, Outer};
-pub use eval::Ctx;
+pub use eval::{Ctx, in_range};
 pub use exec::{Mode, Out};
 pub use image::Image;
 pub use loaded::Loaded;

@@ -265,6 +265,19 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
         let condition = ticks_of.iter().map(|t| format!("g_tick == {t}")).collect::<Vec<_>>().join(" || ");
         let _ = writeln!(s, "        image[{slot}] = ({condition}) ? 1 : 0; /* {name} */");
     }
+    // 8.4: Ein Tunable gilt ab seiner Tick-Grenze; der Rahmen schreibt den
+    // Parametervektor vor dem Schritt, wie `apply_stimulus` im Interpreter.
+    for stim in inputs {
+        let Stimulus::Tune { tick, name, text } = stim else { continue };
+        let Some((i, slot)) = layout.parameters.iter().enumerate().find(|(_, s)| s.name == *name) else { continue };
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let Some(value) = tune_literal(p, i, text) else { continue };
+        let _ = writeln!(
+            s,
+            "        if (g_tick == {tick}) *({ct} *)(params + {}) = {value}; /* tune {name} */",
+            slot.offset
+        );
+    }
     // 7.2: Eine Maschine laeuft in jedem `period`-ten Tick. Ohne die
     // Bedingung liefe ein `every 50 ms`-Modell bei 10 ms Tick fuenfmal
     // zu oft, und sein Wert stuende im Trace an der falschen Stelle.
@@ -576,6 +589,36 @@ pub(crate) fn psi_commit(s: &mut String, p: &Program, driven: &[&takt_mir::machi
 
 pub(crate) fn param_literal(p: &Program, index: usize) -> Option<String> {
     literal(p, &p.params.get(index)?.default)
+}
+
+/// Der Wert einer `tune`-Zeile als C-Text (8.4): ausserhalb der Range
+/// verworfen, wie im Interpreter.
+fn tune_literal(p: &Program, index: usize, text: &str) -> Option<String> {
+    use takt_interp::Value;
+    let param = p.params.get(index)?;
+    let v = takt_interp::trace::parse_value(text, param.ty, p).ok()?;
+    let range = match p.types.get(param.ty) {
+        takt_mir::types::Type::Int { range, .. }
+        | takt_mir::types::Type::Float { range, .. }
+        | takt_mir::types::Type::Duration { range } => *range,
+        _ => None,
+    };
+    if range.is_some_and(|r| !takt_interp::in_range(&v, &r)) {
+        return None;
+    }
+    Some(match v {
+        Value::Int(n) => n.to_string(),
+        Value::UInt(n) => n.to_string(),
+        Value::Bool(b) => u8::from(b).to_string(),
+        Value::Duration(ns) => ns.to_string(),
+        Value::F64(f) => format!("{f:?}"),
+        Value::F32(f) => format!("{f:?}f"),
+        Value::Enum { variant, .. } => {
+            let takt_mir::types::Type::Enum(e) = p.types.get(param.ty) else { return None };
+            p.enums.get(e.index())?.variants.get(variant as usize)?.discriminant.to_string()
+        }
+        _ => return None,
+    })
 }
 
 /// Ein Literal als C-Text; alles andere braeuchte den Interpreter.

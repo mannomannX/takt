@@ -31,6 +31,7 @@ Leerzeichen, außer im Rest einer Meldung.
 | `in` | Stimulus | `in <channel> <wert>` oder `in <channel> <qualität> [reason=<grund>] [age=<dauer>]` |
 | `cmd` | Stimulus | `cmd <command>` — ein Tick lang wahr (8.5) |
 | `abort` | Stimulus | `abort` — Operator-Abort für alle Maschinen (5.4) |
+| `tune` | Stimulus, Golden | `tune <name> <wert>` — ein Tunable gilt ab dieser Tick-Grenze (8.4); der Golden-Trace zeichnet jede Zeile auf, eine verworfene mit ` rejected` |
 | `out` | Golden | `out <channel> <wert>` — beim Commit, nur bei Änderung und in Tick 0 |
 | `state` | Golden | `state <maschine> <pfad>` — Blattpfad mit `.`, nur bei Änderung und in Tick 0 |
 | `pub` | Golden | `pub <maschine> <variable> <wert>` — bei Änderung |

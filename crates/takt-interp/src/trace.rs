@@ -28,6 +28,9 @@ pub enum LineKind {
     Input { channel: String, sample: SampleText },
     /// `cmd <command>`
     Command { name: String },
+    /// `tune <name> <wert>`: ein Tunable aendert sich an dieser Tick-Grenze
+    /// (8.4); ein verworfener Wert traegt ` rejected` (Golden).
+    Tune { name: String, value: String, accepted: bool },
     /// `abort`
     Abort,
     /// `out <channel> <wert>`
@@ -140,6 +143,18 @@ fn parse_line(line: &str) -> Result<TraceLine, String> {
             LineKind::Input { channel: channel.to_string(), sample: parse_sample(value)? }
         }
         "cmd" => LineKind::Command { name: nonempty(args, "`cmd <command>`")?.to_string() },
+        "tune" => {
+            let (name, value) = split_first(args);
+            let (value, accepted) = match value.strip_suffix(" rejected") {
+                Some(v) => (v, false),
+                None => (value, true),
+            };
+            LineKind::Tune {
+                name: nonempty(name, "`tune <name> <wert>`")?.to_string(),
+                value: nonempty(value, "`tune <name> <wert>`")?.to_string(),
+                accepted,
+            }
+        }
         "abort" => LineKind::Abort,
         "out" => {
             let (channel, value) = split_first(args);
@@ -334,6 +349,9 @@ fn render_line(line: &TraceLine) -> String {
         LineKind::State { machine, path } => format!("t={t} state {machine} {path}"),
         LineKind::Published { machine, var, value } => format!("t={t} pub {machine} {var} {value}"),
         LineKind::Signal { machine, name } => format!("t={t} signal {machine} {name}"),
+        LineKind::Tune { name, value, accepted } => {
+            format!("t={t} tune {name} {value}{}", if *accepted { "" } else { " rejected" })
+        }
         LineKind::Job { machine, handle } => format!("t={t} job {machine} {handle} done"),
         LineKind::Fault { machine, kind, message, target } => {
             format!("t={t} fault {machine} {kind} \"{message}\" -> {target}")

@@ -34,13 +34,22 @@ pub enum Stimulus {
         /// Der Inhalt als Text, wie ihn der Trace schreibt.
         text: String,
     },
+    /// `tune <name> <wert>` (8.4): der Parameter gilt ab diesem Tick.
+    Tune {
+        /// Tick der Grenze, ab der der Wert gilt.
+        tick: u64,
+        /// Name des Tunables.
+        name: String,
+        /// Der Wert als Text, wie ihn der Trace schreibt.
+        text: String,
+    },
 }
 
 impl Stimulus {
     /// Der Tick, an dem diese Eingabe anliegt.
     pub fn tick(&self) -> u64 {
         match self {
-            Stimulus::Command { tick, .. } | Stimulus::Element { tick, .. } => *tick,
+            Stimulus::Command { tick, .. } | Stimulus::Element { tick, .. } | Stimulus::Tune { tick, .. } => *tick,
         }
     }
 

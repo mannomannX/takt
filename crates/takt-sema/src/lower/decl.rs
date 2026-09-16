@@ -404,9 +404,6 @@ impl Lowerer<'_> {
         let Some(ty) = self.resolve_type(&decl.ty) else { return };
         let Some(default) = self.check(&decl.value, ty) else { return };
         let Some(default) = self.fold(default) else { return };
-        if decl.tunable {
-            self.stage(decl.span, "`tunable param`", Stage::V1_1);
-        }
         let (_, meta) = self.attrs(&decl.attrs, ty, None, decl.span);
         let id = ParamId(self.program.params.len() as u32);
         self.program.params.push(Param {

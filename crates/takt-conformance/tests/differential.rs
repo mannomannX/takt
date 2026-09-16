@@ -16,7 +16,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 29] = [
+const KORPUS: [&str; 30] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -48,6 +48,7 @@ const KORPUS: [&str; 29] = [
     "37_follows.takt",
     "39_sha256.takt",
     "40_jobs.takt",
+    "41_tunables.takt",
 ];
 
 /// Wie viele Ticks verglichen werden.
@@ -356,4 +357,50 @@ fn the_format_specs_produce_the_expected_text() {
     ] {
         assert!(native.contains(bytes), "{was} — fehlt:\n{native}");
     }
+}
+
+/// Tunables (8.4): Der Parametervektor aendert sich an der Tick-Grenze —
+/// beide Seiten lesen denselben Wert im selben Tick, und ein Wert
+/// ausserhalb der Range bleibt auf beiden Seiten ohne Wirkung.
+#[test]
+fn a_tunable_changes_the_parameter_vector_at_its_tick() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("41_tunables.takt");
+    let stimulus = takt_interp::Trace::parse(
+        "t=3 tune GAIN 5
+t=6 tune GAIN 200
+t=8 tune GAIN 7
+",
+    )
+    .expect("Stimulus");
+    let inputs: Vec<Stimulus> = stimulus
+        .lines
+        .iter()
+        .filter_map(|l| match &l.kind {
+            takt_interp::trace::LineKind::Tune { name, value, .. } => {
+                Some(Stimulus::Tune { tick: l.tick, name: name.clone(), text: value.clone() })
+            }
+            _ => None,
+        })
+        .collect();
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+    let native = common::run_native_with(&clang, &p, "41_tunables.takt", "m", TICKS, &inputs)
+        .unwrap_or_else(|e| panic!("41_tunables.takt: {e}"));
+    let diffs = compare(&interpreted, &native);
+    let list: Vec<String> = diffs.iter().map(|d| format!("  {d}")).collect();
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen:
+{}",
+        diffs.len(),
+        list.join(
+            "
+"
+        )
+    );
 }

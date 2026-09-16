@@ -1,0 +1,15 @@
+system:
+    language = 1
+
+# Pruefung 35 (8.4): Ein Tunable ist ein Input, keine Konstante — es kann
+# keine Kapazitaet bestimmen.
+tunable param N : int in 1..64 = 8
+
+output n : int in 0..64 @ hw("o/n") with safe = 0
+
+machine m:
+    var buf : bytes<N> = default  # ~ SC-35
+    initial RUN
+    state RUN:
+        loop:
+            n = buf.len

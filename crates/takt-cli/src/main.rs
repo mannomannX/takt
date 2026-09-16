@@ -8,6 +8,7 @@
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--profile P] [--order random:SEED]
 //! takt test  DATEI [--ticks N] [--profile P] [--scenario NAME] [--coverage OUT.csv]
+//! takt tune  DATEI --ticks N --save PROFIL [--stim S.trace] [--profile P] [--out DATEI]
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
 //! takt size  DATEI… [--build sim|hw] [--profile P] [--object DATEI.o] [--target NAME]
@@ -70,6 +71,7 @@ impl Args {
             "--object",
             "--hardware",
             "--scenario",
+            "--save",
             "--coverage",
         ];
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
@@ -105,6 +107,7 @@ fn main() -> ExitCode {
         "check" => check(&args),
         "sim" => sim(&args),
         "test" => test(&args),
+        "tune" => tune(&args),
         "run" => run_cmd(&args),
         "replay" => replay(&args),
         "mir" => mir(&args),
@@ -667,6 +670,64 @@ fn compile_file(path: &str, args: &Args) -> Option<takt_mir::Program> {
 /// `takt sim`: fuehrt ein Programm mit einem Stimulus aus, schreibt den Trace
 /// und vergleicht ihn mit einem Golden-Trace. Der Exit-Code folgt dem
 /// Lauf-Verdikt (13.5) und dem Vergleich.
+/// `takt tune DATEI --ticks N --save PROFIL [--stim S.trace] [--out DATEI]`
+/// (8.4): Der Lauf mit seinen `tune`-Zeilen, dann der zuletzt
+/// uebernommene Satz der Tunables als Profilblock — ein Werkzeug ohne
+/// eigene Semantik.
+fn tune(args: &Args) -> bool {
+    let Some(path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let Some(name) = args.value("--save") else {
+        eprintln!("--save PROFIL fehlt");
+        return false;
+    };
+    let Some(program) = compile_file(path, args) else { return false };
+    let Some(ticks) = args.value("--ticks").and_then(|t| t.parse::<u64>().ok()) else {
+        eprintln!("--ticks N fehlt");
+        return false;
+    };
+    let stimulus = match args.value("--stim") {
+        Some(p) => {
+            let Some(text) = read(p) else { return false };
+            match Trace::parse(&text) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("{p}: {e}");
+                    return false;
+                }
+            }
+        }
+        None => Trace::default(),
+    };
+    let options = RunOptions { ticks, profile: profile_of(args), ..Default::default() };
+    let result = match takt_interp::run(&program, &stimulus, &options) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{path}: {e:?}");
+            return false;
+        }
+    };
+    let mut block = format!("profile {name}:\n");
+    for (p, (pname, value)) in program.params.iter().zip(&result.params) {
+        if p.tunable {
+            block.push_str(&format!("    {pname} = {value}\n"));
+        }
+    }
+    match args.value("--out") {
+        Some(out) => {
+            if let Err(e) = std::fs::write(out, &block) {
+                eprintln!("{out}: {e}");
+                return false;
+            }
+            eprintln!("{out}: Profil `{name}` nach {ticks} Ticks geschrieben");
+        }
+        None => print!("{block}"),
+    }
+    true
+}
+
 fn sim(args: &Args) -> bool {
     let Some(path) = args.files.first() else {
         eprintln!("{USAGE}");

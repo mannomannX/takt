@@ -67,6 +67,9 @@ pub struct RunResult {
     pub ended: Ended,
     /// Coverage des Laufs (13.2).
     pub coverage: Coverage,
+    /// Die Parameter am Ende des Laufs als `(Name, Wert)` in
+    /// Literalschreibweise — der zuletzt uebernommene Satz (8.4).
+    pub params: Vec<(String, String)>,
 }
 
 /// Warum ein Lauf endete (12.7).
@@ -135,7 +138,9 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
             sim.image.job_records.push((MachineId(m as u32), slot, line.tick));
         }
     }
-    apply_stimulus(&mut sim, stimulus, 0)?;
+    let mut echo = Vec::new();
+    apply_stimulus(&mut sim, stimulus, 0, &mut echo)?;
+    writer.lines.append(&mut echo);
     sim.init()?;
     collect(&mut writer, &sim, 0, &mut verdict, &mut fail, &mut coverage);
     writer.initial(&sim);
@@ -153,7 +158,8 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
             break;
         }
         sim.age();
-        apply_stimulus(&mut sim, stimulus, tick)?;
+        apply_stimulus(&mut sim, stimulus, tick, &mut echo)?;
+        writer.lines.append(&mut echo);
         sim.step()?;
         collect(&mut writer, &sim, tick, &mut verdict, &mut fail, &mut coverage);
         writer.changes(&sim, tick);
@@ -186,7 +192,8 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
         }
     }
     writer.lines.push(TraceLine { tick: at, kind: LineKind::Final { verdict: final_verdict.name().to_string() } });
-    Ok(RunResult { trace: Trace { lines: writer.lines }, verdict: final_verdict, ended, coverage })
+    let params = final_params(&sim);
+    Ok(RunResult { trace: Trace { lines: writer.lines }, verdict: final_verdict, ended, coverage, params })
 }
 
 /// Das Szenario mit diesem Namen (13.6).
@@ -254,10 +261,39 @@ fn reboot_of(sim: &Sim<'_>) -> Option<Ended> {
 }
 
 /// Speist die Stimuluszeilen eines Ticks ein.
-fn apply_stimulus(sim: &mut Sim<'_>, stimulus: &Trace, tick: u64) -> Result<(), Trap> {
+fn apply_stimulus(sim: &mut Sim<'_>, stimulus: &Trace, tick: u64, echo: &mut Vec<TraceLine>) -> Result<(), Trap> {
     let program = sim.loaded.program;
     for line in stimulus.at(tick) {
         match &line.kind {
+            // 8.4: Ein Tunable ist ein Input mit Halte-Semantik; der Satz
+            // eines Ticks gilt vor dem Schritt. Ausserhalb der Range wird
+            // die Zeile verworfen und als solche aufgezeichnet.
+            LineKind::Tune { name, value, accepted: true } => {
+                let Some(i) = program.params.iter().position(|q| q.name == *name) else {
+                    return Err(Trap::Bug(format!("Stimulus: Parameter `{name}` gibt es nicht")));
+                };
+                let param = &program.params[i];
+                if !param.tunable {
+                    return Err(Trap::Bug(format!("Stimulus: `{name}` ist kein `tunable param` (8.4)")));
+                }
+                let v = parse_value(value, param.ty, program).map_err(Trap::Bug)?;
+                let range = match program.types.get(param.ty) {
+                    Type::Int { range, .. } | Type::Float { range, .. } | Type::Duration { range } => *range,
+                    _ => None,
+                };
+                let accepted = range.as_ref().is_none_or(|r| crate::eval::in_range(&v, r));
+                let text = value_text(&v, param.ty, program);
+                if accepted {
+                    sim.image.params[i] = v;
+                }
+                echo.push(TraceLine { tick, kind: LineKind::Tune { name: name.clone(), value: text, accepted } });
+            }
+            // Eine verworfene Zeile der Aufzeichnung bleibt verworfen und
+            // steht wieder so im Trace: Ein Golden reproduziert sich (12.5).
+            LineKind::Tune { name, value, accepted: false } => {
+                let kind = LineKind::Tune { name: name.clone(), value: value.clone(), accepted: false };
+                echo.push(TraceLine { tick, kind });
+            }
             LineKind::Input { channel, sample } => {
                 let Some(id) = channel_by_name(program, channel) else {
                     return Err(Trap::Bug(format!("Stimulus: Channel `{channel}` gibt es nicht")));
@@ -588,4 +624,10 @@ pub fn value_untyped(v: &Value) -> String {
         Value::Str(s) => format!("{s:?}"),
         other => format!("{other:?}"),
     }
+}
+
+/// Der zuletzt uebernommene Satz der Parameter (8.4), in Literalschreibweise.
+fn final_params(sim: &Sim<'_>) -> Vec<(String, String)> {
+    let program = sim.loaded.program;
+    program.params.iter().zip(&sim.image.params).map(|(p, v)| (p.name.clone(), value_text(v, p.ty, program))).collect()
 }

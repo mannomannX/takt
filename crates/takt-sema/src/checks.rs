@@ -74,6 +74,9 @@ pub const SC12: &str = "SC-12";
 /// Native Funktionen: kuratierte Menge, Signatur, `cost`/`stack`/`total`,
 /// `duration` nur an Jobs (4.5).
 pub const SC31: &str = "SC-31";
+/// `tunable param` steht nicht, wo eine Compile-Zeit-Konstante verlangt
+/// ist (8.4): Array-Groessen, Kapazitaeten, `repeat`.
+pub const SC35: &str = "SC-35";
 /// Jobs: `native job` als Ziel, hoechstens `K_j` Handles je Maschine, ein
 /// Handle je Native, nur in einer Maschine (4.5).
 pub const SC44: &str = "SC-44";

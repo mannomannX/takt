@@ -122,6 +122,16 @@ pub trait Jobs {
     fn cancel(&mut self, slot: u32);
 }
 
+/// Die Aenderungen an Tunables (8.4, v1.1): je Tick-Grenze ein Satz,
+/// atomar vor dem Schritt. `poll` liefert die Aenderungen fuer den Tick
+/// `k` an `apply` — Parameterindex und Wert in kanonischer Byteform
+/// (5.9). Range und Einheit prueft die Quelle beim Lesen der Zeile; die
+/// Schleife traegt nur ein, was sie bekommt.
+pub trait Tunables {
+    /// Die Aenderungen der Tick-Grenze `k`, in Aufzeichnungsreihenfolge.
+    fn poll(&mut self, k: u64, apply: &mut dyn FnMut(u32, &[u8]));
+}
+
 /// Was ein Tick gekostet hat und was er ergab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Tick {
@@ -194,6 +204,10 @@ pub trait Program {
     fn persist_restore(&mut self, _bytes: &[u8]) -> usize {
         0
     }
+
+    /// Ein Tunable aendert sich (8.4): Parameterindex und Wert in
+    /// kanonischer Byteform, gueltig ab dem naechsten Schritt.
+    fn tune(&mut self, _param: u32, _value: &[u8]) {}
 
     /// Ein Job ist fertig (4.5): das Ergebnis in kanonischer Byteform, oder
     /// `None`, wenn der Lauf gescheitert ist. Es geht als `done`/`result`
@@ -293,6 +307,13 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         // verschiebt (12.2). Der Tick wird nie uebersprungen (7.3).
         self.deadline = self.deadline.saturating_add(self.tick_ns.saturating_mul(1 + tick.slept as i64));
         tick
+    }
+
+    /// Traegt den Satz der Tick-Grenze in das Programm ein (8.4) — vor
+    /// dem Schritt, damit er als Input von I_k gilt.
+    pub fn apply_tunables<T: Tunables>(&mut self, tunables: &mut T) {
+        let program = &mut self.program;
+        tunables.poll(self.k, &mut |param, value| program.tune(param, value));
     }
 
     /// Ein Tick mit Jobs (4.5): Vor dem Schritt gehen die fertigen Slots

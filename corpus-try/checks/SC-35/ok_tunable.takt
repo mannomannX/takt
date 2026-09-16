@@ -1,0 +1,14 @@
+system:
+    language = 1
+
+tunable param GAIN : int in 0..100 = 2
+
+output y : int in 0..100000 @ hw("o/y") with safe = 0
+
+machine m:
+    var k : int in 0..1000 = 0
+    initial RUN
+    state RUN:
+        loop:
+            k = k + 1
+            y = k * GAIN

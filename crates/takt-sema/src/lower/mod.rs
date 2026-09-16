@@ -533,6 +533,23 @@ impl<'a> Lowerer<'a> {
         }
         let ty = self.tys.int;
         let lowered = self.expr(e, Some(ty))?;
+        // 8.4: `param` ist zur Compile-Zeit unbekannt, ein Tunable ein Input
+        // (Pruefung 35) — `fold` wuerde sonst den Default einsetzen.
+        if let Some(p) = first_param(&lowered) {
+            let param = &self.program.params[p.index()];
+            let (code, what) = if param.tunable {
+                (crate::checks::SC35, format!("`tunable param {}` ist keine Compile-Zeit-Konstante (8.4)", param.name))
+            } else {
+                (SC3, format!("`param {}` ist zur Compile-Zeit unbekannt (8.4)", param.name))
+            };
+            self.error_hint(
+                code,
+                e.span(),
+                what,
+                "Array-Groessen, Kapazitaeten und `repeat` brauchen `const` oder ein Literal",
+            );
+            return None;
+        }
         let folded = self.fold(lowered)?;
         match folded.kind {
             ExprKind::Int(i) => Some(i),
@@ -770,4 +787,12 @@ impl Spanned for ast::Expr {
     fn span(&self) -> Span {
         self.span
     }
+}
+
+/// Der erste Parameter in einem Ausdruck, wenn es einen gibt.
+fn first_param(e: &Expr) -> Option<ParamId> {
+    if let ExprKind::Param(p) = &e.kind {
+        return Some(*p);
+    }
+    e.children().into_iter().find_map(first_param)
 }
