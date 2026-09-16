@@ -567,9 +567,11 @@ version = "0.1.0"
 dependencies = [
  "rustix",
  "takt-crypto",
+ "takt-diag",
  "takt-interp",
  "takt-native",
  "takt-rt-core",
+ "takt-sema",
 ]
 
 [[package]]

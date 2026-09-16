@@ -114,137 +114,212 @@ impl Ended {
     }
 }
 
-/// Fuehrt ein Programm mit einem Stimulus aus.
-pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<RunResult, Trap> {
-    let scenario = match &options.scenario {
-        Some(name) => {
-            Some(scenario_by_name(program, name).ok_or_else(|| Trap::Bug(format!("Szenario `{name}` gibt es nicht")))?)
-        }
-        None => None,
-    };
-    let mut sim = Sim::new(program, options.profile.as_deref(), &options.overrides, scenario)?;
-    let start_params = params_of(&sim);
-    let only = match &options.only {
-        Some(name) => {
-            let m = machine_by_name(program, name)?;
-            if !sim.order.contains(&m) {
-                return Err(Trap::Bug(format!("Maschine `{name}` laeuft nicht (Vorlage oder Szenario)")));
+/// Ein Lauf, Tick fuer Tick: `new` fuehrt Tick 0 aus, `tick` einen
+/// weiteren, `finish` bildet das Ergebnis (13.5). So kann die Schleife
+/// aus 12.1 ihn treiben (`crate::runtime`), auch mit Schlaf (9.9).
+pub struct Run<'p> {
+    pub(crate) sim: Sim<'p>,
+    pub(crate) stimulus: Trace,
+    pub(crate) ticks: u64,
+    only: Option<MachineId>,
+    scenario: Option<MachineId>,
+    pub(crate) writer: Writer<'p>,
+    pub(crate) monitors: Vec<Monitor>,
+    verdict: Verdict,
+    pub(crate) fail: bool,
+    coverage: Coverage,
+    start_params: Vec<(String, String)>,
+    pub(crate) ended: Ended,
+    pub(crate) last: u64,
+    echo: Vec<TraceLine>,
+    /// Die frueheste Frist fuer die Schleife (9.9), nach jedem Tick neu.
+    pub(crate) deadline: Option<i64>,
+    /// Ein Abbruch aus der Schleife; `finish` liefert ihn.
+    pub(crate) trap: Option<Trap>,
+}
+
+impl<'p> Run<'p> {
+    /// Beginnt den Lauf: Stimulus, Anfangszustand und Anfangsausgaben (9.4).
+    pub fn new(program: &'p Program, stimulus: &Trace, options: &RunOptions) -> Result<Run<'p>, Trap> {
+        let scenario = match &options.scenario {
+            Some(name) => Some(
+                scenario_by_name(program, name).ok_or_else(|| Trap::Bug(format!("Szenario `{name}` gibt es nicht")))?,
+            ),
+            None => None,
+        };
+        let mut sim = Sim::new(program, options.profile.as_deref(), &options.overrides, scenario)?;
+        let start_params = params_of(&sim);
+        let only = match &options.only {
+            Some(name) => {
+                let m = machine_by_name(program, name)?;
+                if !sim.order.contains(&m) {
+                    return Err(Trap::Bug(format!("Maschine `{name}` laeuft nicht (Vorlage oder Szenario)")));
+                }
+                sim.restrict(m);
+                Some(m)
             }
-            sim.restrict(m);
-            Some(m)
+            None => None,
+        };
+        sim.nvm = options.nvm.clone();
+        // Satz 9.4.1: jede lineare Erweiterung der `follows`-Kanten liefert
+        // denselben Trace (7.2).
+        if let Some(seed) = options.order_seed {
+            sim.order = takt_mir::analysis::schedule::linear_extension(program, seed, scenario);
         }
-        None => None,
-    };
-    sim.nvm = options.nvm.clone();
-    // Satz 9.4.1: jede lineare Erweiterung der `follows`-Kanten liefert
-    // denselben Trace (7.2).
-    if let Some(seed) = options.order_seed {
-        sim.order = takt_mir::analysis::schedule::linear_extension(program, seed, scenario);
-    }
-    let mut writer = Writer::new(program);
-    let mut verdict = Verdict::Inconclusive;
-    let mut fail = false;
-    let mut coverage = Coverage::default();
-    let mut monitors: Vec<Monitor> = program.properties.iter().map(|p| Monitor::new(p, program.config.tick)).collect();
+        let mut writer = Writer::new(program);
+        let mut verdict = Verdict::Inconclusive;
+        let mut fail = false;
+        let mut coverage = Coverage::default();
+        let mut monitors: Vec<Monitor> =
+            program.properties.iter().map(|p| Monitor::new(p, program.config.tick)).collect();
 
-    // Tick 0: Stimulus, dann Anfangszustand und Anfangsausgaben (9.4)
-    // 4.5: Aufgezeichnete Fertigstellungen ersetzen das Modell `duration`;
-    // ein Job liest sie beim Start, darum stehen sie vorab im Abbild.
-    for line in &stimulus.lines {
-        if let LineKind::Job { machine, handle } = &line.kind {
-            let Some(m) = program.machines.iter().position(|m| m.name == *machine) else {
-                return Err(Trap::Bug(format!("Stimulus: Maschine `{machine}` gibt es nicht")));
-            };
-            let def = &program.machines[m];
-            let slot = def.layout.job_slots.iter().position(|s| def.vars[s.handle.index()].name == *handle);
-            let Some(slot) = slot else {
-                return Err(Trap::Bug(format!("Stimulus: `{machine}` hat kein Job-Handle `{handle}`")));
-            };
-            sim.image.job_records.push((MachineId(m as u32), slot, line.tick));
+        // Tick 0: Stimulus, dann Anfangszustand und Anfangsausgaben (9.4)
+        // 4.5: Aufgezeichnete Fertigstellungen ersetzen das Modell `duration`;
+        // ein Job liest sie beim Start, darum stehen sie vorab im Abbild.
+        for line in &stimulus.lines {
+            if let LineKind::Job { machine, handle } = &line.kind {
+                let Some(m) = program.machines.iter().position(|m| m.name == *machine) else {
+                    return Err(Trap::Bug(format!("Stimulus: Maschine `{machine}` gibt es nicht")));
+                };
+                let def = &program.machines[m];
+                let slot = def.layout.job_slots.iter().position(|s| def.vars[s.handle.index()].name == *handle);
+                let Some(slot) = slot else {
+                    return Err(Trap::Bug(format!("Stimulus: `{machine}` hat kein Job-Handle `{handle}`")));
+                };
+                sim.image.job_records.push((MachineId(m as u32), slot, line.tick));
+            }
         }
-    }
-    let mut echo = Vec::new();
-    match only {
-        // Die Scheibe traegt, was die fremden Maschinen im Tick 0 nach
-        // ihrem Eintritt zeigten; ihre Anfangswerte rechnet `init` selbst.
-        Some(_) => sim.init_with(|s| apply_stimulus(s, stimulus, 0, &mut echo, only))?,
-        None => {
-            apply_stimulus(&mut sim, stimulus, 0, &mut echo, only)?;
-            sim.init()?;
+        let mut echo = Vec::new();
+        match only {
+            // Die Scheibe traegt, was die fremden Maschinen im Tick 0 nach
+            // ihrem Eintritt zeigten; ihre Anfangswerte rechnet `init` selbst.
+            Some(_) => sim.init_with(|s| apply_stimulus(s, stimulus, 0, &mut echo, only))?,
+            None => {
+                apply_stimulus(&mut sim, stimulus, 0, &mut echo, only)?;
+                sim.init()?;
+            }
         }
-    }
-    writer.lines.append(&mut echo);
-    collect(&mut writer, &sim, 0, &mut verdict, &mut fail, &mut coverage);
-    writer.initial(&sim);
-    observe_properties(&mut monitors, &sim, 0, &mut writer, &mut fail);
-
-    // Auch der Anfangszustand kann das Kommando setzen (12.7).
-    let mut ended = end_of(&sim).unwrap_or(Ended::Ticks);
-    let mut last = 0;
-    if ended != Ended::Ticks {
-        writer.lines.push(TraceLine { tick: 0, kind: LineKind::End { reason: ended.name().to_string() } });
-        sim.safe_all()?;
-        writer.changes(&sim, 0);
-    }
-    for tick in 1..=options.ticks {
-        if ended != Ended::Ticks {
-            break;
-        }
-        sim.age();
-        if let Some(m) = only {
-            sim.image.carry_foreign(m);
-        }
-        apply_stimulus(&mut sim, stimulus, tick, &mut echo, only)?;
         writer.lines.append(&mut echo);
-        sim.step()?;
-        collect(&mut writer, &sim, tick, &mut verdict, &mut fail, &mut coverage);
-        writer.changes(&sim, tick);
-        observe_properties(&mut monitors, &sim, tick, &mut writer, &mut fail);
-        last = tick;
+        collect(&mut writer, &sim, 0, &mut verdict, &mut fail, &mut coverage);
+        writer.initial(&sim);
+        observe_properties(&mut monitors, &sim, 0, &mut writer, &mut fail);
+
+        // Auch der Anfangszustand kann das Kommando setzen (12.7).
+        let ended = end_of(&sim).unwrap_or(Ended::Ticks);
+        if ended != Ended::Ticks {
+            writer.lines.push(TraceLine { tick: 0, kind: LineKind::End { reason: ended.name().to_string() } });
+            sim.safe_all()?;
+            writer.changes(&sim, 0);
+        }
+        let mut run = Run {
+            sim,
+            stimulus: stimulus.clone(),
+            ticks: options.ticks,
+            only,
+            scenario,
+            writer,
+            monitors,
+            verdict,
+            fail,
+            coverage,
+            start_params,
+            ended,
+            last: 0,
+            echo,
+            deadline: None,
+            trap: None,
+        };
+        run.deadline = run.earliest_deadline();
+        Ok(run)
+    }
+
+    /// Ein Tick (9.4); `false`, wenn der Lauf zu Ende ist.
+    pub fn tick(&mut self, tick: u64) -> Result<bool, Trap> {
+        if self.ended != Ended::Ticks {
+            return Ok(false);
+        }
+        self.sim.age();
+        if let Some(m) = self.only {
+            self.sim.image.carry_foreign(m);
+        }
+        apply_stimulus(&mut self.sim, &self.stimulus, tick, &mut self.echo, self.only)?;
+        self.writer.lines.append(&mut self.echo);
+        self.sim.step()?;
+        collect(&mut self.writer, &self.sim, tick, &mut self.verdict, &mut self.fail, &mut self.coverage);
+        self.writer.changes(&self.sim, tick);
+        observe_properties(&mut self.monitors, &self.sim, tick, &mut self.writer, &mut self.fail);
+        self.last = tick;
         // 12.7: nach dem Commit, wenn alle Outputs stehen.
-        if let Some(e) = end_of(&sim) {
-            ended = e;
-            writer.lines.push(TraceLine { tick, kind: LineKind::End { reason: e.name().to_string() } });
+        if let Some(e) = end_of(&self.sim) {
+            self.ended = e;
+            self.writer.lines.push(TraceLine { tick, kind: LineKind::End { reason: e.name().to_string() } });
             // Die Zeile markiert die Entscheidung, das `safe` danach die
             // Ausfuehrung (12.7) — so liest der Trace sich von oben nach
             // unten wie der Ablauf.
-            sim.safe_all()?;
-            writer.changes(&sim, tick);
-            break;
+            self.sim.safe_all()?;
+            self.writer.changes(&self.sim, tick);
+            return Ok(false);
         }
         // 13.6: Der Lauf endet mit dem Szenario — in einem Zustand ohne
         // Ausgang oder in `FAULTED`.
-        if scenario.is_some_and(|s| scenario_done(&sim, s)) {
-            ended = Ended::Scenario;
-            writer.lines.push(TraceLine { tick, kind: LineKind::End { reason: ended.name().to_string() } });
+        if self.scenario.is_some_and(|s| scenario_done(&self.sim, s)) {
+            self.ended = Ended::Scenario;
+            let reason = self.ended.name().to_string();
+            self.writer.lines.push(TraceLine { tick, kind: LineKind::End { reason } });
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// Das Ergebnis (13.5); ein Abbruch aus der Schleife kommt hier heraus.
+    pub fn finish(self) -> Result<RunResult, Trap> {
+        if let Some(trap) = self.trap {
+            return Err(trap);
+        }
+        let Run { sim, ticks, mut writer, monitors, verdict, mut fail, coverage, start_params, ended, last, .. } = self;
+        let at = if ended == Ended::Ticks { ticks } else { last };
+        let properties = finish_properties(monitors, at, &mut writer, &mut fail);
+        let final_verdict = if fail { Verdict::Fail } else { verdict };
+        if takt_mir::persist::any(sim.loaded.program) {
+            if let Some(bytes) = sim.persist_payload() {
+                let hex = bytes.iter().map(|b| format!("{b:02x}")).collect();
+                writer.lines.push(TraceLine { tick: at, kind: LineKind::Persist { hex } });
+            }
+        }
+        writer.lines.push(TraceLine { tick: at, kind: LineKind::Final { verdict: final_verdict.name().to_string() } });
+        let params = params_of(&sim);
+        Ok(RunResult {
+            trace: Trace { lines: writer.lines },
+            verdict: final_verdict,
+            ended,
+            coverage,
+            params,
+            start_params,
+            properties,
+        })
+    }
+}
+
+/// Fuehrt ein Programm mit einem Stimulus aus.
+pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<RunResult, Trap> {
+    let mut run = Run::new(program, stimulus, options)?;
+    for tick in 1..=options.ticks {
+        if !run.tick(tick)? {
             break;
         }
     }
-    let at = if ended == Ended::Ticks { options.ticks } else { last };
-    let properties = finish_properties(monitors, at, &mut writer, &mut fail);
-    let final_verdict = if fail { Verdict::Fail } else { verdict };
-    if takt_mir::persist::any(program) {
-        if let Some(bytes) = sim.persist_payload() {
-            let hex = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            writer.lines.push(TraceLine { tick: at, kind: LineKind::Persist { hex } });
-        }
-    }
-    writer.lines.push(TraceLine { tick: at, kind: LineKind::Final { verdict: final_verdict.name().to_string() } });
-    let params = params_of(&sim);
-    Ok(RunResult {
-        trace: Trace { lines: writer.lines },
-        verdict: final_verdict,
-        ended,
-        coverage,
-        params,
-        start_params,
-        properties,
-    })
+    run.finish()
 }
 
 /// Die Monitore sehen den Tick-Rand-Snapshot (13.3); eine entschiedene
 /// Verletzung ist ein FAIL-Befund (13.5) und eine Trace-Zeile.
-fn observe_properties(monitors: &mut [Monitor], sim: &Sim<'_>, tick: u64, writer: &mut Writer<'_>, fail: &mut bool) {
+pub(crate) fn observe_properties(
+    monitors: &mut [Monitor],
+    sim: &Sim<'_>,
+    tick: u64,
+    writer: &mut Writer<'_>,
+    fail: &mut bool,
+) {
     for m in monitors.iter_mut() {
         if let Some(at) = m.observe(&sim.loaded, &sim.image, tick) {
             *fail = true;
@@ -586,7 +661,7 @@ fn fault_name(kind: takt_mir::machine::FaultKind) -> String {
 }
 
 /// Schreibt Ausgaben, Zustaende und `pub var`, jeweils nur bei Aenderung (T4).
-struct Writer<'p> {
+pub(crate) struct Writer<'p> {
     program: &'p Program,
     lines: Vec<TraceLine>,
     outputs: Vec<Option<String>>,

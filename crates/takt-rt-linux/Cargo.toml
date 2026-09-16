@@ -28,6 +28,9 @@ rustix = { version = "1.1.4", features = ["thread", "mm", "process", "time"] }
 workspace = true
 
 [dev-dependencies]
-# Nur fuer den Test, der zeigt, dass der Befund in den Lauf-Header geht
-# (11.3): Die Runtime kennt den Kopf nicht, sie liefert nur Zeilen.
+# Fuer den Test, der zeigt, dass der Befund in den Lauf-Header geht (11.3),
+# und fuer Satz 9.9.1: Der Interpreter ist das Programm der Schleife, das
+# mit und ohne Schlaf denselben Trace schreibt.
 takt-interp = { path = "../takt-interp" }
+takt-sema = { path = "../takt-sema" }
+takt-diag = { path = "../takt-diag" }

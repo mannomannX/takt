@@ -1683,11 +1683,11 @@ cancel_all_scheduled(m): sched[o] = [] fuer alle o von m
 ### 9.9 Schlaf
 ```
 sleep_allowed():  alle Maschinen in idle-Zustaenden and alle sched[o] leer and alle Wake-Stream-Fenster leer and kein pending[m] and kein raised[m] and keine laufenden Jobs
-sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereignis)   # Wake-Quellen, Operator-Abort, Runtime-Ereignisse
+sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereignis)   # Wake-Quellen (auch ihr Veralten, 3.5), Operator-Abort, Runtime-Ereignisse
                   n = d / T0;  fuer jede Maschine: time_in_state += n*T0, every-Zaehler unveraendert;  now += n*T0
 ```
 **Satz 9.9.1 (Schlaf ist unsichtbar).** Die Trace mit Schlaf ist identisch zur Trace ohne Schlaf.
-*Beweis.* In einem `idle`-Zustand ist `step_m` die Identität auf (C, v, B), solange keine Transition feuert: Es gibt keine `loop:`-Blöcke und keine Handler (statisch, 5.10); Nicht-Wake-Streams werden ohne Fault verworfen (9.6); `when`-Guards hängen nur von Wake-Quellen ab, die während des Schlafs definitionsgemäß nicht feuern (das erste Feuern beendet den Schlaf); `after` feuert frühestens bei der frühesten Frist, die das Ende des Schlafs ist. Die übersprungenen Ticks wären also leere Schritte gewesen; `now` und die Timer werden exakt um sie vorgerückt. ∎
+*Beweis.* In einem `idle`-Zustand ist `step_m` die Identität auf (C, v, B), solange keine Transition feuert: Es gibt keine `loop:`-Blöcke und keine Handler (statisch, 5.10); Nicht-Wake-Streams werden ohne Fault verworfen (9.6); `when`-Guards hängen nur von Wake-Quellen ab, die während des Schlafs definitionsgemäß nicht feuern (das erste Feuern beendet den Schlaf — auch das Veralten einer Wake-Quelle zählt dazu, weil der Guard, der sie liest, in diesem Tick faultet); `after` feuert frühestens bei der frühesten Frist, die das Ende des Schlafs ist. Die übersprungenen Ticks wären also leere Schritte gewesen; `now` und die Timer werden exakt um sie vorgerückt. ∎
 
 ### 9.10 Persistenz
 `persist`-Variablen sind gewöhnliche Komponenten von V_m; s0 = Defaults, überschrieben durch geladene, validierte Werte. Damit ist Satz 9.4.1 unverändert eine Aussage über (s0, (I_k)); das asynchrone Schreiben durch die Runtime liegt außerhalb der Semantik (Beobachtung).

@@ -832,7 +832,7 @@ impl<'p> Sim<'p> {
     }
 
     /// Ist die Maschine in einem `idle`-Zustand (5.10)?
-    fn is_idle(&self, id: MachineId) -> bool {
+    pub fn is_idle(&self, id: MachineId) -> bool {
         let m = &self.loaded.program.machines[id.index()];
         self.states[id.index()].conf.iter().any(|c| m.states[c.index()].idle)
     }
@@ -975,6 +975,15 @@ impl<'p> Sim<'p> {
         // Ein Command gilt einen Tick (8.5): bis zum naechsten Stimulus, damit
         // der Tick-Rand-Snapshot der Eigenschaften ihn noch sieht (13.3).
         self.image.clear_commands();
+    }
+
+    /// Ein uebersprungener Tick (9.9): nur Tick und Zaehler laufen weiter —
+    /// der Schritt waere die Identitaet gewesen (Satz 9.9.1).
+    pub fn skip_tick(&mut self) {
+        self.tick += 1;
+        let active: Vec<MachineId> =
+            self.order.iter().copied().filter(|id| self.states[id.index()].countdown == 0).collect();
+        self.advance_counters(&active);
     }
 
     /// Ein System-Tick (9.4).
