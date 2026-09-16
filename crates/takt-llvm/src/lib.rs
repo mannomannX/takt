@@ -44,6 +44,7 @@ pub mod inspect;
 pub mod lower;
 pub mod machine;
 pub mod persist;
+pub mod psi;
 pub mod reduce;
 pub mod scope;
 pub mod step;

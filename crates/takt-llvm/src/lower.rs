@@ -98,9 +98,9 @@ pub fn program(p: &Program, triple: &str, module_name: &str) -> Lowered {
         };
         crate::machine::declare_state(machine, &st, &mut m);
         let _ = crate::step::init_function(machine, &st, p, &mut m);
+        let vars = crate::step::init_vars_function(machine, &st, p, &mut m);
+        let enter = crate::step::enter_function(machine, &st, p, &mut m);
         if !machine.persist.is_empty() {
-            let vars = crate::step::init_vars_function(machine, &st, p, &mut m);
-            let enter = crate::step::enter_function(machine, &st, p, &mut m);
             let snapshot = crate::persist::snapshot_function(machine, &st, p, &mut m);
             let restore = crate::persist::restore_function(machine, &st, p, &mut m);
             if vars.is_err() || enter.is_err() || snapshot.is_err() || restore.is_err() {
@@ -110,6 +110,9 @@ pub fn program(p: &Program, triple: &str, module_name: &str) -> Lowered {
         let _ = crate::step::idle_function(machine, &st, &mut m);
         let _ = crate::step::advance_function(machine, &st, &mut m);
         let _ = crate::step::deadline_function(machine, &st, p, &mut m);
+        if let Err(e) = crate::psi::publish_function(machine, &st, p, &mut m) {
+            skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.to_string() });
+        }
         if let Err(e) = crate::step::step_function(machine, &st, p, &mut m) {
             skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.to_string() });
         }

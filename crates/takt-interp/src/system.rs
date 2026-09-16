@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use takt_diag::Span;
 
 use takt_mir::expr::{Accessor, Builtin, StreamRef};
-use takt_mir::machine::{FaultKind, Machine, MachineKind, VarScope};
+use takt_mir::machine::{FaultKind, Machine, VarScope};
 use takt_mir::program::{OutputTiming, Overflow, Program};
 use takt_mir::types::Type;
 use takt_mir::*;
@@ -20,6 +20,7 @@ use crate::machine::{self, MachineState};
 use crate::nvm::{Load, Nvm};
 use crate::stream::{Delivery, Element};
 use crate::value::{EvalResult, Fault, Sample, Trap, Value, bug};
+use takt_mir::analysis::schedule;
 
 impl<'a, 'p> MachineEnv<'a, 'p> {
     /// Umgebung einer Maschine fuer diesen Tick.
@@ -294,16 +295,26 @@ impl Outer for MachineEnv<'_, '_> {
         Ok(self.image.output_mut(c))
     }
 
+    // 7.2: Ein Follower liest eine gefolgte Maschine frisch, wenn sie in
+    // diesem Tick schon gelaufen ist; sonst — und in der Abort-Phase — Ψ_k.
     fn published(&self, m: MachineId, v: VarId) -> EvalResult<&Value> {
-        self.image.published_var(m, v).ok_or_else(|| Trap::Bug(format!("`pub var` {} von Maschine {} fehlt", v.0, m.0)))
+        let fresh = self.image.fresh(m) && self.machine(self.loaded).follows.contains(&m);
+        self.image
+            .published_var(m, v, fresh)
+            .ok_or_else(|| Trap::Bug(format!("`pub var` {} von Maschine {} fehlt", v.0, m.0)))
     }
 
     fn state_of(&self, m: MachineId) -> EvalResult<Value> {
-        self.image.published_state(m).cloned().ok_or_else(|| Trap::Bug(format!("Zustand von Maschine {} fehlt", m.0)))
+        let fresh = self.image.fresh(m) && self.machine(self.loaded).follows.contains(&m);
+        self.image
+            .published_state(m, fresh)
+            .cloned()
+            .ok_or_else(|| Trap::Bug(format!("Zustand von Maschine {} fehlt", m.0)))
     }
 
     fn signal(&self, m: MachineId, s: SignalId) -> EvalResult<bool> {
-        Ok(self.image.published_signal(m, s))
+        let fresh = self.image.fresh(m) && self.machine(self.loaded).follows.contains(&m);
+        Ok(self.image.published_signal(m, s, fresh))
     }
 
     fn viol(&mut self, site: SiteId, index: &[i64]) -> EvalResult<&mut i64> {
@@ -506,14 +517,9 @@ pub struct Sim<'p> {
     pub nvm: Nvm,
 }
 
-/// Laufende Maschinen: Vorlagen und Szenarien laufen nicht mit (5.8, 13.6).
+/// Laufende Maschinen in Deklarationsreihenfolge (5.8, 13.6).
 fn runnable(p: &Program) -> Vec<MachineId> {
-    p.machines
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| !matches!(m.kind, MachineKind::Template | MachineKind::Scenario) && !m.states.is_empty())
-        .map(|(i, _)| MachineId(i as u32))
-        .collect()
+    schedule::runnable(p)
 }
 
 impl<'p> Sim<'p> {
@@ -583,7 +589,9 @@ impl<'p> Sim<'p> {
         let outputs = eval_safe_outputs(&loaded, &params)?;
         let image = Image::new(program, outputs, params);
         let states = program.machines.iter().map(MachineState::new).collect();
-        let order = runnable(program);
+        // 7.2: topologisch nach `follows`, sonst Prioritaet; ein Zyklus ist
+        // ein Fehler der Pruefung 33 und kommt hier nicht an.
+        let order = schedule::order(program).unwrap_or_else(|_| runnable(program));
         Ok(Sim { loaded, states, image, tick: 0, order, observations: Vec::new(), nvm: Nvm::new() })
     }
 
@@ -613,7 +621,10 @@ impl<'p> Sim<'p> {
                 MachineEnv::new(&self.loaded, id, &mut self.states[id.index()], &mut self.image, &mut out, tick_ns);
             machine::init(&self.loaded, &mut env, 0)?;
             self.observations.extend(out.into_iter().map(|o| (id, o)));
+            self.publish_one(id);
+            self.image.set_fresh(id);
         }
+        self.image.clear_fresh();
         // Tick 0 aktiviert jede Maschine mit `phase = 0` (7.2); der Zaehler
         // wird wie am Ende jedes Ticks fortgeschrieben.
         let active: Vec<MachineId> =
@@ -865,7 +876,8 @@ impl<'p> Sim<'p> {
         // active(k): countdown == 0 (7.2)
         let active: Vec<MachineId> =
             self.order.iter().copied().filter(|id| self.states[id.index()].countdown == 0).collect();
-        // Schrittphase
+        // Schrittphase; `fresh[m] = publish_m(v_m)` nach jedem Schritt, nur
+        // fuer Follower in dieser Phase sichtbar (9.4).
         let mut aborted = false;
         for id in &active {
             let mut out = Vec::new();
@@ -875,9 +887,12 @@ impl<'p> Sim<'p> {
             aborted |= env.aborted;
             self.observations.extend(out.into_iter().map(|o| (*id, o)));
             result?;
+            self.publish_one(*id);
+            self.image.set_fresh(*id);
         }
         // abort_phase(): Abort und Runtime-Faults wirken im selben Tick fuer
-        // alle Maschinen, ob aktiv oder nicht (5.4, 9.4).
+        // alle Maschinen, ob aktiv oder nicht (5.4, 9.4); dort gilt Ψ_k.
+        self.image.clear_fresh();
         if aborted {
             self.raise_all();
         }
@@ -971,20 +986,30 @@ impl<'p> Sim<'p> {
         Ok(())
     }
 
-    /// Veroeffentlicht `pub var`, Zustand und Signale (9.4).
+    /// Veroeffentlicht `pub var`, Zustand und Signale aller Maschinen (9.4).
     fn publish_all(&mut self) {
-        let program = self.loaded.program;
-        let tick_ns = program.config.tick;
         for id in self.order.clone() {
-            let machine = &program.machines[id.index()];
-            let vars = self.states[id.index()].vars.clone();
-            let signals = self.states[id.index()].raised_signals.clone();
-            let mut out = Vec::new();
-            let env =
-                MachineEnv::new(&self.loaded, id, &mut self.states[id.index()], &mut self.image, &mut out, tick_ns);
-            let state = env.state_value(&self.loaded);
-            self.image.publish(id, machine, &vars, state, &signals);
+            self.publish_one(id);
         }
+    }
+
+    /// `publish_m(v_m)`: traegt eine Maschine in Ψ_{k+1} ein.
+    fn publish_one(&mut self, id: MachineId) {
+        let program = self.loaded.program;
+        let machine = &program.machines[id.index()];
+        let vars = self.states[id.index()].vars.clone();
+        let signals = self.states[id.index()].raised_signals.clone();
+        let mut out = Vec::new();
+        let env = MachineEnv::new(
+            &self.loaded,
+            id,
+            &mut self.states[id.index()],
+            &mut self.image,
+            &mut out,
+            program.config.tick,
+        );
+        let state = env.state_value(&self.loaded);
+        self.image.publish(id, machine, &vars, state, &signals);
     }
 
     /// Zustandspfad einer Maschine.

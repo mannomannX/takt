@@ -76,12 +76,16 @@ pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[Stimulus]) -
 /// Der gemeinsame Rumpf: `Some(name)` tickt eine Maschine, `None` alle.
 fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulus], payload: &[u8]) -> Harness {
     let layout = crate::layout::of(p);
-    // Die Maschinen, die der Rahmen fuehrt, in Deklarationsreihenfolge —
-    // dieselbe, die der Interpreter nimmt (9.4: ohne `follows` ist sie
-    // semantisch irrelevant, aber der Trace soll gleich aussehen).
+    // Die Maschinen, die der Rahmen fuehrt, in Schrittordnung — dieselbe,
+    // die der Interpreter nimmt (7.2: topologisch nach `follows`, sonst
+    // Prioritaet; 9.4.1: ohne Kanten semantisch irrelevant).
     let driven: Vec<&takt_mir::machine::Machine> = match machine {
         Some(name) => p.machines.iter().filter(|m| m.name == name).collect(),
-        None => p.machines.iter().filter(|m| m.kind != takt_mir::machine::MachineKind::Template).collect(),
+        None => takt_mir::analysis::schedule::order(p)
+            .unwrap_or_else(|_| takt_mir::analysis::schedule::runnable(p))
+            .into_iter()
+            .map(|id| &p.machines[id.index()])
+            .collect(),
     };
     let mut s = String::new();
     let _ = writeln!(s, "/* Testrahmen (13.8); erzeugt von takt-conformance. */");
@@ -144,9 +148,10 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     for m in &driven {
         let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "void {}_publish(void *st, void *in);", m.name);
+        let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
         if !m.persist.is_empty() {
-            let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
-            let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
             let _ = writeln!(s, "int {}_persist_snapshot(void *st, void *out, int cap);", m.name);
             let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
         }
@@ -210,21 +215,21 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // damit ein `enter:`-Block schon den sicheren Wert sieht.
     safe_outputs(&mut s, p, &layout);
     sim_bindings(&mut s, p, "    ");
+    // Wie `Sim::init`: erst die Variablen aller Maschinen, dann die
+    // geladenen Werte (5.9), dann die Eintritte in Schrittordnung — und
+    // nach jedem `fresh[m] = publish_m(v_m)`, damit ein Follower schon im
+    // Tick 0 frisch liest (7.2, 9.4).
     for m in &driven {
-        if m.persist.is_empty() {
-            let _ = writeln!(s, "    {0}_init(state_{0}, image, params, latch);", m.name);
-        } else {
-            let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
-        }
+        let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
     }
-    // 5.9: Defaults, dann die geladenen Werte, dann erst enter: — der
-    // Interpreter laedt zwischen init_vars und machine::init.
     for m in &persisting {
         let _ = writeln!(s, "    {0}_persist_restore(state_{0}, persist_in, persist_in_len);", m.name);
     }
-    for m in &persisting {
+    for m in &driven {
         let _ = writeln!(s, "    {0}_enter(state_{0}, image, params, latch);", m.name);
+        let _ = writeln!(s, "    {0}_publish(state_{0}, image);", m.name);
     }
+    psi_commit(&mut s, p, &driven, "    ");
     sim_bindings(&mut s, p, "    ");
     let _ = writeln!(s, "    dump(0);");
     let _ = writeln!(s, "    for (g_tick = 1; g_tick <= {ticks}; g_tick++) {{");
@@ -257,8 +262,13 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
             (per, 0) => format!("if (g_tick % {per} == 0) "),
             (per, ph) => format!("if (g_tick % {per} == {ph}) "),
         };
-        let _ = writeln!(s, "        {condition}{0}_step(state_{0}, image, params, latch);", m.name);
+        let _ = writeln!(
+            s,
+            "        {condition}{{ {0}_step(state_{0}, image, params, latch); {0}_publish(state_{0}, image); }}",
+            m.name
+        );
     }
+    psi_commit(&mut s, p, &driven, "        ");
     // 8.3: Was ein Modell in diesem Tick auf einen `sim`-Output gestellt
     // hat, liest das Programm im naechsten — Unit-Delay wie bei Ψ.
     sim_bindings(&mut s, p, "        ");
@@ -525,6 +535,31 @@ fn range_check(p: &Program, ty: takt_mir::TypeId) -> Option<(&'static str, Strin
         _ => return None,
     };
     Some((ct, literal(&r.lo), literal(&r.hi)))
+}
+
+/// Ψ_{k+1} wird Ψ_k (9.4): die zweite Bank in die erste kopieren, dann
+/// `fresh` und die Signale loeschen — ein Signal ist einen Tick sichtbar
+/// (5.8), und ohne `fresh` liest ein Follower wieder Ψ_k (7.2).
+pub(crate) fn psi_commit(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], indent: &str) {
+    use takt_llvm::psi::{Field, bank_size, field_offset, region_offset};
+    let Some(first) = region_offset(takt_mir::MachineId(0), false, p) else { return };
+    let Some(next) = region_offset(takt_mir::MachineId(0), true, p) else { return };
+    let _ = writeln!(
+        s,
+        "{indent}for (unsigned i = 0; i < {}; i++) image[{first} + i] = image[{next} + i]; /* Psi */",
+        bank_size(p)
+    );
+    for m in driven {
+        let Some(id) = p.machines.iter().position(|x| x.name == m.name) else { continue };
+        let id = takt_mir::MachineId(id as u32);
+        let Some(base) = region_offset(id, true, p) else { continue };
+        let _ = writeln!(s, "{indent}image[{base}] = 0; /* fresh {} */", m.name);
+        for i in 0..m.signals.len() {
+            if let Some(off) = field_offset(id, Field::Signal(takt_mir::SignalId(i as u32)), p) {
+                let _ = writeln!(s, "{indent}image[{}] = 0; /* Signal {}.{} */", base + off, m.name, m.signals[i].name);
+            }
+        }
+    }
 }
 
 pub(crate) fn param_literal(p: &Program, index: usize) -> Option<String> {

@@ -234,6 +234,11 @@ impl Vars for StateVars<'_> {
         let b = m.inst(&format!("icmp ne i8 {raw}, 0"));
         Some(Lowered { value: b.to_string(), ty: LlvmType::Int(1) })
     }
+
+    /// Ψ einer anderen Maschine (7.2); `%1` ist das Abbild.
+    fn published(&self, target: takt_mir::MachineId, field: crate::psi::Field, m: &mut Module) -> Option<Lowered> {
+        crate::psi::load(self.machine, target, field, self.program, m)
+    }
 }
 
 /// Senkt einen Block (11.2: Straight-Line-Code).
@@ -290,6 +295,8 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
             m.void_inst(&format!("call void @{}(i32 {})", Abi::CANCEL, c.0));
             Ok(())
         }
+        StmtKind::Raise(s) => crate::psi::raise(takt_mir::MachineId(ctx.machine_index), *s, ctx.program, m)
+            .ok_or(NotYet { what: "`raise`" }),
         other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
 }

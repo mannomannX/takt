@@ -420,8 +420,8 @@ pub fn check(p: &Program) -> Result<(), Diagnostic> {
         for pv in &m.persist {
             c.index(&m.vars, pv.var.index(), "Variable", m.span)?;
         }
-        if !m.follows.is_empty() {
-            return Err(stage(m.span, "follows", Stage::V1_1));
+        for f in &m.follows {
+            c.index(&p.machines, f.index(), "Maschine", m.span)?;
         }
         if m.node.is_some() {
             return Err(stage(m.span, "Knotenplatzierung", Stage::V2));

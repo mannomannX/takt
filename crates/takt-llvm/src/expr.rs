@@ -95,6 +95,11 @@ pub trait Vars {
         None
     }
 
+    /// `m.x`, `m.state` oder ein Signal einer anderen Maschine aus Ψ (7.2).
+    fn published(&self, _target: takt_mir::MachineId, _field: crate::psi::Field, _m: &mut Module) -> Option<Lowered> {
+        None
+    }
+
     /// Wohin ein gescheiterter Laufzeit-Check springt (4.1, 5.3).
     ///
     /// Nur eine Maschine hat einen Fault-Pfad; eine reine Funktion (4.4)
@@ -146,6 +151,9 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Input { channel, .. } => vars.input(*channel, m).ok_or(NotYet { what: "Input" }),
         ExprKind::Param(id) => vars.param(*id, m).ok_or(NotYet { what: "Parameter" }),
         ExprKind::Output(channel) => vars.output(*channel, m).ok_or(NotYet { what: "Output-Latch" }),
+        ExprKind::Published { machine, var } => psi_read(machine, crate::psi::Field::Var(*var), vars, m),
+        ExprKind::StateOf(machine) => psi_read(machine, crate::psi::Field::State, vars, m),
+        ExprKind::Signal { machine, signal } => psi_read(machine, crate::psi::Field::Signal(*signal), vars, m),
         ExprKind::Command(id) => vars.command(*id, m).ok_or(NotYet { what: "Command" }),
         ExprKind::Builtin(b) => vars.builtin(*b, p, m).ok_or(NotYet { what: crate::scope::builtin_name(*b) }),
         ExprKind::Unary { op, expr } => unary(*op, expr, &want, p, m, vars),
@@ -1219,6 +1227,19 @@ fn convert(
             Ok(Lowered { value: cur, ty: want.clone() })
         }
     }
+}
+
+/// Ψ-Lesevorgang (7.2); Instanz-Arrays mit Index sind v1.2 (5.11).
+fn psi_read(
+    machine: &takt_mir::expr::MachineRef,
+    field: crate::psi::Field,
+    vars: &dyn Vars,
+    m: &mut Module,
+) -> Result<Lowered, NotYet> {
+    if machine.index.is_some() {
+        return Err(NotYet { what: "Instanz-Array mit Index (v1.2)" });
+    }
+    vars.published(machine.machine, field, m).ok_or(NotYet { what: "Psi" })
 }
 
 /// Ist der Typ eine vorzeichenbehaftete Ganzzahl?

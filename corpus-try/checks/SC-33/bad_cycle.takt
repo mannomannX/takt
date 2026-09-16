@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 33 (7.2): die `follows`-Kanten muessen einen azyklischen
+# Graphen bilden.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine a follows b:  # ~ SC-33
+    pub var x : int in 0..99 = 0
+    initial RUN
+    state RUN:
+        loop:
+            x = b.y
+
+machine b follows a:  # ~ SC-33
+    pub var y : int in 0..99 = 0
+    initial RUN
+    state RUN:
+        loop:
+            y = a.x
+            n = y

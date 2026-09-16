@@ -215,8 +215,22 @@ impl Lowerer<'_> {
                 }
             }
         }
-        if !decl.follows.is_empty() {
-            self.stage(decl.follows[0].span, "`follows`", Stage::V1_1);
+        // 7.2: `follows` nennt Maschinen; die Kanten prueft Pruefung 33.
+        for f in &decl.follows {
+            match self.lookup(f) {
+                Some(Entity::Machine(other)) if other == id => {
+                    self.error(SC3, f.span, "eine Maschine folgt nicht sich selbst (7.2)");
+                }
+                Some(Entity::Machine(other)) => {
+                    if !m.follows.contains(&other) {
+                        m.follows.push(other);
+                    }
+                }
+                Some(_) => {
+                    self.error(SC3, f.span, format!("`follows {}`: keine Maschine (7.2)", f.name));
+                }
+                None => {}
+            }
         }
         if let Some(n) = &decl.node {
             self.stage(n.span, "Knotenplatzierung", Stage::V2);

@@ -21,7 +21,6 @@
 
 use std::fmt::Write as _;
 
-use takt_mir::machine::MachineKind;
 use takt_mir::program::Program;
 
 use crate::layout::{Layout, c_type};
@@ -40,8 +39,12 @@ pub struct McuHarness {
 /// laeuft, bis das Board ausgeht.
 pub fn build(p: &Program) -> McuHarness {
     let layout = crate::layout::of(p);
-    let driven: Vec<&takt_mir::machine::Machine> =
-        p.machines.iter().filter(|m| m.kind != MachineKind::Template).collect();
+    // 7.2: in Schrittordnung, wie der Interpreter und der Testrahmen.
+    let driven: Vec<&takt_mir::machine::Machine> = takt_mir::analysis::schedule::order(p)
+        .unwrap_or_else(|_| takt_mir::analysis::schedule::runnable(p))
+        .into_iter()
+        .map(|id| &p.machines[id.index()])
+        .collect();
 
     let mut s = String::new();
     prologue(&mut s, p);
@@ -166,9 +169,10 @@ fn declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
     for m in driven {
         let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "void {}_publish(void *st, void *in);", m.name);
+        let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
         if !m.persist.is_empty() {
-            let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
-            let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
             let _ = writeln!(s, "int {}_persist_snapshot(void *st, void *out, int cap);", m.name);
             let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
         }
@@ -207,18 +211,18 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     }
 
     // 5.9: Defaults, dann die geladenen Werte, dann erst enter: — wie
-    // der Interpreter zwischen init_vars und machine::init laedt.
+    // der Interpreter zwischen init_vars und machine::init laedt; nach
+    // jedem Eintritt `publish`, damit Follower schon im Tick 0 frisch
+    // lesen (7.2, 9.4).
     for m in driven {
-        if m.persist.is_empty() {
-            let _ = writeln!(s, "    {0}_init(state_{0}, image, params, latch);", m.name);
-        } else {
-            let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
-        }
+        let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
     }
     let _ = writeln!(s, "    takt_mcu_persist_restore(persist, persist_len);");
-    for m in driven.iter().filter(|m| !m.persist.is_empty()) {
+    for m in driven {
         let _ = writeln!(s, "    {0}_enter(state_{0}, image, params, latch);", m.name);
+        let _ = writeln!(s, "    {0}_publish(state_{0}, image);", m.name);
     }
+    crate::harness::psi_commit(s, p, driven, "    ");
     let _ = writeln!(s, "}}\n");
 }
 
@@ -230,14 +234,15 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "    takt_fn_fault = 0;");
     for m in driven {
         // Die Periode: Eine Maschine mit `n_m > 1` laeuft nur jeden
-        // n-ten Tick (7.2, Zaehler-Scheduling).
-        if m.period > 1 {
-            let _ = writeln!(s, "    if (k % {} == 0)", m.period);
-            let _ = writeln!(s, "        {0}_step(state_{0}, image, params, latch);", m.name);
-        } else {
-            let _ = writeln!(s, "    {0}_step(state_{0}, image, params, latch);", m.name);
-        }
+        // n-ten Tick (7.2, Zaehler-Scheduling); danach `publish` (9.4).
+        let condition = if m.period > 1 { format!("if (k % {} == 0) ", m.period) } else { String::new() };
+        let _ = writeln!(
+            s,
+            "    {condition}{{ {0}_step(state_{0}, image, params, latch); {0}_publish(state_{0}, image); }}",
+            m.name
+        );
     }
+    crate::harness::psi_commit(s, p, driven, "    ");
     let _ = writeln!(s, "}}\n");
 
     sleep(s, p.config.tick, layout, p, driven);

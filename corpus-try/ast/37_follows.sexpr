@@ -1,0 +1,33 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output level :int in 0..999 @hw("o/level") safe=0)
+(output lagged :int in 0..999 @hw("o/lagged") safe=0)
+(output high :bool @hw("o/high") safe=false)
+(output pinged :bool @hw("o/pinged") safe=false)
+(machine plant
+  (pub-var x :int in 0..999 0)
+  (signal ping)
+  (initial LOW)
+  (state LOW
+    (loop
+      (= x (+ x 1)))
+    (when (>= x 5) -> HIGH))
+  (state HIGH
+    (enter
+      (raise ping))
+    (loop
+      (= x (+ x 2)))
+    (when (>= x 20) -> LOW)))
+(machine ctrl follows=plant
+  (initial RUN)
+  (state RUN
+    (loop
+      (= level (.x plant))
+      (= high (== (.state plant) HIGH))
+      (= pinged (.ping plant)))))
+(machine watch
+  (initial RUN)
+  (state RUN
+    (loop
+      (= lagged (.x plant)))))

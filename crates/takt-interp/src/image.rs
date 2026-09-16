@@ -40,6 +40,9 @@ pub struct Image {
     pub published: Vec<Published>,
     /// Ψ des laufenden Ticks (wird am Tick-Ende zu `published`).
     pub next: Vec<Published>,
+    /// `fresh[m]` (9.4): die Maschine ist in dieser Schrittphase schon
+    /// gelaufen; Follower lesen sie aus `next` (7.2).
+    fresh: Vec<bool>,
     /// Parameterwerte des Laufs (8.4).
     pub params: Vec<Value>,
     /// Adresse → `sim`-Output, der einen `hw`-Input speist (8.3).
@@ -191,6 +194,7 @@ impl Image {
             commands: vec![false; p.commands.len()],
             published,
             next,
+            fresh: vec![false; p.machines.len()],
             params,
             sim_sources,
             hw_inputs,
@@ -310,19 +314,40 @@ impl Image {
         &mut self.outputs[c.index()]
     }
 
-    /// Ψ: `pub var` einer Maschine.
-    pub fn published_var(&self, m: MachineId, v: VarId) -> Option<&Value> {
-        self.published[m.index()].vars.get(&v)
+    /// Ψ: `pub var` einer Maschine; `fresh` liest `next` (7.2).
+    pub fn published_var(&self, m: MachineId, v: VarId, fresh: bool) -> Option<&Value> {
+        self.bank(fresh)[m.index()].vars.get(&v)
     }
 
     /// Ψ: Zustand einer Maschine.
-    pub fn published_state(&self, m: MachineId) -> Option<&Value> {
-        self.published[m.index()].state.as_ref()
+    pub fn published_state(&self, m: MachineId, fresh: bool) -> Option<&Value> {
+        self.bank(fresh)[m.index()].state.as_ref()
     }
 
     /// Ψ: Signal einer Maschine.
-    pub fn published_signal(&self, m: MachineId, s: SignalId) -> bool {
-        self.published[m.index()].signals.get(s.index()).copied().unwrap_or(false)
+    pub fn published_signal(&self, m: MachineId, s: SignalId, fresh: bool) -> bool {
+        self.bank(fresh)[m.index()].signals.get(s.index()).copied().unwrap_or(false)
+    }
+
+    fn bank(&self, fresh: bool) -> &[Published] {
+        if fresh { &self.next } else { &self.published }
+    }
+
+    /// Ist die Maschine in dieser Schrittphase schon gelaufen (9.4)?
+    pub fn fresh(&self, m: MachineId) -> bool {
+        self.fresh.get(m.index()).copied().unwrap_or(false)
+    }
+
+    /// `fresh[m] = publish_m(v_m)`: ab jetzt lesen Follower `next` (7.2).
+    pub fn set_fresh(&mut self, m: MachineId) {
+        if let Some(f) = self.fresh.get_mut(m.index()) {
+            *f = true;
+        }
+    }
+
+    /// Ende der Schrittphase: in der Abort-Phase gilt Ψ_k (7.2).
+    pub fn clear_fresh(&mut self) {
+        self.fresh.iter_mut().for_each(|f| *f = false);
     }
 
     /// Traegt die Veroeffentlichung einer Maschine in Ψ_{k+1} ein (9.4).

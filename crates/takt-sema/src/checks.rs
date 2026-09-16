@@ -85,6 +85,8 @@ pub const SC39: &str = "SC-39";
 pub const SC60: &str = "SC-60";
 /// Lints: `alert`-Polaritaet, Profil-Vollstaendigkeit (5.6, 4.6).
 pub const SC63: &str = "SC-63";
+/// `follows` (7.2): Kanten azyklisch; zwei Warnungen (FB-18, FB-38).
+pub const SC33: &str = "SC-33";
 /// Lints zu Matrizen und Stroemen (3.11, 8.6).
 pub const SC42: &str = "SC-42";
 /// Ungenutzte Channels.
@@ -105,6 +107,7 @@ impl Lowerer<'_> {
         self.performance_lints();
         self.check_writers();
         self.check_fault_forest();
+        self.check_follows();
         self.check_latency();
         self.check_declared_budget();
         self.check_cost_budget();
@@ -117,6 +120,93 @@ impl Lowerer<'_> {
         self.check_simulation();
         self.check_unused();
         self.check_definite_assignment();
+    }
+
+    /// Pruefung 33 (7.2): `follows` azyklisch; dazu die zwei Warnungen aus
+    /// plan/feedback-design.md 3 — das fehlende `follows` (FB-18) und die
+    /// stille Bedeutungsaenderung auf dem Fault-Pfad (FB-38).
+    fn check_follows(&mut self) {
+        use takt_mir::analysis::schedule;
+        let p = &self.program;
+        let mut diags = Vec::new();
+        if let Err(cycle) = schedule::order(p) {
+            let names: Vec<String> = cycle.iter().map(|id| format!("`{}`", p.machines[id.index()].name)).collect();
+            for id in &cycle {
+                diags.push(
+                    Diagnostic::error(
+                        SC33,
+                        p.machines[id.index()].span,
+                        format!("`follows` bildet einen Zyklus: {}", names.join(", ")),
+                    )
+                    .with_suggestion("die Kanten muessen einen azyklischen Graphen bilden (7.2)".to_string()),
+                );
+            }
+        }
+        for (i, a) in p.machines.iter().enumerate() {
+            if matches!(a.kind, MachineKind::Template) {
+                continue;
+            }
+            let id = MachineId(i as u32);
+            let mut reads: Vec<(MachineId, String, Span)> = Vec::new();
+            for_each_expr_machine(a, &mut |e| {
+                if let Some((b, name)) = published_read(p, e) {
+                    reads.push((b, name, e.span));
+                }
+            });
+            // Der Fault-Pfad: `enter` und `loop:` der Fault-Ziele (5.3, 5.4).
+            let mut fault_reads: Vec<(MachineId, String, Span)> = Vec::new();
+            let targets = std::iter::once(a.fault_target).chain(a.states.iter().filter_map(|s| s.fault_target));
+            for t in targets {
+                let FaultTarget::State(s) = t else { continue };
+                for b in [&a.states[s.index()].enter, &a.states[s.index()].loop_block] {
+                    for_each_expr_block(b, &mut |e| {
+                        if let Some((m, name)) = published_read(p, e) {
+                            fault_reads.push((m, name, e.span));
+                        }
+                    });
+                }
+            }
+            let mut seen = HashSet::new();
+            for (b, name, span) in &reads {
+                if *b == id || a.follows.contains(b) {
+                    continue;
+                }
+                let bm = &p.machines[b.index()];
+                if !schedule::same_tick(a, bm) || !seen.insert((*b, name.clone())) {
+                    continue;
+                }
+                diags.push(
+                    Diagnostic::warning(
+                        SC33,
+                        *span,
+                        format!(
+                            "`{}` liest `{name}` mit einem Tick Verzoegerung, obwohl `{}` im selben Tick laeuft",
+                            a.name, bm.name
+                        ),
+                    )
+                    .with_suggestion(format!(
+                        "`follows {}` ergaenzen, wenn die frische Groesse gemeint ist (7.2)",
+                        bm.name
+                    )),
+                );
+            }
+            for (b, name, span) in &fault_reads {
+                let regular = reads
+                    .iter()
+                    .any(|(m, n, sp)| m == b && n == name && !fault_reads.iter().any(|(_, _, fsp)| fsp == sp));
+                if a.follows.contains(b) && regular {
+                    diags.push(
+                        Diagnostic::warning(
+                            SC33,
+                            *span,
+                            format!("`{name}` ist in der Schrittphase frisch, auf dem Fault-Pfad aber der Wert des vorigen Ticks (5.4)"),
+                        )
+                        .with_suggestion("in der Abort-Phase gilt Psi_k, nicht der frische Wert (7.2)".to_string()),
+                    );
+                }
+            }
+        }
+        self.diags.extend(diags);
     }
 
     /// Traegt den Default fuer `max_age` ein (3.5): das Doppelte der
@@ -1253,6 +1343,25 @@ fn output_of(p: &Place) -> Option<ChannelId> {
         Place::Output(c) => Some(*c),
         Place::Field(b, _) | Place::Index(b, _) | Place::Index2(b, _, _) => output_of(b),
         Place::Var(_) => None,
+    }
+}
+
+/// Ein Lesevorgang einer fremden Groesse (`m.x`, `m.state`, Signal): die
+/// Maschine und der Name, wie die Meldung ihn nennt.
+fn published_read(p: &Program, e: &Expr) -> Option<(MachineId, String)> {
+    match &e.kind {
+        ExprKind::Published { machine, var } => {
+            let m = &p.machines[machine.machine.index()];
+            Some((machine.machine, format!("{}.{}", m.name, m.vars[var.index()].name)))
+        }
+        ExprKind::StateOf(machine) => {
+            Some((machine.machine, format!("{}.state", p.machines[machine.machine.index()].name)))
+        }
+        ExprKind::Signal { machine, signal } => {
+            let m = &p.machines[machine.machine.index()];
+            Some((machine.machine, format!("{}.{}", m.name, m.signals[signal.index()].name)))
+        }
+        _ => None,
     }
 }
 

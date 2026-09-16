@@ -94,8 +94,10 @@ impl Ended {
 pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<RunResult, Trap> {
     let mut sim = Sim::new(program, options.profile.as_deref())?;
     sim.nvm = options.nvm.clone();
+    // Satz 9.4.1: jede lineare Erweiterung der `follows`-Kanten liefert
+    // denselben Trace (7.2).
     if let Some(seed) = options.order_seed {
-        permute(&mut sim.order, seed);
+        sim.order = takt_mir::analysis::schedule::linear_extension(program, seed);
     }
     let mut writer = Writer::new(program);
     let mut verdict = Verdict::Inconclusive;
@@ -501,16 +503,6 @@ fn running(sim: &Sim<'_>) -> Vec<MachineId> {
     let mut ids = sim.order.clone();
     ids.sort_by_key(|m| m.0);
     ids
-}
-
-/// Permutiert die Schrittreihenfolge deterministisch (Test zu Satz 9.4.1).
-fn permute(order: &mut [MachineId], seed: u64) {
-    let mut state = seed | 1;
-    for i in (1..order.len()).rev() {
-        state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
-        let j = (state >> 33) as usize % (i + 1);
-        order.swap(i, j);
-    }
 }
 
 /// Ein Wert als Text ohne Typ (Messwerte, Diagnosen).

@@ -164,6 +164,7 @@ fn stmt(s: &Stmt, c: &mut Coverage) {
                 block(&a.body, c);
             }
         }
+        StmtKind::Raise(_) => c.note("`raise`", true),
         other => c.note(stmt_name(other), false),
     }
 }
@@ -291,8 +292,9 @@ fn expr(e: &Expr, c: &mut Coverage) {
         }
         ExprKind::Format(_) => c.note("Format-String", false),
         ExprKind::Builtin(_) => c.note("eingebauter Bezeichner", false),
-        ExprKind::Published { .. } => c.note("Psi (`m.x`)", false),
-        ExprKind::StateOf(_) => c.note("`m.state`", false),
+        ExprKind::Published { .. } => c.note("Psi (`m.x`)", true),
+        ExprKind::StateOf(_) => c.note("`m.state`", true),
+        ExprKind::Signal { .. } => c.note("Signal", true),
         ExprKind::Record { fields, .. } => {
             c.note("Record-Literal", true);
             for f in fields {

@@ -16,7 +16,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 26] = [
+const KORPUS: [&str; 27] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -45,6 +45,7 @@ const KORPUS: [&str; 26] = [
     // prueft `persist_native.rs` (5.9).
     "35_persist.takt",
     "36_int_units.takt",
+    "37_follows.takt",
 ];
 
 /// Wie viele Ticks verglichen werden.
@@ -86,8 +87,9 @@ fn the_interpreter_and_the_generated_code_agree() {
     let mut failed = Vec::new();
     for name in KORPUS {
         let p = corpus(name);
-        let Some(machine) = p.machines.first().map(|m| m.name.clone()) else { continue };
-        let native = match common::run_native(&clang, &p, name, &machine, TICKS) {
+        // Alle Maschinen, in Schrittordnung (7.2): Ψ-Lesevorgaenge und
+        // `follows` gibt es nur zwischen Maschinen.
+        let native = match common::run_native_all(&clang, &p, name, TICKS) {
             Ok(t) => t,
             Err(e) => {
                 failed.push(format!("{name}: laesst sich nicht bauen:\n{e}"));

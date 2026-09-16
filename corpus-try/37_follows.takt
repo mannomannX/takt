@@ -1,0 +1,47 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# `follows` (7.2, v1.1): `ctrl` liest `plant` frisch — `pub var`, Zustand
+# und Signal im selben Tick; `watch` liest dieselbe Groesse mit Unit-Delay.
+
+output level  : int in 0..999 @ hw("o/level")  with safe = 0
+output lagged : int in 0..999 @ hw("o/lagged") with safe = 0
+output high   : bool          @ hw("o/high")   with safe = false
+output pinged : bool          @ hw("o/pinged") with safe = false
+
+machine plant:
+    pub var x : int in 0..999 = 0
+    signal ping
+    initial LOW
+
+    state LOW:
+        loop:
+            x = x + 1
+
+        when x >= 5: -> HIGH
+
+    state HIGH:
+        enter:
+            raise ping
+
+        loop:
+            x = x + 2
+
+        when x >= 20: -> LOW
+
+machine ctrl follows plant:
+    initial RUN
+
+    state RUN:
+        loop:
+            level = plant.x
+            high = plant.state == HIGH
+            pinged = plant.ping
+
+machine watch:
+    initial RUN
+
+    state RUN:
+        loop:
+            lagged = plant.x

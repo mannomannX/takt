@@ -115,6 +115,8 @@ pub fn of(p: &Program) -> Layout {
             out.params = out.params.max(offset + t.size());
         }
     }
+    // Hinter Channels und Commands liegen die zwei Ψ-Baenke (9.4, 7.2).
+    out.image = out.image.max(takt_llvm::psi::image_size(p));
     // Ein leerer Vektor bekommt trotzdem ein Byte: `alloca 0` ist
     // gueltig, aber ein Zeiger darauf waere keiner, den man weiterreichen
     // moechte.
