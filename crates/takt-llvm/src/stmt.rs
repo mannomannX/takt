@@ -1005,18 +1005,8 @@ fn reset_instance(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
-    let struct_ty = LlvmType::Struct(inst.fields.clone());
-    let vars = ctx.vars();
-    for (i, v) in def.state_vars.iter().enumerate() {
-        let init = v.init.as_ref().ok_or(NotYet { what: "Zustandsvariable ohne Initialwert" })?;
-        let value = lower_expr(init, ctx.program, m, &vars)?;
-        let at = m.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {i}"));
-        m.void_inst(&format!("store {} {}, ptr {at}", value.ty, value.value));
-    }
-    // Das Flag geht mit zurueck: Nach `reset()` darf `step` wieder laufen.
-    let flag = m.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {}", inst.stepped()));
-    m.void_inst(&format!("store i1 false, ptr {flag}"));
-    Ok(())
+    let exit = ctx.vars().fault_label().ok_or(NotYet { what: "Fault-Marke" })?;
+    crate::block::init_state(ptr, def, inst, exit, ctx.program, m)
 }
 
 /// `match` ueber einen Summentyp oder Werte (3.8, 6.1).

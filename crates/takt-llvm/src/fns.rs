@@ -180,6 +180,18 @@ pub struct BlockVars {
 }
 
 impl BlockVars {
+    /// Der Kontext einer Instanz ausserhalb ihrer Methoden (Initialwerte,
+    /// `reset()`): nur die Instanzvariablen, ein Fault geht an `exit`.
+    pub fn of_instance(instance: Reg, inst: &crate::block::Instance, exit: String) -> BlockVars {
+        BlockVars {
+            exit,
+            instance_fields: inst.fields[..inst.fields.len() - 1].to_vec(),
+            instance,
+            instance_ty: inst.llvm(),
+            params: Vec::new(),
+        }
+    }
+
     /// Woher eine Variable kommt.
     fn locate(&self, id: takt_mir::VarId) -> Option<Ort> {
         let n = self.instance_fields.len();

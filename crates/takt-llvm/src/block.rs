@@ -137,6 +137,34 @@ pub fn finish_stepped(label: u32, m: &mut Module) {
     m.label(&end_at);
 }
 
+/// Schreibt die Zustandsvariablen einer Instanz auf ihre Initialwerte und
+/// nimmt das `stepped`-Flag zurueck (5.7). Die Initialwerte sehen die
+/// Parameter, wie im Interpreter (`instantiate_block`).
+pub fn init_state(
+    ptr: Reg,
+    def: &BlockDef,
+    inst: &Instance,
+    exit: String,
+    p: &Program,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let struct_ty = inst.llvm();
+    let vars = crate::fns::BlockVars::of_instance(ptr, inst, exit);
+    for (i, v) in def.state_vars.iter().enumerate() {
+        let field = inst.params + i;
+        let ty = inst.fields.get(field).ok_or(NotYet { what: "Zustandsvariable" })?.clone();
+        let value = match &v.init {
+            Some(init) => crate::expr::lower(init, p, m, &vars)?.value,
+            None => "zeroinitializer".to_string(),
+        };
+        let at = m.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {field}"));
+        m.void_inst(&format!("store {ty} {value}, ptr {at}"));
+    }
+    let flag = m.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {}", inst.stepped()));
+    m.void_inst(&format!("store i1 false, ptr {flag}"));
+    Ok(())
+}
+
 /// Setzt alle Felder einer Instanz auf ihren Anfangswert (5.7).
 ///
 /// `reset()` stellt den Zustand her, den die Instanz beim Start hatte —

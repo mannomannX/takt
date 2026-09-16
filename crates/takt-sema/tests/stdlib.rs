@@ -85,3 +85,46 @@ machine m:
     let t = trace(&p, "", 1);
     assert!(t.contains("t=0 out n 1"), "{t}");
 }
+
+#[test]
+fn an_integer_lowpass_settles_exactly() {
+    // 11.4: 16 Nachkommabits im Zustand — der Sprung kommt ganz an, der
+    // erste Schritt rundet wie die Fliesskommaform (1000 / 11 = 90.9).
+    let p = compile(
+        "input raw : int[mV] in -32768..32767 mV @ hw(\"a/raw\") with max_age = 3 s
+output flt : int[mV] in -32768..32767 mV @ hw(\"o/flt\") with safe = 0 mV
+machine m every 10 ms:
+    var f = lowpass_i[mV](tau = 100 ms)
+    initial RUN
+    state RUN:
+        loop:
+            flt = f.step(raw, 10 ms)
+",
+    );
+    let t = trace(&p, "t=0 in raw 0 mV\nt=10 in raw -1000 mV\n", 2000);
+    assert!(t.contains("t=10 out flt -91 mV"), "{t}");
+    let last = t.lines().rev().find(|l| l.contains("out flt")).expect("Ausgabe");
+    assert!(last.ends_with("out flt -1000 mV"), "{last}");
+}
+
+#[test]
+fn an_integer_pid_clamps_at_its_limits() {
+    // Verstaerkungen je Schritt in int[O/E]: 2 mpct/mK * 1000 mK plus das
+    // Integral 1000 mpct je Schritt, gedeckelt bei hi.
+    let p = compile(
+        "input err : int[mK] in -100000..100000 mK @ hw(\"a/err\") with max_age = 3 s
+output u : int[mpct] in 0..10000 mpct @ hw(\"o/u\") with safe = 0 mpct
+machine m every 10 ms:
+    var c = pid_i[mpct, mK](kp = 2 mpct/mK, ki = 1 mpct/mK, kd = 0 mpct/mK, lo = 0 mpct, hi = 10000 mpct)
+    initial RUN
+    state RUN:
+        loop:
+            u = c.step(err)
+",
+    );
+    let t = trace(&p, "t=0 in err 1000 mK\n", 200);
+    assert!(t.contains("t=0 out u 3000 mpct"), "{t}");
+    assert!(t.contains("t=10 out u 4000 mpct"), "{t}");
+    let last = t.lines().rev().find(|l| l.contains("out u ")).expect("Ausgabe");
+    assert!(last.ends_with("out u 10000 mpct"), "{last}");
+}

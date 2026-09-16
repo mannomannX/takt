@@ -14,6 +14,8 @@ output speed : i32[inc/s] @ hw("o/speed") with safe = 0
 output uv    : int[uV]    @ hw("o/uv")    with safe = 0
 output volts : float[V]   @ hw("o/volts") with safe = 0
 output raw   : u32        @ hw("o/raw")   with safe = 0
+output flt   : int[mV]    @ hw("o/flt")   with safe = 0
+output u     : int[uV]    @ hw("o/u")     with safe = 0
 
 const BAUD : u32[Bd] = 921_600 Bd
 
@@ -21,6 +23,8 @@ machine m:
     var mv   : int[mV] = 3300 mV
     var dist : i32[inc] = 250 inc
     var per  : i32[1/s] = 4 1/s
+    var lp   = lowpass_i[mV](tau = 100 ms)
+    var ctrl = pid_i[uV, mV](kp = 2 uV/mV, ki = 1 uV/mV, kd = 1 uV/mV, lo = 0 uV, hi = 20000 uV)
 
     initial RUN
 
@@ -30,6 +34,8 @@ machine m:
         uv = mv.to(uV)
         volts = mv.to_float(V)
         raw = (mv / (1 mV)) as u32
+        flt = lp.step(mv, tick)
+        u = ctrl.step(mv - 3300 mV)
 
     state RUN:
         after 50 ms: -> UP

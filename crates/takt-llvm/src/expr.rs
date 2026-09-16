@@ -83,8 +83,13 @@ pub trait Vars {
     /// Uhr fuehrt (12.1); `time_in_state` steht im Zustand der Maschine;
     /// `tick` ist eine Konstante des Programms. Eine reine Funktion hat
     /// keine davon — sie sieht nur ihre Argumente (4.4).
-    fn builtin(&self, _b: takt_mir::expr::Builtin, _p: &Program, _m: &mut Module) -> Option<Lowered> {
-        None
+    /// `tick` ist eine Konstante des Programms und ueberall lesbar; die
+    /// uebrigen eingebauten Bezeichner kennt nur die Maschine.
+    fn builtin(&self, b: takt_mir::expr::Builtin, p: &Program, _m: &mut Module) -> Option<Lowered> {
+        match b {
+            takt_mir::expr::Builtin::Tick => Some(Lowered { value: p.config.tick.to_string(), ty: LlvmType::Int(64) }),
+            _ => None,
+        }
     }
 
     /// Liest ein Feld des Abbild-Eintrags eines Channels (3.5).

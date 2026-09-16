@@ -1827,7 +1827,8 @@ block vote2oo3[U](tol)              step(a, b, c) -> float[U]?                 #
 block hold_last[U](max_hold)        step(x: float[U]?, dt) -> float[U]?        # letzten guten Wert begrenzt halten
 block reader[const N](b: bytes<N>)  u8() -> u8? / u16_le() / u32_le() / remaining() -> int   (3.9; take(n) -> bytes<M>? offen: eine Methode bindet keine eigene Konstante)
 block writer[const N]()             u8(x) -> bool / u16_le(x) / u32_le(x) / bytes(b) -> bool / mark() -> int / patch_u16(m, v) / data() -> bytes<N>   (eigener Puffer, reset() leert ihn; 3.9)
-block pid_i[O, E](...) / lowpass_i[U](tau)   Integer-Varianten fuer Kerne ohne FPU (3.2; v1.1)
+block lowpass_i[U](tau)             step(x: int[U], dt) -> int[U]              # Integer-Variante fuer Kerne ohne FPU (3.2; v1.1): 16 Nachkommabits im Zustand
+block pid_i[O, E](kp, ki, kd, lo, hi) step(err: int[E]) -> int[O]             # Verstaerkungen je Schritt in int[O/E]; keine Zeitbasis, weil int[s] aus einer Duration nicht entsteht (3.3)
 native fn sha256_init / sha256_update(ctx, chunk) / sha256_final      Chunk-Natives mit opakem Sha256Ctx (4.5)
 native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration (4.5)
 machine flash_model(sectors, t_erase, t_program, CUT_AT_BYTE)          Simulationsmodell (Maschine mit sim-Outputs) mit Stromausfall-Injektion (8.11)

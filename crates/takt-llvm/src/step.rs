@@ -15,11 +15,12 @@
 //! wenn die Invariante bricht, und die Meldung nennte den falschen.
 
 use takt_mir::StateId;
+use takt_mir::expr::{Expr, ExprKind};
 use takt_mir::machine::{Guard, Machine, Target, TransTrigger, Transition};
 use takt_mir::program::Program;
 
 use crate::emit::Module;
-use crate::expr::{NotYet, lower as lower_expr};
+use crate::expr::{NotYet, Vars, lower as lower_expr};
 use crate::machine::{self, Role, StateStruct};
 use crate::stmt::{Ctx, block};
 
@@ -60,6 +61,49 @@ pub fn step_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     }
 }
 
+/// 5.7: `step` hoechstens einmal je Aktivierung — die Flags aller
+/// Instanzen gehen zu Beginn zurueck, wie `clear_stepped` im Interpreter.
+fn clear_stepped(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    for bi in &m.layout.block_instances {
+        let def = p.blocks.get(bi.block.index()).ok_or(NotYet { what: "Block" })?;
+        let inst = crate::block::instance_of(def, p).ok_or(NotYet { what: "Blockinstanz" })?;
+        let i = st.index_of(Role::Var, bi.var.index()).ok_or(NotYet { what: "Instanz im Zustand" })?;
+        let field = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}"));
+        let flag =
+            module.inst(&format!("getelementptr inbounds {}, ptr {field}, i32 0, i32 {}", inst.llvm(), inst.stepped()));
+        module.void_inst(&format!("store i1 false, ptr {flag}"));
+    }
+    Ok(())
+}
+
+/// Eine Blockinstanz im Zustand der Maschine: erst die Parameter aus den
+/// Argumenten der Instanziierung, dann der Zustand (5.7).
+fn init_instance(
+    block: takt_mir::BlockId,
+    init: &Expr,
+    var: usize,
+    ctx: &mut Ctx<'_>,
+    module: &mut Module,
+) -> Result<(), NotYet> {
+    let ExprKind::BlockInit { args, count: None, .. } = &init.kind else {
+        return Err(NotYet { what: "Instanzfeld" });
+    };
+    let p = ctx.program;
+    let def = p.blocks.get(block.index()).ok_or(NotYet { what: "Block" })?;
+    let inst = crate::block::instance_of(def, p).ok_or(NotYet { what: "Blockinstanz" })?;
+    let ptr = ctx.field(Role::Var, var, module).ok_or(NotYet { what: "Instanz im Zustand" })?;
+    let struct_ty = inst.llvm();
+    let vars = ctx.vars();
+    for (k, a) in args.iter().enumerate() {
+        let v = lower_expr(a, p, module, &vars)?;
+        let at = module.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {k}"));
+        module.void_inst(&format!("store {} {}, ptr {at}", v.ty, v.value));
+    }
+    let exit = vars.fault_label().ok_or(NotYet { what: "Fault-Marke" })?;
+    crate::block::init_state(ptr, def, &inst, exit, p, module)
+}
+
 /// Der eigentliche Rumpf; `step_function` raeumt bei `Err` auf.
 fn write_step(
     m: &Machine,
@@ -69,6 +113,7 @@ fn write_step(
     leaves: &[StateId],
 ) -> Result<(), NotYet> {
     machine::begin_step(m, module);
+    clear_stepped(m, st, p, module)?;
 
     let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
     let conf_i = st.index_of(Role::Conf, 0).ok_or(NotYet { what: "conf im Zustand" })?;
@@ -719,9 +764,13 @@ fn emit_init(
         for (i, v) in m.vars.iter().enumerate() {
             let Some(init) = v.init.clone() else { continue };
             let id = takt_mir::VarId(i as u32);
-            // Eine Blockinstanz wird nicht zugewiesen; ihr Zustand entsteht
-            // aus den Initialwerten des Blocks (5.7).
-            if machine::instance_block(m, id).is_some() {
+            // Eine Blockinstanz: die Parameter aus den Argumenten, der
+            // Zustand aus den Initialwerten des Blocks (5.7).
+            if let Some(b) = machine::instance_block(m, id) {
+                if let Err(e) = init_instance(b, &init, i, &mut ctx, module) {
+                    module.abort(mark);
+                    return Err(e);
+                }
                 continue;
             }
             let vars = ctx.vars();

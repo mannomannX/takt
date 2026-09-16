@@ -8,18 +8,24 @@
 (output uv :int[uV] @hw("o/uv") safe=0)
 (output volts :float[V] @hw("o/volts") safe=0)
 (output raw :u32 @hw("o/raw") safe=0)
+(output flt :int[mV] @hw("o/flt") safe=0)
+(output u :int[uV] @hw("o/u") safe=0)
 (const BAUD :u32[Bd] 921_600[Bd])
 (machine m
   (var mv :int[mV] 3300[mV])
   (var dist :i32[inc] 250[inc])
   (var per :i32[1/s] 4[1/s])
+  (var lp (call lowpass_i [mV] tau=100ms))
+  (var ctrl (call pid_i [uV mV] kp=2[uV/mV] ki=1[uV/mV] kd=1[uV/mV] lo=0[uV] hi=20000[uV]))
   (initial RUN)
   (loop
     (= baud BAUD)
     (= speed (* dist per))
     (= uv (.to mv uV))
     (= volts (.to_float mv V))
-    (= raw (as (/ mv 1[mV]) u32)))
+    (= raw (as (/ mv 1[mV]) u32))
+    (= flt (.step lp mv tick))
+    (= u (.step ctrl (- mv 3300[mV]))))
   (state RUN
     (after 50ms -> UP))
   (state UP

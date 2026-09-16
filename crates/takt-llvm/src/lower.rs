@@ -75,7 +75,9 @@ pub fn program(p: &Program, triple: &str, module_name: &str) -> Lowered {
         crate::block::declare(b, &inst, &mut m);
         for fid in b.step.iter().chain(&b.methods) {
             let Some(f) = p.fns.get(fid.index()) else { continue };
-            let _ = crate::fns::block_method(b, f, p, &mut m);
+            if let Err(e) = crate::fns::block_method(b, f, p, &mut m) {
+                skipped.push(Skipped { machine: f.name.clone(), reason: e.what.to_string() });
+            }
         }
     }
 
