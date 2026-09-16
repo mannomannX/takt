@@ -2029,9 +2029,7 @@ impl Lowerer<'_> {
                 let out = items.iter().map(|x| self.check(x, elem)).collect::<Option<Vec<_>>>()?;
                 Some(Expr::new(ExprKind::Array(out), hint.expect("Hinweis"), span))
             }
-            Some(Type::Mat { rows, cols, units }) => {
-                self.mat_literal(items, rows, cols, units, hint.expect("Hinweis"), span)
-            }
+            Some(Type::Mat { .. }) => self.mat_literal(items, hint.expect("Hinweis"), span),
             _ => {
                 let Some(first) = items.first() else {
                     self.error_hint(SC3, span, "Typ eines leeren Arrays nicht ableitbar", "Variable annotieren");

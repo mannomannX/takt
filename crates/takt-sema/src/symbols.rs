@@ -43,6 +43,8 @@ pub enum Entity {
     Enum(EnumId),
     /// Record.
     Record(RecordId),
+    /// Einheitentupel eines `unitvec` (3.11).
+    Unitvec(Vec<crate::units::Unit>),
     /// Variable mit Typ (Maschine, Zustand, Funktion, gehoben).
     Var(VarId, TypeId),
     /// Signal der aktuellen Maschine.

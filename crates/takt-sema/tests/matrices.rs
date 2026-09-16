@@ -73,6 +73,75 @@ fn a_kalman_step_computes_through_the_library() {
     }
 }
 
+const KALMAN_DIM: &str = "
+unitvec X = (m, m/s)
+unitvec Z = (m)
+output pos : float[m] @ hw(\"o/pos\") with safe = 0
+output vel : float[m/s] @ hw(\"o/vel\") with safe = 0
+output p11 : float[m^2/s^2] @ hw(\"o/p11\") with safe = 0
+const F : mat[X, 1/X] = [[1, (10 ms).as(s)], [0 1/s, 1]]
+const H : mat[Z, 1/X] = [[1, (0 s).as(s)]]
+const I : mat[X, 1/X] = [[1, (0 s).as(s)], [0 1/s, 1]]
+const Q : mat[X, X] = [[0 m^2, 0 m^2/s], [0 m^2/s, 0 m^2/s^2]]
+const R : mat[Z, Z] = [[1 m^2]]
+
+machine m:
+    var x : vec[X] = [0 m, 1 m/s]
+    var p : mat[X, X] = [[1 m^2, 0 m^2/s], [0 m^2/s, 1 m^2/s^2]]
+    var z : vec[Z] = [2 m]
+    initial RUN
+    state RUN:
+        loop:
+            x = F * x
+            p = F * p * F.transpose() + Q
+            var s = H * p * H.transpose() + R
+            var k = p * H.transpose() * s.inv()
+            x = x + k * (z - H * x)
+            p = (I - k * H) * p
+            pos = x[0, 0]
+            vel = x[1, 0]
+            p11 = p[1, 1]
+";
+
+#[test]
+fn a_dimensioned_kalman_filter_is_unit_checked_and_runs() {
+    let t = trace(KALMAN_DIM);
+    for prefix in ["out pos 1.00504", "out vel 1.00994", "out p11 0.99995"] {
+        assert!(t.contains(&format!("t=0 {prefix}")), "{prefix} fehlt:\n{t}");
+    }
+}
+
+#[test]
+fn unit_tuples_are_checked_by_hart() {
+    let head = "
+unitvec X = (m, m/s)
+output pos : float[m] @ hw(\"o/pos\") with safe = 0
+const F : mat[X, 1/X] = [[1, (10 ms).as(s)], [0 1/s, 1]]
+machine m:
+    var x : vec[X] = [0 m, 1 m/s]
+    var p : mat[X, X] = [[1 m^2, 0 m^2/s], [0 m^2/s, 1 m^2/s^2]]
+    var i : int in 0..1 = 0
+    initial RUN
+    state RUN:
+        loop:
+";
+    for (body, want) in [
+        ("var a = p * F\n", "Spalteneinheiten"),
+        ("var a = p + F\n", "passen nicht"),
+        ("pos = x[i, 0]\n", "variabler Index"),
+        ("var l = F.cholesky()\n", "symmetrische Einheiten"),
+        ("var y = solve(p, F.transpose())\n", "Zeileneinheiten"),
+    ] {
+        let e = compile(&format!("{head}            {body}")).expect_err(body).join("\n");
+        assert!(e.contains("SC-34") && e.contains(want), "{body}:\n{e}");
+    }
+    let ok = format!(
+        "{head}            var l = p.cholesky()\n            var ok = l.valid\n            var y = solve(p, x)\n            pos = y[0, 0] * (1 m^2)\n"
+    );
+    let e = compile(&ok);
+    assert!(e.is_ok(), "{e:?}");
+}
+
 #[test]
 fn shapes_are_checked_at_compile_time() {
     for (body, want) in [

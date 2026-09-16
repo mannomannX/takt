@@ -1,0 +1,31 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Der lineare Kalman-Filter aus 3.11: jede Zeile einheitengeprueft.
+
+unitvec X = (m, m/s)
+unitvec Z = (m)
+
+output pos : float[m] @ hw("o/pos") with safe = 0
+
+const F : mat[X, 1/X] = [[1, (10 ms).as(s)], [0 1/s, 1]]
+const H : mat[Z, 1/X] = [[1, (0 s).as(s)]]
+const I : mat[X, 1/X] = [[1, (0 s).as(s)], [0 1/s, 1]]
+const Q : mat[X, X] = [[0 m^2, 0 m^2/s], [0 m^2/s, 0 m^2/s^2]]
+const R : mat[Z, Z] = [[1 m^2]]
+
+machine m:
+    var x : vec[X] = [0 m, 1 m/s]
+    var p : mat[X, X] = [[1 m^2, 0 m^2/s], [0 m^2/s, 1 m^2/s^2]]
+    var z : vec[Z] = [2 m]
+    initial RUN
+    state RUN:
+        loop:
+            x = F * x
+            p = F * p * F.transpose() + Q
+            var s = H * p * H.transpose() + R
+            var k = p * H.transpose() * s.inv()
+            x = x + k * (z - H * x)
+            p = (I - k * H) * p
+            pos = x[0, 0]

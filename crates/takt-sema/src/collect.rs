@@ -55,7 +55,7 @@ impl Lowerer<'_> {
                 }
                 ast::Item::System(_) => {}
                 ast::Item::Type(t) => self.type_alias(t),
-                ast::Item::Unitvec(u) => self.stage(u.span, "`unitvec`", Stage::V1_1),
+                ast::Item::Unitvec(u) => self.unitvec_decl(u),
                 ast::Item::Enum(e) => self.enum_body(e),
                 ast::Item::Record(r) => self.record_body(r),
                 ast::Item::Unit(u) => self.unit_decl(u),

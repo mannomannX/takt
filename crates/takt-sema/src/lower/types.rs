@@ -239,37 +239,23 @@ impl Lowerer<'_> {
             ast::TypeKind::Mat { rows, cols, unit } => {
                 let rows = self.const_cap(rows)?;
                 let cols = self.const_cap(cols)?;
-                let units = match unit {
-                    Some(u) => {
-                        let unit = self.unit_expr(u)?;
-                        takt_mir::types::MatUnits::Uniform(self.unit_id(&unit, u.span))
-                    }
-                    None => takt_mir::types::MatUnits::Uniform(None),
+                let unit = match unit {
+                    Some(u) => self.unit_expr(u)?,
+                    None => Unit::one(),
                 };
-                if rows == 0 || cols == 0 {
-                    self.error(
-                        crate::checks::SC30,
-                        span,
-                        "eine Matrix hat mindestens eine Zeile und eine Spalte (3.11)",
-                    );
-                    return None;
-                }
-                // Pruefung 42: keine harte Grenze, ein Lint ab 16 (3.11).
-                if rows > 16 || cols > 16 {
-                    self.warn(
-                        crate::checks::SC42,
-                        span,
-                        format!(
-                            "Matrix {rows}×{cols}: Kosten n³, Scratch {} Byte (3.11)",
-                            u64::from(rows) * u64::from(cols) * 8
-                        ),
-                    );
-                }
-                Some(self.intern(Type::Mat { rows, cols, units }))
+                self.mat_shape(rows, cols, span)?;
+                self.mat_type((vec![unit; rows as usize], vec![Unit::one(); cols as usize]), span)
             }
-            ast::TypeKind::MatDim { .. } | ast::TypeKind::VecDim(_) => {
-                self.stage(span, "dimensionierte Matrizen", Stage::V1_1);
-                None
+            ast::TypeKind::MatDim { rows, cols } => {
+                let r = self.unit_tuple(rows)?;
+                let c = self.unit_tuple(cols)?;
+                self.mat_shape(r.len() as u32, c.len() as u32, span)?;
+                self.mat_type((r, c), span)
+            }
+            ast::TypeKind::VecDim(rows) => {
+                let r = self.unit_tuple(rows)?;
+                self.mat_shape(r.len() as u32, 1, span)?;
+                self.mat_type((r, vec![Unit::one()]), span)
             }
             ast::TypeKind::Map { key, value, len } => {
                 let key = self.resolve_type(key)?;
@@ -543,12 +529,23 @@ impl Lowerer<'_> {
             Type::Line { cap } => format!("line<{cap}>"),
             Type::Samples { elem, len } => format!("samples<{}, {len}>", self.type_name(*elem)),
             Type::Table { key, value } => format!("table<{}, {}>", self.type_name(*key), self.type_name(*value)),
-            Type::Mat { rows, cols, units } => match units {
-                takt_mir::types::MatUnits::Uniform(Some(u)) => {
-                    format!("mat<{rows}, {cols}>[{}]", self.program.units[u.index()].name)
+            Type::Mat { rows, cols, units } => {
+                let tuple = |t: &[UnitId]| {
+                    t.iter().map(|u| self.program.units[u.index()].name.clone()).collect::<Vec<_>>().join(", ")
+                };
+                match units {
+                    takt_mir::types::MatUnits::Uniform(Some(u)) => {
+                        format!("mat<{rows}, {cols}>[{}]", self.program.units[u.index()].name)
+                    }
+                    takt_mir::types::MatUnits::Uniform(None) => format!("mat<{rows}, {cols}>"),
+                    takt_mir::types::MatUnits::Dimensioned { rows: r, cols: c } if c.len() == 1 => {
+                        format!("vec[({})]", tuple(r))
+                    }
+                    takt_mir::types::MatUnits::Dimensioned { rows: r, cols: c } => {
+                        format!("mat[({}), ({})]", tuple(r), tuple(c))
+                    }
                 }
-                _ => format!("mat<{rows}, {cols}>"),
-            },
+            }
             Type::Map { key, value, cap } => {
                 format!("map<{}, {}, {cap}>", self.type_name(*key), self.type_name(*value))
             }

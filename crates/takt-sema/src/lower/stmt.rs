@@ -653,10 +653,9 @@ impl Lowerer<'_> {
                     _ => None,
                 }
             }
-            Place::Index2(b, _, _) => {
+            Place::Index2(b, i, j) => {
                 let t = self.place_type(b, span)?;
-                let Type::Mat { units, .. } = self.ty(t).clone() else { return None };
-                self.mat_elem_type(&units, span)
+                self.mat_index_type(t, i, j, span)
             }
         }
     }

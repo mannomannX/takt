@@ -322,6 +322,13 @@ impl Lowerer<'_> {
 
     // ------------------------------------------------------------ Einheiten
 
+    /// `unitvec X = (m, m/s)` (3.11).
+    pub fn unitvec_decl(&mut self, decl: &ast::UnitvecDecl) {
+        if let Some(units) = decl.units.iter().map(|u| self.unit_expr(u)).collect::<Option<Vec<_>>>() {
+            self.declare(&decl.name, Entity::Unitvec(units));
+        }
+    }
+
     /// `unit psi = 6894.76 Pa`, `unit degC = affine(K, 273.15)`, `unit raw = 1`.
     pub fn unit_decl(&mut self, decl: &ast::UnitDecl) {
         let (name, span) = match decl {

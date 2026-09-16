@@ -791,6 +791,9 @@ Inverse:      mat[1/C, 1/R]      (A * A.inv() = mat[R, 1/R] ist die dimensionier
 Skalar:       s * mat[R, C] = mat[s * R, C]
 Element:      A[i, j] mit konstanten Indizes: r_i * c_j; mit variablem Index nur, wenn alle betroffenen Einheiten gleich sind
 Literal:      [[e_11, ..], ..] ist typisierbar, wenn die Elementeinheiten ein aeusseres Produkt bilden (sonst Typfehler)
+Determinante: r_1 * .. * r_n * c_1 * .. * c_n
+Cholesky:     verlangt r_i = r_1 * c_i (symmetrische Einheiten) und eine Wurzel von r_1;  L : mat[sqrt(r_1) * C, (1, .., 1)]
+Kanonisch:    c_1 = 1 (Zeilen mit c_1 multipliziert, Spalten durch c_1 geteilt); Gleichheit nach Hart ist dann Gleichheit der Tupel
 ```
 Syntax und Beispiel (ein linearer Kalman-Filter, jede Zeile einheitengeprüft):
 ```
