@@ -408,12 +408,12 @@ KW-tunable,Schlüsselwort,2.2,tunable,,M0 (Parser/MIR-Entwurf),fertig,
 KW-driver,Schlüsselwort,2.2,driver,,M0 (Parser/MIR-Entwurf),fertig,
 KW-initial,Schlüsselwort,2.2,initial,,M0 (Parser/MIR-Entwurf),fertig,
 KW-state,Schlüsselwort,2.2,state,,M0 (Parser/MIR-Entwurf),fertig,
-KW-enter,Schlüsselwort,2.2,enter,,M0 (Parser/MIR-Entwurf),fertig,
-KW-loop,Schlüsselwort,2.2,loop,,M0 (Parser/MIR-Entwurf),fertig,
-KW-exit,Schlüsselwort,2.2,exit,,M0 (Parser/MIR-Entwurf),fertig,
-KW-on,Schlüsselwort,2.2,on,,M0 (Parser/MIR-Entwurf),fertig,
-KW-when,Schlüsselwort,2.2,when,,M0 (Parser/MIR-Entwurf),fertig,
-KW-after,Schlüsselwort,2.2,after,,M0 (Parser/MIR-Entwurf),fertig,
+KW-enter,Kontextuelles Wort,2.2,enter,,M6,fertig,"seit Schritt 25 kontextuell (FB-92): leitet nur im Maschinen- oder Zustandsrumpf eine Klausel ein, sonst ein Bezeichner (`50_clause_words.takt`)"
+KW-loop,Kontextuelles Wort,2.2,loop,,M6,fertig,"seit Schritt 25 kontextuell (FB-92): leitet nur im Maschinen- oder Zustandsrumpf eine Klausel ein, sonst ein Bezeichner (`50_clause_words.takt`)"
+KW-exit,Kontextuelles Wort,2.2,exit,,M6,fertig,"seit Schritt 25 kontextuell (FB-92): leitet nur im Maschinen- oder Zustandsrumpf eine Klausel ein, sonst ein Bezeichner (`50_clause_words.takt`)"
+KW-on,Kontextuelles Wort,2.2,on,,M6,fertig,"seit Schritt 25 kontextuell (FB-92): leitet nur im Maschinen- oder Zustandsrumpf eine Klausel ein, sonst ein Bezeichner (`50_clause_words.takt`)"
+KW-when,Kontextuelles Wort,2.2,when,,M6,fertig,"seit Schritt 25 kontextuell (FB-92): leitet nur im Maschinen- oder Zustandsrumpf eine Klausel ein, sonst ein Bezeichner (`50_clause_words.takt`)"
+KW-after,Kontextuelles Wort,2.2,after,,M6,fertig,"seit Schritt 25 kontextuell (FB-92): leitet nur im Maschinen- oder Zustandsrumpf eine Klausel ein, sonst ein Bezeichner (`50_clause_words.takt`)"
 KW-fault,Schlüsselwort,2.2,fault,,M0 (Parser/MIR-Entwurf),fertig,
 KW-sequence,Schlüsselwort,2.2,sequence,,M0 (Parser/MIR-Entwurf),fertig,
 KW-wait,Schlüsselwort,2.2,wait,,M0 (Parser/MIR-Entwurf),fertig,
@@ -650,7 +650,7 @@ PAR-2.5-Reservierte_Wörter,Absatz/Regel,2.5,Reservierte Wörter,,M0 (Parser/MIR
 PAR-2.5-Reservierte_Membernamen,Absatz/Regel,2.5,Reservierte Membernamen,,M0 (Parser/MIR-Entwurf),fertig,
 PAR-2.5-Offene_Enums,Absatz/Regel,2.5,Offene Enums,,M0 (Parser/MIR-Entwurf),fertig,
 PAR-2.5-Verdeckung_und_Additivität,Absatz/Regel,2.5,Verdeckung und Additivität,,M0 (Parser/MIR-Entwurf),fertig,
-PAR-2.5-Operator_Metadaten_v1.1,Absatz/Regel,2.5,Operator-Metadaten (v1.1),v1.1,M6,offen,
+PAR-2.5-Operator_Metadaten_v1.1,Absatz/Regel,2.5,Operator-Metadaten (v1.1),v1.1,M6,fertig,"Parser, MIR (`Meta`) und Hash-Trennung standen seit M0/M5; Schritt 25 prueft alle sechs Traeger und die Hashes (`takt-sema/tests/operator_metadata.rs`)"
 PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M1 (Kernsemantik),teilweise,
 PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M1 (Kernsemantik),teilweise,
 PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M1 (Kernsemantik),teilweise,

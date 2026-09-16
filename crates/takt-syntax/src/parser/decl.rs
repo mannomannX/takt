@@ -914,7 +914,7 @@ impl<'t, 's> Parser<'t, 's> {
         self.expect_op(":")?;
         self.expect_newline()?;
         self.expect_indent()?;
-        self.expect_kw("when")?;
+        self.expect_word("when")?;
         let when = self.parse_guard()?;
         self.expect_newline()?;
         self.expect_kw("then")?;

@@ -104,9 +104,9 @@ impl<'t, 's> Parser<'t, 's> {
         self.bump();
         let initial = self.upper()?;
         self.expect_newline()?;
-        let loop_block = if self.at_kw("loop") { Some(self.parse_loop_block()?) } else { None };
+        let loop_block = if self.at_word("loop") { Some(self.parse_loop_block()?) } else { None };
         let mut handlers = Vec::new();
-        while self.at_kw("on") {
+        while self.at_word("on") {
             handlers.push(self.parse_on_handler()?);
         }
         let mut states = Vec::new();
@@ -195,7 +195,9 @@ impl<'t, 's> Parser<'t, 's> {
         while !self.at(TokenKind::Dedent) && !self.at(TokenKind::Eof) {
             let item_start = self.pos;
             let item_phase = match self.kind() {
-                TokenKind::Keyword => match self.text() {
+                // Die Klauselwoerter sind kontextuell (2.2, FB-92): hier
+                // stehen keine Anweisungen, also ist `on` eine Klausel.
+                k if Self::is_word(k) => match self.text() {
                     "fault" | "var" | "pub" | "instance" => Phase::Prelude,
                     "initial" => Phase::Initial,
                     "enter" => Phase::Enter,
@@ -304,21 +306,21 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `enter_block`
     pub(super) fn parse_enter_block(&mut self) -> PResult<Block> {
-        self.expect_kw("enter")?;
+        self.expect_word("enter")?;
         self.expect_op(":")?;
         self.parse_action_block()
     }
 
     /// `exit_block`
     pub(super) fn parse_exit_block(&mut self) -> PResult<Block> {
-        self.expect_kw("exit")?;
+        self.expect_word("exit")?;
         self.expect_op(":")?;
         self.parse_action_block()
     }
 
     /// `loop_block`
     pub(super) fn parse_loop_block(&mut self) -> PResult<Block> {
-        self.expect_kw("loop")?;
+        self.expect_word("loop")?;
         self.expect_op(":")?;
         self.parse_block()
     }
@@ -326,7 +328,7 @@ impl<'t, 's> Parser<'t, 's> {
     /// `on_handler`
     pub(super) fn parse_on_handler(&mut self) -> PResult<OnHandler> {
         let start = self.pos;
-        self.expect_kw("on")?;
+        self.expect_word("on")?;
         let stream = self.ident()?;
         let pattern = if self.at_kw("matches") || self.at_kw("has") {
             let kind = if self.eat_kw("matches") {
@@ -340,7 +342,7 @@ impl<'t, 's> Parser<'t, 's> {
             None
         };
         let binding = if self.eat_kw("as") { Some(self.ident()?) } else { None };
-        let guard = if self.eat_kw("when") { Some(self.parse_expr()?) } else { None };
+        let guard = if self.eat_word("when") { Some(self.parse_expr()?) } else { None };
         self.expect_op(":")?;
         let body = self.parse_block()?;
         Ok(OnHandler { stream, pattern, binding, guard, body, span: self.span_from(start) })
@@ -349,10 +351,10 @@ impl<'t, 's> Parser<'t, 's> {
     /// `transition`
     pub(super) fn parse_transition(&mut self) -> PResult<Transition> {
         let start = self.pos;
-        let trigger = if self.eat_kw("when") {
+        let trigger = if self.eat_word("when") {
             Trigger::When(self.parse_guard()?)
         } else {
-            self.expect_kw("after")?;
+            self.expect_word("after")?;
             Trigger::After(self.parse_duration_expr()?)
         };
         self.expect_op(":")?;

@@ -1,0 +1,22 @@
+(system
+  (language 1)
+  (tick 10ms))
+(input after :bool @hw("gpio/after"))
+(output on :bool @sim("on") safe=false)
+(output loops :int in 0..999 @sim("loops"))
+(machine blinker
+  (var loop :int in 0..999 0)
+  (var enter :bool false)
+  (initial OFF)
+  (state OFF
+    (loop
+      (= loop (+ loop 1))
+      (= loops loop)
+      (= enter (.or after false)))
+    (when enter -> ON))
+  (state ON
+    (enter
+      (= on true))
+    (after 100ms -> OFF)
+    (exit
+      (= on false))))

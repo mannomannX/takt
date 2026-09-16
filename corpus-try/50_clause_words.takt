@@ -1,0 +1,31 @@
+# 50 — Klauselwoerter als Bezeichner (2.2, FB-92): `enter`, `exit`, `loop`,
+# `on`, `when` und `after` leiten nur im Rumpf einer Maschine oder eines
+# Zustands eine Klausel ein und sind sonst gewoehnliche Namen.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  after : bool          @ hw("gpio/after")
+output on    : bool          @ sim("on") with safe = false
+output loops : int in 0..999 @ sim("loops")
+
+machine blinker:
+    var loop  : int in 0..999 = 0
+    var enter : bool = false
+
+    initial OFF
+
+    state OFF:
+        loop:
+            loop = loop + 1
+            loops = loop
+            enter = after.or(false)
+        when enter: -> ON
+
+    state ON:
+        enter:
+            on = true
+        after 100 ms: -> OFF
+        exit:
+            on = false

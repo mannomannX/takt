@@ -138,7 +138,7 @@ fn build_response(req: RdmHeader, own: Uid, rt: u8,
 system import type enum record unit const param profile stream port node unitvec property assumption
 input output command fn native block machine instance scenario campaign trigger
 var pub persist signal tunable driver
-initial state enter loop exit on when after fault sequence wait until expect repeat step every
+initial state fault sequence wait until expect repeat step every
 check alert log abort measure verify verdict send at pulse cancel raise job arm disarm then bound requires ensures
 program sweep stop_on
 match case if elif else for in range break return pass
@@ -147,7 +147,7 @@ true false none default with
 reserviert (ohne Bedeutung, als Bezeichner verboten): region while yield await async spawn select where impl trait module export extern unsafe try catch throw class struct union static global volatile defer
 ```
 
-**Regel.** Ein Wort ist Schlüsselwort, wenn es eine Aussage, Deklaration oder Klausel am Zeilenanfang einleitet (`check`, `state`, `bound`) oder in Ausdrücken als Operator oder Literal wirkt (`and`, `matches`, `none`). Alle anderen Wörter der Grammatik (2.3) sind *kontextuell*: Typnamen (`bool`, `bytes`, `mat`, `f64`), Attributnamen (`safe`, `rate`, `debounce`), Positionswörter (`layout`, `offset`, `timeout`, `idle`, `resume`, `from`) und Systemeinträge (`tick`, `language`) gelten nur an ihrer Stelle und bleiben andernorts gewöhnliche Bezeichner. Damit darf ein Record ein Feld `offset` oder `len` haben, und die Bibliothek darf Blöcke `rate` und `debounce` nennen. Als Einheitenname nach einer Zahl kommt ein kontextuelles Wort nicht vor (`3 timeout` ist die Zahl 3 vor der Klausel `timeout`). `now`, `time_in_state`, `tick` und `last_fault` sind eingebaute Bezeichner, keine Schlüsselwörter.
+**Regel.** Ein Wort ist Schlüsselwort, wenn es eine Aussage, Deklaration oder Klausel am Zeilenanfang einleitet (`check`, `state`, `bound`) oder in Ausdrücken als Operator oder Literal wirkt (`and`, `matches`, `none`). Alle anderen Wörter der Grammatik (2.3) sind *kontextuell*: Typnamen (`bool`, `bytes`, `mat`, `f64`), Attributnamen (`safe`, `rate`, `debounce`), Positionswörter (`layout`, `offset`, `timeout`, `idle`, `resume`, `from`) und Systemeinträge (`tick`, `language`) gelten nur an ihrer Stelle und bleiben andernorts gewöhnliche Bezeichner. Damit darf ein Record ein Feld `offset` oder `len` haben, und die Bibliothek darf Blöcke `rate` und `debounce` nennen. Als Einheitenname nach einer Zahl kommt ein kontextuelles Wort nicht vor (`3 timeout` ist die Zahl 3 vor der Klausel `timeout`). `now`, `time_in_state`, `tick` und `last_fault` sind eingebaute Bezeichner, keine Schlüsselwörter. Die Klauselwörter des Maschinen- und Zustandsrumpfs `enter`, `exit`, `loop`, `on`, `when` und `after` leiten nur dort eine Klausel ein, wo keine Anweisung stehen kann, und sind darum ebenfalls kontextuell: `var on : bool` ist ein gewöhnlicher Name (FB-92).
 
 ### 2.3 Grammatik (EBNF)
 

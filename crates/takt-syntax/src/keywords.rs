@@ -5,10 +5,11 @@
 //! eine Abweichung bricht den Build.
 
 /// Schluesselwoerter: leiten eine Aussage, Deklaration oder Klausel ein oder wirken
-/// in Ausdruecken als Operator oder Literal (Regel in 2.2).
+/// in Ausdruecken als Operator oder Literal (Regel in 2.2). Die Klauselwoerter des
+/// Maschinen- und Zustandsrumpfs (`enter`, `exit`, `loop`, `on`, `when`, `after`)
+/// stehen nur dort und sind kontextuell (FB-92).
 pub const KEYWORDS: &[&str] = &[
     "abort",
-    "after",
     "alert",
     "always",
     "and",
@@ -31,11 +32,9 @@ pub const KEYWORDS: &[&str] = &[
     "elif",
     "else",
     "ensures",
-    "enter",
     "enum",
     "eventually",
     "every",
-    "exit",
     "expect",
     "false",
     "fault",
@@ -51,7 +50,6 @@ pub const KEYWORDS: &[&str] = &[
     "instance",
     "job",
     "log",
-    "loop",
     "machine",
     "match",
     "matches",
@@ -61,7 +59,6 @@ pub const KEYWORDS: &[&str] = &[
     "node",
     "none",
     "not",
-    "on",
     "once",
     "or",
     "output",
@@ -103,7 +100,6 @@ pub const KEYWORDS: &[&str] = &[
     "verdict",
     "verify",
     "wait",
-    "when",
     "with",
 ];
 
@@ -120,6 +116,7 @@ pub const CONTEXTUAL: &[&str] = &[
     "Duration",
     "Edge",
     "affine",
+    "after",
     "align",
     "allowlist",
     "asap",
@@ -143,7 +140,9 @@ pub const CONTEXTUAL: &[&str] = &[
     "drop",
     "drop_oldest",
     "duration",
+    "enter",
     "eq",
+    "exit",
     "expect_len",
     "f32",
     "f64",
@@ -175,6 +174,7 @@ pub const CONTEXTUAL: &[&str] = &[
     "line",
     "lines",
     "little",
+    "loop",
     "map",
     "mat",
     "max_age",
@@ -186,6 +186,7 @@ pub const CONTEXTUAL: &[&str] = &[
     "monitor",
     "numeric",
     "offset",
+    "on",
     "open",
     "ord",
     "output_timing",
@@ -218,6 +219,7 @@ pub const CONTEXTUAL: &[&str] = &[
     "vec",
     "wake",
     "wcet",
+    "when",
     "within",
     "word",
 ];

@@ -153,6 +153,12 @@ impl<'t, 's> Parser<'t, 's> {
         self.kind() == TokenKind::Op && self.text() == op
     }
 
+    /// Folgt dem Wort eine Zuweisung oder ein Zugriff? Dann ist ein
+    /// Klauselwort wie `on` ein Bezeichner (2.2, FB-92).
+    fn assigned_next(&self) -> bool {
+        ["=", "+=", "-=", "*=", "/=", ".", "["].iter().any(|op| self.at_op_at(1, op))
+    }
+
     fn at_op_at(&self, n: usize, op: &str) -> bool {
         let t = self.tok_at(n);
         t.kind == TokenKind::Op && self.text_of(t) == op
@@ -883,7 +889,7 @@ impl<'t, 's> Parser<'t, 's> {
     }
 
     fn parse_snippet_item(&mut self) -> PResult<SnippetItem> {
-        if self.kind() == TokenKind::Keyword {
+        if Self::is_word(self.kind()) && !self.assigned_next() {
             match self.text() {
                 "fault" => return Ok(SnippetItem::MachinePrelude(MachinePrelude::Fault(self.parse_fault_clause()?))),
                 "persist" => {
