@@ -25,9 +25,9 @@ mod common;
 
 /// Die Beispiele, die der M4-Exit nennt.
 ///
-/// 14.7 fehlt: Es laeuft auf Hardware (M5-Exit), und es gibt kein
-/// Programm dafuer im Korpus. 14.8 gehoert zu M6 (Flash-Modell-
-/// Kampagne) und hat seine Golden-Traces bereits.
+/// 14.7 laeuft im Interpreter mit Golden-Traces; nativ fehlt ihm das
+/// Record-Muster auf einem Strom (unten). 14.8 gehoert zu M6
+/// (Flash-Modell-Kampagne) und hat seine Golden-Traces bereits.
 const EXAMPLES: [&str; 6] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6"];
 
 /// Die uebrigen, mit dem Konstrukt, an dem der Codegen abbricht.
@@ -37,9 +37,10 @@ const EXAMPLES: [&str; 6] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6"];
 /// sobald das Konstrukt gesenkt wird — und dann faellt der Test auf, der
 /// ihn noch fuehrt.
 ///
-/// Leer: Alle sechs Beispiele, die M4 traegt, laufen. 14.7 gehoert zu M5
-/// (Hardware), 14.8 zu M6.
-const OPEN: [(&str, &str); 0] = [];
+/// 14.7: `when button matches Edge(rising = true) as e` — ein
+/// Record-Muster auf einem Strom. Der Codegen senkt Muster nur als Text
+/// (DFA); Record-Elemente haben im Strom noch keine Byte-Form.
+const OPEN: [(&str, &str); 1] = [("14_7", "Record-Muster in einem Guard")];
 
 /// Wie viele Ticks verglichen werden.
 ///
@@ -126,5 +127,5 @@ fn the_remaining_examples_name_what_is_missing() {
         }
     }
     assert!(unerwartet.is_empty(), "{}", unerwartet.join("\n"));
-    assert_eq!(EXAMPLES.len() + OPEN.len(), 6, "die sechs Beispiele des M4-Exits");
+    assert_eq!(EXAMPLES.len() + OPEN.len(), 7, "die sechs Beispiele des M4-Exits und 14.7");
 }

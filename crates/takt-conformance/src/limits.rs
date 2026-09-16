@@ -25,6 +25,15 @@ pub struct Limit {
 /// wird, ist schlechter als keine, weil ihr jemand glaubt.
 pub const LIMITS: &[Limit] = &[
     Limit {
+        was: "Record-Muster auf Stroemen (8.7): `when s matches Edge(rising = true) as e`",
+        warum: "Der Codegen senkt Muster nur als Text ueber den DFA (11.2); ein Record-Element \
+                hat im Byte-Ring der Runtime noch keine Form, also nichts, wogegen ein Guard \
+                oder Handler vergleichen koennte. Der Interpreter prueft die Felder auf `Value`.",
+        wann: "M6 mit den Geraeteprofilen (8.10) und dem Treiberrand fuer Stroeme (12.6): Dort \
+               entsteht die Elementform, die ein Treiber liefert — `Edge` mit Zeitstempel aus \
+               dem Timer-Capture (12.3). 14.7 steht bis dahin in `examples.rs` unter OPEN.",
+    },
+    Limit {
         was: "Skalare Inputs ueber die Zeit",
         warum: "Commands prueft die Abnahme seit Schritt 10 (ein Puls, ein Byte, 8.5); \
                 skalare Lieferungen mit Wert, Qualitaet und Alter brauchen die Umrechnung \

@@ -4,6 +4,8 @@
 
 use takt_diag::{Span, Stage};
 use takt_mir::expr::*;
+use takt_mir::machine::{BlockInstance, VarDef, VarScope};
+use takt_mir::stmt::{Method, Place, Stmt, StmtKind};
 use takt_mir::types::{FloatWidth, IntWidth, Type};
 use takt_mir::*;
 use takt_syntax::ast;
@@ -726,11 +728,77 @@ impl Lowerer<'_> {
             }
         };
         let def = &self.program.blocks[block.index()];
+        // 5.7: `if rose(start):` — ein Block ohne Konstruktorparameter, mit
+        // Argumenten gerufen, ist eine anonyme Instanz je Aufrufstelle; die
+        // Argumente gehen an `step`.
+        if def.params.is_empty() && !args.is_empty() {
+            return self.anonymous_step(block, args, span);
+        }
         let params: Vec<(String, TypeId, Option<Expr>)> =
             def.params.iter().map(|p| (p.name.clone(), p.ty, p.default.clone())).collect();
         let args = self.args(&params, args, span)?;
         let ty = self.block_type(block);
         Some(Expr::new(ExprKind::BlockInit { block, args, count: None }, ty, span))
+    }
+
+    /// Anonyme Instanz (5.7): versteckte Maschinenvariable plus
+    /// `tmp = inst.step(args)` vor der umgebenden Anweisung. Ausdruecke
+    /// bleiben seiteneffektfrei (4.4); der Aufruf steht als Anweisung.
+    fn anonymous_step(&mut self, block: BlockId, args: &[ast::Arg], span: Span) -> Option<Expr> {
+        if self.mctx.is_none() || !self.in_stmt {
+            self.error_hint(
+                SC3,
+                span,
+                "anonyme Blockinstanz nur in einer Anweisung (5.7)",
+                "fuer Guards eine benannte Instanz anlegen und ihr `step` als Anweisung rufen",
+            );
+            return None;
+        }
+        if self.for_depth > 0 {
+            self.error(SC3, span, "`step` hoechstens einmal je Tick: kein Aufruf in einer `for`-Schleife (5.7)");
+            return None;
+        }
+        let def = self.program.blocks[block.index()].clone();
+        let Some(step) = def.step else {
+            self.error(SC3, span, format!("Block `{}` hat kein `step`", def.name));
+            return None;
+        };
+        let f = &self.program.fns[step.index()];
+        let tys: Vec<TypeId> = f.params.iter().map(|p| p.ty).collect();
+        let Some(ret) = f.ret else {
+            self.error(SC3, span, format!("`{}` liefert keinen Wert", def.name));
+            return None;
+        };
+        let arg_exprs = self.method_args(args, &tys, span)?;
+        let n = self.anon;
+        self.anon += 1;
+        let inst_ty = self.block_type(block);
+        let init = Expr::new(ExprKind::BlockInit { block, args: Vec::new(), count: None }, inst_ty, span);
+        let inst = self.new_var(VarDef {
+            name: format!("_{}{n}", def.name),
+            ty: inst_ty,
+            init: Some(init),
+            scope: VarScope::Machine,
+            public: false,
+            span,
+        });
+        self.mctx.as_mut()?.machine.layout.block_instances.push(BlockInstance { var: inst, block, count: 1 });
+        let out = self.new_var(VarDef {
+            name: format!("_{}{n}_out", def.name),
+            ty: ret,
+            init: Some(Expr::new(ExprKind::Default, ret, span)),
+            scope: VarScope::Machine,
+            public: false,
+            span,
+        });
+        let call = StmtKind::MethodCall {
+            target: Some(Place::Var(out)),
+            receiver: Place::Var(inst),
+            method: Method::Step,
+            args: arg_exprs,
+        };
+        self.pending.push(Stmt { kind: call, span });
+        Some(Expr::new(ExprKind::Var(out), ret, span))
     }
 
     /// Typ einer Blockinstanz: ein Handle-Typ je Block (Bloecke sind keine Werte).

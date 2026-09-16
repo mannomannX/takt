@@ -41,6 +41,10 @@ impl Lowerer<'_> {
     /// Anweisungen; ein Fehler ueberspringt genau die betroffene Anweisung.
     pub fn stmts(&mut self, stmts: &[ast::Stmt], kind: BlockKind) -> Vec<Stmt> {
         let mut out = Vec::new();
+        // Der Puffer gehoert zur umgebenden Anweisung: Ein `if`-Rumpf darf
+        // den Aufruf aus seiner Bedingung nicht schlucken.
+        let outer = std::mem::take(&mut self.pending);
+        let was = self.in_stmt;
         for s in stmts {
             // `pulse o = v for d` ist Zucker fuer zwei Anweisungen (7.5,
             // 6.2): setzen und die Wiederherstellung planen.
@@ -50,10 +54,15 @@ impl Lowerer<'_> {
                 }
                 continue;
             }
-            if let Some(m) = self.stmt(s, kind) {
+            self.in_stmt = true;
+            let m = self.stmt(s, kind);
+            out.append(&mut self.pending);
+            if let Some(m) = m {
                 out.push(m);
             }
         }
+        self.in_stmt = was;
+        self.pending = outer;
         out
     }
 
@@ -936,7 +945,7 @@ impl Lowerer<'_> {
         Some(vec![x])
     }
 
-    fn method_args(&mut self, args: &[ast::Arg], tys: &[TypeId], span: Span) -> Option<Vec<Expr>> {
+    pub(crate) fn method_args(&mut self, args: &[ast::Arg], tys: &[TypeId], span: Span) -> Option<Vec<Expr>> {
         if args.len() != tys.len() || args.iter().any(|a| a.name.is_some()) {
             self.error(SC3, span, format!("{} positionale Argumente erwartet", tys.len()));
             return None;
@@ -1020,6 +1029,20 @@ impl Lowerer<'_> {
     }
 
     fn for_stmt(
+        &mut self,
+        target: &ast::ForTarget,
+        iter: &ast::ForIter,
+        body: &ast::Block,
+        kind: BlockKind,
+        span: Span,
+    ) -> Option<StmtKind> {
+        self.for_depth += 1;
+        let out = self.for_body(target, iter, body, kind, span);
+        self.for_depth -= 1;
+        out
+    }
+
+    fn for_body(
         &mut self,
         target: &ast::ForTarget,
         iter: &ast::ForIter,

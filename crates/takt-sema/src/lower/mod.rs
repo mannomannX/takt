@@ -222,6 +222,16 @@ pub struct Lowerer<'a> {
     pub state_enums: HashMap<MachineId, EnumId>,
     /// Zustandsrecord je Block (Typ der Instanzen).
     pub block_records: HashMap<BlockId, RecordId>,
+    /// Ausgehobene `step`-Aufrufe anonymer Instanzen (5.7); `stmts` stellt
+    /// sie vor die Anweisung, in der sie stehen.
+    pub pending: Vec<takt_mir::stmt::Stmt>,
+    /// Gerade wird eine Anweisung gesenkt — nur dort darf ein Aufruf
+    /// ausgehoben werden, in Guards nicht.
+    pub in_stmt: bool,
+    /// Tiefe verschachtelter `for`-Schleifen (5.7: kein `step` darin).
+    pub for_depth: u32,
+    /// Laufende Nummer anonymer Instanzen.
+    pub anon: u32,
     /// Zaehler fuer eindeutige Namen (Instanzen, Segmente).
     pub counter: u32,
 }
@@ -273,6 +283,10 @@ impl<'a> Lowerer<'a> {
             state_enums: HashMap::new(),
             block_records: HashMap::new(),
             counter: 0,
+            pending: Vec::new(),
+            in_stmt: false,
+            for_depth: 0,
+            anon: 0,
         }
     }
 

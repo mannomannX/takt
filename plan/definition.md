@@ -2495,9 +2495,10 @@ machine bms every 100 ms:
     pub var soc             : float[pct] = 0 pct
     pub var charge_as       : float[A*s] = 0 A*s
     var coulomb             = integrate[A](limit = 72000 A*s)
-    initial SELFTEST
+    initial ACTIVE
 
     state ACTIVE:  # Interlocks fuer alle Betriebszustaende
+        initial SELFTEST
         loop:
             for i in range(4):
                 check cell_v[i] < V_MAX + 0.05 V, "cell {i} overvoltage {cell_v[i]}"

@@ -609,7 +609,12 @@ impl Lowerer<'_> {
                     continue;
                 }
             }
-            if let Some(i) = self.seq_item(item) {
+            let was = self.in_stmt;
+            self.in_stmt = matches!(item, ast::SeqItem::Stmt(_));
+            let i = self.seq_item(item);
+            self.in_stmt = was;
+            out.extend(self.pending.drain(..).map(SeqItem::Stmt));
+            if let Some(i) = i {
                 out.push(i);
             }
         }

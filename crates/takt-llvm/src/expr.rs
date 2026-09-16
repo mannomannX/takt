@@ -554,6 +554,11 @@ fn intrinsic(
             m.needs_intrinsic(&format!("{} @llvm.abs.{}({}, i1)", x.ty, x.ty, x.ty));
             m.inst(&format!("call {} @llvm.abs.{}({} {}, i1 false)", x.ty, x.ty, x.ty, x.value))
         }
+        Intrinsic::Abs => {
+            let x = a(0)?;
+            m.needs_intrinsic(&format!("{} @llvm.fabs.{}({})", x.ty, x.ty, x.ty));
+            m.inst(&format!("call {} @llvm.fabs.{}({} {})", x.ty, x.ty, x.ty, x.value))
+        }
         Intrinsic::Min | Intrinsic::Max => {
             let (x, y) = (a(0)?, a(1)?);
             let signed = int_is_signed_ty(args[0].ty, p);
@@ -573,7 +578,31 @@ fn intrinsic(
         // die Konstante dorthin), also ist ihre Zahl bekannt und die
         // Suche abgerollt — keine Schleife, keine Schranke zu pruefen.
         Intrinsic::Interp => return interp(args, want, p, m, vars),
-        _ => return Err(NotYet { what: "Primitive" }),
+        // Ganzzahl ohne Einheit, wie im Interpreter: `f.round()` (halb weg
+        // von null, `llvm.round`) und ausserhalb von i64 ein `RangeFault`.
+        Intrinsic::Round | Intrinsic::Floor | Intrinsic::Ceil => {
+            let x = a(0)?;
+            let name = match op {
+                Intrinsic::Round => "round",
+                Intrinsic::Floor => "floor",
+                _ => "ceil",
+            };
+            m.needs_intrinsic(&format!("{} @llvm.{name}.{}({})", x.ty, x.ty, x.ty));
+            let r = m.inst(&format!("call {} @llvm.{name}.{}({} {})", x.ty, x.ty, x.ty, x.value));
+            let Some(target) = vars.fault_label() else {
+                return Err(NotYet { what: "Rundung ohne Fault-Pfad" });
+            };
+            let lo = float_literal(i64::MIN as f64, &x.ty);
+            let hi = float_literal(i64::MAX as f64, &x.ty);
+            let ge = m.inst(&format!("fcmp oge {} {r}, {lo}", x.ty));
+            let lt = m.inst(&format!("fcmp olt {} {r}, {hi}", x.ty));
+            let ok = m.inst(&format!("and i1 {ge}, {lt}"));
+            let go_on = format!("gerundet_{}", m.next_label());
+            m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
+            m.label(&go_on);
+            m.inst(&format!("fptosi {} {r} to i64", x.ty))
+        }
+        _ => return Err(NotYet { what: op.name() }),
     };
     Ok(Lowered { value: value.to_string(), ty: want.clone() })
 }

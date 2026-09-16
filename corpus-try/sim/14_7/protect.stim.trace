@@ -1,0 +1,2 @@
+t=300 cmd overvolt
+t=900 cmd recover

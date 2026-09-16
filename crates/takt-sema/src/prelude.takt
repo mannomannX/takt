@@ -78,3 +78,28 @@ fn clamp[U](x: float[U], lo: float[U], hi: float[U]) -> float[U]:
 
 fn lerp[U](a: float[U], b: float[U], t: float) -> float[U]:
     return a + (b - a) * t
+
+# --- Standardbibliothek: Bloecke (5.7, 11.4) ----------------------------
+block rising():
+    var last : bool = false
+    step(x: bool) -> bool:
+        var rose : bool = x and not last
+        last = x
+        return rose
+
+block falling():
+    var last : bool = false
+    step(x: bool) -> bool:
+        var fell : bool = last and not x
+        last = x
+        return fell
+
+block integrate[U](limit: float[U*s]):
+    var acc : float[U*s] = 0
+    step(x: float[U], dt: Duration in tick..1 h) -> float[U*s]:
+        acc = acc + x * dt.as(s)
+        if acc > limit:
+            acc = limit
+        elif acc < -limit:
+            acc = -limit
+        return acc
