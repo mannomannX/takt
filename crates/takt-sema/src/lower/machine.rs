@@ -802,6 +802,20 @@ impl Lowerer<'_> {
         self.declare(&decl.name, entity);
     }
 
+    /// Ein Instanzargument: konstant oder ein `param` — eine Laufkonstante,
+    /// die eine Kampagne sweept (13.7); ein `tunable` nicht, die Instanz
+    /// wird einmal gebildet (8.4).
+    fn run_constant(&mut self, v: Expr) -> Option<Expr> {
+        match &v.kind {
+            ExprKind::Param(id) if !self.program.params[id.index()].tunable => Some(v),
+            ExprKind::Param(_) => {
+                self.error(SC3, v.span, "ein `tunable param` ist kein Instanzargument (8.4)");
+                None
+            }
+            _ => self.fold(v),
+        }
+    }
+
     /// Bindet Argumente an die Parameter einer Vorlage.
     fn instance_bindings(
         &mut self,
@@ -874,7 +888,7 @@ impl Lowerer<'_> {
                 }
                 None => {
                     let v = self.check(&a.value, ty)?;
-                    let v = self.fold(v)?;
+                    let v = self.run_constant(v)?;
                     values.push(v.clone());
                     bindings.insert(p.name.name.clone(), Bound::Value(v));
                 }

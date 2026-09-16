@@ -1,0 +1,207 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Stromausfall-Kampagne gegen das Journal (5.9, 13.7, 8.11): Das Programm
+# schreibt den alten und dann den neuen Eintrag so, wie es `takt-rt-core`
+# tut — Sektor loeschen, Nutzlast, Kopf zuletzt, CRC32 ueber Kopf und
+# Nutzlast, zwei Slots im Wechsel — in das Flash-Modell; `CUT` laesst den
+# Strom nach so vielen Bytes wegbleiben. Der Neustart findet den alten
+# oder den neuen Stand, nie etwas dazwischen; die Kampagne `power_cut`
+# faehrt jede Stelle (dieselbe Aussage wie `takt-rt-core/tests/journal.rs`).
+
+native fn crc32(b: bytes<64>) -> u32 with cost = {i32: 1000}, stack = 64, total
+
+param CUT : int in 0..1000 = 0
+
+output flash_cmd        : FlashCmd            @ hw("flash/cmd")    with safe = NONE
+output flash_data       : stream<u8>          @ hw("flash/tx")     with max_rate = 4000 Hz, capacity = 96
+input  flash_status     : FlashStatus         @ hw("flash/status") with max_age = 10 ms
+input  flash_rx         : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
+output flash_status_sim : FlashStatus         @ sim("flash/status")
+output flash_rx_sim     : stream<bytes<4096>> @ sim("flash/rx")    with capacity = 4096
+output found            : int in 0..3         @ hw("o/found")      with safe = 0
+output cut_in           : int in 0..2         @ hw("o/cut_in")     with safe = 0
+
+instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, sectors = 2, t_erase = 2 ms, t_program = 1 ms, cut_at_byte = CUT)
+
+# Was ein Slot beim Start hergibt: 1 alter Stand, 2 neuer Stand, 3 etwas anderes.
+record Entry:
+    present : bool
+    seqno   : int in 0..1000
+    kind    : int in 0..3
+
+fn old_text() -> bytes<64>:
+    var b : bytes<64> = default
+    for x in [0x61, 0x6C, 0x74, 0x65, 0x72, 0x2D, 0x73, 0x74, 0x61, 0x6E, 0x64]:
+        b.push(x as u8)
+    return b
+
+fn new_text() -> bytes<64>:
+    var b : bytes<64> = default
+    for x in [0x6E, 0x65, 0x75, 0x65, 0x72, 0x2D, 0x73, 0x74, 0x61, 0x6E, 0x64]:
+        b.push(x as u8)
+    return b
+
+fn le32(v: int) -> bytes<4>:
+    var b : bytes<4> = default
+    b.push((v & 0xFF) as u8)
+    b.push(((v >> 8) & 0xFF) as u8)
+    b.push(((v >> 16) & 0xFF) as u8)
+    b.push(((v >> 24) & 0xFF) as u8)
+    return b
+
+fn read32(page: bytes<4096>, pos: int) -> int:
+    return (page[pos] as int) | ((page[pos + 1] as int) << 8) | ((page[pos + 2] as int) << 16) | ((page[pos + 3] as int) << 24)
+
+# Der Slot-Kopf aus takt-rt-core: Magic TKPJ, Version, Sequenznummer,
+# Logik-Hash, Laenge, CRC32 ueber die ersten 28 Byte und die Nutzlast.
+fn entry_header(seq: int, payload: bytes<64>) -> bytes<32>:
+    var h      : bytes<32> = default
+    var magic  : bytes<4> = le32(0x4A504B54)
+    var seqb   : bytes<4> = le32(seq)
+    var logic  : bytes<4> = le32(0x7A6B)
+    var length : bytes<4> = le32(payload.len)
+    for x in magic:
+        h.push(x)
+    h.push(1)
+    for i in range(3):
+        h.push(0)
+    for x in seqb:
+        h.push(x)
+    for i in range(4):
+        h.push(0)
+    for x in logic:
+        h.push(x)
+    for i in range(4):
+        h.push(0)
+    for x in length:
+        h.push(x)
+    var buf : bytes<64> = default
+    for x in h:
+        buf.push(x)
+    for x in payload:
+        buf.push(x)
+    var sum : bytes<4> = le32(crc32(buf) as int)
+    for x in sum:
+        h.push(x)
+    return h
+
+fn header_of(page: bytes<4096>) -> Entry:
+    var e : Entry = default
+    if page.len < 32:
+        return e
+    if read32(page, 0) != 0x4A504B54:
+        return e
+    if (read32(page, 4) & 0xFFFF) > 1:
+        return e
+    var length : int = read32(page, 24)
+    if length > 32 or 32 + length > page.len:
+        return e
+    var buf : bytes<64> = default
+    for i in range(28):
+        buf.push(page[i])
+    for i in range(32):
+        if i < length:
+            buf.push(page[32 + i])
+    if (crc32(buf) as int) != read32(page, 28):
+        return e
+    e.present = true
+    e.seqno = read32(page, 8)
+    e.kind = 3
+    if length == 11 and page[32] == 0x61:
+        e.kind = 1
+    elif length == 11 and page[32] == 0x6E:
+        e.kind = 2
+    return e
+
+machine journal:
+    var payload : bytes<64> = default
+    var header  : bytes<32> = default
+    var slot    : int in 0..1 = 0
+    var seq     : int in 0..1000 = 0
+    var phase   : int in 0..2 = 0
+    var a       : Entry = default
+    var b       : Entry = default
+    initial START
+
+    state START:
+        enter:
+            phase = 1
+            slot = 0
+            seq = 1
+            payload = old_text()
+        when true: -> WRITE
+
+    # Ein Schreibvorgang wie `Journal::poll`: loeschen, Nutzlast, Kopf.
+    state WRITE:
+        enter:
+            header = entry_header(seq, payload)
+        sequence:
+            flash_cmd = ERASE(sector = slot as u32)
+            until flash_status == DONE timeout 50 ms
+            flash_cmd = NONE
+            until flash_status == IDLE timeout 50 ms
+            flash_cmd = PROGRAM(addr = (slot * 4096 + 32) as u32, size = payload.len as u32)
+            send flash_data, payload
+            until flash_status == DONE timeout 50 ms
+            flash_cmd = NONE
+            until flash_status == IDLE timeout 50 ms
+            flash_cmd = PROGRAM(addr = (slot * 4096) as u32, size = 32)
+            send flash_data, header
+            until flash_status == DONE timeout 50 ms
+            flash_cmd = NONE
+            until flash_status == IDLE timeout 50 ms
+            -> WRITTEN
+        when flash_status == ERROR(code = 1): -> CUT
+
+    state WRITTEN:
+        when phase == 1:
+            phase = 2
+            slot = 1
+            seq = 2
+            payload = new_text()
+            -> WRITE
+        when true: -> REBOOT
+
+    # Der Strom blieb weg: merken, in welchem Vorgang.
+    state CUT:
+        enter:
+            cut_in = phase
+            flash_cmd = NONE
+        when flash_status == IDLE: -> REBOOT
+
+    # Strom wieder da: beide Slots lesen.
+    state REBOOT:
+        sequence:
+            flash_cmd = READ(addr = 0, size = 4096)
+            until flash_rx as p timeout 50 ms
+            a = header_of(p.data)
+            flash_cmd = NONE
+            until flash_status == IDLE timeout 50 ms
+            flash_cmd = READ(addr = 4096, size = 4096)
+            until flash_rx as q timeout 50 ms
+            b = header_of(q.data)
+            flash_cmd = NONE
+            -> JUDGE
+
+    # Beim Start gewinnt der gueltige Eintrag mit der hoeheren Sequenznummer.
+    state JUDGE:
+        enter:
+            found = 0
+            if a.present and (not b.present or a.seqno >= b.seqno):
+                found = a.kind
+            elif b.present:
+                found = b.kind
+            measure stand = found
+            if cut_in == 1:
+                verify found != 2, "neuer Stand ohne abgeschlossenen Schreibvorgang"
+            else:
+                verify found != 0, "alter Eintrag verloren"
+            verify found != 3, "halber Eintrag"
+            verdict pass "alt oder neu, nie dazwischen"
+
+campaign power_cut:
+    program "45_journal_cut.takt"
+    sweep CUT = 0..90 step 1
+    stop_on never

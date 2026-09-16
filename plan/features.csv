@@ -685,7 +685,7 @@ PAR-5.6-Alerts_in_Schleifen,Absatz/Regel,5.6,Alerts in Schleifen,,M1 (Kernsemant
 PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),fertig,
 PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M6 (mit 8.10),offen,
 PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),fertig,
-PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M5 (Embedded),fertig,
+PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M5 (Embedded),fertig,"in der Simulation geprueft: `corpus-try/45_journal_cut.takt`, Kampagne `power_cut` ueber jede Stelle (M6 Schritt 14)"
 PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M5 (Embedded),fertig,
 PAR-5.10-Nicht_Wake_Streams_in_idle,Absatz/Regel,5.10,Nicht-Wake-Streams in `idle`,,M5 (Embedded),fertig,
 PAR-5.10-Systemschlaf,Absatz/Regel,5.10,Systemschlaf,,M5 (Embedded),fertig,

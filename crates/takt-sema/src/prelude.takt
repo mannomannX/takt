@@ -392,16 +392,21 @@ fn flash_blank() -> bytes<256>:
         b.push(0xFF)
     return b
 
-# Flash-Modell: Sektoren zu 4096 Byte in Chunks zu 256 Byte (Adressen
-# vielfache von 256), Busy-Zeiten, Ruecklesen als ein Element von `rx`,
-# Stromausfall-Injektion: `cut_at_byte > 0` bricht PROGRAM nach so vielen
-# Bytes mit ERROR(1) ab und laesst den Rest geloescht. `data.sent` sind die
-# im Tick gesendeten Bytes (8.8), `cmd` liest das Modell mit Unit-Delay.
+# Flash-Modell: Sektoren zu 4096 Byte in Chunks zu 256 Byte, byteweise
+# programmiert, Busy-Zeiten, Ruecklesen als ein Element von `rx`,
+# Stromausfall-Injektion: `cut_at_byte > 0` bricht das Programmieren nach
+# so vielen Bytes des Laufs (ueber alle PROGRAM-Kommandos gezaehlt) einmal
+# mit ERROR(1) ab; geschrieben ist, was davor kam, der Rest bleibt
+# geloescht. `data.sent` sind die im Tick gesendeten Bytes (8.8), `cmd`
+# liest das Modell mit Unit-Delay.
 machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: output FlashStatus, rx: output stream<bytes<4096>>, sectors: int in 1..64, t_erase: Duration, t_program: Duration, cut_at_byte: int in 0..1_000_000):
     var mem     : map<int, bytes<256>, 256> = default
     var addr    : int in 0..0xFFFF_FFFF = 0
     var size    : int in 0..0xFFFF_FFFF = 0
     var written : int in 0..0xFFFF_FFFF = 0
+    var total   : int in 0..1_000_000 = 0
+    var cut     : bool = false
+    var cut_done : bool = false
     var chunk   : bytes<256> = default
     var page    : bytes<4096> = default
     var code    : u8 = 0
@@ -422,7 +427,7 @@ machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: outpu
                     addr = a as int
                     size = n as int
                     written = 0
-                    chunk = default
+                    cut = false
                     op = 1
                 case READ(a, n):
                     addr = a as int
@@ -454,13 +459,16 @@ machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: outpu
             code = 1
         loop:
             for x in data.sent.or(default):
-                if written < size and (cut_at_byte == 0 or written < cut_at_byte):
-                    chunk.push(x)
+                if written < size and not cut:
+                    chunk = mem.get((addr + written) / 256).or(flash_blank())
+                    chunk[(addr + written) % 256] = x
+                    ok = mem.insert((addr + written) / 256, chunk)
                     written = written + 1
-                    if chunk.len == 256 or written == size:
-                        ok = mem.insert((addr + written - chunk.len) / 256, chunk)
-                        chunk = default
-        when cut_at_byte > 0 and written >= cut_at_byte: -> FAILED
+                    total = total + 1
+                    cut = cut_at_byte > 0 and not cut_done and total >= cut_at_byte
+        when cut:
+            cut_done = true
+            -> FAILED
         when written >= size: -> PROGRAM_DONE
 
     state PROGRAM_DONE:

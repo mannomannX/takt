@@ -92,6 +92,15 @@ fn a_cut_leaves_the_sector_erased_and_reports_an_error() {
     let p = compile(
         "
 output cut : bool @ hw(\"o/cut\") with safe = false
+output third : int in 0..255 @ hw(\"o/third\") with safe = 0
+fn byte_at(b: bytes<4096>, pos: int) -> int:
+    var v : int in 0..255 = 0
+    var i : int in 0..4096 = 0
+    for x in b:
+        if i == pos:
+            v = x as int
+        i = i + 1
+    return v
 instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, sectors = 4, t_erase = 3 ms, t_program = 1 ms, cut_at_byte = 2)
 
 machine dut:
@@ -113,6 +122,7 @@ machine dut:
             until flash_rx as c timeout 20 ms
             got = c.data.len
             first = first_byte(c.data)
+            third = byte_at(c.data, 2)
             flash_cmd = NONE
             phase = 3
             -> DONE
@@ -123,8 +133,9 @@ machine dut:
     let t = trace(&p, 60);
     assert!(t.contains("out cut true"), "{t}");
     assert!(t.contains("out phase 3"), "{t}");
-    // Der abgebrochene Chunk wurde nie geschrieben: geloescht liest 0xFF.
-    assert!(t.contains("out first 255"), "{t}");
+    // Zwei Bytes kamen an, das dritte nicht: geloescht liest 0xFF.
+    assert!(t.contains("out first 97"), "{t}");
+    assert!(t.contains("out third 255"), "{t}");
     assert!(!t.contains("fault"), "{t}");
 }
 
