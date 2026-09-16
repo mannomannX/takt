@@ -1,0 +1,14 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Bis 16 Zeilen und Spalten schweigt der Lint (3.11).
+
+output n : float @ hw("o/n") with safe = 0
+
+machine m:
+    var a : mat<16, 16> = default
+    initial RUN
+    state RUN:
+        loop:
+            n = a[0, 0]

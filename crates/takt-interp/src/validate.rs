@@ -206,7 +206,7 @@ impl Checker<'_> {
                 self.exprs(args)
             }
             ExprKind::JobState { handle, .. } => self.var(*handle, span),
-            ExprKind::MatOp { .. } => Err(stage(span, "Matrixoperation", Stage::V1_1)),
+            ExprKind::MatOp { args, .. } => self.exprs(args),
             ExprKind::Decode { record, bytes } => {
                 self.index(&self.p.records, record.index(), "Record", span)?;
                 self.expr(bytes)

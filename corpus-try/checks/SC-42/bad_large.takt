@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 42 (3.11): ab 16 Zeilen oder Spalten warnt ein Lint —
+# Kosten n^3, Scratch n^2 * 8 Byte.
+
+output n : float @ hw("o/n") with safe = 0
+
+machine m:
+    var a : mat<17, 17> = default  # ~ SC-42
+    initial RUN
+    state RUN:
+        loop:
+            n = a[0, 0]

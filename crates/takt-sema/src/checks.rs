@@ -92,6 +92,10 @@ pub const SC22: &str = "SC-22";
 pub const SC23: &str = "SC-23";
 /// `at` gegen den gemessenen Jitter eines Outputs (7.5, 8.1).
 pub const SC28: &str = "SC-28";
+/// `mat`: Form bei `+ - *`, `inv`/`solve` nur quadratisch, Indizes in Range (3.11).
+pub const SC30: &str = "SC-30";
+/// Dimensionierte Matrizen: Einheitentupel passen (3.11).
+pub const SC34: &str = "SC-34";
 /// Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters gegen
 /// 2·jitter des Outputs (13.7).
 pub const SC29: &str = "SC-29";

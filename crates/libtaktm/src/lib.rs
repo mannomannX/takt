@@ -46,6 +46,8 @@
 
 mod cost;
 mod exact;
+#[cfg(feature = "std")]
+pub mod mat;
 
 pub use cost::{Cost, cost_of};
 #[cfg(feature = "std")]

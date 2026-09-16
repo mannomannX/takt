@@ -246,11 +246,26 @@ impl Lowerer<'_> {
                     }
                     None => takt_mir::types::MatUnits::Uniform(None),
                 };
-                // 15: Matrizen sind v1.1. Der Typ entsteht, damit die
-                // Diagnose ihn nennen kann; das Programm laeuft nicht.
-                let _ = self.intern(Type::Mat { rows, cols, units });
-                self.stage(span, "Matrizen", Stage::V1_1);
-                None
+                if rows == 0 || cols == 0 {
+                    self.error(
+                        crate::checks::SC30,
+                        span,
+                        "eine Matrix hat mindestens eine Zeile und eine Spalte (3.11)",
+                    );
+                    return None;
+                }
+                // Pruefung 42: keine harte Grenze, ein Lint ab 16 (3.11).
+                if rows > 16 || cols > 16 {
+                    self.warn(
+                        crate::checks::SC42,
+                        span,
+                        format!(
+                            "Matrix {rows}×{cols}: Kosten n³, Scratch {} Byte (3.11)",
+                            u64::from(rows) * u64::from(cols) * 8
+                        ),
+                    );
+                }
+                Some(self.intern(Type::Mat { rows, cols, units }))
             }
             ast::TypeKind::MatDim { .. } | ast::TypeKind::VecDim(_) => {
                 self.stage(span, "dimensionierte Matrizen", Stage::V1_1);
@@ -528,7 +543,12 @@ impl Lowerer<'_> {
             Type::Line { cap } => format!("line<{cap}>"),
             Type::Samples { elem, len } => format!("samples<{}, {len}>", self.type_name(*elem)),
             Type::Table { key, value } => format!("table<{}, {}>", self.type_name(*key), self.type_name(*value)),
-            Type::Mat { rows, cols, .. } => format!("mat<{rows}, {cols}>"),
+            Type::Mat { rows, cols, units } => match units {
+                takt_mir::types::MatUnits::Uniform(Some(u)) => {
+                    format!("mat<{rows}, {cols}>[{}]", self.program.units[u.index()].name)
+                }
+                _ => format!("mat<{rows}, {cols}>"),
+            },
             Type::Map { key, value, cap } => {
                 format!("map<{}, {}, {cap}>", self.type_name(*key), self.type_name(*value))
             }

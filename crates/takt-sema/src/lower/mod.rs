@@ -8,6 +8,7 @@ pub mod format;
 pub mod generics;
 pub mod layout;
 pub mod machine;
+pub mod matrix;
 pub mod pattern;
 pub mod stmt;
 pub mod stream;

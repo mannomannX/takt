@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 30 (3.11): Form bei `*`, `inv` nur quadratisch, Indizes
+# vom Typ `int in 0..R-1`.
+
+output n : float @ hw("o/n") with safe = 0
+
+machine m:
+    var a : mat<2, 3> = [[1, 2, 3], [4, 5, 6]]
+    var i : int in 0..2 = 0
+    initial RUN
+    state RUN:
+        loop:
+            var b = a * a    # ~ SC-30
+            var c = a.inv()  # ~ SC-30
+            n = a[2, 0]      # ~ SC-30
+            n = a[i, 0]      # ~ SC-30

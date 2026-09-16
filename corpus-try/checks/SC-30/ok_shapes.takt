@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Passende Formen (3.11): Produkt 2x3 mal 3x2, Inverse einer
+# quadratischen Matrix, Indizes in der Range.
+
+output n : float @ hw("o/n") with safe = 0
+
+machine m:
+    var a : mat<2, 3> = [[1, 2, 3], [4, 5, 6]]
+    var i : int in 0..1 = 0
+    initial RUN
+    state RUN:
+        loop:
+            var b = a * a.transpose()
+            var c = b.inv()
+            n = c[1, 1] + a[i, 2]

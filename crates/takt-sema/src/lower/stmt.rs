@@ -515,9 +515,17 @@ impl Lowerer<'_> {
                     }
                 }
             }
-            ast::ExprKind::Index2 { .. } => {
-                self.stage(e.span, "Matrizen", Stage::V1_1);
-                None
+            ast::ExprKind::Index2 { base, row, col } => {
+                let b = self.place(base)?;
+                let bty = self.place_type(&b, base.span)?;
+                let Type::Mat { rows, cols, .. } = self.ty(bty).clone() else {
+                    let n = self.type_name(bty);
+                    self.error(SC3, e.span, format!("`[i, j]` auf `{n}`"));
+                    return None;
+                };
+                let i = self.mat_index_expr(row, rows, "Zeile")?;
+                let j = self.mat_index_expr(col, cols, "Spalte")?;
+                Some(Place::Index2(Box::new(b), i, j))
             }
             _ => {
                 self.error(SC3, e.span, "kein Zuweisungsziel");
@@ -645,7 +653,11 @@ impl Lowerer<'_> {
                     _ => None,
                 }
             }
-            Place::Index2(b, _, _) => self.place_type(b, span),
+            Place::Index2(b, _, _) => {
+                let t = self.place_type(b, span)?;
+                let Type::Mat { units, .. } = self.ty(t).clone() else { return None };
+                self.mat_elem_type(&units, span)
+            }
         }
     }
 

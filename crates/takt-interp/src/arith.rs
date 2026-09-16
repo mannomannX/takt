@@ -9,7 +9,7 @@ use takt_mir::types::{FloatWidth, IntWidth};
 
 use crate::value::{EvalResult, Fault, Trap, Value, bug};
 
-fn arith(kind: ArithKind, what: impl Into<String>, span: Span, tick: u64) -> Trap {
+pub(crate) fn arith(kind: ArithKind, what: impl Into<String>, span: Span, tick: u64) -> Trap {
     Trap::Fault(Fault::new(FaultKind::Arithmetic(kind), what, span, tick))
 }
 

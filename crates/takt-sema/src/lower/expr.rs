@@ -222,10 +222,7 @@ impl Lowerer<'_> {
                 };
                 Some(Expr::new(ExprKind::Slice { base: Box::new(b), from: Box::new(from), to: Box::new(to) }, ty, span))
             }
-            ast::ExprKind::Index2 { .. } => {
-                self.stage(span, "Matrizen", Stage::V1_1);
-                None
-            }
+            ast::ExprKind::Index2 { base, row, col } => self.mat_index(base, row, col, span),
             ast::ExprKind::Cast { expr, ty } => self.cast(expr, ty, span),
             ast::ExprKind::Unary { op, expr } => self.unary(*op, expr, hint, span),
             ast::ExprKind::Binary { op, lhs, rhs } => self.binary(*op, lhs, rhs, hint, span),
@@ -704,6 +701,9 @@ impl Lowerer<'_> {
         if callee.name == "range" {
             self.error(SC3, span, "`range(N)` nur in `for`");
             return None;
+        }
+        if callee.name == "solve" && self.peek("solve").is_none() {
+            return self.mat_solve(args, span);
         }
         let entity = self.lookup(callee)?;
         match entity {
@@ -1477,10 +1477,7 @@ impl Lowerer<'_> {
                 );
                 None
             }
-            ("transpose" | "inv" | "det" | "solve" | "cholesky", _) => {
-                self.stage(span, "Matrizen", Stage::V1_1);
-                None
-            }
+            ("transpose" | "inv" | "det" | "cholesky", Type::Mat { .. }) => self.mat_member(b, member, args, span),
             ("armed" | "fired", _) => {
                 self.stage(span, "Trigger", Stage::V1_2);
                 None
@@ -2032,9 +2029,8 @@ impl Lowerer<'_> {
                 let out = items.iter().map(|x| self.check(x, elem)).collect::<Option<Vec<_>>>()?;
                 Some(Expr::new(ExprKind::Array(out), hint.expect("Hinweis"), span))
             }
-            Some(Type::Mat { .. }) => {
-                self.stage(span, "Matrizen", Stage::V1_1);
-                None
+            Some(Type::Mat { rows, cols, units }) => {
+                self.mat_literal(items, rows, cols, units, hint.expect("Hinweis"), span)
             }
             _ => {
                 let Some(first) = items.first() else {
@@ -2247,6 +2243,9 @@ impl Lowerer<'_> {
             (a, b)
         };
         let (ta, tb) = (self.ty(a.ty).clone(), self.ty(b.ty).clone());
+        if matches!(ta, Type::Mat { .. }) || matches!(tb, Type::Mat { .. }) {
+            return self.mat_binary(mop, a, b, span);
+        }
         let names = |this: &Self| (this.type_name(a.ty), this.type_name(b.ty));
         let result = match mop {
             BinaryOp::Eq | BinaryOp::Ne => {
@@ -2392,6 +2391,8 @@ impl Lowerer<'_> {
             BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
                 if self.is_duration(other) {
                     self.tys.int
+                } else if matches!(self.ty(other), Type::Mat { .. }) {
+                    self.tys.float
                 } else {
                     self.without_unit(other)
                 }

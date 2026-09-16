@@ -315,7 +315,10 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 let args = args.iter().map(|a| self.eval(a)).collect::<EvalResult<Vec<_>>>()?;
                 self.call_native(*native, args, span)
             }
-            ExprKind::MatOp { .. } => bug("Matrixoperationen ab M6"),
+            ExprKind::MatOp { op, args } => {
+                let values = args.iter().map(|a| self.eval(a)).collect::<EvalResult<Vec<_>>>()?;
+                crate::matrix::op(*op, values, span, self.tick)
+            }
             ExprKind::Decode { record, bytes } => {
                 // `R.decode(b) -> R?` (3.7): `none` bei zu kurzem Puffer,
                 // Konstantenverstoss oder Range-Verletzung; nie ein Fault.
@@ -385,6 +388,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
             (Value::F32(_) | Value::F64(_), Value::F32(_) | Value::F64(_)) => {
                 arith::float_binary(op, &a, &b, span, self.tick)
             }
+            (Value::Mat { .. }, _) | (_, Value::Mat { .. }) => crate::matrix::binary(op, &a, &b, span, self.tick),
             (Value::Duration(_), _) | (_, Value::Duration(_)) => arith::duration_binary(op, &a, &b, span, self.tick),
             _ => match op {
                 BinaryOp::Eq => Ok(Value::Bool(crate::value::same(&a, &b))),
