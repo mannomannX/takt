@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use takt_mir::expr::{Accessor, Expr, ExprKind};
 use takt_mir::machine::{Guard, Machine, TransTrigger};
-use takt_mir::stmt::{Block, Place, Stmt, StmtKind};
+use takt_mir::stmt::{Block, Stmt, StmtKind};
 
 /// Wie oft ein Knoten vorkommt, getrennt nach gedeckt und offen.
 #[derive(Debug, Default)]
@@ -106,9 +106,8 @@ pub fn block(b: &Block, c: &mut Coverage) {
 
 fn stmt(s: &Stmt, c: &mut Coverage) {
     match &s.kind {
-        StmtKind::Assign { target, value } => {
-            let ok = !matches!(target, Place::Index2(..));
-            c.note(if ok { "Zuweisung" } else { "Zuweisung an ein Matrixelement" }, ok);
+        StmtKind::Assign { value, .. } => {
+            c.note("Zuweisung", true);
             expr(value, c);
         }
         StmtKind::Check { cond, .. } => {
@@ -318,7 +317,18 @@ fn expr(e: &Expr, c: &mut Coverage) {
         }
         ExprKind::None | ExprKind::Default => c.note("`none`/`default`", true),
         ExprKind::Matches { .. } => c.note("`matches`", false),
-        ExprKind::MatOp { .. } => c.note("Matrixoperation", false),
+        ExprKind::MatOp { args, .. } => {
+            c.note("Matrixoperation", true);
+            for a in args {
+                expr(a, c);
+            }
+        }
+        ExprKind::Index2 { base, row, col } => {
+            c.note("Matrixelement", true);
+            expr(base, c);
+            expr(row, c);
+            expr(col, c);
+        }
         ExprKind::Slice { base, from, to } => {
             c.note("Teilbereich", true);
             expr(base, c);

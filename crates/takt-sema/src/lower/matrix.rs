@@ -7,7 +7,7 @@
 
 use takt_diag::Span;
 use takt_mir::expr::{BinaryOp, Expr, ExprKind, MatOp};
-use takt_mir::types::{Const, MatUnits, Type};
+use takt_mir::types::{Const, FloatWidth, MatUnits, Type};
 use takt_mir::*;
 use takt_syntax::ast;
 
@@ -51,6 +51,19 @@ impl Lowerer<'_> {
             MatUnits::Dimensioned { rows, cols }
         };
         Some(self.intern(Type::Mat { rows: m, cols: n, units }))
+    }
+
+    /// Merkt den Scratch einer Operation fuer `takt size` vor (11.2, 11.5):
+    /// `floats` Elemente in der Breite von `float` und `ints` Zeilenindizes.
+    fn note_scratch(&mut self, floats: usize, ints: usize) {
+        let width = match self.float_width() {
+            FloatWidth::F32 => 4,
+            FloatWidth::F64 => 8,
+        };
+        let bytes = (floats * width + ints * 4) as u32;
+        if let Some(mc) = self.mctx.as_mut() {
+            mc.machine.layout.scratch_bytes = Some(mc.machine.layout.scratch_bytes.unwrap_or(0).max(bytes));
+        }
     }
 
     /// Eine Einheit eines Tupels; `1` wird als eigene Einheit interniert.
@@ -258,18 +271,21 @@ impl Lowerer<'_> {
             "transpose" => (MatOp::Transpose, self.mat_type((cols, rows), span)?),
             "inv" => {
                 square(self)?;
+                self.note_scratch(2 * n * n, n);
                 let r = cols.iter().map(|c| c.pow(-1)).collect();
                 let c = rows.iter().map(|r| r.pow(-1)).collect();
                 (MatOp::Inv, self.mat_type((r, c), span)?)
             }
             "det" => {
                 square(self)?;
+                self.note_scratch(n * n, n);
                 let unit = rows.iter().chain(&cols).fold(Unit::one(), |acc, u| acc.mul(u));
                 let width = self.float_width();
                 (MatOp::Det, self.float_type(width, &unit, None, span)?)
             }
             "cholesky" => {
                 square(self)?;
+                self.note_scratch(n * n, 0);
                 // `A = L·Lᵀ` verlangt `r_i = r_1 * c_i` und eine Wurzel von `r_1`.
                 if rows.iter().zip(&cols).any(|(r, c)| *r != rows[0].mul(c)) {
                     let t = self.type_name(b.ty);
@@ -346,6 +362,7 @@ impl Lowerer<'_> {
             self.error(SC34, span, format!("`solve`: Zeileneinheiten von `{y}` passen nicht zu `{x}` (3.11)"));
             return None;
         }
+        self.note_scratch(n * n + n * cb.len(), n);
         let rows = ca.iter().map(|c| k.div(c)).collect();
         let ty = self.mat_type((rows, cb), span)?;
         Some(Expr::new(ExprKind::MatOp { op: MatOp::Solve, args: vec![a, b] }, ty, span))

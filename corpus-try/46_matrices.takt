@@ -1,0 +1,62 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Matrizen fester Groesse (3.11): die uniforme Form fuer Geometrie und
+# Gewinne, die dimensionierte fuer einen Zustandsschaetzer — jede Zeile
+# einheitengeprueft, und beide Maschinen rechnen im Interpreter und im
+# erzeugten Code bitidentisch (4.2).
+
+unitvec X = (m, m/s)
+unitvec Z = (m)
+
+output s11  : float          @ hw("o/s11")  with safe = 0
+output k10  : float          @ hw("o/k10")  with safe = 0
+output pdet : float          @ hw("o/pdet") with safe = 0
+output x1   : float          @ hw("o/x1")   with safe = 0
+output c10  : float          @ hw("o/c10")  with safe = 0
+output pos  : float[m]       @ hw("o/pos")  with safe = 0
+output vel  : float[m/s]     @ hw("o/vel")  with safe = 0
+output p11  : float[m^2/s^2] @ hw("o/p11")  with safe = 0
+
+const I2 : mat<2, 2> = [[1, 0], [0, 1]]
+const H2 : mat<1, 2> = [[1, 0]]
+
+const F : mat[X, 1/X] = [[1, (10 ms).as(s)], [0 1/s, 1]]
+const H : mat[Z, 1/X] = [[1, (0 s).as(s)]]
+const I : mat[X, 1/X] = [[1, (0 s).as(s)], [0 1/s, 1]]
+const Q : mat[X, X] = [[0.001 m^2, 0 m^2/s], [0 m^2/s, 0.001 m^2/s^2]]
+const R : mat[Z, Z] = [[0.5 m^2]]
+
+machine geometry:
+    var p : mat<2, 2> = [[2, 1], [1, 3]]
+    initial RUN
+    state RUN:
+        loop:
+            var s : mat<1, 1> = H2 * p * H2.transpose()
+            var k = p * H2.transpose() * s.inv()
+            s11 = s[0, 0]
+            k10 = k[1, 0]
+            pdet = p.det()
+            var x = solve(p, [[1], [2]])
+            x1 = x[1, 0]
+            c10 = p.cholesky().or(I2)[1, 0]
+            p = (I2 - k * H2) * p + I2
+            p[0, 1] = p[1, 0]
+
+machine estimator:
+    var x : vec[X] = [0 m, 1 m/s]
+    var p : mat[X, X] = [[1 m^2, 0 m^2/s], [0 m^2/s, 1 m^2/s^2]]
+    var z : vec[Z] = [2 m]
+    initial RUN
+    state RUN:
+        loop:
+            x = F * x
+            p = F * p * F.transpose() + Q
+            var s = H * p * H.transpose() + R
+            var k = p * H.transpose() * s.inv()
+            x = x + k * (z - H * x)
+            p = (I - k * H) * p
+            pos = x[0, 0]
+            vel = x[1, 0]
+            p11 = p[1, 1]

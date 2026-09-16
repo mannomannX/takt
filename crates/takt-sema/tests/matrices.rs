@@ -58,6 +58,13 @@ machine m:
 ";
 
 #[test]
+fn the_scratch_of_the_largest_operation_is_recorded() {
+    let (p, _) = compile(KALMAN).expect("uebersetzt");
+    // `solve` einer 2×2 in f64: LU 32 Byte, Loesung 16 Byte, zwei Zeilenindizes.
+    assert_eq!(p.expect("Programm").machines[0].layout.scratch_bytes, Some(56));
+}
+
+#[test]
 fn a_kalman_step_computes_through_the_library() {
     let t = trace(KALMAN);
     for line in [

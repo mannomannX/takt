@@ -9,7 +9,8 @@
 //! Integer-Operation `i64` und das Budget auf 32-Bit-Kernen zu pessimistisch.
 
 use crate::Program;
-use crate::expr::{Expr, ExprKind, Repr};
+use crate::TypeId;
+use crate::expr::{BinaryOp, Expr, ExprKind, MatOp, Repr};
 use crate::fns::{CostClass, CostVec};
 use crate::machine::{Budget, Machine};
 use crate::stmt::{Block, Method, Place, Stmt, StmtKind};
@@ -186,7 +187,7 @@ fn place_cost(p: &Place, types: &[Type], natives: &[CostVec]) -> CostVec {
 
 /// Kosten eines Ausdrucks: die Operation selbst plus ihre Kinder.
 fn expr_cost(e: &Expr, types: &[Type], natives: &[CostVec]) -> CostVec {
-    let mut c = match &e.kind {
+    let own = mat_cost(e, types).unwrap_or_else(|| match &e.kind {
         ExprKind::Binary { .. } | ExprKind::Unary { .. } => class_of(e, types),
         ExprKind::Index { .. } | ExprKind::Index2 { .. } | ExprKind::Slice { .. } => {
             CostVec { mem: 1, ..CostVec::default() }
@@ -197,12 +198,50 @@ fn expr_cost(e: &Expr, types: &[Type], natives: &[CostVec]) -> CostVec {
         // Eine implizite Pruefung ist ein Vergleich und ein Sprung.
         ExprKind::Checked { .. } => class_of(e, types),
         _ => CostVec::default(),
-    };
+    });
     // `children_mut` braucht `&mut`; hier reicht die lesende Entsprechung.
-    for child in e.children() {
-        c = c + expr_cost(child, types, natives);
-    }
-    c
+    e.children().iter().fold(own, |c, child| c + expr_cost(child, types, natives))
+}
+
+/// Kosten einer Matrixoperation (3.11, 9.4.3): elementweise R·C, Produkt
+/// R·C·K, die LU-Verfahren n³ — in der Breite von `float` — und der
+/// Scratch als Speicherzugriffe.
+fn mat_cost(e: &Expr, types: &[Type]) -> Option<CostVec> {
+    let dims = |ty: TypeId| match types.get(ty.index()) {
+        Some(Type::Mat { rows, cols, .. }) => Some((u64::from(*rows), u64::from(*cols))),
+        _ => None,
+    };
+    let float = types.iter().find_map(|t| if let Type::Float { width, .. } = t { Some(*width) } else { None });
+    let unit = match float {
+        Some(FloatWidth::F32) => CostVec { f32: 1, ..CostVec::default() },
+        _ => CostVec { f64: 1, ..CostVec::default() },
+    };
+    let mem = |n: u64| CostVec { mem: n, ..CostVec::default() };
+    Some(match &e.kind {
+        ExprKind::Binary { op: BinaryOp::Mul, lhs, rhs } => match (dims(lhs.ty), dims(rhs.ty)) {
+            (Some((r, k)), Some((_, c))) => times(unit, r * k * c),
+            (Some((r, c)), None) | (None, Some((r, c))) => times(unit, r * c),
+            _ => return None,
+        },
+        ExprKind::Binary { .. } => {
+            let (r, c) = dims(e.ty)?;
+            times(unit, r * c)
+        }
+        ExprKind::MatOp { op, args } => {
+            let (n, k) = dims(args.first()?.ty)?;
+            match op {
+                MatOp::Transpose => mem(n * k),
+                MatOp::Det => times(unit, n * n * n) + mem(n * n),
+                MatOp::Inv => times(unit, 2 * n * n * n) + mem(2 * n * n),
+                MatOp::Solve => {
+                    let (_, c) = dims(args.get(1)?.ty)?;
+                    times(unit, n * n * n + n * n * c) + mem(n * n + n * c)
+                }
+                MatOp::Cholesky => times(unit, n * n * n) + mem(n * n),
+            }
+        }
+        _ => return None,
+    })
 }
 
 /// Die Operationsklasse eines Ausdrucks nach Typ und gewaehlter Darstellung.

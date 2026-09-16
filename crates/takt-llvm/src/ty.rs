@@ -144,6 +144,11 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
         // `line<N>` ist `str<N>` plus `.truncated` (3.9): Nur dort hat
         // ein *anderer* — der Treiberrand — die Laenge begrenzt, und das
         // Programm koennte es sonst nicht merken (754).
+        // `mat<R, C>` (3.11): Zeilen aus Elementen in der Breite von `float`;
+        // die Einheiten sind Sache der Sema.
+        Type::Mat { rows, cols, .. } => {
+            LlvmType::Array(Box::new(LlvmType::Array(Box::new(float(p.config.float_width)), *cols)), *rows)
+        }
         Type::Line { cap } => LlvmType::Struct(vec![
             LlvmType::Int(32),
             LlvmType::Array(Box::new(LlvmType::Int(8)), *cap),

@@ -217,6 +217,8 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
             }
             Ok(inner)
         }
+        ExprKind::MatOp { op, args } => crate::matrix::op(*op, args, &want, p, m, vars),
+        ExprKind::Index2 { base, row, col } => crate::matrix::index(base, row, col, &want, p, m, vars),
         other => Err(NotYet { what: node_name(other) }),
     }
 }
@@ -1409,6 +1411,9 @@ fn binary(
     // ohne Gewinn — es gibt keine Seiteneffekte, die er spaeren koennte.
     let a = lower(lhs, p, m, vars)?;
     let b = lower(rhs, p, m, vars)?;
+    if crate::matrix::shape(&a.ty).is_some() || crate::matrix::shape(&b.ty).is_some() {
+        return crate::matrix::binary(op, &a, &b, want, m);
+    }
     let float = a.ty.is_float();
     let signed = int_is_signed(lhs.ty, p);
 

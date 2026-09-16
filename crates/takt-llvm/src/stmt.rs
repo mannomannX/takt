@@ -875,7 +875,18 @@ fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, Llvm
             let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, {} {}", i.ty, i.value));
             Ok((at, (**elem).clone()))
         }
-        Place::Index2(..) => Err(NotYet { what: "Matrixelement als Ziel" }),
+        Place::Index2(base, row, col) => {
+            let (ptr, ty) = place(base, ctx, m)?;
+            let (_, _, elem) = crate::matrix::shape(&ty).ok_or(NotYet { what: "Index auf Nicht-Matrix" })?;
+            let vars = ctx.vars();
+            let i = lower_expr(row, ctx.program, m, &vars)?;
+            let j = lower_expr(col, ctx.program, m, &vars)?;
+            let at = m.inst(&format!(
+                "getelementptr inbounds {ty}, ptr {ptr}, i32 0, {} {}, {} {}",
+                i.ty, i.value, j.ty, j.value
+            ));
+            Ok((at, elem))
+        }
     }
 }
 

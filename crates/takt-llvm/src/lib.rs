@@ -43,6 +43,7 @@ pub mod image;
 pub mod inspect;
 pub mod lower;
 pub mod machine;
+pub mod matrix;
 pub mod persist;
 pub mod psi;
 pub mod reduce;
