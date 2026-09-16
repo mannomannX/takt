@@ -10,6 +10,7 @@ pub mod layout;
 pub mod machine;
 pub mod matrix;
 pub mod pattern;
+pub mod property;
 pub mod stmt;
 pub mod stream;
 pub mod types;

@@ -303,6 +303,9 @@ pub struct Property {
     pub formula: TProp,
     /// `with monitor = true`: Laufzeitmonitor auf Hardware.
     pub monitor: bool,
+    /// `assumption` statt `property`: Umgebungsannahme, beschraenkt die
+    /// Beweisverpflichtung; der Monitor ist derselbe (13.3).
+    pub assumption: bool,
     /// Position.
     pub span: Span,
 }

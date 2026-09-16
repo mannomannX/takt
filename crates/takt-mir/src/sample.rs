@@ -554,6 +554,7 @@ pub fn full_program() -> Program {
     let atom = |k: ExprKind| TProp::Atom(e(k, t_bool));
     p.properties.push(Property {
         name: "no_ignition_without_fuel".into(),
+        assumption: false,
         formula: TProp::Temporal {
             op: TemporalOp::Always,
             window: None,

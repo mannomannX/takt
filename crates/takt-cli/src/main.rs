@@ -877,6 +877,10 @@ fn test(args: &Args) -> bool {
         };
         let last = result.trace.lines.iter().map(|l| l.tick).max().unwrap_or(0);
         println!("{name}: {} nach {last} Ticks ({})", result.verdict.name(), result.ended.name());
+        for p in &result.properties {
+            let word = if p.assumption { "assumption" } else { "property" };
+            println!("  {word} {}: {}", p.name, p.outcome.text());
+        }
         ok &= result.verdict != Verdict::Fail;
         coverage.merge(&result.coverage);
     }

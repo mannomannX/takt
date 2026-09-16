@@ -75,6 +75,9 @@ pub const SC12: &str = "SC-12";
 /// Native Funktionen: kuratierte Menge, Signatur, `cost`/`stack`/`total`,
 /// `duration` nur an Jobs (4.5).
 pub const SC31: &str = "SC-31";
+/// `property`: Fenster positiv und ein Vielfaches des Ticks, `always`/`never`
+/// nicht unter einem beschraenkten Operator, Atome `bool` (13.3).
+pub const SC56: &str = "SC-56";
 /// `map<K, V, N>`: der Schluessel ist POD mit Gleichheit — ohne
 /// Fliesskomma (3.9).
 pub const SC57: &str = "SC-57";

@@ -43,6 +43,7 @@ Leerzeichen, außer im Rest einer Meldung.
 | `measure` | Golden | `measure <maschine> <name> <wert>` |
 | `verify` | Golden | `verify <maschine> ok\|fail "<text>"` |
 | `verdict` | Golden | `verdict <maschine> pass\|fail ["<text>"]` |
+| `property` | Golden | `property <name> violated <tick>` bzw. `assumption <name> violated <tick>` — die Eigenschaft ist an Position `<tick>` verletzt; die Zeile steht im Tick, in dem die Fenster der Position geschlossen sind (Position plus Zukunftstiefe der Formel, 13.3) |
 | `stream` | Golden | `stream <name> dropped=<n> overflowed=<n> malformed=<n>` — bei Änderung (8.6) |
 | `verdict-final` | Golden | `verdict-final PASS\|FAIL\|INCONCLUSIVE` — letzte Zeile (13.5) |
 | `end` | Golden | `end restart\|deep_sleep\|boot_jump` — der Lauf endet hier (12.7); `deep_sleep` startet den naechsten mit `boot_reason = DEEP_SLEEP_WAKE` |
@@ -137,6 +138,8 @@ Innerhalb eines Ticks:
 4. `out` in Channel-Indexreihenfolge; ein Ausgabestrom steht bei seinem
    Channel.
 5. `stream` in Channel-, dann Stream-Indexreihenfolge.
+6. `property`/`assumption` in Deklarationsreihenfolge — nach dem Commit,
+   weil die Monitore den Tick-Rand-Snapshot lesen (13.3).
 
 Die Ordnung hängt nicht davon ab, in welcher Reihenfolge die Maschinen
 geschritten sind; damit prüft ein Trace-Vergleich die Ordnungsunabhängigkeit

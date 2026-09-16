@@ -972,6 +972,9 @@ impl<'p> Sim<'p> {
     pub fn age(&mut self) {
         let program = self.loaded.program;
         self.image.age_inputs(program, program.config.tick);
+        // Ein Command gilt einen Tick (8.5): bis zum naechsten Stimulus, damit
+        // der Tick-Rand-Snapshot der Eigenschaften ihn noch sieht (13.3).
+        self.image.clear_commands();
     }
 
     /// Ein System-Tick (9.4).
@@ -1035,7 +1038,6 @@ impl<'p> Sim<'p> {
         self.image.apply_scheduled(now);
         self.drain_tx(now);
         self.image.commit_outputs();
-        self.image.clear_commands();
         for state in &mut self.states {
             state.raised_signals.iter_mut().for_each(|s| *s = false);
         }

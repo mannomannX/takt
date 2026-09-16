@@ -155,21 +155,17 @@ impl Lowerer<'_> {
                 ast::Item::Instance(i) => self.instance_decl(i),
                 ast::Item::Scenario(s) => self.scenario_decl(s),
                 ast::Item::Profile(p) => self.profile_decl(p),
-                ast::Item::Property(p) => {
-                    let what = match p.kind {
-                        ast::PropertyKind::Property => "`property`",
-                        ast::PropertyKind::Assumption => "`assumption`",
-                    };
-                    self.stage(p.span, what, Stage::V1_1);
-                }
                 ast::Item::Trigger(t) => self.stage(t.span, "`trigger`", Stage::V1_2),
                 _ => {}
             }
         }
         // Kampagnen zuletzt: Sie nennen Profile und Parameter (13.7).
+        // Eigenschaften lesen Zustaende und `pub var`s der Maschinen (13.3).
         for item in &file.items {
-            if let ast::Item::Campaign(c) = item {
-                self.campaign_decl(c);
+            match item {
+                ast::Item::Campaign(c) => self.campaign_decl(c),
+                ast::Item::Property(p) => self.property_decl(p),
+                _ => {}
             }
         }
         let _ = SC3;

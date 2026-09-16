@@ -476,10 +476,25 @@ pub fn check(p: &Program) -> Result<(), Diagnostic> {
     if !p.triggers.is_empty() {
         return Err(stage(p.triggers[0].span, "Trigger", Stage::V1_2));
     }
-    if !p.properties.is_empty() {
-        return Err(stage(p.properties[0].span, "Eigenschaften", Stage::V1_1));
+    let global = Checker { p, machine: None, locals: None };
+    for prop in &p.properties {
+        global.tprop(&prop.formula)?;
     }
     Ok(())
+}
+
+impl Checker<'_> {
+    fn tprop(&self, f: &takt_mir::expr::TProp) -> Result<(), Diagnostic> {
+        use takt_mir::expr::TProp;
+        match f {
+            TProp::Atom(e) => self.expr(e),
+            TProp::Not(a) | TProp::Temporal { inner: a, .. } => self.tprop(a),
+            TProp::Implies(a, b) | TProp::And(a, b) | TProp::Or(a, b) => {
+                self.tprop(a)?;
+                self.tprop(b)
+            }
+        }
+    }
 }
 
 fn self_transition(c: &Checker<'_>, t: &takt_mir::machine::Transition) -> Result<(), Diagnostic> {

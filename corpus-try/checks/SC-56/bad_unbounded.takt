@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 2 ms
+
+# Pruefung 56 (13.3): `always`/`never` nicht unter einem beschraenkten
+# Operator, Fenster ein positives Vielfaches des Ticks.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = 1
+
+property nested: always(n > 0 implies eventually[4 ms](always(n < 5)))  # ~ SC-56
+property odd_window: always(eventually[3 ms](n < 5))                    # ~ SC-56

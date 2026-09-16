@@ -11,6 +11,7 @@ use takt_mir::{ChannelId, MachineId, VarId};
 use crate::coverage::Coverage;
 use crate::env::Observation;
 use crate::nvm::Nvm;
+use crate::property::{Monitor, PropertyResult};
 use crate::stream::Delivery;
 use crate::system::Sim;
 use crate::trace::{LineKind, Trace, TraceLine, parse_value, sample_from_text, value_text};
@@ -79,6 +80,8 @@ pub struct RunResult {
     pub params: Vec<(String, String)>,
     /// Der Parametervektor zu Beginn: Defaults, Profil, Ueberlagerung (12.5).
     pub start_params: Vec<(String, String)>,
+    /// Jede Eigenschaft mit ihrem Ausgang (13.3).
+    pub properties: Vec<PropertyResult>,
 }
 
 /// Warum ein Lauf endete (12.7).
@@ -142,6 +145,7 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
     let mut verdict = Verdict::Inconclusive;
     let mut fail = false;
     let mut coverage = Coverage::default();
+    let mut monitors: Vec<Monitor> = program.properties.iter().map(|p| Monitor::new(p, program.config.tick)).collect();
 
     // Tick 0: Stimulus, dann Anfangszustand und Anfangsausgaben (9.4)
     // 4.5: Aufgezeichnete Fertigstellungen ersetzen das Modell `duration`;
@@ -172,6 +176,7 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
     writer.lines.append(&mut echo);
     collect(&mut writer, &sim, 0, &mut verdict, &mut fail, &mut coverage);
     writer.initial(&sim);
+    observe_properties(&mut monitors, &sim, 0, &mut writer, &mut fail);
 
     // Auch der Anfangszustand kann das Kommando setzen (12.7).
     let mut ended = end_of(&sim).unwrap_or(Ended::Ticks);
@@ -194,6 +199,7 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
         sim.step()?;
         collect(&mut writer, &sim, tick, &mut verdict, &mut fail, &mut coverage);
         writer.changes(&sim, tick);
+        observe_properties(&mut monitors, &sim, tick, &mut writer, &mut fail);
         last = tick;
         // 12.7: nach dem Commit, wenn alle Outputs stehen.
         if let Some(e) = end_of(&sim) {
@@ -214,8 +220,9 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
             break;
         }
     }
-    let final_verdict = if fail { Verdict::Fail } else { verdict };
     let at = if ended == Ended::Ticks { options.ticks } else { last };
+    let properties = finish_properties(monitors, at, &mut writer, &mut fail);
+    let final_verdict = if fail { Verdict::Fail } else { verdict };
     if takt_mir::persist::any(program) {
         if let Some(bytes) = sim.persist_payload() {
             let hex = bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -231,7 +238,41 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
         coverage,
         params,
         start_params,
+        properties,
     })
+}
+
+/// Die Monitore sehen den Tick-Rand-Snapshot (13.3); eine entschiedene
+/// Verletzung ist ein FAIL-Befund (13.5) und eine Trace-Zeile.
+fn observe_properties(monitors: &mut [Monitor], sim: &Sim<'_>, tick: u64, writer: &mut Writer<'_>, fail: &mut bool) {
+    for m in monitors.iter_mut() {
+        if let Some(at) = m.observe(&sim.loaded, &sim.image, tick) {
+            *fail = true;
+            let kind = LineKind::Property { assumption: m.assumption, name: m.name.clone(), at };
+            writer.lines.push(TraceLine { tick, kind });
+        }
+    }
+}
+
+/// Das Laufende entscheidet, was offen blieb; eine Verletzung, die erst
+/// jetzt feststeht, steht im letzten Tick.
+fn finish_properties(
+    monitors: Vec<Monitor>,
+    last: u64,
+    writer: &mut Writer<'_>,
+    fail: &mut bool,
+) -> Vec<PropertyResult> {
+    monitors
+        .into_iter()
+        .map(|mut m| {
+            if let Some(at) = m.close(last) {
+                *fail = true;
+                let kind = LineKind::Property { assumption: m.assumption, name: m.name.clone(), at };
+                writer.lines.push(TraceLine { tick: last, kind });
+            }
+            m.result()
+        })
+        .collect()
 }
 
 /// Das Szenario mit diesem Namen (13.6).

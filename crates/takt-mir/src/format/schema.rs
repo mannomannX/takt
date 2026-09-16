@@ -308,7 +308,8 @@ codec_struct!(Param { 1 one name, 2 one ty, 3 one default, 4 one tunable, 5 meta
 codec_struct!(Profile { 1 one name, 2 rep assignments, 3 meta span });
 codec_struct!(Command { 1 one name, 2 one wake, 3 meta meta, 4 meta span });
 codec_struct!(Node { 1 one name, 2 one address, 3 opt tick, 4 meta span });
-codec_struct!(Property { 1 one name, 2 one formula, 3 one monitor, 4 meta span });
+// `assumption` als `one`: Eigenschaften gab es vor M6 in keiner Datei.
+codec_struct!(Property { 1 one name, 2 one formula, 3 one monitor, 4 meta span, 5 one assumption });
 codec_enum!(Sweep {
     0 Range { 1 one param, 2 one from, 3 one to, 4 one step },
     1 List { 1 one param, 2 rep values },

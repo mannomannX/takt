@@ -56,6 +56,9 @@ pub enum LineKind {
     Verify { machine: String, ok: bool, text: String },
     /// `verdict <maschine> pass|fail ["<text>"]`
     Verdict { machine: String, pass: bool, text: Option<String> },
+    /// `property|assumption <name> violated <tick>`: eine Eigenschaft ist
+    /// an Position `at` entschieden verletzt (13.3).
+    Property { assumption: bool, name: String, at: u64 },
     /// `stream <name> dropped=<n> overflowed=<n> malformed=<n>` — die
     /// Zaehler eines Stroms, wenn sie sich aendern (8.6).
     Stream { name: String, dropped: u32, overflowed: u32, malformed: u32 },
@@ -196,6 +199,16 @@ fn parse_line(line: &str) -> Result<TraceLine, String> {
                 machine: nonempty(machine, "`job <maschine> <handle> done`")?.to_string(),
                 handle: nonempty(handle, "`job <maschine> <handle> done`")?.to_string(),
             }
+        }
+        "property" | "assumption" => {
+            let (name, rest) = split_first(args);
+            let (word, rest) = split_first(rest);
+            let form = "`property <name> violated <tick>`";
+            if word != "violated" {
+                return Err(format!("{form} erwartet"));
+            }
+            let at = nonempty(rest.trim(), form)?.parse::<u64>().map_err(|e| format!("{form}: {e}"))?;
+            LineKind::Property { assumption: art == "assumption", name: name.to_string(), at }
         }
         "fault" => {
             let (machine, rest) = split_first(args);
@@ -373,6 +386,9 @@ pub(crate) fn render_line(line: &TraceLine) -> String {
                 Some(t2) => format!("t={t} verdict {machine} {verdict} \"{t2}\""),
                 None => format!("t={t} verdict {machine} {verdict}"),
             }
+        }
+        LineKind::Property { assumption, name, at } => {
+            format!("t={t} {} {name} violated {at}", if *assumption { "assumption" } else { "property" })
         }
         LineKind::Final { verdict } => format!("t={t} verdict-final {verdict}"),
         LineKind::End { reason } => format!("t={t} end {reason}"),

@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 2 ms
+
+# Beschraenkte Fenster als Vielfache des Ticks, `always` aussen (13.3).
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = 1
+
+property small: always(n < 100)
+property soon: always(n > 0 implies eventually[4 ms](stable[2 ms](n < 5)))
+property before: never(n > 50 and not once[10 ms](n < 5))
