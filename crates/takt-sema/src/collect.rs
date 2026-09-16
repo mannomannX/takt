@@ -162,9 +162,14 @@ impl Lowerer<'_> {
                     };
                     self.stage(p.span, what, Stage::V1_1);
                 }
-                ast::Item::Campaign(c) => self.stage(c.span, "`campaign`", Stage::V1_1),
                 ast::Item::Trigger(t) => self.stage(t.span, "`trigger`", Stage::V1_2),
                 _ => {}
+            }
+        }
+        // Kampagnen zuletzt: Sie nennen Profile und Parameter (13.7).
+        for item in &file.items {
+            if let ast::Item::Campaign(c) = item {
+                self.campaign_decl(c);
             }
         }
         let _ = SC3;

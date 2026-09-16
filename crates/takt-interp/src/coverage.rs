@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use takt_mir::Program;
-use takt_mir::machine::{Machine, MachineKind};
-use takt_mir::stmt::{Block, Stmt, StmtKind};
+use takt_mir::machine::MachineKind;
+use takt_mir::stmt::StmtKind;
 
 use crate::env::CoverKind;
 
@@ -91,8 +91,8 @@ pub fn universe(p: &Program) -> Universe {
         u.transitions +=
             m.states.iter().map(|s| s.transitions.len() as u64).sum::<u64>() + m.faulted.transitions.len() as u64;
         u.handlers += m.handlers.len() as u64 + m.states.iter().map(|s| s.handlers.len() as u64).sum::<u64>();
-        for b in blocks(m) {
-            walk(b, &mut |s| {
+        for b in m.blocks() {
+            b.walk(&mut |s| {
                 if matches!(s.kind, StmtKind::Check { .. }) {
                     u.checks += 1;
                 }
@@ -100,35 +100,4 @@ pub fn universe(p: &Program) -> Universe {
         }
     }
     u
-}
-
-/// Alle Bloecke einer Maschine.
-fn blocks(m: &Machine) -> Vec<&Block> {
-    let mut out = vec![&m.loop_block];
-    out.extend(m.handlers.iter().map(|h| &h.body));
-    out.extend(m.faulted.transitions.iter().map(|t| &t.actions));
-    for s in &m.states {
-        out.extend([&s.enter, &s.exit, &s.loop_block]);
-        out.extend(s.handlers.iter().map(|h| &h.body));
-        out.extend(s.transitions.iter().map(|t| &t.actions));
-    }
-    out
-}
-
-fn walk(b: &Block, f: &mut impl FnMut(&Stmt)) {
-    for s in &b.stmts {
-        f(s);
-        match &s.kind {
-            StmtKind::If { then, otherwise, .. } => {
-                walk(then, f);
-                walk(otherwise, f);
-            }
-            StmtKind::ForRange { body, .. }
-            | StmtKind::ForEach { body, .. }
-            | StmtKind::At { body, .. }
-            | StmtKind::Every { body, .. } => walk(body, f),
-            StmtKind::Match { arms, .. } => arms.iter().for_each(|a| walk(&a.body, f)),
-            _ => {}
-        }
-    }
 }

@@ -124,7 +124,7 @@ SEM-13.3,Semantik/Abschnitt,13.3,Eigenschaftsprüfung (v1.1),v1.1,M6,offen,
 SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M5 (Embedded),offen,
 SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4 (Codegen),fertig,
 SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,fertig,
-SEM-13.7,Semantik/Abschnitt,13.7,Kampagnen (v1.1),v1.1,M6,offen,
+SEM-13.7,Semantik/Abschnitt,13.7,Kampagnen (v1.1),v1.1,M6,fertig,
 SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M5 (Embedded),offen,TTL-Adapter (PA9)
 SEM-13.9,Semantik/Abschnitt,13.9,Migration aus C: `takt import-c` und Orakel-Modus (v1.1),v1.1,M7 (Werkzeuge),offen,
 SEM-14.1,Semantik/Abschnitt,14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),fertig,
@@ -577,7 +577,7 @@ SC-25,Statische Prüfung,10,"Zustandslokale und gehobene Variablen (Sequenz-`var
 SC-26,Statische Prüfung,10,Szenarien schreiben nur `sim`-Outputs; Single-Writer gegenüber Modellmaschinen,F,M3 (Gate),fertig,
 SC-27,Statische Prüfung,10,`every d:` nur in `loop:`; `on`-Handler nur auf deklarierten Streams,F,M3 (Gate),fertig,
 SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0` („tick-granular"", 7.5); deklarierte `jitter`-Anforderung größer als gemessener Wert erfüllt, sonst Fehler (8.1)",W / F,M6 (mit 8.10),teilweise,TTL-Adapter (PA9) — nur die Messung; die Rechnung steht
-SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M6 (mit 8.10),definiert,TTL-Adapter (PA9) — nur die Messung; die Rechnung kommt mit den Kampagnen (plan/m6.md Schritt 13)
+SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M6 (mit 8.10),fertig,Rechnung in `calibrated.rs` (`check_bindings`); Urteil mit gemessenem `jitter` der Hardware-Konfiguration (8.10)
 SC-30,Statische Prüfung,10,"`mat`: Formprüfung bei `+ - *`, `inv`/`solve` nur quadratisch, R, C ≤ 16, Indizes in Range (3.11)",F,M3 (Gate),definiert,
 SC-31,Statische Prüfung,10,"Native Funktionen: nur die kuratierte Menge (v1), `cost`, `stack` und `total` deklariert, Argumente fester Größe (4.5)",F,M3 (Gate),fertig,
 SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration",F,M5 (Embedded),teilweise,TTL-Adapter (PA9) — nur die Messung; die Rechnung steht
@@ -873,7 +873,7 @@ CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig,
 CLI-run,Werkzeug,11.1,takt run,,M4 (Codegen),fertig,
 CLI-replay,Werkzeug,11.1,takt replay,,M4 (Codegen),fertig,
 CLI-test,Werkzeug,11.1,takt test,,M6 (v1.1),fertig,
-CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),offen,
+CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
 CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen,TTL-Adapter (PA9)
 CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),offen,
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig,
@@ -1046,7 +1046,7 @@ CON-matches_/_has,Konstrukt (2.4),2.4,`matches` / `has`,,M0 (Parser/MIR-Entwurf)
 CON-send,Konstrukt (2.4),2.4,`send`,,M0 (Parser/MIR-Entwurf),definiert,
 CON-at_/_pulse_/_cancel,Konstrukt (2.4),2.4,`at` / `pulse` / `cancel`,,M0 (Parser/MIR-Entwurf),definiert,
 CON-measure_/_verify_/_verdict,Konstrukt (2.4),2.4,`measure` / `verify` / `verdict`,,M0 (Parser/MIR-Entwurf),definiert,
-CON-scenario_/_campaign,Konstrukt (2.4),2.4,`scenario` / `campaign`,,M0 (Parser/MIR-Entwurf),teilweise,
+CON-scenario_/_campaign,Konstrukt (2.4),2.4,`scenario` / `campaign`,,M0 (Parser/MIR-Entwurf),fertig,
 CON-persist_var,Konstrukt (2.4),2.4,`persist var`,,M0 (Parser/MIR-Entwurf),fertig,
 CON-idle,Konstrukt (2.4),2.4,`idle`,,M0 (Parser/MIR-Entwurf),definiert,
 CON-signal_/_raise,Konstrukt (2.4),2.4,`signal` / `raise`,,M0 (Parser/MIR-Entwurf),definiert,

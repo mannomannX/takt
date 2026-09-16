@@ -20,13 +20,14 @@
 
 use takt_diag::{Diagnostic, Severity, Span};
 use takt_mir::analysis::schedulability::{self, Load};
-use takt_mir::expr::ExprKind;
+use takt_mir::expr::{Expr, ExprKind};
 use takt_mir::hardware::{Hardware, HwChannel, Target};
 use takt_mir::machine::MachineKind;
-use takt_mir::program::{Binding, Direction, Program};
+use takt_mir::program::{Binding, Direction, Program, Sweep};
+use takt_mir::stmt::{Place, StmtKind};
 use takt_mir::types::{Const, Type};
 
-use crate::checks::{SC12, SC28, SC32, SC39, SC60};
+use crate::checks::{SC12, SC28, SC29, SC32, SC39, SC60};
 
 /// Prüft Kostenbudget und Schedulability gegen eine Kalibrierung.
 ///
@@ -202,8 +203,68 @@ pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
             }
         }
         out.extend(jitter_check(p, c, entry, tick));
+        out.extend(sweep_check(p, c, entry));
     }
     out
+}
+
+/// Prüfung 29: Sweep-Schritte gegen den gemessenen Jitter eines Outputs,
+/// den eine `at`-Anweisung mit dem Parameter stellt (13.7).
+fn sweep_check(p: &Program, c: &takt_mir::program::Channel, entry: &HwChannel) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let Some(jitter) = entry.jitter_ns else { return out };
+    let Some(i) = p.channels.iter().position(|x| std::ptr::eq(x, c)) else { return out };
+    let params = at_params(p, takt_mir::ChannelId(i as u32));
+    for campaign in &p.campaigns {
+        for sweep in &campaign.sweeps {
+            let Sweep::Range { param, step, .. } = sweep else { continue };
+            let ExprKind::Duration(ns) = &step.kind else { continue };
+            if params.contains(param) && *ns < 2 * jitter {
+                out.push(Diagnostic::error(
+                    SC29,
+                    campaign.span,
+                    format!(
+                        "Kampagne `{}`: Sweep-Schritt {} von `{}` liegt unter 2·jitter = {} von `{}` (`at`, 13.7)",
+                        campaign.name,
+                        takt_mir::dump::duration(*ns),
+                        p.params[param.index()].name,
+                        takt_mir::dump::duration(2 * jitter),
+                        c.name
+                    ),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Parameter in der Zeit der `at`-Anweisungen, die diesen Output stellen.
+fn at_params(p: &Program, c: takt_mir::ChannelId) -> Vec<takt_mir::ParamId> {
+    let mut out = Vec::new();
+    for m in &p.machines {
+        for b in m.blocks() {
+            b.walk(&mut |s| {
+                let StmtKind::At { time, body } = &s.kind else { return };
+                let sets = body
+                    .stmts
+                    .iter()
+                    .any(|x| matches!(&x.kind, StmtKind::Assign { target: Place::Output(o), .. } if *o == c));
+                if sets {
+                    params_in(time, &mut out);
+                }
+            });
+        }
+    }
+    out
+}
+
+fn params_in(e: &Expr, out: &mut Vec<takt_mir::ParamId>) {
+    if let ExprKind::Param(id) = &e.kind {
+        out.push(*id);
+    }
+    for child in e.children() {
+        params_in(child, out);
+    }
 }
 
 /// Prüfung 28: gemessener Jitter gegen `at` und gegen die Anforderung.

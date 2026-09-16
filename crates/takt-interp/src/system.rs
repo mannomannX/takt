@@ -634,9 +634,14 @@ impl<'p> Sim<'p> {
 
     /// Neuer Lauf: Outputs auf `safe`, Parameter aus Defaults und Profil;
     /// `scenario` waehlt das Szenario, das mitlaeuft (13.6).
-    pub fn new(program: &'p Program, profile: Option<&str>, scenario: Option<MachineId>) -> Result<Sim<'p>, Trap> {
+    pub fn new(
+        program: &'p Program,
+        profile: Option<&str>,
+        overrides: &[(String, String)],
+        scenario: Option<MachineId>,
+    ) -> Result<Sim<'p>, Trap> {
         let loaded = Loaded::load(program).map_err(|d| Trap::Bug(format!("{d}")))?;
-        let params = eval_params(&loaded, profile)?;
+        let params = eval_params(&loaded, profile, overrides)?;
         let outputs = eval_safe_outputs(&loaded, &params)?;
         let image = Image::new(program, outputs, params);
         let states = program.machines.iter().map(MachineState::new).collect();
@@ -1082,7 +1087,8 @@ impl<'p> Sim<'p> {
 }
 
 /// Parameterwerte: Defaults, dann Profil (8.4).
-fn eval_params(loaded: &Loaded<'_>, profile: Option<&str>) -> Result<Vec<Value>, Trap> {
+/// Defaults, dann das Profil, dann die Ueberlagerung (8.4, 13.7).
+fn eval_params(loaded: &Loaded<'_>, profile: Option<&str>, overrides: &[(String, String)]) -> Result<Vec<Value>, Trap> {
     let p = loaded.program;
     let mut env = crate::ConstEnv::new(p.config.tick);
     let mut ctx = Ctx::new(loaded, &mut env, 0);
@@ -1107,6 +1113,18 @@ fn eval_params(loaded: &Loaded<'_>, profile: Option<&str>) -> Result<Vec<Value>,
             }
             out[id.index()] = v;
         }
+    }
+    for (name, text) in overrides {
+        let Some(i) = p.params.iter().position(|q| q.name == *name) else {
+            return bug(format!("Parameter `{name}` gibt es nicht"));
+        };
+        let v = crate::trace::parse_value(text, p.params[i].ty, p).map_err(Trap::Bug)?;
+        if let Some(range) = range_of(loaded, p.params[i].ty) {
+            if !crate::eval::in_range(&v, &range) {
+                return bug(format!("`{name} = {text}` liegt ausserhalb der Range (8.4)"));
+            }
+        }
+        out[i] = v;
     }
     Ok(out)
 }

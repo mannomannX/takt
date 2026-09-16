@@ -1395,7 +1395,7 @@ pub fn div_ceil(a: i64, b: i64) -> i64 {
     i64::try_from((a + b - 1).div_euclid(b)).unwrap_or(i64::MAX)
 }
 
-fn literal_in_range(e: &Expr, r: &takt_mir::types::Range) -> bool {
+pub(super) fn literal_in_range(e: &Expr, r: &takt_mir::types::Range) -> bool {
     let v = match &e.kind {
         ExprKind::Int(i) => takt_interp::Value::Int(*i),
         ExprKind::Float(f) => takt_interp::Value::F64(*f),

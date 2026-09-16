@@ -21,6 +21,25 @@ pub struct Block {
 }
 
 impl Block {
+    /// Ruft `f` fuer jede Anweisung, auch in geschachtelten Bloecken.
+    pub fn walk(&self, f: &mut impl FnMut(&Stmt)) {
+        for s in &self.stmts {
+            f(s);
+            match &s.kind {
+                StmtKind::If { then, otherwise, .. } => {
+                    then.walk(f);
+                    otherwise.walk(f);
+                }
+                StmtKind::ForRange { body, .. }
+                | StmtKind::ForEach { body, .. }
+                | StmtKind::At { body, .. }
+                | StmtKind::Every { body, .. } => body.walk(f),
+                StmtKind::Match { arms, .. } => arms.iter().for_each(|a| a.body.walk(f)),
+                _ => {}
+            }
+        }
+    }
+
     /// Block aus Anweisungen.
     pub fn new(stmts: Vec<Stmt>) -> Self {
         Block { stmts, span: Span::default() }

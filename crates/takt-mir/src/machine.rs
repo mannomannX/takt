@@ -524,6 +524,20 @@ pub struct Machine {
 }
 
 impl Machine {
+    /// Alle Bloecke: Maschinenebene, `FAULTED`, je Zustand Eintritt,
+    /// Austritt, Schleife, Handler und Uebergaenge.
+    pub fn blocks(&self) -> Vec<&Block> {
+        let mut out = vec![&self.loop_block];
+        out.extend(self.handlers.iter().map(|h| &h.body));
+        out.extend(self.faulted.transitions.iter().map(|t| &t.actions));
+        for s in &self.states {
+            out.extend([&s.enter, &s.exit, &s.loop_block]);
+            out.extend(s.handlers.iter().map(|h| &h.body));
+            out.extend(s.transitions.iter().map(|t| &t.actions));
+        }
+        out
+    }
+
     /// Leere Maschine mit Periode 1; `initial` zeigt auf den ersten Zustand,
     /// der hinzugefuegt wird.
     pub fn new(name: impl Into<String>) -> Self {

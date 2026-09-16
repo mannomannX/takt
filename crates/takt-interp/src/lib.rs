@@ -17,6 +17,7 @@
 pub mod arith;
 pub mod bytes;
 pub mod call;
+pub mod campaign;
 pub mod coverage;
 pub mod env;
 pub mod eval;

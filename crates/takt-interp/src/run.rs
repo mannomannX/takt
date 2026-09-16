@@ -54,6 +54,9 @@ pub struct RunOptions {
     /// Das Szenario, das mitlaeuft (13.6); der Lauf endet, sobald es seinen
     /// letzten Zustand erreicht hat.
     pub scenario: Option<String>,
+    /// Ueberlagerung des Parametervektors nach dem Profil: Name und
+    /// Literal je Parameter (13.7, 12.5).
+    pub overrides: Vec<(String, String)>,
 }
 
 /// Ergebnis eines Laufs.
@@ -70,6 +73,8 @@ pub struct RunResult {
     /// Die Parameter am Ende des Laufs als `(Name, Wert)` in
     /// Literalschreibweise — der zuletzt uebernommene Satz (8.4).
     pub params: Vec<(String, String)>,
+    /// Der Parametervektor zu Beginn: Defaults, Profil, Ueberlagerung (12.5).
+    pub start_params: Vec<(String, String)>,
 }
 
 /// Warum ein Lauf endete (12.7).
@@ -110,7 +115,8 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
         }
         None => None,
     };
-    let mut sim = Sim::new(program, options.profile.as_deref(), scenario)?;
+    let mut sim = Sim::new(program, options.profile.as_deref(), &options.overrides, scenario)?;
+    let start_params = params_of(&sim);
     sim.nvm = options.nvm.clone();
     // Satz 9.4.1: jede lineare Erweiterung der `follows`-Kanten liefert
     // denselben Trace (7.2).
@@ -192,8 +198,15 @@ pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<
         }
     }
     writer.lines.push(TraceLine { tick: at, kind: LineKind::Final { verdict: final_verdict.name().to_string() } });
-    let params = final_params(&sim);
-    Ok(RunResult { trace: Trace { lines: writer.lines }, verdict: final_verdict, ended, coverage, params })
+    let params = params_of(&sim);
+    Ok(RunResult {
+        trace: Trace { lines: writer.lines },
+        verdict: final_verdict,
+        ended,
+        coverage,
+        params,
+        start_params,
+    })
 }
 
 /// Das Szenario mit diesem Namen (13.6).
@@ -626,8 +639,8 @@ pub fn value_untyped(v: &Value) -> String {
     }
 }
 
-/// Der zuletzt uebernommene Satz der Parameter (8.4), in Literalschreibweise.
-fn final_params(sim: &Sim<'_>) -> Vec<(String, String)> {
+/// Der Parametervektor des Sims in Literalschreibweise (8.4).
+fn params_of(sim: &Sim<'_>) -> Vec<(String, String)> {
     let program = sim.loaded.program;
     program.params.iter().zip(&sim.image.params).map(|(p, v)| (p.name.clone(), value_text(v, p.ty, program))).collect()
 }

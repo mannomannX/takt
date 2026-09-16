@@ -1904,7 +1904,7 @@ loop:
 Heartbeat vom Tick-Thread zu jedem I/O-Gerät; Geräte setzen Outputs bei Heartbeat-Verlust auf konfigurierte Safe-Werte (identisch zu den `safe`-Deklarationen; der Compiler exportiert sie in die Hardware-Konfiguration) und verwerfen dabei ausstehende geplante Ausgaben. Damit ist der Verlust des Steuerrechners selbst kein unsicherer Zustand — das schließt die Lücke, die kein Sprachbeweis schließen kann.
 
 ### 12.5 Recording und Replay
-Ein Lauf zeichnet auf: Logik-Hash, Bindungen, Laufzeitprofil (12.8), Profil und Parametervektor, s0 der `persist`-Variablen, alle Input-Snapshots einschließlich Stream-Elementen mit Zeitstempeln und `free[o]`, Commands, Tunable-Änderungen mit Tick (8.4), Job-Fertigstellungen mit Tick und Ergebnis (4.5), Trigger-Ereignisse (7.5); das Format ist versioniert (11.3). `takt replay` führt dasselbe Binär im Sim-Modus mit den aufgezeichneten Inputs aus und vergleicht Outputs und Zustandspfade; Abweichung = Fehler in Runtime oder Treiber, nie in der Logik (Satz 9.4.4).
+Ein Lauf zeichnet auf: Logik-Hash, Bindungen, Laufzeitprofil (12.8), Profil und Parametervektor, s0 der `persist`-Variablen, alle Input-Snapshots einschließlich Stream-Elementen mit Zeitstempeln und `free[o]`, Commands, Tunable-Änderungen mit Tick (8.4), Job-Fertigstellungen mit Tick und Ergebnis (4.5), Trigger-Ereignisse (7.5); das Format ist versioniert (11.3). Der Parametervektor im Kopf ist der zu Beginn des Laufs — Defaults, Profil, Überlagerung einer Kampagne (13.7) —, und `takt replay` wendet ihn an. `takt replay` führt dasselbe Binär im Sim-Modus mit den aufgezeichneten Inputs aus und vergleicht Outputs und Zustandspfade; Abweichung = Fehler in Runtime oder Treiber, nie in der Logik (Satz 9.4.4).
 
 
 ### 12.6 Defensiver Treiberrand
@@ -2078,6 +2078,8 @@ campaign brownout_scan:
     stop_on fail
 ```
 Der Laufraum ist das kartesische Produkt der Sweeps mal `repeat`; jeder Lauf ist eine deterministische Funktion seines Parametervektors und der Inputs (9.4.1); das Ergebnis ist eine Tabelle (Parametervektor, Verdikt, Messwerte, Lauf-ID). Ein fehlgeschlagener Lauf ist per `takt replay` exakt reproduzierbar (12.5). Die Runtime ignoriert `campaign`-Blöcke; sie sind Eingabe der CLI. Ein Sweep-Schritt für einen Parameter, der in einer `at`-Anweisung verwendet wird, muss mindestens `2 * jitter` des betroffenen Outputs betragen (7.5); sonst lehnt die CLI die Kampagne ab, weil die Messreihe unterhalb der Hardware-Präzision läge.
+
+`takt campaign DATEI [NAME] --ticks N [--stim S] [--profile P] [--out DIR]` bildet den Laufraum (erster Sweep außen, Wiederholungen innen), führt jeden Lauf in der Simulation aus — der Vektor überlagert das Profil — und druckt die Tabelle: Lauf-ID, gesweepte Parameter, Wiederholung, Verdikt (13.5), Messwerte (letzter Wert je `measure`-Name). Mit `--out DIR` schreibt sie je Lauf eine Aufzeichnung `NAME-ID.trace` (12.5), deren Kopf den Parametervektor trägt; `takt replay` wendet ihn an. `stop_on fail` bricht nach dem ersten FAIL ab. Ein `repeat` liefert in der Simulation identische Zeilen — das ist Satz 9.4.1, kein Fehler. Prüfung 29 rechnet die CLI, sobald eine Hardware-Konfiguration (`--hardware`) einen gemessenen `jitter` des Outputs trägt.
 
 
 ### 13.8 Treiber- und Native-Konformität

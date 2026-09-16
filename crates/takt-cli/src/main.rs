@@ -8,6 +8,8 @@
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--profile P] [--order random:SEED]
 //! takt test  DATEI [--ticks N] [--profile P] [--scenario NAME] [--coverage OUT.csv]
+//! takt campaign DATEI [NAME] --ticks N [--stim S.trace] [--profile P] [--scenario NAME]
+//!                   [--out DIR] [--hardware DATEI.hw]
 //! takt tune  DATEI --ticks N --save PROFIL [--stim S.trace] [--profile P] [--out DATEI]
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
@@ -30,7 +32,7 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|build|sim|run|replay|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|test|campaign|tune|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -107,6 +109,7 @@ fn main() -> ExitCode {
         "check" => check(&args),
         "sim" => sim(&args),
         "test" => test(&args),
+        "campaign" => campaign(&args),
         "tune" => tune(&args),
         "run" => run_cmd(&args),
         "replay" => replay(&args),
@@ -866,6 +869,135 @@ fn test(args: &Args) -> bool {
     ok
 }
 
+/// `takt campaign`: der Laufraum einer Kampagne als Tabelle, je Lauf eine
+/// Aufzeichnung (13.7).
+fn campaign(args: &Args) -> bool {
+    let Some(path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let Some(program) = compile_file(path, args) else { return false };
+    let campaign = match (args.files.get(1), program.campaigns.as_slice()) {
+        (Some(name), all) => all.iter().find(|c| c.name == *name),
+        (None, [one]) => Some(one),
+        (None, _) => None,
+    };
+    let Some(campaign) = campaign else {
+        let names: Vec<&str> = program.campaigns.iter().map(|c| c.name.as_str()).collect();
+        let have = if names.is_empty() { "keine".to_string() } else { names.join(", ") };
+        eprintln!("{path}: Kampagne nennen — vorhanden: {have}");
+        return false;
+    };
+    if let Some(file) = &campaign.program {
+        let stem = std::path::Path::new(path).file_name().and_then(|f| f.to_str()).unwrap_or(path);
+        if file != stem {
+            eprintln!("{path}: Kampagne `{}` gehoert zu `{file}` (13.7)", campaign.name);
+            return false;
+        }
+    }
+    // Pruefung 29 urteilt mit dem gemessenen Jitter der Konfiguration (13.7).
+    if let Some(hw) = hardware(args) {
+        let diags = takt_sema::calibrated::check_bindings(&program, &hw);
+        for d in &diags {
+            println!("{d}");
+        }
+        if diags.iter().any(|d| d.is_error()) {
+            return false;
+        }
+    }
+    let Some(ticks) = ticks_of(args) else { return false };
+    let Some(stimulus) = stimulus_of(args) else { return false };
+    let profile = profile_of(args).or_else(|| campaign.profile.map(|p| program.profiles[p.index()].name.clone()));
+    let runs = match takt_interp::campaign::runs(&program, campaign) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{path}: {e:?}");
+            return false;
+        }
+    };
+    if let Some(dir) = args.value("--out") {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("{dir}: {e}");
+            return false;
+        }
+    }
+    let swept: Vec<String> =
+        runs.first().map(|r| r.params.iter().map(|(n, _)| n.clone()).collect()).unwrap_or_default();
+    let mut rows =
+        vec![[vec!["Lauf".to_string()], swept, vec!["Wdh".into(), "Verdikt".into(), "Messwerte".into()]].concat()];
+    let mut fails = 0;
+    let mut stopped = None;
+    for run in &runs {
+        let options = RunOptions {
+            ticks,
+            profile: profile.clone(),
+            scenario: args.value("--scenario").map(str::to_string),
+            overrides: run.params.clone(),
+            ..Default::default()
+        };
+        let result = match takt_interp::run(&program, &stimulus, &options) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("{path}: Lauf {}: {e:?}", run.id);
+                return false;
+            }
+        };
+        let values: Vec<String> = run.params.iter().map(|(_, v)| v.clone()).collect();
+        let tail = vec![run.repeat.to_string(), result.verdict.name().to_string(), measures_of(&result.trace)];
+        rows.push([vec![run.id.to_string()], values, tail].concat());
+        if let Some(dir) = args.value("--out") {
+            let file = std::path::Path::new(dir).join(format!("{}-{:03}.trace", campaign.name, run.id));
+            let header = takt_interp::record::Header::of(&program, profile.as_deref(), &result.start_params, ticks);
+            let recording = takt_interp::record::Recording { header, inputs: stimulus.clone() };
+            if let Err(e) = std::fs::write(&file, recording.render()) {
+                eprintln!("{}: {e}", file.display());
+                return false;
+            }
+        }
+        if result.verdict == Verdict::Fail {
+            fails += 1;
+            if campaign.stop_on == takt_mir::program::StopOn::Fail {
+                stopped = Some(run.id);
+                break;
+            }
+        }
+    }
+    print!("{}", table(&rows));
+    match stopped {
+        Some(id) => println!("abgebrochen nach Lauf {id} von {} (stop_on fail)", runs.len()),
+        None => println!("{} Laeufe, {fails} FAIL", runs.len()),
+    }
+    fails == 0
+}
+
+/// Die Messwerte eines Laufs: der letzte Wert je Name (13.5).
+fn measures_of(trace: &Trace) -> String {
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for line in &trace.lines {
+        if let takt_interp::trace::LineKind::Measure { name, value, .. } = &line.kind {
+            match seen.iter_mut().find(|(n, _)| n == name) {
+                Some(slot) => slot.1 = value.clone(),
+                None => seen.push((name.clone(), value.clone())),
+            }
+        }
+    }
+    seen.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join(", ")
+}
+
+/// Spalten linksbuendig, zwei Leerzeichen dazwischen.
+fn table(rows: &[Vec<String>]) -> String {
+    let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let width: Vec<usize> =
+        (0..cols).map(|i| rows.iter().map(|r| r.get(i).map_or(0, |c| c.chars().count())).max().unwrap_or(0)).collect();
+    let mut out = String::new();
+    for r in rows {
+        let cells: Vec<String> = r.iter().enumerate().map(|(i, c)| format!("{c:<w$}", w = width[i])).collect();
+        out.push_str(cells.join("  ").trim_end());
+        out.push('\n');
+    }
+    out
+}
+
 /// `takt run`: ein Lauf, der seine Eingaben aufzeichnet (12.5).
 ///
 /// Der Unterschied zu `sim` ist die Aufzeichnung: `run` schreibt mit
@@ -892,7 +1024,7 @@ fn run_cmd(args: &Args) -> bool {
     };
     if let Some(out) = args.value("--record") {
         let recording = takt_interp::record::Recording {
-            header: takt_interp::record::Header::of(&program, profile_of(args).as_deref(), ticks),
+            header: takt_interp::record::Header::of(&program, profile_of(args).as_deref(), &result.start_params, ticks),
             inputs: stimulus,
         };
         if let Err(e) = std::fs::write(out, recording.render()) {
@@ -948,8 +1080,12 @@ fn replay(args: &Args) -> bool {
     // Die Zahl der Ticks steht im Kopf; `--ticks` darf sie ueberschreiben,
     // um einen Lauf abzukuerzen.
     let ticks = args.value("--ticks").and_then(|v| v.parse::<u64>().ok()).unwrap_or(recording.header.ticks);
-    let options =
-        RunOptions { ticks, profile: recording.header.profile.clone(), order_seed: None, ..Default::default() };
+    let options = RunOptions {
+        ticks,
+        profile: recording.header.profile.clone(),
+        overrides: recording.header.overrides(),
+        ..Default::default()
+    };
     let result = match takt_interp::run(&program, &recording.inputs, &options) {
         Ok(r) => r,
         Err(e) => {

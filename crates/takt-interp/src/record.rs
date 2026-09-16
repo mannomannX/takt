@@ -27,8 +27,10 @@ use crate::trace::Trace;
 /// Formatversion der Aufzeichnung (11.3).
 ///
 /// Leser akzeptieren aeltere Versionen ihres Formats, Schreiber schreiben
-/// die neueste.
-pub const RECORDING_VERSION: u16 = 1;
+/// die neueste. Version 2: Die `param`-Zeilen tragen den Anfangsvektor
+/// des Laufs — Defaults, Profil, Ueberlagerung (13.7) —, und `replay`
+/// wendet ihn an; Version 1 nannte die Defaults.
+pub const RECORDING_VERSION: u16 = 2;
 
 /// Der Kopf einer Aufzeichnung (12.5, 11.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,7 +50,7 @@ pub struct Header {
     pub ticks: u64,
     /// Gewaehltes Profil (8.4), wenn eines gesetzt war.
     pub profile: Option<String>,
-    /// Der Parametervektor: Name und Wert je Parameter.
+    /// Der Parametervektor zu Beginn des Laufs: Name und Wert je Parameter.
     pub params: Vec<(String, String)>,
     /// Laufzeitprofil (12.8).
     pub target: Option<String>,
@@ -77,7 +79,7 @@ pub struct Header {
 
 impl Header {
     /// Der Kopf eines Laufs.
-    pub fn of(p: &Program, profile: Option<&str>, ticks: u64) -> Header {
+    pub fn of(p: &Program, profile: Option<&str>, params: &[(String, String)], ticks: u64) -> Header {
         Header {
             version: RECORDING_VERSION,
             edition: p.config.edition,
@@ -85,11 +87,7 @@ impl Header {
             logic: takt_mir::hash::logic_hash(p).to_string(),
             tick: p.config.tick,
             profile: profile.map(str::to_string),
-            params: p
-                .params
-                .iter()
-                .map(|param| (param.name.clone(), crate::run::value_untyped(&default_value(param, p))))
-                .collect(),
+            params: params.to_vec(),
             target: p.config.target.clone(),
             runtime: Vec::new(),
             natives: p.natives.iter().map(|n| n.name.clone()).collect(),
@@ -128,6 +126,12 @@ impl Header {
             let _ = writeln!(out, "#! irreversibel {o}");
         }
         out
+    }
+
+    /// Der Parametervektor, den `replay` anwendet (12.5): ab Version 2
+    /// steht er im Kopf; Version 1 nannte die Defaults, die ohnehin gelten.
+    pub fn overrides(&self) -> Vec<(String, String)> {
+        if self.version >= 2 { self.params.clone() } else { Vec::new() }
     }
 
     /// Liest einen Kopf; `None`, wenn keine Kopfzeile dasteht.
@@ -177,17 +181,6 @@ impl Header {
             }
         }
         seen.then_some(h)
-    }
-}
-
-/// Der Default eines Parameters als Wert (8.4).
-fn default_value(param: &takt_mir::program::Param, p: &Program) -> crate::value::Value {
-    match &param.default.kind {
-        takt_mir::expr::ExprKind::Int(n) => crate::value::Value::Int(*n),
-        takt_mir::expr::ExprKind::Float(f) => crate::value::Value::F64(*f),
-        takt_mir::expr::ExprKind::Duration(d) => crate::value::Value::Duration(*d),
-        takt_mir::expr::ExprKind::Bool(b) => crate::value::Value::Bool(*b),
-        _ => crate::value::Value::default_for(param.ty, p),
     }
 }
 

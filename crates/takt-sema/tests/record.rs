@@ -32,7 +32,7 @@ fn replaying_a_recording_reproduces_the_run() {
     let options = RunOptions { ticks: 10, profile: None, order_seed: None, ..Default::default() };
     let erst = run(&p, &stimulus, &options).expect("Lauf");
 
-    let recording = Recording { header: Header::of(&p, None, 10), inputs: stimulus };
+    let recording = Recording { header: Header::of(&p, None, &[], 10), inputs: stimulus };
     let text = recording.render();
     let gelesen = Recording::parse(&text).expect("lesbar");
     let zweit = run(&p, &gelesen.inputs, &options).expect("Wiedergabe");
@@ -46,7 +46,7 @@ fn replaying_a_recording_reproduces_the_run() {
 fn a_recording_survives_a_round_trip() {
     let p = program(QUELLE);
     let recording = Recording {
-        header: Header::of(&p, Some("QUAL"), 42),
+        header: Header::of(&p, Some("QUAL"), &[], 42),
         inputs: Trace::parse("t=1 cmd go\nt=7 cmd go\n").expect("Stimulus"),
     };
     let text = recording.render();
@@ -64,7 +64,7 @@ fn a_recording_survives_a_round_trip() {
 fn a_recording_of_another_program_is_rejected() {
     let a = program(QUELLE);
     let b = program(&QUELLE.replace("n + 1", "n + 2"));
-    let recording = Recording { header: Header::of(&a, None, 5), inputs: Trace::default() };
+    let recording = Recording { header: Header::of(&a, None, &[], 5), inputs: Trace::default() };
     assert!(recording.matches(&a).is_ok(), "das eigene Programm passt");
     let err = recording.matches(&b).expect_err("ein anderes Programm nicht");
     assert!(err.contains("anderen Programm"), "{err}");
@@ -74,8 +74,10 @@ fn a_recording_of_another_program_is_rejected() {
 #[test]
 fn a_newer_recording_is_refused() {
     let p = program(QUELLE);
-    let recording = Recording { header: Header::of(&p, None, 1), inputs: Trace::default() };
-    let text = recording.render().replace("takt-aufzeichnung 1", "takt-aufzeichnung 99");
+    let recording = Recording { header: Header::of(&p, None, &[], 1), inputs: Trace::default() };
+    let text = recording
+        .render()
+        .replace(&format!("takt-aufzeichnung {}", takt_interp::record::RECORDING_VERSION), "takt-aufzeichnung 99");
     let err = Recording::parse(&text).expect_err("eine neuere Version");
     assert!(err.contains("neuer"), "{err}");
 }
@@ -87,11 +89,11 @@ fn a_newer_recording_is_refused() {
 #[test]
 fn the_header_carries_no_timestamp_and_no_path() {
     let p = program(QUELLE);
-    let text = Header::of(&p, None, 3).render();
+    let text = Header::of(&p, None, &[], 3).render();
     assert!(!text.contains("2026"), "ein Zeitstempel: {text}");
     assert!(!text.contains(":\\") && !text.contains('/'), "ein Pfad: {text}");
     // Zweimal derselbe Kopf.
-    assert_eq!(text, Header::of(&p, None, 3).render());
+    assert_eq!(text, Header::of(&p, None, &[], 3).render());
 }
 
 /// 12.5 und 4.5: Der Kopf nennt die nativen Funktionen, „damit die
@@ -104,7 +106,7 @@ fn the_header_names_the_native_functions() {
          machine m:\n    var b : bytes<8> = default\n\n    initial RUN\n\
          \x20   state RUN:\n        loop:\n            r = crc32(b)\n";
     let p = program(source);
-    let text = Header::of(&p, None, 1).render();
+    let text = Header::of(&p, None, &[], 1).render();
     assert!(text.contains("#! native crc32"), "die native Funktion fehlt im Kopf:\n{text}");
 }
 
@@ -114,7 +116,7 @@ fn the_header_names_the_native_functions() {
 fn the_header_carries_the_tick_count() {
     let p = program(QUELLE);
     let recording =
-        Recording { header: Header::of(&p, None, 100), inputs: Trace::parse("t=1 cmd go\n").expect("Stimulus") };
+        Recording { header: Header::of(&p, None, &[], 100), inputs: Trace::parse("t=1 cmd go\n").expect("Stimulus") };
     let gelesen = Recording::parse(&recording.render()).expect("lesbar");
     assert_eq!(gelesen.header.ticks, 100, "die Laenge des Laufs steht im Kopf");
 }

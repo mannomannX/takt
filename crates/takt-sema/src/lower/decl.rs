@@ -434,6 +434,102 @@ impl Lowerer<'_> {
         self.declare(&decl.name, Entity::Profile(id));
     }
 
+    /// `campaign` (13.7): Eingabe der CLI, von der Runtime ignoriert.
+    pub fn campaign_decl(&mut self, decl: &ast::CampaignDecl) {
+        let name = decl.name.name.clone();
+        if self.program.campaigns.iter().any(|c| c.name == name) {
+            self.error(SC2, decl.name.span, format!("Kampagne `{name}` doppelt"));
+            return;
+        }
+        let mut c = Campaign {
+            name,
+            program: None,
+            profile: None,
+            sweeps: Vec::new(),
+            repeat: 1,
+            stop_on: StopOn::Never,
+            span: decl.span,
+        };
+        for item in &decl.items {
+            match item {
+                ast::CampaignItem::Program(s) => c.program = Some(s.value.clone()),
+                ast::CampaignItem::Profile(id) => match self.lookup(id) {
+                    Some(Entity::Profile(p)) => c.profile = Some(p),
+                    _ => {
+                        self.error(SC3, id.span, format!("`{}` ist kein Profil", id.name));
+                    }
+                },
+                ast::CampaignItem::SweepRange { param, from, to, step } => {
+                    let Some((p, ty)) = self.sweep_param(param, &c.sweeps) else { continue };
+                    let base = self.base(ty);
+                    let (Some(from), Some(to), Some(step)) =
+                        (self.sweep_value(from, ty), self.sweep_value(to, ty), self.sweep_value(step, base))
+                    else {
+                        continue;
+                    };
+                    let positive = match &step.kind {
+                        ExprKind::Int(n) => *n > 0,
+                        ExprKind::Float(f) => *f > 0.0,
+                        ExprKind::Duration(d) => *d > 0,
+                        _ => false,
+                    };
+                    if !positive {
+                        self.error(SC3, step.span, "der Sweep-Schritt muss eine positive Zahl oder Dauer sein");
+                        continue;
+                    }
+                    c.sweeps.push(Sweep::Range { param: p, from, to, step });
+                }
+                ast::CampaignItem::SweepList { param, values } => {
+                    let Some((p, ty)) = self.sweep_param(param, &c.sweeps) else { continue };
+                    let values: Vec<Expr> = values.iter().filter_map(|v| self.sweep_value(v, ty)).collect();
+                    c.sweeps.push(Sweep::List { param: p, values });
+                }
+                ast::CampaignItem::Repeat(n) => match self.int_attr(n) {
+                    Some(k) if k >= 1 => c.repeat = k,
+                    _ => {
+                        self.error(SC3, n.span, "`repeat` verlangt eine Zahl ab 1");
+                    }
+                },
+                ast::CampaignItem::StopOn(s) => {
+                    c.stop_on = match s {
+                        ast::StopOn::Fail => StopOn::Fail,
+                        ast::StopOn::Never => StopOn::Never,
+                    }
+                }
+            }
+        }
+        self.program.campaigns.push(c);
+    }
+
+    /// Der Parameter eines Sweeps: deklariert und noch nicht gesweept.
+    fn sweep_param(&mut self, name: &ast::Ident, sweeps: &[Sweep]) -> Option<(ParamId, TypeId)> {
+        let Some(Entity::Param(p, ty)) = self.lookup(name) else {
+            self.error(SC3, name.span, format!("`{}` ist kein Parameter", name.name));
+            return None;
+        };
+        let swept = sweeps.iter().any(|s| match s {
+            Sweep::Range { param, .. } | Sweep::List { param, .. } => *param == p,
+        });
+        if swept {
+            self.error(SC2, name.span, format!("`{}` wird schon gesweept", name.name));
+            return None;
+        }
+        Some((p, ty))
+    }
+
+    /// Ein Sweep-Wert: Konstante vom Typ des Parameters, in seiner Range.
+    fn sweep_value(&mut self, e: &ast::Expr, ty: TypeId) -> Option<Expr> {
+        let v = self.check(e, ty)?;
+        let v = self.fold(v)?;
+        if let Some(r) = self.range_of(ty) {
+            if !super::stmt::literal_in_range(&v, &r) {
+                self.error(SC3, v.span, "Sweep-Wert ausserhalb der Range des Parameters");
+                return None;
+            }
+        }
+        Some(v)
+    }
+
     // ------------------------------------------------------------ Channels
 
     /// `input`/`output`.

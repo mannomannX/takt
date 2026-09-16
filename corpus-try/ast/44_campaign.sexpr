@@ -1,0 +1,31 @@
+(system
+  (language 1)
+  (tick 1ms))
+(param GAIN :int in 1..8 2)
+(param LIMIT :int in 0..100 40)
+(profile QUAL
+  (LIMIT 30))
+(output y :int in 0..200 @hw("o/y") safe=0)
+(machine dut
+  (var n :int in 0..100 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (if (< n 100)
+        (= n (+ n 1)))
+      (= y (* n GAIN))
+      (if (== n 10)
+        (measure peak y)
+        (verify (<= y LIMIT) "ueber der Grenze")
+        (verdict pass "gemessen")))))
+(campaign gain_sweep
+  (program "44_campaign.takt")
+  (profile QUAL)
+  (sweep GAIN 1..4 step=1)
+  (repeat 2)
+  (stop_on never))
+(campaign stop_first
+  (program "44_campaign.takt")
+  (profile QUAL)
+  (sweep GAIN [4 1])
+  (stop_on fail))

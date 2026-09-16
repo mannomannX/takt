@@ -91,6 +91,9 @@ pub const SC22: &str = "SC-22";
 pub const SC23: &str = "SC-23";
 /// `at` gegen den gemessenen Jitter eines Outputs (7.5, 8.1).
 pub const SC28: &str = "SC-28";
+/// Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters gegen
+/// 2·jitter des Outputs (13.7).
+pub const SC29: &str = "SC-29";
 /// Speicherbudget gegen `ram`/`flash` der Hardware-Konfiguration (11.5).
 pub const SC39: &str = "SC-39";
 /// Channel-Bindung gegen die Hardware-Konfiguration (8.10).
