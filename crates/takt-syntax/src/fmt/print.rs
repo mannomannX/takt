@@ -146,6 +146,19 @@ impl Emitter<'_, '_> {
                     self.sp("ticks");
                 }
             }
+            SystemItem::TcbPolicy(TcbPolicy::CuratedOnly) => self.name(),
+            SystemItem::TcbPolicy(TcbPolicy::Allowlist(names)) => {
+                self.name();
+                self.op("(");
+                self.glue();
+                for i in 0..names.len() {
+                    if i > 0 {
+                        self.op(",");
+                    }
+                    self.name();
+                }
+                self.op(")");
+            }
         }
         self.newline();
     }

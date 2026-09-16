@@ -74,6 +74,10 @@ pub struct Header {
     /// sichtbar bleibt". Bei der kuratierten Menge ist die Liste kurz;
     /// bei Projekt-Natives (v1.1) ist sie der Punkt.
     pub natives: Vec<String>,
+    /// TCB-Manifest (9.5, 12.5): was der Lauf ueber Compiler und Runtime
+    /// hinaus benutzt — kuratierte Natives, `takt-crypto` mit seiner
+    /// Abhaengigkeit, Projekt-Natives mit ihrer Datei.
+    pub tcb: Vec<String>,
     /// Irreversible Outputs (12.7): der Lauf-Header nennt sie alle.
     pub irreversible: Vec<String>,
     /// Die Scheibe einer Maschine (12.5): nur sie laeuft, die Zeilen
@@ -97,6 +101,7 @@ impl Header {
             target: p.config.target.clone(),
             runtime: Vec::new(),
             natives: p.natives.iter().map(|n| n.name.clone()).collect(),
+            tcb: manifest(p),
             irreversible: p.channels.iter().filter(|c| c.attrs.irreversible).map(|c| c.name.clone()).collect(),
             machine: None,
             chain: None,
@@ -130,6 +135,9 @@ impl Header {
         for n in &self.natives {
             let _ = writeln!(out, "#! native {n}");
         }
+        for t in &self.tcb {
+            let _ = writeln!(out, "#! tcb {t}");
+        }
         for o in &self.irreversible {
             let _ = writeln!(out, "#! irreversibel {o}");
         }
@@ -161,6 +169,7 @@ impl Header {
             params: Vec::new(),
             target: None,
             natives: Vec::new(),
+            tcb: Vec::new(),
             irreversible: Vec::new(),
             machine: None,
             chain: None,
@@ -195,11 +204,34 @@ impl Header {
                     });
                 }
                 "native" => h.natives.push(value.to_string()),
+                "tcb" => h.tcb.push(std::iter::once(value).chain(w).collect::<Vec<_>>().join(" ")),
                 _ => {}
             }
         }
         seen.then_some(h)
     }
+}
+
+/// Das TCB-Manifest eines Programms (9.5): kuratierte Natives aus
+/// `takt-native`, `takt-crypto` mit seiner Abhaengigkeit, Projekt-Natives
+/// mit ihrer Datei.
+fn manifest(p: &Program) -> Vec<String> {
+    let mut out = Vec::new();
+    let curated = |n: &takt_mir::fns::Native| {
+        n.from.is_none() && takt_native::Native::by_name(&n.name).is_some_and(|f| !f.external())
+    };
+    if p.natives.iter().any(curated) {
+        out.push("takt-native".to_string());
+    }
+    if p.natives.iter().any(|n| n.name == takt_native::Native::EcdsaP256Verify.name()) {
+        out.push(takt_crypto::MANIFEST.to_string());
+    }
+    for n in &p.natives {
+        if let Some(file) = &n.from {
+            out.push(format!("projekt {} from {file}", n.name));
+        }
+    }
+    out
 }
 
 /// Eine Aufzeichnung: Kopf und Eingaben (12.5).

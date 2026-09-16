@@ -600,6 +600,11 @@ fn system_item(item: &SystemItem) -> String {
             format!("(tick_tolerance {}{t})", expr(value))
         }
         SystemItem::Target(i) => format!("(target {})", i.name),
+        SystemItem::TcbPolicy(TcbPolicy::CuratedOnly) => "(tcb_policy curated_only)".into(),
+        SystemItem::TcbPolicy(TcbPolicy::Allowlist(names)) => {
+            let list: Vec<&str> = names.iter().map(|n| n.name.as_str()).collect();
+            format!("(tcb_policy (allowlist {}))", list.join(" "))
+        }
         SystemItem::Float(w) => format!("(float {})", float_width(*w)),
         SystemItem::Language(i) => format!("(language {})", i.text),
     }

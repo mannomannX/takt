@@ -183,6 +183,7 @@ fn the_guarantee_survives_the_recording() {
         target: Some("linux_rt".into()),
         runtime: g.header_lines(),
         natives: Vec::new(),
+        tcb: Vec::new(),
         irreversible: Vec::new(),
         machine: None,
         chain: None,

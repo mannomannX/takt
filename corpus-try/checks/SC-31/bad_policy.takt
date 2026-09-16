@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Ein Projekt-Native (4.5) braucht die Richtlinie `tcb_policy` (9.5);
+# ohne sie bleibt es bei der kuratierten Menge.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+native fn my_own(x: int) -> int from "mylib" with cost = 1, stack = 8, total  # ~ SC-31
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = 1

@@ -6,6 +6,7 @@ system:
     language      = 1
     tick          = 1 ms
     output_timing = boundary
+    tcb_policy    = allowlist(crc_custom)
 
 import takt.filters as filt
 import channels from "site1.hw"

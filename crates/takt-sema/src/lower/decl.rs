@@ -80,6 +80,12 @@ pub fn config_from(file: &ast::File, edition: u32, diags: &mut Vec<Diagnostic>) 
                     }
                 }
                 ast::SystemItem::Language(_) => {}
+                ast::SystemItem::TcbPolicy(p) => {
+                    config.tcb_allowlist = match p {
+                        ast::TcbPolicy::CuratedOnly => Vec::new(),
+                        ast::TcbPolicy::Allowlist(names) => names.iter().map(|n| n.name.clone()).collect(),
+                    }
+                }
             }
         }
     }
@@ -992,8 +998,7 @@ impl Lowerer<'_> {
         //
         // Ein Projekt-Native (`from "..."`) ist etwas anderes: Es *soll*
         // nicht in der Menge stehen, sondern eine eigene Implementierung
-        // mitbringen. Dafuer gilt die Stufenmeldung unten (v1.1), und sie
-        // ist die praezisere Auskunft.
+        // mitbringen; die Richtlinie `tcb_policy` entscheidet unten.
         if decl.from.is_none() && takt_native::Native::by_name(&decl.name.name).is_none() {
             self.error_hint(
                 SC3,
@@ -1055,8 +1060,17 @@ impl Lowerer<'_> {
             }
         }
         let stack = super::expr::parse_int(&decl.stack.text).unwrap_or(0) as u32;
-        if decl.from.is_some() && !self.prelude {
-            self.stage(decl.span, "Projekt-Natives", Stage::V1_1);
+        // 4.5, 9.5: Ein Projekt-Native erweitert die TCB; das Programm sagt
+        // es mit `tcb_policy = allowlist(...)`, sonst bleibt es bei der
+        // kuratierten Menge.
+        if decl.from.is_some() && !self.program.config.tcb_allowlist.contains(&decl.name.name) {
+            self.error_hint(
+                SC31,
+                decl.span,
+                format!("Projekt-Native `{0}` verlangt `tcb_policy = allowlist({0})` (4.5, 9.5)", decl.name.name),
+                "`system: tcb_policy = allowlist(...)` nennt jede Rust-Implementierung des Projekts, die in die TCB kommt",
+            );
+            return;
         }
         let id = NativeId(self.program.natives.len() as u32);
         self.program.natives.push(Native {

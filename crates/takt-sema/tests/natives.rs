@@ -128,3 +128,58 @@ fn the_signature_job_must_match_its_curated_signature() {
 ");
     assert!(e.contains("(bytes<N>, bytes<32>, bytes<N>) -> bool"), "{e}");
 }
+
+/// Uebersetzt mit eigenem `system:`-Block.
+fn compile_with(system: &str, body: &str) -> Result<Program, Vec<String>> {
+    let src = format!("system:\n    language = 1\n    tick = 1 ms\n{system}\n{body}");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(&src, &options);
+    let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    if errors.is_empty() { Ok(out.program.expect("Programm")) } else { Err(errors) }
+}
+
+const PROJECT: &str =
+    "native fn crc_custom(b: bytes<64>) -> u32 from \"crypto.rs\" with cost = 5000, stack = 128, total
+output w : u32 @ hw(\"o/w\") with safe = 0
+machine m:
+    var b : bytes<64> = default
+    initial RUN
+    state RUN:
+        loop:
+            w = crc_custom(b)
+";
+
+/// 4.5, 9.5: Ein Projekt-Native braucht die Richtlinie, laeuft nicht im
+/// Interpreter und steht im TCB-Manifest des Kopfes.
+#[test]
+fn a_project_native_needs_the_tcb_policy_and_lands_in_the_manifest() {
+    let e = compile_with("", PROJECT).expect_err("ohne Richtlinie").join("\n");
+    assert!(e.contains("tcb_policy = allowlist(crc_custom)"), "{e}");
+    let e = compile_with("    tcb_policy = allowlist(other)\n", PROJECT).expect_err("nicht genannt").join("\n");
+    assert!(e.contains("tcb_policy"), "{e}");
+    let e = compile_with("    tcb_policy = curated_only\n", PROJECT).expect_err("kuratiert").join("\n");
+    assert!(e.contains("tcb_policy"), "{e}");
+
+    let p = compile_with("    tcb_policy = allowlist(crc_custom, other)\n", PROJECT).expect("erlaubt");
+    assert_eq!(p.natives[0].from.as_deref(), Some("crypto.rs"));
+    assert_eq!(p.config.tcb_allowlist, ["crc_custom", "other"]);
+    let header = takt_interp::record::Header::of(&p, None, &[], 1).render();
+    assert!(header.contains("#! tcb projekt crc_custom from crypto.rs"), "{header}");
+    assert!(!header.contains("#! tcb takt-native"), "{header}");
+    let e = run(&p, &Trace::default(), &RunOptions { ticks: 1, ..Default::default() }).expect_err("Interpreter");
+    assert!(format!("{e:?}").contains("laeuft nicht im Interpreter"), "{e:?}");
+}
+
+#[test]
+fn the_manifest_names_takt_native_and_takt_crypto() {
+    let p = compile("native fn sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, total\n")
+        .expect("uebersetzt");
+    let header = takt_interp::record::Header::of(&p, None, &[], 1).render();
+    assert!(header.contains("#! tcb takt-native\n"), "{header}");
+    let p = compile("native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 2048, duration = 30 ms, total\n").expect("uebersetzt");
+    let text = takt_interp::record::Header::of(&p, None, &[], 1).render();
+    assert!(text.contains("#! tcb takt-crypto ecdsa_p256_verify: p256"), "{text}");
+    let read = takt_interp::record::Header::parse(&text).expect("lesbar");
+    assert_eq!(read.tcb.len(), 1);
+    assert!(read.tcb[0].contains("p256 0.13 (RustCrypto)"), "{:?}", read.tcb);
+}

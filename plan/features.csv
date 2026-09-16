@@ -286,6 +286,7 @@ system-Eintrag-float,system-Eintrag,2.3,"system_item: ""float""",,M0 (Parser/MIR
 system-Eintrag-f32,system-Eintrag,2.3,"system_item: ""f32""",,M0 (Parser/MIR-Entwurf),fertig,
 system-Eintrag-f64,system-Eintrag,2.3,"system_item: ""f64""",,M0 (Parser/MIR-Entwurf),fertig,
 system-Eintrag-language,system-Eintrag,2.3,"system_item: ""language""",,M0 (Parser/MIR-Entwurf),fertig,
+system-Eintrag-tcb_policy,system-Eintrag,2.3,"system_item: ""tcb_policy""",v1.1,M6,fertig,"curated_only | allowlist(…): Projekt-Natives (4.5), TCB-Manifest im Lauf-Header (9.5, 12.5)"
 Channel-Attribut-safe,Channel-Attribut,2.3,"attr: ""safe""",,M0 (Parser/MIR-Entwurf),fertig,
 Channel-Attribut-max_age,Channel-Attribut,2.3,"attr: ""max_age""",,M0 (Parser/MIR-Entwurf),fertig,
 Channel-Attribut-rate,Channel-Attribut,2.3,"attr: ""rate""",,M0 (Parser/MIR-Entwurf),fertig,
@@ -863,7 +864,7 @@ LIB-reader,Standardbibliothek,11.4,block reader[const N],,M6 (stdlib),fertig,
 LIB-writer,Standardbibliothek,11.4,block writer[const N],,M6 (stdlib),fertig,
 LIB-pid_i,Standardbibliothek,11.4,"block pid_i[O, E] / lowpass_i[U]",,M6 (stdlib),fertig,
 LIB-sha256_init,Standardbibliothek,11.4,native fn sha256 / hmac_sha256 / sha256_init / sha256_update / sha256_final,,M6 (stdlib),fertig,
-LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M6 (stdlib),offen,
+LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M6 (stdlib),teilweise,"ecdsa_p256_verify in takt-crypto (p256 0.13, Feature ecdsa, Vektoren RFC 6979); rsa3072_verify und aes_gcm_decrypt offen, bis ein Programm sie braucht (plan/m6.md 2.4)"
 LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M6 (stdlib),fertig,
 LIB-solve,Standardbibliothek,11.4,fn solve,,M6 (stdlib),offen,
 LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M4 (libtaktm),fertig,

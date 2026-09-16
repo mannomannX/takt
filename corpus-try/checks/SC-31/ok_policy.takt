@@ -1,9 +1,9 @@
 system:
-    language = 1
-    tick     = 1 ms
+    language   = 1
+    tick       = 1 ms
+    tcb_policy = allowlist(my_own)
 
-# SC-31 ist erst pruefbar, wenn es Projekt-Natives (4.5) gibt — v1.1.
-# Bis dahin ist die Ablehnung der Abnahmetest (plan/m3.md 1.4).
+# Genannt in `tcb_policy`: das Projekt-Native gehoert zur TCB dieses Programms.
 
 output n : int in 0..99 @ hw("o/n") with safe = 0
 

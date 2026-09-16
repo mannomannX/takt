@@ -147,6 +147,15 @@ pub enum SystemItem {
     Target(Ident),
     Float(FloatWidth),
     Language(IntLit),
+    TcbPolicy(TcbPolicy),
+}
+
+/// `tcb_policy = curated_only | allowlist(f, …)` (4.5, 9.5)
+#[derive(Clone, Debug, PartialEq)]
+#[allow(missing_docs)]
+pub enum TcbPolicy {
+    CuratedOnly,
+    Allowlist(Vec<Ident>),
 }
 
 /// `asap | boundary`

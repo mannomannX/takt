@@ -94,7 +94,12 @@ fn the_same_ir_yields_the_same_object() {
     std::fs::create_dir_all(&tief).expect("Verzeichnis");
 
     let mut objekte = Vec::new();
-    for dir in [&flach, &tief] {
+    for (i, dir) in [&flach, &tief].into_iter().enumerate() {
+        // Zwei Uebersetzungen in derselben Sekunde truegen denselben
+        // Zeitstempel und waeren zufaellig gleich (FB-165).
+        if i == 1 {
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+        }
         let ll = dir.join("programm.ll");
         let obj = dir.join("programm.o");
         std::fs::write(&ll, &ir).expect("IR");
@@ -145,6 +150,9 @@ fn the_same_source_yields_the_same_binary() {
     let _ = std::fs::remove_dir_all(&root);
     let mut binaries = Vec::new();
     for lauf in 0..2 {
+        if lauf == 1 {
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+        }
         let dir = root.join(format!("lauf{lauf}"));
         std::fs::create_dir_all(&dir).expect("Verzeichnis");
         let ll = dir.join("programm.ll");
@@ -172,11 +180,14 @@ fn the_same_source_yields_the_same_binary() {
     );
     // **Der Vergleich allein genuegt nicht.** Zwei Laeufe in derselben
     // Sekunde tragen denselben Zeitstempel und sind zufaellig gleich —
-    // der Test waere gruen und saehe nichts. Geprueft wird darum die
-    // Ursache: dass im Kopf kein Zeitpunkt steht, der von der Uhr kommt.
-    if let Some(stamp) = pe_timestamp(&binaries[0]) {
-        assert_eq!(stamp, 0, "der PE-Kopf traegt einen Build-Zeitstempel ({stamp}); 11.3 verbietet ihn");
-    }
+    // darum liegt zwischen ihnen eine Sekunde. Im PE-Kopf steht kein
+    // Zeitpunkt von der Uhr: lld schreibt im reproduzierbaren Modus einen
+    // Hash des Inhalts in das Feld (FB-165), gleich fuer beide Laeufe.
+    assert_eq!(
+        pe_timestamp(&binaries[0]),
+        pe_timestamp(&binaries[1]),
+        "der PE-Kopf traegt einen Zeitpunkt von der Uhr; 11.3 verbietet ihn"
+    );
 }
 
 /// **Stufe 4**: Auch je Zielarchitektur ist die Uebersetzung

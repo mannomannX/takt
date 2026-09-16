@@ -207,12 +207,26 @@ impl<'t, 's> Parser<'t, 's> {
                 SystemItem::Float(w)
             }
             "language" => SystemItem::Language(self.int_token()?),
+            "tcb_policy" => {
+                if self.eat_word("curated_only") {
+                    SystemItem::TcbPolicy(TcbPolicy::CuratedOnly)
+                } else {
+                    self.expect_word("allowlist")?;
+                    self.expect_op("(")?;
+                    let mut names = vec![self.ident()?];
+                    while self.eat_op(",") {
+                        names.push(self.ident()?);
+                    }
+                    self.expect_op(")")?;
+                    SystemItem::TcbPolicy(TcbPolicy::Allowlist(names))
+                }
+            }
             other => {
                 return Err(self.error_at(
                     name_tok,
                     format!("unbekannter Systemeintrag `{other}`"),
                     Some(
-                        "Eintraege: tick output_timing fault_is_fail tick_source tick_tolerance target float language",
+                        "Eintraege: tick output_timing fault_is_fail tick_source tick_tolerance target float language tcb_policy",
                     ),
                 ));
             }

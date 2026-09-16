@@ -48,6 +48,9 @@ pub struct Config {
     pub tick_tolerance: Option<TickTolerance>,
     /// `target`.
     pub target: Option<String>,
+    /// `tcb_policy = allowlist(…)` (4.5, 9.5): die erlaubten Projekt-Natives;
+    /// leer heisst `curated_only`.
+    pub tcb_allowlist: Vec<String>,
 }
 
 impl Config {
@@ -62,6 +65,7 @@ impl Config {
             tick_source: None,
             tick_tolerance: None,
             target: None,
+            tcb_allowlist: Vec::new(),
         }
     }
 }

@@ -1,7 +1,8 @@
 (system
   (language 1)
   (tick 1ms)
-  (output_timing boundary))
+  (output_timing boundary)
+  (tcb_policy (allowlist crc_custom)))
 (import takt.filters as filt)
 (import-channels "site1.hw")
 (type Pressure float[bar] in 0..400[bar])

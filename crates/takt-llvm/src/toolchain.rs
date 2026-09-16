@@ -82,7 +82,10 @@ impl Clang {
     /// Die Flags stehen hier und nicht an den Aufrufstellen, weil sie
     /// eine Zusage sind und keine Vorliebe: Wer clang ruft, ruft ihn so.
     pub fn deterministic(cmd: &mut Command) -> &mut Command {
-        cmd.env("SOURCE_DATE_EPOCH", "0")
+        // Der COFF-Kopf traegt einen Zeitstempel, den `SOURCE_DATE_EPOCH`
+        // nicht erreicht: LLVM schreibt ihn fuer den inkrementellen Linker
+        // von MSVC. Ohne diese Kompatibilitaet steht dort null (FB-165).
+        cmd.env("SOURCE_DATE_EPOCH", "0").arg("-mno-incremental-linker-compatible")
     }
 
     /// Der Pfad, wenn gefunden.
