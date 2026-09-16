@@ -20,11 +20,13 @@
 
 use takt_diag::{Diagnostic, Severity, Span};
 use takt_mir::analysis::schedulability::{self, Load};
-use takt_mir::hardware::Target;
+use takt_mir::expr::ExprKind;
+use takt_mir::hardware::{Hardware, HwChannel, Target};
 use takt_mir::machine::MachineKind;
-use takt_mir::program::Program;
+use takt_mir::program::{Binding, Direction, Program};
+use takt_mir::types::{Const, Type};
 
-use crate::checks::{SC12, SC32};
+use crate::checks::{SC12, SC28, SC32, SC39, SC60};
 
 /// Prüft Kostenbudget und Schedulability gegen eine Kalibrierung.
 ///
@@ -92,7 +94,216 @@ pub fn check(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
     }
 
     out.extend(declared_budgets(p, target, &load));
+    out.extend(memory_budget(p, target, span));
     out
+}
+
+/// Prüfung 39: `takt size` gegen `ram` und `flash` des Ziels (11.5).
+///
+/// Verglichen wird nur Belastbares; ein offener Posten macht die Summe zur
+/// Untergrenze, und das sagt die Meldung. Ein Ziel ohne Speicherangaben
+/// bekommt kein Urteil.
+fn memory_budget(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let size = takt_mir::analysis::size::size(p).with_hardware(target);
+    let note = if size.has_open() { " (offene Posten nicht gezählt, die Summe ist eine Untergrenze)" } else { "" };
+    for (what, have, limit) in
+        [("RAM", size.ram_total(), target.memory.ram), ("Flash", size.flash_total(), target.memory.flash)]
+    {
+        let Some(limit) = limit else { continue };
+        if have > limit {
+            out.push(
+                Diagnostic::error(
+                    SC39,
+                    span,
+                    format!("{what}: {have} Byte gerechnet, das Ziel `{}` hat {limit}{note}", target.name),
+                )
+                .with_suggestion(
+                    "`takt size` nennt die Posten; Kapazitäten verkleinern, `expect_len` setzen oder `float = f32` \
+                     (11.5)"
+                        .to_string(),
+                ),
+            );
+        }
+    }
+    out
+}
+
+/// Prüfungen 60 und 28: die Bindungen des Programms gegen die Kanäle der
+/// Konfiguration (8.10).
+///
+/// **Ohne Konfiguration kein Urteil** — das ist der Normalfall, und darum
+/// läuft dies wie [`check`] hinterher. Mit Konfiguration ist eine Adresse,
+/// die sie nicht kennt, ein Fehler: 8.10 sagt, welche Channels eine
+/// Plattform anbietet, steht in ihrer Konfiguration.
+pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let tick = p.config.tick;
+    for c in &p.channels {
+        let Binding::Hw(addr) = &c.binding else { continue };
+        let address = addr.text();
+        let Some(entry) = hw.channel(&address) else {
+            out.push(
+                Diagnostic::error(SC60, c.span, format!("die Konfiguration kennt `{address}` nicht"))
+                    .with_suggestion(format!("`[channel {address}]` eintragen oder die Adresse im Programm ändern")),
+            );
+            continue;
+        };
+        if let Some(dir) = entry.direction {
+            if dir != c.dir {
+                let (want, have) = (dir_name(c.dir), dir_name(dir));
+                out.push(Diagnostic::error(
+                    SC60,
+                    c.span,
+                    format!("`{}` ist im Programm {want}, in der Konfiguration {have}", c.name),
+                ));
+            }
+        }
+        let elem = element_type(p, c.ty);
+        if let (Some(cfg_unit), Some(unit)) = (&entry.unit, unit_name(p, elem)) {
+            if cfg_unit != &unit {
+                out.push(
+                    Diagnostic::error(
+                        SC60,
+                        c.span,
+                        format!("`{}` bindet `[{unit}]`, die Konfiguration führt `{cfg_unit}`", c.name),
+                    )
+                    .with_suggestion(
+                        "3.2: Einheiten sind nominal; die Konfiguration nennt, was der Treiber liefert".to_string(),
+                    ),
+                );
+            }
+        }
+        if let (Some((lo, hi)), Some((plo, phi))) = (entry.range, declared_range(p, elem)) {
+            if plo < lo || phi > hi {
+                out.push(
+                    Diagnostic::error(
+                        SC60,
+                        c.span,
+                        format!("`{}` verlangt {plo}..{phi}, das Gerät liefert {lo}..{hi}", c.name),
+                    )
+                    .with_suggestion(
+                        "die Range des Programms muss innerhalb der Geräte-Range liegen (3.5, 12.6)".to_string(),
+                    ),
+                );
+            }
+        }
+        if let (Some(cfg_safe), Some(safe)) = (&entry.safe, c.attrs.safe.as_ref()) {
+            if safe_matches(p, safe, cfg_safe) == Some(false) {
+                let shown = literal_text(p, safe).unwrap_or_default();
+                out.push(
+                    Diagnostic::error(
+                        SC60,
+                        c.span,
+                        format!("`{}` hat `safe = {shown}`, die Konfiguration `{cfg_safe}`", c.name),
+                    )
+                    .with_suggestion("12.4: der Treiber kennt denselben Safe-Wert wie das Programm".to_string()),
+                );
+            }
+        }
+        out.extend(jitter_check(p, c, entry, tick));
+    }
+    out
+}
+
+/// Prüfung 28: gemessener Jitter gegen `at` und gegen die Anforderung.
+fn jitter_check(p: &Program, c: &takt_mir::program::Channel, entry: &HwChannel, tick: i64) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let Some(jitter) = entry.jitter_ns else { return out };
+    if c.dir != Direction::Output {
+        return out;
+    }
+    if let Some(want) = c.attrs.jitter {
+        if jitter > want {
+            out.push(Diagnostic::error(
+                SC28,
+                c.span,
+                format!("`{}` verlangt jitter ≤ {want} ns, gemessen sind {jitter} ns", c.name),
+            ));
+        }
+    }
+    let scheduled =
+        p.channels.iter().position(|x| std::ptr::eq(x, c)).is_some_and(|i| {
+            p.machines.iter().any(|m| m.layout.output_queues.contains(&takt_mir::ChannelId(i as u32)))
+        });
+    if scheduled && jitter >= tick {
+        out.push(
+            Diagnostic::new(
+                Severity::Warning,
+                SC28,
+                c.span,
+                format!("`{}`: gemessener Jitter {jitter} ns ≥ Tick {tick} ns, `at` wirkt tick-granular (7.5)", c.name),
+            )
+            .with_suggestion("einen Timer-Compare-Pin nehmen oder die Anforderung streichen".to_string()),
+        );
+    }
+    out
+}
+
+fn dir_name(d: Direction) -> &'static str {
+    match d {
+        Direction::Input => "Input",
+        Direction::Output => "Output",
+    }
+}
+
+/// Der Elementtyp eines Channel-Arrays, sonst der Typ selbst.
+fn element_type(p: &Program, ty: takt_mir::TypeId) -> takt_mir::TypeId {
+    match p.types.list.get(ty.index()) {
+        Some(Type::Array { elem, .. }) => *elem,
+        _ => ty,
+    }
+}
+
+fn unit_name(p: &Program, ty: takt_mir::TypeId) -> Option<String> {
+    let unit = match p.types.list.get(ty.index())? {
+        Type::Int { unit, .. } | Type::Float { unit, .. } => (*unit)?,
+        _ => return None,
+    };
+    p.units.get(unit.index()).map(|u| u.name.clone())
+}
+
+fn declared_range(p: &Program, ty: takt_mir::TypeId) -> Option<(f64, f64)> {
+    let range = match p.types.list.get(ty.index())? {
+        Type::Int { range, .. } | Type::Float { range, .. } => range.as_ref()?,
+        _ => return None,
+    };
+    Some((const_f64(&range.lo)?, const_f64(&range.hi)?))
+}
+
+fn const_f64(c: &Const) -> Option<f64> {
+    match c {
+        Const::Int(n) => Some(*n as f64),
+        Const::Float(f) => Some(*f),
+        _ => None,
+    }
+}
+
+/// Stimmt das `safe`-Literal des Programms mit dem Text der Konfiguration
+/// ueberein? Zahlen numerisch (`0` und `0.0` sind dasselbe), Wahrheitswerte
+/// und Varianten beim Namen; `None`, wenn das Literal keine Form hat, die
+/// sich vergleichen laesst.
+fn safe_matches(p: &Program, e: &takt_mir::expr::Expr, cfg: &str) -> Option<bool> {
+    Some(match &e.kind {
+        ExprKind::Bool(b) => cfg == b.to_string(),
+        ExprKind::Int(n) => cfg.parse::<f64>().ok()? == *n as f64,
+        ExprKind::Float(f) => cfg.parse::<f64>().ok()? == *f,
+        ExprKind::Variant { .. } => literal_text(p, e)? == cfg,
+        _ => return None,
+    })
+}
+
+/// Ein `safe`-Literal als Text, wie die Konfiguration ihn schreibt.
+fn literal_text(p: &Program, e: &takt_mir::expr::Expr) -> Option<String> {
+    Some(match &e.kind {
+        ExprKind::Bool(b) => b.to_string(),
+        ExprKind::Int(n) => n.to_string(),
+        ExprKind::Float(f) => format!("{f:?}"),
+        ExprKind::Variant { enum_id, variant, fields } if fields.is_empty() => {
+            p.enums.get(enum_id.index())?.variants.get(*variant as usize)?.name.clone()
+        }
+        _ => return None,
+    })
 }
 
 /// Prüfung 12: `with budget = {wcet = …}` je Maschine.

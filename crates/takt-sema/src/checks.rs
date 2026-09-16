@@ -77,6 +77,12 @@ pub const SC32: &str = "SC-32";
 pub const SC22: &str = "SC-22";
 /// `persist var`: POD-Typ, Maschinenebene, nicht in Szenarien (5.9).
 pub const SC23: &str = "SC-23";
+/// `at` gegen den gemessenen Jitter eines Outputs (7.5, 8.1).
+pub const SC28: &str = "SC-28";
+/// Speicherbudget gegen `ram`/`flash` der Hardware-Konfiguration (11.5).
+pub const SC39: &str = "SC-39";
+/// Channel-Bindung gegen die Hardware-Konfiguration (8.10).
+pub const SC60: &str = "SC-60";
 /// Lints: `alert`-Polaritaet, Profil-Vollstaendigkeit (5.6, 4.6).
 pub const SC63: &str = "SC-63";
 /// Lints zu Matrizen und Stroemen (3.11, 8.6).

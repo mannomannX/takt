@@ -70,6 +70,16 @@ impl Size {
         self.items.iter().any(|i| i.origin == Origin::Open)
     }
 
+    /// Belastbare Flash-Posten (Code, Konstanten, Journal).
+    pub fn flash_total(&self) -> u64 {
+        self.items.iter().filter(|i| i.origin != Origin::Open && is_flash(&i.name)).map(|i| i.bytes).sum()
+    }
+
+    /// Belastbare RAM-Posten: alles, was nicht Flash ist.
+    pub fn ram_total(&self) -> u64 {
+        self.items.iter().filter(|i| i.origin != Origin::Open && !is_flash(&i.name)).map(|i| i.bytes).sum()
+    }
+
     /// Der Report als Zeilen.
     pub fn lines(&self) -> Vec<String> {
         let w = self.items.iter().map(|i| i.name.len()).max().unwrap_or(0);
@@ -81,6 +91,11 @@ impl Size {
         }
         out
     }
+}
+
+/// Liegt ein Posten im Flash? Die Namen entstehen in diesem Modul.
+fn is_flash(name: &str) -> bool {
+    name.contains("Flash")
 }
 
 /// Rechnet das Speicherbudget eines Programms (11.5).
@@ -192,6 +207,16 @@ impl Size {
     /// Heute ist das der Flash-Anteil des `persist`-Journals: Zwei Slots
     /// belegen ganze Sektoren, und wie gross die sind, weiss nur das Ziel.
     pub fn with_hardware(mut self, t: &crate::hardware::Target) -> Size {
+        // 12.3: Die Reserven kommen aus der Messung (13.8) in die
+        // Konfiguration; die Marge waehlt das Projekt.
+        if let Some(reserve) = t.memory.stack_reserve {
+            for item in &mut self.items {
+                if item.name == "Runtime-Reserven je Profil" {
+                    item.bytes = reserve.saturating_add(t.memory.stack_margin.unwrap_or(0));
+                    item.origin = Origin::Measured;
+                }
+            }
+        }
         let Some(nvm) = t.nvm else { return self };
         if nvm.sector_bytes == 0 || nvm.sectors == 0 {
             return self;

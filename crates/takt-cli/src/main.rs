@@ -8,8 +8,9 @@
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--profile P] [--order random:SEED]
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
-//!                   [--emit ir|obj|consts|consts-rs] [--out PFAD]
+//!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
 //! takt size  DATEI… [--build sim|hw] [--profile P] [--object DATEI.o] [--target NAME]
+//!                   [--hardware DATEI.hw]
 //! takt cost  DATEI… [--build sim|hw] [--profile P]
 //! takt latency DATEI… [--build sim|hw] [--profile P]
 //! takt mir   DATEI [--dump] [--write OUT.mir] [--hash]
@@ -153,11 +154,18 @@ fn check(args: &Args) -> bool {
                 println!("{}", map.render(d));
             }
         }
-        // Pruefung 12 und 32 brauchen die Kalibrierung (13.8); ohne sie
-        // bleibt es beim Hinweis aus `checks.rs`.
-        if let (Some(program), Some(target)) = (&checked.program, &kalibriert) {
+        // Pruefung 12, 32 und 39 brauchen das Ziel, 60 und 28 die Kanaele
+        // der Konfiguration (8.10); ohne sie bleibt es beim Hinweis.
+        if let Some(program) = &checked.program {
             let span = takt_diag::Span::new(0, 0);
-            for d in takt_sema::calibrated::check(program, target, span) {
+            let mut diags = Vec::new();
+            if let Some(target) = &kalibriert {
+                diags.extend(takt_sema::calibrated::check(program, target, span));
+            }
+            if let Some(hw) = hardware(args) {
+                diags.extend(takt_sema::calibrated::check_bindings(program, &hw));
+            }
+            for d in diags {
                 println!("{}", if line_format { map.render_line(&d) } else { map.render(&d) });
                 if d.is_error() {
                     ok = false;
@@ -315,7 +323,12 @@ fn build(args: &Args) -> bool {
             let rust = emit == "consts-rs";
             let ext = if rust { "rs" } else { "h" };
             let out = args.value("--out").map_or_else(|| format!("{stem}.{ext}"), str::to_string);
-            let text = if rust { constants_rust(&program) } else { constants_header(&program, stem) };
+            let hw = hardware(args);
+            let text = if rust {
+                constants_rust(&program, hw.as_ref())
+            } else {
+                constants_header(&program, stem, hw.as_ref())
+            };
             match std::fs::write(&out, &text) {
                 Ok(()) => {
                     println!("{out}: Konstanten des Programms");
@@ -344,7 +357,7 @@ fn build(args: &Args) -> bool {
 ///
 /// Ein Header statt einer Rust-Datei, weil der Rahmen (12.1) ohnehin C
 /// ist: So liest ihn beides, und die Zahl steht einmal.
-fn constants_header(p: &takt_mir::Program, stem: &str) -> String {
+fn constants_header(p: &takt_mir::Program, stem: &str, hw: Option<&takt_mir::hardware::Hardware>) -> String {
     let guard = stem.to_uppercase().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
     let mut s = String::new();
     s.push_str("/* Konstanten des Programms; erzeugt von `takt build --emit consts`. */\n");
@@ -356,8 +369,26 @@ fn constants_header(p: &takt_mir::Program, stem: &str) -> String {
         s.push_str(&format!("/*   {} — jeder {}. Tick */\n", m.name, m.period));
     }
     s.push_str(&format!("#define TAKT_MACHINES {}\n\n", p.machines.len()));
+    if let Some(hw) = hw {
+        s.push_str("/* Anschluesse aus der Hardware-Konfiguration (8.10); undurchsichtig, fuer das Board. */\n");
+        for (ident, port) in ports(p, hw) {
+            s.push_str(&format!("#define TAKT_PORT_{} \"{port}\"\n", ident.to_uppercase()));
+        }
+        s.push('\n');
+    }
     s.push_str("#endif\n");
     s
+}
+
+/// Adresse → Anschluss fuer jeden `hw`-Kanal, den die Konfiguration kennt.
+fn ports(p: &takt_mir::Program, hw: &takt_mir::hardware::Hardware) -> Vec<(String, String)> {
+    p.channels
+        .iter()
+        .filter_map(|c| match &c.binding {
+            takt_mir::program::Binding::Hw(a) => Some((a.ident(), hw.channel(&a.text())?.port.clone()?)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Dieselben Konstanten als Rust, fuer die Bring-up-Seite.
@@ -371,7 +402,7 @@ fn constants_header(p: &takt_mir::Program, stem: &str) -> String {
 /// braucht einen Index, und ein handgeschriebener Index ist dieselbe
 /// Fehlerquelle in kleiner: Er stimmt, bis jemand einen Ausgang davor
 /// einfuegt.
-fn constants_rust(p: &takt_mir::Program) -> String {
+fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardware>) -> String {
     let mut s = String::new();
     // Regulaere Kommentare, keine `//!`: Die Datei wird per `include!` in
     // ein Modul gezogen, und dort darf kein innerer Doc-Kommentar stehen.
@@ -395,6 +426,12 @@ fn constants_rust(p: &takt_mir::Program) -> String {
         index += 1;
     }
     s.push_str(&format!("\n/// Wie viele Ausgaenge das Programm hat.\npub const OUTPUTS: i32 = {index};\n"));
+    if let Some(hw) = hw {
+        s.push_str("\n/// Anschluesse aus der Hardware-Konfiguration (8.10); undurchsichtig, fuer das Board.\n");
+        for (ident, port) in ports(p, hw) {
+            s.push_str(&format!("pub const PORT_{}: &str = \"{port}\";\n", ident.to_uppercase()));
+        }
+    }
     s
 }
 
@@ -501,9 +538,26 @@ fn size(args: &Args) -> bool {
             continue;
         };
         println!("{path}:");
-        let report = takt_mir::analysis::size::size(program).with_object(&measure(args, program));
-        for line in report.lines() {
-            println!("{line}");
+        let mut report = takt_mir::analysis::size::size(program).with_object(&measure(args, program));
+        if let Some(target) = calibration(args) {
+            report = report.with_hardware(&target);
+            for line in report.lines() {
+                println!("{line}");
+            }
+            // Pruefung 39: die Summe gegen das Ziel (11.5).
+            let m = target.memory;
+            for (what, have, limit) in [("RAM", report.ram_total(), m.ram), ("Flash", report.flash_total(), m.flash)] {
+                let Some(limit) = limit else { continue };
+                let verdict = if have <= limit { "passt" } else { "zu viel" };
+                println!("  {what}: {have} von {limit} Byte auf `{}` — {verdict}", target.name);
+                if have > limit {
+                    ok = false;
+                }
+            }
+        } else {
+            for line in report.lines() {
+                println!("{line}");
+            }
         }
     }
     ok
@@ -540,6 +594,26 @@ fn measure(args: &Args, p: &takt_mir::Program) -> takt_mir::analysis::size::Meas
     out
 }
 
+/// Die Hardware-Konfiguration aus `--hardware DATEI` (8.10), gelesen und
+/// geprueft; ein Lesefehler wird gemeldet und ergibt keine Konfiguration.
+fn hardware(args: &Args) -> Option<takt_mir::hardware::Hardware> {
+    let path = args.value("--hardware")?;
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{path}: {e}");
+            return None;
+        }
+    };
+    match takt_mir::hardware::parse(&text) {
+        Ok(hw) => Some(hw),
+        Err(e) => {
+            eprintln!("{path}: {e}");
+            None
+        }
+    }
+}
+
 /// Die Kalibrierung aus `--hardware DATEI --target NAME` (8.10, 13.8).
 ///
 /// **Beides oder nichts.** Eine Konfiguration ohne Ziel liesse offen,
@@ -549,20 +623,7 @@ fn measure(args: &Args, p: &takt_mir::Program) -> takt_mir::analysis::size::Meas
 /// Konfiguration, entfaellt die Pruefung").
 fn calibration(args: &Args) -> Option<takt_mir::hardware::Target> {
     let path = args.value("--hardware")?;
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("{path}: {e}");
-            return None;
-        }
-    };
-    let hw = match takt_mir::hardware::parse(&text) {
-        Ok(hw) => hw,
-        Err(e) => {
-            eprintln!("{path}: {e}");
-            return None;
-        }
-    };
+    let hw = hardware(args)?;
     let name = args.value("--target").unwrap_or("x86_64");
     match hw.target(name) {
         Some(t) => Some(t.clone()),

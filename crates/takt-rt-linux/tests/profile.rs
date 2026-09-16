@@ -152,9 +152,12 @@ impl Sink for Silent {
 #[test]
 fn the_tick_loop_runs_on_the_real_clock() {
     const T0: i64 = 1_000_000;
+    // `start` vor der Uhr: Die Fristen zaehlen ab deren Nullpunkt, und der
+    // zehnte Tick endet exakt 9 ms danach — nicht 9 ms nach einem
+    // spaeteren `start`.
+    let start = std::time::Instant::now();
     let clock = RealtimeClock::new();
     let mut rt = Runtime::new(Counter::default(), clock, NoWatchdog, Silent, Profile::LINUX_RT, T0, Policy::Fault);
-    let start = std::time::Instant::now();
     rt.run(10);
     assert_eq!(rt.program.0, 10, "zehn Ticks");
     assert!(start.elapsed() >= std::time::Duration::from_millis(9), "die Schleife wartet");

@@ -1,11 +1,14 @@
-# takt-hw 1
-# Kalibrierung der WeAct Black Pill (STM32F401CCU6, Cortex-M4F).
+# takt-hw 3
+# WeAct Black Pill (STM32F401CCU6, Cortex-M4F): Kalibrierung, Speicher,
+# Geraete und Kanaele fuer 29_heartbeat.takt (8.10).
 #
-# **Diese Zahlen sind geschaetzt, nicht gemessen.** Sie stammen aus den
+# **Die Zeiten sind geschaetzt, nicht gemessen.** Sie stammen aus den
 # Zyklenangaben des ARMv7E-M-Handbuchs bei 84 MHz (ein Zyklus = 11905 ps)
 # und dienen dazu, die Rechnung zu pruefen, nicht die Hardware. `takt
 # bench` ersetzt sie durch Messwerte, sobald der Rueckkanal steht
 # (FB-91); bis dahin ist jede Aussage daraus eine Ueberschlagsrechnung.
+# `ram` und `flash` stehen im Datenblatt; die ersten 16 KiB Flash gehoeren
+# dem HID-Bootloader, das Journal liegt in zwei 16-KiB-Sektoren dahinter.
 [target.thumbv7em]
 core_hz = 84000000
 i32 = 11905
@@ -16,3 +19,18 @@ mem = 23810
 call = 47620
 native = 0
 t_io = 120000
+ram = 65536
+flash = 245760
+nvm_sector_bytes = 16384
+nvm_sectors = 2
+nvm_min_interval = 10000000000
+
+[device.gpio]
+driver = "stm32f4-gpio"
+
+[channel ui/led]
+direction = output
+raw = bool
+safe = false
+device = gpio
+port = "PC13 active_low"

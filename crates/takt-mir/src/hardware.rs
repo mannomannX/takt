@@ -1,11 +1,11 @@
 //! Die Hardware-Konfiguration (8.10), soweit die Analyse sie braucht.
 //!
-//! **Was hier steht und warum so wenig.** 8.10 beschreibt eine Datei mit
-//! acht Feldgruppen — Geraete, Channels, Anschluesse, Messwerte,
-//! Kalibrierung, Speicher, Topologie, Herkunft. Umgesetzt ist davon die
-//! eine, die heute jemand liest: die Kalibrierung je Ziel. Alles andere
-//! kommt, wenn ein Werkzeug danach fragt; ein Format auf Vorrat waere
-//! erfunden, und 8.10 laesst seine Form ausdruecklich offen.
+//! **Was hier steht.** 8.10 beschreibt acht Feldgruppen. Umgesetzt sind
+//! die, die ein Werkzeug liest: die Kalibrierung je Ziel (Pruefungen 12
+//! und 32), Speicher und Stack-Reserven je Ziel (Pruefung 39), Geraete
+//! und Kanaele mit Anschluss und Messwerten (Pruefungen 28 und 60; der
+//! Anschluss geht an das Board weiter, 9.5). Topologie und Herkunft
+//! kommen, wenn jemand danach fragt.
 //!
 //! **Warum die Kalibrierung zuerst.** Ohne `c_target` ist die zentrale
 //! Zeitzusage der Sprache unbelegt: `takt cost` rechnet Operationen, aber
@@ -22,12 +22,25 @@
 //! wie sie zustande kam, ist eine Zahl ohne Herkunft.
 //!
 //! ```text
-//! # takt-hw 1
+//! # takt-hw 3
 //! [target.thumbv7em]
 //! core_hz = 84000000
 //! i32 = 11900        # Pikosekunden je Operation
 //! f64 = 1190000
 //! t_io = 120000
+//! ram = 65536
+//! flash = 262144
+//!
+//! [device.gpio]
+//! driver = "stm32-gpio"
+//!
+//! [channel ui/led]
+//! direction = output
+//! raw = bool
+//! safe = false
+//! device = gpio
+//! port = "PC13 active_low"   # undurchsichtig, geht ans Board (8.10)
+//! jitter_ns = 250000         # gemessen (13.8)
 //! ```
 //!
 //! **Pikosekunden, nicht Nanosekunden.** Eine `i32`-Operation dauert bei
@@ -53,8 +66,9 @@ use crate::fns::{CostClass, CostVec};
 /// Leser akzeptieren jede Version bis zu ihrer eigenen; Schreiber
 /// schreiben die neueste. Dieselbe Regel wie beim MIR-Format.
 ///
-/// 2: NVM-Geometrie fuer das `persist`-Journal (5.9).
-pub const FORMAT_VERSION: u32 = 2;
+/// 2: NVM-Geometrie fuer das `persist`-Journal (5.9). 3: Geraete, Kanaele,
+/// Speicher und Stack-Reserven (8.10).
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -136,6 +150,72 @@ pub struct Target {
     pub t_io_ps: u64,
     /// Die NVM-Geometrie hinter `persist var`, falls das Ziel eine hat.
     pub nvm: Option<NvmGeometry>,
+    /// Speicher und Stack-Reserven (11.5, 12.3).
+    pub memory: Memory,
+}
+
+/// Speicher eines Ziels (8.10: „Speicher und Stack"), in Byte.
+///
+/// `ram` und `flash` stehen im Datenblatt; die Reserven misst 13.8 und
+/// die Marge waehlt das Projekt (12.3) — beides je Ziel, nicht je Sprache.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Memory {
+    /// Daten-RAM.
+    pub ram: Option<u64>,
+    /// Flash fuer Code, Konstanten und Journal.
+    pub flash: Option<u64>,
+    /// Instruktions-RAM auf XIP-Zielen (12.3).
+    pub iram: Option<u64>,
+    /// Stack-Reserven fuer Runtime, Treiber, ISRs und RTOS (12.3).
+    pub stack_reserve: Option<u64>,
+    /// Marge auf den gerechneten Stack (12.3).
+    pub stack_margin: Option<u64>,
+}
+
+/// Ein Geraet (8.10: Treibertyp, Adresse, Heartbeat, Zykluszeit).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Device {
+    /// Name des Abschnitts.
+    pub name: String,
+    /// Treibertyp; das Board stellt ihn (9.5).
+    pub driver: Option<String>,
+    /// Busadresse.
+    pub address: Option<String>,
+    /// Heartbeat in Nanosekunden (12.4).
+    pub heartbeat_ns: Option<i64>,
+    /// Zykluszeit in Nanosekunden.
+    pub cycle_ns: Option<i64>,
+    /// `fifo_depth` gepollter Geraete (Pruefung 59).
+    pub fifo_depth: Option<u32>,
+    /// `byte_rate` gepollter Geraete.
+    pub byte_rate: Option<u64>,
+}
+
+/// Ein Kanal (8.10), adressiert wie im Programm (`@ hw("…")`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HwChannel {
+    /// Die Adresse, Schluessel der Bindung (8.1).
+    pub address: String,
+    /// Richtung.
+    pub direction: Option<crate::program::Direction>,
+    /// Rohtyp des Geraets.
+    pub raw: Option<String>,
+    /// Einheit, nominal wie in 3.2.
+    pub unit: Option<String>,
+    /// Range in der Einheit, beide Grenzen einschliesslich.
+    pub range: Option<(f64, f64)>,
+    /// `safe`-Wert eines Outputs, als Text des Literals.
+    pub safe: Option<String>,
+    /// Das Geraet, das ihn bedient.
+    pub device: Option<String>,
+    /// Anschluss: treiberspezifisch, undurchsichtig (8.10).
+    pub port: Option<String>,
+    /// Rate in Hertz.
+    pub rate_hz: Option<u64>,
+    /// Gemessener Jitter eines Outputs in Nanosekunden (13.8).
+    pub jitter_ns: Option<i64>,
+    /// Gemessene Abtastlatenz eines Inputs in Nanosekunden (13.8).
+    pub latency_ns: Option<i64>,
 }
 
 /// Was das Journal vom nichtfluechtigen Speicher wissen muss (5.9, 11.5).
@@ -162,12 +242,16 @@ impl NvmGeometry {
 }
 
 /// Die Hardware-Konfiguration, soweit gelesen (8.10).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Hardware {
     /// Die Formatversion der gelesenen Datei.
     pub format_version: u32,
     /// Die Ziele, nach Namen.
     pub targets: BTreeMap<String, Target>,
+    /// Die Geraete, nach Namen.
+    pub devices: BTreeMap<String, Device>,
+    /// Die Kanaele, nach Adresse.
+    pub channels: BTreeMap<String, HwChannel>,
 }
 
 impl Hardware {
@@ -175,6 +259,18 @@ impl Hardware {
     pub fn target(&self, name: &str) -> Option<&Target> {
         self.targets.get(name)
     }
+
+    /// Der Kanal zu einer Adresse.
+    pub fn channel(&self, address: &str) -> Option<&HwChannel> {
+        self.channels.get(address)
+    }
+}
+
+/// Welcher Abschnitt gerade gelesen wird.
+enum Section {
+    Target(String),
+    Device(String),
+    Channel(String),
 }
 
 /// Was beim Lesen schiefgehen kann.
@@ -207,7 +303,7 @@ impl std::fmt::Display for ParseError {
 /// zu wirken.
 pub fn parse(text: &str) -> Result<Hardware, ParseError> {
     let mut out = Hardware::default();
-    let mut current: Option<String> = None;
+    let mut current: Option<Section> = None;
     let mut seen_magic = false;
 
     for (i, raw) in text.lines().enumerate() {
@@ -246,17 +342,7 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
                 line: line_no,
                 message: "unabgeschlossener Abschnitt: `]` fehlt".into(),
             })?;
-            let target = name.strip_prefix("target.").ok_or_else(|| ParseError {
-                line: line_no,
-                message: format!("unbekannter Abschnitt `{name}`; bekannt: `target.<name>`"),
-            })?;
-            if target.is_empty() {
-                return Err(ParseError { line: line_no, message: "`target.` ohne Namen".into() });
-            }
-            out.targets
-                .entry(target.to_string())
-                .or_insert_with(|| Target { name: target.to_string(), ..Target::default() });
-            current = Some(target.to_string());
+            current = Some(section(name, &mut out, line_no)?);
             continue;
         }
 
@@ -265,38 +351,24 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
             message: format!("weder Abschnitt noch Zuweisung: `{line}`"),
         })?;
         let (key, value) = (key.trim(), value.trim());
-        let Some(name) = current.as_ref() else {
-            return Err(ParseError {
-                line: line_no,
-                message: format!("`{key}` steht vor jedem Abschnitt; erwartet `[target.<name>]`"),
-            });
-        };
-        let number: u64 = value
-            .parse()
-            .map_err(|_| ParseError { line: line_no, message: format!("`{value}` ist keine ganze Zahl") })?;
-
-        let target = out.targets.get_mut(name).expect("Abschnitt angelegt");
-        match key {
-            "core_hz" => {
-                target.core_hz = Some(u32::try_from(number).map_err(|_| ParseError {
-                    line: line_no,
-                    message: format!("{number} Hz passt nicht in 32 Bit"),
-                })?);
+        match &current {
+            Some(Section::Target(name)) => {
+                let target = out.targets.get_mut(name).expect("Abschnitt angelegt");
+                target_key(target, key, value, line_no)?;
             }
-            "t_io" => target.t_io_ps = number,
-            "nvm_sector_bytes" => nvm_of(target).sector_bytes = number as u32,
-            "nvm_sectors" => nvm_of(target).sectors = number as u32,
-            "nvm_min_interval" => nvm_of(target).default_min_interval_ns = number as i64,
-            _ => {
-                let class = CostClass::ALL.iter().find(|c| c.name() == key).ok_or_else(|| ParseError {
+            Some(Section::Device(name)) => {
+                let device = out.devices.get_mut(name).expect("Abschnitt angelegt");
+                device_key(device, key, value, line_no)?;
+            }
+            Some(Section::Channel(address)) => {
+                let channel = out.channels.get_mut(address).expect("Abschnitt angelegt");
+                channel_key(channel, key, value, line_no)?;
+            }
+            None => {
+                return Err(ParseError {
                     line: line_no,
-                    message: format!(
-                        "unbekannter Schluessel `{key}`; bekannt: core_hz, t_io, nvm_sector_bytes, nvm_sectors, \
-                         nvm_min_interval und die Klassen {}",
-                        CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
-                    ),
-                })?;
-                target.c_target.set(*class, number);
+                    message: format!("`{key}` steht vor jedem Abschnitt; erwartet `[target.<name>]`"),
+                });
             }
         }
     }
@@ -310,6 +382,147 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
 /// Die NVM-Geometrie eines Ziels, bei Bedarf angelegt.
 fn nvm_of(target: &mut Target) -> &mut NvmGeometry {
     target.nvm.get_or_insert_with(NvmGeometry::default)
+}
+
+/// Legt den Abschnitt an: `target.<name>`, `device.<name>`, `channel <adresse>`.
+fn section(name: &str, out: &mut Hardware, line: u32) -> Result<Section, ParseError> {
+    if let Some(target) = name.strip_prefix("target.") {
+        if target.is_empty() {
+            return Err(ParseError { line, message: "`target.` ohne Namen".into() });
+        }
+        out.targets
+            .entry(target.to_string())
+            .or_insert_with(|| Target { name: target.to_string(), ..Target::default() });
+        return Ok(Section::Target(target.to_string()));
+    }
+    if let Some(device) = name.strip_prefix("device.") {
+        if device.is_empty() {
+            return Err(ParseError { line, message: "`device.` ohne Namen".into() });
+        }
+        out.devices
+            .entry(device.to_string())
+            .or_insert_with(|| Device { name: device.to_string(), ..Device::default() });
+        return Ok(Section::Device(device.to_string()));
+    }
+    if let Some(address) = name.strip_prefix("channel ") {
+        let address = address.trim();
+        if address.is_empty() {
+            return Err(ParseError { line, message: "`channel` ohne Adresse".into() });
+        }
+        out.channels
+            .entry(address.to_string())
+            .or_insert_with(|| HwChannel { address: address.to_string(), ..HwChannel::default() });
+        return Ok(Section::Channel(address.to_string()));
+    }
+    Err(ParseError {
+        line,
+        message: format!(
+            "unbekannter Abschnitt `{name}`; bekannt: `target.<name>`, `device.<name>`, `channel <adresse>`"
+        ),
+    })
+}
+
+fn number(value: &str, line: u32) -> Result<u64, ParseError> {
+    value.parse().map_err(|_| ParseError { line, message: format!("`{value}` ist keine ganze Zahl") })
+}
+
+/// Ein Text, mit oder ohne Anfuehrungszeichen.
+fn text(value: &str) -> String {
+    value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value).to_string()
+}
+
+fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<(), ParseError> {
+    match key {
+        "core_hz" => {
+            let n = number(value, line)?;
+            target.core_hz = Some(
+                u32::try_from(n).map_err(|_| ParseError { line, message: format!("{n} Hz passt nicht in 32 Bit") })?,
+            );
+        }
+        "t_io" => target.t_io_ps = number(value, line)?,
+        "nvm_sector_bytes" => nvm_of(target).sector_bytes = number(value, line)? as u32,
+        "nvm_sectors" => nvm_of(target).sectors = number(value, line)? as u32,
+        "nvm_min_interval" => nvm_of(target).default_min_interval_ns = number(value, line)? as i64,
+        "ram" => target.memory.ram = Some(number(value, line)?),
+        "flash" => target.memory.flash = Some(number(value, line)?),
+        "iram" => target.memory.iram = Some(number(value, line)?),
+        "stack_reserve" => target.memory.stack_reserve = Some(number(value, line)?),
+        "stack_margin" => target.memory.stack_margin = Some(number(value, line)?),
+        _ => {
+            let class = CostClass::ALL.iter().find(|c| c.name() == key).ok_or_else(|| ParseError {
+                line,
+                message: format!(
+                    "unbekannter Schluessel `{key}`; bekannt: core_hz, t_io, ram, flash, iram, stack_reserve, \
+                     stack_margin, nvm_sector_bytes, nvm_sectors, nvm_min_interval und die Klassen {}",
+                    CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
+                ),
+            })?;
+            target.c_target.set(*class, number(value, line)?);
+        }
+    }
+    Ok(())
+}
+
+fn device_key(device: &mut Device, key: &str, value: &str, line: u32) -> Result<(), ParseError> {
+    match key {
+        "driver" => device.driver = Some(text(value)),
+        "address" => device.address = Some(text(value)),
+        "heartbeat_ns" => device.heartbeat_ns = Some(number(value, line)? as i64),
+        "cycle_ns" => device.cycle_ns = Some(number(value, line)? as i64),
+        "fifo_depth" => device.fifo_depth = Some(number(value, line)? as u32),
+        "byte_rate" => device.byte_rate = Some(number(value, line)?),
+        _ => {
+            return Err(ParseError {
+                line,
+                message: format!(
+                    "unbekannter Schluessel `{key}`; bekannt: driver, address, heartbeat_ns, cycle_ns, fifo_depth, \
+                     byte_rate"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Result<(), ParseError> {
+    match key {
+        "direction" => {
+            channel.direction = Some(match value {
+                "input" => crate::program::Direction::Input,
+                "output" => crate::program::Direction::Output,
+                other => {
+                    return Err(ParseError { line, message: format!("`{other}` ist keine Richtung (input, output)") });
+                }
+            });
+        }
+        "raw" => channel.raw = Some(text(value)),
+        "unit" => channel.unit = Some(text(value)),
+        "range" => {
+            let (lo, hi) = value
+                .split_once("..")
+                .ok_or_else(|| ParseError { line, message: format!("`{value}` ist keine Range (`lo..hi`)") })?;
+            let parse = |t: &str| {
+                t.trim().parse::<f64>().map_err(|_| ParseError { line, message: format!("`{t}` ist keine Zahl") })
+            };
+            channel.range = Some((parse(lo)?, parse(hi)?));
+        }
+        "safe" => channel.safe = Some(text(value)),
+        "device" => channel.device = Some(text(value)),
+        "port" => channel.port = Some(text(value)),
+        "rate_hz" => channel.rate_hz = Some(number(value, line)?),
+        "jitter_ns" => channel.jitter_ns = Some(number(value, line)? as i64),
+        "latency_ns" => channel.latency_ns = Some(number(value, line)? as i64),
+        _ => {
+            return Err(ParseError {
+                line,
+                message: format!(
+                    "unbekannter Schluessel `{key}`; bekannt: direction, raw, unit, range, safe, device, port, \
+                     rate_hz, jitter_ns, latency_ns"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Die Version aus `# takt-hw <n>`.
@@ -339,6 +552,67 @@ pub fn render(hw: &Hardware) -> String {
             s.push_str(&format!("nvm_sector_bytes = {}\n", nvm.sector_bytes));
             s.push_str(&format!("nvm_sectors = {}\n", nvm.sectors));
             s.push_str(&format!("nvm_min_interval = {}\n", nvm.default_min_interval_ns));
+        }
+        let m = target.memory;
+        for (key, value) in [
+            ("ram", m.ram),
+            ("flash", m.flash),
+            ("iram", m.iram),
+            ("stack_reserve", m.stack_reserve),
+            ("stack_margin", m.stack_margin),
+        ] {
+            if let Some(v) = value {
+                s.push_str(&format!("{key} = {v}\n"));
+            }
+        }
+    }
+    for d in hw.devices.values() {
+        s.push_str(&format!("\n[device.{}]\n", d.name));
+        if let Some(v) = &d.driver {
+            s.push_str(&format!("driver = \"{v}\"\n"));
+        }
+        if let Some(v) = &d.address {
+            s.push_str(&format!("address = \"{v}\"\n"));
+        }
+        for (key, value) in [("heartbeat_ns", d.heartbeat_ns), ("cycle_ns", d.cycle_ns)] {
+            if let Some(v) = value {
+                s.push_str(&format!("{key} = {v}\n"));
+            }
+        }
+        if let Some(v) = d.fifo_depth {
+            s.push_str(&format!("fifo_depth = {v}\n"));
+        }
+        if let Some(v) = d.byte_rate {
+            s.push_str(&format!("byte_rate = {v}\n"));
+        }
+    }
+    for c in hw.channels.values() {
+        s.push_str(&format!("\n[channel {}]\n", c.address));
+        if let Some(d) = c.direction {
+            let name = match d {
+                crate::program::Direction::Input => "input",
+                crate::program::Direction::Output => "output",
+            };
+            s.push_str(&format!("direction = {name}\n"));
+        }
+        for (key, value) in [("raw", &c.raw), ("unit", &c.unit), ("safe", &c.safe), ("device", &c.device)] {
+            if let Some(v) = value {
+                s.push_str(&format!("{key} = {v}\n"));
+            }
+        }
+        if let Some((lo, hi)) = c.range {
+            s.push_str(&format!("range = {lo:?}..{hi:?}\n"));
+        }
+        if let Some(v) = &c.port {
+            s.push_str(&format!("port = \"{v}\"\n"));
+        }
+        if let Some(v) = c.rate_hz {
+            s.push_str(&format!("rate_hz = {v}\n"));
+        }
+        for (key, value) in [("jitter_ns", c.jitter_ns), ("latency_ns", c.latency_ns)] {
+            if let Some(v) = value {
+                s.push_str(&format!("{key} = {v}\n"));
+            }
         }
     }
     s

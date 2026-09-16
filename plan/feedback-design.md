@@ -527,9 +527,12 @@ kommt mit M5. Die Prüfungen früher zu aktivieren hieße, sie gegen
 geschätzte Zahlen laufen zu lassen; das ist schlechter als sie ehrlich
 offen zu lassen.
 
----
-
-## 11. Was Referenz und Inventur berührt
+**Korrektur (2026-09-16).** Die Bewertung galt für die Kalibrierung und
+war dort richtig. Für die *anderen* Felder aus 8.10 galt sie nicht:
+Kanäle (Adresse, Richtung, Einheit, Range, `safe`, Anschluss) und Speicher
+(`ram`, `flash`) stehen im Datenblatt, nicht in einer Messung. Sie sind
+jetzt Format 3 der Konfiguration; SC-60 und SC-39 urteilen damit, SC-28
+sobald ein Jitter gemessen ist. Siehe `plan/m5.md` 3.6.
 
 | Stelle | Änderung | Wann |
 |---|---|---|
