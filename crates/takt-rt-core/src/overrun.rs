@@ -42,6 +42,11 @@ impl Overrun {
         Overrun { policy, count: 0, worst: 0 }
     }
 
+    /// Die Policy.
+    pub fn policy(&self) -> Policy {
+        self.policy
+    }
+
     /// Nimmt die Dauer eines Ticks entgegen.
     ///
     /// Die beiden Fragen sind nicht dieselbe: 7.3 protokolliert die

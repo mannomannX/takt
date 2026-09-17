@@ -117,3 +117,82 @@ fn a_slow_device_costs_the_tick_nothing() {
     }
     assert!(persist.journal().writes() >= 1);
 }
+
+/// Zaehlt Ticks, persistiert den Zaehler und schlaeft nach jedem Schritt
+/// `window` Ticks (9.9), wenn `window > 0`.
+struct Sleeper {
+    value: u32,
+    now: i64,
+    window: i64,
+}
+
+impl Program for Sleeper {
+    fn tick(&mut self, _k: u64, now: i64) {
+        self.value += 1;
+        self.now = now;
+    }
+
+    fn sleep_allowed(&self) -> bool {
+        self.window > 0
+    }
+
+    fn next_deadline(&self) -> Option<i64> {
+        Some(self.now + self.window * T0)
+    }
+
+    fn persist_snapshot(&mut self, out: &mut [u8]) -> usize {
+        out[..4].copy_from_slice(&self.value.to_le_bytes());
+        4
+    }
+}
+
+fn sleeping_runtime(window: i64, policy: Policy) -> Runtime<Sleeper, Instant, Quiet, Quiet> {
+    let program = Sleeper { value: 0, now: 0, window };
+    Runtime::new(program, Instant::default(), Quiet, Quiet, Profile::BAREMETAL, T0, policy)
+}
+
+/// Ein Geraet, das den Kern fuenf Ticks lang anhaelt (12.3).
+fn blocking() -> FakeNvm<SLOT> {
+    FakeNvm::<SLOT>::new().with_blocking_ns(5 * T0)
+}
+
+/// **Ein blockierendes Geraet schreibt nur im Schlaffenster** (12.3, 9.9):
+/// Mit zehn Ticks Schlaf je Schritt deckt das Fenster den Vorgang, mit
+/// zwei nicht.
+#[test]
+fn a_blocking_device_writes_only_in_a_sleep_window() {
+    for (window, expect_writes) in [(10, true), (2, false)] {
+        let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
+        let mut persist = Persist::new(Journal::new(blocking(), HASH, 0), &mut current, &mut stored);
+        let mut rt = sleeping_runtime(window, Policy::Fault);
+        persist.load(&mut rt.program);
+        rt.run_persisting(100, &mut persist);
+        assert_eq!(persist.journal().writes() > 0, expect_writes, "Fenster von {window} Ticks");
+    }
+}
+
+/// Unter `overrun = alert` schreibt es sofort — das Programm traegt die
+/// Ueberlaeufe (7.3).
+#[test]
+fn under_alert_a_blocking_device_writes_at_once() {
+    let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
+    let mut persist = Persist::new(Journal::new(blocking(), HASH, 0), &mut current, &mut stored);
+    let mut rt = sleeping_runtime(0, Policy::Alert);
+    persist.load(&mut rt.program);
+    rt.run_persisting(20, &mut persist);
+    assert!(persist.journal().writes() > 0);
+}
+
+/// Ohne Fenster und unter `fault` schreibt nur der Flush (5.9: vor
+/// `reboot`, `boot_jump`, Deep Sleep).
+#[test]
+fn without_a_window_only_the_flush_writes() {
+    let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
+    let mut persist = Persist::new(Journal::new(blocking(), HASH, 0), &mut current, &mut stored);
+    let mut rt = sleeping_runtime(0, Policy::Fault);
+    persist.load(&mut rt.program);
+    rt.run_persisting(100, &mut persist);
+    assert_eq!(persist.journal().writes(), 0);
+    assert!(persist.flush(&mut rt.program));
+    assert_eq!(persist.journal().writes(), 1);
+}

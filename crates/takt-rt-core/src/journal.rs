@@ -185,6 +185,11 @@ impl<N: Nvm> Journal<N> {
         &mut self.nvm
     }
 
+    /// Das Geraet.
+    pub fn device(&self) -> &N {
+        &self.nvm
+    }
+
     /// Liest den gueltigen Eintrag mit der hoechsten Sequenznummer (5.9).
     ///
     /// Laeuft vor dem ersten Tick und darf blockieren. Jeder Fehler —
@@ -422,6 +427,11 @@ impl<'a, N: Nvm> Persist<'a, N> {
         &self.journal
     }
 
+    /// So lange haelt ein Vorgang des Geraets den Kern hoechstens (12.3).
+    pub fn blocking_ns(&self) -> Option<i64> {
+        self.journal.nvm.blocking_ns()
+    }
+
     /// Journal und Geraet zurueck.
     pub fn into_journal(self) -> Journal<N> {
         self.journal
@@ -447,6 +457,9 @@ pub struct FakeNvm<const N: usize> {
     cut_at: Option<u32>,
     written: u32,
     cut: bool,
+    /// Ein Geraet, das den Kern anhaelt (12.3), so lange je Vorgang.
+    blocking_ns: Option<i64>,
+    erases: u32,
 }
 
 /// Der laufende Vorgang einer [`FakeNvm`].
@@ -459,13 +472,34 @@ enum Job<const N: usize> {
 impl<const N: usize> FakeNvm<N> {
     /// Zwei geloeschte Slots.
     pub fn new() -> FakeNvm<N> {
-        FakeNvm { slots: [[0xFF; N]; 2], latency: 1, busy: 0, job: Job::None, cut_at: None, written: 0, cut: false }
+        FakeNvm {
+            slots: [[0xFF; N]; 2],
+            latency: 1,
+            busy: 0,
+            job: Job::None,
+            cut_at: None,
+            written: 0,
+            cut: false,
+            blocking_ns: None,
+            erases: 0,
+        }
     }
 
     /// Wie viele `poll`-Aufrufe ein Vorgang dauert.
     pub fn with_latency(mut self, polls: u32) -> FakeNvm<N> {
         self.latency = polls.max(1);
         self
+    }
+
+    /// Ein Geraet, das den Kern je Vorgang so lange anhaelt (12.3).
+    pub fn with_blocking_ns(mut self, ns: i64) -> FakeNvm<N> {
+        self.blocking_ns = Some(ns);
+        self
+    }
+
+    /// Wie oft ein Slot geloescht wurde.
+    pub fn erases(&self) -> u32 {
+        self.erases
     }
 
     /// Bricht nach `n` geschriebenen Bytes ab (8.11: `CUT_AT_BYTE`).
@@ -532,6 +566,7 @@ impl<const N: usize> Nvm for FakeNvm<N> {
         }
         self.job = Job::Erase(slot);
         self.busy = self.latency;
+        self.erases += 1;
         true
     }
 
@@ -581,5 +616,9 @@ impl<const N: usize> Nvm for FakeNvm<N> {
         let Some(slice) = src.get(at..at + into.len()) else { return false };
         into.copy_from_slice(slice);
         true
+    }
+
+    fn blocking_ns(&self) -> Option<i64> {
+        self.blocking_ns
     }
 }

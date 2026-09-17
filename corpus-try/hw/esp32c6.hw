@@ -1,4 +1,4 @@
-# takt-hw 3
+# takt-hw 4
 # ESP32-C6-DevKitM-1-N4 (ESP32-C6-MINI-1, RV32IMAC, 160 MHz, ohne FPU):
 # Speicher und Journal fuer die Profilfamilie `xip_flash` (12.3,
 # plan/esp32c6.md).
@@ -12,6 +12,11 @@
 # der Rest geht an Cache und Bootloader), aus dem sowohl Daten als auch
 # RAM-residenter Code kommen. Pruefung 39 vergleicht beide Summen gegen
 # dieselbe Grenze — zusammen duerfen sie sie nicht ueberschreiten.
+#
+# Das Journal haelt den Kern an (12.3): Die ROM-Routinen warten synchron
+# auf das Flash. Gemessen am 17.09.2026 mit `58_persist_alert` ueber 16
+# Schreibvorgaenge: Loeschen hoechstens 49,9 ms, Programmieren hoechstens
+# 0,12 ms; hier mit Reserve.
 [target.riscv32imac]
 core_hz = 160000000
 ram = 451600
@@ -19,6 +24,9 @@ flash = 4194304
 iram = 451600
 nvm_sector_bytes = 4096
 nvm_sectors = 2
+nvm_erase_ns = 60000000
+nvm_program_ns = 200000
+nvm_blocking = true
 
 [device.led]
 driver = "esp32c6-rmt-ws2812"

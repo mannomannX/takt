@@ -70,6 +70,7 @@ const KORPUS: &[&str] = &[
     "56_idle_timer.takt",
     "57_persist_often.takt",
     "58_persist_alert.takt",
+    "59_persist_idle.takt",
 ];
 
 fn root() -> PathBuf {
@@ -267,21 +268,16 @@ fn an_idle_state_sleeps_in_virtual_ticks() {
     assert!(diffs.is_empty(), "{diffs:?}");
 }
 
-/// **Das Journal kostet Zeit, aber keine Semantik** (12.3, `xip_flash`;
-/// plan/esp32c6.md Schritt 7, FB-197).
+/// **Unter `overrun = alert` kostet das Journal Zeit, aber keine
+/// Semantik** (7.3, 12.3; plan/nvm.md 2.2, FB-197).
 ///
-/// `57_persist_often` schreibt in jedem Tick (`min_interval = 0`). Eine
-/// Sektorloeschung dauert auf diesem Chip rund 25 ms und ist unteilbar:
-/// Bei 10 ms Tick vergehen dabei Perioden, gleich wo der Code liegt. Was
-/// Schritt 7 erreicht, ist darum nicht ihre Abwesenheit, sondern dass sie
-/// die *logische* Zeit nicht beruehren — der Trace bleibt der des
-/// Interpreters (Satz 9.4.4), und die Tickzahl kommt aus dem SYSTIMER,
-/// nicht aus einem ISR-Zaehler (FB-198).
-///
-/// Die verpassten Perioden zaehlt der Test und schreibt sie hin, statt
-/// sie zuzusichern: Sie sind eine Eigenschaft des Flash, kein Ergebnis
-/// des Compilers. Gemessen am 17.09.2026: 400 mit RAM-Residenz, 429 ohne,
-/// bei 16 Schreibvorgaengen.
+/// `58_persist_alert` schreibt in jedem Tick (`min_interval = 0`) und
+/// nimmt die Ueberlaeufe an. Ein Schreibvorgang haelt den Kern
+/// zweistellige Perioden lang an; die logische Zeit beruehrt das nicht —
+/// der Trace bleibt der des Interpreters (Satz 9.4.4), und die Tickzahl
+/// kommt aus dem SYSTIMER (FB-198). Der Test zaehlt die Perioden und
+/// druckt die gemessenen Lösch- und Programmierzeiten: die Zahlen fuer
+/// `nvm_erase_ns` und `nvm_program_ns` in `corpus-try/hw/esp32c6.hw`.
 #[test]
 fn the_journal_costs_time_but_not_semantics() {
     let Ok(port) = std::env::var("TAKT_ESP32C6_PORT") else {
@@ -289,7 +285,7 @@ fn the_journal_costs_time_but_not_semantics() {
         return;
     };
     let _board = board();
-    let name = "57_persist_often.takt";
+    let name = "58_persist_alert.takt";
     let text = build(name, true)
         .and_then(|elf| {
             probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
@@ -301,7 +297,41 @@ fn the_journal_costs_time_but_not_semantics() {
     assert_eq!(counter(&text, "fehlgeschlagen"), Some(0), "ein Schreibvorgang scheiterte:\n{text}");
     let missed =
         text.lines().filter_map(|l| l.trim().strip_prefix("verpasste Ticks: ")?.parse::<u64>().ok()).next_back();
-    eprintln!("{name}: {writes} Journal-Schreibvorgaenge, {} verpasste Perioden", missed.unwrap_or(0));
+    eprintln!(
+        "{name}: {writes} Journal-Schreibvorgaenge, {} verpasste Perioden; loeschen {} ns, programmieren {} ns",
+        missed.unwrap_or(0),
+        counter(&text, "nvm loeschen").unwrap_or(0),
+        counter(&text, "programmieren").unwrap_or(0)
+    );
+    let p = corpus(name);
+    let diffs = compare(&run_interpreted(&p), &text);
+    assert!(diffs.is_empty(), "{diffs:?}");
+}
+
+/// **Unter `overrun = fault` schreibt das Journal im Schlaf** (9.9, 12.3;
+/// plan/nvm.md 2.3): `59_persist_idle` gibt der Runtime je Runde 500 ms
+/// `idle`, mehr als ein Schreibvorgang braucht. Sie schreibt dort, und
+/// die Schleife verpasst keine Periode; der Trace ist der ohne Schlaf
+/// (Satz 9.9.1). Braucht `nvm_blocking` und die Zeiten in
+/// `corpus-try/hw/esp32c6.hw`, sonst gilt das Geraet als asynchron.
+#[test]
+fn the_journal_writes_in_sleep_windows() {
+    let Ok(port) = std::env::var("TAKT_ESP32C6_PORT") else {
+        eprintln!("uebersprungen: TAKT_ESP32C6_PORT nennt kein Board");
+        return;
+    };
+    let _board = board();
+    let name = "59_persist_idle.takt";
+    let text = build(name, true)
+        .and_then(|elf| {
+            probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
+            capture(&port)
+        })
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let writes = counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
+    assert!(writes >= 1, "das Journal schrieb nie im Schlaf:\n{text}");
+    assert!(!text.contains("verpasste Ticks"), "ein Schreibvorgang im Schlaf hat Perioden gekostet:\n{text}");
+    assert_eq!(counter(&text, "ueberlaeufe"), Some(0), "{text}");
     let p = corpus(name);
     let diffs = compare(&run_interpreted(&p), &text);
     assert!(diffs.is_empty(), "{diffs:?}");

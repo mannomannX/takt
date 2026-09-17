@@ -500,8 +500,8 @@ fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardwar
         takt_mir::persist::min_interval_ns(p).unwrap_or(0)
     ));
     if let Some(hw) = hw {
-        s.push_str("\n/// Anschluesse aus der Hardware-Konfiguration (8.10); undurchsichtig, fuer das Board.\n");
         for (ident, port) in ports(p, hw) {
+            s.push_str("\n/// Anschluss aus der Hardware-Konfiguration (8.10); undurchsichtig, fuer das Board.\n");
             s.push_str(&format!("pub const PORT_{}: &str = \"{port}\";\n", ident.to_uppercase()));
         }
     }

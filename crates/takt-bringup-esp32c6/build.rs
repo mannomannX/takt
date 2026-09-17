@@ -109,12 +109,15 @@ fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
         panic!("Das Werkzeug takt fehlt; erst `cargo build -p takt-cli --{profile}`");
     };
     println!("cargo:rerun-if-changed={}", takt.display());
-    let status = Command::new(&takt)
-        .args(["build", program, "--target", "riscv32imac", "--build", "hw"])
-        .args(emit)
-        .arg("--out")
-        .arg(out)
-        .status();
+    let mut cmd = Command::new(&takt);
+    cmd.args(["build", program, "--target", "riscv32imac", "--build", "hw"]).args(emit).arg("--out").arg(out);
+    // 8.10: Anschluesse und NVM-Zeiten des Boards, wenn die Konfiguration da ist.
+    let hardware = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try/hw/esp32c6.hw");
+    println!("cargo:rerun-if-changed={}", hardware.display());
+    if hardware.exists() {
+        cmd.arg("--hardware").arg(&hardware);
+    }
+    let status = cmd.status();
     match status {
         Ok(s) if s.success() => {}
         Ok(_) => panic!("takt build {} schlug fehl fuer {program}", emit.join(" ")),

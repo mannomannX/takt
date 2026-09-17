@@ -23,7 +23,7 @@ mod takt {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
 }
-use takt::{LOGIC_HASH, OVERRUN_ALERT, PERSIST_BOUND, PERSIST_MIN_INTERVAL_NS, TICK_NS};
+use takt::{LOGIC_HASH, NVM_BLOCKING_NS, OVERRUN_ALERT, PERSIST_BOUND, PERSIST_MIN_INTERVAL_NS, TICK_NS};
 
 /// Alle wie viele Ticks der Zustand ausgegeben wird. USB-Serial-JTAG ist
 /// schnell, aber das FIFO blockiert, wenn der Host nicht liest; ein
@@ -155,7 +155,7 @@ fn main() -> ! {
     let trace_every = if limit > 0 { 1 } else { TRACE_EVERY };
 
     // 5.9: s0 kommt aus dem Journal, darum laden vor dem ersten Eintritt.
-    let mut nvm = FlashNvm::new(peripherals.FLASH, JOURNAL_AT);
+    let mut nvm = FlashNvm::new(peripherals.FLASH, JOURNAL_AT).with_blocking_ns(NVM_BLOCKING_NS);
     if FRESH_JOURNAL && !nvm.wipe() {
         report("journal: loeschen scheiterte");
     }
@@ -197,9 +197,11 @@ fn main() -> ! {
     let flushed = persist.flush(&mut rt.program);
     if let Some(u) = uart() {
         let journal = persist.journal();
+        let (erase_ns, program_ns) = journal.device().measured_ns();
         let _ = write!(
             u,
-            "takt schlief {} ueberlaeufe {} journal geschrieben {} fehlgeschlagen {} flush {}\r\n",
+            "takt schlief {} ueberlaeufe {} journal geschrieben {} fehlgeschlagen {} flush {} \
+             nvm loeschen {erase_ns} ns programmieren {program_ns} ns\r\n",
             rt.sink.slept,
             rt.sink.overruns,
             journal.writes(),

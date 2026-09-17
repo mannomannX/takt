@@ -1,0 +1,16 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output count :int in 0..1000 @hw("o/count") safe=0)
+(machine device
+  (persist cycles :int in 0..1000 0 min_interval=0s)
+  (initial RUN)
+  (state RUN
+    (enter
+      (if (< cycles 1000)
+        (= cycles (+ cycles 1))))
+    (loop
+      (= count cycles))
+    (after 100ms -> SLEEP))
+  (state SLEEP idle
+    (after 500ms -> RUN)))

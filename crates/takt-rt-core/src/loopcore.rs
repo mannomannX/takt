@@ -79,6 +79,12 @@ pub trait Nvm {
     /// Liest aus einem Slot. Laeuft einmal vor dem ersten Tick, darf also
     /// blockieren — dort gibt es keine Deadline.
     fn read(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> bool;
+
+    /// So lange haelt `begin_*` den Kern hoechstens an, in Nanosekunden;
+    /// `None`, wenn der Vorgang in der Hardware weiterlaeuft (12.3).
+    fn blocking_ns(&self) -> Option<i64> {
+        None
+    }
 }
 
 /// Wie weit ein Job ist (4.5).
@@ -346,15 +352,31 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
 
     /// Ein Tick mit Journal (5.9, 12.1).
     ///
-    /// Das Journal laeuft *nach* dem Schritt, also auch nach einem Schlaf:
-    /// Ein begonnener Flash-Vorgang laeuft in der Hardware weiter, und die
-    /// Runtime fragt beim naechsten Wachwerden nach. Vor dem Schlaf zu
-    /// schreiben hiesse, auf ihn zu warten — genau das Blockieren, das der
-    /// `Nvm`-Trait ausschliesst.
+    /// Das Journal laeuft *nach* dem Schritt, in der Wartezeit bis zur
+    /// naechsten Frist. Ein Geraet, das in der Hardware weiterarbeitet,
+    /// wird jeden Tick gefragt; eines, das den Kern anhaelt (12.3), nur
+    /// wenn die Wartezeit den Vorgang deckt — nach einem Schlaf ist sie
+    /// lang, sonst ein Tick abzueglich des Schritts — oder wenn das
+    /// Programm Ueberlaeufe annimmt (`overrun = alert`, 7.3).
     pub fn step_persisting<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) -> Tick {
         let tick = self.step();
-        persist.poll(tick.now, &mut self.program);
+        if self.journal_may_run(persist.blocking_ns()) {
+            persist.poll(tick.now, &mut self.program);
+            // Ein Vorgang ueber die Frist hinaus ist ein Ueberlauf (7.3),
+            // auch wenn der Schritt selbst gepasst hat.
+            let late = self.clock.now().saturating_sub(self.deadline);
+            if late > 0 {
+                self.pending_overrun |= self.overrun.observe(self.tick_ns.saturating_add(late), self.tick_ns).fault;
+            }
+        }
         tick
+    }
+
+    fn journal_may_run(&self, blocking_ns: Option<i64>) -> bool {
+        match blocking_ns {
+            None => true,
+            Some(cost) => self.overrun.policy() == Policy::Alert || self.deadline - self.clock.now() >= cost,
+        }
     }
 
     /// `n` Ticks mit Journal.

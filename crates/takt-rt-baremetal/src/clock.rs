@@ -32,12 +32,14 @@ pub struct TimerClock<T> {
     nominal_ns: i64,
     /// Wie viele Tick-Ereignisse die Schleife verpasst hat.
     missed: u64,
+    /// Um so viele Ereignisse lag die Schleife beim letzten Warten zurueck.
+    lag: u64,
 }
 
 impl<T: TickSource> TimerClock<T> {
     /// Bindet einen Timer an die nominale Periode.
     pub fn new(timer: T, nominal_ns: i64) -> TimerClock<T> {
-        TimerClock { timer, nominal_ns, missed: 0 }
+        TimerClock { timer, nominal_ns, missed: 0, lag: 0 }
     }
 
     /// Die zuletzt gemessene Periode gegenueber der nominalen (7.1).
@@ -76,10 +78,11 @@ impl<T: TickSource> Clock for TimerClock<T> {
     /// Differenz sind verpasste Ticks, und gewartet wird nicht mehr.
     fn wait_until(&mut self, deadline: i64) {
         let target = if self.nominal_ns > 0 { u64::try_from(deadline / self.nominal_ns).unwrap_or(0) } else { 0 };
-        let now = self.timer.ticks();
-        if now > target {
-            self.missed = self.missed.saturating_add(now - target);
-        }
+        // Nur der Zuwachs des Rueckstands ist verloren: Beim Aufholen
+        // liegt die Schleife noch zurueck, verpasst aber nichts Neues.
+        let lag = self.timer.ticks().saturating_sub(target);
+        self.missed = self.missed.saturating_add(lag.saturating_sub(self.lag));
+        self.lag = lag;
         while self.timer.ticks() < target {
             self.timer.wait_for_tick();
         }
@@ -140,6 +143,21 @@ mod tests {
         clock.wait_until(MS);
         assert_eq!(clock.missed(), 2, "zwei Ereignisse hinter der Frist sind zwei verlorene Ticks");
         assert_eq!(clock.timer.waits.get(), 0, "wer schon zu spaet ist, wartet nicht noch");
+    }
+
+    /// Ein Stillstand von zwei Perioden ist zwei verlorene Ticks — nicht
+    /// zwei plus eins beim Aufholen; ein neuer Stillstand zaehlt wieder.
+    #[test]
+    fn catching_up_does_not_count_the_same_loss_twice() {
+        let timer = FakeTimer { count: Cell::new(3), period_ns: MS, ..FakeTimer::default() };
+        let mut clock = TimerClock::new(timer, MS);
+        clock.wait_until(MS);
+        clock.wait_until(2 * MS);
+        clock.wait_until(3 * MS);
+        assert_eq!(clock.missed(), 2, "Aufholen verliert nichts");
+        clock.timer.count.set(7);
+        clock.wait_until(4 * MS);
+        assert_eq!(clock.missed(), 5, "drei weitere Perioden im zweiten Stillstand");
     }
 
     #[test]

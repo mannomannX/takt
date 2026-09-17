@@ -1,0 +1,30 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# `persist` mit Schlaffenster (5.9, 9.9, 12.3): Der Zaehler aendert sich
+# bei jedem Eintritt in RUN, und `min_interval = 0` liesse das Journal
+# sofort schreiben. Auf einem Ziel, dessen Flash den Kern anhaelt,
+# schreibt die Runtime unter `overrun = fault` nur im Schlaf — SLEEP
+# gibt ihr 500 ms, mehr als ein Schreibvorgang braucht. Der Trace ist
+# der ohne Schlaf (Satz 9.9.1), und kein Tick geht verloren.
+
+output count : int in 0..1000 @ hw("o/count") with safe = 0
+
+machine device:
+    persist var cycles : int in 0..1000 = 0 with min_interval = 0 s
+
+    initial RUN
+
+    state RUN:
+        enter:
+            if cycles < 1000:
+                cycles = cycles + 1
+
+        loop:
+            count = cycles
+
+        after 100 ms: -> SLEEP
+
+    state SLEEP idle:
+        after 500 ms: -> RUN
