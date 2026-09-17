@@ -80,22 +80,85 @@ fn what_was_written_comes_back() {
 }
 
 #[test]
-fn the_slots_alternate() {
-    // 5.9: „zwei Slots im Wechsel (ping-pong); ein Schreibvorgang aendert
-    // genau einen Slot."
-    let mut j = journal(0);
-    let (mut stored, mut len) = ([0u8; SLOT], 0);
-    write(&mut j, 0, b"eins", &mut stored, &mut len);
-    let after_first = *j.into_inner().slot(1);
-
+fn entries_append_within_a_slot_without_erasing() {
+    // Version 2: Ein Slot ist ein Log. Der zweite Eintrag steht hinter dem
+    // ersten (32 + 4 Byte, auf 4 ausgerichtet: Versatz 36), der andere
+    // Slot bleibt geloescht, geloescht wurde nur einmal.
     let mut j = journal(0);
     let (mut stored, mut len) = ([0u8; SLOT], 0);
     write(&mut j, 0, b"eins", &mut stored, &mut len);
     write(&mut j, SECOND, b"zwei", &mut stored, &mut len);
     let nvm = j.into_inner();
-    assert_ne!(nvm.slot(0)[..4], [0xFF; 4], "Slot 0 beschrieben");
-    assert_ne!(nvm.slot(1)[..4], [0xFF; 4], "Slot 1 beschrieben");
-    assert_eq!(after_first, [0xFF; SLOT], "der erste Vorgang liess Slot 1 in Ruhe");
+    assert_eq!(nvm.erases(), 1);
+    assert_eq!(nvm.slot(0)[..4], MAGIC.to_le_bytes());
+    assert_eq!(nvm.slot(0)[36..40], MAGIC.to_le_bytes(), "der zweite Eintrag haengt am ersten");
+    assert_eq!(*nvm.slot(1), [0xFF; SLOT], "Slot 1 blieb in Ruhe");
+}
+
+#[test]
+fn a_full_slot_switches_to_the_other_and_erases_it() {
+    // 5.9: „zwei Slots im Wechsel (ping-pong); ein Schreibvorgang aendert
+    // genau einen Slot." Bei 128 Byte je Slot passen drei Eintraege zu 36
+    // Byte; der vierte wechselt.
+    let mut j = journal(0);
+    let (mut stored, mut len) = ([0u8; SLOT], 0);
+    for (i, p) in [b"eins", b"zwei", b"drei", b"vier"].iter().enumerate() {
+        write(&mut j, i as i64 * SECOND, *p, &mut stored, &mut len);
+    }
+    let nvm = j.into_inner();
+    assert_eq!(nvm.erases(), 2, "einmal Slot 0, einmal Slot 1");
+    assert_eq!(nvm.slot(1)[..4], MAGIC.to_le_bytes(), "der vierte Eintrag steht in Slot 1");
+    let mut buf = [0u8; SLOT];
+    let (_, got) = reopen(nvm, HASH, &mut buf);
+    assert_eq!(got, Loaded::Found { length: 4, sequence: 4 });
+    assert_eq!(&buf[..4], b"vier");
+}
+
+#[test]
+fn a_dirty_tail_forces_a_slot_switch() {
+    // Bytes hinter dem letzten Eintrag, die nicht geloescht sind — ein
+    // abgebrochener Vorgang —, machen den Slot unbeschreibbar: NOR-Flash
+    // loescht Bits nur, ein Eintrag darueber waere verfaelscht.
+    let mut j = journal(0);
+    let (mut stored, mut len) = ([0u8; SLOT], 0);
+    write(&mut j, 0, b"eins", &mut stored, &mut len);
+    let mut nvm = j.into_inner();
+    assert!(nvm.begin_write(0, 36, &[0x00, 0x11, 0x22, 0x33]));
+    while nvm.poll() == NvmState::Busy {}
+    let mut buf = [0u8; SLOT];
+    let (mut j, got) = reopen(nvm, HASH, &mut buf);
+    assert_eq!(got, Loaded::Found { length: 4, sequence: 1 });
+    let (mut stored, mut len) = buffer_with(b"eins");
+    write(&mut j, SECOND, b"zwei", &mut stored, &mut len);
+    let nvm = j.into_inner();
+    assert_eq!(nvm.slot(1)[..4], MAGIC.to_le_bytes(), "der neue Eintrag ging in den anderen Slot");
+}
+
+#[test]
+fn after_a_cut_the_next_start_appends_or_switches_safely() {
+    // Ein Abbruch waehrend des Anhaengens: Der alte Eintrag bleibt, der
+    // naechste Lauf schreibt weiter, und der dritte Start findet den
+    // juengsten gueltigen Stand.
+    for cut in 1..60 {
+        let mut j = journal(0);
+        let (mut stored, mut len) = ([0u8; SLOT], 0);
+        write(&mut j, 0, b"alt", &mut stored, &mut len);
+        j.device_mut().cut_at(cut);
+        for _ in 0..64 {
+            j.poll(SECOND, b"neu", &mut stored, &mut len);
+        }
+        let mut nvm = j.into_inner();
+        nvm.power_on();
+        let mut buf = [0u8; SLOT];
+        let (mut j, got) = reopen(nvm, HASH, &mut buf);
+        let Loaded::Found { length, .. } = got else { panic!("Abbruch bei {cut}: nichts mehr da") };
+        let (mut stored, mut len) = buffer_with(&buf[..length as usize]);
+        write(&mut j, 2 * SECOND, b"danach", &mut stored, &mut len);
+        let mut buf = [0u8; SLOT];
+        let (_, got) = reopen(j.into_inner(), HASH, &mut buf);
+        let Loaded::Found { length, .. } = got else { panic!("Abbruch bei {cut}: verloren") };
+        assert_eq!(&buf[..length as usize], b"danach", "Abbruch bei {cut}");
+    }
 }
 
 #[test]
@@ -297,9 +360,9 @@ fn a_cut_during_the_first_write_leaves_no_half_entry() {
     }
 }
 
-/// 11.3: Leser akzeptieren aeltere Versionen ihres Formats. Version 1 ist
-/// die erste; der Test schreibt denselben Slot mit Version 0 und
-/// passender Pruefsumme, und `load` nimmt ihn.
+/// 11.3: Leser akzeptieren aeltere Versionen ihres Formats. Der Test
+/// schreibt den Eintrag mit Version 0 und passender Pruefsumme in einen
+/// geloeschten Slot, und `load` nimmt ihn.
 #[test]
 fn an_older_slot_version_still_loads() {
     let (j, _) = with_old(b"alt");
@@ -312,6 +375,9 @@ fn an_older_slot_version_still_loads() {
     let len = u32::from_le_bytes(raw[24..28].try_into().expect("Laenge")) as usize;
     let crc = crc32_final(crc32_update(crc32_update(crc32_start(), &raw[..28]), &raw[HEADER..HEADER + len]));
     raw[28..32].copy_from_slice(&crc.to_le_bytes());
+    // Flash loescht Bits nur; ueberschrieben wird nach einer Loeschung.
+    assert!(nvm.begin_erase(slot));
+    while nvm.poll() == NvmState::Busy {}
     assert!(nvm.begin_write(slot, 0, &raw));
     for _ in 0..64 {
         if nvm.poll() == NvmState::Done {

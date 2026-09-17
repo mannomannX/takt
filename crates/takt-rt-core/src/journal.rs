@@ -13,19 +13,38 @@
 //! Ein Slot traegt *alle* `persist`-Variablen des Programms, nicht eine je
 //! Variable: 5.9 spricht im Singular vom Slot und vom Eintrag, und ein
 //! Journal je Variable braeuchte je Variable zwei Sektoren.
+//!
+//! **Ein Slot ist ein Log** (Version 2). Eintraege werden hintereinander
+//! angehaengt, auf vier Byte ausgerichtet; geloescht wird erst der andere
+//! Slot, wenn der aktive voll ist. Eine Loeschung kostet zweistellige
+//! Millisekunden und Verschleiss (12.3), ein Anhaengen weder noch. Was
+//! nach dem letzten gueltigen Eintrag nicht geloescht ist — ein
+//! abgebrochener Vorgang —, macht den Slot fuer weiteres Anhaengen
+//! unbrauchbar: NOR-Flash kann Bits nur loeschen, und ein Eintrag ueber
+//! Fremdbytes waere verfaelscht. Der naechste Vorgang wechselt dann den
+//! Slot.
 
 use takt_native::crc::{crc32_final, crc32_start, crc32_update};
 
 use crate::loopcore::{Nvm, NvmState};
 
-/// Kennung eines beschriebenen Slots: `TKPJ`.
+/// Kennung eines beschriebenen Eintrags: `TKPJ`.
 pub const MAGIC: u32 = 0x4A50_4B54;
 
 /// Formatversion des Slots (11.3: Leser akzeptieren aeltere).
-pub const VERSION: u16 = 1;
+///
+/// 2: mehrere Eintraege je Slot. Ein Leser der Version 1 saehe nur den
+/// ersten und hielte ihn fuer den juengsten; er lehnt den Slot ab.
+pub const VERSION: u16 = 2;
 
-/// Laenge des Slot-Kopfes in Byte.
+/// Laenge des Eintragskopfes in Byte.
 pub const HEADER: usize = 32;
+
+/// Laenge eines Eintrags im Slot: Kopf und Nutzlast, auf vier Byte
+/// ausgerichtet, weil das Flash wortweise programmiert.
+fn entry_len(payload: usize) -> u32 {
+    ((HEADER + payload + 3) & !3) as u32
+}
 
 /// Der Kopf eines Slots.
 ///
@@ -112,13 +131,26 @@ enum Phase {
     Head,
 }
 
+/// Was das Durchsehen eines Slots ergab.
+struct Scan {
+    /// Sequenznummer, Versatz und Laenge des juengsten gueltigen Eintrags.
+    best: Option<(u64, u32, u32)>,
+    /// Erstes freies Byte, wenn der Rest des Slots geloescht ist.
+    free: Option<u32>,
+}
+
 /// Das Journal ueber einem NVM-Geraet.
 pub struct Journal<N: Nvm> {
     nvm: N,
     logic_hash: u64,
     min_interval_ns: i64,
-    /// Der Slot, in den als Naechstes geschrieben wird.
-    next_slot: u8,
+    /// Der Slot mit dem juengsten Eintrag; dort wird angehaengt.
+    slot: u8,
+    /// Erstes freies Byte dahinter; `None`, wenn dort nicht angehaengt
+    /// werden darf.
+    free: Option<u32>,
+    /// Slot und Versatz des laufenden Vorgangs.
+    target: (u8, u32),
     sequence: u64,
     phase: Phase,
     /// Wann zuletzt ein Schreibvorgang begann.
@@ -151,7 +183,9 @@ impl<N: Nvm> Journal<N> {
             nvm,
             logic_hash,
             min_interval_ns,
-            next_slot: 0,
+            slot: 0,
+            free: None,
+            target: (0, 0),
             sequence: 0,
             phase: Phase::Idle,
             last_write_ns: 0,
@@ -201,32 +235,68 @@ impl<N: Nvm> Journal<N> {
     /// belegt ist; ohne es schriebe der erste Vorgang blind nach Slot 0
     /// und zerstoerte womoeglich den einzigen gueltigen Eintrag.
     pub fn load(&mut self, into: &mut [u8]) -> Loaded {
-        let mut best: Option<(u64, u32, u8)> = None;
+        let mut best: Option<(u64, u8, u32, u32)> = None;
+        let mut free = [None; 2];
         for slot in 0..2u8 {
-            let Some((header, length)) = self.read_slot(slot, into) else { continue };
-            if best.is_none_or(|(seq, _, _)| header.sequence > seq) {
-                best = Some((header.sequence, length, slot));
+            let scan = self.scan_slot(slot, into);
+            if let Some((sequence, offset, length)) = scan.best
+                && best.is_none_or(|(s, _, _, _)| sequence > s)
+            {
+                best = Some((sequence, slot, offset, length));
             }
+            free[slot as usize] = scan.free;
         }
         self.loaded = true;
-        let Some((sequence, length, slot)) = best else {
+        let Some((sequence, slot, offset, length)) = best else {
+            // Kein gueltiger Stand: Der erste Vorgang loescht Slot 0.
+            self.slot = 1;
+            self.free = None;
             return Loaded::Empty;
         };
-        // Der Puffer traegt jetzt vielleicht den anderen Slot; noch einmal
-        // den Gewinner lesen.
-        if self.read_slot(slot, into).is_none() {
+        // Der Puffer traegt jetzt vielleicht einen anderen Eintrag; noch
+        // einmal den Gewinner lesen.
+        if self.read_entry(slot, offset, into).is_none() {
             return Loaded::Empty;
         }
         self.sequence = sequence;
-        self.next_slot = 1 - slot;
+        self.slot = slot;
+        self.free = free[slot as usize];
         self.ever_written = true;
         Loaded::Found { length, sequence }
     }
 
-    /// Liest einen Slot und prueft ihn; `into` traegt danach die Nutzlast.
-    fn read_slot(&mut self, slot: u8, into: &mut [u8]) -> Option<(Header, u32)> {
+    /// Geht die Eintraege eines Slots durch, bis der Rest geloescht oder
+    /// ungueltig ist, und prueft, ob dahinter angehaengt werden darf.
+    fn scan_slot(&mut self, slot: u8, into: &mut [u8]) -> Scan {
+        let size = self.nvm.slot_size();
+        let mut best: Option<(u64, u32, u32)> = None;
+        let mut end = 0u32;
+        while let Some((header, length)) = self.read_entry(slot, end, into) {
+            if best.is_none_or(|(s, _, _)| header.sequence > s) {
+                best = Some((header.sequence, end, length));
+            }
+            end = end.saturating_add(entry_len(length as usize));
+        }
+        let mut at = end;
+        let mut clean = true;
+        while clean && at < size {
+            let mut chunk = [0u8; HEADER];
+            let n = (size - at).min(HEADER as u32) as usize;
+            clean = self.nvm.read(slot, at, &mut chunk[..n]) && chunk[..n].iter().all(|b| *b == 0xFF);
+            at += n as u32;
+        }
+        Scan { best, free: clean.then_some(end) }
+    }
+
+    /// Liest den Eintrag an `offset` und prueft ihn; `into` traegt danach
+    /// die Nutzlast. `None` fuer Geloeschtes, Fremdes und Verfaelschtes.
+    fn read_entry(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> Option<(Header, u32)> {
+        let size = self.nvm.slot_size();
+        if offset.saturating_add(HEADER as u32) > size {
+            return None;
+        }
         let mut head = [0u8; HEADER];
-        if !self.nvm.read(slot, 0, &mut head) {
+        if !self.nvm.read(slot, offset, &mut head) {
             return None;
         }
         let header = Header::read(&head)?;
@@ -234,11 +304,11 @@ impl<N: Nvm> Journal<N> {
             return None;
         }
         let length = header.length as usize;
-        if length > into.len() || HEADER + length > self.nvm.slot_size() as usize {
+        if length > into.len() || offset.saturating_add(entry_len(length)) > size {
             return None;
         }
         let payload = into.get_mut(..length)?;
-        if !self.nvm.read(slot, HEADER as u32, payload) {
+        if !self.nvm.read(slot, offset + HEADER as u32, payload) {
             return None;
         }
         if checksum(&head, payload) != header.crc32 {
@@ -297,10 +367,11 @@ impl<N: Nvm> Journal<N> {
 
     /// Ein Schritt des Automaten.
     fn advance(&mut self, stored: &[u8], stored_len: &mut usize) {
+        let (slot, at) = self.target;
         match (self.phase, self.nvm.poll()) {
             (_, NvmState::Failed) => self.give_up(stored_len),
             (Phase::Erasing, NvmState::Done) => {
-                if self.nvm.begin_write(self.next_slot, HEADER as u32, &stored[..self.pending_len]) {
+                if self.nvm.begin_write(slot, at + HEADER as u32, &stored[..self.pending_len]) {
                     self.phase = Phase::Payload;
                 } else {
                     self.give_up(stored_len);
@@ -308,7 +379,7 @@ impl<N: Nvm> Journal<N> {
             }
             (Phase::Payload, NvmState::Done) => {
                 let head = self.head;
-                if self.nvm.begin_write(self.next_slot, 0, &head) {
+                if self.nvm.begin_write(slot, at, &head) {
                     self.phase = Phase::Head;
                 } else {
                     self.give_up(stored_len);
@@ -324,7 +395,8 @@ impl<N: Nvm> Journal<N> {
     }
 
     /// Beginnt einen Vorgang: den Stand nach `stored` kopieren, Kopf
-    /// rechnen, Slot loeschen.
+    /// rechnen, dann anhaengen — oder den anderen Slot loeschen, wenn der
+    /// aktive voll oder nicht mehr beschreibbar ist.
     ///
     /// Geschrieben wird aus `stored`, nicht aus `current`: Der aendert sich
     /// weiter, waehrend das Geraet arbeitet, und der CRC muss zu den Bytes
@@ -347,25 +419,42 @@ impl<N: Nvm> Journal<N> {
         self.head = head;
         self.pending_len = n;
         self.failed_last = false;
-        if self.nvm.begin_erase(self.next_slot) {
-            self.phase = Phase::Erasing;
-        } else {
+        let entry = entry_len(n);
+        let ok = match self.free {
+            Some(at) if at.saturating_add(entry) <= self.nvm.slot_size() => {
+                self.target = (self.slot, at);
+                self.phase = Phase::Payload;
+                self.nvm.begin_write(self.slot, at + HEADER as u32, &stored[..n])
+            }
+            _ => {
+                self.target = (1 - self.slot, 0);
+                self.phase = Phase::Erasing;
+                self.nvm.begin_erase(self.target.0)
+            }
+        };
+        if !ok {
             self.give_up(stored_len);
         }
     }
 
     fn finish(&mut self) {
+        let (slot, at) = self.target;
         self.sequence = self.sequence.wrapping_add(1);
-        self.next_slot = 1 - self.next_slot;
+        self.slot = slot;
+        self.free = Some(at + entry_len(self.pending_len));
         self.ever_written = true;
         self.writes = self.writes.saturating_add(1);
         self.phase = Phase::Idle;
     }
 
     /// Ein gescheiterter Vorgang laesst `stored` ungueltig: Der naechste
-    /// Vergleich sieht eine Aenderung und schreibt erneut.
+    /// Vergleich sieht eine Aenderung und schreibt erneut. Ein
+    /// angebrochener Eintrag im aktiven Slot macht ihn unbeschreibbar.
     fn give_up(&mut self, stored_len: &mut usize) {
         *stored_len = 0;
+        if self.target.0 == self.slot {
+            self.free = None;
+        }
         self.failures = self.failures.saturating_add(1);
         self.failed_last = true;
         self.phase = Phase::Idle;
@@ -533,8 +622,9 @@ impl<const N: usize> FakeNvm<N> {
         &self.slots[slot as usize]
     }
 
-    /// Schreibt ein Byte, sofern der Strom noch da ist.
-    fn put(&mut self, slot: u8, at: usize, byte: u8) {
+    /// Schreibt ein Byte, sofern der Strom noch da ist. Programmieren
+    /// loescht Bits nur (`&=`), wie NOR-Flash; `erase` setzt sie.
+    fn put(&mut self, slot: u8, at: usize, byte: u8, erase: bool) {
         if self.cut {
             return;
         }
@@ -544,7 +634,7 @@ impl<const N: usize> FakeNvm<N> {
         }
         self.written = self.written.saturating_add(1);
         if let Some(cell) = self.slots[slot as usize].get_mut(at) {
-            *cell = byte;
+            *cell = if erase { byte } else { *cell & byte };
         }
     }
 }
@@ -598,12 +688,12 @@ impl<const N: usize> Nvm for FakeNvm<N> {
             Job::None => {}
             Job::Erase(slot) => {
                 for at in 0..N {
-                    self.put(slot, at, 0xFF);
+                    self.put(slot, at, 0xFF, true);
                 }
             }
             Job::Write { slot, offset, len, bytes } => {
                 for (i, b) in bytes.iter().enumerate().take(len) {
-                    self.put(slot, offset as usize + i, *b);
+                    self.put(slot, offset as usize + i, *b, false);
                 }
             }
         }
