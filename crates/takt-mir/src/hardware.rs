@@ -67,8 +67,9 @@ use crate::fns::{CostClass, CostVec};
 /// schreiben die neueste. Dieselbe Regel wie beim MIR-Format.
 ///
 /// 2: NVM-Geometrie fuer das `persist`-Journal (5.9). 3: Geraete, Kanaele,
-/// Speicher und Stack-Reserven (8.10).
-pub const FORMAT_VERSION: u32 = 3;
+/// Speicher und Stack-Reserven (8.10). 4: NVM-Zeiten und `nvm_blocking`
+/// (12.3, Pruefung 32).
+pub const FORMAT_VERSION: u32 = 4;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -232,12 +233,32 @@ pub struct NvmGeometry {
     pub sectors: u32,
     /// Schreibabstand, wenn kein `min_interval` deklariert ist.
     pub default_min_interval_ns: i64,
+    /// Dauer einer Sektorloeschung in Nanosekunden (12.3).
+    pub erase_ns: Option<i64>,
+    /// Dauer eines Programmiervorgangs ueber einen Slot in Nanosekunden.
+    pub program_ns: Option<i64>,
+    /// Haelt ein Vorgang den Kern an (`true`), oder laeuft er in der
+    /// Hardware weiter (`false`)? `None`: nicht angegeben.
+    pub blocking: Option<bool>,
 }
 
 impl NvmGeometry {
     /// Groesse eines Slots in Byte: die Haelfte der Sektoren, abgerundet.
     pub fn slot_bytes(&self) -> u32 {
         self.sector_bytes.saturating_mul(self.sectors / 2)
+    }
+
+    /// Wie lange ein blockierender Vorgang den Kern hoechstens haelt:
+    /// die laengere der beiden Phasen. `None`, wenn das Ziel nicht
+    /// blockiert oder die Zeiten fehlen.
+    pub fn blocking_phase_ns(&self) -> Option<i64> {
+        (self.blocking == Some(true)).then_some(self.erase_ns?.max(self.program_ns?))
+    }
+
+    /// Ein ganzer Schreibvorgang: eine Loeschung und zwei
+    /// Programmiervorgaenge (Nutzlast, Kopf).
+    pub fn blocking_write_ns(&self) -> Option<i64> {
+        (self.blocking == Some(true)).then_some(self.erase_ns?.saturating_add(self.program_ns?.saturating_mul(2)))
     }
 }
 
@@ -426,6 +447,14 @@ fn number(value: &str, line: u32) -> Result<u64, ParseError> {
     value.parse().map_err(|_| ParseError { line, message: format!("`{value}` ist keine ganze Zahl") })
 }
 
+fn boolean(value: &str, line: u32) -> Result<bool, ParseError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(ParseError { line, message: format!("`{value}` ist weder `true` noch `false`") }),
+    }
+}
+
 /// Ein Text, mit oder ohne Anfuehrungszeichen.
 fn text(value: &str) -> String {
     value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value).to_string()
@@ -443,6 +472,9 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
         "nvm_sector_bytes" => nvm_of(target).sector_bytes = number(value, line)? as u32,
         "nvm_sectors" => nvm_of(target).sectors = number(value, line)? as u32,
         "nvm_min_interval" => nvm_of(target).default_min_interval_ns = number(value, line)? as i64,
+        "nvm_erase_ns" => nvm_of(target).erase_ns = Some(number(value, line)? as i64),
+        "nvm_program_ns" => nvm_of(target).program_ns = Some(number(value, line)? as i64),
+        "nvm_blocking" => nvm_of(target).blocking = Some(boolean(value, line)?),
         "ram" => target.memory.ram = Some(number(value, line)?),
         "flash" => target.memory.flash = Some(number(value, line)?),
         "iram" => target.memory.iram = Some(number(value, line)?),
@@ -453,7 +485,8 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: core_hz, t_io, ram, flash, iram, stack_reserve, \
-                     stack_margin, nvm_sector_bytes, nvm_sectors, nvm_min_interval und die Klassen {}",
+                     stack_margin, nvm_sector_bytes, nvm_sectors, nvm_min_interval, nvm_erase_ns, nvm_program_ns, \
+                     nvm_blocking und die Klassen {}",
                     CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
                 ),
             })?;
@@ -552,6 +585,14 @@ pub fn render(hw: &Hardware) -> String {
             s.push_str(&format!("nvm_sector_bytes = {}\n", nvm.sector_bytes));
             s.push_str(&format!("nvm_sectors = {}\n", nvm.sectors));
             s.push_str(&format!("nvm_min_interval = {}\n", nvm.default_min_interval_ns));
+            for (key, value) in [("nvm_erase_ns", nvm.erase_ns), ("nvm_program_ns", nvm.program_ns)] {
+                if let Some(v) = value {
+                    s.push_str(&format!("{key} = {v}\n"));
+                }
+            }
+            if let Some(b) = nvm.blocking {
+                s.push_str(&format!("nvm_blocking = {b}\n"));
+            }
         }
         let m = target.memory;
         for (key, value) in [
@@ -732,5 +773,30 @@ t_io = 120000
         c.set(CostClass::I32, u64::MAX / 2);
         let n = CostVec { i32: 4, ..CostVec::default() };
         assert_eq!(c.duration_ps(n), u64::MAX);
+    }
+
+    /// 12.3: Die NVM-Zeiten lesen sich zurueck, und die Rechnung folgt
+    /// dem Modell „eine Loeschung, zwei Programmiervorgaenge".
+    #[test]
+    fn nvm_times_read_back_and_add_up() {
+        let text = format!(
+            "{BEISPIEL}nvm_sector_bytes = 4096\nnvm_erase_ns = 200000000\nnvm_program_ns = 5000000\nnvm_blocking = true\n"
+        );
+        let hw = parse(&text.replace("takt-hw 1", "takt-hw 4")).expect("lesbar");
+        let nvm = hw.target("thumbv7em").expect("Ziel").nvm.expect("NVM");
+        assert_eq!(nvm.blocking_phase_ns(), Some(200_000_000));
+        assert_eq!(nvm.blocking_write_ns(), Some(210_000_000));
+        let again = parse(&render(&hw)).expect("Rundreise");
+        assert_eq!(again.target("thumbv7em").expect("Ziel").nvm, Some(nvm));
+    }
+
+    /// Ohne `nvm_blocking = true` gibt es keine Kosten, auch mit Zeiten.
+    #[test]
+    fn a_non_blocking_device_costs_nothing() {
+        let text = format!("{BEISPIEL}nvm_erase_ns = 200000000\nnvm_program_ns = 5000000\nnvm_blocking = false\n");
+        let hw = parse(&text).expect("lesbar");
+        assert_eq!(hw.target("thumbv7em").expect("Ziel").nvm.expect("NVM").blocking_write_ns(), None);
+        let e = parse(&format!("{BEISPIEL}nvm_blocking = maybe\n")).expect_err("abgelehnt");
+        assert!(e.message.contains("weder `true` noch `false`"), "{e}");
     }
 }

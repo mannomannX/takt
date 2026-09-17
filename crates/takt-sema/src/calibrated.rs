@@ -23,7 +23,7 @@ use takt_mir::analysis::schedulability::{self, Load};
 use takt_mir::expr::{Expr, ExprKind};
 use takt_mir::hardware::{Hardware, HwChannel, Target};
 use takt_mir::machine::MachineKind;
-use takt_mir::program::{Binding, Direction, Program, Sweep};
+use takt_mir::program::{Binding, Direction, OverrunPolicy, Program, Sweep};
 use takt_mir::stmt::{Place, StmtKind};
 use takt_mir::types::{Const, Type};
 
@@ -51,6 +51,8 @@ pub fn check(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
             .with_suggestion("`system: tick_source = hw(\"…\")` nennt die Quelle, aus der der Tick kommt".to_string()),
         );
     }
+
+    out.extend(journal_blocking(p, target, span));
 
     let Some(verdict) = load.judge(&target.c_target, target.t_io_ps) else {
         let fehlend: Vec<&str> = target.c_target.missing().iter().map(|c| c.name()).collect();
@@ -97,6 +99,73 @@ pub fn check(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
     out.extend(declared_budgets(p, target, &load));
     out.extend(memory_budget(p, target, span));
     out
+}
+
+/// Prüfung 32, zweite Klausel: Ein blockierendes NVM kostet den Tick
+/// Perioden (12.3); ob das Programm sie tragen kann, sagen `overrun`
+/// (7.3) und seine `idle`-Zustände (9.9).
+fn journal_blocking(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
+    if !takt_mir::persist::any(p) {
+        return Vec::new();
+    }
+    let undecidable = |what: &str| {
+        vec![
+            Diagnostic::new(
+                Severity::Warning,
+                SC32,
+                span,
+                format!("`persist` auf `{}`, aber {what} fehlt in der Hardware-Konfiguration (8.10)", target.name),
+            )
+            .with_suggestion(
+                "ob das Journal den Tick anhält, ist damit nicht entscheidbar; `nvm_blocking`, `nvm_erase_ns` und \
+                 `nvm_program_ns` sagen es (12.3)"
+                    .to_string(),
+            ),
+        ]
+    };
+    let Some(nvm) = target.nvm else {
+        return if target.memory.iram.is_some() { undecidable("`nvm_blocking`") } else { Vec::new() };
+    };
+    match nvm.blocking {
+        None => return if target.memory.iram.is_some() { undecidable("`nvm_blocking`") } else { Vec::new() },
+        Some(false) => return Vec::new(),
+        Some(true) => {}
+    }
+    let Some(cost) = takt_mir::persist::journal_cost(p, &nvm) else {
+        return undecidable("`nvm_erase_ns` oder `nvm_program_ns`");
+    };
+    let ms = cost.write_ns / 1_000_000;
+    let has_idle = p.machines.iter().any(|m| m.states.iter().any(|s| s.idle));
+    let cost_text = format!(
+        "ein `persist`-Schreibvorgang hält den Tick um {} Perioden an ({ms} ms auf `{}`)",
+        cost.periods, target.name
+    );
+    vec![match (p.config.overrun, has_idle) {
+        (OverrunPolicy::Fault, false) => Diagnostic::error(
+            SC32,
+            span,
+            format!(
+                "{cost_text}; unter `overrun = fault` wäre jeder Schreibvorgang ein Fault, und ohne `idle`-Zustand \
+                 gibt es kein Schlaffenster dafür"
+            ),
+        )
+        .with_suggestion(format!(
+            "`system: overrun = alert` nimmt die Überläufe an; ein `idle`-Zustand mit Frist über {ms} ms lässt das \
+             Journal im Schlaf schreiben (9.9); oder ein Ziel mit `nvm_blocking = false` (12.3)"
+        )),
+        (OverrunPolicy::Fault, true) => Diagnostic::new(
+            Severity::Note,
+            SC32,
+            span,
+            format!("{cost_text}; das Journal schreibt nur in Schlaffenstern darüber und vor `reboot`/Deep Sleep"),
+        ),
+        (OverrunPolicy::Alert, _) => Diagnostic::new(
+            Severity::Warning,
+            SC32,
+            span,
+            format!("{cost_text}; unter `overrun = alert` ist jeder Schreibvorgang ein Overrun-Alert (7.3)"),
+        ),
+    }]
 }
 
 /// Prüfung 39: `takt size` gegen `ram` und `flash` des Ziels (11.5).

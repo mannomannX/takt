@@ -121,3 +121,68 @@ fn an_incomplete_calibration_names_what_it_misses() {
     assert!(format!("{w}").contains("mem"), "die Meldung nennt die fehlende Klasse: {w}");
     assert!(!w.is_error(), "eine fehlende Messung ist kein Programmfehler");
 }
+
+/// Ein Ziel, dessen Journal den Kern anhaelt (12.3): 200 ms je Loeschung,
+/// 5 ms je Programmiervorgang, bei 10 ms Tick also 21 Perioden.
+fn blockierendes_ziel(blocking: Option<bool>) -> Target {
+    let mut text =
+        format!("{HW}iram = 65536\nnvm_sector_bytes = 4096\nnvm_erase_ns = 200000000\nnvm_program_ns = 5000000\n");
+    if let Some(b) = blocking {
+        text.push_str(&format!("nvm_blocking = {b}\n"));
+    }
+    hardware::parse(&text.replace("takt-hw 1", "takt-hw 4")).expect("lesbar").target("probe").expect("Ziel").clone()
+}
+
+const PERSIST: &str = "machine m:\n    persist var n : int in 0..10 = 0\n\n    initial RUN\n\n    state RUN:\n        \
+                       loop:\n            led = true\n";
+
+const PERSIST_IDLE: &str = "machine m:\n    persist var n : int in 0..10 = 0\n\n    initial RUN\n\n    state RUN:\n        \
+                            loop:\n            led = true\n\n        after 200 ms: -> SLEEP\n\n    state SLEEP idle:\n        \
+                            after 500 ms: -> RUN\n";
+
+fn sc32(p: &takt_mir::Program, target: &Target) -> Vec<takt_diag::Diagnostic> {
+    takt_sema::calibrated::check(p, target, Span::new(0, 0)).into_iter().filter(|d| d.code == "SC-32").collect()
+}
+
+/// **Blockierendes NVM unter `fault` ohne Schlaf ist ein Fehler** (12.3,
+/// Pruefung 32): Jeder Schreibvorgang waere ein Fault.
+#[test]
+fn a_blocking_journal_under_fault_without_idle_is_an_error() {
+    let p = compile(&format!("{KOPF}{PERSIST}"));
+    let d = sc32(&p, &blockierendes_ziel(Some(true)));
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(d[0].is_error(), "{d:?}");
+    assert!(d[0].message.contains("21 Perioden") && d[0].message.contains("210 ms"), "{}", d[0].message);
+}
+
+/// Mit einem `idle`-Zustand schreibt das Journal im Schlaf: nur ein Hinweis.
+#[test]
+fn a_blocking_journal_with_idle_is_a_note() {
+    let p = compile(&format!("{KOPF}{PERSIST_IDLE}"));
+    let d = sc32(&p, &blockierendes_ziel(Some(true)));
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!(d[0].severity, takt_diag::Severity::Note, "{d:?}");
+    assert!(d[0].message.contains("Schlaffenstern"), "{}", d[0].message);
+}
+
+/// Unter `overrun = alert` ist es eine Warnung mit der Zahl (7.3).
+#[test]
+fn a_blocking_journal_under_alert_is_a_warning() {
+    let src = format!("{}{PERSIST}", KOPF.replacen("tick = 10 ms\n", "tick = 10 ms\n    overrun = alert\n", 1));
+    let d = sc32(&compile(&src), &blockierendes_ziel(Some(true)));
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!(d[0].severity, takt_diag::Severity::Warning, "{d:?}");
+    assert!(d[0].message.contains("Overrun-Alert"), "{}", d[0].message);
+}
+
+/// Ein XIP-Ziel ohne `nvm_blocking` ist nicht entscheidbar; ein Ziel, das
+/// nicht blockiert, meldet nichts.
+#[test]
+fn a_missing_nvm_blocking_on_a_xip_target_is_undecidable() {
+    let p = compile(&format!("{KOPF}{PERSIST}"));
+    let d = sc32(&p, &blockierendes_ziel(None));
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(d[0].message.contains("nicht") || d[0].message.contains("fehlt"), "{}", d[0].message);
+    assert!(sc32(&p, &blockierendes_ziel(Some(false))).is_empty());
+    assert!(sc32(&p, &ziel()).is_empty(), "ohne iram und ohne NVM kein Urteil");
+}

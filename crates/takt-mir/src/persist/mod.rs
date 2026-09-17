@@ -41,6 +41,32 @@ pub fn min_interval_ns(p: &Program) -> Option<i64> {
     p.machines.iter().flat_map(|m| m.persist.iter()).filter_map(|pv| pv.min_interval).min()
 }
 
+/// Was ein Journal-Schreibvorgang den Tick kostet (12.3, Pruefung 32).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JournalCost {
+    /// Ein ganzer Schreibvorgang in Nanosekunden.
+    pub write_ns: i64,
+    /// Die laengste Phase; so lange haelt `Nvm::begin_*` hoechstens.
+    pub phase_ns: i64,
+    /// Perioden zu T₀, die ein Schreibvorgang kostet.
+    pub periods: u64,
+}
+
+/// Die Kosten auf einem blockierenden Ziel; `None` ohne `persist`, ohne
+/// Blockieren oder ohne Zeiten.
+pub fn journal_cost(p: &Program, nvm: &crate::hardware::NvmGeometry) -> Option<JournalCost> {
+    if !any(p) {
+        return None;
+    }
+    let write_ns = nvm.blocking_write_ns()?;
+    let tick = p.config.tick.max(1);
+    Some(JournalCost {
+        write_ns,
+        phase_ns: nvm.blocking_phase_ns()?,
+        periods: u64::try_from(write_ns.saturating_add(tick - 1) / tick).unwrap_or(0),
+    })
+}
+
 /// Obere Schranke der Journal-Nutzlast in Byte (11.5).
 ///
 /// Je Eintrag acht Byte Typ-Hash, vier Byte Laenge und die kodierte Form.

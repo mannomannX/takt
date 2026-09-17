@@ -362,10 +362,13 @@ fn build(args: &Args) -> bool {
             let ext = if rust { "rs" } else { "h" };
             let out = args.value("--out").map_or_else(|| format!("{stem}.{ext}"), str::to_string);
             let hw = hardware(args);
+            // 12.3: So lange haelt ein Journal-Vorgang den Kern hoechstens; 0 heisst nie.
+            let nvm_blocking_ns =
+                hw.as_ref().and_then(|_| calibration(args)).and_then(|t| t.nvm?.blocking_phase_ns()).unwrap_or(0);
             let text = if rust {
-                constants_rust(&program, hw.as_ref())
+                constants_rust(&program, hw.as_ref(), nvm_blocking_ns)
             } else {
-                constants_header(&program, stem, hw.as_ref())
+                constants_header(&program, stem, hw.as_ref(), nvm_blocking_ns)
             };
             match std::fs::write(&out, &text) {
                 Ok(()) => {
@@ -395,13 +398,20 @@ fn build(args: &Args) -> bool {
 ///
 /// Ein Header statt einer Rust-Datei, weil der Rahmen (12.1) ohnehin C
 /// ist: So liest ihn beides, und die Zahl steht einmal.
-fn constants_header(p: &takt_mir::Program, stem: &str, hw: Option<&takt_mir::hardware::Hardware>) -> String {
+fn constants_header(
+    p: &takt_mir::Program,
+    stem: &str,
+    hw: Option<&takt_mir::hardware::Hardware>,
+    nvm_blocking_ns: i64,
+) -> String {
     let guard = stem.to_uppercase().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
     let mut s = String::new();
     s.push_str("/* Konstanten des Programms; erzeugt von `takt build --emit consts`. */\n");
     s.push_str(&format!("#ifndef TAKT_{guard}_H\n#define TAKT_{guard}_H\n\n"));
     s.push_str("/* Basis-Tick T0 in Nanosekunden (`system: tick`, 7.1). */\n");
     s.push_str(&format!("#define TAKT_TICK_NS {}LL\n\n", p.config.tick));
+    s.push_str("/* So lange haelt ein Journal-Vorgang den Kern hoechstens, in ns (12.3); 0 heisst nie. */\n");
+    s.push_str(&format!("#define TAKT_NVM_BLOCKING_NS {nvm_blocking_ns}LL\n\n"));
     s.push_str("/* `system: overrun` (7.3): 1 heisst `alert`, 0 heisst `fault`. */\n");
     s.push_str(&format!(
         "#define TAKT_OVERRUN_ALERT {}\n\n",
@@ -445,7 +455,7 @@ fn ports(p: &takt_mir::Program, hw: &takt_mir::hardware::Hardware) -> Vec<(Strin
 /// braucht einen Index, und ein handgeschriebener Index ist dieselbe
 /// Fehlerquelle in kleiner: Er stimmt, bis jemand einen Ausgang davor
 /// einfuegt.
-fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardware>) -> String {
+fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardware>, nvm_blocking_ns: i64) -> String {
     let mut s = String::new();
     // Regulaere Kommentare, keine `//!`: Die Datei wird per `include!` in
     // ein Modul gezogen, und dort darf kein innerer Doc-Kommentar stehen.
@@ -453,6 +463,8 @@ fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardwar
     s.push_str("// Nicht von Hand aendern — die Quelle ist die `.takt`-Datei.\n\n");
     s.push_str("/// Basis-Tick T0 in Nanosekunden (`system: tick`, 7.1).\n");
     s.push_str(&format!("pub const TICK_NS: i64 = {};\n\n", p.config.tick));
+    s.push_str("/// So lange haelt ein Journal-Vorgang den Kern hoechstens, in ns (12.3); 0 heisst nie.\n");
+    s.push_str(&format!("pub const NVM_BLOCKING_NS: i64 = {nvm_blocking_ns};\n\n"));
     s.push_str("/// `system: overrun = alert` (7.3); sonst `fault`.\n");
     s.push_str(&format!(
         "pub const OVERRUN_ALERT: bool = {};\n\n",

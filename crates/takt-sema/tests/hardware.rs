@@ -19,7 +19,7 @@ fn compile(body: &str) -> takt_mir::Program {
 }
 
 fn hw(text: &str) -> Hardware {
-    hardware::parse(&format!("# takt-hw 3\n{text}")).unwrap_or_else(|e| panic!("{e}"))
+    hardware::parse(&format!("# takt-hw {}\n{text}", hardware::FORMAT_VERSION)).unwrap_or_else(|e| panic!("{e}"))
 }
 
 fn codes(diags: &[takt_diag::Diagnostic]) -> Vec<String> {

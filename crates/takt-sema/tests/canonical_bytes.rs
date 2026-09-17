@@ -356,7 +356,7 @@ fn the_journal_appears_in_the_size_report() {
     assert_eq!(flash.origin, size::Origin::Open, "ohne Geometrie offen");
 
     let target = Target {
-        nvm: Some(NvmGeometry { sector_bytes: 2048, sectors: 2, default_min_interval_ns: 0 }),
+        nvm: Some(NvmGeometry { sector_bytes: 2048, sectors: 2, ..NvmGeometry::default() }),
         ..Target::default()
     };
     let filled = size::size(&p).with_hardware(&target);
