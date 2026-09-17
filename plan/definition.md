@@ -221,6 +221,7 @@ system_item    := "tick" "=" duration_lit NEWLINE
                 | "float" "=" ( "f32" | "f64" ) NEWLINE                                    (* Breite von float, 4.2; Default f64 *)
                 | "language" "=" INT NEWLINE                                                (* Edition, 2.5 *)   (* @check 49 *)
                 | "tcb_policy" "=" ( "curated_only" | "allowlist" "(" IDENT { "," IDENT } ")" ) NEWLINE   (* Projekt-Natives 4.5, TCB-Manifest 9.5; v1.1 *)
+                | "overrun" "=" ( "fault" | "alert" ) NEWLINE                                (* Reaktion auf Ueberlauf, 7.3; Default fault *)
 
 (* ---------------------------------------------------------------- Typen und Einheiten *)
 
@@ -270,7 +271,7 @@ cost_spec      := int_lit | "{" cost_class ":" int_lit { "," cost_class ":" int_
 cost_class     := "i32" | "i64" | "f32" | "f64" | "mem" | "call" | "native"               (* Operationsklassen, 9.4.3 *)
 block_decl     := "block" IDENT [ generic_vars ] "(" [ params ] ")" ":" NEWLINE INDENT { var_decl NEWLINE }
                   ( step_decl { method_decl } | method_decl { method_decl } ) DEDENT
-step_decl      := "step" "(" [ params ] ")" "->" type ":" block                              (* hoechstens einmal je Instanz und Tick, 5.7 *)   (* @check 11 *)
+step_decl      := "step" "(" [ params ] ")" "->" type [ "requires" expr ] [ "ensures" expr ] ":" block   (* hoechstens einmal je Instanz und Tick; Vertraege sind Beweisverpflichtungen, `result` nur in ensures, 5.7 *)   (* @check 11 *)
 method_decl    := IDENT "(" [ params ] ")" [ "->" type ] ":" block                           (* weitere Methoden wie start/stop/elapsed, 11.4 *)
 generic_vars   := "[" gvar { "," gvar } "]"          (* 3.12: Einheiten- (v1), Konstanten- (v1.1), Typvariablen (v1.2) *)   (* @check 52 *)
 gvar           := UPPER_IDENT | "type" UPPER_IDENT [ ":" capability ] | "const" UPPER_IDENT [ "in" range ]   (* @check 52 *)

@@ -23,7 +23,7 @@ mod takt {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
 }
-use takt::{LOGIC_HASH, PERSIST_BOUND, PERSIST_MIN_INTERVAL_NS, TICK_NS};
+use takt::{LOGIC_HASH, OVERRUN_ALERT, PERSIST_BOUND, PERSIST_MIN_INTERVAL_NS, TICK_NS};
 
 /// Alle wie viele Ticks der Zustand ausgegeben wird. USB-Serial-JTAG ist
 /// schnell, aber das FIFO blockiert, wenn der Host nicht liest; ein
@@ -174,8 +174,8 @@ fn main() -> ! {
     }
 
     let clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS);
-    let mut rt =
-        Runtime::new(program, clock, NoWatchdog, Summary::default(), Profile::BAREMETAL, TICK_NS, Policy::Fault);
+    let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
+    let mut rt = Runtime::new(program, clock, NoWatchdog, Summary::default(), Profile::BAREMETAL, TICK_NS, policy);
     if limit > 0 {
         rt.program.dump();
     }

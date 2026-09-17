@@ -402,6 +402,11 @@ fn constants_header(p: &takt_mir::Program, stem: &str, hw: Option<&takt_mir::har
     s.push_str(&format!("#ifndef TAKT_{guard}_H\n#define TAKT_{guard}_H\n\n"));
     s.push_str("/* Basis-Tick T0 in Nanosekunden (`system: tick`, 7.1). */\n");
     s.push_str(&format!("#define TAKT_TICK_NS {}LL\n\n", p.config.tick));
+    s.push_str("/* `system: overrun` (7.3): 1 heisst `alert`, 0 heisst `fault`. */\n");
+    s.push_str(&format!(
+        "#define TAKT_OVERRUN_ALERT {}\n\n",
+        u8::from(p.config.overrun == takt_mir::program::OverrunPolicy::Alert)
+    ));
     s.push_str("/* Die Maschinen, in Deklarationsreihenfolge (9.4). */\n");
     for m in p.machines.iter().filter(|m| m.kind != takt_mir::machine::MachineKind::Template) {
         s.push_str(&format!("/*   {} — jeder {}. Tick */\n", m.name, m.period));
@@ -448,6 +453,11 @@ fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardwar
     s.push_str("// Nicht von Hand aendern — die Quelle ist die `.takt`-Datei.\n\n");
     s.push_str("/// Basis-Tick T0 in Nanosekunden (`system: tick`, 7.1).\n");
     s.push_str(&format!("pub const TICK_NS: i64 = {};\n\n", p.config.tick));
+    s.push_str("/// `system: overrun = alert` (7.3); sonst `fault`.\n");
+    s.push_str(&format!(
+        "pub const OVERRUN_ALERT: bool = {};\n\n",
+        p.config.overrun == takt_mir::program::OverrunPolicy::Alert
+    ));
 
     s.push_str("/// Die Ausgaenge in der Reihenfolge, die `takt_mcu_output` erwartet.\n");
     let mut index = 0;

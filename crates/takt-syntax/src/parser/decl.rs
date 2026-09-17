@@ -221,12 +221,22 @@ impl<'t, 's> Parser<'t, 's> {
                     SystemItem::TcbPolicy(TcbPolicy::Allowlist(names))
                 }
             }
+            "overrun" => {
+                let p = if self.eat_kw("fault") {
+                    OverrunPolicy::Fault
+                } else if self.eat_kw("alert") {
+                    OverrunPolicy::Alert
+                } else {
+                    return Err(self.error_here("`fault` oder `alert`"));
+                };
+                SystemItem::Overrun(p)
+            }
             other => {
                 return Err(self.error_at(
                     name_tok,
                     format!("unbekannter Systemeintrag `{other}`"),
                     Some(
-                        "Eintraege: tick output_timing fault_is_fail tick_source tick_tolerance target float language tcb_policy",
+                        "Eintraege: tick output_timing fault_is_fail tick_source tick_tolerance target float language tcb_policy overrun",
                     ),
                 ));
             }

@@ -1,0 +1,37 @@
+system:
+    language = 1
+    tick     = 10 ms
+    overrun  = alert
+
+# `overrun = alert` (7.3): Ein Ueberlauf ist hier ein Alert, kein Fault.
+# Das ist die Freigabe fuer ein Ziel, dessen Journal den Tick anhaelt
+# (12.3, plan/nvm.md 2.2): Jeder Schreibvorgang kostet Perioden, und das
+# Programm sagt, dass es sie traegt. Die Semantik bleibt die von
+# `57_persist_often` — der Trace haengt nicht an der Policy.
+
+output count : int in 0..1000 @ hw("o/count") with safe = 0
+
+machine device:
+    persist var cycles : int in 0..1000 = 0 with min_interval = 0 s
+
+    initial RUN
+
+    state RUN:
+        enter:
+            if cycles < 1000:
+                cycles = cycles + 1
+
+        loop:
+            count = cycles
+
+        after 10 ms: -> BUMP
+
+    state BUMP:
+        enter:
+            if cycles < 1000:
+                cycles = cycles + 1
+
+        loop:
+            count = cycles
+
+        after 10 ms: -> RUN

@@ -148,6 +148,15 @@ pub enum SystemItem {
     Float(FloatWidth),
     Language(IntLit),
     TcbPolicy(TcbPolicy),
+    Overrun(OverrunPolicy),
+}
+
+/// `overrun = fault | alert` (7.3)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum OverrunPolicy {
+    Fault,
+    Alert,
 }
 
 /// `tcb_policy = curated_only | allowlist(f, …)` (4.5, 9.5)

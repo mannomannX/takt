@@ -131,6 +131,7 @@ impl Emitter<'_, '_> {
         match item {
             SystemItem::Tick(_) | SystemItem::Target(_) | SystemItem::Language(_) => self.name(),
             SystemItem::OutputTiming(_) | SystemItem::FaultIsFail(_) | SystemItem::Float(_) => self.name(),
+            SystemItem::Overrun(_) => self.name(),
             SystemItem::TickSource(_) => {
                 self.sp("hw");
                 self.op("(");

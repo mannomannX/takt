@@ -96,6 +96,12 @@ pub fn config_from(file: &ast::File, edition: u32, diags: &mut Vec<Diagnostic>) 
                         ast::TcbPolicy::Allowlist(names) => names.iter().map(|n| n.name.clone()).collect(),
                     }
                 }
+                ast::SystemItem::Overrun(p) => {
+                    config.overrun = match p {
+                        ast::OverrunPolicy::Fault => OverrunPolicy::Fault,
+                        ast::OverrunPolicy::Alert => OverrunPolicy::Alert,
+                    }
+                }
             }
         }
     }

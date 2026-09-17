@@ -51,6 +51,18 @@ pub struct Config {
     /// `tcb_policy = allowlist(…)` (4.5, 9.5): die erlaubten Projekt-Natives;
     /// leer heisst `curated_only`.
     pub tcb_allowlist: Vec<String>,
+    /// `overrun` (7.3): Reaktion der Runtime, kein Logikanteil.
+    pub overrun: OverrunPolicy,
+}
+
+/// `system: overrun = fault | alert` (7.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OverrunPolicy {
+    /// `Runtime(Overrun)` fuer alle Maschinen.
+    #[default]
+    Fault,
+    /// Nur ein Alert.
+    Alert,
 }
 
 /// Laufzeitprofil (12.8): `system: target = …`.
@@ -105,6 +117,7 @@ impl Config {
             tick_tolerance: None,
             target: None,
             tcb_allowlist: Vec::new(),
+            overrun: OverrunPolicy::Fault,
         }
     }
 }

@@ -69,6 +69,7 @@ const KORPUS: &[&str] = &[
     "55_frames_with_bytes.takt",
     "56_idle_timer.takt",
     "57_persist_often.takt",
+    "58_persist_alert.takt",
 ];
 
 fn root() -> PathBuf {

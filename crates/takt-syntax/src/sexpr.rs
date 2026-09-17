@@ -614,6 +614,8 @@ fn system_item(item: &SystemItem) -> String {
         }
         SystemItem::Float(w) => format!("(float {})", float_width(*w)),
         SystemItem::Language(i) => format!("(language {})", i.text),
+        SystemItem::Overrun(OverrunPolicy::Fault) => "(overrun fault)".into(),
+        SystemItem::Overrun(OverrunPolicy::Alert) => "(overrun alert)".into(),
     }
 }
 
