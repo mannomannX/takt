@@ -81,7 +81,7 @@ jitter_ns = 50000
 #[test]
 fn a_configuration_reads_back_with_devices_and_channels() {
     let cfg = hw(CONFIG);
-    assert_eq!(cfg.format_version, 3);
+    assert_eq!(cfg.format_version, hardware::FORMAT_VERSION);
     assert_eq!(cfg.target("thumbv7em").expect("Ziel").memory.ram, Some(65536));
     assert_eq!(cfg.devices["daq1"].driver.as_deref(), Some("ads131"));
     let ai0 = cfg.channel("daq1/ai0").expect("Kanal");
