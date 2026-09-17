@@ -57,7 +57,7 @@ pub fn build(p: &Program) -> McuHarness {
     declarations(&mut s, &driven);
     init(&mut s, p, &layout, &driven);
     tick(&mut s, p, &layout, &driven);
-    telemetry(&mut s, p, &layout);
+    telemetry(&mut s, p, &layout, &driven);
 
     McuHarness { source: s, layout }
 }
@@ -383,7 +383,7 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
 /// `takt_mcu_dump`: den Latch ausgeben, fuer den Vergleich — dieselben
 /// Zeilen wie `dump` im Linux-Rahmen (grammar/trace.md), damit
 /// `compare` beide lesen kann.
-fn telemetry(s: &mut String, p: &Program, layout: &Layout) {
+fn telemetry(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md). */");
     let _ = writeln!(s, "void takt_mcu_dump(void) {{");
     for slot in &layout.outputs {
@@ -418,8 +418,29 @@ fn telemetry(s: &mut String, p: &Program, layout: &Layout) {
         let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
     }
     let _ = writeln!(s, "}}\n");
+    program_counters(s, p, driven);
     commit(s, layout);
     outputs(s, layout);
+}
+
+/// `takt_mcu_pc`: wo jede Maschine steht (11.2, Instrumentierung
+/// `statements`). Ohne sie bleibt die Funktion leer.
+fn program_counters(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine]) {
+    let _ = writeln!(s, "/* Der Programmzaehler je Maschine (11.2). */");
+    let _ = writeln!(s, "void takt_mcu_pc(void) {{");
+    for m in driven {
+        let Some(at) =
+            takt_llvm::machine::state_struct(m, p).and_then(|st| st.byte_offset(takt_llvm::machine::Role::Pc, 0))
+        else {
+            continue;
+        };
+        let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+        let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
+        let _ = writeln!(s, "    takt_board_trace(\"pc {} \");", m.name);
+        let _ = writeln!(s, "    takt_board_trace_i64(*(int *)(state_{} + {at}));", m.name);
+        let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+    }
+    let _ = writeln!(s, "}}\n");
 }
 
 /// Der Aufruf, der einen Wert in den Trace schreibt: Fliesskommazahlen

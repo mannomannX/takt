@@ -34,6 +34,10 @@ pub trait TickSource {
     /// `tick_tolerance` — siehe [`crate::tolerance`].
     fn last_period_ns(&self) -> i64;
 
+    /// Die Zeit des Timers in Nanosekunden, feiner als ein Tick: fuer
+    /// `took` und `drift` (7.3). Monoton, ab einem beliebigen Nullpunkt.
+    fn now_ns(&self) -> i64;
+
     /// Wartet, bis das naechste Tick-Ereignis vorliegt.
     ///
     /// Auf einer MCU ist das ein `WFI` mit anschliessender Pruefung des

@@ -45,6 +45,7 @@ Leerzeichen, außer im Rest einer Meldung.
 | `verdict` | Golden | `verdict <maschine> pass\|fail ["<text>"]` |
 | `property` | Golden | `property <name> violated <tick>` bzw. `assumption <name> violated <tick>` — die Eigenschaft ist an Position `<tick>` verletzt; die Zeile steht im Tick, in dem die Fenster der Position geschlossen sind (Position plus Zukunftstiefe der Formel, 13.3) |
 | `stream` | Golden | `stream <name> dropped=<n> overflowed=<n> malformed=<n>` — bei Änderung (8.6) |
+| `time` | Metazeile | `time took=<ns> drift=<ns> slept=<n>` — was der Tick physisch gekostet hat (7.3, 12.3); nur native Runtimes schreiben sie, der Interpreter nie. Sie steht ausserhalb der kanonischen Ordnung (T5), der Hashkette (T6) und jedes Trace-Vergleichs: 12.5 haelt Zeitstempel ausserhalb der Semantik |
 | `verdict-final` | Golden | `verdict-final PASS\|FAIL\|INCONCLUSIVE` — letzte Zeile (13.5) |
 | `end` | Golden | `end restart\|deep_sleep\|boot_jump` — der Lauf endet hier (12.7); `deep_sleep` startet den naechsten mit `boot_reason = DEEP_SLEEP_WAKE` |
 
@@ -143,6 +144,8 @@ Innerhalb eines Ticks:
 6. `property`/`assumption` in Deklarationsreihenfolge — nach dem Commit,
    weil die Monitore den Tick-Rand-Snapshot lesen (13.3).
 
+Metazeilen (`time`) stehen am Ende ihres Ticks und zählen nicht mit.
+
 Die Ordnung hängt nicht davon ab, in welcher Reihenfolge die Maschinen
 geschritten sind; damit prüft ein Trace-Vergleich die Ordnungsunabhängigkeit
 aus Satz 9.4.1 unmittelbar.
@@ -151,7 +154,7 @@ aus Satz 9.4.1 unmittelbar.
 
 Über dem kanonischen Trace liegt eine Hashkette (Referenz 12.5): `H` ist
 SHA-256, `h_0 = H("takt-kette 1" LF Logik-Hash LF)`, und für jeden Tick `k`,
-der Zeilen hat, in aufsteigender Folge `h_k = H(h_{k-1} ‖ Zeile_1 LF ‖ … ‖
+der Zeilen hat, die keine Metazeilen sind, in aufsteigender Folge `h_k = H(h_{k-1} ‖ Zeile_1 LF ‖ … ‖
 Zeile_n LF)` mit den Zeilen des Ticks in der Ordnung von T5. Das Kettenende
 `h_n` steht als Hex im Kopf der Aufzeichnung (`#! kette h_n`);
 `takt verify-trace TRACE --record R` rechnet es nach. Ticks ohne Zeilen

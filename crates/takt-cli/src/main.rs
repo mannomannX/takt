@@ -6,7 +6,7 @@
 //!                   [--hardware DATEI.hw --target NAME]
 //!                   [--build sim|hw] [--params-profile P]
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
-//!                   [--params-profile P] [--order random:SEED]
+//!                   [--params-profile P] [--order random:SEED] [--steps OUT.steps]
 //! takt test  DATEI [--ticks N] [--params-profile P] [--scenario NAME] [--coverage OUT.csv] [--out DIR]
 //! takt campaign DATEI [NAME] --ticks N [--stim S.trace] [--params-profile P] [--scenario NAME]
 //!                   [--out DIR] [--hardware DATEI.hw]
@@ -15,6 +15,7 @@
 //! takt replay DATEI --record R.trace [--golden G.trace] [--ticks N]
 //!                   [--machine M [--extract SCHEIBE.trace]]
 //! takt verify-trace TRACE.trace --record R.trace
+//! takt timing TRACE.trace --tick NS
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
 //!                   [--instrument statements|states|off]
@@ -32,12 +33,14 @@
 
 use std::process::ExitCode;
 
+use std::fmt::Write as _;
+
 use takt_diag::{Policy, SourceMap};
 use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -89,6 +92,8 @@ impl Args {
             "--machine",
             "--extract",
             "--instrument",
+            "--steps",
+            "--tick",
             "--params-profile",
         ];
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
@@ -130,6 +135,7 @@ fn main() -> ExitCode {
         "run" => run_cmd(&args),
         "replay" => replay(&args),
         "verify-trace" => verify_trace(&args),
+        "timing" => timing(&args),
         "mir" => mir(&args),
         "fmt" => fmt(&args),
         "build" => build(&args),
@@ -935,7 +941,9 @@ fn sim(args: &Args) -> bool {
         },
         None => None,
     };
-    let options = RunOptions { ticks, profile: profile_of(args), order_seed, ..Default::default() };
+    let steps_to = args.value("--steps");
+    let options =
+        RunOptions { ticks, profile: profile_of(args), order_seed, steps: steps_to.is_some(), ..Default::default() };
     let result = match takt_interp::run(&program, &stimulus, &options) {
         Ok(r) => r,
         Err(e) => {
@@ -945,6 +953,13 @@ fn sim(args: &Args) -> bool {
     };
     let text = result.trace.render();
     let mut ok = result.verdict != Verdict::Fail;
+    if let Some(out) = steps_to {
+        let src = read(path).unwrap_or_default();
+        if let Err(e) = std::fs::write(out, steps_with_positions(&result.steps, &src)) {
+            eprintln!("{out}: {e}");
+            return false;
+        }
+    }
     if let Some(out) = args.value("--trace") {
         if let Err(e) = std::fs::write(out, &text) {
             eprintln!("{out}: {e}");
@@ -968,6 +983,32 @@ fn sim(args: &Args) -> bool {
     }
     println!("{path}: {} nach {ticks} Ticks", result.verdict.name());
     ok
+}
+
+/// Ersetzt `@<versatz>` durch `<zeile>:<spalte>` (`takt sim --steps`).
+fn steps_with_positions(steps: &str, src: &str) -> String {
+    let mut starts = vec![0usize];
+    starts.extend(src.match_indices('\n').map(|(i, _)| i + 1));
+    let mut out = String::new();
+    for line in steps.lines() {
+        match line.split_once(" @").and_then(|(head, rest)| {
+            let (offset, tail) = rest.split_once(' ').unwrap_or((rest, ""));
+            Some((head, offset.parse::<usize>().ok()?, tail))
+        }) {
+            Some((head, offset, tail)) => {
+                let row = starts.partition_point(|&s| s <= offset);
+                let col = src.get(starts[row - 1]..offset).map_or(0, |s| s.chars().count()) + 1;
+                out.push_str(head);
+                let _ = write!(out, " {row}:{col}");
+                if !tail.is_empty() {
+                    let _ = write!(out, " {tail}");
+                }
+            }
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// `takt test`: jedes Szenario als eigener Sim-Lauf (13.6); Verdikte je
@@ -1483,6 +1524,74 @@ fn replay(args: &Args) -> bool {
         None => print!("{text}"),
     }
     result.verdict != Verdict::Fail
+}
+
+/// `takt timing`: die physische Zeit eines Laufs aus seinen
+/// `time`-Metazeilen (7.3, 12.3).
+fn timing(args: &Args) -> bool {
+    let Some(path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let Some(text) = read(path) else { return false };
+    let trace = match Trace::parse(&text) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{path}: {e}");
+            return false;
+        }
+    };
+    let times: Vec<(u64, i64, i64, u64)> = trace
+        .lines
+        .iter()
+        .filter_map(|l| match l.kind {
+            takt_interp::trace::LineKind::Time { took, drift, slept } => Some((l.tick, took, drift, slept)),
+            _ => None,
+        })
+        .collect();
+    if times.is_empty() {
+        eprintln!("{path}: keine `time`-Zeilen; nur native Laeufe schreiben sie (12.3)");
+        return false;
+    }
+    let period: i64 = match args.value("--tick").map(str::parse) {
+        Some(Ok(n)) => n,
+        Some(Err(_)) => {
+            eprintln!("--tick: Nanosekunden erwartet");
+            return false;
+        }
+        None => {
+            eprintln!("--tick fehlt: `takt timing TRACE --tick <ns>` (T0 aus `system: tick`)");
+            return false;
+        }
+    };
+    let (mut late, mut lost, mut worst_drift, mut worst_took, mut slept) = (0u64, 0i64, 0i64, 0i64, 0u64);
+    let mut last_drift = 0i64;
+    for (_, took, drift, n) in &times {
+        let drift = (*drift).max(0);
+        if drift >= period {
+            late += 1;
+        }
+        if drift > last_drift {
+            lost += drift - last_drift;
+        }
+        last_drift = drift;
+        worst_drift = worst_drift.max(drift);
+        worst_took = worst_took.max(*took);
+        slept += n;
+    }
+    let lost = if period > 0 { lost / period } else { 0 };
+    println!("{path}: {} Ticks mit Zeit", times.len());
+    println!("  verspaetete Ticks   {late}");
+    println!("  verlorene Perioden  {lost}");
+    println!("  groesster Rueckstand {worst_drift} ns");
+    println!("  laengster Schritt   {worst_took} ns");
+    println!("  geschlafene Ticks   {slept}");
+    let mut spaeteste: Vec<&(u64, i64, i64, u64)> = times.iter().collect();
+    spaeteste.sort_by_key(|(_, _, d, _)| -*d);
+    for (k, took, drift, _) in spaeteste.iter().take(3).filter(|(_, _, d, _)| *d > 0) {
+        println!("  Tick {k}: {drift} ns zu spaet, Schritt {took} ns");
+    }
+    true
 }
 
 /// `takt verify-trace`: rechnet die Hashkette eines Traces nach (12.5, A3).

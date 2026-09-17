@@ -220,6 +220,13 @@ pub trait Outer {
     }
     /// Coverage-Treffer (13.2); ausserhalb einer Maschine zaehlt nichts.
     fn cover(&mut self, _kind: CoverKind, _name: String) {}
+    /// Eine ausgefuehrte Anweisung, fuer `takt sim --steps`.
+    fn step_taken(&mut self, _span: Span, _result: Option<String>) {}
+    /// Ist die Schrittsicht eingeschaltet? Ohne sie entfaellt das
+    /// Formatieren des Ergebniswerts.
+    fn steps_wanted(&self) -> bool {
+        false
+    }
     /// `abort`: Vormerkung fuer alle anderen Maschinen (5.4).
     fn abort(&mut self) -> EvalResult<()> {
         bug("abort ausserhalb einer Maschine")
@@ -283,6 +290,17 @@ pub struct MachineEnv<'a, 'p> {
     pub tick: u64,
     /// `abort` wurde in diesem Schritt ausgefuehrt (5.4).
     pub aborted: bool,
+    /// Ausgefuehrte Anweisungen, wenn die Schrittsicht laeuft.
+    pub steps: Option<&'a mut Vec<Step>>,
+}
+
+/// Eine ausgefuehrte Anweisung (`takt sim --steps`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Step {
+    /// Stelle im Quelltext.
+    pub span: Span,
+    /// Ergebnis, wo eines anfaellt.
+    pub result: Option<String>,
 }
 
 /// Umgebung der Konstantenauswertung: nur programmweite Konstanten sind

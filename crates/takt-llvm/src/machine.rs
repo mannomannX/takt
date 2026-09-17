@@ -164,6 +164,18 @@ impl StateStruct {
             .map(|(i, _)| u32::try_from(i).unwrap_or(u32::MAX))
     }
 
+    /// Der Byteversatz eines Felds, wie das Datenlayout es legt — fuer
+    /// Rahmen, die den Zustand als Bytepuffer halten (12.1).
+    pub fn byte_offset(&self, role: Role, nth: usize) -> Option<u64> {
+        let index = self.index_of(role, nth)? as usize;
+        let mut at = 0u64;
+        for f in &self.fields[..index] {
+            at = at.div_ceil(f.ty.align()) * f.ty.align() + f.ty.aligned_size();
+        }
+        let align = self.fields[index].ty.align();
+        Some(at.div_ceil(align) * align)
+    }
+
     /// Die Groesse in Bytes, ohne Ausrichtung (11.5 rechnet genauer).
     pub fn size(&self) -> u64 {
         self.fields.iter().map(|f| f.ty.size()).sum()

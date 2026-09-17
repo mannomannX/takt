@@ -93,6 +93,22 @@ impl TickSource for Tim2Tick {
         takt_board_support::Measurement { cycles: LAST_CYCLES.load(Ordering::Relaxed), core_hz: self.core_hz }.ns()
     }
 
+    /// Ticks mal Schritte je Tick plus der Stand von TIM2 innerhalb des
+    /// laufenden Ticks; gelesen, bis Tickzahl und Zaehler zusammenpassen,
+    /// weil der Ueberlauf dazwischen kommen kann.
+    fn now_ns(&self) -> i64 {
+        // SAFETY: `CNT` wird nur gelesen; das Register gehoert dem Board.
+        let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
+        let counts = loop {
+            let before = count();
+            let cnt = u64::from(tim2.cnt().read().bits());
+            if count() == before {
+                break before * u64::from(self.counts_per_tick) + cnt;
+            }
+        };
+        takt_board_support::clock::elapsed_ns(self.timer_hz, counts)
+    }
+
     fn wait_for_tick(&mut self) {
         let start = count();
         // `wfi` statt Warteschleife: Ein Kern, der zwischen den Ticks

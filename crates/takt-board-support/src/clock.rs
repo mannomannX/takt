@@ -72,11 +72,28 @@ pub fn period_ns(timer_hz: u32, counts: u32) -> i64 {
     i64::try_from(u128::from(counts) * 1_000_000_000 / u128::from(timer_hz)).unwrap_or(i64::MAX)
 }
 
+/// Die Zeit, die `counts` Schritte eines Zaehlers ausmachen — exakt in
+/// `u128`, weil der Zaehler ueber Stunden laeuft und ein Rundungsfehler
+/// je Schritt sich summierte (FB-192).
+pub fn elapsed_ns(timer_hz: u32, counts: u64) -> i64 {
+    if timer_hz == 0 {
+        return 0;
+    }
+    i64::try_from(u128::from(counts) * 1_000_000_000 / u128::from(timer_hz)).unwrap_or(i64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const MHZ: u32 = 1_000_000;
+
+    #[test]
+    fn elapsed_time_is_exact_over_hours() {
+        assert_eq!(elapsed_ns(16_000_000, 16_000_000 * 3600), 3_600_000_000_000);
+        assert_eq!(elapsed_ns(16_000_000, 1), 62, "62,5 ns abgerundet");
+        assert_eq!(elapsed_ns(16_000_000, 2), 125);
+    }
 
     #[test]
     fn one_millisecond_is_a_thousand_counts_at_one_megahertz() {

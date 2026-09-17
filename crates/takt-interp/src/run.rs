@@ -2,6 +2,7 @@
 //! Lauf-Verdikt bilden (Referenz 9.4, 13.5; `grammar/trace.md`).
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use takt_diag::Span;
 use takt_mir::program::{Direction, Overflow, Program};
@@ -62,6 +63,8 @@ pub struct RunOptions {
     /// fremden Maschinen liest, liefert der Stimulus als `out`-, `state`-,
     /// `pub`- und `signal`-Zeilen.
     pub only: Option<String>,
+    /// Jede ausgefuehrte Anweisung mitschreiben (`takt sim --steps`).
+    pub steps: bool,
 }
 
 /// Ergebnis eines Laufs.
@@ -82,6 +85,8 @@ pub struct RunResult {
     pub start_params: Vec<(String, String)>,
     /// Jede Eigenschaft mit ihrem Ausgang (13.3).
     pub properties: Vec<PropertyResult>,
+    /// Jede ausgefuehrte Anweisung als Zeile, wenn `steps` gesetzt war.
+    pub steps: String,
 }
 
 /// Warum ein Lauf endete (12.7).
@@ -136,6 +141,7 @@ pub struct Run<'p> {
     pub(crate) deadline: Option<i64>,
     /// Ein Abbruch aus der Schleife; `finish` liefert ihn.
     pub(crate) trap: Option<Trap>,
+    steps: String,
 }
 
 impl<'p> Run<'p> {
@@ -161,6 +167,9 @@ impl<'p> Run<'p> {
             None => None,
         };
         sim.nvm = options.nvm.clone();
+        if options.steps {
+            sim.steps = Some(Vec::new());
+        }
         // Satz 9.4.1: jede lineare Erweiterung der `follows`-Kanten liefert
         // denselben Trace (7.2).
         if let Some(seed) = options.order_seed {
@@ -228,9 +237,28 @@ impl<'p> Run<'p> {
             echo,
             deadline: None,
             trap: None,
+            steps: String::new(),
         };
         run.deadline = run.earliest_deadline();
         Ok(run)
+    }
+
+    /// Die Anweisungen dieses Ticks als Zeilen (`takt sim --steps`):
+    /// `t=<k> step <maschine> @<versatz> [= <wert>]`; Zeile und Spalte
+    /// macht das Werkzeug daraus, das den Quelltext hat.
+    fn collect_steps(&mut self, tick: u64) {
+        let Some(taken) = self.sim.steps.as_mut() else { return };
+        let program = self.sim.loaded.program;
+        let mut lines = String::new();
+        for (id, step) in taken.drain(..) {
+            let name = &program.machines[id.index()].name;
+            let _ = write!(lines, "t={tick} step {name} @{}", step.span.start);
+            if let Some(value) = &step.result {
+                let _ = write!(lines, " = {value}");
+            }
+            lines.push('\n');
+        }
+        self.steps.push_str(&lines);
     }
 
     /// Ein Tick (9.4); `false`, wenn der Lauf zu Ende ist.
@@ -245,6 +273,7 @@ impl<'p> Run<'p> {
         apply_stimulus(&mut self.sim, &self.stimulus, tick, &mut self.echo, self.only)?;
         self.writer.lines.append(&mut self.echo);
         self.sim.step()?;
+        self.collect_steps(tick);
         collect(&mut self.writer, &self.sim, tick, &mut self.verdict, &mut self.fail, &mut self.coverage);
         self.writer.changes(&self.sim, tick);
         observe_properties(&mut self.monitors, &self.sim, tick, &mut self.writer, &mut self.fail);
@@ -276,7 +305,9 @@ impl<'p> Run<'p> {
         if let Some(trap) = self.trap {
             return Err(trap);
         }
-        let Run { sim, ticks, mut writer, monitors, verdict, mut fail, coverage, start_params, ended, last, .. } = self;
+        let Run {
+            sim, ticks, mut writer, monitors, verdict, mut fail, coverage, start_params, ended, last, steps, ..
+        } = self;
         let at = if ended == Ended::Ticks { ticks } else { last };
         let properties = finish_properties(monitors, at, &mut writer, &mut fail);
         let final_verdict = if fail { Verdict::Fail } else { verdict };
@@ -296,6 +327,7 @@ impl<'p> Run<'p> {
             params,
             start_params,
             properties,
+            steps,
         })
     }
 }

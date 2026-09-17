@@ -34,17 +34,41 @@ pub struct Overrun {
     pub count: u64,
     /// Die groesste gemessene Ueberschreitung in Nanosekunden.
     pub worst: i64,
+    /// Ticks, die mindestens eine Periode zu spaet begannen.
+    pub late: u64,
+    /// Der groesste Rueckstand beim Tickbeginn in Nanosekunden.
+    pub worst_drift: i64,
+    /// Perioden, in denen kein Tick beginnen konnte: der Zuwachs des
+    /// Rueckstands, nie das Aufholen.
+    pub lost: u64,
+    last_drift: i64,
 }
 
 impl Overrun {
     /// Mit einer Policy.
     pub fn new(policy: Policy) -> Overrun {
-        Overrun { policy, count: 0, worst: 0 }
+        Overrun { policy, ..Overrun::default() }
     }
 
     /// Die Policy.
     pub fn policy(&self) -> Policy {
         self.policy
+    }
+
+    /// Nimmt den Rueckstand beim Tickbeginn entgegen (12.3, plan/esp32c6.md 6.1).
+    ///
+    /// `drift` und `took` je Tick sind die einzige Quelle; die drei Zahlen
+    /// hier sind eine Faltung darueber, kein zweiter Zaehler.
+    pub fn observe_drift(&mut self, drift: i64, tick_ns: i64) {
+        let drift = drift.max(0);
+        if drift >= tick_ns {
+            self.late = self.late.saturating_add(1);
+        }
+        self.worst_drift = self.worst_drift.max(drift);
+        if drift > self.last_drift && tick_ns > 0 {
+            self.lost = self.lost.saturating_add(((drift - self.last_drift) / tick_ns) as u64);
+        }
+        self.last_drift = drift;
     }
 
     /// Nimmt die Dauer eines Ticks entgegen.
@@ -72,4 +96,33 @@ pub struct Seen {
     /// Daraus folgt `Runtime(Overrun)` im naechsten Tick — nur unter der
     /// Policy `fault`.
     pub fault: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const T: i64 = 1_000_000;
+
+    /// Ein Stillstand von fuenf Perioden, aufgeholt, dann drei weitere:
+    /// acht verlorene Perioden, nicht 5 + 4 + 3 + 2 + 1 + 3.
+    #[test]
+    fn lost_periods_count_the_growth_of_the_lag_only() {
+        let mut o = Overrun::new(Policy::Fault);
+        for drift in [0, 0, 5 * T, 4 * T, 3 * T, 2 * T, T, 0, 3 * T, 2 * T] {
+            o.observe_drift(drift, T);
+        }
+        assert_eq!(o.lost, 8);
+        assert_eq!(o.late, 7, "sieben Ticks begannen mindestens eine Periode zu spaet");
+        assert_eq!(o.worst_drift, 5 * T);
+    }
+
+    /// Ein frueher Tick (negativer Rueckstand) ist kein Verlust.
+    #[test]
+    fn an_early_tick_costs_nothing() {
+        let mut o = Overrun::new(Policy::Fault);
+        o.observe_drift(-T / 2, T);
+        o.observe_drift(T / 2, T);
+        assert_eq!((o.lost, o.late, o.worst_drift), (0, 0, T / 2));
+    }
 }

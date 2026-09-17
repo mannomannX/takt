@@ -67,6 +67,11 @@ impl TickSource for SystimerTick {
     }
 
     #[esp_hal::ram]
+    fn now_ns(&self) -> i64 {
+        takt_board_support::clock::elapsed_ns(self.timer_hz, SystemTimer::unit_value(Unit::Unit0))
+    }
+
+    #[esp_hal::ram]
     fn last_period_ns(&self) -> i64 {
         takt_board_support::clock::period_ns(self.timer_hz, LAST_COUNTS.load(Ordering::Relaxed))
     }

@@ -39,6 +39,9 @@ const TICKS: Option<&str> = option_env!("TAKT_TICKS");
 /// loeschen, damit der Lauf wie der Interpreter ohne Speicher beginnt.
 const FRESH_JOURNAL: bool = option_env!("TAKT_FRESH_JOURNAL").is_some();
 
+/// `TAKT_INSTRUMENT=statements`: den Programmzaehler je Tick mitgeben (11.2).
+const TRACE_PC: bool = matches!(option_env!("TAKT_INSTRUMENT"), Some(m) if matches!(m.as_bytes(), b"statements"));
+
 /// Das Journal: die `nvs`-Partition des ESP-IDF-Schemas, das `probe-rs`
 /// flasht (0x9000, 24 KiB, sonst leer); zwei Sektoren davon.
 const JOURNAL_AT: u32 = 0x9000;
@@ -113,17 +116,23 @@ impl Watchdog for NoWatchdog {
     fn kick(&mut self) {}
 }
 
-/// Die Schleife meldet je Tick; hier zaehlt nur, was der Bericht braucht.
+/// Die Schleife meldet je Tick; im Konformitaetslauf geht jede Zeit als
+/// Metazeile mit (grammar/trace.md, `time`).
 #[derive(Default)]
 struct Summary {
     slept: u64,
     overruns: u64,
+    trace: bool,
 }
 
 impl Sink for Summary {
     fn record(&mut self, tick: &Tick) {
         self.slept += tick.slept;
         self.overruns += u64::from(tick.overrun);
+        if let (true, Some(u)) = (self.trace, uart()) {
+            let _ = tick.write_time(u);
+            u.write("\r\n");
+        }
     }
 }
 
@@ -175,12 +184,12 @@ fn main() -> ! {
 
     let clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS);
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
-    let mut rt = Runtime::new(program, clock, NoWatchdog, Summary::default(), Profile::BAREMETAL, TICK_NS, policy);
+    let sink = Summary { trace: limit > 0, ..Summary::default() };
+    let mut rt = Runtime::new(program, clock, NoWatchdog, sink, Profile::BAREMETAL, TICK_NS, policy);
     if limit > 0 {
         rt.program.dump();
     }
     let mut next_trace = trace_every;
-    let mut reported: u64 = 0;
     loop {
         rt.step_persisting(&mut persist);
         rt.program.commit();
@@ -188,7 +197,9 @@ fn main() -> ! {
         if k >= next_trace {
             next_trace = k + trace_every;
             rt.program.dump();
-            missed(&rt, &mut reported);
+            if TRACE_PC {
+                rt.program.pc();
+            }
         }
         if limit > 0 && k >= limit {
             break;
@@ -198,12 +209,17 @@ fn main() -> ! {
     if let Some(u) = uart() {
         let journal = persist.journal();
         let (erase_ns, program_ns) = journal.device().measured_ns();
+        let o = rt.overrun();
         let _ = write!(
             u,
-            "takt schlief {} ueberlaeufe {} journal geschrieben {} fehlgeschlagen {} flush {} \
+            "takt schlief {} ueberlaeufe {} verspaetet {} verloren {} rueckstand {} ns \
+             journal geschrieben {} fehlgeschlagen {} flush {} \
              nvm loeschen {erase_ns} ns programmieren {program_ns} ns\r\n",
             rt.sink.slept,
             rt.sink.overruns,
+            o.late,
+            o.lost,
+            o.worst_drift,
             journal.writes(),
             journal.failures(),
             u8::from(flushed)
@@ -224,16 +240,3 @@ fn report(text: &str) {
     }
 }
 
-/// Verpasste Ticks, sobald ihre Zahl steigt.
-fn missed<S>(
-    rt: &Runtime<Generated, takt_rt_baremetal::TimerClock<takt_board_esp32c6::SystimerTick>, NoWatchdog, S>,
-    last: &mut u64,
-) {
-    let missed = rt.clock.missed();
-    if missed > *last {
-        *last = missed;
-        if let Some(u) = uart() {
-            let _ = write!(u, "  verpasste Ticks: {missed}\r\n");
-        }
-    }
-}

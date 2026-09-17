@@ -63,7 +63,7 @@ SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),fertig,
 SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),fertig,
 SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),fertig,
 SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig,
-SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),fertig,"`system: overrun = fault | alert` seit plan/nvm.md Schritt 1; ein Journal-Vorgang ueber die Frist zaehlt als Ueberlauf (Schritt 3)"
+SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),fertig,"`system: overrun = fault | alert` seit plan/nvm.md Schritt 1; ein Journal-Vorgang ueber die Frist zaehlt als Ueberlauf (Schritt 3); vier Kennzahlen aus `drift` und `took` je Tick, `time`-Metazeile und `takt timing` (plan/esp32c6.md Schritt 8)"
 SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M6 (v1.1),fertig,`sys/clock` am eingebauten Geraet `sys` (Pruefung 60); `takt-rt-linux::wall_clock_ns` fuer den Treiberrand
 SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),fertig,
 SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M2 (Ströme),teilweise,
@@ -878,6 +878,7 @@ CLI-check,Werkzeug,11.1,takt check,,M0-M3,fertig,
 CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig,
 CLI-run,Werkzeug,11.1,takt run,,M4 (Codegen),fertig,
 CLI-replay,Werkzeug,11.1,takt replay,,M4 (Codegen),fertig,"Maschinen-Replay `--machine M [--extract]` (12.5, A2a) seit M6 Schritt 13"
+CLI-timing,Werkzeug,11.1,takt timing,,M5 (Embedded),fertig,"die vier Kennzahlen aus den `time`-Zeilen einer Aufzeichnung (7.3, plan/esp32c6.md 6.1)"
 CLI-verify-trace,Werkzeug,11.1,takt verify-trace,,M6 (v1.1),fertig,"Hashkette h_k = H(h_{k-1} ‖ Zeilen des Ticks k) im Kopf der Aufzeichnung (`#! kette`), T6 in grammar/trace.md (A3)"
 CLI-test,Werkzeug,11.1,takt test,,M6 (v1.1),fertig,`--out DIR` schreibt je Szenario `NAME.trace` (FB-190)
 CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
@@ -1097,3 +1098,4 @@ TEST-Rahmen-Stroeme_und_Szenarien,Abnahme,13.8,"Konformitaetsrahmen: Ringe fuer 
 SEM-3.9-inout,Semantik/Absatz,3.9,"`inout`: Aufruf als Anweisung schreibt zurueck, Argument muss eine Stelle sein, `-> T` daneben ausgeschlossen",,M6,fertig,FB-178; `takt-sema/tests/inout.rs`
 system-Eintrag-overrun,system-Eintrag,2.3,"system_item: ""overrun""",,M0 (Parser/MIR-Entwurf),fertig,"plan/nvm.md Schritt 1: Parser, Formatter, S-Ausdruck, Senkung nach `Config.overrun`, Konstanten; `58_persist_alert.takt`"
 DEC-Blockierendes_NVM,Entscheidung,16,"Blockierendes NVM → deklarierte Kosten (8.10), Prüfung 32, Schreiben im Schlaffenster, `overrun = alert`; asynchroner Treiber als Option mit Residenznachweis",,Doku/Rationale,rationale,
+FMT-Trace-Zeitzeile,Versioniertes Format,11.3,"Trace-Metazeile `time` (7.3, grammar/trace.md T1)",,M5 (Embedded),fertig,"ausserhalb von T5, T6 und jedem Vergleich; nur native Runtimes schreiben sie"

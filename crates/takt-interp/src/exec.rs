@@ -50,6 +50,26 @@ impl Ctx<'_, '_> {
 
     /// Eine Anweisung.
     pub fn exec(&mut self, s: &Stmt, mode: Mode) -> EvalResult<Out> {
+        let out = self.exec_inner(s, mode);
+        if self.outer.steps_wanted() {
+            let result = match (&out, &s.kind) {
+                (Ok(_), StmtKind::Assign { target, .. }) => self.place_text(target),
+                (Err(Trap::Fault(f)), _) => Some(format!("fault {}", f.message)),
+                _ => None,
+            };
+            self.outer.step_taken(s.span, result);
+        }
+        out
+    }
+
+    /// Der geschriebene Wert einer Zuweisung, fuer die Schrittsicht.
+    fn place_text(&mut self, place: &Place) -> Option<String> {
+        let ty = self.place_type(place).ok()?;
+        let value = self.place_mut(place, Span::new(0, 0)).ok()?.clone();
+        Some(crate::format::display(&value, None, ty, self))
+    }
+
+    fn exec_inner(&mut self, s: &Stmt, mode: Mode) -> EvalResult<Out> {
         let span = s.span;
         match &s.kind {
             StmtKind::Assign { target, value } => {

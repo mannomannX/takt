@@ -70,6 +70,18 @@ pub enum LineKind {
     /// Ende des Laufs (5.9). Beobachtung, keine Semantik — aber genau die
     /// Bytes, die der erzeugte Code liefern muss (Satz 9.4.4).
     Persist { hex: String },
+    /// `time took=<ns> drift=<ns> slept=<n>`: was der Tick physisch
+    /// gekostet hat (7.3, 12.3). Metazeile — ausserhalb der kanonischen
+    /// Ordnung, der Hashkette und jedes Vergleichs, weil 12.5 Zeitstempel
+    /// ausserhalb der Semantik haelt.
+    Time { took: i64, drift: i64, slept: u64 },
+}
+
+impl LineKind {
+    /// Traegt die Zeile Semantik, oder ist sie ein Datum daneben?
+    pub fn is_meta(&self) -> bool {
+        matches!(self, LineKind::Time { .. })
+    }
 }
 
 /// Wert oder Qualitaet eines Inputs (3.5).
@@ -272,6 +284,16 @@ fn parse_line(line: &str) -> Result<TraceLine, String> {
         "verdict-final" => {
             LineKind::Final { verdict: nonempty(args, "`verdict-final PASS|FAIL|INCONCLUSIVE`")?.to_string() }
         }
+        "time" => {
+            let mut fields = [0i64; 3];
+            for (i, key) in ["took", "drift", "slept"].iter().enumerate() {
+                let Some(text) = args.split_whitespace().find_map(|f| f.strip_prefix(&format!("{key}="))) else {
+                    return Err(format!("`time` ohne `{key}=<zahl>`"));
+                };
+                fields[i] = text.parse().map_err(|_| format!("`{key}={text}` ist keine Zahl"))?;
+            }
+            LineKind::Time { took: fields[0], drift: fields[1], slept: fields[2].max(0) as u64 }
+        }
         other => return Err(format!("unbekannte Art `{other}`")),
     };
     Ok(TraceLine { tick, kind })
@@ -393,6 +415,7 @@ pub(crate) fn render_line(line: &TraceLine) -> String {
         LineKind::Final { verdict } => format!("t={t} verdict-final {verdict}"),
         LineKind::End { reason } => format!("t={t} end {reason}"),
         LineKind::Persist { hex } => format!("t={t} persist {hex}"),
+        LineKind::Time { took, drift, slept } => format!("t={t} time took={took} drift={drift} slept={slept}"),
     }
 }
 

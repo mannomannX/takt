@@ -295,14 +295,16 @@ fn the_journal_costs_time_but_not_semantics() {
     let writes = counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
     assert!(writes > 1, "das Journal schrieb nur {writes}-mal; der Fall aus 12.3 trat nicht ein:\n{text}");
     assert_eq!(counter(&text, "fehlgeschlagen"), Some(0), "ein Schreibvorgang scheiterte:\n{text}");
-    let missed =
-        text.lines().filter_map(|l| l.trim().strip_prefix("verpasste Ticks: ")?.parse::<u64>().ok()).next_back();
     eprintln!(
-        "{name}: {writes} Journal-Schreibvorgaenge, {} verpasste Perioden; loeschen {} ns, programmieren {} ns",
-        missed.unwrap_or(0),
+        "{name}: {writes} Journal-Schreibvorgaenge, {} verlorene Perioden, Rueckstand {} ns; \
+         loeschen {} ns, programmieren {} ns",
+        counter(&text, "verloren").unwrap_or(0),
+        counter(&text, "rueckstand").unwrap_or(0),
         counter(&text, "nvm loeschen").unwrap_or(0),
         counter(&text, "programmieren").unwrap_or(0)
     );
+    let times = text.lines().filter(|l| l.contains(" time took=")).count();
+    assert!(times as u64 >= TICKS, "die Zeitzeilen fehlen ({times} von {TICKS}):\n{text}");
     let p = corpus(name);
     let diffs = compare(&run_interpreted(&p), &text);
     assert!(diffs.is_empty(), "{diffs:?}");
@@ -330,7 +332,7 @@ fn the_journal_writes_in_sleep_windows() {
         .unwrap_or_else(|e| panic!("{name}: {e}"));
     let writes = counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
     assert!(writes >= 1, "das Journal schrieb nie im Schlaf:\n{text}");
-    assert!(!text.contains("verpasste Ticks"), "ein Schreibvorgang im Schlaf hat Perioden gekostet:\n{text}");
+    assert_eq!(counter(&text, "verloren"), Some(0), "ein Schreibvorgang im Schlaf hat Perioden gekostet:\n{text}");
     assert_eq!(counter(&text, "ueberlaeufe"), Some(0), "{text}");
     let p = corpus(name);
     let diffs = compare(&run_interpreted(&p), &text);

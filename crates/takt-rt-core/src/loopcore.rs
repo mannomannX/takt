@@ -155,6 +155,14 @@ pub struct Tick {
     pub slept: u64,
 }
 
+impl Tick {
+    /// Die Metazeile `t=<k> time took=<ns> drift=<ns> slept=<n>`
+    /// (grammar/trace.md T1; 12.5: Zeit ausserhalb der Semantik).
+    pub fn write_time(&self, w: &mut impl core::fmt::Write) -> core::fmt::Result {
+        write!(w, "t={} time took={} drift={} slept={}", self.k, self.took, self.drift, self.slept)
+    }
+}
+
 /// Das Programm, das die Schleife ausfuehrt.
 ///
 /// Die Semantik liegt hinter diesem Trait: Der Interpreter fuehrt sie ueber
@@ -278,6 +286,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         self.clock.wait_until(self.deadline);
         let began = self.clock.now();
         let drift = began - self.deadline;
+        self.overrun.observe_drift(drift, self.tick_ns);
 
         // 7.3: Der Overrun des vorigen Ticks wirkt jetzt. Er kommt vor dem
         // Schritt, damit die Maschinen ihn in diesem Tick sehen.
@@ -384,6 +393,11 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         for _ in 0..n {
             self.step_persisting(persist);
         }
+    }
+
+    /// Die Ueberlauf- und Rueckstandszahlen des Laufs (7.3).
+    pub fn overrun(&self) -> &Overrun {
+        &self.overrun
     }
 
     /// Nummer des naechsten Ticks.

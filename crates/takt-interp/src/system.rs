@@ -33,7 +33,13 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
         out: &'a mut Vec<Observation>,
         tick_ns: i64,
     ) -> Self {
-        MachineEnv { loaded, id, state, image, out, tick_ns, tick: 0, aborted: false }
+        MachineEnv { loaded, id, state, image, out, tick_ns, tick: 0, aborted: false, steps: None }
+    }
+
+    /// Sammelt die ausgefuehrten Anweisungen (`takt sim --steps`).
+    pub fn with_steps(mut self, steps: &'a mut Vec<crate::env::Step>) -> Self {
+        self.steps = Some(steps);
+        self
     }
 
     /// Die Maschine.
@@ -384,6 +390,16 @@ impl Outer for MachineEnv<'_, '_> {
         m.vars.get(v.index()).map(|d| d.ty).ok_or_else(|| Trap::Bug(format!("Variable {} fehlt", v.0)))
     }
 
+    fn step_taken(&mut self, span: takt_diag::Span, result: Option<String>) {
+        if let Some(steps) = &mut self.steps {
+            steps.push(crate::env::Step { span, result });
+        }
+    }
+
+    fn steps_wanted(&self) -> bool {
+        self.steps.is_some()
+    }
+
     fn cover(&mut self, kind: crate::env::CoverKind, name: String) {
         self.out.push(Observation::Cover { kind, name });
     }
@@ -570,6 +586,9 @@ pub struct Sim<'p> {
     pub foreign: Vec<MachineId>,
     /// Beobachtungen des laufenden Ticks je Maschine.
     pub observations: Vec<(MachineId, Observation)>,
+    /// Ausgefuehrte Anweisungen des laufenden Ticks je Maschine, wenn die
+    /// Schrittsicht laeuft (`takt sim --steps`).
+    pub steps: Option<Vec<(MachineId, crate::env::Step)>>,
     /// Nichtfluechtiger Speicher fuer `persist var` (5.9); vor `init()` zu
     /// fuellen, danach unveraendert — das Schreiben liegt ausserhalb der
     /// Semantik.
@@ -666,6 +685,7 @@ impl<'p> Sim<'p> {
             order,
             foreign: Vec::new(),
             observations: Vec::new(),
+            steps: None,
             nvm: Nvm::new(),
         })
     }
@@ -1014,11 +1034,18 @@ impl<'p> Sim<'p> {
         let mut aborted = false;
         for id in &active {
             let mut out = Vec::new();
+            let mut taken = Vec::new();
             let mut env =
                 MachineEnv::new(&self.loaded, *id, &mut self.states[id.index()], &mut self.image, &mut out, tick_ns);
+            if self.steps.is_some() {
+                env = env.with_steps(&mut taken);
+            }
             let result = machine::step_m(&self.loaded, &mut env, self.tick);
             aborted |= env.aborted;
             self.observations.extend(out.into_iter().map(|o| (*id, o)));
+            if let Some(steps) = &mut self.steps {
+                steps.extend(taken.into_iter().map(|s| (*id, s)));
+            }
             result?;
             self.publish_one(*id);
             self.image.set_fresh(*id);

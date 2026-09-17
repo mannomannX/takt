@@ -19,6 +19,7 @@ unsafe extern "C" {
     fn takt_mcu_init_with(persist: *const c_void, len: i32) -> i32;
     fn takt_mcu_tick(k: i64);
     fn takt_mcu_dump();
+    fn takt_mcu_pc();
     fn takt_mcu_output(index: i32) -> i64;
     fn takt_mcu_commit();
     fn takt_mcu_idle() -> bool;
@@ -62,6 +63,12 @@ impl Generated {
     pub fn dump(&self) {
         // SAFETY: liest nur den statischen Zustand des Rahmens.
         unsafe { takt_mcu_dump() };
+    }
+
+    /// Der Programmzaehler je Maschine (11.2); leer ohne `statements`.
+    pub fn pc(&self) {
+        // SAFETY: liest nur den statischen Zustand des Rahmens.
+        unsafe { takt_mcu_pc() };
     }
 
     /// Commit der Outputs am Tick-Ende (9.4).

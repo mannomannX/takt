@@ -387,12 +387,12 @@ fn is_stream(p: &Program, ty: takt_mir::TypeId) -> bool {
 /// (Satz 9.4.4). Wer sie signiert und womit, liegt ausserhalb.
 pub fn chain(trace: &Trace, logic: &str) -> String {
     let mut h = takt_native::sha256::sha256(format!("takt-kette 1\n{logic}\n").as_bytes());
-    let mut ticks: Vec<u64> = trace.lines.iter().map(|l| l.tick).collect();
+    let mut ticks: Vec<u64> = trace.lines.iter().filter(|l| !l.kind.is_meta()).map(|l| l.tick).collect();
     ticks.sort_unstable();
     ticks.dedup();
     for tick in ticks {
         let mut data = h.to_vec();
-        for line in trace.at(tick) {
+        for line in trace.at(tick).filter(|l| !l.kind.is_meta()) {
             data.extend_from_slice(crate::trace::render_line(line).as_bytes());
             data.push(b'\n');
         }

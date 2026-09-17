@@ -39,3 +39,23 @@ fn a_state_line_reads_back() {
 fn a_final_verdict_reads_back() {
     roundtrip(LineKind::Final { verdict: "PASS".into() });
 }
+
+#[test]
+fn a_time_line_reads_back() {
+    roundtrip(LineKind::Time { took: 123_456, drift: -2_000, slept: 0 });
+    roundtrip(LineKind::Time { took: 0, drift: 40_000_000, slept: 49 });
+}
+
+/// Die Zeitzeile traegt keine Semantik: Sie steht ausserhalb der
+/// Hashkette (T6) und laesst einen Trace unveraendert (12.5).
+#[test]
+fn a_time_line_does_not_change_the_chain() {
+    let ohne = Trace {
+        lines: vec![TraceLine { tick: 1, kind: LineKind::Output { channel: "led".into(), value: "true".into() } }],
+    };
+    let mut mit = ohne.clone();
+    mit.lines.push(TraceLine { tick: 1, kind: LineKind::Time { took: 5, drift: 7, slept: 0 } });
+    mit.lines.push(TraceLine { tick: 2, kind: LineKind::Time { took: 5, drift: 7, slept: 0 } });
+    let hash = "abc";
+    assert_eq!(takt_interp::record::chain(&mit, hash), takt_interp::record::chain(&ohne, hash));
+}

@@ -26,6 +26,12 @@ fn main() {
     if env::var("TAKT_FRESH_JOURNAL").is_ok() {
         println!("cargo:rustc-env=TAKT_FRESH_JOURNAL=1");
     }
+    // 11.2: `statements` fuellt `pc` je Maschine; Default auf `baremetal`
+    // ist `states`, also aus.
+    println!("cargo:rerun-if-env-changed=TAKT_INSTRUMENT");
+    if let Ok(mode) = env::var("TAKT_INSTRUMENT") {
+        println!("cargo:rustc-env=TAKT_INSTRUMENT={mode}");
+    }
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     ram_resident(&out);
     build_takt_program(&out);
@@ -111,6 +117,9 @@ fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
     println!("cargo:rerun-if-changed={}", takt.display());
     let mut cmd = Command::new(&takt);
     cmd.args(["build", program, "--target", "riscv32imac", "--build", "hw"]).args(emit).arg("--out").arg(out);
+    if let Ok(mode) = env::var("TAKT_INSTRUMENT") {
+        cmd.args(["--instrument", &mode]);
+    }
     // 8.10: Anschluesse und NVM-Zeiten des Boards, wenn die Konfiguration da ist.
     let hardware = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try/hw/esp32c6.hw");
     println!("cargo:rerun-if-changed={}", hardware.display());
