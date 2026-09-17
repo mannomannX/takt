@@ -1791,7 +1791,7 @@ takt-crypto       Kryptographie mit geprüfter Abhängigkeit (4.5): ECDSA P-256 
 takt-stdlib       Standardbibliothek in Takt selbst (11.4): Blöcke, Funktionen, Protokollpakete, Simulationsmodelle
 takt-conformance  Testkorpus, Golden-Traces, Kalibrierung (`c_target`, `guard`, `jitter`), Subnormal-Vektoren, `takt bench` (13.8)
 takt-import-c     C-Frontend mit Klassifikation, Abbildungsregeln und Orakel-Modus (13.9; v1.1)
-takt-cli          check | sim | run | replay | verify-trace | test | campaign | driver-test | prove | fmt | size | latency | graph | bench | tune | migrate | import-c | mir | parse | tokens
+takt-cli          check | build | sim | run | replay | verify-trace | timing | test | campaign | driver-test | prove | fmt | size | cost | latency | graph | bench | tune | migrate | import-c | mir | parse | tokens
 takt-lsp          Editor-Integration, Live-Zustandsanzeige über Telemetrie
 ```
 

@@ -885,7 +885,9 @@ CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
 CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen,TTL-Adapter (PA9)
 CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),fertig,"`--export DATEI.smt2 --depth k`, sonst Solver (`--solver`, `TAKT_SOLVER`, `z3`/`cvc5`): Eigenschaften bewiesen/verletzt/unbewiesen, Pruefstellen bewiesen unerreichbar/erreichbar mit Pfad/unentschieden, Gegenbeispiele als Stimulus im Interpreter bestaetigt (`takt-prove/src/solve.rs`)"
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig,
+CLI-build,Werkzeug,11.1,takt build,,M5 (Embedded),fertig,"uebersetzt und assembliert je Ziel; bindet nicht — Startcode und Speicherkarte gehoeren zum Board (`--emit ir|obj|consts|consts-rs`)"
 CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig,"`--baseline DATEI` vergleicht die Posten mit einer gespeicherten Rechnung (RAM/Flash gewachsen = Fehler), `--save-baseline DATEI` schreibt sie (D1, Schritt 26)"
+CLI-cost,Werkzeug,11.1,takt cost,,M3 (Gate),fertig,"Operationsvektoren je Maschine und Zustand (9.4.3)"
 CLI-latency,Werkzeug,11.1,takt latency,,M3 (Gate),fertig,
 CLI-graph,Werkzeug,11.1,takt graph,,M4 (Codegen),fertig,
 CLI-bench,Werkzeug,11.1,takt bench,,M5 (Embedded),offen,TTL-Adapter (PA9)
