@@ -20,6 +20,7 @@ use crate::machine::{self, MachineState};
 use crate::nvm::{Load, Nvm};
 use crate::stream::{Delivery, Element};
 use crate::value::{EvalResult, Fault, Sample, Trap, Value, bug};
+use takt_mir::TypeId;
 use takt_mir::analysis::schedule;
 
 impl<'a, 'p> MachineEnv<'a, 'p> {
@@ -402,7 +403,11 @@ impl Outer for MachineEnv<'_, '_> {
             // Ausgabestrom: die Bytes gehen in den Sendepuffer; reicht der
             // freie Platz nicht, ist das ein `StreamOverflow` (8.8).
             StreamRef::Channel(c) => {
-                let bytes = to_bytes(&v);
+                let elem = match self.loaded.ty(self.loaded.program.channels[c.index()].ty) {
+                    Type::Stream(e) => *e,
+                    _ => return bug(format!("Channel {} ist kein Strom", c.0)),
+                };
+                let bytes = element_bytes(self.loaded, elem, &v);
                 let Some(tx) = self.image.tx.get_mut(&c) else {
                     return bug(format!("Channel {} ist kein Ausgabestrom", c.0));
                 };
@@ -432,6 +437,7 @@ impl Outer for MachineEnv<'_, '_> {
             // Interner Stream: das Element wird im naechsten Tick sichtbar
             // (8.6, Unit-Delay).
             StreamRef::Internal(sid) => {
+                let v = as_element(self.loaded, sid, v);
                 let t = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(self.tick_ns);
                 let bytes = crate::stream::byte_len(&v).max(len_max.min(crate::stream::byte_len(&v)));
                 let Some(slot) = self.image.stream_next.get_mut(sid.index()) else {
@@ -1229,16 +1235,28 @@ impl Outer for ParamEnv {
 /// Der Default aus 7.5 ist vier.
 pub const MAX_SCHED: u32 = 4;
 
-/// Bytes eines Werts fuer einen Ausgabestrom (8.8): Text und Bytes gehen
-/// als Inhalt, eine Zahl als ein Byte.
-fn to_bytes(v: &Value) -> Vec<u8> {
+/// Die Bytes eines Elements fuer einen Ausgabestrom (8.8): Text und
+/// `bytes<N>` als Inhalt, alles andere in der kanonischen Byteform
+/// (plan/m6.md 2.2) — so liest es der `sim`-gekoppelte Eingang, und so
+/// legt es der Rahmen ab.
+fn element_bytes(loaded: &Loaded<'_>, elem: TypeId, v: &Value) -> Vec<u8> {
     match v {
         Value::Bytes(b) => b.clone(),
         Value::Str(s) => s.as_bytes().to_vec(),
         Value::Line { text, .. } => text.as_bytes().to_vec(),
-        Value::Int(i) => vec![*i as u8],
-        Value::UInt(u) => vec![*u as u8],
-        Value::Array(items) => items.iter().flat_map(to_bytes).collect(),
-        _ => Vec::new(),
+        Value::Array(items) => items.iter().flat_map(|x| element_bytes(loaded, elem, x)).collect(),
+        other => crate::bytes::encode(loaded.program, other, elem).unwrap_or_default(),
+    }
+}
+
+/// Text in einem `bytes`-Strom ist ein Element aus seinen Bytes (8.8): Die
+/// Sema laesst das Literal zu, der Wert muss die Form des Elements haben,
+/// sonst faultet der Leser bei `data[i]` (FB-176).
+fn as_element(loaded: &Loaded<'_>, sid: takt_mir::StreamId, v: Value) -> Value {
+    let elem = loaded.program.streams[sid.index()].elem;
+    match (loaded.ty(elem), v) {
+        (Type::Bytes { .. }, Value::Str(s)) => Value::Bytes(s.into_bytes()),
+        (Type::Bytes { .. }, Value::Line { text, .. }) => Value::Bytes(text.into_bytes()),
+        (_, v) => v,
     }
 }

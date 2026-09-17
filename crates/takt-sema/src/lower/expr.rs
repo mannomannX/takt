@@ -616,13 +616,22 @@ impl Lowerer<'_> {
             self.error(SC3, span, format!("`{}` ist kein Record", name.name));
             return None;
         };
-        let params: Vec<(String, TypeId, Option<Expr>)> = self.program.records[r.index()]
+        let def = &self.program.records[r.index()];
+        let params: Vec<(String, TypeId, Option<Expr>)> = def
             .fields
             .iter()
             .filter(|f| f.name != "_")
             .map(|f| (f.name.clone(), f.ty, f.const_value.map(|c| const_expr(c, f.ty, span))))
             .collect();
-        let fields = self.args(&params, args, span)?;
+        // Padding (3.7) nennt kein Argument, steht aber im Wert: `default`.
+        // So traegt jedes Literal alle Felder, und Interpreter wie Codegen
+        // sehen dieselbe Form (`encode`, Struct-Literal).
+        let padding: Vec<(usize, TypeId)> =
+            def.fields.iter().enumerate().filter(|(_, f)| f.name == "_").map(|(i, f)| (i, f.ty)).collect();
+        let mut fields = self.args(&params, args, span)?;
+        for (i, ty) in padding {
+            fields.insert(i, Expr::new(ExprKind::Default, ty, span));
+        }
         let ty = self.intern(Type::Record(r));
         Some(Expr::new(ExprKind::Record { record: r, fields }, ty, span))
     }

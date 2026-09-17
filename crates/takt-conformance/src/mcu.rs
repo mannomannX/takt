@@ -88,6 +88,7 @@ fn runtime_abi(s: &mut String, p: &Program) {
     for (name, args, kind, flag) in [
         ("takt_alert", "int m, int site, unsigned char on", "alert", Some("on")),
         ("takt_log", "int m, int site", "log", None),
+        ("takt_fault", "int m, int site", "fault", None),
         ("takt_abort", "int m, int site", "abort", None),
         ("takt_verify", "int m, int site, unsigned char ok", "verify", Some("ok")),
         ("takt_verdict", "int m, int site, unsigned char pass", "verdict", Some("pass")),

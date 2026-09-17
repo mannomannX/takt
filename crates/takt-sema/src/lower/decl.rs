@@ -865,7 +865,20 @@ impl Lowerer<'_> {
     pub fn register_fn(&mut self, decl: &ast::FnDecl) -> Option<FnId> {
         let params = self.params(&decl.params)?;
         let ret = match &decl.ret {
-            Some(t) => Some(self.resolve_type(t)?),
+            Some(t) => {
+                // 3.9: Der `inout`-Parameter *ist* die Rueckgabe; daneben
+                // haette ein `-> T` keinen Weg zurueck zur Aufrufstelle.
+                if params.iter().any(|p| p.inout) {
+                    self.error_hint(
+                        SC3,
+                        decl.span,
+                        "`inout` und `-> T` schliessen sich aus",
+                        "der `inout`-Parameter ist die Rueckgabe; ein Ergebnis daneben als Feld oder Laenge (3.9)",
+                    );
+                    return None;
+                }
+                Some(self.resolve_type(t)?)
+            }
             None => {
                 let inout: Vec<&FnParam> = params.iter().filter(|p| p.inout).collect();
                 match inout.as_slice() {

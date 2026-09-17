@@ -1,0 +1,65 @@
+# 53 — Stroeme in jeder Elementform (8.6, plan/m6.md 2.2): Skalare und
+# Records als Elemente, `for` ueber das Fenster mit `break`, `count`, zwei
+# Leser desselben Stroms, `s as e` in einer Sequenz, `wrap_u8`.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+record Pulse:
+    rising : bool
+    pin    : u8
+
+stream<u8> raw with capacity = 16
+stream<Pulse> pulses with capacity = 8
+
+output total : int in 0..100000 @ sim("t")
+output count : int in 0..16     @ sim("c")
+output pin   : int in 0..255    @ sim("p")
+output first : int in 0..255    @ sim("f")
+
+machine writer:
+    var k : u8 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            send raw, k
+            send raw, k.wrap_u8() + 1
+            send pulses, Pulse(rising = true, pin = k)
+            k = k.wrap_u8() + 2
+
+machine reader:
+    var sum : int in 0..100000 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            count = raw.count
+            for b in raw:
+                sum = sum + (b.data as int)
+                if b.data == 7:
+                    break
+            total = sum
+            for e in pulses:
+                pin = e.data.pin as int
+
+machine waiter:
+    var got : int in 0..255 = 0
+
+    initial WAIT
+
+    state WAIT:
+        sequence:
+            until pulses as m timeout 5 ms
+            got = m.data.pin as int
+            -> DONE
+
+    state DONE:
+        enter:
+            first = got
+        # Der zweite Leser leert weiter, sonst liefe der Ring voll (8.6).
+        on pulses as e:
+            pass

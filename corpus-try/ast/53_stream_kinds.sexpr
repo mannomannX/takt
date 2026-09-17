@@ -1,0 +1,47 @@
+(system
+  (language 1)
+  (tick 1ms))
+(record Pulse
+  (rising: bool)
+  (pin: u8))
+(stream raw :u8 capacity=16)
+(stream pulses :Pulse capacity=8)
+(output total :int in 0..100000 @sim("t"))
+(output count :int in 0..16 @sim("c"))
+(output pin :int in 0..255 @sim("p"))
+(output first :int in 0..255 @sim("f"))
+(machine writer
+  (var k :u8 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (send raw k)
+      (send raw (+ (.wrap_u8 k) 1))
+      (send pulses (Pulse rising=true pin=k))
+      (= k (+ (.wrap_u8 k) 2)))))
+(machine reader
+  (var sum :int in 0..100000 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= count (.count raw))
+      (for b in raw
+        (= sum (+ sum (as (.data b) int)))
+        (if (== (.data b) 7)
+          (break)))
+      (= total sum)
+      (for e in pulses
+        (= pin (as (.pin (.data e)) int))))))
+(machine waiter
+  (var got :int in 0..255 0)
+  (initial WAIT)
+  (state WAIT
+    (sequence
+      (until (as pulses m) timeout=5ms)
+      (= got (as (.pin (.data m)) int))
+      (-> DONE)))
+  (state DONE
+    (enter
+      (= first got))
+    (on pulses as e
+      (pass))))

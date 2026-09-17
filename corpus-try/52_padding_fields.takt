@@ -1,0 +1,29 @@
+# 52 — Padding im Drahtformat (3.7): `_`-Felder nennt kein Literal, aber
+# jeder Wert traegt sie; `encode` kennt den Plan, der Codegen das Struct.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+record Reg layout little:
+    byte : u8
+    _    : [3] u8
+    word : u16
+
+output width : int in 0..8   @ sim("w")
+output first : int in 0..255 @ sim("f")
+output last  : int in 0..255 @ sim("l")
+
+machine m:
+    var k : u8 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            var r : Reg = Reg(byte = k, word = 0x0102)
+            var e = r.encode()
+            width = e.len
+            first = e[0] as int
+            last = e[5] as int
+            k = k.wrap_u8() + 1

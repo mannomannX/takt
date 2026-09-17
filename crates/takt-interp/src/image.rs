@@ -583,7 +583,16 @@ pub fn elements_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Vec<Value
         Some(Type::Int { width: takt_mir::types::IntWidth::U8, .. }) => {
             bytes.iter().map(|b| Value::UInt(u64::from(*b))).collect()
         }
-        _ => vec![element_of(bytes, ty, p)],
+        Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }) => vec![element_of(bytes, ty, p)],
+        // Feste Elementform (plan/m6.md 2.2): der Block traegt so viele
+        // Elemente in kanonischer Byteform, wie hineinpassen.
+        _ => match takt_mir::bytes::max_size(p, elem) {
+            Ok(size) if size > 0 => bytes
+                .chunks_exact(size as usize)
+                .filter_map(|chunk| crate::bytes::decode(p, chunk, elem).ok())
+                .collect(),
+            _ => vec![element_of(bytes, ty, p)],
+        },
     }
 }
 

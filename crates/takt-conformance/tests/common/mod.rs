@@ -82,6 +82,19 @@ pub fn run_native_persist(
     run_native_inner(clang, p, name, None, ticks, &[], payload)
 }
 
+/// Ein Szenario nativ (13.6): die laufenden Maschinen samt dem
+/// gewaehlten Szenario, wie `takt test` sie fuehrt.
+#[allow(dead_code)]
+pub fn run_native_scenario(
+    clang: &Clang,
+    p: &Program,
+    name: &str,
+    scenario: &str,
+    ticks: u64,
+) -> Result<String, String> {
+    run_native_build(clang, p, name, ticks, harness::build_scenario(p, scenario, ticks, &[]))
+}
+
 /// Der gemeinsame Rumpf: `Some(name)` fuehrt eine Maschine, `None` alle.
 fn run_native_inner(
     clang: &Clang,
@@ -92,6 +105,12 @@ fn run_native_inner(
     inputs: &[Stimulus],
     payload: &[u8],
 ) -> Result<String, String> {
+    run_native_build(clang, p, name, ticks, harness::build_restoring(p, machine, ticks, inputs, payload))
+}
+
+/// Uebersetzt Programm und Rahmen, laeuft und liefert den Trace.
+fn run_native_build(clang: &Clang, p: &Program, name: &str, ticks: u64, h: harness::Harness) -> Result<String, String> {
+    let _ = ticks;
     let dir = std::env::temp_dir().join(format!("takt-abnahme-{}", name.replace('.', "_")));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -99,7 +118,6 @@ fn run_native_inner(
     let c = dir.join("rahmen.c");
     let exe = dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" });
     std::fs::write(&ll, ir_of(p)).map_err(|e| e.to_string())?;
-    let h = harness::build_restoring(p, machine, ticks, inputs, payload);
     std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
     let path = clang.path().ok_or("clang")?;
     let mut cmd = std::process::Command::new(path);

@@ -1,0 +1,21 @@
+(system
+  (language 1)
+  (tick 1ms))
+(record Reg layout=little
+  (byte: u8)
+  (_: [3]u8)
+  (word: u16))
+(output width :int in 0..8 @sim("w"))
+(output first :int in 0..255 @sim("f"))
+(output last :int in 0..255 @sim("l"))
+(machine m
+  (var k :u8 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (var r :Reg (Reg byte=k word=0x0102))
+      (var e (.encode r))
+      (= width (.len e))
+      (= first (as (index e 0) int))
+      (= last (as (index e 5) int))
+      (= k (+ (.wrap_u8 k) 1)))))

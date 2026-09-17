@@ -121,8 +121,46 @@ fn read_field(buf: Reg, at: u32, ty: TypeId, endian: Endian, p: &Program, m: &mu
             let wide = widen(raw.to_string(), width * 8, 32, m);
             Ok(Field { value: wide, ty: LlvmType::Int(32) })
         }
+        // Ein Array fester Laenge liegt elementweise hintereinander (3.7).
+        Some(Type::Array { elem, len }) => {
+            let w = field_size(*elem, p).ok_or(NotYet { what: "Feldgroesse" })?;
+            let mut cur = "undef".to_string();
+            for i in 0..*len {
+                let item = read_field(buf, at + i * w, *elem, endian, p, m)?;
+                cur = m.inst(&format!("insertvalue {target} {cur}, {} {}, {i}", item.ty, item.value)).to_string();
+            }
+            Ok(Field { value: cur, ty: target })
+        }
         _ => Err(NotYet { what: "Feld dieses Typs im Drahtformat" }),
     }
+}
+
+/// Schreibt ein Feld nach `at` (3.7): ein Array elementweise, alles
+/// andere als Zahl seiner Drahtbreite.
+#[allow(clippy::too_many_arguments)]
+fn write_field(
+    data: Reg,
+    at: u32,
+    ty: TypeId,
+    operand: &str,
+    field_ty: &LlvmType,
+    endian: Endian,
+    p: &Program,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    if let Some(Type::Array { elem, len }) = p.types.list.get(ty.index()) {
+        let w = field_size(*elem, p).ok_or(NotYet { what: "Feldgroesse" })?;
+        let elem_ty = ty::lower(*elem, p).ok_or(NotYet { what: "Feldtyp" })?;
+        for i in 0..*len {
+            let item = m.inst(&format!("extractvalue {field_ty} {operand}, {i}")).to_string();
+            write_field(data, at + i * w, *elem, &item, &elem_ty, endian, p, m)?;
+        }
+        return Ok(());
+    }
+    let width = field_size(ty, p).ok_or(NotYet { what: "Feldgroesse" })?;
+    let raw = to_bits(operand, field_ty, width, m);
+    store_int(data, at, width, endian, &raw, m);
+    Ok(())
 }
 
 /// Verbreitert eine Zahl auf `to` Bit, wenn noetig.
@@ -227,7 +265,6 @@ pub fn encode(
     let data = m.inst(&format!("getelementptr inbounds {want}, ptr {buf}, i32 0, i32 1"));
     for (i, f) in def.fields.iter().enumerate() {
         let at = f.offset.ok_or(NotYet { what: "Feld ohne Versatz" })?;
-        let width = field_size(f.ty, p).ok_or(NotYet { what: "Feldgroesse" })?;
         let field_ty = ty::lower(f.ty, p).ok_or(NotYet { what: "Feldtyp" })?;
         // Ein Konstantenfeld traegt seinen deklarierten Wert, nicht den
         // des Records (3.7).
@@ -235,8 +272,7 @@ pub fn encode(
             Some(c) => const_operand(c).ok_or(NotYet { what: "Konstantenfeld dieses Typs" })?,
             None => m.inst(&format!("extractvalue {} {}, {i}", value.ty, value.value)).to_string(),
         };
-        let raw = to_bits(&operand, &field_ty, width, m);
-        store_int(data, at, width, layout.endian, &raw, m);
+        write_field(data, at, f.ty, &operand, &field_ty, layout.endian, p, m)?;
     }
     let loaded = m.inst(&format!("load {want}, ptr {buf}"));
     Ok(crate::expr::Lowered { value: loaded.to_string(), ty: want.clone() })

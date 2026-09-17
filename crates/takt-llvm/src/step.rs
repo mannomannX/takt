@@ -227,9 +227,7 @@ fn transitions(
             TransTrigger::When(Guard::Match { subject, kind, pattern, binding }) => {
                 match_guard(subject, *kind, pattern, *binding, ctx, m)?
             }
-            // `s as e` ohne Muster (8.6): das naechste Element, wenn es
-            // eines gibt. Es kommt mit dem Bedarf; kein Beispiel nutzt es.
-            TransTrigger::When(Guard::Next { .. }) => return Err(NotYet { what: "Uebergang mit `s as e`" }),
+            TransTrigger::When(Guard::Next { stream, binding }) => next_element(*stream, *binding, ctx, m)?,
         };
         // Die Marke muss je *erzeugter* Verzweigung eindeutig sein, nicht
         // je Zustand: Ein Blatt fuehrt auch die Uebergaenge seiner
@@ -976,7 +974,8 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
         // 9.6: Auch ein Element ohne passenden Handler gilt als
         // untersucht — sonst saehe die Maschine es im naechsten Tick
         // wieder.
-        m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
+        let mi = ctx.machine_index;
+        m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
         crate::stream::note_examined(ex_ptr, seq, m);
         // 8.7: Der erste passende Handler gewinnt. Ohne Muster ist das
         // immer der erste — weitere kaemen nie zum Zug. Mit Muster wird
@@ -993,10 +992,40 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
     Ok(())
 }
 
+/// `s as e` als Guard (8.6): das naechste Element des Fensters, wenn es
+/// eines gibt — wie `first_match` ohne Muster: binden, untersuchen, wahr.
+fn next_element(
+    stream: takt_mir::expr::StreamRef,
+    binding: takt_mir::VarId,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::expr::Lowered, NotYet> {
+    let (cur_ptr, ex_ptr) = ctx.vars().stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
+    let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+    let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
+    let mi = ctx.machine_index;
+    let buf = crate::stream::scratch(ctx.program, elem, m)?;
+    let k = ctx.next_label();
+    let name = ctx.machine.name.clone();
+    let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
+    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
+    let (take, done) = (format!("naechstes{k}_{name}"), format!("naechstes{k}_{name}_fertig"));
+    m.void_inst(&format!("br i1 {some}, label %{take}, label %{done}"));
+    m.label(&take);
+    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 0, ptr {buf})", crate::stream::Streams::AT));
+    bind_element(binding, buf, seq, elem, ctx, m)?;
+    m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
+    crate::stream::note_examined(ex_ptr, seq, m);
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
+    Ok(crate::expr::Lowered { value: some.to_string(), ty: crate::ty::LlvmType::Int(1) })
+}
+
 /// Legt das Element aus dem Scratch in die Bindung (8.7, Wrapper-Regel):
 /// `t` und `seq` hinter den Captures, dann der Inhalt als `text`
 /// beziehungsweise `data`. Die Captures schreibt `captures::walk`.
-fn bind_element(
+pub(crate) fn bind_element(
     var: takt_mir::VarId,
     buf: crate::emit::Reg,
     seq: crate::emit::Reg,
@@ -1294,7 +1323,8 @@ fn match_guard(
     let (mark, next) = (format!("guard{k}_{name}_treffer"), format!("guard{k}_{name}_weiter"));
     m.void_inst(&format!("br i1 {ok}, label %{mark}, label %{next}"));
     m.label(&mark);
-    m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
+    let mi = ctx.machine_index;
+    m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
     crate::stream::note_examined(ex_ptr, seq, m);
     m.void_inst(&format!("store i1 true, ptr {hit_ptr}"));
     m.void_inst(&format!("br label %{next}"));
@@ -1394,6 +1424,7 @@ fn fault_path(
     let machine_def = ctx.machine;
     let (leaves, end, conf_slot) = (target.leaves, target.end, target.conf);
     m.label(&format!("fault_{}_{}", machine_def.name, from.index()));
+    m.void_inst(&format!("call void @{}(i32 {}, i32 {})", crate::abi::Abi::FAULT, ctx.machine_index, from.index()));
     // Der Fault wird vorgemerkt; `pending` traegt ihn fuer die
     // Abort-Phase (5.4), die die Runtime fuehrt.
     if let Some(pending) = st.index_of(Role::Pending, 0) {

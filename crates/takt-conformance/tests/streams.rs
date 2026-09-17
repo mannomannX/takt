@@ -40,7 +40,9 @@ fn harness_of(p: &Program, stimulus: &[Stimulus]) -> String {
 fn without_elements_the_window_stays_empty() {
     let p = with_bounds("");
     let c = harness_of(&p, &[]);
-    assert!(c.contains("takt_stream_count(int s, long long cur) { (void)s; (void)cur; return 0; }"));
+    // Ohne Stimulus fragt der Zaehler nur den Ring; ein Kanal ohne Ring
+    // hat ein leeres Fenster.
+    assert!(c.contains("return k >= 0 ? takt_int_count(k, cur) : 0;"), "{c}");
     assert!(!c.contains("g_elems"), "ohne Stimulus braucht es keine Tabelle");
 }
 

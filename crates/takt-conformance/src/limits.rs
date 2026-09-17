@@ -49,11 +49,13 @@ pub const LIMITS: &[Limit] = &[
     },
     Limit {
         was: "Ueberlaufende Stroeme (8.6)",
-        warum: "Der Rahmen liefert Stromelemente (`streams.rs`), prueft `capacity` und \
-                `capacity_bytes` aber je Tick — unter der Annahme eines Konsumenten, der sein \
-                Fenster leert. Ein Puffer, der ueber mehrere Ticks volllaeuft, weil niemand \
-                liest, braeuchte den Cursor des Konsumenten, und den kennt erst der Lauf. \
-                `s.overflowed` und der `StreamOverflow` bleiben darum ungeprueft.",
+        warum: "Der Rahmen liefert Stromelemente (`streams.rs`) und fuehrt interne wie \
+                gekoppelte Stroeme als Ringe mit Freigabe unter dem kleinsten Cursor; \
+                `capacity` prueft er beim Eingang je Tick, am Ring als Elementzahl, \
+                `capacity_bytes` gar nicht. Laeuft ein Ring voll, faultet nativ der Sender \
+                (`takt_stream_send` liefert `false`), im Interpreter die Leser (8.6); \
+                `drop_oldest`, `s.overflowed` und der Zeitpunkt des `StreamOverflow` bleiben \
+                darum ungeprueft.",
         wann: "Mit der Runtime: `takt-rt-core::stream` haelt den Ring samt Verdraengung und \
                Eviction; wo der Rahmen rechnet, wuerde sie messen.",
     },

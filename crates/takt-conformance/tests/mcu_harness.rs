@@ -124,7 +124,16 @@ fn the_harness_exports_what_the_loop_needs() {
 fn the_harness_answers_the_whole_abi() {
     let p = corpus("19_faults.takt");
     let src = takt_conformance::mcu::build(&p).source;
-    for name in ["takt_now", "takt_alert", "takt_log", "takt_measure", "takt_verify", "takt_abort", "takt_verdict"] {
+    for name in [
+        "takt_now",
+        "takt_alert",
+        "takt_log",
+        "takt_fault",
+        "takt_measure",
+        "takt_verify",
+        "takt_abort",
+        "takt_verdict",
+    ] {
         assert!(src.contains(name), "`{name}` fehlt im Rahmen — der erzeugte Code ruft es (abi.rs)");
     }
     assert!(src.contains("takt_fn_fault"), "das Fault-Flag reiner Funktionen fehlt (4.1)");

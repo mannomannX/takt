@@ -79,6 +79,37 @@ impl LlvmType {
             LlvmType::Void => 0,
         }
     }
+
+    /// Ausrichtung in Bytes, wie die Datenlayouts der Ziele sie waehlen:
+    /// natuerlich, also die Breite des Skalars, bei Aggregaten die
+    /// groesste ihrer Felder (x86-64, aarch64, thumbv7em, riscv32 gleich).
+    pub fn align(&self) -> u64 {
+        match self {
+            LlvmType::Int(n) => u64::from(n.div_ceil(8)).next_power_of_two().min(8),
+            LlvmType::F32 => 4,
+            LlvmType::F64 | LlvmType::Ptr => 8,
+            LlvmType::Array(t, _) => t.align(),
+            LlvmType::Struct(fields) => fields.iter().map(LlvmType::align).max().unwrap_or(1),
+            LlvmType::Void => 1,
+        }
+    }
+
+    /// Groesse mit Ausrichtung: was `alloca` und der Zustands-Struct im
+    /// Speicher belegen — die Zahl, mit der ein Rahmen den Platz reserviert.
+    pub fn aligned_size(&self) -> u64 {
+        match self {
+            LlvmType::Struct(fields) => {
+                let mut at: u64 = 0;
+                for f in fields {
+                    at = at.div_ceil(f.align()) * f.align();
+                    at += f.aligned_size();
+                }
+                at.div_ceil(self.align()) * self.align()
+            }
+            LlvmType::Array(t, n) => t.aligned_size() * u64::from(*n),
+            other => other.size(),
+        }
+    }
 }
 
 /// 11.2: Werte ueber dieser Schwelle werden per Zeiger uebergeben.

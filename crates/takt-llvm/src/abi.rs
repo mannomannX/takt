@@ -47,6 +47,11 @@ impl Abi {
     /// `abort "text"` (5.4): Fault fuer *alle* Maschinen im selben Tick.
     pub const ABORT: &'static str = "takt_abort";
 
+    /// Ein Fault-Uebergang (5.3): Maschine und der verlassene Zustand. Die
+    /// Runtime schreibt ihn in den Trace, damit ein nativer Lauf sagt, *wo*
+    /// er vom Interpreter abwich — nicht nur, dass die Outputs anders sind.
+    pub const FAULT: &'static str = "takt_fault";
+
     /// `now` (3.3): die Dauer seit dem Start des Laufs.
     ///
     /// Sie steht nicht im Zustand einer Maschine, sondern gehoert der
@@ -126,6 +131,7 @@ impl Abi {
         m.declare(&format!("declare void @{}(i32, i32, double)", Abi::MEASURE));
         m.declare(&format!("declare void @{}(i32, i32, i1)", Abi::VERIFY));
         m.declare(&format!("declare void @{}(i32, i32)", Abi::ABORT));
+        m.declare(&format!("declare void @{}(i32, i32)", Abi::FAULT));
         m.declare(&format!("declare i64 @{}()", Abi::NOW));
         m.declare(&format!("declare void @{}(i32, i32, i1)", Abi::VERDICT));
         m.declare(&format!("declare void @{}(i32, i64)", Abi::PROPERTY));

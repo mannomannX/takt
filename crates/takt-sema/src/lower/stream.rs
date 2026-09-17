@@ -334,13 +334,12 @@ impl Lowerer<'_> {
     }
 
     /// Hoechstlaenge eines Werts in Bytes (8.8): die deklarierte Kapazitaet
-    /// eines Puffers, die Groesse eines Records, sonst ein Byte.
+    /// eines Puffers, sonst seine kanonische Byteform (plan/m6.md 2.2) —
+    /// die Form, in der ein Element im Ring liegt.
     fn max_len(&mut self, v: &takt_mir::expr::Expr) -> u32 {
         match self.ty(v.ty) {
             Type::Bytes { cap } | Type::Line { cap } | Type::Str { cap } => *cap,
-            Type::Int { width, .. } => width.bits() / 8,
-            Type::Record(r) => self.program.records[r.index()].wire_size.unwrap_or(1),
-            _ => 1,
+            _ => takt_mir::bytes::max_size(&self.program, v.ty).unwrap_or(1),
         }
     }
 

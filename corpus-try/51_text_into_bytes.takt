@@ -1,0 +1,29 @@
+# 51 — Text in einem `bytes`-Strom (8.8, FB-176): Ein Literal und ein
+# Format werden je ein Element aus Bytes; der Leser indiziert und misst.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+stream<bytes<16>> s with capacity = 4
+output first : int in 0..255 @ sim("f")
+output width : int in 0..16  @ sim("w")
+
+machine writer:
+    var k : int in 0..9 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            send s, "abc"
+            send s, "n={k}"
+            k = (k + 1) % 10
+
+machine reader:
+    initial RUN
+
+    state RUN:
+        on s as m:
+            first = m.data[0] as int
+            width = m.data.len

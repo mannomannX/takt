@@ -84,7 +84,13 @@ impl<'a> Ctx<'a> {
 
     /// Die Variablenabbildung dieser Maschine.
     pub fn vars(&self) -> StateVars<'a> {
-        StateVars { machine: self.machine, leaf: self.leaf, state: self.state, program: self.program }
+        StateVars {
+            machine: self.machine,
+            leaf: self.leaf,
+            state: self.state,
+            program: self.program,
+            machine_index: self.machine_index,
+        }
     }
 
     /// Der Zeiger auf das `n`-te Feld einer Rolle im Zustands-Struct.
@@ -120,6 +126,8 @@ pub struct StateVars<'a> {
     pub state: &'a StateStruct,
     /// Das Programm, fuer die Typen.
     pub program: &'a Program,
+    /// Die Nummer der Maschine im Programm (`Ctx::machine_index`).
+    pub machine_index: u32,
 }
 
 impl StateVars<'_> {
@@ -147,11 +155,12 @@ pub fn image_slot(
     let LlvmType::Struct(fields) = &entry else { return None };
     let ty = fields.get(slot as usize)?.clone();
     let off = crate::image::offset_of(channel, program)?;
-    // Der Versatz wird aufsummiert, weil die Eintraege verschieden
-    // gross sind; `image` begruendet das.
-    let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {off}"));
-    let field = m.inst(&format!("getelementptr inbounds {entry}, ptr {at}, i32 0, i32 {}", slot as usize));
-    let v = m.inst(&format!("load {ty}, ptr {field}"));
+    // Byteweise adressiert und ohne Ausrichtung, wie `image` die
+    // Eintraege zaehlt: Runtime und Rahmen rechnen denselben Versatz, ein
+    // Struct-Zugriff laege mit seinem Padding daneben (FB-177).
+    let inner: u64 = fields.iter().take(slot as usize).map(LlvmType::size).sum();
+    let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {}", off + inner));
+    let v = m.inst(&format!("load {ty}, ptr {at}, align 1"));
     Some(Lowered { value: v.to_string(), ty })
 }
 
@@ -193,6 +202,10 @@ impl Vars for StateVars<'_> {
                 Some(Lowered { value: v.to_string(), ty: res_ty })
             }
         }
+    }
+
+    fn machine_index(&self) -> Option<u32> {
+        Some(self.machine_index)
     }
 
     fn stream_slots(&self, stream: takt_mir::expr::StreamRef, m: &mut Module) -> Option<(Reg, Reg)> {
@@ -337,6 +350,7 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
             Ok(())
         }
         StmtKind::ForRange { var, count, body } => for_range(*var, count, body, ctx, m),
+        StmtKind::ForEach { vars, iter, body } => for_each(vars, iter, body, ctx, m),
         StmtKind::Break => {
             // 4.1: Die Schleife hat eine statische Schranke; `break`
             // verlaesst sie vorzeitig.
@@ -448,14 +462,30 @@ fn send(
             let f = takt_mir::pattern::Format::text(lit);
             crate::format::render(&f, buffer, &ty, len_max, ctx.program, m, &vars)?;
         }
-        // Alles andere ist ein fertiger Wert — `bytes<N>` aus
-        // `frame.encode()` etwa (8.8).
+        // Ein fertiger Wert: Text und `bytes<N>` in ihrer Sammlungsform
+        // (`frame.encode()` etwa, 8.8), alles andere in der kanonischen
+        // Byteform — so liegt es im Ring, und so liest es der Empfaenger
+        // (plan/m6.md 2.2).
         _ => {
             let v = lower_expr(value, ctx.program, m, &vars)?;
-            let LlvmType::Struct(_) = v.ty else {
-                return Err(NotYet { what: "`send` mit einem Wert ohne Laenge" });
-            };
-            m.void_inst(&format!("store {} {}, ptr {buffer}", v.ty, v.value));
+            let src = m.inst(&format!("alloca {}", v.ty));
+            m.void_inst(&format!("store {} {}, ptr {src}", v.ty, v.value));
+            let textual = matches!(
+                ctx.program.types.list.get(value.ty.index()),
+                Some(Type::Bytes { .. } | Type::Str { .. } | Type::Line { .. })
+            );
+            if textual {
+                // `line<N>` traegt hinter den Bytes noch `truncated`; das
+                // Praefix `{ len, bytes }` ist bei allen dreien gleich.
+                let pair = m.inst(&format!("load {ty}, ptr {src}"));
+                m.void_inst(&format!("store {ty} {pair}, ptr {buffer}"));
+            } else {
+                let out = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 1"));
+                let n = crate::persist::encode_canonical(ctx.program, value.ty, src, out, m)?;
+                let n32 = m.inst(&format!("trunc i64 {n} to i32"));
+                let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 0"));
+                m.void_inst(&format!("store i32 {n32}, ptr {len_ptr}"));
+            }
         }
     }
     let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 0"));
@@ -648,6 +678,125 @@ fn for_range(
     let cur = m.inst(&format!("load {ty}, ptr {ptr}"));
     let next = m.inst(&format!("add {ty} {cur}, 1"));
     m.void_inst(&format!("store {ty} {next}, ptr {ptr}"));
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&end_at);
+    Ok(())
+}
+
+/// `for x in W` (9.2, 9.6): ueber ein Fenster laeuft die Schleife ueber
+/// Elemente, ueber ein Array oder eine Sammlung ueber Werte.
+fn for_each(
+    vars: &takt_mir::stmt::ForVars,
+    iter: &Expr,
+    body: &Block,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let takt_mir::stmt::ForVars::One(var) = vars else {
+        return Err(NotYet { what: "`for` mit zwei Variablen (`map`)" });
+    };
+    match &iter.kind {
+        takt_mir::expr::ExprKind::Input { channel, .. } => {
+            for_window(*var, takt_mir::expr::StreamRef::Channel(*channel), body, ctx, m)
+        }
+        takt_mir::expr::ExprKind::Stream(s) => for_window(*var, takt_mir::expr::StreamRef::Internal(*s), body, ctx, m),
+        _ => for_items(*var, iter, body, ctx, m),
+    }
+}
+
+/// `for x in s` ueber ein Fenster (8.7, 9.6): jedes besuchte Element gilt
+/// als untersucht, ein `break` laesst die uebrigen im Fenster — wie
+/// `for_window` im Interpreter.
+fn for_window(
+    var: takt_mir::VarId,
+    stream: takt_mir::expr::StreamRef,
+    body: &Block,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let (cur_ptr, ex_ptr) = ctx.vars().stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
+    let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+    let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
+    let mi = ctx.machine_index;
+    let k = ctx.next_label();
+    let name = ctx.machine.name.clone();
+    let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
+    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let i_ptr = m.inst("alloca i32");
+    m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
+    let buf = crate::stream::scratch(ctx.program, elem, m)?;
+    let (head, loop_body, end_at) =
+        (format!("fenster{k}_{name}"), format!("fenster{k}_{name}_rumpf"), format!("fenster{k}_{name}_ende"));
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&head);
+    let i = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let go_on = m.inst(&format!("icmp slt i32 {i}, {n}"));
+    m.void_inst(&format!("br i1 {go_on}, label %{loop_body}, label %{end_at}"));
+    m.label(&loop_body);
+    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT));
+    crate::step::bind_element(var, buf, seq, elem, ctx, m)?;
+    m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
+    crate::stream::note_examined(ex_ptr, seq, m);
+    ctx.breaks.push(end_at.clone());
+    let result = block(body, ctx, m);
+    ctx.breaks.pop();
+    result?;
+    let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let next = m.inst(&format!("add i32 {cur_i}, 1"));
+    m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&end_at);
+    Ok(())
+}
+
+/// `for x in a` ueber ein Array fester Laenge oder eine Sammlung mit
+/// Laenge (`bytes<N>`, `vec<T, N>`): die Werte der Reihe nach in die
+/// Schleifenvariable.
+fn for_items(var: takt_mir::VarId, iter: &Expr, body: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let vars = ctx.vars();
+    let x = lower_expr(iter, ctx.program, m, &vars)?;
+    let (elem_ty, len, data_index) = match &x.ty {
+        LlvmType::Array(elem, n) => ((**elem).clone(), n.to_string(), None),
+        LlvmType::Struct(fields) if fields.len() == 2 && fields[0] == LlvmType::Int(32) => {
+            let LlvmType::Array(elem, _) = &fields[1] else {
+                return Err(NotYet { what: "`for` ueber diese Sammlung" });
+            };
+            let n = m.inst(&format!("extractvalue {} {}, 0", x.ty, x.value));
+            ((**elem).clone(), n.to_string(), Some(1))
+        }
+        _ => return Err(NotYet { what: "`for` ueber diese Sammlung" }),
+    };
+    let slot = m.inst(&format!("alloca {}", x.ty));
+    m.void_inst(&format!("store {} {}, ptr {slot}", x.ty, x.value));
+    let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
+    let k = ctx.next_label();
+    let name = ctx.machine.name.clone();
+    let i_ptr = m.inst("alloca i32");
+    m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
+    let (head, loop_body, end_at) =
+        (format!("elemente{k}_{name}"), format!("elemente{k}_{name}_rumpf"), format!("elemente{k}_{name}_ende"));
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&head);
+    let i = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let go_on = m.inst(&format!("icmp slt i32 {i}, {len}"));
+    m.void_inst(&format!("br i1 {go_on}, label %{loop_body}, label %{end_at}"));
+    m.label(&loop_body);
+    let at = match data_index {
+        Some(d) => m.inst(&format!("getelementptr inbounds {}, ptr {slot}, i32 0, i32 {d}, i32 {i}", x.ty)),
+        None => m.inst(&format!("getelementptr inbounds {}, ptr {slot}, i32 0, i32 {i}", x.ty)),
+    };
+    let v = m.inst(&format!("load {elem_ty}, ptr {at}"));
+    if elem_ty != ty {
+        return Err(NotYet { what: "`for` mit anderem Elementtyp" });
+    }
+    m.void_inst(&format!("store {ty} {v}, ptr {ptr}"));
+    ctx.breaks.push(end_at.clone());
+    let result = block(body, ctx, m);
+    ctx.breaks.pop();
+    result?;
+    let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let next = m.inst(&format!("add i32 {cur_i}, 1"));
+    m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
     m.label(&end_at);
     Ok(())

@@ -845,13 +845,40 @@ impl Lowerer<'_> {
 
     // ------------------------------------------------------------ Ausdrucksanweisung
 
-    /// `f.step(x)`, `v.push(x)` ohne Ziel; reine Ausdruecke sind Fehler.
+    /// `f.step(x)`, `v.push(x)` ohne Ziel, `fill(b, x)` mit `inout`; reine
+    /// Ausdruecke sind Fehler.
     fn expr_stmt(&mut self, e: &ast::Expr, span: Span) -> Option<StmtKind> {
+        if let ast::ExprKind::Call { args, .. } = &e.kind {
+            return self.inout_call(e, args, span);
+        }
         let ast::ExprKind::Member { base, name, args: Some(args) } = &e.kind else {
             self.error_hint(SC3, span, "Ausdruck ohne Wirkung", "Ergebnis zuweisen oder Anweisung entfernen");
             return None;
         };
         self.method_call(None, base, name, args, span)
+    }
+
+    /// `fill(b, x)` als Anweisung (3.9): Zucker fuer `b = fill(b, x)` — die
+    /// Funktion gibt ihren `inout`-Parameter zurueck, und der geht an die
+    /// Stelle des Arguments.
+    fn inout_call(&mut self, e: &ast::Expr, args: &[ast::Arg], span: Span) -> Option<StmtKind> {
+        let call = self.expr(e, None)?;
+        let ExprKind::Call { callee, .. } = &call.kind else {
+            self.error_hint(SC3, span, "Ausdruck ohne Wirkung", "Ergebnis zuweisen oder Anweisung entfernen");
+            return None;
+        };
+        let params = &self.program.fns[callee.index()].params;
+        let Some(i) = params.iter().position(|p| p.inout) else {
+            self.error_hint(SC3, span, "Ausdruck ohne Wirkung", "Ergebnis zuweisen oder Anweisung entfernen");
+            return None;
+        };
+        let name = params[i].name.clone();
+        let arg = args
+            .iter()
+            .find(|a| a.name.as_ref().is_some_and(|n| n.name == name))
+            .or_else(|| args.get(i).filter(|a| a.name.is_none()))?;
+        let target = self.place(&arg.value)?;
+        Some(StmtKind::Assign { target, value: call })
     }
 
     /// Methodenaufruf `target = receiver.method(args)`.

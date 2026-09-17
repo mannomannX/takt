@@ -77,6 +77,11 @@ pub trait Vars {
         None
     }
 
+    /// Die Nummer der Maschine im Programm; `None` ausserhalb einer Maschine.
+    fn machine_index(&self) -> Option<u32> {
+        None
+    }
+
     /// Cursor und `examined` eines Stroms im Zustand der Maschine (9.6),
     /// als Zeiger; `None` ausserhalb einer Maschine.
     fn stream_slots(
@@ -277,6 +282,9 @@ fn access(
     if which == Accessor::Peek {
         return stream_peek(base, want, p, m, vars);
     }
+    if which == Accessor::Count && stream_of(base, p).is_some() {
+        return stream_count(base, want, m, vars);
+    }
     let x = lower(base, p, m, vars)?;
     if let Some(Type::Map { key, value, cap }) = p.types.list.get(base.ty.index()) {
         return map_access(x, (*key, *value, *cap), (which, args), want, p, m, vars);
@@ -287,6 +295,23 @@ fn access(
     };
     match which {
         // `x.bit(i)` = (x >> i) & 1, als `bool`.
+        // `x.wrap_u8()` (3.10): der Wert in der Breite, ohne Pruefung —
+        // eine Verengung schneidet, eine Erweiterung folgt dem Vorzeichen
+        // der Quelle, wie `arith::wrap` im Interpreter.
+        Accessor::Wrap(w) => {
+            let bits = ty::bits(w);
+            let LlvmType::Int(have) = x.ty else { return Err(NotYet { what: "`wrap` auf einem Nicht-Integer" }) };
+            let signed = matches!(p.types.list.get(base.ty.index()), Some(Type::Int { width, .. }) if width.signed());
+            let v = match have.cmp(&bits) {
+                std::cmp::Ordering::Greater => m.inst(&format!("trunc i{have} {} to i{bits}", x.value)).to_string(),
+                std::cmp::Ordering::Less if signed => {
+                    m.inst(&format!("sext i{have} {} to i{bits}", x.value)).to_string()
+                }
+                std::cmp::Ordering::Less => m.inst(&format!("zext i{have} {} to i{bits}", x.value)).to_string(),
+                std::cmp::Ordering::Equal => x.value.clone(),
+            };
+            Ok(Lowered { value: v, ty: LlvmType::Int(bits) })
+        }
         Accessor::Bit => {
             let i = arg(0, m)?;
             let sh = m.inst(&format!("lshr {} {}, {}", x.ty, x.value, i.value));
@@ -1105,6 +1130,35 @@ fn stream_sent(base: &Expr, want: &LlvmType, m: &mut Module) -> Result<Lowered, 
     Ok(Lowered { value: r.to_string(), ty: want.clone() })
 }
 
+/// Der Strom hinter einem Ausdruck: ein Channel mit Stromtyp oder ein
+/// interner Strom; `None` fuer jeden anderen Wert (etwa `samples`).
+fn stream_of(base: &Expr, p: &Program) -> Option<takt_mir::expr::StreamRef> {
+    match &base.kind {
+        ExprKind::Input { channel, .. } => {
+            let ty = p.channels.get(channel.index())?.ty;
+            matches!(p.types.list.get(ty.index()), Some(Type::Stream(_)))
+                .then_some(takt_mir::expr::StreamRef::Channel(*channel))
+        }
+        ExprKind::Stream(s) => Some(takt_mir::expr::StreamRef::Internal(*s)),
+        _ => None,
+    }
+}
+
+/// `s.count` (8.6): wie viele Elemente das Fenster dieser Maschine hat.
+fn stream_count(base: &Expr, want: &LlvmType, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
+    let stream = match &base.kind {
+        ExprKind::Input { channel, .. } => takt_mir::expr::StreamRef::Channel(*channel),
+        ExprKind::Stream(s) => takt_mir::expr::StreamRef::Internal(*s),
+        _ => return Err(NotYet { what: "`count` ohne festen Strom" }),
+    };
+    let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+    let (cur_ptr, _) = vars.stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
+    let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
+    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let wide = m.inst(&format!("sext i32 {n} to {want}"));
+    Ok(Lowered { value: wide.to_string(), ty: want.clone() })
+}
+
 /// `s.peek()` (8.6, FB-15): das naechste Element als `E?`. Es gilt als
 /// untersucht; der Cursor rueckt am Ende des Schritts (Lemma 9.6.1).
 fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
@@ -1118,6 +1172,7 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
     let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`peek` ohne Wrapper-Typ" }) };
     let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
     let (cur_ptr, ex_ptr) = vars.stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
+    let mi = vars.machine_index().ok_or(NotYet { what: "`peek` ausserhalb einer Maschine" })?;
     let out = m.inst(&format!("alloca {inner}"));
     m.void_inst(&format!("store {inner} zeroinitializer, ptr {out}"));
     let buf = crate::stream::scratch(p, elem, m)?;
@@ -1129,7 +1184,7 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
     m.void_inst(&format!("br i1 {some}, label %{read}, label %{done}"));
     m.label(&read);
     let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 0, ptr {buf})", crate::stream::Streams::AT));
-    m.void_inst(&format!("call void @{}(i32 {sid}, i64 {seq})", crate::stream::Streams::EXAMINED));
+    m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
     crate::stream::note_examined(ex_ptr, seq, m);
     crate::stream::copy_payload(buf, out, elem, p, m)?;
     m.void_inst(&format!("br label %{done}"));

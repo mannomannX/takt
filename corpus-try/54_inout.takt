@@ -1,0 +1,31 @@
+# 54 — `inout` (3.9): der Aufruf als Anweisung schreibt den Parameter
+# zurueck; die Funktion bleibt rein.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+fn fill(src: bytes<8>, inout dst: bytes<16>):
+    dst.clear()
+    for i in range(8):
+        if i >= src.len:
+            break
+        var put : bool = dst.push(src[i])
+    var mark : bool = dst.push(0)
+
+output width : int in 0..16  @ sim("w")
+output first : int in 0..255 @ sim("f")
+
+machine m:
+    var enc : bytes<16> = default
+
+    initial RUN
+
+    state RUN:
+        loop:
+            var src : bytes<8> = default
+            var a   : bool = src.push(0x41)
+            var b   : bool = src.push(0x42)
+            fill(src, enc)
+            width = enc.len
+            first = enc[0] as int

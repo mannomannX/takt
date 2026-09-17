@@ -1,0 +1,23 @@
+(system
+  (language 1)
+  (tick 1ms))
+(fn fill (src:bytes<8> inout dst:bytes<16>)
+  (.clear dst)
+  (for i in (range 8)
+    (if (>= i (.len src))
+      (break))
+    (var put :bool (.push dst (index src i))))
+  (var mark :bool (.push dst 0)))
+(output width :int in 0..16 @sim("w"))
+(output first :int in 0..255 @sim("f"))
+(machine m
+  (var enc :bytes<16> default)
+  (initial RUN)
+  (state RUN
+    (loop
+      (var src :bytes<8> default)
+      (var a :bool (.push src 0x41))
+      (var b :bool (.push src 0x42))
+      (call fill src enc)
+      (= width (.len enc))
+      (= first (as (index enc 0) int)))))

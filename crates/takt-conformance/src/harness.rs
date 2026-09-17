@@ -15,6 +15,7 @@
 
 use std::fmt::Write as _;
 
+use takt_mir::MachineId;
 use takt_mir::program::Program;
 
 use crate::layout::{Layout, c_type};
@@ -50,7 +51,7 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
 /// Bindung `sim` -> `hw` (8.3). Das Modell braucht dann nichts, was ein
 /// gewoehnliches Programm nicht auch braucht.
 pub fn build_all(p: &Program, ticks: u64, inputs: &[Stimulus]) -> Harness {
-    build_inner(p, None, ticks, inputs, &[])
+    build_inner(p, None, None, ticks, inputs, &[])
 }
 
 /// Baut den Rahmen mit einer Journal-Nutzlast (5.9).
@@ -60,7 +61,14 @@ pub fn build_all(p: &Program, ticks: u64, inputs: &[Stimulus]) -> Harness {
 /// `_persist_restore`. Am Ende schreibt er `persist <hex>` — dieselben
 /// Bytes, die der Interpreter in seine Zeile schreibt (Satz 9.4.4).
 pub fn build_restoring(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulus], payload: &[u8]) -> Harness {
-    build_inner(p, machine, ticks, inputs, payload)
+    build_inner(p, machine, None, ticks, inputs, payload)
+}
+
+/// Baut den Rahmen mit einem Szenario (13.6): dieselben Maschinen wie
+/// `takt test` — die laufenden samt dem gewaehlten Szenario, in
+/// Schrittordnung.
+pub fn build_scenario(p: &Program, scenario: &str, ticks: u64, inputs: &[Stimulus]) -> Harness {
+    build_inner(p, None, Some(scenario), ticks, inputs, &[])
 }
 
 /// Baut den Rahmen mit Eingaben (12.5).
@@ -70,19 +78,28 @@ pub fn build_restoring(p: &Program, machine: Option<&str>, ticks: u64, inputs: &
 /// prueft die Abnahme die *Reaktion* auf Lieferungen und nicht nur den
 /// Anfangszustand.
 pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[Stimulus]) -> Harness {
-    build_inner(p, Some(machine), ticks, inputs, &[])
+    build_inner(p, Some(machine), None, ticks, inputs, &[])
 }
 
-/// Der gemeinsame Rumpf: `Some(name)` tickt eine Maschine, `None` alle.
-fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulus], payload: &[u8]) -> Harness {
+/// Der gemeinsame Rumpf: `Some(name)` tickt eine Maschine, `None` alle —
+/// mit `scenario` dazu das gewaehlte Szenario (13.6).
+fn build_inner(
+    p: &Program,
+    machine: Option<&str>,
+    scenario: Option<&str>,
+    ticks: u64,
+    inputs: &[Stimulus],
+    payload: &[u8],
+) -> Harness {
     let layout = crate::layout::of(p);
     // Die Maschinen, die der Rahmen fuehrt, in Schrittordnung — dieselbe,
     // die der Interpreter nimmt (7.2: topologisch nach `follows`, sonst
     // Prioritaet; 9.4.1: ohne Kanten semantisch irrelevant).
+    let chosen = scenario.and_then(|name| p.machines.iter().position(|m| m.name == name)).map(|i| MachineId(i as u32));
     let driven: Vec<&takt_mir::machine::Machine> = match machine {
         Some(name) => p.machines.iter().filter(|m| m.name == name).collect(),
-        None => takt_mir::analysis::schedule::order(p)
-            .unwrap_or_else(|_| takt_mir::analysis::schedule::runnable(p))
+        None => takt_mir::analysis::schedule::order_with(p, chosen)
+            .unwrap_or_else(|_| takt_mir::analysis::schedule::runnable_with(p, chosen))
             .into_iter()
             .map(|id| &p.machines[id.index()])
             .collect(),
@@ -92,6 +109,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let _ = writeln!(s, "#include <stdio.h>");
     let _ = writeln!(s, "#include <string.h>\n");
     let _ = writeln!(s, "static void takt_tx_commit(long long);");
+    let _ = writeln!(s, "static void takt_int_commit(void);");
     let _ = writeln!(s, "static void takt_apply_scheduled(long long);");
 
     // Die Runtime-Aufrufe (`takt-llvm/src/abi.rs`). Sie schreiben in den
@@ -105,6 +123,8 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     let _ = writeln!(s, "    printf(\"t=%lld alert %d %d %d\\n\", g_tick, m, site, on ? 1 : 0);");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_log(int m, int site) {{ printf(\"t=%lld log %d %d\\n\", g_tick, m, site); }}");
+    // 5.3: der Fault-Uebergang, mit Maschine und verlassenem Zustand.
+    let _ = writeln!(s, "void takt_fault(int m, int from) {{ printf(\"t=%lld fault %d %d\\n\", g_tick, m, from); }}");
     // 3.3: `now` ist die Dauer seit dem Start des Laufs — die Tickzahl
     // mal T0, wie im Interpreter. Die Runtime fuehrt sie, weil alle
     // Maschinen dieselbe Uhr lesen (12.1).
@@ -194,7 +214,10 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // seine genaue Groesse kennt nur der Codegen, und sie zu
     // ueberschaetzen kostet im Test nichts.
     for m in &driven {
-        let _ = writeln!(s, "{}", crate::layout::c_buffer(&format!("state_{}", m.name), 4096));
+        // So gross wie der Zustands-Struct mit Ausrichtung (FB-177): eine
+        // feste Zahl hielt, bis die Bindungen eines Stroms Kilobytes wogen.
+        let bytes = takt_llvm::machine::state_struct(m, p).map_or(4096, |st| st.aligned_size());
+        let _ = writeln!(s, "{}", crate::layout::c_buffer(&format!("state_{}", m.name), bytes.max(64)));
     }
     let _ = writeln!(s, "{}", crate::layout::c_buffer("image", layout.image));
     let _ = writeln!(s, "{}", crate::layout::c_buffer("params", layout.params));
@@ -263,6 +286,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     sim_bindings(&mut s, p, "    ");
     // 8.8: Auch im Tick 0 holt der Treiber ab, was `enter` gesendet hat.
     let _ = writeln!(s, "    takt_tx_commit(0);");
+    let _ = writeln!(s, "    takt_int_commit();");
     let _ = writeln!(s, "    dump(0);");
     for (i, _) in &monitors {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, 0);");
@@ -328,6 +352,7 @@ fn build_inner(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulu
     // Rate ab, bevor der Latch ausgeschrieben wird — sonst stuende die
     // Zeile einen Tick spaeter als beim Interpreter.
     let _ = writeln!(s, "        takt_tx_commit(g_tick);");
+    let _ = writeln!(s, "        takt_int_commit();");
     let _ = writeln!(s, "        dump(g_tick);");
     // 13.3: nach dem Commit, wie `observe_properties` im Interpreter.
     for (i, _) in &monitors {

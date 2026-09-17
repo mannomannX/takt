@@ -168,6 +168,12 @@ impl StateStruct {
     pub fn size(&self) -> u64 {
         self.fields.iter().map(|f| f.ty.size()).sum()
     }
+
+    /// Die Groesse mit Ausrichtung: so viel belegt der Struct wirklich,
+    /// und so viel muss ein Rahmen reservieren (FB-177).
+    pub fn aligned_size(&self) -> u64 {
+        self.llvm().aligned_size()
+    }
 }
 
 /// Schreibt die Typdefinition des Zustands-Structs als benannten Typ.
