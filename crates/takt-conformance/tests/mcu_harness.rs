@@ -190,8 +190,9 @@ fn an_unbound_output_needs_no_driver() {
             c.dir != takt_mir::program::Direction::Input && matches!(c.binding, takt_mir::program::Binding::Hw(_))
         })
         .count();
-    // Je gebundenem Ausgang eine Deklaration und ein Aufruf.
-    assert_eq!(calls, bound * 2, "nur gebundene Ausgaenge bekommen Treiber:\n{src}");
+    // Je gebundenem Ausgang eine Deklaration, ein schwacher Default (das
+    // Board ueberschreibt, was es verdrahtet hat) und ein Aufruf.
+    assert_eq!(calls, bound * 3, "nur gebundene Ausgaenge bekommen Treiber:\n{src}");
 }
 
 /// **Die Adresse wird zu einem Bezeichner, der in C gueltig ist.**
@@ -226,7 +227,9 @@ fn every_abi_buffer_is_aligned() {
     for name in ["16_timing.takt", "19_faults.takt", "29_heartbeat.takt"] {
         let p = corpus(name);
         let src = takt_conformance::mcu::build(&p).source;
-        for line in src.lines().filter(|l| l.starts_with("static") && l.contains('[')) {
+        // Byte-Puffer, die der erzeugte Code als Struktur liest; Felder
+        // eines Struct-Typs richtet C von sich aus aus.
+        for line in src.lines().filter(|l| l.starts_with("static") && l.contains("unsigned char") && l.contains('[')) {
             assert!(line.contains("_Alignas(8)"), "{name}: unausgerichteter Puffer: {line}");
         }
     }

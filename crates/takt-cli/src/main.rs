@@ -464,6 +464,19 @@ fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardwar
         index += 1;
     }
     s.push_str(&format!("\n/// Wie viele Ausgaenge das Programm hat.\npub const OUTPUTS: i32 = {index};\n"));
+    // 5.9, 12.3: Das Journal traegt den Logik-Hash als Schluessel; die Runtime
+    // braucht dazu die Nutzlastgrenze und das engste `min_interval`.
+    s.push_str("\n/// Die ersten acht Byte des Logik-Hashes (9.4.4), Schluessel des `persist`-Journals (5.9).\n");
+    let hash = takt_mir::hash::logic_hash(p);
+    let key = u64::from_le_bytes(hash.0[..8].try_into().expect("acht Byte"));
+    s.push_str(&format!("pub const LOGIC_HASH: u64 = {key:#018x};\n"));
+    s.push_str("\n/// Hoechstlaenge der `persist`-Nutzlast in Byte; 0 ohne `persist`.\n");
+    s.push_str(&format!("pub const PERSIST_BOUND: usize = {};\n", takt_mir::persist::max_payload(p).unwrap_or(0)));
+    s.push_str("\n/// Das engste `min_interval` der `persist`-Variablen in Nanosekunden; 0 ohne Angabe.\n");
+    s.push_str(&format!(
+        "pub const PERSIST_MIN_INTERVAL_NS: i64 = {};\n",
+        takt_mir::persist::min_interval_ns(p).unwrap_or(0)
+    ));
     if let Some(hw) = hw {
         s.push_str("\n/// Anschluesse aus der Hardware-Konfiguration (8.10); undurchsichtig, fuer das Board.\n");
         for (ident, port) in ports(p, hw) {

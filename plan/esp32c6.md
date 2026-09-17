@@ -86,6 +86,9 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
   Zeile mitzuschreiben, oder ob der Korpuslauf aus dem RAM-Log
   nachgelagert liest (M5 4, Punkt 1). Schritt 4 schreibt alle 100 Ticks
   ohne verpasste Ticks; jede Zeile mitzuschreiben ist noch nicht gemessen.
+- Der MCU-Rahmen trägt keine geplanten Ausgaben (`at`, 7.5), keine
+  Systemkanäle (`sys/reboot`, `sys/jump`) und keine Jobs; die vier Programme
+  bleiben dem Linux-Vergleich vorbehalten, bis der Rahmen sie hat.
 - `build.rs` nimmt das `takt`-Werkzeug aus dem Release-Verzeichnis, auch
   wenn es älter ist als der Compiler (FB-193): Erster Bau des Servo-Objekts
   kam aus einem Stand vor M6 und ließ die Maschinenfunktionen fehlen. Bis
@@ -100,6 +103,6 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
 | 2 | **fertig 2026-09-17.** `minimal` meldet sich über USB-Serial-JTAG (COM4) hinter dem ROM- und dem ESP-IDF-Bootloader, den `probe-rs` mitbringt; das Abbild braucht den App-Deskriptor aus `esp-bootloader-esp-idf`. Stolperstein: die Index-Auflösung nahm `esp-rom-sys` 0.1.1, das `esp-hal` 1.2.1 nicht mehr übersetzt — `cargo update -p esp-rom-sys --precise 0.1.5`. |
 | 3 | **fertig 2026-09-17.** `tick`: 1000 Ticks je Sekunde, nominale und gemessene Periode 1 000 000 ns, null verpasste Ticks über die Messdauer; LED blinkt sekündlich. Zwei Befunde: `counts_for` rechnete mit ganzzahligen Nanosekunden je Schritt (62 statt 62,5 bei 16 MHz, acht Promille daneben — FB-192, behoben in `takt-board-support`); der Zyklenzähler des Kerns steht in `wfi`, die gemessene Periode kommt darum aus dem SYSTIMER, der Zähler bleibt für `measure`. Ein `nomem` am `wfi` ließ die Warteschleife den Zähler nicht neu laden — entfernt. |
 | 4 | **fertig 2026-09-17.** `takt` mit `29_heartbeat.takt`: Trace `t=100 out led 1`, `t=200 out led 1`, `t=300 out led 1` über USB, bitgleich mit dem Interpreter (`true` an denselben Ticks); LED blinkt im 500-ms-Takt des Programms. Blockierte einmal am veralteten `takt.exe` (FB-193). |
-| 5 | offen |
+| 5 | **fertig 2026-09-17.** `takt-conformance/tests/board_esp32c6.rs` (nur mit `TAKT_ESP32C6_PORT=COM4`): 37 Programme des Differentialkorpus laufen auf dem Chip, je 60 Ticks, Trace über USB-Serial-JTAG, **0 Abweichungen** gegen den Interpreter — Monitore (47), `map`-Iteration (42), SHA-256 (39), Ströme und `sim`-gekoppelte Modelle (23–27, 49–55) eingeschlossen. Ausgelassen, weil der MCU-Rahmen sie nicht trägt: geplante Ausgaben (28), Systemkanäle (32, 34), Jobs (40). Dafür bekam der Rahmen Natives, Ströme, `sim`-Bindungen, Monitore, Floats/Arrays/vorzeichenlose Werte im Trace und schwache Treiber-Defaults (`takt_out_*`). Befund FB-194: Der Rahmen bemaß seine Zustandspuffer aus einer Schranke statt aus dem Struct des Codegens; `39_sha256` schrieb darüber hinaus, und die Stack-Wache des Boards fing es — auf dem Wirt blieb es unsichtbar. |
 | 6 | offen |
 | 7 | offen |

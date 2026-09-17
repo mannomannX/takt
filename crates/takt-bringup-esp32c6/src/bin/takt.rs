@@ -7,9 +7,10 @@
 #![no_main]
 #![allow(unsafe_code, reason = "C-ABI des Rahmens; 9.5 fuehrt Treiber in der TCB")]
 
+use core::fmt::Write as _;
+
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use panic_halt as _;
 use takt_board_esp32c6::{Generated, Telemetry, Ws2812};
 use takt_rt_core::{Clock, Program};
 
@@ -23,8 +24,12 @@ use takt::TICK_NS;
 
 /// Alle wie viele Ticks der Zustand ausgegeben wird. USB-Serial-JTAG ist
 /// schnell, aber das FIFO blockiert, wenn der Host nicht liest; ein
-/// Abzug je 100 Ticks haelt den Tick frei (gemessen wird in Schritt 4).
+/// Abzug je 100 Ticks haelt den Tick frei.
 const TRACE_EVERY: u64 = 100;
+
+/// Konformitaetslauf (plan/esp32c6.md 5): `TAKT_TICKS` beim Bau gesetzt
+/// heisst jeden Tick ausgeben, nach so vielen Ticks `takt end` und Halt.
+const TICKS: Option<&str> = option_env!("TAKT_TICKS");
 
 static mut UART: Option<Telemetry> = None;
 static mut LED: Option<Ws2812> = None;
@@ -52,6 +57,29 @@ pub extern "C" fn takt_board_trace_i64(value: i64) {
     let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
     uart.write_i64(value);
     uart.write_byte(b' ');
+}
+
+/// Vom Rahmen gerufen: eine Zahl ohne Vorzeichen im Trace.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_board_trace_u64(value: u64) {
+    let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
+    uart.write_u64(value);
+    uart.write_byte(b' ');
+}
+
+/// Vom Rahmen gerufen: eine Fliesskommazahl im Trace, als kuerzeste
+/// Ziffernfolge, die den Wert eindeutig zurueckgibt (Bitgleichheit, 4.2).
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_board_trace_f64(value: f64) {
+    let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
+    let _ = write!(uart, "{value:?} ");
+}
+
+/// Vom Rahmen gerufen: ein Byte eines Ausgabestroms, wie der Interpreter es schreibt.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_board_trace_hex8(value: u8) {
+    let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
+    let _ = write!(uart, "0x{value:02x}");
 }
 
 /// Der Output `ui_led` des Programms auf der RGB-LED.
@@ -85,9 +113,14 @@ fn main() -> ! {
         unsafe { LED = Some(led) };
     }
 
+    let limit: u64 = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
+    let trace_every = if limit > 0 { 1 } else { TRACE_EVERY };
     let mut clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS);
     let mut program = Generated::init(false);
-    let mut next_trace = TRACE_EVERY;
+    if limit > 0 {
+        program.dump();
+    }
+    let mut next_trace = trace_every;
     let mut k: u64 = 0;
     let mut reported: u64 = 0;
     loop {
@@ -96,10 +129,20 @@ fn main() -> ! {
         program.tick(k, k as i64 * TICK_NS);
         program.commit();
         if k >= next_trace {
-            next_trace = k + TRACE_EVERY;
+            next_trace = k + trace_every;
             program.dump();
             report(&clock, &mut reported);
         }
+        if limit > 0 && k >= limit {
+            break;
+        }
+    }
+    if let Some(uart) = unsafe { (*&raw mut UART).as_mut() } {
+        uart.write("takt end");
+        uart.newline();
+    }
+    loop {
+        core::hint::spin_loop();
     }
 }
 

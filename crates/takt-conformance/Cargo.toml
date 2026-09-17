@@ -16,3 +16,7 @@ takt-sema = { path = "../takt-sema" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Board 2 (ESP32-C6): der Trace kommt ueber USB-Serial-JTAG (plan/esp32c6.md 5).
+serialport = { version = "4", default-features = false }

@@ -15,6 +15,11 @@ use std::process::Command;
 fn main() {
     // `linkall.x` liefert `esp-hal`: Speicherkarte, Vektortabelle, Cache-Mapping.
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+    // Konformitaetslauf (plan/esp32c6.md 5): so viele Ticks, dann `takt end`.
+    println!("cargo:rerun-if-env-changed=TAKT_TICKS");
+    if let Ok(ticks) = env::var("TAKT_TICKS") {
+        println!("cargo:rustc-env=TAKT_TICKS={ticks}");
+    }
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     build_takt_program(&out);
 }

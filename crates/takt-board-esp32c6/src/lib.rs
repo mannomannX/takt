@@ -43,6 +43,7 @@
 pub mod cycles;
 pub mod guard;
 pub mod led;
+pub mod panic;
 pub mod program;
 pub mod tick;
 pub mod uart;

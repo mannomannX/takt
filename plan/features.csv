@@ -115,7 +115,7 @@ CG-11.5-SizeGemessen,Umsetzung,11.5,`takt size` gegen das Objekt geprueft: die D
 CG-11.5-FlashPosten,Umsetzung,11.5,"Der Posten „Flash (Code, Konstanten)"" wird gemessen statt `offen`: braucht ein festes Ziel",,M5 (Embedded),fertig,
 CG-12.3-StackTiefe,Umsetzung,12.3,"Stacktiefe als laengster Pfad im Aufrufgraphen plus Rahmen je Funktion; die Messung steht (`inspect::stack_frame`), die Rechnung kommt mit dem Profil",,M5 (Embedded),fertig,
 CG-13.4-Objektcode,Umsetzung,13.4,Objektcode gegen Quelle nachvollziehen (Zertifizierung): baut auf `inspect::symbols` auf,,M9 (v2),offen,
-SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedded),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)
+SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedded),teilweise,"RV32IMAC: Korpus auf dem ESP32-C6 mit 0 Abweichungen (2026-09-17, board_esp32c6.rs); Cortex-M offen (Board 1)"
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M5 (Embedded),teilweise,
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig,
 SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M5 (Embedded),teilweise,TTL-Adapter (PA9)
@@ -1092,5 +1092,6 @@ STUFE-v2,Stufe (Roadmap),15,v2,,Doku/Rationale,rationale,
 STUFE-v3,Stufe (Roadmap),15,v3,,Doku/Rationale,rationale,
 "STUFE-entschieden_(früher_„offen"")",Stufe (Roadmap),15,"entschieden (früher „offen"")",,Doku/Rationale,rationale,
 CG-8.6-Stroeme_im_Code,Umsetzung,11.2,"Stroeme im erzeugten Code vollstaendig: `send` in kanonischer Byteform, auf `max_size` gefuellt (feste Slot-Form, plan/m6.md 2.2), `for x in s` ueber das Fenster (Bindung, `break`), `s as e` als Guard, `s.count`, `wrap_*`, Record-Literale mit Padding, Arrays im Drahtformat; Abbild-Eintraege byteweise adressiert",,M6,fertig,"FB-177, FB-180, FB-189; `52`–`55` im Korpus"
+TEST-Rahmen-Board2,Abnahme,13.8,"Board 2 (ESP32-C6): der Differentialkorpus auf dem Chip gegen den Interpreter — bauen, flashen, Trace ueber USB-Serial-JTAG (board_esp32c6.rs, nur mit TAKT_ESP32C6_PORT)",,M6,fertig,"37 Programme, 0 Abweichungen (2026-09-17); FB-194, FB-195"
 TEST-Rahmen-Stroeme_und_Szenarien,Abnahme,13.8,"Konformitaetsrahmen: Ringe fuer interne Stroeme (Unit-Delay, Freigabe unter dem kleinsten Cursor), `sim`-gekoppelte Eingabestroeme, Szenarien wie `takt test` (`build_scenario`), Faults im nativen Trace (`takt_fault`), Zustandspuffer mit Ausrichtung",,M6,fertig,"FB-177, FB-179; `tests/scenarios.rs`"
 SEM-3.9-inout,Semantik/Absatz,3.9,"`inout`: Aufruf als Anweisung schreibt zurueck, Argument muss eine Stelle sein, `-> T` daneben ausgeschlossen",,M6,fertig,FB-178; `takt-sema/tests/inout.rs`

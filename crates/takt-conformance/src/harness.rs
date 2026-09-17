@@ -147,35 +147,9 @@ fn build_inner(
 
     // Die Stroeme (`takt-llvm/src/stream.rs`): die drei Aufrufe ueber
     // dem Stimulus, der vor dem Lauf feststeht (`streams`).
-    crate::streams::emit(&mut s, p, inputs);
+    crate::streams::emit(&mut s, p, inputs, crate::streams::Trace::Stdio);
 
-    // 4.5: Die nativen Funktionen liegen in der Runtime. Der Rahmen
-    // liefert sie in C — dieselbe Rechnung wie `takt-native`, damit der
-    // Vergleich sie mitprueft statt sie zu umgehen.
-    if p.natives.iter().any(|n| n.name == "crc32") {
-        let _ = writeln!(s, "unsigned int takt_native_crc32(const unsigned char *b, int n) {{");
-        let _ = writeln!(s, "    unsigned int c = 0xFFFFFFFFu;");
-        let _ = writeln!(s, "    for (int i = 0; i < n; i++) {{");
-        let _ = writeln!(s, "        c ^= b[i];");
-        let _ = writeln!(s, "        for (int k = 0; k < 8; k++)");
-        let _ = writeln!(s, "            c = (c & 1u) ? ((c >> 1) ^ 0xEDB88320u) : (c >> 1);");
-        let _ = writeln!(s, "    }}");
-        let _ = writeln!(s, "    return c ^ 0xFFFFFFFFu;");
-        let _ = writeln!(s, "}}");
-    }
-    if p.natives.iter().any(|n| n.name == "sum8") {
-        let _ = writeln!(s, "unsigned char takt_native_sum8(const unsigned char *b, int n) {{");
-        let _ = writeln!(s, "    unsigned char s = 0;");
-        let _ = writeln!(s, "    for (int i = 0; i < n; i++) s = (unsigned char)(s + b[i]);");
-        let _ = writeln!(s, "    return s;");
-        let _ = writeln!(s, "}}");
-    }
-    if p.natives.iter().any(|n| n.name.starts_with("sha256") || n.name == "hmac_sha256") {
-        s.push_str(SHA256_C);
-    }
-    if p.types.list.iter().any(|t| matches!(t, takt_mir::types::Type::Map { .. })) {
-        s.push_str(MAP_C);
-    }
+    natives(&mut s, p);
     for m in &driven {
         let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
@@ -448,6 +422,39 @@ fn build_inner(
 
 /// `printf`-Format und Cast fuer einen Skalar: Fliesskomma mit 17
 /// Stellen, damit der Vergleich das Bit trifft (Satz 9.4.4).
+/// Die nativen Funktionen (4.5) in C — dieselbe Rechnung wie
+/// `takt-native`, damit der Vergleich sie mitprueft statt sie zu umgehen.
+/// Der MCU-Rahmen nimmt dieselben.
+pub(crate) fn natives(s: &mut String, p: &Program) {
+    // 4.5: Die nativen Funktionen liegen in der Runtime. Der Rahmen
+    // liefert sie in C — dieselbe Rechnung wie `takt-native`, damit der
+    // Vergleich sie mitprueft statt sie zu umgehen.
+    if p.natives.iter().any(|n| n.name == "crc32") {
+        let _ = writeln!(s, "unsigned int takt_native_crc32(const unsigned char *b, int n) {{");
+        let _ = writeln!(s, "    unsigned int c = 0xFFFFFFFFu;");
+        let _ = writeln!(s, "    for (int i = 0; i < n; i++) {{");
+        let _ = writeln!(s, "        c ^= b[i];");
+        let _ = writeln!(s, "        for (int k = 0; k < 8; k++)");
+        let _ = writeln!(s, "            c = (c & 1u) ? ((c >> 1) ^ 0xEDB88320u) : (c >> 1);");
+        let _ = writeln!(s, "    }}");
+        let _ = writeln!(s, "    return c ^ 0xFFFFFFFFu;");
+        let _ = writeln!(s, "}}");
+    }
+    if p.natives.iter().any(|n| n.name == "sum8") {
+        let _ = writeln!(s, "unsigned char takt_native_sum8(const unsigned char *b, int n) {{");
+        let _ = writeln!(s, "    unsigned char s = 0;");
+        let _ = writeln!(s, "    for (int i = 0; i < n; i++) s = (unsigned char)(s + b[i]);");
+        let _ = writeln!(s, "    return s;");
+        let _ = writeln!(s, "}}");
+    }
+    if p.natives.iter().any(|n| n.name.starts_with("sha256") || n.name == "hmac_sha256") {
+        s.push_str(SHA256_C);
+    }
+    if p.types.list.iter().any(|t| matches!(t, takt_mir::types::Type::Map { .. })) {
+        s.push_str(MAP_C);
+    }
+}
+
 fn number_format(ty: &takt_llvm::ty::LlvmType, signed: bool) -> (&'static str, &'static str) {
     match (ty, signed) {
         (takt_llvm::ty::LlvmType::F32 | takt_llvm::ty::LlvmType::F64, _) => ("%.17g", "(double)"),
@@ -578,7 +585,7 @@ fn scheduled(s: &mut String, p: &Program, layout: &Layout) {
 /// die Qualitaet wird `Good` (0): Der Eingang hat eine Quelle, also ist
 /// er nicht mehr `Bad` (3.5). Ohne das bliebe er `Bad`, und jeder
 /// Lesezugriff faultete.
-fn sim_bindings(s: &mut String, p: &Program, indent: &str) {
+pub(crate) fn sim_bindings(s: &mut String, p: &Program, indent: &str) {
     use takt_mir::program::{Binding, Direction};
     let adresse = |b: &Binding| match b {
         Binding::Hw(a) | Binding::Sim(a) => Some(a.clone()),

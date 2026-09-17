@@ -134,11 +134,21 @@ fn textual(p: &Program, elem: TypeId) -> bool {
     matches!(p.types.list.get(elem.index()), Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }))
 }
 
+/// Wohin der Rahmen seine Trace-Zeilen schreibt: `printf` auf dem Wirt,
+/// die `takt_board_trace*`-Aufrufe des Boards auf der MCU.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trace {
+    /// `stdio`, der Linux-Rahmen.
+    Stdio,
+    /// Das Board stellt `takt_board_trace`, `_i64` und `_hex8`.
+    Board,
+}
+
 /// Schreibt die drei Aufrufe aus `takt-llvm/src/stream.rs` als C.
 ///
 /// Ohne Elemente bleibt es beim leeren Fenster — der Fall, den jedes
 /// Programm aushalten muss, und der bis hierher der einzige war.
-pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
+pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus], trace: Trace) {
     let streams = collect_streams(p, stimulus);
     emit_internal(s, p);
     let _ = writeln!(s, "/* Stroeme (8.6, 9.6); der Stimulus steht vor dem Lauf fest. */");
@@ -155,7 +165,7 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
         let _ = writeln!(s, "    int k = takt_int_slot(s);");
         let _ = writeln!(s, "    if (k >= 0) takt_int_examined(k, m, seq);");
         let _ = writeln!(s, "}}\n");
-        emit_send(s, p);
+        emit_send(s, p, trace);
         return;
     }
 
@@ -238,7 +248,7 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus]) {
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
     let _ = writeln!(s, "    if (k >= 0) takt_int_examined(k, m, seq);");
     let _ = writeln!(s, "}}\n");
-    emit_send(s, p);
+    emit_send(s, p, trace);
 }
 
 /// Die Kapazitaet der Bytes eines Elements (8.6, 3.9): `N` bei Text,
@@ -458,7 +468,7 @@ fn emit_internal(s: &mut String, p: &Program) {
 /// Ohne diese Rate stuende im nativen Trace der ganze Text in einem
 /// Tick, im interpretierten haeppchenweise — und der Vergleich saehe
 /// einen Unterschied, den es in der Sache nicht gibt.
-fn emit_send(s: &mut String, p: &Program) {
+fn emit_send(s: &mut String, p: &Program, trace: Trace) {
     let streams: Vec<(usize, &Channel)> = p
         .channels
         .iter()
@@ -466,11 +476,11 @@ fn emit_send(s: &mut String, p: &Program) {
         .filter(|(_, c)| c.dir == Direction::Output && matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))))
         .collect();
     let _ = writeln!(s, "#define TAKT_TX_MAX 4096");
-    let _ = writeln!(s, "static unsigned char g_tx[{}][TAKT_TX_MAX];", streams.len().max(1));
+    let _ = writeln!(s, "static _Alignas(8) unsigned char g_tx[{}][TAKT_TX_MAX];", streams.len().max(1));
     let _ = writeln!(s, "static int g_tx_n[{}];", streams.len().max(1));
     // 8.8, FB-132: was der letzte Commit abgeholt hat, liest `o.sent` im
     // naechsten Tick — der Unit-Delay eines Outputs.
-    let _ = writeln!(s, "static unsigned char g_tx_sent[{}][TAKT_TX_MAX];", streams.len().max(1));
+    let _ = writeln!(s, "static _Alignas(8) unsigned char g_tx_sent[{}][TAKT_TX_MAX];", streams.len().max(1));
     let _ = writeln!(s, "static int g_tx_sent_n[{}];", streams.len().max(1));
     let _ = writeln!(s, "static int takt_tx_slot(int s) {{");
     let _ = writeln!(s, "    switch (s) {{");
@@ -519,10 +529,24 @@ fn emit_send(s: &mut String, p: &Program) {
         };
         let _ = writeln!(s, "    if (g_tx_n[{slot}] > 0) {{");
         let _ = writeln!(s, "        int n = g_tx_n[{slot}] < {per_tick} ? g_tx_n[{slot}] : {per_tick};");
-        let _ = writeln!(s, "        printf(\"t=%lld out {} [\", t);", c.name);
-        let _ = writeln!(s, "        for (int i = 0; i < n; i++)");
-        let _ = writeln!(s, "            printf(i ? \", 0x%02x\" : \"0x%02x\", g_tx[{slot}][i]);");
-        let _ = writeln!(s, "        printf(\"]\\n\");");
+        match trace {
+            Trace::Stdio => {
+                let _ = writeln!(s, "        printf(\"t=%lld out {} [\", t);", c.name);
+                let _ = writeln!(s, "        for (int i = 0; i < n; i++)");
+                let _ = writeln!(s, "            printf(i ? \", 0x%02x\" : \"0x%02x\", g_tx[{slot}][i]);");
+                let _ = writeln!(s, "        printf(\"]\\n\");");
+            }
+            Trace::Board => {
+                let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+                let _ = writeln!(s, "        takt_board_trace_i64(t);");
+                let _ = writeln!(s, "        takt_board_trace(\"out {} [\");", c.name);
+                let _ = writeln!(s, "        for (int i = 0; i < n; i++) {{");
+                let _ = writeln!(s, "            if (i) takt_board_trace(\", \");");
+                let _ = writeln!(s, "            takt_board_trace_hex8(g_tx[{slot}][i]);");
+                let _ = writeln!(s, "        }}");
+                let _ = writeln!(s, "        takt_board_trace(\"]\\n\");");
+            }
+        }
         let _ = writeln!(s, "        memcpy(g_tx_sent[{slot}], g_tx[{slot}], (size_t)n);");
         let _ = writeln!(s, "        g_tx_sent_n[{slot}] = n;");
         // 8.3: ein `sim`-Ausgabestrom speist den `hw`-Eingang derselben

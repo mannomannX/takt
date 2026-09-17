@@ -464,6 +464,7 @@ dependencies = [
 name = "takt-conformance"
 version = "0.1.0"
 dependencies = [
+ "serialport",
  "takt-diag",
  "takt-interp",
  "takt-llvm",

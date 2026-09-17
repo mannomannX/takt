@@ -49,7 +49,11 @@ pub fn build(p: &Program) -> McuHarness {
     let mut s = String::new();
     prologue(&mut s, p);
     runtime_abi(&mut s, p);
-    storage(&mut s, &layout, &driven);
+    crate::harness::natives(&mut s, p);
+    // Die Stroeme wie im Linux-Rahmen, ohne Stimulus; ihre Trace-Zeilen
+    // gehen an das Board.
+    crate::streams::emit(&mut s, p, &[], crate::streams::Trace::Board);
+    storage(&mut s, p, &layout, &driven);
     declarations(&mut s, &driven);
     init(&mut s, p, &layout, &driven);
     tick(&mut s, p, &layout, &driven);
@@ -64,10 +68,26 @@ fn prologue(s: &mut String, p: &Program) {
     let _ = writeln!(s, "/* Tick: {} ns. Kein Heap, keine libc. */\n", p.config.tick);
     // Nur die Typen, nicht die Funktionen: `stdint.h` ist Teil der
     // freistehenden Umgebung und steht auch ohne libc zur Verfuegung.
-    let _ = writeln!(s, "#include <stdint.h>\n");
+    let _ = writeln!(s, "#include <stdint.h>");
+    let _ = writeln!(s, "#include <stddef.h>\n");
+    // Ohne libc: die vier Speicherroutinen, die Stroeme und `map` brauchen,
+    // liefert `compiler_builtins` des Rust-Binaries; hier nur ihre Namen.
+    let _ = writeln!(s, "void *memcpy(void *, const void *, size_t);");
+    let _ = writeln!(s, "void *memmove(void *, const void *, size_t);");
+    let _ = writeln!(s, "void *memset(void *, int, size_t);");
+    let _ = writeln!(s, "int memcmp(const void *, const void *, size_t);\n");
     // Das Board stellt sie bereit; der Rahmen ruft sie nur.
     let _ = writeln!(s, "void takt_board_trace(const char *line);");
-    let _ = writeln!(s, "void takt_board_trace_i64(long long value);\n");
+    let _ = writeln!(s, "void takt_board_trace_i64(long long value);");
+    let _ = writeln!(s, "void takt_board_trace_u64(unsigned long long value);");
+    let _ = writeln!(s, "void takt_board_trace_f64(double value);");
+    let _ = writeln!(s, "void takt_board_trace_hex8(unsigned char value);\n");
+}
+
+/// Die Laufzeitmonitore (13.3): alle Eigenschaften mit `monitor`, weil der
+/// Rahmen alle Maschinen fuehrt — wie der Linux-Rahmen ohne `--machine`.
+fn monitors(p: &Program) -> Vec<(usize, &takt_mir::program::Property)> {
+    p.properties.iter().enumerate().filter(|(_, prop)| prop.monitor).collect()
 }
 
 /// Die Runtime-Aufrufe aus `takt-llvm/src/abi.rs`.
@@ -134,6 +154,19 @@ fn runtime_abi(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    takt_board_trace_i64((long long)bits);");
     let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
     let _ = writeln!(s, "}}\n");
+
+    // 13.3: Ein Monitor meldet Index und Position, wie im Linux-Rahmen.
+    let _ = writeln!(s, "void takt_property(int i, long long at) {{");
+    let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
+    let _ = writeln!(s, "    takt_board_trace(\"property \");");
+    let _ = writeln!(s, "    takt_board_trace_i64(i);");
+    let _ = writeln!(s, "    takt_board_trace_i64(at);");
+    let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+    let _ = writeln!(s, "}}\n");
+    for (i, _) in monitors(p) {
+        let _ = writeln!(s, "void takt_monitor_{i}(void *st, void *in, void *par, void *out, long long tick);");
+    }
 }
 
 /// Prozessabbild, Latch und Maschinenzustaende — alles statisch.
@@ -141,27 +174,27 @@ fn runtime_abi(s: &mut String, p: &Program) {
 /// 12.3: „Gesamter Zustand statisch in `.bss`; kein Heap." Die Groessen
 /// kommen aus `takt size` (11.5), also aus derselben Rechnung, die der
 /// Compiler gegen das Speicherbudget haelt.
-fn storage(s: &mut String, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
+fn storage(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Statischer Zustand (12.3), ausgerichtet fuer die ABI. */");
     let _ = writeln!(s, "{}", crate::layout::c_buffer("image", layout.image));
+    for (i, prop) in monitors(p) {
+        let size = takt_llvm::monitor::state_size(prop, p).unwrap_or(1);
+        let _ = writeln!(s, "{}", crate::layout::c_buffer(&format!("monitor_{i}"), size));
+    }
     let _ = writeln!(s, "{}", crate::layout::c_buffer("latch", layout.latch));
     let _ = writeln!(s, "{}", crate::layout::c_buffer("params", layout.params));
     for m in driven {
         // Die Zustandsgroesse kennt der Rahmen nicht genau; er nimmt die
         // Obergrenze aus dem Overlay (11.2). Zu gross ist verschwendeter
         // RAM, zu klein waere ein Ueberschreiben — darum grosszuegig.
-        let _ = writeln!(s, "{}", crate::layout::c_buffer(&format!("state_{}", m.name), state_bytes(m)));
+        // So gross wie der Zustands-Struct des Codegens mit Ausrichtung
+        // (FB-177, FB-194): Eine Schranke aus Variablen- und Zustandszahl
+        // uebersah Bloecke und Puffer, und der erzeugte Code schrieb ueber
+        // den Puffer hinaus — auf dem Board bis in die Stack-Wache.
+        let bytes = takt_llvm::machine::state_struct(m, p).map_or(4096, |st| st.aligned_size());
+        let _ = writeln!(s, "{}", crate::layout::c_buffer(&format!("state_{}", m.name), bytes.max(64)));
     }
     let _ = writeln!(s);
-}
-
-/// Die Zustandsgroesse einer Maschine, aufgerundet.
-fn state_bytes(m: &takt_mir::machine::Machine) -> u64 {
-    // `takt size` rechnet es genau (11.5); hier genuegt eine Schranke,
-    // weil der Rahmen den Speicher nur bereitstellt.
-    let vars = m.vars.len() as u64 * 8;
-    let states = m.states.len() as u64 * 16;
-    (vars + states + 64).next_multiple_of(8)
 }
 
 /// Die Signaturen des erzeugten Codes (11.2).
@@ -224,6 +257,10 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let _ = writeln!(s, "    {0}_publish(state_{0}, image);", m.name);
     }
     crate::harness::psi_commit(s, p, driven, "    ");
+    let _ = writeln!(s, "    takt_tx_commit(0);");
+    for (i, _) in monitors(p) {
+        let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, 0);");
+    }
     let _ = writeln!(s, "}}\n");
 }
 
@@ -244,6 +281,14 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         );
     }
     crate::harness::psi_commit(s, p, driven, "    ");
+    // Dieselbe Folge wie im Linux-Rahmen: `sim`-Outputs an ihre `hw`-Inputs
+    // (8.3), dann die Sendepuffer und die internen Ringe, dann die Monitore.
+    crate::harness::sim_bindings(s, p, "    ");
+    let _ = writeln!(s, "    takt_tx_commit(k);");
+    let _ = writeln!(s, "    takt_int_commit();");
+    for (i, _) in monitors(p) {
+        let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, k);");
+    }
     let _ = writeln!(s, "}}\n");
 
     sleep(s, p.config.tick, layout, p, driven);
@@ -334,27 +379,30 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     let _ = writeln!(s, "const int takt_mcu_persist_bound = {};\n", takt_mir::persist::max_payload(p).unwrap_or(0));
 }
 
-/// `takt_mcu_dump`: den Latch ausgeben, fuer den Vergleich.
-///
-/// **Dieselbe Form wie der Linux-Rahmen**, und das ist der Punkt: Ohne
-/// `t=<tick>` laesst sich keine Zeile zuordnen, und der Vergleich mit
-/// `takt sim` — der Kern des M5-Exits — waere nicht moeglich. Eine erste
-/// Fassung schrieb `out led 1` ohne Tick; damit war der Hardwarelauf
-/// nicht gegen den Interpreter zu halten, und das fiel nicht auf, weil
-/// niemand es versucht hat.
-///
-/// [`crate::run::compare`] liest genau diese Form.
+/// `takt_mcu_dump`: den Latch ausgeben, fuer den Vergleich — dieselben
+/// Zeilen wie `dump` im Linux-Rahmen (grammar/trace.md), damit
+/// `compare` beide lesen kann.
 fn telemetry(s: &mut String, p: &Program, layout: &Layout) {
     let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md). */");
     let _ = writeln!(s, "void takt_mcu_dump(void) {{");
     for slot in &layout.outputs {
+        if let takt_llvm::ty::LlvmType::Array(elem, n) = &slot.ty {
+            let Some(ct) = c_type(elem, slot.signed) else { continue };
+            let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+            let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
+            let _ = writeln!(s, "    takt_board_trace(\"out {} [\");", slot.name);
+            let _ = writeln!(s, "    for (int k = 0; k < {n}; k++) {{");
+            let _ = writeln!(s, "        if (k) takt_board_trace(\", \");");
+            let call = trace_call(elem, slot.signed, &format!("(({ct} *)(latch + {}))[k]", slot.offset));
+            let _ = writeln!(s, "        {call};");
+            let _ = writeln!(s, "    }}");
+            let _ = writeln!(s, "    takt_board_trace(\"]\\n\");");
+            continue;
+        }
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
         let _ = writeln!(s, "    takt_board_trace(\"t=\");");
         let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
         let _ = writeln!(s, "    takt_board_trace(\"out {} \");", slot.name);
-        // Ein Enum mit seinem Variantennamen, nicht mit der Diskriminante:
-        // Der Interpreter schreibt den Namen (9.3), und `same_number`
-        // gliche `CLOSED` gegen `0` nicht aus — das ist keine Zahl.
         if let Some(varianten) = enum_variants(p, &slot.name) {
             let _ = writeln!(s, "    switch (*({ct} *)(latch + {})) {{", slot.offset);
             for (d, name) in varianten {
@@ -363,17 +411,29 @@ fn telemetry(s: &mut String, p: &Program, layout: &Layout) {
             let _ = writeln!(s, "    default: takt_board_trace(\"?\");");
             let _ = writeln!(s, "    }}");
         } else {
-            // Zahlen als `i64`, auch `bool` und vorzeichenlose: Der
-            // Vergleich normalisiert `true`/`false` gegen 1/0 und prueft
-            // sonst den Zahlenwert.
-            let _ = writeln!(s, "    takt_board_trace_i64((long long)*({ct} *)(latch + {}));", slot.offset);
+            let call = trace_call(&slot.ty, slot.signed, &format!("*({ct} *)(latch + {})", slot.offset));
+            let _ = writeln!(s, "    {call};");
         }
         let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
     }
     let _ = writeln!(s, "}}\n");
-
     commit(s, layout);
     outputs(s, layout);
+}
+
+/// Der Aufruf, der einen Wert in den Trace schreibt: Fliesskommazahlen
+/// formatiert das Board als Ziffernfolge, die den Wert eindeutig
+/// zurueckgibt; Ganzzahlen tragen das Vorzeichen ihres Typs — ein `u32`
+/// ueber 2^31 darf nicht negativ erscheinen (wie `number_format` im
+/// Linux-Rahmen).
+fn trace_call(ty: &takt_llvm::ty::LlvmType, signed: bool, value: &str) -> String {
+    match (ty, signed) {
+        (takt_llvm::ty::LlvmType::F32 | takt_llvm::ty::LlvmType::F64, _) => {
+            format!("takt_board_trace_f64((double){value})")
+        }
+        (_, true) => format!("takt_board_trace_i64((long long){value})"),
+        (_, false) => format!("takt_board_trace_u64((unsigned long long){value})"),
+    }
 }
 
 /// Die Varianten eines Enum-Ausgangs mit ihren Diskriminanten.
@@ -422,6 +482,13 @@ fn commit(s: &mut String, layout: &Layout) {
     }
     if bound.is_empty() {
         let _ = writeln!(s, "/*   keine — kein Ausgang ist an Hardware gebunden */");
+    }
+    // Schwach gebunden: Ein Ausgang ohne Treiber am Board geht ins Leere,
+    // der Trace zeigt ihn trotzdem — so laeuft jedes Programm des Korpus,
+    // und ein Board ueberschreibt nur, was es verdrahtet hat.
+    for (slot, fname) in &bound {
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let _ = writeln!(s, "__attribute__((weak)) void {fname}({ct} value) {{ (void)value; }}");
     }
 
     let _ = writeln!(s, "\n/* Schritt 10: der Latch geht an die Geraete (12.1). */");

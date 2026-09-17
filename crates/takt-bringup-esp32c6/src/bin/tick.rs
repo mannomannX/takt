@@ -7,7 +7,6 @@
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use panic_halt as _;
 use takt_board_esp32c6::{CORE_HZ, Telemetry, Ws2812};
 use takt_rt_baremetal::TickSource;
 

@@ -54,3 +54,12 @@ impl Telemetry {
         self.write("\r\n");
     }
 }
+
+/// Fuer `write!`: Fliesskommazahlen im Trace kommen aus `core::fmt`, das
+/// die kuerzeste Ziffernfolge druckt, die den Wert eindeutig zurueckgibt.
+impl core::fmt::Write for Telemetry {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.write(s);
+        Ok(())
+    }
+}
