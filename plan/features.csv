@@ -63,7 +63,7 @@ SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),fertig,
 SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),fertig,
 SEM-7.1,Semantik/Abschnitt,7.1,Logische Zeit,,M1 (Kernsemantik),fertig,
 SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig,
-SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),fertig,
+SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),fertig,"`system: overrun = fault | alert` seit plan/nvm.md Schritt 1; ein Journal-Vorgang ueber die Frist zaehlt als Ueberlauf (Schritt 3)"
 SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M6 (v1.1),fertig,`sys/clock` am eingebauten Geraet `sys` (Pruefung 60); `takt-rt-linux::wall_clock_ns` fuer den Treiberrand
 SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),fertig,
 SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M2 (Ströme),teilweise,
@@ -586,7 +586,7 @@ SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0`
 SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M6 (mit 8.10),fertig,Rechnung in `calibrated.rs` (`check_bindings`); Urteil mit gemessenem `jitter` der Hardware-Konfiguration (8.10)
 SC-30,Statische Prüfung,10,"`mat`: Formprüfung bei `+ - *`, `inv`/`solve` nur quadratisch, R, C ≤ 16, Indizes in Range (3.11)",F,M3 (Gate),fertig,"Form bei `+ - *`, `inv`/`det`/`cholesky`/`solve` quadratisch, Indizes statisch vom Typ `int in 0..R-1`; keine Obergrenze, ab 16 Lint SC-42"
 SC-31,Statische Prüfung,10,"Native Funktionen: nur die kuratierte Menge (v1), `cost`, `stack` und `total` deklariert, Argumente fester Größe (4.5)",F,M3 (Gate),fertig,
-SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration",F,M5 (Embedded),teilweise,TTL-Adapter (PA9) — nur die Messung; die Rechnung steht
+SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration. Blockierendes NVM (12.3): ein `persist`-Schreibvorgang kostet `⌈(nvm_erase_ns + 2·nvm_program_ns) / T₀⌉` Perioden — unter `overrun = fault` ohne `idle`-Zustand ein Fehler, mit `idle` ein Hinweis (Schreiben im Schlaf), unter `alert` eine Warnung; fehlt `nvm_blocking` auf einem Ziel mit `iram`, ist die Prüfung nicht entscheidbar",F,M5 (Embedded),teilweise,"TTL-Adapter (PA9) — nur die Messung; die Rechnung steht. NVM-Klausel fertig (plan/nvm.md Schritt 2, `takt-sema/tests/calibrated.rs`)"
 SC-33,Statische Prüfung,10,"`follows`: Kanten azyklisch; Follower liest nur gefolgte Maschinen frisch; keine frischen Lesevorgänge in Aktionsblöcken der Abort-Phase (7.2). **Warnung**, wenn ein Follower eine gefolgte Größe liest, die auch auf seinem Fault-Pfad vorkommt: Dort gilt Ψ_k statt des frischen Werts, die Bedeutung wechselt also still zwischen Schritt- und Abort-Phase (5.4)",F / W,M3 (Gate),fertig,
 SC-34,Statische Prüfung,10,"Dimensionierte Matrizen: Einheitentupel passen (Produkt, Addition, Inverse), Literale bilden ein äußeres Produkt, variable Indizes nur bei gleichen Einheiten (3.11)",F,M3 (Gate),fertig,"`lower/matrix.rs`: Produkt, Addition, Inverse, Cholesky, `solve`, Literale, variable Indizes"
 SC-35,Statische Prüfung,10,"`tunable param` nicht in Compile-Zeit-Konstanten (Array-Größen, Kapazitäten, `repeat`) (8.4)",F,M3 (Gate),fertig,
@@ -691,7 +691,7 @@ PAR-5.6-Alerts_in_Schleifen,Absatz/Regel,5.6,Alerts in Schleifen,,M1 (Kernsemant
 PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),fertig,
 PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M6 (mit 8.10),offen,
 PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),fertig,
-PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M5 (Embedded),fertig,"in der Simulation geprueft: `corpus-try/45_journal_cut.takt`, Kampagne `power_cut` ueber jede Stelle (M6 Schritt 14); im Flash des ESP32-C6 (nvm.rs, FB-197)"
+PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M5 (Embedded),fertig,"in der Simulation geprueft: `corpus-try/45_journal_cut.takt`, Kampagne `power_cut` ueber jede Stelle (M6 Schritt 14); im Flash des ESP32-C6 (nvm.rs, FB-197); Log je Slot seit Version 2 (plan/nvm.md Schritt 4)"
 PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M5 (Embedded),fertig,
 PAR-5.10-Nicht_Wake_Streams_in_idle,Absatz/Regel,5.10,Nicht-Wake-Streams in `idle`,,M5 (Embedded),fertig,
 PAR-5.10-Systemschlaf,Absatz/Regel,5.10,Systemschlaf,,M5 (Embedded),fertig,
@@ -742,7 +742,7 @@ PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M4 (
 PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M4 (Codegen),fertig,
 PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M4 (Codegen),fertig,
 PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M5 (Embedded),offen,
-PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M5 (Embedded),fertig,"ESP32-C6 (plan/esp32c6.md Schritt 7): RAM-Residenz von Tick-ISR, Wartepfad und erzeugtem Code (`#[ram]`, `rwtext_hook.x`); `esp-storage` ohne `critical-section`; `takt size` weist `iram` aus; `idle` als Light-Sleep (Schritt 6). Die Sektorloeschung kostet trotzdem Perioden — sie ist unteilbar und laenger als der Tick (FB-197); die Semantik bleibt unberuehrt."
+PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M5 (Embedded),fertig,"ESP32-C6 (plan/esp32c6.md Schritt 7): RAM-Residenz von Tick-ISR, Wartepfad und erzeugtem Code (`#[ram]`, `rwtext_hook.x`); `esp-storage` ohne `critical-section`; `takt size` weist `iram` aus; `idle` als Light-Sleep (Schritt 6). Die Sektorloeschung kostet trotzdem Perioden — sie ist unteilbar und laenger als der Tick (FB-197); die Semantik bleibt unberuehrt. Seit plan/nvm.md: Kosten in 8.10, Pruefung 32, Schreiben im Schlaffenster, Log-Journal, Residenznachweis in `takt size`."
 PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M6 (v1.1),offen,
 PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M6 (v1.1),offen,
 PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M5 (Embedded),fertig,
@@ -1079,9 +1079,9 @@ CON-tick_source,Konstrukt (2.4),2.4,`tick_source`,,M0 (Parser/MIR-Entwurf),defin
 "CON-jitter,_max_slew",Konstrukt (2.4),2.4,"`jitter`, `max_slew`",,M0 (Parser/MIR-Entwurf),definiert,
 FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M0 (Parser/MIR-Entwurf),teilweise,Version 7; jede aeltere Version lesbar (`takt-mir/tests/roundtrip.rs`)
 FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M4 (Codegen),fertig,"Version 2 (Parametervektor im Kopf); Version 1 lesbar (`takt-interp/tests/recording_versions.rs`, Schritt 26)"
-FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M6 (mit 8.10),fertig,Version 3; Version 1 lesbar (`takt-sema/tests/hardware.rs`)
+FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M6 (mit 8.10),fertig,"Version 4 (NVM-Zeiten, `nvm_blocking`); Version 1 lesbar (`takt-sema/tests/hardware.rs`)"
 FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M5 (Embedded),offen,
-FMT-Journal-Slot,Versioniertes Format,11.3,"`persist`-Journal, Slot-Kopf (`TKPJ`, 5.9)",,M5 (Embedded),fertig,"Version 1; ein Slot der Version 0 mit gueltiger Pruefsumme laedt (`takt-rt-core/tests/journal.rs`, Schritt 26)"
+FMT-Journal-Slot,Versioniertes Format,11.3,"`persist`-Journal, Slot-Kopf (`TKPJ`, 5.9)",,M5 (Embedded),fertig,"Version 2 (Log je Slot, plan/nvm.md 2.4); ein Slot der Version 0 mit gueltiger Pruefsumme laedt (`takt-rt-core/tests/journal.rs`)"
 FMT-Coverage,Versioniertes Format,11.3,"Coverage-Datei (`# takt-coverage 1`, 13.2)",,M6,fertig,"nur Schreiber: `Coverage::render`; ein Leser kommt mit dem Werkzeug, das sie auswertet"
 FMT-Size-Baseline,Versioniertes Format,11.3,"Baseline von `takt size` (`# takt-size 1`, 11.5)",,M6,fertig,"Version 1; aeltere lesbar, neuere abgelehnt (`takt-mir/tests/size_baseline.rs`)"
 FMT-Lauf-Header,Versioniertes Format,11.3,Lauf-Header,,M4 (Codegen),fertig,
@@ -1095,3 +1095,5 @@ CG-8.6-Stroeme_im_Code,Umsetzung,11.2,"Stroeme im erzeugten Code vollstaendig: `
 TEST-Rahmen-Board2,Abnahme,13.8,"Board 2 (ESP32-C6): der Differentialkorpus auf dem Chip gegen den Interpreter — bauen, flashen, Trace ueber USB-Serial-JTAG (board_esp32c6.rs, nur mit TAKT_ESP32C6_PORT)",,M6,fertig,"37 Programme, 0 Abweichungen (2026-09-17); FB-194, FB-195"
 TEST-Rahmen-Stroeme_und_Szenarien,Abnahme,13.8,"Konformitaetsrahmen: Ringe fuer interne Stroeme (Unit-Delay, Freigabe unter dem kleinsten Cursor), `sim`-gekoppelte Eingabestroeme, Szenarien wie `takt test` (`build_scenario`), Faults im nativen Trace (`takt_fault`), Zustandspuffer mit Ausrichtung",,M6,fertig,"FB-177, FB-179; `tests/scenarios.rs`"
 SEM-3.9-inout,Semantik/Absatz,3.9,"`inout`: Aufruf als Anweisung schreibt zurueck, Argument muss eine Stelle sein, `-> T` daneben ausgeschlossen",,M6,fertig,FB-178; `takt-sema/tests/inout.rs`
+system-Eintrag-overrun,system-Eintrag,2.3,"system_item: ""overrun""",,M0 (Parser/MIR-Entwurf),fertig,"plan/nvm.md Schritt 1: Parser, Formatter, S-Ausdruck, Senkung nach `Config.overrun`, Konstanten; `58_persist_alert.takt`"
+DEC-Blockierendes_NVM,Entscheidung,16,"Blockierendes NVM → deklarierte Kosten (8.10), Prüfung 32, Schreiben im Schlaffenster, `overrun = alert`; asynchroner Treiber als Option mit Residenznachweis",,Doku/Rationale,rationale,

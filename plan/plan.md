@@ -211,6 +211,17 @@ Schritte, Hardware: Host und ESP32-C6 über UART) und M9b (Bytecode-VM,
 7 Schritte, verschiebbar). Die VM ist die Option aus 16 und zugleich der
 Schatten-Interpreter für v3.
 
+**Entscheidung (2026-09-17): blockierendes NVM — `plan/nvm.md`.** Board 2
+zeigte, dass ein Journal-Schreibvorgang den Tick anhält, wo Code und
+Daten in einem Flash liegen. Die Sprache bekommt dafür, was sie für
+jede physische Größe hat: die Tatsache in 8.10 (`nvm_blocking`,
+`nvm_erase_ns`, `nvm_program_ns`), das Urteil in Prüfung 32, die Wahl im
+Programm (`system: overrun = fault | alert`, die Syntax, die 7.3
+versprach), und eine Runtime, die im Schlaffenster schreibt. Das
+Journal wird ein Log je Slot. Treiber, die das Flash asynchron
+bedienen, bleiben Board-Arbeit; `takt size` prüft dafür die
+RAM-Residenz.
+
 Unverändert bleibt: Nichts an v1.1 ist ein Breaking Change. Das
 Reservierungspaket aus M0 (Grammatik, MIR-Platzhalter, reservierte Namen,
 Editionen) hält alle diese Konstrukte offen, und jedes v1-Programm bleibt

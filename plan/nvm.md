@@ -207,9 +207,9 @@ schreibt, ist das die Empfehlung — ein Absatz in 12.3, keine Zeile Code.
 
 | Nr. | Stand |
 |---|---|
-| 1 | offen |
-| 2 | offen |
-| 3 | offen |
-| 4 | offen |
-| 5 | offen |
-| 6 | offen |
+| 1 | **fertig 2026-09-17.** `system: overrun = fault \| alert`: Grammatik (2.3 synchronisiert), AST, Parser, Formatter, S-Ausdruck, `Config.overrun` als Metadatum (TAKT-MIR 8, Feld 10), `OVERRUN_ALERT` in den Konstanten, Bring-up nimmt es; `58_persist_alert.takt`. FB-202. |
+| 2 | **fertig 2026-09-17.** `takt-hw 4` mit `nvm_erase_ns`, `nvm_program_ns`, `nvm_blocking`; `persist::journal_cost`; Prüfung 32 mit den drei Fällen aus 2.2 und „nicht entscheidbar“ ohne `nvm_blocking` auf XIP-Zielen; `NVM_BLOCKING_NS` in den Konstanten. Vier Tests in `calibrated.rs`. |
+| 3 | **fertig 2026-09-17.** `Nvm::blocking_ns`; die Schleife pollt ein blockierendes Journal nur, wenn das Wartefenster den Vorgang deckt, oder unter `alert`; ein Vorgang über die Frist ist ein Überlauf. Board 2 misst: Löschen 49,9 ms, Programmieren 0,12 ms (`esp32c6.hw` mit Reserve). `59_persist_idle` schreibt im 500-ms-Schlaffenster ohne verpasste Periode. Befund FB-203: `TimerClock::missed` zählte beim Aufholen mehrfach; die 400 Perioden aus Schritt 7 waren 54. |
+| 4 | **fertig 2026-09-17.** Journal Version 2 als Log je Slot; `FakeNvm` programmiert mit `&=` und zählt Löschungen; vier neue Tests (Anhängen, Wechsel bei vollem Slot, verschmutzter Rest, Abbruch beim Anhängen). Board 2, `58_persist_alert`: 21 Einträge, eine Löschung, vier verpasste Perioden statt 366. FB-204. |
+| 5 | **fertig 2026-09-17.** `inspect`: Symboladressen, Abschnittsgrenzen, `residency`; `takt size --object` zählt die RAM-residenten Symbole des Programms und verlangt bei `nvm_blocking = false` auf XIP-Zielen alle. C6-Abbild: 22 von 22. |
+| 6 | **fertig 2026-09-17.** Referenz: 7.3, 5.9, 8.10 (Zeile NVM), 12.3 (Absatz 2 bedingt, Hardwarewahl), Prüfung 32, 16; Register nachgezogen; Board-Korpus mit Log-Journal und Fensterregel weiter 0 Abweichungen. Draußen geblieben (2.5): der asynchrone Treiber und Flash-Suspend auf dem C6 — Board-Arbeit ohne Sprachanteil. |
