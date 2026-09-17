@@ -1,0 +1,31 @@
+[package]
+name = "takt-board-esp32c6"
+version = "0.1.0"
+description = "Takt: Board-Unterstuetzung fuer den ESP32-C6 (DevKitM-1)"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.86"
+
+# Eigener Workspace, wie beim F401-Crate: Registerzugriff, Interrupt-Handler
+# und die C-ABI des erzeugten Programms brauchen `unsafe`, und das
+# workspace-weite `forbid` (13.4) laesst sich nicht lokal aufheben. 9.5
+# fuehrt Treiber in der Trusted Computing Base (plan/esp32c6.md 2).
+[workspace]
+
+[dependencies]
+takt-board-support = { path = "../takt-board-support" }
+takt-rt-baremetal = { path = "../takt-rt-baremetal" }
+takt-rt-core = { path = "../takt-rt-core" }
+
+# Start, Speicherkarte, Abbildformat und der SYSTIMER-Alarm (plan/esp32c6.md 2):
+# die eine bewusste Abweichung von "PAC statt HAL" — die Speicherkarte eines
+# XIP-Chips mit ROM-Bootloader selbst zu schreiben waere Arbeit ohne Erkenntnis.
+esp-hal = { version = "1.2.1", features = ["esp32c6", "unstable"] }
+esp-println = { version = "0.18", features = ["esp32c6", "jtag-serial"], default-features = false }
+critical-section = "1"
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"

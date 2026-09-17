@@ -109,7 +109,16 @@ if [ -f "$bin" ] && { [ -x "$nm" ] || [ -x "$nm.exe" ]; } && [ -n "$konfiguriert
 fi
 
 echo
-echo "== 4. Die rechnende Haelfte auf dem Wirt"
+echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
+(
+    cd crates/takt-board-esp32c6
+    cargo build --target riscv32imac-unknown-none-elf "$@"
+    cargo clippy --target riscv32imac-unknown-none-elf "$@" -- -D warnings
+)
+cargo build --release --target riscv32imac-unknown-none-elf     --manifest-path crates/takt-bringup-esp32c6/Cargo.toml "$@"
+
+echo
+echo "== 5. Die rechnende Haelfte auf dem Wirt"
 cargo test -p takt-board-support -p takt-flash-weact "$@"
 
 echo

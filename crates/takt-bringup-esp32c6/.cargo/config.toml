@@ -1,0 +1,11 @@
+# Das Ziel des Bring-up-Programms (RV32IMAC, plan/esp32c6.md).
+#
+# Die Linker-Argumente stehen in `build.rs`, nicht hier: Diese Datei gilt
+# nur, wenn `cargo` aus diesem Verzeichnis laeuft.
+
+[build]
+target = "riscv32imac-unknown-none-elf"
+
+[target.riscv32imac-unknown-none-elf]
+# Flashen und Mitlesen ueber USB-Serial-JTAG; `probe-rs` kennt den Chip.
+runner = "probe-rs run --chip esp32c6"

@@ -1,0 +1,8 @@
+# Welches Takt-Programm das Bring-up ausfuehrt.
+#
+# Hier und nicht in einer Umgebungsvariablen: Der Pfad bestimmt den Inhalt
+# des Binaries, und ein vergessener Wert fiele still auf einen Default
+# zurueck (FB-141). `TAKT_PROGRAM` sticht fuer einen einmaligen Versuch.
+#
+# Relativ zu diesem Verzeichnis.
+program = "../../corpus-try/29_heartbeat.takt"

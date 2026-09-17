@@ -33,11 +33,17 @@ pub fn ns_per_count(timer_hz: u32) -> Option<i64> {
 /// beginnt. Diese Unterscheidung ist eine klassische Fehlerquelle; sie
 /// steht darum in zwei Funktionen statt in einer mit einem Kommentar.
 pub fn counts_for(timer_hz: u32, period_ns: i64) -> Result<u32, PeriodError> {
-    let step = ns_per_count(timer_hz).ok_or(PeriodError::NoClock)?;
-    if period_ns < step {
+    if timer_hz == 0 {
+        return Err(PeriodError::NoClock);
+    }
+    // Exakt in `u128`, nicht ueber `ns_per_count`: Bei 16 MHz ist ein
+    // Schritt 62,5 ns, und die Ganzzahl 62 verschoebe jede Periode um
+    // acht Promille (Board 2).
+    let counts = u128::from(period_ns.max(0).unsigned_abs()) * u128::from(timer_hz) / 1_000_000_000;
+    if counts == 0 {
         return Err(PeriodError::TooShort);
     }
-    u32::try_from(period_ns / step).map_err(|_| PeriodError::TooLong)
+    u32::try_from(counts).map_err(|_| PeriodError::TooLong)
 }
 
 /// Der Prescaler, der aus der Eingangsfrequenz die Zielfrequenz macht.
@@ -60,7 +66,10 @@ pub fn prescaler_for(input_hz: u32, target_hz: u32) -> Option<u16> {
 /// die Konfiguration falsch — und das faellt beim Start auf statt spaeter
 /// als Drift.
 pub fn period_ns(timer_hz: u32, counts: u32) -> i64 {
-    ns_per_count(timer_hz).map_or(0, |step| i64::from(counts) * step)
+    if timer_hz == 0 {
+        return 0;
+    }
+    i64::try_from(u128::from(counts) * 1_000_000_000 / u128::from(timer_hz)).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]

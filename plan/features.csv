@@ -115,7 +115,7 @@ CG-11.5-SizeGemessen,Umsetzung,11.5,`takt size` gegen das Objekt geprueft: die D
 CG-11.5-FlashPosten,Umsetzung,11.5,"Der Posten „Flash (Code, Konstanten)"" wird gemessen statt `offen`: braucht ein festes Ziel",,M5 (Embedded),fertig,
 CG-12.3-StackTiefe,Umsetzung,12.3,"Stacktiefe als laengster Pfad im Aufrufgraphen plus Rahmen je Funktion; die Messung steht (`inspect::stack_frame`), die Rechnung kommt mit dem Profil",,M5 (Embedded),fertig,
 CG-13.4-Objektcode,Umsetzung,13.4,Objektcode gegen Quelle nachvollziehen (Zertifizierung): baut auf `inspect::symbols` auf,,M9 (v2),offen,
-SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedded),teilweise,Board 2 (RV32IMAC)
+SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedded),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M5 (Embedded),teilweise,
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig,
 SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M5 (Embedded),teilweise,TTL-Adapter (PA9)
@@ -137,7 +137,7 @@ SEM-14.3,Semantik/Abschnitt,14.3,Parametrisierte Maschine mit Instanzen (Ventilr
 SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig,
 SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig,
 SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig,
-SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),offen,Board 2 (RV32IMAC)
+SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),offen,Board 2 = ESP32-C6 (plan/esp32c6.md)
 SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),fertig,Wortlaut in `corpus-try/sim/14_8/program.takt` mit den kuratierten Namen (FB-166); im Interpreter mit Flash-Modell und Signaturpruefung
 G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),fertig,
 G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),fertig,
@@ -742,13 +742,13 @@ PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M4 (
 PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M4 (Codegen),fertig,
 PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M4 (Codegen),fertig,
 PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M5 (Embedded),offen,
-PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M5 (Embedded),offen,Board mit XIP-Flash
+PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M5 (Embedded),offen,ESP32-C6 (plan/esp32c6.md Schritt 7)
 PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M6 (v1.1),offen,
 PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M6 (v1.1),offen,
 PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M5 (Embedded),fertig,
 PAR-12.7-Start_Channels,Absatz/Regel,12.7,Start-Channels,,M6 (v1.1),offen,
 PAR-12.7-Irreversible_Outputs,Absatz/Regel,12.7,Irreversible Outputs,,M6 (v1.1),fertig,
-PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M5 (Embedded),teilweise,Board 2 (RV32IMAC)
+PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M5 (Embedded),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)
 PAR-13.3-Sprache,Absatz/Regel,13.3,Sprache,,M6 (v1.1),fertig,`TProp` aus dem AST (`lower/property.rs`)
 PAR-13.3-Semantik,Absatz/Regel,13.3,Semantik,,M6 (v1.1),fertig,"`takt-interp/src/property.rs`: Tick-Rand-Snapshots, dreiwertig auf dem endlichen Lauf, Entscheidung bei geschlossenem Fenster"
 PAR-13.3-Verwendung,Absatz/Regel,13.3,Verwendung,,M6 (v1.1),fertig,"Monitor in `takt test`/`RunResult.properties`, nativ mit `with monitor = true`; `takt prove` mit Export und Solver (k-Induktion/BMC), Gegenbeispiel als Stimulus"
@@ -900,7 +900,7 @@ EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Vent
 EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig,
 EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig,
 EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig,
-EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),teilweise,Board 2 (RV32IMAC)
+EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)
 EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise,`corpus-try/sim/14_8/` mit drei Szenarien und Golden-Traces (M6 Schritt 17); differentiell offen: `ecdsa_p256_verify` hat keinen C-Rahmen (examples.rs OPEN)
 PRINC-1,Leitentscheidung,0.2,Synchron-zyklische Multirate-Ausführung.,,Doku/Rationale,rationale,
 PRINC-2,Leitentscheidung,0.2,Drei Konstruktebenen.,,Doku/Rationale,rationale,

@@ -1,0 +1,42 @@
+[package]
+name = "takt-bringup-esp32c6"
+version = "0.1.0"
+description = "Takt: Bring-up-Programm fuer den ESP32-C6 — Tick, Telemetrie ueber USB-Serial-JTAG"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.86"
+
+# Eigener Workspace, wie das F401-Bring-up: Interrupt-Handler und C-ABI
+# brauchen `unsafe`, und das workspace-weite `forbid` (13.4) laesst sich
+# nicht lokal aufheben (plan/esp32c6.md 2).
+[workspace]
+
+[build-dependencies]
+takt-conformance = { path = "../takt-conformance" }
+takt-diag = { path = "../takt-diag" }
+takt-llvm = { path = "../takt-llvm" }
+takt-mir = { path = "../takt-mir" }
+takt-sema = { path = "../takt-sema" }
+
+[dependencies]
+takt-board-esp32c6 = { path = "../takt-board-esp32c6" }
+takt-board-support = { path = "../takt-board-support" }
+takt-rt-baremetal = { path = "../takt-rt-baremetal" }
+takt-rt-core = { path = "../takt-rt-core" }
+
+# Start, Speicherkarte und Abbildformat des XIP-Chips (plan/esp32c6.md 2).
+esp-hal = { version = "1.2.1", features = ["esp32c6", "unstable"] }
+esp-println = { version = "0.18", features = ["esp32c6", "jtag-serial"], default-features = false }
+panic-halt = "1.0"
+# App-Deskriptor im Abbild: der ROM-Bootloader und `probe-rs` verlangen ihn.
+esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32c6"] }
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+debug = true
+lto = true
