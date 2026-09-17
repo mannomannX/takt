@@ -170,7 +170,7 @@ driver machine uart_port:
             var num   : u32[Hz] = F_PCLK
             var den   : u32[Hz] = BAUD.to(Hz) * 16
             var whole : u32     = num / den
-            var rest  : u32     = num % den
+            var rest  : u32[Hz] = num % den                     # der Rest traegt die Einheit
             var frac  : u32     = (rest * 64) / den
 
             expect whole >= 1 and whole <= 0xFFFF, "baud divisor out of range: {whole}"
@@ -178,12 +178,16 @@ driver machine uart_port:
             uart_ct = UartCtrl(flags = 0)                       # alles aus
             uart_bd = UartBaud(div_int  = whole as u16,
                                div_frac = frac as u8)
-            uart_ct = UartCtrl(flags = 0)
-                        .with_bit(4, true)                      # rx_flush
-                        .with_bit(5, true)                      # tx_flush
-            uart_ct = UartCtrl(flags = 0)
-                        .with_bit(0, true)                      # enable
-                        .with_bit(1, true)                      # rts
+            # Bitfelder sind Sichten auf das Traegerfeld (3.7): der Name
+            # setzt genau seine Bits.
+            var ctl : UartCtrl = UartCtrl(flags = 0)
+            ctl.flags.rx_flush = true
+            ctl.flags.tx_flush = true
+            uart_ct = ctl
+            ctl = UartCtrl(flags = 0)
+            ctl.flags.enable = true
+            ctl.flags.rts    = true
+            uart_ct = ctl
             wait 200 us                                          # Einschwingen der Leitung
             -> RUN
 
@@ -198,7 +202,7 @@ driver machine uart_port:
             # ---- Fehlerflags zuerst: W1C, damit kein Ereignis verloren geht.
             if st.flags.bit(3):
                 overruns += 1
-                uart_ct = uart_ct.with_bit(4, true)              # rx_flush
+                uart_ct.flags.rx_flush = true                    # Lesen, Bit setzen, Schreiben (15)
                 alert true, "uart RX overrun (#{overruns})"
             if st.flags.bit(4):
                 frame_errs += 1
@@ -227,7 +231,7 @@ driver machine uart_port:
             for ev in tx_raw:
                 if sent >= room or not cts_ok:
                     break
-                uart_dr = UartData(byte = ev)
+                uart_dr = UartData(byte = ev.data)               # `ev` ist die Bindung (8.7)
                 tx_bytes += 1
                 sent += 1
 
@@ -269,8 +273,10 @@ driver machine uart_port:
 const MAX_PAYLOAD : int = 1024
 const MAX_ENCODED : int = 1024 + 5 + 1                # n + ceil(n/254) + Trenner
 
-stream<bytes<1024>> rx_frames with capacity = 8, expect_len = 96, overflow = fault
-stream<bytes<1024>> tx_frames with capacity = 8, expect_len = 96, overflow = fault
+# Der Byte-Ring muss die Hoechstlast je Aktivierung fassen (Lemma 9.6.1):
+# `expect_len` sagt, was ueblich ist, `capacity_bytes`, was nie ueberlaeuft.
+stream<bytes<1024>> rx_frames with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
+stream<bytes<1024>> tx_frames with capacity = 8, expect_len = 96, capacity_bytes = 3072, overflow = fault
 
 
 # --- reine Funktionen: COBS ---------------------------------------------------
@@ -278,7 +284,9 @@ stream<bytes<1024>> tx_frames with capacity = 8, expect_len = 96, overflow = fau
 # aufzugeben: der Compiler uebergibt per Zeiger, Aliasing ist statisch
 # ausgeschlossen (Pruefung 47).
 
-fn cobs_encode(src: bytes<1024>, inout dst: bytes<1030>) -> bool:
+# `inout` ist die Rueckgabe (3.9): `cobs_encode(src, dst)` als Anweisung
+# steht fuer `dst = cobs_encode(src, dst)`. Ein Fehler laesst `dst` leer.
+fn cobs_encode(src: bytes<1024>, inout dst: bytes<1030>):
     dst.clear()
     var code_at : int in 0..1030 = 0
     var code    : int in 1..255  = 1
@@ -301,30 +309,35 @@ fn cobs_encode(src: bytes<1024>, inout dst: bytes<1030>) -> bool:
             code = 1
     dst[code_at] = code as u8
     put = dst.push(0)                                  # Rahmentrenner
-    return ok and put
+    if not (ok and put):
+        dst.clear()
 
-fn cobs_decode(src: bytes<1030>, inout dst: bytes<1024>) -> bool:
+fn cobs_decode(src: bytes<1030>, inout dst: bytes<1024>):
     dst.clear()
-    var i : int in 0..1030 = 0
+    var i   : int in 0..1030 = 0
+    var bad : bool = false
     for _pass in range(MAX_ENCODED):
-        if i >= src.len:
+        if bad or i >= src.len:
             break
         var code : int in 0..255 = src[i] as int
         if code == 0:
-            return false                               # unerwarteter Trenner
+            bad = true                                 # unerwarteter Trenner
+            break
         i += 1
         for k in range(254):
             if k + 1 >= code or i >= src.len:
                 break
             var put = dst.push(src[i])
             if not put:
-                return false                           # Nutzlast zu gross
+                bad = true                             # Nutzlast zu gross
+                break
             i += 1
-        if code < 255 and i < src.len:
+        if not bad and code < 255 and i < src.len:
             var sep = dst.push(0)
             if not sep:
-                return false
-    return dst.len > 0
+                bad = true
+    if bad:
+        dst.clear()
 
 
 fn crc16_ccitt(b: bytes<1024>, seed: u16) -> u16:
@@ -358,6 +371,21 @@ machine uart_framer follows uart_port:
 
     initial SYNC
 
+    # TX-Richtung in jedem Zustand: der Sender braucht keinen Rahmensync,
+    # und ein Frame je Aktivierung haelt das Budget flach.
+    loop:
+        for f in tx_frames:
+            cobs_encode(f.data, enc)
+            if enc.len > 0:
+                for i in range(MAX_ENCODED):
+                    if i >= enc.len:
+                        break
+                    send tx_raw, enc[i]
+                frames_out += 1
+            else:
+                alert true, "cobs encode overflow ({f.data.len} bytes)"
+            break
+
     state SYNC:
         # Nach einem Fehler wird bis zum naechsten Nullbyte verworfen; erst
         # dann ist die Rahmengrenze wieder bekannt.
@@ -368,19 +396,6 @@ machine uart_framer follows uart_port:
                 -> ASSEMBLE
 
     state ASSEMBLE:
-        loop:
-            # TX-Richtung: ein Frame je Aktivierung, damit das Budget flach bleibt.
-            for f in tx_frames:
-                if cobs_encode(f.data, enc):
-                    for i in range(MAX_ENCODED):
-                        if i >= enc.len:
-                            break
-                        send tx_raw, enc[i]
-                    frames_out += 1
-                else:
-                    alert true, "cobs encode overflow ({f.data.len} bytes)"
-                break
-
         on rx_raw as ev:
             # Leitungsfehler auf Byteebene verwerfen den ganzen Frame.
             if ev.data.frame or ev.data.parity or ev.data.brk:
@@ -388,7 +403,8 @@ machine uart_framer follows uart_port:
                 -> RESYNC
             if ev.data.b == 0:
                 if acc.len > 0:
-                    if cobs_decode(acc, out):
+                    cobs_decode(acc, out)
+                    if out.len > 0:
                         send rx_frames, out
                         frames_in += 1
                     else:
@@ -413,8 +429,8 @@ machine uart_framer follows uart_port:
 
 const HDR_LEN : int = 5                                # magic + kind + seq + len(2)
 
-stream<bytes<1024>> app_rx with capacity = 8, expect_len = 96, overflow = fault
-stream<bytes<1024>> app_tx  with capacity = 8, expect_len = 96, overflow = fault
+stream<bytes<1024>> app_rx with capacity = 8, expect_len = 96, capacity_bytes = 1024, overflow = fault
+stream<bytes<1024>> app_tx  with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
 stream<bytes<1024>> app_tx2 with capacity = 8, expect_len = 96, overflow = fault
 
 param RETRIES     : int in 0..8 = 3
@@ -578,7 +594,8 @@ block line_assembler[const N in 16..1024]():
             return AssembledLine(ready = true, data = out)
         if ev.b == 0x0D:                                   # CR ignorieren
             return AssembledLine(ready = false, data = default)
-        if not buf.push(ev.b):
+        var fits : bool = buf.push(ev.b)                   # `push` ist eine Anweisung (4.4)
+        if not fits:
             trunc = true
         return AssembledLine(ready = false, data = default)
 
@@ -596,7 +613,7 @@ block line_assembler[const N in 16..1024]():
 
 property no_tx_without_cts: always(uart_port.tx_bytes > 0 implies once[1 ms](uart_port.cts_ok))
 
-property de_before_data: always(rs485_de implies stable[10 us](rs485_de))
+property de_before_data: always(rs485_de implies stable[100 us](rs485_de))   # ein Tick; Fenster sind Tick-Vielfache (13.3)
 
 property link_recovers: always(uart_link.up == false implies eventually[2 s](uart_link.up == true))
 
@@ -618,7 +635,7 @@ machine uart_model:
     initial RUN
     state RUN:
         loop:
-            var f0 : u8 = 0x02
+            var f0 : u32 = 0x02                                # `flags` ist u32
             if now < CTS_DROP_AT or CTS_DROP_AT == 0 s:
                 f0 = f0 | 0x80
             st_sim = UartStatus(flags = f0)
