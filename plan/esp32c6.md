@@ -69,6 +69,8 @@ architekturneutral und wird wiederverwendet.
 | 5 | Konformität: der Korpus aus `differential.rs` auf dem Board, Trace nachgelagert aus dem RAM-Log (M5 4, Punkt 1); Monitore und `map`-Iteration (M6 Schritt 28) | Interpreter ≡ x86-64 ≡ riscv32imac; Register-IDs mit Blocker „Board 2" |
 | 6 | 14.7 auf dem Board: `persist` in einem Flash-Sektor, `idle` mit `Sleep` (Light-Sleep, SYSTIMER weckt) | 14.7-Lauf mit Trace; Satz 9.9.1 auf Hardware |
 | 7 | `xip_flash`: RAM-Residenz von Code und tick-gelesenen Konstanten (IRAM), Flash-Schreibzugriff im Lauf ohne Stillstand, `takt size` mit `iram` | PAR-12.3 (Profilfamilie `xip_flash`), SC-39 mit `iram` |
+| 8 | Physische Zeit je Tick: Metazeile `time` in Trace und Telemetrie, `TickSource::now_ns`, abgeleitete Kennzahlen statt Zähler (Abschnitt 6) | `takt timing` auf einer Board-Aufzeichnung nennt die Journal-Löschung als späten Tick; Kennzahlen gegen einen eingespielten Stillstand |
+| 9 | Innentick-Sicht: `takt sim --steps` im Interpreter, `pc` je Maschine im Rahmen unter `statements` (Abschnitt 6) | jede Anweisung eines Ticks als Zeile; `t=k pc` auf dem Board |
 
 Schritte 1–4 sind der Bring-up (zwei bis vier Tage); 5–7 sind die
 Hardwareanteile aus M5 und M6, die dieses Board tragen kann. Was bei Board
@@ -105,6 +107,81 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
   das Skript den Stand prüft: `cargo build -p takt-cli --release` vor dem
   Bring-up.
 
+## 6. Nachtrag: die physische Seite des Ticks (Schritte 8 und 9)
+
+Die logische Taktgenauigkeit ist belegt: Trace je Tick in kanonischer
+Ordnung, Permutationslauf, Differentialtest bis auf den Chip, Hashkette,
+Replay. Die physische Seite — lief Tick k zur Zeit k·T₀ — misst die
+Runtime (`Tick { took, drift, overrun, slept }`), aber niemand schreibt
+sie je Tick mit, und der Zähler der verpassten Ticks in `TimerClock`
+zählte falsch, ohne dass ein Test es sah (FB-203). Zwei Schritte
+schließen das; beide sind Werkzeug und Runtime, keine Sprache.
+
+### 6.1 Physische Zeit je Tick (Schritt 8)
+
+**Eine Quelle, abgeleitete Zahlen.** Der Fehler in `missed` entstand,
+weil die Uhr aus ihrem Zähler Ereignisse zurückrechnete — ein zweiter
+Zähler neben dem, was die Schleife ohnehin je Tick weiß. Die Lösung ist,
+den zweiten Zähler abzuschaffen: `drift` (Beginn des Ticks minus Frist)
+und `took` (Dauer des Schritts) sind je Tick die Wahrheit, und alles
+andere folgt daraus:
+
+| Kennzahl | Definition | Bedeutung |
+|---|---|---|
+| verspätete Ticks | Zahl der Ticks mit `drift ≥ T₀` | Ticks, die mindestens eine Periode zu spät begannen |
+| Rückstand | `max drift` | wie weit die Schleife höchstens hinterherlief |
+| verlorene Perioden | `Σ max(0, drift_k − drift_{k−1}) / T₀` | Zeit, in der kein Tick begonnen werden konnte — der Zuwachs des Rückstands, nie das Aufholen |
+| Überläufe | Ticks mit `took > T₀` | 7.3, unverändert |
+
+`Overrun` in `takt-rt-core` führt die vier Zahlen; `TimerClock::missed`
+entfällt. Ein Test auf dem Wirt spielt mit einer Attrappe einen
+Stillstand von fünf Perioden und ein Aufholen ein und erwartet genau
+fünf; auf dem Board liefert das Journal den bekannten Stillstand
+(Löschung 49,9 ms bei 10 ms Tick: fünf Perioden, `58_persist_alert`).
+
+**Feinere Uhr.** `TimerClock::now()` zählt Ticks; `took` ist damit null
+oder ein Vielfaches von T₀. `TickSource` bekommt `now_ns()` aus dem
+Zählerstand des Timers (SYSTIMER: 62,5 ns), für `took` und `drift`; die
+logische Zeit bleibt Ticks × T₀ (7.1).
+
+**Die Metazeile.** `t=<k> time took=<ns> drift=<ns> [slept=<n>]`, von
+den nativen Runtimes geschrieben (Sink auf Linux, Telemetrie auf dem
+Board), nie vom Interpreter — er hat keine physische Zeit. Sie steht
+außerhalb der Hashkette (T6) und des Vergleichs (`compare` überliest
+sie wie Kommentare), weil 12.5 Zeitstempel außerhalb der Semantik hält:
+Der Trace bleibt bitgleich, die Zeit kommt daneben zu stehen. `takt
+timing AUFZEICHNUNG` rechnet die vier Kennzahlen daraus und nennt die
+spätesten Ticks mit ihrer Nummer — damit ist ein Überlauf einem Tick
+zuzuordnen, nicht nur gezählt. Referenz nachziehen: 7.3 („die physische
+Verzögerung wird protokolliert" bekommt die vier Begriffe), 12.5
+(`time`-Zeile), `grammar/trace.md` (T1 als Metazeile, T5 am Ende des
+Ticks, T6 ausgenommen).
+
+### 6.2 Innentick-Sicht (Schritt 9)
+
+Der Trace zeigt je Tick, was beobachtbar ist; zwischen zwei Zeilen
+liegen alle Anweisungen des Ticks. Für die Fehlersuche innerhalb eines
+Ticks bekommt der Interpreter `takt sim --steps DATEI`: je ausgeführter
+Anweisung eine Zeile `t=<k> step <maschine> <zustand> <zeile>:<spalte>
+<anweisung> [= <wert>]` — Zuweisungen mit Ergebnis, Guards mit
+Wahrheitswert, Übergänge mit Ziel, Prüfungen mit Ausgang. Der
+Interpreter hat die Spannen der MIR-Anweisungen; die Kosten sind eine
+Zeile je Anweisung, und die Datei ist kein Trace: kein kanonisches
+Format, keine Hashkette, nur für Menschen. Das ersetzt den Debugger,
+den das Modell nicht braucht: Ein Lauf ist deterministisch, also ist
+der Schrittmitschnitt eines Ticks so gut wie ein Haltepunkt darin.
+
+Auf dem Chip gibt es keinen Interpreter, aber der Codegen führt unter
+`statements` (11.2, 12.8) einen Programmzähler `pc` je Maschine im
+Zustandsstruct: die Zeile der letzten Anweisung. Der Rahmen gibt ihn am
+Tickende als Metazeile `t=<k> pc <maschine> <zeile>` aus, wenn die
+Instrumentierung es erlaubt — auf `baremetal` ist der Default `states`,
+also aus. Damit sagt ein Board nach einem Fault oder Überlauf, wo die
+Maschine stand.
+
+**Was beides nicht ist:** kein Haltepunkt, kein Eingriff in den Lauf,
+keine Sprache. Wer im Programm eine Sonde will, hat `log` und `measure`.
+
 ## 5. Stand der Umsetzung
 
 | # | Stand |
@@ -116,3 +193,5 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
 | 5 | **fertig 2026-09-17.** `takt-conformance/tests/board_esp32c6.rs` (nur mit `TAKT_ESP32C6_PORT=COM4`): 37 Programme des Differentialkorpus laufen auf dem Chip, je 60 Ticks, Trace über USB-Serial-JTAG, **0 Abweichungen** gegen den Interpreter — Monitore (47), `map`-Iteration (42), SHA-256 (39), Ströme und `sim`-gekoppelte Modelle (23–27, 49–55) eingeschlossen. Ausgelassen, weil der MCU-Rahmen sie nicht trägt: geplante Ausgaben (28), Systemkanäle (32, 34), Jobs (40). Dafür bekam der Rahmen Natives, Ströme, `sim`-Bindungen, Monitore, Floats/Arrays/vorzeichenlose Werte im Trace und schwache Treiber-Defaults (`takt_out_*`). Befund FB-194: Der Rahmen bemaß seine Zustandspuffer aus einer Schranke statt aus dem Struct des Codegens; `39_sha256` schrieb darüber hinaus, und die Stack-Wache des Boards fing es — auf dem Wirt blieb es unsichtbar. |
 | 6 | **fertig 2026-09-17, mit einer Grenze.** Die Schleife ist jetzt `takt_rt_core::Runtime` mit `run_persisting`: das `persist`-Journal liegt in zwei Flash-Sektoren der `nvs`-Partition (`nvm.rs`, `esp-storage`), `idle` schläft als virtuelle Ticks über `TimerClock` (9.9). Belegt in `board_esp32c6.rs`: `35_persist` überlebt einen Reset (der zweite Lauf beginnt mit dem `count` des ersten, `journal: Eintrag`), `56_idle_timer` schläft rund 50 von 60 Ticks und bleibt trace-gleich mit dem Interpreter. Drei Befunde: die Uhr wartete auf das nächste Ereignis statt auf die Frist, nach virtuellen Ticks lief die Schleife der Zeit davon (FB-199, behoben); ein ISR-Zähler verliert Ticks, solange das Flash die Interrupts sperrt — die Tickzahl kommt jetzt aus dem SYSTIMER selbst (FB-198, behoben); und der Preis des Journals: `esp-storage` löscht und schreibt blockierend mit gesperrten Interrupts, ein Schreibvorgang kostet drei bis vier Ticks zu 10 ms (FB-197) — genau der Fall, den 12.3 für `xip_flash` beschreibt, und damit Schritt 7. Die Grenze: 14.7 selbst läuft noch nicht, weil seine Eingänge (AFE, Taster als `Edge`-Strom, Ladegerät als Wake-Quelle) Treiber am Board brauchen, die der MCU-Rahmen heute nicht anbietet — er stellt Ausgänge (`takt_out_*`), aber keine Eingänge. |
 | 7 | **fertig 2026-09-17.** Drei Teile. (1) *RAM-Residenz:* Tick-ISR, Zaehler, Wartepfad und Schlaf tragen `#[esp_hal::ram]`; der erzeugte Takt-Code und sein C-Rahmen kommen ueber `rwtext_hook.x` nach `.rwtext` (eingeschaltet mit `ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK`). Gemessen: 4904 Byte Code und 104 Byte Konstanten wandern aus dem Flash ins RAM. (2) *Flash-Schreibzugriff im Lauf:* `esp-storage` laeuft ohne `critical-section` — es sperrte die Interrupts fuer die ganze Sektorloeschung —, und `FlashNvm` deckt die Nebenlaeufigkeit selbst mit einem Flag. (3) *`takt size` mit `iram`:* `Sections` trennt `.trap`/`.rwtext` von `.text`/`.rodata`, der Bericht hat einen eigenen Posten, und Pruefung 39 vergleicht ihn mit `iram` aus `corpus-try/hw/esp32c6.hw` (FB-201). Die Grenze, die bleibt: Eine Sektorloeschung dauert rund 25 ms und ist unteilbar, bei 10 ms Tick vergehen also Perioden — 400 statt 429 in 16 Schreibvorgaengen. Das ist Hardware, nicht Compiler (FB-197); die logische Zeit bleibt unberuehrt, weil die Tickzahl aus dem SYSTIMER kommt. Belegt mit `57_persist_often.takt` (`min_interval = 0`) in `the_journal_costs_time_but_not_semantics`, und der volle Korpus laeuft mit RAM-Residenz weiter mit **0 Abweichungen** (39 Programme). Nachtrag: Die 400 Perioden waren ein Zählfehler der Uhr (FB-203), wirklich 54; mit dem Log-Journal aus `plan/nvm.md` sind es 4. |
+| 8 | offen |
+| 9 | offen |
