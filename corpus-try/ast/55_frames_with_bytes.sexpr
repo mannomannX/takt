@@ -1,0 +1,40 @@
+(system
+  (language 1)
+  (tick 1ms))
+(record Frame layout=little
+  (id: u32 in 0..0x7FF)
+  (dlc: u8 in 0..8)
+  (data: bytes<8>))
+(input rx :stream<Frame> @hw("can0/rx") max_rate=4000[Hz] capacity=16 overflow=fault)
+(output rx_sim :stream<Frame> @sim("can0/rx"))
+(output seen :int in 0..1000 @hw("o/seen") safe=0)
+(output first :int in 0..255 @hw("o/first") safe=0)
+(output total :int in 0..8000 @hw("o/total") safe=0)
+(machine dut
+  (initial RUN)
+  (state RUN
+    (on rx as f
+      (= seen (+ seen 1))
+      (= total (+ total (.len (.data (.data f)))))
+      (if (> (.len (.data (.data f))) 0)
+        (= first (as (index (.data (.data f)) 0) int))))))
+(machine model
+  (var k :int in 0..255 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (var d :bytes<8> default)
+      (var a :bool (.push d (as k u8)))
+      (if (== (% k 2) 0)
+        (var b :bool (.push d 0x55))
+        (var c :bool (.push d 0xAA)))
+      (send rx_sim (Frame id=0x181 dlc=(as (.len d) u8) data=d))
+      (= k (% (+ k 1) 256)))))
+(scenario "frames cross the sim boundary" every=1ms
+  (initial RUN)
+  (state RUN
+    (sequence
+      (wait 6ms)
+      (verify (>= seen 4) "frames did not arrive")
+      (verify (>= total 8) "payloads lost their length")
+      (verdict pass "frames intact"))))

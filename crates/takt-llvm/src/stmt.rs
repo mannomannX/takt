@@ -480,11 +480,15 @@ fn send(
                 let pair = m.inst(&format!("load {ty}, ptr {src}"));
                 m.void_inst(&format!("store {ty} {pair}, ptr {buffer}"));
             } else {
+                // Feste Slot-Form (plan/m6.md 2.2): die kanonische Form, mit
+                // Nullen auf `len_max` (= `max_size`) gefuellt — so liegt
+                // das Element im Ring, und so trennt es der Empfaenger, auch
+                // mit einem `bytes<N>`-Feld darin (FB-189).
+                m.void_inst(&format!("store {ty} zeroinitializer, ptr {buffer}"));
                 let out = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 1"));
-                let n = crate::persist::encode_canonical(ctx.program, value.ty, src, out, m)?;
-                let n32 = m.inst(&format!("trunc i64 {n} to i32"));
+                let _ = crate::persist::encode_canonical(ctx.program, value.ty, src, out, m)?;
                 let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 0"));
-                m.void_inst(&format!("store i32 {n32}, ptr {len_ptr}"));
+                m.void_inst(&format!("store i32 {len_max}, ptr {len_ptr}"));
             }
         }
     }

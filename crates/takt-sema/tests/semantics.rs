@@ -1080,3 +1080,29 @@ fn errors_of(body: &str) -> String {
     let out = takt_sema::compile(&src, &options);
     out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect::<Vec<_>>().join("\n")
 }
+
+#[test]
+fn a_prefixed_rate_counts_in_hertz() {
+    let body = "\
+output tx  : stream<u8>   @ hw(\"o/tx\")  with max_rate = 2 kHz, capacity = 16
+output got : int in 0..16 @ hw(\"o/got\") with safe = 0
+command go
+
+machine dut:
+    var msg : bytes<4> = default
+    initial IDLE
+    state IDLE:
+        enter:
+            msg.push(1)
+            msg.push(2)
+            msg.push(3)
+        when go:
+            send tx, msg
+            -> SENT
+    state SENT:
+        loop:
+            got = tx.sent.or(default).len
+";
+    let trace = simulate(body, "t=1 cmd go\n", 4);
+    assert!(trace.contains("t=2 out got 2\n"), "2 kHz sind 2 Byte je Millisekunde (8.8, FB-188): {trace}");
+}

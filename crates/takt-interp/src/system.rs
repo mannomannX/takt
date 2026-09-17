@@ -1245,7 +1245,16 @@ fn element_bytes(loaded: &Loaded<'_>, elem: TypeId, v: &Value) -> Vec<u8> {
         Value::Str(s) => s.as_bytes().to_vec(),
         Value::Line { text, .. } => text.as_bytes().to_vec(),
         Value::Array(items) => items.iter().flat_map(|x| element_bytes(loaded, elem, x)).collect(),
-        other => crate::bytes::encode(loaded.program, other, elem).unwrap_or_default(),
+        // Feste Elementform (plan/m6.md 2.2): die kanonische Form, mit
+        // Nullen auf `max_size` gefuellt — ein `bytes<N>`-Feld macht sie
+        // sonst variabel lang, und der Leser faende die Grenzen nicht (FB-189).
+        other => {
+            let mut bytes = crate::bytes::encode(loaded.program, other, elem).unwrap_or_default();
+            if let Ok(size) = takt_mir::bytes::max_size(loaded.program, elem) {
+                bytes.resize(size as usize, 0);
+            }
+            bytes
+        }
     }
 }
 

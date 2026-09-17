@@ -29,6 +29,12 @@ pub fn decode(p: &Program, bytes: &[u8], ty: TypeId) -> Result<Value, Error> {
     if d.is_empty() { Ok(v) } else { Err(Error::Malformed) }
 }
 
+/// Liest einen Wert aus einem Slot fester Groesse (plan/m6.md 2.2): vorn
+/// die kanonische Form, dahinter Fuellbytes bis `max_size`.
+pub fn decode_slot(p: &Program, bytes: &[u8], ty: TypeId) -> Result<Value, Error> {
+    read(p, ty, &mut Decoder::new(bytes), 0)
+}
+
 fn write(p: &Program, v: &Value, ty: TypeId, out: &mut Encoder, depth: u32) -> Result<(), Error> {
     if depth > 32 {
         return Err(Error::NotPod);

@@ -647,9 +647,9 @@ impl Lowerer<'_> {
                     // Sekunde, Einheit Hz"); jede Einheit dieser Dimension ist
                     // erlaubt, also auch `kHz` und `1/min`.
                     let Some(v) = self.expr(e, None).and_then(|v| self.fold(v)) else { continue };
-                    let ok = self
-                        .unit_of_type(v.ty)
-                        .is_some_and(|u| self.units.dimension(&self.program, &u) == [0, 0, -1, 0, 0, 0, 0]);
+                    let unit = self.unit_of_type(v.ty);
+                    let ok =
+                        unit.as_ref().is_some_and(|u| self.units.dimension(&self.program, u) == [0, 0, -1, 0, 0, 0, 0]);
                     if !ok {
                         let n = self.type_name(v.ty);
                         self.error_hint(
@@ -660,6 +660,11 @@ impl Lowerer<'_> {
                         );
                         continue;
                     }
+                    // Abgelegt in Hz: jeder Leser nimmt die Zahl so (FB-188).
+                    let v = match unit.and_then(|u| self.units.factor(&self.program, &u)) {
+                        Some(f) => in_hertz(v, f),
+                        None => v,
+                    };
                     if matches!(a.kind, ast::AttrKind::Rate(_)) {
                         out.rate = Some(v);
                     } else {
@@ -1367,4 +1372,18 @@ pub fn int_width(t: ast::IntType) -> IntWidth {
         ast::IntType::U32 => IntWidth::U32,
         ast::IntType::U64 => IntWidth::U64,
     }
+}
+
+/// Eine Rate in Hz: der Faktor ihrer Einheit zur Basis (`kHz`: 1000,
+/// `1/min`: 1/60) geht in das Literal; ganzzahlig, wenn es aufgeht.
+fn in_hertz(mut v: takt_mir::expr::Expr, f: takt_mir::types::Rational) -> takt_mir::expr::Expr {
+    use takt_mir::expr::ExprKind;
+    let (num, den) = (f.num as f64, f.den as f64);
+    v.kind = match v.kind {
+        ExprKind::Int(n) if f.den == 1 => ExprKind::Int(n.saturating_mul(f.num)),
+        ExprKind::Int(n) => ExprKind::Float(n as f64 * num / den),
+        ExprKind::Float(x) => ExprKind::Float(x * num / den),
+        other => other,
+    };
+    v
 }

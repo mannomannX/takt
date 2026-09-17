@@ -1,0 +1,50 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# 55 — Record-Elemente mit `bytes<N>`-Feld auf Stroemen (plan/m6.md 2.2):
+# ein Element belegt einen Slot fester Laenge (`max_size`), hinter der
+# kanonischen Form mit Nullen gefuellt. Der Leser findet so die Grenzen,
+# auch wenn das Feld kuerzer ist als seine Kapazitaet (FB-189).
+
+record Frame layout little:
+    id   : u32 in 0..0x7FF
+    dlc  : u8 in 0..8
+    data : bytes<8>
+
+input  rx     : stream<Frame>  @ hw("can0/rx") with max_rate = 4000 Hz, capacity = 16, overflow = fault
+output rx_sim : stream<Frame>  @ sim("can0/rx")
+output seen   : int in 0..1000 @ hw("o/seen")  with safe = 0
+output first  : int in 0..255  @ hw("o/first") with safe = 0
+output total  : int in 0..8000 @ hw("o/total") with safe = 0
+
+machine dut:
+    initial RUN
+    state RUN:
+        on rx as f:
+            seen = seen + 1
+            total = total + f.data.data.len
+            if f.data.data.len > 0:
+                first = f.data.data[0] as int
+
+machine model:
+    var k : int in 0..255 = 0
+    initial RUN
+    state RUN:
+        loop:
+            var d : bytes<8> = default
+            var a : bool = d.push(k as u8)
+            if k % 2 == 0:
+                var b : bool = d.push(0x55)
+                var c : bool = d.push(0xAA)
+            send rx_sim, Frame(id = 0x181, dlc = d.len as u8, data = d)
+            k = (k + 1) % 256
+
+scenario "frames cross the sim boundary" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            wait 6 ms
+            verify seen >= 4, "frames did not arrive"
+            verify total >= 8, "payloads lost their length"
+            verdict pass "frames intact"

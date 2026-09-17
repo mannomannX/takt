@@ -7,7 +7,7 @@
 //!                   [--build sim|hw] [--params-profile P]
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--params-profile P] [--order random:SEED]
-//! takt test  DATEI [--ticks N] [--params-profile P] [--scenario NAME] [--coverage OUT.csv]
+//! takt test  DATEI [--ticks N] [--params-profile P] [--scenario NAME] [--coverage OUT.csv] [--out DIR]
 //! takt campaign DATEI [NAME] --ticks N [--stim S.trace] [--params-profile P] [--scenario NAME]
 //!                   [--out DIR] [--hardware DATEI.hw]
 //! takt tune  DATEI --ticks N --save PROFIL [--stim S.trace] [--params-profile P] [--out DATEI]
@@ -936,6 +936,14 @@ fn test(args: &Args) -> bool {
         for p in &result.properties {
             let word = if p.assumption { "assumption" } else { "property" };
             println!("  {word} {}: {}", p.name, p.outcome.text());
+        }
+        // Der Trace je Szenario, wie `takt campaign --out` ihn schreibt (12.5).
+        if let Some(dir) = args.value("--out") {
+            let file = std::path::Path::new(dir).join(format!("{name}.trace"));
+            if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&file, result.trace.render())) {
+                eprintln!("{}: {e}", file.display());
+                return false;
+            }
         }
         ok &= result.verdict != Verdict::Fail;
         coverage.merge(&result.coverage);

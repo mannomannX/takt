@@ -589,7 +589,7 @@ pub fn elements_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Vec<Value
         _ => match takt_mir::bytes::max_size(p, elem) {
             Ok(size) if size > 0 => bytes
                 .chunks_exact(size as usize)
-                .filter_map(|chunk| crate::bytes::decode(p, chunk, elem).ok())
+                .filter_map(|chunk| crate::bytes::decode_slot(p, chunk, elem).ok())
                 .collect(),
             _ => vec![element_of(bytes, ty, p)],
         },

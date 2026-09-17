@@ -254,34 +254,6 @@ impl Lowerer<'_> {
 
     // ------------------------------------------------------------ Literale
 
-    /// Ein Ganzzahlliteral mit vorangestelltem `-` in einem Ganzzahl-
-    /// kontext, als *ein* Wert geprueft.
-    ///
-    /// Das aeussere `None` heisst „nicht dieser Fall": Der Aufrufer
-    /// senkt dann gewoehnlich. Das innere heisst „behandelt, aber
-    /// fehlerhaft" — es ist gemeldet, und ein zweiter Durchgang wuerde
-    /// dieselbe Stelle ein zweites Mal anstreichen.
-    fn negative_literal(&mut self, expr: &ast::Expr, hint: Option<TypeId>, span: Span) -> Option<Option<Expr>> {
-        let ast::ExprKind::Number { value: ast::Number::Int(i), unit: None } = &expr.kind else {
-            return None;
-        };
-        let hint = hint?;
-        let Type::Int { width, range, .. } = self.ty(hint).clone() else { return None };
-        let v = -parse_int(&i.text)?;
-        let (lo, hi) = takt_interp::arith::bounds(width);
-        if v < lo || v > hi {
-            self.error(SC3, span, format!("Literal passt nicht in `{}`", takt_interp::arith::name(width)));
-            return Some(None);
-        }
-        if let Some(r) = range {
-            if !takt_interp::eval::in_range(&takt_interp::Value::Int(v as i64), &r) {
-                self.error(SC3, span, "Literal ausserhalb der Range");
-                return Some(None);
-            }
-        }
-        Some(Some(Expr::new(ExprKind::Int(v as i64), hint, span)))
-    }
-
     fn number(
         &mut self,
         value: &ast::Number,
@@ -2154,12 +2126,20 @@ impl Lowerer<'_> {
                 Some(Expr::new(ExprKind::Unary { op: UnaryOp::Not, expr: Box::new(x) }, ty, span))
             }
             ast::UnaryOp::Neg => {
-                // Der Zweierkomplementbereich ist asymmetrisch: `-32768`
-                // passt in `i16`, `32768` nicht. Wuerde der Operand fuer
-                // sich geprueft, fiele genau die Untergrenze jeder
-                // signierten Breite durch (3.1).
-                if let Some(e) = self.negative_literal(expr, hint, span) {
-                    return e;
+                // Ein negatives Literal ist *ein* Wert (3.1, 3.2): Breite und
+                // Range gelten fuer ihn, nicht fuer seinen Betrag — `-32768`
+                // passt in `i16`, `-20 inc` in `-100..0 inc`, und `-60 degC`
+                // ist ein Punkt, nicht das Negative eines Punkts (FB-184).
+                if let ast::ExprKind::Number { value, unit } = &expr.kind {
+                    let negated = match value {
+                        ast::Number::Int(i) => {
+                            ast::Number::Int(ast::IntLit { text: format!("-{}", i.text), span: i.span })
+                        }
+                        ast::Number::Float(f) => {
+                            ast::Number::Float(ast::FloatLit { text: format!("-{}", f.text), span: f.span })
+                        }
+                    };
+                    return self.number(&negated, unit.as_ref(), hint, span);
                 }
                 let x = self.expr(expr, hint)?;
                 if !(self.is_numeric(x.ty) || self.is_duration(x.ty)) {
@@ -2547,16 +2527,20 @@ fn same_dimension(this: &Lowerer<'_>, a: takt_mir::UnitId, b: takt_mir::UnitId) 
 /// Ganzzahltext in jeder Schreibweise.
 pub fn parse_int(text: &str) -> Option<i128> {
     let t = text.replace('_', "");
-    if let Some(h) = t.strip_prefix("0x") {
-        return i128::from_str_radix(h, 16).ok();
-    }
-    if let Some(b) = t.strip_prefix("0b") {
-        return i128::from_str_radix(b, 2).ok();
-    }
-    if let Some(o) = t.strip_prefix("0o") {
-        return i128::from_str_radix(o, 8).ok();
-    }
-    t.parse().ok()
+    let (negative, t) = match t.strip_prefix('-') {
+        Some(rest) => (true, rest.to_string()),
+        None => (false, t),
+    };
+    let magnitude = if let Some(h) = t.strip_prefix("0x") {
+        i128::from_str_radix(h, 16).ok()
+    } else if let Some(b) = t.strip_prefix("0b") {
+        i128::from_str_radix(b, 2).ok()
+    } else if let Some(o) = t.strip_prefix("0o") {
+        i128::from_str_radix(o, 8).ok()
+    } else {
+        t.parse().ok()
+    }?;
+    Some(if negative { -magnitude } else { magnitude })
 }
 
 /// Fliesskommatext in Programmbreite korrekt gerundet.

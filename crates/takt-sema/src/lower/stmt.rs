@@ -3,7 +3,7 @@
 //! Aktionsblock-Regeln (5.5, Pruefung 8).
 
 use takt_diag::{Span, Stage};
-use takt_mir::expr::{BinaryOp, CheckedKind, Expr, ExprKind};
+use takt_mir::expr::{BinaryOp, CheckedKind, Expr, ExprKind, UnaryOp};
 use takt_mir::fns::NativeKind;
 use takt_mir::machine::{CounterSite, FaultTarget, JobSlot, Target, VarDef, VarScope};
 use takt_mir::stmt::*;
@@ -204,7 +204,13 @@ impl Lowerer<'_> {
                 };
                 StmtKind::Raise(SignalId(i as u32))
             }
-            ast::StmtKind::Break => StmtKind::Break,
+            ast::StmtKind::Break => {
+                if self.for_depth == 0 {
+                    self.error(SC8, span, "`break` nur in `for` (4.4)");
+                    return None;
+                }
+                StmtKind::Break
+            }
             ast::StmtKind::Pass => StmtKind::Pass,
             ast::StmtKind::Expr(e) => self.expr_stmt(e, span)?,
             ast::StmtKind::If { branches, otherwise } => self.if_stmt(branches, otherwise.as_ref(), kind)?,
@@ -1167,6 +1173,17 @@ impl Lowerer<'_> {
                 None => Block::default(),
             }
         };
+        // 3.5: Dominanz "durch dieselbe Flussanalyse wie Definite
+        // Assignment" — verlaesst der Zweig unter `not x.valid` den Block
+        // immer, gilt `x.valid` fuer den Rest wie nach `check x.valid` (3.8).
+        if branches.len() == 1 && otherwise.is_none() && always_exits(&then_block.stmts) {
+            if let ExprKind::Unary { op: UnaryOp::Not, expr } = &c.kind {
+                let facts = Self::facts_of(expr);
+                if let Some(frame) = self.facts.last_mut() {
+                    frame.extend(facts);
+                }
+            }
+        }
         Some(StmtKind::If { cond: c, then: then_block, otherwise: otherwise_block })
     }
 
@@ -1441,4 +1458,15 @@ pub(super) fn literal_in_range(e: &Expr, r: &takt_mir::types::Range) -> bool {
         _ => return false,
     };
     takt_interp::eval::in_range(&v, r)
+}
+
+/// Verlaesst jeder Pfad den Block (`return`, `break`, `abort`)? Eine
+/// Transition nicht: im Entry-Tick ist `->` wirkungslos (5.2).
+fn always_exits(stmts: &[Stmt]) -> bool {
+    match stmts.last().map(|s| &s.kind) {
+        Some(StmtKind::Return(_) | StmtKind::Break | StmtKind::Abort { .. }) => true,
+        Some(StmtKind::If { then, otherwise, .. }) => always_exits(&then.stmts) && always_exits(&otherwise.stmts),
+        Some(StmtKind::Match { arms, .. }) => !arms.is_empty() && arms.iter().all(|a| always_exits(&a.body.stmts)),
+        _ => false,
+    }
 }
