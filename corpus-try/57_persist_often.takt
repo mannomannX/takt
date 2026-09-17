@@ -1,0 +1,36 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# `persist` ohne Wartezeit (5.9, 12.3): Der Zaehler aendert sich in jedem
+# Tick, und `min_interval = 0` laesst das Journal so oft schreiben, wie
+# es fertig wird. Auf einem XIP-Ziel ist das der Fall, den 12.3
+# beschreibt — eine Sektorloeschung sperrt den Flash-Cache fuer
+# zweistellige Millisekunden, und der Tick muss trotzdem laufen.
+
+output count : int in 0..1000 @ hw("o/count") with safe = 0
+
+machine device:
+    persist var cycles : int in 0..1000 = 0 with min_interval = 0 s
+
+    initial RUN
+
+    state RUN:
+        enter:
+            if cycles < 1000:
+                cycles = cycles + 1
+
+        loop:
+            count = cycles
+
+        after 10 ms: -> BUMP
+
+    state BUMP:
+        enter:
+            if cycles < 1000:
+                cycles = cycles + 1
+
+        loop:
+            count = cycles
+
+        after 10 ms: -> RUN

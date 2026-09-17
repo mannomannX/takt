@@ -22,11 +22,16 @@ pub(crate) fn set_counts_per_tick(counts: u32) {
 
 /// Von der Alarm-ISR gerufen: merkt sich die gemessene Periode in
 /// SYSTIMER-Schritten.
+#[esp_hal::ram]
 pub fn on_timer_interrupt(elapsed_counts: u32) {
     LAST_COUNTS.store(elapsed_counts, Ordering::Relaxed);
 }
 
 /// Tick-Ereignisse seit dem Start des SYSTIMER.
+///
+/// Im RAM (12.3): Ein Flash-Schreibvorgang schaltet den Cache ab, und der
+/// Zaehler wird waehrenddessen gelesen.
+#[esp_hal::ram]
 pub fn count() -> u64 {
     match u64::from(COUNTS_PER_TICK.load(Ordering::Relaxed)) {
         0 => 0,
@@ -56,14 +61,18 @@ impl SystimerTick {
 }
 
 impl TickSource for SystimerTick {
+    #[esp_hal::ram]
     fn ticks(&self) -> u64 {
         count()
     }
 
+    #[esp_hal::ram]
     fn last_period_ns(&self) -> i64 {
         takt_board_support::clock::period_ns(self.timer_hz, LAST_COUNTS.load(Ordering::Relaxed))
     }
 
+    /// Im RAM, weil sie waehrend eines Flash-Schreibvorgangs laeuft (12.3).
+    #[esp_hal::ram]
     fn wait_for_tick(&mut self) {
         let start = count();
         while count() == start {

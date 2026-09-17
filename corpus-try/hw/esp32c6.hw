@@ -1,0 +1,31 @@
+# takt-hw 3
+# ESP32-C6-DevKitM-1-N4 (ESP32-C6-MINI-1, RV32IMAC, 160 MHz, ohne FPU):
+# Speicher und Journal fuer die Profilfamilie `xip_flash` (12.3,
+# plan/esp32c6.md).
+#
+# **Die Kostentabelle fehlt bewusst.** Code laeuft ueber den Flash-Cache;
+# eine Zeitmessung beschriebe hier das Cache-Verhalten, nicht den Kern
+# (plan/esp32c6.md 1). Sie gehoert zu Board 1.
+#
+# `ram` und `iram` nennen denselben Bereich, und das ist kein Fehler: Der
+# C6 hat einen einheitlichen HP-SRAM (`esp-hal` richtet 0x6E610 Byte ein,
+# der Rest geht an Cache und Bootloader), aus dem sowohl Daten als auch
+# RAM-residenter Code kommen. Pruefung 39 vergleicht beide Summen gegen
+# dieselbe Grenze — zusammen duerfen sie sie nicht ueberschreiten.
+[target.riscv32imac]
+core_hz = 160000000
+ram = 451600
+flash = 4194304
+iram = 451600
+nvm_sector_bytes = 4096
+nvm_sectors = 2
+
+[device.led]
+driver = "esp32c6-rmt-ws2812"
+
+[channel ui/led]
+direction = output
+raw = bool
+safe = false
+device = led
+port = "GPIO8"

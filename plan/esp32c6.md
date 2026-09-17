@@ -28,7 +28,7 @@ einem Pin — sie bekommt ihre 24 Bit über den RMT-Baustein (`led.rs`).
 |---|---|
 | Kern | RV32IMAC, 160 MHz, ohne FPU (`f32` und `f64` aus `libtaktm`) |
 | Flash | 4 MB im Modul, XIP über Cache — Profilfamilie `xip_flash` (12.3) |
-| RAM | 512 KB HP-SRAM |
+| RAM | 512 KB HP-SRAM; `esp-hal` richtet 451 600 Byte ein, aus denen Daten *und* RAM-residenter Code kommen (`corpus-try/hw/esp32c6.hw`) |
 | Tick | SYSTIMER (52-bittig, 16 MHz), Alarm auf Vergleichswert |
 | Zyklen | CSR `mcycle` (statt DWT) |
 | Telemetrie | USB-Serial-JTAG (kein Adapter), verlustfrei mit Host: eigener Schreiber auf dem `esp-hal`-Treiber (FB-200) |
@@ -82,6 +82,11 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
   (Modul ESP32-C6-MINI-1, 4 MB Flash, RGB-LED WS2812 an GPIO8, BOOT an
   GPIO9; zwei USB-Buchsen: „USB" ist der native USB-Serial-JTAG, „UART"
   ein CP2102 an UART0). Die Pins stehen in den Bring-up-Programmen (`GPIO8`).
+- Der Tick verliert Perioden, während das Journal einen Sektor löscht
+  (rund 25 ms, unteilbar). Schritt 7 hat alles entfernt, was darüber
+  hinaus blockierte; was bleibt, ist die Löschzeit selbst. Wer sie nicht
+  verlieren darf, wählt `min_interval` groß genug — oder ein Ziel mit
+  getrenntem Programm- und Datenflash.
 - Ob der Trace-Rückkanal über USB-Serial-JTAG schnell genug ist, um jede
   Zeile mitzuschreiben, oder ob der Korpuslauf aus dem RAM-Log
   nachgelagert liest (M5 4, Punkt 1). Schritt 4 schreibt alle 100 Ticks
@@ -110,4 +115,4 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
 | 4 | **fertig 2026-09-17.** `takt` mit `29_heartbeat.takt`: Trace `t=100 out led 1`, `t=200 out led 1`, `t=300 out led 1` über USB, bitgleich mit dem Interpreter (`true` an denselben Ticks); LED blinkt im 500-ms-Takt des Programms. Blockierte einmal am veralteten `takt.exe` (FB-193). |
 | 5 | **fertig 2026-09-17.** `takt-conformance/tests/board_esp32c6.rs` (nur mit `TAKT_ESP32C6_PORT=COM4`): 37 Programme des Differentialkorpus laufen auf dem Chip, je 60 Ticks, Trace über USB-Serial-JTAG, **0 Abweichungen** gegen den Interpreter — Monitore (47), `map`-Iteration (42), SHA-256 (39), Ströme und `sim`-gekoppelte Modelle (23–27, 49–55) eingeschlossen. Ausgelassen, weil der MCU-Rahmen sie nicht trägt: geplante Ausgaben (28), Systemkanäle (32, 34), Jobs (40). Dafür bekam der Rahmen Natives, Ströme, `sim`-Bindungen, Monitore, Floats/Arrays/vorzeichenlose Werte im Trace und schwache Treiber-Defaults (`takt_out_*`). Befund FB-194: Der Rahmen bemaß seine Zustandspuffer aus einer Schranke statt aus dem Struct des Codegens; `39_sha256` schrieb darüber hinaus, und die Stack-Wache des Boards fing es — auf dem Wirt blieb es unsichtbar. |
 | 6 | **fertig 2026-09-17, mit einer Grenze.** Die Schleife ist jetzt `takt_rt_core::Runtime` mit `run_persisting`: das `persist`-Journal liegt in zwei Flash-Sektoren der `nvs`-Partition (`nvm.rs`, `esp-storage`), `idle` schläft als virtuelle Ticks über `TimerClock` (9.9). Belegt in `board_esp32c6.rs`: `35_persist` überlebt einen Reset (der zweite Lauf beginnt mit dem `count` des ersten, `journal: Eintrag`), `56_idle_timer` schläft rund 50 von 60 Ticks und bleibt trace-gleich mit dem Interpreter. Drei Befunde: die Uhr wartete auf das nächste Ereignis statt auf die Frist, nach virtuellen Ticks lief die Schleife der Zeit davon (FB-199, behoben); ein ISR-Zähler verliert Ticks, solange das Flash die Interrupts sperrt — die Tickzahl kommt jetzt aus dem SYSTIMER selbst (FB-198, behoben); und der Preis des Journals: `esp-storage` löscht und schreibt blockierend mit gesperrten Interrupts, ein Schreibvorgang kostet drei bis vier Ticks zu 10 ms (FB-197) — genau der Fall, den 12.3 für `xip_flash` beschreibt, und damit Schritt 7. Die Grenze: 14.7 selbst läuft noch nicht, weil seine Eingänge (AFE, Taster als `Edge`-Strom, Ladegerät als Wake-Quelle) Treiber am Board brauchen, die der MCU-Rahmen heute nicht anbietet — er stellt Ausgänge (`takt_out_*`), aber keine Eingänge. |
-| 7 | offen |
+| 7 | **fertig 2026-09-17.** Drei Teile. (1) *RAM-Residenz:* Tick-ISR, Zaehler, Wartepfad und Schlaf tragen `#[esp_hal::ram]`; der erzeugte Takt-Code und sein C-Rahmen kommen ueber `rwtext_hook.x` nach `.rwtext` (eingeschaltet mit `ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK`). Gemessen: 4904 Byte Code und 104 Byte Konstanten wandern aus dem Flash ins RAM. (2) *Flash-Schreibzugriff im Lauf:* `esp-storage` laeuft ohne `critical-section` — es sperrte die Interrupts fuer die ganze Sektorloeschung —, und `FlashNvm` deckt die Nebenlaeufigkeit selbst mit einem Flag. (3) *`takt size` mit `iram`:* `Sections` trennt `.trap`/`.rwtext` von `.text`/`.rodata`, der Bericht hat einen eigenen Posten, und Pruefung 39 vergleicht ihn mit `iram` aus `corpus-try/hw/esp32c6.hw` (FB-201). Die Grenze, die bleibt: Eine Sektorloeschung dauert rund 25 ms und ist unteilbar, bei 10 ms Tick vergehen also Perioden — 400 statt 429 in 16 Schreibvorgaengen. Das ist Hardware, nicht Compiler (FB-197); die logische Zeit bleibt unberuehrt, weil die Tickzahl aus dem SYSTIMER kommt. Belegt mit `57_persist_often.takt` (`min_interval = 0`) in `the_journal_costs_time_but_not_semantics`, und der volle Korpus laeuft mit RAM-Residenz weiter mit **0 Abweichungen** (39 Programme). |

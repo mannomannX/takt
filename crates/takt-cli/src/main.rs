@@ -595,15 +595,31 @@ fn size(args: &Args) -> bool {
             for line in report.lines() {
                 println!("{line}");
             }
-            // Pruefung 39: die Summe gegen das Ziel (11.5).
+            // Pruefung 39: die Summen gegen das Ziel (11.5); IRAM nur auf
+            // XIP-Zielen, wo beide Seiten es kennen (12.3).
+            //
+            // Teilen sich Daten und RAM-residenter Code denselben Bereich
+            // (`ram == iram`, wie auf dem ESP32-C6), zaehlt die Summe
+            // beider gegen die eine Grenze — getrennt geprueft passten
+            // zwei Haelften, die zusammen nicht hineingehen.
             let m = target.memory;
-            for (what, have, limit) in [("RAM", report.ram_total(), m.ram), ("Flash", report.flash_total(), m.flash)] {
+            let iram = report.iram_total();
+            let shared = iram > 0 && m.iram.is_some() && m.iram == m.ram;
+            let limits = [
+                (if shared { "RAM + IRAM" } else { "RAM" }, report.ram_total() + if shared { iram } else { 0 }, m.ram),
+                ("Flash", report.flash_total(), m.flash),
+                ("IRAM", iram, m.iram.filter(|_| iram > 0 && !shared)),
+            ];
+            for (what, have, limit) in limits {
                 let Some(limit) = limit else { continue };
                 let verdict = if have <= limit { "passt" } else { "zu viel" };
                 println!("  {what}: {have} von {limit} Byte auf `{}` — {verdict}", target.name);
                 if have > limit {
                     ok = false;
                 }
+            }
+            if iram > 0 && m.iram.is_none() {
+                println!("  IRAM: {iram} Byte gemessen, aber `iram` fehlt in der Konfiguration (8.10)");
             }
         } else {
             for line in report.lines() {
@@ -683,7 +699,11 @@ fn measure(args: &Args, p: &takt_mir::Program) -> takt_mir::analysis::size::Meas
     let target = args.value("--target").and_then(takt_llvm::Target::by_name).unwrap_or(host);
     let tools = takt_llvm::inspect::Binutils::best_for(target);
 
-    out.flash = tools.sections(path).map(|s| s.flash());
+    if let Some(s) = tools.sections(path) {
+        out.flash = Some(s.flash());
+        out.iram_text = Some(s.iram_text);
+        out.iram_rodata = Some(s.iram_rodata);
+    }
 
     // Die Rahmen aller Funktionen in einem Durchlauf; die Rechnung
     // braucht sie vollstaendig, sonst meldet sie unbekannt.

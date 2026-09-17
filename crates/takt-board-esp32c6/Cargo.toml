@@ -23,7 +23,13 @@ takt-rt-core = { path = "../takt-rt-core" }
 esp-hal = { version = "1.2.1", features = ["esp32c6", "unstable"] }
 # Das `persist`-Journal im SPI-Flash (5.9); byteweise lesen, weil die
 # Nutzlast keine Wortgrenzen kennt.
-esp-storage = { version = "0.10", features = ["esp32c6", "bytewise-read"] }
+#
+# Ohne `critical-section` (im Default-Feature): Sie sperrt die Interrupts
+# fuer die Dauer einer Sektorloeschung — zweistellige Millisekunden, in
+# denen der Tick-Alarm nicht ankaeme. 12.3 verlangt fuer `xip_flash` das
+# Gegenteil: Der Tick laeuft aus dem RAM weiter, waehrend das Journal
+# schreibt. Die Nebenlaeufigkeit deckt `FlashNvm` selbst ab (`nvm.rs`).
+esp-storage = { version = "0.10", default-features = false, features = ["esp32c6", "bytewise-read"] }
 critical-section = "1"
 
 [lints.rust]

@@ -68,6 +68,7 @@ const KORPUS: &[&str] = &[
     "54_inout.takt",
     "55_frames_with_bytes.takt",
     "56_idle_timer.takt",
+    "57_persist_often.takt",
 ];
 
 fn root() -> PathBuf {
@@ -106,7 +107,10 @@ fn build(name: &str, fresh: bool) -> Result<PathBuf, String> {
         .arg("--manifest-path")
         .arg(&manifest)
         .env("TAKT_PROGRAM", &program)
-        .env("TAKT_TICKS", TICKS.to_string());
+        .env("TAKT_TICKS", TICKS.to_string())
+        // 12.3: RAM-Residenz des Takt-Programms. `.cargo/config.toml` des
+        // Bring-ups greift hier nicht, weil `--manifest-path` von aussen baut.
+        .env("ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK", "true");
     if fresh {
         cargo.env("TAKT_FRESH_JOURNAL", "1");
     } else {
@@ -192,6 +196,14 @@ fn last_output(text: &str, name: &str) -> Option<String> {
         .next_back()
 }
 
+/// Die Zahl hinter einem Wort der Abschlusszeile (`takt schlief 0
+/// ueberlaeufe 0 journal geschrieben 3 …`).
+fn counter(text: &str, label: &str) -> Option<u64> {
+    let line = text.lines().find(|l| l.starts_with("takt schlief "))?;
+    let rest = line.split_once(label)?.1;
+    rest.split_whitespace().next()?.parse().ok()
+}
+
 /// Die Zahl hinter `takt schlief`.
 fn slept(text: &str) -> Option<u64> {
     text.lines().find_map(|l| l.strip_prefix("takt schlief ")?.split_whitespace().next()?.parse().ok())
@@ -249,6 +261,46 @@ fn an_idle_state_sleeps_in_virtual_ticks() {
         .unwrap_or_else(|e| panic!("{name}: {e}"));
     let slept = slept(&text).unwrap_or_else(|| panic!("keine Schlafzeile:\n{text}"));
     assert!(slept >= 40, "60 Ticks mit 500 ms `idle` bei 10 ms Tick: mehr als 40 virtuelle erwartet, {slept}:\n{text}");
+    let p = corpus(name);
+    let diffs = compare(&run_interpreted(&p), &text);
+    assert!(diffs.is_empty(), "{diffs:?}");
+}
+
+/// **Das Journal kostet Zeit, aber keine Semantik** (12.3, `xip_flash`;
+/// plan/esp32c6.md Schritt 7, FB-197).
+///
+/// `57_persist_often` schreibt in jedem Tick (`min_interval = 0`). Eine
+/// Sektorloeschung dauert auf diesem Chip rund 25 ms und ist unteilbar:
+/// Bei 10 ms Tick vergehen dabei Perioden, gleich wo der Code liegt. Was
+/// Schritt 7 erreicht, ist darum nicht ihre Abwesenheit, sondern dass sie
+/// die *logische* Zeit nicht beruehren — der Trace bleibt der des
+/// Interpreters (Satz 9.4.4), und die Tickzahl kommt aus dem SYSTIMER,
+/// nicht aus einem ISR-Zaehler (FB-198).
+///
+/// Die verpassten Perioden zaehlt der Test und schreibt sie hin, statt
+/// sie zuzusichern: Sie sind eine Eigenschaft des Flash, kein Ergebnis
+/// des Compilers. Gemessen am 17.09.2026: 400 mit RAM-Residenz, 429 ohne,
+/// bei 16 Schreibvorgaengen.
+#[test]
+fn the_journal_costs_time_but_not_semantics() {
+    let Ok(port) = std::env::var("TAKT_ESP32C6_PORT") else {
+        eprintln!("uebersprungen: TAKT_ESP32C6_PORT nennt kein Board");
+        return;
+    };
+    let _board = board();
+    let name = "57_persist_often.takt";
+    let text = build(name, true)
+        .and_then(|elf| {
+            probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
+            capture(&port)
+        })
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let writes = counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
+    assert!(writes > 1, "das Journal schrieb nur {writes}-mal; der Fall aus 12.3 trat nicht ein:\n{text}");
+    assert_eq!(counter(&text, "fehlgeschlagen"), Some(0), "ein Schreibvorgang scheiterte:\n{text}");
+    let missed =
+        text.lines().filter_map(|l| l.trim().strip_prefix("verpasste Ticks: ")?.parse::<u64>().ok()).next_back();
+    eprintln!("{name}: {writes} Journal-Schreibvorgaenge, {} verpasste Perioden", missed.unwrap_or(0));
     let p = corpus(name);
     let diffs = compare(&run_interpreted(&p), &text);
     assert!(diffs.is_empty(), "{diffs:?}");

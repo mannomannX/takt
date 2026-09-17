@@ -52,3 +52,32 @@ fn the_difference_names_changed_new_and_missing_items() {
         ]
     );
 }
+
+/// 12.3: Die RAM-residenten Posten entstehen nur, wo das Objekt sie hat.
+#[test]
+fn iram_items_appear_only_for_xip_targets() {
+    use takt_mir::analysis::size::{IRAM_RODATA, IRAM_TEXT, Measured};
+
+    let xip = Measured { flash: Some(100), iram_text: Some(8788), iram_rodata: Some(104), ..Measured::default() };
+    let items = sample().with_object(&xip).items;
+    let named = |n: &str| items.iter().find(|i| i.name == n).map(|i| i.bytes);
+    assert_eq!(named(IRAM_TEXT), Some(8788));
+    assert_eq!(named(IRAM_RODATA), Some(104));
+
+    let plain = Measured { flash: Some(100), iram_text: Some(0), iram_rodata: Some(0), ..Measured::default() };
+    let items = sample().with_object(&plain).items;
+    assert!(!items.iter().any(|i| i.name.starts_with("IRAM")), "ohne XIP keine IRAM-Zeile");
+}
+
+/// IRAM hat eine eigene Grenze (8.10) und gehoert darum in keine der
+/// beiden anderen Summen.
+#[test]
+fn iram_is_counted_apart_from_ram_and_flash() {
+    use takt_mir::analysis::size::Measured;
+
+    let m = Measured { flash: Some(100), iram_text: Some(700), iram_rodata: Some(30), ..Measured::default() };
+    let s = sample().with_object(&m);
+    assert_eq!(s.iram_total(), 730);
+    assert_eq!(s.flash_total(), 100);
+    assert_eq!(s.ram_total(), 40 + 256);
+}

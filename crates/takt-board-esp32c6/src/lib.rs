@@ -121,6 +121,10 @@ pub fn init(systimer: SYSTIMER<'static>, tick_ns: i64) -> Result<SystimerTick, I
 
 /// Die Alarm-ISR: misst die Periode in SYSTIMER-Schritten, quittiert den
 /// Interrupt und zaehlt den Tick (12.3: „die ISR setzt ein Flag").
+///
+/// Im RAM: Waehrend eines Flash-Schreibvorgangs ist der Cache aus, und
+/// eine ISR im Flash liefe erst danach (12.3, `xip_flash`).
+#[esp_hal::ram]
 #[esp_hal::handler(priority = Priority::Priority1)]
 fn on_alarm() {
     let now = SystemTimer::unit_value(Unit::Unit0);
@@ -135,6 +139,7 @@ fn on_alarm() {
 }
 
 /// Wartet auf den naechsten Interrupt.
+#[esp_hal::ram]
 pub(crate) fn wfi() {
     // SAFETY: `wfi` haelt den Kern an, bis ein Interrupt kommt. Ohne
     // `nomem`: Die ISR schreibt den Tickzaehler, und der Aufrufer liest ihn

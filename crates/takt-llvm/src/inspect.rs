@@ -53,6 +53,10 @@ pub struct Sections {
     pub data: u64,
     /// `.bss`: genullte Daten (Zustaende, Ringe, 11.2).
     pub bss: u64,
+    /// Code im Instruktions-RAM (`xip_flash`, 12.3); nicht in `text`.
+    pub iram_text: u64,
+    /// Konstanten im RAM, die der Tick liest (12.3); nicht in `rodata`.
+    pub iram_rodata: u64,
 }
 
 impl Sections {
@@ -60,13 +64,19 @@ impl Sections {
     ///
     /// `.data` zaehlt mit, weil seine Anfangswerte ebenfalls im Flash
     /// stehen muessen — die Runtime kopiert sie beim Start ins RAM.
+    /// Fuer die RAM-residenten Abschnitte gilt dasselbe.
     pub fn flash(&self) -> u64 {
-        self.text + self.rodata + self.data
+        self.text + self.rodata + self.data + self.iram_text + self.iram_rodata
     }
 
     /// Was im RAM liegt (11.5).
     pub fn ram(&self) -> u64 {
         self.data + self.bss
+    }
+
+    /// Was im Instruktions-RAM liegt (12.3); null ohne XIP.
+    pub fn iram(&self) -> u64 {
+        self.iram_text + self.iram_rodata
     }
 }
 
@@ -163,35 +173,7 @@ impl Binutils {
     /// es lesen kann.
     pub fn sections(&self, file: &Path) -> Option<Sections> {
         let out = Command::new(self.tool("size")).arg("-A").arg(file).output().ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut s = Sections::default();
-        for line in text.lines() {
-            let mut w = line.split_whitespace();
-            let (Some(name), Some(size)) = (w.next(), w.next()) else { continue };
-            let Ok(bytes) = size.parse::<u64>() else { continue };
-            // Ein Abschnitt kann Zusaetze tragen (`.text.startup`); die
-            // Zuordnung geht darum ueber das Praefix.
-            //
-            // **Die Namen unterscheiden sich je Format.** ELF sagt
-            // `.rodata`, PE/COFF sagt `.rdata` — und dort liegen auch
-            // `.xdata` und `.pdata`, die Ausnahmebehandlung des
-            // Aufrufers. Beide zaehlen als Konstanten, weil sie im Flash
-            // stehen und der Tick sie nicht schreibt. Ohne `.rdata`
-            // meldete die Messung auf Windows null, und der Vergleich
-            // mit der Rechnung schlug fehl, obwohl beide stimmten.
-            match name {
-                n if n.starts_with(".text") => s.text += bytes,
-                n if n.starts_with(".rodata") || n.starts_with(".rdata") => s.rodata += bytes,
-                n if n.starts_with(".xdata") || n.starts_with(".pdata") => s.rodata += bytes,
-                n if n.starts_with(".data") => s.data += bytes,
-                n if n.starts_with(".bss") => s.bss += bytes,
-                _ => {}
-            }
-        }
-        Some(s)
+        out.status.success().then(|| parse_sections(&String::from_utf8_lossy(&out.stdout)))
     }
 
     /// Die definierten Symbole mit ihren Groessen (11.5, 13.4).
@@ -363,5 +345,107 @@ fn parse_num(s: &str) -> Option<u64> {
     match t.strip_prefix("0x") {
         Some(hex) => u64::from_str_radix(hex, 16).ok(),
         None => t.parse().ok(),
+    }
+}
+
+/// Die Ausgabe von `size -A`: je Zeile Abschnitt, Groesse, Adresse.
+///
+/// **Die Namen unterscheiden sich je Format.** ELF sagt `.rodata`,
+/// PE/COFF sagt `.rdata` — und dort liegen auch `.xdata` und `.pdata`,
+/// die Ausnahmebehandlung des Aufrufers. Beide zaehlen als Konstanten,
+/// weil sie im Flash stehen und der Tick sie nicht schreibt.
+///
+/// RAM-residente Abschnitte stehen zuerst: `.rwtext` faenge sonst als
+/// `.r…` in den Flash-Konstanten (12.3).
+fn parse_sections(text: &str) -> Sections {
+    let mut s = Sections::default();
+    for line in text.lines() {
+        let mut w = line.split_whitespace();
+        let (Some(name), Some(size)) = (w.next(), w.next()) else { continue };
+        let Ok(bytes) = size.parse::<u64>() else { continue };
+        // Ein Abschnitt kann Zusaetze tragen (`.text.startup`); die
+        // Zuordnung geht darum ueber das Praefix.
+        match name {
+            n if is_iram_text(n) => s.iram_text += bytes,
+            n if is_iram_rodata(n) => s.iram_rodata += bytes,
+            n if n.starts_with(".text") => s.text += bytes,
+            n if n.starts_with(".rodata") || n.starts_with(".rdata") => s.rodata += bytes,
+            n if n.starts_with(".xdata") || n.starts_with(".pdata") => s.rodata += bytes,
+            n if n.starts_with(".data") => s.data += bytes,
+            n if n.starts_with(".bss") => s.bss += bytes,
+            _ => {}
+        }
+    }
+    s
+}
+
+/// Praefix eines Abschnittsnamens, mit `.suffix` als Treffer.
+fn has_prefix(name: &str, prefixes: &[&str]) -> bool {
+    let Some(n) = name.strip_prefix('.') else { return false };
+    prefixes.iter().any(|p| n == *p || n.strip_prefix(p).is_some_and(|r| r.starts_with('.')))
+}
+
+/// RAM-residenter Code (12.3): `esp-hal` sagt `.rwtext` und legt den
+/// Trap-Vektor in `.trap`, ESP-IDF sagt `.iram0.text`, RP2040
+/// `.time_critical`.
+fn is_iram_text(name: &str) -> bool {
+    has_prefix(name, &["rwtext", "trap", "iram0.text", "iram.text", "iram", "time_critical", "ramfunc"])
+}
+
+/// Konstanten, die der Tick im RAM liest (12.3): DFA- und `const`-Tabellen,
+/// `safe`-Werte.
+fn is_iram_rodata(name: &str) -> bool {
+    has_prefix(name, &["rwtext.rodata", "iram0.rodata", "iram.rodata", "srodata"])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `llvm-size -A` auf dem Bring-up-Abbild des ESP32-C6 (12.3).
+    const ESP32C6: &str = "\
+section                    size         addr
+.trap                      1600   1082130432
+.rwtext                    7188   1082132032
+.rwtext.wifi                  0   1082139220
+.data                      3028   1082139220
+.bss                        856   1082142248
+.rodata                   11772   1107296544
+.text                     38908   1107361824
+.stack                   439440   1082143104
+";
+
+    #[test]
+    fn ram_resident_code_counts_as_iram_not_as_text() {
+        let s = parse_sections(ESP32C6);
+        assert_eq!(s.iram_text, 1600 + 7188);
+        assert_eq!(s.text, 38908);
+        assert_eq!(s.iram(), 8788);
+    }
+
+    /// Der Inhalt des RAM-Abschnitts wird beim Start aus dem Flash
+    /// geladen und belegt ihn damit ebenfalls.
+    #[test]
+    fn iram_belongs_to_the_flash_image() {
+        let s = parse_sections(ESP32C6);
+        assert_eq!(s.flash(), 38908 + 11772 + 3028 + 8788);
+        assert_eq!(s.ram(), 3028 + 856);
+    }
+
+    /// Ohne XIP gibt es die Abschnitte nicht, und `iram` ist null.
+    #[test]
+    fn a_target_without_xip_has_no_iram() {
+        let s = parse_sections(".text 100 0\n.rodata 50 0\n.bss 20 0\n");
+        assert_eq!(s.iram(), 0);
+        assert_eq!(s.flash(), 150);
+    }
+
+    /// `.rwtext` beginnt mit `.r` und darf nicht als Flash-Konstante
+    /// zaehlen; `.rodata` umgekehrt nicht als IRAM.
+    #[test]
+    fn rwtext_and_rodata_are_told_apart() {
+        let s = parse_sections(".rwtext 10 0\n.rwtext.literal 4 0\n.rodata 7 0\n");
+        assert_eq!(s.iram_text, 14);
+        assert_eq!(s.rodata, 7);
     }
 }

@@ -10,6 +10,7 @@ use crate::tick;
 pub struct WfiSleep;
 
 impl Sleep for WfiSleep {
+    #[esp_hal::ram]
     fn sleep_until_event(&mut self) -> u64 {
         let before = tick::count();
         crate::wfi();

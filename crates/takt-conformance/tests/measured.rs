@@ -236,8 +236,12 @@ fn the_report_takes_the_measurement() {
     let symbols: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
     let frames: Vec<Option<u32>> =
         tools.stack_frames(&obj, &symbols).into_iter().map(|f| f.and_then(|n| u32::try_from(n).ok())).collect();
-    let measured =
-        size::Measured { flash: Some(sections.flash()), stack: takt_mir::analysis::stack::depth(&p, &frames) };
+    let measured = size::Measured {
+        flash: Some(sections.flash()),
+        stack: takt_mir::analysis::stack::depth(&p, &frames),
+        iram_text: Some(sections.iram_text),
+        iram_rodata: Some(sections.iram_rodata),
+    };
 
     let report = size::size(&p).with_object(&measured);
     let flash = report.items.iter().find(|i| i.name == "Flash (Code, Konstanten)").expect("Flash-Posten");

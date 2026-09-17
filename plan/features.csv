@@ -593,7 +593,7 @@ SC-35,Statische Prüfung,10,"`tunable param` nicht in Compile-Zeit-Konstanten (A
 SC-36,Statische Prüfung,10,`check … for d` / `alert … for d`: `d >= P_m`; Rundung auf Perioden mit effektivem Wert (5.6),W,M3 (Gate),fertig,
 SC-37,Statische Prüfung,10,`len_field`: verweist auf ein vorangehendes Integer-Feld; statische Obergrenze des Feldes (3.7),F,M3 (Gate),fertig,
 SC-38,Statische Prüfung,10,"Einheiten auf Integern: `.to()` nur bei ganzzahligem Faktor, sonst `.to_float()` (3.2)",F,M6 (frueh),fertig,
-SC-39,Statische Prüfung,10,"Speicherbudget aller `baremetal`- und `rtos`-Profile: `takt size` (11.5) ≤ `ram`/`flash`/`iram` der Hardware-Konfiguration, aufgeschlüsselt; auf Targets mit XIP-Flash zusätzlich RAM-Residenz von Code und tick-gelesenen Konstanten (12.3); `debounce`-Haltedauer im Report",F,M6 (mit 8.10),teilweise,
+SC-39,Statische Prüfung,10,"Speicherbudget aller `baremetal`- und `rtos`-Profile: `takt size` (11.5) ≤ `ram`/`flash`/`iram` der Hardware-Konfiguration, aufgeschlüsselt; auf Targets mit XIP-Flash zusätzlich RAM-Residenz von Code und tick-gelesenen Konstanten (12.3); `debounce`-Haltedauer im Report",F,M6 (mit 8.10),fertig,"`takt size --hardware` prueft RAM, Flash und `iram` (12.3); teilen sich Daten und RAM-residenter Code denselben Bereich, zaehlt die Summe gegen die eine Grenze. `debounce` fehlt noch."
 SC-40,Statische Prüfung,10,"Performance-Lint: `int` ohne Range in Schleifen und Regelpfaden auf 32-Bit-Zielen, mit Kostenanteil (3.4)",W,M3 (Gate),fertig,
 SC-41,Statische Prüfung,10,"Performance-Lint: `float = f64` auf Zielen ohne f64-Hardware, mit Kostenanteil der f64-Operationen; Vorschlag `system: float = f32` (4.2)",W,M3 (Gate),fertig,
 SC-42,Statische Prüfung,10,"Lint: Matrizen über 16×16 (Kosten n³, Scratch n²·8 Byte) (3.11); `expect_len < N` schwächt Lemma 9.6.1 zur deklarierten Annahme (8.6)",W,M3 (Gate),fertig,"Matrix-Lint in `lower/types.rs`, `expect_len` in `checks.rs`"
@@ -742,7 +742,7 @@ PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M4 (
 PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M4 (Codegen),fertig,
 PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M4 (Codegen),fertig,
 PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M5 (Embedded),offen,
-PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M5 (Embedded),offen,ESP32-C6 (plan/esp32c6.md Schritt 7)
+PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M5 (Embedded),fertig,"ESP32-C6 (plan/esp32c6.md Schritt 7): RAM-Residenz von Tick-ISR, Wartepfad und erzeugtem Code (`#[ram]`, `rwtext_hook.x`); `esp-storage` ohne `critical-section`; `takt size` weist `iram` aus; `idle` als Light-Sleep (Schritt 6). Die Sektorloeschung kostet trotzdem Perioden — sie ist unteilbar und laenger als der Tick (FB-197); die Semantik bleibt unberuehrt."
 PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M6 (v1.1),offen,
 PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M6 (v1.1),offen,
 PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M5 (Embedded),fertig,

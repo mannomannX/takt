@@ -94,9 +94,18 @@ impl Size {
         self.items.iter().filter(|i| i.origin != Origin::Open && is_flash(&i.name)).map(|i| i.bytes).sum()
     }
 
-    /// Belastbare RAM-Posten: alles, was nicht Flash ist.
+    /// Belastbare RAM-Posten: alles, was weder Flash noch IRAM ist.
     pub fn ram_total(&self) -> u64 {
-        self.items.iter().filter(|i| i.origin != Origin::Open && !is_flash(&i.name)).map(|i| i.bytes).sum()
+        self.items
+            .iter()
+            .filter(|i| i.origin != Origin::Open && !is_flash(&i.name) && !is_iram(&i.name))
+            .map(|i| i.bytes)
+            .sum()
+    }
+
+    /// Belastbare IRAM-Posten (12.3, `xip_flash`); null ohne XIP.
+    pub fn iram_total(&self) -> u64 {
+        self.items.iter().filter(|i| i.origin != Origin::Open && is_iram(&i.name)).map(|i| i.bytes).sum()
     }
 
     /// Die Posten als Baseline-Datei (`takt size --save-baseline`, D1):
@@ -177,6 +186,12 @@ fn is_flash(name: &str) -> bool {
     name.contains("Flash")
 }
 
+/// Liegt ein Posten im Instruktions-RAM (12.3)? Eigene Grenze, darum
+/// weder in `ram_total` noch in `flash_total`.
+fn is_iram(name: &str) -> bool {
+    name.starts_with("IRAM")
+}
+
 /// Rechnet das Speicherbudget eines Programms (11.5).
 pub fn size(p: &Program) -> Size {
     let mut items = Vec::new();
@@ -244,6 +259,11 @@ pub fn size(p: &Program) -> Size {
     Size { items }
 }
 
+/// Die RAM-residenten Posten der Profilfamilie `xip_flash` (12.3).
+pub const IRAM_TEXT: &str = "IRAM (Code im Tick)";
+/// Konstanten, die der Tick im RAM liest (12.3).
+pub const IRAM_RODATA: &str = "IRAM (Konstanten im Tick)";
+
 /// Was sich erst an einem erzeugten Objekt ablesen laesst (11.5, 12.3).
 ///
 /// Zwei Posten stehen ohne Objekt auf `offen`, und zwar nicht aus
@@ -256,6 +276,11 @@ pub struct Measured {
     pub flash: Option<u64>,
     /// Der Programmanteil des Stacks als laengster Pfad (12.3).
     pub stack: Option<super::stack::Depth>,
+    /// RAM-residenter Code auf XIP-Zielen (12.3); `None` ohne Messung,
+    /// `Some(0)` auf Zielen ohne solche Abschnitte.
+    pub iram_text: Option<u64>,
+    /// Konstanten, die der Tick im RAM liest (12.3).
+    pub iram_rodata: Option<u64>,
 }
 
 impl Size {
@@ -274,6 +299,13 @@ impl Size {
             if let Some(bytes) = value {
                 item.bytes = bytes;
                 item.origin = Origin::Measured;
+            }
+        }
+        // Nur auf XIP-Zielen: ein Ziel ohne solche Abschnitte bekaeme
+        // sonst zwei Nullzeilen, die nichts aussagen (12.3).
+        for (name, bytes) in [(IRAM_TEXT, m.iram_text), (IRAM_RODATA, m.iram_rodata)] {
+            if let Some(bytes) = bytes.filter(|b| *b > 0) {
+                self.items.push(Item { name: name.into(), bytes, origin: Origin::Measured });
             }
         }
         self

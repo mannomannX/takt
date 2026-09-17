@@ -27,7 +27,24 @@ fn main() {
         println!("cargo:rustc-env=TAKT_FRESH_JOURNAL=1");
     }
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    ram_resident(&out);
     build_takt_program(&out);
+}
+
+/// Legt Takt-Code und tick-gelesene Konstanten ins RAM (12.3).
+///
+/// `esp-hal` bindet `rwtext_hook.x` in `.rwtext` ein; die Datei muss im
+/// Suchpfad des Linkers liegen, und `OUT_DIR` steht dort. Eingeschaltet
+/// wird der Haken ueber `ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK` — als echte
+/// Umgebungsvariable zur Bauzeit von `esp-hal`, darum in
+/// `.cargo/config.toml` und nicht hier.
+fn ram_resident(out: &Path) {
+    let hook = Path::new(env!("CARGO_MANIFEST_DIR")).join("rwtext_hook.x");
+    println!("cargo:rerun-if-changed={}", hook.display());
+    if let Err(e) = fs::copy(&hook, out.join("rwtext_hook.x")) {
+        panic!("rwtext_hook.x nicht kopierbar: {e}");
+    }
+    println!("cargo:rustc-link-search={}", out.display());
 }
 
 fn build_takt_program(out: &Path) {
