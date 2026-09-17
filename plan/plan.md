@@ -187,6 +187,17 @@ Ende-zu-Ende bis x86-64, 14.8 differentiell — und bündelt den
 Hardwareteil beider Meilensteine in einem Schritt. Der erste Schritt ist
 die Bewertung aus FB-55: Einheiten auf Ganzzahlen.
 
+**Entscheidung (2026-09-17): M8 ist geplant — `plan/m8.md`.** Alles an
+v1.2 parst seit M6; M8 ist Sema, MIR, Interpreter, Codegen, Runtime und
+Konformität in 23 Schritten, sechs Stränge, fünf davon unabhängig. Die
+Referenz lässt fünf Dinge offen (Gerätemodell für `port`, Einheit von
+`CaptureCmd::ARM`, Element von `.fired`, `persist` in gescopten
+Instanzen, Review-Prozess für Natives); `plan/m8.md` 2 entscheidet sie,
+Abschnitt 7 zieht `definition.md` vor dem jeweiligen Schritt nach. Der
+Hardware-Anteil ist ein einziger Schritt: eine `driver machine` auf den
+UART0-Registern des ESP32-C6, ohne Lötkolben. Die Lücke der geplanten
+Ausgaben im MCU-Rahmen (`plan/esp32c6.md`) schließt der Trigger-Codegen.
+
 Unverändert bleibt: Nichts an v1.1 ist ein Breaking Change. Das
 Reservierungspaket aus M0 (Grammatik, MIR-Platzhalter, reservierte Namen,
 Editionen) hält alle diese Konstrukte offen, und jedes v1-Programm bleibt
