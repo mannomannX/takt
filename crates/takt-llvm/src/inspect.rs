@@ -85,11 +85,54 @@ impl Sections {
 pub struct Symbol {
     /// Name, wie der Linker ihn fuehrt.
     pub name: String,
+    /// Adresse im Abbild.
+    pub address: u64,
     /// Groesse in Byte; null, wenn das Format sie nicht nennt.
     pub size: u64,
     /// Die Klasse, wie `nm` sie schreibt: `T` fuer Code, `t` fuer
     /// lokalen Code, `R`/`r` fuer Konstanten, `B`/`b` fuer `.bss`.
     pub kind: char,
+}
+
+/// Ein Abschnitt mit seiner Lage im Abbild (`objdump -h`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SectionRange {
+    /// Name.
+    pub name: String,
+    /// Erste Adresse.
+    pub start: u64,
+    /// Groesse in Byte.
+    pub size: u64,
+}
+
+impl SectionRange {
+    fn contains(&self, address: u64) -> bool {
+        address >= self.start && address < self.start.saturating_add(self.size)
+    }
+}
+
+/// Welche Symbole eines Programms im RAM liegen und welche im Flash
+/// (12.3, `xip_flash`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Residency {
+    /// Symbole in RAM-residenten Abschnitten.
+    pub ram: Vec<String>,
+    /// Symbole im Flash — bei asynchronem NVM ein Stillstand im Tick.
+    pub flash: Vec<String>,
+}
+
+/// Ordnet die Code- und Konstantensymbole, die `is_program` waehlt, nach
+/// dem Abschnitt ein, in dem ihre Adresse liegt.
+pub fn residency(symbols: &[Symbol], sections: &[SectionRange], is_program: impl Fn(&str) -> bool) -> Residency {
+    let mut out = Residency::default();
+    for s in symbols.iter().filter(|s| matches!(s.kind, 'T' | 't' | 'R' | 'r') && is_program(&s.name)) {
+        let resident = sections
+            .iter()
+            .find(|sec| sec.contains(s.address))
+            .is_some_and(|sec| is_iram_text(&sec.name) || is_iram_rodata(&sec.name));
+        if resident { &mut out.ram } else { &mut out.flash }.push(s.name.clone());
+    }
+    out
 }
 
 /// Die Werkzeuge einer Zielkette (`size`, `nm`, `objdump`).
@@ -176,6 +219,12 @@ impl Binutils {
         out.status.success().then(|| parse_sections(&String::from_utf8_lossy(&out.stdout)))
     }
 
+    /// Die Abschnitte mit ihrer Lage im Abbild (`objdump -h`).
+    pub fn section_ranges(&self, file: &Path) -> Option<Vec<SectionRange>> {
+        let out = Command::new(self.tool("objdump")).arg("-h").arg(file).output().ok()?;
+        out.status.success().then(|| parse_section_table(&String::from_utf8_lossy(&out.stdout)))
+    }
+
     /// Die definierten Symbole mit ihren Groessen (11.5, 13.4).
     ///
     /// Nur definierte: Ein undefiniertes Symbol ist ein Aufruf in die
@@ -200,7 +249,8 @@ impl Binutils {
             if kind.len() != 1 {
                 continue;
             }
-            list.push(Symbol { name: name.to_string(), size, kind: k });
+            let address = u64::from_str_radix(w[0], 16).unwrap_or(0);
+            list.push(Symbol { name: name.to_string(), address, size, kind: k });
         }
         // Nach Namen sortiert: Die Reihenfolge von `nm` haengt an der
         // Adresse, und ein Vergleich zweier Ziele soll sie nicht sehen.
@@ -379,6 +429,24 @@ fn parse_sections(text: &str) -> Sections {
     s
 }
 
+/// Die Tabelle von `objdump -h`: `Idx Name Size VMA Type`, hexadezimal.
+fn parse_section_table(text: &str) -> Vec<SectionRange> {
+    text.lines()
+        .filter_map(|line| {
+            let w: Vec<&str> = line.split_whitespace().collect();
+            let (name, size, vma) = (w.get(1)?, w.get(2)?, w.get(3)?);
+            if !name.starts_with('.') {
+                return None;
+            }
+            Some(SectionRange {
+                name: name.to_string(),
+                start: u64::from_str_radix(vma, 16).ok()?,
+                size: u64::from_str_radix(size, 16).ok()?,
+            })
+        })
+        .collect()
+}
+
 /// Praefix eines Abschnittsnamens, mit `.suffix` als Treffer.
 fn has_prefix(name: &str, prefixes: &[&str]) -> bool {
     let Some(n) = name.strip_prefix('.') else { return false };
@@ -447,5 +515,49 @@ section                    size         addr
         let s = parse_sections(".rwtext 10 0\n.rwtext.literal 4 0\n.rodata 7 0\n");
         assert_eq!(s.iram_text, 14);
         assert_eq!(s.rodata, 7);
+    }
+}
+
+#[cfg(test)]
+mod residency_tests {
+    use super::*;
+
+    const TABLE: &str = "\
+Sections:
+Idx Name                 Size     VMA      Type
+  0                      00000000 00000000 
+  1 .trap                00000640 40800000 TEXT
+  2 .rwtext              00001c34 40800640 TEXT
+  4 .data                0000032c 40802274 DATA
+  9 .rodata              00002dfc 42000120 DATA
+ 11 .text                000097fc 42010020 TEXT
+";
+
+    fn sym(name: &str, address: u64, kind: char) -> Symbol {
+        Symbol { name: name.into(), address, size: 4, kind }
+    }
+
+    #[test]
+    fn the_section_table_reads_names_sizes_and_addresses() {
+        let t = parse_section_table(TABLE);
+        assert_eq!(t.len(), 5);
+        assert_eq!(t[1], SectionRange { name: ".rwtext".into(), start: 0x4080_0640, size: 0x1c34 });
+    }
+
+    /// Ein Symbol liegt im RAM, wenn sein Abschnitt RAM-resident ist;
+    /// Daten und fremde Symbole zaehlen nicht.
+    #[test]
+    fn symbols_are_sorted_by_the_section_that_holds_them() {
+        let sections = parse_section_table(TABLE);
+        let symbols = [
+            sym("device_step", 0x4080_2160, 'T'),
+            sym("takt_mcu_tick", 0x4201_0100, 'T'),
+            sym("takt_fn_scale", 0x4200_0200, 'R'),
+            sym("STATE", 0x4080_2300, 'B'),
+            sym("memcpy", 0x4201_0500, 'T'),
+        ];
+        let r = residency(&symbols, &sections, |n| n.starts_with("device_") || n.starts_with("takt_"));
+        assert_eq!(r.ram, vec!["device_step"]);
+        assert_eq!(r.flash, vec!["takt_mcu_tick", "takt_fn_scale"]);
     }
 }

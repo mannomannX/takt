@@ -611,12 +611,26 @@ fn size(args: &Args) -> bool {
             continue;
         };
         println!("{path}:");
-        let mut report = takt_mir::analysis::size::size(program).with_object(&measure(args, program));
-        if let Some(target) = calibration(args) {
-            report = report.with_hardware(&target);
-            for line in report.lines() {
-                println!("{line}");
+        let (measured, residency) = measure(args, program);
+        let mut report = takt_mir::analysis::size::size(program).with_object(&measured);
+        let target = calibration(args);
+        if let Some(target) = &target {
+            report = report.with_hardware(target);
+        }
+        for line in report.lines() {
+            println!("{line}");
+        }
+        // 12.3: Auf einem XIP-Ziel zaehlt, was vom Programm im RAM liegt;
+        // mit asynchronem NVM muss es alles sein, sonst steht der Tick.
+        if let Some(r) = residency.filter(|_| report.iram_total() > 0) {
+            println!("  RAM-Residenz des Programms: {} von {} Symbolen", r.ram.len(), r.ram.len() + r.flash.len());
+            let asynchronous = target.as_ref().is_some_and(|t| t.nvm.and_then(|n| n.blocking) == Some(false));
+            if asynchronous && !r.flash.is_empty() {
+                println!("  im Flash, bei asynchronem NVM ein Stillstand im Tick (12.3): {}", r.flash.join(", "));
+                ok = false;
             }
+        }
+        if let Some(target) = target {
             // Pruefung 39: die Summen gegen das Ziel (11.5); IRAM nur auf
             // XIP-Zielen, wo beide Seiten es kennen (12.3).
             //
@@ -642,10 +656,6 @@ fn size(args: &Args) -> bool {
             }
             if iram > 0 && m.iram.is_none() {
                 println!("  IRAM: {iram} Byte gemessen, aber `iram` fehlt in der Konfiguration (8.10)");
-            }
-        } else {
-            for line in report.lines() {
-                println!("{line}");
             }
         }
         if let Some(file) = args.value("--save-baseline") {
@@ -706,13 +716,16 @@ fn against_baseline(report: &takt_mir::analysis::size::Size, file: &str) -> bool
 /// **Ohne `--object` bleibt es leer, und das ist kein Mangel.** Flash und
 /// Stacktiefe entscheidet der Codegen, nicht die MIR; wer sie wissen will,
 /// muss uebersetzt haben. `takt build --emit obj` liefert die Datei.
-fn measure(args: &Args, p: &takt_mir::Program) -> takt_mir::analysis::size::Measured {
+fn measure(
+    args: &Args,
+    p: &takt_mir::Program,
+) -> (takt_mir::analysis::size::Measured, Option<takt_llvm::inspect::Residency>) {
     let mut out = takt_mir::analysis::size::Measured::default();
-    let Some(file) = args.value("--object") else { return out };
+    let Some(file) = args.value("--object") else { return (out, None) };
     let path = std::path::Path::new(file);
     if !path.exists() {
         eprintln!("{file}: nicht gefunden; Flash und Stack bleiben offen");
-        return out;
+        return (out, None);
     }
 
     // Ohne `--target` der Wirt: Ein Objekt ohne Angabe stammt meist aus
@@ -733,7 +746,19 @@ fn measure(args: &Args, p: &takt_mir::Program) -> takt_mir::analysis::size::Meas
     let frames: Vec<Option<u32>> =
         tools.stack_frames(path, &symbols).into_iter().map(|f| f.and_then(|n| u32::try_from(n).ok())).collect();
     out.stack = takt_mir::analysis::stack::depth(p, &frames);
-    out
+
+    let residency = tools
+        .section_ranges(path)
+        .zip(tools.symbols(path))
+        .map(|(ranges, syms)| takt_llvm::inspect::residency(&syms, &ranges, |n| is_program_symbol(p, n)));
+    (out, residency)
+}
+
+/// Symbole, die der Codegen und der Rahmen (12.1) fuer das Programm
+/// erzeugen: Maschinen, Funktionen, Natives, `takt_mcu_*`.
+fn is_program_symbol(p: &takt_mir::Program, name: &str) -> bool {
+    ["takt_mcu_", "takt_fn_", "takt_native_"].iter().any(|pre| name.starts_with(pre))
+        || p.machines.iter().any(|m| name.starts_with(&format!("{}_", takt_llvm::fns::sanitized(&m.name))))
 }
 
 /// Die Hardware-Konfiguration aus `--hardware DATEI` (8.10), gelesen und
