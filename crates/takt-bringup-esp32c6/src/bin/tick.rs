@@ -18,7 +18,7 @@ const REPORT_EVERY: u64 = 1_000;
 #[main]
 fn main() -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
-    let mut uart = Telemetry::new();
+    let mut uart = Telemetry::new(peripherals.USB_DEVICE);
     let mut clock = match takt_board_esp32c6::init(peripherals.SYSTIMER, TICK_NS) {
         Ok(c) => c,
         Err(e) => {

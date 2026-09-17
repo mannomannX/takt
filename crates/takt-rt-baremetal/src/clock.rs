@@ -30,8 +30,6 @@ pub struct TimerClock<T> {
     timer: T,
     /// Nominale Periode aus `system: tick`, in Nanosekunden.
     nominal_ns: i64,
-    /// Stand des ISR-Zaehlers beim letzten Tickbeginn.
-    last_count: u64,
     /// Wie viele Tick-Ereignisse die Schleife verpasst hat.
     missed: u64,
 }
@@ -39,8 +37,7 @@ pub struct TimerClock<T> {
 impl<T: TickSource> TimerClock<T> {
     /// Bindet einen Timer an die nominale Periode.
     pub fn new(timer: T, nominal_ns: i64) -> TimerClock<T> {
-        let last_count = timer.ticks();
-        TimerClock { timer, nominal_ns, last_count, missed: 0 }
+        TimerClock { timer, nominal_ns, missed: 0 }
     }
 
     /// Die zuletzt gemessene Periode gegenueber der nominalen (7.1).
@@ -67,30 +64,25 @@ impl<T: TickSource> TimerClock<T> {
 
 impl<T: TickSource> Clock for TimerClock<T> {
     fn now(&self) -> i64 {
-        // Die logische Zeit ist die Zahl der Tick-Ereignisse mal der
-        // *nominalen* Periode — nicht die Summe der gemessenen. 7.1:
-        // „`tick` bleibt der nominale Wert der Semantik." Waere es
-        // anders, liefe die logische Zeit mit der Uhr davon, und zwei
-        // Laeufe desselben Programms auf verschieden schnellen Uhren
-        // haetten verschiedene Traces (Satz 9.4.1).
         self.timer.ticks().saturating_mul(self.nominal_ns.unsigned_abs()) as i64
     }
 
-    fn wait_until(&mut self, _deadline: i64) {
-        // Die Deadline interessiert nicht: Der Timer bestimmt den Takt,
-        // nicht die Schleife. Was zaehlt, ist, ob schon ein Ereignis
-        // vorliegt — dann ist der Schritt zu lang gewesen und die
-        // Schleife laeuft ohne Warten weiter.
-        let before = self.timer.ticks();
-        let elapsed = before.saturating_sub(self.last_count);
-        if elapsed == 0 {
-            self.timer.wait_for_tick();
-        } else {
-            // Mehr als ein Ereignis seit dem letzten Tickbeginn: Der
-            // Schritt hat seine Periode ueberschritten.
-            self.missed = self.missed.saturating_add(elapsed.saturating_sub(1));
+    /// Wartet auf das Tick-Ereignis, in dem `deadline` liegt.
+    ///
+    /// **Die Frist, nicht das naechste Ereignis.** Nach virtuellen Ticks
+    /// (9.9) rueckt die Schleife ihre Frist um mehrere Perioden vor; wer
+    /// dann nur auf das naechste Ereignis wartete, liefe der Zeit davon.
+    /// Liegt die Frist schon zurueck, war der letzte Schritt zu lang: die
+    /// Differenz sind verpasste Ticks, und gewartet wird nicht mehr.
+    fn wait_until(&mut self, deadline: i64) {
+        let target = if self.nominal_ns > 0 { u64::try_from(deadline / self.nominal_ns).unwrap_or(0) } else { 0 };
+        let now = self.timer.ticks();
+        if now > target {
+            self.missed = self.missed.saturating_add(now - target);
         }
-        self.last_count = self.timer.ticks();
+        while self.timer.ticks() < target {
+            self.timer.wait_for_tick();
+        }
     }
 }
 
@@ -133,22 +125,30 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_event_means_the_step_was_too_long() {
+    fn the_clock_waits_for_the_deadline() {
         let timer = FakeTimer { count: Cell::new(0), period_ns: MS, ..FakeTimer::default() };
         let mut clock = TimerClock::new(timer, MS);
-        // Zwei Ereignisse, waehrend der Schritt lief.
-        clock.timer.count.set(2);
-        clock.wait_until(0);
-        assert_eq!(clock.missed(), 1, "zwei Ereignisse seit dem Tickbeginn heisst eine verlorene Periode");
+        clock.wait_until(2 * MS);
+        assert_eq!(clock.timer.waits.get(), 2, "zwei Ereignisse bis zur Frist");
+        assert_eq!(clock.missed(), 0);
+    }
+
+    #[test]
+    fn a_deadline_in_the_past_means_the_step_was_too_long() {
+        let timer = FakeTimer { count: Cell::new(3), period_ns: MS, ..FakeTimer::default() };
+        let mut clock = TimerClock::new(timer, MS);
+        clock.wait_until(MS);
+        assert_eq!(clock.missed(), 2, "zwei Ereignisse hinter der Frist sind zwei verlorene Ticks");
         assert_eq!(clock.timer.waits.get(), 0, "wer schon zu spaet ist, wartet nicht noch");
     }
 
     #[test]
-    fn without_a_pending_event_the_loop_waits() {
-        let timer = FakeTimer { count: Cell::new(0), period_ns: MS, ..FakeTimer::default() };
+    fn virtual_ticks_move_the_deadline_and_the_clock_follows() {
+        let timer = FakeTimer { count: Cell::new(1), period_ns: MS, ..FakeTimer::default() };
         let mut clock = TimerClock::new(timer, MS);
-        clock.wait_until(0);
-        assert_eq!(clock.timer.waits.get(), 1);
+        // Die Schleife schlief drei virtuelle Ticks: Frist von 2 auf 5 ms.
+        clock.wait_until(5 * MS);
+        assert_eq!(clock.timer.waits.get(), 4, "die Uhr wartet die geschlafenen Perioden wirklich ab");
         assert_eq!(clock.missed(), 0);
     }
 }

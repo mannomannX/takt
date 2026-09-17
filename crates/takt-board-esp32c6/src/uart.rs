@@ -1,29 +1,71 @@
-//! Telemetrie ueber USB-Serial-JTAG (12.3).
+//! Telemetrie ueber USB-Serial-JTAG (12.3, 13.8).
 //!
-//! Der Chip bringt die Schnittstelle mit; `esp-println` bedient ihr
-//! FIFO. Dieselben Aufrufe wie beim F401 (`write`, `write_i64`,
+//! **Verlustfrei, solange ein Host liest.** `esp-println` gibt Bytes nach
+//! einer kurzen Wartezeit auf, wenn der Host das FIFO nicht schnell genug
+//! leert — im Konformitaetslauf fehlte so das Ende einer Zeile (FB-200).
+//! Hier wartet jedes Byte, bis das FIFO Platz hat, bis zu 50 ms; erst dann
+//! gilt der Host als abwesend, und eine Sekunde lang wird nichts
+//! geschrieben, damit ein Board ohne Leser nicht an jeder Zeile steht.
+//!
+//! Gesendet wird an Zeilenenden und wenn das FIFO voll ist: ein USB-Paket
+//! je Zeile statt je Textstueck, denn jedes Paket braucht einen Abruf des
+//! Hosts. Dieselben Aufrufe wie beim F401 (`write`, `write_i64`,
 //! `newline`), damit die Bring-up-Programme beider Boards gleich lesen.
 
-use esp_println::Printer;
+use esp_hal::Blocking;
+use esp_hal::peripherals::USB_DEVICE;
+use esp_hal::timer::systimer::{SystemTimer, Unit};
+use esp_hal::usb::usb_serial_jtag::UsbSerialJtag;
+
+/// Warten auf Platz im FIFO, in SYSTIMER-Schritten zu 62,5 ns: 50 ms.
+const WAIT: u64 = 800_000;
+/// Schweigen nach einem Timeout: eine Sekunde.
+const SILENCE: u64 = 16_000_000;
 
 /// Die serielle Ausgabe.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Telemetry;
+pub struct Telemetry {
+    port: UsbSerialJtag<'static, Blocking>,
+    silent_until: u64,
+    dropped: u32,
+}
 
 impl Telemetry {
-    /// Die Schnittstelle ist mit dem Chip da; hier gibt es nichts einzurichten.
-    pub fn new() -> Telemetry {
-        Telemetry
+    /// Bindet die Schnittstelle; sie ist mit dem Chip da.
+    pub fn new(usb: USB_DEVICE<'static>) -> Telemetry {
+        Telemetry { port: UsbSerialJtag::new(usb), silent_until: 0, dropped: 0 }
     }
 
-    /// Ein Byte.
+    /// Ein Byte; am Zeilenende geht das Paket ab.
     pub fn write_byte(&mut self, b: u8) {
-        Printer::write_bytes(&[b]);
+        let start = SystemTimer::unit_value(Unit::Unit0);
+        if start < self.silent_until {
+            self.dropped = self.dropped.saturating_add(1);
+            return;
+        }
+        while self.port.write_byte_nb(b).is_err() {
+            // Das FIFO ist voll: abschicken, dann auf den Host warten.
+            let _ = self.port.flush_tx_nb();
+            if SystemTimer::unit_value(Unit::Unit0).wrapping_sub(start) > WAIT {
+                self.silent_until = start + WAIT + SILENCE;
+                self.dropped = self.dropped.saturating_add(1);
+                return;
+            }
+        }
+        if b == b'\n' {
+            let _ = self.port.flush_tx_nb();
+        }
+    }
+
+    /// Wie viele Bytes ohne Host verworfen wurden.
+    pub fn dropped(&self) -> u32 {
+        self.dropped
     }
 
     /// Ein Text.
     pub fn write(&mut self, s: &str) {
-        Printer::write_bytes(s.as_bytes());
+        for b in s.bytes() {
+            self.write_byte(b);
+        }
     }
 
     /// Eine Zahl, dezimal.
@@ -38,7 +80,9 @@ impl Telemetry {
                 break;
             }
         }
-        Printer::write_bytes(&buf[i..]);
+        for b in &buf[i..] {
+            self.write_byte(*b);
+        }
     }
 
     /// Eine Zahl mit Vorzeichen, dezimal.

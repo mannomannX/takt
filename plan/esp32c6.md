@@ -31,7 +31,7 @@ einem Pin — sie bekommt ihre 24 Bit über den RMT-Baustein (`led.rs`).
 | RAM | 512 KB HP-SRAM |
 | Tick | SYSTIMER (52-bittig, 16 MHz), Alarm auf Vergleichswert |
 | Zyklen | CSR `mcycle` (statt DWT) |
-| Telemetrie | USB-Serial-JTAG (kein Adapter) |
+| Telemetrie | USB-Serial-JTAG (kein Adapter), verlustfrei mit Host: eigener Schreiber auf dem `esp-hal`-Treiber (FB-200) |
 | LED | WS2812 an IO8, über RMT-Kanal 0 |
 | Flashen | `probe-rs` über USB-Serial-JTAG oder `espflash`; Abbild im ESP-Format vom ROM-Bootloader geladen |
 
@@ -89,6 +89,11 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
 - Der MCU-Rahmen trägt keine geplanten Ausgaben (`at`, 7.5), keine
   Systemkanäle (`sys/reboot`, `sys/jump`) und keine Jobs; die vier Programme
   bleiben dem Linux-Vergleich vorbehalten, bis der Rahmen sie hat.
+- Eingänge vom Board: Der MCU-Rahmen hat `takt_out_*` für Ausgänge, aber
+  keinen Weg, einen `hw`-Eingang mit Wert und Qualität zu stellen (12.1,
+  12.6). Ohne ihn bleiben 14.7 und jeder echte Treiber am Board Simulation.
+- Watchdog: `esp-hal` hält RWDT und MWDT beim Start an; die Schleife läuft
+  mit einem leeren `Watchdog` (12.3 verlangt einen echten).
 - `build.rs` nimmt das `takt`-Werkzeug aus dem Release-Verzeichnis, auch
   wenn es älter ist als der Compiler (FB-193): Erster Bau des Servo-Objekts
   kam aus einem Stand vor M6 und ließ die Maschinenfunktionen fehlen. Bis
@@ -104,5 +109,5 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
 | 3 | **fertig 2026-09-17.** `tick`: 1000 Ticks je Sekunde, nominale und gemessene Periode 1 000 000 ns, null verpasste Ticks über die Messdauer; LED blinkt sekündlich. Zwei Befunde: `counts_for` rechnete mit ganzzahligen Nanosekunden je Schritt (62 statt 62,5 bei 16 MHz, acht Promille daneben — FB-192, behoben in `takt-board-support`); der Zyklenzähler des Kerns steht in `wfi`, die gemessene Periode kommt darum aus dem SYSTIMER, der Zähler bleibt für `measure`. Ein `nomem` am `wfi` ließ die Warteschleife den Zähler nicht neu laden — entfernt. |
 | 4 | **fertig 2026-09-17.** `takt` mit `29_heartbeat.takt`: Trace `t=100 out led 1`, `t=200 out led 1`, `t=300 out led 1` über USB, bitgleich mit dem Interpreter (`true` an denselben Ticks); LED blinkt im 500-ms-Takt des Programms. Blockierte einmal am veralteten `takt.exe` (FB-193). |
 | 5 | **fertig 2026-09-17.** `takt-conformance/tests/board_esp32c6.rs` (nur mit `TAKT_ESP32C6_PORT=COM4`): 37 Programme des Differentialkorpus laufen auf dem Chip, je 60 Ticks, Trace über USB-Serial-JTAG, **0 Abweichungen** gegen den Interpreter — Monitore (47), `map`-Iteration (42), SHA-256 (39), Ströme und `sim`-gekoppelte Modelle (23–27, 49–55) eingeschlossen. Ausgelassen, weil der MCU-Rahmen sie nicht trägt: geplante Ausgaben (28), Systemkanäle (32, 34), Jobs (40). Dafür bekam der Rahmen Natives, Ströme, `sim`-Bindungen, Monitore, Floats/Arrays/vorzeichenlose Werte im Trace und schwache Treiber-Defaults (`takt_out_*`). Befund FB-194: Der Rahmen bemaß seine Zustandspuffer aus einer Schranke statt aus dem Struct des Codegens; `39_sha256` schrieb darüber hinaus, und die Stack-Wache des Boards fing es — auf dem Wirt blieb es unsichtbar. |
-| 6 | offen |
+| 6 | **fertig 2026-09-17, mit einer Grenze.** Die Schleife ist jetzt `takt_rt_core::Runtime` mit `run_persisting`: das `persist`-Journal liegt in zwei Flash-Sektoren der `nvs`-Partition (`nvm.rs`, `esp-storage`), `idle` schläft als virtuelle Ticks über `TimerClock` (9.9). Belegt in `board_esp32c6.rs`: `35_persist` überlebt einen Reset (der zweite Lauf beginnt mit dem `count` des ersten, `journal: Eintrag`), `56_idle_timer` schläft rund 50 von 60 Ticks und bleibt trace-gleich mit dem Interpreter. Drei Befunde: die Uhr wartete auf das nächste Ereignis statt auf die Frist, nach virtuellen Ticks lief die Schleife der Zeit davon (FB-199, behoben); ein ISR-Zähler verliert Ticks, solange das Flash die Interrupts sperrt — die Tickzahl kommt jetzt aus dem SYSTIMER selbst (FB-198, behoben); und der Preis des Journals: `esp-storage` löscht und schreibt blockierend mit gesperrten Interrupts, ein Schreibvorgang kostet drei bis vier Ticks zu 10 ms (FB-197) — genau der Fall, den 12.3 für `xip_flash` beschreibt, und damit Schritt 7. Die Grenze: 14.7 selbst läuft noch nicht, weil seine Eingänge (AFE, Taster als `Edge`-Strom, Ladegerät als Wake-Quelle) Treiber am Board brauchen, die der MCU-Rahmen heute nicht anbietet — er stellt Ausgänge (`takt_out_*`), aber keine Eingänge. |
 | 7 | offen |

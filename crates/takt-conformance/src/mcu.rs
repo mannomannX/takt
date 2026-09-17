@@ -221,7 +221,7 @@ fn declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
 fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Einmal vor dem ersten Tick (12.1, Schritt 1). */");
     let _ = writeln!(s, "int takt_mcu_persist_restore(const void *in, int len);");
-    let _ = writeln!(s, "void takt_mcu_init_with(const void *persist, int persist_len) {{");
+    let _ = writeln!(s, "int takt_mcu_init_with(const void *persist, int persist_len) {{");
     let _ = writeln!(s, "    for (unsigned i = 0; i < sizeof image; i++) image[i] = 0;");
     let _ = writeln!(s, "    for (unsigned i = 0; i < sizeof latch; i++) latch[i] = 0;");
     let _ = writeln!(s, "    for (unsigned i = 0; i < sizeof params; i++) params[i] = 0;");
@@ -251,7 +251,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     for m in driven {
         let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
     }
-    let _ = writeln!(s, "    takt_mcu_persist_restore(persist, persist_len);");
+    let _ = writeln!(s, "    int restored = takt_mcu_persist_restore(persist, persist_len);");
     for m in driven {
         let _ = writeln!(s, "    {0}_enter(state_{0}, image, params, latch);", m.name);
         let _ = writeln!(s, "    {0}_publish(state_{0}, image);", m.name);
@@ -261,6 +261,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, 0);");
     }
+    let _ = writeln!(s, "    return restored;");
     let _ = writeln!(s, "}}\n");
 }
 
@@ -340,7 +341,7 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     // 9.9: „fuer jede Maschine: time_in_state += n*T0". Ein
     // uebersprungener Tick ruft kein `_step`; ohne das feuerte jede
     // `after`-Frist um die geschlafenen Ticks zu spaet.
-    let _ = writeln!(s, "void takt_mcu_init(void) {{ takt_mcu_init_with(0, 0); }}\n");
+    let _ = writeln!(s, "void takt_mcu_init(void) {{ (void)takt_mcu_init_with(0, 0); }}\n");
     let _ = writeln!(s, "void takt_mcu_advance(long long n) {{");
     let _ = writeln!(s, "    g_tick += n;");
     for m in driven {

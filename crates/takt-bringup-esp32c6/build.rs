@@ -20,6 +20,12 @@ fn main() {
     if let Ok(ticks) = env::var("TAKT_TICKS") {
         println!("cargo:rustc-env=TAKT_TICKS={ticks}");
     }
+    // `TAKT_FRESH_JOURNAL`: das Journal vor dem Lauf loeschen — wie der
+    // Interpreter ohne Speicher beginnen (Konformitaetslauf).
+    println!("cargo:rerun-if-env-changed=TAKT_FRESH_JOURNAL");
+    if env::var("TAKT_FRESH_JOURNAL").is_ok() {
+        println!("cargo:rustc-env=TAKT_FRESH_JOURNAL=1");
+    }
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     build_takt_program(&out);
 }

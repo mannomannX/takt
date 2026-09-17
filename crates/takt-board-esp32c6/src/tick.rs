@@ -1,28 +1,37 @@
-//! Tick aus dem SYSTIMER-Alarm (7.1, 12.3); die gemessene Periode in
-//! Schritten desselben Zaehlers.
+//! Tick aus dem SYSTIMER (7.1, 12.3).
 //!
-//! Der Zaehler gehoert in die ISR, nicht in die Schleife: Wer in der
-//! Hauptschleife zaehlt, verliert jeden Tick, den ein zu langer Schritt
-//! ueberdeckt — und damit die Information, die den Overrun belegt.
+//! **Der Zaehler ist die Zeit, der Interrupt nur das Wecken.** Die Zahl
+//! der Ticks kommt aus dem Stand des SYSTIMER, nicht aus einem Zaehler in
+//! der ISR: Steht der Kern laenger als eine Periode — eine Sektorloeschung
+//! im Flash sperrt Interrupts fuer zweistellige Millisekunden —, faellt
+//! nur *ein* Alarm an, und ein ISR-Zaehler verloere die Ticks dazwischen
+//! still. Der Timer verliert sie nicht.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use takt_board_support::Counter64;
+use esp_hal::timer::systimer::{SystemTimer, Unit};
 use takt_rt_baremetal::TickSource;
 
-static TICKS: Counter64 = Counter64::new();
+static COUNTS_PER_TICK: AtomicU32 = AtomicU32::new(0);
 static LAST_COUNTS: AtomicU32 = AtomicU32::new(0);
 
-/// Von der Alarm-ISR gerufen: zaehlt den Tick und merkt sich die
-/// gemessene Periode in SYSTIMER-Schritten.
+/// Von `init` gesetzt: so viele SYSTIMER-Schritte ist ein Tick lang.
+pub(crate) fn set_counts_per_tick(counts: u32) {
+    COUNTS_PER_TICK.store(counts, Ordering::Relaxed);
+}
+
+/// Von der Alarm-ISR gerufen: merkt sich die gemessene Periode in
+/// SYSTIMER-Schritten.
 pub fn on_timer_interrupt(elapsed_counts: u32) {
-    TICKS.tick();
     LAST_COUNTS.store(elapsed_counts, Ordering::Relaxed);
 }
 
-/// Tick-Ereignisse seit dem Start.
+/// Tick-Ereignisse seit dem Start des SYSTIMER.
 pub fn count() -> u64 {
-    TICKS.get()
+    match u64::from(COUNTS_PER_TICK.load(Ordering::Relaxed)) {
+        0 => 0,
+        counts => SystemTimer::unit_value(Unit::Unit0) / counts,
+    }
 }
 
 /// Der SYSTIMER als Tick-Quelle: nominale und gemessene Periode in

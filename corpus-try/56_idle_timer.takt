@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# `idle` mit dem Timer als einziger Wake-Quelle (5.10, 9.9): Die Schleife
+# ueberspringt die Ticks bis zur `after`-Frist als virtuelle Ticks (Satz
+# 9.9.1), der Trace ist derselbe wie ohne Schlaf. Auf einem Board ist das
+# der Schlaf zwischen zwei Blinkphasen.
+
+output led : bool @ hw("ui/led") with safe = false
+
+machine m:
+    initial SLEEP
+
+    state SLEEP idle:
+        enter:
+            led = false
+        after 500 ms: -> RUN
+
+    state RUN:
+        enter:
+            led = true
+        after 200 ms: -> SLEEP

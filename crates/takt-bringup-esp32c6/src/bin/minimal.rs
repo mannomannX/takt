@@ -7,14 +7,16 @@
 #![no_main]
 
 use esp_hal::main;
-use esp_println::println;
+use takt_board_esp32c6::Telemetry;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
 #[main]
 fn main() -> ! {
-    let _peripherals = esp_hal::init(esp_hal::Config::default());
-    println!("takt esp32c6: minimal");
+    let peripherals = esp_hal::init(esp_hal::Config::default());
+    let mut telemetry = Telemetry::new(peripherals.USB_DEVICE);
+    telemetry.write("takt esp32c6: minimal");
+    telemetry.newline();
     loop {
         // Nichts zu tun: `wfi` hielte den JTAG-Kanal nicht wach, also spinnt der Kern.
         core::hint::spin_loop();

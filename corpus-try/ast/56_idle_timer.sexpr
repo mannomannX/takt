@@ -1,0 +1,14 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output led :bool @hw("ui/led") safe=false)
+(machine m
+  (initial SLEEP)
+  (state SLEEP idle
+    (enter
+      (= led false))
+    (after 500ms -> RUN))
+  (state RUN
+    (enter
+      (= led true))
+    (after 200ms -> SLEEP)))

@@ -137,7 +137,7 @@ SEM-14.3,Semantik/Abschnitt,14.3,Parametrisierte Maschine mit Instanzen (Ventilr
 SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig,
 SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig,
 SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig,
-SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),offen,Board 2 = ESP32-C6 (plan/esp32c6.md)
+SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),teilweise,"Persistenz und Schlaf auf dem ESP32-C6 (plan/esp32c6.md 6: 35_persist, 56_idle_timer); 14.7 selbst braucht Eingaenge vom Board (MCU-Rahmen ohne takt_in_*)"
 SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),fertig,Wortlaut in `corpus-try/sim/14_8/program.takt` mit den kuratierten Namen (FB-166); im Interpreter mit Flash-Modell und Signaturpruefung
 G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),fertig,
 G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),fertig,
@@ -691,7 +691,7 @@ PAR-5.6-Alerts_in_Schleifen,Absatz/Regel,5.6,Alerts in Schleifen,,M1 (Kernsemant
 PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),fertig,
 PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M6 (mit 8.10),offen,
 PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),fertig,
-PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M5 (Embedded),fertig,"in der Simulation geprueft: `corpus-try/45_journal_cut.takt`, Kampagne `power_cut` ueber jede Stelle (M6 Schritt 14)"
+PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M5 (Embedded),fertig,"in der Simulation geprueft: `corpus-try/45_journal_cut.takt`, Kampagne `power_cut` ueber jede Stelle (M6 Schritt 14); im Flash des ESP32-C6 (nvm.rs, FB-197)"
 PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M5 (Embedded),fertig,
 PAR-5.10-Nicht_Wake_Streams_in_idle,Absatz/Regel,5.10,Nicht-Wake-Streams in `idle`,,M5 (Embedded),fertig,
 PAR-5.10-Systemschlaf,Absatz/Regel,5.10,Systemschlaf,,M5 (Embedded),fertig,
@@ -828,7 +828,7 @@ RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M5 (Embed
 RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M5 (Embedded),teilweise,TTL-Adapter (PA9)
 RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M5 (Embedded),teilweise,TTL-Adapter (PA9)
 PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4 (Codegen),fertig,
-PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M5 (Embedded),teilweise,
+PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M5 (Embedded),teilweise,"Tick, Journal und Schlaf auf dem ESP32-C6 (plan/esp32c6.md); Watchdog und Eingaenge offen"
 PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M6 (v1.1),offen,RTOS auf Board 1 + TTL-Adapter (PA9); Schnitt in plan/m6.md 2.13
 PROFIL-boot,Profil/Eintrag,12.8,boot,,M6 (v1.1),offen,Startpartition auf einem Board + TTL-Adapter (PA9); Schnitt in plan/m6.md 2.13
 FAULT-CheckFailed,Fault-Art,5.3,CheckFailed,,M1 (Kernsemantik),fertig,

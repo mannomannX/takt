@@ -19,6 +19,14 @@ use takt_mir::program::Program;
 
 const TICKS: u64 = 60;
 
+/// Ein Board, drei Tests: cargo fuehrt Tests nebenlaeufig aus, das Board
+/// und sein Port vertragen nur einen Lauf zugleich.
+static BOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn board() -> std::sync::MutexGuard<'static, ()> {
+    BOARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Der Differentialkorpus ohne das, was der MCU-Rahmen nicht traegt:
 /// Systemkanaele (32, 34), geplante Ausgaben (28) und Jobs (40).
 const KORPUS: &[&str] = &[
@@ -59,6 +67,7 @@ const KORPUS: &[&str] = &[
     "53_stream_kinds.takt",
     "54_inout.takt",
     "55_frames_with_bytes.takt",
+    "56_idle_timer.takt",
 ];
 
 fn root() -> PathBuf {
@@ -84,19 +93,26 @@ fn run_interpreted(p: &Program) -> String {
     }
 }
 
-/// Baut das Bring-up-Binary fuer `name` und liefert den Pfad des ELF.
-fn build(name: &str) -> Result<PathBuf, String> {
+/// Baut das Bring-up-Binary fuer `name` und liefert den Pfad des ELF;
+/// `fresh` loescht das Journal vor dem Lauf (wie der Interpreter ohne
+/// Speicher), sonst laedt der Lauf, was der vorige schrieb.
+fn build(name: &str, fresh: bool) -> Result<PathBuf, String> {
     let manifest = root().join("crates/takt-bringup-esp32c6/Cargo.toml");
     let program = root().join("corpus-try").join(name);
-    let out = Command::new("cargo")
+    let mut cargo = Command::new("cargo");
+    cargo
         .args(["build", "--release", "--target", "riscv32imac-unknown-none-elf", "--bin", "takt"])
         .arg("--message-format=json-render-diagnostics")
         .arg("--manifest-path")
         .arg(&manifest)
         .env("TAKT_PROGRAM", &program)
-        .env("TAKT_TICKS", TICKS.to_string())
-        .output()
-        .map_err(|e| format!("cargo: {e}"))?;
+        .env("TAKT_TICKS", TICKS.to_string());
+    if fresh {
+        cargo.env("TAKT_FRESH_JOURNAL", "1");
+    } else {
+        cargo.env_remove("TAKT_FRESH_JOURNAL");
+    }
+    let out = cargo.output().map_err(|e| format!("cargo: {e}"))?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).into_owned());
     }
@@ -125,11 +141,14 @@ fn probe_rs(args: &[&str]) -> Result<(), String> {
 /// zweiter Reset genuegt dann. Ein Lauf, der etwas sagt und nicht endet,
 /// wird nicht wiederholt — das waere ein Befund.
 fn capture(port: &str) -> Result<String, String> {
-    let mut serial = serialport::new(port, 115_200)
-        .timeout(Duration::from_millis(200))
-        .open()
-        .map_err(|e| format!("{port}: {e}"))?;
     for attempt in 0..2 {
+        // Nach dem Flashen legt der USB-Serial-JTAG neu an; ein Handle von
+        // davor liefert nichts. Darum kurz warten und je Versuch neu oeffnen.
+        std::thread::sleep(Duration::from_millis(500));
+        let mut serial = serialport::new(port, 115_200)
+            .timeout(Duration::from_millis(200))
+            .open()
+            .map_err(|e| format!("{port}: {e}"))?;
         probe_rs(&["reset", "--chip", "esp32c6"])?;
         let start = Instant::now();
         let mut text = String::new();
@@ -162,18 +181,92 @@ fn output_names(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// Der letzte `out`-Wert eines Ausgangs im Trace.
+fn last_output(text: &str, name: &str) -> Option<String> {
+    text.lines()
+        .filter_map(|l| {
+            let mut w = l.split_whitespace();
+            w.next()?.strip_prefix("t=")?;
+            (w.next()? == "out" && w.next()? == name).then(|| w.collect::<Vec<_>>().join(" "))
+        })
+        .next_back()
+}
+
+/// Die Zahl hinter `takt schlief`.
+fn slept(text: &str) -> Option<u64> {
+    text.lines().find_map(|l| l.strip_prefix("takt schlief ")?.split_whitespace().next()?.parse().ok())
+}
+
+/// **`persist` ueberlebt einen Reset** (5.9, 12.3; plan/esp32c6.md 6).
+///
+/// `35_persist` zaehlt `cycles` hoch; der Lauf schreibt das Journal am
+/// Ende (`flush`). Ein zweiter Lauf desselben Abbilds nach einem Reset —
+/// ohne frisches Journal — muss mit dem letzten Stand des ersten beginnen.
+#[test]
+fn persistence_survives_a_reset() {
+    let Ok(port) = std::env::var("TAKT_ESP32C6_PORT") else {
+        eprintln!("uebersprungen: TAKT_ESP32C6_PORT nennt kein Board");
+        return;
+    };
+    let _board = board();
+    let name = "35_persist.takt";
+    let first = build(name, false)
+        .and_then(|elf| {
+            probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
+            capture(&port)
+        })
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let end = last_output(&first, "count").unwrap_or_else(|| panic!("kein `count` im ersten Lauf:\n{first}"));
+    assert!(first.contains("flush 1"), "das Journal wurde am Ende nicht geschrieben:\n{first}");
+    // Der zweite Lauf: derselbe Chip, ein Reset, das Journal bleibt.
+    let second = capture(&port).unwrap_or_else(|e| panic!("{name}, zweiter Lauf: {e}"));
+    let start = second
+        .lines()
+        .find_map(|l| l.strip_prefix("t=0 out count "))
+        .map(str::trim)
+        .unwrap_or_else(|| panic!("kein `count` bei t=0 im zweiten Lauf:\n{second}"));
+    assert_eq!(start, end.trim(), "der zweite Lauf beginnt nicht mit dem Stand des ersten:\n{second}");
+    assert!(second.contains("journal: Eintrag"), "das Journal wurde nicht geladen:\n{second}");
+}
+
+/// **`idle` schlaeft** (9.9, Satz 9.9.1; plan/esp32c6.md 6):
+/// `56_idle_timer` verbringt 500 von 700 ms im Schlaf, mit dem Timer als
+/// einziger Wake-Quelle; die Schleife zaehlt die Ticks dazwischen als
+/// virtuelle, und der Trace bleibt der des Interpreters.
+#[test]
+fn an_idle_state_sleeps_in_virtual_ticks() {
+    let Ok(port) = std::env::var("TAKT_ESP32C6_PORT") else {
+        eprintln!("uebersprungen: TAKT_ESP32C6_PORT nennt kein Board");
+        return;
+    };
+    let _board = board();
+    let name = "56_idle_timer.takt";
+    let text = build(name, true)
+        .and_then(|elf| {
+            probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
+            capture(&port)
+        })
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let slept = slept(&text).unwrap_or_else(|| panic!("keine Schlafzeile:\n{text}"));
+    assert!(slept >= 40, "60 Ticks mit 500 ms `idle` bei 10 ms Tick: mehr als 40 virtuelle erwartet, {slept}:\n{text}");
+    let p = corpus(name);
+    let diffs = compare(&run_interpreted(&p), &text);
+    assert!(diffs.is_empty(), "{diffs:?}");
+}
+
 #[test]
 fn the_board_agrees_with_the_interpreter() {
     let Ok(port) = std::env::var("TAKT_ESP32C6_PORT") else {
         eprintln!("uebersprungen: TAKT_ESP32C6_PORT nennt kein Board");
         return;
     };
+    let _board = board();
     // `TAKT_ESP32C6_ONLY=42_map.takt` fuer einen einzelnen Fall.
     let only = std::env::var("TAKT_ESP32C6_ONLY").ok();
     let mut failed = Vec::new();
     for name in KORPUS.iter().filter(|n| only.as_deref().is_none_or(|o| o == **n)) {
         let p = corpus(name);
-        let board = match build(name).and_then(|elf| {
+        let board = match build(name, true).and_then(|elf| {
             probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
             capture(&port)
         }) {

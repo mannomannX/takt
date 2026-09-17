@@ -34,7 +34,8 @@
 //! | RAM | 512 KB HP-SRAM |
 //! | Tick | SYSTIMER, 16 MHz, Alarm 0 periodisch |
 //! | Zyklen | Performance-Zaehler des Kerns (CSR 0x7e2) |
-//! | Telemetrie | USB-Serial-JTAG |
+//! | Journal | zwei Flash-Sektoren in der `nvs`-Partition (`nvm.rs`) |
+//! | Telemetrie | USB-Serial-JTAG, verlustfrei mit Host (`uart.rs`) |
 //! | LED | WS2812 an IO8 (DevKitM-1), ueber RMT-Kanal 0 |
 
 #![no_std]
@@ -43,6 +44,7 @@
 pub mod cycles;
 pub mod guard;
 pub mod led;
+pub mod nvm;
 pub mod panic;
 pub mod program;
 pub mod tick;
@@ -59,6 +61,7 @@ use esp_hal::timer::systimer::{Alarm, SystemTimer, Unit};
 
 pub use guard::{WfiSleep, reboot};
 pub use led::Ws2812;
+pub use nvm::FlashNvm;
 pub use program::Generated;
 pub use tick::{SystimerTick, on_timer_interrupt};
 pub use uart::Telemetry;
@@ -100,6 +103,7 @@ pub fn init(systimer: SYSTIMER<'static>, tick_ns: i64) -> Result<SystimerTick, I
         return Err(InitError::SubMicrosecond);
     }
     cycles::enable();
+    tick::set_counts_per_tick(counts);
     let alarm = SystemTimer::new(systimer).alarm0;
     alarm.set_interrupt_handler(on_alarm);
     alarm.enable_auto_reload(true);
