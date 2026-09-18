@@ -443,7 +443,9 @@ impl Lowerer<'_> {
         self.scopes.push();
         self.facts.push(Vec::new());
         if decl.resume {
-            self.stage(decl.span, "`resume`", Stage::V1_2);
+            let mc = self.mctx.as_mut().expect("Maschine");
+            mc.machine.states[id.index()].resume = true;
+            mc.machine.layout.saved_paths.push(id);
         }
         for item in &decl.body.prelude {
             match item {

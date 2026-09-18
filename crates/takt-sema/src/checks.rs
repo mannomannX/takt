@@ -91,6 +91,9 @@ pub const SC44: &str = "SC-44";
 pub const SC32: &str = "SC-32";
 /// `idle`: kein `loop:`/Handler, Guards nur ueber Wake-Quellen (5.10).
 pub const SC22: &str = "SC-22";
+/// `resume`: nur an zusammengesetzten Zustaenden mit `initial`, nicht an
+/// `idle` (5.12).
+pub const SC54: &str = "SC-54";
 /// `persist var`: POD-Typ, Maschinenebene, nicht in Szenarien (5.9).
 pub const SC23: &str = "SC-23";
 /// `at` gegen den gemessenen Jitter eines Outputs (7.5, 8.1).
@@ -140,6 +143,7 @@ impl Lowerer<'_> {
         self.check_declared_budget();
         self.check_cost_budget();
         self.check_idle_states();
+        self.check_resume_states();
         self.check_persist();
         self.check_alert_polarity();
         self.check_profile_completeness();
@@ -630,6 +634,38 @@ impl Lowerer<'_> {
                             ),
                         );
                     }
+                }
+            }
+        }
+        self.diags.extend(diags);
+    }
+
+    /// Pruefung 54 (5.12): `resume` nur an zusammengesetzten Zustaenden mit
+    /// `initial` und nicht an `idle`.
+    fn check_resume_states(&mut self) {
+        let mut diags = Vec::new();
+        for m in self.program.machines.iter().filter(|m| m.kind != MachineKind::Template) {
+            for s in m.states.iter().filter(|s| s.resume) {
+                if s.initial.is_none() {
+                    diags.push(
+                        Diagnostic::error(
+                            SC54,
+                            s.span,
+                            format!("`resume` an `{}`, das keine Kindzustaende hat", s.name),
+                        )
+                        .with_suggestion(
+                            "`resume` merkt sich den zuletzt aktiven Kindpfad; ohne `initial` gibt es keinen (5.12)"
+                                .to_string(),
+                        ),
+                    );
+                }
+                if s.idle {
+                    diags.push(
+                        Diagnostic::error(SC54, s.span, format!("`{}` ist `idle` und `resume` zugleich", s.name))
+                            .with_suggestion(
+                                "Ein `idle`-Zustand hat keine Kinder, die aktiv waeren (5.10, 5.12)".to_string(),
+                            ),
+                    );
                 }
             }
         }

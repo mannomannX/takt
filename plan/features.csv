@@ -57,7 +57,7 @@ SEM-5.8,Semantik/Abschnitt,5.8,Ergonomie in Maschinen,,M1 (Kernsemantik),fertig,
 SEM-5.9,Semantik/Abschnitt,5.9,Persistente Variablen (v1.1),v1.1,M5 (Embedded),fertig,
 SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M5 (Embedded),fertig,
 SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,offen,
-SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,offen,
+SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,fertig,"Sema `layout.saved_paths`, Interpreter `MachineState::saved`, Codegen `Role::Saved` mit `save_paths`/`resume_into`; Korpus `60_resume.takt`"
 SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),fertig,
 SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),fertig,
 SEM-6.3,Semantik/Abschnitt,6.3,Beispiel des Desugarings,,M1 (Kernsemantik),fertig,
@@ -608,7 +608,7 @@ SC-50,Statische Prüfung,10,Reservierte Wörter als Bezeichner; reservierte Memb
 SC-51,Statische Prüfung,10,`match` über offene Enums ohne `case _` (2.5),F,M3 (Gate),fertig,
 SC-52,Statische Prüfung,10,Generics: genau eine Fähigkeit je Typvariable; Instanziierungsgraph azyklisch; `const`-Variablen nur in Typen und `range` (3.12),F,M3 (Gate),teilweise,
 SC-53,Statische Prüfung,10,Gescopte Instanzen: Single-Writer global; keine Instanzen in `idle`-Zuständen; kein (mittelbares) Selbst-Scoping (5.11),F,M3 (Gate),definiert,
-SC-54,Statische Prüfung,10,`resume` nur an Zuständen mit Kindern; Fault-Ziele werden über `initial` betreten (5.12),F,M3 (Gate),definiert,
+SC-54,Statische Prüfung,10,`resume` nur an Zuständen mit Kindern; Fault-Ziele werden über `initial` betreten (5.12),F,M3 (Gate),fertig,"`checks.rs::check_resume_states`: `resume` nur mit `initial`-Kind und nicht an `idle`; Fault-Uebergang betritt `initial` (Interpreter `switch`, Codegen `fault_path`)"
 SC-55,Statische Prüfung,10,Trigger: Guard und Outputs knotenlokal; `arm`/`disarm` nur aus der deklarierenden Maschine (7.5),F,M3 (Gate),definiert,
 SC-56,Statische Prüfung,10,"`property`: nur lesend, alle Zeitoperatoren beschränkt (13.3)",F,M3 (Gate),fertig,"`lower/property.rs`: Fenster positiv und Vielfaches des Ticks, `always`/`never` nicht unter beschraenkten Operatoren, Atome `bool`"
 SC-57,Statische Prüfung,10,`map`: Schlüssel POD mit Gleichheit (3.9),F,M3 (Gate),fertig,

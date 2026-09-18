@@ -123,6 +123,9 @@ pub struct MachineState {
     pub was_idle: bool,
     /// Ist die Maschine in `FAULTED`?
     pub faulted: bool,
+    /// Zuletzt aktiver Blattpfad je `resume`-Zustand (5.12); `None` vor dem
+    /// ersten Austritt.
+    pub saved: Vec<Option<StateId>>,
 }
 
 /// Zaehler einer Maschine, geschluesselt nach Stelle und den Indizes der
@@ -175,6 +178,7 @@ impl MachineState {
             dropped: vec![0; m.layout.cursors.len()],
             was_idle: false,
             faulted: false,
+            saved: vec![None; m.states.len()],
         }
     }
 
@@ -599,7 +603,7 @@ pub fn resolve_m(
             Ok(Out::Normal) => return Ok(()),
             Ok(Out::Goto(target)) => {
                 env.state.abort_latched = false;
-                out = switch(loaded, env, target, tick);
+                out = switch(loaded, env, target, tick, false);
             }
             Ok(Out::Break) | Ok(Out::Return(_)) => return bug("Sprung ausserhalb einer Funktion"),
             Err(Trap::Bug(msg)) => return Err(Trap::Bug(msg)),
@@ -618,7 +622,7 @@ pub fn resolve_m(
                     FaultTarget::Faulted => Target::Faulted,
                 });
                 env.observe_fault(&f, target_name(loaded, env, target));
-                out = switch(loaded, env, target, tick);
+                out = switch(loaded, env, target, tick, true);
             }
         }
     }
@@ -648,8 +652,15 @@ fn target_name(loaded: &Loaded<'_>, env: &MachineEnv<'_, '_>, t: Target) -> Stri
 /// Konfigurationswechsel in fester Reihenfolge (9.3, `switch`): neue
 /// Konfiguration, `exit` innen nach aussen, Initialisierung, `enter` aussen
 /// nach innen im Modus ENTRY.
-pub fn switch(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, target: Target, tick: u64) -> Result<Out, Trap> {
+pub fn switch(
+    loaded: &Loaded<'_>,
+    env: &mut MachineEnv<'_, '_>,
+    target: Target,
+    tick: u64,
+    by_fault: bool,
+) -> Result<Out, Trap> {
     let m = env.machine(loaded);
+    let by_fault = by_fault || matches!(target, Target::Fault(_));
     let target = match target {
         Target::Fault(kind) => {
             // Ein Timeout einer Sequenz nimmt den Fault-Pfad des Zustands (6.2)
@@ -673,7 +684,13 @@ pub fn switch(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, target: Target,
     };
     let new = match goal {
         None => Vec::new(),
-        Some(s) => descend(env.machine(loaded), s),
+        // 5.12: Ein Uebergang auf einen `resume`-Zustand betritt den
+        // gespeicherten Kindpfad; ein Fault-Uebergang immer `initial`.
+        Some(s) => {
+            let saved =
+                env.state.saved[s.index()].filter(|_| !by_fault && env.machine(loaded).states[s.index()].resume);
+            descend(env.machine(loaded), saved.unwrap_or(s))
+        }
     };
     // (1) neue Konfiguration setzen. Der kleinste gemeinsame Vorfahr liegt
     // echt oberhalb des Zielzustands (9.3): eine Selbsttransition `-> S` aus
@@ -687,6 +704,14 @@ pub fn switch(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, target: Target,
     let first_entry = old.is_empty() && !env.state.faulted;
     env.state.conf = new.clone();
     env.state.faulted = matches!(target, Target::Faulted);
+    // 5.12: Was verlassen wird, merkt sich sein Blatt.
+    if let Some(leaf) = old.last().copied() {
+        for s in &old[common..] {
+            if env.machine(loaded).states[s.index()].resume {
+                env.state.saved[s.index()] = Some(leaf);
+            }
+        }
+    }
     // (2) exit-Bloecke der verlassenen Zustaende, innen nach aussen
     for s in old[common..].iter().rev() {
         let block = env.machine(loaded).states[s.index()].exit.clone();
@@ -763,7 +788,7 @@ fn clear_stepped(vars: &mut [Value]) {
 /// Maschinenvariablen sind vorher gesetzt (`MachineEnv::init_vars`).
 pub fn init(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) -> Result<(), Trap> {
     let initial = env.machine(loaded).initial;
-    let out = switch(loaded, env, Target::State(initial), tick);
+    let out = switch(loaded, env, Target::State(initial), tick, false);
     resolve_m(loaded, env, out, tick)
 }
 

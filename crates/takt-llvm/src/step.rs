@@ -270,6 +270,10 @@ fn transitions(
         let Some(index) = leaves.iter().position(|l| *l == leaf) else {
             return Err(NotYet { what: "Zielblatt" });
         };
+        if let Some(slot) = ctx.machine.layout.saved_paths.iter().position(|s| *s == to) {
+            resume_into(ctx, m, leaves[from], to, slot, conf_slot, &t.actions, leaves, end, &skip)?;
+            continue;
+        }
         // 5.2 gibt die Reihenfolge vor: `exit:` des verlassenen Zustands,
         // dann der Aktionsblock des Uebergangs (Modus ENTRY), dann
         // `enter:` des betretenen. Wer sie vertauscht, laesst `enter:` auf
@@ -398,6 +402,70 @@ fn leave_configuration(ctx: &Ctx<'_>, m: &mut Module, leaves: usize) {
 /// Blatt und Ziel nimmt, laesst die Zwischenebenen aus — und ein `enter:`
 /// dort ist genau die Stelle, an der ein Ablauf seine Vorbedingung
 /// herstellt.
+/// 5.12: Was verlassen wird, merkt sich sein Blatt.
+fn save_paths(ctx: &mut Ctx<'_>, m: &mut Module, from: StateId, leaf: StateId) {
+    for id in machine::exiting(ctx.machine, from, leaf) {
+        let Some(slot) = ctx.machine.layout.saved_paths.iter().position(|s| *s == id) else { continue };
+        let Some(ptr) = ctx.field(Role::Saved, slot, m) else { continue };
+        m.void_inst(&format!("store i32 {}, ptr {ptr}", from.index()));
+    }
+}
+
+/// 5.12: Ein Uebergang auf einen `resume`-Zustand betritt den gespeicherten
+/// Blattpfad; ohne gespeicherten Pfad das `initial`-Kind.
+#[allow(clippy::too_many_arguments)]
+fn resume_into(
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+    from: StateId,
+    to: StateId,
+    slot: usize,
+    conf_slot: &crate::emit::Reg,
+    actions: &takt_mir::stmt::Block,
+    leaves: &[StateId],
+    end: &str,
+    skip: &str,
+) -> Result<(), NotYet> {
+    let initial = machine::initial_leaf(ctx.machine, to).ok_or(NotYet { what: "Zielzustand ohne `initial`" })?;
+    let under: Vec<(usize, StateId)> = leaves
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| machine::path_to(ctx.machine, **l).contains(&to))
+        .map(|(i, l)| (i, *l))
+        .collect();
+    let Some(ptr) = ctx.field(Role::Saved, slot, m) else { return Err(NotYet { what: "`saved`-Slot" }) };
+    let saved = m.inst(&format!("load i32, ptr {ptr}"));
+    let tail = format!("resume_{}_{}", ctx.machine.name, to.index());
+    for (n, (index, leaf)) in under.iter().enumerate() {
+        let hit = format!("{tail}_hit{n}");
+        let next = format!("{tail}_next{n}");
+        let cond = m.inst(&format!("icmp eq i32 {saved}, {}", leaf.index()));
+        m.void_inst(&format!("br i1 {cond}, label %{hit}, label %{next}"));
+        m.label(&hit);
+        enter_leaf(ctx, m, from, *leaf, *index, conf_slot, Some(actions))?;
+        entry_tick(ctx, m, from, *leaf)?;
+        m.void_inst(&format!("br label %{end}"));
+        m.label(&next);
+    }
+    let index = leaves.iter().position(|l| *l == initial).ok_or(NotYet { what: "Zielblatt" })?;
+    enter_leaf(ctx, m, from, initial, index, conf_slot, Some(actions))?;
+    entry_tick(ctx, m, from, initial)?;
+    m.void_inst(&format!("br label %{end}"));
+    m.label(skip);
+    Ok(())
+}
+
+/// 5.2 Regel 4: die `loop:`-Bloecke der betretenen Zustaende, `-> ZIEL`
+/// wirkungslos.
+fn entry_tick(ctx: &mut Ctx<'_>, m: &mut Module, from: StateId, leaf: StateId) -> Result<(), NotYet> {
+    let saved = ctx.end.take();
+    for id in machine::entering(ctx.machine, from, leaf) {
+        block(&ctx.machine.states[id.index()].loop_block.clone(), ctx, m)?;
+    }
+    ctx.end = saved;
+    Ok(())
+}
+
 fn enter_leaf(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
@@ -407,6 +475,7 @@ fn enter_leaf(
     conf_slot: &crate::emit::Reg,
     actions: Option<&takt_mir::stmt::Block>,
 ) -> Result<(), NotYet> {
+    save_paths(ctx, m, from, leaf);
     for id in machine::exiting(ctx.machine, from, leaf) {
         block(&ctx.machine.states[id.index()].exit.clone(), ctx, m)?;
     }
@@ -826,6 +895,13 @@ fn emit_init(
         reset_counters(&ctx, None, module);
         for id in &kette {
             reset_counters(&ctx, Some(*id), module);
+        }
+        // 5.12: Kein gespeicherter Pfad vor dem ersten Austritt; die Null
+        // des genullten Speichers waere ein gueltiges Blatt.
+        for slot in 0..m.layout.saved_paths.len() {
+            if let Some(ptr) = ctx.field(Role::Saved, slot, module) {
+                module.void_inst(&format!("store i32 -1, ptr {ptr}"));
+            }
         }
         let mut koerper = vec![m.loop_block.clone()];
         koerper.extend(kette.iter().map(|id| m.states[id.index()].loop_block.clone()));
@@ -1458,6 +1534,7 @@ fn fault_path(
     };
     // 5.2 Regel 3: `exit:` des verlassenen, `enter:` des betretenen
     // Zustands. Ein Fault-Uebergang laeuft sonst wie jeder andere.
+    save_paths(ctx, m, from, leaf);
     for id in machine::exiting(machine_def, from, leaf) {
         block(&machine_def.states[id.index()].exit.clone(), ctx, m)?;
     }

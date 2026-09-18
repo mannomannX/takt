@@ -78,6 +78,9 @@ pub enum Role {
     LastFault,
     /// `pc`: die Zeile der letzten Anweisung, fuer die Instrumentierung.
     Pc,
+    /// `saved[i]`: zuletzt aktives Blatt eines `resume`-Zustands (5.12);
+    /// -1 vor dem ersten Austritt.
+    Saved,
 }
 
 /// Die Tiefe des Zustandsbaums einer Maschine.
@@ -145,6 +148,9 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
         role: Role::LastFault,
     });
     fields.push(Field { name: "pc".into(), ty: LlvmType::Int(32), role: Role::Pc });
+    for (i, _) in m.layout.saved_paths.iter().enumerate() {
+        fields.push(Field { name: format!("saved{i}"), ty: LlvmType::Int(32), role: Role::Saved });
+    }
     Some(StateStruct { fields, depth: d })
 }
 

@@ -1,0 +1,24 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# `idle` und `resume` zugleich: ein schlafender Zustand hat keine aktiven
+# Kinder (5.10, 5.12).
+
+input  wake : bool         @ hw("i/wake") with wake = true
+output n    : int in 0..99 @ hw("o/n")    with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN idle resume:  # ~ SC-54
+        initial SUB
+
+        when wake: -> DONE
+
+        state SUB:
+            after 1 ms: -> SUB
+
+    state DONE:
+        loop:
+            n = 1

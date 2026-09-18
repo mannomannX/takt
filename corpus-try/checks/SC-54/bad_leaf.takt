@@ -2,12 +2,13 @@ system:
     language = 1
     tick     = 1 ms
 
-# Dasselbe Programm ohne `resume` (5.12): keine Stufenmeldung.
+# `resume` an einem Blattzustand: kein Kindpfad, den er sich merken koennte.
 
 output n : int in 0..99 @ hw("o/n") with safe = 0
 
 machine m:
     initial RUN
-    state RUN:
+
+    state RUN resume:  # ~ SC-54
         loop:
             n = 1

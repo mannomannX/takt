@@ -1,0 +1,25 @@
+(system
+  (language 1)
+  (tick 10ms))
+(command pause)
+(command work)
+(output phase :int in 0..9 @hw("o/phase") safe=0)
+(output paused :bool @hw("o/paused") safe=false)
+(machine m
+  (initial WORK)
+  (state WORK resume
+    (initial FIRST)
+    (enter
+      (= paused false))
+    (when pause -> PAUSE)
+    (state FIRST
+      (enter
+        (= phase 1))
+      (after 20ms -> SECOND))
+    (state SECOND
+      (enter
+        (= phase 2))))
+  (state PAUSE
+    (enter
+      (= paused true))
+    (when work -> WORK)))
