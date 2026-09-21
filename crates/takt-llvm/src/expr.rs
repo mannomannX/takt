@@ -126,6 +126,18 @@ pub trait Vars {
         None
     }
 
+    /// Dasselbe mit einem Index in ein Instanz-Array (5.11).
+    fn published_at(
+        &self,
+        _first: takt_mir::MachineId,
+        _field: crate::psi::Field,
+        _len: u32,
+        _index: &Lowered,
+        _m: &mut Module,
+    ) -> Option<Lowered> {
+        None
+    }
+
     /// Wohin ein gescheiterter Laufzeit-Check springt (4.1, 5.3).
     ///
     /// Nur eine Maschine hat einen Fault-Pfad; eine reine Funktion (4.4)
@@ -177,9 +189,9 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Input { channel, .. } => vars.input(*channel, m).ok_or(NotYet { what: "Input" }),
         ExprKind::Param(id) => vars.param(*id, m).ok_or(NotYet { what: "Parameter" }),
         ExprKind::Output(channel) => vars.output(*channel, m).ok_or(NotYet { what: "Output-Latch" }),
-        ExprKind::Published { machine, var } => psi_read(machine, crate::psi::Field::Var(*var), vars, m),
-        ExprKind::StateOf(machine) => psi_read(machine, crate::psi::Field::State, vars, m),
-        ExprKind::Signal { machine, signal } => psi_read(machine, crate::psi::Field::Signal(*signal), vars, m),
+        ExprKind::Published { machine, var } => psi_read(machine, crate::psi::Field::Var(*var), p, vars, m),
+        ExprKind::StateOf(machine) => psi_read(machine, crate::psi::Field::State, p, vars, m),
+        ExprKind::Signal { machine, signal } => psi_read(machine, crate::psi::Field::Signal(*signal), p, vars, m),
         ExprKind::Command(id) => vars.command(*id, m).ok_or(NotYet { what: "Command" }),
         ExprKind::JobState { handle, field } => vars.job(*handle, *field, p, m).ok_or(NotYet { what: "Job-Zustand" }),
         ExprKind::Builtin(b) => vars.builtin(*b, p, m).ok_or(NotYet { what: crate::scope::builtin_name(*b) }),
@@ -1458,13 +1470,22 @@ fn convert(
 fn psi_read(
     machine: &takt_mir::expr::MachineRef,
     field: crate::psi::Field,
+    p: &Program,
     vars: &dyn Vars,
     m: &mut Module,
 ) -> Result<Lowered, NotYet> {
-    if machine.index.is_some() {
-        return Err(NotYet { what: "Instanz-Array mit Index (v1.2)" });
+    let Some(index) = &machine.index else {
+        return vars.published(machine.machine, field, m).ok_or(NotYet { what: "Psi" });
+    };
+    // 5.11: Das Array beginnt bei `machine.machine`; seine Laenge steht
+    // an der Instanz.
+    let len = match &p.machines.get(machine.machine.index()).map(|x| &x.kind) {
+        Some(takt_mir::machine::MachineKind::Instance(info)) => info.array.map(|(_, n)| n),
+        _ => None,
     }
-    vars.published(machine.machine, field, m).ok_or(NotYet { what: "Psi" })
+    .ok_or(NotYet { what: "Instanz-Array ohne Laenge" })?;
+    let i = lower(index, p, m, vars)?;
+    vars.published_at(machine.machine, field, len, &i, m).ok_or(NotYet { what: "Psi mit Index" })
 }
 
 /// Ist der Typ eine vorzeichenbehaftete Ganzzahl?

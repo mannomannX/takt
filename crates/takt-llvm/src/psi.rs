@@ -131,6 +131,43 @@ pub fn load(reader: &Machine, target: MachineId, field: Field, p: &Program, m: &
     })
 }
 
+/// Wie [`load`], aber mit einem Index in ein Instanz-Array (5.11).
+///
+/// Die Regionen der Instanzen liegen hintereinander und sind gleich gross
+/// — sie entstehen aus derselben Vorlage. Der Index ist darum ein
+/// Vielfaches der Regionsgroesse auf der Adresse des ersten Elements.
+/// Die Frischepruefung entfaellt: `follows` nennt eine Maschine, kein
+/// Array, ein indizierter Zugriff hat also nie eine Kante.
+pub fn load_indexed(
+    first: MachineId,
+    field: Field,
+    len: u32,
+    index: &Lowered,
+    p: &Program,
+    m: &mut Module,
+) -> Option<Lowered> {
+    let fty = field_type(first, field, p)?;
+    let off = field_offset(first, field, p)?;
+    let base = region_offset(first, false, p)? + off;
+    let stride = region_size(first, p);
+    // 3.4: Der Index ist gegen die Laenge geprueft, bevor er hier
+    // ankommt; `urem` haelt die Adresse auch dann im Array, wenn eine
+    // spaetere Aenderung die Pruefung verloere.
+    let i64_index = m.inst(&format!("zext i32 {} to i64", index.value));
+    let safe = m.inst(&format!("urem i64 {i64_index}, {}", u64::from(len.max(1))));
+    let delta = m.inst(&format!("mul i64 {safe}, {stride}"));
+    let at = m.inst(&format!("add i64 {delta}, {base}"));
+    let ptr = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {at}"));
+    let raw = m.inst(&format!("load {fty}, ptr {ptr}"));
+    Some(match field {
+        Field::Signal(_) => {
+            let b = m.inst(&format!("icmp ne i8 {raw}, 0"));
+            Lowered { value: b.to_string(), ty: LlvmType::Int(1) }
+        }
+        _ => Lowered { value: raw.to_string(), ty: fty },
+    })
+}
+
 /// Ψ_k eines Feldes ohne Frischepruefung: fuer die Monitore nach dem
 /// Commit des Ticks (13.3), wenn die erste Bank das Veroeffentlichte traegt.
 pub fn load_bank(target: MachineId, field: Field, p: &Program, m: &mut Module) -> Option<Lowered> {

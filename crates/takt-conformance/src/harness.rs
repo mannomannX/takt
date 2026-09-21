@@ -115,6 +115,11 @@ fn build_inner(
     // Die Runtime-Aufrufe (`takt-llvm/src/abi.rs`). Sie schreiben in den
     // Trace, damit der Vergleich sie sieht.
     let _ = writeln!(s, "static long long g_tick = 0;");
+    // 5.11: je gescopter Instanz, ob sie zu Beginn des vorigen Ticks
+    // aktiv war — der Vergleich liefert Ein- und Austritt.
+    for (owner, _, i) in scoped_of(p) {
+        let _ = writeln!(s, "static _Bool g_scope_{owner}_{i} = 0;");
+    }
     // Das Fault-Flag der reinen Funktionen (4.1, `abi::Abi::FAULT_FLAG`).
     // Es gehoert der Runtime; der Rahmen stellt es bereit und setzt es je
     // Tick zurueck, wie es die Abort-Phase taete.
@@ -160,6 +165,12 @@ fn build_inner(
             let _ = writeln!(s, "int {}_persist_snapshot(void *st, void *out, int cap);", m.name);
             let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
         }
+        // 5.11: das Aktivitaetspraedikat je gescopter Instanz und die
+        // `exit:`-Bloecke fuer ihren Austritt.
+        for (i, _) in m.states.iter().flat_map(|st| st.instances.iter()).enumerate() {
+            let _ = writeln!(s, "_Bool {}_scope_{i}(void *st);", m.name);
+        }
+        let _ = writeln!(s, "void {}_exit_all(void *st, void *in, void *par, void *out);", m.name);
     }
     // 13.3: Laufzeitmonitore laufen nur, wenn der Rahmen alle Maschinen
     // fuehrt — eine Eigenschaft liest jede.
@@ -249,13 +260,21 @@ fn build_inner(
     for m in &driven {
         let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
     }
+    // 5.11: Eine gescopte Instanz betritt nichts, solange ihr Scope
+    // steht nicht; `scoped_lifecycle` nach dem `enter` des Besitzers
+    // holt sie herein.
+    let scoped_names: Vec<String> = scoped_of(p).into_iter().map(|(_, inst, _)| inst).collect();
     for m in &persisting {
         let _ = writeln!(s, "    {0}_persist_restore(state_{0}, persist_in, persist_in_len);", m.name);
     }
     for m in &driven {
+        if scoped_names.contains(&m.name) {
+            continue;
+        }
         let _ = writeln!(s, "    {0}_enter(state_{0}, image, params, latch);", m.name);
         let _ = writeln!(s, "    {0}_publish(state_{0}, image);", m.name);
     }
+    scoped_lifecycle(&mut s, p, &layout, "    ");
     psi_commit(&mut s, p, &driven, "    ");
     sim_bindings(&mut s, p, "    ");
     // 8.8: Auch im Tick 0 holt der Treiber ab, was `enter` gesendet hat.
@@ -306,11 +325,19 @@ fn build_inner(
     // 7.2: Eine Maschine laeuft in jedem `period`-ten Tick. Ohne die
     // Bedingung liefe ein `every 50 ms`-Modell bei 10 ms Tick fuenfmal
     // zu oft, und sein Wert stuende im Trace an der falschen Stelle.
+    let scoped = scoped_of(p);
     for m in &driven {
         let condition = match (m.period.max(1), m.phase) {
             (1, _) => String::new(),
             (per, 0) => format!("if (g_tick % {per} == 0) "),
             (per, ph) => format!("if (g_tick % {per} == {ph}) "),
+        };
+        // 5.11: Eine gescopte Instanz schreitet nur, solange ihr Scope
+        // steht; der Stand ist der zu Tick-Beginn.
+        let condition = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
+            Some((owner, _, i)) if condition.is_empty() => format!("if (g_scope_{owner}_{i}) "),
+            Some((owner, _, i)) => format!("{} if (g_scope_{owner}_{i}) ", condition.trim_end()),
+            None => condition,
         };
         let _ = writeln!(
             s,
@@ -318,6 +345,7 @@ fn build_inner(
             m.name
         );
     }
+    scoped_lifecycle(&mut s, p, &layout, "        ");
     psi_commit(&mut s, p, &driven, "        ");
     // 8.3: Was ein Modell in diesem Tick auf einen `sim`-Output gestellt
     // hat, liest das Programm im naechsten — Unit-Delay wie bei Ψ.
@@ -657,6 +685,62 @@ fn range_check(p: &Program, ty: takt_mir::TypeId) -> Option<(&'static str, Strin
         _ => return None,
     };
     Some((ct, literal(&r.lo), literal(&r.hi)))
+}
+
+/// Die gescopten Instanzen mit ihrem Besitzer und der Nummer, unter der
+/// der Codegen das Praedikat `<besitzer>_scope_<n>` erzeugt (5.11).
+pub(crate) fn scoped_of(p: &Program) -> Vec<(String, String, usize)> {
+    let mut out = Vec::new();
+    for owner in &p.machines {
+        for (i, si) in owner.states.iter().flat_map(|s| s.instances.iter()).enumerate() {
+            out.push((owner.name.clone(), p.machines[si.machine.index()].name.clone(), i));
+        }
+    }
+    out
+}
+
+/// Der Lebenszyklus der gescopten Instanzen nach dem Schritt des
+/// Besitzers (5.11): Eintritt initialisiert frisch und betritt `initial`,
+/// Austritt setzt die Outputs auf `safe` und verwirft den Zustand.
+///
+/// Das Aktivitaetsbit steht im Rahmen, nicht im Zustands-Struct: Es ist
+/// eine Aussage ueber den *Besitzer*, und der Rahmen fragt sie ohnehin
+/// vor jedem Schritt ab (`<besitzer>_scope_<n>`).
+pub(crate) fn scoped_lifecycle(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
+    for (owner, inst, i) in scoped_of(p) {
+        let _ = writeln!(s, "{indent}{{ _Bool now = {owner}_scope_{i}(state_{owner});");
+        let _ = writeln!(s, "{indent}  if (now && !g_scope_{owner}_{i}) {{");
+        let _ = writeln!(s, "{indent}    memset(state_{inst}, 0, sizeof state_{inst});");
+        let _ = writeln!(s, "{indent}    {inst}_init_vars(state_{inst}, image, params, latch);");
+        let _ = writeln!(s, "{indent}    {inst}_enter(state_{inst}, image, params, latch);");
+        let _ = writeln!(s, "{indent}    {inst}_publish(state_{inst}, image);");
+        let _ = writeln!(s, "{indent}  }} else if (!now && g_scope_{owner}_{i}) {{");
+        // 5.11: erst die `exit:`-Bloecke von innen nach aussen, dann
+        // gehen die Outputs auf `safe` — sie ueberschreiben, was ein
+        // `exit` an ihnen tat, genau wie im Interpreter.
+        let _ = writeln!(s, "{indent}    {inst}_exit_all(state_{inst}, image, params, latch);");
+        safe_outputs_of(s, p, layout, &inst, &format!("{indent}    "));
+        let _ = writeln!(s, "{indent}    memset(state_{inst}, 0, sizeof state_{inst});");
+        let _ = writeln!(s, "{indent}    {inst}_publish(state_{inst}, image);");
+        let _ = writeln!(s, "{indent}  }}");
+        let _ = writeln!(s, "{indent}  g_scope_{owner}_{i} = now; }}");
+    }
+}
+
+/// Die Outputs einer Maschine auf ihren `safe`-Wert (5.11, 5.2 Regel 5).
+fn safe_outputs_of(s: &mut String, p: &Program, layout: &Layout, machine: &str, indent: &str) {
+    let Some(id) = p.machines.iter().position(|m| m.name == machine).map(|i| takt_mir::MachineId(i as u32)) else {
+        return;
+    };
+    for slot in &layout.outputs {
+        let Some(c) = p.channels.iter().find(|c| c.name == slot.name) else { continue };
+        if c.owner != Some(id) {
+            continue;
+        }
+        let Some(safe) = c.attrs.safe.as_ref().and_then(|e| literal(p, e)) else { continue };
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let _ = writeln!(s, "{indent}*({ct} *)(latch + {}) = {safe}; /* {} auf safe (5.11) */", slot.offset, slot.name);
+    }
 }
 
 /// Ψ_{k+1} wird Ψ_k (9.4): die zweite Bank in die erste kopieren, dann

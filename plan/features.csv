@@ -56,7 +56,7 @@ SEM-5.7,Semantik/Abschnitt,5.7,Blöcke innerhalb von Maschinen,,M1 (Kernsemantik
 SEM-5.8,Semantik/Abschnitt,5.8,Ergonomie in Maschinen,,M1 (Kernsemantik),fertig,
 SEM-5.9,Semantik/Abschnitt,5.9,Persistente Variablen (v1.1),v1.1,M5 (Embedded),fertig,
 SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M5 (Embedded),fertig,
-SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,teilweise,"Sema und Interpreter fertig (M8 Schritte 5 und 6): Aktivitaet aus der Konfiguration des Besitzers, Instanzen vor dem Besitzer, `exit` nur bei regulaerem Uebergang; Satz 9.4.1 ueber 32 Ordnungen geprueft. Codegen offen (Schritt 8), `step_function` meldet `NotYet`"
+SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,fertig,"Sema, Interpreter und Codegen (M8 Schritte 5 bis 8): Aktivitaet aus `<besitzer>_scope_<n>`, Lebenszyklus im Rahmen, `_exit_all` fuer die exit-Bloecke; Overlay in `size` und `schedulability`. Indiziertes Lesen eines Instanz-Arrays fehlt (FB-210)"
 SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,fertig,"Sema `layout.saved_paths`, Interpreter `MachineState::saved`, Codegen `Role::Saved` mit `save_paths`/`resume_into`; Korpus `60_resume.takt`"
 SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),fertig,
 SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),fertig,

@@ -309,6 +309,17 @@ impl Vars for StateVars<'_> {
     fn published(&self, target: takt_mir::MachineId, field: crate::psi::Field, m: &mut Module) -> Option<Lowered> {
         crate::psi::load(self.machine, target, field, self.program, m)
     }
+
+    fn published_at(
+        &self,
+        first: takt_mir::MachineId,
+        field: crate::psi::Field,
+        len: u32,
+        index: &Lowered,
+        m: &mut Module,
+    ) -> Option<Lowered> {
+        crate::psi::load_indexed(first, field, len, index, self.program, m)
+    }
 }
 
 /// Senkt einen Block (11.2: Straight-Line-Code).

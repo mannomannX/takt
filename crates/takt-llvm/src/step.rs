@@ -51,12 +51,6 @@ pub fn step_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     if leaves.is_empty() {
         return Err(NotYet { what: "Maschine ohne Blattzustand" });
     }
-    // 5.11: Der Lebenszyklus gescopter Instanzen fehlt im Codegen noch
-    // (M8 Schritt 8). Lieber melden als still danebenlaufen — der
-    // Interpreter ist die Spezifikation (Satz 9.4.4).
-    if m.states.iter().any(|s| !s.instances.is_empty()) {
-        return Err(NotYet { what: "gescopte Instanzen (5.11)" });
-    }
     let mark = module.mark();
     match write_step(m, st, p, module, &leaves) {
         Ok(()) => Ok(()),
@@ -717,6 +711,52 @@ pub fn idle_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Resu
     Ok(())
 }
 
+/// `<maschine>_scope_<n>(st) -> i1`: Steht der Scope-Zustand der n-ten
+/// gescopten Instanz in der Konfiguration? (5.11)
+///
+/// Die Aktivitaet ist eine Frage an die Konfiguration des Besitzers, und
+/// die steht in `conf[0]` als Blattnummer. Welche Blaetter unter dem
+/// Scope liegen, weiss der Codegen statisch — die Funktion ist darum ein
+/// `or` ueber eine feste Liste, wie `_idle`. Der Rahmen ruft sie vor dem
+/// Schritt der Instanz und vergleicht mit dem Stand des vorigen Ticks.
+pub fn scope_function(
+    m: &Machine,
+    st: &StateStruct,
+    index: usize,
+    scope: takt_mir::StateId,
+    module: &mut Module,
+) -> Result<(), NotYet> {
+    let leaves = machine::leaves(m);
+    let under: Vec<usize> =
+        leaves.iter().enumerate().filter(|(_, l)| machine::path_to(m, **l).contains(&scope)).map(|(i, _)| i).collect();
+
+    let mark = module.mark();
+    module.begin(&format!("{}_scope_{index}", m.name), &crate::ty::LlvmType::Int(1), &[crate::ty::LlvmType::Ptr]);
+    if under.is_empty() {
+        module.end(Some((&crate::ty::LlvmType::Int(1), "0".into())));
+        return Ok(());
+    }
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let Some(conf_i) = st.index_of(Role::Conf, 0) else {
+        module.abort(mark);
+        return Err(NotYet { what: "conf im Zustand" });
+    };
+    let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+    let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
+    let cur = module.inst(&format!("load i8, ptr {slot}"));
+    let mut acc = None;
+    for i in &under {
+        let eq = module.inst(&format!("icmp eq i8 {cur}, {i}"));
+        acc = Some(match acc {
+            None => eq,
+            Some(a) => module.inst(&format!("or i1 {a}, {eq}")),
+        });
+    }
+    let out = acc.expect("mindestens ein Blatt");
+    module.end(Some((&crate::ty::LlvmType::Int(1), out.to_string())));
+    Ok(())
+}
+
 /// `<maschine>_deadline(st) -> i64`: Basis-Ticks bis zur naechsten
 /// `after`-Frist.
 ///
@@ -810,6 +850,61 @@ pub fn init_vars_function(m: &Machine, st: &StateStruct, p: &Program, module: &m
 /// `<maschine>_enter`: die `enter:`-Kette und der Entry-Tick (5.2).
 pub fn enter_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     emit_init(m, st, p, module, "_enter", false, true)
+}
+
+/// `<maschine>_exit_all(st, in, par, out)`: die `exit:`-Bloecke der ganzen
+/// Konfiguration, von innen nach aussen (5.11).
+///
+/// Eine gescopte Instanz verlaesst bei einem regulaeren Uebergang ihres
+/// Besitzers jeden Zustand, in dem sie steht. Es gibt kein Ziel, darum
+/// kein `switch`: Der Zweig haengt am aktuellen Blatt, und der Pfad
+/// dorthin steht statisch fest. Wirksam ist das fuer `log` und Signale —
+/// die Outputs der Instanz gehen danach ohnehin auf `safe` (5.11).
+pub fn exit_all_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    let leaves = machine::leaves(m);
+    let has_exit = m.states.iter().any(|s| !s.exit.stmts.is_empty());
+    let mark = module.mark();
+    let ptr = crate::ty::LlvmType::Ptr;
+    module.begin(
+        &format!("{}_exit_all", m.name),
+        &crate::ty::LlvmType::Void,
+        &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
+    );
+    if !has_exit || leaves.is_empty() {
+        module.end(None);
+        return Ok(());
+    }
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let Some(conf_i) = st.index_of(Role::Conf, 0) else {
+        module.abort(mark);
+        return Err(NotYet { what: "conf im Zustand" });
+    };
+    let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+    let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
+    let cur = module.inst(&format!("load i8, ptr {slot}"));
+    let end = format!("exit_all_{}_end", crate::fns::sanitized(&m.name));
+    let mut ctx = Ctx::new(m, st, p);
+    for (i, leaf) in leaves.iter().enumerate() {
+        let hit = format!("exit_all_{}_{i}", crate::fns::sanitized(&m.name));
+        let next = format!("exit_all_{}_n{i}", crate::fns::sanitized(&m.name));
+        let eq = module.inst(&format!("icmp eq i8 {cur}, {i}"));
+        module.void_inst(&format!("br i1 {eq}, label %{hit}, label %{next}"));
+        module.label(&hit);
+        ctx.leaf = Some(*leaf);
+        for id in machine::path_to(m, *leaf).iter().rev() {
+            let b = m.states[id.index()].exit.clone();
+            if let Err(e) = block(&b, &mut ctx, module) {
+                module.abort(mark);
+                return Err(e);
+            }
+        }
+        module.void_inst(&format!("br label %{end}"));
+        module.label(&next);
+    }
+    module.void_inst(&format!("br label %{end}"));
+    module.label(&end);
+    module.end(None);
+    Ok(())
 }
 
 fn emit_init(

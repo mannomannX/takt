@@ -116,6 +116,12 @@ pub fn program_with(p: &Program, triple: &str, module_name: &str, instrument: cr
             }
         }
         let _ = crate::step::idle_function(machine, &st, &mut m);
+        // 5.11: je gescopter Instanz ein Praedikat auf der Konfiguration.
+        for (i, si) in machine.states.iter().flat_map(|s| s.instances.iter()).enumerate() {
+            let _ = crate::step::scope_function(machine, &st, i, si.scope, &mut m);
+        }
+        // 5.11: die `exit:`-Bloecke, wenn der Besitzer den Scope verlaesst.
+        let _ = crate::step::exit_all_function(machine, &st, p, &mut m);
         let _ = crate::step::advance_function(machine, &st, &mut m);
         let _ = crate::step::deadline_function(machine, &st, p, &mut m);
         if let Err(e) = crate::psi::publish_function(machine, &st, p, &mut m) {

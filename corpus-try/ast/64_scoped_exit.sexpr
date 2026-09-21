@@ -1,0 +1,21 @@
+(system
+  (language 1)
+  (tick 1ms))
+(output a :bool @hw("o/a") safe=false)
+(machine blip (o:output bool) every=1ms
+  (initial LOW)
+  (state LOW
+    (enter
+      (= o true))
+    (after 30ms -> LOW)
+    (exit
+      (log "instanz verlassen"))))
+(machine ctrl
+  (initial FIRST)
+  (state FIRST
+    (instance p blip o=a)
+    (after 4ms -> SECOND))
+  (state SECOND
+    (loop
+      (pass))
+    (after 3ms -> FIRST)))
