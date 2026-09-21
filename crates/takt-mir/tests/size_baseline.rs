@@ -10,6 +10,7 @@ fn sample() -> Size {
             Item { name: "Flash (Code, Konstanten)".into(), bytes: 0, origin: Origin::Open },
             Item { name: "Stack nativer Funktionen".into(), bytes: 256, origin: Origin::Contract },
         ],
+        overlay_saved: 0,
     }
 }
 

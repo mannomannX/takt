@@ -76,6 +76,9 @@ pub struct Item {
 pub struct Size {
     /// Die Posten in Ausgabereihenfolge.
     pub items: Vec<Item>,
+    /// Was die Ueberlagerung exklusiver gescopter Instanzen spart (11.5).
+    /// Kein Posten: Die Summe zaehlt schon den ueberlagerten Stand.
+    pub overlay_saved: u64,
 }
 
 impl Size {
@@ -146,7 +149,7 @@ impl Size {
                 .ok_or_else(|| format!("Zeile {}: unbekannte Herkunft `{origin}`", n + 2))?;
             items.push(Item { name: name.trim().to_string(), bytes, origin });
         }
-        Ok(Size { items })
+        Ok(Size { items, overlay_saved: 0 })
     }
 
     /// Was sich gegen eine Baseline geaendert hat: erst die Posten in
@@ -174,6 +177,9 @@ impl Size {
         let mut out: Vec<String> =
             self.items.iter().map(|i| format!("  {:w$}  {:>9}  {}", i.name, i.bytes, i.origin.name())).collect();
         out.push(format!("  {:w$}  {:>9}  belastbar", "Summe", self.total()));
+        if self.overlay_saved > 0 {
+            out.push(format!("  Overlay: {} Bytes gespart (exklusive gescopte Instanzen, 11.5)", self.overlay_saved));
+        }
         if self.has_open() {
             out.push("  (Posten mit `offen` fehlen in der Summe: die Eingabe kommt mit 8.10 und 13.8)".into());
         }
@@ -197,9 +203,30 @@ pub fn size(p: &Program) -> Size {
     let mut items = Vec::new();
 
     // Eine Vorlage liegt nicht im Speicher; ihr Rumpf steht in den Instanzen.
-    let allocated = p.machines.iter().filter(|m| m.kind != MachineKind::Template);
+    // Eine gescopte Instanz zaehlt nicht hier, sondern im Zustand, der sie
+    // scopet (11.5): Geschwisterzustaende schliessen einander aus, ihre
+    // Instanzen ueberlagern sich also.
+    let scoped: Vec<crate::MachineId> =
+        crate::machine::scoped_instances(p).into_iter().map(|(_, si)| si.machine).collect();
+    let allocated = p
+        .machines
+        .iter()
+        .enumerate()
+        .filter(|(i, m)| m.kind != MachineKind::Template && !scoped.contains(&crate::MachineId(*i as u32)))
+        .map(|(_, m)| m);
     let states: u64 = allocated.clone().map(|m| machine_bytes(p, m)).sum();
     items.push(Item { name: "Maschinenzustaende (Overlay)".into(), bytes: states, origin: Origin::Exact });
+    // 11.5: was die Ueberlagerung gegenueber der flachen Summe spart. Kein
+    // Posten, sondern eine Notiz — ein Posten ginge in die Summe ein.
+    // Die flache Summe rechnet jede Instanz voll, der Besitzer traegt
+    // nur seine eigenen Zustaende.
+    let flat: u64 = p
+        .machines
+        .iter()
+        .filter(|m| m.kind != MachineKind::Template)
+        .map(|m| machine_bytes_without_instances(p, m))
+        .sum();
+    let overlay_saved = flat.saturating_sub(states);
 
     let streams: u64 = p
         .streams
@@ -256,7 +283,7 @@ pub fn size(p: &Program) -> Size {
     items.push(Item { name: "Flash (Code, Konstanten)".into(), bytes: 0, origin: Origin::Open });
     items.push(Item { name: "Stack (Programmanteil)".into(), bytes: 0, origin: Origin::Open });
 
-    Size { items }
+    Size { items, overlay_saved }
 }
 
 /// Die RAM-residenten Posten der Profilfamilie `xip_flash` (12.3).
@@ -347,6 +374,16 @@ impl Size {
 /// Overlay der exklusiven Zustaende (11.2). Pruefung 62 vergleicht sie
 /// mit dem deklarierten `budget = {ram = …}`.
 pub fn machine_bytes(p: &Program, m: &Machine) -> u64 {
+    machine_bytes_at(p, m, true)
+}
+
+/// Dieselbe Rechnung ohne die gescopten Instanzen — die Vergleichsgroesse
+/// fuer „was das Overlay spart" (11.5).
+pub fn machine_bytes_without_instances(p: &Program, m: &Machine) -> u64 {
+    machine_bytes_at(p, m, false)
+}
+
+fn machine_bytes_at(p: &Program, m: &Machine, with_instances: bool) -> u64 {
     // Maschinenweite Variablen liegen immer.
     let machine_vars: u64 = m
         .vars
@@ -355,9 +392,9 @@ pub fn machine_bytes(p: &Program, m: &Machine) -> u64 {
         .map(|v| u64::from(type_bytes(p, v.ty)))
         .sum();
 
-    // Zustandslokale Variablen: je Zustand summiert, ueber Geschwister das
-    // Maximum. Die Wurzeln schliessen einander aus.
-    let state_vars = overlay(p, m, &m.roots);
+    // Zustandslokale Variablen und gescopte Instanzen: je Zustand summiert,
+    // ueber Geschwister das Maximum. Die Wurzeln schliessen einander aus.
+    let state_vars = overlay(p, m, &m.roots, with_instances);
 
     // Konfigurationspfad, Timer, Zaehler, Cursor (11.2).
     let depth = m.states.len().max(1) as u64;
@@ -371,7 +408,7 @@ pub fn machine_bytes(p: &Program, m: &Machine) -> u64 {
 }
 
 /// Das Maximum ueber einander ausschliessende Geschwister, rekursiv.
-fn overlay(p: &Program, m: &Machine, siblings: &[crate::StateId]) -> u64 {
+fn overlay(p: &Program, m: &Machine, siblings: &[crate::StateId], with_instances: bool) -> u64 {
     siblings
         .iter()
         .map(|id| {
@@ -382,7 +419,16 @@ fn overlay(p: &Program, m: &Machine, siblings: &[crate::StateId]) -> u64 {
                 .filter(|v| matches!(v.scope, crate::machine::VarScope::State(x) | crate::machine::VarScope::Lifted(x) if x == *id))
                 .map(|v| u64::from(type_bytes(p, v.ty)))
                 .sum();
-            own + overlay(p, m, &s.children)
+            // 11.5: Die in `s` gescopten Instanzen liegen in `s`; zwei
+            // Geschwister teilen ihren Platz, weil sie nie zugleich aktiv
+            // sind (5.11). Ihre Summe, nicht ihr Maximum — sie laufen
+            // nebeneinander, solange `s` steht.
+            let instances: u64 = if with_instances {
+                s.instances.iter().map(|si| machine_bytes(p, &p.machines[si.machine.index()])).sum()
+            } else {
+                0
+            };
+            own + instances + overlay(p, m, &s.children, with_instances)
         })
         .max()
         .unwrap_or(0)

@@ -28,7 +28,7 @@
 
 use crate::fns::CostVec;
 use crate::hardware::CTarget;
-use crate::machine::MachineKind;
+use crate::machine::{Machine, MachineKind};
 use crate::program::Program;
 
 /// Die Rechenlast eines Ticks (7.2).
@@ -95,16 +95,59 @@ impl Load {
 /// umgesetzt ist, ist `Σ_m B_m` die richtige und zugleich sichere
 /// Antwort — sie ueberschaetzt nie.
 pub fn load(p: &Program) -> Load {
-    let driven = p.machines.iter().filter(|m| m.kind != MachineKind::Template);
+    // 5.11: Eine gescopte Instanz laeuft nur, solange ihr Scope steht;
+    // zwei in exklusiven Zustaenden nie zugleich. Ihre Last gehoert darum
+    // in die Spitze ihres Besitzers, nicht in die flache Summe (9.4.3).
+    let scoped: Vec<crate::MachineId> =
+        crate::machine::scoped_instances(p).into_iter().map(|(_, si)| si.machine).collect();
     let mut peak = CostVec::default();
     let mut abort = CostVec::default();
-    for m in driven {
+    for (i, m) in p.machines.iter().enumerate() {
+        if m.kind == MachineKind::Template || scoped.contains(&crate::MachineId(i as u32)) {
+            continue;
+        }
         let Some(b) = m.budget else { continue };
-        peak = peak + b.activation;
-        abort = abort + b.fault_path;
+        peak = peak + b.activation + peak_of_instances(p, m);
+        abort = abort + b.fault_path + abort_of_instances(p, m);
     }
     // `tick` steht in Nanosekunden (3.3); gerechnet wird in Pikosekunden.
     Load { peak, abort, tick_ps: (p.config.tick.max(0) as u64).saturating_mul(1000) }
+}
+
+/// Die Spitzenlast der in `m` gescopten Instanzen (9.4.3, 5.11).
+fn peak_of_instances(p: &Program, m: &Machine) -> CostVec {
+    instances_over(p, m, &m.roots, &|b| b.activation)
+}
+
+/// Dasselbe fuer die Abort-Phase (7.2).
+fn abort_of_instances(p: &Program, m: &Machine) -> CostVec {
+    instances_over(p, m, &m.roots, &|b| b.fault_path)
+}
+
+/// Maximum ueber Geschwisterzustaende, Summe innerhalb eines Zustands —
+/// dieselbe Rekursion wie beim Speicher-Overlay (11.5). Eine Instanz kann
+/// selbst Instanzen scopen, darum rekursiv ueber ihren Zustandsbaum.
+fn instances_over(
+    p: &Program,
+    m: &Machine,
+    siblings: &[crate::StateId],
+    pick: &dyn Fn(&crate::machine::Budget) -> CostVec,
+) -> CostVec {
+    siblings
+        .iter()
+        .map(|id| {
+            let s = &m.states[id.index()];
+            let mut own = CostVec::default();
+            for si in &s.instances {
+                let inst = &p.machines[si.machine.index()];
+                if let Some(b) = inst.budget {
+                    own = own + pick(&b);
+                }
+                own = own + instances_over(p, inst, &inst.roots, pick);
+            }
+            own + instances_over(p, m, &s.children, pick)
+        })
+        .fold(CostVec::default(), CostVec::max)
 }
 
 #[cfg(test)]
