@@ -40,7 +40,7 @@ SEM-3.8,Semantik/Abschnitt,3.8,Optionaltyp `T?`,,M1 (Kernsemantik),fertig,
 SEM-3.9,Semantik/Abschnitt,3.9,"Bytes, Vektoren, Strings, Tabellen",,M1 (Kernsemantik),fertig,
 SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernsemantik),fertig,
 SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M6 (v1.1),fertig,"Sema `lower/matrix.rs`, Interpreter `takt-interp/src/matrix.rs`, Codegen `takt-llvm/src/matrix.rs`, Numerik `libtaktm::mat`; Korpus `46_matrices.takt` differentiell (Schritt 18)"
-SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),teilweise,
+SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),fertig,"Typvariablen (M8 Schritt 3): `GenericVar::Type` mit Faehigkeit, Unifikation in `solve_call`, Memo mit Typnamen; Korpus `62_type_generics.takt`"
 SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),fertig,
 SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M1 (Kernsemantik),teilweise,
 SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),fertig,
@@ -607,7 +607,7 @@ SC-48,Statische Prüfung,10,`irreversible`-Outputs: Zuweisung nur in Sequenzen u
 SC-49,Statische Prüfung,10,Edition fehlt (2.5),W (Zertifizierungsmodus: F),M3 (Gate),fertig,
 SC-50,Statische Prüfung,10,Reservierte Wörter als Bezeichner; reservierte Membernamen als Feld- oder Variantennamen (2.5),F,M3 (Gate),fertig,
 SC-51,Statische Prüfung,10,`match` über offene Enums ohne `case _` (2.5),F,M3 (Gate),fertig,
-SC-52,Statische Prüfung,10,Generics: genau eine Fähigkeit je Typvariable; Instanziierungsgraph azyklisch; `const`-Variablen nur in Typen und `range` (3.12),F,M3 (Gate),teilweise,
+SC-52,Statische Prüfung,10,Generics: genau eine Fähigkeit je Typvariable; Instanziierungsgraph azyklisch; `const`-Variablen nur in Typen und `range` (3.12),F,M3 (Gate),fertig,"Faehigkeit als Vorbedingung an der Aufrufstelle (`takt-mir::capability`); Zyklus ueber die Tiefe des Memo-Stapels; `checks/SC-52/` mit ok_type, bad_capability, bad_type_cycle"
 SC-53,Statische Prüfung,10,Gescopte Instanzen: Single-Writer global; keine Instanzen in `idle`-Zuständen; kein (mittelbares) Selbst-Scoping (5.11),F,M3 (Gate),definiert,
 SC-54,Statische Prüfung,10,`resume` nur an Zuständen mit Kindern; Fault-Ziele werden über `initial` betreten (5.12),F,M3 (Gate),fertig,"`checks.rs::check_resume_states`: `resume` nur mit `initial`-Kind und nicht an `idle`; Fault-Uebergang betritt `initial` (Interpreter `switch`, Codegen `fault_path`)"
 SC-55,Statische Prüfung,10,Trigger: Guard und Outputs knotenlokal; `arm`/`disarm` nur aus der deklarierenden Maschine (7.5),F,M3 (Gate),definiert,

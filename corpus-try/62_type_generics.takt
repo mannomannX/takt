@@ -1,0 +1,51 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Typvariablen (3.12, v1.2): `type T: capability` wird je Aufruf
+# monomorphisiert. `max_of` laeuft hier zweimal — einmal ueber Ganzzahlen,
+# einmal ueber Spannungen. Beide Instanzen stehen getrennt in der MIR,
+# der Memo dedupliziert gleiche Argumente.
+
+fn max_of[type T: ord, const N in 1..8](xs: [N] T) -> T:
+    var best = xs[0]
+    for i in range(N):
+        if xs[i] > best:
+            best = xs[i]
+    return best
+
+fn count_same[type T: eq, const N in 1..8](xs: [N] T, of: T) -> int in 0..8:
+    var n = 0
+    for i in range(N):
+        if xs[i] == of:
+            n = n + 1
+    return n
+
+input  a : int in 0..100      @ sim("i/a")
+input  b : float[V] in 0..5 V @ sim("i/b")
+
+output peak  : int in 0..100 @ hw("o/peak")  with safe = 0
+output volts : float[V]      @ hw("o/volts") with safe = 0 V
+output hits  : int in 0..8   @ hw("o/hits")  with safe = 0
+
+machine ctrl:
+    var xs : [4] int in 0..100 = [0, 0, 0, 0]
+    var ys : [4] float[V] = [0 V, 0 V, 0 V, 0 V]
+
+    initial RUN
+
+    state RUN:
+        loop:
+            xs[0] = a
+            ys[0] = b
+            peak = max_of(xs)
+            volts = max_of(ys)
+            hits = count_same(xs, a)
+
+        when a > 90: -> HIGH
+
+    state HIGH:
+        enter:
+            peak = 100
+
+        when a < 10: -> RUN

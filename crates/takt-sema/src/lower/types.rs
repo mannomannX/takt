@@ -1,7 +1,7 @@
 //! Typauflösung (plan/m1.md 3.5): `ast::Type` → `TypeId`, Einheitenausdrücke,
 //! Ranges, Typnamen in Quellschreibweise, Vergleich modulo Range.
 
-use takt_diag::{Span, Stage};
+use takt_diag::Span;
 use takt_mir::expr::{Expr, ExprKind};
 use takt_mir::types::{Const, FloatWidth, IntWidth, Range, RangeOrigin, Type};
 use takt_mir::{TypeId, UnitId};
@@ -276,10 +276,17 @@ impl Lowerer<'_> {
                 }
                 Some(self.intern(Type::Map { key, value, cap }))
             }
-            ast::TypeKind::TypeVar { name, .. } => {
-                self.stage(name.span, "Typvariablen", Stage::V1_2);
-                None
-            }
+            // 3.12: In einer gebundenen Instanz ist die Variable ihr Typ; in
+            // der generischen Pruefung steht kein Typ zur Verfuegung, und der
+            // Rumpf wird erst je Instanz geprueft.
+            ast::TypeKind::TypeVar { name, wrap } => match self.env.type_value(&name.name) {
+                Some(t) => Some(self.wrap(t, wrap.as_ref(), span)),
+                None if self.env.index(&name.name).is_some() => None,
+                None => {
+                    self.error(SC3, name.span, format!("Typ `{}` ist nicht bekannt", name.name));
+                    None
+                }
+            },
         }
     }
 

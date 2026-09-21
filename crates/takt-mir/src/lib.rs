@@ -15,6 +15,7 @@
 
 pub mod analysis;
 pub mod bytes;
+pub mod capability;
 pub mod desugar;
 pub mod dfa;
 pub mod dump;

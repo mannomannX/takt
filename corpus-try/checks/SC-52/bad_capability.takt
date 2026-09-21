@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 52 (3.12): die Faehigkeit ist Vorbedingung der Instanziierung.
+# `bool` traegt kein `numeric`, der Aufruf ist ein Fehler an der Stelle,
+# nicht im Rumpf.
+
+output n : bool @ hw("o/n") with safe = false
+
+fn twice[type T: numeric](x: T) -> T:
+    return x + x
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            n = twice(true)  # ~ SC-52

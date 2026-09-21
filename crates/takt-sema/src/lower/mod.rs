@@ -31,12 +31,19 @@ use crate::Options;
 use crate::symbols::{Entity, Scopes, Symbol};
 use crate::units::{Unit, Units};
 
-/// Generische Variable einer Vorlage (3.12): Einheit (v1) oder Konstante
-/// (v1.1); Typvariablen sind v1.2.
+/// Generische Variable einer Vorlage (3.12): Einheit (v1), Konstante
+/// (v1.1) oder Typ (v1.2).
 #[derive(Clone, Debug, PartialEq)]
 pub enum GenericVar {
     /// Einheitenvariable `U`.
     Unit(String),
+    /// `type T: capability` (v1.2).
+    Type {
+        /// Name.
+        name: String,
+        /// Geforderte Faehigkeit; ohne sie jeder Typ.
+        capability: Option<takt_syntax::ast::Capability>,
+    },
     /// `const N in lo..hi`; ohne Range die ganze Breite von `int`.
     Const {
         /// Name.
@@ -52,7 +59,7 @@ impl GenericVar {
     /// Name der Variablen.
     pub fn name(&self) -> &str {
         match self {
-            GenericVar::Unit(n) | GenericVar::Const { name: n, .. } => n,
+            GenericVar::Unit(n) | GenericVar::Type { name: n, .. } | GenericVar::Const { name: n, .. } => n,
         }
     }
 }
@@ -62,6 +69,8 @@ impl GenericVar {
 pub enum Binding {
     /// Einheit.
     Unit(Unit),
+    /// Typ (v1.2).
+    Type(TypeId),
     /// Konstante.
     Const(i64),
 }
@@ -124,19 +133,27 @@ pub struct Env {
     /// Konstantenbindungen; `None` waehrend der generischen Pruefung und
     /// bei Einheitenvariablen.
     pub consts: Vec<Option<i64>>,
+    /// Typbindungen (v1.2); `None` waehrend der generischen Pruefung.
+    pub types: Vec<Option<TypeId>>,
 }
 
 impl Env {
     /// Offene Umgebung (generische Pruefung).
     pub fn open(vars: &[GenericVar]) -> Env {
-        Env { vars: vars.to_vec(), units: vec![None; vars.len()], consts: vec![None; vars.len()] }
+        Env {
+            vars: vars.to_vec(),
+            units: vec![None; vars.len()],
+            consts: vec![None; vars.len()],
+            types: vec![None; vars.len()],
+        }
     }
 
     /// Gebundene Umgebung einer Instanz.
     pub fn bound(vars: &[GenericVar], bindings: &[Binding]) -> Env {
         let units = bindings.iter().map(|b| if let Binding::Unit(u) = b { Some(u.clone()) } else { None }).collect();
         let consts = bindings.iter().map(|b| if let Binding::Const(n) = b { Some(*n) } else { None }).collect();
-        Env { vars: vars.to_vec(), units, consts }
+        let types = bindings.iter().map(|b| if let Binding::Type(t) = b { Some(*t) } else { None }).collect();
+        Env { vars: vars.to_vec(), units, consts, types }
     }
 
     /// Index einer Variablen.
@@ -155,8 +172,14 @@ impl Env {
         let i = self.index(name)? as usize;
         match &self.vars[i] {
             GenericVar::Const { lo, .. } => Some(self.consts[i].unwrap_or(if *lo == i64::MIN { 1 } else { *lo })),
-            GenericVar::Unit(_) => None,
+            GenericVar::Unit(_) | GenericVar::Type { .. } => None,
         }
+    }
+
+    /// Bindung einer Typvariablen (3.12, v1.2).
+    pub fn type_value(&self, name: &str) -> Option<TypeId> {
+        let i = self.index(name)? as usize;
+        matches!(self.vars[i], GenericVar::Type { .. }).then(|| self.types[i]).flatten()
     }
 }
 
@@ -270,6 +293,8 @@ pub struct Lowerer<'a> {
     pub templates: Templates,
     /// Instanzen der Vorlagen.
     pub memo: HashMap<String, Memo>,
+    /// Instanzen in Arbeit, fuer die Zyklusregel (3.12, Pruefung 52).
+    pub memo_stack: Vec<String>,
     /// Generische Umgebung.
     pub env: Env,
     /// Rahmen der Funktionsruempfe (innerster zuletzt).
@@ -338,6 +363,7 @@ impl<'a> Lowerer<'a> {
             edition,
             templates: Templates::default(),
             memo: HashMap::new(),
+            memo_stack: Vec::new(),
             env: Env::default(),
             fn_ctx: Vec::new(),
             mctx: None,

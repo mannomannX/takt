@@ -2,7 +2,7 @@
 //! eine Programmkopie, sequentielles Loesen der Einheitenvariablen aus den
 //! Argumenten, Instanziierung mit Memo.
 
-use takt_diag::{Span, Stage};
+use takt_diag::Span;
 use takt_mir::expr::{Expr, ExprKind};
 use takt_mir::fns::{BlockDef, Fn, GenericArgVal, GenericOrigin};
 use takt_mir::machine::{VarDef, VarScope};
@@ -26,9 +26,8 @@ impl Lowerer<'_> {
         for g in gvars {
             let (name, var) = match g {
                 ast::GenericVar::Unit(name) => (name, GenericVar::Unit(name.name.clone())),
-                ast::GenericVar::Type { name, .. } => {
-                    self.stage(name.span, "Typvariablen", Stage::V1_2);
-                    return None;
+                ast::GenericVar::Type { name, capability } => {
+                    (name, GenericVar::Type { name: name.name.clone(), capability: *capability })
                 }
                 ast::GenericVar::Const { name, range } => {
                     let (lo, hi) = match range {
@@ -94,6 +93,7 @@ impl Lowerer<'_> {
         let program = self.program.clone();
         let units = self.units.clone_shallow();
         let memo = self.memo.clone();
+        let memo_stack = self.memo_stack.clone();
         let records = self.block_records.clone();
         let state_enums = self.state_enums.clone();
         self.checking += 1;
@@ -102,6 +102,7 @@ impl Lowerer<'_> {
         self.program = program;
         self.units = units;
         self.memo = memo;
+        self.memo_stack = memo_stack;
         self.block_records = records;
         self.state_enums = state_enums;
     }
@@ -161,11 +162,13 @@ impl Lowerer<'_> {
         let id = match self.memo.get(&key) {
             Some(Memo::Fn(id)) => *id,
             _ => {
+                self.enter_instance(&key, &t.decl.name.name, span)?;
                 let env = Env::bound(&t.generics, &bound);
                 let name = self.instance_name(&t.decl.name.name, &bound);
                 let before = self.diags.len();
                 let id = self.with_env(env, t.prelude, |this| this.instantiate_fn(&t.decl, name));
                 self.library_diags(t.prelude, before, &t.decl.name.name, span);
+                self.memo_stack.pop();
                 let id = id?;
                 self.memo.insert(key, Memo::Fn(id));
                 id
@@ -193,11 +196,13 @@ impl Lowerer<'_> {
         if let Some(Memo::Block(id)) = self.memo.get(&key) {
             return Some(*id);
         }
+        self.enter_instance(&key, &t.decl.name.name, span)?;
         let env = Env::bound(&t.generics, &bound);
         let name = self.instance_name(&t.decl.name.name, &bound);
         let before = self.diags.len();
         let id = self.with_env(env, t.prelude, |this| this.instantiate_block(&t.decl, name));
         self.library_diags(t.prelude, before, &t.decl.name.name, span);
+        self.memo_stack.pop();
         let id = id?;
         self.memo.insert(key, Memo::Block(id));
         Some(id)
@@ -216,6 +221,7 @@ impl Lowerer<'_> {
             .iter()
             .map(|b| match b {
                 Binding::Unit(u) => self.units.display(&self.program, u),
+                Binding::Type(t) => self.type_name(*t),
                 Binding::Const(n) => n.to_string(),
             })
             .collect()
@@ -254,13 +260,11 @@ impl Lowerer<'_> {
                         ast::Expr { kind: ast::ExprKind::Upper { name: name.clone(), args: None }, span: name.span };
                     Binding::Const(self.const_int(&e)?)
                 }
-                (_, ast::GenericArg::Type(t)) => {
-                    self.stage(t.span, "Typargumente", Stage::V1_2);
-                    return None;
-                }
+                (GenericVar::Type { .. }, ast::GenericArg::Type(t)) => Binding::Type(self.resolve_type(t)?),
                 (var, _) => {
                     let what = match var {
                         GenericVar::Unit(_) => "eine Einheit",
+                        GenericVar::Type { .. } => "einen Typ",
                         GenericVar::Const { .. } => "eine Konstante",
                     };
                     self.error(SC52, span, format!("`{}` von `{fname}` verlangt {what} (3.12)", var.name()));
@@ -280,6 +284,7 @@ impl Lowerer<'_> {
         // Einheiten und Kapazitaeten der Argumente (positional oder benannt)
         let mut arg_units: Vec<Option<Unit>> = vec![None; params.len()];
         let mut arg_caps: Vec<Option<i64>> = vec![None; params.len()];
+        let mut arg_types: Vec<Option<TypeId>> = vec![None; params.len()];
         let start = self.diags.len();
         for (i, a) in args.iter().enumerate() {
             let idx = match &a.name {
@@ -298,9 +303,18 @@ impl Lowerer<'_> {
             if let Some(e) = self.expr(&a.value, None) {
                 arg_units[idx] = self.unit_of_type(e.ty);
                 arg_caps[idx] = self.capacity_of(e.ty);
+                arg_types[idx] = Some(e.ty);
             }
         }
         self.diags.truncate(start);
+        // 3.12: Typvariablen aus der Struktur der Parameter.
+        let saved = std::mem::replace(&mut self.env, Env::open(vars));
+        for (i, p) in params.iter().enumerate() {
+            if let Some(ty) = arg_types[i] {
+                self.unify_type_vars(&p.ty, ty, &mut bound);
+            }
+        }
+        self.env = saved;
         for (i, var) in const_patterns.iter().enumerate() {
             if let (Some(v), Some(cap)) = (var, arg_caps[i]) {
                 if bound[*v as usize].is_none() {
@@ -351,6 +365,23 @@ impl Lowerer<'_> {
                     }
                     out.push(Binding::Const(n));
                 }
+                (Some(Binding::Type(t)), GenericVar::Type { name, capability }) => {
+                    // Pruefung 52: die Faehigkeit ist Vorbedingung und
+                    // meldet vor jedem Fehler im Rumpf (3.12).
+                    if let Some(cap) = capability.map(capability_of) {
+                        if !takt_mir::capability::holds(&self.program, t, cap) {
+                            let ty = self.type_name(t);
+                            self.error_hint(
+                                SC52,
+                                span,
+                                format!("`{name}` von `{fname}` braucht `{}`, `{ty}` hat es nicht (3.12)", cap.name()),
+                                format!("`{}` tragen {}", cap.name(), cap.expects()),
+                            );
+                            return None;
+                        }
+                    }
+                    out.push(Binding::Type(t));
+                }
                 (Some(b), _) => out.push(b),
                 (None, var) => {
                     self.error_hint(
@@ -382,6 +413,63 @@ impl Lowerer<'_> {
         let ast::ExprKind::Upper { name, args: None } = &e.kind else { return None };
         let i = self.env.index(&name.name)?;
         matches!(self.env.vars[i as usize], GenericVar::Const { .. }).then_some(i)
+    }
+
+    /// Legt eine Instanz auf den Memo-Stapel (3.12, Pruefung 52).
+    ///
+    /// Rekursion mit gleichen Argumenten faengt der Memo ab, bevor es
+    /// hierher kommt; hier bleibt der Fall mit *wachsenden* Argumenten
+    /// (`f[T]` ruft `f[[1] T]`). Jede Instanz hat einen eigenen
+    /// Schluessel, ein Vergleich faende den Zyklus also nie — die Tiefe
+    /// des Stapels ist das Kriterium. Ohne sie laeuft die Senkung bis zum
+    /// Stapelueberlauf.
+    ///
+    /// Acht, nicht mehr: Jede Ebene schachtelt den Typ tiefer, und die
+    /// Typaufloesung darueber kostet ihrerseits Stapel — ab zwoelf
+    /// ueberlaeuft der native Stapel, bevor der Zaehler greift. Acht
+    /// Ebenen sind fuer echte Vorlagen reichlich.
+    fn enter_instance(&mut self, key: &str, name: &str, span: Span) -> Option<()> {
+        const DEPTH: usize = 8;
+        if self.memo_stack.len() >= DEPTH {
+            let path = self.memo_stack[self.memo_stack.len() - 3..].join(" -> ");
+            self.error_hint(
+                SC52,
+                span,
+                format!("`{name}`: Instanziierung endet nach {DEPTH} Schritten nicht (3.12)"),
+                format!("wachsende Argumente, zuletzt: {path} -> {key}"),
+            );
+            return None;
+        }
+        self.memo_stack.push(key.to_string());
+        Some(())
+    }
+
+    /// Unifiziert einen Parametertyp mit dem Typ seines Arguments und
+    /// traegt gefundene Typvariablen in `bound` ein (3.12): `[N] T` gegen
+    /// `[4] int[V]` bindet `T = int[V]`. Nur die Struktur zaehlt; die
+    /// Kapazitaet loest `type_const_pattern`, die Einheit das Muster.
+    fn unify_type_vars(&mut self, pattern: &ast::Type, arg: TypeId, bound: &mut [Option<Binding>]) {
+        match &pattern.kind {
+            ast::TypeKind::TypeVar { name, wrap: None } => {
+                if let Some(i) = self.env.index(&name.name) {
+                    let i = i as usize;
+                    if matches!(self.env.vars[i], GenericVar::Type { .. }) && bound[i].is_none() {
+                        bound[i] = Some(Binding::Type(arg));
+                    }
+                }
+            }
+            ast::TypeKind::Array { elem, .. } | ast::TypeKind::Vec { elem, .. } => {
+                if let Type::Array { elem: inner, .. } | Type::Vec { elem: inner, .. } = self.ty(arg) {
+                    self.unify_type_vars(elem, *inner, bound);
+                }
+            }
+            ast::TypeKind::Wrapped { inner, .. } => {
+                if let Type::Optional(t) = self.ty(arg) {
+                    self.unify_type_vars(inner, *t, bound);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Kapazitaet eines Puffertyps (fuer die Bindung einer Konstantenvariablen).
@@ -447,6 +535,7 @@ impl Lowerer<'_> {
             .enumerate()
             .map(|(i, v)| match v {
                 GenericVar::Const { .. } => GenericArgVal::Const(env.consts[i].unwrap_or(0)),
+                GenericVar::Type { .. } => GenericArgVal::Type(env.types[i].unwrap_or(self.tys.bool)),
                 GenericVar::Unit(_) => {
                     let id = env.units[i]
                         .as_ref()
@@ -559,5 +648,18 @@ impl Entity {
             Entity::FnTemplate(i) | Entity::BlockTemplate(i) | Entity::MachineTemplate(i) => Some(*i),
             _ => None,
         }
+    }
+}
+
+/// `ast::Capability` als Praedikat der MIR (3.12).
+fn capability_of(c: ast::Capability) -> takt_mir::capability::Capability {
+    use takt_mir::capability::Capability as C;
+    match c {
+        ast::Capability::Pod => C::Pod,
+        ast::Capability::Eq => C::Eq,
+        ast::Capability::Ord => C::Ord,
+        ast::Capability::Numeric => C::Numeric,
+        ast::Capability::Integer => C::Integer,
+        ast::Capability::Float => C::Float,
     }
 }

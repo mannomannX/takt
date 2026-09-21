@@ -1,0 +1,24 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 52 (3.12): eine Typvariable mit erfuellter Faehigkeit. `int`
+# traegt `ord`, die Instanziierung geht durch.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+fn biggest[type T: ord, const N in 1..8](a: [N] T) -> T:
+    var best = a[0]
+    for i in range(N):
+        if a[i] > best:
+            best = a[i]
+    return best
+
+machine m:
+    var xs : [4] int in 0..99 = default
+
+    initial RUN
+
+    state RUN:
+        loop:
+            n = biggest(xs)

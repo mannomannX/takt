@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 52 (3.12): der Instanziierungsgraph bleibt azyklisch. `grow`
+# ruft sich mit wachsendem Argument (`T` → `[1] T`); das terminiert nicht.
+
+output n : bool @ hw("o/n") with safe = false
+
+fn grow[type T: pod](x: T) -> bool:
+    var a : [1] T = [x]
+    return grow(a)  # ~ SC-52
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            n = grow(true)
