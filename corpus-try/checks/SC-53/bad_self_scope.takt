@@ -1,0 +1,35 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 53 (c), 5.11: Der Instanziierungsgraph bleibt azyklisch.
+# `alpha` scopet `beta`, `beta` wieder `alpha`.
+
+output o : bool @ hw("o/o") with safe = false
+
+machine alpha(n: int in 0..3) every 1 ms:
+    initial A
+
+    state A:
+        instance ab = beta(n = n)  # ~ SC-53
+
+        loop:
+            pass
+
+machine beta(n: int in 0..3) every 1 ms:
+    initial B
+
+    state B:
+        instance ba = alpha(n = n)
+
+        loop:
+            pass
+
+machine top:
+    initial RUN
+
+    state RUN:
+        instance i = alpha(n = 1)
+
+        loop:
+            o = true

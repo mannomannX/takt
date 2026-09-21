@@ -623,3 +623,30 @@ impl Machine {
 pub fn scenario_name(label: &str) -> String {
     label.split_whitespace().collect::<Vec<_>>().join("_")
 }
+
+/// Wo eine gescopte Instanz haengt (5.11): Besitzer und Zustand.
+///
+/// Der Index faellt aus den Zustaenden; er liegt hier, damit Interpreter
+/// und Codegen dieselbe Quelle lesen und die Aktivitaet nicht zweimal
+/// hergeleitet wird.
+pub fn scope_of(p: &crate::Program, inst: MachineId) -> Option<(MachineId, ScopedInstance)> {
+    for (i, m) in p.machines.iter().enumerate() {
+        for s in &m.states {
+            if let Some(si) = s.instances.iter().find(|si| si.machine == inst) {
+                return Some((MachineId(i as u32), si.clone()));
+            }
+        }
+    }
+    None
+}
+
+/// Alle gescopten Instanzen eines Programms mit ihrem Besitzer.
+pub fn scoped_instances(p: &crate::Program) -> Vec<(MachineId, ScopedInstance)> {
+    let mut out = Vec::new();
+    for (i, m) in p.machines.iter().enumerate() {
+        for s in &m.states {
+            out.extend(s.instances.iter().map(|si| (MachineId(i as u32), si.clone())));
+        }
+    }
+    out
+}

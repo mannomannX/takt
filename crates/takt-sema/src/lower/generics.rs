@@ -94,6 +94,7 @@ impl Lowerer<'_> {
         let units = self.units.clone_shallow();
         let memo = self.memo.clone();
         let memo_stack = self.memo_stack.clone();
+        let pending_scoped = std::mem::take(&mut self.pending_scoped);
         let records = self.block_records.clone();
         let state_enums = self.state_enums.clone();
         self.checking += 1;
@@ -103,6 +104,9 @@ impl Lowerer<'_> {
         self.units = units;
         self.memo = memo;
         self.memo_stack = memo_stack;
+        // Was die generische Pruefung an gescopten Instanzen auflas, gehoert
+        // zur verworfenen Kopie; die echte Senkung legt sie erneut an.
+        self.pending_scoped = pending_scoped;
         self.block_records = records;
         self.state_enums = state_enums;
     }

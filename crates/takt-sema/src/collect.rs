@@ -131,6 +131,7 @@ impl Lowerer<'_> {
                 _ => {}
             }
         }
+        self.scoped_cycles(file);
         self.check_templates();
         for item in &file.items {
             match item {
@@ -170,4 +171,61 @@ impl Lowerer<'_> {
         }
         let _ = SC3;
     }
+
+    /// Pruefung 53 (c), 5.11: Kein Selbst-Scoping. Der Graph laeuft
+    /// ueber Maschinennamen und wird vor dem Lowern geprueft — danach
+    /// waere die erste Meldung der Namenskonflikt der inneren
+    /// Deklaration, der den Grund nicht nennt.
+    fn scoped_cycles(&mut self, file: &ast::File) {
+        let mut edges: Vec<(String, String, takt_diag::Span)> = Vec::new();
+        for item in &file.items {
+            let ast::Item::Machine(m) = item else { continue };
+            collect_scopes(&m.name.name, &m.body.states, &mut edges);
+        }
+        for (from, _, span) in edges.clone() {
+            if let Some(path) = reaches(&edges, &from, &from) {
+                self.error_hint(
+                    crate::checks::SC53,
+                    span,
+                    format!("`{from}` scopet sich selbst (5.11)"),
+                    format!("der Instanziierungsgraph bleibt azyklisch; Pfad: {path}"),
+                );
+                return;
+            }
+        }
+    }
+}
+
+/// Die Kanten `Besitzer -> Vorlage` aller gescopten Instanzen, rekursiv
+/// durch den Zustandsbaum (5.11).
+fn collect_scopes(owner: &str, states: &[ast::StateDecl], out: &mut Vec<(String, String, takt_diag::Span)>) {
+    for s in states {
+        for p in &s.body.prelude {
+            if let ast::StatePrelude::Instance(i) = p {
+                out.push((owner.to_string(), i.template.name.clone(), i.span));
+            }
+        }
+        collect_scopes(owner, &s.body.states, out);
+    }
+}
+
+/// Ein Pfad von `from` nach `goal` ueber die Kanten, als Text; `None`,
+/// wenn es keinen gibt.
+fn reaches(edges: &[(String, String, takt_diag::Span)], from: &str, goal: &str) -> Option<String> {
+    let mut seen = vec![from.to_string()];
+    let mut frontier = vec![(from.to_string(), from.to_string())];
+    while let Some((node, path)) = frontier.pop() {
+        for (a, b, _) in edges.iter().filter(|(a, _, _)| *a == node) {
+            let _ = a;
+            let path = format!("{path} -> {b}");
+            if b == goal {
+                return Some(path);
+            }
+            if !seen.contains(b) {
+                seen.push(b.clone());
+                frontier.push((b.clone(), path));
+            }
+        }
+    }
+    None
 }

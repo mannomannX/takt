@@ -51,6 +51,12 @@ pub fn step_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     if leaves.is_empty() {
         return Err(NotYet { what: "Maschine ohne Blattzustand" });
     }
+    // 5.11: Der Lebenszyklus gescopter Instanzen fehlt im Codegen noch
+    // (M8 Schritt 8). Lieber melden als still danebenlaufen — der
+    // Interpreter ist die Spezifikation (Satz 9.4.4).
+    if m.states.iter().any(|s| !s.instances.is_empty()) {
+        return Err(NotYet { what: "gescopte Instanzen (5.11)" });
+    }
     let mark = module.mark();
     match write_step(m, st, p, module, &leaves) {
         Ok(()) => Ok(()),

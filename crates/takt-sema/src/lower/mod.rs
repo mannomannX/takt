@@ -295,6 +295,12 @@ pub struct Lowerer<'a> {
     pub memo: HashMap<String, Memo>,
     /// Instanzen in Arbeit, fuer die Zyklusregel (3.12, Pruefung 52).
     pub memo_stack: Vec<String>,
+    /// Gescopte Instanzen, die nach der besitzenden Maschine zu senken
+    /// sind (5.11): `lower_machine` ersetzt `mctx`, mitten im Zustand
+    /// ginge der Kontext des Besitzers verloren.
+    pub pending_scoped: Vec<(MachineId, StateId, takt_syntax::ast::InstanceDecl)>,
+    /// Vorlagen, deren gescopte Instanzen gerade gesenkt werden (5.11 (c)).
+    pub scope_stack: Vec<String>,
     /// Generische Umgebung.
     pub env: Env,
     /// Rahmen der Funktionsruempfe (innerster zuletzt).
@@ -364,6 +370,8 @@ impl<'a> Lowerer<'a> {
             templates: Templates::default(),
             memo: HashMap::new(),
             memo_stack: Vec::new(),
+            pending_scoped: Vec::new(),
+            scope_stack: Vec::new(),
             env: Env::default(),
             fn_ctx: Vec::new(),
             mctx: None,

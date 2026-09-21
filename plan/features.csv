@@ -56,7 +56,7 @@ SEM-5.7,Semantik/Abschnitt,5.7,Blöcke innerhalb von Maschinen,,M1 (Kernsemantik
 SEM-5.8,Semantik/Abschnitt,5.8,Ergonomie in Maschinen,,M1 (Kernsemantik),fertig,
 SEM-5.9,Semantik/Abschnitt,5.9,Persistente Variablen (v1.1),v1.1,M5 (Embedded),fertig,
 SEM-5.10,Semantik/Abschnitt,5.10,"Schlafzustände (`idle`, v1.1)",v1.1,M5 (Embedded),fertig,
-SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,offen,
+SEM-5.11,Semantik/Abschnitt,5.11,Gescopte Instanzen: parallele Komposition ohne Regionen (v1.2),v1.2,M8,teilweise,"Sema und Interpreter fertig (M8 Schritte 5 und 6): Aktivitaet aus der Konfiguration des Besitzers, Instanzen vor dem Besitzer, `exit` nur bei regulaerem Uebergang; Satz 9.4.1 ueber 32 Ordnungen geprueft. Codegen offen (Schritt 8), `step_function` meldet `NotYet`"
 SEM-5.12,Semantik/Abschnitt,5.12,History-Zustände: `resume` (v1.2),v1.2,M8,fertig,"Sema `layout.saved_paths`, Interpreter `MachineState::saved`, Codegen `Role::Saved` mit `save_paths`/`resume_into`; Korpus `60_resume.takt`"
 SEM-6.1,Semantik/Abschnitt,6.1,Motivation,,M1 (Kernsemantik),fertig,
 SEM-6.2,Semantik/Abschnitt,6.2,Desugaring (formal),,M1 (Kernsemantik),fertig,
@@ -608,7 +608,7 @@ SC-49,Statische Prüfung,10,Edition fehlt (2.5),W (Zertifizierungsmodus: F),M3 (
 SC-50,Statische Prüfung,10,Reservierte Wörter als Bezeichner; reservierte Membernamen als Feld- oder Variantennamen (2.5),F,M3 (Gate),fertig,
 SC-51,Statische Prüfung,10,`match` über offene Enums ohne `case _` (2.5),F,M3 (Gate),fertig,
 SC-52,Statische Prüfung,10,Generics: genau eine Fähigkeit je Typvariable; Instanziierungsgraph azyklisch; `const`-Variablen nur in Typen und `range` (3.12),F,M3 (Gate),fertig,"Faehigkeit als Vorbedingung an der Aufrufstelle (`takt-mir::capability`); Zyklus ueber die Tiefe des Memo-Stapels; `checks/SC-52/` mit ok_type, bad_capability, bad_type_cycle"
-SC-53,Statische Prüfung,10,Gescopte Instanzen: Single-Writer global; keine Instanzen in `idle`-Zuständen; kein (mittelbares) Selbst-Scoping (5.11),F,M3 (Gate),definiert,
+SC-53,Statische Prüfung,10,Gescopte Instanzen: Single-Writer global; keine Instanzen in `idle`-Zuständen; kein (mittelbares) Selbst-Scoping (5.11),F,M3 (Gate),fertig,"Selbst-Scoping in `collect.rs::scoped_cycles` (vor dem Lowern, sonst meldet der Namenskonflikt zuerst); Single-Writer deckt Pruefung 7 ab, `idle` deckt Pruefung 22 ab; `checks/SC-53/`, `SC-7/bad_scoped_shared_output`, `SC-22/bad_idle_scope`"
 SC-54,Statische Prüfung,10,`resume` nur an Zuständen mit Kindern; Fault-Ziele werden über `initial` betreten (5.12),F,M3 (Gate),fertig,"`checks.rs::check_resume_states`: `resume` nur mit `initial`-Kind und nicht an `idle`; Fault-Uebergang betritt `initial` (Interpreter `switch`, Codegen `fault_path`)"
 SC-55,Statische Prüfung,10,Trigger: Guard und Outputs knotenlokal; `arm`/`disarm` nur aus der deklarierenden Maschine (7.5),F,M3 (Gate),definiert,
 SC-56,Statische Prüfung,10,"`property`: nur lesend, alle Zeitoperatoren beschränkt (13.3)",F,M3 (Gate),fertig,"`lower/property.rs`: Fenster positiv und Vielfaches des Ticks, `always`/`never` nicht unter beschraenkten Operatoren, Atome `bool`"

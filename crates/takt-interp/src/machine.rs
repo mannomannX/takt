@@ -792,6 +792,21 @@ pub fn init(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) -> Res
     resolve_m(loaded, env, out, tick)
 }
 
+/// Die ganze Konfiguration verlassen: `exit` von innen nach aussen (5.11).
+///
+/// Eine gescopte Instanz verlaesst bei einem regulaeren Uebergang ihres
+/// Besitzers jeden Zustand, in dem sie steht — es gibt kein Ziel, darum
+/// kein `switch`.
+pub fn exit_all(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) -> Result<(), Trap> {
+    for s in env.state.conf.clone().iter().rev() {
+        let block = env.machine(loaded).states[s.index()].exit.clone();
+        let mut ctx = env.ctx(loaded, tick);
+        ctx.exec_block(&block, Mode::Entry)?;
+    }
+    env.state.conf.clear();
+    Ok(())
+}
+
 /// Beobachtungen, die eine Maschine in einem Tick erzeugt hat.
 pub type Observations = Vec<Observation>;
 

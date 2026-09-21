@@ -74,8 +74,22 @@ fn topological(
     running: Vec<MachineId>,
     mut pick: impl FnMut(&[MachineId]) -> MachineId,
 ) -> Result<Vec<MachineId>, Vec<MachineId>> {
+    // 5.11: Eine gescopte Instanz schreitet vor ihrem Besitzer; das ist
+    // dieselbe Art Kante wie `follows` und geht darum in denselben
+    // topologischen Lauf ein — auch in die Permutationen (Satz 9.4.1).
+    let owns: Vec<(MachineId, MachineId)> = crate::machine::scoped_instances(p)
+        .into_iter()
+        .map(|(owner, si)| (owner, si.machine))
+        .filter(|(o, i)| running.contains(o) && running.contains(i))
+        .collect();
     let edges = |id: MachineId, to: Option<MachineId>| {
-        p.machines[id.index()].follows.iter().filter(|f| running.contains(f) && to.is_none_or(|t| t == **f)).count()
+        let follows = p.machines[id.index()]
+            .follows
+            .iter()
+            .filter(|f| running.contains(f) && to.is_none_or(|t| t == **f))
+            .count();
+        let scoped = owns.iter().filter(|(o, i)| *o == id && to.is_none_or(|t| t == *i)).count();
+        follows + scoped
     };
     let mut indegree: Vec<usize> = (0..p.machines.len()).map(|i| edges(MachineId(i as u32), None)).collect();
     let mut ready: Vec<MachineId> = running.iter().copied().filter(|id| indegree[id.index()] == 0).collect();

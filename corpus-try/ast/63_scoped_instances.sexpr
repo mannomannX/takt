@@ -1,0 +1,26 @@
+(system
+  (language 1)
+  (tick 1ms))
+(input mode :int in 0..2 @sim("i/mode"))
+(output a :bool @hw("o/a") safe=false)
+(output b :bool @hw("o/b") safe=false)
+(output c :bool @hw("o/c") safe=false)
+(machine blip (o:output bool) every=1ms
+  (initial LOW)
+  (state LOW
+    (enter
+      (= o false))
+    (after 3ms -> HIGH))
+  (state HIGH
+    (enter
+      (= o true))
+    (after 3ms -> LOW)))
+(machine ctrl
+  (initial FIRST)
+  (state FIRST
+    (instance p blip o=a)
+    (instance q blip o=b)
+    (when (== mode 1) -> SECOND))
+  (state SECOND
+    (instance r blip o=c)
+    (when (== mode 0) -> FIRST)))

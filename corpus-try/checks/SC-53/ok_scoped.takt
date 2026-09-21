@@ -1,0 +1,38 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 53 (5.11): zwei gescopte Instanzen in exklusiven Zustaenden,
+# jede mit eigenem Output. Das ist der erlaubte Fall.
+
+input  mode : int in 0..1 @ sim("i/mode")
+output a    : bool        @ hw("o/a") with safe = false
+output b    : bool        @ hw("o/b") with safe = false
+
+machine blip(o: output bool) every 1 ms:
+    initial LOW
+
+    state LOW:
+        enter:
+            o = false
+
+        after 3 ms: -> HIGH
+
+    state HIGH:
+        enter:
+            o = true
+
+        after 3 ms: -> LOW
+
+machine ctrl:
+    initial FIRST
+
+    state FIRST:
+        instance p = blip(o = a)
+
+        when mode == 1: -> SECOND
+
+    state SECOND:
+        instance q = blip(o = b)
+
+        when mode == 0: -> FIRST

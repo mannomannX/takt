@@ -593,6 +593,12 @@ pub struct Sim<'p> {
     /// fuellen, danach unveraendert — das Schreiben liegt ausserhalb der
     /// Semantik.
     pub nvm: Nvm,
+    /// Gescopte Instanzen mit ihrem Besitzer (5.11).
+    pub scoped: Vec<(MachineId, takt_mir::machine::ScopedInstance)>,
+    /// Welche gescopte Instanz war zu Beginn des vorigen Ticks aktiv?
+    /// Die Aktivitaet steht vor jedem Schritt fest (5.11), der Vergleich
+    /// mit diesem Stand liefert Ein- und Austritt.
+    pub active_scoped: Vec<bool>,
 }
 
 /// Laufende Maschinen in Deklarationsreihenfolge (5.8, 13.6).
@@ -677,6 +683,8 @@ impl<'p> Sim<'p> {
         // ein Fehler der Pruefung 33 und kommt hier nicht an.
         let order =
             schedule::order_with(program, scenario).unwrap_or_else(|_| schedule::runnable_with(program, scenario));
+        let scoped = takt_mir::machine::scoped_instances(program);
+        let active_scoped = vec![false; scoped.len()];
         Ok(Sim {
             loaded,
             states,
@@ -687,6 +695,8 @@ impl<'p> Sim<'p> {
             observations: Vec::new(),
             steps: None,
             nvm: Nvm::new(),
+            scoped,
+            active_scoped,
         })
     }
 
@@ -733,7 +743,13 @@ impl<'p> Sim<'p> {
         for id in self.foreign.clone() {
             self.image.set_fresh(id);
         }
+        // 5.11: Eine gescopte Instanz betritt nichts, solange ihr Scope
+        // steht nicht — der Besitzer sagt es erst mit seinem `init`.
+        let scoped_ids: Vec<MachineId> = self.scoped.iter().map(|(_, si)| si.machine).collect();
         for id in self.order.clone() {
+            if scoped_ids.contains(&id) {
+                continue;
+            }
             let mut out = Vec::new();
             let mut env =
                 MachineEnv::new(&self.loaded, id, &mut self.states[id.index()], &mut self.image, &mut out, tick_ns);
@@ -742,6 +758,7 @@ impl<'p> Sim<'p> {
             self.publish_one(id);
             self.image.set_fresh(id);
         }
+        self.scoped_lifecycle(tick_ns)?;
         self.image.clear_fresh();
         // Tick 0 aktiviert jede Maschine mit `phase = 0` (7.2); der Zaehler
         // wird wie am Ende jedes Ticks fortgeschrieben.
@@ -1013,6 +1030,85 @@ impl<'p> Sim<'p> {
     }
 
     /// Ein System-Tick (9.4).
+    /// Die gescopten Instanzen, die gerade nicht laufen (5.11).
+    fn inactive_scoped(&self) -> Vec<MachineId> {
+        (0..self.scoped.len()).filter(|i| !self.active_scoped[*i]).map(|i| self.scoped[i].1.machine).collect()
+    }
+
+    /// Ist die gescopte Instanz `i` aktiv? (5.11) Sie ist es, wenn ihr
+    /// Scope-Zustand in der Konfiguration des Besitzers liegt. Die Frage
+    /// wird zu Tick-Beginn gestellt und gilt fuer den ganzen Tick; damit
+    /// haengt der Trace nicht von der Schrittordnung ab (Satz 9.4.1).
+    fn scope_active(&self, i: usize) -> bool {
+        let (owner, si) = &self.scoped[i];
+        self.states[owner.index()].conf.contains(&si.scope)
+    }
+
+    /// Ein- und Austritte der gescopten Instanzen nach einem Schritt des
+    /// Besitzers (5.11).
+    ///
+    /// Austritt: `exit` von innen nach aussen bei einem regulaeren
+    /// Uebergang, ohne `exit` nach einem Fault (2.2 in plan/m8.md, wie
+    /// 5.4 es fuer den Besitzer sagt); danach gehen die Outputs der
+    /// Instanz auf `safe` und ihr Zustand wird verworfen. Eintritt: frisch
+    /// initialisiert, `initial` betreten.
+    fn scoped_lifecycle(&mut self, tick_ns: i64) -> Result<(), Trap> {
+        for i in 0..self.scoped.len() {
+            let now = self.scope_active(i);
+            if now == self.active_scoped[i] {
+                continue;
+            }
+            let (owner, si) = self.scoped[i].clone();
+            let inst = si.machine;
+            if now {
+                self.enter_scoped(inst, tick_ns)?;
+            } else {
+                let faulted = self.states[owner.index()].faulted
+                    || self.states[owner.index()].last_fault.as_ref().is_some_and(|f| f.tick == self.tick);
+                self.leave_scoped(inst, faulted, tick_ns)?;
+            }
+            self.active_scoped[i] = now;
+        }
+        Ok(())
+    }
+
+    /// Eine gescopte Instanz betreten (5.11): frischer Zustand, Variablen,
+    /// `initial`. Sie schreitet ab dem naechsten Tick.
+    fn enter_scoped(&mut self, inst: MachineId, tick_ns: i64) -> Result<(), Trap> {
+        let program = self.loaded.program;
+        self.states[inst.index()] = MachineState::new(&program.machines[inst.index()]);
+        let mut out = Vec::new();
+        let mut env =
+            MachineEnv::new(&self.loaded, inst, &mut self.states[inst.index()], &mut self.image, &mut out, tick_ns);
+        env.init_vars(&self.loaded, self.tick)?;
+        machine::init(&self.loaded, &mut env, self.tick)?;
+        self.observations.extend(out.into_iter().map(|o| (inst, o)));
+        self.publish_one(inst);
+        Ok(())
+    }
+
+    /// Eine gescopte Instanz verlassen (5.11).
+    fn leave_scoped(&mut self, inst: MachineId, by_fault: bool, tick_ns: i64) -> Result<(), Trap> {
+        let mut out = Vec::new();
+        if !by_fault {
+            let mut env =
+                MachineEnv::new(&self.loaded, inst, &mut self.states[inst.index()], &mut self.image, &mut out, tick_ns);
+            machine::exit_all(&self.loaded, &mut env, self.tick)?;
+        }
+        // 5.11: Was die Instanz stellte, geht auf `safe` — wie bei
+        // FAULTED, nur dass hier die ganze Maschine verschwindet.
+        let mut safe = Vec::new();
+        let mut env =
+            MachineEnv::new(&self.loaded, inst, &mut self.states[inst.index()], &mut self.image, &mut safe, tick_ns);
+        env.safe_outputs(&self.loaded);
+        out.extend(safe);
+        self.observations.extend(out.into_iter().map(|o| (inst, o)));
+        self.publish_one(inst);
+        self.states[inst.index()] = MachineState::new(&self.loaded.program.machines[inst.index()]);
+        Ok(())
+    }
+
+    /// Ein System-Tick (9.4).
     pub fn step(&mut self) -> Result<(), Trap> {
         let program = self.loaded.program;
         let tick_ns = program.config.tick;
@@ -1026,9 +1122,15 @@ impl<'p> Sim<'p> {
         // deliver(D_k): interne Streams werden sichtbar, Ueberlauf merkt den
         // Fault fuer jeden Konsumenten vor (9.6).
         self.deliver()?;
-        // active(k): countdown == 0 (7.2)
-        let active: Vec<MachineId> =
-            self.order.iter().copied().filter(|id| self.states[id.index()].countdown == 0).collect();
+        // active(k): countdown == 0 (7.2); eine gescopte Instanz zusaetzlich
+        // nur, wenn ihr Scope-Zustand zu Tick-Beginn steht (5.11).
+        let inactive = self.inactive_scoped();
+        let active: Vec<MachineId> = self
+            .order
+            .iter()
+            .copied()
+            .filter(|id| self.states[id.index()].countdown == 0 && !inactive.contains(id))
+            .collect();
         // Schrittphase; `fresh[m] = publish_m(v_m)` nach jedem Schritt, nur
         // fuer Follower in dieser Phase sichtbar (9.4).
         let mut aborted = false;
@@ -1050,6 +1152,9 @@ impl<'p> Sim<'p> {
             self.publish_one(*id);
             self.image.set_fresh(*id);
         }
+        // 5.11: Der Besitzer ist geschritten, seine Konfiguration steht —
+        // jetzt treten die gescopten Instanzen ein oder aus.
+        self.scoped_lifecycle(tick_ns)?;
         // abort_phase(): Abort und Runtime-Faults wirken im selben Tick fuer
         // alle Maschinen, ob aktiv oder nicht (5.4, 9.4); dort gilt Ψ_k.
         self.image.clear_fresh();

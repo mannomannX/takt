@@ -351,6 +351,16 @@ impl Lowerer<'_> {
         let mut machine = ctx.machine;
         machine.name = self.program.machines[id.index()].name.clone();
         self.program.machines[id.index()] = machine;
+        self.drain_scoped();
+    }
+
+    /// Senkt die gescopten Instanzen, die beim Lowern der Zustaende
+    /// aufgelaufen sind (5.11). Eine Instanz kann selbst welche
+    /// deklarieren, darum bis zur Leere.
+    fn drain_scoped(&mut self) {
+        while let Some((owner, scope, decl)) = self.pending_scoped.pop() {
+            self.scoped_instance(owner, scope, &decl);
+        }
     }
 
     fn add_states(
@@ -461,8 +471,11 @@ impl Lowerer<'_> {
                 ast::StatePrelude::Var(v) => {
                     self.machine_var(v, VarScope::State(id));
                 }
+                // 5.11: erst nach dem Besitzer, weil `lower_machine` den
+                // Kontext ersetzt.
                 ast::StatePrelude::Instance(i) => {
-                    self.stage(i.span, "gescopte Instanzen", Stage::V1_2);
+                    let owner = self.mctx.as_ref().expect("Maschine").id;
+                    self.pending_scoped.push((owner, id, i.clone()));
                 }
             }
         }
@@ -741,14 +754,26 @@ impl Lowerer<'_> {
 
     // ------------------------------------------------------------ Instanzen
 
-    /// `instance NAME[i in a..b] = tmpl(args)`.
+    /// `instance NAME[i in a..b] = tmpl(args)` auf Dateiebene.
     pub fn instance_decl(&mut self, decl: &ast::InstanceDecl) {
+        self.instance_at(decl, None);
+    }
+
+    /// `instance NAME = tmpl(args) in ZUSTAND [resume]` (5.11): dieselbe
+    /// Instanz, zusaetzlich am Zustand ihres Besitzers vermerkt.
+    fn scoped_instance(&mut self, owner: MachineId, scope: StateId, decl: &ast::InstanceDecl) {
+        self.instance_at(decl, Some((owner, scope)));
+    }
+
+    /// `instance NAME[i in a..b] = tmpl(args)`; mit `scope` gescopt (5.11).
+    fn instance_at(&mut self, decl: &ast::InstanceDecl, scope: Option<(MachineId, StateId)>) {
         let Some(Entity::MachineTemplate(idx)) = self.lookup(&decl.template) else {
             self.error(SC3, decl.template.span, format!("`{}` ist keine Maschinenvorlage", decl.template.name));
             return;
         };
-        if decl.resume {
-            self.stage(decl.span, "`resume`", Stage::V1_2);
+        if decl.resume && scope.is_none() {
+            self.error(SC3, decl.span, "`resume` gibt es nur an einer gescopten Instanz (5.11)");
+            return;
         }
         let t = self.templates.machines[idx].clone();
         let template = match t.id {
@@ -796,6 +821,10 @@ impl Lowerer<'_> {
             self.with_env(super::Env::default(), t.prelude, |this| {
                 this.lower_machine(&t.decl, id, kind, &bindings, Some(idx))
             });
+            if let Some((owner, state)) = scope {
+                let inst = ScopedInstance { machine: id, scope: state, resume: decl.resume, span: decl.span };
+                self.program.machines[owner.index()].states[state.index()].instances.push(inst);
+            }
         }
         let entity = match &decl.index {
             None => Entity::Machine(first),

@@ -453,9 +453,6 @@ pub fn check(p: &Program) -> Result<(), Diagnostic> {
             } else if !s.children.is_empty() {
                 return Err(err(s.span, format!("Zustand `{}` hat Kinder, aber kein initial", s.name)));
             }
-            if !s.instances.is_empty() {
-                return Err(stage(s.span, "gescopte Instanzen", Stage::V1_2));
-            }
             for h in &s.handlers {
                 c.handler(h)?;
             }

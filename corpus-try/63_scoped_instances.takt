@@ -1,0 +1,44 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Gescopte Instanzen (5.11, v1.2): der Lebenszyklus haengt am Zustand des
+# Besitzers. `p` und `q` laufen in FIRST, `r` in SECOND; sie sind exklusiv
+# und teilen darum Speicher (11.5), aber keinen Output — Single-Writer gilt
+# global (Pruefung 7). Beim Austritt gehen die Outputs auf `safe`, beim
+# Wiedereintritt beginnt die Instanz frisch: `initial`, neue Timer.
+
+input  mode : int in 0..2 @ sim("i/mode")
+
+output a : bool @ hw("o/a") with safe = false
+output b : bool @ hw("o/b") with safe = false
+output c : bool @ hw("o/c") with safe = false
+
+machine blip(o: output bool) every 1 ms:
+    initial LOW
+
+    state LOW:
+        enter:
+            o = false
+
+        after 3 ms: -> HIGH
+
+    state HIGH:
+        enter:
+            o = true
+
+        after 3 ms: -> LOW
+
+machine ctrl:
+    initial FIRST
+
+    state FIRST:
+        instance p = blip(o = a)
+        instance q = blip(o = b)
+
+        when mode == 1: -> SECOND
+
+    state SECOND:
+        instance r = blip(o = c)
+
+        when mode == 0: -> FIRST

@@ -94,6 +94,15 @@ pub const SC22: &str = "SC-22";
 /// `resume`: nur an zusammengesetzten Zustaenden mit `initial`, nicht an
 /// `idle` (5.12).
 pub const SC54: &str = "SC-54";
+/// Gescopte Instanzen: kein Selbst-Scoping (5.11).
+///
+/// Die uebrigen Teile von 53 fallen woanders: Single-Writer global ist
+/// Pruefung 7, die keine Ausnahme fuer Exklusivitaet kennt — und genau
+/// das will 5.11. Kein Scope in einem `idle`-Zustand ist Pruefung 22,
+/// die `idle` ohnehin auf einen leeren Schritt prueft. Zugriff nur im
+/// Scope ist Namensaufloesung: Der Name steht im Zustand, ausserhalb ist
+/// er nicht sichtbar.
+pub const SC53: &str = "SC-53";
 /// `persist var`: POD-Typ, Maschinenebene, nicht in Szenarien (5.9).
 pub const SC23: &str = "SC-23";
 /// `at` gegen den gemessenen Jitter eines Outputs (7.5, 8.1).

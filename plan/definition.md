@@ -1029,6 +1029,8 @@ Austritt des Zustands (switch, Schritt 2 = exit-Bloecke):
     danach stehen alle Outputs von inst auf safe; inst kostet keine Schritte mehr; sched, Jobs und Trigger
     von inst werden verworfen; ohne resume wird die Konfiguration verworfen
 Faults: eigener Fault-Wald je Instanz; abort erreicht aktive Instanzen in der Abort-Phase; last_fault je Instanz
+    Verlaesst der Besitzer den Zustand ueber einen Fault-Uebergang, laufen die exit-Bloecke der Instanzen nicht
+    (5.4 gilt fuer sie mit); Outputs gehen trotzdem auf safe, die Konfiguration wird verworfen
 Beobachtung: Name "maschine.ZUSTAND.inst"; die scopende Maschine liest inst.state und inst.pub_var (Unit-Delay)
 ```
 Statische Regeln: Single-Writer bleibt global — ein Output gehört genau einer Instanz, gescopt oder nicht, auch wenn zwei exklusive Zustände je eine Instanz desselben Templates deklarieren (sie brauchen verschiedene Outputs oder eine Instanz auf höherer Ebene). `idle`-Zustände dürfen keine Instanzen scopen (sie hätten `loop:`-Blöcke). Ein Template darf sich nicht — auch nicht mittelbar — selbst scopen. `persist var` in gescopten Instanzen ist erlaubt (Schlüssel enthält den Scope-Namen).
