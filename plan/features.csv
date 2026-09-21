@@ -870,6 +870,7 @@ LIB-hold_last,Standardbibliothek,11.4,block hold_last[U],,M6 (stdlib),fertig,
 LIB-reader,Standardbibliothek,11.4,block reader[const N],,M6 (stdlib),fertig,
 LIB-writer,Standardbibliothek,11.4,block writer[const N],,M6 (stdlib),fertig,
 LIB-pid_i,Standardbibliothek,11.4,"block pid_i[O, E] / lowpass_i[U]",,M6 (stdlib),fertig,
+LIB-qp_box,Standardbibliothek,11.4,block qp_box[const N in 1..16],v1.2,M8 (QP),fertig,"M8 Schritt 21: projizierter Gradient in Takt im Prelude, nicht als Native — damit sind Interpreter und Codegen per Konstruktion einig (Satz 9.4.4) und die TCB wächst nicht. Schrittweite 1/||H||_inf (Gerschgorin), `iters` vor der statischen Schranke MAX_QP_ITERS. Korpus `69_qp_box.takt`, Differential grün, `qp_box_solves_a_two_by_two_problem`"
 LIB-sha256_init,Standardbibliothek,11.4,native fn sha256 / hmac_sha256 / sha256_init / sha256_update / sha256_final,,M6 (stdlib),fertig,
 LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M6 (stdlib),teilweise,"ecdsa_p256_verify in takt-crypto (p256 0.13, Feature ecdsa, Vektoren RFC 6979); rsa3072_verify und aes_gcm_decrypt offen, bis ein Programm sie braucht (plan/m6.md 2.4)"
 LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M6 (stdlib),fertig,

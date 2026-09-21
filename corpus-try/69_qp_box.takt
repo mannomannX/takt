@@ -1,0 +1,54 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Beschraenkter QP-Loeser (11.4, v1.2): `qp_box` minimiert
+# `1/2 x^T H x + g^T x` unter `lb <= x <= ub` mit projiziertem Gradienten
+# in fester Iterationszahl. Er steht in Takt im Prelude und nicht als
+# Native — damit rechnen Interpreter und Codegen dasselbe (Satz 9.4.4).
+#
+# Zwei Faelle mit bekannter Loesung:
+#   H = [[2, 0], [0, 4]], g = [-2, -8]  =>  unbeschraenkt x* = [1, 2]
+#   dieselbe Aufgabe mit ub = [0.5, 1.5]  =>  x* = [0.5, 1.5], beide am Rand
+
+const H  : mat<2, 2> = [[2.0, 0.0], [0.0, 4.0]]
+const G  : mat<2, 1> = [[-2.0], [-8.0]]
+const LO : mat<2, 1> = [[0.0], [0.0]]
+const HI : mat<2, 1> = [[10.0], [10.0]]
+const TI : mat<2, 1> = [[0.5], [1.5]]
+
+output x_free  : float @ hw("o/x_free")  with safe = 0.0
+output y_free  : float @ hw("o/y_free")  with safe = 0.0
+output x_tight : float @ hw("o/x_tight") with safe = 0.0
+output y_tight : float @ hw("o/y_tight") with safe = 0.0
+output both_ok : bool  @ hw("o/both_ok") with safe = false
+
+machine solver:
+    var free  = qp_box[2](h = H, g = G, lb = LO, ub = HI, iters = 200, tol = 1e-9)
+    var tight = qp_box[2](h = H, g = G, lb = LO, ub = TI, iters = 200, tol = 1e-9)
+
+    initial RUN
+
+    state RUN:
+        loop:
+            free.solve()
+            tight.solve()
+
+            var a = free.result()
+            var b = tight.result()
+
+            x_free = a[0, 0]
+            y_free = a[1, 0]
+            x_tight = b[0, 0]
+            y_tight = b[1, 0]
+            # Eine Blockmethode steht in Anweisungsposition, nicht als
+            # Teilausdruck (5.7) — sie hat einen Effekt und wird sequenziert.
+            var c_free  = free.converged()
+            var c_tight = tight.converged()
+            both_ok = c_free and c_tight
+
+            # Die Box haelt: Kein Iterierter verlaesst sie, auch der letzte
+            # nicht — die Projektion steht in jedem Schritt.
+            check b[0, 0] <= 0.5 and b[1, 0] <= 1.5, "qp_box left the box"
+
+        after 100 ms: -> RUN

@@ -1869,6 +1869,7 @@ block reader[const N](b: bytes<N>)  u8() -> u8? / u16_le() / u32_le() / remainin
 block writer[const N]()             u8(x) -> bool / u16_le(x) / u32_le(x) / bytes(b) -> bool / mark() -> int / patch_u16(m, v) / data() -> bytes<N>   (eigener Puffer, reset() leert ihn; 3.9)
 block lowpass_i[U](tau)             step(x: int[U], dt) -> int[U]              # Integer-Variante fuer Kerne ohne FPU (3.2; v1.1): 16 Nachkommabits im Zustand
 block pid_i[O, E](kp, ki, kd, lo, hi) step(err: int[E]) -> int[O]             # Verstaerkungen je Schritt in int[O/E]; keine Zeitbasis, weil int[s] aus einer Duration nicht entsteht (3.3)
+block qp_box[const N in 1..16](h: mat<N, N>, g, lb, ub, iters, tol)   solve() / result() -> mat<N, 1> / converged() -> bool   # beschränktes QP `min 1/2 x'Hx + g'x` unter `lb <= x <= ub`, projizierter Gradient mit Schrittweite 1/||H||_inf; `iters` bricht vor der statischen Schranke MAX_QP_ITERS ab, Kosten iters*(N^2+3N) Flops; ohne Konvergenz ist `x` der letzte Iterierte, nie ein Fehler (v1.2)
 native fn sha256_init / sha256_update(ctx, chunk) / sha256_final      Chunk-Natives mit opakem Sha256Ctx (4.5)
 native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration (4.5)
 machine flash_model(cmd, data, status, rx, sectors, t_erase, t_program, cut_at_byte)   Simulationsmodell mit Stromausfall-Injektion (8.11); die Channels bindet die Instanz

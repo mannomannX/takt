@@ -1336,8 +1336,13 @@ fn block_method_call(
         let v = lower_expr(a, ctx.program, m, &vars)?;
         ops.push(format!("{} {}", v.ty, v.value));
     }
-    let (_, fid) = match method {
-        Method::Step => ("step", def.step.ok_or(NotYet { what: "Block ohne `step`" })?),
+    let fid = match method {
+        Method::Step => def.step.ok_or(NotYet { what: "Block ohne `step`" })?,
+        // Jede weitere Methode (5.7): ein gewoehnlicher Aufruf mit der
+        // Instanz als erstem Argument. Nur `step` ist auf einmal je
+        // Aktivierung beschraenkt; `result()` oder `converged()` lesen
+        // und duerfen so oft laufen, wie das Programm sie nennt.
+        Method::Block(fid) => fid,
         Method::Reset => {
             // `reset()` stellt den Anfangszustand her; er steht in den
             // Initialwerten der Zustandsvariablen (5.7). Der Codegen
@@ -1352,19 +1357,23 @@ fn block_method_call(
         Some(t) => ty::lower(t, ctx.program).ok_or(NotYet { what: "Rueckgabetyp" })?,
         None => LlvmType::Void,
     };
-    // 5.7: hoechstens einmal je Aktivierung. Der Zweig ueberspringt den
-    // zweiten Aufruf, statt ihn zu wiederholen.
+    // 5.7: `step` hoechstens einmal je Aktivierung. Der Zweig ueberspringt
+    // den zweiten Aufruf, statt ihn zu wiederholen.
+    let once = method == Method::Step;
     let label = m.next_label();
-    let flag = m.inst(&format!(
-        "getelementptr inbounds {}, ptr {ptr}, i32 0, i32 {}",
-        LlvmType::Struct(inst.fields.clone()),
-        inst.stepped()
-    ));
-    let done = m.inst(&format!("load i1, ptr {flag}"));
-    let (go_on, end_at) = (format!("step{label}"), format!("step{label}_ende"));
-    m.void_inst(&format!("br i1 {done}, label %{end_at}, label %{go_on}"));
-    m.label(&go_on);
-    m.void_inst(&format!("store i1 true, ptr {flag}"));
+    let end_at = format!("step{label}_ende");
+    if once {
+        let flag = m.inst(&format!(
+            "getelementptr inbounds {}, ptr {ptr}, i32 0, i32 {}",
+            LlvmType::Struct(inst.fields.clone()),
+            inst.stepped()
+        ));
+        let done = m.inst(&format!("load i1, ptr {flag}"));
+        let go_on = format!("step{label}");
+        m.void_inst(&format!("br i1 {done}, label %{end_at}, label %{go_on}"));
+        m.label(&go_on);
+        m.void_inst(&format!("store i1 true, ptr {flag}"));
+    }
     let symbol = crate::block::method_symbol(def, &f.name);
     let call = if ret == LlvmType::Void {
         m.void_inst(&format!("call void @{symbol}({})", ops.join(", ")));
@@ -1376,8 +1385,10 @@ fn block_method_call(
         let (dst, _) = place(t, ctx, m)?;
         m.void_inst(&format!("store {ret} {v}, ptr {dst}"));
     }
-    m.void_inst(&format!("br label %{end_at}"));
-    m.label(&end_at);
+    if once {
+        m.void_inst(&format!("br label %{end_at}"));
+        m.label(&end_at);
+    }
     Ok(())
 }
 
@@ -1553,6 +1564,17 @@ fn fn_place<V: Slots>(target: &Place, ctx: &mut FnCtx<'_, V>, m: &mut Module) ->
             let LlvmType::Array(elem, _) = &array_ty else { return Err(NotYet { what: "Elementtyp" }) };
             let at = m.inst(&format!("getelementptr inbounds {array_ty}, ptr {data}, i32 0, {} {}", i.ty, i.value));
             Ok((at, (**elem).clone()))
+        }
+        Place::Index2(base, row, col) => {
+            let (ptr, ty) = fn_place(base, ctx, m)?;
+            let (_, _, elem) = crate::matrix::shape(&ty).ok_or(NotYet { what: "Index auf Nicht-Matrix" })?;
+            let i = lower_expr(row, ctx.program, m, &ctx.vars)?;
+            let j = lower_expr(col, ctx.program, m, &ctx.vars)?;
+            let at = m.inst(&format!(
+                "getelementptr inbounds {ty}, ptr {ptr}, i32 0, {} {}, {} {}",
+                i.ty, i.value, j.ty, j.value
+            ));
+            Ok((at, elem))
         }
         _ => Err(NotYet { what: "Zuweisungsziel in einer Funktion" }),
     }

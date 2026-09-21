@@ -388,6 +388,73 @@ block writer[const N in 1..65536]():
     data() -> bytes<N>:
         return buf
 
+# --- Beschraenkter QP-Loeser (11.4) -------------------------------------
+const MAX_QP_ITERS : int = 200
+
+# `qp_box` loest `min 1/2 x^T H x + g^T x` unter `lb <= x <= ub` mit
+# projiziertem Gradienten in `ITERS` festen Iterationen. In Takt
+# geschrieben und nicht als Native: Damit sind Interpreter und Codegen per
+# Konstruktion einig (Satz 9.4.4), und die TCB waechst nicht.
+#
+# Die Iterationszahl ist ein Parameter mit statischer Obergrenze
+# `MAX_QP_ITERS`: Das Budget rechnet mit der Schranke (5.8, 9.4.3),
+# `iters` sagt, wann der Aufrufer abbrechen will.
+#
+# Die Schrittweite ist `1/L` mit `L` als Zeilensummennorm von `H` — eine
+# obere Schranke des groessten Eigenwerts (Gerschgorin). Damit konvergiert
+# das Verfahren fuer jedes positiv semidefinite `H`, ohne dass der Aufrufer
+# eine Schrittweite raten muss. Ist `L` null (H = 0), ist das Problem
+# linear und die Loesung liegt auf dem Rand; der Schritt ist dann 1.
+#
+# Totalitaet: Hoechstens `MAX_QP_ITERS` Iterationen laufen durch, `break`
+# verlaesst sie frueher. Ohne Konvergenz ist `x` der letzte Iterierte und
+# `converged` falsch — nie ein Fehler.
+block qp_box[const N in 1..16](h: mat<N, N>, g: mat<N, 1>,
+                               lb: mat<N, 1>, ub: mat<N, 1>,
+                               iters: int in 1..MAX_QP_ITERS, tol: float):
+    var x    : mat<N, 1> = default
+    var done : bool      = false
+
+    solve():
+        # Schrittweite aus der Zeilensummennorm.
+        var l : float = 0.0
+        for i in range(N):
+            var row : float = 0.0
+            for j in range(N):
+                row = row + abs(h[i, j])
+            if row > l:
+                l = row
+        var gamma : float = 1.0 if l <= 0.0 else 1.0 / l
+
+        # Start in der Box, damit jeder Iterierte zulaessig ist.
+        for i in range(N):
+            x[i, 0] = clamp(0.0, lb[i, 0], ub[i, 0])
+
+        done = false
+        # Die Schleife laeuft bis zur statischen Schranke; `iters` bricht
+        # frueher ab. Die Schranke ist das Budget (5.8, 9.4.3), `iters`
+        # die Absicht des Aufrufers — beide muessen dastehen.
+        for k in range(MAX_QP_ITERS):
+            if k >= iters:
+                break
+            var grad : mat<N, 1> = h * x + g
+            var move : float = 0.0
+            for i in range(N):
+                var before = x[i, 0]
+                x[i, 0] = clamp(before - gamma * grad[i, 0], lb[i, 0], ub[i, 0])
+                var d = abs(x[i, 0] - before)
+                if d > move:
+                    move = d
+            if move <= tol:
+                done = true
+                break
+
+    result() -> mat<N, 1>:
+        return x
+
+    converged() -> bool:
+        return done
+
 # --- Simulationsmodelle (8.11) ------------------------------------------
 # Geraete mit Kommando und Status: Das Programm deklariert `flash_cmd`,
 # `flash_data`, `flash_status`, `flash_rx` wie in 8.11 und bindet sie beim

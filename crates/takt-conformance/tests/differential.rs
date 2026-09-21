@@ -16,7 +16,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 50] = [
+const KORPUS: [&str; 51] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -69,6 +69,7 @@ const KORPUS: [&str; 50] = [
     "63_scoped_instances.takt",
     "64_scoped_exit.takt",
     "68_uart_port.takt",
+    "69_qp_box.takt",
 ];
 
 /// Wie viele Ticks verglichen werden.
@@ -529,6 +530,35 @@ fn the_two_implementations_agree_on_triggers() {
         interpreted,
         native
     );
+}
+
+/// **Der QP-Loeser trifft die bekannte Loesung** (11.4, Satz 9.4.4).
+///
+/// `H = diag(2, 4)`, `g = (-2, -8)`: unbeschraenkt liegt das Minimum bei
+/// `(1, 2)`. Mit `ub = (0.5, 1.5)` liegen beide Komponenten am Rand, und
+/// die Projektion trifft ihn genau — nicht ungefaehr.
+#[test]
+fn qp_box_solves_a_two_by_two_problem() {
+    let p = corpus("69_qp_box.takt");
+    let options = takt_interp::RunOptions { ticks: 2, ..Default::default() };
+    let trace = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+
+    for (channel, want) in [("x_tight", "0.5"), ("y_tight", "1.5"), ("both_ok", "true")] {
+        let line = format!("out {channel} {want}");
+        assert!(
+            trace.contains(&line),
+            "`{line}` fehlt:
+{trace}"
+        );
+    }
+    // Der unbeschraenkte Fall konvergiert gegen (1, 2); nach 200
+    // Iterationen steht `y` exakt, `x` bis auf die Schrittweite.
+    assert!(trace.contains("out y_free 2"), "{trace}");
+    let x = trace
+        .lines()
+        .find_map(|l| l.strip_prefix("t=0 out x_free ").map(|v| v.parse::<f64>().expect("Zahl")))
+        .expect("x_free");
+    assert!((x - 1.0).abs() < 1e-6, "x_free = {x}");
 }
 
 /// **Capture-Fenster auf beiden Seiten** (8.9, Satz 9.4.4).
