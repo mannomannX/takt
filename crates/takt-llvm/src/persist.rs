@@ -375,6 +375,28 @@ impl Reader<'_> {
                 }
                 off
             }
+            // 8.9: Kopf `t, pre, post, rate`, dann `N` Abtastwerte; der
+            // Struct traegt dieselben fuenf Felder (`ty::lower`).
+            Type::Capture { elem, len } => {
+                let (elem, len) = (*elem, *len);
+                let mut off = off;
+                for (i, w, n) in [(0usize, "i64", 8), (1, "i32", 4), (2, "i32", 4), (3, "double", 8)] {
+                    let v = self.load_at(off, w);
+                    if store {
+                        let fp = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {dst}, i32 0, i32 {i}"));
+                        self.module.void_inst(&format!("store {w} {v}, ptr {fp}"));
+                    }
+                    off = self.module.inst(&format!("add i64 {off}, {n}"));
+                }
+                let samples = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {dst}, i32 0, i32 4"));
+                let inner = crate::ty::lower(elem, self.p).ok_or(NotYet { what: "Capture-Elementtyp" })?;
+                let arr = crate::ty::LlvmType::Array(Box::new(inner), len);
+                for i in 0..len {
+                    let ep = self.module.inst(&format!("getelementptr inbounds {arr}, ptr {samples}, i32 0, i32 {i}"));
+                    off = self.decode(elem, ep, off, store)?;
+                }
+                off
+            }
             Type::Array { elem, len } => {
                 let (elem, len) = (*elem, *len);
                 let mut off = off;

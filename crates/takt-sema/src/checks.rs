@@ -1145,6 +1145,8 @@ impl Lowerer<'_> {
             Type::Bytes { cap } | Type::Line { cap } | Type::Str { cap } => Some(*cap),
             Type::Int { width, .. } => Some(width.bits() / 8),
             Type::Record(r) => self.program.records[r.index()].wire_size.or(Some(1)),
+            // 8.9: Kopf plus `N` Abtastwerte.
+            Type::Capture { .. } => takt_mir::bytes::max_size(&self.program, ty).ok().or(Some(1)),
             _ => Some(1),
         }
     }

@@ -74,7 +74,7 @@ SEM-8.5,Semantik/Abschnitt,8.5,Commands und Operator-Interaktion,,M2 (Ströme),f
 SEM-8.6,Semantik/Abschnitt,8.6,Ereignisströme (`stream<E>`),,M2 (Ströme),fertig,
 SEM-8.7,Semantik/Abschnitt,8.7,"Muster, Captures, Handler",,M2 (Ströme),fertig,
 SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),fertig,
-SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),teilweise,TTL-Adapter (PA9)
+SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),fertig,"`capture<T,N>` (M8 Schritte 12 und 13): Accessoren, Byteform mit 24-Byte-Kopf, Stimulusform `t;pre;post;rate;[…]`, `CaptureCmd` im Prelude, Codegen als Struct; Korpus `66_capture.takt`, Differential gruen. TTL-Adapter (PA9) fuer die Messung offen"
 SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M6,teilweise,
 SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M6 (v1.1),offen,
 SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),fertig,

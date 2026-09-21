@@ -567,6 +567,8 @@ pub fn element_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Value {
             Value::Line { text: String::from_utf8_lossy(bytes).trim_end().to_string(), truncated: false }
         }
         Some(Type::Str { .. }) => Value::Str(String::from_utf8_lossy(bytes).to_string()),
+        // 8.9: Ein Capture-Fenster kommt in seiner kanonischen Byteform.
+        Some(Type::Capture { .. }) => crate::bytes::decode(p, bytes, elem).unwrap_or(Value::Bytes(bytes.to_vec())),
         _ => Value::Bytes(bytes.to_vec()),
     }
 }

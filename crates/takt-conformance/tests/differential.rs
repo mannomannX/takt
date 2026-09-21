@@ -529,3 +529,45 @@ fn the_two_implementations_agree_on_triggers() {
         native
     );
 }
+
+/// **Capture-Fenster auf beiden Seiten** (8.9, Satz 9.4.4).
+#[test]
+fn the_two_implementations_agree_on_capture_windows() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("66_capture.takt");
+    let stimulus =
+        takt_interp::Trace::parse("t=2 in wave 20000000;2;2;1000.0;[1.0, 2.0, 0.5, 3.0]\n").expect("Stimulus");
+    let inputs: Vec<Stimulus> = stimulus
+        .lines
+        .iter()
+        .filter_map(|l| match &l.kind {
+            takt_interp::trace::LineKind::Input { channel, sample } => {
+                Some(Stimulus::element(l.tick, channel, sample.value.as_deref().unwrap_or_default()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inputs.len(), 1);
+
+    let native =
+        common::run_native_all_with(&clang, &p, "66_capture", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+
+    // Ohne diese Zusicherung pruefte der Test ein leeres Fenster.
+    assert!(interpreted.contains("out dip 0.5 V"), "der Handler lief nicht:\n{interpreted}");
+
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen mit Capture:\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
+        diffs.len(),
+        diffs.iter().take(6).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n"),
+        interpreted,
+        native
+    );
+}

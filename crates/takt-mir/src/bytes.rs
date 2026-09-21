@@ -96,6 +96,9 @@ pub enum Error {
     Malformed,
 }
 
+/// Kopf eines `capture`-Elements: `t: i64, pre: u32, post: u32, rate: f64` (8.9).
+pub const CAPTURE_HEAD: u32 = 24;
+
 /// Obere Schranke der kodierten Laenge in Byte.
 ///
 /// Fuer `bytes`, `str`, `vec` und `map` ist es die Kapazitaet, nicht die
@@ -135,6 +138,8 @@ fn size_at(p: &Program, ty: TypeId, depth: u32) -> Result<u32, Error> {
             Ok(n)
         }
         Type::Array { elem, len } => Ok(size_at(p, *elem, depth + 1)? * len),
+        // 8.9: Kopf `t, pre, post, rate`, dann `N` Abtastwerte.
+        Type::Capture { elem, len } => Ok(CAPTURE_HEAD + size_at(p, *elem, depth + 1)? * len),
         Type::Bytes { cap } | Type::Str { cap } => Ok(4 + cap),
         Type::Vec { elem, cap } => Ok(4 + size_at(p, *elem, depth + 1)? * cap),
         // 3.9: `N` Slots zu je `1 + K + V` Byte — die Slots selbst sind die

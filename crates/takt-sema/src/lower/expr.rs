@@ -1552,6 +1552,22 @@ impl Lowerer<'_> {
             // Konstrukten, die es noch nicht gibt. Die uebrigen Zugriffe
             // dieser Liste kennt M2; sie landen hier nur auf einem falschen
             // Traeger und sind dann ein Typfehler, kein Stufenproblem.
+            // 8.9: `.t`, `.pre`, `.post`, `.samples`, `.rate` eines
+            // Capture-Fensters.
+            ("t" | "pre" | "post" | "samples" | "rate", Type::Capture { elem, len }) => {
+                if !no_args(self) {
+                    return None;
+                }
+                let (elem, len) = (*elem, *len);
+                let (acc, ty) = match member {
+                    "t" => (Accessor::T, self.tys.duration),
+                    "pre" => (Accessor::Pre, self.tys.int),
+                    "post" => (Accessor::Post, self.tys.int),
+                    "rate" => (Accessor::Rate, self.hertz()),
+                    _ => (Accessor::Samples, self.intern(Type::Array { elem, len })),
+                };
+                Some(Expr::new(ExprKind::Accessor { base: Box::new(b), accessor: acc, args: vec![] }, ty, span))
+            }
             ("pre" | "post" | "samples" | "remaining" | "jitter" | "time_warped", _) => {
                 self.stage(span, format!("`.{member}`").as_str(), Stage::V1_1);
                 None

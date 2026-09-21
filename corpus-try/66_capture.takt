@@ -1,0 +1,29 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# `capture<T, N>` (8.9, v1.2): ein vom Treiber um ein Ereignis herum
+# aufgezeichnetes Fenster, geliefert als Stromelement. Ein Element traegt
+# `.t`, `.pre`, `.post`, `.samples` und `.rate`; die Reduktionen aus 3.9
+# laufen darauf.
+#
+# Das Fenster kommt aus dem Stimulus in der Form `t;pre;post;rate;[…]`.
+# Die Armierung ueber `CaptureCmd` (8.11) steht in `checks/`-Naehe, nicht
+# hier: Ein Enum mit Feldern bildet der Codegen noch nicht ab (FB-211).
+
+input  wave : stream<capture<float[V], 4>> @ hw("daq/cap0") with max_rate = 10 Hz, capacity = 2
+
+output dip   : float[V]    @ hw("o/dip")   with safe = 0 V
+output peak  : float[V]    @ hw("o/peak")  with safe = 0 V
+output count : int in 0..9 @ hw("o/count") with safe = 0
+
+machine ctrl:
+    initial ARMING
+
+    state ARMING:
+        on wave as w:
+            dip = w.data.samples.min()
+            peak = w.data.samples.max()
+            count = w.data.pre + w.data.post
+
+        after 1 s: -> ARMING

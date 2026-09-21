@@ -432,3 +432,35 @@ fn the_tcb_encoder_writes_the_same_bytes() {
     tcb.raw(&[0xaa, 0xbb]).expect("Platz");
     assert_eq!(host.bytes, tcb.written());
 }
+
+/// 8.9: Ein Capture-Element geht durch die Byteform und zurueck.
+///
+/// `capture` ist kein `persist`-Typ (nur Stromelement), der Typ kommt
+/// darum aus dem Kanal.
+#[test]
+fn a_capture_element_round_trips_through_bytes() {
+    let p = compile(
+        "input  wave : stream<capture<float[V], 4>> @ hw(\"daq/c\") with max_rate = 10 Hz, capacity = 2
+output dip  : float[V]                     @ hw(\"o/dip\") with safe = 0 V
+
+machine m:
+    initial RUN
+    state RUN:
+        on wave as w:
+            dip = w.data.samples.min()
+",
+    );
+    let ch = p.channels.iter().find(|c| c.name == "wave").expect("Kanal");
+    let takt_mir::types::Type::Stream(elem) = p.types.list[ch.ty.index()] else { panic!("kein Strom") };
+    let v = Value::Record(vec![
+        Value::Duration(20_000_000),
+        Value::Int(2),
+        Value::Int(2),
+        Value::F64(1000.0),
+        Value::Array(vec![Value::F64(1.0), Value::F64(2.0), Value::F64(0.5), Value::F64(3.0)]),
+    ]);
+    let bytes = roundtrip(&p, elem, &v);
+    // Kopf (24) plus vier `f64`.
+    assert_eq!(bytes.len(), 24 + 4 * 8);
+    assert_eq!(max_size(&p, elem), Ok(24 + 4 * 8));
+}

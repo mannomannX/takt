@@ -1415,6 +1415,7 @@ on vbus_wave as w:
     measure dip_at = w.t
 ```
 Ein Capture-Element trägt `.t` (Triggerzeitpunkt), `.pre` und `.post` (Anzahl Samples vor und nach dem Trigger, `pre + post <= N`), `.samples : [N] T` (gültig `0..pre+post-1`), `.rate` und die Reduktionen aus 3.9. Speicher: Byte-Ring nach 8.6 mit Elementgröße `N · sizeof(T)`; Budget O(N) je Verarbeitung.
+Festlegungen der Umsetzung: Die Byteform ist der Kopf `t: i64, pre: u32, post: u32, rate: f64` (24 Byte), dann `N · sizeof(T)` Abtastwerte in der kanonischen Form aus 5.9; `max_size` zählt den Kopf mit, und der Ring rechnet damit. `CaptureCmd` ist ein gewöhnliches Enum des Prelude (`NONE`, `ARM(pre: u32, level: float, edge: CaptureEdge)`), kein eingebauter Typkonstruktor: `level` trägt keine Einheit, weil sie am Kanal steht und nicht am Kommando — damit bleibt `CaptureCmd` ohne Typparameter, wie die Deklaration oben es schreibt. Die Kantenauswahl heißt `CaptureEdge` (`RISING`, `FALLING`, `BOTH`), weil `Edge` in 7.5 schon das Element eines Flankenstroms ist. Ein `capture` ist nur Stromelement (kein Variablentyp); ein Modell liefert ein Fenster darum über den Stimulus in der Form `t;pre;post;rate;[s1, s2, …]`, nicht über einen Konstruktor.
 
 
 ### 8.10 Hardware-Konfiguration und Geräteprofile (v1.1)

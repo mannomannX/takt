@@ -308,6 +308,18 @@ fn access(
         return stream_count(base, want, m, vars);
     }
     let x = lower(base, p, m, vars)?;
+    // 8.9: `[t, pre, post, rate, samples]` in fester Reihenfolge.
+    if let Some(Type::Capture { .. }) = p.types.list.get(base.ty.index()) {
+        if let Some(i) = capture_field(which) {
+            let v = m.inst(&format!("extractvalue {} {}, {i}", x.ty, x.value));
+            // `pre` und `post` liegen als `i32` im Element, `int` ist i64.
+            let v = match (&want, matches!(which, Accessor::Pre | Accessor::Post)) {
+                (LlvmType::Int(64), true) => m.inst(&format!("sext i32 {v} to i64")),
+                _ => v,
+            };
+            return Ok(Lowered { value: v.to_string(), ty: want.clone() });
+        }
+    }
     if let Some(Type::Map { key, value, cap }) = p.types.list.get(base.ty.index()) {
         return map_access(x, (*key, *value, *cap), (which, args), want, p, m, vars);
     }
@@ -1739,4 +1751,16 @@ fn node_name(e: &ExprKind) -> &'static str {
         ExprKind::Ok(_) | ExprKind::Err(_) => "`ok`/`err`",
         _ => "Ausdruck",
     }
+}
+
+/// Das Feld eines Capture-Elements zu seinem Zugriff (8.9).
+fn capture_field(which: Accessor) -> Option<u32> {
+    Some(match which {
+        Accessor::T => 0,
+        Accessor::Pre => 1,
+        Accessor::Post => 2,
+        Accessor::Rate => 3,
+        Accessor::Samples => 4,
+        _ => return None,
+    })
 }

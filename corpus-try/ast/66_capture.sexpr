@@ -1,0 +1,15 @@
+(system
+  (language 1)
+  (tick 10ms))
+(input wave :stream<capture<float[V], 4>> @hw("daq/cap0") max_rate=10[Hz] capacity=2)
+(output dip :float[V] @hw("o/dip") safe=0[V])
+(output peak :float[V] @hw("o/peak") safe=0[V])
+(output count :int in 0..9 @hw("o/count") safe=0)
+(machine ctrl
+  (initial ARMING)
+  (state ARMING
+    (on wave as w
+      (= dip (.min (.samples (.data w))))
+      (= peak (.max (.samples (.data w))))
+      (= count (+ (.pre (.data w)) (.post (.data w)))))
+    (after 1s -> ARMING)))

@@ -650,3 +650,14 @@ impl Lowerer<'_> {
         }
     }
 }
+
+impl Lowerer<'_> {
+    /// `float[1/s]` fuer `.rate` eines Capture-Fensters (8.9).
+    pub fn hertz(&mut self) -> TypeId {
+        let Some(s) = self.units.lookup(&mut self.program, "s") else { return self.tys.float };
+        let unit = crate::units::Unit { factors: vec![(crate::units::Atom::Named(s), -1)], overflow: false };
+        let unit = self.unit_id(&unit, Span::default());
+        let width = self.program.config.float_width;
+        self.intern(Type::Float { width, unit, range: None })
+    }
+}

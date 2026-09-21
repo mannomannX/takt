@@ -585,6 +585,18 @@ impl<'p, 'o> Ctx<'p, 'o> {
             (Accessor::Min | Accessor::Max | Accessor::Mean | Accessor::Rms, Value::Array(x) | Value::Samples(x)) => {
                 self.reduce(acc, &x, base.ty, span)
             }
+            // 8.9: Ein Capture-Element ist ein Record in fester Reihenfolge
+            // `[t, pre, post, rate, samples]`.
+            (Accessor::T | Accessor::Pre | Accessor::Post | Accessor::Rate | Accessor::Samples, Value::Record(f)) => {
+                let i = match acc {
+                    Accessor::T => 0,
+                    Accessor::Pre => 1,
+                    Accessor::Post => 2,
+                    Accessor::Rate => 3,
+                    _ => 4,
+                };
+                f.get(i).cloned().ok_or_else(|| Trap::Bug("Capture-Element ohne Feld".into()))
+            }
             (Accessor::Truncated, Value::Line { truncated, .. }) => Ok(Value::Bool(truncated)),
             (Accessor::StartsWith, Value::Str(s) | Value::Line { text: s, .. }) => match self.eval(&args[0])? {
                 Value::Str(t) => Ok(Value::Bool(s.starts_with(&t))),

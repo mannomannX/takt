@@ -148,6 +148,15 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
             LlvmType::Struct(fields)
         }
         Type::Array { elem, len } => LlvmType::Array(Box::new(lower(*elem, p)?), *len),
+        // 8.9: `[t, pre, post, rate, samples]` in fester Reihenfolge, wie
+        // der Interpreter es haelt.
+        Type::Capture { elem, len } => LlvmType::Struct(vec![
+            LlvmType::Int(64),
+            LlvmType::Int(32),
+            LlvmType::Int(32),
+            LlvmType::F64,
+            LlvmType::Array(Box::new(lower(*elem, p)?), *len),
+        ]),
         // 8.9: `samples<T, N>` liefert je Tick "ein beschraenktes Array";
         // die Reduktionen rechnen darauf. Der Interpreter haelt es ebenso
         // (`Value::Samples` neben `Value::Array`), und die Zahl der

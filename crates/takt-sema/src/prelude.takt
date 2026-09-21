@@ -68,6 +68,11 @@ record EfuseBlock:
 
 enum EfuseCmd open: NONE, BURN_MIN_VERSION(version: u32), BURN_SECURE_BOOT
 
+# Armierung eines Capture-Fensters (8.9); `level` traegt die Einheit des
+# Kanals nicht — sie steht am Kanal, nicht am Kommando.
+enum CaptureEdge: RISING, FALLING, BOTH
+enum CaptureCmd open: NONE, ARM(pre: u32, level: float, edge: CaptureEdge)
+
 # --- eingebaute Records (5.3, 8.6) -------------------------------------
 record LastFault:
     kind    : FaultKind

@@ -628,6 +628,28 @@ pub fn parse_value(text: &str, ty: TypeId, p: &Program) -> Result<Value, String>
             }
             Ok(Value::Array(parts.iter().map(|x| parse_value(x, *elem, p)).collect::<Result<Vec<_>, _>>()?))
         }
+        // 8.9: `t;pre;post;rate;[s1, s2, …]` — der Kopf, dann die
+        // Abtastwerte. Fehlende zaehlen als Default, wie beim Tick-Array.
+        Type::Capture { elem, len } => {
+            let mut head = text.splitn(5, ';');
+            let mut next = |what: &str| head.next().ok_or_else(|| format!("`{what}` fehlt in `{text}`"));
+            let t = next("t")?.trim().parse::<i64>().map_err(|_| "`t` ist keine Zahl in ns".to_string())?;
+            let pre = next("pre")?.trim().parse::<i64>().map_err(|_| "`pre` ist keine Zahl".to_string())?;
+            let post = next("post")?.trim().parse::<i64>().map_err(|_| "`post` ist keine Zahl".to_string())?;
+            let rate = next("rate")?.trim().parse::<f64>().map_err(|_| "`rate` ist keine Zahl".to_string())?;
+            let inner = next("samples")?.trim().trim_start_matches('[').trim_end_matches(']');
+            let parts: Vec<&str> = if inner.trim().is_empty() { Vec::new() } else { split_top(inner) };
+            let mut items: Vec<Value> =
+                parts.iter().map(|x| parse_value(x, *elem, p)).collect::<Result<Vec<_>, _>>()?;
+            items.resize(*len as usize, Value::default_for(*elem, p));
+            Ok(Value::Record(vec![
+                Value::Duration(t),
+                Value::Int(pre),
+                Value::Int(post),
+                Value::F64(rate),
+                Value::Array(items),
+            ]))
+        }
         // 8.9: ein Tick-Array eines oversampelten Kanals. Es darf kuerzer als
         // `N` sein — fehlende Samples sind der Normalfall und geben dem Wert
         // die Qualitaet `Stale`, nicht einen Lesefehler.

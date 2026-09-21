@@ -197,7 +197,15 @@ impl Value {
             Type::Map { cap, .. } => Value::Map(vec![None; *cap as usize]),
             Type::Optional(_) => Value::Optional(None),
             Type::Result { ok, .. } => Value::Result(Ok(Box::new(Value::default_for(*ok, p)))),
-            Type::Stream(_) | Type::Capture { .. } => Value::Samples(Vec::new()),
+            Type::Stream(_) => Value::Samples(Vec::new()),
+            // 8.9: `[t, pre, post, rate, samples]` in fester Reihenfolge.
+            Type::Capture { elem, len } => Value::Record(vec![
+                Value::Duration(0),
+                Value::Int(0),
+                Value::Int(0),
+                Value::F64(0.0),
+                Value::Array(vec![Value::default_for(*elem, p); *len as usize]),
+            ]),
             Type::Handle(_) => Value::Handle,
         }
     }

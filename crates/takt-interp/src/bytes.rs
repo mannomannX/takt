@@ -77,6 +77,20 @@ fn write(p: &Program, v: &Value, ty: TypeId, out: &mut Encoder, depth: u32) -> R
                 write(p, i, *elem, out, depth + 1)?;
             }
         }
+        (Type::Capture { elem, len }, Value::Record(f)) => {
+            let [t, pre, post, rate, Value::Array(items)] = &f[..] else { return Err(Error::Malformed) };
+            out.duration(t.as_duration().ok_or(Error::Malformed)?);
+            out.len(u32::try_from(pre.as_int().ok_or(Error::Malformed)?).map_err(|_| Error::Malformed)?);
+            out.len(u32::try_from(post.as_int().ok_or(Error::Malformed)?).map_err(|_| Error::Malformed)?);
+            let Value::F64(r) = rate else { return Err(Error::Malformed) };
+            out.float(r.to_bits(), takt_mir::types::FloatWidth::F64);
+            if items.len() != *len as usize {
+                return Err(Error::Malformed);
+            }
+            for i in items {
+                write(p, i, *elem, out, depth + 1)?;
+            }
+        }
         (Type::Bytes { cap }, Value::Bytes(b)) => {
             if b.len() > *cap as usize {
                 return Err(Error::Malformed);
@@ -171,6 +185,19 @@ fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32) -> Result<Valu
                 items.push(read(p, *elem, d, depth + 1)?);
             }
             Value::Array(items)
+        }
+        // 8.9: Kopf, dann `N` Abtastwerte; der Record steht in fester
+        // Reihenfolge `[t, pre, post, rate, samples]`.
+        Type::Capture { elem, len } => {
+            let t = Value::Duration(d.duration()?);
+            let pre = Value::Int(i64::from(d.len(u32::MAX)?));
+            let post = Value::Int(i64::from(d.len(u32::MAX)?));
+            let rate = Value::F64(f64::from_bits(d.float(takt_mir::types::FloatWidth::F64)?));
+            let mut items = Vec::with_capacity(*len as usize);
+            for _ in 0..*len {
+                items.push(read(p, *elem, d, depth + 1)?);
+            }
+            Value::Record(vec![t, pre, post, rate, Value::Array(items)])
         }
         Type::Bytes { cap } => {
             let n = d.len(*cap)?;
