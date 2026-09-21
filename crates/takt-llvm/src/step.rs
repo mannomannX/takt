@@ -51,6 +51,12 @@ pub fn step_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     if leaves.is_empty() {
         return Err(NotYet { what: "Maschine ohne Blattzustand" });
     }
+    // 7.5: Die Trigger-Phase fehlt im Codegen noch (M8 Schritt 11). Eine
+    // Maschine, die einen Trigger armiert, traegt sein `armed` im Layout;
+    // lieber melden als still danebenlaufen (Satz 9.4.4).
+    if !m.layout.trigger_flags.is_empty() {
+        return Err(NotYet { what: "Trigger (7.5)" });
+    }
     let mark = module.mark();
     match write_step(m, st, p, module, &leaves) {
         Ok(()) => Ok(()),
