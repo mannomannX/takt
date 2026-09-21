@@ -790,9 +790,7 @@ fn cancel_jobs(env: &mut MachineEnv<'_, '_>) {
     }
     // 7.5: Ein Fault-Uebergang disarmiert die Trigger der Maschine — ihre
     // Ausgabe waere sonst ein Effekt aus einem verlassenen Zustand.
-    for flag in &mut env.state.armed {
-        *flag = false;
-    }
+    env.state.armed.fill(false);
 }
 
 /// Setzt das `step`-Flag jeder Blockinstanz zurueck (5.1).
