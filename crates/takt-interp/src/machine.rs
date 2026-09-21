@@ -105,6 +105,9 @@ pub struct MachineState {
     pub raised_signals: Vec<bool>,
     /// Die Job-Slots (4.5), in der Reihenfolge von `Layout::job_slots`.
     pub jobs: Vec<JobRun>,
+    /// `armed` je Trigger dieser Maschine (7.5), in der Reihenfolge von
+    /// `Layout::trigger_flags`.
+    pub armed: Vec<bool>,
     /// `cur[s, m]` je gelesenem Stream (9.6), in der Reihenfolge von
     /// `Layout::cursors`.
     pub cursors: Vec<i64>,
@@ -173,6 +176,7 @@ impl MachineState {
             countdown: m.phase,
             raised_signals: vec![false; m.signals.len()],
             jobs: vec![JobRun::idle(); m.layout.job_slots.len()],
+            armed: vec![false; m.layout.trigger_flags.len()],
             cursors: vec![0; m.layout.cursors.len()],
             examined: vec![-1; m.layout.cursors.len()],
             dropped: vec![0; m.layout.cursors.len()],
@@ -444,7 +448,18 @@ fn first_match(
     for element in env.window(loaded, stream) {
         let Some(caps) = hit(loaded, env, &element)? else { continue };
         if let Some(var) = binding {
-            let value = env.element_record(loaded, var, &element, caps)?;
+            // 7.5: Eine Bindung auf `t.fired` traegt den Elementtyp selbst
+            // — das Element *ist* dort der Record aus Captures und `.t`.
+            let var_ty = loaded.program.machines[env.id.index()].vars[var.index()].ty;
+            let elem_ty = match stream {
+                StreamRef::Internal(s) => Some(loaded.program.streams[s.index()].elem),
+                _ => None,
+            };
+            let value = if elem_ty == Some(var_ty) {
+                element.value.clone()
+            } else {
+                env.element_record(loaded, var, &element, caps)?
+            };
             *env.state.vars.get_mut(var.index()).ok_or_else(|| Trap::Bug("Bindung fehlt".into()))? = value;
         }
         env.mark_examined(loaded, stream, element.seq);
@@ -772,6 +787,11 @@ fn poll_jobs(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) {
 fn cancel_jobs(env: &mut MachineEnv<'_, '_>) {
     for job in &mut env.state.jobs {
         job.cancel();
+    }
+    // 7.5: Ein Fault-Uebergang disarmiert die Trigger der Maschine — ihre
+    // Ausgabe waere sonst ein Effekt aus einem verlassenen Zustand.
+    for flag in &mut env.state.armed {
+        *flag = false;
     }
 }
 

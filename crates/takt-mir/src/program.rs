@@ -389,6 +389,16 @@ pub struct Trigger {
     pub then: Block,
     /// `bound` in Nanosekunden (`guard = bound`).
     pub bound: i64,
+    /// Die Maschine, die ihn armiert (7.5: `armed` ist ihr Zustand);
+    /// `None`, solange kein `arm` ihn nennt.
+    pub owner: Option<MachineId>,
+    /// Der interne Strom, in den `fired` seine Elemente legt.
+    ///
+    /// 7.5 nennt `fired` einen Eingabestrom mit `.t` und den Captures —
+    /// also genau das, was eine Handler-Bindung traegt. Ein eigener
+    /// Elementtyp haette Fenster, Cursor und Ueberlauf noch einmal
+    /// gebraucht; als interner Strom erbt er sie.
+    pub fired: StreamId,
     /// Position.
     pub span: Span,
 }

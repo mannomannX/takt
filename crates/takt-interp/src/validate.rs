@@ -107,6 +107,7 @@ impl Checker<'_> {
             | ExprKind::None
             | ExprKind::Default
             | ExprKind::Builtin(_) => Ok(()),
+            ExprKind::Armed(t) => self.index(&self.p.triggers, t.index(), "Trigger", span),
             ExprKind::Variant { enum_id, variant, fields } => {
                 self.index(&self.p.enums, enum_id.index(), "Enum", span)?;
                 self.index(&self.p.enums[enum_id.index()].variants, *variant as usize, "Variante", span)?;
@@ -304,7 +305,7 @@ impl Checker<'_> {
                     Observe::Verdict { message, .. } => message.as_ref().map_or(Ok(()), |m| self.format(m)),
                 }
             }
-            StmtKind::Arm { .. } => Err(stage(span, "arm", Stage::V1_2)),
+            StmtKind::Arm { trigger, .. } => self.index(&self.p.triggers, trigger.index(), "Trigger", span).map(|_| ()),
             StmtKind::MethodCall { target, receiver, args, .. } => {
                 if let Some(t) = target {
                     self.place(t, span)?;
@@ -466,9 +467,6 @@ pub fn check(p: &Program) -> Result<(), Diagnostic> {
                 self_transition(&c, t)?;
             }
         }
-    }
-    if !p.triggers.is_empty() {
-        return Err(stage(p.triggers[0].span, "Trigger", Stage::V1_2));
     }
     let global = Checker { p, machine: None, locals: None };
     for prop in &p.properties {

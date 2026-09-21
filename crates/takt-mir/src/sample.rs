@@ -366,6 +366,19 @@ pub fn full_program() -> Program {
         readers: vec![MachineId(1)],
         span: sp(18),
     });
+    // 7.5: `fired` eines Triggers ist ein interner Strom.
+    let fired_stream = StreamId(p.streams.len() as u32);
+    p.streams.push(Stream {
+        name: "cut_on_erase.fired".into(),
+        elem: t_msg,
+        capacity: 4,
+        capacity_bytes: None,
+        expect_len: None,
+        overflow: Overflow::Drop,
+        writer: None,
+        readers: vec![MachineId(0)],
+        span: sp(29),
+    });
     let _ = t_stream_msg;
     let pa_limit = ParamId(0);
     p.params.push(Param {
@@ -551,6 +564,8 @@ pub fn full_program() -> Program {
             value: e(ExprKind::Variant { enum_id: e_valve, variant: 0, fields: vec![] }, t_valve),
         })]),
         bound: 20_000,
+        owner: Some(MachineId(0)),
+        fired: fired_stream,
         span: sp(29),
     });
     let atom = |k: ExprKind| TProp::Atom(e(k, t_bool));

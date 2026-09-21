@@ -490,6 +490,8 @@ pub enum ExprKind {
         signal: SignalId,
     },
     Builtin(Builtin),
+    /// `t.armed` (7.5, v1.2): das Flag im Layout der armierenden Maschine.
+    Armed(TriggerId),
     Field {
         base: Box<Expr>,
         field: u32,

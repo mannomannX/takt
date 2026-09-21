@@ -1,0 +1,30 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 55 (7.5): ein Trigger, wie er sein soll — ein Muster ueber
+# genau einem Strom, `then` nur mit Output-Zuweisungen, `d >= bound > 0`,
+# armiert aus einer Maschine.
+
+input  dut_log : stream<line<64>> @ sim("dut/log") with capacity = 8, max_rate = 200 Hz
+output vbus    : bool             @ hw("o/vbus")   with safe = true
+output phase   : int in 0..9      @ hw("o/phase")  with safe = 0
+
+trigger cut:
+    when dut_log matches "Erasing sector {n:int}"
+    then at event.t + 20 ms: vbus = false
+    bound 5 ms
+
+machine ctrl:
+    initial IDLE
+
+    state IDLE:
+        enter:
+            phase = 1
+            arm cut
+
+        when cut.fired as f: -> DONE
+
+    state DONE:
+        enter:
+            phase = 2

@@ -1,0 +1,38 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Trigger (7.5, v1.2): eine deklarative Regel auf einem Strom, die der
+# Compiler auf den I/O-Knoten verlagert. `arm` armiert sie, das erste
+# passende Element feuert, `armed` faellt, und `fired` traegt die Captures
+# und `.t` des Ausloesers. Die Ausgabe wird fuer `event.t + d` geplant; in
+# der Simulation ist das exakt, die Latenz des Knotens (`bound`) ist ein
+# Datum, kein Einfluss auf den Trace (9.4.4).
+#
+# Der Strom kommt aus dem Stimulus, wie bei `23_patterns`.
+
+input  dut_log : stream<line<64>> @ hw("u/rx") with capacity = 8, max_rate = 200 Hz
+
+output vbus  : bool        @ hw("o/vbus")  with safe = true
+output phase : int in 0..9 @ hw("o/phase") with safe = 0
+
+trigger cut_on_erase:
+    when dut_log matches "Erasing sector {n:int}"
+    then at event.t + 20 ms: vbus = false
+    bound 5 ms
+
+machine ctrl:
+    initial ARMING
+
+    state ARMING:
+        enter:
+            phase = 1
+            arm cut_on_erase
+
+        when cut_on_erase.fired as f: -> CUT
+
+    state CUT:
+        enter:
+            phase = 2
+
+        after 100 ms: -> ARMING

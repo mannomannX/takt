@@ -7,7 +7,7 @@
 use takt_diag::Span;
 use takt_mir::expr::{Accessor, Builtin, JobField, StreamRef};
 use takt_mir::machine::FaultKind;
-use takt_mir::{ChannelId, CommandId, CounterId, MachineId, ParamId, SignalId, SiteId, TypeId, VarId};
+use takt_mir::{ChannelId, CommandId, CounterId, MachineId, ParamId, SignalId, SiteId, TriggerId, TypeId, VarId};
 
 use crate::image::Image;
 use crate::loaded::Loaded;
@@ -191,6 +191,14 @@ pub trait Outer {
     /// `now`, `tick`, `time_in_state`, `last_fault`, `event`.
     fn builtin(&self, _b: Builtin) -> EvalResult<Value> {
         bug("eingebaute Groesse ausserhalb eines Laufs")
+    }
+    /// `t.armed` (7.5): das Flag im Layout der armierenden Maschine.
+    fn armed(&self, _t: TriggerId) -> EvalResult<Value> {
+        bug("`armed` ausserhalb einer Maschine")
+    }
+    /// `arm t` / `disarm t` (7.5).
+    fn set_armed(&mut self, _t: TriggerId, _on: bool) -> EvalResult<()> {
+        bug("`arm` ausserhalb einer Maschine")
     }
     /// Bestaetigungszaehler `viol[site, index]` in Nanosekunden (5.6);
     /// `index` sind die Indizes der umgebenden `for`-Schleifen.

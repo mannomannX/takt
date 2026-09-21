@@ -301,6 +301,10 @@ pub struct Lowerer<'a> {
     pub pending_scoped: Vec<(MachineId, StateId, takt_syntax::ast::InstanceDecl)>,
     /// Vorlagen, deren gescopte Instanzen gerade gesenkt werden (5.11 (c)).
     pub scope_stack: Vec<String>,
+    /// Typ von `event` im `then`-Teil eines Triggers (7.5): der
+    /// Bindungsrecord des Guards, also Captures und `.t`. Ausserhalb
+    /// eines Triggers `None` — dort ist `event` nicht erklaert.
+    pub event_ty: Option<TypeId>,
     /// Generische Umgebung.
     pub env: Env,
     /// Rahmen der Funktionsruempfe (innerster zuletzt).
@@ -372,6 +376,7 @@ impl<'a> Lowerer<'a> {
             memo_stack: Vec::new(),
             pending_scoped: Vec::new(),
             scope_stack: Vec::new(),
+            event_ty: None,
             env: Env::default(),
             fn_ctx: Vec::new(),
             mctx: None,

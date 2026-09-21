@@ -170,6 +170,35 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
 
     /// Baut den Bindungsrecord eines Elements: die Captures, gefolgt von
     /// `.t`, `.seq` und `.text`/`.data` (8.7).
+    /// Wie [`Self::element_record`], aber mit dem Elementtyp eines Stroms
+    /// statt dem einer Bindung (7.5: `event` und `fired` teilen ihn).
+    pub fn element_record_for(
+        &mut self,
+        loaded: &Loaded<'_>,
+        stream: StreamId,
+        element: &Element,
+        caps: Vec<Value>,
+    ) -> Result<Value, Trap> {
+        let ty = loaded.program.streams[stream.index()].elem;
+        let Type::Record(r) = loaded.ty(ty) else {
+            return bug("`fired` ohne Recordtyp");
+        };
+        let defs = loaded.program.records[r.index()].fields.clone();
+        let mut fields = caps;
+        for def in defs.iter().skip(fields.len()) {
+            let v = match def.name.as_str() {
+                "t" => Value::Duration(element.t),
+                "seq" => Value::Int(element.seq),
+                "text" | "data" => element.value.clone(),
+                _ => Value::default_for(def.ty, loaded.program),
+            };
+            fields.push(v);
+        }
+        fields.truncate(defs.len());
+        Ok(Value::Record(fields))
+    }
+
+    /// Baut den Bindungsrecord eines Elements aus dem Typ einer Bindung.
     pub fn element_record(
         &mut self,
         loaded: &Loaded<'_>,
@@ -378,6 +407,25 @@ impl Outer for MachineEnv<'_, '_> {
     fn builtin(&self, b: Builtin) -> EvalResult<Value> {
         let m = &self.loaded.program.machines[self.id.index()];
         machine::builtin_value(b, m, self.state, self.tick, self.tick_ns, self.last_fault_value(self.loaded))
+    }
+
+    fn armed(&self, t: TriggerId) -> EvalResult<Value> {
+        let m = &self.loaded.program.machines[self.id.index()];
+        let Some(i) = m.layout.trigger_flags.iter().position(|x| *x == t) else {
+            return bug("Trigger nicht in dieser Maschine armiert (7.5)");
+        };
+        Ok(Value::Bool(self.state.armed.get(i).copied().unwrap_or(false)))
+    }
+
+    fn set_armed(&mut self, t: TriggerId, on: bool) -> EvalResult<()> {
+        let m = &self.loaded.program.machines[self.id.index()];
+        let Some(i) = m.layout.trigger_flags.iter().position(|x| *x == t) else {
+            return bug("Trigger nicht in dieser Maschine armiert (7.5)");
+        };
+        if let Some(f) = self.state.armed.get_mut(i) {
+            *f = on;
+        }
+        Ok(())
     }
 
     fn period(&self) -> EvalResult<i64> {
@@ -595,6 +643,12 @@ pub struct Sim<'p> {
     pub nvm: Nvm,
     /// Gescopte Instanzen mit ihrem Besitzer (5.11).
     pub scoped: Vec<(MachineId, takt_mir::machine::ScopedInstance)>,
+    /// Cursor je Trigger auf seinem Quellstrom (7.5).
+    ///
+    /// Ein Trigger wird mit Ereignisrate ausgewertet, nicht mit dem Tick,
+    /// und gehoert keiner Maschine — er kann darum nicht den Cursor
+    /// seines Besitzers benutzen, der den Strom gar nicht liest.
+    pub trigger_cursors: Vec<i64>,
     /// Welche gescopte Instanz war zu Beginn des vorigen Ticks aktiv?
     /// Die Aktivitaet steht vor jedem Schritt fest (5.11), der Vergleich
     /// mit diesem Stand liefert Ein- und Austritt.
@@ -697,6 +751,7 @@ impl<'p> Sim<'p> {
             nvm: Nvm::new(),
             scoped,
             active_scoped,
+            trigger_cursors: vec![0; program.triggers.len()],
         })
     }
 
@@ -1030,6 +1085,97 @@ impl<'p> Sim<'p> {
     }
 
     /// Ein System-Tick (9.4).
+    /// Trigger-Phase (7.5): die armierten Trigger ueber die Elemente, die
+    /// in diesem Tick eingetroffen sind.
+    ///
+    /// Sie liegt zwischen Zustellung und Schrittphase, damit die geplante
+    /// Ausgabe im selben Tick in `sched` steht. Ein Trigger ist
+    /// einschuessig: Das erste passende Element feuert, `armed` faellt,
+    /// und `fired` bekommt ein Element — im naechsten Tick sichtbar, wie
+    /// jeder interne Strom (8.6).
+    ///
+    /// Ausgefuehrt wird er in der Umgebung seines Besitzers: 7.5 nennt
+    /// `armed` dessen Zustand, und `schedule` braucht ohnehin eine
+    /// Maschine.
+    fn trigger_phase(&mut self, tick_ns: i64) -> Result<(), Trap> {
+        for i in 0..self.loaded.program.triggers.len() {
+            let t = &self.loaded.program.triggers[i];
+            let (Some(owner), fired) = (t.owner, t.fired) else { continue };
+            let flags = &self.loaded.program.machines[owner.index()].layout.trigger_flags;
+            let Some(slot) = flags.iter().position(|x| x.index() == i) else { continue };
+            if !self.states[owner.index()].armed.get(slot).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some(hit) = self.trigger_fires(TriggerId(i as u32), owner, tick_ns)? else { continue };
+            self.states[owner.index()].armed[slot] = false;
+            let t = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(tick_ns);
+            let bytes = crate::stream::byte_len(&hit);
+            if let Some(q) = self.image.stream_next.get_mut(fired.index()) {
+                q.push((t, hit, bytes));
+            }
+        }
+        Ok(())
+    }
+
+    /// Prueft einen armierten Trigger gegen die Elemente dieses Ticks und
+    /// plant seine Ausgaben, wenn er feuert (7.5). Liefert das Element von
+    /// `fired`: die Captures und `.t` des Ausloesers.
+    fn trigger_fires(&mut self, id: TriggerId, owner: MachineId, tick_ns: i64) -> Result<Option<Value>, Trap> {
+        let trigger = self.loaded.program.triggers[id.index()].clone();
+        let takt_mir::machine::Guard::Match { subject, kind, pattern, .. } = &trigger.guard else { return Ok(None) };
+        let Some(stream) = stream_of_expr(subject) else { return Ok(None) };
+        // 7.5: mit dem eigenen Cursor des Triggers, nicht dem des
+        // Besitzers — der liest den Quellstrom in der Regel gar nicht.
+        let cursor = self.trigger_cursors[id.index()];
+        let window = match stream {
+            StreamRef::Channel(c) => self.image.channel_bufs.get(&c).map(|b| b.window(cursor)).unwrap_or_default(),
+            StreamRef::Internal(s) => {
+                self.image.stream_bufs.get(s.index()).map(|b| b.window(cursor)).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        let mut out = Vec::new();
+        let mut env =
+            MachineEnv::new(&self.loaded, owner, &mut self.states[owner.index()], &mut self.image, &mut out, tick_ns);
+        let mut found = None;
+        let mut seen = None;
+        for element in window {
+            seen = Some(element.seq);
+            let consts = trigger_consts(&self.loaded, &mut env, pattern, self.tick)?;
+            if let Some(caps) = crate::pattern::match_value(pattern, *kind, &element.value, &consts) {
+                found = Some((element, caps));
+                break;
+            }
+        }
+        let Some((element, caps)) = found else {
+            // Kein Treffer: alles Gesehene ist untersucht (9.6).
+            if let Some(last) = seen {
+                self.trigger_cursors[id.index()] = last + 1;
+            }
+            self.observations.extend(out.into_iter().map(|o| (owner, o)));
+            return Ok(None);
+        };
+        self.trigger_cursors[id.index()] = element.seq + 1;
+        // 7.5: `event` ist das Element mit seinen Captures; `then` plant
+        // seine Ausgaben fuer `event.t + d` mit `guard = bound`.
+        let event = env.element_record_for(&self.loaded, trigger.fired, &element, caps)?;
+        let mut ctx = env.ctx(&self.loaded, self.tick).with_event(event.clone());
+        let at = ctx.eval_duration(&trigger.time)?;
+        let mut writes = Vec::new();
+        for stmt in &trigger.then.stmts {
+            let takt_mir::stmt::StmtKind::Assign { target: takt_mir::stmt::Place::Output(c), value } = &stmt.kind
+            else {
+                return bug("`then` eines Triggers enthaelt mehr als Output-Zuweisungen");
+            };
+            writes.push((*c, ctx.eval(value)?, stmt.span));
+        }
+        for (c, v, span) in writes {
+            env.schedule(c, at, v, span)?;
+        }
+        self.observations.extend(out.into_iter().map(|o| (owner, o)));
+        Ok(Some(event))
+    }
+
     /// Die gescopten Instanzen, die gerade nicht laufen (5.11).
     fn inactive_scoped(&self) -> Vec<MachineId> {
         (0..self.scoped.len()).filter(|i| !self.active_scoped[*i]).map(|i| self.scoped[i].1.machine).collect()
@@ -1122,6 +1268,9 @@ impl<'p> Sim<'p> {
         // deliver(D_k): interne Streams werden sichtbar, Ueberlauf merkt den
         // Fault fuer jeden Konsumenten vor (9.6).
         self.deliver()?;
+        // 7.5: die Trigger-Phase liegt zwischen Zustellung und Schritt —
+        // die geplante Ausgabe steht damit im selben Tick in `sched`.
+        self.trigger_phase(tick_ns)?;
         // active(k): countdown == 0 (7.2); eine gescopte Instanz zusaetzlich
         // nur, wenn ihr Scope-Zustand zu Tick-Beginn steht (5.11).
         let inactive = self.inactive_scoped();
@@ -1400,4 +1549,29 @@ fn as_element(loaded: &Loaded<'_>, sid: takt_mir::StreamId, v: Value) -> Value {
         (Type::Bytes { .. }, Value::Line { text, .. }) => Value::Bytes(text.into_bytes()),
         (_, v) => v,
     }
+}
+
+/// Der Strom, ueber den ein Trigger-Guard laeuft (7.5).
+fn stream_of_expr(subject: &takt_mir::expr::Expr) -> Option<StreamRef> {
+    match &subject.kind {
+        takt_mir::expr::ExprKind::Input { channel, .. } => Some(StreamRef::Channel(*channel)),
+        takt_mir::expr::ExprKind::Stream(s) => Some(StreamRef::Internal(*s)),
+        _ => None,
+    }
+}
+
+/// Die Konstanten der Feldbedingungen eines Trigger-Musters (8.7).
+fn trigger_consts(
+    loaded: &Loaded<'_>,
+    env: &mut MachineEnv<'_, '_>,
+    pattern: &takt_mir::pattern::Pattern,
+    tick: u64,
+) -> Result<Vec<Value>, Trap> {
+    let takt_mir::pattern::Pattern::Record { fields, .. } = pattern else { return Ok(Vec::new()) };
+    let mut out = Vec::new();
+    for (_, e) in fields {
+        let mut ctx = env.ctx(loaded, tick);
+        out.push(ctx.eval(e)?);
+    }
+    Ok(out)
 }

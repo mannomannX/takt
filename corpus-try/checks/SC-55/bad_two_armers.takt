@@ -1,0 +1,32 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 55 (7.5): `armed` ist Zustand genau einer Maschine. Zwei
+# Armierer haetten zwei Flags fuer einen Trigger.
+
+input  dut_log : stream<line<64>> @ sim("dut/log") with capacity = 8, max_rate = 200 Hz
+output vbus    : bool             @ hw("o/vbus")   with safe = true
+output phase   : int in 0..9      @ hw("o/phase")  with safe = 0
+output other   : int in 0..9      @ hw("o/other")  with safe = 0
+
+trigger cut:
+    when dut_log matches "Erasing sector {n:int}"
+    then at event.t + 20 ms: vbus = false
+    bound 5 ms
+
+machine ctrl:
+    initial IDLE
+
+    state IDLE:
+        enter:
+            phase = 1
+            arm cut
+
+machine second:
+    initial IDLE
+
+    state IDLE:
+        enter:
+            other = 1
+            arm cut  # ~ SC-55

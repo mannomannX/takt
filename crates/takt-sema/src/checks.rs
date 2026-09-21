@@ -94,6 +94,9 @@ pub const SC22: &str = "SC-22";
 /// `resume`: nur an zusammengesetzten Zustaenden mit `initial`, nicht an
 /// `idle` (5.12).
 pub const SC54: &str = "SC-54";
+/// Trigger: Guard und Outputs knotenlokal, `arm`/`disarm` nur aus der
+/// deklarierenden Maschine, `d >= bound > 0` (7.5).
+pub const SC55: &str = "SC-55";
 /// Gescopte Instanzen: kein Selbst-Scoping (5.11).
 ///
 /// Die uebrigen Teile von 53 fallen woanders: Single-Writer global ist
@@ -153,6 +156,7 @@ impl Lowerer<'_> {
         self.check_cost_budget();
         self.check_idle_states();
         self.check_resume_states();
+        self.check_triggers();
         self.check_persist();
         self.check_alert_polarity();
         self.check_profile_completeness();
@@ -680,7 +684,96 @@ impl Lowerer<'_> {
         }
         self.diags.extend(diags);
     }
-
+    /// Pruefung 55 (7.5): Trigger sind Knotenregeln.
+    ///
+    /// Die Form des Guards — ein Muster ueber genau einem Strom — steht
+    /// schon in `trigger_decl`; ohne sie entstuende kein Trigger. Hier
+    /// bleiben die Regeln ueber dem fertigen Knoten: `when` liest nur das
+    /// Ereignis, `then` schreibt nur Outputs, `d >= bound > 0`, und
+    /// `arm` kommt aus genau einer Maschine.
+    fn check_triggers(&mut self) {
+        let mut diags = Vec::new();
+        for t in &self.program.triggers {
+            if t.bound <= 0 {
+                diags.push(Diagnostic::error(
+                    SC55,
+                    t.span,
+                    format!("`bound` von `{}` muss positiv sein (7.5)", t.name),
+                ));
+            }
+            // 7.5: `d >= bound`, damit die Ausgabe nie in der Vergangenheit
+            // liegt. `d` ist der Abstand zu `event.t`; nur eine konstante
+            // Differenz ist statisch entscheidbar.
+            if let Some(d) = delay_of(&t.time) {
+                if d < t.bound {
+                    diags.push(
+                        Diagnostic::error(
+                            SC55,
+                            t.span,
+                            format!(
+                                "`{}` plant {} nach dem Ereignis, sagt aber {} zu (7.5)",
+                                t.name,
+                                takt_mir::dump::duration(d),
+                                takt_mir::dump::duration(t.bound)
+                            ),
+                        )
+                        .with_suggestion("`d >= bound`: fruehestens nach der zugesagten Reaktionszeit".to_string()),
+                    );
+                }
+            }
+            // 7.5: `then` schreibt nur Outputs — keine Variablen, kein
+            // Zustand. Der Trigger hat keinen.
+            for s in &t.then.stmts {
+                if !matches!(s.kind, StmtKind::Assign { target: Place::Output(_), .. }) {
+                    diags.push(
+                        Diagnostic::error(SC55, s.span, format!("`then` von `{}` schreibt mehr als Outputs", t.name))
+                            .with_suggestion(
+                            "ein Trigger hat keinen Zustand ausser `armed` (7.5); Variablen gehoeren in die Maschine"
+                                .to_string(),
+                        ),
+                    );
+                }
+            }
+            // 7.5: `when` liest nur das Ereignis, Konstanten und Parameter.
+            if let takt_mir::machine::Guard::Match {
+                pattern: takt_mir::pattern::Pattern::Record { fields, .. }, ..
+            } = &t.guard
+            {
+                if fields.iter().any(|(_, e)| reads_state(e)) {
+                    diags.push(
+                        Diagnostic::error(SC55, t.span, format!("`when` von `{}` liest Zustand (7.5)", t.name))
+                            .with_suggestion("knotenlokal heisst: das Ereignis, Konstanten und Parameter".to_string()),
+                    );
+                }
+            }
+        }
+        // 7.5: `armed` ist Zustand *einer* Maschine.
+        let mut armers: HashMap<TriggerId, Vec<(String, Span)>> = HashMap::new();
+        for m in &self.program.machines {
+            if matches!(m.kind, MachineKind::Template) {
+                continue;
+            }
+            for_each_stmt(m, &mut |s| {
+                if let StmtKind::Arm { trigger, .. } = &s.kind {
+                    let list = armers.entry(*trigger).or_default();
+                    if !list.iter().any(|(n, _)| *n == m.name) {
+                        list.push((m.name.clone(), s.span));
+                    }
+                }
+            });
+        }
+        for (id, list) in &armers {
+            if list.len() > 1 {
+                let name = self.program.triggers[id.index()].name.clone();
+                diags.push(
+                    Diagnostic::error(SC55, list[1].1, format!("`{name}` wird aus mehreren Maschinen armiert (7.5)"))
+                        .with_note(list[0].1, format!("auch in `{}`", list[0].0))
+                        .with_suggestion("`armed` ist Zustand genau einer Maschine".to_string()),
+                );
+            }
+        }
+        self.diags.extend(diags);
+    }
     /// Pruefung 23 (5.9): `persist var` — POD-Typ, Maschinenebene, nicht in
     /// Szenarien, Typ-Hash eindeutig.
     ///
@@ -1083,6 +1176,20 @@ impl Lowerer<'_> {
                 }
             });
         }
+        // 7.5: Die Outputs im `then` eines Triggers gehoeren seiner
+        // armierenden Maschine — der Trigger handelt fuer sie, und
+        // Single-Writer bleibt eine Aussage ueber Maschinen.
+        for t in &self.program.triggers {
+            let Some(owner) = t.owner else { continue };
+            for s in &t.then.stmts {
+                if let StmtKind::Assign { target: Place::Output(c), .. } = &s.kind {
+                    let list = writers.entry(*c).or_default();
+                    if !list.iter().any(|(m, _)| *m == owner) {
+                        list.push((owner, s.span));
+                    }
+                }
+            }
+        }
         let mut diags = Vec::new();
         let is_scenario = |m: MachineId| self.program.machines[m.index()].kind == MachineKind::Scenario;
         for (c, list) in &writers {
@@ -1377,6 +1484,15 @@ impl Lowerer<'_> {
             for r in &m.layout.cursors {
                 if let StreamRef::Channel(c) = r {
                     read.insert(*c);
+                }
+            }
+        }
+        // 7.5: Ein Trigger liest seinen Quellstrom und schreibt die
+        // Outputs seines `then` — beides ohne Maschine.
+        for t in &self.program.triggers {
+            if let takt_mir::machine::Guard::Match { subject, .. } = &t.guard {
+                if let ExprKind::Input { channel, .. } = &subject.kind {
+                    read.insert(*channel);
                 }
             }
         }
@@ -2067,4 +2183,41 @@ fn walk_guard(e: &Expr, f: &mut impl FnMut(&Expr)) {
     for c in e.children() {
         walk_guard(c, f);
     }
+}
+
+/// Der konstante Abstand einer `at`-Zeit zu `event.t` (7.5); `None`, wenn
+/// die Zeit nicht die Form `event.t + d` hat.
+fn delay_of(time: &Expr) -> Option<i64> {
+    let ExprKind::Binary { op: takt_mir::expr::BinaryOp::Add, lhs, rhs } = &time.kind else { return None };
+    // `event` ist ein Record, `.t` darum ein Feld — kein `Accessor::T`.
+    let is_event_t = |e: &Expr| {
+        matches!(&e.kind, ExprKind::Field { base, .. }
+            if matches!(base.kind, ExprKind::Builtin(takt_mir::expr::Builtin::Event)))
+    };
+    let (a, b) = (lhs.as_ref(), rhs.as_ref());
+    let d = if is_event_t(a) {
+        b
+    } else if is_event_t(b) {
+        a
+    } else {
+        return None;
+    };
+    match &d.kind {
+        ExprKind::Duration(ns) => Some(*ns),
+        _ => None,
+    }
+}
+
+/// Liest ein Ausdruck Zustand? (7.5: `when` ist knotenlokal.)
+fn reads_state(e: &Expr) -> bool {
+    let mut found = false;
+    walk_expr(e, &mut |x| {
+        if matches!(
+            x.kind,
+            ExprKind::Var(_) | ExprKind::Published { .. } | ExprKind::StateOf(_) | ExprKind::Signal { .. }
+        ) {
+            found = true;
+        }
+    });
+    found
 }

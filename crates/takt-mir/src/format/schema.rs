@@ -143,6 +143,7 @@ codec_enum!(ExprKind {
     41 Stream(1 one s),
     42 Format(1 one f),
     43 JobState { 1 one handle, 2 one field },
+    44 Armed(1 one t),
 });
 codec_unit_enum!(Intrinsic {
     0 Abs, 1 Min, 2 Max, 3 Sqrt, 4 Sin, 5 Cos, 6 Tan, 7 Asin, 8 Acos, 9 Atan, 10 Atan2, 11 Exp, 12 Log, 13 Pow,
@@ -317,7 +318,7 @@ codec_enum!(Sweep {
 });
 codec_unit_enum!(StopOn { 0 Fail, 1 Never });
 codec_struct!(Campaign { 1 one name, 2 opt program, 3 opt profile, 4 rep sweeps, 5 one repeat, 6 one stop_on, 7 meta span });
-codec_struct!(Trigger { 1 one name, 2 opt node, 3 one guard, 4 one time, 5 one then, 6 one bound, 7 meta span });
+codec_struct!(Trigger { 1 one name, 2 opt node, 3 one guard, 4 one time, 5 one then, 6 one bound, 7 meta span, 8 opt owner, 9 one fired });
 codec_struct!(Program {
     1 one config, 2 one types, 3 rep units, 4 rep enums, 5 rep records, 6 rep fns, 7 rep natives, 8 rep blocks,
     9 rep machines, 10 rep channels, 11 rep streams, 12 rep params, 13 rep profiles, 14 rep commands, 15 rep nodes,

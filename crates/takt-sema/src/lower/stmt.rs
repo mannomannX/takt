@@ -2,7 +2,7 @@
 //! mit Bestaetigungszeit, Beobachtungen, Kontrollfluss, Methodenaufrufe,
 //! Aktionsblock-Regeln (5.5, Pruefung 8).
 
-use takt_diag::{Span, Stage};
+use takt_diag::Span;
 use takt_mir::expr::{BinaryOp, CheckedKind, Expr, ExprKind, UnaryOp};
 use takt_mir::fns::NativeKind;
 use takt_mir::machine::{CounterSite, FaultTarget, JobSlot, Target, VarDef, VarScope};
@@ -83,9 +83,28 @@ impl Lowerer<'_> {
             ast::StmtKind::Assign { target, op, value } => return self.assign(target, *op, value, kind, span),
             ast::StmtKind::Var(decl) => self.var_stmt(decl, kind)?,
             ast::StmtKind::Job { handle, callee, args } => self.job_stmt(handle, callee, args, kind, span)?,
-            ast::StmtKind::Arm { .. } => {
-                self.stage(span, "Trigger", Stage::V1_2);
-                return None;
+            // 7.5: `arm t` / `disarm t`; die armierende Maschine besitzt
+            // den Trigger, ihr Layout traegt sein `armed`.
+            ast::StmtKind::Arm { arm, trigger } => {
+                let Some(Entity::Trigger(id)) = self.lookup(trigger) else {
+                    self.error(SC3, trigger.span, format!("`{}` ist kein Trigger", trigger.name));
+                    return None;
+                };
+                let Some(mc) = self.mctx.as_mut() else {
+                    self.error(SC3, span, "`arm` nur in einer Maschine (7.5)");
+                    return None;
+                };
+                let owner = mc.id;
+                if !mc.machine.layout.trigger_flags.contains(&id) {
+                    mc.machine.layout.trigger_flags.push(id);
+                }
+                // Der erste `arm` bestimmt den Besitzer; Pruefung 55
+                // meldet, wenn eine zweite Maschine ihn nennt.
+                let t = &mut self.program.triggers[id.index()];
+                if t.owner.is_none() {
+                    t.owner = Some(owner);
+                }
+                StmtKind::Arm { trigger: id, on: *arm }
             }
             ast::StmtKind::Check { cond, message, confirm, within, target, req } => {
                 if kind.is_action() {

@@ -1,0 +1,22 @@
+(system
+  (language 1)
+  (tick 10ms))
+(input dut_log :stream<line<64>> @hw("u/rx") capacity=8 max_rate=200[Hz])
+(output vbus :bool @hw("o/vbus") safe=true)
+(output phase :int in 0..9 @hw("o/phase") safe=0)
+(trigger cut_on_erase bound=5ms
+  (when (matches dut_log "Erasing sector {n:int}"))
+  (then
+    (at (+ (.t event) 20ms)
+      (= vbus false))))
+(machine ctrl
+  (initial ARMING)
+  (state ARMING
+    (enter
+      (= phase 1)
+      (arm cut_on_erase))
+    (when (as (.fired cut_on_erase) f) -> CUT))
+  (state CUT
+    (enter
+      (= phase 2))
+    (after 100ms -> ARMING)))

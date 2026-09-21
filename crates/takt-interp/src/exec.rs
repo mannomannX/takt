@@ -285,6 +285,12 @@ impl Ctx<'_, '_> {
                 self.outer.raise(*sig)?;
                 Ok(Out::Normal)
             }
+            // 7.5: `arm`/`disarm`; einschuessig heisst, dass `armed` beim
+            // Feuern von selbst faellt — hier wird es nur gesetzt.
+            StmtKind::Arm { trigger, on } => {
+                self.outer.set_armed(*trigger, *on)?;
+                Ok(Out::Normal)
+            }
             StmtKind::Job { handle, native, args } => {
                 // 4.5: Die Argumente werden kopiert, das Ergebnis der reinen
                 // Funktion steht fest; das Modell liefert es nach `duration`.
@@ -320,7 +326,6 @@ impl Ctx<'_, '_> {
                 self.observe(o, span)?;
                 Ok(Out::Normal)
             }
-            StmtKind::Arm { .. } => bug("arm ab M8"),
             StmtKind::MethodCall { target, receiver, method, args } => {
                 let args = args.iter().map(|a| self.eval(a)).collect::<EvalResult<Vec<_>>>()?;
                 let result = self.method_call(receiver, *method, args, span)?;

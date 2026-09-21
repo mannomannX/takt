@@ -133,6 +133,13 @@ impl Lowerer<'_> {
         }
         self.scoped_cycles(file);
         self.check_templates();
+        // 7.5: Trigger vor den Maschinen — `arm t` in einem Rumpf nennt
+        // den Namen, und die Deklaration liegt auf Dateiebene.
+        for item in &file.items {
+            if let ast::Item::Trigger(t) = item {
+                self.trigger_decl(t);
+            }
+        }
         for item in &file.items {
             match item {
                 ast::Item::Machine(m) if m.params.is_empty() => {
@@ -156,7 +163,6 @@ impl Lowerer<'_> {
                 ast::Item::Instance(i) => self.instance_decl(i),
                 ast::Item::Scenario(s) => self.scenario_decl(s),
                 ast::Item::Profile(p) => self.profile_decl(p),
-                ast::Item::Trigger(t) => self.stage(t.span, "`trigger`", Stage::V1_2),
                 _ => {}
             }
         }

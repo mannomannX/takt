@@ -432,10 +432,16 @@ impl Lowerer<'_> {
                 let ty = match b {
                     Builtin::Now | Builtin::Tick | Builtin::TimeInState => self.tys.duration,
                     Builtin::LastFault => self.tys.last_fault_ty,
-                    Builtin::Event => {
-                        self.stage(span, "`event` in Triggern", Stage::V1_2);
-                        return None;
-                    }
+                    // 7.5: `event` ist das Element, das den Guard erfuellt
+                    // hat — mit seinen Captures und `.t`. Ausserhalb eines
+                    // Triggers gibt es kein Ereignis.
+                    Builtin::Event => match self.event_ty {
+                        Some(ty) => ty,
+                        None => {
+                            self.error(SC3, span, "`event` gibt es nur im `then`-Teil eines Triggers (7.5)");
+                            return None;
+                        }
+                    },
                 };
                 if matches!(b, Builtin::TimeInState | Builtin::LastFault) && self.mctx.is_none() {
                     self.error(SC3, span, format!("`{}` nur in Maschinen", name.name));
@@ -1080,6 +1086,10 @@ impl Lowerer<'_> {
                     let raw = self.input_read(c, base.span, true);
                     return self.wrapper_access(raw, name, args, span);
                 }
+            }
+            // 7.5: `t.armed` ist ein `bool`, `t.fired` der Eingangsstrom.
+            if let Some(Entity::Trigger(t)) = self.peek(&id.name).cloned() {
+                return self.trigger_member(t, name, span);
             }
         }
         if let ast::ExprKind::TypeName { name: tn, args: None } = &base.kind {
@@ -1796,6 +1806,35 @@ impl Lowerer<'_> {
                     name.span,
                     format!("kein Zugriff `{other}` auf ein Job-Handle"),
                     "`done` oder `result` (4.5)",
+                );
+                None
+            }
+        }
+    }
+
+    /// `t.armed` und `t.fired` (7.5, v1.2).
+    ///
+    /// `armed` ist ein `bool` im Layout der armierenden Maschine, `fired`
+    /// der interne Strom des Triggers — beides lesend, beides ohne
+    /// Argumente.
+    fn trigger_member(&mut self, t: TriggerId, name: &ast::Ident, span: Span) -> Option<Expr> {
+        match name.name.as_str() {
+            "armed" => {
+                let bool = self.tys.bool;
+                Some(Expr::new(ExprKind::Armed(t), bool, span))
+            }
+            "fired" => {
+                let s = self.program.triggers[t.index()].fired;
+                let elem = self.program.streams[s.index()].elem;
+                let ty = self.intern(Type::Stream(elem));
+                Some(Expr::new(ExprKind::Stream(s), ty, span))
+            }
+            other => {
+                self.error_hint(
+                    SC3,
+                    name.span,
+                    format!("ein Trigger hat kein `{other}`"),
+                    "`armed` ist sein Zustand, `fired` sein Eingangsstrom (7.5)",
                 );
                 None
             }

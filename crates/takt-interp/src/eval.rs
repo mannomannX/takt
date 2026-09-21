@@ -44,13 +44,21 @@ pub struct Ctx<'p, 'o> {
     /// Eine Beobachtungsstelle in einer Schleife hat je Durchlauf eine
     /// eigene Flanke (5.6).
     pub loops: Vec<i64>,
+    /// `event` im `then`-Teil eines Triggers (7.5); sonst `None`.
+    pub event: Option<Value>,
     pub(crate) depth: u32,
 }
 
 impl<'p, 'o> Ctx<'p, 'o> {
     /// Neuer Kontext ohne Rahmen.
     pub fn new(loaded: &'o Loaded<'p>, outer: &'o mut dyn Outer, tick: u64) -> Self {
-        Ctx { loaded, outer, tick, frames: Vec::new(), loops: Vec::new(), depth: 0 }
+        Ctx { loaded, outer, tick, frames: Vec::new(), loops: Vec::new(), event: None, depth: 0 }
+    }
+
+    /// Kontext mit gebundenem `event` (7.5).
+    pub fn with_event(mut self, event: Value) -> Self {
+        self.event = Some(event);
+        self
     }
 
     /// Fault an einer Stelle.
@@ -221,7 +229,14 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 self.machine_index(machine)?;
                 Ok(Value::Bool(self.outer.signal(machine.machine, *signal)?))
             }
+            // 7.5: `event` ist das Element, das den Guard erfuellt hat; es
+            // steht nur im `then`-Teil eines Triggers.
+            ExprKind::Builtin(Builtin::Event) => {
+                self.event.clone().ok_or_else(|| Trap::Bug("`event` ausserhalb eines Triggers".into()))
+            }
             ExprKind::Builtin(b) => self.outer.builtin(*b),
+            // 7.5: `armed` liegt im Layout der armierenden Maschine.
+            ExprKind::Armed(t) => self.outer.armed(*t),
             ExprKind::Field { base, field } => {
                 let v = self.eval(base)?;
                 field_of(v, *field)

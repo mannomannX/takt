@@ -8,7 +8,7 @@
 
 use takt_diag::Span;
 use takt_mir::expr::{Expr, ExprKind, StreamRef};
-use takt_mir::machine::{Guard, Handler};
+use takt_mir::machine::{Guard, Handler, VarDef, VarScope};
 use takt_mir::types::Type;
 use takt_mir::{ChannelId, TypeId, VarId};
 use takt_syntax::ast;
@@ -139,12 +139,31 @@ impl Lowerer<'_> {
     /// erste passende Element im Fenster und setzt `examined` auf dessen
     /// Nummer; die Elemente danach bleiben unkonsumiert.
     pub fn stream_guard(&mut self, subject: &ast::Expr, binding: Option<&ast::Ident>) -> Option<Guard> {
-        let ast::ExprKind::Ident(name) = &subject.kind else {
-            self.error(SC3, subject.span, "Stream-Guard verlangt einen Stream-Namen");
-            return None;
+        // 7.5: `t.fired` ist ein Strom wie jeder andere; der Guard nimmt
+        // ihn wie einen Namen. Sein Element ist aber schon der Record aus
+        // Captures und `.t` — es noch einmal zu umhuellen versteckte die
+        // Captures hinter `.data`, und 7.5 nennt sie direkt (`f.n`).
+        let (stream, elem, wrapped) = match &subject.kind {
+            ast::ExprKind::Ident(name) => {
+                let (r, e) = self.stream_ref(name)?;
+                (r, e, true)
+            }
+            _ => {
+                let e = self.expr(subject, None)?;
+                let ExprKind::Stream(s) = e.kind else {
+                    self.error(SC3, subject.span, "Stream-Guard verlangt einen Stream");
+                    return None;
+                };
+                let r = StreamRef::Internal(s);
+                self.add_cursor(r);
+                (r, self.program.streams[s.index()].elem, false)
+            }
         };
-        let (stream, elem) = self.stream_ref(name)?;
-        let var = self.bind_none(binding, elem, subject.span)?;
+        let var = match (binding, wrapped) {
+            (Some(n), true) => Some(self.binding_var(n, &[], Some(elem), subject.span)?),
+            (Some(n), false) => Some(self.plain_binding(n, elem, subject.span)?),
+            (None, _) => None,
+        };
         Some(Guard::Next { stream, binding: var? })
     }
 
@@ -428,4 +447,20 @@ impl Lowerer<'_> {
 /// Ist der Ausdruck ein Textliteral oder ein Formatstring (8.8)?
 fn is_textual(e: &ast::Expr) -> bool {
     matches!(&e.kind, ast::ExprKind::Str(_))
+}
+
+impl Lowerer<'_> {
+    /// Bindung ohne Huelle: die Variable traegt den Elementtyp selbst
+    /// (7.5, `t.fired as f`). Das Element ist dort schon ein Record aus
+    /// Captures und `.t`.
+    fn plain_binding(&mut self, name: &ast::Ident, elem: TypeId, span: Span) -> Option<VarId> {
+        let state = self.mctx.as_ref().and_then(|m| m.current);
+        let scope = match state {
+            Some(s) => VarScope::Lifted(s),
+            None => VarScope::Machine,
+        };
+        let id = self.new_var(VarDef { name: name.name.clone(), ty: elem, init: None, scope, public: false, span });
+        self.declare(name, Entity::Var(id, elem));
+        Some(id)
+    }
 }

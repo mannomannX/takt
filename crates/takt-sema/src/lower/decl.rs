@@ -801,6 +801,100 @@ impl Lowerer<'_> {
         self.declare(&decl.name, Entity::Command(id));
     }
 
+    /// `trigger NAME [node N]: when G then at T: … bound d` (7.5, v1.2).
+    ///
+    /// Der Trigger ist eine Funktion seines Quellstroms ohne eigenen
+    /// Zustand ausser `armed`. Gesenkt wird er wie eine kleine Maschine
+    /// ohne Zustaende: der Guard ueber dem Strom, der `then`-Block als
+    /// Aktionsblock, und `event` darin mit dem Typ der Guard-Bindung.
+    pub fn trigger_decl(&mut self, decl: &ast::TriggerDecl) {
+        let id = TriggerId(self.program.triggers.len() as u32);
+        let node = decl.node.as_ref().and_then(|n| match self.lookup(n) {
+            Some(Entity::Node(id)) => Some(id),
+            _ => {
+                self.error(SC3, n.span, format!("`{}` ist kein Knoten", n.name));
+                None
+            }
+        });
+        let Some((guard, elem, captures)) = self.trigger_guard(&decl.when, decl.span) else { return };
+        // 7.5: `event` traegt die Captures und `.t` — derselbe Record, den
+        // eine Handler-Bindung traegt, damit `event.n` und `f.n` dasselbe
+        // heissen.
+        let event_ty = self.binding_type(&format!("{}.event", decl.name.name), &captures, Some(elem), decl.span);
+        let saved = self.event_ty.replace(event_ty);
+        let time = self.expr(&decl.then.time, Some(self.tys.duration));
+        let then = self.block(&decl.then.body, BlockKind::At);
+        self.event_ty = saved;
+        let Some(time) = time else { return };
+        let bound = decl.bound.ns;
+        // 7.5: `fired` ist ein Eingangsstrom mit den Feldern von `event`.
+        // Ein eigener Elementtyp braeuchte Fenster, Cursor und Ueberlauf
+        // noch einmal; als interner Strom erbt er sie.
+        let fired = StreamId(self.program.streams.len() as u32);
+        self.program.streams.push(Stream {
+            name: format!("{}.fired", decl.name.name),
+            elem: event_ty,
+            capacity: 4,
+            // Die Byteschranke faellt aus der Elementgroesse (8.6). Ein
+            // Bindungsrecord traegt keine `wire_size` — er ist eingebaut,
+            // nicht `layout` —, darum wird sie hier gesetzt.
+            capacity_bytes: Some(4 * self.record_bytes(event_ty)),
+            expect_len: None,
+            // 7.5: einschuessig — mehr als eine Armierung je Tick gibt es
+            // nicht, ein Ueberlauf waere kein Programmierfehler.
+            overflow: Overflow::Drop,
+            writer: None,
+            readers: Vec::new(),
+            span: decl.span,
+        });
+        self.program.triggers.push(Trigger {
+            name: decl.name.name.clone(),
+            node,
+            guard,
+            time,
+            then,
+            bound,
+            owner: None,
+            fired,
+            span: decl.span,
+        });
+        self.declare(&decl.name, Entity::Trigger(id));
+    }
+
+    /// Der `when`-Guard eines Triggers: genau ein Quellstrom, mit seinem
+    /// Elementtyp und den Captures des Musters (7.5, Pruefung 55).
+    fn trigger_guard(&mut self, g: &ast::Guard, span: Span) -> Option<TriggerGuard> {
+        let ast::Guard::Expr(e) = g else {
+            self.error(crate::checks::SC55, span, "`when` eines Triggers ist ein Muster ueber einem Strom (7.5)");
+            return None;
+        };
+        let ast::ExprKind::Match { subject, kind, pattern, .. } = &e.kind else {
+            self.error(crate::checks::SC55, e.span, "`when` eines Triggers ist ein Muster ueber einem Strom (7.5)");
+            return None;
+        };
+        let ast::ExprKind::Ident(name) = &subject.kind else {
+            self.error(crate::checks::SC55, subject.span, "`when` liest genau einen Strom (7.5)");
+            return None;
+        };
+        if !self.is_stream(name) {
+            self.error(crate::checks::SC55, subject.span, format!("`{}` ist kein Strom (7.5)", name.name));
+            return None;
+        }
+        let (_, elem) = self.stream_ref(name)?;
+        let subject_expr = self.expr(subject, None)?;
+        let lowered = self.pattern(pattern, Some(elem), e.span)?;
+        let guard = takt_mir::machine::Guard::Match {
+            subject: subject_expr,
+            kind: match kind {
+                ast::MatchKind::Matches => takt_mir::expr::MatchKind::Matches,
+                ast::MatchKind::Has => takt_mir::expr::MatchKind::Has,
+            },
+            pattern: lowered.pattern,
+            binding: None,
+        };
+        Some((guard, elem, lowered.captures))
+    }
+
     /// `stream<E> name with …` (8.6, M2 in der Ausfuehrung).
     pub fn stream_decl(&mut self, decl: &ast::StreamDecl) {
         let Some(elem) = self.elem_type(&decl.elem) else { return };
@@ -1393,3 +1487,31 @@ fn in_hertz(mut v: takt_mir::expr::Expr, f: takt_mir::types::Rational) -> takt_m
     };
     v
 }
+
+impl Lowerer<'_> {
+    /// Bytes eines Recordtyps als obere Schranke (8.6): die Summe seiner
+    /// Felder, Puffer mit ihrer Kapazitaet.
+    fn record_bytes(&self, ty: TypeId) -> u32 {
+        match self.program.types.list.get(ty.index()) {
+            Some(Type::Bytes { cap } | Type::Line { cap } | Type::Str { cap }) => *cap,
+            Some(Type::Int { width, .. }) => width.bits() / 8,
+            Some(Type::Float { width, .. }) => {
+                if *width == FloatWidth::F32 {
+                    4
+                } else {
+                    8
+                }
+            }
+            Some(Type::Duration { .. }) => 8,
+            Some(Type::Record(r)) => {
+                self.program.records[r.index()].fields.iter().map(|f| self.record_bytes(f.ty)).sum::<u32>().max(1)
+            }
+            Some(Type::Array { elem, len }) => self.record_bytes(*elem).saturating_mul(*len),
+            _ => 1,
+        }
+    }
+}
+
+/// Der gesenkte `when`-Guard eines Triggers mit dem Elementtyp seines
+/// Quellstroms und den Captures des Musters (7.5).
+type TriggerGuard = (takt_mir::machine::Guard, TypeId, Vec<(String, TypeId)>);

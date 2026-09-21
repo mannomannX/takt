@@ -532,6 +532,7 @@ impl Dumper<'_> {
                 Builtin::Event => "event",
             }
             .to_string(),
+            ExprKind::Armed(t) => format!("{}.armed", self.p.triggers[t.index()].name),
             ExprKind::Field { base, field } => format!("{}.{field}", self.expr(base)),
             ExprKind::Index { base, index } => format!("{}[{}]", self.expr(base), self.expr(index)),
             ExprKind::Index2 { base, row, col } => {
