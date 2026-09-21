@@ -240,7 +240,15 @@ impl Lowerer<'_> {
                             self.error("SC-46", b.span, format!("Bitfeld {lo}..{hi} ausserhalb des Traegerfelds"));
                             continue;
                         }
-                        out.push(BitfieldDef { name: b.name.name.clone(), ty: bty, lo, hi, span: b.span });
+                        out.push(BitfieldDef {
+                            name: b.name.name.clone(),
+                            ty: bty,
+                            lo,
+                            hi,
+                            access: access_of(b.access),
+                            active_low: b.active_low,
+                            span: b.span,
+                        });
                     }
                     fields.push(FieldDef {
                         name: name.name.clone(),
@@ -1520,3 +1528,15 @@ impl Lowerer<'_> {
 /// Der gesenkte `when`-Guard eines Triggers mit dem Elementtyp seines
 /// Quellstroms und den Captures des Musters (7.5).
 type TriggerGuard = (takt_mir::machine::Guard, TypeId, Vec<(String, TypeId)>);
+
+/// `ast::Access` als Zugriffsart der MIR (3.7).
+fn access_of(a: ast::Access) -> Access {
+    match a {
+        ast::Access::Rw => Access::Rw,
+        ast::Access::Ro => Access::Ro,
+        ast::Access::Wo => Access::Wo,
+        ast::Access::W1c => Access::W1c,
+        ast::Access::W0c => Access::W0c,
+        ast::Access::Rsvd => Access::Rsvd,
+    }
+}

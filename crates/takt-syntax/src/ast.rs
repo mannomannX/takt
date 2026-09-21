@@ -311,8 +311,49 @@ pub struct Bitfield {
     pub from: IntLit,
     /// Letzte Bitposition bei `a..b`.
     pub to: Option<IntLit>,
+    /// Zugriffsart (3.7, v1.2); Standard `rw`.
+    pub access: Access,
+    /// `active_low`: der logische Wert ist invertiert.
+    pub active_low: bool,
     /// Position.
     pub span: Span,
+}
+
+/// Zugriffsart eines Bitfelds (3.7, v1.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum Access {
+    #[default]
+    Rw,
+    Ro,
+    Wo,
+    /// *write one to clear*: Schreiben setzt nur dieses Bit auf 1.
+    W1c,
+    /// *write zero to clear*: Schreiben setzt nur dieses Bit auf 0.
+    W0c,
+    /// Reserviert: weder lesbar noch schreibbar.
+    Rsvd,
+}
+
+impl Access {
+    /// Name in Quelltext und Meldungen.
+    pub fn name(self) -> &'static str {
+        match self {
+            Access::Rw => "rw",
+            Access::Ro => "ro",
+            Access::Wo => "wo",
+            Access::W1c => "w1c",
+            Access::W0c => "w0c",
+            Access::Rsvd => "rsvd",
+        }
+    }
+
+    /// Die Zugriffsart zu ihrem Namen.
+    pub fn by_name(name: &str) -> Option<Access> {
+        [Access::Rw, Access::Ro, Access::Wo, Access::W1c, Access::W0c, Access::Rsvd]
+            .into_iter()
+            .find(|a| a.name() == name)
+    }
 }
 
 /// Typ eines Bitfelds.

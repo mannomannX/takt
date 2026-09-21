@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+record Sr layout little:
+    flags : u8 with bits:
+        tx_full  : bool at 0 ro
+        overflow : bool at 1 w1c
+        enable   : bool at 2
+        reserved : u8 at 4..7 rsvd
+
+output sr : Sr   @ hw("o/sr") with safe = default
+output f  : bool @ hw("o/f")  with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            sr.flags = 7  # ~ SC-46

@@ -205,7 +205,15 @@ pub fn full_program() -> Program {
                 const_value: None,
                 offset: None,
                 len_field: None,
-                bits: vec![BitfieldDef { name: "encrypted".into(), ty: t_bool, lo: 0, hi: 0, span: sp(8) }],
+                bits: vec![BitfieldDef {
+                    name: "encrypted".into(),
+                    ty: t_bool,
+                    lo: 0,
+                    hi: 0,
+                    access: Access::default(),
+                    active_low: false,
+                    span: sp(8),
+                }],
                 span: sp(8),
             },
             FieldDef {

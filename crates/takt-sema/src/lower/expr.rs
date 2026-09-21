@@ -1415,7 +1415,19 @@ impl Lowerer<'_> {
                 if !no_args(self) {
                     return None;
                 }
-                let (lo, hi, ty) = bitfield_of(self, &b, field).expect("gerade geprueft");
+                let bf = bitfield_of(self, &b, field).expect("gerade geprueft");
+                let (lo, hi, ty) = (bf.lo, bf.hi, bf.ty);
+                // 3.7: `wo` liefert nicht den geschriebenen Wert, `rsvd`
+                // hat keinen.
+                if !bf.access.readable() {
+                    self.error_hint(
+                        crate::checks::SC46,
+                        span,
+                        format!("`{field}` ist `{}` und nicht lesbar (3.7)", bf.access.name()),
+                        "ein `wo`-Feld liefert beim Lesen nicht, was geschrieben wurde",
+                    );
+                    return None;
+                }
                 let int = self.tys.int;
                 let pos = |v: u8| Expr::new(ExprKind::Int(i64::from(v)), int, span);
                 // `bit` liefert `bool`, `bits` einen `int`; das Bitfeld traegt
@@ -1427,6 +1439,15 @@ impl Lowerer<'_> {
                     (Accessor::Bits, vec![pos(hi), pos(lo)], int)
                 };
                 let value = Expr::new(ExprKind::Accessor { base: Box::new(b), accessor, args }, raw, span);
+                // 3.7: `active_low` kehrt den Wert an der Grenze um; der
+                // Traeger bleibt roh.
+                let value = match (bf.active_low, is_bool) {
+                    (true, true) => Expr::new(ExprKind::Unary { op: UnaryOp::Not, expr: Box::new(value) }, raw, span),
+                    (true, false) => {
+                        Expr::new(ExprKind::Unary { op: UnaryOp::BitNot, expr: Box::new(value) }, raw, span)
+                    }
+                    (false, _) => value,
+                };
                 // Die Breite des Bitfelds passt in seinen Typ (Pruefung 46),
                 // die Verengung ist also nachweislich verlustfrei.
                 if is_bool {
@@ -2659,12 +2680,11 @@ fn bitfield_names(lo: &Lowerer<'_>, base: &Expr) -> Option<Vec<String>> {
 
 /// Positionen und Typ eines benannten Bitfelds (3.7), wenn `base` das
 /// Traegerfeld eines Records ist und dieses ein Bitfeld `name` deklariert.
-fn bitfield_of(lo: &Lowerer<'_>, base: &Expr, name: &str) -> Option<(u8, u8, TypeId)> {
+pub(crate) fn bitfield_of(lo: &Lowerer<'_>, base: &Expr, name: &str) -> Option<takt_mir::types::BitfieldDef> {
     let ExprKind::Field { base: owner, field } = &base.kind else { return None };
     let Type::Record(r) = lo.program.types.list.get(owner.ty.index())? else { return None };
     let def = lo.program.records[r.index()].fields.get(*field as usize)?;
-    let b = def.bits.iter().find(|b| b.name == name)?;
-    Some((b.lo, b.hi, b.ty))
+    def.bits.iter().find(|b| b.name == name).cloned()
 }
 
 fn record_field(lo: &Lowerer<'_>, ty: TypeId, name: &str) -> Option<(u32, TypeId)> {

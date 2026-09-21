@@ -656,6 +656,19 @@ enum BootMsg:
   ```
   **Zugriff auf Bitfelder.** Ein benanntes Bitfeld ist eine *Sicht* auf sein Trägerfeld, kein eigener Speicher: `p.flags.encrypted` liest es mit dem deklarierten Typ (`bool` bei einer einzelnen Position, sonst der Integer-Typ), `p.flags.level = 5` schreibt genau seine Bits und lässt die übrigen des Trägers unverändert. Beides senkt auf die Bitoperatoren aus 3.10 (`bit`/`bits` beziehungsweise `with_bit` und Maske), kostet also nichts Zusätzliches. Der Träger bleibt daneben als Ganzes lesbar und schreibbar (`p.flags`), und weil der Codec ihn serialisiert, überstehen die Bitfelder `encode`/`decode` ohne eigenes Zutun. Zusammengesetzte Zuweisungen (`+=`) sind auf einem Bitfeld nicht erlaubt — der Rechenschritt gehört sichtbar hin.
 
+  **Zugriffsarten (v1.2).** Nach dem Bitbereich steht ein Zugriffswort, Standard `rw`: `tx_full : bool at 0 ro`, `overflow : bool at 1 w1c`, `reserved : u8 at 4..7 rsvd`; danach optional `active_low`.
+
+  | Zugriffsart | Lesen | Schreiben |
+  |---|---|---|
+  | `rw` | Bit aus dem Träger | Lese-Modifiziere-Schreibe |
+  | `ro` | Bit aus dem Träger | **Fehler** (Prüfung 46) |
+  | `wo` | **Fehler** — der gelesene Wert ist nicht der geschriebene | ohne RMW, übrige Bits 0 |
+  | `w1c` | Bit aus dem Träger | **ohne RMW**: nur dieses Bit als 1 |
+  | `w0c` | Bit aus dem Träger | **ohne RMW**: nur dieses Bit als 0 |
+  | `rsvd` | **Fehler** | **Fehler** |
+
+  Der Punkt ist `w1c`: Eine Zuweisung senkt dort *nicht* auf Lese-Modifiziere-Schreibe, sondern auf einen einzelnen Schreibvorgang mit einer Maske, die genau dieses Bit trägt. Damit ist das Löschen ungesehener Ereignisse strukturell ausgeschlossen, nicht Gegenstand von Disziplin. Daraus folgt: Ein Träger, der mindestens ein `w1c`- oder `w0c`-Feld enthält, darf nicht als Ganzes geschrieben werden (`sr.flags = x` ist ein Fehler), sonst entstünde der RMW über die Hintertür. `active_low` invertiert an genau zwei Stellen — beim Senken eines Lesezugriffs und beim Senken eines Schreibzugriffs; der Träger selbst bleibt roh, wer `sr.flags` liest, sieht die Hardware-Bits.
+
 Regeln: verschachtelte Records und Arrays fester Länge; `offset = N` für absolute Positionen (sonst fortlaufend); `align` rundet die Gesamtlänge; Bitfelder liegen innerhalb der Breite ihres Trägerfelds und überlappen nicht (statisch geprüft); Konstantenfelder werden bei `decode` geprüft und bei `encode` gesetzt; die Länge eines Records ist statisch. `decode` liefert `none` bei Konstanten-, Range- oder Längenverstoß.
 - **`default`.** Jeder POD-Typ hat einen Standardwert: 0 bzw. `0 U`, `false`, die erste Variante, leere `vec`/`bytes`, Records feldweise; `var img : ImageHeader = default` ist damit ohne Literal möglich.
 - **Records als Konstanten, Arrays von Records als Gerätetabellen.** Ein Record-Konstruktor mit konstanten Argumenten ist ein `const_expr` (2.3). Statische Gerätebeschreibungen — Sensordefinitionen, PID-Tabellen, Personality-Listen, Registerkarten — stehen deshalb als ein Datenblock da und werden indiziert, statt als Kette von Bedingungen in den Code zu wandern:

@@ -344,6 +344,12 @@ impl Emitter<'_, '_> {
             self.glue();
             self.fmt_int_lit();
         }
+        if b.access != Access::Rw {
+            self.sp(b.access.name());
+        }
+        if b.active_low {
+            self.sp("active_low");
+        }
     }
 
     /// `unit_decl`

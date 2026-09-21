@@ -1,0 +1,21 @@
+(system
+  (language 1)
+  (tick 10ms))
+(record UartStatus layout=little
+  (bits flags: u8
+    (tx_full: bool at 0 ro)
+    (overflow: bool at 1 w1c)
+    (enable: bool at 2)
+    (nrst: bool at 3 active_low)
+    (reserved: u8 at 4..7 rsvd)))
+(output sr :UartStatus @hw("o/sr") safe=default)
+(output f :bool @hw("o/f") safe=false)
+(machine ctrl
+  (initial RUN)
+  (state RUN
+    (loop
+      (= f (.tx_full (.flags sr)))
+      (= (.overflow (.flags sr)) true)
+      (= (.enable (.flags sr)) true)
+      (= (.nrst (.flags sr)) false))
+    (after 1s -> RUN)))

@@ -231,8 +231,57 @@ pub struct BitfieldDef {
     pub lo: u8,
     /// Letzte Bitposition (einschliesslich).
     pub hi: u8,
+    /// Zugriffsart (3.7, v1.2); Standard `rw`.
+    pub access: Access,
+    /// `active_low`: der logische Wert ist invertiert.
+    pub active_low: bool,
     /// Position.
     pub span: Span,
+}
+
+/// Zugriffsart eines Bitfelds (3.7, v1.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum Access {
+    #[default]
+    Rw,
+    Ro,
+    Wo,
+    /// *write one to clear*: Schreiben setzt nur dieses Bit auf 1.
+    W1c,
+    /// *write zero to clear*: Schreiben setzt nur dieses Bit auf 0.
+    W0c,
+    /// Reserviert: weder lesbar noch schreibbar.
+    Rsvd,
+}
+
+impl Access {
+    /// Name in Meldungen.
+    pub fn name(self) -> &'static str {
+        match self {
+            Access::Rw => "rw",
+            Access::Ro => "ro",
+            Access::Wo => "wo",
+            Access::W1c => "w1c",
+            Access::W0c => "w0c",
+            Access::Rsvd => "rsvd",
+        }
+    }
+
+    /// Ist das Feld lesbar? (3.7)
+    pub fn readable(self) -> bool {
+        !matches!(self, Access::Wo | Access::Rsvd)
+    }
+
+    /// Ist das Feld schreibbar?
+    pub fn writable(self) -> bool {
+        !matches!(self, Access::Ro | Access::Rsvd)
+    }
+
+    /// Schreibt es ohne Lese-Modifiziere-Schreibe? (`w1c`, `w0c`)
+    pub fn clear_only(self) -> bool {
+        matches!(self, Access::W1c | Access::W0c)
+    }
 }
 
 /// Feld eines Records oder einer Variante (3.7).

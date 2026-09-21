@@ -53,7 +53,8 @@ codec_enum!(Type {
 });
 codec_struct!(VariantDef { 1 one name, 2 one discriminant, 3 rep fields, 4 meta span });
 codec_struct!(EnumDef { 1 one name, 2 rep variants, 3 opt layout, 4 one open, 5 one builtin, 6 meta span });
-codec_struct!(BitfieldDef { 1 one name, 2 one ty, 3 one lo, 4 one hi, 5 meta span });
+codec_unit_enum!(Access { 0 Rw, 1 Ro, 2 Wo, 3 W1c, 4 W0c, 5 Rsvd });
+codec_struct!(BitfieldDef { 1 one name, 2 one ty, 3 one lo, 4 one hi, 5 meta span, 6 one access, 7 one active_low });
 codec_struct!(FieldDef { 1 one name, 2 one ty, 3 opt const_value, 4 opt offset, 5 opt len_field, 6 rep bits, 7 meta span });
 codec_struct!(WireLayout { 1 one endian, 2 opt align });
 codec_struct!(RecordDef { 1 one name, 2 rep fields, 3 opt layout, 4 one builtin, 5 meta span, 6 opt wire_size });

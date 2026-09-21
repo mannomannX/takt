@@ -7,7 +7,7 @@ use takt_mir::expr::{BinaryOp, CheckedKind, Expr, ExprKind, UnaryOp};
 use takt_mir::fns::NativeKind;
 use takt_mir::machine::{CounterSite, FaultTarget, JobSlot, Target, VarDef, VarScope};
 use takt_mir::stmt::*;
-use takt_mir::types::{HandleKind, Type};
+use takt_mir::types::{Access, HandleKind, Type};
 use takt_mir::*;
 use takt_syntax::ast;
 
@@ -411,6 +411,17 @@ impl Lowerer<'_> {
         if let Some(stmt) = self.bitfield_assign(target, op, value, kind, span) {
             return stmt;
         }
+        // 3.7: Ein Traeger mit `w1c`/`w0c`-Feldern darf nicht als Ganzes
+        // geschrieben werden — sonst entstuende der RMW ueber die Hintertuer.
+        if let Some(name) = self.clear_only_carrier(target) {
+            self.error_hint(
+                crate::checks::SC46,
+                span,
+                format!("`{name}` traegt `w1c`- oder `w0c`-Felder und wird nicht als Ganzes geschrieben (3.7)"),
+                "einzelne Felder zuweisen; ein Schreiben des Traegers loeschte ungesehene Ereignisse",
+            );
+            return None;
+        }
         let place = self.place(target)?;
         let ty = self.place_type(&place, target.span)?;
         if kind == BlockKind::At && !matches!(place, Place::Output(_)) {
@@ -572,10 +583,21 @@ impl Lowerer<'_> {
         span: Span,
     ) -> Option<Option<Stmt>> {
         let ast::ExprKind::Member { base: carrier, name, args: None } = &target.kind else { return None };
-        let (lo, hi, bty) = self.bitfield_at(carrier, &name.name)?;
+        let bf = self.bitfield_at(carrier, &name.name)?;
+        let (lo, hi, bty) = (bf.lo, bf.hi, bf.ty);
         Some((|| {
             if op != ast::AssignOp::Set {
                 self.error(SC3, span, "Bitfelder nehmen nur `=`, kein `+=` und Verwandte");
+                return None;
+            }
+            // 3.7: `ro` und `rsvd` sind nicht zuweisbar.
+            if !bf.access.writable() {
+                self.error_hint(
+                    crate::checks::SC46,
+                    span,
+                    format!("`{}` ist `{}` und nicht zuweisbar (3.7)", name.name, bf.access.name()),
+                    "ein `ro`-Feld liest die Hardware, es schreibt sie nicht",
+                );
                 return None;
             }
             let place = self.place(carrier)?;
@@ -584,9 +606,24 @@ impl Lowerer<'_> {
                 self.error(SC8, span, "`at`-Bloecke enthalten nur Zuweisungen an Outputs (5.5)");
                 return None;
             }
-            let old = self.place_expr(&place, cty, target.span);
             let rhs = self.check(value, bty)?;
-            let new = self.insert_bits(old, rhs, lo, hi, cty, span)?;
+            // 3.7: `active_low` kehrt den Wert an der Grenze um.
+            let rhs = if bf.active_low {
+                let op = if matches!(self.ty(bty), Type::Bool) { UnaryOp::Not } else { UnaryOp::BitNot };
+                Expr::new(ExprKind::Unary { op, expr: Box::new(rhs) }, bty, span)
+            } else {
+                rhs
+            };
+            // 3.7: `w1c`/`w0c` schreiben *ohne* Lese-Modifiziere-Schreibe —
+            // sonst loeschte der Schreibvorgang Ereignisse, die seit dem
+            // Lesen kamen. `wo` ebenso: Der gelesene Wert taugt nicht.
+            let new = if bf.access.clear_only() || bf.access == Access::Wo {
+                let base = self.clear_base(&bf, cty, span);
+                self.insert_bits(base, rhs, lo, hi, cty, span)?
+            } else {
+                let old = self.place_expr(&place, cty, target.span);
+                self.insert_bits(old, rhs, lo, hi, cty, span)?
+            };
             Some(Stmt::new(StmtKind::Assign { target: place, value: new }, span))
         })())
     }
@@ -606,7 +643,7 @@ impl Lowerer<'_> {
 
     /// Positionen und Typ eines Bitfelds, wenn `carrier` das Traegerfeld
     /// eines Records ist.
-    fn bitfield_at(&mut self, carrier: &ast::Expr, name: &str) -> Option<(u8, u8, TypeId)> {
+    fn bitfield_at(&mut self, carrier: &ast::Expr, name: &str) -> Option<takt_mir::types::BitfieldDef> {
         let ast::ExprKind::Member { base, name: field, args: None } = &carrier.kind else { return None };
         let b = self.place(base).or_else(|| {
             self.diags.pop();
@@ -615,8 +652,7 @@ impl Lowerer<'_> {
         let bty = self.place_type(&b, base.span)?;
         let Type::Record(r) = self.ty(bty).clone() else { return None };
         let def = self.program.records[r.index()].fields.iter().find(|f| f.name == field.name)?;
-        let bits = def.bits.iter().find(|x| x.name == name)?;
-        Some((bits.lo, bits.hi, bits.ty))
+        def.bits.iter().find(|x| x.name == name).cloned()
     }
 
     /// `(traeger & !maske) | ((wert << lo) & maske)` — das Einsetzen eines
@@ -1487,5 +1523,31 @@ fn always_exits(stmts: &[Stmt]) -> bool {
         Some(StmtKind::If { then, otherwise, .. }) => always_exits(&then.stmts) && always_exits(&otherwise.stmts),
         Some(StmtKind::Match { arms, .. }) => !arms.is_empty() && arms.iter().all(|a| always_exits(&a.body.stmts)),
         _ => false,
+    }
+}
+
+impl Lowerer<'_> {
+    /// Der Traegerwert, auf den ein Schreibvorgang ohne
+    /// Lese-Modifiziere-Schreibe aufsetzt (3.7): bei `w0c` alle Bits 1,
+    /// sonst alle 0 — so traegt das Ergebnis genau das eine Bit.
+    fn clear_base(&mut self, bf: &takt_mir::types::BitfieldDef, cty: TypeId, span: Span) -> Expr {
+        let all = if bf.access == Access::W0c { -1 } else { 0 };
+        Expr::new(ExprKind::Int(all), cty, span)
+    }
+}
+
+impl Lowerer<'_> {
+    /// Der Name eines Traegerfelds, das `w1c`- oder `w0c`-Bitfelder
+    /// traegt (3.7); `None`, wenn das Ziel keins ist.
+    fn clear_only_carrier(&mut self, target: &ast::Expr) -> Option<String> {
+        let ast::ExprKind::Member { base, name, args: None } = &target.kind else { return None };
+        let b = self.place(base).or_else(|| {
+            self.diags.pop();
+            None
+        })?;
+        let bty = self.place_type(&b, base.span)?;
+        let Type::Record(r) = self.ty(bty).clone() else { return None };
+        let def = self.program.records[r.index()].fields.iter().find(|f| f.name == name.name)?;
+        def.bits.iter().any(|x| x.access.clear_only()).then(|| name.name.clone())
     }
 }

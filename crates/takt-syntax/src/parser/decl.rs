@@ -429,7 +429,16 @@ impl<'t, 's> Parser<'t, 's> {
         self.expect_kw("at")?;
         let from = self.parse_int_lit()?;
         let to = if self.eat_op("..") { Some(self.parse_int_lit()?) } else { None };
-        Ok(Bitfield { name, ty, from, to, span: self.span_from(start) })
+        // 3.7 (v1.2): Zugriffswort nach dem Bitbereich, dann `active_low`.
+        let mut access = Access::default();
+        for a in [Access::Rw, Access::Ro, Access::Wo, Access::W1c, Access::W0c, Access::Rsvd] {
+            if self.eat_word(a.name()) {
+                access = a;
+                break;
+            }
+        }
+        let active_low = self.eat_word("active_low");
+        Ok(Bitfield { name, ty, from, to, access, active_low, span: self.span_from(start) })
     }
 
     /// `unit_decl`

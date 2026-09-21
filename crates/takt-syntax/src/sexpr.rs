@@ -151,7 +151,13 @@ impl Printer {
                                             BitType::Int(i) => int_type(*i).to_string(),
                                         };
                                         let to = b.to.as_ref().map(|t| format!("..{}", t.text)).unwrap_or_default();
-                                        p.line(&format!("({}: {t} at {}{to})", b.name.name, b.from.text));
+                                        let acc = if b.access == Access::Rw {
+                                            String::new()
+                                        } else {
+                                            format!(" {}", b.access.name())
+                                        };
+                                        let low = if b.active_low { " active_low" } else { "" };
+                                        p.line(&format!("({}: {t} at {}{to}{acc}{low})", b.name.name, b.from.text));
                                     }
                                 });
                             }
