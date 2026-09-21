@@ -27,7 +27,7 @@ use takt_mir::program::{Binding, Direction, OverrunPolicy, Program, Sweep};
 use takt_mir::stmt::{Place, StmtKind};
 use takt_mir::types::{Const, Type};
 
-use crate::checks::{SC12, SC28, SC29, SC32, SC39, SC60};
+use crate::checks::{SC12, SC28, SC29, SC32, SC39, SC59, SC60};
 
 /// Prüft Kostenbudget und Schedulability gegen eine Kalibrierung.
 ///
@@ -471,6 +471,123 @@ fn declared_budgets(p: &Program, target: &Target, _load: &Load) -> Vec<Diagnosti
         }
     }
     out
+}
+
+/// Prüfung 59: Ein gepolltes Gerät läuft zwischen zwei Ticks nicht über.
+///
+/// `fifo_depth[d] / byte_rate[d] >= P_m + jitter[tick_source] + wcet_poll[d]`.
+/// Die linke Seite ist die Zeit, in der das FIFO volläuft; die rechte, wie
+/// lange der Treiber schlimmstenfalls nicht hinsieht.
+///
+/// **Welche Maschine ein Gerät pollt.** Ein Port ist im Sim-Build das
+/// Channelpaar `mmio/ADR/r` und `mmio/ADR/w` (12.9), und ein Channel nennt
+/// sein Gerät (8.10). Damit ist die Zuordnung schon da: kein zweiter
+/// Bindungsweg, dieselbe Regel wie für jeden anderen Kanal — die Adresse
+/// ist ein Schlüssel in die Konfiguration.
+///
+/// **Was gemeldet wird, wenn eine Größe fehlt.** Ein Fehler, keine Stille:
+/// Eine Prüfung, die bei fehlender Eingabe schweigt, ist von einer
+/// bestandenen nicht zu unterscheiden. `with polling = unchecked` an der
+/// Maschine ist der ausdrückliche Verzicht; er erscheint im Lauf-Header.
+pub fn polling(p: &Program, hw: &Hardware, target: Option<&Target>) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let jitter_ns = tick_jitter(p, hw);
+    for (name, device) in &hw.devices {
+        if device.fifo_depth.is_none() && device.byte_rate.is_none() {
+            continue;
+        }
+        let Some(m) = polling_machine(p, hw, name) else { continue };
+        let machine = &p.machines[m.index()];
+        if machine.polling_unchecked {
+            continue;
+        }
+        let span = machine.span;
+        let mut missing: Vec<&str> = Vec::new();
+        if device.fifo_depth.is_none() {
+            missing.push("fifo_depth");
+        }
+        if device.byte_rate.is_none() {
+            missing.push("byte_rate");
+        }
+        if jitter_ns.is_none() {
+            missing.push("jitter_ns der Tickquelle");
+        }
+        let wcet_ns = target.and_then(|t| poll_wcet_ns(machine, t));
+        if wcet_ns.is_none() {
+            missing.push("wcet_poll (Kalibrierung, 13.8)");
+        }
+        if !missing.is_empty() {
+            out.push(
+                Diagnostic::error(
+                    SC59,
+                    span,
+                    format!(
+                        "`{}` pollt `{name}`, aber Prüfung 59 ist nicht entscheidbar: {} fehlt",
+                        machine.name,
+                        missing.join(", ")
+                    ),
+                )
+                .with_suggestion(
+                    "die Größen in die Hardware-Konfiguration eintragen (8.10) beziehungsweise `takt bench` \
+                     laufen lassen (13.8); `with polling = unchecked` an der Maschine verzichtet \
+                     ausdrücklich darauf und erscheint im Lauf-Header"
+                        .to_string(),
+                ),
+            );
+            continue;
+        }
+        let (depth, rate) = (device.fifo_depth.expect("geprüft") as u64, device.byte_rate.expect("geprüft"));
+        if rate == 0 {
+            continue;
+        }
+        // Volllaufzeit in Nanosekunden, ohne Fliesskomma: die Rechnung
+        // gehört zu einem Urteil und muss auf jedem Ziel gleich ausfallen.
+        let fill_ns = depth.saturating_mul(1_000_000_000) / rate;
+        let period_ns = (machine.period as i64).saturating_mul(p.config.tick).max(0) as u64;
+        let need_ns = period_ns.saturating_add(jitter_ns.expect("geprüft")).saturating_add(wcet_ns.expect("geprüft"));
+        if fill_ns < need_ns {
+            out.push(
+                Diagnostic::error(
+                    SC59,
+                    span,
+                    format!(
+                        "`{}` pollt `{name}` zu selten: das FIFO läuft nach {fill_ns} ns voll, \
+                         der Treiber sieht erst nach {need_ns} ns wieder hin",
+                        machine.name
+                    ),
+                )
+                .with_suggestion(
+                    "Periode senken, das Gerät in die TCB geben (12.6) oder DMA statt Polling verwenden".to_string(),
+                ),
+            );
+        }
+    }
+    out
+}
+
+/// Die Maschine, deren Port an einem Channel dieses Geräts hängt.
+fn polling_machine(p: &Program, hw: &Hardware, device: &str) -> Option<takt_mir::MachineId> {
+    p.ports.iter().find_map(|port| {
+        let owner = port.owner?;
+        let keys = [format!("mmio/{:#x}/r", port.address), format!("mmio/{:#x}/w", port.address)];
+        keys.iter().filter_map(|k| hw.channel(k)).any(|c| c.device.as_deref() == Some(device)).then_some(owner)
+    })
+}
+
+/// `jitter[tick_source]`: der gemessene Jitter der Tickquelle (13.8).
+fn tick_jitter(p: &Program, hw: &Hardware) -> Option<u64> {
+    let source = p.config.tick_source.as_ref()?;
+    let jitter = hw.channel(&source.text())?.jitter_ns?;
+    u64::try_from(jitter).ok()
+}
+
+/// `wcet_poll`: was eine Aktivierung der Treibermaschine kostet (9.4.3).
+fn poll_wcet_ns(m: &takt_mir::machine::Machine, target: &Target) -> Option<u64> {
+    let budget = m.budget?;
+    if !target.c_target.missing().is_empty() {
+        return None;
+    }
+    Some(ns(target.c_target.duration_ps(budget.activation + budget.fault_path)))
 }
 
 /// Pikosekunden als Nanosekunden, kaufmännisch gerundet.

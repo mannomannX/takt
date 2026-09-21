@@ -101,6 +101,7 @@ attr           := "safe" "=" const_expr | "max_age" "=" duration_lit | "rate" "=
                 | "irreversible" "=" "true"                                                    (* 12.7 *)
                 | "label" "=" STRING | "display" "=" unit_expr | "group" "=" STRING | "doc" "=" STRING   (* Metadaten, 2.5; v1.1 *)
                 | "budget" "=" "{" budget_item { "," budget_item } "}"                  (* je Maschine, 7.2 *)   (* @check 62 *)
+                | "polling" "=" "unchecked"                          (* je Maschine, v1.2 *)   (* @check 59 *)
 budget_item    := ( "ram" | "wcet" ) "=" const_expr                                     (* wcet: braucht c_target, 13.8 *)
 framing        := "raw" | "lines" | "cobs" | "length_prefixed" "(" IDENT ")" | "fixed" "(" INT ")"
 command_decl   := "command" IDENT [ "with" attr { "," attr } ] NEWLINE                          (* wake: 5.10; Metadaten: 2.5 *)

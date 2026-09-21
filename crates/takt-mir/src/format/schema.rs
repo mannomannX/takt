@@ -282,7 +282,7 @@ codec_struct!(Machine {
     1 one name, 2 one kind, 3 one driver, 4 rep params, 5 one period, 6 one phase, 7 rep follows, 8 opt node,
     9 rep vars, 10 rep persist, 11 rep signals, 12 one fault_target, 13 rep states, 14 rep roots, 15 one initial,
     16 one loop_block, 17 rep handlers, 18 one faulted, 19 one layout, 20 opt budget, 21 meta meta, 22 meta span,
-    23 opt declared_budget,
+    23 opt declared_budget, 24 meta polling_unchecked,
 });
 
 // ---------------------------------------------------------------- Programm

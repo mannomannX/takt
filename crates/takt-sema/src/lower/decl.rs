@@ -733,6 +733,11 @@ impl Lowerer<'_> {
                         self.error(SC3, a.span, "`budget` nur an einer Maschine (7.2)");
                     }
                 }
+                ast::AttrKind::PollingUnchecked => {
+                    if dir.is_some() {
+                        self.error(SC3, a.span, "`polling` nur an einer Maschine (Pruefung 59)");
+                    }
+                }
             }
         }
         let _ = span;

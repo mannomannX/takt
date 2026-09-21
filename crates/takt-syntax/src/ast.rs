@@ -542,6 +542,8 @@ pub enum AttrKind {
     Doc(StrLit),
     /// `budget = {ram = …, wcet = …}` je Maschine (7.2).
     Budget(Vec<BudgetItem>),
+    /// `polling = unchecked` je Maschine (Pruefung 59).
+    PollingUnchecked,
 }
 
 /// Ein Posten in `budget = {…}` (7.2).

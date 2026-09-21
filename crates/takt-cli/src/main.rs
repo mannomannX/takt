@@ -188,7 +188,7 @@ fn check(args: &Args) -> bool {
                 println!("{}", map.render(d));
             }
         }
-        // Pruefung 12, 32 und 39 brauchen das Ziel, 60 und 28 die Kanaele
+        // Pruefung 12, 32 und 39 brauchen das Ziel, 28, 59 und 60 die Kanaele
         // der Konfiguration (8.10); ohne sie bleibt es beim Hinweis.
         if let Some(program) = &checked.program {
             let span = takt_diag::Span::new(0, 0);
@@ -198,6 +198,7 @@ fn check(args: &Args) -> bool {
             }
             if let Some(hw) = hardware(args) {
                 diags.extend(takt_sema::calibrated::check_bindings(program, &hw));
+                diags.extend(takt_sema::calibrated::polling(program, &hw, kalibriert.as_ref()));
             }
             for d in diags {
                 println!("{}", if line_format { map.render_line(&d) } else { map.render(&d) });

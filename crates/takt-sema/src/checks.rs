@@ -83,6 +83,8 @@ pub const SC56: &str = "SC-56";
 pub const SC57: &str = "SC-57";
 /// Registerports: nur in einer `driver machine` (12.9).
 pub const SC64: &str = "SC-64";
+/// Gepolltes Geraet laeuft zwischen zwei Ticks nicht ueber (12.9).
+pub const SC59: &str = "SC-59";
 /// `tunable param` steht nicht, wo eine Compile-Zeit-Konstante verlangt
 /// ist (8.4): Array-Groessen, Kapazitaeten, `repeat`.
 pub const SC35: &str = "SC-35";

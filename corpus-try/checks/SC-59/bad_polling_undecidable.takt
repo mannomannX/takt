@@ -1,0 +1,29 @@
+system:
+    language    = 1
+    tick        = 1 ms
+    tick_source = hw("sys/clock")
+
+# Pruefung 59 (12.9, FB-10) ohne `polling = unchecked` und ohne alle vier
+# Groessen: nicht entscheidbar, und das ist ein Fehler. Eine Pruefung, die
+# bei fehlender Eingabe schweigt, waere von einer bestandenen nicht zu
+# unterscheiden (FB-136).
+#
+# Am Geraet `spi` fehlt `byte_rate`; wie schnell sein FIFO vollaeuft,
+# weiss darum niemand.
+
+record SpiRegs layout little:
+    status : u8 with bits:
+        rx_ready : bool at 0 ro
+
+port spi : SpiRegs @ mmio(0x60001000)
+
+output got : bool @ hw("o/busy") with safe = false
+
+driver machine spi0 every 10 ms:  # ~ SC-59
+    initial RUN
+
+    state RUN:
+        loop:
+            got = spi.status.rx_ready
+
+        after 1 s: -> RUN

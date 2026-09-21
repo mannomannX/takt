@@ -481,6 +481,8 @@ pub struct Machine {
     pub kind: MachineKind,
     /// `driver machine`.
     pub driver: bool,
+    /// `with polling = unchecked`: Pruefung 59 ausdruecklich freigegeben.
+    pub polling_unchecked: bool,
     /// Parameter einer Vorlage.
     pub params: Vec<crate::fns::FnParam>,
     /// Periode `n_m` in Basis-Ticks.
@@ -545,6 +547,7 @@ impl Machine {
             name: name.into(),
             kind: MachineKind::Regular,
             driver: false,
+            polling_unchecked: false,
             params: Vec::new(),
             period: 1,
             phase: 0,

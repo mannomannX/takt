@@ -16,6 +16,11 @@
 //! Die Dateien laufen durch `compile`, nicht durch `check`: die Pruefungen 6
 //! bis 16 entstehen erst mit der MIR, und `compile` schliesst die Syntax- und
 //! Namenspruefungen ein.
+//!
+//! Liegt im Verzeichnis eine `hardware.hw`, laufen zusaetzlich die
+//! Pruefungen, die eine Konfiguration brauchen (`takt_sema::calibrated`).
+//! Sie entscheiden aus zwei Eingaben und sind darum ohne Konfiguration
+//! nicht nur stumm, sondern gar nicht anwendbar.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -51,6 +56,12 @@ fn expectations(src: &str, code: &str) -> BTreeSet<u32> {
     out
 }
 
+/// Die Hardware-Konfiguration eines Pruefverzeichnisses, falls es eine hat.
+fn hardware(dir: &Path) -> Option<takt_mir::hardware::Hardware> {
+    let text = std::fs::read_to_string(dir.join("hardware.hw")).ok()?;
+    Some(takt_mir::hardware::parse(&text).expect("hardware.hw lesbar"))
+}
+
 fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>) {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
@@ -58,6 +69,7 @@ fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>) {
         .filter(|p| p.extension().is_some_and(|x| x == "takt"))
         .collect();
     files.sort();
+    let hw = hardware(dir);
     let mut seen_ok = false;
     let mut seen_bad = false;
     for path in files {
@@ -66,8 +78,12 @@ fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>) {
         let map = SourceMap::single(name.as_str(), src.as_str());
         let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
         let checked = takt_sema::compile(&src, &options);
+        let mut diagnostics = checked.diagnostics.clone();
+        if let (Some(hw), Some(program)) = (&hw, &checked.program) {
+            diagnostics.extend(takt_sema::calibrated::polling(program, hw, hw.targets.values().next()));
+        }
         let actual: BTreeSet<u32> =
-            checked.diagnostics.iter().filter(|d| d.code == code).map(|d| map.line_col(d.span).0).collect();
+            diagnostics.iter().filter(|d| d.code == code).map(|d| map.line_col(d.span).0).collect();
         if name.starts_with("ok_") {
             seen_ok = true;
             if !actual.is_empty() {

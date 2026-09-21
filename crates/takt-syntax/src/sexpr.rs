@@ -670,6 +670,7 @@ fn attrs(list: &[Attr]) -> String {
                     .collect::<Vec<_>>()
                     .join(",")
             ),
+            AttrKind::PollingUnchecked => "polling=unchecked".to_string(),
             AttrKind::MaxAge(d) => format!("max_age={}", duration(d)),
             AttrKind::Rate(e) => format!("rate={}", expr(e)),
             AttrKind::MaxRate(e) => format!("max_rate={}", expr(e)),

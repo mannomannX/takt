@@ -498,11 +498,15 @@ impl<'t, 's> Parser<'t, 's> {
             "group" => AttrKind::Group(self.string()?),
             "doc" => AttrKind::Doc(self.string()?),
             "budget" => AttrKind::Budget(self.parse_budget()?),
+            "polling" => {
+                self.expect_word("unchecked")?;
+                AttrKind::PollingUnchecked
+            }
             other => {
                 return Err(self.error_at(
                     name_tok,
                     format!("unbekanntes Attribut `{other}`"),
-                    Some("Attribute: safe max_age rate max_rate capacity framing overflow wake jitter max_slew debounce capacity_bytes expect_len irreversible label display group doc budget"),
+                    Some("Attribute: safe max_age rate max_rate capacity framing overflow wake jitter max_slew debounce capacity_bytes expect_len irreversible label display group doc budget polling"),
                 ));
             }
         };

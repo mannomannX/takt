@@ -1,0 +1,27 @@
+system:
+    language    = 1
+    tick        = 1 ms
+    tick_source = hw("sys/clock")
+
+# Pruefung 59 (12.9, FB-10): Ein gepolltes Geraet laeuft zwischen zwei
+# Ticks nicht ueber. Die Rechnung braucht vier Groessen aus der
+# Hardware-Konfiguration und der Kalibrierung; ohne sie ist sie nicht
+# entscheidbar. `with polling = unchecked` verzichtet ausdruecklich —
+# die Freigabe steht am Kopf und erscheint im Lauf-Header.
+
+record UartRegs layout little:
+    status : u8 with bits:
+        tx_full : bool at 0 ro
+
+port ust : UartRegs @ mmio(0x60000000)
+
+output busy : bool @ hw("o/busy") with safe = false
+
+driver machine uart0 every 10 ms with polling = unchecked:
+    initial RUN
+
+    state RUN:
+        loop:
+            busy = ust.status.tx_full
+
+        after 1 s: -> RUN
