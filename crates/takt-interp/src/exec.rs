@@ -372,6 +372,8 @@ impl Ctx<'_, '_> {
             }
             Observe::Verify { cond, message, req } => {
                 let ok = matches!(self.eval(cond), Ok(Value::Bool(true)));
+                // 13.4: `verify` zaehlt wie ein `check` fuer die Rueckverfolgung.
+                self.outer.cover(CoverKind::Check, format!("verify @{}", span.start));
                 Observation::Verify { span, ok, message: render(message, self), req: req.clone() }
             }
             Observe::Verdict { pass, message } => {

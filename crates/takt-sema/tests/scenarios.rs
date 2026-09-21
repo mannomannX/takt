@@ -108,7 +108,7 @@ fn coverage_counts_states_transitions_and_checks() {
     assert!(has(CoverKind::Check, "dut", "check"), "{c:?}");
     assert!(!has(CoverKind::CheckFailed, "dut", "check"), "{c:?}");
     let u = takt_interp::coverage::universe(&p);
-    assert_eq!(u.checks, 2, "ein `check` und ein `expect`");
+    assert_eq!(u.checks, 3, "ein `check`, ein `expect` und ein `verify` (13.4)");
     let text = c.render();
     assert!(text.starts_with("# takt-coverage 1\n"), "{text}");
 }

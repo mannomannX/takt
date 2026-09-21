@@ -1,0 +1,62 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Anforderungsreferenzen (13.4): `check` und `verify` tragen eine `req`-ID.
+# `takt check --report` listet je ID ihre Stellen, `takt test` ergaenzt die
+# Szenarien, die sie durchlaufen haben. SR-3 liegt in einem Zustand, den
+# kein Szenario erreicht — seine Zeile nennt darum kein Szenario.
+
+input  p     : float[bar] in 0..100 bar @ hw("daq/p")   with max_age = 10 ms
+output valve : bool                     @ hw("o/valve") with safe = false
+output p_sim : float[bar]               @ sim("daq/p")  with safe = 1 bar
+
+machine dut:
+    initial CLOSED
+
+    state CLOSED:
+        loop:
+            check p < 50 bar, "overpressure" req "SR-1"
+
+        when p > 5 bar: -> OPEN
+
+    state OPEN:
+        enter:
+            valve = true
+
+        loop:
+            check p < 80 bar, "hard limit" req "SR-2"
+
+        when p < 2 bar: -> CLOSED
+        when p > 90 bar: -> LOCKED
+
+    state LOCKED:
+        enter:
+            valve = false
+
+        loop:
+            check p < 10 bar, "locked out" req "SR-3"
+
+        when p < 1 bar: -> CLOSED
+
+scenario "pressure rises" every 1 ms:
+    initial RUN
+
+    state RUN:
+        sequence:
+            p_sim = 1 bar
+            wait 3 ms
+            p_sim = 10 bar
+            until dut.state == OPEN timeout 10 ms
+            verify valve, "valve should open" req "SR-2"
+            verdict pass "opened"
+
+scenario "stays closed" every 1 ms:
+    initial RUN
+
+    state RUN:
+        sequence:
+            p_sim = 1 bar
+            wait 5 ms
+            verify dut.state == CLOSED, "must stay closed" req "SR-1"
+            verdict pass "closed"

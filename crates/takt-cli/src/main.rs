@@ -31,6 +31,7 @@
 //! Exit-Code 1 bei Fehlern, nicht kanonischen Dateien (`fmt --check`), einem
 //! Golden-Unterschied oder dem Lauf-Verdikt FAIL (13.5).
 
+use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 use std::fmt::Write as _;
@@ -213,9 +214,43 @@ fn check(args: &Args) -> bool {
             for line in checked.report.lines() {
                 println!("  {line}");
             }
+            if let Some(program) = &checked.program {
+                for line in requirement_lines(&takt_mir::requirements::index(program), &map, None) {
+                    println!("  {line}");
+                }
+            }
         }
     }
     ok
+}
+
+/// Der Abschnitt „Anforderungen" des Reports (13.4): je `req`-ID ihre
+/// pruefenden Stellen. `by_scenario` nennt je Stelle die Szenarien, die
+/// sie durchliefen; ohne sie bleibt es bei der Stelle.
+fn requirement_lines(
+    index: &takt_mir::requirements::Index,
+    map: &SourceMap,
+    by_scenario: Option<&BTreeMap<(String, String), Vec<String>>>,
+) -> Vec<String> {
+    if index.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!("Anforderungen:        {} (13.4)", index.len())];
+    for (req, sites) in &index.by_req {
+        out.push(format!("  {req}"));
+        for s in sites {
+            let (line, _) = map.line_col(s.span);
+            let mut text =
+                format!("    {} {}:{line} {} {}", s.kind.name(), map.name(s.span.file), s.machine_name, s.block);
+            if let Some(by) = by_scenario {
+                let (machine, key) = s.cover_key();
+                let names = by.get(&(machine.to_string(), key)).map(Vec::as_slice).unwrap_or(&[]);
+                let _ = write!(text, " — {}", if names.is_empty() { "kein Szenario".into() } else { names.join(", ") });
+            }
+            out.push(text);
+        }
+    }
+    out
 }
 
 /// `takt latency`: Safe-State-Latenz je Output (9.4.5).
@@ -1041,6 +1076,8 @@ fn test(args: &Args) -> bool {
     }
     let universe = takt_interp::coverage::universe(&program);
     let mut coverage = takt_interp::Coverage::default();
+    // 13.4: je Pruefstelle die Szenarien, die sie durchliefen.
+    let mut by_scenario: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut ok = true;
     for name in &scenarios {
         let options =
@@ -1067,9 +1104,24 @@ fn test(args: &Args) -> bool {
             }
         }
         ok &= result.verdict != Verdict::Fail;
+        for (kind, machine, key) in result.coverage.hits.keys() {
+            if *kind == takt_interp::CoverKind::Check {
+                by_scenario.entry((machine.clone(), key.clone())).or_default().push(name.clone());
+            }
+        }
         coverage.merge(&result.coverage);
     }
     println!("Coverage: {}", coverage.summary(universe));
+    // 13.4: welche Szenarien welche Anforderung durchliefen.
+    let index = takt_mir::requirements::index(&program);
+    if !index.is_empty() {
+        if let Some(src) = read(path) {
+            let map = SourceMap::single(path.as_str(), src.as_str());
+            for line in requirement_lines(&index, &map, Some(&by_scenario)) {
+                println!("{line}");
+            }
+        }
+    }
     for c in program.channels.iter().filter(|c| c.attrs.irreversible) {
         let covered = coverage.hits.keys().any(|(k, _, n)| *k == takt_interp::CoverKind::Irreversible && *n == c.name);
         if !covered {

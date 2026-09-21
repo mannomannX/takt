@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 
 use takt_mir::Program;
 use takt_mir::machine::MachineKind;
-use takt_mir::stmt::StmtKind;
+use takt_mir::stmt::{Observe, StmtKind};
 
 use crate::env::CoverKind;
 
@@ -93,7 +93,8 @@ pub fn universe(p: &Program) -> Universe {
         u.handlers += m.handlers.len() as u64 + m.states.iter().map(|s| s.handlers.len() as u64).sum::<u64>();
         for b in m.blocks() {
             b.walk(&mut |s| {
-                if matches!(s.kind, StmtKind::Check { .. }) {
+                // 13.4: `verify` zaehlt mit, weil es dieselbe Coverage-Art traegt.
+                if matches!(s.kind, StmtKind::Check { .. } | StmtKind::Observe(Observe::Verify { .. })) {
                     u.checks += 1;
                 }
             });

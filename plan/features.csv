@@ -126,6 +126,7 @@ SEM-13.1,Semantik/Abschnitt,13.1,Referenzinterpreter und differentielles Testen,
 SEM-13.2,Semantik/Abschnitt,13.2,Coverage aus der Simulation,,M6 (v1.1),fertig,
 SEM-13.3,Semantik/Abschnitt,13.3,Eigenschaftsprüfung (v1.1),v1.1,M6,fertig,"Monitore im Interpreter und nativ (Schritt 19), Kodierung, Export, Solver und Pruefstellen-Klassifikation (Schritte 20-22); Reichweite: Invarianten ohne Zeitoperatoren, kein Strom/Handler/Job in der Kodierung"
 SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M5 (Embedded),offen,
+SEM-13.4-Anforderungen,Semantik/Abschnitt,13.4,"Anforderungsreferenzen im Report: `takt check --report` listet je `req`-ID ihre Stellen, `takt test` die Szenarien dazu (v1.2)",v1.2,M8,fertig,"`takt-mir::requirements`; `verify` zaehlt fuer die Coverage wie ein `check`; Korpus `61_requirements.takt`, `takt-cli/tests/report.rs`"
 SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4 (Codegen),fertig,
 SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,fertig,
 SEM-13.7,Semantik/Abschnitt,13.7,Kampagnen (v1.1),v1.1,M6,fertig,

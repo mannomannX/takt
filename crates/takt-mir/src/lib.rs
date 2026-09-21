@@ -28,6 +28,7 @@ pub mod machine;
 pub mod pattern;
 pub mod persist;
 pub mod program;
+pub mod requirements;
 pub mod sample;
 pub mod stmt;
 pub mod sys;

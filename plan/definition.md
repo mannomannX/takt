@@ -2045,6 +2045,7 @@ Eine Annahme beschränkt die **Beweisverpflichtung**, nicht die Typsicherheit �
 ### 13.4 Zertifizierungspfad
 - Die Sprache ist per Konstruktion eine Teilmenge im Sinne von MISRA/JPL Power of Ten (keine Rekursion, keine dynamische Allokation, beschränkte Schleifen, keine Exceptions).
 - Traceability: jeder `check`, `expect`, `alert`, `verify` und jede Transition trägt eine stabile ID (Hash aus Pfad und Text) und optional eine Anforderungsreferenz (`check p < LIMIT, "…" req "SR-12"`, v1.2).
+- Der Report führt die Referenzen zurück: `takt check --report` schließt mit einem Abschnitt „Anforderungen" — je ID, alphabetisch, ihre prüfenden Stellen mit Art (`check`, `expect`, `verify`), Datei, Zeile, Maschine und Block. `takt test` ergänzt je Stelle die Szenarien, die sie durchlaufen haben; eine Stelle, die keines erreicht, trägt „kein Szenario" und ist keine Warnung. Ein Programm ohne `req` hat den Abschnitt nicht. Für die Abdeckung zählt ein `verify` wie ein `check` (13.2).
 - Qualifizierbarer Codegen (SCADE-Vorbild) ist eine spätere Investition; die Architektur (kleine MIR, Referenzinterpreter, differentielles Testen) ist darauf ausgelegt.
 - Zielnormen: IEC 61508 (SIL 2–3), IEC 61513 (Nuklear), DO-178C (Ground Support Equipment bis Flight).
 
