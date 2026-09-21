@@ -81,9 +81,9 @@ pub const SC56: &str = "SC-56";
 /// `map<K, V, N>`: der Schluessel ist POD mit Gleichheit — ohne
 /// Fliesskomma (3.9).
 pub const SC57: &str = "SC-57";
-/// Registerports: nur in einer `driver machine` (12.9).
+/// Registerports: nur in einer `driver machine` (12.10).
 pub const SC64: &str = "SC-64";
-/// Gepolltes Geraet laeuft zwischen zwei Ticks nicht ueber (12.9).
+/// Gepolltes Geraet laeuft zwischen zwei Ticks nicht ueber (12.10).
 pub const SC59: &str = "SC-59";
 /// `tunable param` steht nicht, wo eine Compile-Zeit-Konstante verlangt
 /// ist (8.4): Array-Groessen, Kapazitaeten, `repeat`.

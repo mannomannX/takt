@@ -1,5 +1,5 @@
 //! Prüfung 59: Ein gepolltes Gerät läuft zwischen zwei Ticks nicht über
-//! (12.9, FB-10).
+//! (12.10, FB-10).
 //!
 //! **Was hier belegt wird.** Die Ungleichung `fifo_depth / byte_rate >=
 //! P_m + jitter + wcet_poll` urteilt nur, wenn alle vier Größen da sind.

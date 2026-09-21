@@ -498,14 +498,17 @@ impl Lowerer<'_> {
                     }
                     Some(Place::Output(c))
                 }
-                // 12.9: Ein Port ist nur in einer `driver machine` erreichbar
+                // 12.10: Ein Port ist nur in einer `driver machine` erreichbar
                 // (Pruefung 64); der Zugriff schreibt sofort.
                 Entity::Port(p) => {
                     if !self.in_driver() {
                         self.error_hint(
                             crate::checks::SC64,
                             e.span,
-                            format!("`{}` ist ein Port und nur in einer `driver machine` erreichbar (12.9)", name.name),
+                            format!(
+                                "`{}` ist ein Port und nur in einer `driver machine` erreichbar (12.10)",
+                                name.name
+                            ),
                             "`driver machine` erklaert, dass die Maschine Register anfasst",
                         );
                         return None;
@@ -1570,7 +1573,7 @@ impl Lowerer<'_> {
 }
 
 impl Lowerer<'_> {
-    /// Laeuft das Lowering gerade in einer `driver machine`? (12.9)
+    /// Laeuft das Lowering gerade in einer `driver machine`? (12.10)
     fn in_driver(&self) -> bool {
         self.mctx.as_ref().is_some_and(|m| m.machine.driver)
     }

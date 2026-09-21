@@ -216,7 +216,7 @@ driver machine uart_port:
             # Auf der Zielhardware entnaehme eine Schleife so viele Bytes,
             # wie `rx_level` meldet — jedes Lesen des Datenregisters holt
             # das naechste. Im Sim-Build geht das nicht: Ein Port liest den
-            # Modellwert des Ticks (12.9), und der ist innerhalb des Ticks
+            # Modellwert des Ticks (12.10), und der ist innerhalb des Ticks
             # derselbe. Sechzehn Lesevorgaenge lieferten sechzehnmal
             # dasselbe Byte. Ein Register, das beim Lesen weiterschaltet,
             # ist mit einem Pegelkanal nicht darstellbar (FB-212).
@@ -642,7 +642,7 @@ property no_silent_loss: always(uart_framer.frames_in >= uart_link.delivered)
 # 7. Simulationsmodell und Szenarien
 # ============================================================================
 
-# Das Geraetemodell spricht die Kanaele des Ports (12.9): `mmio/ADR/r`
+# Das Geraetemodell spricht die Kanaele des Ports (12.10): `mmio/ADR/r`
 # stellt, was ein Registerlesen liefert, `mmio/ADR/w` sammelt jeden
 # Schreibvorgang. Damit haengen Modell und Treiber an derselben Adresse,
 # ohne einander zu kennen.

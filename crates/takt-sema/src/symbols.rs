@@ -55,7 +55,7 @@ pub enum Entity {
     Node(NodeId),
     /// Trigger (v1.2).
     Trigger(TriggerId),
-    /// Registerport (12.9, v1.2).
+    /// Registerport (12.10, v1.2).
     Port(PortId),
     /// Profil.
     Profile(ProfileId),

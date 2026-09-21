@@ -481,7 +481,7 @@ fn declared_budgets(p: &Program, target: &Target, _load: &Load) -> Vec<Diagnosti
 /// lange der Treiber schlimmstenfalls nicht hinsieht.
 ///
 /// **Welche Maschine ein Gerät pollt.** Ein Port ist im Sim-Build das
-/// Channelpaar `mmio/ADR/r` und `mmio/ADR/w` (12.9), und ein Channel nennt
+/// Channelpaar `mmio/ADR/r` und `mmio/ADR/w` (12.10), und ein Channel nennt
 /// sein Gerät (8.10). Damit ist die Zuordnung schon da: kein zweiter
 /// Bindungsweg, dieselbe Regel wie für jeden anderen Kanal — die Adresse
 /// ist ein Schlüssel in die Konfiguration.

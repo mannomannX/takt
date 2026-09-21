@@ -3,7 +3,7 @@ system:
     tick        = 1 ms
     tick_source = hw("sys/clock")
 
-# Pruefung 59 (12.9, FB-10): Ein gepolltes Geraet laeuft zwischen zwei
+# Pruefung 59 (12.10, FB-10): Ein gepolltes Geraet laeuft zwischen zwei
 # Ticks nicht ueber. Die Rechnung braucht vier Groessen aus der
 # Hardware-Konfiguration und der Kalibrierung; ohne sie ist sie nicht
 # entscheidbar. `with polling = unchecked` verzichtet ausdruecklich —

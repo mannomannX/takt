@@ -1,4 +1,4 @@
-//! Programm und Tabellen (Referenz 2.4, 7.1, 8.1 bis 8.6, 11.3, 12.9, 13.3,
+//! Programm und Tabellen (Referenz 2.4, 7.1, 8.1 bis 8.6, 11.3, 12.10, 13.3,
 //! 13.7; plan/mir.md 2.1).
 
 use takt_diag::Span;
@@ -447,11 +447,11 @@ pub struct Program {
     pub campaigns: Vec<Campaign>,
     /// Trigger (v1.2).
     pub triggers: Vec<Trigger>,
-    /// Registerports (12.9, v1.2).
+    /// Registerports (12.10, v1.2).
     pub ports: Vec<Port>,
 }
 
-/// Ein Registerport (12.9, v1.2): ein Record an einer festen Adresse.
+/// Ein Registerport (12.10, v1.2): ein Record an einer festen Adresse.
 ///
 /// Jeder Feldzugriff ist ein sofortiger Lade- oder Speichervorgang in
 /// Programmreihenfolge — nicht zu Tick-Beginn abgetastet, nicht an das

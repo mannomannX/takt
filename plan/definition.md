@@ -247,7 +247,7 @@ profile_decl   := "profile" UPPER_IDENT ":" NEWLINE INDENT { UPPER_IDENT "=" con
 
 channel_decl   := ( "input" | "output" ) IDENT ":" type "@" binding [ "with" attr { "," attr } ] NEWLINE   (* @check 7, 17 *)
 stream_decl    := "stream" "<" elem_type ">" IDENT "with" attr { "," attr } NEWLINE            (* interner Stream, 8.6 *)   (* @check 43 *)
-port_decl      := "port" IDENT ":" TYPE_IDENT "@" "mmio" "(" HEX ")" NEWLINE                    (* @stage v1.2 — Treiberstufe *)
+port_decl      := "port" IDENT ":" TYPE_IDENT "@" "mmio" "(" HEX ")" NEWLINE                    (* @stage v1.2 — Treiberstufe 12.10 *)   (* @check 64 *)
 binding        := "hw" "(" STRING ")" | "sim" "(" STRING ")" | "none"                       (* STRING nach address_text *)   (* @check 7, 13 *)
 attr           := "safe" "=" const_expr | "max_age" "=" duration_lit | "rate" "=" const_expr   (* @check 17, 28, 48 *)
                 | "max_rate" "=" const_expr | "capacity" "=" int_lit | "framing" "=" framing
@@ -428,7 +428,7 @@ pattern_text   := { TEXT_CHAR | "{{" | "}}" | "{" IDENT ":" pattern_kind "}" | "
 pattern_kind   := "int" | "hex" | "float" | "word" | "str" [ "<" INT ">" ]
 format_text    := { TEXT_CHAR | "{{" | "}}" | "{" expr [ ":" format_spec ] "}" }                (* @start — Formatstring, 3.9 *)   (* @check 16 *)
 format_spec    := "hex" | "." INT | INT                                                          (* {x:hex} {x:.3} {x:08} *)
-address_text   := address_segment { "/" address_segment }                                        (* @start — hw()/sim()-Adresse (8.1, 12.9); Bedeutung: Hardware-Konfiguration 8.10 *)
+address_text   := address_segment { "/" address_segment }                                        (* @start — hw()/sim()-Adresse (8.1, 12.10); Bedeutung: Hardware-Konfiguration 8.10 *)
 address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                                              (* [a:b] halboffen, bindet ein Channel-Array: tc[0:16] sind 16 Kanaele *)
 ```
 
@@ -475,7 +475,7 @@ address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                            
 | `default` | Standardwert eines POD-Typs (3.7). |
 | `inout` | In-place-Parameter reiner Funktionen; Zucker für Rückgabe (3.9). |
 | `irreversible` | Output ohne Rückweg (z. B. einmalig programmierbare Bits); verlangt `expect` davor und Szenario-Abdeckung (12.7). |
-| `driver machine`, `port` | Treiberstufe mit sofortigen Registerzugriffen (15; v1.2). |
+| `driver machine`, `port` | Treiberstufe mit sofortigen Registerzugriffen (12.10; v1.2). |
 | `tunable param` | Zur Laufzeit änderbarer Parameter mit Halte-Semantik, Range erzwungen, aufgezeichnet (8.4; v1.1). |
 | `follows` | Explizite Vorrangbeziehung zwischen Maschinen; frische Lesevorgänge im selben Tick (7.2; v1.1). |
 | `debounce`, `Suspect` | Entprellte Qualität mit beschränkter Haltedauer (3.5). |
@@ -1781,11 +1781,12 @@ sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereigni
 | 56 | `property`: nur lesend, alle Zeitoperatoren beschränkt (13.3) | F |
 | 57 | `map`: Schlüssel POD mit Gleichheit (3.9) | F |
 | 58 | Knoten (12.9): `follows` knotenlokal; `hops` aus der Topologie berechenbar; Knotentick Vielfaches von `system.tick` | F |
-| 59 | Treiberstufe (15, v1.2): Ein gepolltes Gerät läuft zwischen zwei Ticks nicht über — `fifo_depth[d] / byte_rate[d] >= P_m + jitter[tick_source] + wcet_poll[d]`, alle vier Größen aus der Hardware-Konfiguration (8.10) beziehungsweise der Konformitätsmessung (13.8). Fehlt eine, ist die Prüfung nicht entscheidbar: Sie verlangt die Messung oder die ausdrückliche Freigabe `with polling = unchecked`, die im Lauf-Header erscheint. Verletzung nennt drei Auswege: Periode senken, Gerät in die TCB geben (12.6), oder DMA statt Polling | F |
+| 59 | Treiberstufe (12.10, v1.2): Ein gepolltes Gerät läuft zwischen zwei Ticks nicht über — `fifo_depth[d] / byte_rate[d] >= P_m + jitter[tick_source] + wcet_poll[d]`, alle vier Größen aus der Hardware-Konfiguration (8.10) beziehungsweise der Konformitätsmessung (13.8). Fehlt eine, ist die Prüfung nicht entscheidbar: Sie verlangt die Messung oder die ausdrückliche Freigabe `with polling = unchecked`, die im Lauf-Header erscheint. Verletzung nennt drei Auswege: Periode senken, Gerät in die TCB geben (12.6), oder DMA statt Polling | F |
 | 60 | Channel-Bindung gegen die Hardware-Konfiguration (8.10): Einheit, Skalierung und Range eines `@ hw(…)`-Channels stimmen mit der Konfiguration überein. Ein Programm, das `float[bar]` bindet, während die Konfiguration `psi` führt, ist sonst unentdeckt — die Einheitenrechnung aus 3.2 endet am Channel-Rand. Fehlt die Konfiguration, entfällt die Prüfung (keine Eingabe, kein Urteil) | F |
 | 61 | `check c, "…" within d`: Die gerechnete Safe-State-Latenz (Satz 9.4.5) hält die geforderte Frist ein. Verglichen wird in Ticks (`d / T₀`); die Meldung nennt die Aufschlüsselung nach Erkennung, Bestätigung, Fault-Pfad und Commit, weil die Zahl sonst nicht zu verbessern ist | F |
 | 62 | `machine … with budget = {ram = …}`: Der gerechnete Speicher der Maschine (11.5, mit Overlay) liegt im deklarierten Budget. `wcet` braucht die Kalibrierung (13.8) und meldet bis dahin seine Stufe | F |
 | 63 | Zwei Lints ohne eigene Syntax: (a) `alert` und `check` mit **derselben** Bedingung im selben Block — die Polaritaet ist entgegengesetzt gemeint (5.6), und weil beide Zeilen gleich aussehen, faellt die Verwechslung sonst niemandem auf; (b) ein `profile`, das einen `param` nicht nennt — er nimmt still seinen Default, und das ist beim Lesen nicht von der Absicht zu unterscheiden (4.6) | W |
+| 64 | Treiberstufe (12.10, v1.2): Ein `port` wird nur in einer `driver machine` gelesen oder geschrieben. Wer Register anfasst, sagt es in der Deklaration; damit ist die Treiberstufe eines Programms an seinen Köpfen ablesbar. Eine `driver machine` ohne `port` ist eine Warnung | F |
 
 Die Kombination aus 4, 8, 9, 11, 17–22 und 30–32 ist die konstruktive Form der Sätze in Abschnitt 9.
 
@@ -2023,6 +2024,41 @@ input  i_u : float[A] @ hw("io1/ai0")  # Adresse nennt den Knoten (wie heute)
 9. **Simulation.** Hops sind Verzögerungen im Simulator; Satz 9.4.4 gilt mit Hops als Teil der Semantik.
 
 Warum diese Regeln schon heute gelten: v1-Programme laufen auf dem Hauptknoten mit `hops = 0` überall, Channel-Adressen sind bereits knotenpräfixiert, und `follows` ist bereits knotenlokal, weil es nur einen Knoten gibt. Nichts an einem v1-Programm muss sich ändern, wenn v2 kommt.
+
+### 12.10 Treiberstufe (v1.2): Register, Ports und Gerätemodelle
+
+```
+record UartStatus layout little:
+    flags : u32 with bits:
+        tx_full : bool at 0 ro         # nur lesbar
+        oflow   : bool at 1 w1c        # Schreiben einer Eins löscht
+        rx_level: u8   at 8..12
+
+port uart_st : UartStatus @ mmio(0x4000_1000)
+
+driver machine uart0 every 10 ms:
+    initial RUN
+    state RUN:
+        loop:
+            busy = uart_st.flags.tx_full      # sofortiges Registerlesen
+            uart_st.flags.oflow = true        # sofortiges Registerschreiben
+```
+
+**Was ein Port ist.** `port r : Rec @ mmio(ADR)` bindet einen Registerrecord an eine feste Adresse. Jeder Feldzugriff ist ein eigener Lade- oder Speichervorgang, **sofort und in Programmreihenfolge** — nicht zu Tick-Beginn abgetastet und nicht an das Tick-Ende verschoben, wie es ein Channel wäre (8.3). Das ist der ganze Unterschied zum übrigen I/O-Modell, und er ist beabsichtigt: Ein Statusregister, das man zweimal liest, soll zweimal gelesen werden, und ein Kommando, das vor dem nächsten stehen muss, darf nicht umsortiert werden. Im erzeugten Code ist das `load volatile` und `store volatile` an der Adresse.
+
+**Nur in einer `driver machine` (Prüfung 64).** Wer Register anfasst, sagt es in der Deklaration; damit ist die Treiberstufe eines Programms an seinen Köpfen ablesbar. Eine `driver machine` ohne `port` ist eine Warnung, kein Fehler — sie ist zulässig, aber wahrscheinlich ein Versehen.
+
+**Zugriffsarten am Bitfeld (3.7).** `rw ro wo w1c w0c rsvd` stehen am Feld und nicht am Träger, weil ein Register sie mischt. Entscheidend ist die Senkung: Eine Zuweisung an ein `w1c`-Feld wird **kein** Lese-Modifiziere-Schreibe, sondern ein einzelner Schreibvorgang mit Einzelbitmaske (`r.0 = 0.with_bit(k, true)`). Damit ist das Löschen ungesehener Ereignisse strukturell unmöglich. Aus demselben Grund darf ein Träger mit `w1c`- oder `w0c`-Feldern nicht als Ganzes geschrieben werden — der RMW käme sonst durch die Hintertür zurück.
+
+**Kosten.** Ein Portzugriff zählt in der Klasse `mem` (9.4.3), mit der Latenz des Geräts aus der Hardware-Konfiguration (`latency_ns`, 8.10), sonst einem Wort.
+
+**Gerätemodell in der Simulation: Pflicht.** Ein Port ist im Sim-Build ein Channel-Paar. Gelesen wird der `sim`-Output `mmio/ADR/r`, den ein Modell stellt — mit Unit-Delay wie jeder Modellwert (8.3). Geschrieben wird in den Eingabestrom `mmio/ADR/w`, der jeden Vorgang einzeln und in Reihenfolge führt, auch mehrere je Tick. Damit hängen Treiber und Modell an derselben Adresse, ohne einander zu kennen, und die Adresse bleibt ein Schlüssel in die Konfiguration (8.10) wie jede andere. Ohne Modell liest ein Port den Defaultwert seines Records; das ist kein Fehler, aber auch keine Aussage — die Hardware-Korrektheit eines Treibers ist Sache seiner Modell-Szenarien, nicht des Compilers.
+
+Ein Register, das **beim Lesen weiterschaltet** (eine FIFO hinter einem Datenregister), ist mit einem Pegelkanal nicht darstellbar: Innerhalb eines Ticks liefert jeder Lesevorgang denselben Modellwert. Ein Treiber, der im Sim-Build laufen soll, entnimmt solchen Registern darum ein Element je Tick.
+
+**Polling (Prüfung 59).** Ein gepolltes Gerät darf zwischen zwei Aktivierungen seines Treibers nicht überlaufen: `fifo_depth[d] / byte_rate[d] >= P_m + jitter[tick_source] + wcet_poll[d]`. Die ersten beiden Größen stehen am Gerät (8.10), der Jitter am Kanal der Tickquelle, `wcet_poll` kommt aus dem Kostenmodell mit Kalibrierung (13.8). Welche Maschine ein Gerät pollt, sagt die Konfiguration: Der Kanal des Ports nennt sein Gerät wie jeder andere Kanal. Fehlt eine der vier Größen, ist die Prüfung nicht entscheidbar und meldet das als Fehler — eine Prüfung, die bei fehlender Eingabe schweigt, wäre von einer bestandenen nicht zu unterscheiden. Die ausdrückliche Freigabe ist `with polling = unchecked` am Maschinenkopf; sie erscheint im Lauf-Header. Eine Verletzung nennt drei Auswege: Periode senken, das Gerät in die TCB geben (12.6) oder DMA statt Polling.
+
+**Was die Treiberstufe nicht ändert.** Totalität bleibt: Ein Portzugriff kann nicht fehlschlagen, es gibt keinen Bus-Fault und keine Zeitüberschreitung im Sprachmodell. Was die Hardware daraus macht, prüft die Simulation gegen das Modell und die Messung auf dem Board. Damit lassen sich einfache Treiber (GPIO, UART-Polling, SPI-Flash-Kommandos) in Takt schreiben; Startprogramme der ersten Generation behalten ihren Flash-Treiber in der Runtime (12.6).
 
 ---
 

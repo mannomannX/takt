@@ -2,7 +2,7 @@ system:
     language = 1
     tick     = 1 ms
 
-# Pruefung 64 (12.9): Ein Registerport ist nur in einer `driver machine`
+# Pruefung 64 (12.10): Ein Registerport ist nur in einer `driver machine`
 # erreichbar.
 
 record UartRegs layout little:

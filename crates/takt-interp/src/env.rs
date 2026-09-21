@@ -198,11 +198,11 @@ pub trait Outer {
     fn armed(&self, _t: TriggerId) -> EvalResult<Value> {
         bug("`armed` ausserhalb einer Maschine")
     }
-    /// Lesen eines Registerports (12.9): sofort, nicht aus dem Abbild.
+    /// Lesen eines Registerports (12.10): sofort, nicht aus dem Abbild.
     fn port_read(&mut self, _p: PortId) -> EvalResult<Value> {
         bug("Portzugriff ausserhalb eines Laufs")
     }
-    /// Schreiben eines Registerports (12.9).
+    /// Schreiben eines Registerports (12.10).
     fn port_write(&mut self, _p: PortId, _v: Value) -> EvalResult<()> {
         bug("Portzugriff ausserhalb eines Laufs")
     }

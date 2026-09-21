@@ -22,7 +22,7 @@ pub enum Quality {
     Bad,
 }
 
-/// Grund einer Degradierung (`x.reason`, 3.5, 12.9).
+/// Grund einer Degradierung (`x.reason`, 3.5, 12.10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub enum Reason {

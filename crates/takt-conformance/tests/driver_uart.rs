@@ -8,7 +8,7 @@
 //!
 //! Der Test sagt dreierlei: Das Programm uebersetzt ohne Fehler, seine
 //! Szenarien bestehen im Interpreter, und der Codegen bringt es ganz
-//! durch — jeder Portzugriff als `volatile` an seiner Adresse (12.9).
+//! durch — jeder Portzugriff als `volatile` an seiner Adresse (12.10).
 
 use takt_diag::Policy;
 use takt_mir::Program;
@@ -82,7 +82,7 @@ fn the_whole_program_lowers_to_native_code() {
         )
     );
 
-    // 12.9: Jeder Portzugriff steht an seiner Adresse und ist `volatile` —
+    // 12.10: Jeder Portzugriff steht an seiner Adresse und ist `volatile` —
     // sonst duerfte LLVM zwei Registerlesevorgaenge zusammenfassen.
     for address in [0x4000_1000u64, 0x4000_1004, 0x4000_1008, 0x4000_100C] {
         let want = format!("inttoptr i64 {address} to ptr");

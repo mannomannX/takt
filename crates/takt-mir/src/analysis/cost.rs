@@ -172,7 +172,7 @@ fn observe_cost(o: &crate::stmt::Observe, types: &[Type], natives: &[CostVec]) -
 fn place_cost(p: &Place, types: &[Type], natives: &[CostVec]) -> CostVec {
     match p {
         Place::Var(_) | Place::Output(_) => CostVec::default(),
-        // 12.9: Ein Portzugriff ist ein Lade- oder Speichervorgang.
+        // 12.10: Ein Portzugriff ist ein Lade- oder Speichervorgang.
         Place::Port(_) => CostVec { mem: 1, ..CostVec::default() },
         Place::Field(b, _) => place_cost(b, types, natives),
         Place::Index(b, i) => {

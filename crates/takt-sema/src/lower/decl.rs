@@ -1550,7 +1550,7 @@ fn access_of(a: ast::Access) -> Access {
 }
 
 impl Lowerer<'_> {
-    /// `port NAME : Regs @ mmio(0x…)` (12.9, v1.2).
+    /// `port NAME : Regs @ mmio(0x…)` (12.10, v1.2).
     ///
     /// Der Port bindet einen Registerrecord an eine feste Adresse. Nur
     /// eine `driver machine` darf ihn benutzen (Pruefung 64); wer ihn

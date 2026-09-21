@@ -69,7 +69,7 @@ pub enum Place {
     Var(VarId),
     /// Eigener Output.
     Output(ChannelId),
-    /// Registerport (12.9): jeder Zugriff ist sofort und in
+    /// Registerport (12.10): jeder Zugriff ist sofort und in
     /// Programmreihenfolge, nicht ueber das Prozessabbild.
     Port(PortId),
     /// Feld.

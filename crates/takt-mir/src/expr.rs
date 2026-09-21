@@ -492,7 +492,7 @@ pub enum ExprKind {
     Builtin(Builtin),
     /// `t.armed` (7.5, v1.2): das Flag im Layout der armierenden Maschine.
     Armed(TriggerId),
-    /// Lesen eines Registerports (12.9, v1.2): sofort, in
+    /// Lesen eines Registerports (12.10, v1.2): sofort, in
     /// Programmreihenfolge, nicht ueber das Prozessabbild.
     PortRead(PortId),
     Field {

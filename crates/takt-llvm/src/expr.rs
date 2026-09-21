@@ -205,7 +205,7 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
             let v = m.inst(&format!("load i1, ptr {armed}"));
             Ok(Lowered { value: v.to_string(), ty: LlvmType::Int(1) })
         }
-        // 12.9: `load volatile` an der Adresse — sofort, nicht umgeordnet.
+        // 12.10: `load volatile` an der Adresse — sofort, nicht umgeordnet.
         ExprKind::PortRead(id) => {
             let port = p.ports.get(id.index()).ok_or(NotYet { what: "Port" })?;
             let ptr = m.inst(&format!("inttoptr i64 {} to ptr", port.address));

@@ -469,13 +469,13 @@ impl Lowerer<'_> {
                 self.error(SC3, span, format!("`{}` ist eine Funktion; Aufruf mit `(...)`", i.name()));
                 None
             }
-            // 12.9: Ein Portlesen ist sofort und nur in einer `driver machine`.
+            // 12.10: Ein Portlesen ist sofort und nur in einer `driver machine`.
             Entity::Port(p) => {
                 if !self.mctx.as_ref().is_some_and(|m| m.machine.driver) {
                     self.error_hint(
                         crate::checks::SC64,
                         span,
-                        format!("`{}` ist ein Port und nur in einer `driver machine` erreichbar (12.9)", name.name),
+                        format!("`{}` ist ein Port und nur in einer `driver machine` erreichbar (12.10)", name.name),
                         "`driver machine` erklaert, dass die Maschine Register anfasst",
                     );
                     return None;

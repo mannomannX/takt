@@ -409,7 +409,7 @@ impl Outer for MachineEnv<'_, '_> {
         machine::builtin_value(b, m, self.state, self.tick, self.tick_ns, self.last_fault_value(self.loaded))
     }
 
-    /// 12.9: Ein Port ist im Sim-Build ein Channel-Paar. Gelesen wird der
+    /// 12.10: Ein Port ist im Sim-Build ein Channel-Paar. Gelesen wird der
     /// `sim`-Output `mmio/ADR/r`, den ein Modell stellt — mit Unit-Delay
     /// wie jeder Modellwert (8.3).
     fn port_read(&mut self, p: PortId) -> EvalResult<Value> {
@@ -422,7 +422,7 @@ impl Outer for MachineEnv<'_, '_> {
         }
     }
 
-    /// 12.9: Ein Schreibvorgang wird ein Element des Eingangsstroms
+    /// 12.10: Ein Schreibvorgang wird ein Element des Eingangsstroms
     /// `mmio/ADR/w` — in Reihenfolge, auch mehrere je Tick.
     fn port_write(&mut self, p: PortId, v: Value) -> EvalResult<()> {
         let port = &self.loaded.program.ports[p.index()];
@@ -1602,7 +1602,7 @@ fn trigger_consts(
     Ok(out)
 }
 
-/// Die `sim`-Adresse eines Channels als Text (8.3, 12.9).
+/// Die `sim`-Adresse eines Channels als Text (8.3, 12.10).
 fn sim_address(c: &takt_mir::program::Channel) -> Option<String> {
     let takt_mir::program::Binding::Sim(a) = &c.binding else { return None };
     Some(a.segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("/"))

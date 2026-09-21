@@ -74,7 +74,7 @@ pub enum ArithKind {
     Singular,
 }
 
-/// Runtime-Fault-Art (5.3, 7.3, 12.6, 12.9).
+/// Runtime-Fault-Art (5.3, 7.3, 12.6, 12.10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub enum RuntimeKind {

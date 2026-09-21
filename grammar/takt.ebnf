@@ -91,7 +91,7 @@ profile_decl   := "profile" UPPER_IDENT ":" NEWLINE INDENT { UPPER_IDENT "=" con
 
 channel_decl   := ( "input" | "output" ) IDENT ":" type "@" binding [ "with" attr { "," attr } ] NEWLINE   (* @check 7, 17 *)
 stream_decl    := "stream" "<" elem_type ">" IDENT "with" attr { "," attr } NEWLINE            (* interner Stream, 8.6 *)   (* @check 43 *)
-port_decl      := "port" IDENT ":" TYPE_IDENT "@" "mmio" "(" HEX ")" NEWLINE                    (* @stage v1.2 — Treiberstufe *)
+port_decl      := "port" IDENT ":" TYPE_IDENT "@" "mmio" "(" HEX ")" NEWLINE                    (* @stage v1.2 — Treiberstufe 12.10 *)   (* @check 64 *)
 binding        := "hw" "(" STRING ")" | "sim" "(" STRING ")" | "none"                       (* STRING nach address_text *)   (* @check 7, 13 *)
 attr           := "safe" "=" const_expr | "max_age" "=" duration_lit | "rate" "=" const_expr   (* @check 17, 28, 48 *)
                 | "max_rate" "=" const_expr | "capacity" "=" int_lit | "framing" "=" framing
@@ -272,5 +272,5 @@ pattern_text   := { TEXT_CHAR | "{{" | "}}" | "{" IDENT ":" pattern_kind "}" | "
 pattern_kind   := "int" | "hex" | "float" | "word" | "str" [ "<" INT ">" ]
 format_text    := { TEXT_CHAR | "{{" | "}}" | "{" expr [ ":" format_spec ] "}" }                (* @start — Formatstring, 3.9 *)   (* @check 16 *)
 format_spec    := "hex" | "." INT | INT                                                          (* {x:hex} {x:.3} {x:08} *)
-address_text   := address_segment { "/" address_segment }                                        (* @start — hw()/sim()-Adresse (8.1, 12.9); Bedeutung: Hardware-Konfiguration 8.10 *)
+address_text   := address_segment { "/" address_segment }                                        (* @start — hw()/sim()-Adresse (8.1, 12.10); Bedeutung: Hardware-Konfiguration 8.10 *)
 address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                                              (* [a:b] halboffen, bindet ein Channel-Array: tc[0:16] sind 16 Kanaele *)

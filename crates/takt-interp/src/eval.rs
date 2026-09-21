@@ -237,7 +237,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
             ExprKind::Builtin(b) => self.outer.builtin(*b),
             // 7.5: `armed` liegt im Layout der armierenden Maschine.
             ExprKind::Armed(t) => self.outer.armed(*t),
-            // 12.9: Ein Portlesen geht sofort an die Hardware; in der
+            // 12.10: Ein Portlesen geht sofort an die Hardware; in der
             // Simulation liefert das Modell den Wert (8.3).
             ExprKind::PortRead(p) => self.outer.port_read(*p),
             ExprKind::Field { base, field } => {
@@ -856,7 +856,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
     /// `Value` und braucht darum einen eigenen Weg; alles andere laeuft
     /// ueber `place_mut`.
     pub fn assign(&mut self, place: &Place, value: Value, span: Span) -> EvalResult<()> {
-        // 12.9: Ein Portzugriff geht sofort an die Hardware, nicht ueber
+        // 12.10: Ein Portzugriff geht sofort an die Hardware, nicht ueber
         // eine Stelle im Abbild.
         if let Place::Port(p) = place {
             return self.outer.port_write(*p, value);
@@ -887,7 +887,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 return Ok(());
             }
         }
-        // 12.9: Eine Stelle *unter* einem Port hat keinen Speicher, in dem
+        // 12.10: Eine Stelle *unter* einem Port hat keinen Speicher, in dem
         // sie liegen koennte. Der ganze Record wird gelesen, veraendert und
         // in einem Zug zurueckgeschrieben.
         let (root, steps) = self.path(place, span)?;

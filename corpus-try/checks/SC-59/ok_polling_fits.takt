@@ -3,12 +3,12 @@ system:
     tick        = 1 ms
     tick_source = hw("sys/clock")
 
-# Pruefung 59 (12.9, FB-10): `fifo_depth / byte_rate >= P_m + jitter +
+# Pruefung 59 (12.10, FB-10): `fifo_depth / byte_rate >= P_m + jitter +
 # wcet_poll`. Mit `hw/sc59.hw` laeuft das FIFO nach 88 ms voll, der
 # Treiber sieht alle 10 ms hin — die Ungleichung haelt.
 #
 # Die Zuordnung Treiber zu Geraet kommt ohne neue Syntax aus: Der Port
-# hat im Sim-Build die Kanaele `mmio/ADR/r` und `mmio/ADR/w` (12.9), und
+# hat im Sim-Build die Kanaele `mmio/ADR/r` und `mmio/ADR/w` (12.10), und
 # ein Kanal nennt sein Geraet (8.10).
 
 record UartRegs layout little:
