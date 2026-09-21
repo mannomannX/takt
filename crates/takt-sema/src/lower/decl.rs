@@ -91,9 +91,12 @@ pub fn config_from(file: &ast::File, edition: u32, diags: &mut Vec<Diagnostic>) 
                 }
                 ast::SystemItem::Language(_) => {}
                 ast::SystemItem::TcbPolicy(p) => {
+                    config.tcb_reviewed = matches!(p, ast::TcbPolicy::Reviewed(_));
                     config.tcb_allowlist = match p {
                         ast::TcbPolicy::CuratedOnly => Vec::new(),
-                        ast::TcbPolicy::Allowlist(names) => names.iter().map(|n| n.name.clone()).collect(),
+                        ast::TcbPolicy::Allowlist(names) | ast::TcbPolicy::Reviewed(names) => {
+                            names.iter().map(|n| n.name.clone()).collect()
+                        }
                     }
                 }
                 ast::SystemItem::Overrun(p) => {

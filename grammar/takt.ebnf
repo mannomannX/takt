@@ -64,7 +64,7 @@ system_item    := "tick" "=" duration_lit NEWLINE
                 | "target" "=" IDENT NEWLINE                                              (* Laufzeitprofil, 12.8 *)
                 | "float" "=" ( "f32" | "f64" ) NEWLINE                                    (* Breite von float, 4.2; Default f64 *)
                 | "language" "=" INT NEWLINE                                                (* Edition, 2.5 *)   (* @check 49 *)
-                | "tcb_policy" "=" ( "curated_only" | "allowlist" "(" IDENT { "," IDENT } ")" ) NEWLINE   (* Projekt-Natives 4.5, TCB-Manifest 9.5; v1.1 *)
+                | "tcb_policy" "=" ( "curated_only" | ( "allowlist" | "reviewed" ) "(" IDENT { "," IDENT } ")" ) NEWLINE   (* Projekt-Natives 4.5, TCB-Manifest 9.5; v1.1, reviewed: v1.2 *)
                 | "overrun" "=" ( "fault" | "alert" ) NEWLINE                                (* Reaktion auf Ueberlauf, 7.3; Default fault *)
 
 (* ---------------------------------------------------------------- Typen und Einheiten *)

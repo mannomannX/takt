@@ -211,14 +211,19 @@ impl<'t, 's> Parser<'t, 's> {
                 if self.eat_word("curated_only") {
                     SystemItem::TcbPolicy(TcbPolicy::CuratedOnly)
                 } else {
-                    self.expect_word("allowlist")?;
+                    let reviewed =
+                        if self.eat_word("reviewed") { true } else { self.expect_word("allowlist").map(|_| false)? };
                     self.expect_op("(")?;
                     let mut names = vec![self.ident()?];
                     while self.eat_op(",") {
                         names.push(self.ident()?);
                     }
                     self.expect_op(")")?;
-                    SystemItem::TcbPolicy(TcbPolicy::Allowlist(names))
+                    SystemItem::TcbPolicy(if reviewed {
+                        TcbPolicy::Reviewed(names)
+                    } else {
+                        TcbPolicy::Allowlist(names)
+                    })
                 }
             }
             "overrun" => {

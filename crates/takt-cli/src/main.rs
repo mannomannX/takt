@@ -27,6 +27,7 @@
 //! takt fmt   DATEI… [--check] [--stdout] [--snippet] [--verify] [--edition]
 //! takt parse DATEI… [--ast] [--debug] [--snippet]
 //! takt tokens DATEI
+//! takt tcb review DATEI --native NAME --by NAME --date JJJJ-MM-TT [--review DATEI]
 //! ```
 //! Exit-Code 1 bei Fehlern, nicht kanonischen Dateien (`fmt --check`), einem
 //! Golden-Unterschied oder dem Lauf-Verdikt FAIL (13.5).
@@ -41,7 +42,7 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens DATEI… (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -67,6 +68,10 @@ impl Args {
     fn parse(rest: &[String]) -> Args {
         const WITH_VALUE: &[&str] = &[
             "--ticks",
+            "--native",
+            "--by",
+            "--date",
+            "--review",
             "--stim",
             "--golden",
             "--trace",
@@ -146,12 +151,87 @@ fn main() -> ExitCode {
         "graph" => graph(&args),
         "parse" => parse(&args),
         "tokens" => tokens(&args),
+        "tcb" => tcb(&args),
         _ => {
             eprintln!("{USAGE}");
             false
         }
     };
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// Pfad der Review-Datei; `--review` oder `natives.review` neben dem Programm.
+fn review_path(args: &Args, program: &str) -> std::path::PathBuf {
+    match args.value("--review") {
+        Some(p) => std::path::PathBuf::from(p),
+        None => std::path::Path::new(program).with_file_name("natives.review"),
+    }
+}
+
+/// Die Review-Datei, falls sie da ist; eine leere sonst.
+fn review_of(path: &std::path::Path) -> Option<takt_mir::review::Review> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Some(takt_mir::review::Review::default()) };
+    match takt_mir::review::parse(&text) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            eprintln!("{}:{}: {}", path.display(), e.line, e.message);
+            None
+        }
+    }
+}
+
+/// Die Quelle eines Natives, relativ zum Programm gesucht.
+fn native_source(program: &str, from: &str) -> Option<Vec<u8>> {
+    let beside = std::path::Path::new(program).with_file_name(from);
+    std::fs::read(&beside).or_else(|_| std::fs::read(from)).ok()
+}
+
+/// `takt tcb review DATEI --native NAME --by NAME` (4.5, v1.2).
+///
+/// Schreibt die Zeile, nachdem jemand hingesehen hat. Das Werkzeug
+/// bezeugt nichts — es haelt fest, was der Pruefer sagt, und der Commit
+/// sagt, wer es war.
+fn tcb(args: &Args) -> bool {
+    if args.files.first().map(String::as_str) != Some("review") {
+        eprintln!("takt tcb review DATEI --native NAME --by NAME --date JJJJ-MM-TT [--review DATEI]");
+        return false;
+    }
+    let Some(path) = args.files.get(1) else {
+        eprintln!("takt tcb review: kein Programm genannt");
+        return false;
+    };
+    // Das Datum steht im Aufruf und kommt nicht aus der Systemuhr: Ein
+    // Werkzeug, das dieselbe Eingabe zweimal verschieden beantwortet,
+    // passt nicht zu reproduzierbaren Builds (11.3).
+    let (Some(native), Some(by), Some(date)) = (args.value("--native"), args.value("--by"), args.value("--date"))
+    else {
+        eprintln!("takt tcb review: `--native NAME`, `--by NAME` und `--date JJJJ-MM-TT` sind Pflicht");
+        return false;
+    };
+    let Some(program) = compile_file(path, args) else { return false };
+    let Some(def) = program.natives.iter().find(|n| n.name == native && n.from.is_some()) else {
+        eprintln!("{path}: kein Projekt-Native `{native}`");
+        return false;
+    };
+    let from = def.from.as_deref().unwrap_or_default();
+    let Some(source) = native_source(path, from) else {
+        eprintln!("{path}: `{from}` ist nicht lesbar");
+        return false;
+    };
+    let file = review_path(args, path);
+    let Some(mut review) = review_of(&file) else { return false };
+    review.insert(takt_mir::review::Entry {
+        native: native.to_string(),
+        hash: takt_mir::review::hash_of(&source),
+        by: by.to_string(),
+        date: date.to_string(),
+    });
+    if let Err(e) = std::fs::write(&file, review.render()) {
+        eprintln!("{}: {e}", file.display());
+        return false;
+    }
+    println!("{}: `{native}` geprueft von {by}", file.display());
+    true
 }
 
 fn read(path: &str) -> Option<String> {
@@ -199,6 +279,15 @@ fn check(args: &Args) -> bool {
             if let Some(hw) = hardware(args) {
                 diags.extend(takt_sema::calibrated::check_bindings(program, &hw));
                 diags.extend(takt_sema::calibrated::polling(program, &hw, kalibriert.as_ref()));
+            }
+            // 4.5: `tcb_policy = reviewed(…)` verlangt je Projekt-Native
+            // eine Zeile in `natives.review`.
+            if program.config.tcb_reviewed {
+                match review_of(&review_path(args, path)) {
+                    Some(review) => diags
+                        .extend(takt_sema::calibrated::reviewed(program, &review, &|from| native_source(path, from))),
+                    None => ok = false,
+                }
             }
             for d in diags {
                 println!("{}", if line_format { map.render_line(&d) } else { map.render(&d) });

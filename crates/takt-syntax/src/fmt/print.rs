@@ -148,7 +148,7 @@ impl Emitter<'_, '_> {
                 }
             }
             SystemItem::TcbPolicy(TcbPolicy::CuratedOnly) => self.name(),
-            SystemItem::TcbPolicy(TcbPolicy::Allowlist(names)) => {
+            SystemItem::TcbPolicy(TcbPolicy::Allowlist(names) | TcbPolicy::Reviewed(names)) => {
                 self.name();
                 self.op("(");
                 self.glue();

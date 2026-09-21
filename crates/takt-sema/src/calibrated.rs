@@ -24,10 +24,11 @@ use takt_mir::expr::{Expr, ExprKind};
 use takt_mir::hardware::{Hardware, HwChannel, Target};
 use takt_mir::machine::MachineKind;
 use takt_mir::program::{Binding, Direction, OverrunPolicy, Program, Sweep};
+use takt_mir::review::Review;
 use takt_mir::stmt::{Place, StmtKind};
 use takt_mir::types::{Const, Type};
 
-use crate::checks::{SC12, SC28, SC29, SC32, SC39, SC59, SC60};
+use crate::checks::{SC12, SC28, SC29, SC31, SC32, SC39, SC59, SC60};
 
 /// Prüft Kostenbudget und Schedulability gegen eine Kalibrierung.
 ///
@@ -588,6 +589,59 @@ fn poll_wcet_ns(m: &takt_mir::machine::Machine, target: &Target) -> Option<u64> 
         return None;
     }
     Some(ns(target.c_target.duration_ps(budget.activation + budget.fault_path)))
+}
+
+/// Prüfung 31, zweite Klausel: `tcb_policy = reviewed(…)` (4.5, v1.2).
+///
+/// Ein Projekt-Native erweitert die TCB. `allowlist` sagt, dass das
+/// Programm es weiß; `reviewed` verlangt zusätzlich, dass jemand
+/// hingesehen hat. Der Schlüssel ist der Hash der Quelle, nicht ihr Name:
+/// Eine geänderte Implementierung ist eine andere und braucht einen
+/// eigenen Eintrag.
+///
+/// **Warum hier und nicht in `checks.rs`.** Wie die Prüfungen darüber
+/// braucht sie eine zweite Eingabe — die Review-Datei und die Quellen —,
+/// und die hat nicht jeder Aufrufer. Ohne `reviewed` im Programm tut sie
+/// nichts.
+pub fn reviewed(p: &Program, review: &Review, source_of: &dyn Fn(&str) -> Option<Vec<u8>>) -> Vec<Diagnostic> {
+    if !p.config.tcb_reviewed {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for n in p.natives.iter().filter(|n| n.from.is_some()) {
+        let from = n.from.as_deref().unwrap_or_default();
+        let Some(source) = source_of(from) else {
+            out.push(
+                Diagnostic::error(SC31, n.span, format!("`{}`: `{from}` ist nicht lesbar", n.name))
+                    .with_suggestion("`reviewed` prüft den Hash der Quelle; ohne sie ist nichts zu prüfen".to_string()),
+            );
+            continue;
+        };
+        let hash = takt_mir::review::hash_of(&source);
+        if review.entry(&n.name, &hash).is_some() {
+            continue;
+        }
+        // Eine Zeile mit anderem Hash ist der haeufige Fall: Die Quelle
+        // wurde nach dem Review geaendert. Das zu sagen ist hilfreicher
+        // als „nicht geprueft".
+        let stale = review.any_for(&n.name);
+        let mut d = Diagnostic::error(
+            SC31,
+            n.span,
+            if stale.is_empty() {
+                format!("`{}` ist nicht geprüft; `natives.review` nennt es nicht", n.name)
+            } else {
+                format!("`{}` wurde seit dem Review geändert ({from})", n.name)
+            },
+        );
+        d = d.with_suggestion(format!(
+            "`takt tcb review <datei> --native {} --by <name> --date <tag>` schreibt die Zeile, \
+             nachdem jemand hingesehen hat (4.5)",
+            n.name
+        ));
+        out.push(d);
+    }
+    out
 }
 
 /// Pikosekunden als Nanosekunden, kaufmännisch gerundet.

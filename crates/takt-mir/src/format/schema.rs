@@ -292,7 +292,7 @@ codec_unit_enum!(OverrunPolicy { 0 Fault, 1 Alert });
 codec_struct!(TickTolerance { 1 one pct, 2 one ticks });
 codec_struct!(Config {
     1 one edition, 2 one tick, 3 one output_timing, 4 one fault_is_fail, 5 one float_width, 6 metaopt tick_source,
-    7 opt tick_tolerance, 8 metaopt target, 9 rep tcb_allowlist, 10 meta overrun,
+    7 opt tick_tolerance, 8 metaopt target, 9 rep tcb_allowlist, 10 meta overrun, 11 meta tcb_reviewed,
 });
 codec_struct!(DeclaredBudget { 1 opt ram, 2 meta span, 3 opt wcet_ns });
 codec_struct!(Meta { 1 opt label, 2 opt display, 3 opt group, 4 opt doc });

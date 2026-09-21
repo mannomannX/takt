@@ -159,12 +159,15 @@ pub enum OverrunPolicy {
     Alert,
 }
 
-/// `tcb_policy = curated_only | allowlist(f, …)` (4.5, 9.5)
+/// `tcb_policy = curated_only | allowlist(f, …) | reviewed(f, …)` (4.5, 9.5)
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub enum TcbPolicy {
     CuratedOnly,
     Allowlist(Vec<Ident>),
+    /// Wie `allowlist`, verlangt zusaetzlich je Native eine Zeile in
+    /// `natives.review` (v1.2).
+    Reviewed(Vec<Ident>),
 }
 
 /// `asap | boundary`

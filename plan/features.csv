@@ -292,7 +292,7 @@ system-Eintrag-float,system-Eintrag,2.3,"system_item: ""float""",,M0 (Parser/MIR
 system-Eintrag-f32,system-Eintrag,2.3,"system_item: ""f32""",,M0 (Parser/MIR-Entwurf),fertig,
 system-Eintrag-f64,system-Eintrag,2.3,"system_item: ""f64""",,M0 (Parser/MIR-Entwurf),fertig,
 system-Eintrag-language,system-Eintrag,2.3,"system_item: ""language""",,M0 (Parser/MIR-Entwurf),fertig,
-system-Eintrag-tcb_policy,system-Eintrag,2.3,"system_item: ""tcb_policy""",v1.1,M6,fertig,"curated_only | allowlist(…): Projekt-Natives (4.5), TCB-Manifest im Lauf-Header (9.5, 12.5)"
+system-Eintrag-tcb_policy,system-Eintrag,2.3,"system_item: ""tcb_policy""",v1.1,M6,fertig,"curated_only | allowlist(…) | reviewed(…): Projekt-Natives (4.5), TCB-Manifest im Lauf-Header (9.5, 12.5). M8 Schritt 22: `reviewed` verlangt je Native eine Zeile in `natives.review` mit dem SHA-256 der Quelle; `takt tcb review … --native … --by … --date …` schreibt sie, `takt check` lehnt ab, was keine hat oder sich seit dem Review geändert hat. Keine Signaturen — die Datei liegt im Repository, die Historie ist das Audit"
 Channel-Attribut-safe,Channel-Attribut,2.3,"attr: ""safe""",,M0 (Parser/MIR-Entwurf),fertig,
 Channel-Attribut-max_age,Channel-Attribut,2.3,"attr: ""max_age""",,M0 (Parser/MIR-Entwurf),fertig,
 Channel-Attribut-rate,Channel-Attribut,2.3,"attr: ""rate""",,M0 (Parser/MIR-Entwurf),fertig,
@@ -547,8 +547,8 @@ MEM-clear,Reservierter Membername,2.5,clear,,M0 (Parser/MIR-Entwurf),fertig,
 MEM-skip,Reservierter Membername,2.5,skip,,M0 (Parser/MIR-Entwurf),fertig,
 MEM-starts_with,Reservierter Membername,2.5,starts_with,,M0 (Parser/MIR-Entwurf),fertig,
 MEM-contains,Reservierter Membername,2.5,contains,,M0 (Parser/MIR-Entwurf),fertig,
-MEM-armed,Reservierter Membername,2.5,armed,,M0 (Parser/MIR-Entwurf),fertig,"`ExprKind::Armed`; Flag in `Layout::trigger_flags` der armierenden Maschine (7.5)"
-MEM-fired,Reservierter Membername,2.5,fired,,M0 (Parser/MIR-Entwurf),fertig,"interner Strom je Trigger; Element ist der Record aus Captures und `.t` (7.5)"
+MEM-armed,Reservierter Membername,2.5,armed,,M0 (Parser/MIR-Entwurf),fertig,`ExprKind::Armed`; Flag in `Layout::trigger_flags` der armierenden Maschine (7.5)
+MEM-fired,Reservierter Membername,2.5,fired,,M0 (Parser/MIR-Entwurf),fertig,interner Strom je Trigger; Element ist der Record aus Captures und `.t` (7.5)
 MEM-pre,Reservierter Membername,2.5,pre,,M0 (Parser/MIR-Entwurf),definiert,
 MEM-post,Reservierter Membername,2.5,post,,M0 (Parser/MIR-Entwurf),definiert,
 MEM-samples,Reservierter Membername,2.5,samples,,M0 (Parser/MIR-Entwurf),definiert,
@@ -619,7 +619,7 @@ SC-60,Statische Prüfung,10,"Channel-Bindung gegen die Hardware-Konfiguration (8
 SC-61,Statische Prüfung,10,"`check c, ""…"" within d`: Die gerechnete Safe-State-Latenz (Satz 9.4.5) hält die geforderte Frist ein. Verglichen wird in Ticks (`d / T₀`); die Meldung nennt die Aufschlüsselung nach Erkennung, Bestätigung, Fault-Pfad und Commit, weil die Zahl sonst nicht zu verbessern ist",F,M3 (Gate),fertig,
 SC-62,Statische Prüfung,10,"`machine … with budget = {ram = …}`: Der gerechnete Speicher der Maschine (11.5, mit Overlay) liegt im deklarierten Budget. `wcet` braucht die Kalibrierung (13.8) und meldet bis dahin seine Stufe",F,M3 (Gate),fertig,
 SC-63,Statische Prüfung,10,"Zwei Lints ohne eigene Syntax: (a) `alert` und `check` mit **derselben** Bedingung im selben Block — die Polaritaet ist entgegengesetzt gemeint (5.6), und weil beide Zeilen gleich aussehen, faellt die Verwechslung sonst niemandem auf; (b) ein `profile`, das einen `param` nicht nennt — er nimmt still seinen Default, und das ist beim Lesen nicht von der Absicht zu unterscheiden (4.6)",W,M3 (Gate),fertig,
-SC-64,Statische Prüfung,10,"Treiberstufe (12.9, v1.2): Ein `port` darf nur in einer `driver machine` gelesen oder geschrieben werden. Wer Register anfasst, sagt es in der Deklaration; damit ist die Treiberstufe eines Programms an seinen Köpfen ablesbar",F,M8 (mit port),fertig,"M8 Schritt 15: `checks/SC-64/ok_driver.takt` und `bad_no_driver.takt`"
+SC-64,Statische Prüfung,10,"Treiberstufe (12.9, v1.2): Ein `port` darf nur in einer `driver machine` gelesen oder geschrieben werden. Wer Register anfasst, sagt es in der Deklaration; damit ist die Treiberstufe eines Programms an seinen Köpfen ablesbar",F,M8 (mit port),fertig,M8 Schritt 15: `checks/SC-64/ok_driver.takt` und `bad_no_driver.takt`
 OBL-T1,Beweisverpflichtung,9.4.2,T1,,M1/M2 (Interpreter),rationale,
 OBL-T2,Beweisverpflichtung,9.4.2,T2,,M1/M2 (Interpreter),fertig,
 OBL-T3,Beweisverpflichtung,9.4.2,T3,,M1/M2 (Interpreter),fertig,
@@ -877,6 +877,7 @@ LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M6 (stdlib),fertig,
 LIB-solve,Standardbibliothek,11.4,fn solve,,M6 (stdlib),fertig,"`solve(A, b)` als eingebauter Aufruf (`lower/matrix.rs`), Methoden in `mat_member`"
 LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M4 (libtaktm),fertig,
 LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M6 (stdlib),offen,
+CLI-tcb,Werkzeug,11.1,takt tcb review,v1.2,M8 (Review),fertig,"M8 Schritt 22: schreibt eine Zeile in `natives.review`. Das Datum steht im Aufruf und kommt nicht aus der Systemuhr — ein Werkzeug, das dieselbe Eingabe zweimal verschieden beantwortet, passt nicht zu reproduzierbaren Builds (11.3)"
 CLI-check,Werkzeug,11.1,takt check,,M0-M3,fertig,
 CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig,
 CLI-run,Werkzeug,11.1,takt run,,M4 (Codegen),fertig,
@@ -888,9 +889,9 @@ CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
 CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen,TTL-Adapter (PA9)
 CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),fertig,"`--export DATEI.smt2 --depth k`, sonst Solver (`--solver`, `TAKT_SOLVER`, `z3`/`cvc5`): Eigenschaften bewiesen/verletzt/unbewiesen, Pruefstellen bewiesen unerreichbar/erreichbar mit Pfad/unentschieden, Gegenbeispiele als Stimulus im Interpreter bestaetigt (`takt-prove/src/solve.rs`)"
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig,
-CLI-build,Werkzeug,11.1,takt build,,M5 (Embedded),fertig,"uebersetzt und assembliert je Ziel; bindet nicht — Startcode und Speicherkarte gehoeren zum Board (`--emit ir|obj|consts|consts-rs`)"
+CLI-build,Werkzeug,11.1,takt build,,M5 (Embedded),fertig,uebersetzt und assembliert je Ziel; bindet nicht — Startcode und Speicherkarte gehoeren zum Board (`--emit ir|obj|consts|consts-rs`)
 CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig,"`--baseline DATEI` vergleicht die Posten mit einer gespeicherten Rechnung (RAM/Flash gewachsen = Fehler), `--save-baseline DATEI` schreibt sie (D1, Schritt 26)"
-CLI-cost,Werkzeug,11.1,takt cost,,M3 (Gate),fertig,"Operationsvektoren je Maschine und Zustand (9.4.3)"
+CLI-cost,Werkzeug,11.1,takt cost,,M3 (Gate),fertig,Operationsvektoren je Maschine und Zustand (9.4.3)
 CLI-latency,Werkzeug,11.1,takt latency,,M3 (Gate),fertig,
 CLI-graph,Werkzeug,11.1,takt graph,,M4 (Codegen),fertig,
 CLI-bench,Werkzeug,11.1,takt bench,,M5 (Embedded),offen,TTL-Adapter (PA9)

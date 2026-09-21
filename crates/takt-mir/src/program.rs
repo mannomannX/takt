@@ -51,6 +51,9 @@ pub struct Config {
     /// `tcb_policy = allowlist(…)` (4.5, 9.5): die erlaubten Projekt-Natives;
     /// leer heisst `curated_only`.
     pub tcb_allowlist: Vec<String>,
+    /// `tcb_policy = reviewed(…)`: jedes Projekt-Native braucht zusaetzlich
+    /// eine Zeile in `natives.review` (4.5, v1.2).
+    pub tcb_reviewed: bool,
     /// `overrun` (7.3): Reaktion der Runtime, kein Logikanteil.
     pub overrun: OverrunPolicy,
 }
@@ -117,6 +120,7 @@ impl Config {
             tick_tolerance: None,
             target: None,
             tcb_allowlist: Vec::new(),
+            tcb_reviewed: false,
             overrun: OverrunPolicy::Fault,
         }
     }
