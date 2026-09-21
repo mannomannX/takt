@@ -619,6 +619,7 @@ SC-60,Statische Prüfung,10,"Channel-Bindung gegen die Hardware-Konfiguration (8
 SC-61,Statische Prüfung,10,"`check c, ""…"" within d`: Die gerechnete Safe-State-Latenz (Satz 9.4.5) hält die geforderte Frist ein. Verglichen wird in Ticks (`d / T₀`); die Meldung nennt die Aufschlüsselung nach Erkennung, Bestätigung, Fault-Pfad und Commit, weil die Zahl sonst nicht zu verbessern ist",F,M3 (Gate),fertig,
 SC-62,Statische Prüfung,10,"`machine … with budget = {ram = …}`: Der gerechnete Speicher der Maschine (11.5, mit Overlay) liegt im deklarierten Budget. `wcet` braucht die Kalibrierung (13.8) und meldet bis dahin seine Stufe",F,M3 (Gate),fertig,
 SC-63,Statische Prüfung,10,"Zwei Lints ohne eigene Syntax: (a) `alert` und `check` mit **derselben** Bedingung im selben Block — die Polaritaet ist entgegengesetzt gemeint (5.6), und weil beide Zeilen gleich aussehen, faellt die Verwechslung sonst niemandem auf; (b) ein `profile`, das einen `param` nicht nennt — er nimmt still seinen Default, und das ist beim Lesen nicht von der Absicht zu unterscheiden (4.6)",W,M3 (Gate),fertig,
+SC-64,Statische Pr�fung,10,"Treiberstufe (12.9, v1.2): Ein `port` darf nur in einer `driver machine` gelesen oder geschrieben werden. Wer Register anfasst, sagt es in der Deklaration; damit ist die Treiberstufe eines Programms an seinen K�pfen ablesbar",F,M8 (mit port),fertig,"M8 Schritt 15: `checks/SC-64/ok_driver.takt` und `bad_no_driver.takt`"
 OBL-T1,Beweisverpflichtung,9.4.2,T1,,M1/M2 (Interpreter),rationale,
 OBL-T2,Beweisverpflichtung,9.4.2,T2,,M1/M2 (Interpreter),fertig,
 OBL-T3,Beweisverpflichtung,9.4.2,T3,,M1/M2 (Interpreter),fertig,
@@ -1070,7 +1071,7 @@ CON-T!E,Konstrukt (2.4),2.4,`T!E`,,M0 (Parser/MIR-Entwurf),definiert,
 CON-default,Konstrukt (2.4),2.4,`default`,,M0 (Parser/MIR-Entwurf),definiert,
 CON-inout,Konstrukt (2.4),2.4,`inout`,,M0 (Parser/MIR-Entwurf),definiert,
 CON-irreversible,Konstrukt (2.4),2.4,`irreversible`,,M0 (Parser/MIR-Entwurf),fertig,
-"CON-driver_machine,_port",Konstrukt (2.4),2.4,"`driver machine`, `port`",,M0 (Parser/MIR-Entwurf),definiert,
+"CON-driver_machine,_port",Konstrukt (2.4),2.4,"`driver machine`, `port`",,M0 (Parser/MIR-Entwurf),fertig,"M8 Schritte 15-17: `port r : Rec @ mmio(ADR)` nur in `driver machine` (Pr�fung 64); Interpreter als Sim-Paar `mmio/ADR/r` / `mmio/ADR/w`, Codegen als `load volatile` / `store volatile` auf `inttoptr`; Korpus `68_uart_port.takt`, Differential gr�n"
 CON-tunable_param,Konstrukt (2.4),2.4,`tunable param`,,M0 (Parser/MIR-Entwurf),definiert,
 CON-follows,Konstrukt (2.4),2.4,`follows`,,M0 (Parser/MIR-Entwurf),fertig,
 "CON-debounce,_Suspect",Konstrukt (2.4),2.4,"`debounce`, `Suspect`",,M0 (Parser/MIR-Entwurf),fertig,

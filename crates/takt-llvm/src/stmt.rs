@@ -877,8 +877,20 @@ fn assign(target: &Place, value: &Expr, ctx: &mut Ctx<'_>, m: &mut Module) -> Re
     let vars = ctx.vars();
     let v = lower_expr(value, ctx.program, m, &vars)?;
     let (ptr, _) = place(target, ctx, m)?;
-    m.void_inst(&format!("store {} {}, ptr {ptr}", v.ty, v.value));
+    // 12.9: Ein Portzugriff ist `volatile` — sofort und in
+    // Programmreihenfolge, nicht umgeordnet oder zusammengefasst.
+    let vol = if roots_in_port(target) { "volatile " } else { "" };
+    m.void_inst(&format!("store {vol}{} {}, ptr {ptr}", v.ty, v.value));
     Ok(())
+}
+
+/// Wurzelt die Stelle in einem Registerport? (12.9)
+fn roots_in_port(p: &Place) -> bool {
+    match p {
+        Place::Port(_) => true,
+        Place::Field(b, _) | Place::Index(b, _) | Place::Index2(b, _, _) => roots_in_port(b),
+        Place::Var(_) | Place::Output(_) => false,
+    }
 }
 
 /// `check c`: Vergleich und bedingter Sprung in den Trampolin (11.2).
@@ -1043,8 +1055,14 @@ fn map_method_call(
 
 fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, LlvmType), NotYet> {
     match target {
-        // 12.9: MMIO im Codegen ist M8 Schritt 17.
-        Place::Port(_) => Err(NotYet { what: "Registerport (12.9)" }),
+        // 12.9: Die Adresse steht in der Deklaration; ob der Zugriff
+        // `volatile` wird, entscheidet die Stelle, die ihn erzeugt.
+        Place::Port(id) => {
+            let port = ctx.program.ports.get(id.index()).ok_or(NotYet { what: "Port" })?;
+            let ty = ty::lower(port.ty, ctx.program).ok_or(NotYet { what: "Portrecord" })?;
+            let ptr = m.inst(&format!("inttoptr i64 {} to ptr", port.address));
+            Ok((ptr, ty))
+        }
         Place::Var(id) => {
             let def = ctx.machine.vars.get(id.index()).ok_or(NotYet { what: "Variable" })?;
             let ty = ty::lower(def.ty, ctx.program).ok_or(NotYet { what: "Variablentyp" })?;

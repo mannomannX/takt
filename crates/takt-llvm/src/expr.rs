@@ -205,6 +205,13 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
             let v = m.inst(&format!("load i1, ptr {armed}"));
             Ok(Lowered { value: v.to_string(), ty: LlvmType::Int(1) })
         }
+        // 12.9: `load volatile` an der Adresse — sofort, nicht umgeordnet.
+        ExprKind::PortRead(id) => {
+            let port = p.ports.get(id.index()).ok_or(NotYet { what: "Port" })?;
+            let ptr = m.inst(&format!("inttoptr i64 {} to ptr", port.address));
+            let v = m.inst(&format!("load volatile {want}, ptr {ptr}"));
+            Ok(Lowered { value: v.to_string(), ty: want.clone() })
+        }
         ExprKind::Unary { op, expr } => unary(*op, expr, &want, p, m, vars),
         ExprKind::Binary { op, lhs, rhs } => binary(*op, lhs, rhs, &want, p, m, vars),
         ExprKind::Cond { cond, then, otherwise } => cond_expr(cond, then, otherwise, &want, p, m, vars),

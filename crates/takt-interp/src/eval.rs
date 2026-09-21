@@ -887,7 +887,17 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 return Ok(());
             }
         }
-        *self.place_mut(place, span)? = value;
+        // 12.9: Eine Stelle *unter* einem Port hat keinen Speicher, in dem
+        // sie liegen koennte. Der ganze Record wird gelesen, veraendert und
+        // in einem Zug zurueckgeschrieben.
+        let (root, steps) = self.path(place, span)?;
+        if let Place::Port(p) = root {
+            let (p, tick) = (*p, self.tick);
+            let mut whole = self.outer.port_read(p)?;
+            *Self::walk_mut(&mut whole, steps, span, tick)? = value;
+            return self.outer.port_write(p, whole);
+        }
+        *self.at(root, steps, span)? = value;
         Ok(())
     }
 
@@ -901,11 +911,13 @@ impl<'p, 'o> Ctx<'p, 'o> {
 
     /// Loest eine Stelle zu einem veraenderbaren Wert auf (9.2).
     pub fn place_mut(&mut self, place: &Place, span: Span) -> EvalResult<&mut Value> {
-        enum Step {
-            Field(u32),
-            Index(usize),
-            Index2(usize, usize),
-        }
+        let (root, steps) = self.path(place, span)?;
+        self.at(root, steps, span)
+    }
+
+    /// Wurzel einer Stelle und der Weg dorthin, innerster Schritt zuerst;
+    /// Indizes sind ausgewertet und auf Vorzeichen geprueft.
+    fn path<'a>(&mut self, place: &'a Place, span: Span) -> EvalResult<(&'a Place, Vec<Step>)> {
         let mut steps = Vec::new();
         let mut cur = place;
         loop {
@@ -934,12 +946,22 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 }
             }
         }
+        Ok((cur, steps))
+    }
+
+    /// Steigt von der Wurzel aus den Weg hinab.
+    fn at(&mut self, root: &Place, steps: Vec<Step>, span: Span) -> EvalResult<&mut Value> {
         let tick = self.tick;
-        let mut v: &mut Value = match cur {
+        let v: &mut Value = match root {
             Place::Var(v) => self.var_mut(*v)?,
             Place::Output(c) => self.outer.output_mut(*c)?,
-            _ => unreachable!(),
+            // Ein Port hat kein Abbild; `assign` liest und schreibt ihn ganz.
+            _ => return bug("Stelle ohne Speicher"),
         };
+        Self::walk_mut(v, steps, span, tick)
+    }
+
+    fn walk_mut(mut v: &mut Value, steps: Vec<Step>, span: Span, tick: u64) -> EvalResult<&mut Value> {
         for step in steps.into_iter().rev() {
             v = match (step, v) {
                 (Step::Field(f), Value::Record(fields) | Value::Enum { fields, .. }) => {
@@ -972,6 +994,13 @@ impl<'p, 'o> Ctx<'p, 'o> {
         }
         Ok(v)
     }
+}
+
+/// Ein Schritt in eine Stelle hinein.
+enum Step {
+    Field(u32),
+    Index(usize),
+    Index2(usize, usize),
 }
 
 /// Feld eines Records oder einer Variante.

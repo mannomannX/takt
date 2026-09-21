@@ -1,0 +1,34 @@
+(system
+  (language 1)
+  (tick 10ms))
+(record UartStatus layout=little
+  (bits flags: u8
+    (tx_full: bool at 0 ro)
+    (oflow: bool at 1 w1c)))
+(port ust :UartStatus @mmio(0x60000000))
+(record UartStatusModel layout=little
+  (bits flags: u8
+    (tx_full: bool at 0)
+    (oflow: bool at 1)))
+(output ust_r :UartStatusModel @sim("mmio/0x60000000/r"))
+(input ust_w :stream<bytes<4>> @sim("mmio/0x60000000/w") capacity=8 max_rate=200[Hz])
+(output busy :bool @hw("o/busy") safe=false)
+(machine model every=10ms
+  (var full :bool false)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= full (not full))
+      (= (.tx_full (.flags ust_r)) full))
+    (after 1s -> RUN)))
+(driver-machine uart0
+  (var seen :bool false)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= busy (.tx_full (.flags ust)))
+      (= (.oflow (.flags ust)) true)
+      (check (or seen (< now 20ms)) "Schreibkanal des Ports blieb leer"))
+    (on ust_w as w
+      (= seen true))
+    (after 1s -> RUN)))

@@ -1,0 +1,62 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Registerports (12.9, v1.2): `port` bindet einen Registerrecord an eine
+# feste Adresse, und jeder Feldzugriff ist ein sofortiger Lade- oder
+# Speichervorgang in Programmreihenfolge — im erzeugten Code
+# `load volatile` und `store volatile`.
+#
+# Im Sim-Build ist ein Port ein Channel-Paar (12.9): `mmio/ADR/r` liefert,
+# was das Modell stellt, `mmio/ADR/w` sammelt jeden Schreibvorgang.
+
+record UartStatus layout little:
+    flags : u8 with bits:
+        tx_full : bool at 0 ro
+        oflow   : bool at 1 w1c
+
+port ust : UartStatus @ mmio(0x60000000)
+
+# Das Modell stellt dieselben Bits, aber ohne Zugriffsarten: `ro` und
+# `w1c` beschreiben, was die *Hardware* mit dem Register tut — wer sie
+# spielt, schreibt es (1.4 in plan/feedback-design.md).
+record UartStatusModel layout little:
+    flags : u8 with bits:
+        tx_full : bool at 0
+        oflow   : bool at 1
+
+output ust_r : UartStatusModel  @ sim("mmio/0x60000000/r")
+input  ust_w : stream<bytes<4>> @ sim("mmio/0x60000000/w") with capacity = 8, max_rate = 200 Hz
+
+output busy : bool @ hw("o/busy") with safe = false
+
+machine model every 10 ms:
+    var full : bool = false
+
+    initial RUN
+
+    state RUN:
+        loop:
+            full = not full
+            ust_r.flags.tx_full = full
+
+        after 1 s: -> RUN
+
+driver machine uart0:
+    var seen : bool = false
+
+    initial RUN
+
+    state RUN:
+        loop:
+            busy = ust.flags.tx_full
+            ust.flags.oflow = true
+
+            # Jeder Durchlauf schreibt genau einmal, also muss der
+            # Schreibkanal ab dem zweiten Tick gefuehrt haben.
+            check seen or now < 20 ms, "Schreibkanal des Ports blieb leer"
+
+        on ust_w as w:
+            seen = true
+
+        after 1 s: -> RUN
