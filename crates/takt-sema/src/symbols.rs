@@ -55,6 +55,8 @@ pub enum Entity {
     Node(NodeId),
     /// Trigger (v1.2).
     Trigger(TriggerId),
+    /// Registerport (12.9, v1.2).
+    Port(PortId),
     /// Profil.
     Profile(ProfileId),
     /// Eingebaute Groesse (`now`, `tick`, `time_in_state`, `last_fault`, `event`).

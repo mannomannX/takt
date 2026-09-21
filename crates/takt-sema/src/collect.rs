@@ -60,7 +60,7 @@ impl Lowerer<'_> {
                 ast::Item::Record(r) => self.record_body(r),
                 ast::Item::Unit(u) => self.unit_decl(u),
                 ast::Item::Stream(s) => self.stream_decl(s),
-                ast::Item::Port(p) => self.stage(p.span, "`port`", Stage::V1_2),
+                ast::Item::Port(p) => self.port_decl(p),
                 ast::Item::Node(n) => self.node_decl(n),
                 ast::Item::Property(_) => {}
                 ast::Item::Const(c) => self.const_decl(c),

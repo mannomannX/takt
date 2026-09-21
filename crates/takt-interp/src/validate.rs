@@ -78,6 +78,7 @@ impl Checker<'_> {
         match pl {
             Place::Var(v) => self.var(*v, span),
             Place::Output(c) => self.index(&self.p.channels, c.index(), "Channel", span),
+            Place::Port(p) => self.index(&self.p.ports, p.index(), "Port", span),
             Place::Field(b, _) => self.place(b, span),
             Place::Index(b, i) => {
                 self.place(b, span)?;
@@ -108,6 +109,7 @@ impl Checker<'_> {
             | ExprKind::Default
             | ExprKind::Builtin(_) => Ok(()),
             ExprKind::Armed(t) => self.index(&self.p.triggers, t.index(), "Trigger", span),
+            ExprKind::PortRead(p) => self.index(&self.p.ports, p.index(), "Port", span),
             ExprKind::Variant { enum_id, variant, fields } => {
                 self.index(&self.p.enums, enum_id.index(), "Enum", span)?;
                 self.index(&self.p.enums[enum_id.index()].variants, *variant as usize, "Variante", span)?;

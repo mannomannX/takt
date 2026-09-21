@@ -498,6 +498,21 @@ impl Lowerer<'_> {
                     }
                     Some(Place::Output(c))
                 }
+                // 12.9: Ein Port ist nur in einer `driver machine` erreichbar
+                // (Pruefung 64); der Zugriff schreibt sofort.
+                Entity::Port(p) => {
+                    if !self.in_driver() {
+                        self.error_hint(
+                            crate::checks::SC64,
+                            e.span,
+                            format!("`{}` ist ein Port und nur in einer `driver machine` erreichbar (12.9)", name.name),
+                            "`driver machine` erklaert, dass die Maschine Register anfasst",
+                        );
+                        return None;
+                    }
+                    self.program.ports[p.index()].owner = self.mctx.as_ref().map(|m| m.id);
+                    Some(Place::Port(p))
+                }
                 Entity::Param(..) => {
                     self.error(SC3, e.span, format!("Parameter `{}` ist nicht beschreibbar (8.4)", name.name));
                     None
@@ -692,6 +707,7 @@ impl Lowerer<'_> {
     /// Deklarierter Typ einer Stelle.
     pub fn place_type(&mut self, p: &Place, span: Span) -> Option<TypeId> {
         match p {
+            Place::Port(x) => Some(self.program.ports[x.index()].ty),
             Place::Var(v) => self.var_type(*v).or_else(|| {
                 self.error(SC3, span, "Variable ohne Typ");
                 None
@@ -726,6 +742,7 @@ impl Lowerer<'_> {
         match p {
             Place::Var(v) => Expr::new(ExprKind::Var(*v), ty, span),
             Place::Output(c) => Expr::new(ExprKind::Output(*c), ty, span),
+            Place::Port(x) => Expr::new(ExprKind::PortRead(*x), ty, span),
             Place::Field(b, f) => {
                 let bt = self.place_type(b, span).unwrap_or(ty);
                 let base = self.place_expr(b, bt, span);
@@ -1549,5 +1566,12 @@ impl Lowerer<'_> {
         let Type::Record(r) = self.ty(bty).clone() else { return None };
         let def = self.program.records[r.index()].fields.iter().find(|f| f.name == name.name)?;
         def.bits.iter().any(|x| x.access.clear_only()).then(|| name.name.clone())
+    }
+}
+
+impl Lowerer<'_> {
+    /// Laeuft das Lowering gerade in einer `driver machine`? (12.9)
+    fn in_driver(&self) -> bool {
+        self.mctx.as_ref().is_some_and(|m| m.machine.driver)
     }
 }

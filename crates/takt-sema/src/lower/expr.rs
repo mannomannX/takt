@@ -469,6 +469,21 @@ impl Lowerer<'_> {
                 self.error(SC3, span, format!("`{}` ist eine Funktion; Aufruf mit `(...)`", i.name()));
                 None
             }
+            // 12.9: Ein Portlesen ist sofort und nur in einer `driver machine`.
+            Entity::Port(p) => {
+                if !self.mctx.as_ref().is_some_and(|m| m.machine.driver) {
+                    self.error_hint(
+                        crate::checks::SC64,
+                        span,
+                        format!("`{}` ist ein Port und nur in einer `driver machine` erreichbar (12.9)", name.name),
+                        "`driver machine` erklaert, dass die Maschine Register anfasst",
+                    );
+                    return None;
+                }
+                let ty = self.program.ports[p.index()].ty;
+                self.program.ports[p.index()].owner = self.mctx.as_ref().map(|m| m.id);
+                Some(Expr::new(ExprKind::PortRead(p), ty, span))
+            }
             _ => {
                 self.error(SC3, span, format!("`{}` ist kein Wert", name.name));
                 None

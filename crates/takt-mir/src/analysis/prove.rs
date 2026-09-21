@@ -161,7 +161,7 @@ fn observe(o: &mut crate::stmt::Observe, p: &Proofs) {
 
 fn place(pl: &mut Place, p: &Proofs) {
     match pl {
-        Place::Var(_) | Place::Output(_) => {}
+        Place::Var(_) | Place::Output(_) | Place::Port(_) => {}
         Place::Field(b, _) => place(b, p),
         Place::Index(b, i) => {
             place(b, p);

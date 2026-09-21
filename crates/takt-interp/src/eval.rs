@@ -237,6 +237,9 @@ impl<'p, 'o> Ctx<'p, 'o> {
             ExprKind::Builtin(b) => self.outer.builtin(*b),
             // 7.5: `armed` liegt im Layout der armierenden Maschine.
             ExprKind::Armed(t) => self.outer.armed(*t),
+            // 12.9: Ein Portlesen geht sofort an die Hardware; in der
+            // Simulation liefert das Modell den Wert (8.3).
+            ExprKind::PortRead(p) => self.outer.port_read(*p),
             ExprKind::Field { base, field } => {
                 let v = self.eval(base)?;
                 field_of(v, *field)
@@ -853,6 +856,11 @@ impl<'p, 'o> Ctx<'p, 'o> {
     /// `Value` und braucht darum einen eigenen Weg; alles andere laeuft
     /// ueber `place_mut`.
     pub fn assign(&mut self, place: &Place, value: Value, span: Span) -> EvalResult<()> {
+        // 12.9: Ein Portzugriff geht sofort an die Hardware, nicht ueber
+        // eine Stelle im Abbild.
+        if let Place::Port(p) = place {
+            return self.outer.port_write(*p, value);
+        }
         if let Place::Index(base, index) = place {
             let i = self.eval_int(index)?;
             if matches!(self.place_kind(base, span)?, Some(PlaceKind::Bytes)) {
@@ -902,7 +910,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
         let mut cur = place;
         loop {
             match cur {
-                Place::Var(_) | Place::Output(_) => break,
+                Place::Var(_) | Place::Output(_) | Place::Port(_) => break,
                 Place::Field(b, f) => {
                     steps.push(Step::Field(*f));
                     cur = b;

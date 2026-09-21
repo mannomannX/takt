@@ -249,7 +249,7 @@ impl Calls {
 
     fn place(&mut self, p: &Place) {
         match p {
-            Place::Var(_) | Place::Output(_) => {}
+            Place::Var(_) | Place::Output(_) | Place::Port(_) => {}
             Place::Field(b, _) => self.place(b),
             Place::Index(b, i) => {
                 self.place(b);

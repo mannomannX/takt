@@ -191,7 +191,7 @@ fn narrow_observe(o: &mut crate::stmt::Observe, types: &[Type], n: &mut Count) {
 
 fn narrow_place(p: &mut Place, types: &[Type], n: &mut Count) {
     match p {
-        Place::Var(_) | Place::Output(_) => {}
+        Place::Var(_) | Place::Output(_) | Place::Port(_) => {}
         Place::Field(b, _) => narrow_place(b, types, n),
         Place::Index(b, i) => {
             narrow_place(b, types, n);

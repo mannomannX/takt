@@ -7,7 +7,9 @@
 use takt_diag::Span;
 use takt_mir::expr::{Accessor, Builtin, JobField, StreamRef};
 use takt_mir::machine::FaultKind;
-use takt_mir::{ChannelId, CommandId, CounterId, MachineId, ParamId, SignalId, SiteId, TriggerId, TypeId, VarId};
+use takt_mir::{
+    ChannelId, CommandId, CounterId, MachineId, ParamId, PortId, SignalId, SiteId, TriggerId, TypeId, VarId,
+};
 
 use crate::image::Image;
 use crate::loaded::Loaded;
@@ -195,6 +197,14 @@ pub trait Outer {
     /// `t.armed` (7.5): das Flag im Layout der armierenden Maschine.
     fn armed(&self, _t: TriggerId) -> EvalResult<Value> {
         bug("`armed` ausserhalb einer Maschine")
+    }
+    /// Lesen eines Registerports (12.9): sofort, nicht aus dem Abbild.
+    fn port_read(&mut self, _p: PortId) -> EvalResult<Value> {
+        bug("Portzugriff ausserhalb eines Laufs")
+    }
+    /// Schreiben eines Registerports (12.9).
+    fn port_write(&mut self, _p: PortId, _v: Value) -> EvalResult<()> {
+        bug("Portzugriff ausserhalb eines Laufs")
     }
     /// `arm t` / `disarm t` (7.5).
     fn set_armed(&mut self, _t: TriggerId, _on: bool) -> EvalResult<()> {

@@ -367,6 +367,7 @@ impl Dumper<'_> {
         match p {
             Place::Var(v) => self.var_name(*v).to_string(),
             Place::Output(c) => self.p.channels[c.index()].name.clone(),
+            Place::Port(p) => self.p.ports[p.index()].name.clone(),
             Place::Field(b, f) => format!("{}.{f}", self.place(b)),
             Place::Index(b, i) => format!("{}[{}]", self.place(b), self.expr(i)),
             Place::Index2(b, i, j) => format!("{}[{}, {}]", self.place(b), self.expr(i), self.expr(j)),
@@ -533,6 +534,7 @@ impl Dumper<'_> {
             }
             .to_string(),
             ExprKind::Armed(t) => format!("{}.armed", self.p.triggers[t.index()].name),
+            ExprKind::PortRead(p) => self.p.ports[p.index()].name.clone(),
             ExprKind::Field { base, field } => format!("{}.{field}", self.expr(base)),
             ExprKind::Index { base, index } => format!("{}[{}]", self.expr(base), self.expr(index)),
             ExprKind::Index2 { base, row, col } => {

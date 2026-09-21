@@ -1,0 +1,25 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 64 (12.9): Ein Registerport ist nur in einer `driver machine`
+# erreichbar.
+
+record UartRegs layout little:
+    status : u8 with bits:
+        tx_full : bool at 0 ro
+        oflow   : bool at 1 w1c
+
+port ust : UartRegs @ mmio(0x60000000)
+
+output busy : bool @ hw("o/busy") with safe = false
+
+driver machine uart0:
+    initial RUN
+
+    state RUN:
+        loop:
+            busy = ust.status.tx_full
+            ust.status.oflow = true
+
+        after 1 s: -> RUN

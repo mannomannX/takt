@@ -443,6 +443,29 @@ pub struct Program {
     pub campaigns: Vec<Campaign>,
     /// Trigger (v1.2).
     pub triggers: Vec<Trigger>,
+    /// Registerports (12.9, v1.2).
+    pub ports: Vec<Port>,
+}
+
+/// Ein Registerport (12.9, v1.2): ein Record an einer festen Adresse.
+///
+/// Jeder Feldzugriff ist ein sofortiger Lade- oder Speichervorgang in
+/// Programmreihenfolge — nicht zu Tick-Beginn abgetastet, nicht an das
+/// Tick-Ende verschoben.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Port {
+    /// Name.
+    pub name: String,
+    /// Registerrecord.
+    pub record: RecordId,
+    /// Sein Typ, damit Leser ihn ohne Internieren bekommen.
+    pub ty: TypeId,
+    /// Physische Adresse.
+    pub address: u64,
+    /// Die Maschine, die ihn deklariert (`driver machine`).
+    pub owner: Option<MachineId>,
+    /// Position.
+    pub span: Span,
 }
 
 impl Program {
@@ -467,6 +490,7 @@ impl Program {
             properties: Vec::new(),
             campaigns: Vec::new(),
             triggers: Vec::new(),
+            ports: Vec::new(),
         }
     }
 

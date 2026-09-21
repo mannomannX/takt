@@ -552,6 +552,7 @@ impl Ctx<'_, '_> {
         match place {
             Place::Var(v) => self.var_type(*v),
             Place::Output(c) => Ok(p.channels[c.index()].ty),
+            Place::Port(x) => Ok(p.ports[x.index()].ty),
             Place::Field(b, f) => {
                 let base = self.place_type(b)?;
                 match self.loaded.ty(base) {

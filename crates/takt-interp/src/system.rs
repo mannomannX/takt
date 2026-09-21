@@ -409,6 +409,32 @@ impl Outer for MachineEnv<'_, '_> {
         machine::builtin_value(b, m, self.state, self.tick, self.tick_ns, self.last_fault_value(self.loaded))
     }
 
+    /// 12.9: Ein Port ist im Sim-Build ein Channel-Paar. Gelesen wird der
+    /// `sim`-Output `mmio/ADR/r`, den ein Modell stellt — mit Unit-Delay
+    /// wie jeder Modellwert (8.3).
+    fn port_read(&mut self, p: PortId) -> EvalResult<Value> {
+        let port = &self.loaded.program.ports[p.index()];
+        let want = format!("mmio/{:#x}/r", port.address);
+        let ty = port.ty;
+        match self.loaded.program.channels.iter().position(|c| sim_address(c) == Some(want.clone())) {
+            Some(i) => Ok(self.image.output(ChannelId(i as u32)).clone()),
+            None => Ok(Value::default_for(ty, self.loaded.program)),
+        }
+    }
+
+    /// 12.9: Ein Schreibvorgang wird ein Element des Eingangsstroms
+    /// `mmio/ADR/w` — in Reihenfolge, auch mehrere je Tick.
+    fn port_write(&mut self, p: PortId, v: Value) -> EvalResult<()> {
+        let port = &self.loaded.program.ports[p.index()];
+        let want = format!("mmio/{:#x}/w", port.address);
+        let Some(i) = self.loaded.program.channels.iter().position(|c| sim_address(c) == Some(want.clone())) else {
+            return Ok(());
+        };
+        let t = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(self.tick_ns);
+        self.image.push_element(ChannelId(i as u32), t, v, false);
+        Ok(())
+    }
+
     fn armed(&self, t: TriggerId) -> EvalResult<Value> {
         let m = &self.loaded.program.machines[self.id.index()];
         let Some(i) = m.layout.trigger_flags.iter().position(|x| *x == t) else {
@@ -1574,4 +1600,10 @@ fn trigger_consts(
         out.push(ctx.eval(e)?);
     }
     Ok(out)
+}
+
+/// Die `sim`-Adresse eines Channels als Text (8.3, 12.9).
+fn sim_address(c: &takt_mir::program::Channel) -> Option<String> {
+    let takt_mir::program::Binding::Sim(a) = &c.binding else { return None };
+    Some(a.segments.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join("/"))
 }

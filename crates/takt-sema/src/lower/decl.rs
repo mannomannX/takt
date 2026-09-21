@@ -1540,3 +1540,32 @@ fn access_of(a: ast::Access) -> Access {
         ast::Access::Rsvd => Access::Rsvd,
     }
 }
+
+impl Lowerer<'_> {
+    /// `port NAME : Regs @ mmio(0x…)` (12.9, v1.2).
+    ///
+    /// Der Port bindet einen Registerrecord an eine feste Adresse. Nur
+    /// eine `driver machine` darf ihn benutzen (Pruefung 64); wer ihn
+    /// besitzt, traegt Pruefung 64 nach, wenn sie die Zugriffe sieht.
+    pub fn port_decl(&mut self, decl: &ast::PortDecl) {
+        let Some(Entity::Record(record)) = self.lookup(&decl.regs) else {
+            self.error(SC3, decl.regs.span, format!("`{}` ist kein Record", decl.regs.name));
+            return;
+        };
+        let Some(address) = super::expr::parse_int(&decl.address.text).and_then(|x| u64::try_from(x).ok()) else {
+            self.error(SC3, decl.address.span, "Adresse ist keine Ganzzahl");
+            return;
+        };
+        let ty = self.intern(Type::Record(record));
+        let id = PortId(self.program.ports.len() as u32);
+        self.program.ports.push(Port {
+            name: decl.name.name.clone(),
+            record,
+            ty,
+            address,
+            owner: None,
+            span: decl.span,
+        });
+        self.declare(&decl.name, Entity::Port(id));
+    }
+}

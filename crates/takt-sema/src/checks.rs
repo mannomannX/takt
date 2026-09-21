@@ -81,6 +81,8 @@ pub const SC56: &str = "SC-56";
 /// `map<K, V, N>`: der Schluessel ist POD mit Gleichheit — ohne
 /// Fliesskomma (3.9).
 pub const SC57: &str = "SC-57";
+/// Registerports: nur in einer `driver machine` (12.9).
+pub const SC64: &str = "SC-64";
 /// `tunable param` steht nicht, wo eine Compile-Zeit-Konstante verlangt
 /// ist (8.4): Array-Groessen, Kapazitaeten, `repeat`.
 pub const SC35: &str = "SC-35";
@@ -1649,7 +1651,7 @@ fn output_of(p: &Place) -> Option<ChannelId> {
     match p {
         Place::Output(c) => Some(*c),
         Place::Field(b, _) | Place::Index(b, _) | Place::Index2(b, _, _) => output_of(b),
-        Place::Var(_) => None,
+        Place::Var(_) | Place::Port(_) => None,
     }
 }
 
@@ -1967,7 +1969,7 @@ fn format_exprs(m: &takt_mir::pattern::Format, f: &mut impl FnMut(&Expr)) {
 
 fn place_exprs(p: &Place, f: &mut impl FnMut(&Expr)) {
     match p {
-        Place::Var(_) | Place::Output(_) => {}
+        Place::Var(_) | Place::Output(_) | Place::Port(_) => {}
         Place::Field(b, _) => place_exprs(b, f),
         Place::Index(b, i) => {
             place_exprs(b, f);

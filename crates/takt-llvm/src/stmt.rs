@@ -1043,6 +1043,8 @@ fn map_method_call(
 
 fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, LlvmType), NotYet> {
     match target {
+        // 12.9: MMIO im Codegen ist M8 Schritt 17.
+        Place::Port(_) => Err(NotYet { what: "Registerport (12.9)" }),
         Place::Var(id) => {
             let def = ctx.machine.vars.get(id.index()).ok_or(NotYet { what: "Variable" })?;
             let ty = ty::lower(def.ty, ctx.program).ok_or(NotYet { what: "Variablentyp" })?;

@@ -54,6 +54,8 @@ ids! {
     CampaignId,
     /// Eintrag in `Program::triggers`.
     TriggerId,
+    /// Eintrag in `Program::ports`.
+    PortId,
     /// Eintrag in `Machine::states`.
     StateId,
     /// Eintrag in `Machine::vars` beziehungsweise `Fn::locals`.
