@@ -483,3 +483,49 @@ t=14 in edges Pulse(true, 1)
         native
     );
 }
+
+/// **Trigger auf beiden Seiten** (7.5, Satz 9.4.4).
+///
+/// Der Hauptlauf treibt keine Stroeme, ein Trigger feuerte dort also
+/// nie — und ein Lauf, in dem beide Seiten nichts tun, waere gruen. Der
+/// Test schickt darum ein passendes Element und prueft, dass die
+/// geplante Ausgabe auf beiden Seiten zur selben Zeit steht.
+#[test]
+fn the_two_implementations_agree_on_triggers() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("65_trigger.takt");
+    let stimulus = takt_interp::Trace::parse("t=2 in dut_log Erasing sector 7\n").expect("Stimulus");
+    let inputs: Vec<Stimulus> = stimulus
+        .lines
+        .iter()
+        .filter_map(|l| match &l.kind {
+            takt_interp::trace::LineKind::Input { channel, sample } => {
+                Some(Stimulus::element(l.tick, channel, sample.value.as_deref().unwrap_or_default()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inputs.len(), 1);
+
+    let native =
+        common::run_native_all_with(&clang, &p, "65_trigger", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+
+    // Ohne diese Zusicherung pruefte der Test einen Trigger, der nie feuert.
+    assert!(interpreted.contains("out vbus false"), "der Trigger hat nicht gefeuert:\n{interpreted}");
+
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen mit Trigger:\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
+        diffs.len(),
+        diffs.iter().take(6).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n"),
+        interpreted,
+        native
+    );
+}

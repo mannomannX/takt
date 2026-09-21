@@ -208,6 +208,16 @@ impl Vars for StateVars<'_> {
         Some(self.machine_index)
     }
 
+    fn trigger_slots(&self, t: takt_mir::TriggerId, m: &mut Module) -> Option<(Reg, Reg)> {
+        let nth = self.machine.layout.trigger_flags.iter().position(|x| *x == t)?;
+        let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
+        let mut at = |role: Role| {
+            let i = self.state.index_of(role, nth)?;
+            Some(m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}")))
+        };
+        Some((at(Role::Armed)?, at(Role::TriggerCursor)?))
+    }
+
     fn stream_slots(&self, stream: takt_mir::expr::StreamRef, m: &mut Module) -> Option<(Reg, Reg)> {
         let nth = self.machine.layout.cursors.iter().position(|c| *c == stream)?;
         let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
@@ -390,6 +400,11 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         StmtKind::Raise(s) => crate::psi::raise(takt_mir::MachineId(ctx.machine_index), *s, ctx.program, m)
             .ok_or(NotYet { what: "`raise`" }),
         StmtKind::Job { handle, native, args } => job_begin(*handle, *native, args, ctx, m),
+        StmtKind::Arm { trigger, on } => {
+            let (armed, _) = ctx.vars().trigger_slots(*trigger, m).ok_or(NotYet { what: "`arm` eines Triggers" })?;
+            m.void_inst(&format!("store i1 {on}, ptr {armed}"));
+            Ok(())
+        }
         other => Err(NotYet { what: crate::scope::stmt_name(other) }),
     }
 }

@@ -51,12 +51,6 @@ pub fn step_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     if leaves.is_empty() {
         return Err(NotYet { what: "Maschine ohne Blattzustand" });
     }
-    // 7.5: Die Trigger-Phase fehlt im Codegen noch (M8 Schritt 11). Eine
-    // Maschine, die einen Trigger armiert, traegt sein `armed` im Layout;
-    // lieber melden als still danebenlaufen (Satz 9.4.4).
-    if !m.layout.trigger_flags.is_empty() {
-        return Err(NotYet { what: "Trigger (7.5)" });
-    }
     let mark = module.mark();
     match write_step(m, st, p, module, &leaves) {
         Ok(()) => Ok(()),
@@ -1532,6 +1526,18 @@ fn pattern_matches(
     m: &mut Module,
 ) -> Result<crate::emit::Reg, NotYet> {
     let into = target(b, ctx, m)?;
+    text_matches(pieces, text, &into, ctx, m)
+}
+
+/// Wie [`pattern_matches`], mit fertigem Ziel fuer die Captures.
+fn text_matches(
+    pieces: &[takt_mir::pattern::PatternPiece],
+    text: crate::emit::Reg,
+    into: &Option<crate::captures::Target<'_>>,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::emit::Reg, NotYet> {
+    let _ = ctx;
     let zero = m.inst("add i32 0, 0");
     let (ok, at) = crate::captures::walk(pieces, text, into.as_ref(), zero, m)?;
     // Der ganze Text: Was hinter dem Durchlauf steht, darf nicht sein.
@@ -1554,6 +1560,18 @@ fn pattern_has(
     m: &mut Module,
 ) -> Result<crate::emit::Reg, NotYet> {
     let into = target(b, ctx, m)?;
+    text_has(pieces, text, &into, ctx, m)
+}
+
+/// Wie [`pattern_has`], mit fertigem Ziel fuer die Captures.
+fn text_has(
+    pieces: &[takt_mir::pattern::PatternPiece],
+    text: crate::emit::Reg,
+    into: &Option<crate::captures::Target<'_>>,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::emit::Reg, NotYet> {
+    let _ = ctx;
     let k = m.next_label();
     let (head, body, done) = (format!("has{k}"), format!("has{k}_rumpf"), format!("has{k}_fertig"));
     let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
@@ -1679,4 +1697,292 @@ struct Jump<'a> {
     end: &'a str,
     /// Der Zeiger auf `conf[0]`.
     conf: &'a crate::emit::Reg,
+}
+
+/// `<besitzer>_triggers(st, in, par, out)`: die Trigger-Phase (7.5).
+///
+/// Sie steht als eigene Funktion, nicht im Schritt: Der Rahmen ruft sie
+/// vor den Maschinenschritten, wie der Interpreter seine Phase zwischen
+/// Zustellung und Schritt legt. Ihr Zustand liegt trotzdem im Struct des
+/// Besitzers — `armed` gehoert laut 7.5 ihm, und der Cursor daneben
+/// spart ein zweites Schema.
+///
+/// Je armiertem Trigger laeuft das Fenster seines Quellstroms; das erste
+/// passende Element plant die Ausgaben, loescht `armed` und legt sich als
+/// Element in `fired`.
+pub fn trigger_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    let mine: Vec<(usize, &takt_mir::program::Trigger)> = p
+        .triggers
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| m.layout.trigger_flags.contains(&takt_mir::TriggerId(*i as u32)))
+        .collect();
+    let mark = module.mark();
+    let ptr = crate::ty::LlvmType::Ptr;
+    module.begin(
+        &format!("{}_triggers", m.name),
+        &crate::ty::LlvmType::Void,
+        &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
+    );
+    if mine.is_empty() {
+        module.end(None);
+        return Ok(());
+    }
+    let mut ctx = Ctx::new(m, st, p);
+    for (i, t) in mine {
+        if let Err(e) = one_trigger(takt_mir::TriggerId(i as u32), t, &mut ctx, module) {
+            module.abort(mark);
+            return Err(e);
+        }
+    }
+    module.end(None);
+    Ok(())
+}
+
+/// Ein Trigger: Fenster durchlaufen, beim ersten Treffer planen (7.5).
+fn one_trigger(
+    id: takt_mir::TriggerId,
+    t: &takt_mir::program::Trigger,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let takt_mir::machine::Guard::Match { subject, kind, pattern, .. } = &t.guard else {
+        return Err(NotYet { what: "Trigger ohne Mustern-Guard" });
+    };
+    let stream = match &subject.kind {
+        takt_mir::expr::ExprKind::Input { channel, .. } => takt_mir::expr::StreamRef::Channel(*channel),
+        takt_mir::expr::ExprKind::Stream(s) => takt_mir::expr::StreamRef::Internal(*s),
+        _ => return Err(NotYet { what: "Trigger ohne Quellstrom" }),
+    };
+    let (armed_ptr, cur_ptr) = ctx.vars().trigger_slots(id, m).ok_or(NotYet { what: "Trigger im Zustand" })?;
+    let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+    let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
+    let k = ctx.next_label();
+    let name = crate::fns::sanitized(&t.name);
+    let (skip, head, body, end_at) =
+        (format!("t{k}_{name}_aus"), format!("t{k}_{name}"), format!("t{k}_{name}_rumpf"), format!("t{k}_{name}_ende"));
+
+    let armed = m.inst(&format!("load i1, ptr {armed_ptr}"));
+    m.void_inst(&format!("br i1 {armed}, label %{head}, label %{skip}"));
+    m.label(&head);
+    let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
+    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let i_ptr = m.inst("alloca i32");
+    m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
+    let buf = crate::stream::scratch(ctx.program, elem, m)?;
+    let loop_head = format!("{head}_schleife");
+    m.void_inst(&format!("br label %{loop_head}"));
+    m.label(&loop_head);
+    let i = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let go_on = m.inst(&format!("icmp slt i32 {i}, {n}"));
+    m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{end_at}"));
+    m.label(&body);
+    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT));
+    // 7.5: Der Trigger fuehrt seinen eigenen Cursor; was er gesehen hat,
+    // sieht er nicht wieder.
+    let next_seq = m.inst(&format!("add i64 {seq}, 1"));
+    m.void_inst(&format!("store i64 {next_seq}, ptr {cur_ptr}"));
+
+    let event = event_record(t, ctx, m)?;
+    let hit = trigger_hit(pattern, *kind, buf, seq, elem, &event, ctx, m)?;
+    let (fire, step_on) = (format!("{body}_treffer"), format!("{body}_weiter"));
+    m.void_inst(&format!("br i1 {hit}, label %{fire}, label %{step_on}"));
+    m.label(&fire);
+    m.void_inst(&format!("store i1 false, ptr {armed_ptr}"));
+    plan_outputs(t, &event, ctx, m)?;
+    emit_fired(t, &event, ctx, m)?;
+    m.void_inst(&format!("br label %{end_at}"));
+    m.label(&step_on);
+    let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let nx = m.inst(&format!("add i32 {cur_i}, 1"));
+    m.void_inst(&format!("store i32 {nx}, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{loop_head}"));
+    m.label(&end_at);
+    m.void_inst(&format!("br label %{skip}"));
+    m.label(&skip);
+    Ok(())
+}
+
+/// Der Scratch fuer `event`: Captures, `.t`, `.seq`, Inhalt (7.5).
+struct Event {
+    slot: crate::emit::Reg,
+    record: crate::ty::LlvmType,
+    fields: Vec<(u32, crate::ty::LlvmType)>,
+    ty: takt_mir::TypeId,
+}
+
+/// Legt den `event`-Record an: sein Typ ist der Elementtyp von `fired`.
+fn event_record(t: &takt_mir::program::Trigger, ctx: &Ctx<'_>, m: &mut Module) -> Result<Event, NotYet> {
+    let ty = ctx.program.streams[t.fired.index()].elem;
+    let record = crate::ty::lower(ty, ctx.program).ok_or(NotYet { what: "`event`-Record" })?;
+    let crate::ty::LlvmType::Struct(parts) = &record else { return Err(NotYet { what: "`event` ohne Record" }) };
+    let takt_mir::types::Type::Record(r) = ctx.program.types.list.get(ty.index()).ok_or(NotYet { what: "`event`" })?
+    else {
+        return Err(NotYet { what: "`event` ohne Record" });
+    };
+    // Die Captures stehen vor `t`, `seq` und dem Inhalt (8.7).
+    let fields = ctx.program.records[r.index()]
+        .fields
+        .iter()
+        .enumerate()
+        .take_while(|(_, f)| !matches!(f.name.as_str(), "t" | "seq" | "text" | "data"))
+        .filter_map(|(i, _)| Some((i as u32, parts.get(i)?.clone())))
+        .collect();
+    let slot = m.inst(&format!("alloca {record}, align 8"));
+    Ok(Event { slot, record, fields, ty })
+}
+
+/// Trifft das Muster? Die Captures gehen dabei in den `event`-Record.
+#[allow(clippy::too_many_arguments)]
+fn trigger_hit(
+    pattern: &takt_mir::pattern::Pattern,
+    kind: takt_mir::expr::MatchKind,
+    buf: crate::emit::Reg,
+    seq: crate::emit::Reg,
+    elem: takt_mir::TypeId,
+    event: &Event,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::emit::Reg, NotYet> {
+    fill_event(event, buf, seq, elem, ctx, m)?;
+    match pattern {
+        takt_mir::pattern::Pattern::Record { record, fields } => record_hit(*record, fields, buf, elem, ctx, m),
+        takt_mir::pattern::Pattern::Text { pieces, .. } => {
+            let text = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {}", crate::stream::Streams::LEN_AT));
+            let into = Some(crate::captures::Target { slot: event.slot, record: &event.record, fields: &event.fields });
+            if kind == takt_mir::expr::MatchKind::Matches {
+                text_matches(pieces, text, &into, ctx, m)
+            } else {
+                text_has(pieces, text, &into, ctx, m)
+            }
+        }
+    }
+}
+
+/// `.t`, `.seq` und der Inhalt des Elements in den `event`-Record (7.5).
+fn fill_event(
+    event: &Event,
+    buf: crate::emit::Reg,
+    seq: crate::emit::Reg,
+    elem: takt_mir::TypeId,
+    ctx: &Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let p = ctx.program;
+    let takt_mir::types::Type::Record(r) = p.types.list.get(event.ty.index()).ok_or(NotYet { what: "`event`" })? else {
+        return Err(NotYet { what: "`event` ohne Record" });
+    };
+    let record = &event.record;
+    for (i, def) in p.records[r.index()].fields.iter().enumerate() {
+        let at =
+            |m: &mut Module| m.inst(&format!("getelementptr inbounds {record}, ptr {}, i32 0, i32 {i}", event.slot));
+        match def.name.as_str() {
+            "t" => {
+                let t = m.inst(&format!("load i64, ptr {buf}"));
+                let dst = at(m);
+                m.void_inst(&format!("store i64 {t}, ptr {dst}"));
+            }
+            "seq" => {
+                let dst = at(m);
+                m.void_inst(&format!("store i64 {seq}, ptr {dst}"));
+            }
+            "text" | "data" => {
+                let dst = at(m);
+                crate::stream::copy_payload(buf, dst, elem, p, m)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Die Ausgaben des `then` fuer `event.t + d` planen (7.5, 9.8).
+///
+/// Ein Ueberlauf von `sched` ist hier kein Fault-Zweig wie im `at` einer
+/// Maschine: Der Trigger hat keinen Zustand und kein Fault-Ziel (7.5).
+/// Der Rueckgabewert wird darum verworfen — die Runtime zaehlt ihn.
+fn plan_outputs(
+    t: &takt_mir::program::Trigger,
+    event: &Event,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let at = lower_with_event(&t.time, event, ctx, m)?;
+    for s in &t.then.stmts {
+        let takt_mir::stmt::StmtKind::Assign { target: takt_mir::stmt::Place::Output(c), value } = &s.kind else {
+            return Err(NotYet { what: "`then` mit mehr als Output-Zuweisungen" });
+        };
+        let v = lower_with_event(value, event, ctx, m)?;
+        let word = match &v.ty {
+            crate::ty::LlvmType::Int(1) => m.inst(&format!("zext i1 {} to i64", v.value)).to_string(),
+            crate::ty::LlvmType::Int(64) => v.value.clone(),
+            crate::ty::LlvmType::Int(n) => m.inst(&format!("sext i{n} {} to i64", v.value)).to_string(),
+            _ => return Err(NotYet { what: "Trigger-Ausgabe mit zusammengesetztem Wert" }),
+        };
+        let _ = m.inst(&format!("call i1 @{}(i32 {}, i64 {}, i64 {word})", crate::abi::Abi::SCHEDULE, c.0, at.value));
+    }
+    Ok(())
+}
+
+/// Das Element von `fired` in den Ring (7.5, 8.6).
+///
+/// Es ist ein Record fester Groesse; `send` nimmt Zeiger und Laenge.
+fn emit_fired(t: &takt_mir::program::Trigger, event: &Event, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let sid = crate::stream::number(takt_mir::expr::StreamRef::Internal(t.fired))
+        .ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+    let bytes = crate::stream::payload_cap(ctx.program, event.ty)?;
+    let _ = m.inst(&format!("call i1 @{}(i32 {sid}, ptr {}, i32 {bytes})", crate::stream::Streams::SEND, event.slot));
+    Ok(())
+}
+
+/// Senkt einen Ausdruck, in dem `event` vorkommen darf (7.5).
+fn lower_with_event(
+    e: &takt_mir::expr::Expr,
+    event: &Event,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::expr::Lowered, NotYet> {
+    let vars = EventVars { inner: ctx.vars(), event: event.slot, record: event.record.clone() };
+    crate::expr::lower(e, ctx.program, m, &vars)
+}
+
+/// `Vars` im `then` eines Triggers: alles wie in der Maschine, dazu
+/// `event` aus dem Scratch (7.5).
+struct EventVars<'a> {
+    inner: crate::stmt::StateVars<'a>,
+    event: crate::emit::Reg,
+    record: crate::ty::LlvmType,
+}
+
+impl crate::expr::Vars for EventVars<'_> {
+    fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<crate::expr::Lowered> {
+        self.inner.var(id, m)
+    }
+
+    fn input(&self, c: takt_mir::ChannelId, m: &mut Module) -> Option<crate::expr::Lowered> {
+        self.inner.input(c, m)
+    }
+
+    fn param(&self, id: takt_mir::ParamId, m: &mut Module) -> Option<crate::expr::Lowered> {
+        self.inner.param(id, m)
+    }
+
+    fn output(&self, c: takt_mir::ChannelId, m: &mut Module) -> Option<crate::expr::Lowered> {
+        self.inner.output(c, m)
+    }
+
+    fn machine_index(&self) -> Option<u32> {
+        self.inner.machine_index()
+    }
+
+    fn builtin(&self, b: takt_mir::expr::Builtin, p: &Program, m: &mut Module) -> Option<crate::expr::Lowered> {
+        match b {
+            // `event` liegt im Scratch; `field_of` arbeitet auf Werten.
+            takt_mir::expr::Builtin::Event => {
+                let v = m.inst(&format!("load {}, ptr {}", self.record, self.event));
+                Some(crate::expr::Lowered { value: v.to_string(), ty: self.record.clone() })
+            }
+            other => self.inner.builtin(other, p, m),
+        }
+    }
 }

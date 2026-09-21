@@ -703,7 +703,7 @@ PAR-7.5-Zeitgestempelte_Eingaben,Absatz/Regel,7.5,Zeitgestempelte Eingaben,,M1 (
 PAR-7.5-Geplante_Ausgaben,Absatz/Regel,7.5,Geplante Ausgaben,,M1 (Kernsemantik),fertig,
 PAR-7.5-Latenzformel,Absatz/Regel,7.5,Latenzformel,,M1 (Kernsemantik),fertig,
 PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M5 (Embedded),offen,TTL-Adapter (PA9)
-PAR-7.5-Trigger_v1.2_Regeln_auf_dem_I_O_Knoten,Absatz/Regel,7.5,Trigger (v1.2): Regeln auf dem I/O-Knoten,v1.2,M8,teilweise,"Sema und Interpreter fertig (M8 Schritte 9 und 10): Trigger-Phase zwischen Zustellung und Schritt, eigener Cursor je Trigger, `event` als Bindungsrecord, Ausgabe fuer `event.t + d` geplant. Codegen offen (Schritt 11)"
+PAR-7.5-Trigger_v1.2_Regeln_auf_dem_I_O_Knoten,Absatz/Regel,7.5,Trigger (v1.2): Regeln auf dem I/O-Knoten,v1.2,M8,fertig,"Sema, Interpreter und Codegen (M8 Schritte 9 bis 11): Trigger-Phase vor den Schritten, eigener Cursor je Trigger, `event` als Bindungsrecord, Ausgabe fuer `event.t + d` geplant; `<besitzer>_triggers` im erzeugten Code, Differential gruen. MCU-Rahmen noch ohne Phase"
 PAR-8.3-Sim_Build,Absatz/Regel,8.3,Sim-Build:,,M2 (Ströme),fertig,
 PAR-8.3-Plant_Modelle,Absatz/Regel,8.3,Plant-Modelle,,M2 (Ströme),fertig,
 PAR-8.3-HIL_Umschaltung,Absatz/Regel,8.3,HIL-Umschaltung:,,M2 (Ströme),teilweise,

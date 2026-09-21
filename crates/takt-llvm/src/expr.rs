@@ -82,6 +82,11 @@ pub trait Vars {
         None
     }
 
+    /// `armed` und Cursor eines Triggers im Zustand seines Besitzers (7.5).
+    fn trigger_slots(&self, _t: takt_mir::TriggerId, _m: &mut Module) -> Option<(crate::emit::Reg, crate::emit::Reg)> {
+        None
+    }
+
     /// Cursor und `examined` eines Stroms im Zustand der Maschine (9.6),
     /// als Zeiger; `None` ausserhalb einer Maschine.
     fn stream_slots(
@@ -195,6 +200,11 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Command(id) => vars.command(*id, m).ok_or(NotYet { what: "Command" }),
         ExprKind::JobState { handle, field } => vars.job(*handle, *field, p, m).ok_or(NotYet { what: "Job-Zustand" }),
         ExprKind::Builtin(b) => vars.builtin(*b, p, m).ok_or(NotYet { what: crate::scope::builtin_name(*b) }),
+        ExprKind::Armed(t) => {
+            let (armed, _) = vars.trigger_slots(*t, m).ok_or(NotYet { what: "`armed` eines Triggers" })?;
+            let v = m.inst(&format!("load i1, ptr {armed}"));
+            Ok(Lowered { value: v.to_string(), ty: LlvmType::Int(1) })
+        }
         ExprKind::Unary { op, expr } => unary(*op, expr, &want, p, m, vars),
         ExprKind::Binary { op, lhs, rhs } => binary(*op, lhs, rhs, &want, p, m, vars),
         ExprKind::Cond { cond, then, otherwise } => cond_expr(cond, then, otherwise, &want, p, m, vars),

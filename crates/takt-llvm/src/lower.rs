@@ -122,6 +122,10 @@ pub fn program_with(p: &Program, triple: &str, module_name: &str, instrument: cr
         }
         // 5.11: die `exit:`-Bloecke, wenn der Besitzer den Scope verlaesst.
         let _ = crate::step::exit_all_function(machine, &st, p, &mut m);
+        // 7.5: die Trigger-Phase der Maschine, die sie armiert.
+        if let Err(e) = crate::step::trigger_function(machine, &st, p, &mut m) {
+            skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.to_string() });
+        }
         let _ = crate::step::advance_function(machine, &st, &mut m);
         let _ = crate::step::deadline_function(machine, &st, p, &mut m);
         if let Err(e) = crate::psi::publish_function(machine, &st, p, &mut m) {

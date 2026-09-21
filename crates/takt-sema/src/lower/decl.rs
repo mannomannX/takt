@@ -819,8 +819,13 @@ impl Lowerer<'_> {
         let Some((guard, elem, captures)) = self.trigger_guard(&decl.when, decl.span) else { return };
         // 7.5: `event` traegt die Captures und `.t` — derselbe Record, den
         // eine Handler-Bindung traegt, damit `event.n` und `f.n` dasselbe
-        // heissen.
-        let event_ty = self.binding_type(&format!("{}.event", decl.name.name), &captures, Some(elem), decl.span);
+        // heissen. Ohne den Inhalt des Elements: 7.5 nennt ihn nicht, und
+        // ein `line` haette keine feste Byteform (8.6), die der Ring von
+        // `fired` braucht.
+        let _ = elem;
+        let mut fields = captures.clone();
+        fields.push(("t".to_string(), self.tys.duration));
+        let event_ty = self.binding_type(&format!("{}.event", decl.name.name), &fields, None, decl.span);
         let saved = self.event_ty.replace(event_ty);
         let time = self.expr(&decl.then.time, Some(self.tys.duration));
         let then = self.block(&decl.then.body, BlockKind::At);

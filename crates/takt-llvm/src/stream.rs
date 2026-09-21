@@ -109,8 +109,9 @@ pub fn element(p: &Program, stream: StreamRef) -> Option<TypeId> {
 }
 
 /// Die Kapazitaet der Bytes eines Elements: `N` bei Text, sonst die
+/// Hoechstzahl Nutzbytes eines Elements (8.6).
 /// kanonische Byteform — dasselbe, was `takt_stream_cap` im Rahmen sagt.
-fn payload_cap(p: &Program, elem: TypeId) -> Result<u32, NotYet> {
+pub fn payload_cap(p: &Program, elem: TypeId) -> Result<u32, NotYet> {
     match p.types.list.get(elem.index()) {
         Some(Type::Line { cap } | Type::Str { cap } | Type::Bytes { cap }) => Ok(*cap),
         _ => takt_mir::bytes::max_size(p, elem).map_err(|_| NotYet { what: "Elementform ohne feste Groesse" }),

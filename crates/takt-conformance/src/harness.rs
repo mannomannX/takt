@@ -171,6 +171,9 @@ fn build_inner(
             let _ = writeln!(s, "_Bool {}_scope_{i}(void *st);", m.name);
         }
         let _ = writeln!(s, "void {}_exit_all(void *st, void *in, void *par, void *out);", m.name);
+        if !m.layout.trigger_flags.is_empty() {
+            let _ = writeln!(s, "void {}_triggers(void *st, void *in, void *par, void *out);", m.name);
+        }
     }
     // 13.3: Laufzeitmonitore laufen nur, wenn der Rahmen alle Maschinen
     // fuehrt — eine Eigenschaft liest jede.
@@ -325,6 +328,13 @@ fn build_inner(
     // 7.2: Eine Maschine laeuft in jedem `period`-ten Tick. Ohne die
     // Bedingung liefe ein `every 50 ms`-Modell bei 10 ms Tick fuenfmal
     // zu oft, und sein Wert stuende im Trace an der falschen Stelle.
+    // 7.5: Die Trigger-Phase liegt vor den Schritten, wie im Interpreter
+    // zwischen Zustellung und Schritt.
+    for m in &driven {
+        if !m.layout.trigger_flags.is_empty() {
+            let _ = writeln!(s, "        {0}_triggers(state_{0}, image, params, latch);", m.name);
+        }
+    }
     let scoped = scoped_of(p);
     for m in &driven {
         let condition = match (m.period.max(1), m.phase) {

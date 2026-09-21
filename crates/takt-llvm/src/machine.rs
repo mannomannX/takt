@@ -81,6 +81,12 @@ pub enum Role {
     /// `saved[i]`: zuletzt aktives Blatt eines `resume`-Zustands (5.12);
     /// -1 vor dem ersten Austritt.
     Saved,
+    /// `armed[i]` eines Triggers dieser Maschine (7.5).
+    Armed,
+    /// Der Cursor eines Triggers auf seinem Quellstrom (7.5). Er liegt
+    /// im Zustand des Besitzers, gehoert aber dem Trigger: Der liest mit
+    /// Ereignisrate und unabhaengig davon, was die Maschine untersucht.
+    TriggerCursor,
 }
 
 /// Die Tiefe des Zustandsbaums einer Maschine.
@@ -133,6 +139,10 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     }
     for (i, _) in m.layout.cursors.iter().enumerate() {
         fields.push(Field { name: format!("examined{i}"), ty: LlvmType::Int(64), role: Role::Examined });
+    }
+    for (i, _) in m.layout.trigger_flags.iter().enumerate() {
+        fields.push(Field { name: format!("armed{i}"), ty: LlvmType::Int(1), role: Role::Armed });
+        fields.push(Field { name: format!("trig_cur{i}"), ty: LlvmType::Int(64), role: Role::TriggerCursor });
     }
     // `pending` ist ein Fault mit Gueltigkeitsflag; der Fault selbst ist
     // seine Art und sein Ursprung (5.3). Als Struct, damit 5.4 ihn im
