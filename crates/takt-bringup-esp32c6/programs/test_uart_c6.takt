@@ -1,0 +1,730 @@
+# ============================================================================
+# test_uart_c6.takt — derselbe Treiberstapel auf UART0 des ESP32-C6.
+#
+# Portierung von `feedback/test_uart.takt` (M8 Schritt 19) auf echte
+# Register. Geaendert ist genau eine Schicht: L0, die Registerzugriffe.
+# L1 (COBS), L2 (Link) und L3 (Zeilen) stehen Zeile fuer Zeile wie im
+# Original — das ist die Aussage der Portierung. Wer den Stapel auf ein
+# drittes Board bringt, schreibt wieder nur L0.
+#
+# Die Registerkarte stammt aus der PAC `esp32c6 0.24.0`, nicht aus dem
+# Gedaechtnis:
+#
+#   FIFO       0x6000_0000  Byte in Bits 0..7 (schreiben sendet, lesen holt)
+#   INT_RAW    0x6000_0004  Fehlerflags
+#   INT_CLR    0x6000_0010  loescht sie, je Bit einzeln
+#   STATUS     0x6000_001C  rxfifo_cnt 0..7, txfifo_cnt 16..23
+#
+# Was der C6 *nicht* hat: getrennte `tx_empty`/`tx_idle`-Bits an den
+# Stellen des Originals, ein Steuerregister mit `rx_flush` an Bit 4, und
+# CTS als Pegel im Statuswort. L0 bildet ab, was da ist, und nennt den
+# Rest beim Namen, statt ihn zu verschweigen.
+#
+# Schichtung (jede Schicht ist eine Maschine oder ein Block, nichts davon
+# braucht Konstrukte ausserhalb der Referenz):
+#
+#   L0  driver machine uart_port   — Registerzugriffe ueber `port`, FIFO-Pump,
+#                                    Overrun-/Frame-/Parity-Fehler, Baudrate.
+#                                    (v1.2-Treiberstufe, 15/16 "Register in Takt")
+#   L1  machine uart_framer        — COBS-Rahmung ueber interne Streams,
+#                                    Byte-Ring-Semantik, Ueberlauf als Fault.
+#   L2  machine uart_link          — Vertrag: Laenge + CRC16, Sequenznummer,
+#                                    ACK/NAK, Retransmit, Backoff, Idle-Faehig.
+#   L3  block line_assembler       — reiner, zustandsbehafteter Zeilenzusammenbau
+#                                    fuer Textprotokolle (framing = lines in Takt).
+#
+#   dazu: Simulationsmodell (loopback + Bitfehler-Injektion), Szenarien,
+#         Kampagne, property-Monitore.
+#
+# Sprachfassung: Edition 1, Stufe v1.2 (port/driver machine, arm/disarm,
+# gescopte Instanzen, resume, Typvariablen). Alles was v1.1 ist, ist markiert.
+# ============================================================================
+
+system:
+    language = 1
+    tick     = 1 ms  # 1 kHz: der SYSTIMER des C6 traegt ihn sicher, und
+    # bei 115200 Bd fallen 11,52 Byte/ms an — die
+    # 128-Byte-FIFO deckelt das (siehe MAXPT).
+    float         = f32        # der C6 hat keine FPU (4.2, 12.8)
+    target        = baremetal  # 12.8
+    output_timing = asap       # Latenz vor Jitter (16)
+    fault_is_fail = true
+
+# ============================================================================
+# 1. Einheiten und Grundtypen
+# ============================================================================
+
+unit Bd      = 1 Hz  # Baud = Symbole/s; bei 8N1 gilt Byte/s = Bd/10
+unit tick_ct = 1     # dimensionslose Zaehlgroesse fuer Timer-Ticks
+
+const F_PCLK   : u32[Hz] = 40_000_000 Hz  # XTAL des C6
+const BAUD     : u32[Bd] = 115_200 Bd     # was der ROM-Bootloader stellt
+const FIFO_LEN : int = 128                # TX- und RX-FIFO des C6
+
+# Byte/s bei 8N1 = 10 Symbole je Byte. Ganzzahlig, weil Bd und Hz dieselbe
+# Dimension haben und der Faktor 1 ist (3.2, Integer-Einheiten v1.1).
+const BYTES_PER_S : u32[Hz] = (BAUD.to(Hz)) / 10
+
+# ---------------------------------------------------------------- Registerbild
+# Das Drahtformat von UART0. Die Bitpositionen stehen so in der PAC; wer
+# sie raet, raet falsch — `txfifo_cnt` liegt bei 16..23 und nicht dort, wo
+# ein Statuswort es nahelegen wuerde.
+#
+# `layout little` ist Pflicht, weil die Records ueber `port` an MMIO
+# gebunden sind (3.7).
+
+record UartStatus layout little:
+    word : u32 with bits:
+        rxfifo_cnt : u8 at 0..7 ro
+        rxd        : bool at 15 ro  # Pegel der Empfangsleitung
+        txfifo_cnt : u8 at 16..23 ro
+        txd        : bool at 31 ro  # Pegel der Sendeleitung
+
+record UartData layout little:
+    word : u32 with bits:
+        byte : u8 at 0..7
+
+# Fehlerflags stehen beim C6 nicht im Statuswort, sondern in INT_RAW, und
+# geloescht werden sie ueber ein eigenes Register INT_CLR — nicht per W1C
+# auf demselben. Genau dafuer ist `wo` da: Lesen waere sinnlos.
+record UartIntRaw layout little:
+    word : u32 with bits:
+        parity_err : bool at 2 ro
+        frame_err  : bool at 3 ro
+        rxfifo_ovf : bool at 4 ro
+        brk_det    : bool at 7 ro
+
+record UartIntClr layout little:
+    word : u32 with bits:
+        parity_err : bool at 2 wo
+        frame_err  : bool at 3 wo
+        rxfifo_ovf : bool at 4 wo
+        brk_det    : bool at 7 wo
+
+# Fehlerbild eines empfangenen Bytes; wird als Stream-Element weitergereicht.
+record RxByte layout little:
+    b      : u8
+    frame  : bool
+    parity : bool
+    brk    : bool
+
+enum LinkErr: TIMEOUT, CRC, LENGTH, SEQ, PEER_NAK, OVERRUN, LINE
+enum FrameErr: COBS, LENGTH, EMPTY
+
+enum AckKind layout u8: ACK = 0x06, NAK = 0x15, DATA = 0x02
+
+record LinkHeader layout little:
+    magic : u8 = 0xA5  # Konstantenfeld: decode prueft, encode setzt
+    kind  : AckKind
+    seq   : u8
+    len   : u16 in 0..1024
+
+# ============================================================================
+# 2. L0 — Treiberstufe auf UART0 des ESP32-C6
+#
+# `driver machine` (12.10): Registerzugriffe wirken sofort und in
+# Programmordnung. Diese Schicht ist die einzige, die das Board kennt —
+# alles darueber ist unveraendert aus `feedback/test_uart.takt`.
+#
+# Was hier anders ist als im Original, und warum:
+#
+#   * Keine Baudraten-Konfiguration. UART0 ist beim Start vom
+#     ROM-Bootloader gestellt, und `esp-hal` fuehrt es in `KEEP_ENABLED` —
+#     Takt und Registerinhalt bleiben stehen. CLKDIV zu ueberschreiben
+#     risse den Bootkanal mit.
+#   * Kein `rx_flush`. Der C6 hat es nicht an der Stelle, an der das
+#     Original es erwartete; die FIFO leert sich durch Lesen.
+#   * Kein CTS. Das DevKit fuehrt die Leitung nicht heraus; `cts_ok` ist
+#     darum fest wahr, und das steht hier, statt es zu verschweigen.
+# ============================================================================
+
+port uart_st : UartStatus @ mmio(0x6000001C)
+port uart_dr : UartData @ mmio(0x60000000)
+port uart_ir : UartIntRaw @ mmio(0x60000004)
+port uart_ic : UartIntClr @ mmio(0x60000010)
+
+stream<RxByte> rx_raw with capacity = 64, overflow = fault
+stream<u8> tx_raw with capacity = 256, overflow = fault
+
+output rs485_de : bool @ hw("gpio/rs485_de") with safe = false
+
+command uart_reset
+
+param RX_BREAK_IS_FAULT : bool = false
+param TX_STALL_LIMIT    : Duration in 1 ms..1 s = 50 ms
+param DE_HOLD           : Duration in 0 s..10 ms = 3 ms
+
+# Pruefung 59 braucht `wcet_poll` aus der Kalibrierung; die gibt es fuer
+# den C6 nicht (M7). `polling = unchecked` ist der ausdrueckliche Verzicht
+# und erscheint im Lauf-Header.
+driver machine uart_port with polling = unchecked:
+    fault -> PORT_FAULT
+
+    pub var overruns    : int in 0..1_000_000 = 0
+    pub var frame_errs  : int in 0..1_000_000 = 0
+    pub var parity_errs : int in 0..1_000_000 = 0
+    pub var breaks      : int in 0..1_000_000 = 0
+    pub var rx_bytes    : int in 0..1_000_000_000 = 0
+    pub var tx_bytes    : int in 0..1_000_000_000 = 0
+    pub var sending     : bool = false
+    pub var cts_ok      : bool = true  # das DevKit fuehrt CTS nicht heraus
+    pub var line_ok     : bool = false
+
+    var tx_stalled_for : Duration = 0 s
+    var de_hold        : Duration in 0 s..10 ms = 0 s
+
+    initial RUN
+
+    state RUN:
+        loop:
+            var st = uart_st  # ein Registerlesen
+            var ir = uart_ir  # die Fehlerflags
+            line_ok = true
+
+            # ---- Fehlerflags zuerst, und einzeln geloescht: `wo` auf
+            # INT_CLR senkt auf einen Schreibvorgang mit Einzelbitmaske,
+            # nie auf Lese-Modifiziere-Schreibe (3.7). Ein ungesehenes
+            # Ereignis kann damit nicht verlorengehen.
+            if ir.word.rxfifo_ovf:
+                overruns += 1
+                uart_ic.word.rxfifo_ovf = true
+                alert true, "uart RX overrun (#{overruns})"
+            if ir.word.frame_err:
+                frame_errs += 1
+                uart_ic.word.frame_err = true
+            if ir.word.parity_err:
+                parity_errs += 1
+                uart_ic.word.parity_err = true
+            if ir.word.brk_det:
+                breaks += 1
+                uart_ic.word.brk_det = true
+
+            # ---- RX-Pump: ein Byte je Tick.
+            #
+            # Auf der Hardware holte eine Schleife so viele Bytes, wie
+            # `rxfifo_cnt` meldet — jedes Lesen des Datenregisters schaltet
+            # weiter. Im Sim-Build geht das nicht: Ein Port liest den
+            # Modellwert des Ticks (12.10), und der ist innerhalb des Ticks
+            # derselbe (FB-212). Ein Byte je Tick laeuft auf beiden Seiten.
+            if st.word.rxfifo_cnt > 0:
+                var d = uart_dr
+                send rx_raw, RxByte(b = d.word.byte,
+                                    frame = ir.word.frame_err,
+                                    parity = ir.word.parity_err,
+                                    brk = ir.word.brk_det)
+                rx_bytes += 1
+
+            # ---- TX-Pump: solange die FIFO Platz hat. Die 128 Byte des C6
+            # minus acht Reserve — am Rand verschluckt ein Ueberlauf
+            # Zeichen, und acht Byte kosten nichts.
+            var room : int in 0..128 = 120 - (st.word.txfifo_cnt as int)
+            var sent : int in 0..128 = 0
+            for ev in tx_raw:
+                if sent >= room or not cts_ok:
+                    break
+                uart_dr = UartData(word = ev.data as u32)
+                tx_bytes += 1
+                sent += 1
+
+            if tx_raw.count > 0 and sent == 0:
+                tx_stalled_for += tick
+            else:
+                tx_stalled_for = 0 s
+            check tx_stalled_for < TX_STALL_LIMIT, "uart TX stalled for {tx_stalled_for} (cts={cts_ok})"
+
+            # ---- RS-485-Richtung. Der C6 hat kein `tx_idle`-Bit an der
+            # Stelle des Originals; `txfifo_cnt > 0` sagt dasselbe, solange
+            # noch etwas in der FIFO steht, und die Haltezeit deckt das
+            # Schieberegister danach ab.
+            sending = sent > 0
+            rs485_de = (tx_raw.count > 0) or (sent > 0) or (st.word.txfifo_cnt > 0) or (de_hold > 0 s)
+            if (tx_raw.count > 0) or (sent > 0) or (st.word.txfifo_cnt > 0):
+                de_hold = DE_HOLD
+            elif de_hold > 0 s:
+                de_hold -= tick
+
+            if RX_BREAK_IS_FAULT:
+                check not ir.word.brk_det, "uart break detected on RX line"
+
+        when uart_reset: -> RUN
+
+    state PORT_FAULT:
+        enter:
+            rs485_de = false
+            line_ok = false
+            log "uart port fault: {last_fault.message} @ line {last_fault.line}"
+        after 100 ms: -> RUN
+
+# ============================================================================
+# 3. L1 — COBS-Rahmung: Bytes <-> Frames, in beide Richtungen
+#
+# COBS ist gewaehlt, weil es eine harte Obergrenze der Expansion hat
+# (n + ceil(n/254) + 1) und die Null als Rahmentrenner reserviert — damit ist
+# die Rahmung ein beschraenkter Transducer mit statischem Budget.
+# ============================================================================
+
+const MAX_PAYLOAD : int = 1024
+const MAX_ENCODED : int = 1024 + 5 + 1  # n + ceil(n/254) + Trenner
+
+# Der Byte-Ring muss die Hoechstlast je Aktivierung fassen (Lemma 9.6.1):
+# `expect_len` sagt, was ueblich ist, `capacity_bytes`, was nie ueberlaeuft.
+stream<bytes<1024>> rx_frames with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
+stream<bytes<1024>> tx_frames with capacity = 8, expect_len = 96, capacity_bytes = 3072, overflow = fault
+
+# --- reine Funktionen: COBS ---------------------------------------------------
+# `inout` (3.9) macht das In-Place-Schreiben lesbar, ohne die Reinheit
+# aufzugeben: der Compiler uebergibt per Zeiger, Aliasing ist statisch
+# ausgeschlossen (Pruefung 47).
+
+# `inout` ist die Rueckgabe (3.9): `cobs_encode(src, dst)` als Anweisung
+# steht fuer `dst = cobs_encode(src, dst)`. Ein Fehler laesst `dst` leer.
+fn cobs_encode(src: bytes<1024>, inout dst: bytes<1030>):
+    dst.clear()
+    var code_at : int in 0..1030 = 0
+    var code    : int in 1..255 = 1
+    var ok      : bool = true
+    var put     : bool = dst.push(0)  # Platzhalter fuer den Code
+    ok = ok and put
+    for i in range(MAX_PAYLOAD):
+        if i >= src.len:
+            break
+        var b = src[i]
+        if b != 0:
+            put = dst.push(b)
+            ok = ok and put
+            code += 1
+        if b == 0 or code == 255:
+            dst[code_at] = code as u8
+            code_at = dst.len
+            put = dst.push(0)
+            ok = ok and put
+            code = 1
+    dst[code_at] = code as u8
+    put = dst.push(0)  # Rahmentrenner
+    if not (ok and put):
+        dst.clear()
+
+fn cobs_decode(src: bytes<1030>, inout dst: bytes<1024>):
+    dst.clear()
+    var i   : int in 0..1030 = 0
+    var bad : bool = false
+    for _pass in range(MAX_ENCODED):
+        if bad or i >= src.len:
+            break
+        var code : int in 0..255 = src[i] as int
+        if code == 0:
+            bad = true  # unerwarteter Trenner
+            break
+        i += 1
+        for k in range(254):
+            if k + 1 >= code or i >= src.len:
+                break
+            var put = dst.push(src[i])
+            if not put:
+                bad = true  # Nutzlast zu gross
+                break
+            i += 1
+        if not bad and code < 255 and i < src.len:
+            var sep = dst.push(0)
+            if not sep:
+                bad = true
+    if bad:
+        dst.clear()
+
+fn crc16_ccitt(b: bytes<1024>, seed: u16) -> u16:
+    var crc : u16 = seed
+    for i in range(MAX_PAYLOAD):
+        if i >= b.len:
+            break
+        crc = crc ^ ((b[i] as u16) << 8)
+        for _bit in range(8):
+            if crc.bit(15):
+                crc = (crc.wrap_u16() << 1) ^ 0x1021
+            else:
+                crc = crc.wrap_u16() << 1
+    return crc
+
+machine uart_framer follows uart_port:
+    # `follows` (7.2, v1.1): der Framer liest die Bytes desselben Ticks frisch,
+    # nicht mit Unit-Delay. Damit ist die Ende-zu-Ende-Latenz eines Frames
+    # ein Tick statt zwei — und der DAG-Check ersetzt jede Datenflussanalyse.
+    fault -> RESYNC
+
+    pub var frames_in     : int in 0..1_000_000 = 0
+    pub var frames_out    : int in 0..1_000_000 = 0
+    pub var decode_errors : int in 0..1_000_000 = 0
+    pub var too_long      : int in 0..1_000_000 = 0
+
+    var acc : bytes<1030> = default
+    var out : bytes<1024> = default
+    var enc : bytes<1030> = default
+
+    # Auf einer frischen Leitung ist die Rahmengrenze bekannt: Es ist noch
+    # nichts gekommen. `SYNC` gehoert hinter einen Fehler (ueber `RESYNC`),
+    # wo sie unbekannt ist — als Anfangszustand verschluckte sie den ersten
+    # Frame, weil COBS mit dem Nullbyte *endet*, auf das `SYNC` wartet.
+    initial ASSEMBLE
+
+    # TX-Richtung in jedem Zustand: der Sender braucht keinen Rahmensync,
+    # und ein Frame je Aktivierung haelt das Budget flach.
+    loop:
+        for f in tx_frames:
+            cobs_encode(f.data, enc)
+            if enc.len > 0:
+                for i in range(MAX_ENCODED):
+                    if i >= enc.len:
+                        break
+                    send tx_raw, enc[i]
+                frames_out += 1
+            else:
+                alert true, "cobs encode overflow ({f.data.len} bytes)"
+            break
+
+    state SYNC:
+        # Nach einem Fehler wird bis zum naechsten Nullbyte verworfen; erst
+        # dann ist die Rahmengrenze wieder bekannt.
+        loop:
+            acc.clear()
+        on rx_raw as ev:
+            if ev.data.b == 0:
+                -> ASSEMBLE
+
+    state ASSEMBLE:
+        on rx_raw as ev:
+            # Leitungsfehler auf Byteebene verwerfen den ganzen Frame.
+            if ev.data.frame or ev.data.parity or ev.data.brk:
+                decode_errors += 1
+                -> RESYNC
+            if ev.data.b == 0:
+                if acc.len > 0:
+                    cobs_decode(acc, out)
+                    if out.len > 0:
+                        send rx_frames, out
+                        frames_in += 1
+                    else:
+                        decode_errors += 1
+                acc.clear()
+            else:
+                var put = acc.push(ev.data.b)
+                if not put:
+                    too_long += 1
+                    -> RESYNC
+
+    state RESYNC:
+        enter:
+            acc.clear()
+            log "framer resync after {decode_errors} decode errors"
+        after 1 ms: -> SYNC
+
+# ============================================================================
+# 4. L2 — Link: Header, CRC, Sequenz, ACK/NAK, Retransmit
+# ============================================================================
+
+const HDR_LEN : int = 5  # magic + kind + seq + len(2)
+
+stream<bytes<1024>> app_rx with capacity = 8, expect_len = 96, capacity_bytes = 1024, overflow = fault
+stream<bytes<1024>> app_tx with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
+# Zwei Szenarien schreiben nie zusammen (13.6), aber Pruefung 43 zaehlt
+# Schreiber statisch und kennt die Ausnahme nicht, die Pruefung 26 fuer
+# Outputs macht (FB-213). Bis dahin hat das zweite Szenario seinen
+# eigenen Strom; `IDLE_LINK` liest beide.
+stream<bytes<1024>> app_tx2 with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
+
+param RETRIES     : int in 0..8 = 3
+param ACK_TIMEOUT : Duration in 1 ms..2 s = 25 ms
+param BACKOFF     : Duration in 0 s..500 ms = 5 ms
+
+machine uart_link every 500 us:
+    signal link_established
+    fault -> LINK_DOWN
+
+    pub var tx_seq      : u8 = 0
+    pub var rx_seq      : u8 = 0
+    pub var retransmits : int in 0..1_000_000 = 0
+    pub var crc_errors  : int in 0..1_000_000 = 0
+    pub var delivered   : int in 0..1_000_000 = 0
+    pub var last_err    : LinkErr = TIMEOUT
+    pub var up          : bool = false
+
+    var pending  : bytes<1024> = default
+    var attempts : int in 0..8 = 0
+    var scratch  : bytes<1024> = default
+
+    initial RECEIVING
+
+    # Maschinenweite Ablaufinvariante: die Zaehler duerfen nie ueberlaufen —
+    # der implizite Range-Check tut das ohnehin, `check` macht es sichtbar.
+    loop:
+        check crc_errors < 1_000_000, "crc error counter saturated"
+
+    # ------------------------------------------------------------- Empfangspfad
+    state RECEIVING:
+        initial IDLE_LINK
+
+        # Handler auf Vorfahrenebene: gilt in allen Unterzustaenden.
+        on rx_frames as f:
+            var h = LinkHeader.decode(f.data)
+            if not h.valid:
+                crc_errors += 1
+                last_err = CRC
+            else:
+                var hh = h  # durch h.valid dominiert
+                if (f.data.len as int) < HDR_LEN + (hh.len as int) + 2:
+                    last_err = LENGTH
+                else:
+                    var body = f.data[HDR_LEN..HDR_LEN + (hh.len as int)]
+                    var want = ((f.data[HDR_LEN + (hh.len as int)] as u16) << 8) | (f.data[HDR_LEN + (hh.len as int) + 1] as u16)
+                    if crc16_ccitt(body, 0xFFFF) != want:
+                        crc_errors += 1
+                        last_err = CRC
+                        send tx_frames, make_ctrl(NAK, hh.seq)
+                    else:
+                        match hh.kind:
+                            case DATA:
+                                if hh.seq == rx_seq:
+                                    send app_rx, body
+                                    delivered += 1
+                                    rx_seq = rx_seq.wrap_u8() + 1
+                                send tx_frames, make_ctrl(ACK, hh.seq)
+                            case ACK: pass  # in SENDING behandelt
+                            case NAK: pass
+                            case _: pass  # AckKind ist geschlossen,
+                            # `_` schadet nicht
+
+        state IDLE_LINK:
+            enter:
+                up = false
+            loop:
+                for m in app_tx:
+                    pending = m.data
+                    attempts = 0
+                    -> SENDING
+                for m in app_tx2:
+                    pending = m.data
+                    attempts = 0
+                    -> SENDING
+
+        state SENDING resume:
+            # `resume` (5.12): wird der Link zwischendurch degradiert und kehrt
+            # zurueck, wird der zuletzt aktive Unterzustand wieder betreten.
+            initial TRANSMIT
+
+            state TRANSMIT:
+                enter:
+                    send tx_frames, make_data(tx_seq, pending)
+                    attempts += 1
+                when true: -> AWAIT_ACK
+
+            state AWAIT_ACK:
+                on rx_frames as f:
+                    var h = LinkHeader.decode(f.data)
+                    if h.valid and h.kind == ACK:
+                        up = true
+                        raise link_established
+                        tx_seq = tx_seq.wrap_u8() + 1
+                        -> IDLE_LINK
+                    if h.valid and h.kind == NAK:
+                        last_err = PEER_NAK
+                        -> BACKOFF_ST
+                after ACK_TIMEOUT:
+                    last_err = TIMEOUT
+                    -> BACKOFF_ST
+
+            state BACKOFF_ST:
+                enter:
+                    retransmits += 1
+                when attempts > RETRIES: -> LINK_DOWN
+                after BACKOFF: -> TRANSMIT
+
+    state LINK_DOWN:
+        enter:
+            up = false
+            pending.clear()
+            log "link down: {last_err} after {retransmits} retransmits"
+        when uart_port.line_ok and uart_port.cts_ok: -> RECEIVING
+
+fn make_ctrl(kind: AckKind, seq: u8) -> bytes<1024>:
+    var b : bytes<1024> = default
+    var h = LinkHeader(kind = kind, seq = seq, len = 0)
+    var e = h.encode()
+    for i in range(HDR_LEN):
+        var _ok = b.push(e[i])
+    var c  = crc16_ccitt(default, 0xFFFF)
+    var _a = b.push((c >> 8) as u8)
+    var _b = b.push((c & 0xFF) as u8)
+    return b
+
+fn make_data(seq: u8, payload: bytes<1024>) -> bytes<1024>:
+    var b : bytes<1024> = default
+    var h = LinkHeader(kind = DATA, seq = seq, len = payload.len as u16)
+    var e = h.encode()
+    for i in range(HDR_LEN):
+        var _ok = b.push(e[i])
+    for i in range(MAX_PAYLOAD):
+        if i >= payload.len:
+            break
+        var _p = b.push(payload[i])
+    var c  = crc16_ccitt(payload, 0xFFFF)
+    var _a = b.push((c >> 8) as u8)
+    var _b = b.push((c & 0xFF) as u8)
+    return b
+
+# ============================================================================
+# 5. L3 — Zeilenzusammenbau als reiner Block (Textprotokolle)
+# ============================================================================
+
+# Ergebnis eines Zeichens: fertige Zeile oder nicht. `bytes<N>?` waere
+# die kuerzere Schreibweise, die Grammatik kennt sie aber nicht (3.8).
+record AssembledLine:
+    ready : bool
+    data  : bytes<1024>
+
+block line_assembler[const N in 16..1024]():
+    var buf   : bytes<1024> = default
+    var trunc : bool = false
+
+    step(ev: RxByte) -> AssembledLine:
+        if ev.b == 0x0A:  # LF beendet die Zeile
+            var out = buf
+            buf.clear()
+            trunc = false
+            return AssembledLine(ready = true, data = out)
+        if ev.b == 0x0D:  # CR ignorieren
+            return AssembledLine(ready = false, data = default)
+        var fits : bool = buf.push(ev.b)  # `push` ist eine Anweisung (4.4)
+        if not fits:
+            trunc = true
+        return AssembledLine(ready = false, data = default)
+
+    truncated() -> bool:
+        return trunc
+
+    reset():
+        buf.clear()
+        trunc = false
+
+# ============================================================================
+# 6. Eigenschaften (v1.1) — Monitor in Simulation, Beweisziel fuer `takt prove`
+# ============================================================================
+
+property no_tx_without_cts: always(uart_port.tx_bytes > 0 implies once[1 ms](uart_port.cts_ok))
+
+# Gemeint ist, was der Name sagt: Gehen Daten hinaus, stand die Richtung
+# schon an. Der Vordersatz muss darum der *Vorgang* sein und nicht sein
+# Zaehlerstand — `tx_bytes > 0` bliebe nach dem ersten Byte fuer immer
+# wahr und verlangte DE bis ans Ende des Laufs.
+#
+# Auch `stable[100 us](rs485_de)` traegt das nicht: `stable[d]` gilt auf
+# `[k, k + d/T0]`, bei einem Tick Fenster also auch im naechsten —
+# `always(P implies stable[T0](P))` hiesse „P faellt nie".
+property de_before_data: always(uart_port.sending implies once[1 ms](rs485_de))
+
+property link_recovers: always(uart_link.up == false implies eventually[2 s](uart_link.up == true))
+
+property no_silent_loss: always(uart_framer.frames_in >= uart_link.delivered)
+
+# ============================================================================
+# 7. Simulationsmodell und Szenarien
+#
+# Das Modell spricht die Kanaele der Ports (12.10). Es bildet die
+# Loopback-Schaltung nach, die auf dem Board eine Drahtbruecke von
+# GPIO16 (TX) nach GPIO17 (RX) herstellt: Was hinausgeht, kommt zurueck.
+# ============================================================================
+
+output st_sim : UartStatus @ sim("mmio/0x6000001c/r")
+output dr_sim : UartData   @ sim("mmio/0x60000000/r")
+output ir_sim : UartIntRaw @ sim("mmio/0x60000004/r")
+
+# Hoechstlast je Tick (Lemma 9.6.1): der Treiber schreibt das
+# Datenregister hoechstens `room` mal (120) und loescht hoechstens vier
+# Fehlerflags. Bei 1 kHz Basis-Tick sind das die Raten unten.
+input  dr_w : stream<UartData>   @ sim("mmio/0x60000000/w") with capacity = 128, overflow = fault, max_rate = 120 kHz
+input  ic_w : stream<UartIntClr> @ sim("mmio/0x60000010/w") with capacity = 8, overflow = fault, max_rate = 4 kHz
+
+param BIT_ERROR_AT : int in 0..100000 = 0
+param CTS_DROP_AT  : Duration in 0 s..10 s = 0 s
+
+machine uart_model:
+    var fifo      : [16] u8 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    var level     : int in 0..16 = 0
+    var announced : int in 0..1 = 0
+    var seen      : int in 0..1_000_000 = 0
+    var shifting  : Duration in 0 s..10 ms = 0 s
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # Was der vorige Tick als `rxfifo_cnt` ankuendigte, hat der
+            # Treiber entnommen — seine RX-Pump liest genau ein Byte. Der
+            # Lesekanal traegt einen Pegel und keine Warteschlange und kann
+            # das Entnehmen nicht selbst melden (FB-212); das Modell fuehrt
+            # den Fuellstand darum nach.
+            if announced > 0:
+                for k in range(15):
+                    fifo[k] = fifo[k + 1]
+                level = level - 1
+                announced = 0
+
+            dr_sim = UartData(word = fifo[0] as u32)
+
+            # Solange das Schieberegister laeuft, steht ein Byte in der
+            # TX-FIFO; danach ist sie leer. Der Treiber haengt `rs485_de`
+            # daran.
+            var tx : u32 = 1 if shifting > 0 s else 0
+            st_sim = UartStatus(word = (level as u32) | (tx << 16))
+            ir_sim = UartIntRaw(word = 0)
+
+            if level > 0:
+                announced = 1
+            if shifting > 0 s:
+                shifting -= tick
+
+        # Das Modell erzeugt keine Fehler; der Handler haelt den Kanal
+        # gelesen, damit er nicht ueberlaeuft.
+        on ic_w as c:
+            pass
+
+        # Loopback: Jedes geschriebene Byte kehrt zurueck, gegebenenfalls
+        # mit einem gekippten Bit.
+        on dr_w as d:
+            seen += 1
+            var v : u8 = d.data.word.byte
+            if BIT_ERROR_AT != 0 and seen == BIT_ERROR_AT:
+                v = v ^ 0x40
+            if level < 16:
+                fifo[level] = v
+                level += 1
+            shifting = 2 ms
+
+scenario "loopback delivers payload intact" every 100 us:
+    initial RUN
+    state RUN:
+        sequence:
+            send app_tx, "PING 1\n"
+            until app_rx as m timeout 100 ms
+            verify m.data.len == 7, "payload length mismatch: {m.data.len}"
+            verify uart_link.crc_errors == 0, "unexpected crc errors"
+            verdict pass "loopback ok"
+
+# Das Szenario prueft die Fehlerbehandlung. Ohne `BIT_ERROR_AT` ist die
+# Leitung sauber und es gibt nichts zu erholen; die Kampagne setzt ihn
+# (`sweep`). Die Aussage gilt in beiden Faellen: Was ankommt, ist heil,
+# und retransmittiert wurde hoechstens einmal.
+scenario "single bit error triggers exactly one retransmit" every 100 us:
+    initial RUN
+    state RUN:
+        sequence:
+            send app_tx2, "PING 2\n"
+            until app_rx as m timeout 500 ms
+            verify m.data.len == 7, "payload length mismatch: {m.data.len}"
+            verify uart_link.retransmits <= 1, "too many retransmits: {uart_link.retransmits}"
+            verify uart_link.crc_errors <= 1, "too many crc errors: {uart_link.crc_errors}"
+            verdict pass "delivered intact after {uart_link.retransmits} retransmits"
+
+campaign uart_robustness:
+    program "uart.takt"
+    sweep BIT_ERROR_AT = [0, 1, 3, 7, 12]
+    sweep CTS_DROP_AT = 0 s..200 ms step 20 ms
+    repeat 2
+    stop_on fail
