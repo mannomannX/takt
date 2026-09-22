@@ -1,0 +1,42 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Ein Eingang vom Board (12.1 Schritt 2, 12.6): Der BOOT-Taster an IO9
+# geht als `hw`-Kanal in das Prozessabbild, die LED zeigt ihn an.
+#
+# Der Rahmen macht daraus `takt_in_ui_button(&value, &quality)`; der
+# Treiber im Bring-up entprellt und meldet `Suspect`, solange der Kontakt
+# wackelt. Ohne Treiber bliebe der Eintrag `Bad` (3.5) — darum ist
+# `.or(false)` hier keine Bequemlichkeit, sondern die Aussage, was bei
+# fehlendem Wert gelten soll.
+
+input  btn : bool @ hw("ui/button") with max_age = 100 ms
+output led : bool @ hw("ui/led")    with safe = false
+
+output pressed : int in 0..999 @ hw("o/pressed") with safe = 0
+output shaky   : int in 0..999 @ hw("o/shaky")   with safe = 0
+
+machine ui:
+    var n    : int in 0..999 = 0
+    var s    : int in 0..999 = 0
+    var last : bool = false
+
+    initial RUN
+
+    state RUN:
+        loop:
+            var down = btn.or(false)
+            led = down
+
+            # Eine Flanke, kein Pegel: `n` zaehlt Betaetigungen.
+            if down and not last:
+                n = (n + 1) % 1000
+                pressed = n
+            last = down
+
+            # Was der Treiber als unruhig meldet, wird hier sichtbar —
+            # sonst bliebe die Entprellung eine Behauptung.
+            if btn.suspect:
+                s = (s + 1) % 1000
+                shaky = s

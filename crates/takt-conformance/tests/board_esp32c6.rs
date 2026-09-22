@@ -319,6 +319,39 @@ fn a_driver_machine_writes_uart0_registers() {
     }
 }
 
+/// **Ein Eingang vom Board erreicht das Prozessabbild** (12.1 Schritt 2).
+///
+/// Bis hierher stellte der MCU-Rahmen nur Ausgaenge; ein `hw`-Eingang
+/// blieb `Bad`, weil es keinen Weg gab, ihn zu setzen. Jetzt gibt es
+/// `takt_in_*` als Gegenstueck zu `takt_out_*`, und dieser Test zeigt,
+/// dass der Weg traegt: Der Taster an IO9 geht ueber den Treiber in das
+/// Abbild, und das Programm liest ihn.
+///
+/// **Ohne Finger am Board** prueft der Test, was ohne Druck gilt: Der
+/// Eingang ist `Good` und `false` — nicht `Bad`. Ein `Bad` hiesse, dass
+/// der Treiber nicht gerufen wurde, und genau das war der Zustand vorher.
+#[test]
+fn a_board_input_reaches_the_process_image() {
+    let Ok(port) = std::env::var("TAKT_ESP32C6_PORT") else {
+        eprintln!("uebersprungen: TAKT_ESP32C6_PORT nennt kein Board");
+        return;
+    };
+    let _guard = board();
+    let program = root().join("crates/takt-bringup-esp32c6/programs/button_input.takt");
+    let elf = build_program(&program, true, 40).unwrap_or_else(|e| panic!("{e}"));
+    probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()]).unwrap_or_else(|e| panic!("{e}"));
+    let text = capture(&port).unwrap_or_else(|e| panic!("{e}"));
+
+    // Der Taster ist ungedrueckt: `led` bleibt aus, `pressed` bei null.
+    assert_eq!(last_output(&text, "led").as_deref(), Some("0"), "{text}");
+    assert_eq!(last_output(&text, "pressed").as_deref(), Some("0"), "{text}");
+
+    // Und das ist die Aussage: Waere der Treiber nicht gerufen worden,
+    // bliebe der Eintrag `Bad` — dann faultete `btn.or(false)` nicht,
+    // aber `shaky` zaehlte jeden Tick, weil `Bad` auch `suspect` ist.
+    assert_eq!(last_output(&text, "shaky").as_deref(), Some("0"), "{text}");
+}
+
 /// **`persist` ueberlebt einen Reset** (5.9, 12.3; plan/esp32c6.md 6).
 ///
 /// `35_persist` zaehlt `cycles` hoch; der Lauf schreibt das Journal am

@@ -268,9 +268,11 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
 /// `takt_mcu_tick`: ein Tick, von der Schleife gerufen.
 fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Ein Tick (12.1, Schritte 2 bis 10). */");
+    let _ = writeln!(s, "void takt_mcu_sample(void);");
     let _ = writeln!(s, "void takt_mcu_tick(long long k) {{");
     let _ = writeln!(s, "    g_tick = k;");
     let _ = writeln!(s, "    takt_fn_fault = 0;");
+    let _ = writeln!(s, "    takt_mcu_sample();");
     for m in driven {
         // Die Periode: Eine Maschine mit `n_m > 1` laeuft nur jeden
         // n-ten Tick (7.2, Zaehler-Scheduling); danach `publish` (9.4).
@@ -419,6 +421,7 @@ fn telemetry(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::
     }
     let _ = writeln!(s, "}}\n");
     program_counters(s, p, driven);
+    sample(s, p, layout);
     commit(s, layout);
     outputs(s, layout);
 }
@@ -468,6 +471,66 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
     let takt_mir::types::Type::Enum(e) = p.types.list.get(c.ty.index())? else { return None };
     let def = p.enums.get(e.index())?;
     Some(def.variants.iter().map(|v| (v.discriminant, v.name.clone())).collect())
+}
+
+/// `takt_mcu_sample`: die Treiber an das Abbild (12.1, Schritt 2).
+///
+/// **Das Gegenstueck zu [`commit`], und aus demselben Grund ein Symbol.**
+/// Aus `hw("ui/button")` wird `takt_in_ui_button(&value, &quality)`; wer
+/// den Kanal bindet und keinen Treiber stellt, bekommt einen Linkfehler
+/// mit dem Namen darin. Eine Registrierung zur Laufzeit waere flexibler,
+/// aber ein nicht eingetragener Eingang fiele still aus — und ein
+/// Eingang, der still `Bad` bleibt, ist schlimmer als einer, der fehlt.
+///
+/// **Warum die Qualitaet mitkommt.** 12.6 laesst Eingaenge degradieren
+/// statt zu faulten: Ein Treiber, der nichts Frisches hat, sagt `Stale`,
+/// einer mit unplausiblem Wert `Suspect`. Ohne diesen Rueckweg koennte er
+/// nur luegen oder schweigen. Die schwache Voreinstellung antwortet
+/// nicht und laesst den Eintrag, wie `init` ihn gesetzt hat: `Bad` (3.5).
+///
+/// Eingaenge mit `sim(...)` oder ohne Bindung bekommen keinen Aufruf; sie
+/// stellt das Modell im selben Tick (8.3).
+fn sample(s: &mut String, p: &Program, layout: &Layout) {
+    let bound: Vec<(&crate::layout::Slot, String, u64)> = layout
+        .inputs
+        .iter()
+        .filter_map(|slot| {
+            let name = slot.address.as_ref().map(|a| format!("takt_in_{}", a.ident()))?;
+            Some((slot, name, crate::harness::quality_offset(p, &slot.name)?))
+        })
+        .collect();
+
+    let _ = writeln!(s, "/* Die Treiber, die das Board liest (8.10, 12.1). */");
+    for (slot, fname, _) in &bound {
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let _ = writeln!(s, "_Bool {fname}({ct} *value, unsigned char *quality); /* {} */", slot.name);
+    }
+    if bound.is_empty() {
+        let _ = writeln!(s, "/*   keine — kein Eingang ist an Hardware gebunden */");
+    }
+    for (slot, fname, _) in &bound {
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let _ = writeln!(s, "__attribute__((weak)) _Bool {fname}({ct} *value, unsigned char *quality)");
+        let _ = writeln!(s, "{{ (void)value; (void)quality; return 0; }}");
+    }
+
+    let _ = writeln!(s, "\n/* Schritt 2: die Geraete gehen in das Abbild (12.1). */");
+    let _ = writeln!(s, "void takt_mcu_sample(void) {{");
+    for (slot, fname, quality) in &bound {
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let _ = writeln!(s, "    {{");
+        let _ = writeln!(s, "        {ct} v = *({ct} *)(image + {});", slot.offset);
+        let _ = writeln!(s, "        unsigned char q = 0;");
+        let _ = writeln!(s, "        if ({fname}(&v, &q)) {{");
+        let _ = writeln!(s, "            *({ct} *)(image + {}) = v;", slot.offset);
+        let _ = writeln!(s, "            image[{quality}] = q;");
+        if let Some(age) = crate::harness::age_offset(p, &slot.name) {
+            let _ = writeln!(s, "            *(long long *)(image + {age}) = 0;");
+        }
+        let _ = writeln!(s, "        }}");
+        let _ = writeln!(s, "    }}");
+    }
+    let _ = writeln!(s, "}}\n");
 }
 
 /// `takt_mcu_commit`: den Latch an die Treiber geben (12.1).

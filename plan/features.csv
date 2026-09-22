@@ -93,7 +93,7 @@ SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Loweri
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),fertig,
 SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M6 (stdlib),offen,
 SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3 (Gate),teilweise,
-SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),fertig,
+SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),fertig,"Eingänge im MCU-Rahmen (2026-09-22): `takt_in_<pfad>(&value, &quality)` als Gegenstück zu `takt_out_*`, schwach gebunden und vom Linker geprüft; der Treiber liefert die Qualität mit (12.6), ohne Antwort bleibt der Eintrag `Bad` (3.5). Belegt am ESP32-C6 mit dem BOOT-Taster"
 SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4 (Codegen),fertig,
 RT-8.6-Strompuffer,Umsetzung,12.1,"Strompuffer der Runtime (`takt-rt-core::stream`): Ring ueber geliehenen Feldern statt Const-Generics, feste Slots und Byte-Ring in einer Struktur (FB-115)",,M4/M5 (Runtime),fertig,
 RT-8.6-Rahmenstroeme,Umsetzung,12.1,"Stroeme im Testrahmen (`takt-conformance::streams`): Tabelle ueber dem Stimulus statt Ring, weil der Stimulus vor dem Lauf feststeht; Schranken aus 8.6 je Tick (FB-115)",,M4 (Codegen),fertig,

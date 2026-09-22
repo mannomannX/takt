@@ -13,7 +13,7 @@ use core::fmt::Write as _;
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use takt_board_esp32c6::{FlashNvm, Generated, Telemetry, Ws2812};
+use takt_board_esp32c6::{Button, FlashNvm, Generated, Telemetry, Ws2812};
 use takt_rt_baremetal::Sleep;
 use takt_rt_core::{Journal, Loaded, Persist, Policy, Profile, Runtime, Sink, Tick, Watchdog};
 
@@ -48,6 +48,7 @@ const JOURNAL_AT: u32 = 0x9000;
 
 static mut UART: Option<Telemetry> = None;
 static mut LED: Option<Ws2812> = None;
+static mut BTN: Option<Button> = None;
 
 /// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
 #[unsafe(no_mangle)]
@@ -108,6 +109,22 @@ pub extern "C" fn takt_out_ui_led(value: u8) {
     }
 }
 
+/// Der Input `ui_button` aus dem BOOT-Taster an IO9 (12.1 Schritt 2).
+///
+/// Ein wackelnder Kontakt meldet `Suspect` statt `Good`: Der Wert ist da,
+/// aber noch nicht stabil (12.6). Ohne Treiber bliebe der Eintrag `Bad`,
+/// und das waere hier falsch — der Taster ist verdrahtet.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_in_ui_button(value: *mut u8, quality: *mut u8) -> bool {
+    let Some(btn) = (unsafe { (*&raw mut BTN).as_mut() }) else { return false };
+    let (level, stable) = btn.poll();
+    unsafe {
+        *value = u8::from(level);
+        *quality = if stable { 0 } else { 1 };
+    }
+    true
+}
+
 /// Der Hardware-Watchdog ist noch nicht angebunden (plan/esp32c6.md 4);
 /// `esp-hal` haelt RWDT und MWDT beim Start an.
 struct NoWatchdog;
@@ -159,6 +176,7 @@ fn main() -> ! {
     if let Ok(led) = Ws2812::new(peripherals.RMT, peripherals.GPIO8) {
         unsafe { LED = Some(led) };
     }
+    unsafe { BTN = Some(Button::new(peripherals.GPIO9)) };
 
     let limit: u64 = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
     let trace_every = if limit > 0 { 1 } else { TRACE_EVERY };

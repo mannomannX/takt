@@ -415,3 +415,119 @@ fn a_multirate_deadline_counts_activations() {
     assert!(dl.contains("sub i64 4,"), "200 ms sind vier");
     assert!(dl.contains("mul i64"), "und das Ergebnis geht in Basis-Ticks zurueck");
 }
+
+/// **Eingaenge vom Board** (12.1 Schritt 2, 12.6).
+///
+/// Das Gegenstueck zu `takt_out_*`: Aus `hw("ui/button")` wird
+/// `takt_in_ui_button(&value, &quality)`. Der Treiber liefert beides,
+/// weil 12.6 Eingaenge degradieren laesst statt zu faulten — ohne den
+/// Rueckweg koennte er nur luegen oder schweigen.
+///
+/// Antwortet er nicht, bleibt der Eintrag, wie `init` ihn setzte: `Bad`
+/// (3.5). Das ist die Voreinstellung der schwachen Bindung, und sie ist
+/// der Grund, warum ein fehlender Treiber nicht still durchgeht.
+#[test]
+fn a_bound_input_becomes_a_driver_symbol() {
+    let src = takt_conformance::mcu::build(&program(INPUTS)).source;
+
+    assert!(src.contains("_Bool takt_in_ui_button(unsigned char *value, unsigned char *quality);"), "{src}");
+    assert!(src.contains("_Bool takt_in_adc_temp(long long *value, unsigned char *quality);"), "{src}");
+    assert!(
+        src.contains("__attribute__((weak)) _Bool takt_in_ui_button"),
+        "schwach gebunden:
+{src}"
+    );
+
+    // Innerhalb des Ticks: Schritt 2 steht vor Schritt 3 (12.1).
+    let at = src.find("void takt_mcu_tick(").expect("Tickfunktion");
+    let tick = &src[at..];
+    let sample = tick.find("takt_mcu_sample();").expect("Aufruf");
+    let step = tick.find("m_step(").expect("Schrittfunktion");
+    assert!(
+        sample < step,
+        "`sample` muss vor `step` stehen:
+{tick}"
+    );
+
+    // 3.5: Ein Input ohne Treiber ist `Bad`, und `init` setzt das.
+    assert!(src.contains("ist Bad (3.5)"), "{src}");
+}
+
+/// **Ein `sim`-Eingang bekommt kein Symbol.** Zu ihm gehoert kein Geraet;
+/// ihn stellt das Modell im selben Tick (8.3).
+#[test]
+fn a_simulated_input_gets_no_driver_symbol() {
+    let src = takt_conformance::mcu::build(&program(SIM_INPUT)).source;
+    assert!(
+        !src.contains("takt_in_"),
+        "ein `sim`-Eingang braucht keinen Treiber:
+{src}"
+    );
+    assert!(src.contains("kein Eingang ist an Hardware gebunden"), "{src}");
+}
+
+/// **Der Rahmen mit Eingaengen uebersetzt und bindet.** Ohne diesen Test
+/// pruefte der obige nur, wie der Text aussieht.
+#[test]
+fn a_frame_with_inputs_compiles_and_links() {
+    let clang = takt_llvm::toolchain::find();
+    if matches!(clang, Clang::Missing) {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    }
+    let p = program(INPUTS);
+    let size = link_for(&clang, Target::RISCV32IMAC, &p, "inputs").unwrap_or_else(|e| panic!("{e}"));
+    assert!(size > 0);
+}
+
+/// Ein Programm aus Quelltext, fuer die Rahmenpruefungen oben.
+fn program(src: &str) -> takt_mir::Program {
+    let options =
+        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Hw, profile: None };
+    let out = takt_sema::compile(src, &options);
+    let fehler: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(
+        fehler.is_empty(),
+        "{}",
+        fehler.join(
+            "
+"
+        )
+    );
+    out.program.expect("Programm")
+}
+
+const INPUTS: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+input  btn : bool @ hw(\"ui/button\") with max_age = 100 ms
+input  t   : int in 0..99 @ hw(\"adc/temp\") with max_age = 100 ms
+output led : bool @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            led = btn.or(false) and t.or(0) > 20
+
+        after 1 s: -> RUN
+";
+
+const SIM_INPUT: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+input  x   : bool @ sim(\"model/x\") with max_age = 100 ms
+output led : bool @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            led = x.or(false)
+
+        after 1 s: -> RUN
+";

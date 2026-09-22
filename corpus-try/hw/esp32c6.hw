@@ -37,3 +37,12 @@ raw = bool
 safe = false
 device = led
 port = "GPIO8"
+
+[device.button]
+driver = "esp32c6-gpio-in"
+
+[channel ui/button]
+direction = input
+raw = bool
+device = button
+port = "GPIO9 active_low pull_up debounce=3"

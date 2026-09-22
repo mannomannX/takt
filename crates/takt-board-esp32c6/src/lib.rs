@@ -41,6 +41,7 @@
 #![no_std]
 #![allow(unsafe_code, reason = "Registerzugriff und C-ABI; 9.5 fuehrt Treiber in der TCB")]
 
+pub mod button;
 pub mod cycles;
 pub mod guard;
 pub mod led;
@@ -59,6 +60,7 @@ use esp_hal::time::Duration;
 use esp_hal::timer::Timer;
 use esp_hal::timer::systimer::{Alarm, SystemTimer, Unit};
 
+pub use button::Button;
 pub use guard::{WfiSleep, reboot};
 pub use led::Ws2812;
 pub use nvm::FlashNvm;

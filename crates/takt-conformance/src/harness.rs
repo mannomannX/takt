@@ -838,6 +838,16 @@ pub(crate) fn quality_offset(p: &Program, name: &str) -> Option<u64> {
     Some(base + fields.first()?.size())
 }
 
+/// Der Versatz von `age` im Eintrag eines Channels (3.5).
+pub(crate) fn age_offset(p: &Program, name: &str) -> Option<u64> {
+    let index = p.channels.iter().position(|c| c.name == name)?;
+    let id = takt_mir::ChannelId(index as u32);
+    let base = takt_llvm::image::offset_of(id, p)?;
+    let takt_llvm::ty::LlvmType::Struct(fields) = takt_llvm::image::entry_type(id, p)? else { return None };
+    // Wert, Qualitaet, Grund, dann `age` (`image`).
+    Some(base + fields.iter().take(3).map(takt_llvm::ty::LlvmType::size).sum::<u64>())
+}
+
 /// Die Varianten eines Enum-Outputs mit ihren Diskriminanten (3.7).
 fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
     let c = p.channels.iter().find(|c| c.name == name)?;

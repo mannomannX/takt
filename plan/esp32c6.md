@@ -96,9 +96,15 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
 - Der MCU-Rahmen trägt keine geplanten Ausgaben (`at`, 7.5), keine
   Systemkanäle (`sys/reboot`, `sys/jump`) und keine Jobs; die vier Programme
   bleiben dem Linux-Vergleich vorbehalten, bis der Rahmen sie hat.
-- Eingänge vom Board: Der MCU-Rahmen hat `takt_out_*` für Ausgänge, aber
-  keinen Weg, einen `hw`-Eingang mit Wert und Qualität zu stellen (12.1,
-  12.6). Ohne ihn bleiben 14.7 und jeder echte Treiber am Board Simulation.
+- ~~Eingänge vom Board~~ — **erledigt 2026-09-22.** Der MCU-Rahmen hat
+  jetzt `takt_in_*` als Gegenstück zu `takt_out_*`: Aus `hw("ui/button")`
+  wird `takt_in_ui_button(&value, &quality)`, schwach gebunden wie die
+  Ausgänge, vom Linker geprüft. Der Treiber liefert Wert *und* Qualität,
+  weil 12.6 Eingänge degradieren lässt; antwortet er nicht, bleibt der
+  Eintrag `Bad` (3.5). Belegt am BOOT-Taster (IO9, entprellt):
+  `a_board_input_reaches_the_process_image`. Damit ist 14.7 nicht mehr am
+  Rahmen blockiert, sondern nur noch an seinen eigenen Treibern (AFE,
+  Ladegerät als Wake-Quelle).
 - Watchdog: `esp-hal` hält RWDT und MWDT beim Start an; die Schleife läuft
   mit einem leeren `Watchdog` (12.3 verlangt einen echten).
 - `build.rs` nimmt das `takt`-Werkzeug aus dem Release-Verzeichnis, auch
