@@ -102,16 +102,22 @@ fn run_interpreted(p: &Program) -> String {
 /// `fresh` loescht das Journal vor dem Lauf (wie der Interpreter ohne
 /// Speicher), sonst laedt der Lauf, was der vorige schrieb.
 fn build(name: &str, fresh: bool) -> Result<PathBuf, String> {
+    build_program(&root().join("corpus-try").join(name), fresh, TICKS)
+}
+
+/// Wie [`build`], aber mit vollem Pfad und eigener Tickzahl: Nicht jedes
+/// Programm des Bring-ups liegt im Korpus, und nicht jedes ist nach den
+/// 60 Ticks des Konformitaetslaufs fertig.
+fn build_program(program: &Path, fresh: bool, ticks: u64) -> Result<PathBuf, String> {
     let manifest = root().join("crates/takt-bringup-esp32c6/Cargo.toml");
-    let program = root().join("corpus-try").join(name);
     let mut cargo = Command::new("cargo");
     cargo
         .args(["build", "--release", "--target", "riscv32imac-unknown-none-elf", "--bin", "takt"])
         .arg("--message-format=json-render-diagnostics")
         .arg("--manifest-path")
         .arg(&manifest)
-        .env("TAKT_PROGRAM", &program)
-        .env("TAKT_TICKS", TICKS.to_string())
+        .env("TAKT_PROGRAM", program)
+        .env("TAKT_TICKS", ticks.to_string())
         // 12.3: RAM-Residenz des Takt-Programms. `.cargo/config.toml` des
         // Bring-ups greift hier nicht, weil `--manifest-path` von aussen baut.
         .env("ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK", "true");
@@ -211,6 +217,106 @@ fn counter(text: &str, label: &str) -> Option<u64> {
 /// Die Zahl hinter `takt schlief`.
 fn slept(text: &str) -> Option<u64> {
     text.lines().find_map(|l| l.strip_prefix("takt schlief ")?.split_whitespace().next()?.parse().ok())
+}
+
+/// **Eine `driver machine` schreibt UART0** (12.10, M8 Schritt 20).
+///
+/// Der Nachweis der Treiberstufe auf echten Registern: Zwei Ports, ein
+/// Statuslesen an `0x6000_001C`, zehn Bytes an `0x6000_0000`. Bis hierher
+/// war `port` gegen ein Geraetemodell belegt; hier schreibt er in
+/// Silizium, und die Bytes erscheinen am UART-Anschluss des Boards.
+///
+/// **Zwei Ports, zwei Kabel.** `TAKT_ESP32C6_PORT` ist der USB-Serial-JTAG
+/// zum Flashen, `TAKT_ESP32C6_UART_PORT` die CP210x-Bruecke an UART0. Ohne
+/// den zweiten ist der Test uebersprungen.
+///
+/// Was der Test prueft, ist nicht „es kam etwas": Jede Zeile traegt eine
+/// dreistellige Nummer, und die Folge muss luecken- und dublettenfrei
+/// aufsteigen. Ein uebersprungenes Byte zerrisse eine Zeile, ein
+/// FIFO-Ueberlauf verschluckte eine Nummer, und eine umsortierte
+/// Schreibfolge vertauschte die Ziffern — jeder dieser Faelle faellt hier
+/// auf.
+#[test]
+fn a_driver_machine_writes_uart0_registers() {
+    let Ok(uart) = std::env::var("TAKT_ESP32C6_UART_PORT") else {
+        eprintln!("uebersprungen: TAKT_ESP32C6_UART_PORT nennt keinen UART-Anschluss");
+        return;
+    };
+    let _guard = board();
+    let program = root().join("crates/takt-bringup-esp32c6/programs/uart0_port.takt");
+    // Zehn Ticks je Zeile, plus Rand: Der Lauf muss ueber `WANT` Zeilen
+    // hinaus reichen, sonst haelt das Programm mittendrin.
+    let elf = build_program(&program, true, (WANT as u64 + 4) * 10).unwrap_or_else(|e| panic!("{e}"));
+    probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()]).unwrap_or_else(|e| panic!("{e}"));
+
+    let mut serial = serialport::new(&uart, 115_200)
+        .timeout(Duration::from_millis(200))
+        .open()
+        .unwrap_or_else(|e| panic!("{uart}: {e}"));
+    probe_rs(&["reset", "--chip", "esp32c6"]).unwrap_or_else(|e| panic!("{e}"));
+
+    // Der Treiber schreibt je 100 ms eine Zeile, also je zehn Ticks eine.
+    // 40 Zeilen sind gut vier Sekunden; die Frist laesst Raum fuer den
+    // Start des Boards.
+    const WANT: usize = 40;
+    let start = Instant::now();
+    let mut text = String::new();
+    let mut buf = [0u8; 4096];
+    while start.elapsed() < Duration::from_secs(30) {
+        match serial.read(&mut buf) {
+            Ok(n) => text.push_str(&String::from_utf8_lossy(&buf[..n])),
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(e) => panic!("{uart}: {e}"),
+        }
+        if text.lines().filter(|l| l.starts_with("takt ")).count() > WANT + 1 {
+            break;
+        }
+    }
+
+    // UART0 ist die Bootkonsole des Chips: ROM-Bootloader und zweite
+    // Stufe schreiben darauf, bevor das Takt-Programm laeuft. Gezaehlt
+    // wird darum ab der ersten `takt `-Zeile; die letzte bleibt aussen
+    // vor, weil der Mitschnitt mitten in ihr endet.
+    let lines: Vec<&str> = text.lines().collect();
+    let first = lines.iter().position(|l| l.starts_with("takt ")).unwrap_or_else(|| {
+        panic!(
+            "keine `takt `-Zeile:
+{text}"
+        )
+    });
+    let whole = &lines[first..lines.len().saturating_sub(1)];
+    assert!(
+        whole.len() >= WANT,
+        "nur {} Zeilen in 30 s:
+{text}",
+        whole.len()
+    );
+
+    // Ab hier ist jede Zeile eine des Treibers: Etwas anderes dazwischen
+    // hiesse, dass jemand sonst auf UART0 schreibt, und das waere ein
+    // Befund.
+    let mut numbers = Vec::new();
+    for line in whole {
+        let rest = line.strip_prefix("takt ").unwrap_or_else(|| {
+            panic!(
+                "Zeile ohne `takt `: {line:?}
+{text}"
+            )
+        });
+        assert_eq!(rest.len(), 3, "Nummer nicht dreistellig: {line:?}");
+        numbers.push(rest.parse::<u32>().unwrap_or_else(|e| panic!("{line:?}: {e}")));
+    }
+
+    // Luecken- und dublettenfrei, mit Ueberlauf bei 1000.
+    for pair in numbers.windows(2) {
+        let want = (pair[0] + 1) % 1000;
+        assert_eq!(
+            pair[1], want,
+            "Sprung {} -> {} in:
+{text}",
+            pair[0], pair[1]
+        );
+    }
 }
 
 /// **`persist` ueberlebt einen Reset** (5.9, 12.3; plan/esp32c6.md 6).

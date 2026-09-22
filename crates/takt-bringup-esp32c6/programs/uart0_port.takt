@@ -1,0 +1,82 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# UART0 des ESP32-C6 als Takt-Treiber (12.10, M8 Schritt 20).
+#
+# Der Nachweis der Treiberstufe auf echten Registern: Zwei Ports, eine
+# `driver machine`, und die Bytes erscheinen am UART-Anschluss des Boards.
+# Bis hierher war `port` gegen ein Gerätemodell belegt; hier schreibt er
+# in Silizium.
+#
+# Die Registerkarte stammt aus der PAC `esp32c6 0.24.0`:
+#
+#   FIFO   0x6000_0000  Byte in Bits 0..7 (schreiben sendet)
+#   STATUS 0x6000_001C  txfifo_cnt in Bits 16..23, rxfifo_cnt in 0..7
+#
+# Die TX-FIFO fasst 128 Byte. Geschrieben wird nur, solange
+# `txfifo_cnt < 120` — die acht Byte Reserve kosten nichts und halten
+# den Rand frei, an dem ein Überlauf Zeichen verschluckte.
+#
+# UART0 ist beim Start vom ROM-Bootloader konfiguriert und bleibt es:
+# `esp-hal` führt UART0 in `KEEP_ENABLED` und lässt Takt und
+# Registerinhalt stehen. Das Programm setzt darum keine Baudrate — es
+# schreibt nur in die FIFO. Wer die Rate ändern wollte, schriebe CLKDIV;
+# das ist nicht Gegenstand dieses Nachweises.
+
+record UartFifo layout little:
+    word : u32 with bits:
+        byte : u8 at 0..7 wo
+
+record UartStatus layout little:
+    word : u32 with bits:
+        rxfifo_cnt : u8 at 0..7 ro
+        txfifo_cnt : u8 at 16..23 ro
+
+port fifo : UartFifo @ mmio(0x60000000)
+port status : UartStatus @ mmio(0x6000001C)
+
+# Ein Zeichenvorrat als Konstante: Die Nachricht ist „takt <n>\r\n", und
+# die Ziffern setzt der Treiber aus `n` zusammen.
+const TAKT_T : u8 = 0x74  # 't'
+const TAKT_A : u8 = 0x61  # 'a'
+const TAKT_K : u8 = 0x6B  # 'k'
+const SPACE  : u8 = 0x20
+const ZERO   : u8 = 0x30  # '0'
+const CR     : u8 = 0x0D
+const LF     : u8 = 0x0A
+
+output lines : int in 0..999 @ hw("o/lines") with safe = 0
+
+# Prüfung 59 verlangt vier Größen; für den C6 gibt es keine Kalibrierung
+# (M7), also fehlt `wcet_poll`. `polling = unchecked` ist der
+# ausdrückliche Verzicht und steht im Lauf-Header.
+driver machine uart0 every 100 ms with polling = unchecked:
+    var n : int in 0..999 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # Ein Registerlesen, dann die Entscheidung: Nur wenn die FIFO
+            # Platz hat, geht eine ganze Zeile hinaus. Halbe Zeilen wären
+            # am Host nicht als Zeile erkennbar.
+            var st = status
+            if st.word.txfifo_cnt < 120:
+                fifo.word.byte = TAKT_T
+                fifo.word.byte = TAKT_A
+                fifo.word.byte = TAKT_K
+                fifo.word.byte = TAKT_T
+                fifo.word.byte = SPACE
+
+                # Drei Ziffern, führende Nullen bleiben stehen: Eine feste
+                # Breite macht die Zeile am Host ohne Parser prüfbar.
+                fifo.word.byte = ZERO + ((n / 100) as u8)
+                fifo.word.byte = ZERO + (((n / 10) % 10) as u8)
+                fifo.word.byte = ZERO + ((n % 10) as u8)
+
+                fifo.word.byte = CR
+                fifo.word.byte = LF
+
+                n = (n + 1) % 1000
+                lines = n
