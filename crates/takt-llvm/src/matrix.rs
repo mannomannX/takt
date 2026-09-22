@@ -166,7 +166,7 @@ pub fn index(
         let v = m.inst(&format!("extractvalue {} {}, {ci}, {cj}", x.ty, x.value));
         return Ok(Lowered { value: v.to_string(), ty: want.clone() });
     }
-    let tmp = m.inst(&format!("alloca {}", x.ty));
+    let tmp = m.alloca(&x.ty);
     m.write(&x.ty, &x.value, &tmp.to_string());
     let at = m.inst(&format!(
         "getelementptr inbounds {}, ptr {tmp}, i32 0, {} {}, {} {}",
@@ -183,7 +183,7 @@ struct Mem {
 }
 
 fn mem_of(m: &mut Module, ty: &LlvmType) -> Mem {
-    Mem { ptr: m.inst(&format!("alloca {ty}")), ty: ty.clone() }
+    Mem { ptr: m.alloca(ty), ty: ty.clone() }
 }
 
 fn at(m: &mut Module, mem: &Mem, i: usize, j: usize) -> Reg {
@@ -226,8 +226,8 @@ fn perm_at(m: &mut Module, lu: &Lu, i: usize) -> String {
 fn lu(a: &Lowered, n: usize, t: &LlvmType, on_singular: OnSingular, m: &mut Module) -> Lu {
     let mem = mem_of(m, &a.ty);
     store(m, &a.ty, &a.value, mem.ptr);
-    let perm_ty = format!("[{n} x i32]");
-    let perm = m.inst(&format!("alloca {perm_ty}"));
+    let perm_ty = LlvmType::Array(Box::new(LlvmType::Int(32)), n as u32);
+    let perm = m.alloca(&perm_ty);
     for i in 0..n {
         let p = m.inst(&format!("getelementptr inbounds {perm_ty}, ptr {perm}, i32 0, i32 {i}"));
         m.void_inst(&format!("store i32 {i}, ptr {p}"));
@@ -300,7 +300,7 @@ fn lu(a: &Lowered, n: usize, t: &LlvmType, on_singular: OnSingular, m: &mut Modu
             }
         }
     }
-    Lu { mem, perm, perm_ty, n, swaps, ok }
+    Lu { mem, perm, perm_ty: perm_ty.to_string(), n, swaps, ok }
 }
 
 /// Loest `L·U·x = P·b` fuer die Spalte `col` von `out`; `rhs(i)` ist die

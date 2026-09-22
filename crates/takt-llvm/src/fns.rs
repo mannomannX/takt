@@ -71,6 +71,10 @@ impl Vars for Locals {
         let v = m.inst(&format!("load {ty}, ptr {ptr}"));
         Some(Lowered { value: v.to_string(), ty })
     }
+
+    fn address(&self, id: takt_mir::VarId, _m: &mut Module) -> Option<(Reg, LlvmType)> {
+        self.slots.get(id.index()).cloned()
+    }
 }
 
 impl crate::stmt::Slots for Locals {
@@ -84,7 +88,7 @@ pub fn prologue(f: &FnDef, p: &Program, args: &[Reg], m: &mut Module) -> Result<
     let mut slots = Vec::with_capacity(f.locals.len());
     for (i, v) in f.locals.iter().enumerate() {
         let ty = ty::lower(v.ty, p).ok_or(NotYet { what: "Typ einer lokalen Variablen" })?;
-        let ptr = m.inst(&format!("alloca {ty}"));
+        let ptr = m.alloca(&ty);
         if let Some(arg) = args.get(i) {
             // Ein indirekter Parameter kommt als Zeiger; die Kopie hier
             // gibt der Funktion ihr eigenes Exemplar, wie die Wertsemantik
@@ -276,18 +280,22 @@ impl Vars for BlockVars {
     }
 
     fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<Lowered> {
-        let (ptr, ty) = match self.locate(id)? {
-            Ort::Parameter(ptr, ty) => (ptr, ty),
+        let (ptr, ty) = self.address(id, m)?;
+        let v = m.inst(&format!("load {ty}, ptr {ptr}"));
+        Some(Lowered { value: v.to_string(), ty })
+    }
+
+    fn address(&self, id: takt_mir::VarId, m: &mut Module) -> Option<(Reg, LlvmType)> {
+        match self.locate(id)? {
+            Ort::Parameter(ptr, ty) => Some((ptr, ty)),
             Ort::Instanz(i, ty) => {
                 let ptr = m.inst(&format!(
                     "getelementptr inbounds {}, ptr {}, i32 0, i32 {i}",
                     self.instance_ty, self.instance
                 ));
-                (ptr, ty)
+                Some((ptr, ty))
             }
-        };
-        let v = m.inst(&format!("load {ty}, ptr {ptr}"));
-        Some(Lowered { value: v.to_string(), ty })
+        }
     }
 }
 
@@ -348,7 +356,7 @@ fn block_body(
     let mut params = Vec::with_capacity(f.params.len());
     for (i, v) in f.locals.iter().enumerate() {
         let ty = ty::lower(v.ty, p).ok_or(NotYet { what: "Typ einer lokalen Variablen" })?;
-        let ptr = m.inst(&format!("alloca {ty}"));
+        let ptr = m.alloca(&ty);
         if let Some(arg) = args.get(i + 1) {
             m.void_inst(&format!("store {ty} {arg}, ptr {ptr}"));
         }

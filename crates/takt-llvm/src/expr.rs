@@ -54,6 +54,15 @@ pub trait Vars {
     /// `None` heisst: Die Variable ist hier nicht erreichbar.
     fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<Lowered>;
 
+    /// Die Adresse einer Variablen, wo es eine gibt.
+    ///
+    /// Wer nur adressiert — `.len`, ein Feld, ein Index — nimmt sie statt
+    /// des Werts: Ein `load` des ganzen Aggregats fuer vier Byte Laenge
+    /// kostet bei `bytes<1024>` das Tausendfache (FB-214).
+    fn address(&self, _id: takt_mir::VarId, _m: &mut Module) -> Option<(crate::emit::Reg, LlvmType)> {
+        None
+    }
+
     /// Laedt den Wert eines Input-Channels aus dem Prozessabbild.
     ///
     /// 11.2 gibt der Schrittfunktion dafuer den Zeiger `i`. Die Qualitaet
@@ -313,6 +322,17 @@ fn access(
     }
     if which == Accessor::Count && stream_of(base, p).is_some() {
         return stream_count(base, want, m, vars);
+    }
+    // `.len` braucht vier Byte; ein Vollload kostet bei `bytes<1024>` das
+    // Tausendfache (FB-214).
+    if which == Accessor::Len
+        && let Some((ptr, ty)) = address_of(base, m, vars)
+        && matches!(&ty, LlvmType::Struct(_))
+    {
+        let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 0"));
+        let n = m.inst(&format!("load i32, ptr {at}"));
+        let wide = m.inst(&format!("sext i32 {n} to {want}"));
+        return Ok(Lowered { value: wide.to_string(), ty: want.clone() });
     }
     let x = lower(base, p, m, vars)?;
     // 8.9: `[t, pre, post, rate, samples]` in fester Reihenfolge.
@@ -730,7 +750,7 @@ fn decode(
 ) -> Result<Lowered, NotYet> {
     let b = lower(bytes, p, m, vars)?;
     let LlvmType::Struct(fields) = &b.ty else { return Err(NotYet { what: "`decode` auf einer Nicht-Sammlung" }) };
-    let tmp = m.inst(&format!("alloca {}", b.ty));
+    let tmp = m.alloca(&b.ty);
     m.write(&b.ty, &b.value, &tmp.to_string());
     // Die Laenge steht im Kopf der Sammlung (3.9), die Daten dahinter.
     let len = m.inst(&format!("extractvalue {} {}, 0", b.ty, b.value));
@@ -923,9 +943,9 @@ fn slice(
     let dst = crate::collection::layout_of(want).ok_or(NotYet { what: "Teilbereich ohne Zielsammlung" })?;
     // Quelle und Ziel liegen als Werte vor; `memcpy` liest und schreibt
     // Speicher (11.2: statischer Scratch).
-    let src_ptr = m.inst(&format!("alloca {}", x.ty));
+    let src_ptr = m.alloca(&x.ty);
     m.write(&x.ty, &x.value, &src_ptr.to_string());
-    let out = m.inst(&format!("alloca {want}"));
+    let out = m.alloca(want);
     let len = m.inst(&format!("sub {} {}, {}", a.ty, b.value, a.value));
     let len32 = m.inst(&format!("trunc {} {len} to i32", a.ty));
     let len_ptr = m.inst(&format!("getelementptr inbounds {want}, ptr {out}, i32 0, i32 0"));
@@ -1017,7 +1037,17 @@ fn index_of(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
-    let x = lower(base, p, m, vars)?;
+    // Eine Stelle wird adressiert; nur ein gerechneter Wert braucht den
+    // Umweg ueber einen Scratch (FB-214).
+    let place = address_of(base, m, vars);
+    let x_ty = match &place {
+        Some((_, ty)) => ty.clone(),
+        None => ty::lower(base.ty, p).ok_or(NotYet { what: "Index auf diesem Typ" })?,
+    };
+    let x = match &place {
+        Some(_) => None,
+        None => Some(lower(base, p, m, vars)?),
+    };
     let i = lower(index, p, m, vars)?;
     // 4.1: Der Index liegt in `0..len-1`. Die Schranke ist bei einer
     // Sammlung ihre *Laenge* zur Laufzeit (3.9), bei einem Array seine
@@ -1030,37 +1060,48 @@ fn index_of(
     // Verbindung herzustellen hiesse, den Knoten an den Index zu haengen;
     // das gehoert in die MIR, nicht in den Codegen.
     {
-        let grenze = match &x.ty {
-            LlvmType::Struct(_) => {
-                let l = m.inst(&format!("extractvalue {} {}, 0", x.ty, x.value));
-                let wide = m.inst(&format!("sext i32 {l} to {}", i.ty));
-                wide.to_string()
+        let grenze = match (&x_ty, &place, &x) {
+            (LlvmType::Struct(_), Some((ptr, ty)), _) => {
+                let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 0"));
+                let l = m.inst(&format!("load i32, ptr {at}"));
+                m.inst(&format!("sext i32 {l} to {}", i.ty)).to_string()
             }
-            LlvmType::Array(_, n) => n.to_string(),
+            (LlvmType::Struct(_), None, Some(x)) => {
+                let l = m.inst(&format!("extractvalue {} {}, 0", x.ty, x.value));
+                m.inst(&format!("sext i32 {l} to {}", i.ty)).to_string()
+            }
+            (LlvmType::Array(_, n), _, _) => n.to_string(),
             _ => return Err(NotYet { what: "Index auf diesem Typ" }),
         };
         if let Some(target) = vars.fault_label() {
-            let a = m.inst(&format!("icmp sge {} {}, 0", i.ty, i.value));
-            let b = m.inst(&format!("icmp slt {} {}, {grenze}", i.ty, i.value));
-            let ok = m.inst(&format!("and i1 {a}, {b}"));
+            // Ein `icmp ult` faengt beide Enden: Ein negativer Index ist
+            // vorzeichenlos gelesen groesser als jede Laenge. Das spart
+            // zwei der drei Instruktionen, die `sge`+`slt`+`and` kostete.
+            let ok = m.inst(&format!("icmp ult {} {}, {grenze}", i.ty, i.value));
             let go_on = format!("index_ok{}", m.next_label());
             m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
             m.label(&go_on);
         }
     }
-    // Der Wert liegt als Register vor, nicht im Speicher; ein
-    // `extractvalue` mit berechnetem Index gibt es nicht. Er bekommt
-    // darum einen Platz (11.2: statischer Scratch), und LLVM entfernt
-    // ihn, wo er unnoetig ist.
-    let tmp = m.inst(&format!("alloca {}", x.ty));
-    m.write(&x.ty, &x.value, &tmp.to_string());
-    let (array_ty, data) = match &x.ty {
+    let base_ptr = match (&place, &x) {
+        (Some((ptr, _)), _) => *ptr,
+        // Ein gerechneter Wert liegt als Register vor, nicht im Speicher;
+        // ein `extractvalue` mit berechnetem Index gibt es nicht. Er
+        // bekommt darum einen Platz (11.2).
+        (None, Some(x)) => {
+            let tmp = m.alloca(&x.ty);
+            m.write(&x.ty, &x.value, &tmp.to_string());
+            tmp
+        }
+        _ => return Err(NotYet { what: "Index auf diesem Typ" }),
+    };
+    let (array_ty, data) = match &x_ty {
         LlvmType::Struct(_) => {
-            let l = crate::collection::layout_of(&x.ty).ok_or(NotYet { what: "Index auf diesem Struct" })?;
-            let d = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", x.ty));
+            let l = crate::collection::layout_of(&x_ty).ok_or(NotYet { what: "Index auf diesem Struct" })?;
+            let d = m.inst(&format!("getelementptr inbounds {x_ty}, ptr {base_ptr}, i32 0, i32 1"));
             (LlvmType::Array(Box::new(l.elem), l.cap), d)
         }
-        LlvmType::Array(..) => (x.ty.clone(), tmp),
+        LlvmType::Array(..) => (x_ty.clone(), base_ptr),
         _ => return Err(NotYet { what: "Index auf diesem Typ" }),
     };
     let at = m.inst(&format!("getelementptr inbounds {array_ty}, ptr {data}, i32 0, {} {}", i.ty, i.value));
@@ -1096,7 +1137,7 @@ fn native_call(
             // Ein Byteblock geht als Zeiger und Laenge; sein Wert waere eine
             // Kopie von bis zu mehreren KiB je Aufruf.
             Some(Type::Bytes { .. }) => {
-                let tmp = m.inst(&format!("alloca {}", v.ty));
+                let tmp = m.alloca(&v.ty);
                 m.write(&v.ty, &v.value, &tmp.to_string());
                 let len = m.inst(&format!("extractvalue {} {}, 0", v.ty, v.value));
                 let data = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", v.ty));
@@ -1108,7 +1149,7 @@ fn native_call(
             // Ein Record geht in kanonischer Byteform (5.9): die TCB kennt
             // kein Ziel-Layout.
             Some(Type::Record(_)) => {
-                let tmp = m.inst(&format!("alloca {}", v.ty));
+                let tmp = m.alloca(&v.ty);
                 m.write(&v.ty, &v.value, &tmp.to_string());
                 let buf = canonical_buffer(p, a.ty, m)?;
                 let len = crate::persist::encode_canonical(p, a.ty, tmp, buf, m)?;
@@ -1135,7 +1176,7 @@ fn native_call(
             sig.push("ptr".to_string());
             m.needs_intrinsic(&format!("void @{symbol}({})", sig.join(", ")));
             m.void_inst(&format!("call void @{symbol}({})", ops.join(", ")));
-            let dst = m.inst(&format!("alloca {want}"));
+            let dst = m.alloca(want);
             crate::persist::decode_canonical(p, n.ret, buf, dst, m)?;
             let v = m.inst(&format!("load {want}, ptr {dst}"));
             Ok(Lowered { value: v.to_string(), ty: want.clone() })
@@ -1161,7 +1202,7 @@ fn stream_sent(base: &Expr, want: &LlvmType, m: &mut Module) -> Result<Lowered, 
     let ExprKind::Input { channel: c, .. } = base.kind else { return Err(NotYet { what: "`sent` ohne Ausgabestrom" }) };
     let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`sent` ohne Wrapper-Typ" }) };
     let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
-    let buf = m.inst(&format!("alloca {inner}"));
+    let buf = m.alloca(&inner);
     m.void_inst(&format!("store {inner} zeroinitializer, ptr {buf}"));
     let n = m.inst(&format!("call i32 @{}(i32 {}, ptr {buf})", crate::stream::Streams::SENT, c.0));
     let v = m.inst(&format!("load {inner}, ptr {buf}"));
@@ -1214,7 +1255,7 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
     let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
     let (cur_ptr, ex_ptr) = vars.stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
     let mi = vars.machine_index().ok_or(NotYet { what: "`peek` ausserhalb einer Maschine" })?;
-    let out = m.inst(&format!("alloca {inner}"));
+    let out = m.alloca(&inner);
     m.void_inst(&format!("store {inner} zeroinitializer, ptr {out}"));
     let buf = crate::stream::scratch(p, elem, m)?;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
@@ -1248,7 +1289,7 @@ fn map_access(
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
     let (klen, vlen) = crate::persist::map_widths(p, key, value)?;
-    let slots = m.inst(&format!("alloca {}", x.ty));
+    let slots = m.alloca(&x.ty);
     m.write(&x.ty, &x.value, &slots.to_string());
     match which {
         Accessor::Len => {
@@ -1269,7 +1310,7 @@ fn map_access(
             // `V?` wie `wrap` es baut: Wert, dann das Flag.
             let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`get` ohne Wrapper-Typ" }) };
             let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
-            let dst = m.inst(&format!("alloca {inner}"));
+            let dst = m.alloca(&inner);
             m.void_inst(&format!("store {inner} zeroinitializer, ptr {dst}"));
             crate::persist::decode_canonical(p, value, out, dst, m)?;
             let v = m.inst(&format!("load {inner}, ptr {dst}"));
@@ -1314,7 +1355,7 @@ fn call(
     let sig = crate::fns::signature(f, p).ok_or(NotYet { what: "Signatur" })?;
     // Bei `sret` steht der Platz fuer die Rueckgabe vorn; er wird vor den
     // Argumenten angelegt, damit er im Eintrittsblock liegt.
-    let out = sig.sret.then(|| m.inst(&format!("alloca {}", sig.ret)));
+    let out = sig.sret.then(|| m.alloca(&sig.ret));
     let mut operands = Vec::with_capacity(args.len() + 1);
     if let Some(out) = out {
         operands.push(format!("ptr sret({}) {out}", sig.ret));
@@ -1324,7 +1365,7 @@ fn call(
         // Ein indirektes Argument geht als Zeiger auf eine Kopie: Der
         // Gerufene darf sie aendern, ohne den Aufrufer zu beruehren.
         if v.ty.indirect() {
-            let tmp = m.inst(&format!("alloca {}", v.ty));
+            let tmp = m.alloca(&v.ty);
             m.write(&v.ty, &v.value, &tmp.to_string());
             operands.push(format!("ptr {tmp}"));
         } else {
@@ -1379,6 +1420,24 @@ fn record(fields: &[Expr], want: &LlvmType, p: &Program, m: &mut Module, vars: &
 /// Wert vor, nicht als Speicherort — die Sprache hat keine Referenzen
 /// (11.2), jede Zuweisung ist eine Kopie, und LLVM faltet die Extraktion
 /// aus einem geladenen Struct ohnehin zusammen.
+/// Die Adresse eines Ausdrucks, wo er eine Stelle bezeichnet (FB-214).
+///
+/// Nur Variablen und Wege darin; alles andere ist ein gerechneter Wert
+/// und hat keinen Ort. `None` heisst „nimm den Wert" — der Aufrufer
+/// faellt dann auf den alten Weg zurueck.
+pub(crate) fn address_of(e: &Expr, m: &mut Module, vars: &dyn Vars) -> Option<(crate::emit::Reg, LlvmType)> {
+    match &e.kind {
+        ExprKind::Var(id) => vars.address(*id, m),
+        ExprKind::Field { base, field } => {
+            let (ptr, ty) = address_of(base, m, vars)?;
+            let LlvmType::Struct(fields) = &ty else { return None };
+            let inner = fields.get(*field as usize)?.clone();
+            Some((m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 {field}")), inner))
+        }
+        _ => None,
+    }
+}
+
 fn field_of(
     base: &Expr,
     field: u32,
@@ -1390,6 +1449,17 @@ fn field_of(
     // 3.8 (Dominanz): Ein Feld auf einem Wrapper meint das Feld des
     // Inhalts. Ausgepackt hat ihn schon der `Checked{Missing}`-Knoten,
     // den die MIR darum herum setzt — hier steht nur noch der Zugriff.
+    // Eine Stelle wird adressiert, nicht geladen: `s.f` auf einem
+    // `bytes<1024>` liest sonst 1028 Byte fuer eines (FB-214). Der
+    // Schreibpfad tut das laengst (`place`), der Lesepfad jetzt auch.
+    if let Some((ptr, ty)) = address_of(base, m, vars)
+        && let LlvmType::Struct(fields) = &ty
+        && fields.get(field as usize).is_some()
+    {
+        let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 {field}"));
+        let v = m.inst(&format!("load {want}, ptr {at}"));
+        return Ok(Lowered { value: v.to_string(), ty: want.clone() });
+    }
     let x = lower(base, p, m, vars)?;
     let LlvmType::Struct(_) = &x.ty else { return Err(NotYet { what: "Feldzugriff auf Nicht-Record" }) };
     let r = m.inst(&format!("extractvalue {} {}, {field}", x.ty, x.value));

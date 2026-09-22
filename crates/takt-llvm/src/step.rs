@@ -1251,7 +1251,7 @@ fn record_hit(
 ) -> Result<crate::emit::Reg, NotYet> {
     let p = ctx.program;
     let rec = crate::ty::lower(elem, p).ok_or(NotYet { what: "Typ des Elements" })?;
-    let tmp = m.inst(&format!("alloca {rec}"));
+    let tmp = m.alloca(&rec);
     let src = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {}", crate::stream::Streams::BYTES_AT));
     crate::persist::decode_canonical(p, elem, src, tmp, m)?;
     let mut hit: Option<crate::emit::Reg> = None;

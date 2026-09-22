@@ -185,7 +185,7 @@ impl Vars for StateVars<'_> {
                 let ret = p.natives.get(self.machine.layout.job_slots[slot].native.index())?.ret;
                 let ok_ty = ty::lower(ret, p)?;
                 let res_ty = LlvmType::Struct(vec![ok_ty, LlvmType::Int(32), LlvmType::Int(1)]);
-                let dst = m.inst(&format!("alloca {res_ty}"));
+                let dst = m.alloca(&res_ty);
                 let okp = m.inst(&format!("getelementptr inbounds i8, ptr {at}, i64 1"));
                 let ok8 = m.inst(&format!("load i8, ptr {okp}"));
                 let ok = m.inst(&format!("icmp ne i8 {ok8}, 0"));
@@ -229,13 +229,17 @@ impl Vars for StateVars<'_> {
     }
 
     fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<Lowered> {
+        let (ptr, ty) = self.address(id, m)?;
+        let v = m.inst(&format!("load {ty}, ptr {ptr}"));
+        Some(Lowered { value: v.to_string(), ty })
+    }
+
+    fn address(&self, id: takt_mir::VarId, m: &mut Module) -> Option<(Reg, LlvmType)> {
         let def = self.machine.vars.get(id.index())?;
         let ty = ty::lower(def.ty, self.program)?;
         let i = self.state.index_of(Role::Var, id.index())?;
         let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
-        let ptr = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}"));
-        let v = m.inst(&format!("load {ty}, ptr {ptr}"));
-        Some(Lowered { value: v.to_string(), ty })
+        Some((m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}")), ty))
     }
 
     /// Der Wert eines Inputs; `%1` ist das Prozessabbild (11.2).
@@ -433,7 +437,7 @@ fn job_begin(
     let mut off = m.inst("add i64 0, 0");
     for a in args {
         let v = lower_expr(a, p, m, &vars)?;
-        let tmp = m.inst(&format!("alloca {}", v.ty));
+        let tmp = m.alloca(&v.ty);
         m.write(&v.ty, &v.value, &tmp.to_string());
         let body = m.inst(&format!("add i64 {off}, 4"));
         let dst = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {body}"));
@@ -474,7 +478,7 @@ fn send(
     };
     // Der Puffer: `{ i32 len, [len_max x i8] }`, wie `str<N>` (3.9).
     let ty = LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), len_max)]);
-    let buffer = m.inst(&format!("alloca {ty}"));
+    let buffer = m.alloca(&ty);
     let vars = ctx.vars();
     match &value.kind {
         // Der haeufige Fall: ein Formatstring (8.8). Er wird an Ort und
@@ -494,7 +498,7 @@ fn send(
         // (plan/m6.md 2.2).
         _ => {
             let v = lower_expr(value, ctx.program, m, &vars)?;
-            let src = m.inst(&format!("alloca {}", v.ty));
+            let src = m.alloca(&v.ty);
             m.write(&v.ty, &v.value, &src.to_string());
             let textual = matches!(
                 ctx.program.types.list.get(value.ty.index()),
@@ -795,7 +799,7 @@ fn for_items(var: takt_mir::VarId, iter: &Expr, body: &Block, ctx: &mut Ctx<'_>,
         }
         _ => return Err(NotYet { what: "`for` ueber diese Sammlung" }),
     };
-    let slot = m.inst(&format!("alloca {}", x.ty));
+    let slot = m.alloca(&x.ty);
     m.write(&x.ty, &x.value, &slot.to_string());
     let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
     let k = ctx.next_label();
@@ -874,12 +878,28 @@ fn fn_for<V: Slots>(
 /// `x = e`: Wert berechnen, in den Speicherort schreiben.
 fn assign(target: &Place, value: &Expr, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let vars = ctx.vars();
+    // Stelle zu Stelle: `a = b` auf einem grossen Aggregat kopiert, statt
+    // den Wert erst zu laden (FB-214). Ein Port bleibt aussen vor — sein
+    // Zugriff ist `volatile`, und `memmove` traegt das nicht.
+    if !roots_in_port(target)
+        && let Some(want) = ty::lower(value.ty, ctx.program)
+        && want.indirect()
+        && let Some((src, _)) = crate::expr::address_of(value, m, &vars)
+    {
+        let (dst, _) = place(target, ctx, m)?;
+        m.copy(&want, &src.to_string(), &dst.to_string());
+        return Ok(());
+    }
     let v = lower_expr(value, ctx.program, m, &vars)?;
     let (ptr, _) = place(target, ctx, m)?;
     // 12.10: Ein Portzugriff ist `volatile` — sofort und in
-    // Programmreihenfolge, nicht umgeordnet oder zusammengefasst.
-    let vol = if roots_in_port(target) { "volatile " } else { "" };
-    m.void_inst(&format!("store {vol}{} {}, ptr {ptr}", v.ty, v.value));
+    // Programmreihenfolge, nicht umgeordnet oder zusammengefasst. `memset`
+    // und `memmove` tragen das nicht, also bleibt es hier beim `store`.
+    if roots_in_port(target) {
+        m.void_inst(&format!("store volatile {} {}, ptr {ptr}", v.ty, v.value));
+    } else {
+        m.write(&v.ty, &v.value, &ptr.to_string());
+    }
     Ok(())
 }
 
@@ -1289,7 +1309,7 @@ fn fn_stmt<V: Slots>(s: &Stmt, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result
                         ExprKind::Var(sid) => ctx.vars.slot(sid, m).ok_or(NotYet { what: "Quelle" })?.0,
                         _ => {
                             let v = lower_expr(src, ctx.program, m, &ctx.vars)?;
-                            let tmp = m.inst(&format!("alloca {}", v.ty));
+                            let tmp = m.alloca(&v.ty);
                             m.write(&v.ty, &v.value, &tmp.to_string());
                             tmp
                         }

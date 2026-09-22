@@ -259,7 +259,7 @@ pub fn encode(
     let layout = def.layout.as_ref().ok_or(NotYet { what: "Record ohne `layout`" })?;
     let size = def.wire_size.ok_or(NotYet { what: "Record ohne Drahtgroesse" })?;
     // Das Ergebnis ist ein `bytes<SIZE>`: Laenge und Daten (3.9).
-    let buf = m.inst(&format!("alloca {want}"));
+    let buf = m.alloca(want);
     let len_ptr = m.inst(&format!("getelementptr inbounds {want}, ptr {buf}, i32 0, i32 0"));
     m.void_inst(&format!("store i32 {size}, ptr {len_ptr}"));
     let data = m.inst(&format!("getelementptr inbounds {want}, ptr {buf}, i32 0, i32 1"));

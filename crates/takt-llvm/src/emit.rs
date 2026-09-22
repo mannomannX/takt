@@ -9,21 +9,28 @@
 
 use core::fmt::Write;
 
-use crate::ty::LlvmType;
-
-/// Bis hierher kopiert ein `load`/`store`-Paar, darueber `memcpy` (FB-214).
-const COPY_INLINE_MAX: u64 = 16;
+use crate::ty::{INDIRECT_MIN, LlvmType};
 
 /// Ein SSA-Register (`%0`, `%1`, ...).
 ///
 /// LLVM verlangt in einer Funktion fortlaufende Nummern ab 0, wenn sie
 /// unbenannt sind; der Zaehler steht darum in [`Module`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Reg(pub u32);
+pub enum Reg {
+    /// Nummeriert; LLVM verlangt die Nummern streng aufsteigend.
+    Num(u32),
+    /// Benannt. Ein `alloca`, das nachtraeglich in den Eintrittsblock
+    /// wandert, braucht das: Es steht dort vor Nummern, die spaeter
+    /// vergeben wurden (FB-214).
+    Named(u32),
+}
 
 impl core::fmt::Display for Reg {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "%{}", self.0)
+        match self {
+            Reg::Num(n) => write!(f, "%{n}"),
+            Reg::Named(n) => write!(f, "%slot{n}"),
+        }
     }
 }
 
@@ -42,6 +49,11 @@ pub struct Module {
     block: String,
     /// Zaehler fuer Marken, die aus Ausdruecken entstehen.
     labels: u32,
+    /// Wo im Rumpf der Eintrittsblock der laufenden Funktion beginnt.
+    /// [`Module::alloca`] setzt seine Slots dorthin (FB-214).
+    entry_at: usize,
+    /// Zaehler der benannten Slots der laufenden Funktion.
+    slots: u32,
     /// Instrumentierungsstufe (11.2): was die Schrittfunktionen in `pc`
     /// schreiben.
     pub instrument: crate::target::Instrument,
@@ -78,6 +90,8 @@ impl Module {
             body: String::new(),
             next: 0,
             labels: 0,
+            entry_at: 0,
+            slots: 0,
             instrument: crate::target::Instrument::Off,
             open: false,
             block: String::new(),
@@ -98,9 +112,11 @@ impl Module {
     /// danach auf n, wie LLVM es verlangt.
     pub fn begin(&mut self, name: &str, ret: &LlvmType, params: &[LlvmType]) -> Vec<Reg> {
         debug_assert!(!self.open, "Funktion `{name}` beginnt in einer offenen Funktion");
-        let regs: Vec<Reg> = (0..params.len() as u32).map(Reg).collect();
+        let regs: Vec<Reg> = (0..params.len() as u32).map(Reg::Num).collect();
         let sig: Vec<String> = params.iter().zip(&regs).map(|(t, r)| format!("{t} {r}")).collect();
         let _ = writeln!(self.body, "\ndefine {ret} @{name}({}) {{", sig.join(", "));
+        self.entry_at = self.body.len();
+        self.slots = 0;
         // Der Eintrittsblock bekommt eine Nummer wie ein Register.
         self.next = params.len() as u32 + 1;
         self.open = true;
@@ -138,7 +154,7 @@ impl Module {
     pub fn begin_sig(&mut self, name: &str, sig: &crate::fns::Signature) -> Vec<Reg> {
         debug_assert!(!self.open, "Funktion `{name}` beginnt in einer offenen Funktion");
         let params = sig.params();
-        let regs: Vec<Reg> = (0..params.len() as u32).map(Reg).collect();
+        let regs: Vec<Reg> = (0..params.len() as u32).map(Reg::Num).collect();
         let sig_text: Vec<String> = params
             .iter()
             .zip(&regs)
@@ -150,6 +166,8 @@ impl Module {
             )
             .collect();
         let _ = writeln!(self.body, "\ndefine {} @{name}({}) {{", sig.llvm_ret(), sig_text.join(", "));
+        self.entry_at = self.body.len();
+        self.slots = 0;
         self.next = params.len() as u32 + 1;
         self.open = true;
         self.terminated = false;
@@ -159,7 +177,7 @@ impl Module {
 
     /// Ein frisches Register.
     pub fn reg(&mut self) -> Reg {
-        let r = Reg(self.next);
+        let r = Reg::Num(self.next);
         self.next += 1;
         r
     }
@@ -186,6 +204,23 @@ impl Module {
         matches!(head, "br" | "ret" | "switch" | "unreachable" | "indirectbr" | "resume")
     }
 
+    /// Ein Stack-Slot, immer im Eintrittsblock.
+    ///
+    /// **Warum nicht dort, wo er gebraucht wird.** Ein `alloca` in einem
+    /// Schleifenrumpf ist semantisch eine Allokation *je Durchlauf*; LLVM
+    /// darf ihn nicht hochziehen und `mem2reg` promotet ihn nicht. Bei
+    /// `bytes<1024>` bleibt dann pro Iteration ein 1028-Byte-Slot stehen
+    /// (FB-214). Im Eintrittsblock ist er ein Slot fuer die ganze
+    /// Funktion — so legt C seine Locals an.
+    pub fn alloca(&mut self, ty: &LlvmType) -> Reg {
+        let r = Reg::Named(self.slots);
+        self.slots += 1;
+        let line = format!("  {r} = alloca {ty}\n");
+        self.body.insert_str(self.entry_at, &line);
+        self.entry_at += line.len();
+        r
+    }
+
     /// Schreibt eine Anweisung ohne Ergebnis (`store`, `br`).
     pub fn void_inst(&mut self, text: &str) {
         if self.terminated {
@@ -202,6 +237,12 @@ impl Module {
     /// Ein Wert in der Hand ist ein `store`; erst wo eine *Stelle* zu
     /// kopieren ist, lohnt [`Module::copy`].
     pub fn write(&mut self, ty: &LlvmType, value: &str, dst: &str) {
+        // `store zeroinitializer` schreibt LLVM Feld fuer Feld; `memset`
+        // ist dieselbe Aussage in einem Aufruf (FB-214).
+        if value == "zeroinitializer" && ty.size() > INDIRECT_MIN {
+            self.void_inst(&format!("call void @llvm.memset.p0.i64(ptr {dst}, i8 0, i64 {}, i1 false)", ty.size()));
+            return;
+        }
         self.void_inst(&format!("store {ty} {value}, ptr {dst}"));
     }
 
@@ -214,7 +255,7 @@ impl Module {
     /// kennt — und `memmove` statt `memcpy`, weil ein `inout` dieselbe
     /// Stelle als Quelle und Ziel gibt (3.9).
     pub fn copy(&mut self, ty: &LlvmType, src: &str, dst: &str) {
-        if ty.size() <= COPY_INLINE_MAX {
+        if ty.size() <= INDIRECT_MIN {
             let v = self.inst(&format!("load {ty}, ptr {src}"));
             self.void_inst(&format!("store {ty} {v}, ptr {dst}"));
             return;

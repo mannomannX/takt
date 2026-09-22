@@ -486,7 +486,7 @@ pub(crate) fn encode_padded(
     vars: &dyn crate::expr::Vars,
 ) -> Result<Reg, NotYet> {
     let v = crate::expr::lower(e, p, module, vars)?;
-    let tmp = module.inst(&format!("alloca {}", v.ty));
+    let tmp = module.alloca(&v.ty);
     module.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
     let buf = module.inst(&format!("alloca [{len} x i8]"));
     module.void_inst(&format!("store [{len} x i8] zeroinitializer, ptr {buf}"));
