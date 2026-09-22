@@ -489,7 +489,7 @@ pub(crate) fn encode_padded(
     let tmp = module.alloca(&v.ty);
     module.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
     let buf = module.inst(&format!("alloca [{len} x i8]"));
-    module.void_inst(&format!("store [{len} x i8] zeroinitializer, ptr {buf}"));
+    module.write(&LlvmType::Array(Box::new(LlvmType::Int(8)), len), "zeroinitializer", &buf.to_string());
     encode_canonical(p, e.ty, tmp, buf, module)?;
     Ok(buf)
 }

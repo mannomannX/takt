@@ -1203,7 +1203,7 @@ fn stream_sent(base: &Expr, want: &LlvmType, m: &mut Module) -> Result<Lowered, 
     let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`sent` ohne Wrapper-Typ" }) };
     let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
     let buf = m.alloca(&inner);
-    m.void_inst(&format!("store {inner} zeroinitializer, ptr {buf}"));
+    m.write(&inner, "zeroinitializer", &buf.to_string());
     let n = m.inst(&format!("call i32 @{}(i32 {}, ptr {buf})", crate::stream::Streams::SENT, c.0));
     let v = m.inst(&format!("load {inner}, ptr {buf}"));
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
@@ -1256,7 +1256,7 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
     let (cur_ptr, ex_ptr) = vars.stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
     let mi = vars.machine_index().ok_or(NotYet { what: "`peek` ausserhalb einer Maschine" })?;
     let out = m.alloca(&inner);
-    m.void_inst(&format!("store {inner} zeroinitializer, ptr {out}"));
+    m.write(&inner, "zeroinitializer", &out.to_string());
     let buf = crate::stream::scratch(p, elem, m)?;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
@@ -1302,7 +1302,7 @@ fn map_access(
             let k = args.first().ok_or(NotYet { what: "`get` ohne Schluessel" })?;
             let kbuf = crate::persist::encode_padded(k, klen, p, m, vars)?;
             let out = m.inst(&format!("alloca [{vlen} x i8]"));
-            m.void_inst(&format!("store [{vlen} x i8] zeroinitializer, ptr {out}"));
+            m.write(&LlvmType::Array(Box::new(LlvmType::Int(8)), vlen), "zeroinitializer", &out.to_string());
             m.needs_intrinsic("i1 @takt_native_map_get(ptr, i32, i32, i32, ptr, ptr)");
             let hit = m.inst(&format!(
                 "call i1 @takt_native_map_get(ptr {slots}, i32 {cap}, i32 {klen}, i32 {vlen}, ptr {kbuf}, ptr {out})"
@@ -1311,7 +1311,7 @@ fn map_access(
             let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`get` ohne Wrapper-Typ" }) };
             let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
             let dst = m.alloca(&inner);
-            m.void_inst(&format!("store {inner} zeroinitializer, ptr {dst}"));
+            m.write(&inner, "zeroinitializer", &dst.to_string());
             crate::persist::decode_canonical(p, value, out, dst, m)?;
             let v = m.inst(&format!("load {inner}, ptr {dst}"));
             let with_value = m.inst(&format!("insertvalue {want} undef, {inner} {v}, 0"));
@@ -1361,14 +1361,23 @@ fn call(
         operands.push(format!("ptr sret({}) {out}", sig.ret));
     }
     for a in args {
-        let v = lower(a, p, m, vars)?;
         // Ein indirektes Argument geht als Zeiger auf eine Kopie: Der
-        // Gerufene darf sie aendern, ohne den Aufrufer zu beruehren.
-        if v.ty.indirect() {
-            let tmp = m.alloca(&v.ty);
-            m.write(&v.ty, &v.value, &tmp.to_string());
+        // Gerufene darf sie aendern, ohne den Aufrufer zu beruehren. Steht
+        // das Argument an einer Stelle, wird von dort kopiert, statt es
+        // erst als Wert zu laden (FB-214).
+        let ty = ty::lower(a.ty, p);
+        if let Some(ty) = ty.filter(LlvmType::indirect) {
+            let tmp = m.alloca(&ty);
+            match address_of(a, m, vars) {
+                Some((src, _)) => m.copy(&ty, &src.to_string(), &tmp.to_string()),
+                None => {
+                    let v = lower(a, p, m, vars)?;
+                    m.write(&v.ty, &v.value, &tmp.to_string());
+                }
+            }
             operands.push(format!("ptr {tmp}"));
         } else {
+            let v = lower(a, p, m, vars)?;
             operands.push(format!("{} {}", v.ty, v.value));
         }
     }

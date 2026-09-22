@@ -408,7 +408,7 @@ fn solve(
 fn cholesky(a: &Lowered, n: usize, want: &LlvmType, t: &LlvmType, m: &mut Module) -> Result<Lowered, NotYet> {
     let x = elements(m, a, n, n);
     let out = mem_of(m, &a.ty);
-    m.void_inst(&format!("store {} zeroinitializer, ptr {}", a.ty, out.ptr));
+    m.write(&a.ty, "zeroinitializer", &out.ptr.to_string());
     let zero = float_literal(0.0, t);
     // Ohne Zweig: `ok` sammelt „jedes d > 0"; ein Wert mit `ok = false`
     // wird nicht gelesen, wie `none` im Interpreter.
