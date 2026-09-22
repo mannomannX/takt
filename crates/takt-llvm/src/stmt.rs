@@ -434,7 +434,7 @@ fn job_begin(
     for a in args {
         let v = lower_expr(a, p, m, &vars)?;
         let tmp = m.inst(&format!("alloca {}", v.ty));
-        m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+        m.write(&v.ty, &v.value, &tmp.to_string());
         let body = m.inst(&format!("add i64 {off}, 4"));
         let dst = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {body}"));
         let len = crate::persist::encode_canonical(p, a.ty, tmp, dst, m)?;
@@ -495,7 +495,7 @@ fn send(
         _ => {
             let v = lower_expr(value, ctx.program, m, &vars)?;
             let src = m.inst(&format!("alloca {}", v.ty));
-            m.void_inst(&format!("store {} {}, ptr {src}", v.ty, v.value));
+            m.write(&v.ty, &v.value, &src.to_string());
             let textual = matches!(
                 ctx.program.types.list.get(value.ty.index()),
                 Some(Type::Bytes { .. } | Type::Str { .. } | Type::Line { .. })
@@ -503,8 +503,7 @@ fn send(
             if textual {
                 // `line<N>` traegt hinter den Bytes noch `truncated`; das
                 // Praefix `{ len, bytes }` ist bei allen dreien gleich.
-                let pair = m.inst(&format!("load {ty}, ptr {src}"));
-                m.void_inst(&format!("store {ty} {pair}, ptr {buffer}"));
+                m.copy(&ty, &src.to_string(), &buffer.to_string());
             } else {
                 // Feste Slot-Form (plan/m6.md 2.2): die kanonische Form, mit
                 // Nullen auf `len_max` (= `max_size`) gefuellt — so liegt
@@ -797,7 +796,7 @@ fn for_items(var: takt_mir::VarId, iter: &Expr, body: &Block, ctx: &mut Ctx<'_>,
         _ => return Err(NotYet { what: "`for` ueber diese Sammlung" }),
     };
     let slot = m.inst(&format!("alloca {}", x.ty));
-    m.void_inst(&format!("store {} {}, ptr {slot}", x.ty, x.value));
+    m.write(&x.ty, &x.value, &slot.to_string());
     let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
     let k = ctx.next_label();
     let name = ctx.machine.name.clone();
@@ -1190,6 +1189,10 @@ pub struct FnCtx<'a, V: Slots> {
     pub labels: u32,
     /// Sprungziele der laufenden Schleifen; `break` nimmt das oberste.
     pub breaks: Vec<String>,
+    /// Der `sret`-Platz, wenn die Rueckgabe indirekt geht (FB-214).
+    pub sret: Option<Reg>,
+    /// Der Rueckgabetyp, wie das Programm ihn nennt.
+    pub ret: LlvmType,
 }
 
 /// Eine Variablenquelle, in die auch geschrieben werden kann.
@@ -1227,13 +1230,19 @@ fn fn_stmt<V: Slots>(s: &Stmt, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result
     match &s.kind {
         StmtKind::Return(e) => {
             let v = lower_expr(e, ctx.program, m, &ctx.vars)?;
-            m.void_inst(&format!("ret {} {}", v.ty, v.value));
+            match ctx.sret {
+                Some(out) => {
+                    m.write(&v.ty, &v.value, &out.to_string());
+                    m.void_inst("ret void");
+                }
+                None => m.void_inst(&format!("ret {} {}", v.ty, v.value)),
+            }
             Ok(())
         }
         StmtKind::Assign { target, value } => {
             let v = lower_expr(value, ctx.program, m, &ctx.vars)?;
             let (ptr, _) = fn_place(target, ctx, m)?;
-            m.void_inst(&format!("store {} {}, ptr {ptr}", v.ty, v.value));
+            m.write(&v.ty, &v.value, &ptr.to_string());
             Ok(())
         }
         StmtKind::If { cond, then, otherwise } => {
@@ -1281,7 +1290,7 @@ fn fn_stmt<V: Slots>(s: &Stmt, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result
                         _ => {
                             let v = lower_expr(src, ctx.program, m, &ctx.vars)?;
                             let tmp = m.inst(&format!("alloca {}", v.ty));
-                            m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+                            m.write(&v.ty, &v.value, &tmp.to_string());
                             tmp
                         }
                     };

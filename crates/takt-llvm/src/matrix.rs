@@ -167,7 +167,7 @@ pub fn index(
         return Ok(Lowered { value: v.to_string(), ty: want.clone() });
     }
     let tmp = m.inst(&format!("alloca {}", x.ty));
-    m.void_inst(&format!("store {} {}, ptr {tmp}", x.ty, x.value));
+    m.write(&x.ty, &x.value, &tmp.to_string());
     let at = m.inst(&format!(
         "getelementptr inbounds {}, ptr {tmp}, i32 0, {} {}, {} {}",
         x.ty, i.ty, i.value, j.ty, j.value

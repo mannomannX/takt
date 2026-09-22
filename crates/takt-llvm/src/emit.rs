@@ -11,6 +11,9 @@ use core::fmt::Write;
 
 use crate::ty::LlvmType;
 
+/// Bis hierher kopiert ein `load`/`store`-Paar, darueber `memcpy` (FB-214).
+const COPY_INLINE_MAX: u64 = 16;
+
 /// Ein SSA-Register (`%0`, `%1`, ...).
 ///
 /// LLVM verlangt in einer Funktion fortlaufende Nummern ab 0, wenn sie
@@ -131,6 +134,29 @@ impl Module {
         self.terminated = true;
     }
 
+    /// Wie [`Module::begin`], aber mit `sret`-Attribut fuer die Rueckgabe.
+    pub fn begin_sig(&mut self, name: &str, sig: &crate::fns::Signature) -> Vec<Reg> {
+        debug_assert!(!self.open, "Funktion `{name}` beginnt in einer offenen Funktion");
+        let params = sig.params();
+        let regs: Vec<Reg> = (0..params.len() as u32).map(Reg).collect();
+        let sig_text: Vec<String> = params
+            .iter()
+            .zip(&regs)
+            .enumerate()
+            .map(
+                |(i, (t, r))| {
+                    if i == 0 && sig.sret { format!("ptr sret({}) {r}", sig.ret) } else { format!("{t} {r}") }
+                },
+            )
+            .collect();
+        let _ = writeln!(self.body, "\ndefine {} @{name}({}) {{", sig.llvm_ret(), sig_text.join(", "));
+        self.next = params.len() as u32 + 1;
+        self.open = true;
+        self.terminated = false;
+        self.block = format!("{}", params.len());
+        regs
+    }
+
     /// Ein frisches Register.
     pub fn reg(&mut self) -> Reg {
         let r = Reg(self.next);
@@ -169,6 +195,38 @@ impl Module {
         if Module::is_terminator(text) {
             self.terminated = true;
         }
+    }
+
+    /// Schreibt einen Wert an eine Stelle.
+    ///
+    /// Ein Wert in der Hand ist ein `store`; erst wo eine *Stelle* zu
+    /// kopieren ist, lohnt [`Module::copy`].
+    pub fn write(&mut self, ty: &LlvmType, value: &str, dst: &str) {
+        self.void_inst(&format!("store {ty} {value}, ptr {dst}"));
+    }
+
+    /// Kopiert `ty` von `src` nach `dst`, ohne den Wert zu materialisieren.
+    ///
+    /// **Warum nicht `load` und `store`.** Ein Aggregat als Wert zerlegt
+    /// LLVM in Felder und schreibt jedes einzeln; bei `bytes<1024>` sind
+    /// das tausend Byte-Zugriffe mit je eigener Adressrechnung (FB-214).
+    /// `memmove` ist dieselbe Aussage in einem Aufruf, den das Backend
+    /// kennt — und `memmove` statt `memcpy`, weil ein `inout` dieselbe
+    /// Stelle als Quelle und Ziel gibt (3.9).
+    pub fn copy(&mut self, ty: &LlvmType, src: &str, dst: &str) {
+        if ty.size() <= COPY_INLINE_MAX {
+            let v = self.inst(&format!("load {ty}, ptr {src}"));
+            self.void_inst(&format!("store {ty} {v}, ptr {dst}"));
+            return;
+        }
+        // `memmove` und nicht `memcpy`: Ein `inout` gibt dieselbe Stelle
+        // als Quelle und Ziel (3.9), und `memcpy` verlangt, dass sie sich
+        // nicht ueberlappen. Der Unterschied kostete `39_sha256` seinen
+        // Hashwert.
+        self.void_inst(&format!(
+            "call void @llvm.memmove.p0.p0.i64(ptr {dst}, ptr {src}, i64 {}, i1 false)",
+            ty.size()
+        ));
     }
 
     /// Setzt eine Marke (Basisblock).

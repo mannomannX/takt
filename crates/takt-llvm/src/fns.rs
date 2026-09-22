@@ -86,7 +86,14 @@ pub fn prologue(f: &FnDef, p: &Program, args: &[Reg], m: &mut Module) -> Result<
         let ty = ty::lower(v.ty, p).ok_or(NotYet { what: "Typ einer lokalen Variablen" })?;
         let ptr = m.inst(&format!("alloca {ty}"));
         if let Some(arg) = args.get(i) {
-            m.void_inst(&format!("store {ty} {arg}, ptr {ptr}"));
+            // Ein indirekter Parameter kommt als Zeiger; die Kopie hier
+            // gibt der Funktion ihr eigenes Exemplar, wie die Wertsemantik
+            // es verlangt (11.2: die Sprache hat keine Referenzen).
+            if ty.indirect() {
+                m.copy(&ty, &arg.to_string(), &ptr.to_string());
+            } else {
+                m.void_inst(&format!("store {ty} {arg}, ptr {ptr}"));
+            }
         }
         slots.push((ptr, ty));
     }
@@ -94,16 +101,64 @@ pub fn prologue(f: &FnDef, p: &Program, args: &[Reg], m: &mut Module) -> Result<
 }
 
 /// Die Signatur einer Funktion: Parametertypen und Rueckgabetyp.
-pub fn signature(f: &FnDef, p: &Program) -> Option<(Vec<LlvmType>, LlvmType)> {
-    let mut params = Vec::with_capacity(f.params.len());
+///
+/// Grosse Aggregate gehen per Zeiger (`LlvmType::indirect`): ein
+/// `sret`-Parameter vorn fuer die Rueckgabe, `ptr` statt Wert fuer jeden
+/// grossen Parameter. [`Signature`] haelt fest, was davon gilt, damit
+/// Rumpf und Aufrufstelle dieselbe Form erzeugen.
+pub fn signature(f: &FnDef, p: &Program) -> Option<Signature> {
+    let mut declared = Vec::with_capacity(f.params.len());
     for i in 0..f.params.len() {
-        params.push(ty::lower(f.locals.get(i)?.ty, p)?);
+        declared.push(ty::lower(f.locals.get(i)?.ty, p)?);
     }
     let ret = match f.ret {
         Some(t) => ty::lower(t, p)?,
         None => LlvmType::Void,
     };
-    Some((params, ret))
+    Some(Signature::new(declared, ret))
+}
+
+/// Wie eine Funktion ihre Werte nimmt und gibt.
+#[derive(Clone, Debug)]
+pub struct Signature {
+    /// Die Typen, wie das Programm sie nennt.
+    pub declared: Vec<LlvmType>,
+    /// Der Rueckgabetyp, wie das Programm ihn nennt.
+    pub ret: LlvmType,
+    /// Geht die Rueckgabe ueber einen `sret`-Parameter?
+    pub sret: bool,
+}
+
+impl Signature {
+    fn new(declared: Vec<LlvmType>, ret: LlvmType) -> Signature {
+        let sret = ret.indirect();
+        Signature { declared, ret, sret }
+    }
+
+    /// Die Parametertypen in der Form, die LLVM sieht.
+    pub fn params(&self) -> Vec<LlvmType> {
+        let mut out = Vec::with_capacity(self.declared.len() + usize::from(self.sret));
+        if self.sret {
+            out.push(LlvmType::Ptr);
+        }
+        out.extend(self.declared.iter().map(|t| if t.indirect() { LlvmType::Ptr } else { t.clone() }));
+        out
+    }
+
+    /// Der Rueckgabetyp in der Form, die LLVM sieht.
+    pub fn llvm_ret(&self) -> LlvmType {
+        if self.sret { LlvmType::Void } else { self.ret.clone() }
+    }
+
+    /// Die Deklaration, mit `sret` als Attribut.
+    pub fn declare(&self, name: &str) -> String {
+        let mut ps: Vec<String> = Vec::new();
+        if self.sret {
+            ps.push(format!("ptr sret({})", self.ret));
+        }
+        ps.extend(self.declared.iter().map(|t| if t.indirect() { "ptr".to_string() } else { t.to_string() }));
+        format!("declare {} @{name}({})", self.llvm_ret(), ps.join(", "))
+    }
 }
 
 /// Schreibt eine Funktion vollstaendig (4.4).
@@ -111,10 +166,10 @@ pub fn signature(f: &FnDef, p: &Program) -> Option<(Vec<LlvmType>, LlvmType)> {
 /// `Err` verwirft die angefangene Funktion: Eine halbe waere gueltige IR
 /// mit falschem Inhalt, und der Aufrufer saehe ihr das nicht an.
 pub fn function(f: &FnDef, p: &Program, m: &mut Module) -> Result<(), NotYet> {
-    let (params, ret) = signature(f, p).ok_or(NotYet { what: "Signatur" })?;
+    let sig = signature(f, p).ok_or(NotYet { what: "Signatur" })?;
     let mark = m.mark();
-    let args = m.begin(&symbol(f), &ret, &params);
-    match body(f, p, &args, &ret, m) {
+    let args = m.begin_sig(&symbol(f), &sig);
+    match body(f, p, &args, &sig, m) {
         Ok(()) => Ok(()),
         Err(e) => {
             m.abort(mark);
@@ -123,20 +178,24 @@ pub fn function(f: &FnDef, p: &Program, m: &mut Module) -> Result<(), NotYet> {
             // Linker nennt es beim Namen. Ein fehlendes Symbol laesst
             // clang die ganze Datei zurueckweisen — der Fehler traefe
             // dann alle Funktionen statt der einen.
-            let ps: Vec<String> = params.iter().map(|t| t.to_string()).collect();
-            m.declare(&format!("declare {ret} @{}({})", symbol(f), ps.join(", ")));
+            m.declare(&sig.declare(&symbol(f)));
             Err(e)
         }
     }
 }
 
 /// Der Rumpf; `function` raeumt bei `Err` auf.
-fn body(f: &FnDef, p: &Program, args: &[Reg], ret: &LlvmType, m: &mut Module) -> Result<(), NotYet> {
+fn body(f: &FnDef, p: &Program, args: &[Reg], sig: &Signature, m: &mut Module) -> Result<(), NotYet> {
+    // Bei `sret` ist der erste Parameter der Platz fuer die Rueckgabe;
+    // die Lokalen beginnen dahinter.
+    let (out, args) = if sig.sret { (args.first().copied(), &args[1..]) } else { (None, args) };
     let locals = prologue(f, p, args, m)?;
-    let mut ctx = crate::stmt::FnCtx { program: p, vars: locals, labels: 0, breaks: Vec::new() };
+    let mut ctx =
+        crate::stmt::FnCtx { program: p, vars: locals, labels: 0, breaks: Vec::new(), sret: out, ret: sig.ret.clone() };
     crate::stmt::fn_block(&f.body, &mut ctx, m)?;
     // Ein Rumpf ohne `return` am Ende kann nicht vorkommen (Pruefung 11),
     // aber LLVM verlangt einen Terminator. Der Wert ist unerreichbar.
+    let ret = sig.llvm_ret();
     if !m.terminated() {
         match ret {
             LlvmType::Void => m.void_inst("ret void"),
@@ -302,7 +361,7 @@ fn block_body(
         instance_ty: inst.llvm(),
         params,
     };
-    let mut ctx = crate::stmt::FnCtx { program: p, vars, labels: 0, breaks: Vec::new() };
+    let mut ctx = crate::stmt::FnCtx { program: p, vars, labels: 0, breaks: Vec::new(), sret: None, ret: ret.clone() };
     crate::stmt::fn_block(&f.body, &mut ctx, m)?;
     if !m.terminated() {
         match ret {

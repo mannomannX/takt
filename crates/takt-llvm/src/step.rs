@@ -331,7 +331,7 @@ fn safe_outputs(ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         let value = crate::expr::lower(&safe, ctx.program, m, &vars)?;
         let off = crate::image::latch_offset(c, ctx.program).ok_or(NotYet { what: "Versatz im Latch" })?;
         let ptr = m.inst(&format!("getelementptr inbounds i8, ptr %3, i64 {off}"));
-        m.void_inst(&format!("store {} {}, ptr {ptr}", value.ty, value.value));
+        m.write(&value.ty, &value.value, &ptr.to_string());
     }
     Ok(())
 }

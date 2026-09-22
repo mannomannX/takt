@@ -11,6 +11,12 @@ use takt_mir::TypeId;
 use takt_mir::program::Program;
 use takt_mir::types::{FloatWidth, IntWidth, Type};
 
+/// Ab dieser Groesse geht ein Aggregat per Zeiger durch die Signatur.
+///
+/// Zwei Worte passen in die Registerpaare jeder Zielklasse; darueber
+/// kopierte der Aufruf ohnehin ueber den Stack.
+pub const INDIRECT_MIN: u64 = 16;
+
 /// Ein LLVM-Typ, so weit der Codegen ihn braucht.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LlvmType {
@@ -61,10 +67,21 @@ impl LlvmType {
         matches!(self, LlvmType::F32 | LlvmType::F64)
     }
 
+    /// Geht der Typ als Zeiger durch die Signatur (FB-214)?
+    ///
+    /// Ein Aggregat als Wert laesst LLVM an jeder Aufrufstelle und in
+    /// jedem Rumpf Feld fuer Feld kopieren: `bytes<1024>` als Parameter
+    /// und Rueckgabe macht aus 1000 Byte C-Code 70 000 Byte. C und Rust
+    /// geben grosse Aggregate darum per Zeiger weiter (`sret`, `byval`),
+    /// und Takt tut es jetzt auch.
+    pub fn indirect(&self) -> bool {
+        matches!(self, LlvmType::Struct(_) | LlvmType::Array(..)) && self.size() > INDIRECT_MIN
+    }
+
     /// Groesse in Bytes, so weit der Codegen sie ohne Datenlayout kennt.
     ///
-    /// 11.2 braucht sie fuer die Schwelle der Zeigeruebergabe (Default
-    /// 64 Byte) und fuer `takt size` (11.5).
+    /// 11.2 braucht sie fuer die Schwelle der Zeigeruebergabe und fuer
+    /// `takt size` (11.5).
     pub fn size(&self) -> u64 {
         match self {
             LlvmType::Int(n) => u64::from(n.div_ceil(8)),

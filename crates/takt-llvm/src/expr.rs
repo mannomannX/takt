@@ -731,7 +731,7 @@ fn decode(
     let b = lower(bytes, p, m, vars)?;
     let LlvmType::Struct(fields) = &b.ty else { return Err(NotYet { what: "`decode` auf einer Nicht-Sammlung" }) };
     let tmp = m.inst(&format!("alloca {}", b.ty));
-    m.void_inst(&format!("store {} {}, ptr {tmp}", b.ty, b.value));
+    m.write(&b.ty, &b.value, &tmp.to_string());
     // Die Laenge steht im Kopf der Sammlung (3.9), die Daten dahinter.
     let len = m.inst(&format!("extractvalue {} {}, 0", b.ty, b.value));
     let data = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", b.ty));
@@ -924,7 +924,7 @@ fn slice(
     // Quelle und Ziel liegen als Werte vor; `memcpy` liest und schreibt
     // Speicher (11.2: statischer Scratch).
     let src_ptr = m.inst(&format!("alloca {}", x.ty));
-    m.void_inst(&format!("store {} {}, ptr {src_ptr}", x.ty, x.value));
+    m.write(&x.ty, &x.value, &src_ptr.to_string());
     let out = m.inst(&format!("alloca {want}"));
     let len = m.inst(&format!("sub {} {}, {}", a.ty, b.value, a.value));
     let len32 = m.inst(&format!("trunc {} {len} to i32", a.ty));
@@ -1053,7 +1053,7 @@ fn index_of(
     // darum einen Platz (11.2: statischer Scratch), und LLVM entfernt
     // ihn, wo er unnoetig ist.
     let tmp = m.inst(&format!("alloca {}", x.ty));
-    m.void_inst(&format!("store {} {}, ptr {tmp}", x.ty, x.value));
+    m.write(&x.ty, &x.value, &tmp.to_string());
     let (array_ty, data) = match &x.ty {
         LlvmType::Struct(_) => {
             let l = crate::collection::layout_of(&x.ty).ok_or(NotYet { what: "Index auf diesem Struct" })?;
@@ -1097,7 +1097,7 @@ fn native_call(
             // Kopie von bis zu mehreren KiB je Aufruf.
             Some(Type::Bytes { .. }) => {
                 let tmp = m.inst(&format!("alloca {}", v.ty));
-                m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+                m.write(&v.ty, &v.value, &tmp.to_string());
                 let len = m.inst(&format!("extractvalue {} {}, 0", v.ty, v.value));
                 let data = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", v.ty));
                 ops.push(format!("ptr {data}"));
@@ -1109,7 +1109,7 @@ fn native_call(
             // kein Ziel-Layout.
             Some(Type::Record(_)) => {
                 let tmp = m.inst(&format!("alloca {}", v.ty));
-                m.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+                m.write(&v.ty, &v.value, &tmp.to_string());
                 let buf = canonical_buffer(p, a.ty, m)?;
                 let len = crate::persist::encode_canonical(p, a.ty, tmp, buf, m)?;
                 let len32 = m.inst(&format!("trunc i64 {len} to i32"));
@@ -1249,7 +1249,7 @@ fn map_access(
 ) -> Result<Lowered, NotYet> {
     let (klen, vlen) = crate::persist::map_widths(p, key, value)?;
     let slots = m.inst(&format!("alloca {}", x.ty));
-    m.void_inst(&format!("store {} {}, ptr {slots}", x.ty, x.value));
+    m.write(&x.ty, &x.value, &slots.to_string());
     match which {
         Accessor::Len => {
             m.needs_intrinsic("i32 @takt_native_map_len(ptr, i32, i32, i32)");
@@ -1311,13 +1311,32 @@ fn call(
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
     let f = p.fns.get(func.index()).ok_or(NotYet { what: "Funktion" })?;
-    let mut operands = Vec::with_capacity(args.len());
+    let sig = crate::fns::signature(f, p).ok_or(NotYet { what: "Signatur" })?;
+    // Bei `sret` steht der Platz fuer die Rueckgabe vorn; er wird vor den
+    // Argumenten angelegt, damit er im Eintrittsblock liegt.
+    let out = sig.sret.then(|| m.inst(&format!("alloca {}", sig.ret)));
+    let mut operands = Vec::with_capacity(args.len() + 1);
+    if let Some(out) = out {
+        operands.push(format!("ptr sret({}) {out}", sig.ret));
+    }
     for a in args {
         let v = lower(a, p, m, vars)?;
-        operands.push(format!("{} {}", v.ty, v.value));
+        // Ein indirektes Argument geht als Zeiger auf eine Kopie: Der
+        // Gerufene darf sie aendern, ohne den Aufrufer zu beruehren.
+        if v.ty.indirect() {
+            let tmp = m.inst(&format!("alloca {}", v.ty));
+            m.write(&v.ty, &v.value, &tmp.to_string());
+            operands.push(format!("ptr {tmp}"));
+        } else {
+            operands.push(format!("{} {}", v.ty, v.value));
+        }
     }
     let name = crate::fns::symbol(f);
-    let result = if *want == LlvmType::Void {
+    let result = if let Some(out) = out {
+        m.void_inst(&format!("call void @{name}({})", operands.join(", ")));
+        let r = m.inst(&format!("load {want}, ptr {out}"));
+        Lowered { value: r.to_string(), ty: want.clone() }
+    } else if *want == LlvmType::Void {
         m.void_inst(&format!("call void @{name}({})", operands.join(", ")));
         Lowered { value: String::new(), ty: LlvmType::Void }
     } else {

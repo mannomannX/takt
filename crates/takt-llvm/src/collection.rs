@@ -63,7 +63,7 @@ pub fn push(recv: Reg, l: &Layout, value: &Lowered, label: u32, m: &mut Module) 
     m.label(&write);
     let data = m.inst(&format!("getelementptr inbounds {ty}, ptr {recv}, i32 0, i32 1"));
     let at = m.inst(&format!("getelementptr inbounds [{} x {}], ptr {data}, i32 0, i32 {len}", l.cap, l.elem));
-    m.void_inst(&format!("store {} {}, ptr {at}", value.ty, value.value));
+    m.write(&value.ty, &value.value, &at.to_string());
     let next = m.inst(&format!("add i32 {len}, 1"));
     m.void_inst(&format!("store i32 {next}, ptr {len_ptr}"));
     m.void_inst(&format!("br label %{done}"));

@@ -145,6 +145,7 @@ impl Abi {
         // Schranke, die 4.1 ohnehin verlangt.
         m.declare(&format!("@{} = external global i8", Abi::FAULT_FLAG));
         m.declare("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)");
+        m.declare("declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)");
     }
 }
 
