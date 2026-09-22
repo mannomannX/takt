@@ -1,0 +1,67 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Probe des Empfangswegs. `CONF0.loopback` (Bit 12) schaltet die interne
+# Schleife des UART: Der Sender geht auf den eigenen Empfaenger, ohne
+# Pin und ohne Draht. Kommt damit etwas zurueck, arbeitet der Empfaenger
+# und es fehlt nur die Verbindung nach aussen; kommt nichts, liegt es
+# nicht am Kabel.
+#
+# REG_UPDATE (0x98) uebernimmt die Konfiguration — ohne den Schreibvorgang
+# bleibt CONF0 wirkungslos.
+
+record UartStatus layout little:
+    word : u32 with bits:
+        rxfifo_cnt : u8 at 0..7 ro
+        txfifo_cnt : u8 at 16..23 ro
+
+record UartData layout little:
+    word : u32 with bits:
+        byte : u8 at 0..7
+
+record UartConf0 layout little:
+    word : u32 with bits:
+        loopback : bool at 12
+
+record UartRegUpdate layout little:
+    word : u32 with bits:
+        go : bool at 0 wo
+
+port fifo : UartData @ mmio(0x60000000)
+port status : UartStatus @ mmio(0x6000001C)
+port conf0 : UartConf0 @ mmio(0x60000020)
+port commit : UartRegUpdate @ mmio(0x60000098)
+
+output sent    : int in 0..999 @ hw("o/sent")    with safe = 0
+output back    : int in 0..999 @ hw("o/back")    with safe = 0
+output echo    : int in 0..255 @ hw("o/echo")    with safe = 0
+output loop_on : bool          @ hw("o/loop_on") with safe = false
+
+driver machine probe every 100 ms with polling = unchecked:
+    var n     : int in 0..999 = 0
+    var r     : int in 0..999 = 0
+    var armed : bool = false
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # Ab der zweiten Sekunde die interne Schleife einschalten:
+            # Davor laeuft die Probe ueber den Draht, danach ohne ihn.
+            if now > 2 s and not armed:
+                conf0.word.loopback = true
+                commit.word.go = true
+                armed = true
+                loop_on = true
+
+            var st = status
+            if st.word.rxfifo_cnt > 0:
+                var d = fifo
+                echo = d.word.byte as int
+                r = (r + 1) % 1000
+                back = r
+            if st.word.txfifo_cnt < 120:
+                fifo.word.byte = 0x55
+                n = (n + 1) % 1000
+                sent = n
