@@ -130,10 +130,12 @@ pub fn scratch(p: &Program, elem: TypeId, m: &mut Module) -> Result<Reg, NotYet>
 pub fn copy_payload(buf: Reg, dst: Reg, elem: TypeId, p: &Program, m: &mut Module) -> Result<(), NotYet> {
     match p.types.list.get(elem.index()) {
         Some(Type::Line { cap } | Type::Str { cap } | Type::Bytes { cap }) => {
-            let pair = format!("{{ i32, [{cap} x i8] }}");
+            let pair = crate::ty::LlvmType::Struct(vec![
+                crate::ty::LlvmType::Int(32),
+                crate::ty::LlvmType::Array(Box::new(crate::ty::LlvmType::Int(8)), *cap),
+            ]);
             let src = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {}", Streams::LEN_AT));
-            let v = m.inst(&format!("load {pair}, ptr {src}"));
-            m.void_inst(&format!("store {pair} {v}, ptr {dst}"));
+            m.copy(&pair, &src.to_string(), &dst.to_string());
             if matches!(p.types.list.get(elem.index()), Some(Type::Line { .. })) {
                 let flag = m.inst(&format!("getelementptr inbounds i8, ptr {dst}, i64 {}", 4 + cap));
                 m.void_inst(&format!("store i1 false, ptr {flag}"));

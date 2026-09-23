@@ -89,7 +89,7 @@ pub fn append(recv: Reg, src: Reg, l: &Layout, label: u32, m: &mut Module) -> Re
     let data = m.inst(&format!("getelementptr inbounds {ty}, ptr {recv}, i32 0, i32 1"));
     let at = m.inst(&format!("getelementptr inbounds [{} x {}], ptr {data}, i32 0, i32 {len}", l.cap, l.elem));
     let src_data = m.inst(&format!("getelementptr inbounds {ty}, ptr {src}, i32 0, i32 1"));
-    let bytes = m.inst(&format!("mul i32 {src_len}, {}", l.elem.size().max(1)));
+    let bytes = m.inst(&format!("mul i32 {src_len}, {}", l.elem.aligned_size().max(1)));
     let bytes64 = m.inst(&format!("zext i32 {bytes} to i64"));
     m.void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {at}, ptr {src_data}, i64 {bytes64}, i1 false)"));
     m.void_inst(&format!("store i32 {sum}, ptr {len_ptr}"));

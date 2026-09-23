@@ -155,16 +155,7 @@ impl Module {
         debug_assert!(!self.open, "Funktion `{name}` beginnt in einer offenen Funktion");
         let params = sig.params();
         let regs: Vec<Reg> = (0..params.len() as u32).map(Reg::Num).collect();
-        let sig_text: Vec<String> = params
-            .iter()
-            .zip(&regs)
-            .enumerate()
-            .map(
-                |(i, (t, r))| {
-                    if i == 0 && sig.sret { format!("ptr sret({}) {r}", sig.ret) } else { format!("{t} {r}") }
-                },
-            )
-            .collect();
+        let sig_text: Vec<String> = params.iter().zip(&regs).map(|(t, r)| format!("{t} {r}")).collect();
         let _ = writeln!(self.body, "\ndefine {} @{name}({}) {{", sig.llvm_ret(), sig_text.join(", "));
         self.entry_at = self.body.len();
         self.slots = 0;
@@ -259,7 +250,10 @@ impl Module {
         // `store zeroinitializer` schreibt LLVM Feld fuer Feld; `memset`
         // ist dieselbe Aussage in einem Aufruf (FB-214).
         if value == "zeroinitializer" && ty.size() > INDIRECT_MIN {
-            self.void_inst(&format!("call void @llvm.memset.p0.i64(ptr {dst}, i8 0, i64 {}, i1 false)", ty.size()));
+            self.void_inst(&format!(
+                "call void @llvm.memset.p0.i64(ptr {dst}, i8 0, i64 {}, i1 false)",
+                ty.aligned_size()
+            ));
             return;
         }
         self.void_inst(&format!("store {ty} {value}, ptr {dst}"));
@@ -272,7 +266,8 @@ impl Module {
     /// das tausend Byte-Zugriffe mit je eigener Adressrechnung (FB-214).
     /// `memmove` ist dieselbe Aussage in einem Aufruf, den das Backend
     /// kennt — und `memmove` statt `memcpy`, weil ein `inout` dieselbe
-    /// Stelle als Quelle und Ziel gibt (3.9).
+    /// Stelle als Quelle und Ziel gibt (3.9). Die Laenge ist
+    /// `aligned_size`: `size` packt, das Layout nicht.
     pub fn copy(&mut self, ty: &LlvmType, src: &str, dst: &str) {
         if ty.size() <= INDIRECT_MIN {
             let v = self.inst(&format!("load {ty}, ptr {src}"));
@@ -285,7 +280,7 @@ impl Module {
         // Hashwert.
         self.void_inst(&format!(
             "call void @llvm.memmove.p0.p0.i64(ptr {dst}, ptr {src}, i64 {}, i1 false)",
-            ty.size()
+            ty.aligned_size()
         ));
     }
 

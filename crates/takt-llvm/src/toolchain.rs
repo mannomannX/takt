@@ -63,6 +63,21 @@ pub fn find() -> Clang {
     Clang::Missing
 }
 
+/// `-Os` auf einem Mikrocontroller, `-O2` auf einem Wirt.
+///
+/// Das Ziel steht im Kopf der IR; ein zweiter Parameter wiederholte nur,
+/// was dort schon steht. `-Os` rollt nicht ab und bettet weniger ein —
+/// auf dem C6 acht Prozent kleiner, bei gleicher Semantik: Die strikte
+/// FP-Form (4.2) haengt an den Flags der Instruktionen, nicht an der
+/// Stufe.
+fn opt_level(ir: &str) -> &'static str {
+    let mcu = ir
+        .lines()
+        .find_map(|l| l.strip_prefix("target triple = \""))
+        .is_some_and(|t| t.starts_with("riscv32") || t.starts_with("thumb"));
+    if mcu { "-Os" } else { "-O2" }
+}
+
 impl Clang {
     /// Was jeder Aufruf mitbekommt, damit das Ergebnis reproduzierbar
     /// ist (11.3).
@@ -131,7 +146,7 @@ impl Clang {
         std::fs::write(&ll, ir).map_err(|e| e.to_string())?;
         let mut cmd = Command::new(path);
         let build = Clang::deterministic(&mut cmd)
-            .args(["-Wno-override-module", "-O2"])
+            .args(["-Wno-override-module", opt_level(ir)])
             .arg(&ll)
             .arg("-o")
             .arg(&exe)

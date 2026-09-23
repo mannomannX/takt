@@ -98,7 +98,7 @@ fn init_instance(
     for (k, a) in args.iter().enumerate() {
         let v = lower_expr(a, p, module, &vars)?;
         let at = module.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {k}"));
-        module.void_inst(&format!("store {} {}, ptr {at}", v.ty, v.value));
+        module.write(&v.ty, &v.value, &at.to_string());
     }
     let exit = vars.fault_label().ok_or(NotYet { what: "Fault-Marke" })?;
     crate::block::init_state(ptr, def, &inst, exit, p, module)
@@ -971,7 +971,7 @@ fn emit_init(
                 module.abort(mark);
                 return Err(NotYet { what: "Variable im Zustand" });
             };
-            module.void_inst(&format!("store {} {}, ptr {ptr}", value.ty, value.value));
+            module.write(&value.ty, &value.value, &ptr.to_string());
         }
     }
     if enter {

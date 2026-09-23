@@ -12,6 +12,7 @@
 use takt_mir::TypeId;
 use takt_mir::expr::{Accessor, BinaryOp, ConvertKind, Expr, ExprKind, Intrinsic, JobField, UnaryOp};
 use takt_mir::program::Program;
+use takt_mir::stmt::Place;
 use takt_mir::types::{IntWidth, Type};
 
 use crate::emit::{Module, float_literal};
@@ -334,6 +335,15 @@ fn access(
         let wide = m.inst(&format!("sext i32 {n} to {want}"));
         return Ok(Lowered { value: wide.to_string(), ty: want.clone() });
     }
+    // Ein Feld an seiner Stelle wird reduziert, nicht geladen (FB-214).
+    let signed = elem_signed(base.ty, p);
+    if crate::reduce::reduces(which)
+        && let Some((ptr, ty)) = address_of(base, m, vars)
+        && matches!(ty, LlvmType::Array(..))
+        && let Some(r) = crate::reduce::access(which, crate::reduce::Field::At(ptr, ty), signed, want, m)
+    {
+        return r;
+    }
     let x = lower(base, p, m, vars)?;
     // 8.9: `[t, pre, post, rate, samples]` in fester Reihenfolge.
     if let Some(Type::Capture { .. }) = p.types.list.get(base.ty.index()) {
@@ -499,7 +509,7 @@ fn access(
         // `count`, `last`. Sie stehen in `reduce`, weil sie zusammen
         // gehoeren und eine gemeinsame Zusage tragen — die Reihenfolge
         // der Summation ist dort Semantik (4.2).
-        _ => match crate::reduce::access(which, &x, want, m) {
+        _ => match crate::reduce::access(which, crate::reduce::Field::Of(x), signed, want, m) {
             Some(r) => r,
             None => Err(NotYet { what: crate::scope::accessor_name(which) }),
         },
@@ -748,14 +758,20 @@ fn decode(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
-    let b = lower(bytes, p, m, vars)?;
-    let LlvmType::Struct(fields) = &b.ty else { return Err(NotYet { what: "`decode` auf einer Nicht-Sammlung" }) };
-    let tmp = m.alloca(&b.ty);
-    m.write(&b.ty, &b.value, &tmp.to_string());
+    let (tmp, bty) = match address_of(bytes, m, vars) {
+        Some(at) => at,
+        None => {
+            let b = lower(bytes, p, m, vars)?;
+            let t = m.alloca(&b.ty);
+            m.write(&b.ty, &b.value, &t.to_string());
+            (t, b.ty)
+        }
+    };
+    let LlvmType::Struct(_) = &bty else { return Err(NotYet { what: "`decode` auf einer Nicht-Sammlung" }) };
     // Die Laenge steht im Kopf der Sammlung (3.9), die Daten dahinter.
-    let len = m.inst(&format!("extractvalue {} {}, 0", b.ty, b.value));
-    let data = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", b.ty));
-    let _ = fields;
+    let len_ptr = m.inst(&format!("getelementptr inbounds {bty}, ptr {tmp}, i32 0, i32 0"));
+    let len = m.inst(&format!("load i32, ptr {len_ptr}"));
+    let data = m.inst(&format!("getelementptr inbounds {bty}, ptr {tmp}, i32 0, i32 1"));
     let label = m.next_label();
     crate::wire::decode(data, &len.to_string(), record, want, p, m, label)
 }
@@ -936,30 +952,151 @@ fn slice(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
-    let x = lower(base, p, m, vars)?;
+    let out = m.alloca(want);
+    slice_into(base, from, to, want, &out.to_string(), p, m, vars)?;
+    let v = m.inst(&format!("load {want}, ptr {out}"));
+    Ok(Lowered { value: v.to_string(), ty: want.clone() })
+}
+
+/// Ein Ausdruck, der sein Aggregat direkt an `dst` schreibt, wo er eine
+/// Form dafuer hat (FB-214). `false`: der Aufrufer nimmt den Wert.
+///
+/// `target` ist die Stelle hinter `dst`, wenn sie eine Variable oder ein
+/// Output ist: Was sie liest, darf nicht stueckweise hineinschreiben.
+pub(crate) fn lower_into(
+    e: &Expr,
+    dst: &str,
+    target: Option<&Place>,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<bool, NotYet> {
+    match &e.kind {
+        ExprKind::Call { callee, args } => call_into(*callee, args, dst, target, p, m, vars),
+        ExprKind::Slice { base, from, to } => {
+            let want = ty::lower(e.ty, p).ok_or(NotYet { what: "Teilbereich" })?;
+            slice_into(base, from, to, &want, dst, p, m, vars)?;
+            Ok(true)
+        }
+        // Ein Literal, das sein Ziel liest, bleibt ein Wert: Das zweite
+        // Element laese sonst das erste schon ueberschrieben.
+        ExprKind::Record { fields, .. } | ExprKind::Array(fields) => {
+            let want = ty::lower(e.ty, p).ok_or(NotYet { what: "Literal" })?;
+            if !want.indirect() || target.is_some_and(|t| reads(e, t)) {
+                return Ok(false);
+            }
+            literal_into(fields, &want, dst, p, m, vars)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Ein Literal an seine Stelle, Element fuer Element (FB-214).
+fn literal_into(
+    fields: &[Expr],
+    want: &LlvmType,
+    dst: &str,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<bool, NotYet> {
+    let n = match want {
+        LlvmType::Struct(types) => types.len(),
+        LlvmType::Array(_, len) => *len as usize,
+        _ => return Ok(false),
+    };
+    if n != fields.len() {
+        return Err(NotYet { what: "Literal mit anderer Elementzahl" });
+    }
+    for (i, f) in fields.iter().enumerate() {
+        let at = m.inst(&format!("getelementptr inbounds {want}, ptr {dst}, i32 0, i32 {i}"));
+        store(f, &at.to_string(), None, p, m, vars)?;
+    }
+    Ok(true)
+}
+
+/// Schreibt `e` an `dst`: unmittelbar, als Kopie von seiner Stelle oder
+/// als Wert — in dieser Reihenfolge (FB-214).
+pub(crate) fn store(
+    e: &Expr,
+    dst: &str,
+    target: Option<&Place>,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<(), NotYet> {
+    if lower_into(e, dst, target, p, m, vars)? {
+        return Ok(());
+    }
+    if let Some(want) = ty::lower(e.ty, p).filter(LlvmType::indirect)
+        && let Some((src, _)) = address_of(e, m, vars)
+    {
+        m.copy(&want, &src.to_string(), dst);
+        return Ok(());
+    }
+    let v = lower(e, p, m, vars)?;
+    m.write(&v.ty, &v.value, dst);
+    Ok(())
+}
+
+/// Die Wurzel einer Stelle: die Variable oder der Output darunter.
+pub(crate) fn root(place: &Place) -> &Place {
+    match place {
+        Place::Field(base, _) | Place::Index(base, _) | Place::Index2(base, _, _) => root(base),
+        _ => place,
+    }
+}
+
+/// Ob `e` die Wurzel von `target` liest, auch in Teilausdruecken.
+pub(crate) fn reads(e: &Expr, target: &Place) -> bool {
+    let hit = match (&e.kind, root(target)) {
+        (ExprKind::Var(v), Place::Var(w)) => v == w,
+        (ExprKind::Output(c), Place::Output(d)) => c == d,
+        _ => false,
+    };
+    hit || e.children().into_iter().any(|c| reads(c, target))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn slice_into(
+    base: &Expr,
+    from: &Expr,
+    to: &Expr,
+    want: &LlvmType,
+    out: &str,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<(), NotYet> {
+    // Die Quelle wird adressiert, wo sie eine Stelle ist; nur ein
+    // gerechneter Wert braucht einen Slot (FB-214).
+    let (src_ptr, xty) = match address_of(base, m, vars) {
+        Some(at) => at,
+        None => {
+            let x = lower(base, p, m, vars)?;
+            let t = m.alloca(&x.ty);
+            m.write(&x.ty, &x.value, &t.to_string());
+            (t, x.ty)
+        }
+    };
     let a = lower(from, p, m, vars)?;
     let b = lower(to, p, m, vars)?;
-    let src = crate::collection::layout_of(&x.ty).ok_or(NotYet { what: "Teilbereich einer Nicht-Sammlung" })?;
+    let src = crate::collection::layout_of(&xty).ok_or(NotYet { what: "Teilbereich einer Nicht-Sammlung" })?;
     let dst = crate::collection::layout_of(want).ok_or(NotYet { what: "Teilbereich ohne Zielsammlung" })?;
-    // Quelle und Ziel liegen als Werte vor; `memcpy` liest und schreibt
-    // Speicher (11.2: statischer Scratch).
-    let src_ptr = m.alloca(&x.ty);
-    m.write(&x.ty, &x.value, &src_ptr.to_string());
-    let out = m.alloca(want);
     let len = m.inst(&format!("sub {} {}, {}", a.ty, b.value, a.value));
     let len32 = m.inst(&format!("trunc {} {len} to i32", a.ty));
     let len_ptr = m.inst(&format!("getelementptr inbounds {want}, ptr {out}, i32 0, i32 0"));
     m.void_inst(&format!("store i32 {len32}, ptr {len_ptr}"));
-    let src_data = m.inst(&format!("getelementptr inbounds {}, ptr {src_ptr}, i32 0, i32 1", x.ty));
+    let src_data = m.inst(&format!("getelementptr inbounds {xty}, ptr {src_ptr}, i32 0, i32 1"));
     let at = m.inst(&format!(
         "getelementptr inbounds [{} x {}], ptr {src_data}, i32 0, {} {}",
         src.cap, src.elem, a.ty, a.value
     ));
     let dst_data = m.inst(&format!("getelementptr inbounds {want}, ptr {out}, i32 0, i32 1"));
-    let bytes = m.inst(&format!("mul {} {len}, {}", a.ty, dst.elem.size().max(1)));
-    m.void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst_data}, ptr {at}, i64 {bytes}, i1 false)"));
-    let v = m.inst(&format!("load {want}, ptr {out}"));
-    Ok(Lowered { value: v.to_string(), ty: want.clone() })
+    let bytes = m.inst(&format!("mul {} {len}, {}", a.ty, dst.elem.aligned_size().max(1)));
+    // `memmove`: `xs = xs[1..]` ueberlappt.
+    m.void_inst(&format!("call void @llvm.memmove.p0.p0.i64(ptr {dst_data}, ptr {at}, i64 {bytes}, i1 false)"));
+    Ok(())
 }
 
 /// `interp(t, x)` (3.9): stueckweise lineare Interpolation.
@@ -1132,15 +1269,22 @@ fn native_call(
     let mut ops = Vec::with_capacity(args.len() + 1);
     let mut sig = Vec::with_capacity(args.len() + 1);
     for a in args {
-        let v = lower(a, p, m, vars)?;
+        let vty = ty::lower(a.ty, p).ok_or(NotYet { what: "Argumenttyp" })?;
         match p.types.list.get(a.ty.index()) {
             // Ein Byteblock geht als Zeiger und Laenge; sein Wert waere eine
             // Kopie von bis zu mehreren KiB je Aufruf.
             Some(Type::Bytes { .. }) => {
-                let tmp = m.alloca(&v.ty);
-                m.write(&v.ty, &v.value, &tmp.to_string());
-                let len = m.inst(&format!("extractvalue {} {}, 0", v.ty, v.value));
-                let data = m.inst(&format!("getelementptr inbounds {}, ptr {tmp}, i32 0, i32 1", v.ty));
+                let tmp = m.alloca(&vty);
+                match address_of(a, m, vars) {
+                    Some((src, _)) => m.copy(&vty, &src.to_string(), &tmp.to_string()),
+                    None => {
+                        let v = lower(a, p, m, vars)?;
+                        m.write(&v.ty, &v.value, &tmp.to_string());
+                    }
+                }
+                let len_ptr = m.inst(&format!("getelementptr inbounds {vty}, ptr {tmp}, i32 0, i32 0"));
+                let len = m.inst(&format!("load i32, ptr {len_ptr}"));
+                let data = m.inst(&format!("getelementptr inbounds {vty}, ptr {tmp}, i32 0, i32 1"));
                 ops.push(format!("ptr {data}"));
                 ops.push(format!("i32 {len}"));
                 sig.push("ptr".to_string());
@@ -1149,6 +1293,7 @@ fn native_call(
             // Ein Record geht in kanonischer Byteform (5.9): die TCB kennt
             // kein Ziel-Layout.
             Some(Type::Record(_)) => {
+                let v = lower(a, p, m, vars)?;
                 let tmp = m.alloca(&v.ty);
                 m.write(&v.ty, &v.value, &tmp.to_string());
                 let buf = canonical_buffer(p, a.ty, m)?;
@@ -1160,6 +1305,7 @@ fn native_call(
                 sig.push("i32".to_string());
             }
             _ => {
+                let v = lower(a, p, m, vars)?;
                 ops.push(format!("{} {}", v.ty, v.value));
                 sig.push(v.ty.to_string());
             }
@@ -1353,51 +1499,87 @@ fn call(
 ) -> Result<Lowered, NotYet> {
     let f = p.fns.get(func.index()).ok_or(NotYet { what: "Funktion" })?;
     let sig = crate::fns::signature(f, p).ok_or(NotYet { what: "Signatur" })?;
-    // Bei `sret` steht der Platz fuer die Rueckgabe vorn; er wird vor den
-    // Argumenten angelegt, damit er im Eintrittsblock liegt.
-    let out = sig.sret.then(|| m.alloca(&sig.ret));
+    let out = sig.sret.then(|| m.alloca(&sig.ret).to_string());
+    let value = call_with(f, &sig, args, out.as_deref(), None, p, m, vars)?;
+    Ok(match (out, value) {
+        (Some(out), _) => Lowered { value: m.inst(&format!("load {want}, ptr {out}")).to_string(), ty: want.clone() },
+        (None, Some(r)) => Lowered { value: r.to_string(), ty: want.clone() },
+        (None, None) => Lowered { value: String::new(), ty: LlvmType::Void },
+    })
+}
+
+/// Ein Aufruf, dessen `sret`-Ergebnis direkt an `dst` geht (FB-214).
+/// `false`: kein `sret` — der Aufrufer nimmt den Wert ueber [`lower`].
+pub(crate) fn call_into(
+    func: takt_mir::FnId,
+    args: &[Expr],
+    dst: &str,
+    target: Option<&Place>,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<bool, NotYet> {
+    let f = p.fns.get(func.index()).ok_or(NotYet { what: "Funktion" })?;
+    let sig = crate::fns::signature(f, p).ok_or(NotYet { what: "Signatur" })?;
+    if !sig.sret {
+        return Ok(false);
+    }
+    call_with(f, &sig, args, Some(dst), target, p, m, vars)?;
+    Ok(true)
+}
+
+/// Der Aufruf selbst; `out` ist der `sret`-Platz. Liefert das Register des
+/// Ergebnisses, wenn die Funktion eines per Wert gibt.
+#[allow(clippy::too_many_arguments)]
+fn call_with(
+    f: &takt_mir::fns::Fn,
+    sig: &crate::fns::Signature,
+    args: &[Expr],
+    out: Option<&str>,
+    target: Option<&Place>,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Option<crate::emit::Reg>, NotYet> {
     let mut operands = Vec::with_capacity(args.len() + 1);
     if let Some(out) = out {
         operands.push(format!("ptr sret({}) {out}", sig.ret));
     }
     for a in args {
-        // Ein indirektes Argument geht als Zeiger auf eine Kopie: Der
-        // Gerufene darf sie aendern, ohne den Aufrufer zu beruehren. Steht
-        // das Argument an einer Stelle, wird von dort kopiert, statt es
-        // erst als Wert zu laden (FB-214).
+        // Ein grosses Argument geht als Zeiger auf seine Stelle; was der
+        // Gerufene aendert, kopiert er sich (`prologue`). Einen Slot
+        // brauchen nur ein gerechneter Wert und eine Stelle, die das Ziel
+        // des Aufrufs liest — `sret` schriebe sonst in seine Quelle.
         let ty = ty::lower(a.ty, p);
         if let Some(ty) = ty.filter(LlvmType::indirect) {
-            let tmp = m.alloca(&ty);
-            match address_of(a, m, vars) {
-                Some((src, _)) => m.copy(&ty, &src.to_string(), &tmp.to_string()),
+            let place = if target.is_some_and(|t| reads(a, t)) { None } else { address_of(a, m, vars) };
+            let at = match place {
+                Some((src, _)) => src,
                 None => {
-                    let v = lower(a, p, m, vars)?;
-                    m.write(&v.ty, &v.value, &tmp.to_string());
+                    let tmp = m.alloca(&ty);
+                    store(a, &tmp.to_string(), None, p, m, vars)?;
+                    tmp
                 }
-            }
-            operands.push(format!("ptr {tmp}"));
+            };
+            operands.push(format!("ptr {at}"));
         } else {
             let v = lower(a, p, m, vars)?;
             operands.push(format!("{} {}", v.ty, v.value));
         }
     }
     let name = crate::fns::symbol(f);
-    let result = if let Some(out) = out {
+    let ret = sig.llvm_ret();
+    let value = if ret == LlvmType::Void {
         m.void_inst(&format!("call void @{name}({})", operands.join(", ")));
-        let r = m.inst(&format!("load {want}, ptr {out}"));
-        Lowered { value: r.to_string(), ty: want.clone() }
-    } else if *want == LlvmType::Void {
-        m.void_inst(&format!("call void @{name}({})", operands.join(", ")));
-        Lowered { value: String::new(), ty: LlvmType::Void }
+        None
     } else {
-        let r = m.inst(&format!("call {want} @{name}({})", operands.join(", ")));
-        Lowered { value: r.to_string(), ty: want.clone() }
+        Some(m.inst(&format!("call {ret} @{name}({})", operands.join(", "))))
     };
     // 4.1: Eine reine Funktion faultet den Aufrufer. Sie setzt dafuer das
     // Flag; hier wird es geprueft, und der Aufrufer nimmt seinen eigenen
     // Fault-Pfad (`abi::Abi::FAULT_FLAG`).
     propagate_fault(m, vars)?;
-    Ok(result)
+    Ok(value)
 }
 
 /// Ein Record-Literal (3.7).
@@ -1415,20 +1597,24 @@ fn record(fields: &[Expr], want: &LlvmType, p: &Program, m: &mut Module, vars: &
     if n != fields.len() {
         return Err(NotYet { what: "Literal mit anderer Elementzahl" });
     }
+    let mut vals = Vec::with_capacity(n);
+    for f in fields {
+        vals.push(lower(f, p, m, vars)?);
+    }
+    // Lauter Konstanten sind eine Konstante: LLVM legt sie ab, statt sie
+    // Element fuer Element zu bauen.
+    if vals.iter().all(|v| !v.value.starts_with('%')) {
+        let items = vals.iter().map(|v| format!("{} {}", v.ty, v.value)).collect::<Vec<_>>().join(", ");
+        let value = if matches!(want, LlvmType::Array(..)) { format!("[{items}]") } else { format!("{{ {items} }}") };
+        return Ok(Lowered { value, ty: want.clone() });
+    }
     let mut cur = "undef".to_string();
-    for (i, f) in fields.iter().enumerate() {
-        let v = lower(f, p, m, vars)?;
+    for (i, v) in vals.iter().enumerate() {
         cur = m.inst(&format!("insertvalue {want} {cur}, {} {}, {i}", v.ty, v.value)).to_string();
     }
     Ok(Lowered { value: cur, ty: want.clone() })
 }
 
-/// Ein Feldzugriff auf einen Record (3.7).
-///
-/// `extractvalue` statt `getelementptr` plus `load`: Der Record liegt als
-/// Wert vor, nicht als Speicherort — die Sprache hat keine Referenzen
-/// (11.2), jede Zuweisung ist eine Kopie, und LLVM faltet die Extraktion
-/// aus einem geladenen Struct ohnehin zusammen.
 /// Die Adresse eines Ausdrucks, wo er eine Stelle bezeichnet (FB-214).
 ///
 /// Nur Variablen und Wege darin; alles andere ist ein gerechneter Wert
@@ -1447,6 +1633,7 @@ pub(crate) fn address_of(e: &Expr, m: &mut Module, vars: &dyn Vars) -> Option<(c
     }
 }
 
+/// Ein Feldzugriff auf einen Record (3.7).
 fn field_of(
     base: &Expr,
     field: u32,
@@ -1616,6 +1803,13 @@ fn psi_read(
 }
 
 /// Ist der Typ eine vorzeichenbehaftete Ganzzahl?
+fn elem_signed(ty: TypeId, p: &Program) -> bool {
+    match p.types.list.get(ty.index()) {
+        Some(Type::Array { elem, .. } | Type::Samples { elem, .. }) => int_is_signed_ty(*elem, p),
+        _ => true,
+    }
+}
+
 fn int_is_signed_ty(ty: TypeId, p: &Program) -> bool {
     match p.types.list.get(ty.index()) {
         Some(Type::Int { width, .. }) => ty::signed(*width),

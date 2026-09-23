@@ -191,6 +191,11 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
         Type::Bytes { cap } | Type::Str { cap } => {
             LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), *cap)])
         }
+        // Dieselbe Form wie `bytes<N>`, mit dem Elementtyp statt `i8`;
+        // `push`, `append` und der Index laufen ueber `collection::layout_of`.
+        Type::Vec { elem, cap } => {
+            LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(lower(*elem, p)?), *cap)])
+        }
         // `map<K, V, N>` (3.9): `N` Slots zu je `1 + K + V` Byte — die Form,
         // die `takt_native::map` sondiert und die `persist` kopiert (5.9).
         Type::Map { key, value, cap } => {

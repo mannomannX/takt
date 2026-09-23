@@ -1,0 +1,48 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Ein Record mit Auffuellung: `a` liegt bei 0, `b` bei 8, `c` bei 16 — die
+# Bytes 1..7 sind Fuellung. `size()` ohne Ausrichtung zaehlt 17, das Layout
+# hat 24. Eine Kopie ueber 17 Byte truncierte `c` auf ein Byte; der
+# Interpreter kennt das Problem nicht. Der Record geht per Zeiger durch
+# die Signatur (groesser als zwei Worte) und wird dabei kopiert.
+
+record Padded:
+    a : u8
+    b : i64
+    c : i64
+
+output hi   : int @ hw("o/hi")   with safe = 0
+output lo   : int @ hw("o/lo")   with safe = 0
+output last : int @ hw("o/last") with safe = 0
+
+fn pick(r: Padded) -> i64:
+    return r.c
+
+fn make(n: i64) -> Padded:
+    return Padded(a = 7, b = n, c = n * 4294967296 + 5)
+
+machine m:
+    var k : int in 0..99 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 100
+            var r = make(k as i64)
+            hi = pick(r) / 4294967296
+            lo = pick(r) % 4294967296
+
+            # `append` kopiert Elemente mal Elementgroesse; bei einem
+            # aufgefuellten Record ist die Elementgroesse der Schritt des
+            # Arrays, nicht die Summe der Felder.
+            var one : vec<Padded, 4> = default
+            var two : vec<Padded, 4> = default
+            var _p1 = one.push(r)
+            var _p2 = one.push(make(1))
+            var _ok = two.append(one)
+            last = two[1].c / 4294967296
+
+        after 1 s: -> RUN

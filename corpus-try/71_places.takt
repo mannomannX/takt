@@ -1,0 +1,80 @@
+# 71 — Stellen statt Werte (FB-214).
+#
+# Der Codegen liest grosse Aggregate an ihrer Stelle und schreibt sie
+# unmittelbar dorthin, wo sie hingehoeren: Argumente gehen als Zeiger,
+# Literale Element fuer Element, Reduktionen ueber lange Felder als
+# Schleife. Jede dieser Abkuerzungen hat einen Rand, an dem sie falsch
+# waere — das Literal, das sein Ziel liest; der Teilbereich, der sich
+# selbst ueberlappt; der Parameter, den der Rumpf aendert. Hier stehen
+# genau diese Raender, und der Interpreter sagt, was richtig ist.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+record Wide:
+    a : i64
+    b : i64
+    c : i64
+
+output lo    : int   @ sim("lo")
+output hi    : int   @ sim("hi")
+output avg   : float @ sim("avg")
+output quad  : float @ sim("quad")
+output big   : float @ sim("big")
+output swap  : int   @ sim("swap")
+output tail  : int   @ sim("tail")
+output table : int   @ sim("table")
+output kept  : int   @ sim("kept")
+output grown : int   @ sim("grown")
+
+# Liest den Parameter nur: Er bleibt an der Stelle des Aufrufers.
+fn total(w: Wide) -> i64:
+    return w.a + w.b + w.c
+
+# Aendert den Parameter: Der Rumpf bekommt eine Kopie.
+fn bump(w: Wide) -> Wide:
+    w.a = w.a + 100
+    return w
+
+machine m:
+    var bytes8 : [4] u8 = [200, 3, 250, 7]
+    var window : [12] float = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, -4.0]
+    var wide   : Wide = Wide(a = 1, b = 2, c = 3)
+    var buf    : bytes<64> = default
+    var consts : [10] int in 0..99 = [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+    var k      : int in 0..9 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 10
+            # `u8` vergleicht ohne Vorzeichen: 250 ist das Maximum, 3 das Minimum.
+            lo = bytes8.min() as int
+            hi = bytes8.max() as int
+            # Zwoelf Elemente: die Schleifenform, in derselben Reihenfolge.
+            avg = window.mean()
+            quad = window.rms()
+            big = window.max()
+            # Das Literal liest sein Ziel: erst der Wert, dann die Stelle.
+            wide = Wide(a = wide.b, b = wide.c, c = wide.a)
+            swap = wide.a * 100 + wide.b * 10 + wide.c
+            # Der Parameter bleibt beim Aufrufer; `bump` aendert nur seine Kopie.
+            var _t = total(wide)
+            wide = bump(wide)
+            kept = wide.a
+            # Ein Teilbereich der eigenen Stelle: Quelle und Ziel ueberlappen.
+            buf.clear()
+            var _p1 = buf.push(k as u8)
+            var _p2 = buf.push(10)
+            var _p3 = buf.push(20)
+            var _p4 = buf.push(30)
+            buf = buf[1..buf.len]
+            tail = buf[0] as int * 100 + buf.len
+            # Ein konstantes Feld und ein gerechnetes.
+            table = consts[k]
+            var grown_by : [3] int in 0..99 = [k, k + 1, k + 2]
+            grown = grown_by[2]
+
+        after 1 s: -> RUN

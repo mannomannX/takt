@@ -1,0 +1,30 @@
+(system
+  (language 1)
+  (tick 10ms))
+(record Padded
+  (a: u8)
+  (b: i64)
+  (c: i64))
+(output hi :int @hw("o/hi") safe=0)
+(output lo :int @hw("o/lo") safe=0)
+(output last :int @hw("o/last") safe=0)
+(fn pick (r:Padded) -> i64
+  (return (.c r)))
+(fn make (n:i64) -> Padded
+  (return (Padded a=7 b=n c=(+ (* n 4294967296) 5))))
+(machine m
+  (var k :int in 0..99 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (% (+ k 1) 100))
+      (var r (call make (as k i64)))
+      (= hi (/ (call pick r) 4294967296))
+      (= lo (% (call pick r) 4294967296))
+      (var one :vec<Padded, 4> default)
+      (var two :vec<Padded, 4> default)
+      (var _p1 (.push one r))
+      (var _p2 (.push one (call make 1)))
+      (var _ok (.append two one))
+      (= last (/ (.c (index two 1)) 4294967296)))
+    (after 1s -> RUN)))

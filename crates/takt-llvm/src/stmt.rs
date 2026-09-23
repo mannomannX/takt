@@ -499,9 +499,16 @@ fn send(
         // Byteform — so liegt es im Ring, und so liest es der Empfaenger
         // (plan/m6.md 2.2).
         _ => {
-            let v = lower_expr(value, ctx.program, m, &vars)?;
-            let src = m.alloca(&v.ty);
-            m.write(&v.ty, &v.value, &src.to_string());
+            let vty = ty::lower(value.ty, ctx.program).ok_or(NotYet { what: "Elementtyp" })?;
+            // Eine Stelle wird gelesen, wo sie liegt (FB-214).
+            let src = match crate::expr::address_of(value, m, &vars) {
+                Some((at, _)) => at,
+                None => {
+                    let slot = m.alloca(&vty);
+                    crate::expr::store(value, &slot.to_string(), None, ctx.program, m, &vars)?;
+                    slot
+                }
+            };
             let textual = matches!(
                 ctx.program.types.list.get(value.ty.index()),
                 Some(Type::Bytes { .. } | Type::Str { .. } | Type::Line { .. })
@@ -509,13 +516,16 @@ fn send(
             if textual {
                 // `line<N>` traegt hinter den Bytes noch `truncated`; das
                 // Praefix `{ len, bytes }` ist bei allen dreien gleich.
-                m.copy(&ty, &src.to_string(), &buffer.to_string());
+                // Kopiert wird der kleinere Typ: Wert und Puffer koennen
+                // verschieden gross sein.
+                let prefix = if vty.aligned_size() < ty.aligned_size() { &vty } else { &ty };
+                m.copy(prefix, &src.to_string(), &buffer.to_string());
             } else {
                 // Feste Slot-Form (plan/m6.md 2.2): die kanonische Form, mit
                 // Nullen auf `len_max` (= `max_size`) gefuellt — so liegt
                 // das Element im Ring, und so trennt es der Empfaenger, auch
                 // mit einem `bytes<N>`-Feld darin (FB-189).
-                m.void_inst(&format!("store {ty} zeroinitializer, ptr {buffer}"));
+                m.write(&ty, "zeroinitializer", &buffer.to_string());
                 let out = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 1"));
                 let _ = crate::persist::encode_canonical(ctx.program, value.ty, src, out, m)?;
                 let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 0"));
@@ -880,29 +890,42 @@ fn fn_for<V: Slots>(
 /// `x = e`: Wert berechnen, in den Speicherort schreiben.
 fn assign(target: &Place, value: &Expr, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let vars = ctx.vars();
-    // Stelle zu Stelle: `a = b` auf einem grossen Aggregat kopiert, statt
-    // den Wert erst zu laden (FB-214). Ein Port bleibt aussen vor — sein
-    // Zugriff ist `volatile`, und `memmove` traegt das nicht.
-    if !roots_in_port(target)
-        && let Some(want) = ty::lower(value.ty, ctx.program)
-        && want.indirect()
-        && let Some((src, _)) = crate::expr::address_of(value, m, &vars)
-    {
-        let (dst, _) = place(target, ctx, m)?;
-        m.copy(&want, &src.to_string(), &dst.to_string());
+    // 12.10: Ein Portzugriff ist `volatile` — sofort und in
+    // Programmreihenfolge, nicht umgeordnet oder zusammengefasst. `memset`,
+    // `memmove` und `sret` tragen das nicht, also bleibt es beim `store`.
+    if roots_in_port(target) {
+        let v = lower_expr(value, ctx.program, m, &vars)?;
+        let (ptr, _) = place(target, ctx, m)?;
+        m.void_inst(&format!("store volatile {} {}, ptr {ptr}", v.ty, v.value));
         return Ok(());
     }
-    let v = lower_expr(value, ctx.program, m, &vars)?;
-    let (ptr, _) = place(target, ctx, m)?;
-    // 12.10: Ein Portzugriff ist `volatile` — sofort und in
-    // Programmreihenfolge, nicht umgeordnet oder zusammengefasst. `memset`
-    // und `memmove` tragen das nicht, also bleibt es hier beim `store`.
-    if roots_in_port(target) {
-        m.void_inst(&format!("store volatile {} {}, ptr {ptr}", v.ty, v.value));
-    } else {
-        m.write(&v.ty, &v.value, &ptr.to_string());
+    // Ein Index im Ziel kann faulten; der Interpreter rechnet den Wert
+    // davor, und die Reihenfolge der Faults ist Spur (Satz 9.4.4).
+    if indexed(target) {
+        let want = ty::lower(value.ty, ctx.program).ok_or(NotYet { what: "Typ" })?;
+        if want.indirect() {
+            let tmp = m.alloca(&want);
+            crate::expr::store(value, &tmp.to_string(), None, ctx.program, m, &vars)?;
+            let (dst, _) = place(target, ctx, m)?;
+            m.copy(&want, &tmp.to_string(), &dst.to_string());
+        } else {
+            let v = lower_expr(value, ctx.program, m, &vars)?;
+            let (dst, _) = place(target, ctx, m)?;
+            m.write(&v.ty, &v.value, &dst.to_string());
+        }
+        return Ok(());
     }
-    Ok(())
+    let (dst, _) = place(target, ctx, m)?;
+    crate::expr::store(value, &dst.to_string(), Some(target), ctx.program, m, &vars)
+}
+
+/// Fuehrt die Stelle ueber einen Index? (3.9: er wird geprueft)
+fn indexed(p: &Place) -> bool {
+    match p {
+        Place::Index(..) | Place::Index2(..) => true,
+        Place::Field(b, _) => indexed(b),
+        Place::Var(_) | Place::Output(_) | Place::Port(_) => false,
+    }
 }
 
 /// Wurzelt die Stelle in einem Registerport? (12.10)
@@ -1253,21 +1276,35 @@ pub fn fn_block<V: Slots>(b: &Block, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> 
 fn fn_stmt<V: Slots>(s: &Stmt, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result<(), NotYet> {
     match &s.kind {
         StmtKind::Return(e) => {
-            let v = lower_expr(e, ctx.program, m, &ctx.vars)?;
             match ctx.sret {
                 Some(out) => {
-                    m.write(&v.ty, &v.value, &out.to_string());
+                    crate::expr::store(e, &out.to_string(), None, ctx.program, m, &ctx.vars)?;
                     m.void_inst("ret void");
                 }
-                None => m.void_inst(&format!("ret {} {}", v.ty, v.value)),
+                None => {
+                    let v = lower_expr(e, ctx.program, m, &ctx.vars)?;
+                    m.void_inst(&format!("ret {} {}", v.ty, v.value));
+                }
             }
             Ok(())
         }
         StmtKind::Assign { target, value } => {
-            let v = lower_expr(value, ctx.program, m, &ctx.vars)?;
+            if indexed(target) {
+                let want = ty::lower(value.ty, ctx.program).ok_or(NotYet { what: "Typ" })?;
+                if want.indirect() {
+                    let tmp = m.alloca(&want);
+                    crate::expr::store(value, &tmp.to_string(), None, ctx.program, m, &ctx.vars)?;
+                    let (ptr, _) = fn_place(target, ctx, m)?;
+                    m.copy(&want, &tmp.to_string(), &ptr.to_string());
+                } else {
+                    let v = lower_expr(value, ctx.program, m, &ctx.vars)?;
+                    let (ptr, _) = fn_place(target, ctx, m)?;
+                    m.write(&v.ty, &v.value, &ptr.to_string());
+                }
+                return Ok(());
+            }
             let (ptr, _) = fn_place(target, ctx, m)?;
-            m.write(&v.ty, &v.value, &ptr.to_string());
-            Ok(())
+            crate::expr::store(value, &ptr.to_string(), Some(target), ctx.program, m, &ctx.vars)
         }
         StmtKind::If { cond, then, otherwise } => {
             let c = lower_expr(cond, ctx.program, m, &ctx.vars)?;

@@ -18,6 +18,7 @@
 
 use takt_mir::fns::Fn as FnDef;
 use takt_mir::program::Program;
+use takt_mir::stmt::{Place, StmtKind};
 
 use crate::emit::{Module, Reg};
 use crate::expr::{Lowered, NotYet, Vars};
@@ -88,11 +89,18 @@ pub fn prologue(f: &FnDef, p: &Program, args: &[Reg], m: &mut Module) -> Result<
     let mut slots = Vec::with_capacity(f.locals.len());
     for (i, v) in f.locals.iter().enumerate() {
         let ty = ty::lower(v.ty, p).ok_or(NotYet { what: "Typ einer lokalen Variablen" })?;
+        // Ein grosser Parameter, den der Rumpf nicht schreibt, bleibt an
+        // der Stelle des Aufrufers: Die Wertsemantik (11.2) verlangt ein
+        // eigenes Exemplar nur fuer Aenderungen.
+        if let Some(arg) = args.get(i)
+            && ty.indirect()
+            && !assigned(f, i)
+        {
+            slots.push((*arg, ty));
+            continue;
+        }
         let ptr = m.alloca(&ty);
         if let Some(arg) = args.get(i) {
-            // Ein indirekter Parameter kommt als Zeiger; die Kopie hier
-            // gibt der Funktion ihr eigenes Exemplar, wie die Wertsemantik
-            // es verlangt (11.2: die Sprache hat keine Referenzen).
             if ty.indirect() {
                 m.copy(&ty, &arg.to_string(), &ptr.to_string());
             } else {
@@ -102,6 +110,20 @@ pub fn prologue(f: &FnDef, p: &Program, args: &[Reg], m: &mut Module) -> Result<
         slots.push((ptr, ty));
     }
     Ok(Locals { slots, exit: format!("fn_fault_{}", sanitized(&f.name)) })
+}
+
+/// Ob der Rumpf die lokale Variable `i` schreibt, auch in Teilen.
+fn assigned(f: &FnDef, i: usize) -> bool {
+    let mut hit = false;
+    f.body.walk(&mut |s| {
+        let places = match &s.kind {
+            StmtKind::Assign { target, .. } => vec![target],
+            StmtKind::MethodCall { target, receiver, .. } => target.iter().chain([receiver]).collect(),
+            _ => Vec::new(),
+        };
+        hit |= places.into_iter().any(|t| matches!(crate::expr::root(t), Place::Var(v) if v.index() == i));
+    });
+    hit
 }
 
 /// Die Signatur einer Funktion: Parametertypen und Rueckgabetyp.
@@ -139,13 +161,16 @@ impl Signature {
         Signature { declared, ret, sret }
     }
 
-    /// Die Parametertypen in der Form, die LLVM sieht.
-    pub fn params(&self) -> Vec<LlvmType> {
+    /// Die Parameter, wie Deklaration und Definition sie nennen.
+    ///
+    /// `readonly`: Der Rumpf schreibt nie durch einen Zeiger — was er
+    /// aendert, kopiert `prologue` in einen Slot.
+    pub fn params(&self) -> Vec<String> {
         let mut out = Vec::with_capacity(self.declared.len() + usize::from(self.sret));
         if self.sret {
-            out.push(LlvmType::Ptr);
+            out.push(format!("ptr sret({})", self.ret));
         }
-        out.extend(self.declared.iter().map(|t| if t.indirect() { LlvmType::Ptr } else { t.clone() }));
+        out.extend(self.declared.iter().map(|t| if t.indirect() { "ptr readonly".to_string() } else { t.to_string() }));
         out
     }
 
@@ -154,14 +179,9 @@ impl Signature {
         if self.sret { LlvmType::Void } else { self.ret.clone() }
     }
 
-    /// Die Deklaration, mit `sret` als Attribut.
+    /// Die Deklaration.
     pub fn declare(&self, name: &str) -> String {
-        let mut ps: Vec<String> = Vec::new();
-        if self.sret {
-            ps.push(format!("ptr sret({})", self.ret));
-        }
-        ps.extend(self.declared.iter().map(|t| if t.indirect() { "ptr".to_string() } else { t.to_string() }));
-        format!("declare {} @{name}({})", self.llvm_ret(), ps.join(", "))
+        format!("declare {} @{name}({})", self.llvm_ret(), self.params().join(", "))
     }
 }
 

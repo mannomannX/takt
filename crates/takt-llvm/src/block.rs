@@ -158,7 +158,7 @@ pub fn init_state(
             None => "zeroinitializer".to_string(),
         };
         let at = m.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {field}"));
-        m.void_inst(&format!("store {ty} {value}, ptr {at}"));
+        m.write(&ty, &value, &at.to_string());
     }
     let flag = m.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {}", inst.stepped()));
     m.void_inst(&format!("store i1 false, ptr {flag}"));
