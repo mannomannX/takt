@@ -64,6 +64,8 @@ pub struct Ctx<'a> {
     pub end: Option<String>,
     /// In einer `loop:`-Funktion: wahr im Entry-Tick, wo `->` nicht wirkt.
     pub entry_reg: Option<Reg>,
+    /// Blaetter, deren Fault-Trampolin am Ende des Schritts entsteht.
+    pub fault_leaves: Vec<takt_mir::StateId>,
 }
 
 impl<'a> Ctx<'a> {
@@ -83,6 +85,7 @@ impl<'a> Ctx<'a> {
             breaks: Vec::new(),
             end: None,
             entry_reg: None,
+            fault_leaves: Vec::new(),
         }
     }
 

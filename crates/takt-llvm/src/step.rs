@@ -147,6 +147,7 @@ fn write_step(
     let arms: Vec<String> =
         leaves.iter().enumerate().map(|(i, id)| format!("i8 {i}, label %fault_{}_{}", m.name, id.index())).collect();
     module.void_inst(&format!("switch i8 {cur}, label %{end} [ {} ]", arms.join(" ")));
+    fault_trampolines(st, &jump, &mut ctx, module)?;
 
     module.label(&end);
     // `t_in_state` zaehlt die Ticks im aktiven Zustand (5.2, 11.2). Ein
@@ -222,9 +223,11 @@ fn level(
         }
         m.void_inst(&format!("br label %{}", jump.end));
         // 5.2 Regel 5: Ein Fault fuehrt sofort zum Fault-Ziel des
-        // innersten Zustands, der eines deklariert (Fault-Wald, 5.3). Der
-        // Trampolin steht je Blatt, weil das Ziel am Blatt haengt.
-        return fault_path(ctx.state, leaf, jump, ctx, m);
+        // innersten Zustands, der eines deklariert (Fault-Wald, 5.3). Die
+        // Trampoline entstehen am Ende des Schritts, je Gruppe gleicher
+        // Ketten einer.
+        ctx.fault_leaves.push(leaf);
+        return Ok(());
     }
     // Die Kinder auf den Wegen zu den Blaettern hier, in Blattreihenfolge.
     let depth = node.map_or(0, |s| machine::path_to(machine, s).len());
@@ -463,10 +466,15 @@ fn leave_configuration(ctx: &Ctx<'_>, m: &mut Module, leaves: usize) {
 /// herstellt.
 /// 5.12: Was verlassen wird, merkt sich sein Blatt.
 fn save_paths(ctx: &mut Ctx<'_>, m: &mut Module, from: StateId, leaf: StateId) {
+    save_paths_of(ctx, m, from, leaf, &from.index().to_string());
+}
+
+/// Wie [`save_paths`], mit dem verlassenen Blatt als Operand.
+fn save_paths_of(ctx: &mut Ctx<'_>, m: &mut Module, from: StateId, leaf: StateId, from_val: &str) {
     for id in machine::exiting(ctx.machine, from, leaf) {
         let Some(slot) = ctx.machine.layout.saved_paths.iter().position(|s| *s == id) else { continue };
         let Some(ptr) = ctx.field(Role::Saved, slot, m) else { continue };
-        m.void_inst(&format!("store i32 {}, ptr {ptr}", from.index()));
+        m.void_inst(&format!("store i32 {from_val}, ptr {ptr}"));
     }
 }
 
@@ -1974,10 +1982,23 @@ fn fault_path(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
+    m.label(&format!("fault_{}_{}{}", ctx.machine.name, from.index(), ctx.tag));
+    fault_body(st, from, &from.index().to_string(), target, ctx, m)
+}
+
+/// Der Rumpf eines Fault-Trampolins; `from_val` ist das verlassene Blatt
+/// als Operand, `from` ein Vertreter mit denselben Ketten.
+fn fault_body(
+    st: &StateStruct,
+    from: takt_mir::StateId,
+    from_val: &str,
+    target: &Jump<'_>,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
     let machine_def = ctx.machine;
     let (leaves, end, conf_slot) = (target.leaves, target.end, target.conf);
-    m.label(&format!("fault_{}_{}{}", machine_def.name, from.index(), ctx.tag));
-    m.void_inst(&format!("call void @{}(i32 {}, i32 {})", crate::abi::Abi::FAULT, ctx.machine_index, from.index()));
+    m.void_inst(&format!("call void @{}(i32 {}, i32 {from_val})", crate::abi::Abi::FAULT, ctx.machine_index));
     // Der Fault wird vorgemerkt; `pending` traegt ihn fuer die
     // Abort-Phase (5.4), die die Runtime fuehrt.
     if let Some(pending) = st.index_of(Role::Pending, 0) {
@@ -2011,7 +2032,7 @@ fn fault_path(
     };
     // 5.2 Regel 3: `exit:` des verlassenen, `enter:` des betretenen
     // Zustands. Ein Fault-Uebergang laeuft sonst wie jeder andere.
-    save_paths(ctx, m, from, leaf);
+    save_paths_of(ctx, m, from, leaf, from_val);
     for id in machine::exiting(machine_def, from, leaf) {
         block(&machine_def.states[id.index()].exit.clone(), ctx, m)?;
     }
@@ -2030,6 +2051,59 @@ fn fault_path(
     // wirkungslos, wie in jedem Entry-Tick.
     entry_tick(ctx, m, from, leaf)?;
     m.void_inst(&format!("br label %{end}"));
+    Ok(())
+}
+
+/// Ziel, `FAULTED`, verlassene Zustaende mit `exit:` oder `saved`, betretene.
+type FaultKey = (Option<StateId>, bool, Vec<StateId>, Vec<StateId>);
+
+/// Die Fault-Trampoline des Schritts: Blaetter mit demselben Ziel und
+/// demselben erzeugten Code teilen einen, das verlassene Blatt geht als
+/// Wert hinein (5.3).
+fn fault_trampolines(st: &StateStruct, jump: &Jump<'_>, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let md = ctx.machine;
+    let name = md.name.clone();
+    let leaves = std::mem::take(&mut ctx.fault_leaves);
+    let key = |leaf: StateId| -> FaultKey {
+        match md.fault_target_of(leaf) {
+            takt_mir::machine::FaultTarget::State(to) => match machine::initial_leaf(md, to) {
+                Some(l) => {
+                    let exits = machine::exiting(md, leaf, l)
+                        .into_iter()
+                        .filter(|id| !md.states[id.index()].exit.stmts.is_empty() || md.layout.saved_paths.contains(id))
+                        .collect();
+                    (Some(l), false, exits, machine::entering(md, leaf, l))
+                }
+                None => (None, false, Vec::new(), Vec::new()),
+            },
+            _ => (None, true, Vec::new(), Vec::new()),
+        }
+    };
+    let mut groups: Vec<(FaultKey, Vec<StateId>)> = Vec::new();
+    for leaf in leaves {
+        let k = key(leaf);
+        match groups.iter_mut().find(|(g, _)| *g == k) {
+            Some((_, members)) => members.push(leaf),
+            None => groups.push((k, vec![leaf])),
+        }
+    }
+    for (g, (_, members)) in groups.iter().enumerate() {
+        let group = format!("fault_{name}_g{g}{}", ctx.tag);
+        for leaf in members {
+            m.label(&format!("fault_{name}_{}{}", leaf.index(), ctx.tag));
+            m.void_inst(&format!("br label %{group}"));
+        }
+        m.label(&group);
+        let arms: Vec<String> =
+            members.iter().map(|l| format!("[ {}, %fault_{name}_{}{} ]", l.index(), l.index(), ctx.tag)).collect();
+        let from_val = if members.len() == 1 {
+            members[0].index().to_string()
+        } else {
+            m.inst(&format!("phi i32 {}", arms.join(", "))).to_string()
+        };
+        ctx.leaf = Some(members[0]);
+        fault_body(st, members[0], &from_val, jump, ctx, m)?;
+    }
     Ok(())
 }
 
