@@ -118,9 +118,7 @@ impl<'a> Ctx<'a> {
     /// Das ist die einzige Stelle, an der ein Feldindex in Code wird —
     /// `StateStruct` ist die Quelle, und hier wird sie gelesen.
     pub fn field(&self, role: Role, nth: usize, m: &mut Module) -> Option<Reg> {
-        let i = self.state.index_of(role, nth)?;
-        let ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
-        Some(m.inst(&format!("getelementptr inbounds {ty}, ptr %0, i32 0, i32 {i}")))
+        self.state.field_ptr(&self.machine.name, role, nth, m)
     }
 
     /// Der Name des Fault-Trampolins des laufenden Blatts (5.3).
@@ -266,9 +264,7 @@ impl Vars for StateVars<'_> {
     fn address(&self, id: takt_mir::VarId, m: &mut Module) -> Option<(Reg, LlvmType)> {
         let def = self.machine.vars.get(id.index())?;
         let ty = ty::lower(def.ty, self.program)?;
-        let i = self.state.index_of(Role::Var, id.index())?;
-        let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
-        Some((m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}")), ty))
+        Some((self.state.field_ptr(&self.machine.name, Role::Var, id.index(), m)?, ty))
     }
 
     /// Der Wert eines Inputs; `%1` ist das Prozessabbild (11.2).

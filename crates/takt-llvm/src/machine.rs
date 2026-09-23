@@ -41,6 +41,8 @@ pub struct StateStruct {
     pub fields: Vec<Field>,
     /// Tiefe des Zustandsbaums; die Laenge von `conf` und `t_in_state`.
     pub depth: u32,
+    /// Je Variable ihr Versatz im Overlay (11.2) — `None` fuer ein eigenes Feld.
+    pub overlay: Vec<Option<u64>>,
 }
 
 /// Ein Feld des Zustands-Structs.
@@ -52,6 +54,8 @@ pub struct Field {
     pub ty: LlvmType,
     /// Wofuer es steht.
     pub role: Role,
+    /// Die Nummer innerhalb der Rolle; bei einer Variablen ihre `VarId`.
+    pub nth: usize,
 }
 
 /// Wofuer ein Feld steht (11.2).
@@ -87,6 +91,9 @@ pub enum Role {
     /// im Zustand des Besitzers, gehoert aber dem Trigger: Der liest mit
     /// Ereignisrate und unabhaengig davon, was die Maschine untersucht.
     TriggerCursor,
+    /// Der Speicher der zustandslokalen und gehobenen Variablen:
+    /// Geschwister teilen ihn (11.2, Overlay).
+    Overlay,
 }
 
 /// Die Tiefe des Zustandsbaums einer Maschine.
@@ -108,63 +115,103 @@ pub fn depth(m: &Machine) -> u32 {
 /// fehlt — der Versatz aller folgenden waere falsch, und niemand saehe es.
 pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     let d = depth(m);
+    let field = |name: String, ty: LlvmType, role: Role, nth: usize| Field { name, ty, role, nth };
     let mut fields = Vec::new();
     // 11.2: `conf: [u8; DEPTH]`. Ein `u8` je Ebene reicht, solange eine
     // Ebene nicht mehr als 256 Geschwister hat; darueber waere die
     // Maschine ohnehin nicht mehr lesbar (Prinzip: Struktur sichtbar).
-    fields.push(Field { name: "conf".into(), ty: LlvmType::Array(Box::new(LlvmType::Int(8)), d), role: Role::Conf });
+    fields.push(field("conf".into(), LlvmType::Array(Box::new(LlvmType::Int(8)), d), Role::Conf, 0));
     // 11.2, 5.2: `t_in_state` je Zustand — `after` an einem Vorfahren
     // misst dessen Eintritt, nicht den des Blatts (FB-208). Dahinter der
     // Zaehler des Blatts fuer `time_in_state`.
-    fields.push(Field {
-        name: "t_in_state".into(),
-        ty: LlvmType::Array(Box::new(LlvmType::Int(64)), timers(m) as u32),
-        role: Role::TimeInState,
-    });
+    let timers_ty = LlvmType::Array(Box::new(LlvmType::Int(64)), timers(m) as u32);
+    fields.push(field("t_in_state".into(), timers_ty, Role::TimeInState, 0));
+    // Eine Blockinstanz traegt ihren Zustand im Struct der Maschine
+    // (5.7); ihr Typ steht nicht im Typsystem, sondern in
+    // `Layout::block_instances`.
+    let mut tys = Vec::with_capacity(m.vars.len());
     for (i, v) in m.vars.iter().enumerate() {
-        // Eine Blockinstanz traegt ihren Zustand im Struct der Maschine
-        // (5.7); ihr Typ steht nicht im Typsystem, sondern in
-        // `Layout::block_instances`.
-        let ty = match instance_block(m, takt_mir::VarId(i as u32)) {
+        tys.push(match instance_block(m, takt_mir::VarId(i as u32)) {
             Some(b) => crate::block::instance_of(p.blocks.get(b.index())?, p)?.llvm(),
             None => ty::lower(v.ty, p)?,
-        };
-        fields.push(Field { name: format!("var{i}_{}", v.name), ty, role: Role::Var });
+        });
+    }
+    // 11.2: Zustandslokale und gehobene Variablen von Geschwistern teilen
+    // sich den Platz, rekursiv entlang des Baums — Bedarf eines Zustands
+    // sind seine Variablen plus das Maximum seiner Kinder.
+    let mut overlay = vec![None; m.vars.len()];
+    let region = place(m, &tys, &m.roots, 0, &mut overlay);
+    for (i, v) in m.vars.iter().enumerate() {
+        if overlay[i].is_none() {
+            fields.push(field(format!("var{i}_{}", v.name), tys[i].clone(), Role::Var, i));
+        }
+    }
+    if region > 0 {
+        let words = u32::try_from(region.div_ceil(8)).ok()?;
+        fields.push(field("overlay".into(), LlvmType::Array(Box::new(LlvmType::Int(64)), words), Role::Overlay, 0));
     }
     for (i, _) in m.layout.every_counters.iter().enumerate() {
-        fields.push(Field { name: format!("every_next{i}"), ty: LlvmType::Int(64), role: Role::EveryNext });
+        fields.push(field(format!("every_next{i}"), LlvmType::Int(64), Role::EveryNext, i));
     }
     for (i, _) in m.layout.viol_sites.iter().enumerate() {
-        fields.push(Field { name: format!("viol{i}"), ty: LlvmType::Int(32), role: Role::Viol });
+        fields.push(field(format!("viol{i}"), LlvmType::Int(32), Role::Viol, i));
     }
     for (i, _) in m.layout.cursors.iter().enumerate() {
-        fields.push(Field { name: format!("cur{i}"), ty: LlvmType::Int(64), role: Role::Cursor });
+        fields.push(field(format!("cur{i}"), LlvmType::Int(64), Role::Cursor, i));
     }
     for (i, _) in m.layout.cursors.iter().enumerate() {
-        fields.push(Field { name: format!("examined{i}"), ty: LlvmType::Int(64), role: Role::Examined });
+        fields.push(field(format!("examined{i}"), LlvmType::Int(64), Role::Examined, i));
     }
     for (i, _) in m.layout.trigger_flags.iter().enumerate() {
-        fields.push(Field { name: format!("armed{i}"), ty: LlvmType::Int(1), role: Role::Armed });
-        fields.push(Field { name: format!("trig_cur{i}"), ty: LlvmType::Int(64), role: Role::TriggerCursor });
+        fields.push(field(format!("armed{i}"), LlvmType::Int(1), Role::Armed, i));
+        fields.push(field(format!("trig_cur{i}"), LlvmType::Int(64), Role::TriggerCursor, i));
     }
     // `pending` ist ein Fault mit Gueltigkeitsflag; der Fault selbst ist
     // seine Art und sein Ursprung (5.3). Als Struct, damit 5.4 ihn im
     // selben Tick weiterreichen kann.
-    fields.push(Field {
-        name: "pending".into(),
-        ty: LlvmType::Struct(vec![LlvmType::Int(1), LlvmType::Int(32), LlvmType::Int(32)]),
-        role: Role::Pending,
-    });
-    fields.push(Field {
-        name: "last_fault".into(),
-        ty: LlvmType::Struct(vec![LlvmType::Int(1), LlvmType::Int(32), LlvmType::Int(32)]),
-        role: Role::LastFault,
-    });
-    fields.push(Field { name: "pc".into(), ty: LlvmType::Int(32), role: Role::Pc });
+    let fault = LlvmType::Struct(vec![LlvmType::Int(1), LlvmType::Int(32), LlvmType::Int(32)]);
+    fields.push(field("pending".into(), fault.clone(), Role::Pending, 0));
+    fields.push(field("last_fault".into(), fault, Role::LastFault, 0));
+    fields.push(field("pc".into(), LlvmType::Int(32), Role::Pc, 0));
     for (i, _) in m.layout.saved_paths.iter().enumerate() {
-        fields.push(Field { name: format!("saved{i}"), ty: LlvmType::Int(32), role: Role::Saved });
+        fields.push(field(format!("saved{i}"), LlvmType::Int(32), Role::Saved, i));
     }
-    Some(StateStruct { fields, depth: d })
+    // Hinter `conf` und `t_in_state` (11.2) absteigend nach Ausrichtung:
+    // kein Fuellbyte zwischen den Feldern.
+    fields[2..].sort_by_key(|f| std::cmp::Reverse(f.ty.align()));
+    Some(StateStruct { fields, depth: d, overlay })
+}
+
+/// Der Zustand, dessen Overlay eine Variable gehoert (11.2): zustandslokal
+/// oder gehoben, nicht veroeffentlicht, keine Blockinstanz.
+fn overlaid(m: &Machine, i: usize) -> Option<StateId> {
+    let v = m.vars.get(i)?;
+    if v.public || instance_block(m, takt_mir::VarId(i as u32)).is_some() {
+        return None;
+    }
+    match v.scope {
+        takt_mir::machine::VarScope::State(s) | takt_mir::machine::VarScope::Lifted(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// Legt die Variablen der Geschwister ab `base` an dieselbe Stelle, die
+/// Kinder dahinter; das Ergebnis ist das Ende des groessten Bedarfs.
+fn place(m: &Machine, tys: &[LlvmType], siblings: &[StateId], base: u64, overlay: &mut [Option<u64>]) -> u64 {
+    let mut end = base;
+    for id in siblings {
+        let mut at = base;
+        for (i, ty) in tys.iter().enumerate() {
+            if overlaid(m, i) != Some(*id) {
+                continue;
+            }
+            at = at.div_ceil(ty.align()) * ty.align();
+            overlay[i] = Some(at);
+            at += ty.aligned_size();
+        }
+        end = end.max(place(m, tys, &m.states[id.index()].children, at.div_ceil(8) * 8, overlay));
+    }
+    end
 }
 
 impl StateStruct {
@@ -175,12 +222,23 @@ impl StateStruct {
 
     /// Der Index eines Felds, fuer `getelementptr`.
     pub fn index_of(&self, role: Role, nth: usize) -> Option<u32> {
-        self.fields
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| f.role == role)
-            .nth(nth)
-            .map(|(i, _)| u32::try_from(i).unwrap_or(u32::MAX))
+        self.fields.iter().position(|f| f.role == role && f.nth == nth).and_then(|i| u32::try_from(i).ok())
+    }
+
+    /// Der Zeiger auf ein Feld des Zustands `%0`; eine ueberlagerte
+    /// Variable liegt im Overlay (11.2). Die einzige Stelle, an der ein
+    /// Feldindex in Code wird.
+    pub fn field_ptr(&self, machine: &str, role: Role, nth: usize, m: &mut Module) -> Option<crate::emit::Reg> {
+        let ty = format!("%{}_state", crate::fns::sanitized(machine));
+        if role == Role::Var
+            && let Some(off) = self.overlay.get(nth).copied().flatten()
+        {
+            let region = self.index_of(Role::Overlay, 0)?;
+            let base = m.inst(&format!("getelementptr inbounds {ty}, ptr %0, i32 0, i32 {region}"));
+            return Some(m.inst(&format!("getelementptr inbounds i8, ptr {base}, i64 {off}")));
+        }
+        let i = self.index_of(role, nth)?;
+        Some(m.inst(&format!("getelementptr inbounds {ty}, ptr %0, i32 0, i32 {i}")))
     }
 
     /// Der Byteversatz eines Felds, wie das Datenlayout es legt — fuer

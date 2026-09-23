@@ -113,7 +113,7 @@ pub fn prologue(f: &FnDef, p: &Program, args: &[Reg], m: &mut Module) -> Result<
 }
 
 /// Ob der Rumpf die lokale Variable `i` schreibt, auch in Teilen.
-fn assigned(f: &FnDef, i: usize) -> bool {
+pub(crate) fn assigned(f: &FnDef, i: usize) -> bool {
     let mut hit = false;
     f.body.walk(&mut |s| {
         let places = match &s.kind {

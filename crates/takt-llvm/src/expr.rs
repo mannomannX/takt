@@ -1545,14 +1545,18 @@ fn call_with(
     if let Some(out) = out {
         operands.push(format!("ptr sret({}) {out}", sig.ret));
     }
-    for a in args {
+    for (i, a) in args.iter().enumerate() {
         // Ein grosses Argument geht als Zeiger auf seine Stelle; was der
         // Gerufene aendert, kopiert er sich (`prologue`). Einen Slot
         // brauchen nur ein gerechneter Wert und eine Stelle, die das Ziel
-        // des Aufrufs liest — `sret` schriebe sonst in seine Quelle.
+        // des Aufrufs liest — `sret` schriebe sonst in seine Quelle. Das
+        // Ziel selbst geht ohne Slot, wenn der Gerufene es im Prolog
+        // kopiert: `sret` schreibt erst am Ende (`inout`, 3.9).
         let ty = ty::lower(a.ty, p);
         if let Some(ty) = ty.filter(LlvmType::indirect) {
-            let place = if target.is_some_and(|t| reads(a, t)) { None } else { address_of(a, m, vars) };
+            let is_target = target.is_some_and(|t| matches!((&a.kind, t), (ExprKind::Var(v), Place::Var(w)) if v == w));
+            let copied = is_target && crate::fns::assigned(f, i);
+            let place = if target.is_some_and(|t| reads(a, t)) && !copied { None } else { address_of(a, m, vars) };
             let at = match place {
                 Some((src, _)) => src,
                 None => {

@@ -117,14 +117,31 @@ fn every_machine_has_the_fields_the_reference_names() {
     }
 }
 
-/// Die Variablen der Maschine stehen im Struct.
+/// Die Variablen der Maschine stehen im Struct — als Feld oder im Overlay (11.2).
 #[test]
 fn the_variables_of_a_machine_are_fields_of_its_state() {
     let p = corpus("13_protocol_analysis.takt");
     for m in &p.machines {
         let Some(st) = state_struct(m, &p) else { continue };
         let vars = st.fields.iter().filter(|f| f.role == Role::Var).count();
-        assert_eq!(vars, m.vars.len(), "{}", m.name);
+        let overlaid = st.overlay.iter().flatten().count();
+        assert_eq!(vars + overlaid, m.vars.len(), "{}", m.name);
+    }
+}
+
+/// 11.2: Zustandslokale Variablen von Geschwistern teilen den Platz; die
+/// einer Maschine nicht.
+#[test]
+fn sibling_states_overlay_their_variables() {
+    let p = corpus("13_protocol_analysis.takt");
+    for m in &p.machines {
+        let Some(st) = state_struct(m, &p) else { continue };
+        for (i, v) in m.vars.iter().enumerate() {
+            let local =
+                matches!(v.scope, takt_mir::machine::VarScope::State(_) | takt_mir::machine::VarScope::Lifted(_))
+                    && !v.public;
+            assert_eq!(st.overlay[i].is_some(), local && st.index_of(Role::Var, i).is_none(), "{}.{}", m.name, v.name);
+        }
     }
 }
 
