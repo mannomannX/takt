@@ -31,7 +31,7 @@ fn baseline_path() -> PathBuf {
 fn program(name: &str) -> takt_mir::Program {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try").join(name);
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let o = takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Hw, profile: None };
+    let o = takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
     let out = takt_sema::compile(&src, &o);
     out.program.unwrap_or_else(|| panic!("{name}: uebersetzt nicht"))
 }
