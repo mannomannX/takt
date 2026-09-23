@@ -52,11 +52,27 @@ pub struct Entry {
     pub emitted: bool,
 }
 
+/// Der `loop:`-Block eines Zustands als Funktion: einmal je Zustand,
+/// gerufen vom Schritt, den Entry-Tick-Funktionen und Tick 0.
+#[derive(Clone, Debug)]
+pub struct LoopFn {
+    /// Die Maschine.
+    pub machine: String,
+    /// Der Zustand; `None` ist der maschinenweite `loop:`.
+    pub state: Option<u32>,
+    /// Das Symbol.
+    pub name: String,
+    /// Schon geschrieben?
+    pub emitted: bool,
+}
+
 /// Ein Modul im Aufbau.
 #[derive(Debug)]
 pub struct Module {
     /// Entry-Tick-Funktionen, die noch zu schreiben sind (5.2 Regel 4).
     pub entries: Vec<Entry>,
+    /// `loop:`-Funktionen, die noch zu schreiben sind.
+    pub loops: Vec<LoopFn>,
     /// Der Kopf: `target`, Datenlayout, Kommentare.
     head: String,
     /// Die Funktionen.
@@ -107,6 +123,7 @@ impl Module {
         let _ = writeln!(head, "target triple = \"{triple}\"");
         Module {
             entries: Vec::new(),
+            loops: Vec::new(),
             head,
             body: String::new(),
             next: 0,
@@ -282,6 +299,16 @@ impl Module {
             with_machine_loop,
             emitted: false,
         });
+        name
+    }
+
+    /// Die `loop:`-Funktion eines Zustands; entsteht beim ersten Bedarf.
+    pub fn loop_function(&mut self, machine: &str, state: Option<u32>) -> String {
+        if let Some(l) = self.loops.iter().find(|l| l.machine == machine && l.state == state) {
+            return l.name.clone();
+        }
+        let name = format!("{machine}_loop_{}", state.map_or("root".to_string(), |s| s.to_string()));
+        self.loops.push(LoopFn { machine: machine.to_string(), state, name: name.clone(), emitted: false });
         name
     }
 

@@ -12,9 +12,9 @@ use esp_hal::peripherals::USB_DEVICE;
 use esp_hal::usb::usb_serial_jtag::UsbSerialJtag;
 use takt_rt_baremetal::Port;
 
-/// Der Ring vor der Leitung: 8 KiB fangen einen Host ab, der 40 ms
+/// Der Ring vor der Leitung: 2 KiB fangen einen Host ab, der 20 ms
 /// lang nicht liest, bei 500 us Tick und einer Zeitzeile je Tick.
-const RING: usize = 8192;
+const RING: usize = 2048;
 
 /// Die Leitung.
 pub struct UsbJtag {

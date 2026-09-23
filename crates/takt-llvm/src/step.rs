@@ -195,7 +195,12 @@ fn level(
     // die Invariante aller Zustaende darunter. 8.7: Die Handler einer
     // Ebene laufen unmittelbar nach ihrem `loop:`, Vorfahren vor
     // Nachfahren, jede Ebene mit dem ganzen Fenster (FB-220).
-    block(&loop_block, ctx, m)?;
+    let leaf_operand = match ctx.leaf {
+        Some(leaf) => jump.leaves.iter().position(|l| *l == leaf).ok_or(NotYet { what: "Blatt" })?.to_string(),
+        None => ctx.leaf_reg.ok_or(NotYet { what: "Blattregister" })?.to_string(),
+    };
+    let _ = loop_block;
+    loop_call(ctx, m, node, &leaf_operand, false, jump.end)?;
     dispatch(&handlers, ctx, m)?;
     if let (Some(leaf), [only]) = (node, here)
         && leaf == *only
@@ -537,6 +542,10 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
     let leaves = machine::leaves(m);
     loop {
         let Some(e) = module.entries.iter().find(|e| e.machine == m.name && !e.emitted).cloned() else {
+            if module.loops.iter().any(|l| l.machine == m.name && !l.emitted) {
+                loop_functions(m, st, p, module)?;
+                continue;
+            }
             return Ok(());
         };
         let ptr = crate::ty::LlvmType::Ptr;
@@ -556,11 +565,12 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
         let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
         let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
         let end = format!("ende_{}", e.name);
+        let index = leaves.iter().position(|l| *l == leaf).ok_or(NotYet { what: "Blatt" })?.to_string();
         if e.with_machine_loop {
-            block(&m.loop_block.clone(), &mut ctx, module)?;
+            loop_call(&mut ctx, module, None, &index, true, &end)?;
         }
         for id in &e.entered {
-            block(&m.states[*id as usize].loop_block.clone(), &mut ctx, module)?;
+            loop_call(&mut ctx, module, Some(StateId(*id)), &index, true, &end)?;
         }
         module.void_inst(&format!("br label %{end}"));
         fault_path(st, leaf, &Jump { leaves: &leaves, end: &end, conf: &slot }, &mut ctx, module)?;
@@ -570,6 +580,84 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
             e.emitted = true;
         }
     }
+}
+
+/// Der Aufruf des `loop:`-Blocks eines Zustands (5.2): einmal je Zustand
+/// als Funktion. Der Rueckgabewert: 1 ein `->` hat den Schritt beendet,
+/// 2 ein Fault braucht den Trampolin, 3 `abort` verlaesst die Funktion.
+fn loop_call(
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+    state: Option<StateId>,
+    leaf: &str,
+    entry: bool,
+    end: &str,
+) -> Result<(), NotYet> {
+    let block = match state {
+        None => &ctx.machine.loop_block,
+        Some(s) => &ctx.machine.states[s.index()].loop_block,
+    };
+    if block.stmts.is_empty() {
+        return Ok(());
+    }
+    let name = m.loop_function(&ctx.machine.name, state.map(|s| s.0));
+    let r = m.inst(&format!("call i8 @{name}(ptr %0, ptr %1, ptr %2, ptr %3, i8 {leaf}, i1 {entry})"));
+    let k = ctx.next_label(m);
+    let (on, out) = (format!("weiter{k}_{}", ctx.machine.name), format!("abbruch{k}_{}", ctx.machine.name));
+    m.void_inst(&format!(
+        "switch i8 {r}, label %{on} [ i8 1, label %{end} i8 2, label %{} i8 3, label %{out} ]",
+        ctx.trampoline()
+    ));
+    m.label(&out);
+    m.void_inst("ret void");
+    m.label(&on);
+    Ok(())
+}
+
+/// Die Parameterattribute einer `loop:`-Funktion `(st, in, par, out, leaf, entry)`.
+const LOOP_ATTRS: &[&str] = &["noalias", "", "noalias", "noalias", "", ""];
+
+/// Schreibt die `loop:`-Funktionen einer Maschine, die Schritt und
+/// Entry-Ticks angefordert haben.
+fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    let leaves = machine::leaves(m);
+    while let Some(l) = module.loops.iter().find(|l| l.machine == m.name && !l.emitted).cloned() {
+        let ptr = crate::ty::LlvmType::Ptr;
+        let params =
+            [ptr.clone(), ptr.clone(), ptr.clone(), ptr, crate::ty::LlvmType::Int(8), crate::ty::LlvmType::Int(1)];
+        let args = module.begin_with("internal ", &l.name, &crate::ty::LlvmType::Int(8), &params, LOOP_ATTRS);
+        let state = l.state.map(StateId);
+        let mut ctx = Ctx::new(m, st, p);
+        ctx.leaf_reg = Some(args[4]);
+        ctx.entry_reg = Some(args[5]);
+        ctx.region = leaves
+            .iter()
+            .copied()
+            .filter(|leaf| state.is_none_or(|s| machine::path_to(m, *leaf).contains(&s)))
+            .collect();
+        ctx.tag = format!("_l{}", l.state.map_or("root".to_string(), |s| s.to_string()));
+        let end = format!("ende_{}", l.name);
+        ctx.end = Some(end.clone());
+        let block_ = match state {
+            None => m.loop_block.clone(),
+            Some(s) => m.states[s.index()].loop_block.clone(),
+        };
+        block(&block_, &mut ctx, module)?;
+        module.void_inst("ret i8 0");
+        module.label(&end);
+        module.void_inst("ret i8 1");
+        for leaf in &ctx.region {
+            module.label(&format!("fault_{}_{}{}", m.name, leaf.index(), ctx.tag));
+            module.void_inst("ret i8 2");
+        }
+        module.label(&format!("fault_{}_any{}", m.name, ctx.tag));
+        module.void_inst("ret i8 2");
+        module.end(None);
+        if let Some(l) = module.loops.iter_mut().find(|x| x.name == l.name) {
+            l.emitted = true;
+        }
+    }
+    Ok(())
 }
 
 fn enter_leaf(

@@ -62,6 +62,8 @@ pub struct Ctx<'a> {
     /// (11.2). `None` heisst: Der Block laeuft im Entry-Modus oder in
     /// einer Funktion, wo ein `->` nicht wirkt (5.2 Regel 4).
     pub end: Option<String>,
+    /// In einer `loop:`-Funktion: wahr im Entry-Tick, wo `->` nicht wirkt.
+    pub entry_reg: Option<Reg>,
 }
 
 impl<'a> Ctx<'a> {
@@ -80,6 +82,7 @@ impl<'a> Ctx<'a> {
             sites: 0,
             breaks: Vec::new(),
             end: None,
+            entry_reg: None,
         }
     }
 
@@ -394,7 +397,7 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
             // nicht —, also ruft er die Runtime und verlaesst den Schritt.
             let site = ctx.next_site();
             m.void_inst(&format!("call void @{}(i32 {}, i32 {site})", Abi::ABORT, ctx.machine_index));
-            m.void_inst("ret void");
+            m.void_inst(if ctx.entry_reg.is_some() { "ret i8 3" } else { "ret void" });
             Ok(())
         }
         StmtKind::ForRange { var, count, body } => for_range(*var, count, body, ctx, m),
@@ -416,9 +419,19 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         // Kettenende." Ohne bekanntes Ende laeuft der Block im
         // Entry-Modus, und dort ist ein `->` wirkungslos (5.2 Regel 4) —
         // genau das, was `exec` mit `Mode::Entry` tut.
-        StmtKind::Goto(target) => match ctx.end.clone() {
-            Some(end) => crate::step::goto(*target, ctx, m, &end),
-            None => Ok(()),
+        StmtKind::Goto(target) => match (ctx.end.clone(), ctx.entry_reg) {
+            (Some(end), Some(entry)) => {
+                let k = ctx.next_label(m);
+                let (go, stay) = (format!("gehe{k}_{}", ctx.machine.name), format!("bleibe{k}_{}", ctx.machine.name));
+                m.void_inst(&format!("br i1 {entry}, label %{stay}, label %{go}"));
+                m.label(&go);
+                crate::step::goto(*target, ctx, m, &end)?;
+                m.void_inst(&format!("br label %{stay}"));
+                m.label(&stay);
+                Ok(())
+            }
+            (Some(end), None) => crate::step::goto(*target, ctx, m, &end),
+            (None, _) => Ok(()),
         },
         StmtKind::Cancel(c) => {
             m.void_inst(&format!("call void @{}(i32 {})", Abi::CANCEL, c.0));

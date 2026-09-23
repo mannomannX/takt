@@ -344,8 +344,14 @@ fn the_loop_body_runs_before_the_transitions() {
     let p = corpus("01_minimal.takt");
     let ir = ir_of(&p);
     let watch = ir.find("tank_guard_WATCH:").expect("Zustand WATCH");
-    let check = ir[watch..].find("fcmp").expect("der check in WATCH");
+    // Der `loop:` steht als Funktion und wird vor den Uebergaengen gerufen.
+    let check = ir[watch..].find("call i8 @tank_guard_loop_").expect("der loop: von WATCH");
     let trans = ir[watch..].find("uebergang").expect("der Uebergang aus WATCH");
+    assert!(
+        ir.contains("fcmp"),
+        "der check in WATCH fehlt:
+{ir}"
+    );
     assert!(
         check < trans,
         "der Uebergang steht vor dem `check`:
