@@ -454,18 +454,24 @@ fn after_never_fires_in_the_entry_tick() {
 // --- Geschachtelte Zustaende (5.2) --------------------------------------
 
 /// 5.2: Aktiv ist ein *Pfad*, nicht ein Zustand. Der `loop:` einer
-/// Zwischenebene ist die Invariante aller Zustaende darunter und laeuft
-/// darum in jedem ihrer Blaetter.
+/// Zwischenebene ist die Invariante aller Zustaende darunter: Er steht
+/// einmal in der IR, und ein `switch` ueber die Blaetter fuehrt von ihm
+/// in jedes Blatt darunter (FB-222).
 #[test]
 fn an_ancestor_loop_runs_in_every_leaf_below_it() {
     let p = corpus("17_nested.takt");
     let ir = ir_of(&p);
     // Der `check p < 90 bar` steht einmal im Programm, unter `RUNNING`
-    // mit zwei Blaettern — also zweimal in der IR.
+    // mit zwei Blaettern — und genau einmal in der IR.
     let checks = ir.matches("fcmp olt").count();
     assert_eq!(
-        checks, 2,
-        "der `check` von RUNNING laeuft nicht in beiden Blaettern:
+        checks, 1,
+        "der `check` von RUNNING steht nicht genau einmal:
+{ir}"
+    );
+    assert!(
+        ir.contains("switch i8 ") && ir.matches("label %ebene").count() >= 2,
+        "die Verzweigung von RUNNING auf seine Blaetter fehlt:
 {ir}"
     );
 }

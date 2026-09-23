@@ -132,6 +132,12 @@ fn write_step(
     // steht einmal, und ein `switch` ueber die Blaetter fuehrt darunter
     // weiter. Vorher stand der Handler eines Vorfahren so oft im Objekt,
     // wie er Blaetter hatte (FB-222).
+    // Ausserhalb der Blaetter (FAULTED, 5.3) laeuft kein Nutzercode:
+    // Der Zustandsraum ist statisch, alles andere geht ans Ende.
+    let root = format!("baum_{}", m.name);
+    let live = module.inst(&format!("icmp ult i8 {cur}, {}", leaves.len()));
+    module.void_inst(&format!("br i1 {live}, label %{root}, label %{end}"));
+    module.label(&root);
     let jump = Jump { leaves, end: &end, conf: &slot };
     level(None, leaves, &jump, &mut ctx, module)?;
     // 5.3: Ein Fault auf einer geteilten Ebene nimmt den Trampolin des

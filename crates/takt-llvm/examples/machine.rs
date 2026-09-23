@@ -47,7 +47,7 @@ fn main() {
             continue;
         };
         declare_state(machine, &st, &mut m);
-        if let Err(e) = init_function(machine, &st, &p, &mut m) {
+        if let Err(e) = init_function(machine, &st, &p, &mut m, true) {
             eprintln!("; {}: init: {e:?}", machine.name);
         }
         if let Err(e) = step_function(machine, &st, &p, &mut m) {
