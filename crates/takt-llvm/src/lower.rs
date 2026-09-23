@@ -105,9 +105,9 @@ pub fn program_with(p: &Program, triple: &str, module_name: &str, instrument: cr
             continue;
         };
         crate::machine::declare_state(machine, &st, &mut m);
-        let _ = crate::step::init_function(machine, &st, p, &mut m);
         let vars = crate::step::init_vars_function(machine, &st, p, &mut m);
         let enter = crate::step::enter_function(machine, &st, p, &mut m);
+        let _ = crate::step::init_function(machine, &st, p, &mut m, vars.is_err() || enter.is_err());
         if !machine.persist.is_empty() {
             let snapshot = crate::persist::snapshot_function(machine, &st, p, &mut m);
             let restore = crate::persist::restore_function(machine, &st, p, &mut m);

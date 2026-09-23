@@ -43,7 +43,13 @@ pub struct Ctx<'a> {
     /// Runtime-Aufruf (`crate::abi`).
     pub machine_index: u32,
     /// Das Blatt, dessen Zweig gerade entsteht; sein Fault-Ziel gilt.
+    /// `None` auf einer geteilten Ebene des Schritts: Dort entscheidet
+    /// `leaf_reg` zur Laufzeit.
     pub leaf: Option<takt_mir::StateId>,
+    /// Das Register mit der Nummer des aktiven Blatts im Schritt.
+    pub leaf_reg: Option<Reg>,
+    /// Die Blaetter unter der Ebene, die gerade entsteht.
+    pub region: Vec<takt_mir::StateId>,
     /// Wie viele Meldungsstellen die Maschine schon hat.
     ///
     /// Der Index identifiziert die Stelle im Trace; die Reihenfolge ist
@@ -61,7 +67,19 @@ impl<'a> Ctx<'a> {
     /// Ein Kontext fuer eine Maschine.
     pub fn new(machine: &'a Machine, state: &'a StateStruct, program: &'a Program) -> Ctx<'a> {
         let machine_index = program.machines.iter().position(|m| m.name == machine.name).unwrap_or(0) as u32;
-        Ctx { machine, state, program, checks: 0, machine_index, leaf: None, sites: 0, breaks: Vec::new(), end: None }
+        Ctx {
+            machine,
+            state,
+            program,
+            checks: 0,
+            machine_index,
+            leaf: None,
+            leaf_reg: None,
+            region: Vec::new(),
+            sites: 0,
+            breaks: Vec::new(),
+            end: None,
+        }
     }
 
     /// Eine frische Nummer fuer eine Meldungsstelle (9.3).
@@ -87,6 +105,7 @@ impl<'a> Ctx<'a> {
         StateVars {
             machine: self.machine,
             leaf: self.leaf,
+            shared: self.leaf.is_none() && self.leaf_reg.is_some(),
             state: self.state,
             program: self.program,
             machine_index: self.machine_index,
@@ -108,7 +127,10 @@ impl<'a> Ctx<'a> {
     /// Je Blatt einer, weil das Fault-Ziel am innersten Zustand haengt,
     /// der eines deklariert (Fault-Wald).
     pub fn trampoline(&self) -> String {
-        format!("fault_{}_{}", self.machine.name, self.leaf.map_or(0, |s| s.index()))
+        match self.leaf {
+            Some(leaf) => format!("fault_{}_{}", self.machine.name, leaf.index()),
+            None => format!("fault_{}_any", self.machine.name),
+        }
     }
 }
 
@@ -122,6 +144,9 @@ pub struct StateVars<'a> {
     pub machine: &'a Machine,
     /// Das Blatt, dessen Zweig entsteht; sein Fault-Ziel gilt (5.3).
     pub leaf: Option<takt_mir::StateId>,
+    /// Eine geteilte Ebene des Schritts: Der Fault-Trampolin verzweigt
+    /// zur Laufzeit auf das Blatt.
+    pub shared: bool,
     /// Ihr Zustands-Struct.
     pub state: &'a StateStruct,
     /// Das Programm, fuer die Typen.
@@ -166,6 +191,9 @@ pub fn image_slot(
 
 impl Vars for StateVars<'_> {
     fn fault_label(&self) -> Option<String> {
+        if self.shared {
+            return Some(format!("fault_{}_any", self.machine.name));
+        }
         Some(format!("fault_{}_{}", self.machine.name, self.leaf?.index()))
     }
 

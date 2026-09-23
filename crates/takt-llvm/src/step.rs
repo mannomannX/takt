@@ -122,54 +122,24 @@ fn write_step(
     let cur = module.inst(&format!("load i8, ptr {slot}"));
 
     let end = format!("ende_{}", m.name);
-    let arms: Vec<String> =
-        leaves.iter().enumerate().map(|(i, id)| format!("i8 {i}, label %{}", machine::label_of(m, *id))).collect();
-    // Der Default-Zweig geht ans Ende: Eine Konfiguration ausserhalb der
-    // Blaetter kann nicht entstehen (der Zustandsraum ist statisch), und
-    // `unreachable` waere hier die schaerfere, aber unbelegte Aussage —
-    // 4.1 verlangt Totalitaet, nicht undefiniertes Verhalten.
-    module.void_inst(&format!("switch i8 {cur}, label %{end} [ {} ]", arms.join(" ")));
-
     let mut ctx = Ctx::new(m, st, p);
     // 11.2: Ein `->` im Block springt ans Kettenende. Nur hier gesetzt —
     // die Init-Funktion laeuft im Entry-Modus, und dort ist es
     // wirkungslos (5.2 Regel 4).
     ctx.end = Some(end.clone());
-    for (i, id) in leaves.iter().enumerate() {
-        module.label(&machine::label_of(m, *id));
-        ctx.leaf = Some(*id);
-        // 5.2: Aktiv ist ein *Pfad*, nicht ein Zustand. Die `loop:`-Bloecke
-        // laufen von der Maschine abwaerts bis zum Blatt — ein `check` auf
-        // einer Zwischenebene ist die Invariante *aller* Zustaende darunter,
-        // und wer nur das Blatt ausfuehrt, laesst sie fallen.
-        // 8.7: Die Handler einer Ebene laufen unmittelbar nach ihrem
-        // `loop:` (ein `check` dort ist die Invariante des Zustands),
-        // Vorfahren vor Nachfahren, und jede Ebene sieht das ganze
-        // Fenster — in einem gemeinsamen Durchlauf naehme der Vorfahr dem
-        // Nachfahren jedes Element weg (FB-220).
-        block(&m.loop_block.clone(), &mut ctx, module)?;
-        dispatch(&m.handlers.clone(), &mut ctx, module)?;
-        let pfad = machine::path_to(m, *id);
-        for anc in &pfad {
-            block(&m.states[anc.index()].loop_block.clone(), &mut ctx, module)?;
-            dispatch(&m.states[anc.index()].handlers.clone(), &mut ctx, module)?;
-        }
-        // Dann die Uebergaenge, vom Blatt aufwaerts: Der innerste Zustand
-        // entscheidet zuerst (5.2), und innerhalb einer Ebene gewinnt der
-        // erste passende in Quelltextreihenfolge.
-        for anc in pfad.iter().rev() {
-            let list = m.states[anc.index()].transitions.clone();
-            transitions(&list, i, leaves, &mut ctx, module, &end, &slot)?;
-        }
-        module.void_inst(&format!("br label %{end}"));
-        // 5.2 Regel 5: Ein Fault fuehrt sofort zum Fault-Ziel des
-        // innersten Zustands, der eines deklariert (Fault-Wald, 5.3). Das
-        // Ziel wird betreten und im Entry-Modus ausgefuehrt — damit
-        // stehen die Outputs am Commit des Ticks auf seinen Werten.
-        //
-        // Der Trampolin steht je Blatt, weil das Ziel am Blatt haengt.
-        fault_path(st, *id, &Jump { leaves, end: &end, conf: &slot }, &mut ctx, module)?;
-    }
+    ctx.leaf_reg = Some(cur);
+    // Der Schritt ist ein Baum, kein Zweig je Blatt: Der Code einer Ebene
+    // steht einmal, und ein `switch` ueber die Blaetter fuehrt darunter
+    // weiter. Vorher stand der Handler eines Vorfahren so oft im Objekt,
+    // wie er Blaetter hatte (FB-222).
+    let jump = Jump { leaves, end: &end, conf: &slot };
+    level(None, leaves, &jump, &mut ctx, module)?;
+    // 5.3: Ein Fault auf einer geteilten Ebene nimmt den Trampolin des
+    // Blatts, das gerade aktiv ist.
+    module.label(&format!("fault_{}_any", m.name));
+    let arms: Vec<String> =
+        leaves.iter().enumerate().map(|(i, id)| format!("i8 {i}, label %fault_{}_{}", m.name, id.index())).collect();
+    module.void_inst(&format!("switch i8 {cur}, label %{end} [ {} ]", arms.join(" ")));
 
     module.label(&end);
     // `t_in_state` zaehlt die Ticks im aktiven Zustand (5.2, 11.2). Ein
@@ -197,6 +167,85 @@ fn write_step(
         module.void_inst(&format!("store i64 {new}, ptr {cur_ptr}"));
     }
     module.end(None);
+    Ok(())
+}
+
+/// Eine Ebene des Zustandsbaums (5.2): ihr `loop:`, dann ihre Handler
+/// (8.7), dann die Ebenen darunter — je Blatt ein `switch`-Arm, der Code
+/// der Ebene selbst nur einmal. Ein Blatt endet in seinen Uebergaengen,
+/// vom Blatt aufwaerts, und seinem Fault-Trampolin.
+fn level(
+    node: Option<StateId>,
+    here: &[StateId],
+    jump: &Jump<'_>,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let machine = ctx.machine;
+    // Ueber mehreren Blaettern entscheidet das Blatt zur Laufzeit (`->`,
+    // Fault-Ziel); ueber einem einzigen ist es bekannt.
+    ctx.leaf = if let [leaf] = here { Some(*leaf) } else { None };
+    ctx.region = here.to_vec();
+    let (loop_block, handlers) = match node {
+        None => (machine.loop_block.clone(), machine.handlers.clone()),
+        Some(s) => (machine.states[s.index()].loop_block.clone(), machine.states[s.index()].handlers.clone()),
+    };
+    // 5.2: Aktiv ist ein *Pfad*; ein `check` auf einer Zwischenebene ist
+    // die Invariante aller Zustaende darunter. 8.7: Die Handler einer
+    // Ebene laufen unmittelbar nach ihrem `loop:`, Vorfahren vor
+    // Nachfahren, jede Ebene mit dem ganzen Fenster (FB-220).
+    block(&loop_block, ctx, m)?;
+    dispatch(&handlers, ctx, m)?;
+    if let (Some(leaf), [only]) = (node, here)
+        && leaf == *only
+    {
+        let i = jump.leaves.iter().position(|l| *l == leaf).ok_or(NotYet { what: "Blatt" })?;
+        // Die Uebergaenge vom Blatt aufwaerts: Der innerste Zustand
+        // entscheidet zuerst (5.2), und innerhalb einer Ebene gewinnt der
+        // erste passende in Quelltextreihenfolge.
+        for anc in machine::path_to(machine, leaf).iter().rev() {
+            let list = machine.states[anc.index()].transitions.clone();
+            transitions(&list, i, jump.leaves, ctx, m, jump.end, jump.conf)?;
+        }
+        m.void_inst(&format!("br label %{}", jump.end));
+        // 5.2 Regel 5: Ein Fault fuehrt sofort zum Fault-Ziel des
+        // innersten Zustands, der eines deklariert (Fault-Wald, 5.3). Der
+        // Trampolin steht je Blatt, weil das Ziel am Blatt haengt.
+        return fault_path(ctx.state, leaf, jump, ctx, m);
+    }
+    // Die Kinder auf den Wegen zu den Blaettern hier, in Blattreihenfolge.
+    let depth = node.map_or(0, |s| machine::path_to(machine, s).len());
+    let mut children: Vec<(StateId, Vec<StateId>)> = Vec::new();
+    for leaf in here {
+        let child = machine::path_to(machine, *leaf)[depth];
+        match children.iter_mut().find(|(c, _)| *c == child) {
+            Some((_, below)) => below.push(*leaf),
+            None => children.push((child, vec![*leaf])),
+        }
+    }
+    let labels: Vec<String> =
+        children.iter().map(|(c, _)| format!("ebene{}_{}", ctx.next_label(), machine::label_of(machine, *c))).collect();
+    if let [label] = labels.as_slice() {
+        m.void_inst(&format!("br label %{label}"));
+    } else {
+        let leaf_reg = ctx.leaf_reg.ok_or(NotYet { what: "Blattregister" })?;
+        let mut arms = Vec::new();
+        for ((_, below), label) in children.iter().zip(&labels) {
+            for leaf in below {
+                let i = jump.leaves.iter().position(|l| l == leaf).ok_or(NotYet { what: "Blatt" })?;
+                arms.push(format!("i8 {i}, label %{label}"));
+            }
+        }
+        // Der Default-Zweig geht ans Ende: Eine Konfiguration ausserhalb
+        // der Blaetter kann nicht entstehen (der Zustandsraum ist
+        // statisch), und `unreachable` waere die schaerfere, aber unbelegte
+        // Aussage — 4.1 verlangt Totalitaet, nicht undefiniertes Verhalten.
+        m.void_inst(&format!("switch i8 {leaf_reg}, label %{} [ {} ]", jump.end, arms.join(" ")));
+    }
+    for ((child, below), label) in children.into_iter().zip(labels) {
+        m.label(&label);
+        level(Some(child), &below, jump, ctx, m)?;
+    }
     Ok(())
 }
 
@@ -513,7 +562,27 @@ fn enter_leaf(
 /// bei `dispatch`: Der Entry-Zweig senkt den Block ohne Goto.
 pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYet> {
     let leaves = machine::leaves(ctx.machine);
-    let from = ctx.leaf.ok_or(NotYet { what: "`->` ausserhalb eines Blattzweigs" })?;
+    let Some(from) = ctx.leaf else {
+        // Eine geteilte Ebene: Welche Zustaende verlassen werden, weiss
+        // erst das Blatt — ein Arm je Blatt darunter.
+        let leaf_reg = ctx.leaf_reg.ok_or(NotYet { what: "`->` ausserhalb eines Blattzweigs" })?;
+        let region = ctx.region.clone();
+        let k = ctx.next_label();
+        let name = ctx.machine.name.clone();
+        let mut arms = Vec::new();
+        for leaf in &region {
+            let i = leaves.iter().position(|l| l == leaf).ok_or(NotYet { what: "Blatt" })?;
+            arms.push(format!("i8 {i}, label %von{k}_{name}_{}", leaf.index()));
+        }
+        m.void_inst(&format!("switch i8 {leaf_reg}, label %{end} [ {} ]", arms.join(" ")));
+        for leaf in region {
+            m.label(&format!("von{k}_{name}_{}", leaf.index()));
+            ctx.leaf = Some(leaf);
+            goto(target, ctx, m, end)?;
+        }
+        ctx.leaf = None;
+        return Ok(());
+    };
     let Some(from_index) = leaves.iter().position(|l| *l == from) else {
         return Err(NotYet { what: "`->` aus einem unbekannten Blatt" });
     };
@@ -832,8 +901,32 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
 /// sein `enter:` gehoert darum nicht in den Tickschritt, sondern in eine
 /// eigene Funktion, die die Runtime einmal ruft. Stuende es im Schritt,
 /// liefe es in jedem Tick.
-pub fn init_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
-    emit_init(m, st, p, module, "_init", true, true)
+///
+/// `_init` ist `_init_vars` und `_enter` nacheinander; ein eigener Rumpf
+/// stuende ein zweites Mal im Objekt. `whole` erzwingt ihn, wenn eine
+/// der beiden Funktionen fehlt.
+pub fn init_function(
+    m: &Machine,
+    st: &StateStruct,
+    p: &Program,
+    module: &mut Module,
+    whole: bool,
+) -> Result<(), NotYet> {
+    if whole {
+        return emit_init(m, st, p, module, "_init", true, true);
+    }
+    let ptr = crate::ty::LlvmType::Ptr;
+    let args = module.begin(
+        &format!("{}_init", m.name),
+        &crate::ty::LlvmType::Void,
+        &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
+    );
+    let list = args.iter().map(|a| format!("ptr {a}")).collect::<Vec<_>>().join(", ");
+    module.void_inst(&format!("call void @{}_init_vars({list})", m.name));
+    module.void_inst(&format!("call void @{}_enter({list})", m.name));
+    module.void_inst("ret void");
+    module.end(None);
+    Ok(())
 }
 
 /// `<maschine>_init_vars`: nur Anfangszustand und s0-Defaults (5.9).
