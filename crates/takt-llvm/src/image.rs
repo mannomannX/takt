@@ -61,6 +61,21 @@ pub enum Slot {
     Age = 3,
 }
 
+/// Der Versatz hinter den Typen `before`, ausgerichtet auf `align`.
+///
+/// Natuerliche Ausrichtung, wie LLVM sie annimmt: Ein `load double` an
+/// einem ungeraden Versatz zerlegt das Backend in Byte-Zugriffe (auf
+/// dem C6 die Haelfte des Programms, FB-223), und ein Struct-Zugriff
+/// und ein Byte-Versatz meinen so dieselbe Stelle.
+fn after(before: impl Iterator<Item = Option<LlvmType>>, align: u64) -> u64 {
+    let mut at = 0u64;
+    for t in before.flatten() {
+        at = at.div_ceil(t.align()) * t.align();
+        at += t.aligned_size();
+    }
+    at.div_ceil(align.max(1)) * align.max(1)
+}
+
 /// Das Prozessabbild ist ein Array von Eintraegen, eines je Channel; die
 /// Reihenfolge ist die der `ChannelId`, wie im Interpreter.
 ///
@@ -69,45 +84,42 @@ pub enum Slot {
 /// ist der Preis dafuer, dass die Werte nicht alle gleich gross sind — die
 /// Alternative waere ein Union in der Groesse des groessten Werts, und die
 /// waere fuer ein Abbild mit einem `bytes<256>` verschwenderisch.
+///
+/// Ein Strom hat keinen Eintrag im Abbild: Seine Elemente stehen im
+/// Puffer der Runtime (8.6). Sein Platz bleibt leer, damit der Index
+/// eines Channels seine `ChannelId` bleibt.
 pub fn offset_of(channel: ChannelId, p: &Program) -> Option<u64> {
-    let mut sum = 0;
-    for i in 0..channel.index() {
-        // Ein Strom hat keinen Eintrag im Abbild: Seine Elemente stehen
-        // im Puffer der Runtime (8.6). Sein Platz bleibt leer, damit der
-        // Index eines Channels seine `ChannelId` bleibt.
-        sum += entry_type(ChannelId(i as u32), p).map_or(0, |t| t.size());
-    }
-    Some(sum)
+    let align = entry_type(channel, p).map_or(1, |t| t.align());
+    Some(after((0..channel.index()).map(|i| entry_type(ChannelId(i as u32), p)), align))
+}
+
+/// Das Ende der Channel-Eintraege.
+pub fn entries_end(p: &Program) -> u64 {
+    after((0..p.channels.len()).map(|i| entry_type(ChannelId(i as u32), p)), 1)
 }
 
 /// Der Versatz eines Outputs im Latch (9.2, 11.2).
 ///
 /// Der Latch traegt je Output nur den Wert — die Qualitaet gehoert zur
-/// Eingabe (3.5). Die Versaetze werden wie beim Prozessabbild
-/// aufsummiert: Ein Index waere falsch, sobald zwei Outputs verschieden
-/// breit sind.
-///
-/// Gezaehlt wird ueber *alle* Channels, nicht nur die Outputs: Der Index
-/// eines Channels ist seine `ChannelId`, und eine zweite Nummerierung
-/// waere eine zweite Gelegenheit, sie verschieden zu vergeben.
+/// Eingabe (3.5). Gezaehlt wird ueber *alle* Channels, nicht nur die
+/// Outputs: Der Index eines Channels ist seine `ChannelId`, und eine
+/// zweite Nummerierung waere eine zweite Gelegenheit, sie verschieden zu
+/// vergeben. Ein Strom hat keinen Latch: Er wird gesendet, nicht gestellt
+/// (8.8).
 pub fn latch_offset(channel: ChannelId, p: &Program) -> Option<u64> {
-    let mut sum = 0;
-    for i in 0..channel.index() {
-        // Ein Strom hat keinen Latch: Er wird gesendet, nicht gestellt
-        // (8.8). Sein Platz im Vektor bleibt leer, damit der Index eines
-        // Channels seine `ChannelId` bleibt.
-        sum += crate::ty::lower(p.channels.get(i)?.ty, p).map_or(0, |t| t.size());
-    }
-    Some(sum)
+    let align = crate::ty::lower(p.channels.get(channel.index())?.ty, p).map_or(1, |t| t.align());
+    let before = (0..channel.index()).map(|i| p.channels.get(i).and_then(|c| crate::ty::lower(c.ty, p)));
+    Some(after(before, align))
 }
 
 /// Der Versatz eines Parameters im Parametervektor (8.4).
 pub fn param_offset(id: takt_mir::ParamId, p: &Program) -> Option<u64> {
-    let mut sum = 0;
+    let align = crate::ty::lower(p.params.get(id.index())?.ty, p)?.align();
+    let mut before = Vec::with_capacity(id.index());
     for i in 0..id.index() {
-        sum += crate::ty::lower(p.params.get(i)?.ty, p)?.size();
+        before.push(Some(crate::ty::lower(p.params.get(i)?.ty, p)?));
     }
-    Some(sum)
+    Some(after(before.into_iter(), align))
 }
 
 /// Der Versatz eines Commands im Prozessabbild (8.5).
@@ -116,11 +128,12 @@ pub fn param_offset(id: takt_mir::ParamId, p: &Program) -> Option<u64> {
 /// dem letzten Channel-Eintrag. Ein Command ist ein Puls und traegt nur
 /// ein Byte — es hat keine Qualitaet, weil es keine Lieferung ist.
 pub fn command_offset(id: takt_mir::CommandId, p: &Program) -> Option<u64> {
-    let mut sum = 0;
-    for i in 0..p.channels.len() {
-        sum += entry_type(ChannelId(i as u32), p).map_or(0, |t| t.size());
-    }
-    Some(sum + id.index() as u64)
+    Some(entries_end(p) + id.index() as u64)
+}
+
+/// Das Ende der Commands: hier beginnen die Ψ-Baenke.
+pub fn commands_end(p: &Program) -> u64 {
+    entries_end(p) + p.commands.len() as u64
 }
 
 /// Die Groesse eines Job-Slots im Abbild (4.5): `done: i8`, `ok: i8`, zwei

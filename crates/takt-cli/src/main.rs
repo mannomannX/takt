@@ -658,7 +658,7 @@ fn emit_object(ir: &str, target: takt_llvm::Target, out: &str) -> bool {
 
     let mut cmd = std::process::Command::new(&clang);
     let cmd = takt_llvm::toolchain::Clang::deterministic(&mut cmd)
-        .args(["-Wno-override-module", takt_llvm::toolchain::opt_level_for(&target.triple), "-c"])
+        .args(["-Wno-override-module", takt_llvm::toolchain::opt_level_for(target.triple), "-c"])
         // Je Funktion eine Sektion: Der Linker laesst fallen, was kein
         // Rahmen ruft.
         .args(["-ffunction-sections", "-fdata-sections"])

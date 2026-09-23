@@ -13,7 +13,7 @@
 
 use takt_mir::machine::Machine;
 use takt_mir::program::Program;
-use takt_mir::{ChannelId, MachineId, SignalId, VarId};
+use takt_mir::{MachineId, SignalId, VarId};
 
 use crate::emit::Module;
 use crate::expr::{Lowered, NotYet};
@@ -74,9 +74,7 @@ pub fn region_size(machine: MachineId, p: &Program) -> u64 {
 
 /// Anfang der ersten Bank: hinter den Commands, 8-ausgerichtet.
 fn bank_base(p: &Program) -> u64 {
-    let channels: u64 =
-        (0..p.channels.len()).map(|i| crate::image::entry_type(ChannelId(i as u32), p).map_or(0, |t| t.size())).sum();
-    round8(channels + p.commands.len() as u64)
+    round8(crate::image::commands_end(p))
 }
 
 /// Groesse einer Bank.

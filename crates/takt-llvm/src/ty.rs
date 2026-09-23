@@ -111,6 +111,21 @@ impl LlvmType {
         }
     }
 
+    /// Versatz des `i`-ten Feldes eines Structs bei natuerlicher
+    /// Ausrichtung — dieselbe Stelle, die `getelementptr` meint.
+    pub fn field_offset(&self, i: usize) -> u64 {
+        let LlvmType::Struct(fields) = self else { return 0 };
+        let mut at = 0u64;
+        for (k, f) in fields.iter().enumerate() {
+            at = at.div_ceil(f.align()) * f.align();
+            if k == i {
+                return at;
+            }
+            at += f.aligned_size();
+        }
+        at
+    }
+
     /// Groesse mit Ausrichtung: was `alloca` und der Zustands-Struct im
     /// Speicher belegen — die Zahl, mit der ein Rahmen den Platz reserviert.
     pub fn aligned_size(&self) -> u64 {

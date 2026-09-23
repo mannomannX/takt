@@ -74,7 +74,7 @@ pub fn of(p: &Program) -> Layout {
                     name: c.name.clone(),
                     address: hw_address(c),
                 });
-                out.image = out.image.max(offset + entry.size());
+                out.image = out.image.max(offset + entry.aligned_size());
             }
         } else if let Some(offset) = image::latch_offset(id, p) {
             out.outputs.push(Slot {
@@ -85,7 +85,7 @@ pub fn of(p: &Program) -> Layout {
                 name: c.name.clone(),
                 address: hw_address(c),
             });
-            out.latch = out.latch.max(offset + value_ty.size());
+            out.latch = out.latch.max(offset + value_ty.aligned_size());
         }
     }
     for (i, cmd) in p.commands.iter().enumerate() {
@@ -112,7 +112,7 @@ pub fn of(p: &Program) -> Layout {
                 name: param.name.clone(),
                 address: None,
             });
-            out.params = out.params.max(offset + t.size());
+            out.params = out.params.max(offset + t.aligned_size());
         }
     }
     // Hinter Channels und Commands liegen die zwei Ψ-Baenke (9.4, 7.2).

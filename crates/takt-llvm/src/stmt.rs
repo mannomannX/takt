@@ -180,12 +180,10 @@ pub fn image_slot(
     let LlvmType::Struct(fields) = &entry else { return None };
     let ty = fields.get(slot as usize)?.clone();
     let off = crate::image::offset_of(channel, program)?;
-    // Byteweise adressiert und ohne Ausrichtung, wie `image` die
-    // Eintraege zaehlt: Runtime und Rahmen rechnen denselben Versatz, ein
-    // Struct-Zugriff laege mit seinem Padding daneben (FB-177).
-    let inner: u64 = fields.iter().take(slot as usize).map(LlvmType::size).sum();
-    let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {}", off + inner));
-    let v = m.inst(&format!("load {ty}, ptr {at}, align 1"));
+    // Byteweise adressiert, aber natuerlich ausgerichtet — `image` legt
+    // die Eintraege so, und der Rahmen rechnet denselben Versatz.
+    let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {}", off + entry.field_offset(slot as usize)));
+    let v = m.inst(&format!("load {ty}, ptr {at}"));
     Some(Lowered { value: v.to_string(), ty })
 }
 
