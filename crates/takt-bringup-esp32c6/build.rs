@@ -199,7 +199,7 @@ fn assert_fresh(takt: &Path) {
     let Ok(built) = fs::metadata(takt).and_then(|m| m.modified()) else { return };
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
-    for krate in ["takt-syntax", "takt-diag", "takt-mir", "takt-sema", "takt-interp", "takt-llvm", "takt-conformance", "takt-cli"] {
+    for krate in ["takt-syntax", "takt-diag", "takt-mir", "takt-sema", "takt-interp", "takt-llvm", "takt-cli"] {
         walk(&root.join("crates").join(krate).join("src"), &mut newest);
     }
     if let Some((t, file)) = newest

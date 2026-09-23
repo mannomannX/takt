@@ -17,6 +17,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     // haelt; der Treiber richtet sie nur ein, ohne sie zurueckzusetzen.
     let mut uart = Telemetry::new(unsafe { USB_DEVICE::steal() });
     let _ = write!(uart, "\r\ntakt panic: {info}\r\n");
+    uart.flush();
     loop {
         crate::wfi();
     }

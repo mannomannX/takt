@@ -35,7 +35,7 @@ unsafe extern "C" {
     fn takt_mcu_tick(k: i64);
 
     /// Die Ausgaenge als Trace-Zeilen (`grammar/trace.md`).
-    fn takt_mcu_dump();
+    fn takt_mcu_dump(all: i32);
 
     /// Ein Ausgang aus dem Latch, nach Stellung in der Speicherform.
     fn takt_mcu_output(index: i32) -> i64;
@@ -95,8 +95,8 @@ impl Generated {
     /// ausgibt, nie zum Rechnen. Wer vergleichen will, ruft das hier in
     /// dem Takt, den die Leitung traegt — 12.8 nennt `states` als
     /// Instrumentierungs-Default fuer `baremetal`, nicht `statements`.
-    pub fn dump(&self) {
-        unsafe { takt_mcu_dump() };
+    pub fn dump(&self, all: bool) {
+        unsafe { takt_mcu_dump(i32::from(all)) };
     }
 
     /// Gibt den Latch an die Treiber (12.1, Schritt 10).
@@ -150,7 +150,7 @@ impl Program for Generated {
         // Zwei Quellen fuer dieselbe Zeit waeren eine zu viel.
         unsafe { takt_mcu_tick(k as i64) };
         if self.trace {
-            self.dump();
+            self.dump(true);
         }
     }
 }

@@ -58,41 +58,38 @@ fn outputs(text: &str) -> BTreeMap<(u64, String), String> {
 
 /// Vergleicht zwei Traces.
 ///
-/// Verglichen werden nur Outputs, die *beide* Seiten melden. Der
-/// Interpreter schreibt eine Zeile nur bei Aenderung (9.3), der
-/// Testrahmen in jedem Tick — ein Output, den nur eine Seite nennt, ist
-/// darum kein Unterschied, sondern eine andere Schreibweise.
+/// Beide Seiten duerfen eine Zeile nur bei Aenderung schreiben (9.3); der
+/// letzte Wert gilt fort. Verglichen wird an jedem Tick, an dem eine Seite
+/// schreibt, jeder Output, den beide schon gemeldet haben.
 pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
     let a = outputs(interpreter);
     let b = outputs(native);
-    let mut out = Vec::new();
-    // Der Interpreter schreibt nur Aenderungen; sein letzter Wert gilt
-    // fort, bis ein neuer kommt (9.3).
-    let mut zuletzt: BTreeMap<String, String> = BTreeMap::new();
-    let mut ticks: Vec<u64> = b.keys().map(|(t, _)| *t).collect();
+    let mut ticks: Vec<u64> = a.keys().chain(b.keys()).map(|(t, _)| *t).collect();
+    ticks.sort_unstable();
     ticks.dedup();
+    let (mut want, mut have) = (BTreeMap::new(), BTreeMap::new());
+    let mut out = Vec::new();
     for tick in ticks {
-        for ((t, name), value) in &a {
-            if *t == tick {
-                zuletzt.insert(name.clone(), value.clone());
-            }
-        }
-        for ((t, name), native_value) in &b {
-            if *t != tick {
-                continue;
-            }
-            let Some(want) = zuletzt.get(name) else { continue };
-            if !same_number(want, native_value) {
+        want.extend(at(&a, tick));
+        have.extend(at(&b, tick));
+        for (name, w) in &want {
+            let Some(h) = have.get(name) else { continue };
+            if !same_number(w, h) {
                 out.push(Difference {
                     tick,
-                    output: name.clone(),
-                    interpreter: want.clone(),
-                    native: native_value.clone(),
+                    output: name.to_string(),
+                    interpreter: w.to_string(),
+                    native: h.to_string(),
                 });
             }
         }
     }
     out
+}
+
+/// Die Outputs eines Ticks.
+fn at(m: &BTreeMap<(u64, String), String>, tick: u64) -> impl Iterator<Item = (&str, &str)> {
+    m.range((tick, String::new())..(tick.saturating_add(1), String::new())).map(|((_, n), v)| (n.as_str(), v.as_str()))
 }
 
 /// Sind zwei Ausgaben derselbe Wert?

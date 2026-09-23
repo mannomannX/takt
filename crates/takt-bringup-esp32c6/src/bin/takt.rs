@@ -95,7 +95,7 @@ pub extern "C" fn takt_board_trace_f64(value: f64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn takt_board_trace_hex8(value: u8) {
     let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
-    let _ = write!(uart, "0x{value:02x}");
+    uart.write_hex8(value);
 }
 
 /// Der Output `ui_led` des Programms auf der RGB-LED.
@@ -134,7 +134,8 @@ impl Watchdog for NoWatchdog {
 }
 
 /// Die Schleife meldet je Tick; im Konformitaetslauf geht jede Zeit als
-/// Metazeile mit (grammar/trace.md, `time`).
+/// Metazeile mit (grammar/trace.md, `time`) — ohne `core::fmt`, das je
+/// Tick zu teuer ist.
 #[derive(Default)]
 struct Summary {
     slept: u64,
@@ -147,7 +148,14 @@ impl Sink for Summary {
         self.slept += tick.slept;
         self.overruns += u64::from(tick.overrun);
         if let (true, Some(u)) = (self.trace, uart()) {
-            let _ = tick.write_time(u);
+            u.write("t=");
+            u.write_u64(tick.k);
+            u.write(" time took=");
+            u.write_i64(tick.took);
+            u.write(" drift=");
+            u.write_i64(tick.drift);
+            u.write(" slept=");
+            u.write_u64(tick.slept);
             u.write("\r\n");
         }
     }
@@ -185,22 +193,28 @@ fn main() -> ! {
     let trace_every = if limit > 0 { 1 } else { TRACE_EVERY };
 
     // 5.9: s0 kommt aus dem Journal, darum laden vor dem ersten Eintritt.
-    let mut nvm = FlashNvm::new(peripherals.FLASH, JOURNAL_AT).with_blocking_ns(NVM_BLOCKING_NS);
-    if FRESH_JOURNAL && !nvm.wipe() {
-        report("journal: loeschen scheiterte");
-    }
+    // Ohne `persist` im Programm gibt es kein Journal und keinen Flash-Zugriff.
     let (mut current, mut stored) = ([0u8; PERSIST_BOUND], [0u8; PERSIST_BOUND]);
-    let mut persist = Persist::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), &mut current, &mut stored);
+    let mut persist = None;
+    if PERSIST_BOUND > 0 {
+        let mut nvm = FlashNvm::new(peripherals.FLASH, JOURNAL_AT).with_blocking_ns(NVM_BLOCKING_NS);
+        if FRESH_JOURNAL && !nvm.wipe() {
+            report("journal: loeschen scheiterte");
+        }
+        persist = Some(Persist::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), &mut current, &mut stored));
+    }
     let mut program = Generated::new(false);
-    let (loaded, applied) = persist.load(&mut program);
+    let loaded = persist.as_mut().map(|p| p.load(&mut program));
     program.ensure_init();
     if let Some(u) = uart() {
         match loaded {
-            Loaded::Found { length, sequence } => {
+            Some((Loaded::Found { length, sequence }, applied)) => {
                 let _ = write!(u, "journal: Eintrag {sequence}, {length} Byte, {applied} Werte geladen\r\n");
             }
-            Loaded::Empty => u.write("journal: leer\r\n"),
+            Some((Loaded::Empty, _)) => u.write("journal: leer\r\n"),
+            None => u.write("journal: keins\r\n"),
         }
+        u.flush();
     }
 
     let clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS);
@@ -208,44 +222,52 @@ fn main() -> ! {
     let sink = Summary { trace: limit > 0, ..Summary::default() };
     let mut rt = Runtime::new(program, clock, NoWatchdog, sink, Profile::BAREMETAL, TICK_NS, policy);
     if limit > 0 {
-        rt.program.dump();
+        rt.program.dump(true);
     }
     let mut next_trace = trace_every;
     loop {
-        rt.step_persisting(&mut persist);
+        match persist.as_mut() {
+            Some(p) => rt.step_persisting(p),
+            None => rt.step(),
+        };
         rt.program.commit();
         let k = rt.tick_number();
         if k >= next_trace {
             next_trace = k + trace_every;
-            rt.program.dump();
+            // Im Konformitaetslauf nur Aenderungen, wie der Interpreter (9.3).
+            rt.program.dump(limit == 0);
             if TRACE_PC {
                 rt.program.pc();
             }
+        }
+        if let Some(u) = uart() {
+            u.flush();
         }
         if limit > 0 && k >= limit {
             break;
         }
     }
-    let flushed = persist.flush(&mut rt.program);
+    let flushed = persist.as_mut().is_some_and(|p| p.flush(&mut rt.program));
     if let Some(u) = uart() {
-        let journal = persist.journal();
-        let (erase_ns, program_ns) = journal.device().measured_ns();
+        let (writes, failures, erase_ns, program_ns) = persist.as_ref().map_or((0, 0, 0, 0), |p| {
+            let (erase_ns, program_ns) = p.journal().device().measured_ns();
+            (p.journal().writes(), p.journal().failures(), erase_ns, program_ns)
+        });
         let o = rt.overrun();
         let _ = write!(
             u,
             "takt schlief {} ueberlaeufe {} verspaetet {} verloren {} rueckstand {} ns \
-             journal geschrieben {} fehlgeschlagen {} flush {} \
+             journal geschrieben {writes} fehlgeschlagen {failures} flush {} \
              nvm loeschen {erase_ns} ns programmieren {program_ns} ns\r\n",
             rt.sink.slept,
             rt.sink.overruns,
             o.late,
             o.lost,
             o.worst_drift,
-            journal.writes(),
-            journal.failures(),
             u8::from(flushed)
         );
         u.write("takt end\r\n");
+        u.flush();
     }
     let mut sleep = takt_board_esp32c6::WfiSleep;
     loop {
@@ -258,6 +280,7 @@ fn report(text: &str) {
     if let Some(u) = uart() {
         u.write(text);
         u.newline();
+        u.flush();
     }
 }
 

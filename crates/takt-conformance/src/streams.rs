@@ -531,12 +531,22 @@ fn emit_send(s: &mut String, p: &Program, trace: Trace) {
         .enumerate()
         .filter(|(_, c)| c.dir == Direction::Output && matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))))
         .collect();
-    let _ = writeln!(s, "#define TAKT_TX_MAX 4096");
-    let _ = writeln!(s, "static _Alignas(8) unsigned char g_tx[{}][TAKT_TX_MAX];", streams.len().max(1));
-    let _ = writeln!(s, "static int g_tx_n[{}];", streams.len().max(1));
+    // Je Strom so viel Platz wie seine Kapazitaet (8.8, Default 256), und
+    // fuer das Abgeholte so viel, wie ein Tick hoechstens abholt.
+    let cap = |c: &Channel| c.attrs.capacity.unwrap_or(256);
+    let per_tick = |c: &Channel| match rate_hz(c) {
+        Some(hz) => u32::try_from((hz.saturating_mul(p.config.tick as u64) / 1_000_000_000).max(1)).unwrap_or(u32::MAX),
+        None => u32::MAX,
+    };
+    let n = streams.len().max(1);
+    let tx_max = streams.iter().map(|(_, c)| cap(c)).max().unwrap_or(1);
+    let sent_max = streams.iter().map(|(_, c)| cap(c).min(per_tick(c))).max().unwrap_or(1);
+    let _ = writeln!(s, "#define TAKT_TX_MAX {tx_max}");
+    let _ = writeln!(s, "static _Alignas(8) unsigned char g_tx[{n}][TAKT_TX_MAX];");
+    let _ = writeln!(s, "static int g_tx_n[{n}];");
     // 8.8, FB-132: was der letzte Commit abgeholt hat, liest `o.sent` im
     // naechsten Tick — der Unit-Delay eines Outputs.
-    let _ = writeln!(s, "static _Alignas(8) unsigned char g_tx_sent[{}][TAKT_TX_MAX];", streams.len().max(1));
+    let _ = writeln!(s, "static _Alignas(8) unsigned char g_tx_sent[{n}][{sent_max}];");
     let _ = writeln!(s, "static int g_tx_sent_n[{}];", streams.len().max(1));
     let _ = writeln!(s, "static int takt_tx_slot(int s) {{");
     let _ = writeln!(s, "    switch (s) {{");
@@ -566,7 +576,7 @@ fn emit_send(s: &mut String, p: &Program, trace: Trace) {
     let _ = writeln!(s, "    int k = takt_tx_slot(s);");
     let _ = writeln!(s, "    if (k < 0) return 0;");
     // 8.8: `len > tx.free` ist ein `StreamOverflow`.
-    let _ = writeln!(s, "    if (g_tx_n[k] + n > takt_tx_cap(s) || g_tx_n[k] + n > TAKT_TX_MAX) return 0;");
+    let _ = writeln!(s, "    if (g_tx_n[k] + n > takt_tx_cap(s)) return 0;");
     let _ = writeln!(s, "    memcpy(g_tx[k] + g_tx_n[k], b, (size_t)n);");
     let _ = writeln!(s, "    g_tx_n[k] += n;");
     let _ = writeln!(s, "    return 1;");
@@ -576,13 +586,7 @@ fn emit_send(s: &mut String, p: &Program, trace: Trace) {
     // Interpreter (`value_text` fuer `Value::Bytes`).
     let _ = writeln!(s, "static void takt_tx_commit(long long t) {{");
     for (slot, (i, c)) in streams.iter().enumerate() {
-        let per_tick = match rate_hz(c) {
-            Some(hz) => {
-                let bytes = hz.saturating_mul(p.config.tick as u64) / 1_000_000_000;
-                u32::try_from(bytes.max(1)).unwrap_or(u32::MAX)
-            }
-            None => u32::MAX,
-        };
+        let per_tick = per_tick(c);
         let _ = writeln!(s, "    if (g_tx_n[{slot}] > 0) {{");
         let _ = writeln!(s, "        int n = g_tx_n[{slot}] < {per_tick} ? g_tx_n[{slot}] : {per_tick};");
         match trace {

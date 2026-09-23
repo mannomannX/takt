@@ -7,10 +7,11 @@
 //! gilt der Host als abwesend, und eine Sekunde lang wird nichts
 //! geschrieben, damit ein Board ohne Leser nicht an jeder Zeile steht.
 //!
-//! Gesendet wird an Zeilenenden und wenn das FIFO voll ist: ein USB-Paket
-//! je Zeile statt je Textstueck, denn jedes Paket braucht einen Abruf des
-//! Hosts. Dieselben Aufrufe wie beim F401 (`write`, `write_i64`,
-//! `newline`), damit die Bring-up-Programme beider Boards gleich lesen.
+//! Gesendet wird in [`Telemetry::flush`] (einmal je Tick) und wenn das
+//! FIFO voll ist: ein USB-Paket je Tick statt je Zeile, denn jedes Paket
+//! braucht einen Abruf des Hosts. Dieselben Aufrufe wie beim F401
+//! (`write`, `write_i64`, `newline`), damit die Bring-up-Programme beider
+//! Boards gleich lesen.
 
 use esp_hal::Blocking;
 use esp_hal::peripherals::USB_DEVICE;
@@ -35,25 +36,36 @@ impl Telemetry {
         Telemetry { port: UsbSerialJtag::new(usb), silent_until: 0, dropped: 0 }
     }
 
-    /// Ein Byte; am Zeilenende geht das Paket ab.
+    /// Ein Byte; abgeschickt wird bei vollem FIFO und in [`Telemetry::flush`].
     pub fn write_byte(&mut self, b: u8) {
-        let start = SystemTimer::unit_value(Unit::Unit0);
-        if start < self.silent_until {
-            self.dropped = self.dropped.saturating_add(1);
+        if self.silent_until != 0 {
+            if SystemTimer::unit_value(Unit::Unit0) < self.silent_until {
+                self.dropped = self.dropped.saturating_add(1);
+                return;
+            }
+            self.silent_until = 0;
+        }
+        if self.port.write_byte_nb(b).is_ok() {
             return;
         }
-        while self.port.write_byte_nb(b).is_err() {
-            // Das FIFO ist voll: abschicken, dann auf den Host warten.
+        // Das FIFO ist voll: abschicken, dann auf den Host warten.
+        let start = SystemTimer::unit_value(Unit::Unit0);
+        loop {
             let _ = self.port.flush_tx_nb();
+            if self.port.write_byte_nb(b).is_ok() {
+                return;
+            }
             if SystemTimer::unit_value(Unit::Unit0).wrapping_sub(start) > WAIT {
                 self.silent_until = start + WAIT + SILENCE;
                 self.dropped = self.dropped.saturating_add(1);
                 return;
             }
         }
-        if b == b'\n' {
-            let _ = self.port.flush_tx_nb();
-        }
+    }
+
+    /// Schickt ab, was im FIFO steht.
+    pub fn flush(&mut self) {
+        let _ = self.port.flush_tx_nb();
     }
 
     /// Wie viele Bytes ohne Host verworfen wurden.
@@ -68,10 +80,17 @@ impl Telemetry {
         }
     }
 
-    /// Eine Zahl, dezimal.
+    /// Eine Zahl, dezimal. Die 64-Bit-Division ist auf RV32 ein
+    /// Bibliotheksaufruf; unter 2^32 rechnen die Ziffern in 32 Bit.
     pub fn write_u64(&mut self, mut n: u64) {
         let mut buf = [0u8; 20];
         let mut i = buf.len();
+        while n > u64::from(u32::MAX) {
+            i -= 1;
+            buf[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+        let mut n = n as u32;
         loop {
             i -= 1;
             buf[i] = b'0' + (n % 10) as u8;
@@ -83,6 +102,14 @@ impl Telemetry {
         for b in &buf[i..] {
             self.write_byte(*b);
         }
+    }
+
+    /// Ein Byte als `0x..`, wie der Interpreter Stromelemente schreibt.
+    pub fn write_hex8(&mut self, b: u8) {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        self.write("0x");
+        self.write_byte(HEX[usize::from(b >> 4)]);
+        self.write_byte(HEX[usize::from(b & 15)]);
     }
 
     /// Eine Zahl mit Vorzeichen, dezimal.

@@ -272,6 +272,7 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "void takt_mcu_tick(long long k) {{");
     let _ = writeln!(s, "    g_tick = k;");
     let _ = writeln!(s, "    takt_fn_fault = 0;");
+    crate::harness::aging(s, p, layout, "    ");
     let _ = writeln!(s, "    takt_mcu_sample();");
     for m in driven {
         // Die Periode: Eine Maschine mit `n_m > 1` laeuft nur jeden
@@ -384,40 +385,51 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
 
 /// `takt_mcu_dump`: den Latch ausgeben, fuer den Vergleich — dieselben
 /// Zeilen wie `dump` im Linux-Rahmen (grammar/trace.md), damit
-/// `compare` beide lesen kann.
+/// `compare` beide lesen kann. Ohne `all` nur, was sich seit der letzten
+/// Ausgabe geaendert hat (9.3): Der Trace je Tick kostete sonst mehr als
+/// der Tick.
 fn telemetry(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
-    let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md). */");
-    let _ = writeln!(s, "void takt_mcu_dump(void) {{");
+    let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md); ohne `all` nur die geaenderten. */");
+    let _ = writeln!(s, "{}", crate::layout::c_buffer("g_shown", layout.latch));
+    let _ = writeln!(s, "static int takt_same(const unsigned char *a, const unsigned char *b, unsigned n) {{");
+    let _ = writeln!(s, "    while (n--) if (*a++ != *b++) return 0;");
+    let _ = writeln!(s, "    return 1;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "void takt_mcu_dump(int all) {{");
     for slot in &layout.outputs {
-        if let takt_llvm::ty::LlvmType::Array(elem, n) = &slot.ty {
-            let Some(ct) = c_type(elem, slot.signed) else { continue };
-            let _ = writeln!(s, "    takt_board_trace(\"t=\");");
-            let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
-            let _ = writeln!(s, "    takt_board_trace(\"out {} [\");", slot.name);
-            let _ = writeln!(s, "    for (int k = 0; k < {n}; k++) {{");
-            let _ = writeln!(s, "        if (k) takt_board_trace(\", \");");
-            let call = trace_call(elem, slot.signed, &format!("(({ct} *)(latch + {}))[k]", slot.offset));
-            let _ = writeln!(s, "        {call};");
-            let _ = writeln!(s, "    }}");
-            let _ = writeln!(s, "    takt_board_trace(\"]\\n\");");
-            continue;
-        }
-        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let _ = writeln!(s, "    takt_board_trace(\"t=\");");
-        let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
-        let _ = writeln!(s, "    takt_board_trace(\"out {} \");", slot.name);
-        if let Some(varianten) = enum_variants(p, &slot.name) {
-            let _ = writeln!(s, "    switch (*({ct} *)(latch + {})) {{", slot.offset);
-            for (d, name) in varianten {
-                let _ = writeln!(s, "    case {d}: takt_board_trace(\"{name}\"); break;");
-            }
-            let _ = writeln!(s, "    default: takt_board_trace(\"?\");");
-            let _ = writeln!(s, "    }}");
+        let (elem, count) = match &slot.ty {
+            takt_llvm::ty::LlvmType::Array(elem, n) => (elem.as_ref(), Some(*n)),
+            t => (t, None),
+        };
+        let Some(ct) = c_type(elem, slot.signed) else { continue };
+        let (off, size) = (slot.offset, slot.size);
+        let _ = writeln!(s, "    if (all || !takt_same(latch + {off}, g_shown + {off}, {size})) {{");
+        let _ = writeln!(s, "        memcpy(g_shown + {off}, latch + {off}, {size});");
+        let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+        let _ = writeln!(s, "        takt_board_trace_i64(g_tick);");
+        if let Some(n) = count {
+            let _ = writeln!(s, "        takt_board_trace(\"out {} [\");", slot.name);
+            let _ = writeln!(s, "        for (int k = 0; k < {n}; k++) {{");
+            let _ = writeln!(s, "            if (k) takt_board_trace(\", \");");
+            let _ =
+                writeln!(s, "            {};", trace_call(elem, slot.signed, &format!("(({ct} *)(latch + {off}))[k]")));
+            let _ = writeln!(s, "        }}");
+            let _ = writeln!(s, "        takt_board_trace(\"]\\n\");");
         } else {
-            let call = trace_call(&slot.ty, slot.signed, &format!("*({ct} *)(latch + {})", slot.offset));
-            let _ = writeln!(s, "    {call};");
+            let _ = writeln!(s, "        takt_board_trace(\"out {} \");", slot.name);
+            if let Some(varianten) = enum_variants(p, &slot.name) {
+                let _ = writeln!(s, "        switch (*({ct} *)(latch + {off})) {{");
+                for (d, name) in varianten {
+                    let _ = writeln!(s, "        case {d}: takt_board_trace(\"{name}\"); break;");
+                }
+                let _ = writeln!(s, "        default: takt_board_trace(\"?\");");
+                let _ = writeln!(s, "        }}");
+            } else {
+                let _ = writeln!(s, "        {};", trace_call(elem, slot.signed, &format!("*({ct} *)(latch + {off})")));
+            }
+            let _ = writeln!(s, "        takt_board_trace(\"\\n\");");
         }
-        let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+        let _ = writeln!(s, "    }}");
     }
     let _ = writeln!(s, "}}\n");
     program_counters(s, p, driven);

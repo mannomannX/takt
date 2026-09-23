@@ -18,7 +18,7 @@ unsafe extern "C" {
     fn takt_mcu_init();
     fn takt_mcu_init_with(persist: *const c_void, len: i32) -> i32;
     fn takt_mcu_tick(k: i64);
-    fn takt_mcu_dump();
+    fn takt_mcu_dump(all: i32);
     fn takt_mcu_pc();
     fn takt_mcu_output(index: i32) -> i64;
     fn takt_mcu_commit();
@@ -59,10 +59,10 @@ impl Generated {
         }
     }
 
-    /// Gibt Outputs und Zustaende ueber die Telemetrie aus.
-    pub fn dump(&self) {
+    /// Gibt die Outputs ueber die Telemetrie aus; ohne `all` nur die geaenderten (9.3).
+    pub fn dump(&self, all: bool) {
         // SAFETY: liest nur den statischen Zustand des Rahmens.
-        unsafe { takt_mcu_dump() };
+        unsafe { takt_mcu_dump(i32::from(all)) };
     }
 
     /// Der Programmzaehler je Maschine (11.2); leer ohne `statements`.
@@ -129,7 +129,7 @@ impl Program for Generated {
         // SAFETY: ein Schritt des Rahmens, einmal je Tick aus der Schleife.
         unsafe { takt_mcu_tick(k as i64 + 1) };
         if self.trace {
-            self.dump();
+            self.dump(true);
         }
     }
 }

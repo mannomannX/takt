@@ -288,6 +288,7 @@ fn build_inner(
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, 0);");
     }
     let _ = writeln!(s, "    for (g_tick = 1; g_tick <= {ticks}; g_tick++) {{");
+    aging(&mut s, p, &layout, "        ");
     // 9.8: `apply_scheduled(k)` stellt zu Tick-Beginn, was faellig ist —
     // vor jedem Maschinenschritt, damit die Maschinen den Wert im selben
     // Tick lesen. Die Simulation wendet `T` im Tick `ceil(T / T0)` an.
@@ -661,6 +662,9 @@ pub(crate) fn sim_bindings(s: &mut String, p: &Program, indent: &str) {
         // Interpreter prueft am Rand auch `max_slew` und `debounce`; das
         // bleibt hier aussen vor (LIMITS).
         let Some(q) = quality_offset(p, &inp.name) else { continue };
+        if let Some(age) = age_offset(p, &inp.name) {
+            let _ = writeln!(s, "{indent}*(long long *)(image + {age}) = 0;");
+        }
         match range_check(p, inp.ty) {
             Some((ct, lo, hi)) => {
                 let _ = writeln!(
@@ -828,22 +832,49 @@ fn literal(p: &Program, e: &takt_mir::expr::Expr) -> Option<String> {
     }
 }
 
-/// Der Versatz des Qualitaetsbytes eines Inputs im Abbild (3.5).
-pub(crate) fn quality_offset(p: &Program, name: &str) -> Option<u64> {
+/// Der Versatz eines Feldes im Eintrag eines Channels: Wert, Qualitaet,
+/// Grund, `age` (`image`).
+fn entry_field(p: &Program, name: &str, field: takt_llvm::image::Slot) -> Option<u64> {
     let index = p.channels.iter().position(|c| c.name == name)?;
     let id = takt_mir::ChannelId(index as u32);
     let base = takt_llvm::image::offset_of(id, p)?;
-    // Der Wert steht zuerst, die Qualitaet dahinter (`image`).
-    Some(base + takt_llvm::image::entry_type(id, p)?.field_offset(1))
+    Some(base + takt_llvm::image::entry_type(id, p)?.field_offset(field as usize))
+}
+
+/// Der Versatz des Qualitaetsbytes eines Inputs im Abbild (3.5).
+pub(crate) fn quality_offset(p: &Program, name: &str) -> Option<u64> {
+    entry_field(p, name, takt_llvm::image::Slot::Quality)
 }
 
 /// Der Versatz von `age` im Eintrag eines Channels (3.5).
 pub(crate) fn age_offset(p: &Program, name: &str) -> Option<u64> {
-    let index = p.channels.iter().position(|c| c.name == name)?;
-    let id = takt_mir::ChannelId(index as u32);
-    let base = takt_llvm::image::offset_of(id, p)?;
-    // Wert, Qualitaet, Grund, dann `age` (`image`).
-    Some(base + takt_llvm::image::entry_type(id, p)?.field_offset(3))
+    entry_field(p, name, takt_llvm::image::Slot::Age)
+}
+
+/// Die Abtastungen altern um einen Tick; ueber `max_age` werden sie
+/// `Stale` (3.5), wie `age_inputs` im Interpreter — vor der Lieferung
+/// des Ticks, die das Alter zuruecksetzt.
+pub(crate) fn aging(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
+    let tick = p.config.tick;
+    for slot in &layout.inputs {
+        let (Some(q), Some(age), Some(reason)) = (
+            quality_offset(p, &slot.name),
+            age_offset(p, &slot.name),
+            entry_field(p, &slot.name, takt_llvm::image::Slot::Reason),
+        ) else {
+            continue;
+        };
+        let stale = match p.channels.iter().find(|c| c.name == slot.name).and_then(|c| c.attrs.max_age) {
+            Some(max) => format!(" if (*a > {max}LL && image[{q}] != 3) {{ image[{q}] = 2; image[{reason}] = 0; }}"),
+            None => String::new(),
+        };
+        let _ = writeln!(
+            s,
+            "{indent}{{ long long *a = (long long *)(image + {age}); *a = *a > {}LL ? {}LL : *a + {tick}LL;{stale} }}",
+            i64::MAX - tick,
+            i64::MAX
+        );
+    }
 }
 
 /// Die Varianten eines Enum-Outputs mit ihren Diskriminanten (3.7).

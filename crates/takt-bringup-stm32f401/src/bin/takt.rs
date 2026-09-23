@@ -237,7 +237,7 @@ fn main() -> ! {
 
         if k >= next_trace {
             next_trace = k + TRACE_EVERY;
-            program.dump();
+            program.dump(true);
             report(&clock, &mut reported);
         }
     }
