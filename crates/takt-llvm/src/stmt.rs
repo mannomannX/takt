@@ -342,7 +342,9 @@ pub fn block(b: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet>
         if m.instrument == crate::target::Instrument::Statements {
             mark(s.span.start, ctx, m);
         }
+        let slots = m.slot_mark();
         stmt(s, ctx, m)?;
+        m.end_slots(slots);
     }
     Ok(())
 }
@@ -1236,7 +1238,9 @@ impl<V: Slots> FnCtx<'_, V> {
 /// Senkt den Rumpf einer Funktion (4.4).
 pub fn fn_block<V: Slots>(b: &Block, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result<(), NotYet> {
     for s in &b.stmts {
+        let slots = m.slot_mark();
         fn_stmt(s, ctx, m)?;
+        m.end_slots(slots);
     }
     Ok(())
 }

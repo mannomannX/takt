@@ -147,6 +147,8 @@ impl Abi {
         m.declare("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)");
         m.declare("declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)");
         m.declare("declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)");
+        m.declare("declare void @llvm.lifetime.start.p0(ptr)");
+        m.declare("declare void @llvm.lifetime.end.p0(ptr)");
     }
 }
 

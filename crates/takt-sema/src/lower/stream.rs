@@ -8,9 +8,9 @@
 
 use takt_diag::Span;
 use takt_mir::expr::{Expr, ExprKind, StreamRef};
-use takt_mir::machine::{Guard, Handler, VarDef, VarScope};
+use takt_mir::machine::{Guard, Handler, MachineKind, VarDef, VarScope};
 use takt_mir::types::Type;
-use takt_mir::{ChannelId, TypeId, VarId};
+use takt_mir::{ChannelId, MachineId, TypeId, VarId};
 use takt_syntax::ast;
 
 use super::stmt::SC27;
@@ -251,10 +251,18 @@ impl Lowerer<'_> {
                 // 8.6: genau ein Schreiber je internem Stream (Pruefung 43).
                 if let Some(m) = self.mctx.as_ref() {
                     let id = m.id;
+                    // 13.6: Szenarien laufen je einzeln; zwei duerfen denselben
+                    // Strom senden, wie bei Outputs (Pruefung 26). Ein
+                    // Szenario neben einer Maschine bleibt ein Fehler.
+                    let scenario = m.machine.kind == MachineKind::Scenario;
+                    let other_scenario = |w: MachineId| {
+                        self.program.machines.get(w.index()).is_some_and(|o| o.kind == MachineKind::Scenario)
+                    };
                     let def = &mut self.program.streams[s.index()];
                     match def.writer {
                         None => def.writer = Some(id),
                         Some(w) if w == id => {}
+                        Some(w) if scenario && other_scenario(w) => {}
                         Some(_) => {
                             let n = def.name.clone();
                             self.error_hint(

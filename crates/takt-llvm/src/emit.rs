@@ -218,7 +218,26 @@ impl Module {
         let line = format!("  {r} = alloca {ty}\n");
         self.body.insert_str(self.entry_at, &line);
         self.entry_at += line.len();
+        // Die Lebensdauer beginnt hier, nicht im Eintrittsblock: So kann
+        // LLVM Slots mit getrennten Lebensdauern uebereinanderlegen —
+        // sonst braucht jeder seinen eigenen Platz fuer die ganze
+        // Funktion, und `uart_link_step` hatte 15 KB Rahmen.
+        self.void_inst(&format!("call void @llvm.lifetime.start.p0(ptr {r})"));
         r
+    }
+
+    /// Wie viele Slots die laufende Funktion bis jetzt hat.
+    pub fn slot_mark(&self) -> u32 {
+        self.slots
+    }
+
+    /// Beendet die Lebensdauer aller Slots seit `from` — am Ende der
+    /// Anweisung, in der sie entstanden. Ein Slot lebt nie ueber eine
+    /// Anweisung hinaus: Was daraus weiterverwendet wird, ist geladen.
+    pub fn end_slots(&mut self, from: u32) {
+        for n in from..self.slots {
+            self.void_inst(&format!("call void @llvm.lifetime.end.p0(ptr {})", Reg::Named(n)));
+        }
     }
 
     /// Schreibt eine Anweisung ohne Ergebnis (`store`, `br`).

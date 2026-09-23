@@ -439,11 +439,6 @@ const HDR_LEN : int = 5  # magic + kind + seq + len(2)
 
 stream<bytes<1024>> app_rx with capacity = 8, expect_len = 96, capacity_bytes = 1024, overflow = fault
 stream<bytes<1024>> app_tx with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
-# Zwei Szenarien schreiben nie zusammen (13.6), aber Pruefung 43 zaehlt
-# Schreiber statisch und kennt die Ausnahme nicht, die Pruefung 26 fuer
-# Outputs macht (FB-213). Bis dahin hat das zweite Szenario seinen
-# eigenen Strom; `IDLE_LINK` liest beide.
-stream<bytes<1024>> app_tx2 with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
 
 param RETRIES     : int in 0..8 = 3
 param ACK_TIMEOUT : Duration in 1 ms..2 s = 25 ms
@@ -511,10 +506,6 @@ machine uart_link every 500 us:
                 up = false
             loop:
                 for m in app_tx:
-                    pending = m.data
-                    attempts = 0
-                    -> SENDING
-                for m in app_tx2:
                     pending = m.data
                     attempts = 0
                     -> SENDING
@@ -746,7 +737,7 @@ scenario "single bit error triggers exactly one retransmit" every 100 us:
     initial RUN
     state RUN:
         sequence:
-            send app_tx2, "PING 2\n"
+            send app_tx, "PING 2\n"
             until app_rx as m timeout 500 ms
             verify m.data.len == 7, "payload length mismatch: {m.data.len}"
             verify uart_link.retransmits <= 1, "too many retransmits: {uart_link.retransmits}"

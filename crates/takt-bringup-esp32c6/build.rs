@@ -182,8 +182,46 @@ fn find_takt() -> Option<PathBuf> {
         dir = parent;
         let p = dir.join(&profile).join(exe);
         if p.exists() {
+            assert_fresh(&p);
             return Some(p);
         }
     }
     None
+}
+
+/// Ein `takt`, das aelter ist als der Compiler, baut stillschweigend das
+/// Objekt von gestern (FB-193). Der Vergleich ist grob — Aenderungszeit
+/// gegen jede Quelle der Compiler-Crates —, aber er faellt genau dann,
+/// wenn es darauf ankommt.
+fn assert_fresh(takt: &Path) {
+    let Ok(built) = fs::metadata(takt).and_then(|m| m.modified()) else { return };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    for krate in ["takt-syntax", "takt-diag", "takt-mir", "takt-sema", "takt-interp", "takt-llvm", "takt-conformance", "takt-cli"] {
+        walk(&root.join("crates").join(krate).join("src"), &mut newest);
+    }
+    if let Some((t, file)) = newest
+        && t > built
+    {
+        panic!(
+            "{} ist aelter als {}; `cargo build -p takt-cli --release` vor dem Bring-up (FB-193)",
+            takt.display(),
+            file.display()
+        );
+    }
+}
+
+fn walk(dir: &Path, newest: &mut Option<(std::time::SystemTime, PathBuf)>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            walk(&path, newest);
+        } else if path.extension().is_some_and(|x| x == "rs")
+            && let Ok(t) = fs::metadata(&path).and_then(|m| m.modified())
+            && newest.as_ref().is_none_or(|(n, _)| t > *n)
+        {
+            *newest = Some((t, path));
+        }
+    }
 }

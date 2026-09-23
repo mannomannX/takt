@@ -47,9 +47,10 @@
 
 system:
     language = 1
-    tick     = 1 ms  # 1 kHz: der SYSTIMER des C6 traegt ihn sicher, und
-    # bei 115200 Bd fallen 11,52 Byte/ms an — die
-    # 128-Byte-FIFO deckelt das (siehe MAXPT).
+    tick     = 500 us  # `uart_link every 500 us` ist damit genau ein Tick,
+    # und die RX-Pumpe (ein Byte je Tick, FB-212) liest
+    # 2 Byte/ms: Die Rundreise eines Frames bleibt unter
+    # `ACK_TIMEOUT`, ohne dass L2 angefasst wird.
     float         = f32        # der C6 hat keine FPU (4.2, 12.8)
     target        = baremetal  # 12.8
     output_timing = asap       # Latenz vor Jitter (16)
@@ -429,11 +430,6 @@ const HDR_LEN : int = 5  # magic + kind + seq + len(2)
 
 stream<bytes<1024>> app_rx with capacity = 8, expect_len = 96, capacity_bytes = 1024, overflow = fault
 stream<bytes<1024>> app_tx with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
-# Zwei Szenarien schreiben nie zusammen (13.6), aber Pruefung 43 zaehlt
-# Schreiber statisch und kennt die Ausnahme nicht, die Pruefung 26 fuer
-# Outputs macht (FB-213). Bis dahin hat das zweite Szenario seinen
-# eigenen Strom; `IDLE_LINK` liest beide.
-stream<bytes<1024>> app_tx2 with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
 
 param RETRIES     : int in 0..8 = 3
 param ACK_TIMEOUT : Duration in 1 ms..2 s = 25 ms
@@ -501,10 +497,6 @@ machine uart_link every 500 us:
                 up = false
             loop:
                 for m in app_tx:
-                    pending = m.data
-                    attempts = 0
-                    -> SENDING
-                for m in app_tx2:
                     pending = m.data
                     attempts = 0
                     -> SENDING
@@ -641,6 +633,20 @@ output sent_lines : int in 0..999 @ hw("o/sent")    with safe = 0
 output got_lines  : int in 0..999 @ hw("o/got")     with safe = 0
 output link_up    : bool          @ hw("o/link_up") with safe = false
 
+# Der MCU-Rahmen schreibt nur Ausgaenge in den Trace; die Zaehler der
+# Schichten werden darum gespiegelt, damit ein Lauf am Board sagt, wo
+# ein Frame verlorengeht.
+output d_rx   : int in 0..999999 @ hw("o/d_rx")   with safe = 0
+output d_tx   : int in 0..999999 @ hw("o/d_tx")   with safe = 0
+output d_ovf  : int in 0..999999 @ hw("o/d_ovf")  with safe = 0
+output d_ferr : int in 0..999999 @ hw("o/d_ferr") with safe = 0
+output d_fin  : int in 0..999999 @ hw("o/d_fin")  with safe = 0
+output d_fout : int in 0..999999 @ hw("o/d_fout") with safe = 0
+output d_dec  : int in 0..999999 @ hw("o/d_dec")  with safe = 0
+output d_long : int in 0..999999 @ hw("o/d_long") with safe = 0
+output d_crc  : int in 0..999999 @ hw("o/d_crc")  with safe = 0
+output d_retx : int in 0..999999 @ hw("o/d_retx") with safe = 0
+
 machine source every 1 s:
     var n : int in 0..999 = 0
 
@@ -652,6 +658,16 @@ machine source every 1 s:
             n = (n + 1) % 1000
             sent_lines = n
             link_up = uart_link.up
+            d_rx = uart_port.rx_bytes
+            d_tx = uart_port.tx_bytes
+            d_ovf = uart_port.overruns
+            d_ferr = uart_port.frame_errs
+            d_fin = uart_framer.frames_in
+            d_fout = uart_framer.frames_out
+            d_dec = uart_framer.decode_errors
+            d_long = uart_framer.too_long
+            d_crc = uart_link.crc_errors
+            d_retx = uart_link.retransmits
 
 machine sink:
     var m : int in 0..999 = 0
