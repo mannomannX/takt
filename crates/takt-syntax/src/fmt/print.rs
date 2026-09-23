@@ -1073,11 +1073,15 @@ impl Emitter<'_, '_> {
                     }
                 }
             }
-            SeqItem::Expect { cond, message, .. } => {
+            SeqItem::Expect { cond, message, req, .. } => {
                 self.sp("expect");
                 self.fmt_expr(cond);
                 if message.is_some() {
                     self.op(",");
+                    self.name();
+                }
+                if req.is_some() {
+                    self.sp("req");
                     self.name();
                 }
                 self.newline();
@@ -1301,7 +1305,7 @@ impl Emitter<'_, '_> {
                 target.is_some(),
                 req.is_some(),
             ),
-            StmtKind::Alert { cond, confirm, .. } => self.fmt_alert_stmt(cond, confirm.as_ref()),
+            StmtKind::Alert { cond, confirm, req, .. } => self.fmt_alert_stmt(cond, confirm.as_ref(), req.is_some()),
             StmtKind::Log(_) => self.fmt_log_stmt(),
             StmtKind::Goto(_) => self.fmt_goto_stmt(),
             StmtKind::Abort(m) => self.fmt_abort_stmt(m.is_some()),
@@ -1503,7 +1507,7 @@ impl Emitter<'_, '_> {
     }
 
     /// `alert_stmt`
-    fn fmt_alert_stmt(&mut self, cond: &Expr, confirm: Option<&Expr>) {
+    fn fmt_alert_stmt(&mut self, cond: &Expr, confirm: Option<&Expr>, req: bool) {
         self.sp("alert");
         self.fmt_expr(cond);
         self.op(",");
@@ -1511,6 +1515,10 @@ impl Emitter<'_, '_> {
         if let Some(c) = confirm {
             self.sp("for");
             self.fmt_duration_expr(c);
+        }
+        if req {
+            self.sp("req");
+            self.name();
         }
     }
 

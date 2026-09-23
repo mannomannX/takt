@@ -140,6 +140,13 @@ impl Lowerer<'_> {
                 self.trigger_decl(t);
             }
         }
+        // 5.11: Instanzen bekommen Name und Ids vor den Maschinenruempfen —
+        // `cells[k].value` in einer Maschine findet sie so (FB-210).
+        for item in &file.items {
+            if let ast::Item::Instance(i) = item {
+                self.reserve_instance(i);
+            }
+        }
         for item in &file.items {
             match item {
                 ast::Item::Machine(m) if m.params.is_empty() => {

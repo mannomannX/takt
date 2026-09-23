@@ -79,6 +79,10 @@ pub struct Size {
     /// Was die Ueberlagerung exklusiver gescopter Instanzen spart (11.5).
     /// Kein Posten: Die Summe zaehlt schon den ueberlagerten Stand.
     pub overlay_saved: u64,
+    /// Je Sequenz ihre Dauer (6.2, FB-129): Maschine, Zustand, Ticks.
+    pub sequences: Vec<(String, String, crate::machine::SequenceTicks)>,
+    /// Der Basis-Tick in Nanosekunden, fuer die Anzeige der Dauern.
+    pub tick_ns: i64,
 }
 
 impl Size {
@@ -149,7 +153,7 @@ impl Size {
                 .ok_or_else(|| format!("Zeile {}: unbekannte Herkunft `{origin}`", n + 2))?;
             items.push(Item { name: name.trim().to_string(), bytes, origin });
         }
-        Ok(Size { items, overlay_saved: 0 })
+        Ok(Size { items, overlay_saved: 0, ..Default::default() })
     }
 
     /// Was sich gegen eine Baseline geaendert hat: erst die Posten in
@@ -183,6 +187,11 @@ impl Size {
         if self.has_open() {
             out.push("  (Posten mit `offen` fehlen in der Summe: die Eingabe kommt mit 8.10 und 13.8)".into());
         }
+        for (machine, state, t) in &self.sequences {
+            let dur = |ticks: u64| duration(ticks as i64 * self.tick_ns);
+            let max = t.max.map_or("unbeschraenkt".to_string(), |m| format!("hoechstens {}", dur(m)));
+            out.push(format!("  Sequenz {machine}.{state}: mindestens {}, {max}", dur(t.min)));
+        }
         out
     }
 }
@@ -201,6 +210,13 @@ fn is_iram(name: &str) -> bool {
 /// Rechnet das Speicherbudget eines Programms (11.5).
 pub fn size(p: &Program) -> Size {
     let mut items = Vec::new();
+    let sequences = p
+        .machines
+        .iter()
+        .flat_map(|m| {
+            m.states.iter().filter_map(move |s| s.sequence_ticks.map(|t| (m.name.clone(), s.name.clone(), t)))
+        })
+        .collect();
 
     // Eine Vorlage liegt nicht im Speicher; ihr Rumpf steht in den Instanzen.
     // Eine gescopte Instanz zaehlt nicht hier, sondern im Zustand, der sie
@@ -284,7 +300,17 @@ pub fn size(p: &Program) -> Size {
     items.push(Item { name: "Flash (Code, Konstanten)".into(), bytes: 0, origin: Origin::Open });
     items.push(Item { name: "Stack (Programmanteil)".into(), bytes: 0, origin: Origin::Open });
 
-    Size { items, overlay_saved }
+    Size { items, overlay_saved, sequences, tick_ns: p.config.tick }
+}
+
+/// Eine Dauer in der groessten Einheit, die sie ganz teilt.
+fn duration(ns: i64) -> String {
+    match ns {
+        n if n % 1_000_000_000 == 0 => format!("{} s", n / 1_000_000_000),
+        n if n % 1_000_000 == 0 => format!("{} ms", n / 1_000_000),
+        n if n % 1_000 == 0 => format!("{} us", n / 1_000),
+        n => format!("{n} ns"),
+    }
 }
 
 /// Die RAM-residenten Posten der Profilfamilie `xip_flash` (12.3).

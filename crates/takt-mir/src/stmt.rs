@@ -40,6 +40,13 @@ impl Block {
         }
     }
 
+    /// Enthaelt der Block ein `->`, auch in Zweigen (6.2)?
+    pub fn has_goto(&self) -> bool {
+        let mut hit = false;
+        self.walk(&mut |s| hit |= matches!(s.kind, StmtKind::Goto(_)));
+        hit
+    }
+
     /// Block aus Anweisungen.
     pub fn new(stmts: Vec<Stmt>) -> Self {
         Block { stmts, span: Span::default() }
@@ -174,6 +181,8 @@ pub enum Observe {
         message: Format,
         /// Bestaetigungszeit.
         confirm: Option<Confirm>,
+        /// Anforderung (13.4).
+        req: Option<String>,
     },
     /// `log "text"`
     Log(Format),

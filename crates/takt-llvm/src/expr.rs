@@ -1799,6 +1799,13 @@ fn psi_read(
     }
     .ok_or(NotYet { what: "Instanz-Array ohne Laenge" })?;
     let i = lower(index, p, m, vars)?;
+    // 3.4: Der Index wird hier geprueft; sein `Checked { Index }` traegt
+    // keinen Zweig (`runtime_check`).
+    let ok = m.inst(&format!("icmp ult {} {}, {len}", i.ty, i.value));
+    let target = vars.fault_label().ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
+    let go_on = format!("geprueft_instanz_{}", m.next_label());
+    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
+    m.label(&go_on);
     vars.published_at(machine.machine, field, len, &i, m).ok_or(NotYet { what: "Psi mit Index" })
 }
 

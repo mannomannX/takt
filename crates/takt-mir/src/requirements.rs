@@ -21,6 +21,8 @@ pub enum SiteKind {
     Check,
     /// `expect`.
     Expect,
+    /// `alert`.
+    Alert,
     /// `verify` in einem Szenario.
     Verify,
 }
@@ -31,6 +33,7 @@ impl SiteKind {
         match self {
             SiteKind::Check => "check",
             SiteKind::Expect => "expect",
+            SiteKind::Alert => "alert",
             SiteKind::Verify => "verify",
         }
     }
@@ -116,6 +119,7 @@ fn referenced(s: &Stmt) -> Option<(SiteKind, &str)> {
             Some((kind, req.as_str()))
         }
         StmtKind::Observe(Observe::Verify { req: Some(req), .. }) => Some((SiteKind::Verify, req.as_str())),
+        StmtKind::Observe(Observe::Alert { req: Some(req), .. }) => Some((SiteKind::Alert, req.as_str())),
         _ => None,
     }
 }

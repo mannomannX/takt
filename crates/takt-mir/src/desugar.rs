@@ -24,15 +24,16 @@ pub const CODE: &str = "MIR";
 
 /// Ersetzt in allen Maschinen die Sequenz-Oberflaeche durch Zustaende.
 pub fn desugar(program: &mut Program) -> Result<(), Diagnostic> {
+    let tick_ns = program.config.tick;
     let Program { types, machines, .. } = program;
     for m in machines.iter_mut() {
-        desugar_machine(types, m)?;
+        desugar_machine(types, m, tick_ns)?;
     }
     Ok(())
 }
 
 /// Desugaring einer Maschine; danach gilt `Machine::is_core`.
-pub fn desugar_machine(types: &mut TypeTable, m: &mut Machine) -> Result<(), Diagnostic> {
+pub fn desugar_machine(types: &mut TypeTable, m: &mut Machine, tick_ns: i64) -> Result<(), Diagnostic> {
     let mut i = 0;
     while i < m.states.len() {
         if let Some(seq) = m.states[i].sequence.take() {
@@ -45,6 +46,7 @@ pub fn desugar_machine(types: &mut TypeTable, m: &mut Machine) -> Result<(), Dia
                 )
                 .with_suggestion("die Sequenz in einen eigenen Kindzustand legen (6.2)"));
             }
+            m.states[i].sequence_ticks = Some(ticks_of(&seq.items, m.period, tick_ns));
             Builder::new(types, m, StateId(i as u32), seq.done).run(seq)?;
         }
         i += 1;
@@ -185,8 +187,8 @@ impl<'a> Builder<'a> {
                 self.until(guard.clone(), timeout.clone(), *span);
                 Ok(())
             }
-            SeqItem::Expect { cond, message, span } => {
-                self.expect(cond.clone(), message.clone(), *span);
+            SeqItem::Expect { cond, message, req, span } => {
+                self.expect(cond.clone(), message.clone(), req.clone(), *span);
                 Ok(())
             }
             SeqItem::Repeat { count, counter, body, span } => self.repeat(count.clone(), *counter, body, *span),
@@ -282,7 +284,7 @@ impl<'a> Builder<'a> {
 
     /// `expect e` → `check e` (Fault-Art `Expect`) in `loop:` von `S_i`,
     /// genau einmal im Entry-Tick, danach durch ein Flag deaktiviert.
-    fn expect(&mut self, cond: Expr, message: Option<crate::pattern::Format>, span: Span) {
+    fn expect(&mut self, cond: Expr, message: Option<crate::pattern::Format>, req: Option<String>, span: Span) {
         let seg_id = self.cur().id;
         self.expect_count += 1;
         let flag = self.m.add_var(VarDef {
@@ -294,15 +296,7 @@ impl<'a> Builder<'a> {
             span,
         });
         let check = Stmt::new(
-            StmtKind::Check {
-                cond,
-                message,
-                confirm: None,
-                within: None,
-                target: None,
-                req: None,
-                kind: CheckKind::Expect,
-            },
+            StmtKind::Check { cond, message, confirm: None, within: None, target: None, req, kind: CheckKind::Expect },
             span,
         );
         let clear = Stmt::new(StmtKind::Assign { target: Place::Var(flag), value: self.lit_bool(false, span) }, span);
@@ -514,4 +508,66 @@ fn check_no_goto(s: &Stmt) -> Result<(), Diagnostic> {
         StmtKind::Match { arms, .. } => arms.iter().flat_map(|a| &a.body.stmts).try_for_each(check_no_goto),
         _ => Ok(()),
     }
+}
+
+/// Die Dauer einer Sequenz in Basis-Ticks (6.2, FB-129).
+///
+/// Segmente enden an `wait`, `until`, an einer Anweisung mit `->` und
+/// am Ende eines `repeat`-Koerpers; jede Grenze ist ein Uebergang und
+/// kostet eine Aktivierung. Ein `->` unmittelbar nach `wait`/`until`
+/// verschmilzt mit deren Uebergang. Ein `repeat` mit Literal laeuft
+/// `n`-mal, sonst bleibt das Ende offen.
+fn ticks_of(items: &[SeqItem], period: u32, tick_ns: i64) -> SequenceTicks {
+    let act = u64::from(period.max(1));
+    let ticks = |e: &Expr| match e.kind {
+        ExprKind::Duration(ns) if ns > 0 => (ns as u64).div_ceil((tick_ns.max(1) as u64) * act).max(1) * act,
+        _ => act,
+    };
+    let mut acc = SequenceTicks { min: 0, max: Some(0) };
+    let add = |acc: &mut SequenceTicks, lo: u64, hi: Option<u64>| {
+        acc.min += lo;
+        acc.max = acc.max.zip(hi).map(|(a, b)| a + b);
+    };
+    let mut after_wait = false;
+    for item in items {
+        match item {
+            SeqItem::Stmt(s) => {
+                let goes = crate::stmt::Block::new(vec![s.clone()]).has_goto();
+                if goes && !after_wait {
+                    add(&mut acc, act, Some(act));
+                }
+                after_wait = false;
+            }
+            SeqItem::Wait(d) => {
+                let t = ticks(d);
+                add(&mut acc, t, Some(t));
+                after_wait = true;
+            }
+            SeqItem::Until { timeout, .. } => {
+                add(&mut acc, act, timeout.as_ref().map(|t| ticks(&t.duration)));
+                after_wait = true;
+            }
+            SeqItem::Expect { .. } => {}
+            SeqItem::Repeat { count, body, .. } => {
+                let inner = ticks_of(body, period, tick_ns);
+                let n = match count.kind {
+                    ExprKind::Int(n) if n > 0 => Some(n as u64),
+                    _ => None,
+                };
+                // Der Ruecksprung ist eine schwache Transition: je Durchlauf ein Tick.
+                let per = inner.min.max(act);
+                add(&mut acc, per, n.and_then(|n| inner.max.map(|m| n * m.max(act))));
+                if let Some(n) = n {
+                    acc.min += per * (n - 1);
+                }
+                after_wait = false;
+            }
+            SeqItem::Step { body, .. } => {
+                let inner = ticks_of(body, period, tick_ns);
+                add(&mut acc, inner.min, inner.max);
+                after_wait = false;
+            }
+        }
+    }
+    acc
 }

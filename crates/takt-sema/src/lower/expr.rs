@@ -1086,10 +1086,18 @@ impl Lowerer<'_> {
         span: Span,
     ) -> Option<Expr> {
         let member = name.name.as_str();
+        // 5.11: `cells[k].member` — die erste Instanz und der Index (FB-210).
+        if let ast::ExprKind::Index { base: arr, index } = &base.kind
+            && let ast::ExprKind::Ident(id) = &arr.kind
+            && let Some(Entity::MachineArray(first, len)) = self.peek(&id.name).cloned()
+        {
+            let i = self.machine_index(index, len)?;
+            return self.machine_member(first, Some(i), name, args, span);
+        }
         // Maschine: .state, pub var, Signal
         if let ast::ExprKind::Ident(id) = &base.kind {
             if let Some(Entity::Machine(m)) = self.peek(&id.name).cloned() {
-                return self.machine_member(m, name, args, span);
+                return self.machine_member(m, None, name, args, span);
             }
             if let Some(Entity::Var(v, t)) = self.peek(&id.name).cloned() {
                 if matches!(self.ty(t), Type::Handle(HandleKind::Job)) {
@@ -1893,9 +1901,40 @@ impl Lowerer<'_> {
         }
     }
 
+    /// Der Index in ein Instanz-Array (5.11), gegen die Laenge geprueft
+    /// (3.4): ein Literal beim Uebersetzen, alles andere zur Laufzeit.
+    fn machine_index(&mut self, index: &ast::Expr, len: u32) -> Option<Expr> {
+        let int = self.tys.int;
+        let i = self.expr(index, Some(int))?;
+        if !self.is_int(i.ty) {
+            let n = self.type_name(i.ty);
+            self.error(SC3, index.span, format!("Index muss eine Ganzzahl sein, gefunden `{n}`"));
+            return None;
+        }
+        let proven = match &i.kind {
+            ExprKind::Int(v) => {
+                if *v < 0 || (*v as u64) >= u64::from(len) {
+                    self.error(SC3, index.span, format!("Index {v} ausserhalb 0..{}", len.saturating_sub(1)));
+                    return None;
+                }
+                true
+            }
+            _ => self.range_of(i.ty).is_some_and(|r| match (r.lo, r.hi) {
+                (takt_mir::types::Const::Int(lo), takt_mir::types::Const::Int(hi)) => lo >= 0 && hi < i64::from(len),
+                _ => false,
+            }),
+        };
+        if proven {
+            return Some(i);
+        }
+        let ty = i.ty;
+        Some(Expr::new(ExprKind::Checked { expr: Box::new(i), kind: CheckedKind::Index { len } }, ty, index.span))
+    }
+
     fn machine_member(
         &mut self,
         m: MachineId,
+        index: Option<Expr>,
         name: &ast::Ident,
         args: Option<&[ast::Arg]>,
         span: Span,
@@ -1904,7 +1943,7 @@ impl Lowerer<'_> {
             self.error(SC3, span, format!("`{}` nimmt keine Argumente", name.name));
             return None;
         }
-        let mref = MachineRef { machine: m, index: None };
+        let mref = MachineRef { machine: m, index: index.map(Box::new) };
         if name.name == "state" {
             let e = self.state_enums.get(&m).copied().or_else(|| {
                 self.error(SC3, span, "Zustandstyp der Maschine fehlt");

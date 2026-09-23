@@ -1,0 +1,51 @@
+# 73 — `after` auf zwei Ebenen derselben Kette (5.2, 11.2).
+#
+# Jeder Zustand hat seinen eigenen `t_in_state`: Ein `after` am
+# zusammengesetzten Zustand misst dessen Eintritt, nicht den des Blatts,
+# das darunter gerade wechselt. Ein einziger Zaehler fuer die ganze Kette
+# liesse die aeussere Frist mit jedem inneren Wechsel neu beginnen und
+# nie feuern (FB-208).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output inner : int in 0..999 @ sim("inner")
+output outer : int in 0..999 @ sim("outer")
+output idle  : int in 0..999 @ sim("idle")
+
+machine m:
+    var i : int in 0..999 = 0
+    var o : int in 0..999 = 0
+    var z : int in 0..999 = 0
+
+    initial WORK
+
+    loop:
+        inner = i
+        outer = o
+        idle = z
+
+    state WORK:
+        initial A
+
+        # Die aeussere Frist: 100 ms nach dem Eintritt in WORK, gleich
+        # wie oft A und B darunter wechseln.
+        after 100 ms: -> REST
+
+        state A:
+            after 30 ms:
+                i = i + 1
+                -> B
+
+        state B:
+            after 30 ms:
+                i = i + 1
+                -> A
+
+    state REST:
+        enter:
+            o = o + 1
+        loop:
+            z = z + 1
+        after 50 ms: -> WORK

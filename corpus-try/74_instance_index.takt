@@ -1,0 +1,38 @@
+# 74 — Ein Instanz-Array mit Index lesen (5.11): `cells[k].value` und
+# `cells[k].state`. Der Index wird gegen die Laenge geprueft (3.4) — ein
+# Literal beim Uebersetzen, ein gerechneter Wert zur Laufzeit (FB-210).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output pick  : int in 0..999 @ sim("pick")
+output next  : int in 0..999 @ sim("next")
+output which : int in 0..9   @ sim("which")
+output first : int in 0..999 @ sim("first")
+
+machine cell(idx: int in 0..2) every 10 ms:
+    pub var value : int in 0..999 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            value = (value + idx + 1) % 1000
+
+instance cells[i in 0..3] = cell(idx = i)
+
+machine picker:
+    var k : int in 0..2 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 3
+            which = k
+            # Beweisbar in der Laenge: keine Pruefung.
+            pick = cells[k].value
+            # Gerechnet: die Pruefung bleibt und besteht.
+            next = cells[(k + 1) % 3].value
+            first = cells[0].value

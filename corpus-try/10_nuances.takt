@@ -106,7 +106,7 @@ machine nuances with label = "Nuancen", group = "test":
             m.insert(1, 2)
             m.remove(1)
             for x in vals:
-                alert x > 4.5 V, "high {x:.3}"
+                alert x > 4.5 V, "high {x:.3}" req "SR-10"
             for e in raw_rx:
                 log "byte {e.seq} {{raw}}"
             if name matches "{s:str<8>}" as cap:

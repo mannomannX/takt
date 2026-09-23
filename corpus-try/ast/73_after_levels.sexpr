@@ -1,0 +1,30 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output inner :int in 0..999 @sim("inner"))
+(output outer :int in 0..999 @sim("outer"))
+(output idle :int in 0..999 @sim("idle"))
+(machine m
+  (var i :int in 0..999 0)
+  (var o :int in 0..999 0)
+  (var z :int in 0..999 0)
+  (initial WORK)
+  (loop
+    (= inner i)
+    (= outer o)
+    (= idle z))
+  (state WORK
+    (initial A)
+    (after 100ms -> REST)
+    (state A
+      (after 30ms -> B
+        (= i (+ i 1))))
+    (state B
+      (after 30ms -> A
+        (= i (+ i 1)))))
+  (state REST
+    (enter
+      (= o (+ o 1)))
+    (loop
+      (= z (+ z 1)))
+    (after 50ms -> WORK)))

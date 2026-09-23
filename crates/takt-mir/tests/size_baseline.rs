@@ -11,6 +11,7 @@ fn sample() -> Size {
             Item { name: "Stack nativer Funktionen".into(), bytes: 256, origin: Origin::Contract },
         ],
         overlay_saved: 0,
+        ..Default::default()
     }
 }
 

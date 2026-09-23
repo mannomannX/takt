@@ -488,8 +488,9 @@ impl<'t, 's> Parser<'t, 's> {
                 self.bump();
                 let cond = self.parse_expr()?;
                 let message = if self.eat_op(",") { Some(self.string()?) } else { None };
+                let req = if self.eat_word("req") { Some(self.string()?) } else { None };
                 self.expect_newline()?;
-                Ok(SeqItem::Expect { cond, message, span: self.span_from(start) })
+                Ok(SeqItem::Expect { cond, message, req, span: self.span_from(start) })
             }
             "repeat" => {
                 self.bump();

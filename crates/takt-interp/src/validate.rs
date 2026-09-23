@@ -290,7 +290,7 @@ impl Checker<'_> {
             StmtKind::Observe(o) => {
                 use takt_mir::stmt::Observe;
                 match o {
-                    Observe::Alert { cond, message, confirm } => {
+                    Observe::Alert { cond, message, confirm, .. } => {
                         self.expr(cond)?;
                         self.format(message)?;
                         if let Some(c) = confirm {

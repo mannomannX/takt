@@ -318,7 +318,7 @@ impl Dumper<'_> {
             StmtKind::Every { period, .. } => format!("every {}: …", self.expr(period)),
             StmtKind::Break => "break".to_string(),
             StmtKind::Observe(o) => match o {
-                Observe::Alert { cond, message, confirm } => {
+                Observe::Alert { cond, message, confirm, .. } => {
                     let mut t = format!("alert {}, {}", self.expr(cond), self.format(message));
                     if let Some(c) = confirm {
                         write!(t, " for {}", self.expr(&c.duration)).expect("String");

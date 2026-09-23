@@ -60,7 +60,7 @@ machine hotfire:
                 step "ignite":
                     igniter = true
                     until chamber_p > IGNITION_P timeout 500 ms -> SAFE
-                    expect chamber_p > IGNITION_P, "no chamber pressure after ignition"
+                    expect chamber_p > IGNITION_P, "no chamber pressure after ignition" req "SR-3"
                 step "burn":
                     ox_main = OPEN
                     check chamber_p > IGNITION_P, "flameout"

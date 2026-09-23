@@ -877,6 +877,7 @@ pub fn full_program() -> Program {
             cond: e(ExprKind::Bool(true), t_bool),
             message: msg("warm"),
             confirm: None,
+            req: None,
         })),
     ]);
     m.handlers.push(Handler {
@@ -1372,7 +1373,12 @@ pub fn full_program() -> Program {
                 }),
                 span: sp(65),
             },
-            SeqItem::Expect { cond: e(ExprKind::Bool(true), t_bool), message: Some(msg("expected")), span: sp(66) },
+            SeqItem::Expect {
+                cond: e(ExprKind::Bool(true), t_bool),
+                message: Some(msg("expected")),
+                req: None,
+                span: sp(66),
+            },
             SeqItem::Repeat {
                 count: e(ExprKind::Int(3), t_int),
                 counter: v_rep,

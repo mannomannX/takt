@@ -299,11 +299,7 @@ impl Vars for StateVars<'_> {
                 Some(Lowered { value: v.to_string(), ty: dur })
             }
             B::TimeInState => {
-                let i = self.state.index_of(Role::TimeInState, 0)?;
-                let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
-                let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}"));
-                let cell =
-                    m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", self.state.depth));
+                let cell = crate::machine::timer_cell(self.machine, self.state, self.machine.states.len(), m)?;
                 let ticks = m.inst(&format!("load i64, ptr {cell}"));
                 // Der Zaehler zaehlt Aktivierungen; die Zeit ist ihre
                 // Zahl mal der Periode (7.2), wie in `after`.
@@ -652,10 +648,8 @@ fn every(
 /// Der Zaehler im Zustand zaehlt Aktivierungen; eine Aktivierung ist
 /// `period` Basis-Ticks lang (7.2). Dieselbe Rechnung wie in `after`.
 fn time_in_state_ns(ctx: &Ctx<'_>, m: &mut Module) -> Result<String, NotYet> {
-    let t_i = ctx.state.index_of(Role::TimeInState, 0).ok_or(NotYet { what: "t_in_state im Zustand" })?;
-    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
-    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
-    let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
+    let cell = crate::machine::timer_cell(ctx.machine, ctx.state, ctx.machine.states.len(), m)
+        .ok_or(NotYet { what: "t_in_state im Zustand" })?;
     let ticks = m.inst(&format!("load i64, ptr {cell}"));
     let period_ns = i64::from(ctx.machine.period.max(1)).saturating_mul(ctx.program.config.tick);
     Ok(m.inst(&format!("mul i64 {ticks}, {period_ns}")).to_string())

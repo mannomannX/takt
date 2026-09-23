@@ -139,14 +139,15 @@ impl Lowerer<'_> {
                     kind: CheckKind::Check,
                 }
             }
-            ast::StmtKind::Alert { cond, message, confirm } => {
+            ast::StmtKind::Alert { cond, message, confirm, req } => {
                 if kind.is_action() {
                     return forbidden(self, "alert");
                 }
                 let cond = self.observe_cond(cond);
                 let message = self.format(message)?;
                 let confirm = self.confirm(confirm.as_ref(), span)?;
-                StmtKind::Observe(Observe::Alert { cond: cond?, message, confirm })
+                let req = req.as_ref().map(|r| r.value.clone());
+                StmtKind::Observe(Observe::Alert { cond: cond?, message, confirm, req })
             }
             ast::StmtKind::Log(text) => StmtKind::Observe(Observe::Log(self.format(text)?)),
             ast::StmtKind::Goto(target) => {

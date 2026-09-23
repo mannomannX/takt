@@ -113,9 +113,12 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     // Ebene nicht mehr als 256 Geschwister hat; darueber waere die
     // Maschine ohnehin nicht mehr lesbar (Prinzip: Struktur sichtbar).
     fields.push(Field { name: "conf".into(), ty: LlvmType::Array(Box::new(LlvmType::Int(8)), d), role: Role::Conf });
+    // 11.2, 5.2: `t_in_state` je Zustand — `after` an einem Vorfahren
+    // misst dessen Eintritt, nicht den des Blatts (FB-208). Dahinter der
+    // Zaehler des Blatts fuer `time_in_state`.
     fields.push(Field {
         name: "t_in_state".into(),
-        ty: LlvmType::Array(Box::new(LlvmType::Int(64)), d),
+        ty: LlvmType::Array(Box::new(LlvmType::Int(64)), timers(m) as u32),
         role: Role::TimeInState,
     });
     for (i, v) in m.vars.iter().enumerate() {
@@ -288,6 +291,33 @@ pub fn path_to(m: &Machine, id: StateId) -> Vec<StateId> {
     }
     out.reverse();
     out
+}
+
+/// Die Zaehler `t_in_state`: einer je Zustand und einer fuer das Blatt.
+pub fn timers(m: &Machine) -> usize {
+    m.states.len() + 1
+}
+
+/// Der Zaehler `t_in_state[i]` im Zustands-Struct.
+pub fn timer_cell(m: &Machine, st: &StateStruct, i: usize, module: &mut Module) -> Option<crate::emit::Reg> {
+    let t_i = st.index_of(Role::TimeInState, 0)?;
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let base = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
+    Some(module.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 {i}", timers(m))))
+}
+
+/// Zaehlt alle `t_in_state` um eine Aktivierung weiter (9.4).
+///
+/// Auch die der inaktiven Zustaende: Sie werden beim Eintritt auf null
+/// gesetzt und davor nie gelesen — so braucht das Schrittende das Blatt
+/// nicht zu kennen.
+pub fn advance_timers(m: &Machine, st: &StateStruct, module: &mut Module) {
+    for i in 0..timers(m) {
+        let Some(cell) = timer_cell(m, st, i, module) else { return };
+        let now = module.inst(&format!("load i64, ptr {cell}"));
+        let next = module.inst(&format!("add i64 {now}, 1"));
+        module.void_inst(&format!("store i64 {next}, ptr {cell}"));
+    }
 }
 
 /// Der Zustand zu einer Id.

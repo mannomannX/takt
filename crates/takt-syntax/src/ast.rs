@@ -989,7 +989,7 @@ pub enum SeqItem {
     Stmt(Stmt),
     Wait(Expr),
     Until { guard: Guard, timeout: Option<Timeout>, span: Span },
-    Expect { cond: Expr, message: Option<StrLit>, span: Span },
+    Expect { cond: Expr, message: Option<StrLit>, req: Option<StrLit>, span: Span },
     Repeat { count: Expr, body: Vec<SeqItem>, span: Span },
     Step { name: StrLit, body: Vec<SeqItem>, span: Span },
 }
@@ -1234,6 +1234,7 @@ pub enum StmtKind {
         cond: Expr,
         message: StrLit,
         confirm: Option<Expr>,
+        req: Option<StrLit>,
     },
     Log(StrLit),
     Goto(Ident),

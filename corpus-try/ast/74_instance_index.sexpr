@@ -1,0 +1,24 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output pick :int in 0..999 @sim("pick"))
+(output next :int in 0..999 @sim("next"))
+(output which :int in 0..9 @sim("which"))
+(output first :int in 0..999 @sim("first"))
+(machine cell (idx:int in 0..2) every=10ms
+  (pub-var value :int in 0..999 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= value (% (+ (+ value idx) 1) 1000)))))
+(instance cells [i in 0..3] cell idx=i)
+(machine picker
+  (var k :int in 0..2 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (% (+ k 1) 3))
+      (= which k)
+      (= pick (.value (index cells k)))
+      (= next (.value (index cells (% (+ k 1) 3))))
+      (= first (.value (index cells 0))))))

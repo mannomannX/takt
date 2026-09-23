@@ -217,17 +217,17 @@ impl<'p, 'o> Ctx<'p, 'o> {
             }
             ExprKind::Output(c) => self.outer.output(*c).cloned(),
             ExprKind::Published { machine, var } => {
-                self.machine_index(machine)?;
-                self.outer.published(machine.machine, *var).cloned()
+                let id = self.machine_index(machine)?;
+                self.outer.published(id, *var).cloned()
             }
             ExprKind::StateOf(m) => {
-                self.machine_index(m)?;
-                self.outer.state_of(m.machine)
+                let id = self.machine_index(m)?;
+                self.outer.state_of(id)
             }
             ExprKind::JobState { handle, field } => self.outer.job(*handle, *field),
             ExprKind::Signal { machine, signal } => {
-                self.machine_index(machine)?;
-                Ok(Value::Bool(self.outer.signal(machine.machine, *signal)?))
+                let id = self.machine_index(machine)?;
+                Ok(Value::Bool(self.outer.signal(id, *signal)?))
             }
             // 7.5: `event` ist das Element, das den Guard erfuellt hat; es
             // steht nur im `then`-Teil eines Triggers.
@@ -356,11 +356,24 @@ impl<'p, 'o> Ctx<'p, 'o> {
         }
     }
 
-    fn machine_index(&mut self, m: &MachineRef) -> EvalResult<()> {
-        if m.index.is_some() {
-            return bug("Instanz-Arrays mit Indexausdruck ab M8");
+    /// 5.11: Die Instanz hinter einem Bezug — bei einem Array die erste
+    /// plus Index, gegen die Laenge geprueft (3.4).
+    fn machine_index(&mut self, m: &MachineRef) -> EvalResult<takt_mir::MachineId> {
+        let Some(index) = &m.index else { return Ok(m.machine) };
+        let i = match self.eval(index)? {
+            Value::Int(v) => i128::from(v),
+            Value::UInt(v) => i128::from(v),
+            other => return bug(format!("Instanzindex ist {}", other.kind_name())),
+        };
+        let len = match &self.loaded.program.machines[m.machine.index()].kind {
+            takt_mir::machine::MachineKind::Instance(info) => info.array.map_or(1, |(_, n)| n),
+            _ => 1,
+        };
+        if i < 0 || i >= i128::from(len) {
+            let message = format!("Instanzindex {i} ausserhalb 0..{}", len.saturating_sub(1));
+            return Err(self.fault(FaultKind::Range, message, index.span));
         }
-        Ok(())
+        Ok(takt_mir::MachineId(m.machine.0 + i as u32))
     }
 
     /// Element eines Arrays, Vektors, Bytes oder Strings mit Range-Pruefung.

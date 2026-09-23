@@ -153,7 +153,10 @@ pub fn load_indexed(
     // 3.4: Der Index ist gegen die Laenge geprueft, bevor er hier
     // ankommt; `urem` haelt die Adresse auch dann im Array, wenn eine
     // spaetere Aenderung die Pruefung verloere.
-    let i64_index = m.inst(&format!("zext i32 {} to i64", index.value));
+    let i64_index = match index.ty {
+        LlvmType::Int(64) => index.value.clone(),
+        ref t => m.inst(&format!("sext {t} {} to i64", index.value)).to_string(),
+    };
     let safe = m.inst(&format!("urem i64 {i64_index}, {}", u64::from(len.max(1))));
     let delta = m.inst(&format!("mul i64 {safe}, {stride}"));
     let at = m.inst(&format!("add i64 {delta}, {base}"));

@@ -429,19 +429,31 @@ impl Lowerer<'_> {
     /// Statische Hoechstzahl von `send` auf einen Stream je Aktivierung des
     /// Schreibers (8.6, Pruefung 43).
     fn max_sends(&self, target: StreamRef) -> u64 {
+        let count = |stmts: &[Stmt]| {
+            let mut n = 0u64;
+            walk_stmts(stmts, 0, &mut |s, _| {
+                if let StmtKind::Send { stream, .. } = &s.kind
+                    && *stream == target
+                {
+                    n += 1;
+                }
+            });
+            n
+        };
         let mut worst = 0u64;
         for m in &self.program.machines {
             if matches!(m.kind, MachineKind::Template) {
                 continue;
             }
             let mut n = 0u64;
-            for_each_stmt(m, &mut |s| {
-                if let StmtKind::Send { stream, .. } = &s.kind {
-                    if *stream == target {
-                        n += 1;
-                    }
+            for_each_block(m, &mut |b| n += count(&b.stmts));
+            // 6.2: Eine Sequenz laeuft je Tick ein Segment; ihre `send`
+            // zaehlen je Segment, nicht in der Summe (FB-186).
+            for s in &m.states {
+                if let Some(seq) = &s.sequence {
+                    n += segment_sends(&seq.items, &count);
                 }
-            });
+            }
             worst = worst.max(n);
         }
         worst.max(1)
@@ -1759,30 +1771,71 @@ pub fn for_each_stmt(m: &Machine, f: &mut impl FnMut(&Stmt)) {
 
 /// Wie `for_each_stmt`, mit Schleifentiefe.
 pub fn for_each_stmt_ctx(m: &Machine, f: &mut impl FnMut(&Stmt, u32)) {
-    let visit_block = |b: &Block, f: &mut dyn FnMut(&Stmt, u32)| walk_stmts(&b.stmts, 0, f);
-    visit_block(&m.loop_block, f);
-    // Ein Handler-Rumpf ist gewoehnlicher Code (8.7): er schreibt Outputs und
-    // liest Channels wie jeder andere Block.
-    for h in &m.handlers {
-        visit_block(&h.body, f);
-    }
-    for t in &m.faulted.transitions {
-        visit_block(&t.actions, f);
-    }
+    for_each_block(m, &mut |b| walk_stmts(&b.stmts, 0, f));
     for s in &m.states {
-        visit_block(&s.enter, f);
-        visit_block(&s.exit, f);
-        visit_block(&s.loop_block, f);
-        for h in &s.handlers {
-            visit_block(&h.body, f);
-        }
-        for t in &s.transitions {
-            visit_block(&t.actions, f);
-        }
         if let Some(seq) = &s.sequence {
             walk_seq(&seq.items, f);
         }
     }
+}
+
+/// Die Bloecke einer Maschine ausserhalb ihrer Sequenzen.
+///
+/// Ein Handler-Rumpf ist gewoehnlicher Code (8.7): er schreibt Outputs und
+/// liest Channels wie jeder andere Block.
+pub fn for_each_block(m: &Machine, f: &mut impl FnMut(&Block)) {
+    f(&m.loop_block);
+    for h in &m.handlers {
+        f(&h.body);
+    }
+    for t in &m.faulted.transitions {
+        f(&t.actions);
+    }
+    for s in &m.states {
+        f(&s.enter);
+        f(&s.exit);
+        f(&s.loop_block);
+        for h in &s.handlers {
+            f(&h.body);
+        }
+        for t in &s.transitions {
+            f(&t.actions);
+        }
+    }
+}
+
+/// Das Maximum der `send` eines Segments (6.2): Grenzen sind `wait`,
+/// `until`, eine Anweisung mit `->` und das Ende eines `repeat`-Koerpers.
+fn segment_sends(items: &[SeqItem], count: &dyn Fn(&[Stmt]) -> u64) -> u64 {
+    let (mut best, mut cur) = (0u64, 0u64);
+    for item in items {
+        match item {
+            SeqItem::Stmt(s) => {
+                cur += count(std::slice::from_ref(s));
+                if Block::new(vec![s.clone()]).has_goto() {
+                    best = best.max(cur);
+                    cur = 0;
+                }
+            }
+            SeqItem::Wait(_) => {
+                best = best.max(cur);
+                cur = 0;
+            }
+            SeqItem::Until { timeout, .. } => {
+                best = best.max(cur);
+                cur = 0;
+                if let Some(TimeoutAction::Else(b)) = timeout.as_ref().map(|t| &t.action) {
+                    best = best.max(count(&b.stmts));
+                }
+            }
+            SeqItem::Expect { .. } => {}
+            SeqItem::Repeat { body, .. } | SeqItem::Step { body, .. } => {
+                best = best.max(cur).max(segment_sends(body, count));
+                cur = 0;
+            }
+        }
+    }
+    best.max(cur)
 }
 
 fn walk_seq(items: &[SeqItem], f: &mut dyn FnMut(&Stmt, u32)) {
@@ -1932,7 +1985,7 @@ fn stmt_exprs(s: &Stmt, f: &mut impl FnMut(&Expr)) {
         }
         StmtKind::Every { period, .. } => f(period),
         StmtKind::Observe(o) => match o {
-            Observe::Alert { cond, message, confirm } => {
+            Observe::Alert { cond, message, confirm, .. } => {
                 f(cond);
                 format_exprs(message, f);
                 if let Some(c) = confirm {

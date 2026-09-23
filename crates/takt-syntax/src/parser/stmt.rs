@@ -298,7 +298,8 @@ impl<'t, 's> Parser<'t, 's> {
         self.expect_op(",")?;
         let message = self.string()?;
         let confirm = if self.eat_kw("for") { Some(self.parse_duration_expr()?) } else { None };
-        Ok(StmtKind::Alert { cond, message, confirm })
+        let req = if self.eat_word("req") { Some(self.string()?) } else { None };
+        Ok(StmtKind::Alert { cond, message, confirm, req })
     }
 
     /// `log_stmt`

@@ -305,7 +305,7 @@ seq_item       := stmt   (* @check 14 *)
                 | "wait" duration_expr NEWLINE
                 | "until" guard [ "timeout" duration_expr [ "->" UPPER_IDENT ] ] NEWLINE
                 | "until" guard "timeout" duration_expr "else" ":" action_block           (* weicher Timeout, 6.2; der Block traegt sein Zeilenende *)
-                | "expect" expr [ "," STRING ] NEWLINE
+                | "expect" expr [ "," STRING ] [ "req" STRING ] NEWLINE   (* req: 13.4 *)
                 | "repeat" const_expr ":" NEWLINE INDENT { seq_item } DEDENT
                 | "step" STRING ":" NEWLINE INDENT { seq_item } DEDENT
 
@@ -349,7 +349,7 @@ case_pattern   := UPPER_IDENT [ "(" IDENT { "," IDENT } ")" ] | "_"
 at_stmt        := "at" duration_expr ":" action_block   (* @check 21, 28 *)
 every_stmt     := "every" duration_expr ":" block   (* @check 27 *)
 check_stmt     := "check" expr [ "," STRING ] [ "for" duration_expr ] [ "within" duration_expr ] [ "->" UPPER_IDENT ] [ "req" STRING ]   (* for: 5.6; within: 9.4.5; req: v1.2 *)   (* @check 9, 36, 61 *)
-alert_stmt     := "alert" expr "," STRING [ "for" duration_expr ]   (* @check 36 *)
+alert_stmt     := "alert" expr "," STRING [ "for" duration_expr ] [ "req" STRING ]   (* req: 13.4 *)   (* @check 36 *)
 log_stmt       := "log" STRING                                                               (* Inhalt nach format_text *)
 send_stmt      := "send" IDENT "," expr   (* @check 20 *)
 pulse_stmt     := "pulse" IDENT "=" expr "for" duration_expr   (* @check 21 *)

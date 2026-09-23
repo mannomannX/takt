@@ -327,6 +327,9 @@ pub struct Lowerer<'a> {
     pub tys: Builtins,
     /// Zustandstypen je Maschine.
     pub state_enums: HashMap<MachineId, EnumId>,
+    /// Instanzen auf Dateiebene, deren Ids und Namen vor den Maschinen
+    /// stehen (5.11): erste Id und `(Index, Laenge)` je Element.
+    pub reserved: HashMap<String, (MachineId, Vec<(i64, i64)>)>,
     /// Zustandsrecord je Block (Typ der Instanzen).
     pub block_records: HashMap<BlockId, RecordId>,
     /// Ausgehobene `step`-Aufrufe anonymer Instanzen (5.7); `stmts` stellt
@@ -395,6 +398,7 @@ impl<'a> Lowerer<'a> {
                 last_fault_ty: bool,
             },
             state_enums: HashMap::new(),
+            reserved: HashMap::new(),
             block_records: HashMap::new(),
             counter: 0,
             pending: Vec::new(),

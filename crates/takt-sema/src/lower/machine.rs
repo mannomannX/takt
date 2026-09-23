@@ -711,13 +711,14 @@ impl Lowerer<'_> {
                 };
                 Some(SeqItem::Until { guard: g, timeout, span: *span })
             }
-            ast::SeqItem::Expect { cond, message, span } => {
+            ast::SeqItem::Expect { cond, message, req, span } => {
                 let cond = self.check_bool(cond)?;
                 let message = match message {
                     Some(m) => Some(self.format(m)?),
                     None => None,
                 };
-                Some(SeqItem::Expect { cond, message, span: *span })
+                let req = req.as_ref().map(|r| r.value.clone());
+                Some(SeqItem::Expect { cond, message, req, span: *span })
             }
             ast::SeqItem::Repeat { count, body, span } => {
                 let int = self.tys.int;
@@ -755,9 +756,87 @@ impl Lowerer<'_> {
 
     // ------------------------------------------------------------ Instanzen
 
+    /// Der Eintrag einer Vorlage im Programm; entsteht beim ersten Bedarf.
+    fn template_id(&mut self, idx: usize) -> MachineId {
+        let t = self.templates.machines[idx].clone();
+        match t.id {
+            Some(id) => id,
+            None => self.with_env(super::Env::default(), t.prelude, |this| {
+                let id = this.template_entry(&t.decl, t.state_enum);
+                this.program.machines[id.index()].params = this.template_params(&t.decl);
+                this.templates.machines[idx].id = Some(id);
+                id
+            }),
+        }
+    }
+
     /// `instance NAME[i in a..b] = tmpl(args)` auf Dateiebene.
     pub fn instance_decl(&mut self, decl: &ast::InstanceDecl) {
         self.instance_at(decl, None);
+    }
+
+    /// Die Elemente einer Instanz: `(Index, Laenge)`; ohne Index eines.
+    fn instance_indices(&mut self, decl: &ast::InstanceDecl) -> Option<Vec<(i64, i64)>> {
+        let Some((_, range)) = &decl.index else { return Some(vec![(0, 1)]) };
+        let (Some(lo), Some(hi)) = (self.const_int(&range.from), self.const_int(&range.to)) else { return None };
+        if lo < 0 || hi <= lo || hi - lo > 1024 {
+            self.error(SC3, range.span, "Indexbereich ausserhalb 0..1024");
+            return None;
+        }
+        Some((lo..hi).map(|i| (i, hi - lo)).collect())
+    }
+
+    /// Der Name eines Elements: `NAME` oder `NAME_i` — ein Bezeichner,
+    /// weil Codegen und Rahmen Symbole daraus bilden.
+    fn element_name(decl: &ast::InstanceDecl, i: i64) -> String {
+        match &decl.index {
+            None => decl.name.name.clone(),
+            Some(_) => format!("{}_{i}", decl.name.name),
+        }
+    }
+
+    /// Meldet eine Instanz auf Dateiebene an, bevor die Maschinen gesenkt
+    /// werden (5.11): Ids und Name stehen fest, der Rumpf kommt spaeter.
+    pub fn reserve_instance(&mut self, decl: &ast::InstanceDecl) {
+        let Some(Entity::MachineTemplate(idx)) = self.peek(&decl.template.name).cloned() else { return };
+        let Some(indices) = self.instance_indices(decl) else { return };
+        self.template_id(idx);
+        let t = self.templates.machines[idx].clone();
+        // Wertparameter werden Variablen vor der Schnittstelle (`lower_machine`);
+        // die Nummern muessen schon jetzt stimmen.
+        let params: Vec<(String, Option<TypeId>, Span)> = t
+            .decl
+            .params
+            .iter()
+            .filter(|p| p.dir.is_none())
+            .map(|p| (p.name.name.clone(), self.resolve_type(&p.ty), p.span))
+            .collect();
+        let first = MachineId(self.program.machines.len() as u32);
+        for (i, _) in &indices {
+            // Schnittstelle vorab wie bei jeder Maschine; der Rumpf ersetzt sie.
+            let id = MachineId(self.program.machines.len() as u32);
+            let mut m = Machine::new(Self::element_name(decl, *i));
+            for (name, ty, span) in &params {
+                let Some(ty) = ty else { continue };
+                m.vars.push(VarDef {
+                    name: name.clone(),
+                    ty: *ty,
+                    init: None,
+                    scope: VarScope::Param,
+                    public: false,
+                    span: *span,
+                });
+            }
+            self.declare_interface(&mut m, &t.decl.body);
+            self.program.machines.push(m);
+            self.state_enums.insert(id, t.state_enum);
+        }
+        let entity = match &decl.index {
+            None => Entity::Machine(first),
+            Some(_) => Entity::MachineArray(first, indices.len() as u32),
+        };
+        self.declare(&decl.name, entity);
+        self.reserved.insert(decl.name.name.clone(), (first, indices));
     }
 
     /// `instance NAME = tmpl(args) in ZUSTAND [resume]` (5.11): dieselbe
@@ -777,34 +856,22 @@ impl Lowerer<'_> {
             return;
         }
         let t = self.templates.machines[idx].clone();
-        let template = match t.id {
-            Some(id) => id,
-            None => self.with_env(super::Env::default(), t.prelude, |this| {
-                let id = this.template_entry(&t.decl, t.state_enum);
-                this.program.machines[id.index()].params = this.template_params(&t.decl);
-                this.templates.machines[idx].id = Some(id);
-                id
-            }),
-        };
-        let indices: Vec<(i64, i64)> = match &decl.index {
-            None => vec![(0, 1)],
-            Some((_, range)) => {
-                let (Some(lo), Some(hi)) = (self.const_int(&range.from), self.const_int(&range.to)) else { return };
-                if lo < 0 || hi <= lo || hi - lo > 1024 {
-                    self.error(SC3, range.span, "Indexbereich ausserhalb 0..1024");
-                    return;
+        let template = self.template_id(idx);
+        let reserved = scope.is_none().then(|| self.reserved.remove(&decl.name.name)).flatten();
+        let (first, indices) = match reserved {
+            Some(r) => r,
+            None => {
+                let Some(indices) = self.instance_indices(decl) else { return };
+                let first = MachineId(self.program.machines.len() as u32);
+                for (i, _) in &indices {
+                    self.program.machines.push(Machine::new(Self::element_name(decl, *i)));
                 }
-                (lo..hi).map(|i| (i, hi - lo)).collect()
+                (first, indices)
             }
         };
-        let first = MachineId(self.program.machines.len() as u32);
-        for (i, len) in &indices {
-            let name = match &decl.index {
-                None => decl.name.name.clone(),
-                Some(_) => format!("{}[{i}]", decl.name.name),
-            };
-            let id = MachineId(self.program.machines.len() as u32);
-            self.program.machines.push(Machine::new(name));
+        let declared = scope.is_none();
+        for (k, (i, len)) in indices.iter().enumerate() {
+            let id = MachineId(first.0 + k as u32);
             self.state_enums.insert(id, t.state_enum);
             let bindings = self.scoped(|this| {
                 if let Some((var, _)) = &decl.index {
@@ -827,11 +894,13 @@ impl Lowerer<'_> {
                 self.program.machines[owner.index()].states[state.index()].instances.push(inst);
             }
         }
-        let entity = match &decl.index {
-            None => Entity::Machine(first),
-            Some(_) => Entity::MachineArray(first, indices.len() as u32),
-        };
-        self.declare(&decl.name, entity);
+        if !declared {
+            let entity = match &decl.index {
+                None => Entity::Machine(first),
+                Some(_) => Entity::MachineArray(first, indices.len() as u32),
+            };
+            self.declare(&decl.name, entity);
+        }
     }
 
     /// Ein Instanzargument: konstant oder ein `param` — eine Laufkonstante,

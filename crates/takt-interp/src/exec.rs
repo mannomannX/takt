@@ -342,7 +342,7 @@ impl Ctx<'_, '_> {
     fn observe(&mut self, o: &Observe, span: Span) -> EvalResult<()> {
         let event = match o {
             Observe::Log(f) => Observation::Log(render(f, self)),
-            Observe::Alert { cond, message, confirm } => {
+            Observe::Alert { cond, message, confirm, .. } => {
                 // Die Bedingung eines Alerts nennt das zu meldende Ereignis
                 // (5.6); anders als bei `check` ist sie keine Invariante. Ein
                 // ungueltiger Input laesst den Alert feuern, statt die

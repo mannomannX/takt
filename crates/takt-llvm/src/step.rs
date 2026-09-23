@@ -150,13 +150,7 @@ fn write_step(
     module.label(&end);
     // `t_in_state` zaehlt die Ticks im aktiven Zustand (5.2, 11.2). Ein
     // Uebergang hat ihn auf 0 gesetzt; hier waechst er um einen Tick.
-    if let Some(t_i) = st.index_of(Role::TimeInState, 0) {
-        let base = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
-        let cell = module.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", st.depth));
-        let old = module.inst(&format!("load i64, ptr {cell}"));
-        let new = module.inst(&format!("add i64 {old}, 1"));
-        module.void_inst(&format!("store i64 {new}, ptr {cell}"));
-    }
+    machine::advance_timers(m, st, module);
     // 9.6, `advance_cursors()`: `cur[s, m] = examined + 1`. Der Cursor
     // steht im Zustand der Maschine, nicht im Strom — nur der erzeugte
     // Code kann ihn schreiben; `takt_stream_examined` meldet dasselbe
@@ -211,7 +205,7 @@ fn level(
         // erste passende in Quelltextreihenfolge.
         for anc in machine::path_to(machine, leaf).iter().rev() {
             let list = machine.states[anc.index()].transitions.clone();
-            transitions(&list, i, jump.leaves, ctx, m, jump.end, jump.conf)?;
+            transitions(&list, *anc, i, jump.leaves, ctx, m, jump.end, jump.conf)?;
         }
         m.void_inst(&format!("br label %{}", jump.end));
         // 5.2 Regel 5: Ein Fault fuehrt sofort zum Fault-Ziel des
@@ -261,8 +255,10 @@ fn level(
 /// haelt, gewinnt und verlaesst den Zustand. 8.7 verlangt dieselbe
 /// Reihenfolge fuer Handler — der Quelltext ist die Prioritaet, damit sie
 /// dasteht, statt hergeleitet werden zu muessen.
+#[allow(clippy::too_many_arguments)]
 fn transitions(
     list: &[Transition],
+    at: StateId,
     from: usize,
     leaves: &[StateId],
     ctx: &mut Ctx<'_>,
@@ -276,7 +272,7 @@ fn transitions(
                 let vars = ctx.vars();
                 lower_expr(cond, ctx.program, m, &vars)?
             }
-            TransTrigger::After(d) => after(d, ctx, m)?,
+            TransTrigger::After(d) => after(d, at, ctx, m)?,
             TransTrigger::When(Guard::Match { subject, kind, pattern, binding }) => {
                 match_guard(subject, *kind, pattern, *binding, ctx, m)?
             }
@@ -440,7 +436,6 @@ fn leave_configuration(ctx: &Ctx<'_>, m: &mut Module, leaves: usize) {
     // Der Index hinter dem letzten Blatt: Der `switch` der
     // Schrittfunktion kennt nur 0..leaves und trifft ihn nicht.
     m.void_inst(&format!("store i8 {leaves}, ptr {cell}"));
-    reset_time(ctx, m);
 }
 
 /// Der Wechsel von einem Blatt zu einem anderen (5.2).
@@ -542,7 +537,7 @@ fn enter_leaf(
     if m.instrument != crate::target::Instrument::Off {
         crate::stmt::mark(leaf.0, ctx, m);
     }
-    reset_time(ctx, m);
+    reset_timers(ctx, &machine::entering(ctx.machine, from, leaf), m);
     // 5.8/5.6: Die `every`- und Bestaetigungszaehler der betretenen
     // Zustaende beginnen neu. Vor den `loop:`-Bloecken darunter, weil die
     // im selben Tick laufen (5.2 Regel 4) und das `every` dort steht —
@@ -644,11 +639,7 @@ pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Res
 /// Ohne das Zuruecksetzen misst `after d` die Zeit elapsed dem Start der
 /// Maschine statt elapsed dem Eintritt — der haeufigste Fehler, den eine
 /// handgeschriebene Zustandsmaschine macht.
-fn reset_time(ctx: &Ctx<'_>, m: &mut Module) {
-    let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else { return };
-    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
-    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
-    let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
+fn reset_timers(ctx: &Ctx<'_>, entered: &[StateId], m: &mut Module) {
     // 0, wie im Interpreter (`enter_state`): Ein Zustand, der im Tick k
     // betreten wird, liest dort `t_in_state == 0` — der Entry-Modus
     // (5.2 Regel 4) laeuft noch in diesem Tick und sieht die Null.
@@ -656,7 +647,11 @@ fn reset_time(ctx: &Ctx<'_>, m: &mut Module) {
     // Die Erhoehung am Ende des Schritts macht daraus 1 fuer den
     // naechsten Tick. Ein `-1` hier haette den Entry-Modus -1 lesen
     // lassen und jede `after`-Frist um einen Tick verschoben.
-    m.void_inst(&format!("store i64 0, ptr {cell}"));
+    let leaf = ctx.machine.states.len();
+    for i in entered.iter().map(|s| s.index()).chain([leaf]) {
+        let Some(cell) = machine::timer_cell(ctx.machine, ctx.state, i, m) else { return };
+        m.void_inst(&format!("store i64 0, ptr {cell}"));
+    }
 }
 
 /// Setzt die `every`- und Bestaetigungszaehler eines Zustands beim
@@ -842,32 +837,33 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
     // zaehlt Aktivierungen, nicht Ticks.
     let period = u64::from(m.period.max(1));
     let activation_ns = period.saturating_mul(p.config.tick.max(1) as u64);
-    // Je Blatt die kuerzeste `after`-Frist seiner Kette, in Aktivierungen.
-    let deadlines: Vec<Option<u64>> = leaves
+    // Je Blatt die `after`-Fristen seiner Kette in Aktivierungen, mit dem
+    // Zustand, dessen Zaehler sie misst (FB-208).
+    let deadlines: Vec<Vec<(usize, u64)>> = leaves
         .iter()
         .map(|l| {
             machine::path_to(m, *l)
                 .iter()
-                .flat_map(|id| &m.states[id.index()].transitions)
-                .filter_map(|t| match &t.trigger {
+                .flat_map(|id| m.states[id.index()].transitions.iter().map(move |t| (id.index(), t)))
+                .filter_map(|(at, t)| match &t.trigger {
                     // `after 0` feuert bei der ersten Aktivierung
                     // (`elapsed > 0`), ist also eine Frist von eins.
                     TransTrigger::After(e) => match e.kind {
                         takt_mir::expr::ExprKind::Duration(ns) if ns >= 0 => {
-                            Some((ns as u64).div_ceil(activation_ns).max(1))
+                            Some((at, (ns as u64).div_ceil(activation_ns).max(1)))
                         }
                         _ => None,
                     },
                     TransTrigger::When(_) => None,
                 })
-                .min()
+                .collect()
         })
         .collect();
 
     let mark = module.mark();
     module.begin(&format!("{}_deadline", m.name), &crate::ty::LlvmType::Int(64), &[crate::ty::LlvmType::Ptr]);
 
-    if deadlines.iter().all(Option::is_none) {
+    if deadlines.iter().all(Vec::is_empty) {
         module.end(Some((&crate::ty::LlvmType::Int(64), "-1".into())));
         return Ok(());
     }
@@ -880,19 +876,28 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
     let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
     let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
     let cur = module.inst(&format!("load i8, ptr {slot}"));
-    let tis = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {tis_i}"));
-    let tis0 = module.inst(&format!("getelementptr inbounds [{} x i64], ptr {tis}, i32 0, i32 0", st.depth));
-    let elapsed = module.inst(&format!("load i64, ptr {tis0}"));
-
+    let _ = tis_i;
     // Kaskade statt Sprungtabelle: Ein Blatt ohne Frist liefert -1.
     let mut acc = module.inst("select i1 true, i64 -1, i64 -1");
-    for (i, deadline) in deadlines.iter().enumerate() {
-        let Some(ticks) = deadline else { continue };
-        let rest = module.inst(&format!("sub i64 {ticks}, {elapsed}"));
-        let positiv = module.inst(&format!("icmp sgt i64 {rest}, 0"));
-        let remaining = module.inst(&format!("select i1 {positiv}, i64 {rest}, i64 0"));
+    for (i, list) in deadlines.iter().enumerate() {
+        let mut best: Option<crate::emit::Reg> = None;
+        for (at, ticks) in list {
+            let Some(cell) = machine::timer_cell(m, st, *at, module) else { continue };
+            let elapsed = module.inst(&format!("load i64, ptr {cell}"));
+            let rest = module.inst(&format!("sub i64 {ticks}, {elapsed}"));
+            let positiv = module.inst(&format!("icmp sgt i64 {rest}, 0"));
+            let remaining = module.inst(&format!("select i1 {positiv}, i64 {rest}, i64 0"));
+            best = Some(match best {
+                None => remaining,
+                Some(b) => {
+                    let nearer = module.inst(&format!("icmp slt i64 {remaining}, {b}"));
+                    module.inst(&format!("select i1 {nearer}, i64 {remaining}, i64 {b}"))
+                }
+            });
+        }
+        let Some(best) = best else { continue };
         // Die Runtime springt Basis-Ticks, nicht Aktivierungen.
-        let value = module.inst(&format!("mul i64 {remaining}, {period}"));
+        let value = module.inst(&format!("mul i64 {best}, {period}"));
         let is_leaf = module.inst(&format!("icmp eq i8 {cur}, {i}"));
         acc = module.inst(&format!("select i1 {is_leaf}, i64 {value}, i64 {acc}"));
     }
@@ -1136,13 +1141,7 @@ fn emit_init(
 /// jedes Ticks, in dem die Maschine aktiv war — und am Ende der
 /// Initialisierung, weil Tick 0 dazugehoert.
 fn advance_time(ctx: &Ctx<'_>, m: &mut Module) {
-    let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else { return };
-    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
-    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
-    let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
-    let now = m.inst(&format!("load i64, ptr {cell}"));
-    let next = m.inst(&format!("add i64 {now}, 1"));
-    m.void_inst(&format!("store i64 {next}, ptr {cell}"));
+    machine::advance_timers(ctx.machine, ctx.state, m);
 }
 
 /// `after d` als Ausloeser (5.2, 7.1).
@@ -1161,7 +1160,7 @@ fn advance_time(ctx: &Ctx<'_>, m: &mut Module) {
 ///
 /// Die Dauer ist jeder Ausdruck vom Typ `Duration`; die Grammatik sagt
 /// es so (`duration_expr := expr`), und der Interpreter wertet ihn aus.
-fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crate::expr::Lowered, NotYet> {
+fn after(d: &takt_mir::expr::Expr, at: StateId, ctx: &Ctx<'_>, m: &mut Module) -> Result<crate::expr::Lowered, NotYet> {
     // Ein Literal steht schon zur Uebersetzungszeit fest und braucht
     // keine Anweisung; alles andere wird gesenkt wie jeder Ausdruck —
     // ein Maschinenparameter (5.8) ebenso wie eine Variable.
@@ -1181,12 +1180,8 @@ fn after(d: &takt_mir::expr::Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<crat
         }
         _ => crate::expr::lower(d, ctx.program, m, &vars)?,
     };
-    let Some(t_i) = ctx.state.index_of(Role::TimeInState, 0) else {
-        return Err(NotYet { what: "t_in_state im Zustand" });
-    };
-    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
-    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
-    let cell = m.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", ctx.state.depth));
+    let cell =
+        machine::timer_cell(ctx.machine, ctx.state, at.index(), m).ok_or(NotYet { what: "t_in_state im Zustand" })?;
     let ticks = m.inst(&format!("load i64, ptr {cell}"));
     // Die Periode der Maschine in Nanosekunden steht fest (7.2): `period`
     // Basis-Ticks mal T0.
@@ -1764,7 +1759,7 @@ fn fault_path(
         block(&machine_def.states[id.index()].enter.clone(), ctx, m)?;
     }
     m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
-    reset_time(ctx, m);
+    reset_timers(ctx, &machine::entering(machine_def, from, leaf), m);
     // Auch der Fault-Pfad betritt einen Zustand: seine Zaehler beginnen
     // neu (5.8, 5.6).
     for id in machine::entering(machine_def, from, leaf) {

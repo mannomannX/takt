@@ -237,6 +237,8 @@ pub enum SeqItem {
     Expect {
         cond: Expr,
         message: Option<crate::pattern::Format>,
+        /// Anforderung (13.4).
+        req: Option<String>,
         span: Span,
     },
     /// `repeat n:` mit Zaehlervariable `k_r : int in 0..n = 0` (gehoben).
@@ -251,6 +253,17 @@ pub enum SeqItem {
         body: Vec<SeqItem>,
         span: Span,
     },
+}
+
+/// Die Dauer einer Sequenz bis `done` in Basis-Ticks (6.2): jede Grenze
+/// kostet mindestens einen Tick, `wait d` genau `ceil(d / T0)`, ein
+/// `until` hoechstens seinen `timeout` — ohne ihn ist das Ende offen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SequenceTicks {
+    /// Untere Schranke, exakt.
+    pub min: u64,
+    /// Obere Schranke; `None` heisst unbeschraenkt.
+    pub max: Option<u64>,
 }
 
 /// `sequence:` eines Zustands (Oberflaeche).
@@ -308,6 +321,8 @@ pub struct State {
     pub fault_target: Option<FaultTarget>,
     /// `sequence:` (nur Oberflaeche).
     pub sequence: Option<Sequence>,
+    /// Dauer der Sequenz in Basis-Ticks (6.2, 11.5); `desugar` rechnet sie.
+    pub sequence_ticks: Option<SequenceTicks>,
     /// Gescopte Instanzen.
     pub instances: Vec<ScopedInstance>,
     /// Name aus `step "name"` fuer die Telemetrie.
@@ -336,6 +351,7 @@ impl State {
             transitions: Vec::new(),
             fault_target: None,
             sequence: None,
+            sequence_ticks: None,
             instances: Vec::new(),
             step_name: None,
             meta: Meta::default(),

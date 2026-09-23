@@ -458,9 +458,10 @@ impl Printer {
                     }
                 }
             }
-            SeqItem::Expect { cond, message, .. } => {
+            SeqItem::Expect { cond, message, req, .. } => {
                 let m = message.as_ref().map(|m| format!(" {}", string(m))).unwrap_or_default();
-                self.line(&format!("(expect {}{m})", expr(cond)));
+                let r = req.as_ref().map(|r| format!(" req={}", string(r))).unwrap_or_default();
+                self.line(&format!("(expect {}{m}{r})", expr(cond)));
             }
             SeqItem::Repeat { count, body, .. } => self.node("repeat", &expr(count), |p| p.seq_items(body)),
             SeqItem::Step { name, body, .. } => self.node("step", &string(name), |p| p.seq_items(body)),
@@ -524,9 +525,10 @@ impl Printer {
                 s.push(')');
                 self.line(&s);
             }
-            StmtKind::Alert { cond, message, confirm } => {
+            StmtKind::Alert { cond, message, confirm, req } => {
                 let c = confirm.as_ref().map(|c| format!(" for={}", expr(c))).unwrap_or_default();
-                self.line(&format!("(alert {} {}{c})", expr(cond), string(message)));
+                let r = req.as_ref().map(|r| format!(" req={}", string(r))).unwrap_or_default();
+                self.line(&format!("(alert {} {}{c}{r})", expr(cond), string(message)));
             }
             StmtKind::Log(m) => self.line(&format!("(log {})", string(m))),
             StmtKind::Goto(t) => self.line(&format!("(-> {})", t.name)),

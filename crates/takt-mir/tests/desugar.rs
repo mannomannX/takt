@@ -238,7 +238,7 @@ fn check_is_continuous_from_its_position() {
 #[test]
 fn expect_checks_once_via_flag() {
     let r = Rig::new();
-    let items = vec![SeqItem::Expect { cond: r.pressure_ok(), message: None, span: Span::default() }];
+    let items = vec![SeqItem::Expect { cond: r.pressure_ok(), message: None, req: None, span: Span::default() }];
     let out = r.run(items);
     let expected = "\
         state IGNITION.S0:

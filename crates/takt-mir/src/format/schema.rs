@@ -181,7 +181,7 @@ codec_struct!(CaseValue { 1 one lo, 2 opt hi });
 codec_enum!(ArmPattern { 0 Variant { 1 one variant, 2 rep fields }, 1 Values(1 rep values), 2 Wild });
 codec_struct!(Arm { 1 one pattern, 2 one body, 3 meta span });
 codec_enum!(Observe {
-    0 Alert { 1 one cond, 2 one message, 3 opt confirm },
+    0 Alert { 1 one cond, 2 one message, 3 opt confirm, 4 opt req },
     1 Log(1 one f),
     2 Measure { 1 one name, 2 one value },
     3 Verify { 1 one cond, 2 one message, 3 opt req },
@@ -255,7 +255,7 @@ codec_enum!(SeqItem {
     0 Stmt(1 one s),
     1 Wait(1 one d),
     2 Until { 1 one guard, 2 opt timeout, 3 meta span },
-    3 Expect { 1 one cond, 2 opt message, 3 meta span },
+    3 Expect { 1 one cond, 2 opt message, 3 meta span, 4 opt req },
     4 Repeat { 1 one count, 2 one counter, 3 rep body, 4 meta span },
     5 Step { 1 one name, 2 rep body, 3 meta span },
 });
@@ -264,8 +264,9 @@ codec_struct!(ScopedInstance { 1 one machine, 2 one scope, 3 one resume, 4 meta 
 codec_struct!(State {
     1 one name, 2 opt parent, 3 rep children, 4 opt initial, 5 one idle, 6 one resume, 7 rep vars, 8 one enter,
     9 one exit, 10 one loop_block, 11 rep handlers, 12 rep transitions, 13 opt fault_target, 14 opt sequence,
-    15 rep instances, 16 opt step_name, 17 meta meta, 18 meta span,
+    15 rep instances, 16 opt step_name, 17 meta meta, 18 meta span, 19 opt sequence_ticks,
 });
+codec_struct!(SequenceTicks { 1 one min, 2 opt max });
 codec_struct!(FaultedState { 1 rep transitions, 2 meta span });
 codec_struct!(Budget { 1 one activation, 2 one fault_path });
 codec_struct!(Timer { 1 one state, 2 one width });
