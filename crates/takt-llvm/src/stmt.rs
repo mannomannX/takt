@@ -434,7 +434,7 @@ fn job_begin(
         let size = takt_mir::bytes::max_size(p, q.ty).map_err(|_| NotYet { what: "Job-Argument ohne Byteform" })?;
         cap += 4 + u64::from(size);
     }
-    let buf = m.inst(&format!("alloca [{} x i8]", cap.max(1)));
+    let buf = m.alloca(&format!("[{} x i8]", cap.max(1)));
     let vars = ctx.vars();
     let mut off = m.inst("add i64 0, 0");
     for a in args {
@@ -500,36 +500,42 @@ fn send(
         // (plan/m6.md 2.2).
         _ => {
             let vty = ty::lower(value.ty, ctx.program).ok_or(NotYet { what: "Elementtyp" })?;
-            // Eine Stelle wird gelesen, wo sie liegt (FB-214).
-            let src = match crate::expr::address_of(value, m, &vars) {
-                Some((at, _)) => at,
-                None => {
-                    let slot = m.alloca(&vty);
-                    crate::expr::store(value, &slot.to_string(), None, ctx.program, m, &vars)?;
-                    slot
-                }
-            };
             let textual = matches!(
                 ctx.program.types.list.get(value.ty.index()),
                 Some(Type::Bytes { .. } | Type::Str { .. } | Type::Line { .. })
             );
-            if textual {
-                // `line<N>` traegt hinter den Bytes noch `truncated`; das
-                // Praefix `{ len, bytes }` ist bei allen dreien gleich.
-                // Kopiert wird der kleinere Typ: Wert und Puffer koennen
-                // verschieden gross sein.
-                let prefix = if vty.aligned_size() < ty.aligned_size() { &vty } else { &ty };
-                m.copy(prefix, &src.to_string(), &buffer.to_string());
+            // Eine Stelle wird gelesen, wo sie liegt; ein gerechneter Text
+            // derselben Form entsteht gleich im Puffer (FB-214).
+            let place = crate::expr::address_of(value, m, &vars);
+            if textual && vty == ty && place.is_none() {
+                crate::expr::store(value, &buffer.to_string(), None, ctx.program, m, &vars)?;
             } else {
-                // Feste Slot-Form (plan/m6.md 2.2): die kanonische Form, mit
-                // Nullen auf `len_max` (= `max_size`) gefuellt — so liegt
-                // das Element im Ring, und so trennt es der Empfaenger, auch
-                // mit einem `bytes<N>`-Feld darin (FB-189).
-                m.write(&ty, "zeroinitializer", &buffer.to_string());
-                let out = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 1"));
-                let _ = crate::persist::encode_canonical(ctx.program, value.ty, src, out, m)?;
-                let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 0"));
-                m.void_inst(&format!("store i32 {len_max}, ptr {len_ptr}"));
+                let src = match place {
+                    Some((at, _)) => at,
+                    None => {
+                        let slot = m.alloca(&vty);
+                        crate::expr::store(value, &slot.to_string(), None, ctx.program, m, &vars)?;
+                        slot
+                    }
+                };
+                if textual {
+                    // `line<N>` traegt hinter den Bytes noch `truncated`; das
+                    // Praefix `{ len, bytes }` ist bei allen dreien gleich.
+                    // Kopiert wird der kleinere Typ: Wert und Puffer koennen
+                    // verschieden gross sein.
+                    let prefix = if vty.aligned_size() < ty.aligned_size() { &vty } else { &ty };
+                    m.copy(prefix, &src.to_string(), &buffer.to_string());
+                } else {
+                    // Feste Slot-Form (plan/m6.md 2.2): die kanonische Form,
+                    // mit Nullen auf `len_max` (= `max_size`) gefuellt — so
+                    // liegt das Element im Ring, und so trennt es der
+                    // Empfaenger, auch mit einem `bytes<N>`-Feld (FB-189).
+                    m.write(&ty, "zeroinitializer", &buffer.to_string());
+                    let out = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 1"));
+                    let _ = crate::persist::encode_canonical(ctx.program, value.ty, src, out, m)?;
+                    let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 0"));
+                    m.void_inst(&format!("store i32 {len_max}, ptr {len_ptr}"));
+                }
             }
         }
     }
@@ -767,7 +773,7 @@ fn for_window(
     let name = ctx.machine.name.clone();
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     let buf = crate::stream::scratch(ctx.program, elem, m)?;
     let (head, loop_body, end_at) =
@@ -816,7 +822,7 @@ fn for_items(var: takt_mir::VarId, iter: &Expr, body: &Block, ctx: &mut Ctx<'_>,
     let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
     let k = ctx.next_label();
     let name = ctx.machine.name.clone();
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     let (head, loop_body, end_at) =
         (format!("elemente{k}_{name}"), format!("elemente{k}_{name}_rumpf"), format!("elemente{k}_{name}_ende"));

@@ -65,9 +65,9 @@ pub fn run(id: u32, dfa: &Dfa, text: Reg, m: &mut Module) -> Result<Reg, NotYet>
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
     let bytes = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 4"));
 
-    let state_ptr = m.inst("alloca i32");
+    let state_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {state_ptr}"));
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 

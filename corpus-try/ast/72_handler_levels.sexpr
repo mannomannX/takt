@@ -1,0 +1,44 @@
+(system
+  (language 1)
+  (tick 10ms))
+(stream s :u8 capacity=8 overflow=fault)
+(output outer_seen :int in 0..999 @sim("outer_seen"))
+(output inner_seen :int in 0..999 @sim("inner_seen"))
+(output order :int in 0..999 @sim("order"))
+(output hops :int in 0..999 @sim("hops"))
+(machine producer
+  (var k :int in 0..255 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (% (+ k 1) 256))
+      (send s (as k u8)))))
+(machine consumer
+  (var outer :int in 0..999 0)
+  (var inner :int in 0..999 0)
+  (var mark :int in 0..999 0)
+  (var seen_mark :int in 0..999 0)
+  (var n :int in 0..999 0)
+  (initial OUTER)
+  (loop
+    (= outer_seen outer)
+    (= inner_seen inner)
+    (= order seen_mark)
+    (= hops n))
+  (state OUTER
+    (initial A)
+    (on s as e
+      (= outer (% (+ outer 1) 1000))
+      (= mark (as (.data e) int)))
+    (state A
+      (loop
+        (= seen_mark mark))
+      (on s as e
+        (= inner (% (+ inner 1) 1000))
+        (if (== (% inner 5) 0)
+          (-> B))))
+    (state B
+      (on s as e
+        (= inner (% (+ inner 1) 1000))
+        (= n (% (+ n 1) 1000))
+        (-> A)))))

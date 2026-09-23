@@ -195,8 +195,8 @@ pub fn restore_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
         &[LlvmType::Ptr, LlvmType::Ptr, LlvmType::Int(32)],
     );
     let input = params[1];
-    let off = module.inst("alloca i64");
-    let applied = module.inst("alloca i32");
+    let off = module.alloca("i64");
+    let applied = module.alloca("i32");
     module.void_inst(&format!("store i64 0, ptr {off}"));
     module.void_inst(&format!("store i32 0, ptr {applied}"));
     let total = module.inst(&format!("zext i32 {} to i64", params[2]));
@@ -488,7 +488,7 @@ pub(crate) fn encode_padded(
     let v = crate::expr::lower(e, p, module, vars)?;
     let tmp = module.alloca(&v.ty);
     module.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
-    let buf = module.inst(&format!("alloca [{len} x i8]"));
+    let buf = module.alloca(&format!("[{len} x i8]"));
     module.write(&LlvmType::Array(Box::new(LlvmType::Int(8)), len), "zeroinitializer", &buf.to_string());
     encode_canonical(p, e.ty, tmp, buf, module)?;
     Ok(buf)

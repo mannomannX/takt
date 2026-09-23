@@ -276,6 +276,8 @@ struct Dynamic {
     name: String,
     elem: TypeId,
     capacity: u32,
+    /// `capacity_bytes` (8.6); die Sema setzt den Default.
+    capacity_bytes: u32,
     readers: Vec<u32>,
 }
 
@@ -291,6 +293,7 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
             name: st.name.clone(),
             elem: st.elem,
             capacity: st.capacity,
+            capacity_bytes: st.capacity_bytes.unwrap_or(st.capacity.saturating_mul(payload_cap(p, st.elem))),
             readers: st.readers.iter().map(|m| m.0).collect(),
         })
         .collect();
@@ -305,11 +308,13 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
             })
             .map(|(i, _)| i as u32)
             .collect();
+        let capacity = c.attrs.capacity.unwrap_or(16);
         out.push(Dynamic {
             id: in_id as i64,
             name: c.name.clone(),
             elem,
-            capacity: c.attrs.capacity.unwrap_or(16),
+            capacity,
+            capacity_bytes: c.attrs.capacity_bytes.unwrap_or(capacity.saturating_mul(payload_cap(p, elem))),
             readers,
         });
     }
@@ -346,36 +351,43 @@ fn emit_internal(s: &mut String, p: &Program) {
     let rows = n.max(1);
     let machines = p.machines.len().max(1);
     let readers = dyns.iter().map(|d| d.readers.len()).max().unwrap_or(1).max(1);
-    // Ein Pool statt eines Rechtecks: Jeder Ring hat seine Kapazitaet und
-    // seine Elementgroesse (8.6, wie `takt size` rechnet). Ein Rechteck
-    // gaebe jedem die groesste von beiden — bei sieben Ringen mit einem
-    // `stream<u8>` zu 256 und einem `bytes<1024>` waren das 1,9 MB statt
-    // 69 KB (FB-215).
-    const HEAD: usize = 24;
-    let stride = |d: &Dynamic| (HEAD + payload_cap(p, d.elem) as usize).next_multiple_of(8);
-    let mut offsets = Vec::with_capacity(n);
-    let mut total = 0usize;
+    // Byte-Ring mit Deskriptorring je Strom (8.6): Ein Element belegt,
+    // was es lang ist, nicht seine Kapazitaet — `stream<bytes<1024>>` mit
+    // `capacity = 8` und `capacity_bytes = 1024` sind 1,2 KB statt 8,4 KB
+    // in Slots. Feste Elemente fuellen ihren Ring genau (`CAPB = CAP * N`,
+    // 9.6), also gilt ein Weg fuer beide. Der Deskriptor traegt `off`
+    // und `len`; die Freigabe ist FIFO, darum reicht ein Lesezeiger.
+    let mut doff = Vec::with_capacity(n);
+    let mut boff = Vec::with_capacity(n);
+    let (mut descs, mut bytes) = (0usize, 0usize);
     for d in &dyns {
-        offsets.push(total);
-        total += d.capacity as usize * stride(d);
+        doff.push(descs);
+        boff.push(bytes);
+        descs += d.capacity.max(1) as usize;
+        bytes += d.capacity_bytes.max(1) as usize;
     }
-    let _ = writeln!(s, "/* Ringe im Lauf (8.6, 8.3): Unit-Delay, Cursor je Leser, Freigabe unter dem kleinsten. */");
-    let _ = writeln!(s, "#define TAKT_INT_STREAMS {n}");
-    let _ = writeln!(s, "struct takt_ielem {{ long long tick; long long seq; int len; unsigned char bytes[]; }};");
-    let _ = writeln!(s, "static _Alignas(8) unsigned char g_int_pool[{}];", total.max(8));
-    let list = |v: &[usize]| {
+    let list = |v: Vec<usize>| {
         if v.is_empty() { "0".to_string() } else { v.iter().map(usize::to_string).collect::<Vec<_>>().join(", ") }
     };
-    let _ = writeln!(s, "static const int g_int_off[{rows}] = {{ {} }};", list(&offsets));
+    let _ = writeln!(s, "/* Ringe im Lauf (8.6, 8.3): Byte-Ring mit Deskriptoren, Unit-Delay, Cursor je Leser. */");
+    let _ = writeln!(s, "#define TAKT_INT_STREAMS {n}");
+    let _ = writeln!(s, "struct takt_idesc {{ long long tick; long long seq; int off; int len; }};");
+    let _ = writeln!(s, "static struct takt_idesc g_int_desc[{}];", descs.max(1));
+    let _ = writeln!(s, "static _Alignas(8) unsigned char g_int_pool[{}];", bytes.max(8));
+    let _ = writeln!(s, "static const int g_int_doff[{rows}] = {{ {} }};", list(doff));
+    let _ = writeln!(s, "static const int g_int_boff[{rows}] = {{ {} }};", list(boff));
     let _ = writeln!(
         s,
-        "static const int g_int_stride[{rows}] = {{ {} }};",
-        list(&dyns.iter().map(stride).collect::<Vec<_>>())
+        "static const int g_int_cap[{rows}] = {{ {} }};",
+        list(dyns.iter().map(|d| d.capacity.max(1) as usize).collect())
     );
-    let _ = writeln!(s, "static struct takt_ielem *takt_int_elem(int k, int i) {{");
-    let _ = writeln!(s, "    return (struct takt_ielem *)(g_int_pool + g_int_off[k] + i * g_int_stride[k]);");
-    let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static int g_int_n[{rows}];");
+    let _ = writeln!(
+        s,
+        "static const int g_int_capb[{rows}] = {{ {} }};",
+        list(dyns.iter().map(|d| d.capacity_bytes.max(1) as usize).collect())
+    );
+    let _ = writeln!(s, "static int g_int_head[{rows}], g_int_n[{rows}], g_int_new[{rows}];");
+    let _ = writeln!(s, "static int g_int_bhead[{rows}], g_int_bused[{rows}];");
     let _ = writeln!(s, "static long long g_int_seq[{rows}];");
     let _ = writeln!(s, "static long long g_int_ex[{rows}][{machines}]; /* examined + 1 je Leser */");
     let _ = writeln!(s, "static const int g_int_readers[{rows}][{readers}] = {{");
@@ -408,14 +420,8 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    default: return -1;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static int takt_int_cap(int k) {{");
-    let _ = writeln!(s, "    switch (k) {{");
-    for (i, d) in dyns.iter().enumerate() {
-        let _ = writeln!(s, "    case {i}: return {}; /* {} */", d.capacity, d.name);
-    }
-    let _ = writeln!(s, "    default: return 0;");
-    let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "}}");
+    // Die Kapazitaet eines Elements: so viel Platz nimmt `takt_int_at`
+    // hinter `t` und der Laenge.
     let _ = writeln!(s, "static int takt_int_bytes(int k) {{");
     let _ = writeln!(s, "    switch (k) {{");
     for (i, d) in dyns.iter().enumerate() {
@@ -424,36 +430,60 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    default: return 0;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
-    // 9.6: sichtbar ist, was in einem frueheren Tick gesendet wurde.
+    let _ = writeln!(s, "static struct takt_idesc *takt_int_desc(int k, int i) {{");
+    let _ = writeln!(s, "    return &g_int_desc[g_int_doff[k] + (g_int_head[k] + i) % g_int_cap[k]];");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "/* Der Byte-Ring laeuft um; ein Element darf ueber das Ende reichen. */");
+    let _ = writeln!(s, "static void takt_int_read(int k, int off, unsigned char *dst, int n) {{");
+    let _ = writeln!(s, "    const unsigned char *b = g_int_pool + g_int_boff[k];");
+    let _ = writeln!(s, "    int first = g_int_capb[k] - off;");
+    let _ = writeln!(s, "    if (first > n) first = n;");
+    let _ = writeln!(s, "    memcpy(dst, b + off, (size_t)first);");
+    let _ = writeln!(s, "    memcpy(dst + first, b, (size_t)(n - first));");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "static void takt_int_write(int k, int off, const unsigned char *src, int n) {{");
+    let _ = writeln!(s, "    unsigned char *b = g_int_pool + g_int_boff[k];");
+    let _ = writeln!(s, "    int first = g_int_capb[k] - off;");
+    let _ = writeln!(s, "    if (first > n) first = n;");
+    let _ = writeln!(s, "    memcpy(b + off, src, (size_t)first);");
+    let _ = writeln!(s, "    memcpy(b, src + first, (size_t)(n - first));");
+    let _ = writeln!(s, "}}");
+    // 9.6: Sichtbar ist, was ab `cur` liegt und in einem frueheren Tick
+    // kam. Die Nummern steigen mit der Lage, also ist der Anfang eine
+    // Differenz und das Ende die Zahl der Elemente dieses Ticks.
+    let _ = writeln!(s, "static int takt_int_first(int k, long long cur) {{");
+    let _ = writeln!(s, "    if (g_int_n[k] == 0) return 0;");
+    let _ = writeln!(s, "    long long d = cur - takt_int_desc(k, 0)->seq;");
+    let _ = writeln!(s, "    if (d <= 0) return 0;");
+    let _ = writeln!(s, "    return d < g_int_n[k] ? (int)d : g_int_n[k];");
+    let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static int takt_int_count(int k, long long cur) {{");
-    let _ = writeln!(s, "    int n = 0;");
-    let _ = writeln!(s, "    for (int i = 0; i < g_int_n[k]; i++)");
-    let _ = writeln!(s, "        if (takt_int_elem(k, i)->tick < g_tick && takt_int_elem(k, i)->seq >= cur) n++;");
-    let _ = writeln!(s, "    return n;");
+    let _ = writeln!(s, "    int n = g_int_n[k] - g_int_new[k] - takt_int_first(k, cur);");
+    let _ = writeln!(s, "    return n > 0 ? n : 0;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static long long takt_int_at(int k, long long cur, int i, void *out) {{");
-    let _ = writeln!(s, "    int seen = 0;");
-    let _ = writeln!(s, "    for (int j = 0; j < g_int_n[k]; j++) {{");
-    let _ = writeln!(s, "        const struct takt_ielem *e = takt_int_elem(k, j);");
-    let _ = writeln!(s, "        if (e->tick >= g_tick || e->seq < cur) continue;");
-    let _ = writeln!(s, "        if (seen++ != i) continue;");
-    let _ = writeln!(s, "        unsigned char *p = (unsigned char *)out;");
-    let _ = writeln!(s, "        long long t = e->tick * {}LL;", p.config.tick);
-    let _ = writeln!(s, "        memset(p, 0, (size_t)takt_int_bytes(k) + 12);");
-    let _ = writeln!(s, "        memcpy(p, &t, sizeof t);");
-    let _ = writeln!(s, "        memcpy(p + 8, &e->len, sizeof e->len);");
-    let _ = writeln!(s, "        memcpy(p + 12, e->bytes, (size_t)e->len);");
-    let _ = writeln!(s, "        return e->seq;");
-    let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    return 0;");
+    let _ = writeln!(s, "    if (i < 0 || i >= takt_int_count(k, cur)) return 0;");
+    let _ = writeln!(s, "    const struct takt_idesc *e = takt_int_desc(k, takt_int_first(k, cur) + i);");
+    let _ = writeln!(s, "    unsigned char *p = (unsigned char *)out;");
+    let _ = writeln!(s, "    long long t = e->tick * {}LL;", p.config.tick);
+    let _ = writeln!(s, "    memset(p, 0, (size_t)takt_int_bytes(k) + 12);");
+    let _ = writeln!(s, "    memcpy(p, &t, sizeof t);");
+    let _ = writeln!(s, "    memcpy(p + 8, &e->len, sizeof e->len);");
+    let _ = writeln!(s, "    takt_int_read(k, e->off, p + 12, e->len);");
+    let _ = writeln!(s, "    return e->seq;");
     let _ = writeln!(s, "}}");
+    // 8.6: Zwei Schranken, Elemente und Bytes — wie `Buffer::push`.
     let _ = writeln!(s, "static _Bool takt_int_send(int k, const char *b, int n) {{");
-    let _ = writeln!(s, "    if (n > takt_int_bytes(k) || g_int_n[k] >= takt_int_cap(k)) return 0;");
-    let _ = writeln!(s, "    struct takt_ielem *e = takt_int_elem(k, g_int_n[k]++);");
+    let _ = writeln!(s, "    if (g_int_n[k] >= g_int_cap[k] || g_int_bused[k] + n > g_int_capb[k]) return 0;");
+    let _ = writeln!(s, "    struct takt_idesc *e = takt_int_desc(k, g_int_n[k]);");
     let _ = writeln!(s, "    e->tick = g_tick;");
     let _ = writeln!(s, "    e->seq = g_int_seq[k]++;");
+    let _ = writeln!(s, "    e->off = (g_int_bhead[k] + g_int_bused[k]) % g_int_capb[k];");
     let _ = writeln!(s, "    e->len = n;");
-    let _ = writeln!(s, "    memcpy(e->bytes, b, (size_t)n);");
+    let _ = writeln!(s, "    takt_int_write(k, e->off, (const unsigned char *)b, n);");
+    let _ = writeln!(s, "    g_int_bused[k] += n;");
+    let _ = writeln!(s, "    g_int_n[k]++;");
+    let _ = writeln!(s, "    g_int_new[k]++;");
     let _ = writeln!(s, "    return 1;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static void takt_int_examined(int k, int m, long long seq) {{");
@@ -461,22 +491,23 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    if (seq + 1 > g_int_ex[k][m]) g_int_ex[k][m] = seq + 1;");
     let _ = writeln!(s, "}}");
     // 9.6, `advance_cursors()`: frei wird, was unter dem kleinsten Cursor
-    // aller Leser liegt; ein Strom ohne Leser behaelt nichts.
+    // aller Leser liegt, von vorn; ein Strom ohne Leser behaelt nichts.
     let _ = writeln!(s, "static void takt_int_commit(void) {{");
     let _ = writeln!(s, "    for (int k = 0; k < TAKT_INT_STREAMS; k++) {{");
-    let _ = writeln!(s, "        if (g_int_reader_n[k] == 0) {{ g_int_n[k] = 0; continue; }}");
+    let _ = writeln!(s, "        g_int_new[k] = 0;");
+    let _ = writeln!(s, "        if (g_int_reader_n[k] == 0) {{ g_int_n[k] = 0; g_int_bused[k] = 0; continue; }}");
     let _ = writeln!(s, "        long long min = g_int_ex[k][g_int_readers[k][0]];");
     let _ = writeln!(s, "        for (int r = 1; r < g_int_reader_n[k]; r++) {{");
     let _ = writeln!(s, "            long long c = g_int_ex[k][g_int_readers[k][r]];");
     let _ = writeln!(s, "            if (c < min) min = c;");
     let _ = writeln!(s, "        }}");
-    let _ = writeln!(s, "        int w = 0;");
-    let _ = writeln!(s, "        for (int i = 0; i < g_int_n[k]; i++)");
-    let _ = writeln!(
-        s,
-        "            if (takt_int_elem(k, i)->seq >= min) {{ if (w != i) memcpy(takt_int_elem(k, w), takt_int_elem(k, i), (size_t)g_int_stride[k]); w++; }}"
-    );
-    let _ = writeln!(s, "        g_int_n[k] = w;");
+    let _ = writeln!(s, "        while (g_int_n[k] > 0 && takt_int_desc(k, 0)->seq < min) {{");
+    let _ = writeln!(s, "            int len = takt_int_desc(k, 0)->len;");
+    let _ = writeln!(s, "            g_int_bhead[k] = (g_int_bhead[k] + len) % g_int_capb[k];");
+    let _ = writeln!(s, "            g_int_bused[k] -= len;");
+    let _ = writeln!(s, "            g_int_head[k] = (g_int_head[k] + 1) % g_int_cap[k];");
+    let _ = writeln!(s, "            g_int_n[k]--;");
+    let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}\n");
 }

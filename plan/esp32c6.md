@@ -84,6 +84,15 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
   (Modul ESP32-C6-MINI-1, 4 MB Flash, RGB-LED WS2812 an GPIO8, BOOT an
   GPIO9; zwei USB-Buchsen: „USB" ist der native USB-Serial-JTAG, „UART"
   ein CP2102 an UART0). Die Pins stehen in den Bring-up-Programmen (`GPIO8`).
+- UART0 und seine Pins (2026-09-23): Ein `port @ mmio(…)` schreibt nur
+  Register; die Verbindung zum Pad macht die GPIO-Matrix, und die legt
+  `takt-board-esp32c6/src/pins.rs` — ohne den HAL-Treiber, der CONF0 und
+  Teiler selbst setzen und die Zuordnung beim Fallenlassen zurücknehmen
+  würde. RX liegt auf GPIO17 (U0RXD), TX zurzeit auf GPIO7, weil dort die
+  Schleifenbrücke des Aufbaus steckt; der Standard und die CP2102-Brücke
+  wären GPIO16 (U0TXD). Gefunden mit einer Suchprobe, die einen Pin
+  treibt und zählt, welcher folgt: GPIO7 gegen GPIO17 traf 81 von 81,
+  jede andere Paarung die Hälfte.
 - ~~Der Tick verliert Perioden, während das Journal einen Sektor löscht~~
   — geklärt in `plan/nvm.md`: Die Löschzeit (49,9 ms) steht in
   `esp32c6.hw`, Prüfung 32 urteilt, die Runtime schreibt im Schlaffenster

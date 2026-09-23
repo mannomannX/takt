@@ -232,10 +232,11 @@ pub fn size(p: &Program) -> Size {
         .streams
         .iter()
         .map(|s| {
-            let elem = u64::from(s.capacity) * u64::from(elem_bytes(p, s.elem));
-            let ring = u64::from(s.capacity_bytes.unwrap_or(0));
-            // Deskriptorring: seq, t und Laenge je Element.
-            elem + ring + u64::from(s.capacity) * 20
+            // 8.6: der Byte-Ring (`capacity_bytes`; bei fester Elementgroesse
+            // `capacity * N`) und je Element ein Deskriptor (t, seq, off, len).
+            let default = u64::from(s.capacity) * u64::from(elem_bytes(p, s.elem));
+            let ring = s.capacity_bytes.map_or(default, u64::from);
+            ring + u64::from(s.capacity) * 24
         })
         .sum();
     items.push(Item { name: "Stroeme (Byte- und Deskriptorringe)".into(), bytes: streams, origin: Origin::Exact });

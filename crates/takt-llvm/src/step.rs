@@ -142,20 +142,18 @@ fn write_step(
         // laufen von der Maschine abwaerts bis zum Blatt — ein `check` auf
         // einer Zwischenebene ist die Invariante *aller* Zustaende darunter,
         // und wer nur das Blatt ausfuehrt, laesst sie fallen.
+        // 8.7: Die Handler einer Ebene laufen unmittelbar nach ihrem
+        // `loop:` (ein `check` dort ist die Invariante des Zustands),
+        // Vorfahren vor Nachfahren, und jede Ebene sieht das ganze
+        // Fenster — in einem gemeinsamen Durchlauf naehme der Vorfahr dem
+        // Nachfahren jedes Element weg (FB-220).
         block(&m.loop_block.clone(), &mut ctx, module)?;
+        dispatch(&m.handlers.clone(), &mut ctx, module)?;
         let pfad = machine::path_to(m, *id);
         for anc in &pfad {
             block(&m.states[anc.index()].loop_block.clone(), &mut ctx, module)?;
+            dispatch(&m.states[anc.index()].handlers.clone(), &mut ctx, module)?;
         }
-        // 8.7: Die Handler verarbeiten das Fenster ihres Stroms. Sie
-        // laufen nach den `loop:`-Bloecken, weil ein `check` dort die
-        // Invariante des Zustands ist — sie gilt, bevor ein Ereignis sie
-        // stoeren kann.
-        let mut handler: Vec<takt_mir::machine::Handler> = m.handlers.clone();
-        for anc in &pfad {
-            handler.extend(m.states[anc.index()].handlers.iter().cloned());
-        }
-        dispatch(&handler, &mut ctx, module)?;
         // Dann die Uebergaenge, vom Blatt aufwaerts: Der innerste Zustand
         // entscheidet zuerst (5.2), und innerhalb einer Ebene gewinnt der
         // erste passende in Quelltextreihenfolge.
@@ -1134,7 +1132,7 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
         let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
         let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
         // Der Zaehler laeuft ueber das Fenster; seine Schranke ist `n`.
-        let i_ptr = m.inst("alloca i32");
+        let i_ptr = m.alloca("i32");
         m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
         // Das Element kommt in einen Scratch; die Bindungen fuellt
         // `bind_element` je Handler (8.7).
@@ -1464,9 +1462,9 @@ fn match_guard(
     let name = &ctx.machine.name;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
-    let hit_ptr = m.inst("alloca i1");
+    let hit_ptr = m.alloca("i1");
     m.void_inst(&format!("store i1 false, ptr {hit_ptr}"));
 
     let (head, body, done) =
@@ -1576,9 +1574,9 @@ fn text_has(
     let (head, body, done) = (format!("has{k}"), format!("has{k}_rumpf"), format!("has{k}_fertig"));
     let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
-    let start_ptr = m.inst("alloca i32");
+    let start_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {start_ptr}"));
-    let hit_ptr = m.inst("alloca i1");
+    let hit_ptr = m.alloca("i1");
     m.void_inst(&format!("store i1 false, ptr {hit_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 
@@ -1767,7 +1765,7 @@ fn one_trigger(
     m.label(&head);
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     let buf = crate::stream::scratch(ctx.program, elem, m)?;
     let loop_head = format!("{head}_schleife");
@@ -1828,7 +1826,7 @@ fn event_record(t: &takt_mir::program::Trigger, ctx: &Ctx<'_>, m: &mut Module) -
         .take_while(|(_, f)| !matches!(f.name.as_str(), "t" | "seq" | "text" | "data"))
         .filter_map(|(i, _)| Some((i as u32, parts.get(i)?.clone())))
         .collect();
-    let slot = m.inst(&format!("alloca {record}, align 8"));
+    let slot = m.alloca(&format!("{record}, align 8"));
     Ok(Event { slot, record, fields, ty })
 }
 

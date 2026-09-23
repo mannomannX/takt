@@ -121,7 +121,7 @@ pub fn payload_cap(p: &Program, elem: TypeId) -> Result<u32, NotYet> {
 /// Ein Platz fuer ein Element, wie `takt_stream_at` es schreibt.
 pub fn scratch(p: &Program, elem: TypeId, m: &mut Module) -> Result<Reg, NotYet> {
     let cap = payload_cap(p, elem)?;
-    Ok(m.inst(&format!("alloca [{} x i8], align 8", cap + Streams::BYTES_AT)))
+    Ok(m.alloca(&format!("[{} x i8], align 8", cap + Streams::BYTES_AT)))
 }
 
 /// Der Inhalt eines Elements aus dem Scratch nach `dst`: Text in seiner

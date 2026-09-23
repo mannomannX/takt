@@ -115,7 +115,7 @@ pub fn monitor_function(index: usize, prop: &Property, p: &Program, m: &mut Modu
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr, LlvmType::Int(64)],
     );
     // Die Zaehler der Fenster im Eintrittsblock (11.2: statischer Scratch).
-    let slots: Vec<(Reg, Reg)> = (0..s.bounded).map(|_| (m.inst("alloca i1"), m.inst("alloca i64"))).collect();
+    let slots: Vec<(Reg, Reg)> = (0..s.bounded).map(|_| (m.alloca("i1"), m.alloca("i64"))).collect();
     let flag = m.inst(&format!("getelementptr inbounds {st}, ptr %0, i32 0, i32 0"));
     let seen = m.inst(&format!("load i8, ptr {flag}"));
     let was = m.inst(&format!("icmp ne i8 {seen}, 0"));

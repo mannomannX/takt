@@ -203,7 +203,7 @@ impl Module {
     /// `bytes<1024>` bleibt dann pro Iteration ein 1028-Byte-Slot stehen
     /// (FB-214). Im Eintrittsblock ist er ein Slot fuer die ganze
     /// Funktion — so legt C seine Locals an.
-    pub fn alloca(&mut self, ty: &LlvmType) -> Reg {
+    pub fn alloca<T: std::fmt::Display + ?Sized>(&mut self, ty: &T) -> Reg {
         let r = Reg::Named(self.slots);
         self.slots += 1;
         let line = format!("  {r} = alloca {ty}\n");

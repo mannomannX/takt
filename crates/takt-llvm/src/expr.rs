@@ -1339,7 +1339,7 @@ fn native_call(
 /// Schranke (`bytes::max_size`).
 fn canonical_buffer(p: &Program, ty: TypeId, m: &mut Module) -> Result<crate::emit::Reg, NotYet> {
     let cap = takt_mir::bytes::max_size(p, ty).map_err(|_| NotYet { what: "Typ ohne Byteform" })?;
-    Ok(m.inst(&format!("alloca [{cap} x i8]")))
+    Ok(m.alloca(&format!("[{cap} x i8]")))
 }
 
 /// `o.sent` (8.8): der Treiber schreibt den zuletzt abgeholten Ausschnitt
@@ -1447,7 +1447,7 @@ fn map_access(
         Accessor::Get => {
             let k = args.first().ok_or(NotYet { what: "`get` ohne Schluessel" })?;
             let kbuf = crate::persist::encode_padded(k, klen, p, m, vars)?;
-            let out = m.inst(&format!("alloca [{vlen} x i8]"));
+            let out = m.alloca(&format!("[{vlen} x i8]"));
             m.write(&LlvmType::Array(Box::new(LlvmType::Int(8)), vlen), "zeroinitializer", &out.to_string());
             m.needs_intrinsic("i1 @takt_native_map_get(ptr, i32, i32, i32, ptr, ptr)");
             let hit = m.inst(&format!(

@@ -13,7 +13,7 @@ use core::fmt::Write as _;
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use takt_board_esp32c6::{Button, FlashNvm, Generated, Telemetry, Ws2812};
+use takt_board_esp32c6::{Button, FlashNvm, Generated, Telemetry, Ws2812, route_uart0};
 use takt_rt_baremetal::Sleep;
 use takt_rt_core::{Journal, Loaded, Persist, Policy, Profile, Runtime, Sink, Tick, Watchdog};
 
@@ -177,6 +177,9 @@ fn main() -> ! {
         unsafe { LED = Some(led) };
     }
     unsafe { BTN = Some(Button::new(peripherals.GPIO9)) };
+    // 12.10: Ein `port @ mmio(...)` schreibt Register; die Verbindung zum
+    // Pad macht die GPIO-Matrix, nicht der Treiber.
+    route_uart0(peripherals.GPIO7, peripherals.GPIO17);
 
     let limit: u64 = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
     let trace_every = if limit > 0 { 1 } else { TRACE_EVERY };

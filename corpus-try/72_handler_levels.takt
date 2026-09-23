@@ -1,0 +1,65 @@
+# 72 — Handler je Ebene (8.7): Vorfahren vor Nachfahren, jede Ebene sieht
+# das ganze Fenster, und die Handler laufen unmittelbar nach dem `loop:`
+# ihrer Ebene. Ein gemeinsamer Durchlauf ueber alle Ebenen naehme dem
+# Nachfahren jedes Element weg, und ein `loop:` des Nachfahren saehe
+# nicht, was der Handler des Vorfahren im selben Tick schrieb (FB-220).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+stream<u8> s with capacity = 8, overflow = fault
+
+output outer_seen : int in 0..999 @ sim("outer_seen")
+output inner_seen : int in 0..999 @ sim("inner_seen")
+output order      : int in 0..999 @ sim("order")
+output hops       : int in 0..999 @ sim("hops")
+
+machine producer:
+    var k : int in 0..255 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 256
+            send s, k as u8
+
+machine consumer:
+    var outer     : int in 0..999 = 0
+    var inner     : int in 0..999 = 0
+    var mark      : int in 0..999 = 0
+    var seen_mark : int in 0..999 = 0
+    var n         : int in 0..999 = 0
+
+    initial OUTER
+
+    loop:
+        outer_seen = outer
+        inner_seen = inner
+        order = seen_mark
+        hops = n
+
+    state OUTER:
+        initial A
+
+        # Der Vorfahr sieht jedes Element und merkt sich das letzte.
+        on s as e:
+            outer = (outer + 1) % 1000
+            mark = e.data as int
+
+        state A:
+            # Der Nachfahr liest, was der Vorfahr in diesem Tick schrieb.
+            loop:
+                seen_mark = mark
+
+            on s as e:
+                inner = (inner + 1) % 1000
+                if inner % 5 == 0:
+                    -> B
+
+        state B:
+            on s as e:
+                inner = (inner + 1) % 1000
+                n = (n + 1) % 1000
+                -> A

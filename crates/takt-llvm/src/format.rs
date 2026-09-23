@@ -46,7 +46,7 @@ pub fn render(
 ) -> Result<(), NotYet> {
     let buffer = m.inst(&format!("getelementptr inbounds {ty}, ptr {target}, i32 0, i32 1"));
     // `at` ist die Schreibstelle; sie waechst mit jedem Baustein.
-    let at_ptr = m.inst("alloca i32");
+    let at_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {at_ptr}"));
     for piece in &f.pieces {
         match piece {
@@ -137,8 +137,8 @@ fn number(
 #[allow(clippy::too_many_arguments)]
 fn digits(v: &str, base: u32, signed: bool, with_sign: bool, buffer: Reg, at_ptr: Reg, cap: u32, m: &mut Module) {
     let k = m.next_label();
-    let tmp = m.inst("alloca [24 x i8]");
-    let n_ptr = m.inst("alloca i32");
+    let tmp = m.alloca("[24 x i8]");
+    let n_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {n_ptr}"));
 
     // **Vorzeichenbehaftet** wird auf dem *negativen* Wert gerechnet und
@@ -157,7 +157,7 @@ fn digits(v: &str, base: u32, signed: bool, with_sign: bool, buffer: Reg, at_ptr
         // Ohne Vorzeichen laeuft die Rechnung auf dem Bitmuster selbst.
         m.inst(&format!("add i64 {v}, 0"))
     };
-    let rest_ptr = m.inst("alloca i64");
+    let rest_ptr = m.alloca("i64");
     m.void_inst(&format!("store i64 {start}, ptr {rest_ptr}"));
 
     let (head, body, done) = (format!("zi{k}"), format!("zi{k}_rumpf"), format!("zi{k}_fertig"));
@@ -232,7 +232,7 @@ fn digits_padded(v: &str, width: u32, buffer: Reg, at_ptr: Reg, cap: u32, m: &mu
     m.void_inst(&format!("br label %{ohne}"));
     m.label(&ohne);
     let (head, body, done) = (format!("br{k}"), format!("br{k}_rumpf"), format!("br{k}_fertig"));
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 {places}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
     m.label(&head);
@@ -255,13 +255,13 @@ fn digit_count(v: &str, m: &mut Module) -> Reg {
     let k = m.next_label();
     let (head, body, done) = (format!("sz{k}"), format!("sz{k}_rumpf"), format!("sz{k}_fertig"));
     let neg = m.inst(&format!("icmp slt i64 {v}, 0"));
-    let n_ptr = m.inst("alloca i32");
+    let n_ptr = m.alloca("i32");
     let start_at = m.inst(&format!("select i1 {neg}, i32 1, i32 0"));
     m.void_inst(&format!("store i32 {start_at}, ptr {n_ptr}"));
     // Wie in `ziffern` negativ rechnen: `i64::MIN` hat keinen Betrag.
     let umgekehrt = m.inst(&format!("sub i64 0, {v}"));
     let start = m.inst(&format!("select i1 {neg}, i64 {v}, i64 {umgekehrt}"));
-    let rest_ptr = m.inst("alloca i64");
+    let rest_ptr = m.alloca("i64");
     m.void_inst(&format!("store i64 {start}, ptr {rest_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 
@@ -290,7 +290,7 @@ fn digit_count(v: &str, m: &mut Module) -> Reg {
 fn write_reversed(tmp: Reg, n_ptr: Reg, buffer: Reg, at_ptr: Reg, cap: u32, m: &mut Module) {
     let k = m.next_label();
     let (head, body, done) = (format!("um{k}"), format!("um{k}_rumpf"), format!("um{k}_fertig"));
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     let n = m.inst(&format!("load i32, ptr {n_ptr}"));
     m.void_inst(&format!("store i32 {n}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));

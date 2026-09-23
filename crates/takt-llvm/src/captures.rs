@@ -85,9 +85,9 @@ pub fn walk(
     // `at` ist die Position im Text, `ok` das Urteil. Beide stehen im
     // Speicher, weil die Bausteine Verzweigungen erzeugen und ein
     // SSA-Wert ueber sie hinweg eine Phi-Kette braeuchte.
-    let at_ptr = m.inst("alloca i32");
+    let at_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 {from}, ptr {at_ptr}"));
-    let ok_ptr = m.inst("alloca i1");
+    let ok_ptr = m.alloca("i1");
     m.void_inst(&format!("store i1 true, ptr {ok_ptr}"));
 
     let end_at = format!("cap{k}_ende");
@@ -347,9 +347,9 @@ fn open_end(
     let (head, body, done) = (format!("oe{k}"), format!("oe{k}_rumpf"), format!("oe{k}_fertig"));
     let start = m.inst(&format!("load i32, ptr {at_ptr}"));
     // `gefunden` merkt die Fundstelle; `-1` heisst „noch nichts".
-    let found_ptr = m.inst("alloca i32");
+    let found_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 -1, ptr {found_ptr}"));
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 {start}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 
@@ -460,9 +460,9 @@ fn parse_int(bytes: Reg, start: Reg, end_at: Reg, negative: Option<Reg>, m: &mut
         Some(r) => r,
         None => m.inst("and i1 false, false"),
     };
-    let acc_ptr = m.inst("alloca i64");
+    let acc_ptr = m.alloca("i64");
     m.void_inst(&format!("store i64 0, ptr {acc_ptr}"));
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 {start}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 
@@ -495,9 +495,9 @@ fn parse_int(bytes: Reg, start: Reg, end_at: Reg, negative: Option<Reg>, m: &mut
 fn parse_hex(bytes: Reg, start: Reg, end_at: Reg, m: &mut Module) -> Reg {
     let k = m.next_label();
     let (head, body, done) = (format!("ph{k}"), format!("ph{k}_rumpf"), format!("ph{k}_fertig"));
-    let acc_ptr = m.inst("alloca i64");
+    let acc_ptr = m.alloca("i64");
     m.void_inst(&format!("store i64 0, ptr {acc_ptr}"));
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 {start}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 
@@ -541,7 +541,7 @@ fn copy_text(bytes: Reg, start: Reg, end_at: Reg, target: Reg, ty: &crate::ty::L
     let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {target}, i32 0, i32 0"));
     m.void_inst(&format!("store i32 {n}, ptr {len_ptr}"));
     let buffer = m.inst(&format!("getelementptr inbounds {ty}, ptr {target}, i32 0, i32 1"));
-    let i_ptr = m.inst("alloca i32");
+    let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 
