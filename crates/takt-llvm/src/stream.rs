@@ -46,6 +46,11 @@ impl Streams {
     /// kanonischen Byteform (plan/m6.md 2.2).
     pub const AT: &'static str = "takt_stream_at";
 
+    /// Schreibt das `i`-te Element ohne Umweg: `{ i32 len, [N x i8] }`
+    /// an die erste Stelle, `t` an die zweite; liefert `seq`. Fuer Text
+    /// und Bytes, deren Ringform die Sammlungsform ist (FB-214 C6).
+    pub const BIND: &'static str = "takt_stream_bind";
+
     /// Versatz der Laenge in dem, was `AT` schreibt.
     pub const LEN_AT: u32 = 8;
     /// Versatz der Bytes in dem, was `AT` schreibt.
@@ -85,6 +90,10 @@ impl Streams {
             Streams::AT
         ));
         m.declare(&format!(
+            "declare i64 @{}(i32, i64, i32, ptr, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
+            Streams::BIND
+        ));
+        m.declare(&format!(
             "declare void @{}(i32, i32, i64) nounwind willreturn memory(inaccessiblemem: readwrite)",
             Streams::EXAMINED
         ));
@@ -111,6 +120,12 @@ pub fn number(stream: StreamRef) -> Option<i64> {
         StreamRef::Internal(s) => Some(-1 - i64::from(s.0)),
         _ => None,
     }
+}
+
+/// Ob ein Element ohne Umweg in seine Bindung geht: Text und Bytes
+/// liegen im Ring wie im Record.
+pub fn direct(p: &Program, elem: TypeId) -> bool {
+    matches!(p.types.list.get(elem.index()), Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }))
 }
 
 /// Der Elementtyp eines Stroms.

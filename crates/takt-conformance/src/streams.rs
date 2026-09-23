@@ -157,9 +157,12 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus], trace: Trace) {
         let _ = writeln!(s, "    int k = takt_int_slot(s);");
         let _ = writeln!(s, "    return k >= 0 ? takt_int_count(k, cur) : 0;");
         let _ = writeln!(s, "}}");
-        let _ = writeln!(s, "long long takt_stream_at(int s, long long cur, int i, void *out) {{");
+        let _ = writeln!(s, "long long takt_stream_bind(int s, long long cur, int i, void *data, long long *t) {{");
         let _ = writeln!(s, "    int k = takt_int_slot(s);");
-        let _ = writeln!(s, "    return k >= 0 ? takt_int_at(k, cur, i, out) : 0;");
+        let _ = writeln!(s, "    return k >= 0 ? takt_int_bind(k, cur, i, data, t) : 0;");
+        let _ = writeln!(s, "}}");
+        let _ = writeln!(s, "long long takt_stream_at(int s, long long cur, int i, void *out) {{");
+        let _ = writeln!(s, "    return takt_stream_bind(s, cur, i, (unsigned char *)out + 8, (long long *)out);");
         let _ = writeln!(s, "}}");
         let _ = writeln!(s, "void takt_stream_examined(int s, int m, long long seq) {{");
         let _ = writeln!(s, "    int k = takt_int_slot(s);");
@@ -219,25 +222,26 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus], trace: Trace) {
     // Das `i`-te Element des Fensters an den uebergebenen Platz, im
     // Aufbau von `takt_llvm::stream::Streams::AT`: `t` in Nanosekunden
     // (i64), die Laenge (i32 bei 8), die Bytes ab 12.
-    let _ = writeln!(s, "long long takt_stream_at(int s, long long cur, int i, void *out) {{");
+    let _ = writeln!(s, "long long takt_stream_bind(int s, long long cur, int i, void *data, long long *t) {{");
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
-    let _ = writeln!(s, "    if (k >= 0) return takt_int_at(k, cur, i, out);");
+    let _ = writeln!(s, "    if (k >= 0) return takt_int_bind(k, cur, i, data, t);");
     let _ = writeln!(s, "    int seen = 0;");
     let _ = writeln!(s, "    for (int j = 0; j < g_elem_count; j++) {{");
     let _ = writeln!(s, "        const struct takt_elem *e = &g_elems[j];");
     let _ = writeln!(s, "        if (e->stream != s || e->tick > g_tick || e->seq < cur) continue;");
     let _ = writeln!(s, "        if (seen++ != i) continue;");
-    let _ = writeln!(s, "        int cap = takt_stream_cap(s);");
-    let _ = writeln!(s, "        unsigned char *p = (unsigned char *)out;");
-    let _ = writeln!(s, "        long long t = e->tick * {}LL;", p.config.tick);
-    let _ = writeln!(s, "        memset(p, 0, (size_t)cap + 12);");
-    let _ = writeln!(s, "        memcpy(p, &t, sizeof t);");
-    let _ = writeln!(s, "        memcpy(p + 8, &e->len, sizeof e->len);");
-    let _ = writeln!(s, "        memcpy(p + 12, e->bytes, (size_t)e->len);");
+    let _ = writeln!(s, "        unsigned char *p = (unsigned char *)data;");
+    let _ = writeln!(s, "        long long when = e->tick * {}LL;", p.config.tick);
+    let _ = writeln!(s, "        memcpy(t, &when, sizeof when);");
+    let _ = writeln!(s, "        memcpy(p, &e->len, sizeof e->len);");
+    let _ = writeln!(s, "        memcpy(p + 4, e->bytes, (size_t)e->len);");
+    let _ = writeln!(s, "        memset(p + 4 + e->len, 0, (size_t)(takt_stream_cap(s) - e->len));");
     let _ = writeln!(s, "        return e->seq;");
     let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    (void)out;");
     let _ = writeln!(s, "    return 0;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "long long takt_stream_at(int s, long long cur, int i, void *out) {{");
+    let _ = writeln!(s, "    return takt_stream_bind(s, cur, i, (unsigned char *)out + 8, (long long *)out);");
     let _ = writeln!(s, "}}\n");
 
     // 9.6: `cur[s, m] = examined + 1`. Der Cursor gehoert der Maschine,
@@ -426,7 +430,7 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    default: return -1;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
-    // Die Kapazitaet eines Elements: so viel Platz nimmt `takt_int_at`
+    // Die Kapazitaet eines Elements: so viel Platz nimmt `takt_int_bind`
     // hinter `t` und der Laenge.
     let _ = writeln!(s, "static int takt_int_bytes(int k) {{");
     let _ = writeln!(s, "    switch (k) {{");
@@ -472,17 +476,17 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    int n = g_int_n[k] - g_int_new[k] - takt_int_first(k, cur);");
     let _ = writeln!(s, "    return n > 0 ? n : 0;");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static long long takt_int_at(int k, long long cur, int i, void *out) {{");
+    let _ = writeln!(s, "static long long takt_int_bind(int k, long long cur, int i, void *data, long long *t) {{");
     let _ = writeln!(s, "    int first = takt_int_first(k, cur);");
     let _ = writeln!(s, "    if (i < 0 || i >= g_int_n[k] - g_int_new[k] - first) return 0;");
     let _ = writeln!(s, "    const struct takt_idesc *e = takt_int_desc(k, first + i);");
-    let _ = writeln!(s, "    unsigned char *p = (unsigned char *)out;");
-    let _ = writeln!(s, "    long long t = (((long long)e->tick_hi << 32) | e->tick_lo) * {}LL;", p.config.tick);
+    let _ = writeln!(s, "    unsigned char *p = (unsigned char *)data;");
+    let _ = writeln!(s, "    long long when = (((long long)e->tick_hi << 32) | e->tick_lo) * {}LL;", p.config.tick);
     let _ = writeln!(s, "    int len = e->len;");
-    let _ = writeln!(s, "    memcpy(p, &t, sizeof t);");
-    let _ = writeln!(s, "    memcpy(p + 8, &len, sizeof len);");
-    let _ = writeln!(s, "    takt_int_read(k, e->off, p + 12, len);");
-    let _ = writeln!(s, "    memset(p + 12 + e->len, 0, (size_t)(takt_int_bytes(k) - e->len));");
+    let _ = writeln!(s, "    memcpy(t, &when, sizeof when);");
+    let _ = writeln!(s, "    memcpy(p, &len, sizeof len);");
+    let _ = writeln!(s, "    takt_int_read(k, e->off, p + 4, len);");
+    let _ = writeln!(s, "    memset(p + 4 + len, 0, (size_t)(takt_int_bytes(k) - len));");
     let _ = writeln!(s, "    return takt_int_seq_at(k, first + i);");
     let _ = writeln!(s, "}}");
     // 8.6: Zwei Schranken, Elemente und Bytes — wie `Buffer::push`.

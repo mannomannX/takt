@@ -1413,9 +1413,15 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
         // Der Zaehler laeuft ueber das Fenster; seine Schranke ist `n`.
         let i_ptr = m.alloca("i32");
         m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
-        // Das Element kommt in einen Scratch; die Bindungen fuellt
-        // `bind_element` je Handler (8.7).
-        let buf = crate::stream::scratch(ctx.program, elem, m)?;
+        let hs: Vec<&takt_mir::machine::Handler> = handlers.iter().filter(|h| h.stream == stream).collect();
+        // 8.7: Der erste passende Handler gewinnt. Ohne Muster und Guard
+        // ist das immer der erste — sein Element geht ohne Scratch in die
+        // Bindung. Sonst kommt es in einen Scratch, und die Kette prueft.
+        let direct = hs
+            .first()
+            .filter(|h| h.pattern.is_none() && h.guard.is_none() && crate::stream::direct(ctx.program, elem))
+            .and_then(|h| h.binding);
+        let buf = if direct.is_some() { None } else { Some(crate::stream::scratch(ctx.program, elem, m)?) };
         let (head, body, end_at) = (format!("strom{k}"), format!("strom{k}_rumpf"), format!("strom{k}_ende"));
         m.void_inst(&format!("br label %{head}"));
         m.label(&head);
@@ -1423,20 +1429,23 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
         let go_on = m.inst(&format!("icmp slt i32 {i}, {n}"));
         m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{end_at}"));
         m.label(&body);
-        let seq =
-            m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT));
+        let seq = match (direct, buf) {
+            (Some(var), _) => bind_direct(var, sid, &cur, &i, elem, ctx, m)?,
+            (None, Some(buf)) => {
+                m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT))
+            }
+            (None, None) => return Err(NotYet { what: "Scratch" }),
+        };
         // 9.6: Auch ein Element ohne passenden Handler gilt als
         // untersucht — sonst saehe die Maschine es im naechsten Tick
         // wieder.
         let mi = ctx.machine_index;
         m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
         crate::stream::note_examined(ex_ptr, seq, m);
-        // 8.7: Der erste passende Handler gewinnt. Ohne Muster ist das
-        // immer der erste — weitere kaemen nie zum Zug. Mit Muster wird
-        // daraus eine Kette: Je Handler prueft der Automat, und wer
-        // trifft, laeuft; die uebrigen springen ans Ende.
-        let hs: Vec<&takt_mir::machine::Handler> = handlers.iter().filter(|h| h.stream == stream).collect();
-        handler_chain(&hs, buf, seq, elem, ctx, m)?;
+        match buf {
+            Some(buf) => handler_chain(&hs, buf, seq, elem, ctx, m)?,
+            None => block(&hs[0].body.clone(), ctx, m)?,
+        }
         let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
         let next = m.inst(&format!("add i32 {cur_i}, 1"));
         m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
@@ -1458,7 +1467,8 @@ fn next_element(
     let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
     let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
     let mi = ctx.machine_index;
-    let buf = crate::stream::scratch(ctx.program, elem, m)?;
+    let direct = crate::stream::direct(ctx.program, elem);
+    let buf = if direct { None } else { Some(crate::stream::scratch(ctx.program, elem, m)?) };
     let k = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
@@ -1467,13 +1477,63 @@ fn next_element(
     let (take, done) = (format!("naechstes{k}_{name}"), format!("naechstes{k}_{name}_fertig"));
     m.void_inst(&format!("br i1 {some}, label %{take}, label %{done}"));
     m.label(&take);
-    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 0, ptr {buf})", crate::stream::Streams::AT));
-    bind_element(binding, buf, seq, elem, ctx, m)?;
+    let seq = match buf {
+        Some(buf) => {
+            let seq =
+                m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 0, ptr {buf})", crate::stream::Streams::AT));
+            bind_element(binding, buf, seq, elem, ctx, m)?;
+            seq
+        }
+        None => bind_direct(binding, sid, &cur, &"0", elem, ctx, m)?,
+    };
     m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
     crate::stream::note_examined(ex_ptr, seq, m);
     m.void_inst(&format!("br label %{done}"));
     m.label(&done);
     Ok(crate::expr::Lowered { value: some.to_string(), ty: crate::ty::LlvmType::Int(1) })
+}
+
+/// Legt das `i`-te Element ohne Scratch in die Bindung: Inhalt und `t`
+/// schreibt die Runtime, `seq` kommt zurueck (8.7).
+pub(crate) fn bind_direct(
+    var: takt_mir::VarId,
+    sid: i64,
+    cur: &crate::emit::Reg,
+    i: &dyn std::fmt::Display,
+    elem: takt_mir::TypeId,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::emit::Reg, NotYet> {
+    let p = ctx.program;
+    let ty = ctx.machine.vars.get(var.index()).map(|v| v.ty).ok_or(NotYet { what: "Bindung ohne Typ" })?;
+    let record = crate::ty::lower(ty, p).ok_or(NotYet { what: "Typ der Bindung" })?;
+    let Some(takt_mir::types::Type::Record(r)) = p.types.list.get(ty.index()) else {
+        return Err(NotYet { what: "Bindung ohne Record" });
+    };
+    let slot = ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })?;
+    let (mut t_ptr, mut seq_ptr, mut data_ptr) = (None, None, None);
+    for (k, def) in p.records[r.index()].fields.iter().enumerate() {
+        let at = m.inst(&format!("getelementptr inbounds {record}, ptr {slot}, i32 0, i32 {k}"));
+        match def.name.as_str() {
+            "t" => t_ptr = Some(at),
+            "seq" => seq_ptr = Some(at),
+            "text" | "data" => data_ptr = Some(at),
+            _ => {}
+        }
+    }
+    let (Some(t_ptr), Some(data_ptr)) = (t_ptr, data_ptr) else { return Err(NotYet { what: "Bindung ohne Inhalt" }) };
+    let seq = m.inst(&format!(
+        "call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {data_ptr}, ptr {t_ptr})",
+        crate::stream::Streams::BIND
+    ));
+    if let Some(seq_ptr) = seq_ptr {
+        m.void_inst(&format!("store i64 {seq}, ptr {seq_ptr}"));
+    }
+    if let Some(takt_mir::types::Type::Line { cap }) = p.types.list.get(elem.index()) {
+        let flag = m.inst(&format!("getelementptr inbounds i8, ptr {data_ptr}, i64 {}", 4 + cap));
+        m.void_inst(&format!("store i1 false, ptr {flag}"));
+    }
+    Ok(seq)
 }
 
 /// Legt das Element aus dem Scratch in die Bindung (8.7, Wrapper-Regel):

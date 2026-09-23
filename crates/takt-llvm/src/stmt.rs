@@ -819,7 +819,8 @@ fn for_window(
     let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
-    let buf = crate::stream::scratch(ctx.program, elem, m)?;
+    let direct = crate::stream::direct(ctx.program, elem);
+    let buf = if direct { None } else { Some(crate::stream::scratch(ctx.program, elem, m)?) };
     let (head, loop_body, end_at) =
         (format!("fenster{k}_{name}"), format!("fenster{k}_{name}_rumpf"), format!("fenster{k}_{name}_ende"));
     m.void_inst(&format!("br label %{head}"));
@@ -828,8 +829,15 @@ fn for_window(
     let go_on = m.inst(&format!("icmp slt i32 {i}, {n}"));
     m.void_inst(&format!("br i1 {go_on}, label %{loop_body}, label %{end_at}"));
     m.label(&loop_body);
-    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT));
-    crate::step::bind_element(var, buf, seq, elem, ctx, m)?;
+    let seq = match buf {
+        Some(buf) => {
+            let seq =
+                m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT));
+            crate::step::bind_element(var, buf, seq, elem, ctx, m)?;
+            seq
+        }
+        None => crate::step::bind_direct(var, sid, &cur, &i, elem, ctx, m)?,
+    };
     m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
     crate::stream::note_examined(ex_ptr, seq, m);
     ctx.breaks.push(end_at.clone());
