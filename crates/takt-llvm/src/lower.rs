@@ -67,7 +67,18 @@ pub fn program(p: &Program, triple: &str, module_name: &str) -> Lowered {
 /// Wie [`program`], mit Instrumentierung (11.2): `pc` im Zustand traegt
 /// je Anweisung oder je Zustandswechsel, wo die Maschine steht.
 pub fn program_with(p: &Program, triple: &str, module_name: &str, instrument: crate::target::Instrument) -> Lowered {
-    let mut m = Module::new(module_name, triple).with_instrument(instrument);
+    program_with_diagnostics(p, triple, module_name, instrument, crate::target::Diagnostics::Ids)
+}
+
+/// Wie [`program_with`], mit Diagnosestufe (plan/codegen-hebel.md C).
+pub fn program_with_diagnostics(
+    p: &Program,
+    triple: &str,
+    module_name: &str,
+    instrument: crate::target::Instrument,
+    diagnostics: crate::target::Diagnostics,
+) -> Lowered {
+    let mut m = Module::new(module_name, triple).with_instrument(instrument).with_diagnostics(diagnostics);
     let mut skipped = Vec::new();
     let mut without_persist = Vec::new();
 

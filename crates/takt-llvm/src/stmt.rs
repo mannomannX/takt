@@ -1032,6 +1032,9 @@ fn branch(cond: &Expr, then: &Block, otherwise: &Block, ctx: &mut Ctx<'_>, m: &m
 /// Aufruf.
 fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let machine = ctx.machine_index;
+    // Ohne Diagnose bleiben die Ausdruecke (ihre Pruefungen wirken), die
+    // Aufrufe entfallen; `alert` ist ein Betriebssignal (5.6) und bleibt.
+    let silent = m.diagnostics == crate::target::Diagnostics::None && !matches!(o, Observe::Alert { .. });
     match o {
         Observe::Alert { cond, .. } => {
             let vars = ctx.vars();
@@ -1044,7 +1047,9 @@ fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet>
         }
         Observe::Log(_) => {
             let site = ctx.next_site();
-            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site})", Abi::LOG,));
+            if !silent {
+                m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site})", Abi::LOG));
+            }
             Ok(())
         }
         Observe::Measure { value, .. } => {
@@ -1060,14 +1065,18 @@ fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet>
                 _ => return Err(NotYet { what: "`measure` auf diesem Typ" }),
             };
             let site = ctx.next_site();
-            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, double {as_double})", Abi::MEASURE));
+            if !silent {
+                m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, double {as_double})", Abi::MEASURE));
+            }
             Ok(())
         }
         Observe::Verify { cond, .. } => {
             let vars = ctx.vars();
             let c = lower_expr(cond, ctx.program, m, &vars)?;
             let site = ctx.next_site();
-            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {})", Abi::VERIFY, c.value));
+            if !silent {
+                m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {})", Abi::VERIFY, c.value));
+            }
             Ok(())
         }
         // `verdict pass | fail` (13.2): das Urteil eines Tests. Wie
@@ -1076,7 +1085,9 @@ fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet>
         Observe::Verdict { pass, .. } => {
             let site = ctx.next_site();
             let v = u8::from(*pass);
-            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {v})", Abi::VERDICT));
+            if !silent {
+                m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {v})", Abi::VERDICT));
+            }
             Ok(())
         }
     }

@@ -29,6 +29,7 @@ fn main() {
     // 11.2: `statements` fuellt `pc` je Maschine; Default auf `baremetal`
     // ist `states`, also aus.
     println!("cargo:rerun-if-env-changed=TAKT_INSTRUMENT");
+    println!("cargo:rerun-if-env-changed=TAKT_DIAGNOSTICS");
     if let Ok(mode) = env::var("TAKT_INSTRUMENT") {
         println!("cargo:rustc-env=TAKT_INSTRUMENT={mode}");
     }
@@ -62,7 +63,7 @@ fn build_takt_program(out: &Path) {
     }
     let Some(p) = compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let rahmen = out.join("takt_rahmen.c");
-    if let Err(e) = fs::write(&rahmen, takt_conformance::mcu::build(&p).source) {
+    if let Err(e) = fs::write(&rahmen, takt_conformance::mcu::build_with(&p, diagnostics()).source) {
         panic!("Rahmen nicht schreibbar: {e}");
     }
     let ir = out.join("takt_programm.ll");
@@ -125,6 +126,9 @@ fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
     cmd.args(["build", program, "--target", "riscv32imac", "--build", "hw"]).args(emit).arg("--out").arg(out);
     if let Ok(mode) = env::var("TAKT_INSTRUMENT") {
         cmd.args(["--instrument", &mode]);
+    }
+    if let Ok(level) = env::var("TAKT_DIAGNOSTICS") {
+        cmd.args(["--diagnostics", &level]);
     }
     // 8.10: Anschluesse und NVM-Zeiten des Boards, wenn die Konfiguration da ist.
     let hardware = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try/hw/esp32c6.hw");
@@ -245,4 +249,12 @@ fn walk(dir: &Path, newest: &mut Option<(std::time::SystemTime, PathBuf)>) {
             *newest = Some((t, path));
         }
     }
+}
+
+/// Die Diagnosestufe aus `TAKT_DIAGNOSTICS`; ohne Angabe `ids`.
+fn diagnostics() -> takt_llvm::Diagnostics {
+    env::var("TAKT_DIAGNOSTICS")
+        .ok()
+        .and_then(|l| takt_llvm::Diagnostics::parse(&l))
+        .unwrap_or(takt_llvm::Diagnostics::Ids)
 }

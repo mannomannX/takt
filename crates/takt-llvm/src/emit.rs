@@ -93,6 +93,8 @@ pub struct Module {
     /// Instrumentierungsstufe (11.2): was die Schrittfunktionen in `pc`
     /// schreiben.
     pub instrument: crate::target::Instrument,
+    /// Was an Beobachtungen ausgegeben wird.
+    pub diagnostics: crate::target::Diagnostics,
     /// Gerufene LLVM-Intrinsics mit ihrer Signatur.
     ///
     /// Sie sind je Breite eigene Symbole (`@llvm.smin.i8` ist nicht
@@ -131,11 +133,18 @@ impl Module {
             entry_at: 0,
             slots: 0,
             instrument: crate::target::Instrument::Off,
+            diagnostics: crate::target::Diagnostics::Ids,
             open: false,
             block: String::new(),
             intrinsics: std::collections::BTreeSet::new(),
             terminated: false,
         }
+    }
+
+    /// Dasselbe Modul mit dieser Diagnosestufe.
+    pub fn with_diagnostics(mut self, diagnostics: crate::target::Diagnostics) -> Module {
+        self.diagnostics = diagnostics;
+        self
     }
 
     /// Dasselbe Modul mit dieser Instrumentierungsstufe.

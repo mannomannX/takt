@@ -100,6 +100,31 @@ impl Instrument {
     }
 }
 
+/// Was das Ziel an Beobachtungen ausgibt (plan/codegen-hebel.md C).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Diagnostics {
+    /// `log`, `measure`, `verify`, `verdict` als Stelle mit Argumenten;
+    /// die Ausgaenge im Trace.
+    Ids,
+    /// Nichts davon (12.3, „reduziert"); Faults und `alert` bleiben.
+    None,
+}
+
+impl Diagnostics {
+    /// Der Name in `takt build --diagnostics …`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Diagnostics::Ids => "ids",
+            Diagnostics::None => "none",
+        }
+    }
+
+    /// Die Stufe zu einem Namen.
+    pub fn parse(name: &str) -> Option<Diagnostics> {
+        [Diagnostics::Ids, Diagnostics::None].into_iter().find(|d| d.name() == name)
+    }
+}
+
 /// Ein Ziel, fuer das der Codegen erzeugen kann (12.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Target {

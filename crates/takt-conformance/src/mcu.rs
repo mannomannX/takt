@@ -38,6 +38,12 @@ pub struct McuHarness {
 /// Anders als der Linux-Rahmen kennt dieser keine Tickzahl: Die Schleife
 /// laeuft, bis das Board ausgeht.
 pub fn build(p: &Program) -> McuHarness {
+    build_with(p, takt_llvm::Diagnostics::Ids)
+}
+
+/// Wie [`build`], mit Diagnosestufe: ohne sie gibt `takt_mcu_dump` nichts
+/// aus und der Rahmen traegt kein Schattenlatch.
+pub fn build_with(p: &Program, diagnostics: takt_llvm::Diagnostics) -> McuHarness {
     let layout = crate::layout::of(p);
     // 7.2: in Schrittordnung, wie der Interpreter und der Testrahmen.
     let driven: Vec<&takt_mir::machine::Machine> = takt_mir::analysis::schedule::order(p)
@@ -57,7 +63,7 @@ pub fn build(p: &Program) -> McuHarness {
     declarations(&mut s, &driven);
     init(&mut s, p, &layout, &driven);
     tick(&mut s, p, &layout, &driven);
-    telemetry(&mut s, p, &layout, &driven);
+    telemetry(&mut s, p, &layout, &driven, diagnostics);
 
     McuHarness { source: s, layout }
 }
@@ -388,7 +394,21 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
 /// `compare` beide lesen kann. Ohne `all` nur, was sich seit der letzten
 /// Ausgabe geaendert hat (9.3). Eine Tabelle je Ausgang statt Code je
 /// Ausgang: So war die Funktion die groesste des Rahmens.
-fn telemetry(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
+fn telemetry(
+    s: &mut String,
+    p: &Program,
+    layout: &Layout,
+    driven: &[&takt_mir::machine::Machine],
+    diagnostics: takt_llvm::Diagnostics,
+) {
+    if diagnostics == takt_llvm::Diagnostics::None {
+        let _ = writeln!(s, "void takt_mcu_dump(int all) {{ (void)all; }}\n");
+        program_counters(s, p, driven);
+        sample(s, p, layout);
+        commit(s, layout);
+        outputs(s, layout);
+        return;
+    }
     let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md); ohne `all` nur die geaenderten. */");
     let _ = writeln!(s, "{}", crate::layout::c_buffer("g_shown", layout.latch));
     let _ = writeln!(s, "struct takt_variant {{ long long d; const char *name; }};");

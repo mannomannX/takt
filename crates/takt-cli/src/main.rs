@@ -18,7 +18,7 @@
 //! takt timing TRACE.trace --tick NS
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
-//!                   [--instrument statements|states|off]
+//!                   [--instrument statements|states|off] [--diagnostics ids|none]
 //! takt size  DATEI… [--build sim|hw] [--params-profile P] [--object DATEI.o] [--target NAME]
 //!                   [--hardware DATEI.hw] [--baseline DATEI] [--save-baseline DATEI]
 //! takt cost  DATEI… [--build sim|hw] [--params-profile P]
@@ -98,6 +98,7 @@ impl Args {
             "--machine",
             "--extract",
             "--instrument",
+            "--diagnostics",
             "--steps",
             "--tick",
             "--params-profile",
@@ -454,7 +455,18 @@ fn build(args: &Args) -> bool {
         None => takt_llvm::Instrument::default_for(program.config.runtime_profile(), target),
     };
     println!("Instrumentierung: {} (11.2)", instrument.name());
-    let lowered = takt_llvm::lower::program_with(&program, target.triple, module_name(path), instrument);
+    let diagnostics = match args.value("--diagnostics") {
+        Some(name) => match takt_llvm::Diagnostics::parse(name) {
+            Some(d) => d,
+            None => {
+                eprintln!("--diagnostics: `{name}` unbekannt; ids oder none (12.3)");
+                return false;
+            }
+        },
+        None => takt_llvm::Diagnostics::Ids,
+    };
+    let lowered =
+        takt_llvm::lower::program_with_diagnostics(&program, target.triple, module_name(path), instrument, diagnostics);
     for s in &lowered.skipped {
         // Ein fehlender Schritt ist ein Loch, kein Schoenheitsfehler: Ohne
         // ihn meldet der Linker spaeter ein unbekanntes Symbol statt des
