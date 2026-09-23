@@ -1015,37 +1015,77 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
         module.abort(mark);
         return Err(NotYet { what: "conf oder t_in_state im Zustand" });
     };
+    // Die Fristen je Blatt als Tabelle; eine Funktion je Modul sucht darin.
+    let rows: Vec<String> = deadlines
+        .iter()
+        .enumerate()
+        .flat_map(|(i, list)| {
+            list.iter().map(move |(at, ticks)| format!("{DEADLINE_ROW} {{ i8 {i}, i32 {at}, i64 {ticks} }}"))
+        })
+        .collect();
+    let table = format!("@{}_deadlines", crate::fns::sanitized(&m.name));
+    module.declare(&format!("{table} = internal constant [{} x {DEADLINE_ROW}] [ {} ]", rows.len(), rows.join(", ")));
+    deadline_search(module);
     let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
     let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
     let cur = module.inst(&format!("load i8, ptr {slot}"));
-    let _ = tis_i;
-    // Kaskade statt Sprungtabelle: Ein Blatt ohne Frist liefert -1.
-    let mut acc = module.inst("select i1 true, i64 -1, i64 -1");
-    for (i, list) in deadlines.iter().enumerate() {
-        let mut best: Option<crate::emit::Reg> = None;
-        for (at, ticks) in list {
-            let Some(cell) = machine::timer_cell(m, st, *at, module) else { continue };
-            let elapsed = module.inst(&format!("load i64, ptr {cell}"));
-            let rest = module.inst(&format!("sub i64 {ticks}, {elapsed}"));
-            let positiv = module.inst(&format!("icmp sgt i64 {rest}, 0"));
-            let remaining = module.inst(&format!("select i1 {positiv}, i64 {rest}, i64 0"));
-            best = Some(match best {
-                None => remaining,
-                Some(b) => {
-                    let nearer = module.inst(&format!("icmp slt i64 {remaining}, {b}"));
-                    module.inst(&format!("select i1 {nearer}, i64 {remaining}, i64 {b}"))
-                }
-            });
-        }
-        let Some(best) = best else { continue };
-        // Die Runtime springt Basis-Ticks, nicht Aktivierungen.
-        let value = module.inst(&format!("mul i64 {best}, {period}"));
-        let is_leaf = module.inst(&format!("icmp eq i8 {cur}, {i}"));
-        acc = module.inst(&format!("select i1 {is_leaf}, i64 {value}, i64 {acc}"));
-    }
-
-    module.end(Some((&crate::ty::LlvmType::Int(64), acc.to_string())));
+    let timers = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {tis_i}"));
+    let value = module.inst(&format!(
+        "call i64 @takt_deadline_of(ptr {timers}, ptr {table}, i32 {}, i8 {cur}, i64 {period})",
+        rows.len()
+    ));
+    module.end(Some((&crate::ty::LlvmType::Int(64), value.to_string())));
     Ok(())
+}
+
+/// Eine Zeile der Fristentabelle: Blatt, Zaehler, Frist in Aktivierungen.
+const DEADLINE_ROW: &str = "{ i8, i32, i64 }";
+
+/// `takt_deadline_of(timers, table, n, leaf, period)`: die naechste Frist
+/// des Blatts in Basis-Ticks, -1 ohne Frist. Einmal je Modul.
+fn deadline_search(module: &mut Module) {
+    if module.has_declared("@takt_deadline_of(") {
+        return;
+    }
+    module.declare(&format!(
+        "define internal i64 @takt_deadline_of(ptr %timers, ptr %table, i32 %n, i8 %leaf, i64 %period) nounwind {{
+  br label %kopf
+kopf:
+  %i = phi i32 [ 0, %0 ], [ %i1, %weiter ]
+  %best = phi i64 [ -1, %0 ], [ %best1, %weiter ]
+  %fertig = icmp eq i32 %i, %n
+  br i1 %fertig, label %ende, label %zeile
+zeile:
+  %e = getelementptr inbounds {DEADLINE_ROW}, ptr %table, i32 %i
+  %l = load i8, ptr %e
+  %hier = icmp eq i8 %l, %leaf
+  br i1 %hier, label %frist, label %weiter
+frist:
+  %tp = getelementptr inbounds {DEADLINE_ROW}, ptr %e, i32 0, i32 1
+  %t = load i32, ptr %tp
+  %fp = getelementptr inbounds {DEADLINE_ROW}, ptr %e, i32 0, i32 2
+  %f = load i64, ptr %fp
+  %cp = getelementptr inbounds i64, ptr %timers, i32 %t
+  %c = load i64, ptr %cp
+  %rest = sub i64 %f, %c
+  %pos = icmp sgt i64 %rest, 0
+  %rem = select i1 %pos, i64 %rest, i64 0
+  %erste = icmp eq i64 %best, -1
+  %naeher = icmp slt i64 %rem, %best
+  %nimm = or i1 %erste, %naeher
+  %neu = select i1 %nimm, i64 %rem, i64 %best
+  br label %weiter
+weiter:
+  %best1 = phi i64 [ %best, %zeile ], [ %neu, %frist ]
+  %i1 = add i32 %i, 1
+  br label %kopf
+ende:
+  %keine = icmp eq i64 %best, -1
+  %ticks = mul i64 %best, %period
+  %r = select i1 %keine, i64 -1, i64 %ticks
+  ret i64 %r
+}}"
+    ));
 }
 
 /// Schreibt die Eintrittsfunktion einer Maschine (9.4).

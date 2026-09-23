@@ -372,7 +372,12 @@ fn emit_internal(s: &mut String, p: &Program) {
     };
     let _ = writeln!(s, "/* Ringe im Lauf (8.6, 8.3): Byte-Ring mit Deskriptoren, Unit-Delay, Cursor je Leser. */");
     let _ = writeln!(s, "#define TAKT_INT_STREAMS {n}");
-    let _ = writeln!(s, "struct takt_idesc {{ long long tick; int off; int len; }};");
+    // 12 statt 16 Byte je Element: der Tick in zwei Haelften (kein
+    // 8-Byte-Feld, also Ausrichtung 4), Versatz und Laenge als u16, wo
+    // die Bytekapazitaet es zulaesst.
+    let narrow = dyns.iter().all(|d| d.capacity_bytes <= 65_535);
+    let field = if narrow { "unsigned short" } else { "unsigned" };
+    let _ = writeln!(s, "struct takt_idesc {{ unsigned tick_lo, tick_hi; {field} off, len; }};");
     let _ = writeln!(s, "static struct takt_idesc g_int_desc[{}];", descs.max(1));
     let _ = writeln!(s, "static _Alignas(8) unsigned char g_int_pool[{}];", bytes.max(8));
     let _ = writeln!(s, "static const int g_int_doff[{rows}] = {{ {} }};", list(doff));
@@ -472,10 +477,11 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    if (i < 0 || i >= g_int_n[k] - g_int_new[k] - first) return 0;");
     let _ = writeln!(s, "    const struct takt_idesc *e = takt_int_desc(k, first + i);");
     let _ = writeln!(s, "    unsigned char *p = (unsigned char *)out;");
-    let _ = writeln!(s, "    long long t = e->tick * {}LL;", p.config.tick);
+    let _ = writeln!(s, "    long long t = (((long long)e->tick_hi << 32) | e->tick_lo) * {}LL;", p.config.tick);
+    let _ = writeln!(s, "    int len = e->len;");
     let _ = writeln!(s, "    memcpy(p, &t, sizeof t);");
-    let _ = writeln!(s, "    memcpy(p + 8, &e->len, sizeof e->len);");
-    let _ = writeln!(s, "    takt_int_read(k, e->off, p + 12, e->len);");
+    let _ = writeln!(s, "    memcpy(p + 8, &len, sizeof len);");
+    let _ = writeln!(s, "    takt_int_read(k, e->off, p + 12, len);");
     let _ = writeln!(s, "    memset(p + 12 + e->len, 0, (size_t)(takt_int_bytes(k) - e->len));");
     let _ = writeln!(s, "    return takt_int_seq_at(k, first + i);");
     let _ = writeln!(s, "}}");
@@ -483,9 +489,11 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "static _Bool takt_int_send(int k, const char *b, int n) {{");
     let _ = writeln!(s, "    if (g_int_n[k] >= g_int_cap[k] || g_int_bused[k] + n > g_int_capb[k]) return 0;");
     let _ = writeln!(s, "    struct takt_idesc *e = takt_int_desc(k, g_int_n[k]);");
-    let _ = writeln!(s, "    e->tick = g_tick;");
-    let _ = writeln!(s, "    e->off = g_int_bhead[k] + g_int_bused[k];");
-    let _ = writeln!(s, "    if (e->off >= g_int_capb[k]) e->off -= g_int_capb[k];");
+    let _ = writeln!(s, "    e->tick_lo = (unsigned)g_tick;");
+    let _ = writeln!(s, "    e->tick_hi = (unsigned)(g_tick >> 32);");
+    let _ = writeln!(s, "    int off = g_int_bhead[k] + g_int_bused[k];");
+    let _ = writeln!(s, "    if (off >= g_int_capb[k]) off -= g_int_capb[k];");
+    let _ = writeln!(s, "    e->off = off;");
     let _ = writeln!(s, "    e->len = n;");
     let _ = writeln!(s, "    takt_int_write(k, e->off, (const unsigned char *)b, n);");
     let _ = writeln!(s, "    g_int_bused[k] += n;");

@@ -311,6 +311,11 @@ impl Module {
         name
     }
 
+    /// Ob der Kopf `text` schon enthaelt (fuer Definitionen, die einmal je Modul stehen).
+    pub fn has_declared(&self, text: &str) -> bool {
+        self.head.contains(text)
+    }
+
     /// Die `loop:`-Funktion eines Zustands; entsteht beim ersten Bedarf.
     pub fn loop_function(&mut self, machine: &str, state: Option<u32>) -> String {
         if let Some(l) = self.loops.iter().find(|l| l.machine == machine && l.state == state) {

@@ -372,11 +372,12 @@ fn an_idle_state_reports_its_deadline() {
     assert!(idle.contains("icmp eq i8"), "das aktive Blatt wird geprueft:\n{idle}");
     assert!(idle.contains("xor i1"), "und `pending` negiert");
 
-    let at = ir.find("define i64 @m_deadline").expect("Fristabfrage");
-    let dl = &ir[at..ir[at..].find("\n}").map_or(ir.len(), |e| at + e)];
-    // `after 500 ms` bei 10 ms Tick sind 50 Ticks, `after 200 ms` 20.
-    assert!(dl.contains("sub i64 50,"), "die Frist steht in Ticks:\n{dl}");
-    assert!(dl.contains("sub i64 20,"), "je Blatt die eigene");
+    // Die Fristen stehen als Tabelle je Blatt, in Ticks: `after 500 ms`
+    // bei 10 ms Tick sind 50, `after 200 ms` 20.
+    let table = ir.lines().find(|l| l.starts_with("@m_deadlines = ")).expect("Fristentabelle");
+    assert!(table.contains("i64 50 }"), "die Frist steht in Ticks:\n{table}");
+    assert!(table.contains("i64 20 }"), "je Blatt die eigene");
+    assert!(ir.contains("call i64 @takt_deadline_of(") && ir.contains("define internal i64 @takt_deadline_of("));
 }
 
 /// **Die Frist ist ein absoluter Zeitpunkt in Nanosekunden** (9.9).
@@ -407,13 +408,15 @@ fn the_deadline_is_absolute_nanoseconds() {
 fn a_multirate_deadline_counts_activations() {
     let p = corpus("31_idle_multirate.takt");
     let ir = common::ir_for(&p, Target::THUMBV7EM.triple);
+    // `every 50 ms` bei 10 ms Tick: Periode 5. `after 500 ms` sind zehn
+    // Aktivierungen, `after 200 ms` vier; die Suche rechnet in Basis-Ticks zurueck.
+    let table = ir.lines().find(|l| l.starts_with("@m_deadlines = ")).expect("Fristentabelle");
+    assert!(table.contains("i64 10 }"), "500 ms sind zehn Aktivierungen:\n{table}");
+    assert!(table.contains("i64 4 }"), "200 ms sind vier");
     let at = ir.find("define i64 @m_deadline").expect("Fristabfrage");
     let dl = &ir[at..ir[at..].find("\n}").map_or(ir.len(), |e| at + e)];
-    // `every 50 ms` bei 10 ms Tick: Periode 5. `after 500 ms` sind zehn
-    // Aktivierungen, `after 200 ms` vier.
-    assert!(dl.contains("sub i64 10,"), "500 ms sind zehn Aktivierungen:\n{dl}");
-    assert!(dl.contains("sub i64 4,"), "200 ms sind vier");
-    assert!(dl.contains("mul i64"), "und das Ergebnis geht in Basis-Ticks zurueck");
+    assert!(dl.contains(", i64 5)"), "die Periode geht mit:\n{dl}");
+    assert!(ir.contains("%ticks = mul i64 %best, %period"), "und das Ergebnis geht in Basis-Ticks zurueck");
 }
 
 /// **Eingaenge vom Board** (12.1 Schritt 2, 12.6).

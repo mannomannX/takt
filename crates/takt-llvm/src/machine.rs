@@ -176,9 +176,10 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     for (i, _) in m.layout.saved_paths.iter().enumerate() {
         fields.push(field(format!("saved{i}"), LlvmType::Int(32), Role::Saved, i));
     }
-    // Hinter `conf` und `t_in_state` (11.2) absteigend nach Ausrichtung:
-    // kein Fuellbyte zwischen den Feldern.
-    fields[2..].sort_by_key(|f| std::cmp::Reverse(f.ty.align()));
+    // Hinter `conf` und `t_in_state` (11.2): Skalare vor den grossen
+    // Puffern, damit ihre Versaetze klein bleiben (RISC-V: 12 Bit),
+    // darin absteigend nach Ausrichtung ohne Fuellbytes.
+    fields[2..].sort_by_key(|f| (f.ty.aligned_size() >= 256, std::cmp::Reverse(f.ty.align())));
     Some(StateStruct { fields, depth: d, overlay })
 }
 
