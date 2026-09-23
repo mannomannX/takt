@@ -158,7 +158,12 @@ impl Module {
     /// Die Parameter bekommen die Register 0 bis n-1; der Zaehler steht
     /// danach auf n, wie LLVM es verlangt.
     pub fn begin(&mut self, name: &str, ret: &LlvmType, params: &[LlvmType]) -> Vec<Reg> {
-        self.begin_with("", name, ret, params, &[])
+        self.begin_with("", name, ret, params, &[], "")
+    }
+
+    /// Eine kalte Funktion: `minsize`, weil sie nicht im Tick liegt.
+    pub fn begin_cold(&mut self, name: &str, ret: &LlvmType, params: &[LlvmType]) -> Vec<Reg> {
+        self.begin_with("", name, ret, params, &[], "minsize")
     }
 
     /// Wie [`Module::begin`], mit Bindung (`internal`) und Attributen je
@@ -172,6 +177,7 @@ impl Module {
         ret: &LlvmType,
         params: &[LlvmType],
         attrs: &[&str],
+        fn_attrs: &str,
     ) -> Vec<Reg> {
         debug_assert!(!self.open, "Funktion `{name}` beginnt in einer offenen Funktion");
         let regs: Vec<Reg> = (0..params.len() as u32).map(Reg::Num).collect();
@@ -184,7 +190,8 @@ impl Module {
                 a => format!("{t} {a} {r}"),
             })
             .collect();
-        let _ = writeln!(self.body, "\ndefine {linkage}{ret} @{name}({}) nounwind {{", sig.join(", "));
+        let extra = if fn_attrs.is_empty() { String::new() } else { format!(" {fn_attrs}") };
+        let _ = writeln!(self.body, "\ndefine {linkage}{ret} @{name}({}) nounwind{extra} {{", sig.join(", "));
         self.entry_at = self.body.len();
         self.slots = 0;
         // Der Eintrittsblock bekommt eine Nummer wie ein Register.

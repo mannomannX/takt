@@ -350,7 +350,7 @@ pub fn block_method(b: &takt_mir::fns::BlockDef, f: &FnDef, p: &Program, m: &mut
         None => LlvmType::Void,
     };
     let mark = m.mark();
-    let args = m.begin_with("internal ", &crate::block::method_symbol(b, &f.name), &ret, &params, &[]);
+    let args = m.begin_with("internal ", &crate::block::method_symbol(b, &f.name), &ret, &params, &[], "");
     match block_body(b, f, p, &args, &ret, m) {
         Ok(()) => Ok(()),
         Err(e) => {

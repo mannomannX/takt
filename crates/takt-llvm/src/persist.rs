@@ -44,7 +44,7 @@ pub fn snapshot_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
         bound += 12 + u64::from(max_size(p, ty).map_err(|_| NotYet { what: "persist ohne Byte-Form" })?);
     }
     let mark = module.mark();
-    let params = module.begin(
+    let params = module.begin_cold(
         &format!("{}_persist_snapshot", m.name),
         &LlvmType::Int(32),
         &[LlvmType::Ptr, LlvmType::Ptr, LlvmType::Int(32)],
@@ -189,7 +189,7 @@ pub fn restore_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
         return Ok(());
     }
     let mark = module.mark();
-    let params = module.begin(
+    let params = module.begin_cold(
         &format!("{}_persist_restore", m.name),
         &LlvmType::Int(32),
         &[LlvmType::Ptr, LlvmType::Ptr, LlvmType::Int(32)],

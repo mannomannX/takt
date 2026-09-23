@@ -56,10 +56,10 @@ impl Streams {
     /// Versatz der Bytes in dem, was `AT` schreibt.
     pub const BYTES_AT: u32 = 12;
 
-    /// Meldet, bis zu welcher `seq` die Maschine `m` untersucht hat (9.6:
-    /// `cur[s, m] = examined + 1`). Die Runtime bildet daraus das Minimum
-    /// ueber alle Leser eines internen Stroms und gibt frei, was darunter
-    /// liegt (8.6).
+    /// Meldet einmal je Schritt, bis zu welcher `seq` die Maschine `m`
+    /// untersucht hat (9.6: `cur[s, m] = examined + 1`). Die Runtime
+    /// bildet daraus das Minimum ueber alle Leser eines internen Stroms
+    /// und gibt frei, was darunter liegt (8.6).
     pub const EXAMINED: &'static str = "takt_stream_examined";
 
     /// Legt Bytes in den Sendepuffer eines Ausgabestroms (8.8).

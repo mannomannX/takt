@@ -1400,7 +1400,6 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
     let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`peek` ohne Wrapper-Typ" }) };
     let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
     let (cur_ptr, ex_ptr) = vars.stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
-    let mi = vars.machine_index().ok_or(NotYet { what: "`peek` ausserhalb einer Maschine" })?;
     let out = m.alloca(&inner);
     m.write(&inner, "zeroinitializer", &out.to_string());
     let buf = crate::stream::scratch(p, elem, m)?;
@@ -1412,7 +1411,6 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
     m.void_inst(&format!("br i1 {some}, label %{read}, label %{done}"));
     m.label(&read);
     let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 0, ptr {buf})", crate::stream::Streams::AT));
-    m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
     crate::stream::note_examined(ex_ptr, seq, m);
     crate::stream::copy_payload(buf, out, elem, p, m)?;
     m.void_inst(&format!("br label %{done}"));

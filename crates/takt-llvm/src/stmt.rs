@@ -812,7 +812,6 @@ fn for_window(
     let (cur_ptr, ex_ptr) = ctx.vars().stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
     let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
     let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
-    let mi = ctx.machine_index;
     let k = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
@@ -838,7 +837,6 @@ fn for_window(
         }
         None => crate::step::bind_direct(var, sid, &cur, &i, elem, ctx, m)?,
     };
-    m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
     crate::stream::note_examined(ex_ptr, seq, m);
     ctx.breaks.push(end_at.clone());
     let result = block(body, ctx, m);

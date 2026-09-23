@@ -157,7 +157,8 @@ fn write_step(
     // Code kann ihn schreiben; `takt_stream_examined` meldet dasselbe
     // an die Runtime, die daraus das Minimum ueber alle Konsumenten
     // bildet. Ohne untersuchtes Element bleibt der Cursor, wo er stand.
-    for i in 0..m.layout.cursors.len() {
+    // Der Runtime gilt das Maximum einmal je Schritt, nicht je Element.
+    for (i, stream) in m.layout.cursors.iter().enumerate() {
         let (Some(c), Some(e)) = (st.index_of(Role::Cursor, i), st.index_of(Role::Examined, i)) else { continue };
         let cur_ptr = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {c}"));
         let ex_ptr = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {e}"));
@@ -166,6 +167,12 @@ fn write_step(
         let ahead = module.inst(&format!("icmp sgt i64 {next}, {cur}"));
         let new = module.inst(&format!("select i1 {ahead}, i64 {next}, i64 {cur}"));
         module.void_inst(&format!("store i64 {new}, ptr {cur_ptr}"));
+        if let Some(sid) = crate::stream::number(*stream) {
+            let seq = module.inst(&format!("sub i64 {next}, 1"));
+            let mi = ctx.machine_index;
+            module
+                .void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
+        }
     }
     module.end(None);
     Ok(())
@@ -559,6 +566,7 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
             &crate::ty::LlvmType::Void,
             &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
             machine::MACHINE_ATTRS,
+            "minsize",
         );
         let leaf = StateId(e.leaf);
         let mut ctx = Ctx::new(m, st, p);
@@ -636,7 +644,7 @@ fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Modul
         let ptr = crate::ty::LlvmType::Ptr;
         let params =
             [ptr.clone(), ptr.clone(), ptr.clone(), ptr, crate::ty::LlvmType::Int(8), crate::ty::LlvmType::Int(1)];
-        let args = module.begin_with("internal ", &l.name, &crate::ty::LlvmType::Int(8), &params, LOOP_ATTRS);
+        let args = module.begin_with("internal ", &l.name, &crate::ty::LlvmType::Int(8), &params, LOOP_ATTRS, "");
         let state = l.state.map(StateId);
         let mut ctx = Ctx::new(m, st, p);
         ctx.leaf_reg = Some(args[4]);
@@ -855,7 +863,7 @@ fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
 /// und in `idle` gibt es kein `loop:`, also auch kein `every`.
 pub fn advance_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
     let period = i64::from(m.period.max(1));
-    module.begin(
+    module.begin_cold(
         &format!("{}_advance", m.name),
         &crate::ty::LlvmType::Void,
         &[crate::ty::LlvmType::Ptr, crate::ty::LlvmType::Int(64)],
@@ -1014,7 +1022,7 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
         .collect();
 
     let mark = module.mark();
-    module.begin(&format!("{}_deadline", m.name), &crate::ty::LlvmType::Int(64), &[crate::ty::LlvmType::Ptr]);
+    module.begin_cold(&format!("{}_deadline", m.name), &crate::ty::LlvmType::Int(64), &[crate::ty::LlvmType::Ptr]);
 
     if deadlines.iter().all(Vec::is_empty) {
         module.end(Some((&crate::ty::LlvmType::Int(64), "-1".into())));
@@ -1127,6 +1135,7 @@ pub fn init_function(
         &crate::ty::LlvmType::Void,
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
         machine::MACHINE_ATTRS,
+        "minsize",
     );
     let list = args.iter().map(|a| format!("ptr {a}")).collect::<Vec<_>>().join(", ");
     module.void_inst(&format!("call void @{}_init_vars({list})", m.name));
@@ -1164,7 +1173,7 @@ pub fn exit_all_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
     let has_exit = m.states.iter().any(|s| !s.exit.stmts.is_empty());
     let mark = module.mark();
     let ptr = crate::ty::LlvmType::Ptr;
-    module.begin(
+    module.begin_cold(
         &format!("{}_exit_all", m.name),
         &crate::ty::LlvmType::Void,
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
@@ -1231,6 +1240,7 @@ fn emit_init(
         &crate::ty::LlvmType::Void,
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
         machine::MACHINE_ATTRS,
+        "minsize",
     );
     let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
     let Some(conf_i) = st.index_of(Role::Conf, 0) else {
@@ -1450,8 +1460,6 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
         // 9.6: Auch ein Element ohne passenden Handler gilt als
         // untersucht — sonst saehe die Maschine es im naechsten Tick
         // wieder.
-        let mi = ctx.machine_index;
-        m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
         crate::stream::note_examined(ex_ptr, seq, m);
         match buf {
             Some(buf) => handler_chain(&hs, buf, seq, elem, ctx, m)?,
@@ -1477,7 +1485,6 @@ fn next_element(
     let (cur_ptr, ex_ptr) = ctx.vars().stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
     let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
     let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
-    let mi = ctx.machine_index;
     let direct = crate::stream::direct(ctx.program, elem);
     let buf = if direct { None } else { Some(crate::stream::scratch(ctx.program, elem, m)?) };
     let k = ctx.next_label(m);
@@ -1497,7 +1504,6 @@ fn next_element(
         }
         None => bind_direct(binding, sid, &cur, &"0", elem, ctx, m)?,
     };
-    m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
     crate::stream::note_examined(ex_ptr, seq, m);
     m.void_inst(&format!("br label %{done}"));
     m.label(&done);
@@ -1848,8 +1854,6 @@ fn match_guard(
     let (mark, next) = (format!("guard{k}_{name}_treffer"), format!("guard{k}_{name}_weiter"));
     m.void_inst(&format!("br i1 {ok}, label %{mark}, label %{next}"));
     m.label(&mark);
-    let mi = ctx.machine_index;
-    m.void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
     crate::stream::note_examined(ex_ptr, seq, m);
     m.void_inst(&format!("store i1 true, ptr {hit_ptr}"));
     m.void_inst(&format!("br label %{next}"));
