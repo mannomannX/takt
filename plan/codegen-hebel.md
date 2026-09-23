@@ -116,7 +116,35 @@ Rund 1,9× der nackten C-Fassung, mit allen Prüfungen, Faults und Meldungen. Da
 6. B6 oder A5, B7, B3.
 7. Größen-Baseline je Korpusprogramm als Test, damit nichts davon still zurückkommt (noch nicht im Register).
 
-## 6. Quellen
+## 6. Stand 2026-09-24
+
+Alle Hebel sind entweder umgesetzt oder mit Messung verworfen. Zahlen am UART-Stapel auf dem C6, Objekt mit den Zielflags.
+
+| Hebel | Stand | Messung |
+|---|---|---|
+| A1 `-Oz` | verworfen | −5 % Objekt, aber Schrittzeit 20,9 auf 25,7 µs |
+| A2 `-msave-restore`, A3 Outliner | umgesetzt (FB-233) | zusammen 13 782 auf 12 432 Byte bei 21,5 µs; Millicode `millicode.S` im C6-Bring-up |
+| A4 `--icf=all` | umgesetzt | −1 % |
+| A5 LTO-Modul aus Programm und Rahmen | verworfen | in jeder Variante rund 3,5 KB größer als getrennt |
+| A6 `cold` auf Fault-Pfaden | verworfen | 0 |
+| A7 Rahmen mit den Zielflags | umgesetzt | 5 868 auf 5 480 Byte |
+| B1 `loop:`-Rumpf einmal je Zustand | umgesetzt (FB-234) | 12 432 auf 9 868 Byte; `46_matrices` 6 368 auf 3 456 |
+| B2 Fault-Stelle gepackt | hinfällig | eine Prüfstelle ist schon nur `icmp` und `br` |
+| B3 Fristen als Tabelle | umgesetzt (FB-237) | `uart_port_deadline` 266 auf 64 Byte, Tabelle und Suche dazu; hier neutral |
+| B4 große Felder ans Ende | umgesetzt (FB-237) | hier neutral |
+| B5 Elemente ohne Scratch | umgesetzt (FB-238) | Stack-Rahmen 3 216 auf 1 120 Byte, Objekt −232 |
+| B6 Ringzugriffe in der IR | verworfen | A5 zeigt, dass Einbetten wächst; die Aufrufe sind billig |
+| B7 Dauern als Tickzähler | verworfen | nicht exakt: Parameter sind beliebige Nanosekunden, der Interpreter rechnet in ihnen (Satz 9.4.4) |
+| C Meldungsprofil | umgesetzt (FB-235) | `ids` war schon der Stand (die geschätzten 1,3 KB gab es nicht); `none` −162 Byte Objekt, −752 `.rwtext` |
+| D1 Telemetrie-Ring 2 KiB | umgesetzt | `.bss` −6 144 |
+| D2 Deskriptor 12 Byte | umgesetzt (FB-236) | `g_int_desc` 5 632 auf 4 224 |
+| D3 Bip-Puffer | offen | D2 und B5 nehmen den größten Teil; bei Bedarf |
+| D4 Schattenlatch nur mit Diagnose | umgesetzt (FB-235) | −112 |
+| Größen-Baseline als Test | umgesetzt (FB-239) | `crates/takt-llvm/tests/size_baseline.rs` |
+
+Summe: Objekt 13 782 auf 9 652 Byte (−30 %), `.rwtext` 20 816 auf 16 144, `.bss` 41 928 auf 34 384, Schrittzeit 20,9 auf rund 23,8 µs (Aufrufe der `loop:`-Funktionen und die Fristensuche je Tick), Board `verspaetet 0 verloren 0 verworfen 0`. Gegen die C-Fassung (2 830 Byte) bleibt ein Faktor 3,4: Prüfungen, Fault-Pfade, Stromprotokoll und Gerüst. Darunter führt nur der Beweisweg (Abschnitt 4).
+
+## 7. Quellen
 
 - defmt: Interned strings, `.defmt`-Sektion nicht im Flash — https://defmt.ferrous-systems.com/ser-istr , https://ferrous-systems.com/blog/defmt/
 - Zig-Baumodi: Prüfungen aus in `ReleaseFast`/`ReleaseSmall` — https://zig.guide/language-basics/runtime-safety/

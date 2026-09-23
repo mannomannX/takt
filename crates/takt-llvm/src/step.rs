@@ -548,6 +548,10 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
             }
             return Ok(());
         };
+        if let Some(x) = module.entries.iter_mut().find(|x| x.name == e.name) {
+            x.emitted = true;
+        }
+        let mark = module.mark();
         let ptr = crate::ty::LlvmType::Ptr;
         module.begin_with(
             "internal ",
@@ -565,20 +569,23 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
         let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
         let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
         let end = format!("ende_{}", e.name);
-        let index = leaves.iter().position(|l| *l == leaf).ok_or(NotYet { what: "Blatt" })?.to_string();
-        if e.with_machine_loop {
-            loop_call(&mut ctx, module, None, &index, true, &end)?;
+        let body = |ctx: &mut Ctx<'_>, module: &mut Module| -> Result<(), NotYet> {
+            let index = leaves.iter().position(|l| *l == leaf).ok_or(NotYet { what: "Blatt" })?.to_string();
+            if e.with_machine_loop {
+                loop_call(ctx, module, None, &index, true, &end)?;
+            }
+            for id in &e.entered {
+                loop_call(ctx, module, Some(StateId(*id)), &index, true, &end)?;
+            }
+            module.void_inst(&format!("br label %{end}"));
+            fault_path(st, leaf, &Jump { leaves: &leaves, end: &end, conf: &slot }, ctx, module)
+        };
+        if let Err(err) = body(&mut ctx, module) {
+            module.abort(mark);
+            return Err(err);
         }
-        for id in &e.entered {
-            loop_call(&mut ctx, module, Some(StateId(*id)), &index, true, &end)?;
-        }
-        module.void_inst(&format!("br label %{end}"));
-        fault_path(st, leaf, &Jump { leaves: &leaves, end: &end, conf: &slot }, &mut ctx, module)?;
         module.label(&end);
         module.end(None);
-        if let Some(e) = module.entries.iter_mut().find(|x| x.name == e.name) {
-            e.emitted = true;
-        }
     }
 }
 
@@ -622,6 +629,10 @@ const LOOP_ATTRS: &[&str] = &["noalias", "", "noalias", "noalias", "", ""];
 fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     let leaves = machine::leaves(m);
     while let Some(l) = module.loops.iter().find(|l| l.machine == m.name && !l.emitted).cloned() {
+        if let Some(x) = module.loops.iter_mut().find(|x| x.name == l.name) {
+            x.emitted = true;
+        }
+        let mark = module.mark();
         let ptr = crate::ty::LlvmType::Ptr;
         let params =
             [ptr.clone(), ptr.clone(), ptr.clone(), ptr, crate::ty::LlvmType::Int(8), crate::ty::LlvmType::Int(1)];
@@ -642,7 +653,10 @@ fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Modul
             None => m.loop_block.clone(),
             Some(s) => m.states[s.index()].loop_block.clone(),
         };
-        block(&block_, &mut ctx, module)?;
+        if let Err(err) = block(&block_, &mut ctx, module) {
+            module.abort(mark);
+            return Err(err);
+        }
         module.void_inst("ret i8 0");
         module.label(&end);
         module.void_inst("ret i8 1");
@@ -653,9 +667,6 @@ fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Modul
         module.label(&format!("fault_{}_any{}", m.name, ctx.tag));
         module.void_inst("ret i8 2");
         module.end(None);
-        if let Some(l) = module.loops.iter_mut().find(|x| x.name == l.name) {
-            l.emitted = true;
-        }
     }
     Ok(())
 }
