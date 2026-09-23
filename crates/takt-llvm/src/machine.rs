@@ -234,8 +234,14 @@ pub fn step_name(m: &Machine) -> String {
 /// der Maschine — darum ist er ein Ausgabeparameter und kein Rueckgabewert.
 pub fn begin_step(m: &Machine, module: &mut Module) -> Vec<crate::emit::Reg> {
     let ptr = LlvmType::Ptr;
-    module.begin(&step_name(m), &LlvmType::Void, &[ptr.clone(), ptr.clone(), ptr.clone(), ptr])
+    // `noalias` auf Zustand, Parametern und Latch: Ohne die Zusage
+    // entwertet jeder Latch-Store alle Ladungen aus dem Zustand. Das
+    // Abbild nicht — `takt_job_begin` schreibt es ueber die Runtime.
+    module.begin_with("", &step_name(m), &LlvmType::Void, &[ptr.clone(), ptr.clone(), ptr.clone(), ptr], MACHINE_ATTRS)
 }
+
+/// Die Parameterattribute der Maschinenfunktionen `(st, in, par, out)`.
+pub const MACHINE_ATTRS: &[&str] = &["noalias", "", "noalias", "noalias"];
 
 /// Schreibt den Fault-Trampolin einer Maschine (5.3, 11.2).
 ///

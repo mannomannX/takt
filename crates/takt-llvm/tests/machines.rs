@@ -428,25 +428,20 @@ fn the_quality_scale_matches_the_runtime() {
 
 // --- `after d` (5.2, 7.1) ------------------------------------------------
 
-/// 7.1: `after` feuert „nie im Entry-Tick" — im erzeugten Code steht
-/// dafuer der Vergleich `elapsed > 0` neben `elapsed >= d`.
+/// 7.1: `after` feuert „nie im Entry-Tick" — die Frist steht in
+/// Aktivierungen im Vergleich, und sie ist mindestens eins.
 #[test]
 fn after_never_fires_in_the_entry_tick() {
     let p = corpus("16_timing.takt");
     let ir = ir_of(&p);
+    let deadlines: Vec<i64> = ir
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("%").and_then(|l| l.split_once(" = icmp sge i64 %")))
+        .filter_map(|(_, rest)| rest.split_once(", ").and_then(|(_, k)| k.trim().parse().ok()))
+        .collect();
     assert!(
-        ir.contains("icmp sgt i64"),
-        "der Vergleich gegen 0 fehlt:
-{ir}"
-    );
-    assert!(
-        ir.contains("icmp sge i64 %"),
-        "der Vergleich gegen die Frist fehlt:
-{ir}"
-    );
-    assert!(
-        ir.contains("and i1"),
-        "beide Bedingungen werden nicht verknuepft:
+        !deadlines.is_empty() && deadlines.iter().all(|k| *k >= 1),
+        "die Frist in Aktivierungen fehlt oder ist null:
 {ir}"
     );
 }

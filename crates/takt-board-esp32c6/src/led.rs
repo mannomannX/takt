@@ -25,6 +25,8 @@ const RESET: u16 = 2_000;
 /// Die LED hinter einem RMT-Sendekanal.
 pub struct Ws2812 {
     channel: Option<Channel<'static, Blocking, Tx>>,
+    /// Die zuletzt gesendete Farbe: Ein Bild kostet 80 µs Warten.
+    last: Option<[u8; 3]>,
 }
 
 impl Ws2812 {
@@ -36,11 +38,15 @@ impl Ws2812 {
         let rmt = Rmt::new(rmt, Rate::from_mhz(RMT_MHZ))?;
         let config = TxChannelConfig::default().with_clk_divider(1).with_idle_output_level(Level::Low);
         let channel = rmt.channel0.configure_tx(&config)?.with_pin(pin);
-        Ok(Ws2812 { channel: Some(channel) })
+        Ok(Ws2812 { last: None, channel: Some(channel) })
     }
 
     /// Setzt die Farbe; `[0, 0, 0]` ist aus.
     pub fn set(&mut self, rgb: [u8; 3]) {
+        if self.last == Some(rgb) {
+            return;
+        }
+        self.last = Some(rgb);
         let Some(channel) = self.channel.take() else { return };
         let frame = frame(rgb);
         self.channel = Some(match channel.transmit(&frame) {

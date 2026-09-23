@@ -38,3 +38,5 @@ panic = "abort"
 codegen-units = 1
 debug = true
 lto = true
+# Gemessen: 20 % weniger Flash als `3`, `z` ist groesser als `s`.
+opt-level = "s"

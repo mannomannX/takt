@@ -111,10 +111,33 @@ impl Module {
     /// Die Parameter bekommen die Register 0 bis n-1; der Zaehler steht
     /// danach auf n, wie LLVM es verlangt.
     pub fn begin(&mut self, name: &str, ret: &LlvmType, params: &[LlvmType]) -> Vec<Reg> {
+        self.begin_with("", name, ret, params, &[])
+    }
+
+    /// Wie [`Module::begin`], mit Bindung (`internal`) und Attributen je
+    /// Parameter (`noalias`). Jede Funktion ist `nounwind`: Es gibt keine
+    /// Ausnahmen (4.1), und ohne die Zusage traegt jedes Objekt eine
+    /// Abwickeltabelle.
+    pub fn begin_with(
+        &mut self,
+        linkage: &str,
+        name: &str,
+        ret: &LlvmType,
+        params: &[LlvmType],
+        attrs: &[&str],
+    ) -> Vec<Reg> {
         debug_assert!(!self.open, "Funktion `{name}` beginnt in einer offenen Funktion");
         let regs: Vec<Reg> = (0..params.len() as u32).map(Reg::Num).collect();
-        let sig: Vec<String> = params.iter().zip(&regs).map(|(t, r)| format!("{t} {r}")).collect();
-        let _ = writeln!(self.body, "\ndefine {ret} @{name}({}) {{", sig.join(", "));
+        let sig: Vec<String> = params
+            .iter()
+            .zip(&regs)
+            .enumerate()
+            .map(|(i, (t, r))| match attrs.get(i).copied().unwrap_or("") {
+                "" => format!("{t} {r}"),
+                a => format!("{t} {a} {r}"),
+            })
+            .collect();
+        let _ = writeln!(self.body, "\ndefine {linkage}{ret} @{name}({}) nounwind {{", sig.join(", "));
         self.entry_at = self.body.len();
         self.slots = 0;
         // Der Eintrittsblock bekommt eine Nummer wie ein Register.
@@ -156,7 +179,10 @@ impl Module {
         let params = sig.params();
         let regs: Vec<Reg> = (0..params.len() as u32).map(Reg::Num).collect();
         let sig_text: Vec<String> = params.iter().zip(&regs).map(|(t, r)| format!("{t} {r}")).collect();
-        let _ = writeln!(self.body, "\ndefine {} @{name}({}) {{", sig.llvm_ret(), sig_text.join(", "));
+        // Reine Funktionen ruft nur dieses Modul: `internal` laesst LLVM
+        // einbetten und Ungenutztes fallen.
+        let _ =
+            writeln!(self.body, "\ndefine internal {} @{name}({}) nounwind {{", sig.llvm_ret(), sig_text.join(", "));
         self.entry_at = self.body.len();
         self.slots = 0;
         self.next = params.len() as u32 + 1;

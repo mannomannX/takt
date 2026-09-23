@@ -74,11 +74,28 @@ impl Streams {
     /// Schreibt die Deklarationen in den Modulkopf.
     pub fn declare(m: &mut Module) {
         m.declare("\n; Stroeme (8.6, 8.8, 9.6); die Puffer gehoeren der Runtime");
-        m.declare(&format!("declare i32 @{}(i32, i64)", Streams::COUNT));
-        m.declare(&format!("declare i64 @{}(i32, i64, i32, ptr)", Streams::AT));
-        m.declare(&format!("declare void @{}(i32, i32, i64)", Streams::EXAMINED));
-        m.declare(&format!("declare i1 @{}(i32, ptr, i32)", Streams::SEND));
-        m.declare(&format!("declare i32 @{}(i32, ptr)", Streams::SENT));
+        // Die Ringe sind Statics der Runtime; `at`/`sent` schreiben nur
+        // den uebergebenen Platz, `send` liest nur den uebergebenen.
+        m.declare(&format!(
+            "declare i32 @{}(i32, i64) nounwind willreturn memory(inaccessiblemem: read)",
+            Streams::COUNT
+        ));
+        m.declare(&format!(
+            "declare i64 @{}(i32, i64, i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
+            Streams::AT
+        ));
+        m.declare(&format!(
+            "declare void @{}(i32, i32, i64) nounwind willreturn memory(inaccessiblemem: readwrite)",
+            Streams::EXAMINED
+        ));
+        m.declare(&format!(
+            "declare i1 @{}(i32, ptr, i32) nounwind willreturn memory(argmem: read, inaccessiblemem: readwrite)",
+            Streams::SEND
+        ));
+        m.declare(&format!(
+            "declare i32 @{}(i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
+            Streams::SENT
+        ));
     }
 }
 

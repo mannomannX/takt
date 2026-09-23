@@ -79,7 +79,22 @@ pub fn elapsed_ns(timer_hz: u32, counts: u64) -> i64 {
     if timer_hz == 0 {
         return 0;
     }
-    i64::try_from(u128::from(counts) * 1_000_000_000 / u128::from(timer_hz)).unwrap_or(i64::MAX)
+    // Gekuerzt bleibt die Rechnung in `u64` (bei 16 MHz: 290 Jahre); erst
+    // darueber kostet sie `u128`. Der Wert ist derselbe.
+    let g = gcd(1_000_000_000, u64::from(timer_hz));
+    let (num, den) = (1_000_000_000 / g, u64::from(timer_hz) / g);
+    let ns = match counts.checked_mul(num) {
+        Some(p) => u128::from(p / den),
+        None => u128::from(counts) * u128::from(num) / u128::from(den),
+    };
+    i64::try_from(ns).unwrap_or(i64::MAX)
+}
+
+const fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
 
 #[cfg(test)]

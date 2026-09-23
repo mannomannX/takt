@@ -927,10 +927,12 @@ pub fn init_function(
         return emit_init(m, st, p, module, "_init", true, true);
     }
     let ptr = crate::ty::LlvmType::Ptr;
-    let args = module.begin(
+    let args = module.begin_with(
+        "internal ",
         &format!("{}_init", m.name),
         &crate::ty::LlvmType::Void,
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
+        machine::MACHINE_ATTRS,
     );
     let list = args.iter().map(|a| format!("ptr {a}")).collect::<Vec<_>>().join(", ");
     module.void_inst(&format!("call void @{}_init_vars({list})", m.name));
@@ -1027,10 +1029,13 @@ fn emit_init(
     };
     let mark = module.mark();
     let ptr = crate::ty::LlvmType::Ptr;
-    module.begin(
+    let linkage = if suffix == "_init" { "internal " } else { "" };
+    module.begin_with(
+        linkage,
         &format!("{}{suffix}", m.name),
         &crate::ty::LlvmType::Void,
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
+        machine::MACHINE_ATTRS,
     );
     let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
     let Some(conf_i) = st.index_of(Role::Conf, 0) else {
@@ -1174,18 +1179,18 @@ fn after(d: &takt_mir::expr::Expr, at: StateId, ctx: &Ctx<'_>, m: &mut Module) -
     // engere Regel im Codegen hiesse, dass dasselbe Programm auf zwei
     // Wegen verschieden ausfaellt.
     let vars = ctx.vars();
-    let deadline = match d.kind {
-        takt_mir::expr::ExprKind::Duration(ns) => {
-            crate::expr::Lowered { value: ns.to_string(), ty: crate::ty::LlvmType::Int(64) }
-        }
-        _ => crate::expr::lower(d, ctx.program, m, &vars)?,
-    };
     let cell =
         machine::timer_cell(ctx.machine, ctx.state, at.index(), m).ok_or(NotYet { what: "t_in_state im Zustand" })?;
     let ticks = m.inst(&format!("load i64, ptr {cell}"));
-    // Die Periode der Maschine in Nanosekunden steht fest (7.2): `period`
-    // Basis-Ticks mal T0.
     let period_ns = i64::from(ctx.machine.period.max(1)).saturating_mul(ctx.program.config.tick);
+    // Ein Literal wird zur Frist in Aktivierungen: `ticks * P >= d` ist
+    // `ticks >= ceil(d / P)`, und `elapsed > 0` steckt in der Eins.
+    if let takt_mir::expr::ExprKind::Duration(ns) = d.kind {
+        let need = (ns.max(0) as u64).div_ceil(period_ns.max(1) as u64).max(1);
+        let reached = m.inst(&format!("icmp sge i64 {ticks}, {need}"));
+        return Ok(crate::expr::Lowered { value: reached.to_string(), ty: crate::ty::LlvmType::Int(1) });
+    }
+    let deadline = crate::expr::lower(d, ctx.program, m, &vars)?;
     let elapsed = m.inst(&format!("mul i64 {ticks}, {period_ns}"));
     let positive = m.inst(&format!("icmp sgt i64 {elapsed}, 0"));
     let reached = m.inst(&format!("icmp sge i64 {elapsed}, {}", deadline.value));

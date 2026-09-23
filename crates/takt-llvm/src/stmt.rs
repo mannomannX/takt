@@ -506,6 +506,8 @@ fn send(
     let ty = LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), len_max)]);
     let buffer = m.alloca(&ty);
     let vars = ctx.vars();
+    // Laenge und Bytes, wenn sie nicht im Puffer liegen.
+    let mut source: Option<(Reg, Reg)> = None;
     match &value.kind {
         // Der haeufige Fall: ein Formatstring (8.8). Er wird an Ort und
         // Stelle gebaut, statt als Wert erzeugt und dann kopiert.
@@ -531,6 +533,7 @@ fn send(
             // Eine Stelle wird gelesen, wo sie liegt; ein gerechneter Text
             // derselben Form entsteht gleich im Puffer (FB-214).
             let place = crate::expr::address_of(value, m, &vars);
+            let at_place = place.is_some();
             if textual && vty == ty && place.is_none() {
                 crate::expr::store(value, &buffer.to_string(), None, ctx.program, m, &vars)?;
             } else {
@@ -542,7 +545,13 @@ fn send(
                         slot
                     }
                 };
-                if textual {
+                if textual && at_place {
+                    // Die Stelle traegt `{ len, bytes }` selbst; der Ring
+                    // liest sie unmittelbar.
+                    let len_ptr = m.inst(&format!("getelementptr inbounds {vty}, ptr {src}, i32 0, i32 0"));
+                    let bytes = m.inst(&format!("getelementptr inbounds {vty}, ptr {src}, i32 0, i32 1"));
+                    source = Some((len_ptr, bytes));
+                } else if textual {
                     // `line<N>` traegt hinter den Bytes noch `truncated`; das
                     // Praefix `{ len, bytes }` ist bei allen dreien gleich.
                     // Kopiert wird der kleinere Typ: Wert und Puffer koennen
@@ -563,9 +572,14 @@ fn send(
             }
         }
     }
-    let len_ptr = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 0"));
+    let (len_ptr, bytes) = match source {
+        Some(at) => at,
+        None => (
+            m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 0")),
+            m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 1")),
+        ),
+    };
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
-    let bytes = m.inst(&format!("getelementptr inbounds {ty}, ptr {buffer}, i32 0, i32 1"));
     let ok = m.inst(&format!("call i1 @{}(i32 {sid}, ptr {bytes}, i32 {len})", crate::stream::Streams::SEND));
     // 8.8: `len > tx.free` ist ein `StreamOverflow`.
     ctx.checks += 1;

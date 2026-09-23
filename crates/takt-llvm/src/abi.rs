@@ -126,20 +126,25 @@ impl Abi {
     /// was der Trace braucht, und sie ist beim Uebersetzen bekannt.
     pub fn declare(m: &mut Module) {
         m.declare("\n; Runtime-Schnittstelle (9.3, 5.4); `takt-rt-core` liefert sie");
-        m.declare(&format!("declare void @{}(i32, i32, i1)", Abi::ALERT));
-        m.declare(&format!("declare void @{}(i32, i32)", Abi::LOG));
-        m.declare(&format!("declare void @{}(i32, i32, double)", Abi::MEASURE));
-        m.declare(&format!("declare void @{}(i32, i32, i1)", Abi::VERIFY));
-        m.declare(&format!("declare void @{}(i32, i32)", Abi::ABORT));
-        m.declare(&format!("declare void @{}(i32, i32)", Abi::FAULT));
-        m.declare(&format!("declare i64 @{}()", Abi::NOW));
-        m.declare(&format!("declare void @{}(i32, i32, i1)", Abi::VERDICT));
-        m.declare(&format!("declare void @{}(i32, i64)", Abi::PROPERTY));
+        // Die Runtime schreibt nur ihre eigenen Statics — Trace, Ringe,
+        // Plan: fuer LLVM „unzugaenglicher" Speicher. So bleiben Ladungen
+        // aus Zustand und Abbild ueber den Aufruf hinweg gueltig.
+        const RT: &str = "nounwind willreturn memory(inaccessiblemem: readwrite)";
+        m.declare(&format!("declare void @{}(i32, i32, i1) {RT}", Abi::ALERT));
+        m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::LOG));
+        m.declare(&format!("declare void @{}(i32, i32, double) {RT}", Abi::MEASURE));
+        m.declare(&format!("declare void @{}(i32, i32, i1) {RT}", Abi::VERIFY));
+        m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::ABORT));
+        m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::FAULT));
+        m.declare(&format!("declare i64 @{}() nounwind willreturn memory(inaccessiblemem: read)", Abi::NOW));
+        m.declare(&format!("declare void @{}(i32, i32, i1) {RT}", Abi::VERDICT));
+        m.declare(&format!("declare void @{}(i32, i64) {RT}", Abi::PROPERTY));
         // 9.8: `(channel, T, wert) -> konnte geplant werden`.
-        m.declare(&format!("declare i1 @{}(i32, i64, i64)", Abi::SCHEDULE));
-        m.declare(&format!("declare void @{}(i32)", Abi::CANCEL));
-        m.declare(&format!("declare void @{}(i32, i32, i32, ptr, i32)", Abi::JOB_BEGIN));
-        m.declare(&format!("declare void @{}(i32, i32)", Abi::JOB_CANCEL));
+        m.declare(&format!("declare i1 @{}(i32, i64, i64) {RT}", Abi::SCHEDULE));
+        m.declare(&format!("declare void @{}(i32) {RT}", Abi::CANCEL));
+        // `job_begin` liest die Argumente und schreibt spaeter das Abbild.
+        m.declare(&format!("declare void @{}(i32, i32, i32, ptr, i32) nounwind willreturn", Abi::JOB_BEGIN));
+        m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::JOB_CANCEL));
         // `append` kopiert eine ganze Folge in einem Zug (3.9); LLVM
         // kennt das als Intrinsic, und eine Schleife braeuchte eine
         // Schranke, die 4.1 ohnehin verlangt.

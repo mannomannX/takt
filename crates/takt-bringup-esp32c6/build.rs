@@ -140,6 +140,8 @@ fn compile_c(src: &Path, obj: &Path) {
         .args([
             "-O2",
             "-c",
+            "-ffunction-sections",
+            "-fdata-sections",
             "-ffreestanding",
             "-nostdlib",
             "--target=riscv32-unknown-none-elf",

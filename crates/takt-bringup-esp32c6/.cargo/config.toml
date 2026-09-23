@@ -10,6 +10,8 @@ target = "riscv32imac-unknown-none-elf"
 # 12.3 (`xip_flash`): `esp-hal` zieht damit `rwtext_hook.x` in `.rwtext`
 # — dort legt `build.rs` das Takt-Programm ins RAM.
 ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK = "true"
+# Sprungtabellen im Flash: 2,4 KB RAM, die nur Fehlerpfade lesen.
+ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM = "false"
 
 [target.riscv32imac-unknown-none-elf]
 # Flashen und Mitlesen ueber USB-Serial-JTAG; `probe-rs` kennt den Chip.

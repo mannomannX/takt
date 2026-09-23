@@ -120,7 +120,8 @@ fn build_program(program: &Path, fresh: bool, ticks: u64) -> Result<PathBuf, Str
         .env("TAKT_TICKS", ticks.to_string())
         // 12.3: RAM-Residenz des Takt-Programms. `.cargo/config.toml` des
         // Bring-ups greift hier nicht, weil `--manifest-path` von aussen baut.
-        .env("ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK", "true");
+        .env("ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK", "true")
+        .env("ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM", "false");
     if fresh {
         cargo.env("TAKT_FRESH_JOURNAL", "1");
     } else {

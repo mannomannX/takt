@@ -71,11 +71,12 @@ pub fn find() -> Clang {
 /// FP-Form (4.2) haengt an den Flags der Instruktionen, nicht an der
 /// Stufe.
 fn opt_level(ir: &str) -> &'static str {
-    let mcu = ir
-        .lines()
-        .find_map(|l| l.strip_prefix("target triple = \""))
-        .is_some_and(|t| t.starts_with("riscv32") || t.starts_with("thumb"));
-    if mcu { "-Os" } else { "-O2" }
+    ir.lines().find_map(|l| l.strip_prefix("target triple = \"")).map_or("-O2", opt_level_for)
+}
+
+/// Die Stufe fuer ein Tripel: `-Os` auf MCU-Zielen, sonst `-O2`.
+pub fn opt_level_for(triple: &str) -> &'static str {
+    if triple.starts_with("riscv32") || triple.starts_with("thumb") { "-Os" } else { "-O2" }
 }
 
 impl Clang {
