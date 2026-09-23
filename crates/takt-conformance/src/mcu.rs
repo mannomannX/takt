@@ -386,51 +386,99 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
 /// `takt_mcu_dump`: den Latch ausgeben, fuer den Vergleich — dieselben
 /// Zeilen wie `dump` im Linux-Rahmen (grammar/trace.md), damit
 /// `compare` beide lesen kann. Ohne `all` nur, was sich seit der letzten
-/// Ausgabe geaendert hat (9.3): Der Trace je Tick kostete sonst mehr als
-/// der Tick.
+/// Ausgabe geaendert hat (9.3). Eine Tabelle je Ausgang statt Code je
+/// Ausgang: So war die Funktion die groesste des Rahmens.
 fn telemetry(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md); ohne `all` nur die geaenderten. */");
     let _ = writeln!(s, "{}", crate::layout::c_buffer("g_shown", layout.latch));
+    let _ = writeln!(s, "struct takt_variant {{ long long d; const char *name; }};");
+    let _ = writeln!(
+        s,
+        "struct takt_out {{ const char *name; const struct takt_variant *variants; unsigned short off, size, count; unsigned char kind, n_variants; }};"
+    );
+    let mut rows = Vec::new();
+    let mut kinds: Vec<u8> = Vec::new();
+    for (i, slot) in layout.outputs.iter().enumerate() {
+        let (elem, count) = match &slot.ty {
+            takt_llvm::ty::LlvmType::Array(elem, n) => (elem.as_ref(), *n),
+            t => (t, 0),
+        };
+        let Some(kind) = value_kind(elem, slot.signed) else { continue };
+        kinds.push(kind);
+        let variants = enum_variants(p, &slot.name).unwrap_or_default();
+        let mut vptr = "0".to_string();
+        if !variants.is_empty() {
+            let list: Vec<String> = variants.iter().map(|(d, name)| format!("{{ {d}LL, \"{name}\" }}")).collect();
+            let _ = writeln!(s, "static const struct takt_variant g_out{i}_v[] = {{ {} }};", list.join(", "));
+            vptr = format!("g_out{i}_v");
+        }
+        rows.push(format!(
+            "    {{ \"{}\", {vptr}, {}, {}, {count}, {kind}, {} }},",
+            slot.name,
+            slot.offset,
+            slot.size,
+            variants.len()
+        ));
+    }
+    kinds.sort_unstable();
+    kinds.dedup();
+    let n = rows.len();
+    if rows.is_empty() {
+        rows.push("    { \"\", 0, 0, 0, 0, 0, 0 },".to_string());
+    }
+    let _ = writeln!(s, "static const struct takt_out g_outs[] = {{\n{}\n}};", rows.join("\n"));
     let _ = writeln!(s, "static int takt_same(const unsigned char *a, const unsigned char *b, unsigned n) {{");
     let _ = writeln!(s, "    while (n--) if (*a++ != *b++) return 0;");
     let _ = writeln!(s, "    return 1;");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_mcu_dump(int all) {{");
-    for slot in &layout.outputs {
-        let (elem, count) = match &slot.ty {
-            takt_llvm::ty::LlvmType::Array(elem, n) => (elem.as_ref(), Some(*n)),
-            t => (t, None),
-        };
-        let Some(ct) = c_type(elem, slot.signed) else { continue };
-        let (off, size) = (slot.offset, slot.size);
-        let _ = writeln!(s, "    if (all || !takt_same(latch + {off}, g_shown + {off}, {size})) {{");
-        let _ = writeln!(s, "        memcpy(g_shown + {off}, latch + {off}, {size});");
-        let _ = writeln!(s, "        takt_board_trace(\"t=\");");
-        let _ = writeln!(s, "        takt_board_trace_i64(g_tick);");
-        if let Some(n) = count {
-            let _ = writeln!(s, "        takt_board_trace(\"out {} [\");", slot.name);
-            let _ = writeln!(s, "        for (int k = 0; k < {n}; k++) {{");
-            let _ = writeln!(s, "            if (k) takt_board_trace(\", \");");
-            let _ =
-                writeln!(s, "            {};", trace_call(elem, slot.signed, &format!("(({ct} *)(latch + {off}))[k]")));
-            let _ = writeln!(s, "        }}");
-            let _ = writeln!(s, "        takt_board_trace(\"]\\n\");");
-        } else {
-            let _ = writeln!(s, "        takt_board_trace(\"out {} \");", slot.name);
-            if let Some(varianten) = enum_variants(p, &slot.name) {
-                let _ = writeln!(s, "        switch (*({ct} *)(latch + {off})) {{");
-                for (d, name) in varianten {
-                    let _ = writeln!(s, "        case {d}: takt_board_trace(\"{name}\"); break;");
-                }
-                let _ = writeln!(s, "        default: takt_board_trace(\"?\");");
-                let _ = writeln!(s, "        }}");
-            } else {
-                let _ = writeln!(s, "        {};", trace_call(elem, slot.signed, &format!("*({ct} *)(latch + {off})")));
-            }
-            let _ = writeln!(s, "        takt_board_trace(\"\\n\");");
-        }
-        let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "static long long takt_load(unsigned char kind, const unsigned char *v) {{");
+    let _ = writeln!(s, "    switch (kind) {{");
+    for kind in kinds.iter().filter(|k| *k & 0x80 == 0) {
+        let ct = kind_c_type(*kind);
+        let _ = writeln!(s, "    case {kind}: return (long long)*(const {ct} *)v;");
     }
+    let _ = writeln!(s, "    default: return 0;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "static void takt_dump_value(const struct takt_out *o, const unsigned char *v) {{");
+    let _ = writeln!(s, "    if (o->variants) {{");
+    let _ = writeln!(s, "        long long d = takt_load(o->kind, v);");
+    let _ = writeln!(s, "        for (unsigned i = 0; i < o->n_variants; i++)");
+    let _ = writeln!(s, "            if (o->variants[i].d == d) {{ takt_board_trace(o->variants[i].name); return; }}");
+    let _ = writeln!(s, "        takt_board_trace(\"?\");");
+    let _ = writeln!(s, "        return;");
+    let _ = writeln!(s, "    }}");
+    for kind in kinds.iter().filter(|k| *k & 0x80 != 0) {
+        let ct = kind_c_type(*kind);
+        let _ = writeln!(s, "    if (o->kind == {kind}) {{ takt_board_trace_f64((double)*(const {ct} *)v); return; }}");
+    }
+    let _ = writeln!(s, "    if (o->kind & 0x40) takt_board_trace_u64((unsigned long long)takt_load(o->kind, v));");
+    let _ = writeln!(s, "    else takt_board_trace_i64(takt_load(o->kind, v));");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "void takt_mcu_dump(int all) {{");
+    let _ = writeln!(s, "    for (unsigned i = 0; i < {n}; i++) {{");
+    let _ = writeln!(s, "        const struct takt_out *o = &g_outs[i];");
+    let _ = writeln!(s, "        const unsigned char *v = latch + o->off;");
+    let _ = writeln!(s, "        if (!all && takt_same(v, g_shown + o->off, o->size)) continue;");
+    let _ = writeln!(s, "        memcpy(g_shown + o->off, v, o->size);");
+    let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "        takt_board_trace_i64(g_tick);");
+    let _ = writeln!(s, "        takt_board_trace(\"out \");");
+    let _ = writeln!(s, "        takt_board_trace(o->name);");
+    let _ = writeln!(s, "        if (o->count) {{");
+    let _ = writeln!(s, "            unsigned w = o->size / o->count;");
+    let _ = writeln!(s, "            takt_board_trace(\" [\");");
+    let _ = writeln!(s, "            for (unsigned k = 0; k < o->count; k++) {{");
+    let _ = writeln!(s, "                if (k) takt_board_trace(\", \");");
+    let _ = writeln!(s, "                takt_dump_value(o, v + k * w);");
+    let _ = writeln!(s, "            }}");
+    let _ = writeln!(s, "            takt_board_trace(\"]\\n\");");
+    let _ = writeln!(s, "        }} else {{");
+    let _ = writeln!(s, "            takt_board_trace(\" \");");
+    let _ = writeln!(s, "            takt_dump_value(o, v);");
+    let _ = writeln!(s, "            takt_board_trace(\"\\n\");");
+    let _ = writeln!(s, "        }}");
+    let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}\n");
     program_counters(s, p, driven);
     sample(s, p, layout);
@@ -458,18 +506,33 @@ fn program_counters(s: &mut String, p: &Program, driven: &[&takt_mir::machine::M
     let _ = writeln!(s, "}}\n");
 }
 
-/// Der Aufruf, der einen Wert in den Trace schreibt: Fliesskommazahlen
-/// formatiert das Board als Ziffernfolge, die den Wert eindeutig
-/// zurueckgibt; Ganzzahlen tragen das Vorzeichen ihres Typs — ein `u32`
-/// ueber 2^31 darf nicht negativ erscheinen (wie `number_format` im
-/// Linux-Rahmen).
-fn trace_call(ty: &takt_llvm::ty::LlvmType, signed: bool, value: &str) -> String {
-    match (ty, signed) {
-        (takt_llvm::ty::LlvmType::F32 | takt_llvm::ty::LlvmType::F64, _) => {
-            format!("takt_board_trace_f64((double){value})")
-        }
-        (_, true) => format!("takt_board_trace_i64((long long){value})"),
-        (_, false) => format!("takt_board_trace_u64((unsigned long long){value})"),
+/// Die Art eines Werts in der Ausgabetabelle: Breite in Bytes, `0x40`
+/// ohne Vorzeichen, `0x80` Fliesskomma.
+fn value_kind(ty: &takt_llvm::ty::LlvmType, signed: bool) -> Option<u8> {
+    use takt_llvm::ty::LlvmType;
+    Some(match (ty, signed) {
+        (LlvmType::Int(1), _) => 0x41,
+        (LlvmType::Int(bits), true) => u8::try_from(bits / 8).ok()?,
+        (LlvmType::Int(bits), false) => 0x40 | u8::try_from(bits / 8).ok()?,
+        (LlvmType::F32, _) => 0x84,
+        (LlvmType::F64, _) => 0x88,
+        _ => return None,
+    })
+}
+
+/// Der C-Typ zu einer Art.
+fn kind_c_type(kind: u8) -> &'static str {
+    match kind {
+        0x01 => "signed char",
+        0x02 => "short",
+        0x04 => "int",
+        0x08 => "long long",
+        0x41 => "unsigned char",
+        0x42 => "unsigned short",
+        0x44 => "unsigned int",
+        0x48 => "unsigned long long",
+        0x84 => "float",
+        _ => "double",
     }
 }
 
