@@ -53,7 +53,8 @@ pub fn step_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     }
     let mark = module.mark();
     match write_step(m, st, p, module, &leaves) {
-        Ok(()) => Ok(()),
+        // Dahinter, was der Schritt an Entry-Tick-Funktionen angefordert hat.
+        Ok(()) => entry_functions(m, st, p, module),
         Err(e) => {
             module.abort(mark);
             Err(e)
@@ -223,8 +224,10 @@ fn level(
             None => children.push((child, vec![*leaf])),
         }
     }
-    let labels: Vec<String> =
-        children.iter().map(|(c, _)| format!("ebene{}_{}", ctx.next_label(), machine::label_of(machine, *c))).collect();
+    let labels: Vec<String> = children
+        .iter()
+        .map(|(c, _)| format!("ebene{}_{}", ctx.next_label(m), machine::label_of(machine, *c)))
+        .collect();
     if let [label] = labels.as_slice() {
         m.void_inst(&format!("br label %{label}"));
     } else {
@@ -281,7 +284,7 @@ fn transitions(
         // Die Marke muss je *erzeugter* Verzweigung eindeutig sein, nicht
         // je Zustand: Ein Blatt fuehrt auch die Uebergaenge seiner
         // Vorfahren aus (5.2), und zwei Ebenen haetten sonst dieselbe.
-        let id = ctx.next_label();
+        let id = ctx.next_label(m);
         let name = &ctx.machine.name;
         let (take, skip) = (format!("uebergang{id}_{name}"), format!("bleibt{id}_{name}"));
         m.void_inst(&format!("br i1 {}, label %{take}, label %{skip}", c.value));
@@ -297,7 +300,7 @@ fn transitions(
             // endet in `end`, hier kommt nichts nach.
             Target::Fault(kind) => {
                 pending(ctx, m, kind);
-                m.void_inst(&format!("br label %fault_{}_{}", ctx.machine.name, leaves[from].index()));
+                m.void_inst(&format!("br label %fault_{}_{}{}", ctx.machine.name, leaves[from].index(), ctx.tag));
                 m.label(&skip);
                 continue;
             }
@@ -345,11 +348,7 @@ fn transitions(
         // 5.2 Regel 4: Im Entry-Tick ist `-> ZIEL` wirkungslos. Der
         // Interpreter erreicht das mit `Mode::Entry`; hier wird das
         // Sprungziel fuer die Dauer dieser Bloecke entfernt.
-        let saved = ctx.end.take();
-        for id in machine::entering(ctx.machine, leaves[from], leaf) {
-            block(&ctx.machine.states[id.index()].loop_block.clone(), ctx, m)?;
-        }
-        ctx.end = saved;
+        entry_tick(ctx, m, leaves[from], leaf)?;
         m.void_inst(&format!("br label %{end}"));
         m.label(&skip);
     }
@@ -505,13 +504,72 @@ fn resume_into(
 
 /// 5.2 Regel 4: die `loop:`-Bloecke der betretenen Zustaende, `-> ZIEL`
 /// wirkungslos.
+/// Der Entry-Tick eines Wechsels (5.2 Regel 4) als Aufruf: Die `loop:`-
+/// Bloecke der betretenen Zustaende stehen einmal je (Blatt, Eintritts-
+/// menge) in einer eigenen Funktion — vorher an jeder Uebergangsstelle
+/// noch einmal (FB-224). Ihr Fault-Trampolin ist der des *neuen* Blatts,
+/// wie 5.2 es verlangt.
 fn entry_tick(ctx: &mut Ctx<'_>, m: &mut Module, from: StateId, leaf: StateId) -> Result<(), NotYet> {
-    let saved = ctx.end.take();
-    for id in machine::entering(ctx.machine, from, leaf) {
-        block(&ctx.machine.states[id.index()].loop_block.clone(), ctx, m)?;
+    entry_call(ctx, m, leaf, machine::entering(ctx.machine, from, leaf), false)
+}
+
+fn entry_call(
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+    leaf: StateId,
+    entered: Vec<StateId>,
+    with_machine_loop: bool,
+) -> Result<(), NotYet> {
+    let runs = (with_machine_loop && !ctx.machine.loop_block.stmts.is_empty())
+        || entered.iter().any(|id| !ctx.machine.states[id.index()].loop_block.stmts.is_empty());
+    if !runs {
+        return Ok(());
     }
-    ctx.end = saved;
+    let ids = entered.iter().map(|s| s.0).collect();
+    let name = m.entry_function(&ctx.machine.name, leaf.0, ids, with_machine_loop);
+    m.void_inst(&format!("call void @{name}(ptr %0, ptr %1, ptr %2, ptr %3)"));
     Ok(())
+}
+
+/// Schreibt die Entry-Tick-Funktionen einer Maschine, die ihre Schritte
+/// angefordert haben; jede kann weitere anfordern (Fault-Wald, 5.3).
+pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    let leaves = machine::leaves(m);
+    loop {
+        let Some(e) = module.entries.iter().find(|e| e.machine == m.name && !e.emitted).cloned() else {
+            return Ok(());
+        };
+        let ptr = crate::ty::LlvmType::Ptr;
+        module.begin_with(
+            "internal ",
+            &e.name,
+            &crate::ty::LlvmType::Void,
+            &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
+            machine::MACHINE_ATTRS,
+        );
+        let leaf = StateId(e.leaf);
+        let mut ctx = Ctx::new(m, st, p);
+        ctx.leaf = Some(leaf);
+        ctx.tag = format!("_e{}", e.name.rsplit("_entry").next().unwrap_or("0"));
+        let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+        let conf_i = st.index_of(Role::Conf, 0).ok_or(NotYet { what: "conf im Zustand" })?;
+        let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+        let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
+        let end = format!("ende_{}", e.name);
+        if e.with_machine_loop {
+            block(&m.loop_block.clone(), &mut ctx, module)?;
+        }
+        for id in &e.entered {
+            block(&m.states[*id as usize].loop_block.clone(), &mut ctx, module)?;
+        }
+        module.void_inst(&format!("br label %{end}"));
+        fault_path(st, leaf, &Jump { leaves: &leaves, end: &end, conf: &slot }, &mut ctx, module)?;
+        module.label(&end);
+        module.end(None);
+        if let Some(e) = module.entries.iter_mut().find(|x| x.name == e.name) {
+            e.emitted = true;
+        }
+    }
 }
 
 fn enter_leaf(
@@ -568,7 +626,7 @@ pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Res
         // erst das Blatt — ein Arm je Blatt darunter.
         let leaf_reg = ctx.leaf_reg.ok_or(NotYet { what: "`->` ausserhalb eines Blattzweigs" })?;
         let region = ctx.region.clone();
-        let k = ctx.next_label();
+        let k = ctx.next_label(m);
         let name = ctx.machine.name.clone();
         let mut arms = Vec::new();
         for leaf in &region {
@@ -609,11 +667,7 @@ pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Res
             //
             // Im Entry-Modus ist ein weiteres `->` wirkungslos, darum
             // wird das Sprungziel fuer die Dauer entfernt.
-            let saved = ctx.end.take();
-            for id in machine::entering(ctx.machine, leaves[from_index], leaf) {
-                block(&ctx.machine.states[id.index()].loop_block.clone(), ctx, m)?;
-            }
-            ctx.end = saved;
+            entry_tick(ctx, m, leaves[from_index], leaf)?;
         }
         // `-> FAULTED` (5.3): die Konfiguration wird leer, die Outputs
         // gehen auf `safe`. Wie beim Uebergang.
@@ -629,7 +683,7 @@ pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Res
     m.void_inst(&format!("br label %{end}"));
     // Was nach dem Sprung kaeme, ist unerreichbar; LLVM verlangt fuer den
     // folgenden Code trotzdem einen Block.
-    let k = ctx.next_label();
+    let k = ctx.next_label(m);
     m.label(&format!("nach_goto{k}_{}", ctx.machine.name));
     Ok(())
 }
@@ -924,7 +978,8 @@ pub fn init_function(
     whole: bool,
 ) -> Result<(), NotYet> {
     if whole {
-        return emit_init(m, st, p, module, "_init", true, true);
+        emit_init(m, st, p, module, "_init", true, true)?;
+        return entry_functions(m, st, p, module);
     }
     let ptr = crate::ty::LlvmType::Ptr;
     let args = module.begin_with(
@@ -953,7 +1008,8 @@ pub fn init_vars_function(m: &Machine, st: &StateStruct, p: &Program, module: &m
 
 /// `<maschine>_enter`: die `enter:`-Kette und der Entry-Tick (5.2).
 pub fn enter_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
-    emit_init(m, st, p, module, "_enter", false, true)
+    emit_init(m, st, p, module, "_enter", false, true)?;
+    entry_functions(m, st, p, module)
 }
 
 /// `<maschine>_exit_all(st, in, par, out)`: die `exit:`-Bloecke der ganzen
@@ -1111,14 +1167,10 @@ fn emit_init(
                 module.void_inst(&format!("store i32 -1, ptr {ptr}"));
             }
         }
-        let mut koerper = vec![m.loop_block.clone()];
-        koerper.extend(kette.iter().map(|id| m.states[id.index()].loop_block.clone()));
         let end_at = format!("init_ende_{}", m.name);
-        for b in &koerper {
-            if let Err(e) = block(b, &mut ctx, module) {
-                module.abort(mark);
-                return Err(e);
-            }
+        if let Err(e) = entry_call(&mut ctx, module, leaf, kette.clone(), true) {
+            module.abort(mark);
+            return Err(e);
         }
         module.void_inst(&format!("br label %{end_at}"));
         // Der Fault-Pfad des Anfangszustands: Ein `check`, der schon im
@@ -1227,7 +1279,7 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
         let (cur_ptr, ex_ptr) = ctx.vars().stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
         let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
         let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
-        let k = ctx.next_label();
+        let k = ctx.next_label(m);
         let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
         let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
         // Der Zaehler laeuft ueber das Fenster; seine Schranke ist `n`.
@@ -1279,7 +1331,7 @@ fn next_element(
     let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
     let mi = ctx.machine_index;
     let buf = crate::stream::scratch(ctx.program, elem, m)?;
-    let k = ctx.next_label();
+    let k = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
@@ -1386,7 +1438,7 @@ fn handler_chain(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
-    let k = ctx.next_label();
+    let k = ctx.next_label(m);
     let name = &ctx.machine.name;
     let end_at = format!("handler{k}_{name}_ende");
     for (n, h) in hs.iter().enumerate() {
@@ -1557,7 +1609,7 @@ fn match_guard(
     let b = binding.and_then(|v| Binding::of_var(v, ctx));
     let buf = crate::stream::scratch(ctx.program, elem, m)?;
 
-    let k = ctx.next_label();
+    let k = ctx.next_label(m);
     let name = &ctx.machine.name;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
@@ -1721,7 +1773,7 @@ fn fault_path(
 ) -> Result<(), NotYet> {
     let machine_def = ctx.machine;
     let (leaves, end, conf_slot) = (target.leaves, target.end, target.conf);
-    m.label(&format!("fault_{}_{}", machine_def.name, from.index()));
+    m.label(&format!("fault_{}_{}{}", machine_def.name, from.index(), ctx.tag));
     m.void_inst(&format!("call void @{}(i32 {}, i32 {})", crate::abi::Abi::FAULT, ctx.machine_index, from.index()));
     // Der Fault wird vorgemerkt; `pending` traegt ihn fuer die
     // Abort-Phase (5.4), die die Runtime fuehrt.
@@ -1773,11 +1825,7 @@ fn fault_path(
     // Entry-Modus: Die `loop:`-Bloecke des Fault-Ziels laufen noch in
     // diesem Tick (5.2 Regel 4 und 5) — und ein `->` darin ist dort
     // wirkungslos, wie in jedem Entry-Tick.
-    let saved = ctx.end.take();
-    for id in machine::entering(machine_def, from, leaf) {
-        block(&machine_def.states[id.index()].loop_block.clone(), ctx, m)?;
-    }
-    ctx.end = saved;
+    entry_tick(ctx, m, from, leaf)?;
     m.void_inst(&format!("br label %{end}"));
     Ok(())
 }
@@ -1854,7 +1902,7 @@ fn one_trigger(
     let (armed_ptr, cur_ptr) = ctx.vars().trigger_slots(id, m).ok_or(NotYet { what: "Trigger im Zustand" })?;
     let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
     let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
-    let k = ctx.next_label();
+    let k = ctx.next_label(m);
     let name = crate::fns::sanitized(&t.name);
     let (skip, head, body, end_at) =
         (format!("t{k}_{name}_aus"), format!("t{k}_{name}"), format!("t{k}_{name}_rumpf"), format!("t{k}_{name}_ende"));

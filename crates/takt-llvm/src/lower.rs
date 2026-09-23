@@ -134,6 +134,10 @@ pub fn program_with(p: &Program, triple: &str, module_name: &str, instrument: cr
         if let Err(e) = crate::step::step_function(machine, &st, p, &mut m) {
             skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.to_string() });
         }
+        // Zuletzt: Was die Schritte an Entry-Tick-Funktionen angefordert haben.
+        if let Err(e) = crate::step::entry_functions(machine, &st, p, &mut m) {
+            skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.into() });
+        }
     }
 
     // 13.3: Laufzeitmonitore hinter den Maschinen; sie lesen nur das Abbild.

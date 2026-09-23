@@ -36,9 +36,6 @@ pub struct Ctx<'a> {
     pub state: &'a StateStruct,
     /// Das Programm.
     pub program: &'a Program,
-    /// Wie oft schon ein Fault-Zweig entstanden ist; die Marken muessen
-    /// eindeutig sein.
-    checks: u32,
     /// Die Nummer der Maschine im Programm; sie geht in jeden
     /// Runtime-Aufruf (`crate::abi`).
     pub machine_index: u32,
@@ -50,6 +47,10 @@ pub struct Ctx<'a> {
     pub leaf_reg: Option<Reg>,
     /// Die Blaetter unter der Ebene, die gerade entsteht.
     pub region: Vec<takt_mir::StateId>,
+    /// Anhang der Fault-Marken dieser Funktion: Eine Maschine hat mehrere
+    /// Funktionen mit Trampolin (Schritt, Entry-Ticks), die Marken eines
+    /// Moduls sind aber eindeutig.
+    pub tag: String,
     /// Wie viele Meldungsstellen die Maschine schon hat.
     ///
     /// Der Index identifiziert die Stelle im Trace; die Reihenfolge ist
@@ -71,11 +72,11 @@ impl<'a> Ctx<'a> {
             machine,
             state,
             program,
-            checks: 0,
             machine_index,
             leaf: None,
             leaf_reg: None,
             region: Vec::new(),
+            tag: String::new(),
             sites: 0,
             breaks: Vec::new(),
             end: None,
@@ -95,9 +96,8 @@ impl<'a> Ctx<'a> {
     /// Zustand oder Anweisung: Derselbe Block kann mehrfach erzeugt
     /// werden, etwa der `loop:` einer Zwischenebene je Blatt darunter
     /// (5.2).
-    pub fn next_label(&mut self) -> u32 {
-        self.checks += 1;
-        self.checks
+    pub fn next_label(&mut self, m: &mut Module) -> u32 {
+        m.next_label()
     }
 
     /// Die Variablenabbildung dieser Maschine.
@@ -106,6 +106,7 @@ impl<'a> Ctx<'a> {
             machine: self.machine,
             leaf: self.leaf,
             shared: self.leaf.is_none() && self.leaf_reg.is_some(),
+            tag: self.tag.clone(),
             state: self.state,
             program: self.program,
             machine_index: self.machine_index,
@@ -128,8 +129,8 @@ impl<'a> Ctx<'a> {
     /// der eines deklariert (Fault-Wald).
     pub fn trampoline(&self) -> String {
         match self.leaf {
-            Some(leaf) => format!("fault_{}_{}", self.machine.name, leaf.index()),
-            None => format!("fault_{}_any", self.machine.name),
+            Some(leaf) => format!("fault_{}_{}{}", self.machine.name, leaf.index(), self.tag),
+            None => format!("fault_{}_any{}", self.machine.name, self.tag),
         }
     }
 }
@@ -147,6 +148,8 @@ pub struct StateVars<'a> {
     /// Eine geteilte Ebene des Schritts: Der Fault-Trampolin verzweigt
     /// zur Laufzeit auf das Blatt.
     pub shared: bool,
+    /// Anhang der Fault-Marken der Funktion (`Ctx::tag`).
+    pub tag: String,
     /// Ihr Zustands-Struct.
     pub state: &'a StateStruct,
     /// Das Programm, fuer die Typen.
@@ -190,9 +193,9 @@ pub fn image_slot(
 impl Vars for StateVars<'_> {
     fn fault_label(&self) -> Option<String> {
         if self.shared {
-            return Some(format!("fault_{}_any", self.machine.name));
+            return Some(format!("fault_{}_any{}", self.machine.name, self.tag));
         }
-        Some(format!("fault_{}_{}", self.machine.name, self.leaf?.index()))
+        Some(format!("fault_{}_{}{}", self.machine.name, self.leaf?.index(), self.tag))
     }
 
     fn job(&self, handle: takt_mir::VarId, field: JobField, p: &Program, m: &mut Module) -> Option<Lowered> {
@@ -580,8 +583,7 @@ fn send(
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
     let ok = m.inst(&format!("call i1 @{}(i32 {sid}, ptr {bytes}, i32 {len})", crate::stream::Streams::SEND));
     // 8.8: `len > tx.free` ist ein `StreamOverflow`.
-    ctx.checks += 1;
-    let go_on = format!("gesendet{}_{}", ctx.checks, ctx.machine.name);
+    let go_on = format!("gesendet{}_{}", m.next_label(), ctx.machine.name);
     m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{}", ctx.trampoline()));
     m.label(&go_on);
     Ok(())
@@ -640,7 +642,7 @@ fn every(
     let due_at = m.inst(&format!("select i1 {fresh}, i64 {}, i64 {next}", d.value));
     let due = m.inst(&format!("icmp sge i64 {clock}, {due_at}"));
 
-    let k = ctx.next_label();
+    let k = ctx.next_label(m);
     let name = &ctx.machine.name;
     let (run, skip) = (format!("every{k}_{name}"), format!("every{k}_{name}_aus"));
     m.void_inst(&format!("br i1 {due}, label %{run}, label %{skip}"));
@@ -710,8 +712,7 @@ fn at(time: &Expr, body: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<()
             _ => return Err(NotYet { what: "`at` mit einem zusammengesetzten Wert" }),
         };
         let ok = m.inst(&format!("call i1 @{}(i32 {}, i64 {}, i64 {word})", Abi::SCHEDULE, c.0, t.value));
-        ctx.checks += 1;
-        let go_on = format!("geplant{}_{}", ctx.checks, ctx.machine.name);
+        let go_on = format!("geplant{}_{}", m.next_label(), ctx.machine.name);
         m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{}", ctx.trampoline()));
         m.label(&go_on);
     }
@@ -742,7 +743,7 @@ fn for_range(
     let n = lower_expr(count, ctx.program, m, &vars)?;
     let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
     m.void_inst(&format!("store {ty} 0, ptr {ptr}"));
-    let k = ctx.next_label();
+    let k = ctx.next_label(m);
     let name = &ctx.machine.name;
     let (head, loop_body, end_at) =
         (format!("fuer{k}_{name}"), format!("fuer{k}_{name}_rumpf"), format!("fuer{k}_{name}_ende"));
@@ -803,7 +804,7 @@ fn for_window(
     let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
     let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
     let mi = ctx.machine_index;
-    let k = ctx.next_label();
+    let k = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
@@ -854,7 +855,7 @@ fn for_items(var: takt_mir::VarId, iter: &Expr, body: &Block, ctx: &mut Ctx<'_>,
     let slot = m.alloca(&x.ty);
     m.write(&x.ty, &x.value, &slot.to_string());
     let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
-    let k = ctx.next_label();
+    let k = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
@@ -989,8 +990,7 @@ fn check(cond: &Expr, kind: takt_mir::stmt::CheckKind, ctx: &mut Ctx<'_>, m: &mu
     if c.ty != LlvmType::Int(1) {
         return Err(NotYet { what: "Bedingung ist kein `bool`" });
     }
-    ctx.checks += 1;
-    let go_on = format!("weiter{}_{}", ctx.checks, ctx.machine.name);
+    let go_on = format!("weiter{}_{}", m.next_label(), ctx.machine.name);
     let _ = kind;
     m.void_inst(&format!("br i1 {}, label %{go_on}, label %{}", c.value, ctx.trampoline()));
     m.label(&go_on);
@@ -1001,8 +1001,7 @@ fn check(cond: &Expr, kind: takt_mir::stmt::CheckKind, ctx: &mut Ctx<'_>, m: &mu
 fn branch(cond: &Expr, then: &Block, otherwise: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let vars = ctx.vars();
     let c = lower_expr(cond, ctx.program, m, &vars)?;
-    ctx.checks += 1;
-    let n = ctx.checks;
+    let n = m.next_label();
     let name = &ctx.machine.name;
     let (t, f, end) = (format!("dann{n}_{name}"), format!("sonst{n}_{name}"), format!("ende{n}_{name}"));
     m.void_inst(&format!("br i1 {}, label %{t}, label %{f}", c.value));
@@ -1527,7 +1526,7 @@ fn reset_instance(
 fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let vars = ctx.vars();
     let value = lower_expr(subject, ctx.program, m, &vars)?;
-    let n = ctx.next_label();
+    let n = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let end_at = format!("match{n}_{name}");
     // Bei einem Summentyp wird die Diskriminante verglichen; die MIR

@@ -34,9 +34,29 @@ impl core::fmt::Display for Reg {
     }
 }
 
+/// Eine Entry-Tick-Funktion (5.2 Regel 4), die eine Maschine braucht:
+/// die `loop:`-Bloecke der betretenen Zustaende, einmal je Eintrittsmenge.
+#[derive(Clone, Debug)]
+pub struct Entry {
+    /// Die Maschine.
+    pub machine: String,
+    /// Das Symbol.
+    pub name: String,
+    /// Das Blatt, das betreten wird.
+    pub leaf: u32,
+    /// Die betretenen Zustaende, von aussen nach innen.
+    pub entered: Vec<u32>,
+    /// Laeuft auch der maschinenweite `loop:` (Tick 0, 9.4)?
+    pub with_machine_loop: bool,
+    /// Schon geschrieben?
+    pub emitted: bool,
+}
+
 /// Ein Modul im Aufbau.
 #[derive(Debug)]
 pub struct Module {
+    /// Entry-Tick-Funktionen, die noch zu schreiben sind (5.2 Regel 4).
+    pub entries: Vec<Entry>,
     /// Der Kopf: `target`, Datenlayout, Kommentare.
     head: String,
     /// Die Funktionen.
@@ -86,6 +106,7 @@ impl Module {
         let _ = writeln!(head, "; keine Fast-Math-Flags, contract=off, keine Reassoziation");
         let _ = writeln!(head, "target triple = \"{triple}\"");
         Module {
+            entries: Vec::new(),
             head,
             body: String::new(),
             next: 0,
@@ -241,6 +262,27 @@ impl Module {
         // Funktion, und `uart_link_step` hatte 15 KB Rahmen.
         self.void_inst(&format!("call void @llvm.lifetime.start.p0(ptr {r})"));
         r
+    }
+
+    /// Die Entry-Tick-Funktion zu Blatt und Eintrittsmenge; entsteht beim
+    /// ersten Bedarf und wird nach den Funktionen der Maschine geschrieben.
+    pub fn entry_function(&mut self, machine: &str, leaf: u32, entered: Vec<u32>, with_machine_loop: bool) -> String {
+        if let Some(e) = self.entries.iter().find(|e| {
+            e.machine == machine && e.leaf == leaf && e.entered == entered && e.with_machine_loop == with_machine_loop
+        }) {
+            return e.name.clone();
+        }
+        let n = self.entries.iter().filter(|e| e.machine == machine).count();
+        let name = format!("{machine}_entry{n}");
+        self.entries.push(Entry {
+            machine: machine.to_string(),
+            name: name.clone(),
+            leaf,
+            entered,
+            with_machine_loop,
+            emitted: false,
+        });
+        name
     }
 
     /// Wie viele Slots die laufende Funktion bis jetzt hat.
