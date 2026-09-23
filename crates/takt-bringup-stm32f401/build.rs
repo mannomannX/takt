@@ -69,17 +69,14 @@ fn build_takt_program(out: &Path) {
         panic!("Rahmen nicht schreibbar: {e}");
     }
 
-    let obj = out.join("takt_programm.o");
-    run_takt_build(&program, &["--emit", "obj"], &obj);
-
-    // Die Tickperiode und die Ausgangsindizes kommen aus dem Programm,
-    // nicht aus der Hand: Beide standen schon einmal doppelt, und die
-    // logische Zeit lief darum zehnfach zu schnell.
+    let ir = out.join("takt_programm.ll");
+    run_takt_build(&program, &["--emit", "ir"], &ir);
     run_takt_build(&program, &["--emit", "consts-rs"], &out.join("takt_consts.rs"));
-
-    let obj_rahmen = out.join("takt_rahmen.o");
-    compile_c(&rahmen, &obj_rahmen);
+    let (obj, obj_rahmen) = (out.join("takt_programm.o"), out.join("takt_rahmen.o"));
+    translate(&ir, &obj);
+    translate(&rahmen, &obj_rahmen);
     archive(out, &[&obj, &obj_rahmen]);
+    println!("cargo:rustc-link-arg=--icf=all");
 
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=taktprogramm");
@@ -162,11 +159,12 @@ fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
     }
 }
 
-/// Uebersetzt den C-Rahmen.
-fn compile_c(src: &Path, obj: &Path) {
-    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Rahmen") };
+/// Uebersetzt eine Quelle (IR oder C) mit den Groessenflags des Ziels.
+fn translate(src: &Path, obj: &Path) {
+    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Programm") };
     let ok = Command::new(&clang)
-        .args(["-O2", "-c", "-ffreestanding", "-nostdlib", "--target=thumbv7em-none-eabihf"])
+        .args(["-c", "-Wno-override-module", "-ffreestanding", "-nostdlib", "--target=thumbv7em-none-eabihf"])
+        .args(takt_llvm::toolchain::object_flags("thumbv7em-none-eabihf"))
         .arg(src)
         .arg("-o")
         .arg(obj)

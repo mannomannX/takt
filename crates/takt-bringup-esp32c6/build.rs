@@ -65,12 +65,18 @@ fn build_takt_program(out: &Path) {
     if let Err(e) = fs::write(&rahmen, takt_conformance::mcu::build(&p).source) {
         panic!("Rahmen nicht schreibbar: {e}");
     }
-    let obj = out.join("takt_programm.o");
-    run_takt_build(&program, &["--emit", "obj"], &obj);
+    let ir = out.join("takt_programm.ll");
+    run_takt_build(&program, &["--emit", "ir"], &ir);
     run_takt_build(&program, &["--emit", "consts-rs"], &out.join("takt_consts.rs"));
-    let obj_rahmen = out.join("takt_rahmen.o");
-    compile_c(&rahmen, &obj_rahmen);
-    archive(out, &[&obj, &obj_rahmen]);
+    let (obj, obj_rahmen) = (out.join("takt_programm.o"), out.join("takt_rahmen.o"));
+    translate(&ir, &obj);
+    translate(&rahmen, &obj_rahmen);
+    let millicode = Path::new(env!("CARGO_MANIFEST_DIR")).join("millicode.S");
+    println!("cargo:rerun-if-changed={}", millicode.display());
+    let obj_mc = out.join("millicode.o");
+    assemble(&millicode, &obj_mc);
+    archive(out, &[&obj, &obj_rahmen, &obj_mc]);
+    println!("cargo:rustc-link-arg=--icf=all");
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=taktprogramm");
 }
@@ -134,20 +140,33 @@ fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
     }
 }
 
-fn compile_c(src: &Path, obj: &Path) {
-    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Rahmen") };
+/// Uebersetzt eine Quelle (IR oder C) mit den Groessenflags des Ziels.
+fn translate(src: &Path, obj: &Path) {
+    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Programm") };
     let ok = Command::new(&clang)
         .args([
-            "-O2",
             "-c",
-            "-ffunction-sections",
-            "-fdata-sections",
+            "-Wno-override-module",
             "-ffreestanding",
             "-nostdlib",
             "--target=riscv32-unknown-none-elf",
             "-march=rv32imac",
             "-mabi=ilp32",
         ])
+        .args(takt_llvm::toolchain::object_flags("riscv32-unknown-none-elf"))
+        .arg(src)
+        .arg("-o")
+        .arg(obj)
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(ok, "{}: uebersetzt nicht", src.display());
+}
+
+/// Uebersetzt die Millicode-Routinen fuer `-msave-restore`.
+fn assemble(src: &Path, obj: &Path) {
+    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Millicode") };
+    let ok = Command::new(&clang)
+        .args(["-c", "--target=riscv32-unknown-none-elf", "-march=rv32imac", "-mabi=ilp32"])
         .arg(src)
         .arg("-o")
         .arg(obj)

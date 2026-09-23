@@ -79,6 +79,21 @@ pub fn opt_level_for(triple: &str) -> &'static str {
     if triple.starts_with("riscv32") || triple.starts_with("thumb") { "-Os" } else { "-O2" }
 }
 
+/// Die Flags, mit denen ein Objekt fuer `triple` entsteht: je Funktion
+/// eine Sektion, auf der MCU `-Os` (`-Oz` kostete am C6 ein Fuenftel der
+/// Schrittzeit), Millicode fuer Prolog und Epilog (RISC-V) und der
+/// Outliner fuer wiederkehrende Befehlsfolgen (plan/codegen-hebel.md A).
+pub fn object_flags(triple: &str) -> Vec<&'static str> {
+    let mut flags = vec![opt_level_for(triple), "-ffunction-sections", "-fdata-sections"];
+    if triple.starts_with("riscv32") {
+        flags.push("-msave-restore");
+    }
+    if triple.starts_with("riscv32") || triple.starts_with("thumb") {
+        flags.extend(["-mllvm", "-enable-machine-outliner=always"]);
+    }
+    flags
+}
+
 impl Clang {
     /// Was jeder Aufruf mitbekommt, damit das Ergebnis reproduzierbar
     /// ist (11.3).

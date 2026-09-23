@@ -658,10 +658,8 @@ fn emit_object(ir: &str, target: takt_llvm::Target, out: &str) -> bool {
 
     let mut cmd = std::process::Command::new(&clang);
     let cmd = takt_llvm::toolchain::Clang::deterministic(&mut cmd)
-        .args(["-Wno-override-module", takt_llvm::toolchain::opt_level_for(target.triple), "-c"])
-        // Je Funktion eine Sektion: Der Linker laesst fallen, was kein
-        // Rahmen ruft.
-        .args(["-ffunction-sections", "-fdata-sections"])
+        .args(["-Wno-override-module", "-c"])
+        .args(takt_llvm::toolchain::object_flags(target.triple))
         .arg(format!("--target={}", target.triple));
     // Freistehend nur fuer die MCU: Auf dem Wirt gibt es eine libc, und
     // `-nostdlib` naehme sie dem Objekt ohne Not.
