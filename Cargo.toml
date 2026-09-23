@@ -8,6 +8,8 @@ exclude = [
     # geprueft wird das Crate von `tools/embedded.sh`.
     "crates/takt-board-stm32f401",
     "crates/takt-board-esp32c6",
+    # Die C-ABI des erzeugten Rahmens, einmal fuer alle Boards; aus demselben Grund.
+    "crates/takt-mcu-program",
 ]
 
 members = [

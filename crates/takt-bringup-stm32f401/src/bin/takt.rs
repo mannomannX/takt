@@ -36,92 +36,63 @@
 #![no_main]
 #![allow(unsafe_code, reason = "Interrupt-Handler und C-ABI; 9.5 fuehrt Treiber in der TCB")]
 
+use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
-use takt_board_stm32f401::{Board, CORE_HZ, Generated, Led, Telemetry, cycles, tick};
-use takt_rt_core::Clock;
-use takt_rt_core::Program;
+use takt_board_stm32f401::{Board, CORE_HZ, Generated, Led, Telemetry, WfiSleep, cycles, tick};
+use takt_rt_baremetal::{Cadence, JournalStats, NoWatchdog, Sleep};
+use takt_rt_core::{FakeNvm, Persist, Policy, Profile, Runtime};
 
-/// Die Konstanten des uebersetzten Programms (`takt build --emit consts-rs`).
-///
-/// **Sie stehen nicht hier, weil sie schon woanders stehen.** Die
-/// Tickperiode gehoert in `system: tick`, die Ausgangsindizes in die
-/// Kanalreihenfolge; beides von Hand nachzuschreiben war genau der Fehler,
-/// der die logische Zeit einmal zehnfach zu schnell laufen liess — das
-/// Programm sagte 10 ms, dieses Modul 1 ms, und niemand kannte beides.
 mod takt {
-    // Nicht jedes Programm braucht jede Konstante; `OUTPUTS` etwa nutzt
-    // nur, wer ueber alle Ausgaenge laeuft.
     #![allow(dead_code)]
-
     include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
 }
+use takt::{OVERRUN_ALERT, TICK_NS};
 
-use takt::TICK_NS;
-
-/// Die Baudrate der Telemetrie.
 const BAUD: u32 = 115_200;
 
-/// Wie viele Ticks zwischen zwei Trace-Zeilen liegen.
-///
-/// **Gerechnet, nicht gesetzt.** Eine Zeile `t=<n> out <name> <wert>` ist
-/// gut zwanzig Zeichen; bei 115200 Baud und zehn Bit je Zeichen sind das
-/// rund 1,8 ms. Passt das in eine Tickperiode, geht der Trace je Tick
-/// heraus — und nur dann laesst sich der Lauf gegen `takt sim`
-/// vergleichen, was der Kern des M5-Exits ist.
-///
-/// Passt es nicht, wird ausgeduennt statt die Steuerung aufzuhalten
-/// (12.2: „wer nicht mitkommt, verwirft und zaehlt"). Ein Trace mit
-/// Luecken ist immer noch vergleichbar — `run::compare` prueft nur, was
-/// beide Seiten melden —, ein verpasster Tick waere ein Messfehler.
+/// Alle wie viele Ticks die Ausgaenge im Betrieb ausgegeben werden: jeden,
+/// wenn eine Zeile ein Zehntel der Periode fuellt, sonst jeden hundertsten.
 const TRACE_EVERY: u64 = {
-    // Zeichen je Zeile, grosszuegig: Tickzahl, Name und Wert wachsen.
     const CHARS: u64 = 32;
     const NS_PER_LINE: u64 = CHARS * 10 * 1_000_000_000 / BAUD as u64;
-    // **Zehn Prozent, nicht fuenfzig.** Eine erste Fassung liess die
-    // Zeile die halbe Periode fuellen und uebersah, dass `write_byte`
-    // blockierend auf `TXE` wartet: Was auf der Leitung steht, steht auch
-    // in der Schleife. Bei 10 ms Tick und 1,74 ms je Zeile hiess das 17
-    // Prozent Auslastung allein fuer die Diagnose — und mit jedem
-    // verpassten Tick mehr. Am Board waren es sechs Sekunden je Zyklus
-    // statt einer.
     if TICK_NS as u64 >= NS_PER_LINE * 10 { 1 } else { 100 }
 };
 
-/// Der DWT-Stand beim vorigen Interrupt.
+/// Konformitaetslauf: `TAKT_TICKS` beim Bau gesetzt heisst jeden Tick
+/// ausgeben und nach so vielen Ticks `takt end`.
+const TICKS: Option<&str> = option_env!("TAKT_TICKS");
+
+/// `TAKT_INSTRUMENT=statements`: den Programmzaehler je Tick mitgeben (11.2).
+const TRACE_PC: bool = matches!(option_env!("TAKT_INSTRUMENT"), Some(m) if matches!(m.as_bytes(), b"statements"));
+
 static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
 
-/// Die Telemetrie, die der erzeugte Rahmen ruft.
-///
-/// **Sie steht hier und nicht im Board-Crate**, weil der Rahmen sie als
-/// C-Symbol erwartet und das Board nicht weiss, wohin ein Trace gehen
-/// soll — USART, Ringpuffer oder nirgendwohin.
+/// Die Telemetrie, statisch: Der erzeugte Rahmen ruft `takt_board_trace`
+/// als C-Symbol, und eine Funktion ohne Empfaenger kommt an nichts heran,
+/// was in `main` liegt.
 static mut UART: Option<Telemetry> = None;
 
-/// Die LED, die der Treiber `takt_out_ui_led` schaltet.
-///
-/// **Sie steht hier aus demselben Grund wie [`UART`]**: Der erzeugte
-/// Rahmen ruft den Treiber als C-Symbol, und eine Funktion ohne
-/// Empfaenger kommt an nichts heran, was in `main` liegt.
+/// Die LED, die der Treiber `takt_out_ui_led` schaltet; aus demselben Grund.
 static mut LED: Option<Led> = None;
 
-/// Schreibt eine Zeichenkette (vom Rahmen gerufen).
+fn uart() -> Option<&'static mut Telemetry> {
+    unsafe { (*&raw mut UART).as_mut() }
+}
+
+/// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
 ///
 /// # Safety
 ///
 /// Der Rahmen uebergibt einen nullterminierten Zeiger auf statischen
-/// Text; er stammt aus dem erzeugten C-Code und lebt so lange wie das
-/// Programm.
+/// Text; die Schranke haelt einen Zeiger ohne Null auf (4.1, von Hand).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_board_trace(text: *const u8) {
-    let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
+    let Some(uart) = uart() else { return };
     let mut p = text;
-    // Eine Schranke statt `while *p != 0`: Ein Zeiger ohne Null waere
-    // sonst eine Endlosschleife, und die Regel aus 4.1 gilt hier von
-    // Hand, weil die TCB sie nicht geschenkt bekommt.
     for _ in 0..256 {
         let b = unsafe { *p };
         if b == 0 {
@@ -132,26 +103,43 @@ pub unsafe extern "C" fn takt_board_trace(text: *const u8) {
     }
 }
 
-/// Schreibt eine Zahl mit Trennzeichen (vom Rahmen gerufen).
+/// Vom Rahmen gerufen: eine Zahl im Trace.
 #[unsafe(no_mangle)]
 pub extern "C" fn takt_board_trace_i64(value: i64) {
-    let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
+    let Some(uart) = uart() else { return };
     uart.write_i64(value);
     uart.write_byte(b' ');
 }
 
+/// Vom Rahmen gerufen: eine Zahl ohne Vorzeichen im Trace.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_board_trace_u64(value: u64) {
+    let Some(uart) = uart() else { return };
+    uart.write_u64(value);
+    uart.write_byte(b' ');
+}
+
+/// Vom Rahmen gerufen: eine Fliesskommazahl als kuerzeste eindeutige Ziffernfolge (4.2).
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_board_trace_f64(value: f64) {
+    let Some(uart) = uart() else { return };
+    let _ = write!(uart, "{value:?} ");
+}
+
+/// Vom Rahmen gerufen: ein Byte eines Ausgabestroms, wie der Interpreter es schreibt.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_board_trace_hex8(value: u8) {
+    let Some(uart) = uart() else { return };
+    uart.write_hex8(value);
+}
+
 /// Der Treiber fuer `output led : bool @ hw("ui/led")`.
 ///
-/// **Der Name ist keine Verabredung, sondern die Adresse.** Der erzeugte
-/// Rahmen bildet `hw("ui/led")` auf `takt_out_ui_led` ab und ruft die
-/// Funktion in Schritt 10 der Tickschleife (12.1). Wer sie nicht stellt,
-/// bekommt einen Linkfehler mit diesem Namen — 8.10 will die Zuordnung
-/// ausserhalb des Programms, und hier ist sie: eine Zeile, die sagt,
-/// welches Geraet hinter der Adresse steckt.
-///
-/// Die Umkehrung ist Boardwissen: Die LED der Black Pill liegt an PC13
-/// gegen 3V3, leuchtet also bei `low`. Das Programm sagt `true` und meint
-/// „an"; was das elektrisch heisst, weiss nur diese Zeile.
+/// Der Name ist die Adresse: Der Rahmen bildet `hw("ui/led")` auf
+/// `takt_out_ui_led` ab und ruft es in Schritt 10 (12.1); wer es nicht
+/// stellt, bekommt einen Linkfehler mit diesem Namen (8.10). Die LED der
+/// Black Pill liegt an PC13 gegen 3V3 — was `true` elektrisch heisst,
+/// weiss nur diese Zeile.
 #[unsafe(no_mangle)]
 pub extern "C" fn takt_out_ui_led(value: u8) {
     let Some(led) = (unsafe { (*&raw mut LED).as_mut() }) else { return };
@@ -186,8 +174,7 @@ fn main() -> ! {
             cortex_m::asm::wfi();
         }
     };
-
-    let Ok(uart) = Telemetry::new(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, BAUD) else {
+    let Ok(telemetry) = takt_board_stm32f401::telemetry(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, BAUD) else {
         led.on();
         loop {
             cortex_m::asm::wfi();
@@ -195,90 +182,34 @@ fn main() -> ! {
     };
     // Erst jetzt sichtbar machen: Ein Trace vor der Einrichtung schriebe
     // in ein nicht konfiguriertes Register.
-    unsafe { UART = Some(uart) };
+    unsafe { UART = Some(telemetry) };
 
     let (mut dcb, mut dwt) = (cp.DCB, cp.DWT);
     cycles::enable(&mut dcb, &mut dwt);
     unsafe { cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::TIM2) };
 
     banner(timer.nominal_ns());
-
-    // Die Tickquelle in die Uhr der Runtime: Sie zaehlt jeden Schritt
-    // einmal und haelt fest, wenn die Schleife nicht mitkam (12.3).
-    let mut clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS);
-
-    // Erst hier erreichbar machen: Ein Treiberaufruf vor der Einrichtung
-    // schriebe in ein nicht konfiguriertes Register.
     unsafe { LED = Some(led) };
 
-    let mut program = Generated::init(false);
-    let mut next_trace = TRACE_EVERY;
-    let mut k: u64 = 0;
-    // Was zuletzt gemeldet wurde: verpasste Ticks, verworfene Bytes.
-    let mut reported = (0u64, 0u32);
-
+    let clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS);
+    let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
+    let mut rt = Runtime::new(Generated::init(false), clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
+    let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
+    // Kein Journal: Das Board hat noch keinen `Nvm`-Treiber (5.9).
+    let no_journal = None::<&mut Persist<'_, FakeNvm<0>>>;
+    let stats = takt_rt_baremetal::run(&mut rt, no_journal, Cadence::of(limit, TRACE_EVERY, TRACE_PC), uart);
+    if let Some(u) = uart() {
+        takt_rt_baremetal::report(u, rt.overrun(), &stats, &JournalStats::default());
+    }
+    let mut sleep = WfiSleep;
     loop {
-        // **Ueber `Clock::wait_until`, nicht ueber den Timer direkt.**
-        // Eine erste Fassung rief `wait_for_tick` an der Tickquelle und
-        // rechnete dann mit deren *echter* Tickzahl. Dauert ein Durchlauf
-        // laenger als eine Periode, springt diese Zahl — gerechnet wurde
-        // aber nur ein Schritt, und `after 500 ms` feuerte nach 50
-        // gerechneten Ticks, die laenger als 500 ms gebraucht hatten. Am
-        // Board sah das aus wie eine falsche Periode und war eine
-        // uebersprungene Rechnung.
-        //
-        // `TimerClock` zaehlt jeden Schritt einmal und haelt fest, wenn
-        // die Schleife nicht mitkam (12.3: „→ `Runtime(Overrun)`").
-        clock.wait_until(0);
-        k += 1;
-        program.tick(k, k as i64 * TICK_NS);
-        // Schritt 10: Der Rahmen gibt den Latch an die Treiber (12.1).
-        program.commit();
-
-        if k >= next_trace {
-            next_trace = k + TRACE_EVERY;
-            program.dump(true);
-            report(&clock, &mut reported);
-        }
+        sleep.sleep_until_event();
     }
 }
-
-/// Meldet, was die Schleife nicht geschafft hat — einmal je Aenderung.
-///
-/// **Zwei Zaehler, die bisher niemand las.** `TimerClock::missed` haelt
-/// fest, wie oft ein Schritt laenger dauerte als seine Periode (12.3),
-/// `Telemetry::dropped`, wie viele Bytes die Telemetrie verwarf, statt die
-/// Steuerung aufzuhalten (12.2). Beide zaehlten still, und darum blieb
-/// eine zu langsame Schleife unbemerkt: Sie sah aus wie eine falsche
-/// Tickperiode.
-///
-/// **Nur bei Aenderung, und das ist keine Sparsamkeit.** Eine erste
-/// Fassung meldete, solange `missed > 0` — und weil jede Meldung ueber
-/// UART blockiert, verpasste sie dabei weitere Ticks, was die Meldung
-/// wiederholte. Eine Diagnose, die verstaerkt, was sie misst, ist keine:
-/// Am Board wurden aus einer Sekunde je Blinkzyklus sechs.
-fn report(clock: &takt_rt_baremetal::TimerClock<takt_board_stm32f401::tick::Tim2Tick>, last: &mut (u64, u32)) {
-    let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
-    let missed = clock.missed();
-    if missed > last.0 {
-        last.0 = missed;
-        uart.write("  verpasste Ticks: ");
-        uart.write_u64(missed);
-        uart.newline();
-    }
-    let dropped = uart.dropped();
-    if dropped > last.1 {
-        last.1 = dropped;
-        uart.write("  verworfene Bytes: ");
-        uart.write_u64(u64::from(dropped));
-        uart.newline();
-    }
-}
-
 
 /// Was beim Start feststeht.
 fn banner(nominal_ns: i64) {
-    let Some(uart) = (unsafe { (*&raw mut UART).as_mut() }) else { return };
+    let Some(uart) = uart() else { return };
     uart.newline();
     uart.write("takt auf stm32f401");
     uart.newline();
@@ -292,4 +223,5 @@ fn banner(nominal_ns: i64) {
     uart.write(if cycles::running() { "laeuft" } else { "STEHT" });
     uart.newline();
     uart.newline();
+    uart.flush();
 }

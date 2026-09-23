@@ -122,7 +122,7 @@ fn main() -> ! {
     // **Kein `expect` hier.** Ein Panic haelt an, und `panic-halt` laesst
     // die LED stehen, wo sie gerade war — ein Zustand, der wie „laeuft"
     // aussehen kann. Ein Fehlercode blinkt stattdessen.
-    let Ok(mut uart) = Telemetry::new(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, 115_200) else {
+    let Ok(mut uart) = takt_board_stm32f401::telemetry(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, 115_200) else {
         blink_error(&led, 4);
     };
 
@@ -211,24 +211,31 @@ fn spin(n: u32) {
 /// Was beim Start feststeht.
 fn banner(uart: &mut Telemetry, clock: &takt_board_stm32f401::Tim2Tick) {
     uart.newline();
+    uart.flush();
     uart.write("takt bring-up stm32f401");
     uart.newline();
+    uart.flush();
     uart.write("  Kerntakt      ");
     uart.write_u64(u64::from(CORE_HZ));
     uart.write(" Hz");
     uart.newline();
+    uart.flush();
     uart.write("  Timertakt     ");
     uart.write_u64(u64::from(TIMER_HZ));
     uart.write(" Hz");
     uart.newline();
+    uart.flush();
     uart.write("  Tick nominal  ");
     uart.write_i64(clock.nominal_ns());
     uart.write(" ns");
     uart.newline();
+    uart.flush();
     uart.write("  DWT           ");
     uart.write(if cycles::running() { "laeuft" } else { "STEHT — Messungen sind wertlos" });
     uart.newline();
+    uart.flush();
     uart.newline();
+    uart.flush();
 }
 
 /// Ein Bericht je Sekunde.
@@ -256,6 +263,7 @@ fn report(uart: &mut Telemetry, clock: &takt_board_stm32f401::Tim2Tick, ticks: u
     uart.write_i64(measure_reference().ns());
     uart.write(" ns");
     uart.newline();
+    uart.flush();
 }
 
 /// Eine feste Rechenschleife, in Zyklen gemessen.

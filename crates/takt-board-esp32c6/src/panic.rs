@@ -9,15 +9,17 @@ use core::fmt::Write as _;
 
 use esp_hal::peripherals::USB_DEVICE;
 
-use crate::uart::Telemetry;
+use takt_rt_baremetal::DRAIN_ROUNDS;
+
+use crate::uart::telemetry;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // SAFETY: Nach dem Panic laeuft nichts mehr, das die Schnittstelle
     // haelt; der Treiber richtet sie nur ein, ohne sie zurueckzusetzen.
-    let mut uart = Telemetry::new(unsafe { USB_DEVICE::steal() });
+    let mut uart = telemetry(unsafe { USB_DEVICE::steal() });
     let _ = write!(uart, "\r\ntakt panic: {info}\r\n");
-    uart.flush();
+    uart.drain(DRAIN_ROUNDS);
     loop {
         crate::wfi();
     }

@@ -115,6 +115,10 @@ echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
     cargo build --target riscv32imac-unknown-none-elf "$@"
     cargo clippy --target riscv32imac-unknown-none-elf "$@" -- -D warnings
 )
+(
+    cd crates/takt-mcu-program
+    cargo clippy --target riscv32imac-unknown-none-elf "$@" -- -D warnings
+)
 cargo build --release --target riscv32imac-unknown-none-elf     --manifest-path crates/takt-bringup-esp32c6/Cargo.toml "$@"
 
 echo

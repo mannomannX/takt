@@ -1,17 +1,28 @@
-//! Das erzeugte Programm hinter seiner C-ABI (12.1, 12.3).
+//! Das erzeugte Programm hinter seiner C-ABI (12.1, 12.3), einmal fuer
+//! alle Boards.
 //!
 //! Der Rahmen aus `takt_conformance::mcu` liefert `takt_mcu_init_with`,
 //! `takt_mcu_tick` und die Schwestern; hier werden sie zum
-//! [`takt_rt_core::Program`], das die Tickschleife kennt.
+//! [`takt_rt_core::Program`] und [`takt_rt_baremetal::Traced`], die die
+//! Tickschleife kennt. Ein Board bringt nur noch Uhr, Leitung und
+//! Treiber mit.
 //!
 //! **Laden vor dem Eintritt.** s0 enthaelt die geladenen `persist`-Werte
 //! (5.9), also muss das Journal *vor* dem ersten `enter` gelesen sein. Das
 //! Programm beginnt darum uninitialisiert; die erste `persist_restore`
 //! initialisiert es mit den Bytes, und [`Generated::ensure_init`] holt den
 //! Start ohne Journal nach, wenn keines da war.
+//!
+//! **Die Gegenrichtung fehlt mit Absicht.** Der Rahmen ruft
+//! `takt_board_trace*`, um Traces auszugeben; die stellt das Programm, das
+//! ihn bindet — es weiss, wohin die Telemetrie geht.
+
+#![no_std]
+#![allow(unsafe_code, reason = "C-ABI des erzeugten Rahmens; 9.5 fuehrt ihn in der TCB")]
 
 use core::ffi::c_void;
 
+use takt_rt_baremetal::Traced;
 use takt_rt_core::Program;
 
 unsafe extern "C" {
@@ -32,7 +43,7 @@ unsafe extern "C" {
 /// Das gebundene Programm.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Generated {
-    /// Nach jedem Tick den Zustand ausgeben.
+    /// Nach jedem Tick die Ausgaenge ausgeben.
     pub trace: bool,
     initialized: bool,
 }
@@ -59,28 +70,27 @@ impl Generated {
         }
     }
 
-    /// Gibt die Outputs ueber die Telemetrie aus; ohne `all` nur die geaenderten (9.3).
-    pub fn dump(&self, all: bool) {
-        // SAFETY: liest nur den statischen Zustand des Rahmens.
-        unsafe { takt_mcu_dump(i32::from(all)) };
-    }
-
-    /// Der Programmzaehler je Maschine (11.2); leer ohne `statements`.
-    pub fn pc(&self) {
-        // SAFETY: liest nur den statischen Zustand des Rahmens.
-        unsafe { takt_mcu_pc() };
-    }
-
-    /// Commit der Outputs am Tick-Ende (9.4).
-    pub fn commit(&self) {
-        // SAFETY: schreibt die Latches des Rahmens; die Schleife ruft es einmal je Tick.
-        unsafe { takt_mcu_commit() };
-    }
-
     /// Der Wert eines Outputs, als Bitmuster.
     pub fn output(&self, index: i32) -> i64 {
         // SAFETY: liest einen Latch des Rahmens; ein fremder Index liefert 0.
         unsafe { takt_mcu_output(index) }
+    }
+}
+
+impl Traced for Generated {
+    fn commit(&self) {
+        // SAFETY: schreibt die Latches des Rahmens; die Schleife ruft es einmal je Tick.
+        unsafe { takt_mcu_commit() };
+    }
+
+    fn dump(&self, all: bool) {
+        // SAFETY: liest nur den statischen Zustand des Rahmens.
+        unsafe { takt_mcu_dump(i32::from(all)) };
+    }
+
+    fn pc(&self) {
+        // SAFETY: liest nur den statischen Zustand des Rahmens.
+        unsafe { takt_mcu_pc() };
     }
 }
 

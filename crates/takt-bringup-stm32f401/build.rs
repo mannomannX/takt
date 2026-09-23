@@ -111,7 +111,9 @@ fn program_path() -> String {
         .lines()
         .map(str::trim)
         .filter(|l| !l.starts_with('#'))
-        .find_map(|l| l.strip_prefix("program")?.trim_start().strip_prefix('=')?.trim().strip_prefix('"')?.strip_suffix('"'))
+        .find_map(|l| {
+            l.strip_prefix("program")?.trim_start().strip_prefix('=')?.trim().strip_prefix('"')?.strip_suffix('"')
+        })
         .unwrap_or_else(|| panic!("{config}: kein `program = \"…\"`"));
     format!("{here}/{value}")
 }

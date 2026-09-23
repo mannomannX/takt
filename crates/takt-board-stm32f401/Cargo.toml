@@ -24,6 +24,7 @@ rust-version = "1.85"
 
 [dependencies]
 takt-board-support = { path = "../takt-board-support" }
+takt-mcu-program = { path = "../takt-mcu-program" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 # Der Kern liefert den `Program`-Trait, den `program.rs` erfuellt. Direkt
 # und nicht ueber einen Re-Export von `takt-rt-baremetal`: Was dieses

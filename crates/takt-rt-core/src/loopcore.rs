@@ -36,6 +36,11 @@ pub trait Sink {
     fn record(&mut self, tick: &Tick);
 }
 
+/// Keine Telemetrie: Wer `step` ruft, bekommt den `Tick` ohnehin zurueck.
+impl Sink for () {
+    fn record(&mut self, _: &Tick) {}
+}
+
 /// Wie weit ein begonnener NVM-Vorgang ist.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NvmState {

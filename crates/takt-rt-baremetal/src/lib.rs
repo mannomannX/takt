@@ -20,6 +20,10 @@
 //! ihn der Timer und die Schleife wartet auf ihn (12.3). Dieselbe Frage,
 //! entgegengesetzte Richtung — siehe [`clock`].
 //!
+//! **Eine Schleife, eine Telemetrie.** [`run`] fuehrt den Lauf ueber der
+//! Runtime, [`Telemetry`] den Ring vor der Leitung — beides ohne Board,
+//! das nur Uhr, Leitung ([`Port`]) und Journal stellt.
+//!
 //! **Die Zeitgarantie ist eine andere.** 12.8 fuehrt `linux_rt` mit
 //! „empirisch (Konformitaetsmessung)" und `baremetal` mit „statisch
 //! (Budget × kalibrierte Tabelle) plus Messung". Das Statische entsteht
@@ -30,8 +34,12 @@
 
 pub mod board;
 pub mod clock;
+pub mod run;
+pub mod telemetry;
 pub mod tolerance;
 
 pub use board::{HardwareWatchdog, Sleep, StackGuard, TickSource};
 pub use clock::TimerClock;
+pub use run::{Cadence, JournalStats, NoWatchdog, Stats, Traced, report, run};
+pub use telemetry::{DRAIN_ROUNDS, Port, Telemetry};
 pub use tolerance::Period;

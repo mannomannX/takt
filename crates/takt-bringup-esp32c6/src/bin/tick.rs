@@ -7,8 +7,8 @@
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use takt_board_esp32c6::{CORE_HZ, Telemetry, Ws2812};
-use takt_rt_baremetal::TickSource;
+use takt_board_esp32c6::{CORE_HZ, Ws2812};
+use takt_rt_baremetal::{DRAIN_ROUNDS, TickSource};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -18,7 +18,7 @@ const REPORT_EVERY: u64 = 1_000;
 #[main]
 fn main() -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
-    let mut uart = Telemetry::new(peripherals.USB_DEVICE);
+    let mut uart = takt_board_esp32c6::telemetry(peripherals.USB_DEVICE);
     let mut clock = match takt_board_esp32c6::init(peripherals.SYSTIMER, TICK_NS) {
         Ok(c) => c,
         Err(e) => {
@@ -28,6 +28,7 @@ fn main() -> ! {
                 takt_board_esp32c6::InitError::SubMicrosecond => "keine ganze Mikrosekunde",
             });
             uart.newline();
+            uart.drain(DRAIN_ROUNDS);
             loop {
                 core::hint::spin_loop();
             }
@@ -39,6 +40,7 @@ fn main() -> ! {
     uart.write_u64(u64::from(CORE_HZ));
     uart.write(" Hz");
     uart.newline();
+    uart.drain(DRAIN_ROUNDS);
 
     let mut led = Ws2812::new(peripherals.RMT, peripherals.GPIO8).ok();
     let mut lit = false;
@@ -63,6 +65,7 @@ fn main() -> ! {
             uart.write("  verpasst ");
             uart.write_u64(missed);
             uart.newline();
+            uart.drain(DRAIN_ROUNDS);
         }
     }
 }

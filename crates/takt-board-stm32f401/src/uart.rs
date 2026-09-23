@@ -1,34 +1,34 @@
-//! Telemetrie ueber USART1 (12.3).
+//! Telemetrie ueber USART1 (12.3): die Leitung hinter
+//! [`takt_rt_baremetal::Telemetry`].
 //!
 //! 12.3 nennt „Telemetrie ueber UART/CAN/Ethernet, reduziert
 //! (Zustandspfad, Faults, `pub var`)". Fuer den Bring-up ist das der
 //! einzige Weg, vom Board etwas zu erfahren: Ohne Debugger sieht man
 //! sonst nur, ob die LED blinkt.
 //!
-//! **Wartend, aber nicht unbegrenzt.** Eine erste Fassung wartete mit
-//! `while` auf das `TXE`-Flag. Spraenge der Sender nicht an, stuende das
-//! Programm dort still — ohne Zeichen nach aussen, denn wer nichts senden
-//! kann, kann auch nicht melden, dass er nichts senden kann.
-//!
-//! 12.2 sagt es fuer den `Sink` der Runtime: „wer nicht mitkommt,
-//! verwirft und zaehlt, statt die Steuerung aufzuhalten". Dasselbe gilt
-//! hier, aus demselben Grund — die Telemetrie ist Diagnose, nicht
-//! Steuerung, und ein verlorenes Byte ist besser als ein stehendes
-//! Programm. [`Telemetry::dropped`] sagt, wie viele es waren.
+//! **Wartend, aber nicht unbegrenzt.** Ein USART ohne FIFO nimmt ein Byte
+//! je `TXE`; die Leitung wartet darauf mit Schranke, denn eine
+//! unbegrenzte Warteschleife auf ein Hardware-Flag ist der sicherste Weg,
+//! ein Programm stillzulegen (FB-139). Ein verlorenes Byte ist besser
+//! als ein stehendes Programm — die Telemetrie ist Diagnose, nicht
+//! Steuerung (12.2); den Ring und das Zaehlen macht `takt-rt-baremetal`.
 //!
 //! Pins: PA9 (TX) und PA10 (RX), die Standardbelegung von USART1 auf
 //! diesem Board.
 
 use stm32f4::stm32f401::{GPIOA, RCC, USART1};
+use takt_rt_baremetal::Port;
 
-/// Der Telemetriekanal.
-pub struct Telemetry {
+/// Der Ring vor der Leitung: eine Zeile je Tick bei 10 ms passt in
+/// 115200 Baud, der Ring faengt die Buendel dazwischen.
+const RING: usize = 1024;
+
+/// Die Leitung.
+pub struct Usart1 {
     usart: USART1,
-    /// Verworfene Bytes, siehe [`Telemetry::write_byte`].
-    dropped: u32,
 }
 
-impl Telemetry {
+impl Usart1 {
     /// Richtet USART1 auf PA9/PA10 ein.
     ///
     /// `baud` ist die Zielbaudrate, `pclk_hz` der Takt des Busses, an dem
@@ -39,7 +39,7 @@ impl Telemetry {
         rcc: &RCC,
         pclk_hz: u32,
         baud: u32,
-    ) -> Result<Telemetry, takt_board_support::uart::BaudError> {
+    ) -> Result<Usart1, takt_board_support::uart::BaudError> {
         rcc.ahb1enr().modify(|_, w| w.gpioaen().set_bit());
         rcc.apb2enr().modify(|_, w| w.usart1en().set_bit());
         // Errata: zwei APB-Takte Verzoegerung, siehe lib.rs.
@@ -67,83 +67,34 @@ impl Telemetry {
             w.ue().set_bit()
         });
 
-        Ok(Telemetry { usart, dropped: 0 })
+        Ok(Usart1 { usart })
     }
+}
 
-    /// Schreibt ein Byte und wartet, bis es heraus ist.
-    ///
-    /// **Mit Schranke, nicht mit `while`.** Eine unbegrenzte Warteschleife
-    /// auf ein Hardware-Flag ist der sicherste Weg, ein Programm
-    /// stillzulegen: Setzt `TXE` nie — weil ein Register falsch steht, der
-    /// Takt nicht stimmt oder der Sender gar nicht laeuft —, haengt alles
-    /// danach, und man sieht nur, dass nichts passiert. Als das Board
-    /// einmal still stand, war die Schleife der zweite Verdaechtige; die
-    /// Ursache lag woanders (FB-139), die Schranke blieb trotzdem.
-    ///
-    /// Die Sprache erzwingt diese Regel ueberall (4.1: „beschraenkte
-    /// Schleifen"); in der TCB muss man sie von Hand einhalten. Ein
-    /// verlorenes Byte ist besser als ein stehendes Programm — die
-    /// Telemetrie ist Diagnose, nicht Steuerung.
-    pub fn write_byte(&mut self, b: u8) {
+impl Port for Usart1 {
+    fn try_write(&mut self, b: u8) -> bool {
         // Bei 115200 Baud dauert ein Byte rund 87 us, bei 84 MHz also
-        // etwa 7300 Zyklen. 100 000 Durchlaeufe sind ein Vielfaches
-        // davon und immer noch weniger als eine Millisekunde.
+        // etwa 7300 Zyklen; 100 000 Durchlaeufe sind ein Vielfaches davon.
         for _ in 0..100_000u32 {
             if self.usart.sr().read().txe().bit_is_set() {
                 self.usart.dr().write(|w| unsafe { w.dr().bits(u16::from(b)) });
-                return;
+                return true;
             }
         }
-        // Aufgegeben: Das Byte ist weg, das Programm laeuft weiter.
-        self.dropped = self.dropped.saturating_add(1);
+        false
     }
+}
 
-    /// Wie viele Bytes die Telemetrie verworfen hat.
-    ///
-    /// Ein Zaehler statt eines stillen Verlusts: 12.2 verlangt fuer den
-    /// `Sink` der Runtime dasselbe — „wer nicht mitkommt, verwirft und
-    /// zaehlt, statt die Steuerung aufzuhalten".
-    pub fn dropped(&self) -> u32 {
-        self.dropped
-    }
+/// Die Telemetrie des Boards.
+pub type Telemetry = takt_rt_baremetal::Telemetry<Usart1, RING>;
 
-    /// Schreibt eine Zeichenkette.
-    pub fn write(&mut self, s: &str) {
-        for b in s.bytes() {
-            self.write_byte(b);
-        }
-    }
-
-    /// Schreibt eine Zahl in Dezimalschreibweise.
-    ///
-    /// Ohne `format!`: Das braeuchte einen Allokator, und 12.3 sagt „kein
-    /// Heap". Die Ziffern entstehen darum in einem Puffer auf dem Stack.
-    pub fn write_u64(&mut self, mut n: u64) {
-        let mut buf = [0u8; 20];
-        let mut i = buf.len();
-        loop {
-            i -= 1;
-            buf[i] = b'0' + (n % 10) as u8;
-            n /= 10;
-            if n == 0 {
-                break;
-            }
-        }
-        for b in &buf[i..] {
-            self.write_byte(*b);
-        }
-    }
-
-    /// Schreibt eine Zahl mit Vorzeichen.
-    pub fn write_i64(&mut self, n: i64) {
-        if n < 0 {
-            self.write_byte(b'-');
-        }
-        self.write_u64(n.unsigned_abs());
-    }
-
-    /// Schliesst eine Zeile ab.
-    pub fn newline(&mut self) {
-        self.write("\r\n");
-    }
+/// Die Telemetrie ueber USART1 auf PA9.
+pub fn telemetry(
+    usart: USART1,
+    gpioa: &GPIOA,
+    rcc: &RCC,
+    pclk_hz: u32,
+    baud: u32,
+) -> Result<Telemetry, takt_board_support::uart::BaudError> {
+    Ok(Telemetry::new(Usart1::new(usart, gpioa, rcc, pclk_hz, baud)?))
 }

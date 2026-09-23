@@ -14,6 +14,7 @@ rust-version = "1.86"
 
 [dependencies]
 takt-board-support = { path = "../takt-board-support" }
+takt-mcu-program = { path = "../takt-mcu-program" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 takt-rt-core = { path = "../takt-rt-core" }
 

@@ -51,15 +51,14 @@
 pub mod cycles;
 pub mod guard;
 pub mod led;
-pub mod program;
 pub mod tick;
 pub mod uart;
 
 pub use guard::{Canary, Iwdg, WfiSleep, reboot};
 pub use led::Led;
-pub use program::Generated;
-pub use uart::Telemetry;
+pub use takt_mcu_program::Generated;
 pub use tick::{Tim2Tick, on_timer_interrupt};
+pub use uart::{Telemetry, Usart1, telemetry};
 
 /// Was ein einzelnes Board beitraegt.
 ///

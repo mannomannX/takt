@@ -35,7 +35,7 @@
 //! | Tick | SYSTIMER, 16 MHz, Alarm 0 periodisch |
 //! | Zyklen | Performance-Zaehler des Kerns (CSR 0x7e2) |
 //! | Journal | zwei Flash-Sektoren in der `nvs`-Partition (`nvm.rs`) |
-//! | Telemetrie | USB-Serial-JTAG, verlustfrei mit Host (`uart.rs`) |
+//! | Telemetrie | USB-Serial-JTAG als Leitung hinter dem Ring aus `takt-rt-baremetal` (`uart.rs`) |
 //! | LED | WS2812 an IO8 (DevKitM-1), ueber RMT-Kanal 0 |
 
 #![no_std]
@@ -48,7 +48,6 @@ pub mod led;
 pub mod nvm;
 pub mod panic;
 pub mod pins;
-pub mod program;
 pub mod tick;
 pub mod uart;
 
@@ -66,9 +65,9 @@ pub use guard::{WfiSleep, reboot};
 pub use led::Ws2812;
 pub use nvm::FlashNvm;
 pub use pins::route_uart0;
-pub use program::Generated;
+pub use takt_mcu_program::Generated;
 pub use tick::{SystimerTick, on_timer_interrupt};
-pub use uart::Telemetry;
+pub use uart::{Telemetry, UsbJtag, telemetry};
 
 /// Der Kerntakt in Hertz, wie `esp_hal::init` ihn mit `CpuClock::max()` setzt.
 pub const CORE_HZ: u32 = 160_000_000;

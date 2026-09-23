@@ -1,0 +1,22 @@
+[package]
+name = "takt-mcu-program"
+version = "0.1.0"
+description = "Takt: das erzeugte Programm hinter seiner C-ABI (12.1, 12.3)"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.86"
+
+# Eigener Workspace wie die Board-Crates: `extern "C"` braucht `unsafe`,
+# und `forbid` (13.4) laesst sich nicht lokal aufheben. 9.5 fuehrt den
+# Rahmen in der Trusted Computing Base.
+[workspace]
+
+[dependencies]
+takt-rt-baremetal = { path = "../takt-rt-baremetal" }
+takt-rt-core = { path = "../takt-rt-core" }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"

@@ -41,4 +41,3 @@ pub fn route_uart0(tx_pin: GPIO7<'static>, rx_pin: GPIO17<'static>) {
     rx.set_input_enable(true);
     esp_hal::gpio::InputSignal::U0RXD.connect_to(&rx);
 }
-
