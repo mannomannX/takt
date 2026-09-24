@@ -25,18 +25,23 @@ pub mod size;
 pub mod stack;
 pub mod walk;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use takt_diag::Diagnostic;
 
-use crate::Program;
 use crate::analysis::facts::Facts;
 use crate::analysis::walk::{CheckCause, ImplicitCheck, Walk};
-use crate::machine::Machine;
-use crate::types::{Range, Type};
+use crate::expr::{CheckedKind, Expr, ExprKind};
+use crate::machine::{Guard, Machine, MachineKind, TransTrigger};
+use crate::stmt::{Block, Method, Observe, Place, Stmt, StmtKind};
+use crate::types::{Range, RangeOrigin, Type};
+use crate::{FnId, Program, TypeId};
 
 /// Code der Warnungen ueber implizite Pruefungen (Pruefung 24).
 pub const SC24: &str = "SC-24";
+
+/// Code der Pruefung 9: Guards aus `FAULTED` ohne implizite Pruefung.
+pub const SC9: &str = "SC-9";
 
 /// Was die Analyse ueber ein Programm herausgefunden hat.
 #[derive(Clone, Debug, Default)]
@@ -52,6 +57,8 @@ pub struct Report {
     pub narrowed: u32,
     /// Ausdruecke mit Integer-Darstellung insgesamt.
     pub integer_exprs: u32,
+    /// Die verbliebenen Pruefungen, je Stelle eine.
+    pub sites: Vec<ImplicitCheck>,
 }
 
 impl Report {
@@ -85,9 +92,17 @@ pub fn analyze(program: &mut Program) -> (Vec<Diagnostic>, Report) {
         proofs.add(&w.proven, &w.ranges);
         all.extend(w.checks);
     }
+    for id in reachable_fns(program) {
+        let w = analyze_fn(program, &program.fns[id.index()]);
+        proofs.add(&w.proven, &w.ranges);
+        all.extend(w.checks);
+    }
+    // Gewarnt wird im Programm des Nutzers, nicht im Prelude.
+    let user: BTreeSet<u32> = program.machines.iter().map(|m| m.span.file.0).collect();
     // Was bewiesen ist, verschwindet aus der MIR; die Intervalle bleiben als
     // Annotation stehen (3.4).
     prove::apply(program, &proofs);
+    diags.extend(faulted_guards(program));
 
     // Eine Pruefung ist eine *Stelle* im Programm, keine Ausfuehrung: Ein
     // abgerollter Schleifenkoerper besucht dieselbe Stelle mehrfach, zaehlt
@@ -107,13 +122,14 @@ pub fn analyze(program: &mut Program) -> (Vec<Diagnostic>, Report) {
         if c.relational {
             report.relational += 1;
         }
-        if c.warns {
+        if c.warns && user.contains(&c.span.file.0) {
             report.warned += 1;
             diags.push(Diagnostic::warning(SC24, c.span, message(c.cause)).with_suggestion(
                 "Range deklarieren, `clamp` benutzen oder eine range-typisierte Zwischengroesse einfuehren (3.4)",
             ));
         }
     }
+    report.sites = seen.values().copied().collect();
     // Ursachen ohne Fund erscheinen mit 0, damit die Zeile stabil bleibt.
     for c in [CheckCause::Declared, CheckCause::Index, CheckCause::Convert, CheckCause::Arith] {
         report.checks.entry(c.name()).or_default();
@@ -123,6 +139,45 @@ pub fn analyze(program: &mut Program) -> (Vec<Diagnostic>, Report) {
     report.narrowed = n.0;
     report.integer_exprs = n.1;
     (diags, report)
+}
+
+/// Pruefung 9 (5.3): Ein Guard aus `FAULTED` darf nicht faulten — was die
+/// Analyse nicht wegbeweist, ist ein Fehler.
+fn faulted_guards(program: &Program) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for m in &program.machines {
+        if matches!(m.kind, MachineKind::Template) || m.states.is_empty() {
+            continue;
+        }
+        for t in &m.faulted.transitions {
+            if let TransTrigger::When(Guard::Expr(e)) = &t.trigger
+                && has_check(e)
+            {
+                out.push(
+                    Diagnostic::error(
+                        SC9,
+                        t.span,
+                        format!("Guard aus `FAULTED` von `{}` enthaelt eine implizite Pruefung", m.name),
+                    )
+                    .with_suggestion(
+                        "Channel nur unter `.valid` oder mit `.or(...)` lesen; keine Range- oder \
+                         Arithmetik-Pruefung (5.3)",
+                    ),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// Bleibt im Ausdruck eine Pruefung stehen?
+fn has_check(e: &Expr) -> bool {
+    let own = match &e.kind {
+        ExprKind::Checked { kind: CheckedKind::Range(r), .. } => r.origin != RangeOrigin::Proven,
+        ExprKind::Checked { .. } => true,
+        _ => false,
+    };
+    own || e.children().iter().any(|c| has_check(c))
 }
 
 /// Die Meldung zu einer Ursache.
@@ -203,11 +258,146 @@ fn machine_entry(program: &Program, m: &Machine) -> Facts {
 
 /// Deklarierte Range je Variable, indiziert wie `Machine::vars`.
 fn declared_ranges(program: &Program, m: &Machine) -> Vec<Option<Range>> {
-    m.vars
-        .iter()
-        .map(|v| match program.types.list.get(v.ty.index()) {
-            Some(Type::Int { range, .. } | Type::Float { range, .. } | Type::Duration { range }) => *range,
-            _ => None,
-        })
-        .collect()
+    m.vars.iter().map(|v| range_of(program, v.ty)).collect()
+}
+
+fn range_of(program: &Program, ty: TypeId) -> Option<Range> {
+    match program.types.list.get(ty.index()) {
+        Some(Type::Int { range, .. } | Type::Float { range, .. } | Type::Duration { range }) => *range,
+        _ => None,
+    }
+}
+
+/// Eine Funktion: die Parameter tragen ihre Range hinein (3.4), die
+/// lokalen Variablen werden im Rumpf zugewiesen.
+fn analyze_fn<'p>(program: &'p Program, f: &'p crate::fns::Fn) -> Walk<'p> {
+    let declared = f.locals.iter().map(|v| range_of(program, v.ty)).collect();
+    let mut w = Walk::new(program, declared);
+    let mut facts = Facts::entry();
+    for (i, v) in f.locals.iter().enumerate().take(f.params.len()) {
+        let start = range_of(program, v.ty).map_or(domain::Interval::Top, |r| domain::Interval::from_range(&r));
+        facts.declare(crate::VarId(i as u32), start);
+    }
+    w.block(&f.body, &mut facts);
+    w
+}
+
+/// Funktionen, die Maschinencode erreicht; Bibliothekscode, den niemand
+/// ruft, gehoert nicht zum Programm (Lemma 3.4).
+fn reachable_fns(program: &Program) -> Vec<FnId> {
+    let mut calls = Vec::new();
+    for m in &program.machines {
+        for init in m.vars.iter().filter_map(|v| v.init.as_ref()) {
+            calls_in(init, program, &mut calls);
+        }
+        for h in m.handlers.iter().chain(m.states.iter().flat_map(|s| &s.handlers)) {
+            if let Some(g) = &h.guard {
+                calls_in(g, program, &mut calls);
+            }
+        }
+        for t in m.faulted.transitions.iter().chain(m.states.iter().flat_map(|s| &s.transitions)) {
+            match &t.trigger {
+                TransTrigger::When(Guard::Expr(e)) | TransTrigger::After(e) => calls_in(e, program, &mut calls),
+                TransTrigger::When(Guard::Match { subject, .. }) => calls_in(subject, program, &mut calls),
+                TransTrigger::When(Guard::Next { .. }) => {}
+            }
+        }
+        for b in m.blocks() {
+            calls_in_block(b, program, &mut calls);
+        }
+    }
+    let mut seen = vec![false; program.fns.len()];
+    let mut out = Vec::new();
+    while let Some(f) = calls.pop() {
+        if std::mem::replace(&mut seen[f.index()], true) {
+            continue;
+        }
+        out.push(f);
+        let def = &program.fns[f.index()];
+        for init in def.locals.iter().filter_map(|v| v.init.as_ref()) {
+            calls_in(init, program, &mut calls);
+        }
+        calls_in_block(&def.body, program, &mut calls);
+    }
+    out.sort_by_key(|f| f.index());
+    out
+}
+
+fn calls_in_block(b: &Block, program: &Program, out: &mut Vec<FnId>) {
+    b.walk(&mut |s| {
+        if let StmtKind::MethodCall { method: Method::Block(f), .. } = &s.kind {
+            out.push(*f);
+        }
+        for e in stmt_exprs(s) {
+            calls_in(e, program, out);
+        }
+    });
+}
+
+fn calls_in(e: &Expr, program: &Program, out: &mut Vec<FnId>) {
+    match &e.kind {
+        ExprKind::Call { callee, .. } => out.push(*callee),
+        ExprKind::BlockInit { block, .. } => {
+            let b = &program.blocks[block.index()];
+            out.extend(b.step.iter().chain(&b.methods).copied());
+        }
+        _ => {}
+    }
+    for c in e.children() {
+        calls_in(c, program, out);
+    }
+}
+
+/// Die Ausdruecke einer Anweisung, ohne die der Unterbloecke.
+fn stmt_exprs(s: &Stmt) -> Vec<&Expr> {
+    match &s.kind {
+        StmtKind::Assign { target, value } => {
+            let mut v = place_exprs(target);
+            v.push(value);
+            v
+        }
+        StmtKind::Check { cond, confirm, .. } => {
+            let mut v = vec![cond];
+            v.extend(confirm.iter().map(|c| &c.duration));
+            v
+        }
+        StmtKind::If { cond, .. } => vec![cond],
+        StmtKind::ForRange { count, .. } => vec![count],
+        StmtKind::ForEach { iter, .. } => vec![iter],
+        StmtKind::Match { subject, .. } => vec![subject],
+        StmtKind::Every { period, .. } => vec![period],
+        StmtKind::At { time, .. } => vec![time],
+        StmtKind::Send { value, .. } | StmtKind::Return(value) => vec![value],
+        StmtKind::MethodCall { target, args, .. } => {
+            let mut v = target.as_ref().map(place_exprs).unwrap_or_default();
+            v.extend(args);
+            v
+        }
+        StmtKind::Job { args, .. } => args.iter().collect(),
+        StmtKind::Observe(Observe::Alert { cond, confirm, .. }) => {
+            let mut v = vec![cond];
+            v.extend(confirm.iter().map(|c| &c.duration));
+            v
+        }
+        StmtKind::Observe(Observe::Measure { value, .. }) => vec![value],
+        StmtKind::Observe(Observe::Verify { cond, .. }) => vec![cond],
+        _ => Vec::new(),
+    }
+}
+
+fn place_exprs(p: &Place) -> Vec<&Expr> {
+    match p {
+        Place::Var(_) | Place::Output(_) | Place::Port(_) => Vec::new(),
+        Place::Field(b, _) => place_exprs(b),
+        Place::Index(b, i) => {
+            let mut v = place_exprs(b);
+            v.push(i);
+            v
+        }
+        Place::Index2(b, r, c) => {
+            let mut v = place_exprs(b);
+            v.extend([r, c]);
+            v
+        }
+    }
 }

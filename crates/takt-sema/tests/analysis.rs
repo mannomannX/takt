@@ -473,7 +473,9 @@ fn the_protocol_case_keeps_its_implicit_checks_low() {
 
     let r = out.report;
     assert!(r.total_checks() <= 4, "Protokollcode bleibt unter vier impliziten Pruefungen: {:?}", r.checks);
-    assert_eq!(r.warned, 0, "keine davon steht in einer Schleife oder einem Aktionsblock: {:?}", r.checks);
+    // `b[from + i]` in der CRC-Schleife ist relational (`from + i < len`);
+    // das beweist erst ein Oktagon (plan/m6.md 2.12).
+    assert_eq!(r.warned, 1, "nur der Ring-Index der CRC-Schleife steht in einer Schleife: {:?}", r.checks);
     assert!(r.narrowed > 0, "die Verengung greift auch hier: {} von {}", r.narrowed, r.integer_exprs);
 }
 
@@ -694,4 +696,159 @@ machine m with budget = {ram = 256}:
 ",
     );
     assert!(!warnings.iter().any(|w| w.contains("SC-12")), "SC-12 meldet sich ungefragt:\n{}", warnings.join("\n"));
+}
+
+#[test]
+fn a_break_under_or_refines_the_rest_of_the_loop() {
+    // De Morgan: hinter `if a or b: break` gilt `not a and not b`.
+    let (_, r, _) = compile(
+        "machine m:
+    var room : int in 0..128 = 100
+    initial RUN
+    state RUN:
+        loop:
+            var sent : int in 0..128 = 0
+            for i in range(200):
+                if sent >= room or i > 150:
+                    break
+                sent = sent + 1
+            n = sent % 100
+",
+    );
+    assert_eq!(count(&r, "Declared"), 0, "sent < room <= 128, also passt sent + 1: {:?}", r.checks);
+}
+
+#[test]
+fn the_length_of_a_collection_lies_within_its_capacity() {
+    let (_, r, _) = compile(
+        "machine m:
+    var s : bytes<16> = default
+    initial RUN
+    state RUN:
+        loop:
+            var l : int in 0..16 = s.len
+            n = l
+",
+    );
+    assert_eq!(count(&r, "Declared"), 0, "`len` liegt in 0..16: {:?}", r.checks);
+}
+
+#[test]
+fn a_conversion_is_checked_only_where_the_source_can_exceed_the_target() {
+    let (_, fits, _) = compile(
+        "machine m:
+    var c : int in 1..255 = 7
+    initial RUN
+    state RUN:
+        loop:
+            var b : u8 = c as u8
+            n = (b as int) % 100
+",
+    );
+    assert_eq!(count(&fits, "Convert"), 0, "1..255 passt in u8: {:?}", fits.checks);
+    let (_, wide, _) = compile(
+        "machine m:
+    var w : int in 0..1000 = 7
+    initial RUN
+    state RUN:
+        loop:
+            var b : u8 = w as u8
+            n = (b as int) % 100
+",
+    );
+    assert_eq!(count(&wide, "Convert"), 1, "0..1000 passt nicht: {:?}", wide.checks);
+}
+
+#[test]
+fn a_shift_amount_is_checked_only_outside_the_width() {
+    let body = |range: &str| {
+        format!(
+            "machine m:
+    var k : int in {range} = 3
+    var s : u16 = 1
+    initial RUN
+    state RUN:
+        loop:
+            s = s << k
+            n = (s >> 9) as int
+"
+        )
+    };
+    let (_, fits, _) = compile(&body("0..15"));
+    assert_eq!(count(&fits, "Arith"), 0, "0..15 ist ein gueltiger Betrag: {:?}", fits.checks);
+    let (_, wide, _) = compile(&body("0..20"));
+    assert_eq!(count(&wide, "Arith"), 1, "20 ist keiner: {:?}", wide.checks);
+}
+
+#[test]
+fn a_divisor_is_checked_only_where_it_can_be_zero() {
+    let body = |range: &str| {
+        format!(
+            "machine m:
+    var d : int in {range} = 2
+    initial RUN
+    state RUN:
+        loop:
+            n = 50 / d
+"
+        )
+    };
+    let (_, safe, _) = compile(&body("1..10"));
+    assert_eq!(count(&safe, "Arith"), 0, "1..10 enthaelt keine Null: {:?}", safe.checks);
+    let (_, risky, _) = compile(&body("0..10"));
+    assert_eq!(count(&risky, "Arith"), 1, "0..10 enthaelt sie: {:?}", risky.checks);
+}
+
+#[test]
+fn an_overflow_is_checked_in_narrow_types_and_never_warned_in_wide_ones() {
+    let (_, narrow, w_narrow) = compile(
+        "machine m:
+    var a : u8 = 200
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(3):
+                a = a + 1
+            n = (a as int) % 100
+",
+    );
+    assert_eq!(count(&narrow, "Arith"), 1, "u8 + 1 kann ueberlaufen: {:?}", narrow.checks);
+    assert!(w_narrow.iter().any(|w| w.contains("SC-24")), "in der Schleife warnt es: {w_narrow:?}");
+    let (_, wide, w_wide) = compile(
+        "machine m:
+    var t : Duration = 0 s
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(3):
+                t = t + tick
+            n = 1
+",
+    );
+    assert_eq!(count(&wide, "Arith"), 1, "eine Dauer ist i64 und kann ueberlaufen: {:?}", wide.checks);
+    assert!(!w_wide.iter().any(|w| w.contains("SC-24")), "i64-Ueberlauf warnt nicht (Pruefung 4): {w_wide:?}");
+}
+
+#[test]
+fn a_proven_range_check_stays_in_the_mir_as_proven() {
+    use takt_mir::expr::{CheckedKind, ExprKind};
+    use takt_mir::stmt::StmtKind;
+    use takt_mir::types::RangeOrigin;
+    let (p, r, _) = compile(
+        "machine m:
+    var a : int in 0..9 = 5
+    initial RUN
+    state RUN:
+        loop:
+            n = a + 1
+",
+    );
+    assert_eq!(count(&r, "Declared"), 0, "0..9 plus 1 liegt in 0..99: {:?}", r.checks);
+    let m = p.machines.iter().find(|m| m.name == "m").expect("Maschine");
+    let stmt = &m.states[0].loop_block.stmts[0];
+    let StmtKind::Assign { value, .. } = &stmt.kind else { panic!("Zuweisung erwartet: {stmt:?}") };
+    let ExprKind::Checked { kind: CheckedKind::Range(range), .. } = &value.kind else {
+        panic!("die bewiesene Range bleibt als Knoten stehen: {value:?}")
+    };
+    assert_eq!(range.origin, RangeOrigin::Proven);
 }

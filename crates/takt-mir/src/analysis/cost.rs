@@ -10,11 +10,11 @@
 
 use crate::Program;
 use crate::TypeId;
-use crate::expr::{BinaryOp, Expr, ExprKind, MatOp, Repr};
+use crate::expr::{BinaryOp, CheckedKind, Expr, ExprKind, MatOp, Repr};
 use crate::fns::{CostClass, CostVec};
 use crate::machine::{Budget, Machine};
 use crate::stmt::{Block, Method, Place, Stmt, StmtKind};
-use crate::types::{FloatWidth, Type};
+use crate::types::{FloatWidth, RangeOrigin, Type};
 
 /// Rechnet je Maschine `B_m` (Aktivierung) und `F_m` (Fault-Pfad) und traegt
 /// beide in `Machine::budget` ein.
@@ -197,6 +197,7 @@ fn expr_cost(e: &Expr, types: &[Type], natives: &[CostVec]) -> CostVec {
         ExprKind::Call { .. } => CostVec { call: 1, ..CostVec::default() },
         ExprKind::NativeCall { native, .. } => natives.get(native.index()).copied().unwrap_or_default(),
         ExprKind::Intrinsic { .. } => class_of(e, types) + CostVec { call: 1, ..CostVec::default() },
+        ExprKind::Checked { kind: CheckedKind::Range(r), .. } if r.origin == RangeOrigin::Proven => CostVec::default(),
         // Eine implizite Pruefung ist ein Vergleich und ein Sprung.
         ExprKind::Checked { .. } => class_of(e, types),
         _ => CostVec::default(),

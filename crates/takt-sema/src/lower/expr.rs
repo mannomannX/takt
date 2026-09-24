@@ -2068,14 +2068,7 @@ impl Lowerer<'_> {
             self.error(SC3, index.span, format!("Index muss eine Ganzzahl sein, gefunden `{n}`"));
             return None;
         }
-        let proven = match (&i.kind, len) {
-            (ExprKind::Int(v), Some(n)) => *v >= 0 && (*v as u64) < u64::from(n),
-            (_, Some(n)) => self.range_of(i.ty).is_some_and(|r| match (r.lo, r.hi) {
-                (takt_mir::types::Const::Int(lo), takt_mir::types::Const::Int(hi)) => lo >= 0 && hi < i64::from(n),
-                _ => false,
-            }),
-            _ => false,
-        };
+        let proven = self.index_proven(&i, len);
         let e = Expr::new(ExprKind::Index { base: Box::new(b), index: Box::new(i) }, elem, span);
         let _ = raw;
         if proven {
@@ -2087,6 +2080,28 @@ impl Lowerer<'_> {
                 span,
             ))
         }
+    }
+
+    /// Liegt der Index beweisbar in `0..len-1`? Eine Laenge, die erst zur
+    /// Laufzeit feststeht (`None`), beweist nichts.
+    pub fn index_proven(&mut self, i: &Expr, len: Option<u32>) -> bool {
+        match (&i.kind, len) {
+            (ExprKind::Int(v), Some(n)) => *v >= 0 && (*v as u64) < u64::from(n),
+            (_, Some(n)) => self.range_of(i.ty).is_some_and(|r| match (r.lo, r.hi) {
+                (takt_mir::types::Const::Int(lo), takt_mir::types::Const::Int(hi)) => lo >= 0 && hi < i64::from(n),
+                _ => false,
+            }),
+            _ => false,
+        }
+    }
+
+    /// Der Index einer Zuweisungsstelle, `Checked{Index}` wenn nicht beweisbar.
+    pub fn index_checked(&mut self, i: Expr, len: Option<u32>) -> Expr {
+        if self.index_proven(&i, len) {
+            return i;
+        }
+        let (ty, span) = (i.ty, i.span);
+        Expr::new(ExprKind::Checked { expr: Box::new(i), kind: CheckedKind::Index { len: len.unwrap_or(0) } }, ty, span)
     }
 
     fn array(&mut self, items: &[ast::Expr], hint: Option<TypeId>, span: Span) -> Option<Expr> {
@@ -2493,12 +2508,41 @@ impl Lowerer<'_> {
             },
             BinaryOp::And | BinaryOp::Or => unreachable!(),
         };
-        let shift_checked = matches!(mop, BinaryOp::Shl | BinaryOp::Shr) && !matches!(b.kind, ExprKind::Int(_));
-        let e = Expr::new(ExprKind::Binary { op: mop, lhs: Box::new(a), rhs: Box::new(b) }, result, span);
-        if shift_checked {
-            Some(Expr::new(ExprKind::Checked { expr: Box::new(e), kind: CheckedKind::Shift }, result, span))
+        Some(self.arith_checked(mop, a, b, result, span))
+    }
+
+    /// 4.1: Ueberlauf, Division durch null und Schiebebetrag faulten; die
+    /// Knoten stehen um Ergebnis, Divisor und Operation, bis die
+    /// Intervallanalyse sie wegbeweist (3.4).
+    pub fn arith_checked(&mut self, mop: BinaryOp, a: Expr, b: Expr, result: TypeId, span: Span) -> Expr {
+        let literal = |e: &Expr| matches!(e.kind, ExprKind::Int(_) | ExprKind::Duration(_));
+        let integral = matches!(self.ty(result), Type::Int { .. } | Type::Duration { .. });
+        let arith =
+            integral && matches!(mop, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem);
+        let folded = literal(&a) && literal(&b);
+        let bits = match self.ty(result) {
+            Type::Int { width, .. } => i64::from(width.bits()),
+            _ => 64,
+        };
+        let shift_checked = matches!(mop, BinaryOp::Shl | BinaryOp::Shr)
+            && !matches!(b.kind, ExprKind::Int(v) if (0..bits).contains(&v));
+        let b = if arith && matches!(mop, BinaryOp::Div | BinaryOp::Rem) && !literal(&b) {
+            let (ty, at) = (b.ty, b.span);
+            Expr::new(ExprKind::Checked { expr: Box::new(b), kind: CheckedKind::DivZero }, ty, at)
         } else {
-            Some(e)
+            b
+        };
+        let e = Expr::new(ExprKind::Binary { op: mop, lhs: Box::new(a), rhs: Box::new(b) }, result, span);
+        let kind = if shift_checked {
+            Some(CheckedKind::Shift)
+        } else if arith && !folded {
+            Some(CheckedKind::Overflow)
+        } else {
+            None
+        };
+        match kind {
+            Some(kind) => Expr::new(ExprKind::Checked { expr: Box::new(e), kind }, result, span),
+            None => e,
         }
     }
 

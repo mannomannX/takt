@@ -66,6 +66,8 @@ pub struct Ctx<'a> {
     pub entry_reg: Option<Reg>,
     /// Blaetter, deren Fault-Trampolin am Ende des Schritts entsteht.
     pub fault_leaves: Vec<takt_mir::StateId>,
+    /// Ein Fault-Ziel ausserhalb des Schritts (Trigger-Phase, 7.5).
+    pub fault: Option<String>,
 }
 
 impl<'a> Ctx<'a> {
@@ -86,6 +88,7 @@ impl<'a> Ctx<'a> {
             end: None,
             entry_reg: None,
             fault_leaves: Vec::new(),
+            fault: None,
         }
     }
 
@@ -116,6 +119,7 @@ impl<'a> Ctx<'a> {
             state: self.state,
             program: self.program,
             machine_index: self.machine_index,
+            fault: self.fault.clone(),
         }
     }
 
@@ -160,6 +164,8 @@ pub struct StateVars<'a> {
     pub program: &'a Program,
     /// Die Nummer der Maschine im Programm (`Ctx::machine_index`).
     pub machine_index: u32,
+    /// Ein Fault-Ziel ausserhalb des Schritts (`Ctx::fault`).
+    pub fault: Option<String>,
 }
 
 impl StateVars<'_> {
@@ -196,6 +202,9 @@ pub fn image_slot(
 
 impl Vars for StateVars<'_> {
     fn fault_label(&self) -> Option<String> {
+        if let Some(f) = &self.fault {
+            return Some(f.clone());
+        }
         if self.shared {
             return Some(format!("fault_{}_any{}", self.machine.name, self.tag));
         }
@@ -1165,6 +1174,36 @@ fn map_method_call(
     Ok(())
 }
 
+/// Die Indexpruefung einer Zuweisungsstelle (4.1): nur unter einem
+/// `Checked{Index}`-Knoten; die Grenze ist die Laenge, bei Arrays die Zahl.
+fn index_guard(
+    index: &Expr,
+    i: &Lowered,
+    ty: &LlvmType,
+    ptr: &Reg,
+    vars: &dyn Vars,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    if !matches!(index.kind, ExprKind::Checked { kind: takt_mir::expr::CheckedKind::Index { .. }, .. }) {
+        return Ok(());
+    }
+    let bound = match ty {
+        LlvmType::Array(_, n) => n.to_string(),
+        LlvmType::Struct(_) => {
+            let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 0"));
+            let n = m.inst(&format!("load i32, ptr {at}"));
+            m.inst(&format!("sext i32 {n} to {}", i.ty)).to_string()
+        }
+        _ => return Err(NotYet { what: "Index auf diesem Typ" }),
+    };
+    let target = vars.fault_label().ok_or(NotYet { what: "Indexpruefung ohne Fault-Pfad" })?;
+    let ok = m.inst(&format!("icmp ult {} {}, {bound}", i.ty, i.value));
+    let go_on = format!("index_ok{}", m.next_label());
+    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
+    m.label(&go_on);
+    Ok(())
+}
+
 fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, LlvmType), NotYet> {
     match target {
         // 12.10: Die Adresse steht in der Deklaration; ob der Zugriff
@@ -1202,8 +1241,7 @@ fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, Llvm
             let LlvmType::Array(elem, _) = &ty else { return Err(NotYet { what: "Index auf Nicht-Array" }) };
             let vars = ctx.vars();
             let i = lower_expr(index, ctx.program, m, &vars)?;
-            // Die Grenze prueft der `Checked`-Knoten der MIR (4.1); hier
-            // steht nur der Zugriff.
+            index_guard(index, &i, &ty, &ptr, &vars, m)?;
             let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, {} {}", i.ty, i.value));
             Ok((at, (**elem).clone()))
         }
@@ -1687,9 +1725,9 @@ fn fn_place<V: Slots>(target: &Place, ctx: &mut FnCtx<'_, V>, m: &mut Module) ->
         Place::Index(base, index) => {
             let (ptr, ty) = fn_place(base, ctx, m)?;
             let i = lower_expr(index, ctx.program, m, &ctx.vars)?;
+            index_guard(index, &i, &ty, &ptr, &ctx.vars, m)?;
             // Bei einer Sammlung liegt das Element im `data`-Feld (3.9),
-            // bei einem Array unmittelbar. Die Grenze prueft der
-            // `Checked`-Knoten der MIR (4.1).
+            // bei einem Array unmittelbar.
             let (array_ty, data) = match &ty {
                 LlvmType::Struct(_) => {
                     let l = collection::layout_of(&ty).ok_or(NotYet { what: "Index auf diesem Struct" })?;

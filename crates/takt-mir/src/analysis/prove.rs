@@ -11,24 +11,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use takt_diag::Span;
 
 use crate::Program;
-use crate::expr::{Expr, ExprKind};
+use crate::analysis::walk::tag;
+use crate::expr::{CheckedKind, Expr, ExprKind};
 use crate::stmt::{Block, Place, Stmt, StmtKind};
-use crate::types::Range;
+use crate::types::{Range, RangeOrigin};
 
 /// Was der Durchlauf bewiesen hat.
 #[derive(Default)]
 pub struct Proofs {
-    /// Stellen mit erlassener Pruefung.
-    pub dropped: BTreeSet<(u32, u32)>,
+    /// Stellen und Art der erlassenen Pruefungen.
+    pub dropped: BTreeSet<(u32, u32, u8)>,
     /// Bewiesenes Intervall je Stelle.
     pub ranges: BTreeMap<(u32, u32), Range>,
 }
 
 impl Proofs {
     /// Sammelt die Ergebnisse eines Durchlaufs.
-    pub fn add(&mut self, proven: &[Span], ranges: &[(Span, Range)]) {
-        for s in proven {
-            self.dropped.insert(key(*s));
+    pub fn add(&mut self, proven: &[(Span, u8)], ranges: &[(Span, Range)]) {
+        for (s, k) in proven {
+            let (f, at) = key(*s);
+            self.dropped.insert((f, at, *k));
         }
         for (s, r) in ranges {
             self.ranges.insert(key(*s), *r);
@@ -36,8 +38,9 @@ impl Proofs {
     }
 
     /// Ist die Pruefung an dieser Stelle bewiesen?
-    fn is_dropped(&self, s: Span) -> bool {
-        self.dropped.contains(&key(s))
+    fn is_dropped(&self, s: Span, kind: &CheckedKind) -> bool {
+        let (f, at) = key(s);
+        self.dropped.contains(&(f, at, tag(kind)))
     }
 
     /// Das bewiesene Intervall an dieser Stelle.
@@ -181,15 +184,23 @@ fn expr(e: &mut Expr, p: &Proofs) {
         expr(c, p);
     }
     // Eine bewiesene Pruefung faellt weg; der Ausdruck darunter tritt an
-    // ihre Stelle (3.4).
-    if matches!(e.kind, ExprKind::Checked { .. }) && p.is_dropped(e.span) {
-        let ExprKind::Checked { expr: inner, .. } = std::mem::replace(&mut e.kind, ExprKind::Bool(false)) else {
-            unreachable!("gerade geprueft")
-        };
-        let ty = e.ty;
-        *e = *inner;
-        // Der Typ des Ganzen bleibt der der Pruefung: sie hat verengt.
-        e.ty = ty;
+    // ihre Stelle (3.4). Eine Range bleibt als bewiesene stehen: Der
+    // Interpreter prueft sie weiter und meldet einen Verstoss als Fehler
+    // des Compilers, der Codegen laesst sie aus.
+    if let ExprKind::Checked { kind, .. } = &mut e.kind
+        && p.is_dropped(e.span, kind)
+    {
+        if let CheckedKind::Range(r) = kind {
+            r.origin = RangeOrigin::Proven;
+        } else {
+            let ExprKind::Checked { expr: inner, .. } = std::mem::replace(&mut e.kind, ExprKind::Bool(false)) else {
+                unreachable!("gerade geprueft")
+            };
+            let ty = e.ty;
+            *e = *inner;
+            // Der Typ des Ganzen bleibt der der Pruefung: sie hat verengt.
+            e.ty = ty;
+        }
     }
     if e.range.is_none() {
         e.range = p.range_at(e.span);

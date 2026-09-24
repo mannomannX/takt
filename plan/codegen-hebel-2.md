@@ -99,3 +99,34 @@ Nicht über die Größe: Nach P3 steht Takt dort, wo SPARK nach dem Beweis steht
 6. S5, S6, R3 — nach Bedarf, mit Messung.
 
 Jeder Schritt gegen Differenzsuite, Fuzzer, MCU-Rahmen, Größen-Baseline und Board.
+
+## 5. Stand 2026-09-24
+
+Gemessen am UART-Objekt (`test_uart_c6_hw.takt`, `riscv32imac`, `-Os`, Flags aus `toolchain::object_flags`), verifiziert gegen Differenzsuite, Fuzzer, MCU-Rahmen, Größen-Baseline und Board.
+
+| Schritt | Objekt | Befund |
+|---|---|---|
+| Ausgang (erste Runde) | 9 652 | |
+| S4 `minsize`, S3 `examined` einmal je Schritt | 9 432 | −220 Byte; FB-240 |
+| S1 Fault-Trampoline je Gruppe | 9 358 | 17 Blätter in 9 Gruppen; −74 Byte; FB-241. Der Schlüssel ist der erzeugte Code (Ziel, `exit:`-/`saved`-Zustände, `enter:`-Kette), nicht die Kette der verlassenen Zustände — die ist je Blatt verschieden. |
+| S2 Übergang als Daten | — | **Gemessen, verworfen** (FB-245). Die Schrittfunktionen des UART-Programms enthalten 6 Übergangsstellen; eine Stelle sind zwei bis vier komprimierte Stores (`sb`, `sw zero`), ein Tabelleneintrag kostet dasselbe. Gleiche Enden über alle Stellen: 39 IR-Instruktionen, die LLVM ohnehin zusammenlegt. Der Rest des Schritts ist Nutzercode (Handler, Decode, `memmove`). |
+| P1, P2 Prüfungen als Knoten, Intervallanalyse als Beweiser | 9 416 | +58 Byte, weil der Codegen vorher **Prüfungen ausließ** (FB-242): Überlauf in schmalen Typen, Division durch null, Schiebebetrag, `as`-Konversion und der Index einer Zuweisungsstelle standen nur im Interpreter; ein variabler Schiebebetrag erzeugte ungültige IR (`shl i16 x, i64 y`). Jetzt trägt die MIR jede Prüfung als Knoten, die Analyse beweist, was sie kann, und der Codegen setzt den Rest um. Funktionsrümpfe wurden vorher nie analysiert (FB-243). |
+
+### Was P1/P2 konkret gebracht haben
+
+- Analyse (FB-244): De Morgan an `or`/`and` (`if a or b: break` verfeinert beide), `len`/`count` ≤ Kapazität, `>>` und `&` mit Schranken, `tick` als Konstante, Division mit Null-Ausschluss (der Quotient deckt die beiden Seiten neben der Null), Konversion, Schiebebetrag, Überlauf und Divisor als Beweisziele. Ein Überlauf in 64 Bit warnt nicht (Prüfung 4).
+- Bewiesene Range-Prüfungen bleiben als `RangeOrigin::Proven` in der MIR: Der Interpreter prüft sie weiter und meldet einen Verstoß als Fehler des Compilers (`Bug`), nicht als Fault; der Codegen lässt sie aus. Damit prüft die Differenzsuite jeden Beweis mit — dieselbe Absicherung, die P3 braucht.
+- `takt check --report --checks` nennt jede verbliebene Prüfung mit Ursache und Stelle; das ist die Liste der Beweispflichten für P3.
+- Prüfung 9 (Guards aus `FAULTED` ohne implizite Prüfung) läuft nach der Analyse, sonst schlüge sie bei beweisbarer Arithmetik an.
+- Kennzahl: `Valid`/`Missing` zählten als `Arith` (FB-247); jetzt zählen nur die vier Ursachen aus 3.4.
+
+UART nach P2: 42 Prüfungen — 29 `Declared` (Zähler `x += 1` in `0..1_000_000`, Tick-Rand-Invarianten ohne beweisbare Schranke), 12 `Index` (Ringindizes gegen die Laufzeitlänge, 10 davon relational), 1 `Arith` (`tx_stalled_for += tick`, i64), 0 `Convert`. Das ist die Arbeitsliste für P3: Zähler brauchen eine Invariante über Ticks (k-Induktion), Ringindizes eine Relation (`i < s.len`, Oktagon oder SMT).
+
+### Zielbild, korrigiert
+
+Die Tabelle in 2 nahm an, dass P1/P2 Prüfungen *entfernen*; tatsächlich fehlten dem Codegen Prüfungen, und die Analyse hat die neuen sofort wegbewiesen, wo es ging. Der ehrliche Stand: 9 416 Byte, Faktor 3,4 zu C — mit vollständigen Prüfungen. Die verbleibenden 56 Fault-Zweige (31 Range, 7 Überlauf-Instanzen, 4 Konversion, 12 Index, Rest Streams) sind P3-Material; jeder kostet 6–12 Byte.
+
+### Offen
+
+- `NonFinite` und `Domain` für Gleitkomma stehen als Knotenart bereit, aber weder Sema noch Codegen erzeugen sie; der Interpreter faultet bei nicht endlichem Ergebnis (4.2). Dieselbe Lücke wie FB-242, für `float`; die Warnpolitik aus 3.4 passt dort nicht (jede Gleitkommaoperation wäre eine Prüfung ohne Beweisweg).
+- R1, R2, S5, S6, P3, R3 wie in 4.

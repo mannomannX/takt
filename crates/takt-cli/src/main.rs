@@ -305,6 +305,16 @@ fn check(args: &Args) -> bool {
             for line in checked.report.lines() {
                 println!("  {line}");
             }
+            // `--checks`: jede verbliebene Pruefung mit Stelle (3.4).
+            if args.has("--checks") {
+                let mut sites = checked.report.sites.clone();
+                sites.sort_by_key(|c| (c.span.file.0, c.span.start));
+                for c in sites {
+                    let (line, col) = map.line_col(c.span);
+                    let note = if c.warns { " (Schleife oder Aktionsblock)" } else { "" };
+                    println!("  Pruefung {} {line}:{col}{note}", c.cause.name());
+                }
+            }
             if let Some(program) = &checked.program {
                 for line in requirement_lines(&takt_mir::requirements::index(program), &map, None) {
                     println!("  {line}");

@@ -9,9 +9,9 @@ use takt_diag::Span;
 
 use crate::analysis::domain::{Domain, Interval, Intervals};
 use crate::analysis::facts::Facts;
-use crate::expr::{BinaryOp, Expr, ExprKind, UnaryOp};
+use crate::expr::{Accessor, BinaryOp, CheckedKind, Expr, ExprKind, UnaryOp};
 use crate::stmt::{Block, Place, Stmt, StmtKind};
-use crate::types::{Const, Range, Type};
+use crate::types::{Const, IntWidth, Range, Type};
 use crate::{Program, VarId};
 
 /// Ab dieser Zahl abgerollter Anweisungen wird eine Schleife gewidet statt
@@ -68,9 +68,9 @@ pub struct Walk<'p> {
     pub program: &'p Program,
     /// Gefundene implizite Pruefungen.
     pub checks: Vec<ImplicitCheck>,
-    /// Stellen, an denen die Analyse die Pruefung erlassen hat; der zweite
-    /// Durchlauf (`prove`) entfernt dort den Knoten.
-    pub proven: Vec<Span>,
+    /// Stellen und Art der Pruefungen, die die Analyse erlassen hat; der
+    /// zweite Durchlauf (`prove`) streicht sie.
+    pub proven: Vec<(Span, u8)>,
     /// Bewiesenes Intervall je Stelle, fuer die Annotation `Expr::range`.
     pub ranges: Vec<(Span, Range)>,
     /// Tiefe der `for`-Schleifen: entscheidet ueber die Warnung.
@@ -276,9 +276,17 @@ impl<'p> Walk<'p> {
     /// Verfeinert die Fakten an einer Bedingung (3.4).
     fn refine(&mut self, cond: &Expr, taken: bool, f: &mut Facts) {
         match &cond.kind {
+            // De Morgan: `a and b` gilt ganz, `not (a or b)` verneint beide.
+            ExprKind::Binary { op: BinaryOp::And, lhs, rhs } if taken => {
+                self.refine(lhs, true, f);
+                self.refine(rhs, true, f);
+            }
+            ExprKind::Binary { op: BinaryOp::Or, lhs, rhs } if !taken => {
+                self.refine(lhs, false, f);
+                self.refine(rhs, false, f);
+            }
+            ExprKind::Binary { op: BinaryOp::And | BinaryOp::Or, .. } => {}
             ExprKind::Binary { op, lhs, rhs } => {
-                // Im `else`-Zweig gilt die verneinte Bedingung; ist sie
-                // nicht verneinbar (`and`, `or`), verfeinert der Zweig nicht.
                 let effective = if taken { *op } else { negate(*op) };
                 if !taken && effective == *op {
                     return;
@@ -358,6 +366,7 @@ impl<'p> Walk<'p> {
             ExprKind::Int(v) => Interval::point(i128::from(*v)),
             ExprKind::Duration(v) => Interval::point(i128::from(*v)),
             ExprKind::Bool(_) | ExprKind::Float(_) => Interval::Top,
+            ExprKind::Builtin(crate::expr::Builtin::Tick) => Interval::point(i128::from(self.program.config.tick)),
             ExprKind::Var(v) => f.interval(*v),
             ExprKind::Unary { op, expr } => {
                 let i = self.expr(expr, f);
@@ -374,6 +383,8 @@ impl<'p> Walk<'p> {
                     BinaryOp::Mul => a * b,
                     BinaryOp::Div => a / b,
                     BinaryOp::Rem => a % b,
+                    BinaryOp::Shr => shr(a, b),
+                    BinaryOp::BitAnd => bit_and(a, b),
                     _ => Interval::Top,
                 }
             }
@@ -387,10 +398,14 @@ impl<'p> Walk<'p> {
                 let y = self.expr(otherwise, &mut b);
                 Intervals::join(&x, &y)
             }
-            ExprKind::Checked { expr, kind } => {
-                let i = self.expr(expr, f);
-                let relational = relational(expr, f);
-                self.checked(i, kind, e.span, relational)
+            ExprKind::Checked { expr, kind } => self.checked(e, expr, kind, f),
+            // 3.9: Die Laenge liegt zwischen null und der Kapazitaet.
+            ExprKind::Accessor { base, accessor: Accessor::Len | Accessor::Count, args } => {
+                self.expr(base, f);
+                for a in args {
+                    self.expr(a, f);
+                }
+                capacity_of(self.program, base.ty)
             }
             ExprKind::Index { base, index } => {
                 self.expr(base, f);
@@ -429,27 +444,94 @@ impl<'p> Walk<'p> {
     }
 
     /// Eine implizite Pruefung: entfaellt sie, oder bleibt sie stehen?
-    fn checked(&mut self, i: Interval, kind: &crate::expr::CheckedKind, span: Span, relational: bool) -> Interval {
-        use crate::expr::CheckedKind;
+    /// Liefert das Intervall hinter der bestandenen Pruefung.
+    fn checked(&mut self, node: &Expr, inner: &Expr, kind: &CheckedKind, f: &mut Facts) -> Interval {
+        let relational = relational(inner, f);
+        let contained = |i: Interval, r: Interval| i != Interval::Top && i.meet(r) == i;
         let (cause, proven, result) = match kind {
-            CheckedKind::Range(r) => (CheckCause::Declared, i.fits(r), Interval::from_range(r)),
-            CheckedKind::Index { len } => {
-                let r = Interval::Int { lo: 0, hi: i128::from(len.saturating_sub(1)) };
-                (CheckCause::Index, i.meet(r) == i, r)
+            // Validitaet und Wrapper entscheidet die Dominanz im Sema (3.5, 3.8).
+            CheckedKind::Valid | CheckedKind::Missing => return self.expr(inner, f),
+            CheckedKind::Range(r) => {
+                let i = self.expr(inner, f);
+                (CheckCause::Declared, i.fits(r), Interval::from_range(r))
             }
-            CheckedKind::Convert => (CheckCause::Convert, false, Interval::Top),
-            CheckedKind::DivZero | CheckedKind::Overflow | CheckedKind::Shift => (CheckCause::Arith, false, i),
-            _ => (CheckCause::Arith, false, Interval::Top),
+            // Der Knoten umschliesst den Zugriff oder (an einer Stelle) den Index.
+            CheckedKind::Index { len } => {
+                let (i, value) = match &inner.kind {
+                    ExprKind::Index { index, .. } => {
+                        self.expr(inner, f);
+                        (self.eval_only(index, f), Interval::Top)
+                    }
+                    _ => {
+                        let i = self.expr(inner, f);
+                        (i, i)
+                    }
+                };
+                let r = Interval::Int { lo: 0, hi: i128::from(*len) - 1 };
+                (CheckCause::Index, *len > 0 && contained(i, r), if *len > 0 { value.meet(r) } else { value })
+            }
+            CheckedKind::Convert => match &inner.kind {
+                ExprKind::Cast { expr, to } => {
+                    let s = self.expr(expr, f);
+                    let b = self.width_of(*to).map_or(Interval::Top, width_bounds);
+                    (CheckCause::Convert, contained(s, b), s.meet(b))
+                }
+                _ => (CheckCause::Convert, false, self.expr(inner, f)),
+            },
+            CheckedKind::Shift => match &inner.kind {
+                ExprKind::Binary { op, lhs, rhs } => {
+                    let (a, b) = (self.expr(lhs, f), self.expr(rhs, f));
+                    let bits = self.width_of(node.ty).map_or(64, |w| i128::from(w.bits()));
+                    let value = if *op == BinaryOp::Shr { shr(a, b) } else { Interval::Top };
+                    (CheckCause::Arith, contained(b, Interval::Int { lo: 0, hi: bits - 1 }), value)
+                }
+                _ => (CheckCause::Arith, false, self.expr(inner, f)),
+            },
+            // Das rohe Ergebnis zaehlt; `expr` klemmte es auf den Typ.
+            CheckedKind::Overflow => {
+                let i = match &inner.kind {
+                    ExprKind::Binary { op, lhs, rhs } => {
+                        let (a, b) = (self.expr(lhs, f), self.expr(rhs, f));
+                        match op {
+                            BinaryOp::Add => a + b,
+                            BinaryOp::Sub => a - b,
+                            BinaryOp::Mul => a * b,
+                            BinaryOp::Div => a / b,
+                            BinaryOp::Rem => a % b,
+                            _ => Interval::Top,
+                        }
+                    }
+                    _ => self.expr(inner, f),
+                };
+                let b = self.width_of(node.ty).map_or(Interval::Top, width_bounds);
+                (CheckCause::Arith, contained(i, b), i.meet(b))
+            }
+            CheckedKind::DivZero => {
+                let i = self.expr(inner, f);
+                (CheckCause::Arith, !i.contains_zero(), i)
+            }
+            CheckedKind::NonFinite | CheckedKind::Domain => (CheckCause::Arith, false, self.expr(inner, f)),
         };
         if proven {
             // 3.4: „Ist das Intervall des Ausdrucks enthalten → keine
             // Pruefung."
-            self.proven.push(span);
+            self.proven.push((node.span, tag(kind)));
         } else {
-            let warns = self.loop_depth > 0 || self.in_action;
-            self.checks.push(ImplicitCheck { cause, span, warns, relational });
+            // Ein Ueberlauf in 64 Bit warnt nicht (Pruefung 4).
+            let wide = matches!(kind, CheckedKind::Overflow) && self.width_of(node.ty).is_none_or(|w| w.bits() == 64);
+            let warns = !wide && (self.loop_depth > 0 || self.in_action);
+            self.checks.push(ImplicitCheck { cause, span: node.span, warns, relational });
         }
         result
+    }
+
+    /// Die Breite eines Ganzzahl- oder Dauertyps.
+    fn width_of(&self, ty: crate::TypeId) -> Option<IntWidth> {
+        match self.program.types.list.get(ty.index()) {
+            Some(Type::Int { width, .. }) => Some(*width),
+            Some(Type::Duration { .. }) => Some(IntWidth::I64),
+            _ => None,
+        }
     }
 
     /// Was ein Typ ueber seine Werte sagt: die deklarierte Range, sonst die
@@ -464,6 +546,38 @@ impl<'p> Walk<'p> {
             Some(Type::Int { width, .. }) if width.bits() < 64 => width_bounds(*width),
             _ => Interval::Top,
         }
+    }
+}
+
+/// Die Art einer Pruefung als Schluessel; zwei Knoten an derselben Stelle
+/// (Divisor und sein Ueberlauf) bleiben so unterscheidbar.
+pub fn tag(kind: &CheckedKind) -> u8 {
+    match kind {
+        CheckedKind::DivZero => 0,
+        CheckedKind::Overflow => 1,
+        CheckedKind::NonFinite => 2,
+        CheckedKind::Domain => 3,
+        CheckedKind::Index { .. } => 4,
+        CheckedKind::Range(_) => 5,
+        CheckedKind::Convert => 6,
+        CheckedKind::Shift => 7,
+        CheckedKind::Valid => 8,
+        CheckedKind::Missing => 9,
+    }
+}
+
+/// Was `len` und `count` einer Sammlung hoechstens sind (3.9).
+fn capacity_of(p: &Program, ty: crate::TypeId) -> Interval {
+    match p.types.list.get(ty.index()) {
+        Some(Type::Array { len, .. } | Type::Samples { len, .. }) => Interval::point(i128::from(*len)),
+        Some(
+            Type::Bytes { cap }
+            | Type::Vec { cap, .. }
+            | Type::Str { cap }
+            | Type::Line { cap }
+            | Type::Map { cap, .. },
+        ) => Interval::Int { lo: 0, hi: i128::from(*cap) },
+        _ => Interval::Top,
     }
 }
 
@@ -506,6 +620,29 @@ fn negate(op: BinaryOp) -> BinaryOp {
         BinaryOp::Gt => BinaryOp::Le,
         BinaryOp::Ge => BinaryOp::Lt,
         other => other,
+    }
+}
+
+/// `a >> b` fuer nichtnegatives `a`.
+fn shr(a: Interval, b: Interval) -> Interval {
+    match (a, b) {
+        (Interval::Int { lo, hi }, Interval::Int { lo: bl, hi: bh }) if lo >= 0 && bl >= 0 && bh < 127 => {
+            Interval::Int { lo: lo >> bh, hi: hi >> bl }
+        }
+        _ => Interval::Top,
+    }
+}
+
+/// `a & b`: mit einer nichtnegativen Seite hoechstens deren Obergrenze.
+fn bit_and(a: Interval, b: Interval) -> Interval {
+    let cap = |i: Interval| match i {
+        Interval::Int { lo, hi } if lo >= 0 => Some(hi),
+        _ => None,
+    };
+    match (cap(a), cap(b)) {
+        (Some(x), Some(y)) => Interval::Int { lo: 0, hi: x.min(y) },
+        (Some(x), None) | (None, Some(x)) => Interval::Int { lo: 0, hi: x },
+        _ => Interval::Top,
     }
 }
 

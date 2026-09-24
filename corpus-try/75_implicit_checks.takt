@@ -1,0 +1,122 @@
+# 75 — Implizite Pruefungen (4.1): Ueberlauf, Division durch null,
+# Schiebebetrag, `as`-Konversion und der Index einer Zuweisungsstelle
+# faulten im erzeugten Code wie im Interpreter. Was die Intervallanalyse
+# beweist (3.4), prueft niemand mehr: `proven_fine` laeuft ohne einen
+# einzigen Zweig.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output ovf   : int in 0..300 @ hw("o/ovf")   with safe = 0
+output div   : int in 0..300 @ hw("o/div")   with safe = 0
+output shift : int in 0..300 @ hw("o/shift") with safe = 0
+output conv  : int in 0..300 @ hw("o/conv")  with safe = 0
+output idx   : int in 0..300 @ hw("o/idx")   with safe = 0
+output fine  : int in 0..300 @ hw("o/fine")  with safe = 0
+
+machine overflow_u8:
+    fault -> SAFE
+    var a : u8 = 250
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # 250, 252, 254, dann 256: Ueberlauf in `u8` im vierten Tick.
+            a = a + 2
+            ovf = a as int
+
+    state SAFE:
+        enter:
+            ovf = 7
+
+machine div_zero:
+    fault -> SAFE
+    var d : int in 0..3 = 3
+    var q : int in 0..300 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # 12/3, 12/2, 12/1, dann 12/0: Division durch null im vierten Tick.
+            q = 12 / d
+            div = q
+            d = d - 1
+
+    state SAFE:
+        enter:
+            div = 7
+
+machine shift_amount:
+    fault -> SAFE
+    var k : int in 0..20 = 13
+    var s : u16 = 1
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # `<<` wickelt (3.10); der Betrag 16 im vierten Tick faultet.
+            s = s << k
+            shift = (s >> 8) as int
+            k = k + 1
+
+    state SAFE:
+        enter:
+            shift = 7
+
+machine convert_loss:
+    fault -> SAFE
+    var w : int in 0..1000 = 250
+    var b : u8 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # 250, 253, dann 256: passt im dritten Tick nicht mehr in `u8`.
+            b = w as u8
+            conv = b as int
+            w = w + 3
+
+    state SAFE:
+        enter:
+            conv = 7
+
+machine index_write:
+    fault -> SAFE
+    var buf : [4] int = [1, 2, 3, 4]
+    var i   : int in 0..6 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # Der Index 4 im fuenften Tick liegt ausserhalb.
+            buf[i] = i * 10
+            idx = buf[0] + buf[3]
+            i = i + 1
+
+    state SAFE:
+        enter:
+            idx = 7
+
+machine proven_fine:
+    fault -> SAFE
+    var n : int in 0..100 = 0
+    var s : bytes<8> = default
+
+    initial RUN
+
+    state RUN:
+        loop:
+            if n < 100:
+                n = n + 1
+            var m : int in 0..8 = s.len
+            fine = n + m
+
+    state SAFE:
+        enter:
+            fine = 7

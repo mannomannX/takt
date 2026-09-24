@@ -828,6 +828,9 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 let v = self.eval(inner)?;
                 if in_range(&v, r) {
                     Ok(v)
+                } else if r.origin == takt_mir::types::RangeOrigin::Proven {
+                    let text = crate::format::display(&v, None, inner.ty, self);
+                    bug(format!("bewiesene Range verletzt: {text}"))
                 } else {
                     let text = crate::format::display(&v, None, inner.ty, self);
                     Err(self.fault(FaultKind::Range, format!("{text} ausserhalb der Range"), span))

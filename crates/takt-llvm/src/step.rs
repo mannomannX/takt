@@ -2151,12 +2151,20 @@ pub fn trigger_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
         return Ok(());
     }
     let mut ctx = Ctx::new(m, st, p);
+    // Ein Fault in der Trigger-Phase beendet den Lauf, wie ein Trap im
+    // Interpreter: Die Runtime bricht ab (5.4).
+    let fault = format!("fault_{}_triggers", m.name);
+    ctx.fault = Some(fault.clone());
     for (i, t) in mine {
         if let Err(e) = one_trigger(takt_mir::TriggerId(i as u32), t, &mut ctx, module) {
             module.abort(mark);
             return Err(e);
         }
     }
+    module.void_inst("ret void");
+    module.label(&fault);
+    let site = ctx.next_site();
+    module.void_inst(&format!("call void @{}(i32 {}, i32 {site})", crate::abi::Abi::ABORT, ctx.machine_index));
     module.end(None);
     Ok(())
 }
@@ -2377,6 +2385,10 @@ struct EventVars<'a> {
 }
 
 impl crate::expr::Vars for EventVars<'_> {
+    fn fault_label(&self) -> Option<String> {
+        self.inner.fault_label()
+    }
+
     fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<crate::expr::Lowered> {
         self.inner.var(id, m)
     }

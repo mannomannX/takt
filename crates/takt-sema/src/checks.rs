@@ -1279,23 +1279,6 @@ impl Lowerer<'_> {
             }
             // 5.3: damit `FAULTED` nie scheitern kann, duerfen die Guards
             // seiner Transitionen keine impliziten Pruefungen enthalten.
-            for t in &m.faulted.transitions {
-                if let TransTrigger::When(Guard::Expr(e)) = &t.trigger {
-                    if has_checked(e) {
-                        diags.push(
-                            Diagnostic::error(
-                                SC9,
-                                t.span,
-                                format!("Guard aus `FAULTED` von `{}` enthaelt eine implizite Pruefung", m.name),
-                            )
-                            .with_suggestion(
-                                "Channel nur unter `.valid` oder mit `.or(...)` lesen; keine Range- oder \
-                                 Arithmetik-Pruefung (5.3)",
-                            ),
-                        );
-                    }
-                }
-            }
             for (i, s) in m.states.iter().enumerate() {
                 let id = StateId(i as u32);
                 let mut seen = HashSet::new();
@@ -2099,17 +2082,6 @@ pub fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
     let _ = SC8;
 }
 
-/// Enthaelt der Ausdruck eine implizite Pruefung (5.3, Pruefung 9)?
-fn has_checked(e: &Expr) -> bool {
-    let mut found = false;
-    walk_expr(e, &mut |x| {
-        if matches!(x.kind, ExprKind::Checked { .. }) {
-            found = true;
-        }
-    });
-    found
-}
-
 /// Elementtyp eines `stream<E>`.
 fn stream_elem(p: &takt_mir::Program, ty: TypeId) -> Option<TypeId> {
     match p.types.list.get(ty.index()) {
@@ -2247,6 +2219,10 @@ fn walk_guard(e: &Expr, f: &mut impl FnMut(&Expr)) {
 /// Der konstante Abstand einer `at`-Zeit zu `event.t` (7.5); `None`, wenn
 /// die Zeit nicht die Form `event.t + d` hat.
 fn delay_of(time: &Expr) -> Option<i64> {
+    let time = match &time.kind {
+        ExprKind::Checked { expr, .. } => expr.as_ref(),
+        _ => time,
+    };
     let ExprKind::Binary { op: takt_mir::expr::BinaryOp::Add, lhs, rhs } = &time.kind else { return None };
     // `event` ist ein Record, `.t` darum ein Feld — kein `Accessor::T`.
     let is_event_t = |e: &Expr| {

@@ -237,40 +237,12 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Intrinsic { op, args } => intrinsic(*op, args, &want, p, m, vars),
         ExprKind::Decode { record, bytes } => decode(*record, bytes, &want, p, m, vars),
         ExprKind::Slice { base, from, to } => slice(base, from, to, &want, p, m, vars),
-        ExprKind::Index { base, index } => index_of(base, index, &want, p, m, vars),
+        ExprKind::Index { base, index } => index_of(base, index, &want, p, m, vars, false),
         ExprKind::Field { base, field } => field_of(base, *field, &want, p, m, vars),
         ExprKind::Cast { expr, to } => cast(expr, *to, &want, p, m, vars),
         ExprKind::Convert { expr, kind, unit } => convert(expr, *kind, *unit, &want, p, m, vars),
         ExprKind::Accessor { base, accessor: which, args } => access(base, *which, args, &want, p, m, vars),
-        ExprKind::Checked { expr, kind } => {
-            // 3.5: Ein Lesen auf einem ungueltigen Channel ist ein
-            // `SensorFault`. Die Pruefung steht *vor* dem Lesen — der Wert
-            // im Abbild ist bei `Bad` bedeutungslos.
-            if *kind == takt_mir::expr::CheckedKind::Valid
-                && let ExprKind::Input { channel, .. } = &expr.kind
-            {
-                valid_or_fault(*channel, m, vars)?;
-            }
-            let inner = lower(expr, p, m, vars)?;
-            // 4.1: Die uebrigen Pruefungen stehen *hinter* dem Wert — sie
-            // pruefen ihn. Wo M3 sie wegbeweisen konnte, steht hier kein
-            // `Checked`-Knoten (plan/m4.md 4.2), und es entsteht kein
-            // Zweig.
-            runtime_check(kind, &inner, m, vars)?;
-            // `Missing` ist das Auspacken eines `T?`/`T!E` (3.8): Der
-            // Knoten prueft, dass ein Wert da ist, *und* liefert ihn. Der
-            // Zweig in den Fault-Trampolin entsteht in der Maschine; hier
-            // steht das Auspacken, ohne das jeder folgende Zugriff auf den
-            // Wrapper statt auf den Inhalt ginge.
-            if *kind == takt_mir::expr::CheckedKind::Missing
-                && let LlvmType::Struct(_) = &inner.ty
-                && inner.ty != want
-            {
-                let v = m.inst(&format!("extractvalue {} {}, 0", inner.ty, inner.value));
-                return Ok(Lowered { value: v.to_string(), ty: want });
-            }
-            Ok(inner)
-        }
+        ExprKind::Checked { expr, kind } => checked_expr(expr, kind, &want, p, m, vars),
         ExprKind::MatOp { op, args } => crate::matrix::op(*op, args, &want, p, m, vars),
         ExprKind::Index2 { base, row, col } => crate::matrix::index(base, row, col, &want, p, m, vars),
         other => Err(NotYet { what: node_name(other) }),
@@ -812,6 +784,7 @@ fn runtime_check(
 ) -> Result<(), NotYet> {
     use takt_mir::expr::CheckedKind as K;
     let condition = match kind {
+        K::Range(r) if r.origin == takt_mir::types::RangeOrigin::Proven => return Ok(()),
         // Die Range steht am Knoten; beide Grenzen einschliesslich (3.4).
         K::Range(r) => match &value.ty {
             LlvmType::Int(bits) => {
@@ -863,11 +836,11 @@ fn runtime_check(
         // Ein Divisor von null ist ein `ArithmeticFault` (4.1). Geprueft
         // wird der *Divisor*; die MIR setzt den Knoten um ihn.
         K::DivZero => m.inst(&format!("icmp ne {} {}, 0", value.ty, value.value)).to_string(),
-        // Ueberlauf, Domaene und Konversion brauchen den Operator, den der
-        // Knoten nicht nennt — sie kommen mit dem Kostenmodell, das sie
-        // ohnehin braucht. Bis dahin steht hier kein Zweig, und das ist
-        // sichtbar: Der Knoten wird gemeldet, nicht uebergangen.
-        K::Overflow | K::NonFinite | K::Domain | K::Convert | K::Shift => return Ok(()),
+        // Ueberlauf, Schiebebetrag und Konversion brauchen die Operanden;
+        // `checked_expr` setzt sie um.
+        K::Overflow | K::NonFinite | K::Domain | K::Convert | K::Shift => {
+            return Err(NotYet { what: "Pruefung ohne Operanden" });
+        }
         // `Valid` steht vor dem Wert (siehe oben), `Missing` ist das
         // Auspacken (3.8).
         K::Valid | K::Missing => return Ok(()),
@@ -879,6 +852,198 @@ fn runtime_check(
     m.void_inst(&format!("br i1 {condition}, label %{go_on}, label %{target}"));
     m.label(&go_on);
     Ok(())
+}
+
+/// Ein Zweig in den Fault-Trampolin, wenn `ok` falsch ist.
+fn guard(ok: &str, what: &str, target: &str, m: &mut Module) {
+    let ok = m.inst(ok);
+    let go_on = format!("geprueft_{what}_{}", m.next_label());
+    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
+    m.label(&go_on);
+}
+
+/// Ein `Checked`-Knoten (4.1): die Pruefung vor dem Wert, dann der Wert.
+/// Wo die Analyse sie wegbewiesen hat, steht kein Knoten (3.4).
+fn checked_expr(
+    inner: &Expr,
+    kind: &takt_mir::expr::CheckedKind,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    use takt_mir::expr::CheckedKind as K;
+    match kind {
+        // 3.5: Die Pruefung steht *vor* dem Lesen — der Wert im Abbild ist
+        // bei `Bad` bedeutungslos.
+        K::Valid => {
+            if let ExprKind::Input { channel, .. } = &inner.kind {
+                valid_or_fault(*channel, m, vars)?;
+            }
+            lower(inner, p, m, vars)
+        }
+        // 3.8: `Missing` prueft, dass ein Wert da ist, *und* packt ihn aus.
+        K::Missing => {
+            let x = lower(inner, p, m, vars)?;
+            if let LlvmType::Struct(_) = &x.ty
+                && x.ty != *want
+            {
+                let v = m.inst(&format!("extractvalue {} {}, 0", x.ty, x.value));
+                return Ok(Lowered { value: v.to_string(), ty: want.clone() });
+            }
+            Ok(x)
+        }
+        K::Index { .. } => match &inner.kind {
+            ExprKind::Index { base, index } => index_of(base, index, want, p, m, vars, true),
+            // Der Index einer Zuweisungsstelle: die Stelle prueft.
+            _ => lower(inner, p, m, vars),
+        },
+        K::Overflow => match &inner.kind {
+            ExprKind::Binary { op, lhs, rhs } => overflow_checked(*op, lhs, rhs, want, p, m, vars),
+            _ => Err(NotYet { what: "Ueberlaufpruefung ohne Operator" }),
+        },
+        K::Shift => match &inner.kind {
+            ExprKind::Binary { op, lhs, rhs } => shift_checked(*op, lhs, rhs, want, p, m, vars),
+            _ => Err(NotYet { what: "Schiebepruefung ohne Operator" }),
+        },
+        K::Convert => match &inner.kind {
+            ExprKind::Cast { expr, to } => convert_checked(expr, *to, want, p, m, vars),
+            _ => Err(NotYet { what: "Konversionspruefung ohne `as`" }),
+        },
+        K::Range(_) | K::DivZero | K::NonFinite | K::Domain => {
+            let x = lower(inner, p, m, vars)?;
+            runtime_check(kind, &x, m, vars)?;
+            Ok(x)
+        }
+    }
+}
+
+/// `+`, `-`, `*`, `/`, `%` mit Ueberlaufpruefung (4.1). `MIN % -1` ist
+/// null und kein Ueberlauf; der Divisor wird dafuer auf eins gesetzt.
+fn overflow_checked(
+    op: BinaryOp,
+    lhs: &Expr,
+    rhs: &Expr,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let a = lower(lhs, p, m, vars)?;
+    let b = lower(rhs, p, m, vars)?;
+    let LlvmType::Int(bits) = a.ty else { return Err(NotYet { what: "Ueberlaufpruefung auf Nicht-Ganzzahl" }) };
+    let signed = int_is_signed(lhs.ty, p);
+    let target = vars.fault_label().ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
+    let value = match op {
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
+            let word = match op {
+                BinaryOp::Add => "add",
+                BinaryOp::Sub => "sub",
+                _ => "mul",
+            };
+            let name = format!("llvm.{}{word}.with.overflow.i{bits}", if signed { "s" } else { "u" });
+            let decl = format!("declare {{ i{bits}, i1 }} @{name}(i{bits}, i{bits})");
+            if !m.has_declared(&decl) {
+                m.declare(&decl);
+            }
+            let pair = m.inst(&format!("call {{ i{bits}, i1 }} @{name}(i{bits} {}, i{bits} {})", a.value, b.value));
+            let bad = m.inst(&format!("extractvalue {{ i{bits}, i1 }} {pair}, 1"));
+            guard(&format!("xor i1 {bad}, true"), "ovf", &target, m);
+            m.inst(&format!("extractvalue {{ i{bits}, i1 }} {pair}, 0"))
+        }
+        BinaryOp::Div | BinaryOp::Rem => {
+            let mut divisor = b.value.clone();
+            if signed {
+                let neg = m.inst(&format!("icmp eq i{bits} {divisor}, -1"));
+                if op == BinaryOp::Div {
+                    let min = m.inst(&format!("icmp eq i{bits} {}, -{}", a.value, 1u128 << (bits - 1)));
+                    let bad = m.inst(&format!("and i1 {min}, {neg}"));
+                    guard(&format!("xor i1 {bad}, true"), "ovf", &target, m);
+                } else {
+                    divisor = m.inst(&format!("select i1 {neg}, i{bits} 1, i{bits} {divisor}")).to_string();
+                }
+            }
+            let text = match (op, signed) {
+                (BinaryOp::Div, true) => "sdiv",
+                (BinaryOp::Div, false) => "udiv",
+                (_, true) => "srem",
+                _ => "urem",
+            };
+            m.inst(&format!("{text} i{bits} {}, {divisor}", a.value))
+        }
+        _ => return Err(NotYet { what: "Ueberlaufpruefung auf diesem Operator" }),
+    };
+    Ok(Lowered { value: value.to_string(), ty: want.clone() })
+}
+
+/// `<<`, `>>` mit geprueftem Betrag `0..width-1` (3.10).
+fn shift_checked(
+    op: BinaryOp,
+    lhs: &Expr,
+    rhs: &Expr,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let a = lower(lhs, p, m, vars)?;
+    let b = lower(rhs, p, m, vars)?;
+    let LlvmType::Int(bits) = a.ty else { return Err(NotYet { what: "Schiebepruefung auf Nicht-Ganzzahl" }) };
+    let target = vars.fault_label().ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
+    guard(&format!("icmp ult {} {}, {bits}", b.ty, b.value), "shift", &target, m);
+    let amount = int_to(b, &a.ty, m);
+    let text = match op {
+        BinaryOp::Shl => "shl",
+        _ if int_is_signed(lhs.ty, p) => "ashr",
+        _ => "lshr",
+    };
+    let r = m.inst(&format!("{text} {} {}, {}", a.ty, a.value, amount.value));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
+}
+
+/// `as` zwischen Ganzzahlbreiten mit Pruefung (3.10): Der Quellwert muss
+/// in die Zielbreite passen; eine Grenze, die die Quelle nicht erreichen
+/// kann, wird nicht geprueft.
+fn convert_checked(
+    src: &Expr,
+    to: TypeId,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let x = lower(src, p, m, vars)?;
+    let (Some(from), Some(dst)) = (int_width(src.ty, p), int_width(to, p)) else {
+        return Err(NotYet { what: "Konversionspruefung zwischen diesen Typen" });
+    };
+    let (slo, shi) = width_bounds(from);
+    let (lo, hi) = width_bounds(dst);
+    let target = vars.fault_label().ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
+    let signed = from.signed();
+    if lo > slo {
+        guard(&format!("icmp {} {} {}, {lo}", if signed { "sge" } else { "uge" }, x.ty, x.value), "conv", &target, m);
+    }
+    if hi < shi {
+        guard(&format!("icmp {} {} {}, {hi}", if signed { "sle" } else { "ule" }, x.ty, x.value), "conv", &target, m);
+    }
+    cast_value(x, src.ty, to, want, p, m)
+}
+
+/// Die Grenzen einer Breite.
+fn width_bounds(w: IntWidth) -> (i128, i128) {
+    let bits = w.bits();
+    if w.signed() { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) }
+}
+
+/// Bringt einen nichtnegativen Ganzzahlwert auf eine andere Breite.
+fn int_to(v: Lowered, ty: &LlvmType, m: &mut Module) -> Lowered {
+    let (LlvmType::Int(from), LlvmType::Int(to)) = (&v.ty, ty) else { return v };
+    if from == to {
+        return v;
+    }
+    let op = if from > to { "trunc" } else { "zext" };
+    let r = m.inst(&format!("{op} {} {} to {ty}", v.ty, v.value));
+    Lowered { value: r.to_string(), ty: ty.clone() }
 }
 
 /// Der Name einer Pruefungsart, fuer die Marke.
@@ -1173,6 +1338,7 @@ fn index_of(
     p: &Program,
     m: &mut Module,
     vars: &dyn Vars,
+    checked: bool,
 ) -> Result<Lowered, NotYet> {
     // Eine Stelle wird adressiert; nur ein gerechneter Wert braucht den
     // Umweg ueber einen Scratch (FB-214).
@@ -1188,15 +1354,8 @@ fn index_of(
     let i = lower(index, p, m, vars)?;
     // 4.1: Der Index liegt in `0..len-1`. Die Schranke ist bei einer
     // Sammlung ihre *Laenge* zur Laufzeit (3.9), bei einem Array seine
-    // statische Groesse.
-    //
-    // Geprueft wird immer, auch wo M3 die Schranke gezeigt hat: Der
-    // `Checked{Index}`-Knoten umschliesst den *Zugriff*, nicht den Index,
-    // und `index_of` sieht ihn darum nicht. Das kostet einen Zweig, den
-    // LLVM meist wegoptimiert — und es ist die konservative Seite. Die
-    // Verbindung herzustellen hiesse, den Knoten an den Index zu haengen;
-    // das gehoert in die MIR, nicht in den Codegen.
-    {
+    // statische Groesse. Ohne `Checked{Index}`-Knoten ist sie bewiesen.
+    if checked {
         let grenze = match (&x_ty, &place, &x) {
             (LlvmType::Struct(_), Some((ptr, ty)), _) => {
                 let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 0"));
@@ -1210,15 +1369,10 @@ fn index_of(
             (LlvmType::Array(_, n), _, _) => n.to_string(),
             _ => return Err(NotYet { what: "Index auf diesem Typ" }),
         };
-        if let Some(target) = vars.fault_label() {
-            // Ein `icmp ult` faengt beide Enden: Ein negativer Index ist
-            // vorzeichenlos gelesen groesser als jede Laenge. Das spart
-            // zwei der drei Instruktionen, die `sge`+`slt`+`and` kostete.
-            let ok = m.inst(&format!("icmp ult {} {}, {grenze}", i.ty, i.value));
-            let go_on = format!("index_ok{}", m.next_label());
-            m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
-            m.label(&go_on);
-        }
+        // Ein `icmp ult` faengt beide Enden: negativ ist vorzeichenlos
+        // groesser als jede Laenge.
+        let target = vars.fault_label().ok_or(NotYet { what: "Indexpruefung ohne Fault-Pfad" })?;
+        guard(&format!("icmp ult {} {}, {grenze}", i.ty, i.value), "index", &target, m);
     }
     let base_ptr = match (&place, &x) {
         (Some((ptr, _)), _) => *ptr,
@@ -1680,10 +1834,21 @@ fn cast(
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
     let x = lower(e, p, m, vars)?;
+    cast_value(x, e.ty, to, want, p, m)
+}
+
+fn cast_value(
+    x: Lowered,
+    from: TypeId,
+    to: TypeId,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+) -> Result<Lowered, NotYet> {
     if x.ty == *want {
         return Ok(x);
     }
-    let from_signed = int_is_signed_ty(e.ty, p);
+    let from_signed = int_is_signed_ty(from, p);
     let to_signed = int_is_signed_ty(to, p);
     let op = match (&x.ty, want) {
         (LlvmType::Int(a), LlvmType::Int(b)) if a > b => "trunc",
@@ -1865,6 +2030,7 @@ fn binary(
     // ohne Gewinn — es gibt keine Seiteneffekte, die er spaeren koennte.
     let a = lower(lhs, p, m, vars)?;
     let b = lower(rhs, p, m, vars)?;
+    let b = if matches!(op, BinaryOp::Shl | BinaryOp::Shr) { int_to(b, &a.ty, m) } else { b };
     if crate::matrix::shape(&a.ty).is_some() || crate::matrix::shape(&b.ty).is_some() {
         return crate::matrix::binary(op, &a, &b, want, m);
     }

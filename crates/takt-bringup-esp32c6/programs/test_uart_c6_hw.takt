@@ -485,7 +485,7 @@ machine uart_link every 500 us:
                                 if hh.seq == rx_seq:
                                     send app_rx, body
                                     delivered += 1
-                                    rx_seq = rx_seq.wrap_u8() + 1
+                                    rx_seq = wrapping_add(rx_seq, 1)
                                 send tx_frames, make_ctrl(ACK, hh.seq)
                             case ACK: pass  # in SENDING behandelt
                             case NAK: pass
@@ -518,7 +518,7 @@ machine uart_link every 500 us:
                     if h.valid and h.kind == ACK:
                         up = true
                         raise link_established
-                        tx_seq = tx_seq.wrap_u8() + 1
+                        tx_seq = wrapping_add(tx_seq, 1)
                         -> IDLE_LINK
                     if h.valid and h.kind == NAK:
                         last_err = PEER_NAK

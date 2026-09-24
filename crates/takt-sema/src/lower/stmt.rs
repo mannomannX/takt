@@ -458,7 +458,7 @@ impl Lowerer<'_> {
                 let r = self.expr(value, Some(hint))?;
                 let r = self.coerce(r, hint)?;
                 let result = self.base(ty);
-                Expr::new(ExprKind::Binary { op: bop, lhs: Box::new(lhs), rhs: Box::new(r) }, result, span)
+                self.arith_checked(bop, lhs, r, result, span)
             }
         };
         let value = self.range_checked(rhs, ty, span);
@@ -535,11 +535,16 @@ impl Lowerer<'_> {
                 let bty = self.place_type(&b, base.span)?;
                 let int = self.tys.int;
                 let i = self.check(index, int)?;
-                if !matches!(self.ty(bty), Type::Array { .. } | Type::Vec { .. } | Type::Bytes { .. }) {
-                    let n = self.type_name(bty);
-                    self.error(SC3, e.span, format!("Index auf `{n}`"));
-                    return None;
-                }
+                let len = match self.ty(bty) {
+                    Type::Array { len, .. } => Some(*len),
+                    Type::Vec { .. } | Type::Bytes { .. } => None,
+                    _ => {
+                        let n = self.type_name(bty);
+                        self.error(SC3, e.span, format!("Index auf `{n}`"));
+                        return None;
+                    }
+                };
+                let i = self.index_checked(i, len);
                 Some(Place::Index(Box::new(b), i))
             }
             ast::ExprKind::Member { base, name, args: None } => {

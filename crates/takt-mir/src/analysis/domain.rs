@@ -51,6 +51,17 @@ impl Interval {
         }
     }
 
+    /// Die Teile unter und ueber der Null; `Bottom`, wo keiner ist.
+    fn without_zero(self) -> (Interval, Interval) {
+        match self {
+            Interval::Int { lo, hi } => (
+                if lo < 0 { Interval::Int { lo, hi: hi.min(-1) } } else { Interval::Bottom },
+                if hi > 0 { Interval::Int { lo: lo.max(1), hi } } else { Interval::Bottom },
+            ),
+            other => (other, other),
+        }
+    }
+
     /// Enthaelt das Intervall die Null? Entscheidet ueber die
     /// Divisionspruefung (3.4: „Division mit Nullausschluss").
     pub fn contains_zero(&self) -> bool {
@@ -239,19 +250,20 @@ impl std::ops::Mul for Interval {
     }
 }
 
-/// Quotient. Enthaelt der Divisor die Null, ist das Ergebnis `Top` —
-/// die Pruefung faengt den Fall zur Laufzeit (4.1).
+/// Quotient. Die Null im Divisor faultet (4.1) und liefert keinen Wert;
+/// das Ergebnis deckt die beiden Seiten daneben.
 impl std::ops::Div for Interval {
     type Output = Interval;
 
     fn div(self, o: Interval) -> Interval {
-        if o.contains_zero() {
-            return Interval::Top;
-        }
-        Self::lift(self, o, |a, b, c, d| {
-            let e = [a.checked_div(c)?, a.checked_div(d)?, b.checked_div(c)?, b.checked_div(d)?];
-            Some((*e.iter().min()?, *e.iter().max()?))
-        })
+        let (neg, pos) = o.without_zero();
+        let part = |o: Interval| {
+            Self::lift(self, o, |a, b, c, d| {
+                let e = [a.checked_div(c)?, a.checked_div(d)?, b.checked_div(c)?, b.checked_div(d)?];
+                Some((*e.iter().min()?, *e.iter().max()?))
+            })
+        };
+        Intervals::join(&part(neg), &part(pos))
     }
 }
 
@@ -261,10 +273,10 @@ impl std::ops::Rem for Interval {
     type Output = Interval;
 
     fn rem(self, o: Interval) -> Interval {
-        if o.contains_zero() {
-            return Interval::Top;
+        let Interval::Int { lo: c, hi: d } = o else { return o };
+        if c == 0 && d == 0 {
+            return Interval::Bottom;
         }
-        let Interval::Int { lo: c, hi: d } = o else { return Interval::Top };
         let m = c.abs().max(d.abs()) - 1;
         match self {
             Interval::Bottom => Interval::Bottom,
