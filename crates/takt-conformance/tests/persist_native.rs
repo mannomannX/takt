@@ -16,8 +16,12 @@ use takt_mir::Program;
 const TICKS: u64 = 40;
 
 fn program() -> Program {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/35_persist.takt");
-    let src = std::fs::read_to_string(path).expect("lesbar");
+    corpus("35_persist.takt")
+}
+
+fn corpus(name: &str) -> Program {
+    let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
+    let src = std::fs::read_to_string(&path).expect("lesbar");
     let options =
         takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
     let out = takt_sema::compile(&src, &options);
@@ -120,4 +124,56 @@ fn a_payload_with_an_out_of_range_value_is_rejected_on_both_sides() {
         common::run_native_persist(&clang, &p, "35_persist_range", TICKS, &payload).unwrap_or_else(|e| panic!("{e}"));
     let diffs = compare(&interp, &native);
     assert!(diffs.is_empty(), "{} Abweichungen: {diffs:?}\n--- nativ ---\n{native}", diffs.len());
+}
+
+/// 11.2: Ein Enum mit Feldern liegt im Journal als Diskriminante und
+/// Felder in kanonischer Form, dahinter Nullen — bytegleich auf beiden
+/// Seiten.
+#[test]
+fn a_variant_with_fields_is_persisted_byte_for_byte() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("81_persist_variants.takt");
+    let native = common::run_native_persist(&clang, &p, "81_snapshot", TICKS, &[]).unwrap_or_else(|e| panic!("{e}"));
+    let interp = interpreted(&p, Nvm::new());
+    let want = persist_line(&interp).expect("Interpreter schreibt keine persist-Zeile");
+    let got = persist_line(&native).expect("Rahmen schreibt keine persist-Zeile");
+    assert_eq!(got, want, "Snapshot weicht ab\n--- Interpreter ---\n{interp}\n--- nativ ---\n{native}");
+    assert!(compare(&interp, &native).is_empty());
+}
+
+/// Ein geladener Stand mit `MOVE(-7, 3)` treibt beide Seiten gleich, und
+/// der Schnappschuss danach ist wieder bytegleich.
+#[test]
+fn a_restored_variant_with_fields_drives_both_sides_the_same() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("81_persist_variants.takt");
+    let m = p.machines.iter().find(|m| !m.persist.is_empty()).expect("persist");
+    let by_name = |name: &str| {
+        let pv = m.persist.iter().find(|pv| m.vars[pv.var.index()].name == name).expect(name);
+        (pv.type_hash, m.vars[pv.var.index()].ty)
+    };
+    let (h_last, t_last) = by_name("last");
+    let (h_count, t_count) = by_name("count");
+    let last = Value::Enum { variant: 1, fields: vec![Value::Int(-7), Value::Int(3)] };
+    let count = Value::Int(500);
+    let payload = Nvm::payload(&p, &[(h_last, &last, t_last), (h_count, &count, t_count)]).expect("kodierbar");
+
+    let mut nvm = Nvm::new();
+    nvm.from_program_payload(&p, &payload);
+    let interp = interpreted(&p, nvm);
+    assert!(interp.contains("out cmd MOVE(-7, 3)") && interp.contains("out seen 500"), "nicht geladen:\n{interp}");
+
+    let native =
+        common::run_native_persist(&clang, &p, "81_restore", TICKS, &payload).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interp, &native);
+    assert!(diffs.is_empty(), "{} Abweichungen: {diffs:?}\n--- nativ ---\n{native}", diffs.len());
+    assert_eq!(persist_line(&native), persist_line(&interp), "Snapshot nach dem Laden weicht ab");
 }

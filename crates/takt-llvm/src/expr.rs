@@ -279,29 +279,112 @@ fn cond_expr(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
+    if want.indirect() {
+        let tmp = m.alloca(want);
+        cond_into(cond, then, otherwise, &tmp.to_string(), p, m, vars)?;
+        let v = m.inst(&format!("load {want}, ptr {tmp}"));
+        return Ok(Lowered { value: v.to_string(), ty: want.clone() });
+    }
     let c = lower(cond, p, m, vars)?;
     let a = lower(then, p, m, vars)?;
     let b = lower(otherwise, p, m, vars)?;
-    Ok(Lowered { value: choose(&c.value, &a, &b, m), ty: want.clone() })
+    let r = m.inst(&format!("select i1 {}, {} {}, {} {}", c.value, a.ty, a.value, b.ty, b.value));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
 }
 
-/// `c ? a : b` als `select`; ein grosses Aggregat geht ueber einen Platz
-/// und einen Zweig, weil LLVM ein `select` darueber nicht zu Ende
-/// vereinfacht.
-fn choose(cond: &str, a: &Lowered, b: &Lowered, m: &mut Module) -> String {
-    if !matches!(a.ty, LlvmType::Struct(_) | LlvmType::Array(..)) || a.ty.size() <= 16 {
-        return m.inst(&format!("select i1 {cond}, {} {}, {} {}", a.ty, a.value, b.ty, b.value)).to_string();
-    }
-    let tmp = m.alloca(&a.ty);
-    m.write(&a.ty, &b.value, &tmp.to_string());
+/// `c ? a : b` an seine Stelle (11.2): ein grosser Wert wird nie als
+/// `select` ueber Aggregate gebaut.
+fn cond_into(
+    cond: &Expr,
+    then: &Expr,
+    otherwise: &Expr,
+    dst: &str,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<(), NotYet> {
+    let c = lower(cond, p, m, vars)?;
     let n = m.next_label();
-    let (take, done) = (format!("wahl_{n}"), format!("gewaehlt_{n}"));
-    m.void_inst(&format!("br i1 {cond}, label %{take}, label %{done}"));
-    m.label(&take);
-    m.write(&a.ty, &a.value, &tmp.to_string());
+    let (yes, no, done) = (format!("dann_{n}"), format!("sonst_{n}"), format!("weiter_{n}"));
+    m.void_inst(&format!("br i1 {}, label %{yes}, label %{no}", c.value));
+    m.label(&yes);
+    store(then, dst, None, p, m, vars)?;
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&no);
+    store(otherwise, dst, None, p, m, vars)?;
     m.void_inst(&format!("br label %{done}"));
     m.label(&done);
-    m.inst(&format!("load {}, ptr {tmp}", a.ty)).to_string()
+    Ok(())
+}
+
+/// Die Adresse eines Werts: seine Stelle, sonst ein Platz, in den er
+/// geschrieben wird (11.2).
+pub(crate) fn place_of(
+    e: &Expr,
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<String, NotYet> {
+    if let Some((ptr, _)) = address_of(e, m, vars) {
+        return Ok(ptr.to_string());
+    }
+    let tmp = m.alloca(want);
+    store(e, &tmp.to_string(), None, p, m, vars)?;
+    Ok(tmp.to_string())
+}
+
+/// `x.or(d)` eines grossen Wrappers an seine Stelle: der Wert per
+/// `memcpy`, sonst der Ersatz — der Wrapper wird nie geladen.
+fn or_into(base: &Expr, default: &Expr, dst: &str, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<(), NotYet> {
+    let wty = ty::lower(base.ty, p).ok_or(NotYet { what: "Wrapper" })?;
+    let LlvmType::Struct(fields) = &wty else { return Err(NotYet { what: "`.or` ohne Wrapper-Typ" }) };
+    let ptr = place_of(base, &wty, p, m, vars)?;
+    let flag = m.inst(&format!("getelementptr inbounds {wty}, ptr {ptr}, i32 0, i32 {}", fields.len() - 1));
+    let valid = m.inst(&format!("load i1, ptr {flag}"));
+    let n = m.next_label();
+    let (take, other, done) = (format!("wert_{n}"), format!("ersatz_{n}"), format!("oder_{n}"));
+    m.void_inst(&format!("br i1 {valid}, label %{take}, label %{other}"));
+    m.label(&take);
+    let at = m.inst(&format!("getelementptr inbounds {wty}, ptr {ptr}, i32 0, i32 0"));
+    m.copy(&fields[0], &at.to_string(), dst);
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&other);
+    store(default, dst, None, p, m, vars)?;
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
+    Ok(())
+}
+
+/// `ok(v)`, `lift(v)`, `err(e)` an ihre Stelle (3.8): der Wert per
+/// `store`, das Flag dahinter.
+fn wrap_into(
+    inner: &Expr,
+    ok: bool,
+    want: &LlvmType,
+    dst: &str,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<(), NotYet> {
+    let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`ok`/`err` ohne Wrapper-Typ" }) };
+    let at = |i: usize, m: &mut Module| m.inst(&format!("getelementptr inbounds {want}, ptr {dst}, i32 0, i32 {i}"));
+    if ok {
+        let value_at = at(0, m);
+        store(inner, &value_at.to_string(), None, p, m, vars)?;
+    } else if fields.len() == 3 {
+        let v = lower(inner, p, m, vars)?;
+        let err_at = at(1, m);
+        m.void_inst(&format!("store {} {}, ptr {err_at}", v.ty, v.value));
+    }
+    let flag_at = at(fields.len() - 1, m);
+    m.void_inst(&format!("store i1 {}, ptr {flag_at}", if ok { "true" } else { "false" }));
+    Ok(())
+}
+
+/// Ist der Ausdruck ein Wrapper (`T?`, `T!E`) ohne Channel dahinter?
+fn is_wrapper(e: &Expr, p: &Program) -> bool {
+    channel_of(e).is_none() && matches!(p.types.get(e.ty), Type::Optional(_) | Type::Result { .. })
 }
 
 /// Zugriffe, die reine Rechnung sind (3.10).
@@ -348,6 +431,30 @@ fn access(
     {
         return r;
     }
+    if let Some(Type::Map { key, value, cap }) = p.types.list.get(base.ty.index()) {
+        let mty = ty::lower(base.ty, p).ok_or(NotYet { what: "`map`" })?;
+        let slots = place_of(base, &mty, p, m, vars)?;
+        return map_access(slots, (*key, *value, *cap), (which, args), want, p, m, vars);
+    }
+    // 11.2: Ein grosser Wrapper wird nicht geladen; sein Flag liegt hinter
+    // dem Wert, der Wert kommt per `memcpy`.
+    if matches!(which, Accessor::Valid | Accessor::Or)
+        && is_wrapper(base, p)
+        && let Some(wty) = ty::lower(base.ty, p).filter(LlvmType::indirect)
+    {
+        if which == Accessor::Or {
+            let d = args.first().ok_or(NotYet { what: "`.or` ohne Ersatz" })?;
+            let tmp = m.alloca(want);
+            or_into(base, d, &tmp.to_string(), p, m, vars)?;
+            let v = m.inst(&format!("load {want}, ptr {tmp}"));
+            return Ok(Lowered { value: v.to_string(), ty: want.clone() });
+        }
+        let LlvmType::Struct(fields) = &wty else { return Err(NotYet { what: "Wrapper" }) };
+        let ptr = place_of(base, &wty, p, m, vars)?;
+        let flag = m.inst(&format!("getelementptr inbounds {wty}, ptr {ptr}, i32 0, i32 {}", fields.len() - 1));
+        let v = m.inst(&format!("load i1, ptr {flag}"));
+        return Ok(Lowered { value: v.to_string(), ty: LlvmType::Int(1) });
+    }
     let x = lower(base, p, m, vars)?;
     // 8.9: `[t, pre, post, rate, samples]` in fester Reihenfolge.
     if let Some(Type::Capture { .. }) = p.types.list.get(base.ty.index()) {
@@ -360,9 +467,6 @@ fn access(
             };
             return Ok(Lowered { value: v.to_string(), ty: want.clone() });
         }
-    }
-    if let Some(Type::Map { key, value, cap }) = p.types.list.get(base.ty.index()) {
-        return map_access(x, (*key, *value, *cap), (which, args), want, p, m, vars);
     }
     let arg = |i: usize, m: &mut Module| -> Result<Lowered, NotYet> {
         let e = args.get(i).ok_or(NotYet { what: "Argument fehlt" })?;
@@ -473,7 +577,11 @@ fn access(
                 }
                 _ => x.clone(),
             };
-            Ok(Lowered { value: choose(&valid.value, &value_of, &fallback, m), ty: want.clone() })
+            let r = m.inst(&format!(
+                "select i1 {}, {} {}, {} {}",
+                valid.value, value_of.ty, value_of.value, fallback.ty, fallback.value
+            ));
+            Ok(Lowered { value: r.to_string(), ty: want.clone() })
         }
         // `f.encode()` (3.7): der Record als Bytes seiner deklarierten
         // Laenge.
@@ -591,8 +699,7 @@ fn self_variant(
     let mut slots = Vec::with_capacity(*width as usize);
     for (f, def_f) in fields.iter().zip(&v.fields) {
         let x = lower(f, p, m, vars)?;
-        let signed = matches!(p.types.get(def_f.ty), Type::Enum(_)) || int_is_signed(def_f.ty, p);
-        slots.push(into_slot(&x, signed, m)?);
+        slots.push(into_slot(&x, slot_signed(def_f.ty, p), m)?);
     }
     slots.resize(*width as usize, "0".to_string());
     let arr = LlvmType::Array(Box::new(LlvmType::Int(64)), *width);
@@ -610,8 +717,13 @@ fn self_variant(
     Ok(Lowered { value: out.to_string(), ty: want.clone() })
 }
 
+/// Wird ein Feld dieses Typs vorzeichenbehaftet ins Fach erweitert?
+pub(crate) fn slot_signed(ty: TypeId, p: &Program) -> bool {
+    matches!(p.types.get(ty), Type::Enum(_)) || int_is_signed(ty, p)
+}
+
 /// Ein Feld in sein 8-Byte-Fach: Ganzzahlen erweitert, Gleitkomma bitgleich.
-fn into_slot(x: &Lowered, signed: bool, m: &mut Module) -> Result<String, NotYet> {
+pub(crate) fn into_slot(x: &Lowered, signed: bool, m: &mut Module) -> Result<String, NotYet> {
     Ok(match &x.ty {
         LlvmType::Int(64) => x.value.clone(),
         LlvmType::Int(_) => {
@@ -676,6 +788,13 @@ fn wrap(
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
     let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`ok`/`err` ohne Wrapper-Typ" }) };
+    if want.indirect() {
+        let tmp = m.alloca(want);
+        m.write(want, "zeroinitializer", &tmp.to_string());
+        wrap_into(inner, ok, want, &tmp.to_string(), p, m, vars)?;
+        let v = m.inst(&format!("load {want}, ptr {tmp}"));
+        return Ok(Lowered { value: v.to_string(), ty: want.clone() });
+    }
     let v = lower(inner, p, m, vars)?;
     let mut cur = "undef".to_string();
     if ok {
@@ -1424,11 +1543,39 @@ pub(crate) fn lower_into(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<bool, NotYet> {
+    let big = || ty::lower(e.ty, p).filter(LlvmType::indirect);
     match &e.kind {
         ExprKind::Call { callee, args } => call_into(*callee, args, dst, target, p, m, vars),
         ExprKind::Slice { base, from, to } => {
             let want = ty::lower(e.ty, p).ok_or(NotYet { what: "Teilbereich" })?;
             slice_into(base, from, to, &want, dst, p, m, vars)?;
+            Ok(true)
+        }
+        ExprKind::Cond { cond, then, otherwise } if big().is_some() => {
+            cond_into(cond, then, otherwise, dst, p, m, vars)?;
+            Ok(true)
+        }
+        ExprKind::Ok(v) | ExprKind::Lift(v) if big().is_some() => {
+            wrap_into(v, true, &big().expect("gross"), dst, p, m, vars)?;
+            Ok(true)
+        }
+        ExprKind::Err(v) if big().is_some() => {
+            wrap_into(v, false, &big().expect("gross"), dst, p, m, vars)?;
+            Ok(true)
+        }
+        ExprKind::Accessor { base, accessor: Accessor::Or, args }
+            if big().is_some() && is_wrapper(base, p) && ty::lower(base.ty, p).is_some_and(|t| t.indirect()) =>
+        {
+            let d = args.first().ok_or(NotYet { what: "`.or` ohne Ersatz" })?;
+            or_into(base, d, dst, p, m, vars)?;
+            Ok(true)
+        }
+        ExprKind::Accessor { base, accessor: Accessor::Get, args } if big().is_some() => {
+            let Some(Type::Map { key, value, cap }) = p.types.list.get(base.ty.index()) else { return Ok(false) };
+            let want = big().expect("gross");
+            let mty = ty::lower(base.ty, p).ok_or(NotYet { what: "`map`" })?;
+            let slots = place_of(base, &mty, p, m, vars)?;
+            map_get_into(&slots, (*key, *value, *cap), args, &want, dst, p, m, vars)?;
             Ok(true)
         }
         // Ein Literal, das sein Ziel liest, bleibt ein Wert: Das zweite
@@ -1866,7 +2013,7 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
 /// `m.len` und `m.get(k)` einer `map` (3.9) ueber `takt_native_map_*`:
 /// Der Wert der Map wird abgelegt, die Native sondiert ueber den Slots.
 fn map_access(
-    x: Lowered,
+    slots: String,
     (key, value, cap): (TypeId, TypeId, u32),
     (which, args): (Accessor, &[Expr]),
     want: &LlvmType,
@@ -1875,8 +2022,6 @@ fn map_access(
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
     let (klen, vlen) = crate::persist::map_widths(p, key, value)?;
-    let slots = m.alloca(&x.ty);
-    m.write(&x.ty, &x.value, &slots.to_string());
     match which {
         Accessor::Len => {
             m.needs_intrinsic("i32 @takt_native_map_len(ptr, i32, i32, i32)");
@@ -1885,27 +2030,43 @@ fn map_access(
             Ok(Lowered { value: wide.to_string(), ty: want.clone() })
         }
         Accessor::Get => {
-            let k = args.first().ok_or(NotYet { what: "`get` ohne Schluessel" })?;
-            let kbuf = crate::persist::encode_padded(k, klen, p, m, vars)?;
-            let out = m.alloca(&format!("[{vlen} x i8]"));
-            m.write(&LlvmType::Array(Box::new(LlvmType::Int(8)), vlen), "zeroinitializer", &out.to_string());
-            m.needs_intrinsic("i1 @takt_native_map_get(ptr, i32, i32, i32, ptr, ptr)");
-            let hit = m.inst(&format!(
-                "call i1 @takt_native_map_get(ptr {slots}, i32 {cap}, i32 {klen}, i32 {vlen}, ptr {kbuf}, ptr {out})"
-            ));
-            // `V?` wie `wrap` es baut: Wert, dann das Flag.
-            let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "`get` ohne Wrapper-Typ" }) };
-            let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
-            let dst = m.alloca(&inner);
-            m.write(&inner, "zeroinitializer", &dst.to_string());
-            crate::persist::decode_canonical(p, value, out, dst, m)?;
-            let v = m.inst(&format!("load {inner}, ptr {dst}"));
-            let with_value = m.inst(&format!("insertvalue {want} undef, {inner} {v}, 0"));
-            let r = m.inst(&format!("insertvalue {want} {with_value}, i1 {hit}, 1"));
+            let tmp = m.alloca(want);
+            m.write(want, "zeroinitializer", &tmp.to_string());
+            map_get_into(&slots, (key, value, cap), args, want, &tmp.to_string(), p, m, vars)?;
+            let r = m.inst(&format!("load {want}, ptr {tmp}"));
             Ok(Lowered { value: r.to_string(), ty: want.clone() })
         }
         _ => Err(NotYet { what: "Zugriff auf eine `map`" }),
     }
+}
+
+/// `m.get(k)` als `V?` an seine Stelle: der Wert in das Feld 0, das Flag
+/// dahinter — ohne den Wrapper zu laden.
+#[allow(clippy::too_many_arguments)]
+fn map_get_into(
+    slots: &str,
+    (key, value, cap): (TypeId, TypeId, u32),
+    args: &[Expr],
+    want: &LlvmType,
+    dst: &str,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<(), NotYet> {
+    let (klen, vlen) = crate::persist::map_widths(p, key, value)?;
+    let k = args.first().ok_or(NotYet { what: "`get` ohne Schluessel" })?;
+    let kbuf = crate::persist::encode_padded(k, klen, p, m, vars)?;
+    let out = m.alloca(&format!("[{vlen} x i8]"));
+    m.write(&LlvmType::Array(Box::new(LlvmType::Int(8)), vlen), "zeroinitializer", &out.to_string());
+    m.needs_intrinsic("i1 @takt_native_map_get(ptr, i32, i32, i32, ptr, ptr)");
+    let hit = m.inst(&format!(
+        "call i1 @takt_native_map_get(ptr {slots}, i32 {cap}, i32 {klen}, i32 {vlen}, ptr {kbuf}, ptr {out})"
+    ));
+    let value_at = m.inst(&format!("getelementptr inbounds {want}, ptr {dst}, i32 0, i32 0"));
+    crate::persist::decode_canonical(p, value, out, value_at, m)?;
+    let flag_at = m.inst(&format!("getelementptr inbounds {want}, ptr {dst}, i32 0, i32 1"));
+    m.void_inst(&format!("store i1 {hit}, ptr {flag_at}"));
+    Ok(())
 }
 
 /// `default` eines Typs (3.7): 0, `false`, leere Sammlung.

@@ -411,24 +411,58 @@ fn telemetry(
     }
     let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md); ohne `all` nur die geaenderten. */");
     let _ = writeln!(s, "{}", crate::layout::c_buffer("g_shown", layout.latch));
-    let _ = writeln!(s, "struct takt_variant {{ long long d; const char *name; }};");
+    let _ = writeln!(s, "struct takt_variant;");
+    let _ = writeln!(s, "struct takt_field {{ const struct takt_variant *names; unsigned char kind, n_names; }};");
+    let _ = writeln!(
+        s,
+        "struct takt_variant {{ long long d; const char *name; const struct takt_field *fields; unsigned char n_fields; }};"
+    );
     let _ = writeln!(
         s,
         "struct takt_out {{ const char *name; const struct takt_variant *variants; unsigned short off, size, count; unsigned char kind, n_variants; }};"
     );
     let mut rows = Vec::new();
     let mut kinds: Vec<u8> = Vec::new();
+    let mut named = std::collections::BTreeSet::new();
     for (i, slot) in layout.outputs.iter().enumerate() {
         let (elem, count) = match &slot.ty {
             takt_llvm::ty::LlvmType::Array(elem, n) => (elem.as_ref(), *n),
             t => (t, 0),
         };
-        let Some(kind) = value_kind(elem, slot.signed) else { continue };
+        let payload = payload_variants(p, &slot.name);
+        let Some(kind) = value_kind(elem, slot.signed).or(payload.as_ref().map(|_| 4)) else { continue };
         kinds.push(kind);
         let variants = enum_variants(p, &slot.name).unwrap_or_default();
         let mut vptr = "0".to_string();
         if !variants.is_empty() {
-            let list: Vec<String> = variants.iter().map(|(d, name)| format!("{{ {d}LL, \"{name}\" }}")).collect();
+            let mut list = Vec::with_capacity(variants.len());
+            for (j, (d, name)) in variants.iter().enumerate() {
+                let fields = payload.as_ref().map_or(&[][..], |v| &v[j][..]);
+                let mut fptr = "0".to_string();
+                if !fields.is_empty() {
+                    let mut items = Vec::with_capacity(fields.len());
+                    for (kind, names) in fields {
+                        let table = match names {
+                            Some((enum_name, table)) => {
+                                if named.insert(enum_name.clone()) {
+                                    let _ = writeln!(
+                                        s,
+                                        "static const struct takt_variant g_enum_{enum_name}[] = {{ {table} }};"
+                                    );
+                                }
+                                format!("g_enum_{enum_name}")
+                            }
+                            None => "0".to_string(),
+                        };
+                        let n_names = names.as_ref().map_or(0, |(_, t)| t.matches("{ ").count());
+                        items.push(format!("{{ {table}, {kind}, {n_names} }}"));
+                    }
+                    let _ =
+                        writeln!(s, "static const struct takt_field g_out{i}_v{j}_f[] = {{ {} }};", items.join(", "));
+                    fptr = format!("g_out{i}_v{j}_f");
+                }
+                list.push(format!("{{ {d}LL, \"{name}\", {fptr}, {} }}", fields.len()));
+            }
             let _ = writeln!(s, "static const struct takt_variant g_out{i}_v[] = {{ {} }};", list.join(", "));
             vptr = format!("g_out{i}_v");
         }
@@ -460,11 +494,35 @@ fn telemetry(
     let _ = writeln!(s, "    default: return 0;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "static void takt_dump_field(const struct takt_field *f, const unsigned char *at) {{");
+    let _ = writeln!(s, "    long long v = *(const long long *)at;");
+    let _ = writeln!(s, "    if (f->names) {{");
+    let _ = writeln!(s, "        for (unsigned i = 0; i < f->n_names; i++)");
+    let _ = writeln!(s, "            if (f->names[i].d == v) {{ takt_board_trace(f->names[i].name); return; }}");
+    let _ = writeln!(s, "        takt_board_trace(\"?\");");
+    let _ = writeln!(s, "    }} else if (f->kind == 0x41) takt_board_trace(v ? \"true\" : \"false\");");
+    let _ = writeln!(s, "    else if (f->kind == 0x84) takt_board_trace_f64((double)*(const float *)at);");
+    let _ = writeln!(s, "    else if (f->kind == 0x88) takt_board_trace_f64(*(const double *)at);");
+    let _ = writeln!(s, "    else if (f->kind & 0x40) takt_board_trace_u64((unsigned long long)v);");
+    let _ = writeln!(s, "    else takt_board_trace_i64(v);");
+    let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static void takt_dump_value(const struct takt_out *o, const unsigned char *v) {{");
     let _ = writeln!(s, "    if (o->variants) {{");
     let _ = writeln!(s, "        long long d = takt_load(o->kind, v);");
-    let _ = writeln!(s, "        for (unsigned i = 0; i < o->n_variants; i++)");
-    let _ = writeln!(s, "            if (o->variants[i].d == d) {{ takt_board_trace(o->variants[i].name); return; }}");
+    let _ = writeln!(s, "        for (unsigned i = 0; i < o->n_variants; i++) {{");
+    let _ = writeln!(s, "            const struct takt_variant *x = &o->variants[i];");
+    let _ = writeln!(s, "            if (x->d != d) continue;");
+    let _ = writeln!(s, "            takt_board_trace(x->name);");
+    let _ = writeln!(s, "            if (x->n_fields) {{");
+    let _ = writeln!(s, "                takt_board_trace(\"(\");");
+    let _ = writeln!(s, "                for (unsigned k = 0; k < x->n_fields; k++) {{");
+    let _ = writeln!(s, "                    if (k) takt_board_trace(\", \");");
+    let _ = writeln!(s, "                    takt_dump_field(&x->fields[k], v + 8 + 8 * k);");
+    let _ = writeln!(s, "                }}");
+    let _ = writeln!(s, "                takt_board_trace(\")\");");
+    let _ = writeln!(s, "            }}");
+    let _ = writeln!(s, "            return;");
+    let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "        takt_board_trace(\"?\");");
     let _ = writeln!(s, "        return;");
     let _ = writeln!(s, "    }}");
@@ -554,6 +612,42 @@ fn kind_c_type(kind: u8) -> &'static str {
         0x84 => "float",
         _ => "double",
     }
+}
+
+/// Die Felder je Variante eines Enum-Ausgangs mit Nutzlast: Art wie
+/// [`value_kind`], bei einem Enum-Feld dazu Name und Tabelle seiner Namen.
+#[allow(clippy::type_complexity)]
+fn payload_variants(p: &Program, name: &str) -> Option<Vec<Vec<(u8, Option<(String, String)>)>>> {
+    use takt_mir::types::Type;
+    let c = p.channels.iter().find(|c| c.name == name)?;
+    let Type::Enum(e) = p.types.get(c.ty) else { return None };
+    let def = p.enums.get(e.index())?;
+    if def.variants.iter().all(|v| v.fields.is_empty()) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(def.variants.len());
+    for v in &def.variants {
+        let mut fields = Vec::with_capacity(v.fields.len());
+        for f in &v.fields {
+            let signed = matches!(p.types.get(f.ty), Type::Int { width, .. } if width.signed());
+            let kind = match p.types.get(f.ty) {
+                Type::Enum(inner) => {
+                    let def = p.enums.get(inner.index())?;
+                    let table: Vec<String> = def
+                        .variants
+                        .iter()
+                        .map(|w| format!("{{ {}LL, \"{}\", 0, 0 }}", w.discriminant, w.name))
+                        .collect();
+                    fields.push((4u8, Some((def.name.clone(), table.join(", ")))));
+                    continue;
+                }
+                _ => value_kind(&takt_llvm::ty::lower(f.ty, p)?, signed)?,
+            };
+            fields.push((kind, None));
+        }
+        out.push(fields);
+    }
+    Some(out)
 }
 
 /// Die Varianten eines Enum-Ausgangs mit ihren Diskriminanten.

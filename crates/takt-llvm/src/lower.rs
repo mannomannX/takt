@@ -22,10 +22,17 @@ use takt_mir::machine::MachineKind;
 /// fehlendes Symbol statt des Konstrukts, das gefehlt hat (FB-104).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Skipped {
-    /// Die Maschine, deren Schritt fehlt.
+    /// Die Maschine, deren Schritt fehlt, oder `fn <name>`.
     pub machine: String,
     /// Warum.
     pub reason: String,
+}
+
+impl Skipped {
+    /// Was fehlt: `<m>_step` oder `fn <name>`.
+    pub fn what(s: &Skipped) -> String {
+        if s.machine.starts_with("fn ") { s.machine.clone() } else { format!("{}_step", s.machine) }
+    }
 }
 
 /// Das Ergebnis einer Uebersetzung.
@@ -98,9 +105,16 @@ pub fn program_with_diagnostics(
         }
     }
 
+    let reachable = takt_mir::analysis::reachable_fns(p);
     for (i, f) in p.fns.iter().enumerate() {
-        if !methods.contains(&takt_mir::FnId(i as u32)) {
-            let _ = crate::fns::function(f, p, &mut m);
+        let id = takt_mir::FnId(i as u32);
+        if methods.contains(&id) {
+            continue;
+        }
+        if let Err(e) = crate::fns::function(f, p, &mut m)
+            && reachable.contains(&id)
+        {
+            skipped.push(Skipped { machine: format!("fn {}", f.name), reason: e.what.to_string() });
         }
     }
 

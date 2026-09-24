@@ -298,7 +298,7 @@ fn analyze_fn<'p>(program: &'p Program, f: &'p crate::fns::Fn) -> Walk<'p> {
 
 /// Funktionen, die Maschinencode erreicht; Bibliothekscode, den niemand
 /// ruft, gehoert nicht zum Programm (Lemma 3.4).
-fn reachable_fns(program: &Program) -> Vec<FnId> {
+pub fn reachable_fns(program: &Program) -> Vec<FnId> {
     let mut calls = Vec::new();
     for m in &program.machines {
         for init in m.vars.iter().filter_map(|v| v.init.as_ref()) {

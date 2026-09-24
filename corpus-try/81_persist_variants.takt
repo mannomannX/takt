@@ -1,0 +1,35 @@
+# 81 — `persist` eines Enums mit Feldern (5.9, 11.2): Diskriminante, dann
+# die Felder der Variante in kanonischer Form, dahinter Nullen bis zur
+# groessten Variante. Der Schnappschuss ist im Interpreter und nativ
+# bytegleich, und ein geladener Stand treibt beide Seiten gleich.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+enum Cmd: NONE, MOVE(dx: int in -100..100, dy: int in -100..100), STOP(hard: bool), SPEED(v: float)
+
+output cmd  : Cmd @ hw("o/cmd")  with safe = NONE
+output seen : int @ hw("o/seen") with safe = 0
+
+machine m:
+    persist var last  : Cmd = NONE
+    persist var count : int in 0..1000 = 0
+    var k             : int in 0..3 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            cmd = last
+            seen = count
+            var c : Cmd = NONE
+            if k == 1:
+                c = MOVE(dx = -7, dy = 3)
+            elif k == 2:
+                c = STOP(hard = true)
+            elif k == 3:
+                c = SPEED(v = 1.5)
+            last = c
+            count = (count + 1) % 1000
+            k = (k + 1) % 4

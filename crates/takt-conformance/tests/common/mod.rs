@@ -27,7 +27,7 @@ pub fn ir_for(p: &Program, triple: &str) -> String {
     // prueft, als die Werkzeuge erzeugen.
     let out = takt_llvm::lower::program(p, triple, "abnahme");
     for s in &out.skipped {
-        eprintln!("{}_step fehlt: {}", s.machine, s.reason);
+        eprintln!("{} fehlt: {}", takt_llvm::lower::Skipped::what(s), s.reason);
     }
     out.ir
 }

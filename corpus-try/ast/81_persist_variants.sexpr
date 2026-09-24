@@ -1,0 +1,29 @@
+(system
+  (language 1)
+  (tick 10ms))
+(enum Cmd
+  (NONE)
+  (MOVE (dx: int in (- 100)..100) (dy: int in (- 100)..100))
+  (STOP (hard: bool))
+  (SPEED (v: float)))
+(output cmd :Cmd @hw("o/cmd") safe=NONE)
+(output seen :int @hw("o/seen") safe=0)
+(machine m
+  (persist last :Cmd NONE)
+  (persist count :int in 0..1000 0)
+  (var k :int in 0..3 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= cmd last)
+      (= seen count)
+      (var c :Cmd NONE)
+      (if (== k 1)
+        (= c (MOVE dx=(- 7) dy=3)))
+      (elif (== k 2)
+        (= c (STOP hard=true)))
+      (elif (== k 3)
+        (= c (SPEED v=1.5)))
+      (= last c)
+      (= count (% (+ count 1) 1000))
+      (= k (% (+ k 1) 4)))))

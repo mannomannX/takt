@@ -335,10 +335,18 @@ impl Vars for StateVars<'_> {
         Some(Lowered { value: v.to_string(), ty })
     }
 
-    /// Der Latch eines eigenen Outputs; `%3` ist der Latch (11.2).
+    /// Der Latch eines eigenen Outputs; `%3` ist der Latch (11.2). Ein
+    /// fremder Output kommt aus der Ψ-Bank seines Besitzers (8.3).
     fn output(&self, channel: takt_mir::ChannelId, m: &mut Module) -> Option<Lowered> {
         let c = self.program.channels.get(channel.index())?;
         let ty = ty::lower(c.ty, self.program)?;
+        if let Some(owner) = c.owner.filter(|o| o.0 != self.machine_index) {
+            let off = crate::psi::region_offset(owner, false, self.program)?
+                + crate::psi::field_offset(owner, crate::psi::Field::Output(channel), self.program)?;
+            let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {off}"));
+            let v = m.inst(&format!("load {ty}, ptr {at}"));
+            return Some(Lowered { value: v.to_string(), ty });
+        }
         let off = crate::image::latch_offset(channel, self.program)?;
         let at = m.inst(&format!("getelementptr inbounds i8, ptr %3, i64 {off}"));
         let v = m.inst(&format!("load {ty}, ptr {at}"));
@@ -869,27 +877,46 @@ fn for_window(
 /// Schleifenvariable.
 fn for_items(var: takt_mir::VarId, iter: &Expr, body: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let vars = ctx.vars();
-    let x = lower_expr(iter, ctx.program, m, &vars)?;
-    let (elem_ty, len, data_index) = match &x.ty {
+    let want = ty::lower(iter.ty, ctx.program).ok_or(NotYet { what: "`for` ueber diese Sammlung" })?;
+    let slot = crate::expr::place_of(iter, &want, ctx.program, m, &vars)?;
+    let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
+    let k = ctx.next_label(m);
+    items_loop(&want, &slot, (&ptr.to_string(), &ty), k, m, &mut |m, end_at| {
+        ctx.breaks.push(end_at.to_string());
+        let result = block(body, ctx, m);
+        ctx.breaks.pop();
+        result
+    })
+}
+
+/// Die Schleife ueber die Elemente einer Sammlung an ihrer Adresse; den
+/// Rumpf senkt der Rufer und bekommt dafuer das Ende als Sprungziel.
+fn items_loop(
+    want: &LlvmType,
+    slot: &str,
+    (ptr, ty): (&str, &LlvmType),
+    k: u32,
+    m: &mut Module,
+    body: &mut dyn FnMut(&mut Module, &str) -> Result<(), NotYet>,
+) -> Result<(), NotYet> {
+    let (elem_ty, len, data_index) = match want {
         LlvmType::Array(elem, n) => ((**elem).clone(), n.to_string(), None),
         LlvmType::Struct(fields) if fields.len() == 2 && fields[0] == LlvmType::Int(32) => {
             let LlvmType::Array(elem, _) = &fields[1] else {
                 return Err(NotYet { what: "`for` ueber diese Sammlung" });
             };
-            let n = m.inst(&format!("extractvalue {} {}, 0", x.ty, x.value));
+            let at = m.inst(&format!("getelementptr inbounds {want}, ptr {slot}, i32 0, i32 0"));
+            let n = m.inst(&format!("load i32, ptr {at}"));
             ((**elem).clone(), n.to_string(), Some(1))
         }
         _ => return Err(NotYet { what: "`for` ueber diese Sammlung" }),
     };
-    let slot = m.alloca(&x.ty);
-    m.write(&x.ty, &x.value, &slot.to_string());
-    let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
-    let k = ctx.next_label(m);
-    let name = ctx.machine.name.clone();
+    if elem_ty != *ty {
+        return Err(NotYet { what: "`for` mit anderem Elementtyp" });
+    }
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
-    let (head, loop_body, end_at) =
-        (format!("elemente{k}_{name}"), format!("elemente{k}_{name}_rumpf"), format!("elemente{k}_{name}_ende"));
+    let (head, loop_body, end_at) = (format!("elemente{k}"), format!("elemente{k}_rumpf"), format!("elemente{k}_ende"));
     m.void_inst(&format!("br label %{head}"));
     m.label(&head);
     let i = m.inst(&format!("load i32, ptr {i_ptr}"));
@@ -897,24 +924,41 @@ fn for_items(var: takt_mir::VarId, iter: &Expr, body: &Block, ctx: &mut Ctx<'_>,
     m.void_inst(&format!("br i1 {go_on}, label %{loop_body}, label %{end_at}"));
     m.label(&loop_body);
     let at = match data_index {
-        Some(d) => m.inst(&format!("getelementptr inbounds {}, ptr {slot}, i32 0, i32 {d}, i32 {i}", x.ty)),
-        None => m.inst(&format!("getelementptr inbounds {}, ptr {slot}, i32 0, i32 {i}", x.ty)),
+        Some(d) => m.inst(&format!("getelementptr inbounds {want}, ptr {slot}, i32 0, i32 {d}, i32 {i}")),
+        None => m.inst(&format!("getelementptr inbounds {want}, ptr {slot}, i32 0, i32 {i}")),
     };
     let v = m.inst(&format!("load {elem_ty}, ptr {at}"));
-    if elem_ty != ty {
-        return Err(NotYet { what: "`for` mit anderem Elementtyp" });
-    }
     m.void_inst(&format!("store {ty} {v}, ptr {ptr}"));
-    ctx.breaks.push(end_at.clone());
-    let result = block(body, ctx, m);
-    ctx.breaks.pop();
-    result?;
+    body(m, &end_at)?;
     let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
     let next = m.inst(&format!("add i32 {cur_i}, 1"));
     m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
     m.label(&end_at);
     Ok(())
+}
+
+/// `for x in a` in einer Funktion (4.4).
+fn fn_for_each<V: Slots>(
+    vars: &takt_mir::stmt::ForVars,
+    iter: &Expr,
+    body: &Block,
+    ctx: &mut FnCtx<'_, V>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let takt_mir::stmt::ForVars::One(var) = vars else {
+        return Err(NotYet { what: "`for` mit zwei Variablen (`map`)" });
+    };
+    let want = ty::lower(iter.ty, ctx.program).ok_or(NotYet { what: "`for` ueber diese Sammlung" })?;
+    let slot = crate::expr::place_of(iter, &want, ctx.program, m, &ctx.vars)?;
+    let (ptr, ty) = ctx.vars.slot(*var, m).ok_or(NotYet { what: "Schleifenvariable" })?;
+    let k = ctx.next_label(m);
+    items_loop(&want, &slot, (&ptr.to_string(), &ty), k, m, &mut |m, end_at| {
+        ctx.breaks.push(end_at.to_string());
+        let result = fn_block(body, ctx, m);
+        ctx.breaks.pop();
+        result
+    })
 }
 
 /// `for i in range(n)` in einer Funktion (4.1).
@@ -1328,9 +1372,9 @@ fn method_call(
                 ExprKind::Var(id) => place(&Place::Var(id), ctx, m)?.0,
                 _ => {
                     let vars = ctx.vars();
-                    let v = lower_expr(src, ctx.program, m, &vars)?;
-                    let tmp = m.alloca(&v.ty);
-                    m.write(&v.ty, &v.value, &tmp.to_string());
+                    let want = ty::lower(src.ty, ctx.program).ok_or(NotYet { what: "Quelle von `append`" })?;
+                    let tmp = m.alloca(&want);
+                    crate::expr::store(src, &tmp.to_string(), None, ctx.program, m, &vars)?;
                     tmp
                 }
             };
@@ -1500,6 +1544,7 @@ fn fn_stmt<V: Slots>(s: &Stmt, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result
             Ok(())
         }
         StmtKind::ForRange { var, count, body } => fn_for(*var, count, body, ctx, m),
+        StmtKind::ForEach { vars, iter, body } => fn_for_each(vars, iter, body, ctx, m),
         StmtKind::Break => {
             // 4.1: Die Schleife hat eine statische Schranke; `break`
             // verlaesst sie vorzeitig. Das Ziel steht auf dem Stapel der

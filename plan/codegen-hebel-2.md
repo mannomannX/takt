@@ -156,8 +156,14 @@ Sechs Posten aus der Frage „wo weitermachen“, alle ohne Hardwarebedarf:
 - **`takt prove` je Maschine und `max_slew`** (FB-259): Ψ frei unter Typannahmen, Pfade am Gesamtmodell bestätigt, Maschinen neben Handlern beweisbar; die Änderung je Tick durch `max_slew` beschränkt (als Produkt statt Division des Rands, vier ulp geweitet — die Division ließ z3 über drei Minuten rechnen, das Produkt fünf Sekunden).
 - **Enums mit Feldern im Codegen** (FB-211): `{ i32, [W x i64] }`, Bau, `match` mit mehreren Bindungen, `==`, Trace `NAME(f1, f2)` im Linux-Rahmen; Korpus 80 im Differenztest. `persist` solcher Enums und der MCU-Rahmen bleiben offen; `45_journal_cut` bleibt draußen (FB-260).
 
+### Nachzüge 2026-09-24, zweiter Teil
+
+- **Große Werte durch `T?` per Zeiger** (FB-260): `.or`, `ok`/`lift`/`err`, `map.get` und `c ? a : b` über der Schwelle schreiben in Plätze und lesen per `memcpy`; `map`-Zugriffe nehmen die Adresse der `map` statt einer 8-KB-Kopie; `for x in a` läuft über die Adresse der Sammlung, auch in Funktionen. `45_journal_cut` übersetzt bei -O1 in unter einer Sekunde und läuft im Differenztest. Dabei zwei Nebenbefunde: fremde Outputs las der native Code frisch statt mit Unit-Delay (FB-262, jetzt aus der Ψ-Bank des Besitzers), und Fehlversuche erreichbarer Funktionen wurden verschluckt (FB-263).
+- **`persist` von Enums mit Feldern**: Diskriminante, dann die Felder der Variante in kanonischer Form, der Eintrag so lang wie die Variante — bytegleich mit dem Interpreter; Korpus 81 mit Schnappschuss- und Ladetest.
+- **Trace `NAME(f1, f2)` im MCU-Rahmen**: Feldtabelle je Variante, Felder aus den 8-Byte-Fächern, verschachtelte Enums mit Namen. Korpus 80 im Board-Korpus. Board: Im Board-Test lief Korpus 80 bis t = 50 und schrieb `NAME(f1, f2)`-Zeilen, die Aufzeichnung endete ohne `takt end`; danach lieferte die USB-Konsole des C6 für kein Abbild mehr Zeichen, auch nach Löschen und Neuflashen — der Board-Lauf des UART-Programms und von Korpus 80 steht aus, bis das Kabel neu gesteckt ist.
+
 ### Offen
 
 - Sichten auf Stromelemente (R3) lohnen erst bei vielen großen Elementen je Tick: Gewinn ≈ Elemente je Tick × Kopie. Der Zweig `r3-stream-views` hält die vollständige Umsetzung bereit.
 - Oktagone v1.1 (Summen `x + y ≤ c`, Abschluss) und eine exakte Länge für `encode()` fester Layouts, wenn eine Zählung sie trägt.
-- Große Werte durch `T?` per Zeiger (11.2): `45_journal_cut` bringt LLVM 22 mit `bytes<256>?` aus `map.get(…).or(…)` zum Stillstand (FB-260); `persist` und MCU-Trace für Enums mit Feldern; eine Naht für `mmio`-Ports im C-Rahmen (FB-261).
+- Eine Naht für `mmio`-Ports im C-Rahmen (FB-261); `match` auf großen Wrappern lädt das Subjekt noch als Wert.

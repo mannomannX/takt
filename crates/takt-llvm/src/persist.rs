@@ -135,8 +135,47 @@ impl Writer<'_> {
                 self.store_at(off, "i64", &v);
                 self.module.inst(&format!("add i64 {off}, 8"))
             }
+            // Diskriminante, dann die Felder der Variante in kanonischer
+            // Form; der Eintrag ist so lang wie die Variante.
             Type::Enum(e) if self.p.enums[e.index()].variants.iter().any(|v| !v.fields.is_empty()) => {
-                return Err(NotYet { what: "`persist` eines Enums mit Feldern" });
+                let def = self.p.enums[e.index()].clone();
+                let LlvmType::Struct(parts) = &llvm else { return Err(NotYet { what: "Enum mit Feldern" }) };
+                let arr = parts[1].clone();
+                let d_at = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {src}, i32 0, i32 0"));
+                let d = self.module.inst(&format!("load i32, ptr {d_at}"));
+                let wide = self.module.inst(&format!("sext i32 {d} to i64"));
+                self.store_at(off, "i64", &wide.to_string());
+                let base = self.module.inst(&format!("add i64 {off}, 8"));
+                let payload = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {src}, i32 0, i32 1"));
+                let n = self.module.next_label();
+                let done = format!("persist{n}_ende");
+                let cases: String = def
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| format!(" i32 {}, label %persist{n}_{i}", v.discriminant))
+                    .collect();
+                let from = self.module.block().to_string();
+                self.module.void_inst(&format!("switch i32 {d}, label %{done} [{cases} ]"));
+                let mut ends = vec![format!("[ {base}, %{from} ]")];
+                for (i, v) in def.variants.iter().enumerate() {
+                    self.module.label(&format!("persist{n}_{i}"));
+                    let mut o = base;
+                    for (k, f) in v.fields.iter().enumerate() {
+                        let st = crate::ty::storage(f.ty, self.p).ok_or(NotYet { what: "Feldtyp" })?;
+                        let slot_at =
+                            self.module.inst(&format!("getelementptr inbounds {arr}, ptr {payload}, i32 0, i32 {k}"));
+                        let raw = self.module.inst(&format!("load i64, ptr {slot_at}"));
+                        let v = crate::expr::from_slot(&raw.to_string(), &st, self.module);
+                        let tmp = self.module.alloca(&st);
+                        self.module.void_inst(&format!("store {st} {v}, ptr {tmp}"));
+                        o = self.encode(f.ty, tmp, o)?;
+                    }
+                    ends.push(format!("[ {o}, %{} ]", self.module.block()));
+                    self.module.void_inst(&format!("br label %{done}"));
+                }
+                self.module.label(&done);
+                self.module.inst(&format!("phi i64 {}", ends.join(", ")))
             }
             Type::Enum(_) => {
                 let v = self.module.inst(&format!("load i32, ptr {src}"));
@@ -369,7 +408,62 @@ impl Reader<'_> {
                 self.module.inst(&format!("add i64 {off}, 8"))
             }
             Type::Enum(e) if self.p.enums[e.index()].variants.iter().any(|v| !v.fields.is_empty()) => {
-                return Err(NotYet { what: "`persist` eines Enums mit Feldern" });
+                let def = self.p.enums[e.index()].clone();
+                let LlvmType::Struct(parts) = &llvm else { return Err(NotYet { what: "Enum mit Feldern" }) };
+                let arr = parts[1].clone();
+                let d = self.load_at(off, "i64");
+                if store {
+                    let narrow = self.module.inst(&format!("trunc i64 {d} to i32"));
+                    let d_at = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {dst}, i32 0, i32 0"));
+                    self.module.void_inst(&format!("store i32 {narrow}, ptr {d_at}"));
+                    let payload = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {dst}, i32 0, i32 1"));
+                    self.module.void_inst(&format!("store {arr} zeroinitializer, ptr {payload}"));
+                } else {
+                    let mut any = self.module.inst("add i1 0, 0");
+                    for v in &def.variants {
+                        let eq = self.module.inst(&format!("icmp eq i64 {d}, {}", v.discriminant));
+                        any = self.module.inst(&format!("or i1 {any}, {eq}"));
+                    }
+                    self.require(any);
+                }
+                let base = self.module.inst(&format!("add i64 {off}, 8"));
+                let narrow = self.module.inst(&format!("trunc i64 {d} to i32"));
+                let n = self.module.next_label();
+                let done = format!("laden{n}_ende");
+                let cases: String = def
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| format!(" i32 {}, label %laden{n}_{i}", v.discriminant))
+                    .collect();
+                let from = self.module.block().to_string();
+                self.module.void_inst(&format!("switch i32 {narrow}, label %{done} [{cases} ]"));
+                let mut ends = vec![format!("[ {base}, %{from} ]")];
+                for (i, v) in def.variants.iter().enumerate() {
+                    self.module.label(&format!("laden{n}_{i}"));
+                    let mut o = base;
+                    for (k, f) in v.fields.iter().enumerate() {
+                        let st = crate::ty::storage(f.ty, self.p).ok_or(NotYet { what: "Feldtyp" })?;
+                        let tmp = self.module.alloca(&st);
+                        self.module.void_inst(&format!("store {st} zeroinitializer, ptr {tmp}"));
+                        o = self.decode(f.ty, tmp, o, store)?;
+                        if store {
+                            let v = self.module.inst(&format!("load {st}, ptr {tmp}"));
+                            let x = crate::expr::Lowered { value: v.to_string(), ty: st.clone() };
+                            let wide = crate::expr::into_slot(&x, crate::expr::slot_signed(f.ty, self.p), self.module)?;
+                            let payload =
+                                self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {dst}, i32 0, i32 1"));
+                            let slot_at = self
+                                .module
+                                .inst(&format!("getelementptr inbounds {arr}, ptr {payload}, i32 0, i32 {k}"));
+                            self.module.void_inst(&format!("store i64 {wide}, ptr {slot_at}"));
+                        }
+                    }
+                    ends.push(format!("[ {o}, %{} ]", self.module.block()));
+                    self.module.void_inst(&format!("br label %{done}"));
+                }
+                self.module.label(&done);
+                self.module.inst(&format!("phi i64 {}", ends.join(", ")))
             }
             Type::Enum(e) => {
                 let d = self.load_at(off, "i64");

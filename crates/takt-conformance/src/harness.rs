@@ -824,6 +824,19 @@ pub(crate) fn psi_commit(s: &mut String, p: &Program, driven: &[&takt_mir::machi
     use takt_llvm::psi::{Field, bank_size, field_offset, region_offset};
     let Some(first) = region_offset(takt_mir::MachineId(0), false, p) else { return };
     let Some(next) = region_offset(takt_mir::MachineId(0), true, p) else { return };
+    // 8.3: Was eine Maschine ausgibt, lesen die anderen im naechsten Tick
+    // aus ihrer Ψ-Bank.
+    for (i, c) in p.channels.iter().enumerate() {
+        let id = takt_mir::ChannelId(i as u32);
+        let (Some(owner), Some(src)) = (c.owner, takt_llvm::image::latch_offset(id, p)) else { continue };
+        let (Some(bank), Some(off), Some(ty)) =
+            (region_offset(owner, true, p), field_offset(owner, Field::Output(id), p), takt_llvm::ty::lower(c.ty, p))
+        else {
+            continue;
+        };
+        let _ =
+            writeln!(s, "{indent}memcpy(image + {}, latch + {src}, {}); /* Psi {} */", bank + off, ty.size(), c.name);
+    }
     let _ = writeln!(
         s,
         "{indent}for (unsigned i = 0; i < {}; i++) image[{first} + i] = image[{next} + i]; /* Psi */",

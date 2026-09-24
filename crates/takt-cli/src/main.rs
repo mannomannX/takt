@@ -488,7 +488,7 @@ fn build(args: &Args) -> bool {
         // Ein fehlender Schritt ist ein Loch, kein Schoenheitsfehler: Ohne
         // ihn meldet der Linker spaeter ein unbekanntes Symbol statt des
         // Konstrukts, das gefehlt hat (FB-104).
-        eprintln!("{}_step fehlt: {}", s.machine, s.reason);
+        eprintln!("{} fehlt: {}", takt_llvm::lower::Skipped::what(s), s.reason);
     }
     for name in &lowered.without_persist {
         // Der Code laeuft, aber ohne Lesepfad startet jeder Lauf beim
@@ -965,7 +965,7 @@ fn object_for_size(p: &takt_mir::Program, target: takt_llvm::Target, source: &st
         takt_llvm::Diagnostics::Ids,
     );
     for s in &lowered.skipped {
-        eprintln!("{}_step fehlt: {}", s.machine, s.reason);
+        eprintln!("{} fehlt: {}", takt_llvm::lower::Skipped::what(s), s.reason);
     }
     let out = std::env::temp_dir().join(format!("takt-size-{}.o", std::process::id()));
     let file = out.to_str()?.to_string();

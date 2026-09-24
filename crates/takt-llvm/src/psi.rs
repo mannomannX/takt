@@ -12,8 +12,9 @@
 //! ein zweites Datenlayout daneben gestellt.
 
 use takt_mir::machine::Machine;
+use takt_mir::program::Direction;
 use takt_mir::program::Program;
-use takt_mir::{MachineId, SignalId, VarId};
+use takt_mir::{ChannelId, MachineId, SignalId, VarId};
 
 use crate::emit::Module;
 use crate::expr::{Lowered, NotYet};
@@ -31,6 +32,17 @@ pub enum Field {
     Var(VarId),
     /// Ein Signal.
     Signal(SignalId),
+    /// Ein eigener Output, wie ihn fremde Maschinen lesen (8.3, Unit-Delay).
+    Output(ChannelId),
+}
+
+/// Die Outputs einer Maschine in Channelreihenfolge.
+fn outputs_of(machine: MachineId, p: &Program) -> impl Iterator<Item = (ChannelId, &takt_mir::program::Channel)> {
+    p.channels
+        .iter()
+        .enumerate()
+        .filter(move |(_, c)| c.dir == Direction::Output && c.owner == Some(machine))
+        .map(|(i, c)| (ChannelId(i as u32), c))
 }
 
 fn round8(x: u64) -> u64 {
@@ -61,6 +73,12 @@ pub fn field_offset(machine: MachineId, field: Field, p: &Program) -> Option<u64
         }
         off += 8;
     }
+    for (c, ch) in outputs_of(machine, p) {
+        if field == Field::Output(c) {
+            return Some(off);
+        }
+        off += round8(ty::lower(ch.ty, p)?.size());
+    }
     None
 }
 
@@ -69,7 +87,8 @@ pub fn region_size(machine: MachineId, p: &Program) -> u64 {
     let Some(m) = p.machines.get(machine.index()) else { return 0 };
     let vars: u64 =
         m.vars.iter().filter(|v| v.public).map(|v| round8(ty::lower(v.ty, p).map_or(8, |t| t.size()))).sum();
-    16 + vars + 8 * m.signals.len() as u64
+    let outputs: u64 = outputs_of(machine, p).map(|(_, c)| round8(ty::lower(c.ty, p).map_or(8, |t| t.size()))).sum();
+    16 + vars + 8 * m.signals.len() as u64 + outputs
 }
 
 /// Anfang der ersten Bank: hinter den Commands, 8-ausgerichtet.
@@ -98,6 +117,7 @@ fn field_type(machine: MachineId, field: Field, p: &Program) -> Option<LlvmType>
     Some(match field {
         Field::Fresh | Field::Signal(_) => LlvmType::Int(8),
         Field::State => LlvmType::Int(32),
+        Field::Output(c) => ty::lower(p.channels.get(c.index())?.ty, p)?,
         Field::Var(v) => ty::lower(p.machines.get(machine.index())?.vars.get(v.index())?.ty, p)?,
     })
 }
