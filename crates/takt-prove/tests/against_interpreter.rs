@@ -186,3 +186,35 @@ fn the_export_is_smtlib_with_both_queries() {
     assert!(text.contains("(declare-const |i.cmd.go#3| Bool)"), "{text}");
     assert_eq!(text.matches("(check-sat)").count(), 0, "ohne Eigenschaft keine Anfrage");
 }
+
+/// 11.3: Jede implizite Pruefung, die das Modell kennt, ist eine
+/// Pruefstelle mit dem Namen aus `takt check --checks`.
+#[test]
+fn implicit_checks_become_proof_sites() {
+    let src = "\
+system:
+    language = 1
+    tick = 1 ms
+
+output n : int in 0..999 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    var a : int in 0..200 = 100
+    initial RUN
+    state RUN:
+        loop:
+            a = a + 60
+            n = a
+";
+    let options =
+        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let out = takt_sema::compile(src, &options);
+    let p = out.program.expect("Programm");
+    let model = encode(&p).expect("kodierbar");
+    let site = model.checks.iter().find(|c| c.kind == "range").expect("die Range-Pruefung ist eine Stelle");
+    assert_eq!(site.machine, "m");
+    assert!(
+        out.report.sites.iter().any(|s| s.span.start == site.start),
+        "dieselbe Stelle, die `takt check --checks` nennt"
+    );
+}

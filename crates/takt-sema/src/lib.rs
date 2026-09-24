@@ -112,7 +112,26 @@ pub fn check(src: &str, policy: Policy) -> Checked {
 
 /// Uebersetzt eine Datei in die MIR (Kernform nach dem Desugaring 6.2).
 pub fn compile(src: &str, options: &Options) -> Compiled {
+    compile_with(src, options, None)
+}
+
+/// Wie [`compile`], mit einer Beweisdatei (11.3): Ihr Hash muss zur
+/// Quelle passen (Pruefung 65), dann entfallen die bewiesenen Stellen.
+pub fn compile_with(src: &str, options: &Options, proof: Option<&takt_mir::analysis::proof::Proof>) -> Compiled {
     let mut sink = Sink::new(options.policy);
+    let external = match proof {
+        Some(p) if p.program != takt_mir::review::hash_of(src.as_bytes()) => {
+            sink.extend([takt_diag::Diagnostic::error(
+                checks::SC65,
+                takt_diag::Span::new(0, 0),
+                "Beweisdatei passt nicht zu dieser Quelle (Hash weicht ab)",
+            )
+            .with_suggestion("`takt prove --save-proof` neu ausfuehren (11.3)")]);
+            Vec::new()
+        }
+        Some(p) => p.tags(),
+        None => Vec::new(),
+    };
     let (edition, file) = match syntax(src, &mut sink) {
         Some(pair) => pair,
         None => {
@@ -133,7 +152,7 @@ pub fn compile(src: &str, options: &Options) -> Compiled {
     // Codegen und `takt size` benutzen dieselben Intervalle.
     let report = match &mut program {
         Some(p) => {
-            let (d, r) = takt_mir::analysis::analyze(p);
+            let (d, r) = takt_mir::analysis::analyze(p, &external);
             sink.extend(d);
             takt_mir::analysis::cost::budgets(p);
             r

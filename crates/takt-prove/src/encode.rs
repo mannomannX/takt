@@ -591,7 +591,7 @@ impl Enc<'_> {
             }
             ExprKind::Checked { expr, kind } => {
                 let x = self.expr(expr, cx, env, flow)?;
-                self.checked(kind, x, span, flow)?
+                self.checked(kind, x, span, cx, flow)?
             }
             ExprKind::Convert { expr, kind, .. } => {
                 let x = self.expr(expr, cx, env, flow)?;
@@ -698,8 +698,10 @@ impl Enc<'_> {
 
     /// Eine implizite Pruefung (4.1): Range und Division sind Fault-Zweige,
     /// Nichtendlichkeit ebenso; Ueberlauf und Gueltigkeit sind Annahmen.
-    fn checked(&mut self, kind: &CheckedKind, x: Term, span: Span, flow: &mut Flow) -> R<Term> {
+    fn checked(&mut self, kind: &CheckedKind, x: Term, span: Span, cx: &Cx<'_>, flow: &mut Flow) -> R<Term> {
         let fail = match kind {
+            // Die Intervallanalyse hat sie bewiesen (3.4).
+            CheckedKind::Range(r) if r.origin == takt_mir::types::RangeOrigin::Proven => return Ok(x),
             CheckedKind::Range(r) => {
                 let (lo, hi) = (self.bound(&r.lo, x.sort()), self.bound(&r.hi, x.sort()));
                 let (ge, le) = if x.sort() == Sort::Int { (Op::Ge, Op::Le) } else { (Op::FGe, Op::FLe) };
@@ -722,6 +724,12 @@ impl Enc<'_> {
             CheckedKind::Missing | CheckedKind::Index { .. } => return no("Wrapper oder Index", span),
         };
         let cond = Term::and(vec![flow.alive.clone(), fail.clone()]);
+        // Eine Pruefstelle (11.3): `takt prove` zeigt, ob sie je faultet.
+        self.sites.entry(span.start).or_default().push(cond.clone());
+        if let Some(m) = cx.m {
+            let name = takt_mir::analysis::walk::name(kind).to_string();
+            self.site_info.insert(span.start, (span, self.machine(m).name.clone(), name));
+        }
         flow.exits.push(Exit { cond, kind: ExitKind::Fault(None) });
         flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
         Ok(x)

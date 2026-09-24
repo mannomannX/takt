@@ -1787,6 +1787,7 @@ sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereigni
 | 62 | `machine … with budget = {ram = …}`: Der gerechnete Speicher der Maschine (11.5, mit Overlay) liegt im deklarierten Budget. `wcet` braucht die Kalibrierung (13.8) und meldet bis dahin seine Stufe | F |
 | 63 | Zwei Lints ohne eigene Syntax: (a) `alert` und `check` mit **derselben** Bedingung im selben Block — die Polaritaet ist entgegengesetzt gemeint (5.6), und weil beide Zeilen gleich aussehen, faellt die Verwechslung sonst niemandem auf; (b) ein `profile`, das einen `param` nicht nennt — er nimmt still seinen Default, und das ist beim Lesen nicht von der Absicht zu unterscheiden (4.6) | W |
 | 64 | Treiberstufe (12.10, v1.2): Ein `port` wird nur in einer `driver machine` gelesen oder geschrieben. Wer Register anfasst, sagt es in der Deklaration; damit ist die Treiberstufe eines Programms an seinen Köpfen ablesbar. Eine `driver machine` ohne `port` ist eine Warnung | F |
+| 65 | Beweisdatei (`.takt-proof`, 11.3): Der Programm-Hash der Datei stimmt mit der Quelle überein; nur dann entfallen die bewiesenen impliziten Prüfungen im erzeugten Code. Der Interpreter prüft sie weiter und meldet einen Verstoß als Fehler des Compilers, nicht als Fault. | F |
 
 Die Kombination aus 4, 8, 9, 11, 17–22 und 30–32 ist die konstruktive Form der Sätze in Abschnitt 9.
 

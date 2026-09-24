@@ -878,3 +878,41 @@ fn a_check_is_proven_only_when_every_unrolled_round_proves_it() {
     };
     assert_eq!(range.origin, RangeOrigin::Declared, "kein Besuch allein beweist sie");
 }
+
+#[test]
+fn an_external_proof_drops_the_check_and_a_stale_one_is_refused() {
+    use takt_mir::analysis::proof::{Proof, Site};
+    use takt_mir::expr::{CheckedKind, ExprKind};
+    use takt_mir::stmt::StmtKind;
+    use takt_mir::types::RangeOrigin;
+    let body = "\
+machine m:
+    var a : int in 0..200 = 100
+    initial RUN
+    state RUN:
+        loop:
+            a = a + 60
+            n = a % 100
+";
+    let (_, r, _) = compile(body);
+    assert_eq!(count(&r, "Declared"), 1, "a + 60 kann die Range verlassen: {:?}", r.checks);
+    let site = r.sites.iter().find(|s| s.cause.name() == "Declared").expect("die Stelle");
+
+    let src = format!("{HEAD}{OUT}{body}");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let hash = takt_mir::review::hash_of(src.as_bytes());
+    let proof = Proof { program: hash, sites: vec![Site { start: site.span.start, kind: "range".into(), k: 3 }] };
+    let out = takt_sema::compile_with(&src, &options, Some(&proof));
+    assert!(!out.has_errors(), "{:?}", out.diagnostics);
+    assert_eq!(count(&out.report, "Declared"), 0, "die bewiesene Stelle zaehlt nicht mehr: {:?}", out.report.checks);
+    let p = out.program.expect("Programm");
+    let m = p.machines.iter().find(|m| m.name == "m").expect("Maschine");
+    let StmtKind::Assign { value, .. } = &m.states[0].loop_block.stmts[0].kind else { panic!("Zuweisung") };
+    let ExprKind::Checked { kind: CheckedKind::Range(range), .. } = &value.kind else { panic!("Knoten: {value:?}") };
+    assert_eq!(range.origin, RangeOrigin::Proven, "der Interpreter prueft weiter, der Codegen nicht");
+
+    let stale = Proof { program: "0000".into(), ..proof };
+    let out = takt_sema::compile_with(&src, &options, Some(&stale));
+    assert!(out.diagnostics.iter().any(|d| d.code == "SC-65"), "{:?}", out.diagnostics);
+    assert!(out.program.is_none(), "eine fremde Beweisdatei uebersetzt nicht");
+}

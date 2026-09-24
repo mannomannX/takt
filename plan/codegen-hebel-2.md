@@ -113,6 +113,10 @@ Gemessen am UART-Objekt (`test_uart_c6_hw.takt`, `riscv32imac`, `-Os`, Flags aus
 | P1, P2 Prüfungen als Knoten, Intervallanalyse als Beweiser | 9 416 | +58 Byte, weil der Codegen vorher **Prüfungen ausließ** (FB-242): Überlauf in schmalen Typen, Division durch null, Schiebebetrag, `as`-Konversion und der Index einer Zuweisungsstelle standen nur im Interpreter; ein variabler Schiebebetrag erzeugte ungültige IR (`shl i16 x, i64 y`). Jetzt trägt die MIR jede Prüfung als Knoten, die Analyse beweist, was sie kann, und der Codegen setzt den Rest um. Funktionsrümpfe wurden vorher nie analysiert (FB-243). |
 | R1 Bereichsganzzahlen schmal gespeichert | 9 014 | −402 Byte; FB-248. `int in 0..1_000_000` liegt als `i32`, `Duration in 0 s..10 ms` als `i32`, `int in 0..8` als `i8`; gerechnet wird weiter in `i64`, `sext` beim Laden, `trunc` beim Schreiben. Ψ, Journal und C-Rahmen behalten ihre Breiten. `takt size` rechnet mit derselben Regel. |
 | R2 32-Bit-Rechnung, wo die Analyse es beweist | 8 676 | −338 Byte; FB-249. Ein Knoten rechnet in `i32`, wenn er und jeder breite Teilausdruck bewiesen in `i32` passen (Lemma 3.4); `sext` einmal am Ende. Vergleiche ebenso. Im UART-IR sinken die `i64`-Vergleiche von 136 auf 55. Dabei geschlossen: Beweise aus abgerollten Schleifen galten, wenn *eine* Runde bewies — jetzt muss es jede (FB-250). |
+| S5 Handler-Fenster als Funktion je Strom | — | **Gemessen, verworfen** (FB-251). Das UART-Programm hat fünf Handler-Fenster insgesamt, höchstens zwei auf demselben Strom; ein Fenster ist etwa 40 Byte Gerüst. |
+| S6 Rahmen als Tabellen | — | **Gemessen, verworfen** (FB-252). `takt_mcu_init_with` 506 Byte: vier `memset`, sechs Parameter-Stores (60 Byte), zwanzig Aufrufe; `takt_mcu_commit` 152 Byte für 13 Treiberaufrufe. Eine Tabelle spart die Stores, nicht die Aufrufe — unter 50 Byte. Der große Posten aus der ersten Runde war die Dump-Tabelle (FB-231), die steht schon. |
+| P3 Beweispflichten an `takt prove` | — | Plumbing umgesetzt (FB-253), ohne Solver auf dieser Maschine nicht gemessen. `takt prove --save-proof DATEI` schreibt die als unerreichbar bewiesenen Prüfstellen mit dem SHA-256 der Quelle als `.takt-proof`; `takt check/build/sim … --proof DATEI` prüft den Hash (Prüfung 65) und lässt die Stellen im Codegen aus — Range-Knoten bleiben als `Proven` stehen, der Interpreter prüft sie weiter. Der Prover führt jetzt jede implizite Prüfung (Range, Divisor, Endlichkeit) als Stelle mit demselben Namen wie `takt check --checks`. Grenze: `Index`, `Overflow`, `Shift`, `Convert` modelliert der Prover nicht; die zehn relationalen Ringindizes des UART-Programms bleiben. |
+| R3 Bip-Puffer | — | Nicht angefasst: Die Planung stellt ihn unter „erst, wenn die Laufzeit der Elemente drückt“; der Schritt liegt bei 24 µs je Tick, weit unter der Periode. Bleibt offen. |
 
 ### Was P1/P2 konkret gebracht haben
 
@@ -128,7 +132,4 @@ UART nach P2: 42 Prüfungen — 29 `Declared` (Zähler `x += 1` in `0..1_000_000
 
 Die Tabelle in 2 nahm an, dass P1/P2 Prüfungen *entfernen*; tatsächlich fehlten dem Codegen Prüfungen, und die Analyse hat die neuen sofort wegbewiesen, wo es ging. Der ehrliche Stand: 9 416 Byte, Faktor 3,4 zu C — mit vollständigen Prüfungen. Die verbleibenden 56 Fault-Zweige (31 Range, 7 Überlauf-Instanzen, 4 Konversion, 12 Index, Rest Streams) sind P3-Material; jeder kostet 6–12 Byte.
 
-### Offen
-
-- `NonFinite` und `Domain` für Gleitkomma stehen als Knotenart bereit, aber weder Sema noch Codegen erzeugen sie; der Interpreter faultet bei nicht endlichem Ergebnis (4.2). Dieselbe Lücke wie FB-242, für `float`; die Warnpolitik aus 3.4 passt dort nicht (jede Gleitkommaoperation wäre eine Prüfung ohne Beweisweg).
-- R1, R2, S5, S6, P3, R3 wie in 4.
+### Offen   

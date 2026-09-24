@@ -52,6 +52,10 @@ pub const SC25: &str = "SC-25";
 pub const SC8: &str = "SC-8";
 /// Fault-Wald.
 pub const SC9: &str = "SC-9";
+
+/// Pruefung 65 (11.3): Eine Beweisdatei gilt nur fuer die Quelle, deren
+/// Hash sie traegt.
+pub const SC65: &str = "SC-65";
 /// Erreichbarkeit und tote Uebergaenge.
 pub const SC10: &str = "SC-10";
 /// Terminierung.

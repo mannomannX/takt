@@ -60,6 +60,8 @@ pub struct ImplicitCheck {
     /// einer anderen in Beziehung gesetzt — nur dort koennte `±x ± y <= c`
     /// beweisen, was ein Intervall nicht kann.
     pub relational: bool,
+    /// Die Art als Schluessel ([`tag`]).
+    pub tag: u8,
 }
 
 /// Der Zustand eines Durchlaufs.
@@ -523,7 +525,7 @@ impl<'p> Walk<'p> {
             // Ein Ueberlauf in 64 Bit warnt nicht (Pruefung 4).
             let wide = matches!(kind, CheckedKind::Overflow) && self.width_of(node.ty).is_none_or(|w| w.bits() == 64);
             let warns = !wide && (self.loop_depth > 0 || self.in_action);
-            self.checks.push(ImplicitCheck { cause, span: node.span, warns, relational });
+            self.checks.push(ImplicitCheck { cause, span: node.span, warns, relational, tag: tag(kind) });
             self.kept.push((node.span, tag(kind)));
         }
         result
@@ -569,6 +571,23 @@ pub fn tag(kind: &CheckedKind) -> u8 {
         CheckedKind::Missing => 9,
     }
 }
+
+/// Der Name einer Pruefungsart, wie Report und Beweisdatei ihn fuehren.
+pub fn name(kind: &CheckedKind) -> &'static str {
+    NAMES[tag(kind) as usize]
+}
+
+/// Der Name zu einem Schluessel aus [`tag`].
+pub fn name_of_tag(tag: u8) -> &'static str {
+    NAMES.get(tag as usize).copied().unwrap_or("?")
+}
+
+/// Der Schluessel zu einem Namen.
+pub fn tag_of_name(name: &str) -> Option<u8> {
+    NAMES.iter().position(|n| *n == name).map(|i| i as u8)
+}
+
+const NAMES: [&str; 10] = ["div", "ovf", "fin", "dom", "index", "range", "conv", "shift", "valid", "missing"];
 
 /// Was `len` und `count` einer Sammlung hoechstens sind (3.9).
 fn capacity_of(p: &Program, ty: crate::TypeId) -> Interval {

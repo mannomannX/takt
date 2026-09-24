@@ -94,6 +94,8 @@ impl Args {
             "--solver",
             "--timeout",
             "--save",
+            "--proof",
+            "--save-proof",
             "--coverage",
             "--machine",
             "--extract",
@@ -258,7 +260,11 @@ fn check(args: &Args) -> bool {
         };
         let map = SourceMap::single(path.as_str(), src.as_str());
         let options = takt_sema::Options { policy, build: build_of(args), profile: profile_of(args) };
-        let checked = takt_sema::compile(&src, &options);
+        let Some(proof) = proof_of(args) else {
+            ok = false;
+            continue;
+        };
+        let checked = takt_sema::compile_with(&src, &options, proof.as_ref());
         // Mit Kalibrierung urteilt SC-12 gleich (siehe unten); sein
         // Hinweis „noch nicht entscheidbar" waere daneben ein Widerspruch.
         let kalibriert = calibration(args);
@@ -312,7 +318,8 @@ fn check(args: &Args) -> bool {
                 for c in sites {
                     let (line, col) = map.line_col(c.span);
                     let note = if c.warns { " (Schleife oder Aktionsblock)" } else { "" };
-                    println!("  Pruefung {} {line}:{col}{note}", c.cause.name());
+                    let kind = takt_mir::analysis::walk::name_of_tag(c.tag);
+                    println!("  Pruefung {} {kind} {line}:{col} @{}{note}", c.cause.name(), c.span.start);
                 }
             }
             if let Some(program) = &checked.program {
@@ -977,11 +984,25 @@ fn profile_of(args: &Args) -> Option<String> {
 }
 
 /// Uebersetzt eine Datei und meldet die Diagnosen; `None` bei Fehlern.
+/// Die Beweisdatei aus `--proof` (11.3); `None` heisst: nicht lesbar.
+fn proof_of(args: &Args) -> Option<Option<takt_mir::analysis::proof::Proof>> {
+    let Some(path) = args.value("--proof") else { return Some(None) };
+    let text = read(path)?;
+    match takt_mir::analysis::proof::parse(&text) {
+        Ok(p) => Some(Some(p)),
+        Err(e) => {
+            eprintln!("{path}: {e}");
+            None
+        }
+    }
+}
+
 fn compile_file(path: &str, args: &Args) -> Option<takt_mir::Program> {
     let src = read(path)?;
     let map = SourceMap::single(path, src.as_str());
     let options = takt_sema::Options { policy: Policy::default(), build: build_of(args), profile: profile_of(args) };
-    let out = takt_sema::compile(&src, &options);
+    let proof = proof_of(args)?;
+    let out = takt_sema::compile_with(&src, &options, proof.as_ref());
     for d in &out.diagnostics {
         eprintln!("{}", map.render(d));
     }
@@ -1360,6 +1381,27 @@ fn prove(args: &Args) -> bool {
                 for c in &checks {
                     let (line, col) = map.as_ref().map_or((0, 0), |m| m.line_col(c.span));
                     println!("    {} {}:{line}:{col}: {}", c.kind, c.machine, c.text());
+                }
+                // 11.3: Die bewiesenen Stellen neben das Programm, mit dem
+                // Hash der Quelle; `--proof` laesst sie im Codegen aus.
+                if let Some(out) = args.value("--save-proof") {
+                    let sites: Vec<takt_mir::analysis::proof::Site> = checks
+                        .iter()
+                        .filter_map(|c| match c.verdict {
+                            takt_prove::CheckVerdict::Unreachable { k } => {
+                                Some(takt_mir::analysis::proof::Site { start: c.start, kind: c.kind.clone(), k })
+                            }
+                            _ => None,
+                        })
+                        .filter(|s| takt_mir::analysis::walk::tag_of_name(&s.kind).is_some())
+                        .collect();
+                    let Some(src) = read(path) else { return false };
+                    let text = takt_mir::analysis::proof::render(&takt_mir::review::hash_of(src.as_bytes()), &sites);
+                    if let Err(e) = std::fs::write(out, text) {
+                        eprintln!("{out}: {e}");
+                        return false;
+                    }
+                    println!("  {out}: {} bewiesene Stellen", sites.len());
                 }
             }
             for r in &reports {
