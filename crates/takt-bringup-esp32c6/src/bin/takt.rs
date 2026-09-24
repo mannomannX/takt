@@ -131,6 +131,7 @@ pub extern "C" fn takt_in_ui_button(value: *mut u8, quality: *mut u8) -> bool {
 #[main]
 fn main() -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    takt_board_esp32c6::reenumerate_if_requested();
     let mut telemetry = takt_board_esp32c6::telemetry(peripherals.USB_DEVICE);
     let Ok(timer) = takt_board_esp32c6::init(peripherals.SYSTIMER, TICK_NS) else {
         telemetry.write("takt: Periode nicht einrichtbar");

@@ -19,22 +19,34 @@ const RING: usize = 2048;
 /// Die Leitung.
 pub struct UsbJtag {
     port: UsbSerialJtag<'static, Blocking>,
+    /// Seit dem letzten Abschicken kam ein Byte ins FIFO.
+    pending: bool,
 }
 
 impl UsbJtag {
     /// Bindet die Schnittstelle; sie ist mit dem Chip da.
     pub fn new(usb: USB_DEVICE<'static>) -> UsbJtag {
-        UsbJtag { port: UsbSerialJtag::new(usb) }
+        UsbJtag { port: UsbSerialJtag::new(usb), pending: false }
     }
 }
 
 impl Port for UsbJtag {
     fn try_write(&mut self, b: u8) -> bool {
-        self.port.write_byte_nb(b).is_ok()
+        let taken = self.port.write_byte_nb(b).is_ok();
+        self.pending |= taken;
+        taken
     }
 
     fn flush(&mut self) {
-        let _ = self.port.flush_tx_nb();
+        // `wr_done` nur fuer ein angefangenes Paket bei freiem FIFO: Bei
+        // belegtem Endpunkt — der Host hat das letzte Paket noch nicht
+        // abgeholt — setzt es den Endpunkt fest, bis der Block zurueckgesetzt
+        // wird (FB-267); genau das passiert unter Last, wenn der Ring voll
+        // ist und vor jedem Byte die Leitung versucht wird.
+        if self.pending && USB_DEVICE::regs().ep1_conf().read().serial_in_ep_data_free().bit_is_set() {
+            let _ = self.port.flush_tx_nb();
+            self.pending = false;
+        }
     }
 }
 

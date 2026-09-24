@@ -50,6 +50,7 @@ pub mod panic;
 pub mod pins;
 pub mod tick;
 pub mod uart;
+pub mod usb;
 
 use core::cell::{Cell, RefCell};
 
@@ -68,6 +69,7 @@ pub use pins::route_uart0;
 pub use takt_mcu_program::Generated;
 pub use tick::{SystimerTick, on_timer_interrupt};
 pub use uart::{Telemetry, UsbJtag, telemetry};
+pub use usb::reenumerate_if_requested;
 
 /// Der Kerntakt in Hertz, wie `esp_hal::init` ihn mit `CpuClock::max()` setzt.
 pub const CORE_HZ: u32 = 160_000_000;

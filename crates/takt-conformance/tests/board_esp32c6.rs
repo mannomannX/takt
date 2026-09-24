@@ -12,9 +12,13 @@ use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use takt_conformance::compare;
+use takt_llvm::inspect::Binutils;
+use takt_llvm::target::Target;
 use takt_mir::program::Program;
 
 const TICKS: u64 = 60;
@@ -151,38 +155,149 @@ fn probe_rs(args: &[&str]) -> Result<(), String> {
 
 /// Setzt das Board zurueck und liest den Trace bis `takt end`.
 ///
-/// Kommt gar nichts, nicht einmal der ROM-Bootloader, hat der
-/// USB-Serial-JTAG nach dem Flashen noch nicht wieder angelegt; ein
-/// zweiter Reset genuegt dann. Ein Lauf, der etwas sagt und nicht endet,
-/// wird nicht wiederholt — das waere ein Befund.
-fn capture(port: &str) -> Result<String, String> {
-    for attempt in 0..2 {
-        // Nach dem Flashen legt der USB-Serial-JTAG neu an; ein Handle von
-        // davor liefert nichts. Darum kurz warten und je Versuch neu oeffnen.
-        std::thread::sleep(Duration::from_millis(500));
-        let mut serial = serialport::new(port, 115_200)
-            .timeout(Duration::from_millis(200))
-            .open()
-            .map_err(|e| format!("{port}: {e}"))?;
-        probe_rs(&["reset", "--chip", "esp32c6"])?;
-        let start = Instant::now();
-        let mut text = String::new();
-        let mut buf = [0u8; 4096];
-        while start.elapsed() < Duration::from_secs(30) {
-            match serial.read(&mut buf) {
-                Ok(n) => text.push_str(&String::from_utf8_lossy(&buf[..n])),
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
-                Err(e) => return Err(format!("{port}: {e}")),
+/// Fehlt das Ende, entscheidet der Tickzaehler ueber JTAG: Steht das
+/// Programm vor dem Ende, ist das der Befund, und der Text gehoert in die
+/// Meldung. Lief es durch, hat die Konsole geschwiegen — gleich nach dem
+/// Flashen, weil der USB-Serial-JTAG neu anlegt und ein Handle von davor
+/// nichts liefert, genuegt ein zweiter Reset; sonst steht ihr
+/// Empfangsendpunkt (FB-266), und das Board meldet sein USB-Geraet auf
+/// Wunsch neu an — ein Neustecken ohne Hand.
+fn capture(port: &str, elf: &Path, ticks: u64) -> Result<String, String> {
+    let mut last = String::new();
+    for attempt in 0..3 {
+        let text = match capture_once(port) {
+            Ok(text) => text,
+            Err(e) if attempt < 2 => {
+                eprintln!("{e}; neuer Versuch");
+                last = e;
+                continue;
             }
-            if text.contains("takt end") {
-                return Ok(text);
-            }
+            Err(e) => return Err(e),
+        };
+        if text.contains("takt end") {
+            return Ok(text);
         }
-        if !text.is_empty() || attempt == 1 {
-            return Err(format!("kein `takt end` binnen 30 s; gelesen:\n{text}"));
+        let tick = tick_over_jtag(elf)?;
+        if u64::from(tick) < ticks {
+            return Err(format!("kein `takt end` binnen 30 s, das Programm steht bei Tick {tick}; gelesen:\n{text}"));
+        }
+        let when = if text.is_empty() { "" } else { " mittendrin" };
+        last = format!("das Programm lief bis Tick {tick}, die Konsole schwieg{when}");
+        eprintln!("{last}; {}", if attempt == 0 { "neuer Versuch" } else { "Neuanmeldung des USB-Geraets" });
+        if attempt > 0 {
+            reenumerate(port)?;
         }
     }
-    unreachable!("zwei Versuche")
+    Err(format!("{last}; auch nach Neuanmeldung des USB-Geraets — Kabel neu stecken"))
+}
+
+/// Ein Reset und ein Lesen mit harter Frist.
+///
+/// Der Leser laeuft in einem eigenen Thread: Ein `read`, das trotz
+/// Timeout nicht zurueckkehrt (FB-266), haelt so nur den Thread, nicht
+/// den Test. Haengt er, bleibt der Port bis zur Neuanmeldung belegt.
+fn capture_once(port: &str) -> Result<String, String> {
+    // Nach dem Flashen legt der USB-Serial-JTAG neu an; ein Handle von
+    // davor liefert nichts. Darum kurz warten und je Versuch neu oeffnen.
+    std::thread::sleep(Duration::from_millis(500));
+    let mut serial = serialport::new(port, 115_200)
+        .timeout(Duration::from_millis(200))
+        .open()
+        .map_err(|e| format!("{port}: {e}"))?;
+    probe_rs(&["reset", "--chip", "esp32c6"])?;
+    let (tx, rx) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader = std::thread::spawn({
+        let stop = Arc::clone(&stop);
+        move || {
+            let mut buf = [0u8; 4096];
+            while !stop.load(Ordering::Relaxed) {
+                match serial.read(&mut buf) {
+                    Ok(n) => {
+                        if tx.send(Ok(buf[..n].to_vec())).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+                    Err(e) => {
+                        let _ = tx.send(Err(e.to_string()));
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut text = String::new();
+    let result = loop {
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(Ok(bytes)) => {
+                text.push_str(&String::from_utf8_lossy(&bytes));
+                if text.contains("takt end") {
+                    break Ok(());
+                }
+            }
+            Ok(Err(e)) => break Err(format!("{port}: {e}")),
+            Err(_) => break Ok(()),
+        }
+    };
+    stop.store(true, Ordering::Relaxed);
+    let until = Instant::now() + Duration::from_secs(1);
+    while !reader.is_finished() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    result.map(|()| text)
+}
+
+/// Der Tickzaehler des Bring-ups (`g_tick`), ueber JTAG gelesen.
+fn tick_over_jtag(elf: &Path) -> Result<u32, String> {
+    let symbols = Binutils::best_for(Target::RISCV32IMAC).symbols(elf).ok_or("`nm` fehlt: kein Blick auf `g_tick`")?;
+    let g_tick = symbols.iter().find(|s| s.name == "g_tick").ok_or("kein `g_tick` im Abbild")?;
+    let address = format!("{:#x}", g_tick.address);
+    let out = Command::new("probe-rs")
+        .args(["read", "--chip", "esp32c6", "b32", &address, "1"])
+        .output()
+        .map_err(|e| format!("probe-rs: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("JTAG antwortet nicht (Kabel neu stecken):\n{}", String::from_utf8_lossy(&out.stderr)));
+    }
+    // `40802478: 0000003c`
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.split_once(": ").and_then(|(_, v)| u32::from_str_radix(v.trim(), 16).ok()))
+        .ok_or_else(|| "probe-rs read: kein Wert".to_string())
+}
+
+/// LP_AON STORE0 und der Wunsch `TAKT`, wie `usb.rs` des Board-Crates sie liest.
+const REENUMERATE_REG: &str = "0x600b1000";
+const REENUMERATE_MAGIC: &str = "0x54414b54";
+
+/// Laesst das Board sein USB-Geraet neu anmelden und wartet den Port ab.
+fn reenumerate(port: &str) -> Result<(), String> {
+    probe_rs(&["write", "--chip", "esp32c6", "b32", REENUMERATE_REG, REENUMERATE_MAGIC])?;
+    probe_rs(&["reset", "--chip", "esp32c6"])?;
+    if !port_listed(port, false, Duration::from_secs(3)) {
+        return Err("das USB-Geraet hat sich nicht abgemeldet: Bring-up ohne Neuanmeldung?".to_string());
+    }
+    if !port_listed(port, true, Duration::from_secs(10)) {
+        return Err(format!("{port} kam nach der Neuanmeldung nicht zurueck"));
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    Ok(())
+}
+
+/// Wartet, bis das System den Port fuehrt (`present`) oder nicht mehr.
+fn port_listed(port: &str, present: bool, within: Duration) -> bool {
+    let until = Instant::now() + within;
+    while Instant::now() < until {
+        let listed =
+            serialport::available_ports().is_ok_and(|ps| ps.iter().any(|p| p.port_name.eq_ignore_ascii_case(port)));
+        if listed == present {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
 }
 
 /// Die Namen der Ausgaenge, die ein Trace nennt.
@@ -341,7 +456,7 @@ fn a_board_input_reaches_the_process_image() {
     let program = root().join("crates/takt-bringup-esp32c6/programs/button_input.takt");
     let elf = build_program(&program, true, 40).unwrap_or_else(|e| panic!("{e}"));
     probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()]).unwrap_or_else(|e| panic!("{e}"));
-    let text = capture(&port).unwrap_or_else(|e| panic!("{e}"));
+    let text = capture(&port, &elf, 40).unwrap_or_else(|e| panic!("{e}"));
 
     // Der Taster ist ungedrueckt: `led` bleibt aus, `pressed` bei null.
     assert_eq!(last_output(&text, "led").as_deref(), Some("0"), "{text}");
@@ -366,16 +481,14 @@ fn persistence_survives_a_reset() {
     };
     let _board = board();
     let name = "35_persist.takt";
-    let first = build(name, false)
-        .and_then(|elf| {
-            probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
-            capture(&port)
-        })
+    let elf = build(name, false).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let first = probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])
+        .and_then(|()| capture(&port, &elf, TICKS))
         .unwrap_or_else(|e| panic!("{name}: {e}"));
     let end = last_output(&first, "count").unwrap_or_else(|| panic!("kein `count` im ersten Lauf:\n{first}"));
     assert!(first.contains("flush 1"), "das Journal wurde am Ende nicht geschrieben:\n{first}");
     // Der zweite Lauf: derselbe Chip, ein Reset, das Journal bleibt.
-    let second = capture(&port).unwrap_or_else(|e| panic!("{name}, zweiter Lauf: {e}"));
+    let second = capture(&port, &elf, TICKS).unwrap_or_else(|e| panic!("{name}, zweiter Lauf: {e}"));
     let start = second
         .lines()
         .find_map(|l| l.strip_prefix("t=0 out count "))
@@ -400,7 +513,7 @@ fn an_idle_state_sleeps_in_virtual_ticks() {
     let text = build(name, true)
         .and_then(|elf| {
             probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
-            capture(&port)
+            capture(&port, &elf, TICKS)
         })
         .unwrap_or_else(|e| panic!("{name}: {e}"));
     let slept = slept(&text).unwrap_or_else(|| panic!("keine Schlafzeile:\n{text}"));
@@ -431,7 +544,7 @@ fn the_journal_costs_time_but_not_semantics() {
     let text = build(name, true)
         .and_then(|elf| {
             probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
-            capture(&port)
+            capture(&port, &elf, TICKS)
         })
         .unwrap_or_else(|e| panic!("{name}: {e}"));
     let writes = counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
@@ -469,7 +582,7 @@ fn the_journal_writes_in_sleep_windows() {
     let text = build(name, true)
         .and_then(|elf| {
             probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
-            capture(&port)
+            capture(&port, &elf, TICKS)
         })
         .unwrap_or_else(|e| panic!("{name}: {e}"));
     let writes = counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
@@ -479,6 +592,33 @@ fn the_journal_writes_in_sleep_windows() {
     let p = corpus(name);
     let diffs = compare(&run_interpreted(&p), &text);
     assert!(diffs.is_empty(), "{diffs:?}");
+}
+
+/// **Das Board meldet sein USB-Geraet auf Wunsch neu an** (FB-266).
+///
+/// Der Wunsch ueber JTAG in STORE0, ein Reset: Der Port verschwindet und
+/// kommt zurueck, und ein Lauf danach spricht wie zuvor. Dazu der
+/// Tickzaehler ueber JTAG, der eine stumme Konsole von einem stehenden
+/// Programm unterscheidet.
+#[test]
+fn the_board_reenumerates_its_usb_on_request() {
+    let Ok(port) = std::env::var("TAKT_ESP32C6_PORT") else {
+        eprintln!("uebersprungen: TAKT_ESP32C6_PORT nennt kein Board");
+        return;
+    };
+    let _board = board();
+    let name = "01_minimal.takt";
+    let elf = build(name, true).unwrap_or_else(|e| panic!("{name}: {e}"));
+    probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()]).unwrap_or_else(|e| panic!("{e}"));
+    let first = capture(&port, &elf, TICKS).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!(tick_over_jtag(&elf).unwrap_or_else(|e| panic!("{e}")), TICKS as u32, "{first}");
+    reenumerate(&port).unwrap_or_else(|e| panic!("{e}"));
+    let second = capture_once(&port).unwrap_or_else(|e| panic!("{name}, nach der Neuanmeldung: {e}"));
+    assert!(second.contains("takt end"), "nach der Neuanmeldung:\n{second}");
+    let outs = |t: &str| {
+        t.lines().filter(|l| l.starts_with("t=") && l.contains(" out ")).map(str::to_string).collect::<Vec<_>>()
+    };
+    assert_eq!(outs(&first), outs(&second));
 }
 
 #[test]
@@ -495,7 +635,7 @@ fn the_board_agrees_with_the_interpreter() {
         let p = corpus(name);
         let board = match build(name, true).and_then(|elf| {
             probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()])?;
-            capture(&port)
+            capture(&port, &elf, TICKS)
         }) {
             Ok(t) => t,
             Err(e) => {
