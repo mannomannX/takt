@@ -1106,3 +1106,44 @@ machine dut:
     let trace = simulate(body, "t=1 cmd go\n", 4);
     assert!(trace.contains("t=2 out got 2\n"), "2 kHz sind 2 Byte je Millisekunde (8.8, FB-188): {trace}");
 }
+
+/// 12.10: Ein Strom an `mmio/ADR/r` schaltet je Lesen weiter — ein
+/// Datenregister, das eine FIFO leert; leer liest der Port das letzte
+/// Element, vor dem ersten den Default.
+#[test]
+fn a_stream_at_the_read_address_advances_per_port_read() {
+    let trace = simulate(
+        "\
+record Data layout little:
+    b : u8
+
+port dr : Data @ mmio(0x40001000)
+
+output regs : stream<Data> @ sim(\"mmio/0x40001000/r\") with max_rate = 40 kHz, capacity = 64
+output sum  : int @ hw(\"o/sum\") with safe = 0
+
+machine model:
+    var k : int in 0..255 = 1
+    initial RUN
+    state RUN:
+        loop:
+            send regs, Data(b = k as u8)
+            send regs, Data(b = (k + 1) as u8)
+            k = (k + 2) % 200
+
+driver machine pump:
+    initial RUN
+    state RUN:
+        loop:
+            var s : int = 0
+            for _i in range(3):
+                s = s + (dr.b as int)
+            sum = s
+",
+        "",
+        3,
+    );
+    assert!(trace.contains("t=0 out sum 0\n"), "vor dem ersten Element der Default:\n{trace}");
+    assert!(trace.contains("t=1 out sum 5\n"), "1, 2 und dann wieder 2:\n{trace}");
+    assert!(trace.contains("t=2 out sum 11\n"), "3, 4 und wieder 4:\n{trace}");
+}

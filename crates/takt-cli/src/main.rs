@@ -19,7 +19,7 @@
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
 //!                   [--instrument statements|states|off] [--diagnostics ids|none]
-//! takt size  DATEI… [--build sim|hw] [--params-profile P] [--object DATEI.o] [--target NAME]
+//! takt size  DATEI… [--build sim|hw] [--params-profile P] [--object DATEI.o | --target NAME]
 //!                   [--hardware DATEI.hw] [--baseline DATEI] [--save-baseline DATEI]
 //! takt cost  DATEI… [--build sim|hw] [--params-profile P]
 //! takt latency DATEI… [--build sim|hw] [--params-profile P]
@@ -772,7 +772,7 @@ fn size(args: &Args) -> bool {
             continue;
         };
         println!("{path}:");
-        let (measured, residency) = measure(args, program);
+        let (measured, residency) = measure(args, program, path);
         let mut report = takt_mir::analysis::size::size(program).with_object(&measured);
         let target = calibration(args);
         if let Some(target) = &target {
@@ -872,47 +872,104 @@ fn against_baseline(report: &takt_mir::analysis::size::Size, file: &str) -> bool
     ok
 }
 
-/// Was ein erzeugtes Objekt beisteuert (11.5, 12.3).
-///
-/// **Ohne `--object` bleibt es leer, und das ist kein Mangel.** Flash und
-/// Stacktiefe entscheidet der Codegen, nicht die MIR; wer sie wissen will,
-/// muss uebersetzt haben. `takt build --emit obj` liefert die Datei.
+/// Was ein erzeugtes Objekt beisteuert (11.5, 12.3): `--object` nennt
+/// eines, sonst uebersetzt `--target` das Programm dafuer; ohne beides
+/// bleiben Flash und Stack offen, weil sie der Codegen entscheidet.
 fn measure(
     args: &Args,
     p: &takt_mir::Program,
+    source: &str,
 ) -> (takt_mir::analysis::size::Measured, Option<takt_llvm::inspect::Residency>) {
     let mut out = takt_mir::analysis::size::Measured::default();
-    let Some(file) = args.value("--object") else { return (out, None) };
-    let path = std::path::Path::new(file);
+    let host = if cfg!(windows) { takt_llvm::Target::X86_64_WINDOWS } else { takt_llvm::Target::X86_64_LINUX };
+    let target = args.value("--target").and_then(takt_llvm::Target::by_name);
+    let built;
+    let path = match (args.value("--object"), target) {
+        (Some(file), _) => std::path::Path::new(file).to_path_buf(),
+        (None, Some(target)) => {
+            let Some(file) = object_for_size(p, target, source) else { return (out, None) };
+            built = file;
+            built.clone()
+        }
+        (None, None) => return (out, None),
+    };
     if !path.exists() {
-        eprintln!("{file}: nicht gefunden; Flash und Stack bleiben offen");
+        eprintln!("{}: nicht gefunden; Flash und Stack bleiben offen", path.display());
         return (out, None);
     }
+    let tools = takt_llvm::inspect::Binutils::best_for(target.unwrap_or(host));
 
-    // Ohne `--target` der Wirt: Ein Objekt ohne Angabe stammt meist aus
-    // `takt build` ohne Ziel, und das uebersetzt fuer den Wirt.
-    let host = if cfg!(windows) { takt_llvm::Target::X86_64_WINDOWS } else { takt_llvm::Target::X86_64_LINUX };
-    let target = args.value("--target").and_then(takt_llvm::Target::by_name).unwrap_or(host);
-    let tools = takt_llvm::inspect::Binutils::best_for(target);
-
-    if let Some(s) = tools.sections(path) {
+    if let Some(s) = tools.sections(&path) {
         out.flash = Some(s.flash());
         out.iram_text = Some(s.iram_text);
         out.iram_rodata = Some(s.iram_rodata);
     }
 
-    // Die Rahmen aller Funktionen in einem Durchlauf; die Rechnung
-    // braucht sie vollstaendig, sonst meldet sie unbekannt.
-    let symbols: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
-    let frames: Vec<Option<u32>> =
-        tools.stack_frames(path, &symbols).into_iter().map(|f| f.and_then(|n| u32::try_from(n).ok())).collect();
-    out.stack = takt_mir::analysis::stack::depth(p, &frames);
+    // Alle Rahmen in einem Durchlauf: die Funktionen und je Maschine ihr
+    // Schritt mit den Schleifen- und Eintrittsfunktionen darunter.
+    let syms = tools.symbols(&path).unwrap_or_default();
+    let prefixes: Vec<String> = p.machines.iter().map(|m| format!("{}_", takt_llvm::fns::sanitized(&m.name))).collect();
+    let mut names: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
+    names.extend(
+        syms.iter()
+            .filter(|s| matches!(s.kind, 'T' | 't') && prefixes.iter().any(|pre| s.name.starts_with(pre)))
+            .map(|s| s.name.clone()),
+    );
+    let measured: Vec<Option<u32>> =
+        tools.stack_frames(&path, &names).into_iter().map(|f| f.and_then(|n| u32::try_from(n).ok())).collect();
+    // Eine Funktion ohne Symbol ist ueberall eingebettet: ihr Rahmen liegt
+    // in dem des Rufers.
+    let frames: Vec<Option<u32>> = names[..p.fns.len()]
+        .iter()
+        .zip(&measured)
+        .map(|(name, f)| f.or_else(|| (!syms.iter().any(|s| s.name == *name)).then_some(0)))
+        .collect();
+    let machines: Vec<takt_mir::analysis::stack::MachineFrames> = prefixes
+        .iter()
+        .map(|pre| {
+            let mut mf = takt_mir::analysis::stack::MachineFrames::default();
+            for (name, f) in names.iter().zip(&measured).skip(p.fns.len()) {
+                let Some(f) = *f else { continue };
+                if !name.starts_with(pre) {
+                    continue;
+                }
+                if name == &format!("{pre}step") {
+                    mf.step = Some(f);
+                } else if mf.inner.as_ref().is_none_or(|(_, n)| f > *n) {
+                    mf.inner = Some((name.clone(), f));
+                }
+            }
+            mf
+        })
+        .collect();
+    out.stack = takt_mir::analysis::stack::depth(p, &frames, &machines);
 
     let residency = tools
-        .section_ranges(path)
-        .zip(tools.symbols(path))
-        .map(|(ranges, syms)| takt_llvm::inspect::residency(&syms, &ranges, |n| is_program_symbol(p, n)));
+        .section_ranges(&path)
+        .map(|ranges| takt_llvm::inspect::residency(&syms, &ranges, |n| is_program_symbol(p, n)));
+    if args.value("--object").is_none() {
+        let _ = std::fs::remove_file(&path);
+    }
     (out, residency)
+}
+
+/// Das Objekt fuer `takt size --target`: dieselbe Uebersetzung wie
+/// `takt build`, in einer Datei, die die Messung wieder loescht.
+fn object_for_size(p: &takt_mir::Program, target: takt_llvm::Target, source: &str) -> Option<std::path::PathBuf> {
+    let instrument = takt_llvm::Instrument::default_for(p.config.runtime_profile(), target);
+    let lowered = takt_llvm::lower::program_with_diagnostics(
+        p,
+        target.triple,
+        module_name(source),
+        instrument,
+        takt_llvm::Diagnostics::Ids,
+    );
+    for s in &lowered.skipped {
+        eprintln!("{}_step fehlt: {}", s.machine, s.reason);
+    }
+    let out = std::env::temp_dir().join(format!("takt-size-{}.o", std::process::id()));
+    let file = out.to_str()?.to_string();
+    emit_object(&lowered.ir, target, &file).then_some(out)
 }
 
 /// Symbole, die der Codegen und der Rahmen (12.1) fuer das Programm
@@ -1290,146 +1347,154 @@ fn prove(args: &Args) -> bool {
         }
         None => 5,
     };
-    let model = match takt_prove::encode(&program) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("{path}: nicht kodierbar: {} (plan/m6.md 2.8)", e.what);
+    let whole = takt_prove::encode(&program);
+    match &whole {
+        Ok(model) => {
+            println!(
+                "{path}: {} Zustandsvariablen, {} Eingaben, {} Annahmen, {} Beweisziele",
+                model.state.len(),
+                model.inputs.len(),
+                model.assumptions.len(),
+                model.properties.len()
+            );
+            for n in &model.notes {
+                println!("  Reichweite: {n}");
+            }
+        }
+        Err(e) => println!(
+            "{path}: Gesamtmodell nicht kodierbar: {} (plan/m6.md 2.8) — Eigenschaften und Vertraege entfallen, Pruefstellen je Maschine (13.3)",
+            e.what
+        ),
+    }
+    if let Some(out) = args.value("--export") {
+        let Ok(model) = &whole else {
+            eprintln!("{path}: nicht kodierbar, kein Export");
+            return false;
+        };
+        if let Err(e) = std::fs::write(out, takt_prove::export(model, depth)) {
+            eprintln!("{out}: {e}");
             return false;
         }
-    };
-    println!(
-        "{path}: {} Zustandsvariablen, {} Eingaben, {} Annahmen, {} Beweisziele",
-        model.state.len(),
-        model.inputs.len(),
-        model.assumptions.len(),
-        model.properties.len()
-    );
-    for n in &model.notes {
-        println!("  Reichweite: {n}");
+        println!("  {out}: BMC und Induktionsschritt bis Tiefe {depth}");
+        return true;
     }
-    match args.value("--export") {
-        Some(out) => {
-            if let Err(e) = std::fs::write(out, takt_prove::export(&model, depth)) {
-                eprintln!("{out}: {e}");
-                return false;
-            }
-            println!("  {out}: BMC und Induktionsschritt bis Tiefe {depth}");
-            true
+    let solver = match args.value("--solver") {
+        Some(p) => takt_prove::Solver::At(p.into()),
+        None => takt_prove::find(),
+    };
+    if !solver.works() {
+        eprintln!(
+            "{path}: kein Solver — `z3` oder `cvc5` auf den PATH oder nach `~/.takt/bin`, `TAKT_SOLVER` oder `--solver` setzen (13.3)"
+        );
+        return false;
+    }
+    let timeout = match args.value("--timeout").map(str::parse::<u64>) {
+        Some(Ok(n)) => n,
+        Some(Err(e)) => {
+            eprintln!("--timeout: {e}");
+            return false;
         }
-        None => {
-            let solver = match args.value("--solver") {
-                Some(p) => takt_prove::Solver::At(p.into()),
-                None => takt_prove::find(),
-            };
-            if !solver.works() {
-                eprintln!(
-                    "{path}: kein Solver — `z3` oder `cvc5` auf den PATH oder nach `~/.takt/bin`, `TAKT_SOLVER` oder `--solver` setzen (13.3)"
-                );
+        None => 60,
+    };
+    let mut ok = true;
+    let mut reports = Vec::new();
+    if let Ok(model) = &whole {
+        reports = match takt_prove::prove(model, &program, depth, &solver, timeout) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("{path}: {e}");
                 return false;
             }
-            let timeout = match args.value("--timeout").map(str::parse::<u64>) {
-                Some(Ok(n)) => n,
-                Some(Err(e)) => {
-                    eprintln!("--timeout: {e}");
-                    return false;
-                }
-                None => 60,
-            };
-            let reports = match takt_prove::prove(&model, &program, depth, &solver, timeout) {
-                Ok(r) => r,
+        };
+        // B2: die Vertraege der Bloecke — aus jedem typkonformen Zustand.
+        if !model.contracts.is_empty() {
+            let contracts = match takt_prove::verify_contracts(model, &solver, timeout) {
+                Ok(c) => c,
                 Err(e) => {
                     eprintln!("{path}: {e}");
                     return false;
                 }
             };
-            let mut ok = true;
-            // B2: die Vertraege der Bloecke — aus jedem typkonformen Zustand.
-            if !model.contracts.is_empty() {
-                let contracts = match takt_prove::verify_contracts(&model, &solver, timeout) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("{path}: {e}");
-                        return false;
-                    }
-                };
-                let map = read(path).map(|src| SourceMap::single(path.as_str(), src.as_str()));
-                println!("  Vertraege: {}", contracts.len());
-                for c in &contracts {
-                    let (line, col) = map.as_ref().map_or((0, 0), |m| m.line_col(c.span));
-                    println!("    {}.step {line}:{col}: {}", c.block, c.verdict.text());
-                    ok &= !matches!(c.verdict, takt_prove::ContractVerdict::Violated { .. });
-                }
+            let map = read(path).map(|src| SourceMap::single(path.as_str(), src.as_str()));
+            println!("  Vertraege: {}", contracts.len());
+            for c in &contracts {
+                let (line, col) = map.as_ref().map_or((0, 0), |m| m.line_col(c.span));
+                println!("    {}.step {line}:{col}: {}", c.block, c.verdict.text());
+                ok &= !matches!(c.verdict, takt_prove::ContractVerdict::Violated { .. });
             }
-            // B3: jede Pruefstelle klassifiziert — bewiesen unerreichbar,
-            // erreichbar mit Pfad, unentschieden; ohne Budget-Effekt (FB-49).
-            if !model.checks.is_empty() {
-                let checks = match takt_prove::classify(&model, &program, depth, &solver, timeout) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("{path}: {e}");
-                        return false;
-                    }
-                };
-                let count = |f: fn(&takt_prove::CheckVerdict) -> bool| checks.iter().filter(|c| f(&c.verdict)).count();
-                println!(
-                    "  Pruefstellen: {} bewiesen unerreichbar, {} erreichbar mit Pfad, {} unentschieden",
-                    count(|v| matches!(v, takt_prove::CheckVerdict::Unreachable { .. })),
-                    count(|v| matches!(v, takt_prove::CheckVerdict::Reachable { .. })),
-                    count(|v| matches!(v, takt_prove::CheckVerdict::Undecided { .. }))
-                );
-                let map = read(path).map(|src| SourceMap::single(path.as_str(), src.as_str()));
-                for c in &checks {
-                    let (line, col) = map.as_ref().map_or((0, 0), |m| m.line_col(c.span));
-                    println!("    {} {}:{line}:{col}: {}", c.kind, c.machine, c.text());
-                }
-                // 11.3: Die bewiesenen Stellen neben das Programm, mit dem
-                // Hash der Quelle; `--proof` laesst sie im Codegen aus.
-                if let Some(out) = args.value("--save-proof") {
-                    let sites: Vec<takt_mir::analysis::proof::Site> = checks
-                        .iter()
-                        .filter_map(|c| match c.verdict {
-                            takt_prove::CheckVerdict::Unreachable { k } => {
-                                Some(takt_mir::analysis::proof::Site { start: c.start, kind: c.kind.clone(), k })
-                            }
-                            _ => None,
-                        })
-                        .filter(|s| takt_mir::analysis::walk::tag_of_name(&s.kind).is_some())
-                        .collect();
-                    let Some(src) = read(path) else { return false };
-                    let text = takt_mir::analysis::proof::render(&takt_mir::review::hash_of(src.as_bytes()), &sites);
-                    if let Err(e) = std::fs::write(out, text) {
-                        eprintln!("{out}: {e}");
-                        return false;
-                    }
-                    println!("  {out}: {} bewiesene Stellen", sites.len());
-                }
-            }
-            for r in &reports {
-                let word = if r.assumption { "assumption" } else { "property" };
-                println!("  {word} {}: {}", r.name, r.verdict.text());
-                if let takt_prove::Verdict::Violated { stimulus, .. } = &r.verdict {
-                    ok = false;
-                    match args.value("--out") {
-                        Some(dir) => {
-                            let file = std::path::Path::new(dir).join(format!("{}.stim.trace", r.name));
-                            if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&file, stimulus))
-                            {
-                                eprintln!("{}: {e}", file.display());
-                                return false;
-                            }
-                            println!("    Gegenbeispiel: {}", file.display());
-                        }
-                        None => {
-                            for line in stimulus.lines() {
-                                println!("    {line}");
-                            }
-                        }
-                    }
-                }
-            }
-            ok
         }
     }
+    // B3: jede Pruefstelle klassifiziert, je Maschine (13.3) — bewiesen
+    // unerreichbar, erreichbar mit Pfad, unentschieden; ohne Budget-Effekt (FB-49).
+    let (checks, notes) =
+        match takt_prove::classify_compositional(&program, whole.as_ref().ok(), depth, &solver, timeout) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("{path}: {e}");
+                return false;
+            }
+        };
+    for n in notes.iter().filter(|n| whole.as_ref().is_ok_and(|m| !m.notes.contains(n)) || whole.is_err()) {
+        println!("  Reichweite: {n}");
+    }
+    if !checks.is_empty() {
+        let count = |f: fn(&takt_prove::CheckVerdict) -> bool| checks.iter().filter(|c| f(&c.verdict)).count();
+        println!(
+            "  Pruefstellen (je Maschine, Ψ frei): {} bewiesen unerreichbar, {} erreichbar mit Pfad, {} unentschieden",
+            count(|v| matches!(v, takt_prove::CheckVerdict::Unreachable { .. })),
+            count(|v| matches!(v, takt_prove::CheckVerdict::Reachable { .. })),
+            count(|v| matches!(v, takt_prove::CheckVerdict::Undecided { .. }))
+        );
+        let map = read(path).map(|src| SourceMap::single(path.as_str(), src.as_str()));
+        for c in &checks {
+            let (line, col) = map.as_ref().map_or((0, 0), |m| m.line_col(c.span));
+            println!("    {} {}:{line}:{col}: {}", c.kind, c.machine, c.text());
+        }
+        // 11.3: Die bewiesenen Stellen neben das Programm, mit dem
+        // Hash der Quelle; `--proof` laesst sie im Codegen aus.
+        if let Some(out) = args.value("--save-proof") {
+            let sites: Vec<takt_mir::analysis::proof::Site> = checks
+                .iter()
+                .filter_map(|c| match c.verdict {
+                    takt_prove::CheckVerdict::Unreachable { k } => {
+                        Some(takt_mir::analysis::proof::Site { start: c.start, kind: c.kind.clone(), k })
+                    }
+                    _ => None,
+                })
+                .filter(|s| takt_mir::analysis::walk::tag_of_name(&s.kind).is_some())
+                .collect();
+            let Some(src) = read(path) else { return false };
+            let text = takt_mir::analysis::proof::render(&takt_mir::review::hash_of(src.as_bytes()), &sites);
+            if let Err(e) = std::fs::write(out, text) {
+                eprintln!("{out}: {e}");
+                return false;
+            }
+            println!("  {out}: {} bewiesene Stellen", sites.len());
+        }
+    }
+    for r in &reports {
+        let word = if r.assumption { "assumption" } else { "property" };
+        println!("  {word} {}: {}", r.name, r.verdict.text());
+        if let takt_prove::Verdict::Violated { stimulus, .. } = &r.verdict {
+            ok = false;
+            match args.value("--out") {
+                Some(dir) => {
+                    let file = std::path::Path::new(dir).join(format!("{}.stim.trace", r.name));
+                    if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&file, stimulus)) {
+                        eprintln!("{}: {e}", file.display());
+                        return false;
+                    }
+                    println!("    Gegenbeispiel: {}", file.display());
+                }
+                None => {
+                    for line in stimulus.lines() {
+                        println!("    {line}");
+                    }
+                }
+            }
+        }
+    }
+    ok
 }
 
 /// `takt campaign`: der Laufraum einer Kampagne als Tabelle, je Lauf eine

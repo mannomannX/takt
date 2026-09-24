@@ -13,7 +13,7 @@
 //! (Inputs gueltig, kein i64-Ueberlauf, Tunables konstant), stehen als
 //! Notizen im Export.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Not;
 
 use takt_diag::Span;
@@ -246,11 +246,31 @@ struct Enc<'p> {
     sites: BTreeMap<u32, Vec<Term>>,
     /// Position, Maschine und Art je Pruefstelle.
     site_info: BTreeMap<u32, (Span, String, String)>,
+    /// Nur diese Maschine (13.3): Ψ, fremde Outputs und ein fremder `abort`
+    /// sind freie Eingaben je Tick.
+    scope: Option<MachineId>,
+    /// Was die Typen ueber freie Ψ-Eingaben sagen.
+    psi_assumptions: Vec<Term>,
+    psi_seen: BTreeSet<String>,
 }
 
 /// Kodiert ein Programm.
 pub fn encode(p: &Program) -> R<Model> {
-    let order = takt_mir::analysis::schedule::order(p).unwrap_or_else(|_| takt_mir::analysis::schedule::runnable(p));
+    encode_with(p, None)
+}
+
+/// Kodiert eine Maschine allein (13.3): Ψ-Lesevorgaenge, fremde Outputs
+/// und ein fremder `abort` sind freie Eingaben unter den Annahmen ihrer
+/// Typen — mehr Verhalten als das Ganze, darum bleibt „unerreichbar" wahr.
+pub fn encode_machine(p: &Program, m: MachineId) -> R<Model> {
+    encode_with(p, Some(m))
+}
+
+fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
+    let order = match scope {
+        Some(m) => vec![m],
+        None => takt_mir::analysis::schedule::order(p).unwrap_or_else(|_| takt_mir::analysis::schedule::runnable(p)),
+    };
     let mut enc = Enc {
         p,
         order,
@@ -259,6 +279,9 @@ pub fn encode(p: &Program) -> R<Model> {
         aborts: Vec::new(),
         sites: BTreeMap::new(),
         site_info: BTreeMap::new(),
+        scope,
+        psi_assumptions: Vec::new(),
+        psi_seen: BTreeSet::new(),
     };
     enc.check_reach()?;
     let init = enc.init()?;
@@ -282,7 +305,11 @@ pub fn encode(p: &Program) -> R<Model> {
         .collect();
     let mut properties = Vec::new();
     let mut assumptions = enc.channel_assumptions()?;
-    for prop in &p.properties {
+    let (slew, slew_state) = enc.slew_assumptions()?;
+    assumptions.extend(slew);
+    assumptions.extend(enc.psi_assumptions.clone());
+    let scoped = enc.scope.is_some();
+    for prop in p.properties.iter().filter(|_| !scoped) {
         match enc.goal(prop, &pre)? {
             Some(goal) => {
                 if goal.assumption {
@@ -295,10 +322,11 @@ pub fn encode(p: &Program) -> R<Model> {
                 .push(format!("`{}` nicht kodiert: nur `always(…)`/`never(…)` ohne Zeitoperatoren (2.8)", prop.name)),
         }
     }
-    let state = init
+    let mut state: Vec<StateVar> = init
         .iter()
         .map(|(name, i)| StateVar { name: name.clone(), sort: i.sort(), init: i.clone(), next: next[name].clone() })
         .collect();
+    state.extend(slew_state);
     let mut leaves = BTreeMap::new();
     for &id in &enc.order {
         let m = &p.machines[id.index()];
@@ -353,10 +381,19 @@ impl Enc<'_> {
                 return no("gescopte Instanzen", m.span);
             }
         }
-        if !self.p.streams.is_empty() {
+        if self.scope.is_none() && !self.p.streams.is_empty() {
             return no("interne Stroeme", Span::default());
         }
         Ok(())
+    }
+
+    /// Eine freie Ψ-Eingabe (13.3); `true`, wenn sie neu ist.
+    fn free_psi(&mut self, target: MachineId, loc: &str, sort: Sort) -> (Term, bool) {
+        let name = format!("i.psi.{}", loc.trim_start_matches("s."));
+        let fresh = self.psi_seen.insert(name.clone());
+        let owner = self.machine(target).name.clone();
+        self.note(&format!("Ψ aus `{owner}` ist eine freie Eingabe je Tick (13.3)"));
+        (self.input(name, sort), fresh)
     }
 
     fn sort_of(&self, ty: TypeId, span: Span) -> R<Sort> {
@@ -529,7 +566,16 @@ impl Enc<'_> {
                 self.input(format!("i.{}", ch.name), sort)
             }
             ExprKind::Output(c) => {
-                let own = cx.m.is_some() && self.p.channels[c.index()].owner == cx.m;
+                let ch = &self.p.channels[c.index()];
+                if let Some(owner) = ch.owner.filter(|o| !self.order.contains(o)) {
+                    let (ty, name) = (ch.ty, ch.name.clone());
+                    let (x, fresh) = self.free_psi(owner, &format!("s.out.{name}"), self.sort_of(ty, span)?);
+                    if fresh && let Some(t) = self.type_invariant(x.clone(), ty) {
+                        self.psi_assumptions.push(t);
+                    }
+                    return Ok(x);
+                }
+                let own = cx.m.is_some() && ch.owner == cx.m;
                 let loc = self.loc_out(*c);
                 let src = if own { env } else { cx.pre };
                 src.get(&loc).cloned().ok_or_else(|| Unsupported { what: "Output".into(), span })?
@@ -539,6 +585,14 @@ impl Enc<'_> {
                     return no("Instanz-Array", span);
                 }
                 let loc = self.loc_var(machine.machine, *var);
+                if !self.order.contains(&machine.machine) {
+                    let ty = self.machine(machine.machine).vars[var.index()].ty;
+                    let (x, fresh) = self.free_psi(machine.machine, &loc, self.sort_of(ty, span)?);
+                    if fresh && let Some(t) = self.type_invariant(x.clone(), ty) {
+                        self.psi_assumptions.push(t);
+                    }
+                    return Ok(x);
+                }
                 self.psi(cx, env, machine.machine, &loc, span)?
             }
             ExprKind::StateOf(machine) => {
@@ -546,6 +600,22 @@ impl Enc<'_> {
                     return no("Instanz-Array", span);
                 }
                 let loc = self.loc_leaf(machine.machine);
+                if !self.order.contains(&machine.machine) {
+                    let (x, fresh) = self.free_psi(machine.machine, &loc, Sort::Int);
+                    if fresh {
+                        let m = machine.machine;
+                        let mut codes: Vec<Term> = self
+                            .leaves(m)
+                            .into_iter()
+                            .map(|l| Term::eq(x.clone(), Term::int(self.code(m, l))))
+                            .collect();
+                        if let Some(c) = self.faulted_code(m) {
+                            codes.push(Term::eq(x.clone(), Term::int(c)));
+                        }
+                        self.psi_assumptions.push(Term::or(codes));
+                    }
+                    return Ok(x);
+                }
                 self.psi(cx, env, machine.machine, &loc, span)?
             }
             ExprKind::Signal { machine, signal } => {
@@ -553,6 +623,9 @@ impl Enc<'_> {
                     return no("Instanz-Array", span);
                 }
                 let loc = self.loc_sig(machine.machine, signal.index());
+                if !self.order.contains(&machine.machine) {
+                    return Ok(self.free_psi(machine.machine, &loc, Sort::Bool).0);
+                }
                 self.psi(cx, env, machine.machine, &loc, span)?
             }
             ExprKind::Builtin(b) => match b {
@@ -1443,6 +1516,10 @@ impl Enc<'_> {
             let active = actives[&m].clone();
             self.step_machine(m, &active, pre, &actives, &mut cur)?;
         }
+        if self.scope.is_some() {
+            let foreign = self.input("i.abort.foreign".into(), Sort::Bool);
+            self.aborts.push(foreign);
+        }
         let raised = Term::or(std::mem::take(&mut self.aborts));
         if !raised.is_bool(false) {
             self.abort_phase(&raised, pre, &actives, &mut cur)?;
@@ -1483,7 +1560,7 @@ impl Enc<'_> {
             }
         }
         for (i, c) in self.p.channels.iter().enumerate() {
-            if c.dir != Direction::Output {
+            if c.dir != Direction::Output || c.owner.is_some_and(|o| !self.order.contains(&o)) {
                 continue;
             }
             let value = match c.attrs.safe.clone() {
@@ -1608,7 +1685,7 @@ impl Enc<'_> {
     fn channel_assumptions(&mut self) -> R<Vec<Term>> {
         let mut out = Vec::new();
         for c in &self.p.channels {
-            if c.dir != Direction::Input {
+            if c.dir != Direction::Input || matches!(self.p.types.get(c.ty), Type::Stream(_)) {
                 continue;
             }
             let range = match self.p.types.get(c.ty) {
@@ -1628,6 +1705,38 @@ impl Enc<'_> {
             out.push(Term::and(vec![Term::bin(ge, x.clone(), lo), Term::bin(le, x, hi)]));
         }
         Ok(out)
+    }
+
+    /// `max_slew` als Annahme (13.3): der Betrag der Aenderung je Tick
+    /// hoechstens Rate mal Tickdauer, wie der Rand es erzwingt (12.6). Der
+    /// Wert des Vortick liegt in zwei Zustandsvariablen, weil ein Uebergang
+    /// nur die Eingaben seines eigenen Ticks sieht.
+    fn slew_assumptions(&mut self) -> R<(Vec<Term>, Vec<StateVar>)> {
+        let mut terms = Vec::new();
+        let mut state = Vec::new();
+        let tick_s = self.p.config.tick as f64 / 1e9;
+        for c in &self.p.channels {
+            if c.dir != Direction::Input {
+                continue;
+            }
+            let slew = match c.attrs.max_slew.as_ref().map(|e| &e.kind) {
+                Some(ExprKind::Float(f)) => *f,
+                Some(ExprKind::Int(n)) => *n as f64,
+                _ => continue,
+            };
+            let sort = self.sort_of(c.ty, c.span)?;
+            let x = self.input(format!("i.{}", c.name), sort);
+            let (cur, prev) = (format!("s.slew.{}.cur", c.name), format!("s.slew.{}.prev", c.name));
+            state.push(StateVar { name: cur.clone(), sort, init: x.clone(), next: x.clone() });
+            state.push(StateVar { name: prev.clone(), sort, init: x.clone(), next: Term::var(cur, sort) });
+            let wide = |t: Term| if t.sort() == Sort::F64 { t } else { Term::app(Op::ToF64, vec![t]) };
+            let diff = Term::app(Op::FAbs, vec![Term::bin(Op::FSub, wide(x), wide(Term::var(prev, sort)))]);
+            // Die Schranke je Tick statt der Division des Rands: um vier ulp
+            // geweitet, damit sie nie enger ist als dessen Rundung.
+            let bound = (slew * tick_s) * (1.0 + 4.0 * f64::EPSILON);
+            terms.push(Term::bin(Op::FLe, diff, Term::float(bound, Sort::F64)));
+        }
+        Ok((terms, state))
     }
 
     /// `always(φ)`/`never(φ)` ohne Zeitoperatoren als Invariante ueber den

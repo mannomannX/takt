@@ -2173,6 +2173,15 @@ impl Lowerer<'_> {
                 let out = items.iter().map(|x| self.check(x, elem)).collect::<Option<Vec<_>>>()?;
                 Some(Expr::new(ExprKind::Array(out), hint.expect("Hinweis"), span))
             }
+            Some(Type::Bytes { cap }) => {
+                if items.len() > cap as usize {
+                    self.error(SC3, span, format!("hoechstens {cap} Bytes"));
+                    return None;
+                }
+                let byte = self.intern(Type::Int { width: IntWidth::U8, unit: None, range: None });
+                let out = items.iter().map(|x| self.check(x, byte)).collect::<Option<Vec<_>>>()?;
+                Some(Expr::new(ExprKind::Array(out), hint.expect("Hinweis"), span))
+            }
             Some(Type::Mat { .. }) => self.mat_literal(items, hint.expect("Hinweis"), span),
             _ => {
                 let Some(first) = items.first() else {

@@ -83,6 +83,8 @@ pub struct Size {
     pub sequences: Vec<(String, String, crate::machine::SequenceTicks)>,
     /// Der Basis-Tick in Nanosekunden, fuer die Anzeige der Dauern.
     pub tick_ns: i64,
+    /// Die Funktionen des tiefsten Stackpfads, von der Wurzel zum Blatt (12.3).
+    pub stack_path: Vec<String>,
 }
 
 impl Size {
@@ -186,6 +188,9 @@ impl Size {
         }
         if self.has_open() {
             out.push("  (Posten mit `offen` fehlen in der Summe: die Eingabe kommt mit 8.10 und 13.8)".into());
+        }
+        if !self.stack_path.is_empty() {
+            out.push(format!("  Stack-Pfad: {}", self.stack_path.join(" > ")));
         }
         for (machine, state, t) in &self.sequences {
             let dur = |ticks: u64| duration(ticks as i64 * self.tick_ns);
@@ -300,7 +305,7 @@ pub fn size(p: &Program) -> Size {
     items.push(Item { name: "Flash (Code, Konstanten)".into(), bytes: 0, origin: Origin::Open });
     items.push(Item { name: "Stack (Programmanteil)".into(), bytes: 0, origin: Origin::Open });
 
-    Size { items, overlay_saved, sequences, tick_ns: p.config.tick }
+    Size { items, overlay_saved, sequences, tick_ns: p.config.tick, stack_path: Vec::new() }
 }
 
 /// Eine Dauer in der groessten Einheit, die sie ganz teilt.
@@ -354,6 +359,9 @@ impl Size {
                 item.bytes = bytes;
                 item.origin = Origin::Measured;
             }
+        }
+        if let Some(d) = &m.stack {
+            self.stack_path = d.path.clone();
         }
         // Nur auf XIP-Zielen: ein Ziel ohne solche Abschnitte bekaeme
         // sonst zwei Nullzeilen, die nichts aussagen (12.3).

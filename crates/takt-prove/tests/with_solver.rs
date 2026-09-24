@@ -4,7 +4,10 @@
 
 use takt_mir::Program;
 use takt_mir::analysis::proof::{Site, parse, render};
-use takt_prove::{CheckVerdict, ContractVerdict, Solver, Verdict, classify, encode, find, prove, verify_contracts};
+use takt_prove::{
+    CheckVerdict, ContractVerdict, Solver, Verdict, classify, classify_compositional, encode, find, prove,
+    verify_contracts,
+};
 
 fn compile(src: &str) -> Program {
     let options =
@@ -189,4 +192,99 @@ fn a_reachable_implicit_check_gets_its_path() {
     let site = sites.iter().find(|s| s.kind == "range").expect("Range-Stelle");
     let CheckVerdict::Reachable { at, .. } = &site.verdict else { panic!("{site:?}") };
     assert_eq!((*at, site.machine.as_str()), (1, "f"));
+}
+
+/// 13.3: Je Maschine, mit Ψ als freier Eingabe in seiner Range. Der
+/// Erzeuger hat einen Handler auf einem Strom und ist nicht kodierbar;
+/// der Verbraucher wird trotzdem bewiesen.
+#[test]
+fn a_machine_is_proven_alone_when_the_whole_is_not_encodable() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input evt : stream<u8> @ hw(\"i/evt\") with max_rate = 1 kHz, capacity = 16
+output y  : int @ hw(\"o/y\") with safe = 0
+
+machine producer:
+    pub var level : int in 0..100 = 0
+    initial RUN
+    state RUN:
+        on evt as _e:
+            level = (level + 1) % 101
+
+machine consumer:
+    var x : int in 0..100 = 0
+    initial RUN
+    state RUN:
+        loop:
+            x = x + (producer.level % 2)
+            y = x
+        when x >= 50:
+            -> RESET
+    state RESET:
+        loop:
+            x = 0
+            -> RUN
+",
+    );
+    assert!(encode(&p).is_err(), "das Ganze ist nicht kodierbar");
+    let (sites, notes) = classify_compositional(&p, None, 5, &solver, 60).expect("Solver laeuft");
+    let site = sites.iter().find(|s| s.kind == "range").unwrap_or_else(|| panic!("Range-Stelle: {notes:?}"));
+    assert_eq!((site.machine.as_str(), &site.verdict), ("consumer", &CheckVerdict::Unreachable { k: 5 }), "{site:?}");
+}
+
+/// Ein Pfad im Maschinenmodell wird am Gesamtmodell gesucht und dort
+/// vom Interpreter bestaetigt.
+#[test]
+fn a_path_found_alone_is_confirmed_on_the_whole() {
+    let Some(solver) = solver() else { return };
+    let p = corpus_with("19_faults.takt", "");
+    let whole = encode(&p).expect("kodierbar");
+    let (sites, _) = classify_compositional(&p, Some(&whole), 3, &solver, 60).expect("Solver laeuft");
+    let site = sites.iter().find(|s| s.kind == "range").expect("Range-Stelle");
+    let CheckVerdict::Reachable { at, .. } = &site.verdict else { panic!("{site:?}") };
+    assert_eq!(*at, 1);
+}
+
+/// 13.3: `max_slew` gilt als Annahme — die Aenderung je Tick ist durch
+/// die Rate beschraenkt, wie der Rand sie erzwingt (12.6).
+#[test]
+fn max_slew_bounds_the_change_per_tick() {
+    let Some(solver) = solver() else { return };
+    let body = |attr: &str| {
+        format!(
+            "system:
+    language = 1
+    tick     = 1 ms
+
+input  x : float in -1000.0..1000.0 @ hw(\"i/x\"){attr}
+output y : float @ hw(\"o/y\") with safe = 0.0
+
+machine m:
+    var last  : float = 0.0
+    var armed : bool = false
+    initial RUN
+    state RUN:
+        loop:
+            if armed:
+                check abs(x - last) <= 0.02, \"Sprung\"
+            last = x
+            armed = true
+            y = last
+"
+        )
+    };
+    let p = compile(&body(" with max_slew = 10.0"));
+    let model = encode(&p).expect("kodierbar");
+    assert!(model.state.iter().any(|v| v.name == "s.slew.x.prev"), "der Vortick liegt im Zustand");
+    let sites = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    assert_eq!(sites[0].verdict, CheckVerdict::Unreachable { k: 2 }, "{:?}", sites[0]);
+
+    let p = compile(&body(""));
+    let model = encode(&p).expect("kodierbar");
+    let sites = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    assert!(matches!(sites[0].verdict, CheckVerdict::Reachable { .. }), "ohne Rate springt x: {:?}", sites[0]);
 }

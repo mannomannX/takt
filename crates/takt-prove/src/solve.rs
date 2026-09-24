@@ -200,49 +200,115 @@ pub fn classify(
     solver: &Solver,
     timeout_s: u64,
 ) -> Result<Vec<CheckReport>, String> {
+    (0..model.checks.len())
+        .map(|i| Ok(report(&model.checks[i], classify_site(model, program, i, depth, solver, timeout_s)?)))
+        .collect()
+}
+
+/// Pruefstellen je Maschine (13.3): Ψ, fremde Outputs und ein fremder
+/// `abort` sind freie Eingaben unter den Annahmen ihrer Typen. Was so
+/// unerreichbar ist, ist es im Ganzen; ein Pfad im Maschinenmodell wird
+/// am Gesamtmodell gesucht und dort vom Interpreter bestaetigt.
+pub fn classify_compositional(
+    program: &Program,
+    whole: Option<&Model>,
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+) -> Result<(Vec<CheckReport>, Vec<String>), String> {
     let mut out = Vec::new();
-    for (i, site) in model.checks.iter().enumerate() {
-        let bmc = solver.run(&query(model, depth, Target::Check(i), Query::Bmc), timeout_s, "check-bmc")?;
-        let verdict = match answer(&bmc) {
-            "sat" => {
-                let values = parse_values(&bmc, "@");
-                let stimulus = stimulus(&values, program, depth);
-                let confirmed = if site.kind == "requires" {
-                    confirm_requires(model, site, &values, depth)
-                } else {
-                    confirm_check(program, site, &stimulus, depth)
-                };
-                match confirmed {
-                    Some(at) => CheckVerdict::Reachable { at, stimulus },
-                    None => CheckVerdict::Undecided {
+    let mut notes = Vec::new();
+    let in_whole =
+        |site: &crate::encode::CheckSite| whole.and_then(|w| w.checks.iter().position(|s| s.start == site.start));
+    for (i, machine) in program.machines.iter().enumerate() {
+        let model = match crate::encode::encode_machine(program, takt_mir::MachineId(i as u32)) {
+            Ok(m) => m,
+            Err(e) => {
+                notes.push(format!("`{}` nicht kodierbar: {}", machine.name, e.what));
+                if let Some(w) = whole {
+                    for (j, site) in w.checks.iter().enumerate().filter(|(_, s)| s.machine == machine.name) {
+                        out.push(report(site, classify_site(w, program, j, depth, solver, timeout_s)?));
+                    }
+                }
+                continue;
+            }
+        };
+        notes.extend(model.notes.iter().cloned());
+        for (j, site) in model.checks.iter().enumerate() {
+            let bmc = solver.run(&query(&model, depth, Target::Check(j), Query::Bmc), timeout_s, "check-bmc")?;
+            let verdict = match answer(&bmc) {
+                "unsat" => induction_verdict(&model, j, depth, solver, timeout_s)?,
+                "sat" => match (whole, in_whole(site)) {
+                    (Some(w), Some(k)) => classify_site(w, program, k, depth, solver, timeout_s)?,
+                    _ => CheckVerdict::Undecided {
                         reason: format!(
-                            "der Solver fand einen Pfad bis Tiefe {depth}, der Interpreter bestaetigt ihn nicht — die Kodierung weicht ab, bitte melden:\n{stimulus}"
+                            "Pfad bis Tiefe {depth} im Maschinenmodell (Ψ frei), ohne Gesamtmodell nicht bestaetigbar"
                         ),
                     },
-                }
-            }
-            "unsat" => {
-                let ind =
-                    solver.run(&query(model, depth, Target::Check(i), Query::Induction), timeout_s, "check-ind")?;
-                match answer(&ind) {
-                    "unsat" => CheckVerdict::Unreachable { k: depth },
-                    "sat" => CheckVerdict::Undecided {
-                        reason: format!("kein Pfad bis Tiefe {depth}, Induktionsschritt offen (k = {depth})"),
-                    },
-                    other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
-                }
-            }
-            other => CheckVerdict::Undecided { reason: format!("BMC: Solver sagt `{other}`") },
-        };
-        out.push(CheckReport {
-            start: site.start,
-            span: site.span,
-            machine: site.machine.clone(),
-            kind: site.kind.clone(),
-            verdict,
-        });
+                },
+                other => CheckVerdict::Undecided { reason: format!("BMC: Solver sagt `{other}`") },
+            };
+            out.push(report(site, verdict));
+        }
     }
-    Ok(out)
+    out.sort_by_key(|c| c.start);
+    notes.sort();
+    notes.dedup();
+    Ok((out, notes))
+}
+
+fn report(site: &crate::encode::CheckSite, verdict: CheckVerdict) -> CheckReport {
+    CheckReport { start: site.start, span: site.span, machine: site.machine.clone(), kind: site.kind.clone(), verdict }
+}
+
+fn classify_site(
+    model: &Model,
+    program: &Program,
+    i: usize,
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+) -> Result<CheckVerdict, String> {
+    let site = &model.checks[i];
+    let bmc = solver.run(&query(model, depth, Target::Check(i), Query::Bmc), timeout_s, "check-bmc")?;
+    Ok(match answer(&bmc) {
+        "sat" => {
+            let values = parse_values(&bmc, "@");
+            let stimulus = stimulus(&values, program, depth);
+            let confirmed = if site.kind == "requires" {
+                confirm_requires(model, site, &values, depth)
+            } else {
+                confirm_check(program, site, &stimulus, depth)
+            };
+            match confirmed {
+                Some(at) => CheckVerdict::Reachable { at, stimulus },
+                None => CheckVerdict::Undecided {
+                    reason: format!(
+                        "der Solver fand einen Pfad bis Tiefe {depth}, der Interpreter bestaetigt ihn nicht — die Kodierung weicht ab, bitte melden:\n{stimulus}"
+                    ),
+                },
+            }
+        }
+        "unsat" => induction_verdict(model, i, depth, solver, timeout_s)?,
+        other => CheckVerdict::Undecided { reason: format!("BMC: Solver sagt `{other}`") },
+    })
+}
+
+fn induction_verdict(
+    model: &Model,
+    i: usize,
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+) -> Result<CheckVerdict, String> {
+    let ind = solver.run(&query(model, depth, Target::Check(i), Query::Induction), timeout_s, "check-ind")?;
+    Ok(match answer(&ind) {
+        "unsat" => CheckVerdict::Unreachable { k: depth },
+        "sat" => CheckVerdict::Undecided {
+            reason: format!("kein Pfad bis Tiefe {depth}, Induktionsschritt offen (k = {depth})"),
+        },
+        other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
+    })
 }
 
 /// Das Urteil ueber einen Block-Vertrag (5.7, B2).

@@ -16,7 +16,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 60] = [
+const KORPUS: [&str; 62] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -79,6 +79,8 @@ const KORPUS: [&str; 60] = [
     "76_stream_views.takt",
     "77_float_faults.takt",
     "78_length_guards.takt",
+    "79_byte_literals.takt",
+    "80_payload_variants.takt",
 ];
 
 /// Wie viele Ticks verglichen werden.

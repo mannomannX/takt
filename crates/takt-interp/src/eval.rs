@@ -174,6 +174,16 @@ impl<'p, 'o> Ctx<'p, 'o> {
                             .collect::<EvalResult<Vec<_>>>()?,
                     ),
                     Type::Vec { .. } => Value::Vec(values),
+                    Type::Bytes { .. } => Value::Bytes(
+                        values
+                            .into_iter()
+                            .map(|v| match v {
+                                Value::UInt(n) => Ok(n as u8),
+                                Value::Int(n) => Ok(n as u8),
+                                other => bug(format!("Byte erwartet, {} gefunden", other.kind_name())),
+                            })
+                            .collect::<EvalResult<Vec<u8>>>()?,
+                    ),
                     // 8.3: ein Modell speist einen oversampelten Kanal mit
                     // dem Tick-Array (8.9).
                     Type::Samples { .. } => Value::Samples(values),

@@ -282,7 +282,8 @@ impl Binutils {
     /// meldet dann eine unbekannte Tiefe statt einer zu kleinen.
     pub fn stack_frames(&self, file: &Path, symbols: &[String]) -> Vec<Option<u64>> {
         let mut out = vec![None; symbols.len()];
-        let Ok(res) = Command::new(self.tool("objdump")).args(["-d", "--no-show-raw-insn"]).arg(file).output() else {
+        let Ok(res) = Command::new(self.tool("objdump")).args(["-d", "-r", "--no-show-raw-insn"]).arg(file).output()
+        else {
             return out;
         };
         if !res.status.success() {
@@ -293,29 +294,37 @@ impl Binutils {
         // Ein Durchlauf: Beim Funktionskopf merken, welches Symbol gerade
         // laeuft, und die erste Rahmenanpassung danach nehmen.
         let mut current: Option<usize> = None;
+        // Was `__riscv_save_N` vor der Rahmenanpassung sichert (`-msave-restore`).
+        let mut saved = 0;
         for line in text.lines() {
-            if line.contains(">:") {
+            if line.contains(">:") && !line.contains("jalr") {
                 // Ein Kopf ohne Rahmenanpassung ist ein Blatt mit Registern.
                 if let Some(i) = current.take()
                     && out[i].is_none()
                 {
-                    out[i] = Some(0);
+                    out[i] = Some(saved);
                 }
                 current = symbols.iter().position(|sym| line.contains(&format!("<{sym}>:")));
+                saved = 0;
                 continue;
+            }
+            if current.is_some()
+                && let Some(n) = millicode_save(line)
+            {
+                saved = n;
             }
             if let Some(i) = current
                 && out[i].is_none()
                 && let Some(n) = frame_adjust(line)
             {
-                out[i] = Some(n);
+                out[i] = Some(n + saved);
                 current = None;
             }
         }
         if let Some(i) = current
             && out[i].is_none()
         {
-            out[i] = Some(0);
+            out[i] = Some(saved);
         }
         out
     }
@@ -369,7 +378,8 @@ fn frame_adjust(line: &str) -> Option<u64> {
     // Jede Zeile beginnt mit Adresse und Tabulator (`  2d:\tsub …`); der
     // Befehl steht dahinter. Ohne das Abtrennen begaenne keine Zeile mit
     // dem Mnemonic, und jede Pruefung liefe ins Leere.
-    let l = line.split('\t').next_back().unwrap_or(line).trim();
+    let l = line.split_once('\t').map_or(line, |(_, rest)| rest).replace('\t', " ");
+    let l = l.trim();
     // x86-64: `sub    $0x68,%rsp`
     if let Some(rest) = l.strip_prefix("sub").map(str::trim_start)
         && rest.ends_with("%rsp")
@@ -386,7 +396,20 @@ fn frame_adjust(line: &str) -> Option<u64> {
     if (l.starts_with("stp") || l.starts_with("str")) && l.contains("[sp, #-") {
         return l.split("#-").nth(1).and_then(|s| s.split(']').next()).and_then(parse_num);
     }
+    // RISC-V: `addi sp, sp, -0x430`
+    if l.starts_with("addi") && l.contains("sp, sp, -") {
+        return l.split("sp, sp, -").nth(1).and_then(parse_num);
+    }
     None
+}
+
+/// Die Sicherung von `__riscv_save_N` (`millicode.S`): 16 Byte bis N = 3,
+/// sonst 64 — im Objekt als Relokation, im Abbild als Sprungziel.
+fn millicode_save(line: &str) -> Option<u64> {
+    let at = line.find("__riscv_save_")?;
+    let n: u64 =
+        line[at + "__riscv_save_".len()..].chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()?;
+    Some(if n <= 3 { 16 } else { 64 })
 }
 
 /// Eine Zahl, dezimal oder hexadezimal.

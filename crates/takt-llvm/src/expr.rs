@@ -236,11 +236,14 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         ExprKind::Unary { op, expr } => unary(*op, expr, &want, p, m, vars),
         ExprKind::Binary { op, lhs, rhs } => binary(*op, lhs, rhs, &want, p, m, vars),
         ExprKind::Cond { cond, then, otherwise } => cond_expr(cond, then, otherwise, &want, p, m, vars),
-        ExprKind::Variant { enum_id, variant, fields } => self_variant(*enum_id, *variant, fields, &want, p),
+        ExprKind::Variant { enum_id, variant, fields } => self_variant(*enum_id, *variant, fields, &want, p, m, vars),
         ExprKind::Record { fields, .. } => record(fields, &want, p, m, vars),
         // Ein Array-Literal wird wie ein Record gebaut: `insertvalue` je
         // Element aus `undef` heraus (3.9).
-        ExprKind::Array(items) => record(items, &want, p, m, vars),
+        ExprKind::Array(items) => match p.types.get(e.ty) {
+            Type::Bytes { .. } => bytes_literal(items, &want, p, m, vars),
+            _ => record(items, &want, p, m, vars),
+        },
         // Eine Stuetzstelle ist ein Paar (3.9); sie steht nur in einer
         // Tabelle, und `interp` liest sie dort unmittelbar.
         ExprKind::Call { callee, args } => call(*callee, args, &want, p, m, vars),
@@ -279,8 +282,26 @@ fn cond_expr(
     let c = lower(cond, p, m, vars)?;
     let a = lower(then, p, m, vars)?;
     let b = lower(otherwise, p, m, vars)?;
-    let r = m.inst(&format!("select i1 {}, {} {}, {} {}", c.value, a.ty, a.value, b.ty, b.value));
-    Ok(Lowered { value: r.to_string(), ty: want.clone() })
+    Ok(Lowered { value: choose(&c.value, &a, &b, m), ty: want.clone() })
+}
+
+/// `c ? a : b` als `select`; ein grosses Aggregat geht ueber einen Platz
+/// und einen Zweig, weil LLVM ein `select` darueber nicht zu Ende
+/// vereinfacht.
+fn choose(cond: &str, a: &Lowered, b: &Lowered, m: &mut Module) -> String {
+    if !matches!(a.ty, LlvmType::Struct(_) | LlvmType::Array(..)) || a.ty.size() <= 16 {
+        return m.inst(&format!("select i1 {cond}, {} {}, {} {}", a.ty, a.value, b.ty, b.value)).to_string();
+    }
+    let tmp = m.alloca(&a.ty);
+    m.write(&a.ty, &b.value, &tmp.to_string());
+    let n = m.next_label();
+    let (take, done) = (format!("wahl_{n}"), format!("gewaehlt_{n}"));
+    m.void_inst(&format!("br i1 {cond}, label %{take}, label %{done}"));
+    m.label(&take);
+    m.write(&a.ty, &a.value, &tmp.to_string());
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
+    m.inst(&format!("load {}, ptr {tmp}", a.ty)).to_string()
 }
 
 /// Zugriffe, die reine Rechnung sind (3.10).
@@ -452,11 +473,7 @@ fn access(
                 }
                 _ => x.clone(),
             };
-            let r = m.inst(&format!(
-                "select i1 {}, {} {}, {} {}",
-                valid.value, value_of.ty, value_of.value, fallback.ty, fallback.value
-            ));
-            Ok(Lowered { value: r.to_string(), ty: want.clone() })
+            Ok(Lowered { value: choose(&valid.value, &value_of, &fallback, m), ty: want.clone() })
         }
         // `f.encode()` (3.7): der Record als Bytes seiner deklarierten
         // Laenge.
@@ -562,16 +579,86 @@ fn self_variant(
     fields: &[Expr],
     want: &LlvmType,
     p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
-    if !fields.is_empty() {
-        // Eine Variante mit Feldern braucht ein Struct aus Diskriminante
-        // und Nutzlast; `ty::lower` lehnt solche Enums heute ab, und der
-        // Musterabgleich, der sie auspackt, fehlt ebenso.
-        return Err(NotYet { what: "Variante mit Feldern" });
-    }
     let def = p.enums.get(enum_id.index()).ok_or(NotYet { what: "Enum" })?;
     let v = def.variants.get(variant as usize).ok_or(NotYet { what: "Variante" })?;
-    Ok(Lowered { value: v.discriminant.to_string(), ty: want.clone() })
+    let LlvmType::Struct(parts) = want else {
+        return Ok(Lowered { value: v.discriminant.to_string(), ty: want.clone() });
+    };
+    let Some(LlvmType::Array(_, width)) = parts.get(1) else { return Err(NotYet { what: "Variante ohne Faecher" }) };
+    let mut slots = Vec::with_capacity(*width as usize);
+    for (f, def_f) in fields.iter().zip(&v.fields) {
+        let x = lower(f, p, m, vars)?;
+        let signed = matches!(p.types.get(def_f.ty), Type::Enum(_)) || int_is_signed(def_f.ty, p);
+        slots.push(into_slot(&x, signed, m)?);
+    }
+    slots.resize(*width as usize, "0".to_string());
+    let arr = LlvmType::Array(Box::new(LlvmType::Int(64)), *width);
+    if slots.iter().all(|s| !s.starts_with('%')) {
+        let items = slots.iter().map(|s| format!("i64 {s}")).collect::<Vec<_>>().join(", ");
+        let value = format!("{{ i32 {}, {arr} [{items}] }}", v.discriminant);
+        return Ok(Lowered { value, ty: want.clone() });
+    }
+    let mut cur = "zeroinitializer".to_string();
+    for (i, s) in slots.iter().enumerate() {
+        cur = m.inst(&format!("insertvalue {arr} {cur}, i64 {s}, {i}")).to_string();
+    }
+    let out = m.inst(&format!("insertvalue {want} undef, i32 {}, 0", v.discriminant));
+    let out = m.inst(&format!("insertvalue {want} {out}, {arr} {cur}, 1"));
+    Ok(Lowered { value: out.to_string(), ty: want.clone() })
+}
+
+/// Ein Feld in sein 8-Byte-Fach: Ganzzahlen erweitert, Gleitkomma bitgleich.
+fn into_slot(x: &Lowered, signed: bool, m: &mut Module) -> Result<String, NotYet> {
+    Ok(match &x.ty {
+        LlvmType::Int(64) => x.value.clone(),
+        LlvmType::Int(_) => {
+            let op = if signed { "sext" } else { "zext" };
+            m.inst(&format!("{op} {} {} to i64", x.ty, x.value)).to_string()
+        }
+        LlvmType::F64 => m.inst(&format!("bitcast double {} to i64", x.value)).to_string(),
+        LlvmType::F32 => {
+            let bits = m.inst(&format!("bitcast float {} to i32", x.value));
+            m.inst(&format!("zext i32 {bits} to i64")).to_string()
+        }
+        _ => return Err(NotYet { what: "Feld einer Variante" }),
+    })
+}
+
+/// Aus dem 8-Byte-Fach zurueck in den Typ des Feldes.
+pub(crate) fn from_slot(slot: &str, want: &LlvmType, m: &mut Module) -> String {
+    match want {
+        LlvmType::Int(64) => slot.to_string(),
+        LlvmType::Int(_) => m.inst(&format!("trunc i64 {slot} to {want}")).to_string(),
+        LlvmType::F64 => m.inst(&format!("bitcast i64 {slot} to double")).to_string(),
+        LlvmType::F32 => {
+            let bits = m.inst(&format!("trunc i64 {slot} to i32"));
+            m.inst(&format!("bitcast i32 {bits} to float")).to_string()
+        }
+        _ => slot.to_string(),
+    }
+}
+
+/// Gleichheit zweier Enums mit Feldern: Diskriminante und jedes Fach.
+fn enum_equal(a: &Lowered, b: &Lowered, m: &mut Module) -> Result<Lowered, NotYet> {
+    let LlvmType::Struct(parts) = &a.ty else { return Err(NotYet { what: "Enumvergleich ohne Struct" }) };
+    let Some(arr @ LlvmType::Array(_, width)) = parts.get(1) else {
+        return Err(NotYet { what: "Enumvergleich ohne Faecher" });
+    };
+    let da = m.inst(&format!("extractvalue {} {}, 0", a.ty, a.value));
+    let db = m.inst(&format!("extractvalue {} {}, 0", b.ty, b.value));
+    let mut same = m.inst(&format!("icmp eq i32 {da}, {db}")).to_string();
+    let pa = m.inst(&format!("extractvalue {} {}, 1", a.ty, a.value));
+    let pb = m.inst(&format!("extractvalue {} {}, 1", b.ty, b.value));
+    for k in 0..*width {
+        let sa = m.inst(&format!("extractvalue {arr} {pa}, {k}"));
+        let sb = m.inst(&format!("extractvalue {arr} {pb}, {k}"));
+        let eq = m.inst(&format!("icmp eq i64 {sa}, {sb}"));
+        same = m.inst(&format!("and i1 {same}, {eq}")).to_string();
+    }
+    Ok(Lowered { value: same, ty: LlvmType::Int(1) })
 }
 
 /// Baut ein `T?` oder `T!E` (3.8).
@@ -1972,6 +2059,37 @@ fn record(fields: &[Expr], want: &LlvmType, p: &Program, m: &mut Module, vars: &
     Ok(Lowered { value: cur, ty: want.clone() })
 }
 
+/// `[1, 2, 3]` als `bytes<N>` (3.9): die Laenge ist die Elementzahl.
+fn bytes_literal(
+    items: &[Expr],
+    want: &LlvmType,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Lowered, NotYet> {
+    let LlvmType::Struct(fields) = want else { return Err(NotYet { what: "Byteliteral ohne Puffer" }) };
+    let Some(LlvmType::Array(_, cap)) = fields.get(1) else { return Err(NotYet { what: "Byteliteral ohne Puffer" }) };
+    let mut vals = Vec::with_capacity(items.len());
+    for x in items {
+        vals.push(lower(x, p, m, vars)?);
+    }
+    let n = vals.len();
+    if vals.iter().all(|v| !v.value.starts_with('%')) {
+        let mut inhalt: Vec<String> = vals.iter().map(|v| format!("i8 {}", v.value)).collect();
+        inhalt.resize(*cap as usize, "i8 0".to_string());
+        let value = format!("{{ i32 {n}, [{cap} x i8] [{}] }}", inhalt.join(", "));
+        return Ok(Lowered { value, ty: want.clone() });
+    }
+    let arr = LlvmType::Array(Box::new(LlvmType::Int(8)), *cap);
+    let mut cur = "zeroinitializer".to_string();
+    for (i, v) in vals.iter().enumerate() {
+        cur = m.inst(&format!("insertvalue {arr} {cur}, i8 {}, {i}", v.value)).to_string();
+    }
+    let s = m.inst(&format!("insertvalue {want} undef, i32 {n}, 0"));
+    let s = m.inst(&format!("insertvalue {want} {s}, {arr} {cur}, 1"));
+    Ok(Lowered { value: s.to_string(), ty: want.clone() })
+}
+
 /// Die Adresse eines Ausdrucks, wo er eine Stelle bezeichnet (FB-214).
 ///
 /// Nur Variablen und Wege darin; alles andere ist ein gerechneter Wert
@@ -2250,7 +2368,8 @@ fn binary(
     // hinter der Laenge steht, ist bei einem Capture Rest des vorigen
     // Elements.
     if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(a.ty, LlvmType::Struct(_)) && a.ty == b.ty {
-        let same = text_equal(&a, &b, m)?;
+        let enum_typed = matches!(p.types.get(lhs.ty), Type::Enum(_));
+        let same = if enum_typed { enum_equal(&a, &b, m)? } else { text_equal(&a, &b, m)? };
         if op == BinaryOp::Eq {
             return Ok(same);
         }

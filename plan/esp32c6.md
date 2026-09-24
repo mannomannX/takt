@@ -116,11 +116,10 @@ STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
   Ladegerät als Wake-Quelle).
 - Watchdog: `esp-hal` hält RWDT und MWDT beim Start an; die Schleife läuft
   mit einem leeren `Watchdog` (12.3 verlangt einen echten).
-- `build.rs` nimmt das `takt`-Werkzeug aus dem Release-Verzeichnis, auch
-  wenn es älter ist als der Compiler (FB-193): Erster Bau des Servo-Objekts
-  kam aus einem Stand vor M6 und ließ die Maschinenfunktionen fehlen. Bis
-  das Skript den Stand prüft: `cargo build -p takt-cli --release` vor dem
-  Bring-up.
+- ~~`build.rs` nimmt das `takt`-Werkzeug aus dem Release-Verzeichnis, auch
+  wenn es älter ist als der Compiler (FB-193)~~ — erledigt: das Skript
+  prüft den Stand und weist ein veraltetes Werkzeug ab; `cargo build -p
+  takt-cli --release` bleibt der erste Schritt.
 
 ## 6. Nachtrag: die physische Seite des Ticks (Schritte 8 und 9)
 

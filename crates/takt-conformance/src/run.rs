@@ -107,6 +107,16 @@ fn same_number(interpreter: &str, native: &str) -> bool {
         let (xs, ys) = (items(x), items(y));
         return xs.len() == ys.len() && xs.iter().zip(&ys).all(|(a, b)| same_number(a, b));
     }
+    // Varianten mit Feldern: `RECT(3.0, 1.5)` gegen `RECT(3, 1.5)`.
+    if let (Some((na, xa)), Some((nb, xb))) = (interpreter.split_once('('), native.split_once('('))
+        && na == nb
+        && xa.ends_with(')')
+        && xb.ends_with(')')
+    {
+        let items = |s: &str| s.trim_end_matches(')').split(',').map(str::trim).map(String::from).collect::<Vec<_>>();
+        let (xs, ys) = (items(xa), items(xb));
+        return xs.len() == ys.len() && xs.iter().zip(&ys).all(|(a, b)| same_number(a, b));
+    }
     let a = interpreter.split_whitespace().next().unwrap_or(interpreter);
     let b = native.split_whitespace().next().unwrap_or(native);
     if a == b {

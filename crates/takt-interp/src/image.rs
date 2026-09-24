@@ -1,7 +1,7 @@
 //! Prozessabbild (Referenz 9.1, 9.4): Inputs mit Qualitaet und Alter,
 //! Commands als Pulse, Output-Latches, Ψ als Snapshot des Tick-Anfangs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use takt_mir::machine::Machine;
 use takt_mir::program::{Binding, Direction, Program};
@@ -52,6 +52,10 @@ pub struct Image {
     sim_sources: HashMap<String, ChannelId>,
     /// Adresse → `hw`-Input.
     hw_inputs: HashMap<String, ChannelId>,
+    /// Elemente eines Stroms an `mmio/ADR/r`, die ein Port noch liest (12.10).
+    port_queues: HashMap<String, VecDeque<Value>>,
+    /// Das zuletzt entnommene Element je Adresse.
+    port_last: HashMap<String, Value>,
     /// Inputs, die der Stimulus in diesem Tick gesetzt hat; ihre
     /// `sim`-Bindung ruht so lange (8.3).
     driven: Vec<bool>,
@@ -201,6 +205,8 @@ impl Image {
             params,
             sim_sources,
             hw_inputs,
+            port_queues: HashMap::new(),
+            port_last: HashMap::new(),
             driven,
             channel_bufs,
             stream_bufs,
@@ -460,7 +466,36 @@ impl Image {
             };
             self.inputs[inp.index()] = self.through_edge(sample, inp, now, p);
         }
+        // 12.10: Ein Strom an `mmio/ADR/r` liefert je Lesen ein Element.
+        let ports: Vec<(String, ChannelId)> = self
+            .sim_sources
+            .iter()
+            .filter(|(a, _)| a.starts_with("mmio/") && a.ends_with("/r"))
+            .map(|(a, c)| (a.clone(), *c))
+            .collect();
+        for (addr, out) in ports {
+            let ty = p.channels[out.index()].ty;
+            if !matches!(p.types.list.get(ty.index()), Some(Type::Stream(_))) {
+                continue;
+            }
+            let sent = self.tx.get_mut(&out).map(|t| std::mem::take(&mut t.sent)).unwrap_or_default();
+            if !sent.is_empty() {
+                self.port_queues.entry(addr).or_default().extend(elements_of(&sent, ty, p));
+            }
+        }
         self.driven.iter_mut().for_each(|d| *d = false);
+    }
+
+    /// Das naechste Element eines Stroms an `mmio/ADR/r` (12.10); ist er
+    /// leer, das zuletzt entnommene.
+    pub fn port_next(&mut self, addr: &str) -> Option<Value> {
+        match self.port_queues.get_mut(addr).and_then(VecDeque::pop_front) {
+            Some(v) => {
+                self.port_last.insert(addr.to_string(), v.clone());
+                Some(v)
+            }
+            None => self.port_last.get(addr).cloned(),
+        }
     }
 
     /// Laesst alle Inputs um einen Tick altern; ueberschreitet das Alter

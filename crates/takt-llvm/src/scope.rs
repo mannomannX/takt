@@ -151,10 +151,8 @@ fn stmt(s: &Stmt, c: &mut Coverage) {
             c.note("Beobachtung (`alert`, `log`, `measure`, ...)", ok);
         }
         StmtKind::Match { arms, subject } => {
-            // Varianten ohne Feldbindungen und Wertmuster werden gesenkt;
-            // Bindungen brauchen den Musterabgleich ueber Summentypen.
             let ok = arms.iter().all(|a| match &a.pattern {
-                takt_mir::stmt::ArmPattern::Variant { fields, .. } => fields.len() <= 1,
+                takt_mir::stmt::ArmPattern::Variant { .. } => true,
                 _ => true,
             });
             c.note("`match`", ok);
@@ -300,7 +298,7 @@ fn expr(e: &Expr, c: &mut Coverage) {
                 expr(f, c);
             }
         }
-        ExprKind::Variant { fields, .. } => c.note("Variante", fields.is_empty()),
+        ExprKind::Variant { .. } => c.note("Variante", true),
         ExprKind::Array(items) => {
             c.note("Array-Literal", true);
             for i in items {

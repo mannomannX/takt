@@ -1,0 +1,12 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+output n : int @ hw("o/n") with safe = 0
+
+machine m:
+    var cmd : bytes<2> = [1, 2, 3]  # ~ SC-3
+    initial RUN
+    state RUN:
+        loop:
+            n = cmd.len as int

@@ -145,7 +145,19 @@ Fünf Prüfungen, keine davon mit Beweisweg im Compiler oder im Prover:
 
 Eine Stromkodierung im Prover (Überapproximation: freies Element je Handler-Aktivierung) hätte hier kein Ziel: Keine der fünf Stellen wird durch freie Elemente beweisbar, und die zwei COBS-Stellen liegen in einer Funktion mit `bytes`, die der Prover nicht kodiert. Sie bleibt nach „messen, dann bauen“ (m6.md 2.12) ungebaut.
 
+### Nachzüge 2026-09-24
+
+Sechs Posten aus der Frage „wo weitermachen“, alle ohne Hardwarebedarf:
+
+- **Inventur-Hygiene.** 43 Konstrukte der Übersicht 2.4 und 16 reservierte Member standen auf `definiert`, obwohl ihre Belege laufen; FB-46 (`assumption`) stand auf „entworfen“. Jetzt `fertig` beziehungsweise „umgesetzt“.
+- **`takt size` misst den Stack** (FB-169): `--target` übersetzt das Programm selbst; der Posten ist je Maschine Schritt plus tiefste Schleifenfunktion plus Funktionspfad, mit RISC-V-Prolog und `__riscv_save_N`; eingebettete Funktionen haben keinen Rahmen. UART: Stack 3 344 Byte `gemessen` (`uart_link_step > uart_link_loop_1 > make_data`), Flash 8 678.
+- **Byte-Folgen-Literale** (FB-130): `[0x01, 199, 0x00]` als `bytes<N>` und auf Byteströmen; Korpus 79.
+- **Port liest einen Strom** (FB-212): `mmio/ADR/r` als `stream<Regs>` schaltet je Lesen weiter (12.10); Interpreter-Test in `semantics.rs`.
+- **`takt prove` je Maschine und `max_slew`** (FB-259): Ψ frei unter Typannahmen, Pfade am Gesamtmodell bestätigt, Maschinen neben Handlern beweisbar; die Änderung je Tick durch `max_slew` beschränkt (als Produkt statt Division des Rands, vier ulp geweitet — die Division ließ z3 über drei Minuten rechnen, das Produkt fünf Sekunden).
+- **Enums mit Feldern im Codegen** (FB-211): `{ i32, [W x i64] }`, Bau, `match` mit mehreren Bindungen, `==`, Trace `NAME(f1, f2)` im Linux-Rahmen; Korpus 80 im Differenztest. `persist` solcher Enums und der MCU-Rahmen bleiben offen; `45_journal_cut` bleibt draußen (FB-260).
+
 ### Offen
 
 - Sichten auf Stromelemente (R3) lohnen erst bei vielen großen Elementen je Tick: Gewinn ≈ Elemente je Tick × Kopie. Der Zweig `r3-stream-views` hält die vollständige Umsetzung bereit.
 - Oktagone v1.1 (Summen `x + y ≤ c`, Abschluss) und eine exakte Länge für `encode()` fester Layouts, wenn eine Zählung sie trägt.
+- Große Werte durch `T?` per Zeiger (11.2): `45_journal_cut` bringt LLVM 22 mit `bytes<256>?` aus `map.get(…).or(…)` zum Stillstand (FB-260); `persist` und MCU-Trace für Enums mit Feldern; eine Naht für `mmio`-Ports im C-Rahmen (FB-261).

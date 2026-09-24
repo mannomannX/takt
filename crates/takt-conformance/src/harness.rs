@@ -426,6 +426,10 @@ fn build_inner(
             let _ = writeln!(dump, "    printf(\"]\\n\");");
             continue;
         }
+        if let Some(text) = payload_enum_dump(p, slot) {
+            dump.push_str(&text);
+            continue;
+        }
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
         // Ein Enum wird mit seinem Variantennamen ausgegeben, nicht mit
         // der Diskriminante: Der Interpreter schreibt den Namen (9.3), und
@@ -457,6 +461,62 @@ fn build_inner(
     s.push_str(&dump);
 
     Harness { source: s, layout }
+}
+
+/// Ein Enum mit Feldern: `NAME(f1, f2)` wie `value_text` (9.3), die Felder
+/// aus ihren 8-Byte-Faechern hinter der Diskriminante (11.2).
+fn payload_enum_dump(p: &Program, slot: &crate::layout::Slot) -> Option<String> {
+    use takt_mir::types::{FloatWidth, Type};
+    let c = p.channels.iter().find(|c| c.name == slot.name)?;
+    let Type::Enum(e) = p.types.get(c.ty) else { return None };
+    let def = p.enums.get(e.index())?;
+    if def.variants.iter().all(|v| v.fields.is_empty()) {
+        return None;
+    }
+    let mut s = String::new();
+    let _ = writeln!(
+        s,
+        "    {{ int d = *(int *)(latch + {}); long long *f = (long long *)(latch + {}); (void)f;",
+        slot.offset,
+        slot.offset + 8
+    );
+    let _ = writeln!(s, "    switch (d) {{");
+    for v in &def.variants {
+        let mut fmt = String::new();
+        let mut args = String::new();
+        for (k, field) in v.fields.iter().enumerate() {
+            let (ff, fa) = match p.types.get(field.ty) {
+                Type::Bool => ("%s".to_string(), format!("f[{k}] ? \"true\" : \"false\"")),
+                Type::Float { width: FloatWidth::F32, .. } => {
+                    ("%.17g".to_string(), format!("(double)*(float *)&f[{k}]"))
+                }
+                Type::Float { .. } => ("%.17g".to_string(), format!("*(double *)&f[{k}]")),
+                Type::Int { width, .. } if width.signed() => ("%lld".to_string(), format!("(long long)f[{k}]")),
+                Type::Int { .. } => ("%llu".to_string(), format!("(unsigned long long)f[{k}]")),
+                Type::Enum(inner) => {
+                    let names: String = p.enums[inner.index()]
+                        .variants
+                        .iter()
+                        .map(|w| format!("f[{k}] == {} ? \"{}\" : ", w.discriminant, w.name))
+                        .collect();
+                    ("%s".to_string(), format!("({names}\"?\")"))
+                }
+                _ => return None,
+            };
+            if k > 0 {
+                fmt.push_str(", ");
+            }
+            fmt.push_str(&ff);
+            args.push_str(", ");
+            args.push_str(&fa);
+        }
+        let text = if v.fields.is_empty() { v.name.clone() } else { format!("{}({fmt})", v.name) };
+        let _ =
+            writeln!(s, "    case {}: printf(\"t=%lld out {} {text}\\n\", t{args}); break;", v.discriminant, slot.name);
+    }
+    let _ = writeln!(s, "    default: printf(\"t=%lld out {} ?\\n\", t);", slot.name);
+    let _ = writeln!(s, "    }} }}");
+    Some(s)
 }
 
 /// `printf`-Format und Cast fuer einen Skalar: Fliesskomma mit 17

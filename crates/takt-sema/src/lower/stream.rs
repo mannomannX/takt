@@ -325,7 +325,11 @@ impl Lowerer<'_> {
         let v = if byte_stream && is_textual(value) {
             self.text(value, None)?
         } else if byte_stream {
-            let e = self.expr(value, Some(elem))?;
+            let hint = match &value.kind {
+                ast::ExprKind::Array(items) => self.intern(Type::Bytes { cap: items.len() as u32 }),
+                _ => elem,
+            };
+            let e = self.expr(value, Some(hint))?;
             match self.ty(e.ty) {
                 Type::Bytes { .. } | Type::Str { .. } | Type::Line { .. } => e,
                 _ => self.coerce(e, elem)?,

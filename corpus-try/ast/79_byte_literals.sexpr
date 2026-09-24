@@ -1,0 +1,18 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output total :int @hw("o/total") safe=0)
+(output second :int @hw("o/second") safe=0)
+(output tx :stream<u8> @hw("o/tx") max_rate=4000[Hz] capacity=16)
+(machine m
+  (var cmd :bytes<4> (array 0x01 199 0x00))
+  (var k :int in 0..3 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (var frame :bytes<8> (array (as k u8) 7))
+      (= total (+ (as (+ (.len cmd) (.len frame)) int) (as (index frame 0) int)))
+      (= second (as (index cmd 1) int))
+      (if (== k 0)
+        (send tx (array 0xAA 0x55 (as k u8))))
+      (= k (% (+ k 1) 4)))))

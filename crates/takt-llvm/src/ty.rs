@@ -177,7 +177,16 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
             if e.variants.iter().all(|v| v.fields.is_empty()) {
                 LlvmType::Int(32)
             } else {
-                return None;
+                // Diskriminante und je Feld ein 8-Byte-Fach (11.2): so viele
+                // wie die groesste Variante braucht, ungenutzte null.
+                let width = e.variants.iter().map(|v| v.fields.len()).max()? as u32;
+                for f in e.variants.iter().flat_map(|v| v.fields.iter()) {
+                    let scalar = matches!(lower(f.ty, p)?, LlvmType::Int(_) | LlvmType::F32 | LlvmType::F64);
+                    if !scalar || matches!(p.types.get(f.ty), Type::Duration { .. }) {
+                        return None;
+                    }
+                }
+                LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(64)), width)])
             }
         }
         Type::Record(id) => {

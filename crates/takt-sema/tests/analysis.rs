@@ -552,10 +552,19 @@ machine m:
     frames[by_name("leaf_small")] = Some(8);
     frames[by_name("leaf_big")] = Some(48);
 
-    let d = takt_mir::analysis::stack::depth(&p, &frames).expect("Tiefe");
+    let d = takt_mir::analysis::stack::depth(&p, &frames, &[]).expect("Tiefe");
     assert_eq!(d.bytes, 32 + 48, "der teurere Zweig zaehlt, nicht beide");
     assert_eq!(d.path.first().map(String::as_str), Some("outer"));
     assert!(d.path.iter().any(|f| f == "leaf_big"), "der Pfad nennt den teuren Zweig: {:?}", d.path);
+
+    // 12.3: Der Schritt der Maschine und ihre Schleifenfunktion liegen
+    // unter dem Pfad; der Bericht nennt die ganze Kette.
+    let machines = [takt_mir::analysis::stack::MachineFrames { step: Some(100), inner: Some(("m_loop_0".into(), 16)) }];
+    let d = takt_mir::analysis::stack::depth(&p, &frames, &machines).expect("Tiefe");
+    assert_eq!(d.bytes, 100 + 16 + 32 + 48);
+    assert_eq!(d.path, ["m_step", "m_loop_0", "outer", "leaf_big"]);
+    let unmeasured = [takt_mir::analysis::stack::MachineFrames::default()];
+    assert!(takt_mir::analysis::stack::depth(&p, &frames, &unmeasured).is_none(), "ohne Schrittrahmen keine Schranke");
 }
 
 /// Eine erreichbare Funktion ohne gemessenen Rahmen macht die Rechnung
@@ -578,7 +587,7 @@ machine m:
 ",
     );
     let frames = vec![None; p.fns.len()];
-    assert!(takt_mir::analysis::stack::depth(&p, &frames).is_none(), "ohne Messung keine Schranke");
+    assert!(takt_mir::analysis::stack::depth(&p, &frames, &[]).is_none(), "ohne Messung keine Schranke");
 }
 
 /// 9.4.3: `B_m` ist der zustandsfreie Anteil plus das komponentenweise

@@ -411,15 +411,20 @@ impl Outer for MachineEnv<'_, '_> {
 
     /// 12.10: Ein Port ist im Sim-Build ein Channel-Paar. Gelesen wird der
     /// `sim`-Output `mmio/ADR/r`, den ein Modell stellt — mit Unit-Delay
-    /// wie jeder Modellwert (8.3).
+    /// wie jeder Modellwert (8.3); ist er ein Strom, entnimmt jedes Lesen
+    /// ein Element.
     fn port_read(&mut self, p: PortId) -> EvalResult<Value> {
         let port = &self.loaded.program.ports[p.index()];
         let want = format!("mmio/{:#x}/r", port.address);
         let ty = port.ty;
-        match self.loaded.program.channels.iter().position(|c| sim_address(c) == Some(want.clone())) {
-            Some(i) => Ok(self.image.output(ChannelId(i as u32)).clone()),
-            None => Ok(Value::default_for(ty, self.loaded.program)),
+        let program = self.loaded.program;
+        let Some(i) = program.channels.iter().position(|c| sim_address(c) == Some(want.clone())) else {
+            return Ok(Value::default_for(ty, program));
+        };
+        if matches!(self.loaded.ty(program.channels[i].ty), Type::Stream(_)) {
+            return Ok(self.image.port_next(&want).unwrap_or_else(|| Value::default_for(ty, program)));
         }
+        Ok(self.image.output(ChannelId(i as u32)).clone())
     }
 
     /// 12.10: Ein Schreibvorgang wird ein Element des Eingangsstroms

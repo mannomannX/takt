@@ -11,10 +11,10 @@ pub mod smt;
 pub mod solve;
 pub mod term;
 
-pub use encode::{CheckSite, ContractGoal, Goal, Model, StateVar, Unsupported, encode};
+pub use encode::{CheckSite, ContractGoal, Goal, Model, StateVar, Unsupported, encode, encode_machine};
 pub use eval::Val;
 pub use smt::export;
 pub use solve::{
-    CheckReport, CheckVerdict, ContractReport, ContractVerdict, Report, Solver, Verdict, classify, find, prove,
-    verify_contracts,
+    CheckReport, CheckVerdict, ContractReport, ContractVerdict, Report, Solver, Verdict, classify,
+    classify_compositional, find, prove, verify_contracts,
 };

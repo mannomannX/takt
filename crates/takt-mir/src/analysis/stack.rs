@@ -50,33 +50,76 @@ pub struct Depth {
 /// keine.
 pub type Frames = [Option<u32>];
 
-/// Rechnet den Programmanteil des Stacks (12.3).
+/// Die Rahmen einer Maschine im Objekt: ihr Schritt und die tiefste
+/// Schleifen- oder Eintrittsfunktion, die er ruft.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MachineFrames {
+    /// `<m>_step`.
+    pub step: Option<u32>,
+    /// Name und Rahmen der tiefsten gerufenen Funktion der Maschine.
+    pub inner: Option<(String, u32)>,
+}
+
+/// Rechnet den Programmanteil des Stacks (12.3): je Maschine der Schritt,
+/// darunter ihre tiefste eigene Funktion, darunter der laengste Pfad durch
+/// die gerufenen Funktionen; das Maximum ueber die Maschinen. Ohne
+/// Maschinenrahmen (indiziert wie [`Program::machines`]) zaehlt nur der
+/// Funktionsanteil ab den Einstiegen.
 ///
-/// `None`, wenn eine erreichbare Funktion keinen gemessenen Rahmen hat
-/// oder das Programm keine Funktion ruft.
-pub fn depth(p: &Program, frames: &Frames) -> Option<Depth> {
+/// `None`, wenn ein Rahmen fehlt oder nichts zu rechnen ist.
+pub fn depth(p: &Program, frames: &Frames, machines: &[MachineFrames]) -> Option<Depth> {
     let n = p.fns.len();
     if frames.len() < n {
         return None;
     }
     // Memoisierung ueber den azyklischen Graphen (Pruefung 11): Jede
-    // Funktion wird einmal gerechnet, auch wenn viele Pfade zu ihr fuehren.
+    // erreichbare Funktion wird einmal gerechnet, auch wenn viele Pfade zu
+    // ihr fuehren; was keine Maschine ruft, liegt nicht im Objekt.
     let mut best: Vec<Option<(u64, Vec<FnId>)>> = vec![None; n];
-    for i in 0..n {
-        resolve(p, frames, FnId(i as u32), &mut best, 0)?;
+    for f in entry_points(p) {
+        resolve(p, frames, f, &mut best, 0)?;
+    }
+    let names = |path: &[FnId]| path.iter().map(|f| p.fns[f.index()].name.clone()).collect::<Vec<_>>();
+
+    if machines.len() < p.machines.len() {
+        // Einstieg ist jede Funktion, die eine Maschine ruft. Nicht „was
+        // niemand ruft": Eine Hilfsfunktion kann von einer Maschine *und*
+        // von einer anderen Funktion gerufen werden, und dann zaehlt der
+        // laengere der beiden Pfade.
+        let (bytes, path) = entry_points(p)
+            .iter()
+            .filter_map(|f| best[f.index()].as_ref())
+            .max_by_key(|(b, _)| *b)
+            .map(|(b, path)| (*b, path.clone()))?;
+        return Some(Depth { bytes, path: names(&path) });
     }
 
-    // Einstieg ist jede Funktion, die eine Maschine ruft. Nicht „was
-    // niemand ruft": Eine Hilfsfunktion kann von einer Maschine *und* von
-    // einer anderen Funktion gerufen werden, und dann zaehlt der laengere
-    // der beiden Pfade.
-    let (bytes, path) = entry_points(p)
-        .iter()
-        .filter_map(|f| best[f.index()].as_ref())
-        .max_by_key(|(b, _)| *b)
-        .map(|(b, path)| (*b, path.clone()))?;
-
-    Some(Depth { bytes, path: path.iter().map(|f| p.fns[f.index()].name.clone()).collect() })
+    let mut out: Option<Depth> = None;
+    for (m, mf) in p.machines.iter().zip(machines) {
+        let mut calls = Calls::default();
+        calls.machine(m);
+        let leaf = calls.natives.iter().map(|id| p.natives.get(*id).map_or(0, |n| u64::from(n.stack))).max();
+        let (below, path) = calls
+            .fns
+            .iter()
+            .filter_map(|f| best[f.index()].as_ref())
+            .max_by_key(|(b, _)| *b)
+            .map(|(b, path)| (*b, names(path)))
+            .filter(|(b, _)| leaf.is_none_or(|l| *b >= l))
+            .unwrap_or((leaf.unwrap_or(0), Vec::new()));
+        let mut bytes = u64::from(mf.step?);
+        let mut chain = vec![format!("{}_step", m.name)];
+        if let Some((name, n)) = &mf.inner {
+            bytes += u64::from(*n);
+            chain.push(name.clone());
+        }
+        bytes += below;
+        chain.extend(path);
+        if out.as_ref().is_none_or(|d| bytes > d.bytes) {
+            out = Some(Depth { bytes, path: chain });
+        }
+    }
+    out
 }
 
 /// Der teuerste Pfad ab `f`, memoisiert.

@@ -1249,11 +1249,20 @@ fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, Llvm
         }
         Place::Index(base, index) => {
             let (ptr, ty) = place(base, ctx, m)?;
-            let LlvmType::Array(elem, _) = &ty else { return Err(NotYet { what: "Index auf Nicht-Array" }) };
             let vars = ctx.vars();
             let i = lower_expr(index, ctx.program, m, &vars)?;
             index_guard(index, &i, &ty, &ptr, &vars, m)?;
-            let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, {} {}", i.ty, i.value));
+            let (array_ty, data) = match &ty {
+                LlvmType::Struct(_) => {
+                    let l = collection::layout_of(&ty).ok_or(NotYet { what: "Index auf diesem Struct" })?;
+                    let d = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 1"));
+                    (LlvmType::Array(Box::new(l.elem), l.cap), d)
+                }
+                LlvmType::Array(..) => (ty.clone(), ptr),
+                _ => return Err(NotYet { what: "Index auf diesem Typ" }),
+            };
+            let LlvmType::Array(elem, _) = &array_ty else { return Err(NotYet { what: "Elementtyp" }) };
+            let at = m.inst(&format!("getelementptr inbounds {array_ty}, ptr {data}, i32 0, {} {}", i.ty, i.value));
             Ok((at, (**elem).clone()))
         }
         Place::Index2(base, row, col) => {
@@ -1315,8 +1324,16 @@ fn method_call(
             // Speicherort; ihr Wert waere eine Kopie, die `memcpy` nicht
             // lesen kann.
             let src = args.first().ok_or(NotYet { what: "`append` ohne Argument" })?;
-            let ExprKind::Var(id) = src.kind else { return Err(NotYet { what: "`append` aus einem Ausdruck" }) };
-            let (src_ptr, _) = place(&Place::Var(id), ctx, m)?;
+            let src_ptr = match src.kind {
+                ExprKind::Var(id) => place(&Place::Var(id), ctx, m)?.0,
+                _ => {
+                    let vars = ctx.vars();
+                    let v = lower_expr(src, ctx.program, m, &vars)?;
+                    let tmp = m.alloca(&v.ty);
+                    m.write(&v.ty, &v.value, &tmp.to_string());
+                    tmp
+                }
+            };
             collection::append(recv, src_ptr, &layout, label, m)
         }
         _ => collection::clear(recv, &layout, m),
@@ -1644,7 +1661,7 @@ fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m
                 // 6.1: Die Felder der Variante werden an gehobene
                 // Variablen gebunden, bevor der Rumpf laeuft. Sie liegen
                 // im Wert hinter der Diskriminante.
-                bind_fields(&value, fields, ctx, m)?;
+                bind_fields(&value, fields, subject.ty, *variant, ctx, m)?;
                 block(&arm.body.clone(), ctx, m)?;
                 m.void_inst(&format!("br label %{end_at}"));
                 m.label(&go_on);
@@ -1699,11 +1716,36 @@ fn enum_of(ty: takt_mir::TypeId, p: &Program) -> Option<&takt_mir::types::EnumDe
 /// ist das Feld 0 der Wert und Feld 1 der Fehler (3.8). Mehr als ein Feld
 /// braucht den Aufbau der Variante im Wert, den erst die Summentypen mit
 /// Feldern mitbringen.
-fn bind_fields(value: &Lowered, fields: &[takt_mir::VarId], ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+fn bind_fields(
+    value: &Lowered,
+    fields: &[takt_mir::VarId],
+    subject: takt_mir::TypeId,
+    variant: u32,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
     if fields.is_empty() {
         return Ok(());
     }
     let LlvmType::Struct(parts) = &value.ty else { return Err(NotYet { what: "Variante ohne Felder im Wert" }) };
+    // Ein Enum mit Feldern: die Faecher hinter der Diskriminante, je Feld
+    // eines (11.2).
+    if let (takt_mir::types::Type::Enum(_), Some(arr @ LlvmType::Array(..))) =
+        (ctx.program.types.get(subject), parts.get(1))
+    {
+        let arr = arr.clone();
+        let payload = m.inst(&format!("extractvalue {} {}, 1", value.ty, value.value));
+        let _ = variant;
+        for (k, var) in fields.iter().enumerate() {
+            let def = ctx.machine.vars.get(var.index()).ok_or(NotYet { what: "Bindung" })?;
+            let want = ty::storage(def.ty, ctx.program).ok_or(NotYet { what: "Typ der Bindung" })?;
+            let slot = m.inst(&format!("extractvalue {arr} {payload}, {k}"));
+            let v = crate::expr::from_slot(&slot.to_string(), &want, m);
+            let ptr = ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })?;
+            m.void_inst(&format!("store {want} {v}, ptr {ptr}"));
+        }
+        return Ok(());
+    }
     if fields.len() > 1 {
         return Err(NotYet { what: "`case` mit mehreren Feldbindungen" });
     }

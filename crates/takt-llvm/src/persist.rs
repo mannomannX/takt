@@ -135,6 +135,9 @@ impl Writer<'_> {
                 self.store_at(off, "i64", &v);
                 self.module.inst(&format!("add i64 {off}, 8"))
             }
+            Type::Enum(e) if self.p.enums[e.index()].variants.iter().any(|v| !v.fields.is_empty()) => {
+                return Err(NotYet { what: "`persist` eines Enums mit Feldern" });
+            }
             Type::Enum(_) => {
                 let v = self.module.inst(&format!("load i32, ptr {src}"));
                 let wide = self.module.inst(&format!("sext i32 {v} to i64"));
@@ -364,6 +367,9 @@ impl Reader<'_> {
                     self.int_range(v, range);
                 }
                 self.module.inst(&format!("add i64 {off}, 8"))
+            }
+            Type::Enum(e) if self.p.enums[e.index()].variants.iter().any(|v| !v.fields.is_empty()) => {
+                return Err(NotYet { what: "`persist` eines Enums mit Feldern" });
             }
             Type::Enum(e) => {
                 let d = self.load_at(off, "i64");

@@ -1,0 +1,55 @@
+# 80 — Enums mit Feldern (3.6, 11.2): Varianten mit Nutzlast als Wert und
+# Output, Vergleich und `match` mit Bindungen. Im erzeugten Code sind sie
+# Diskriminante und 8-Byte-Faecher, im Trace `NAME(f1, f2)`.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+enum Shape: EMPTY, CIRCLE(r: float), RECT(w: float, h: float)
+enum Cmd: NONE, MOVE(dx: int in -100..100, dy: int in -100..100), STOP(hard: bool)
+
+output shape : Shape @ hw("o/shape") with safe = EMPTY
+output cmd   : Cmd   @ hw("o/cmd")   with safe = NONE
+output area  : float @ hw("o/area")  with safe = 0.0
+output same  : bool  @ hw("o/same")  with safe = false
+output total : int   @ hw("o/total") with safe = 0
+
+machine m:
+    var k    : int in 0..3 = 0
+    var last : Cmd = NONE
+    var sum  : int = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            var s : Shape = EMPTY
+            if k == 0:
+                s = CIRCLE(r = 2.0)
+            elif k == 1:
+                s = RECT(w = (k + 2) as float, h = 1.5)
+            shape = s
+            match s:
+                case CIRCLE(r):
+                    area = r * r * 3.0
+                case RECT(w, h):
+                    area = w * h
+                case EMPTY:
+                    area = 0.0
+
+            var c : Cmd = NONE
+            if k == 1:
+                c = MOVE(dx = k * 10, dy = -k)
+            elif k == 2:
+                c = STOP(hard = true)
+            same = c == last
+            last = c
+            cmd = c
+            match c:
+                case MOVE(dx, dy):
+                    sum = sum + dx + dy
+                case _:
+                    pass
+            total = sum
+            k = (k + 1) % 4
