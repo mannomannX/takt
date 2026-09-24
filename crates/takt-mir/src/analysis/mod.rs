@@ -89,12 +89,12 @@ pub fn analyze(program: &mut Program) -> (Vec<Diagnostic>, Report) {
 
     for id in 0..program.machines.len() {
         let w = analyze_machine(program, id);
-        proofs.add(&w.proven, &w.ranges);
+        proofs.add(&w.proven, &w.kept, &w.ranges);
         all.extend(w.checks);
     }
     for id in reachable_fns(program) {
         let w = analyze_fn(program, &program.fns[id.index()]);
-        proofs.add(&w.proven, &w.ranges);
+        proofs.add(&w.proven, &w.kept, &w.ranges);
         all.extend(w.checks);
     }
     // Gewarnt wird im Programm des Nutzers, nicht im Prelude.

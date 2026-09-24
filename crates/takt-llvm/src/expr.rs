@@ -10,7 +10,9 @@
 //! traegt ein Flag; `emit` bietet dafuer keine Moeglichkeit (4.2).
 
 use takt_mir::TypeId;
-use takt_mir::expr::{Accessor, BinaryOp, ConvertKind, Expr, ExprKind, Intrinsic, JobField, UnaryOp};
+use takt_mir::expr::{
+    Accessor, BinaryOp, CheckedKind, ConvertKind, Expr, ExprKind, Intrinsic, JobField, Repr, UnaryOp,
+};
 use takt_mir::program::Program;
 use takt_mir::stmt::Place;
 use takt_mir::types::{IntWidth, Type};
@@ -184,6 +186,15 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         return interp(args, &want, p, m, vars);
     }
     let want = ty::lower(e.ty, p).ok_or(NotYet { what: "Typ" })?;
+    // Lemma 3.4: Passen der Ausdruck und alle Teilausdruecke in 32 Bit,
+    // wird in 32 Bit gerechnet und einmal am Ende erweitert.
+    if want == LlvmType::Int(64)
+        && narrow_ok(e, p)
+        && !matches!(e.kind, ExprKind::Int(_) | ExprKind::Duration(_) | ExprKind::Var(_))
+    {
+        let v = lower_narrow(e, p, m, vars)?;
+        return Ok(fit(v, &want, m));
+    }
     match &e.kind {
         ExprKind::Bool(b) => Ok(Lowered { value: i32::from(*b).to_string(), ty: want }),
         ExprKind::Int(n) => Ok(Lowered { value: n.to_string(), ty: want }),
@@ -1033,6 +1044,123 @@ fn convert_checked(
 fn width_bounds(w: IntWidth) -> (i128, i128) {
     let bits = w.bits();
     if w.signed() { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) }
+}
+
+/// Ist der Ausdruck ein `int` oder eine Dauer, also `i64` gerechnet?
+fn wide_int(e: &Expr, p: &Program) -> bool {
+    ty::lower(e.ty, p) == Some(LlvmType::Int(64))
+}
+
+/// Darf der Knoten in 32 Bit gerechnet werden (Lemma 3.4)? Er und jeder
+/// breite Teilausdruck passen bewiesen in `i32`, und seine Art ist eine,
+/// die `lower_narrow` kennt.
+fn narrow_ok(e: &Expr, p: &Program) -> bool {
+    let kind = match &e.kind {
+        ExprKind::Int(_) | ExprKind::Duration(_) | ExprKind::Var(_) | ExprKind::Cond { .. } | ExprKind::Cast { .. } => {
+            true
+        }
+        ExprKind::Unary { op, .. } => matches!(op, UnaryOp::Neg | UnaryOp::BitNot),
+        ExprKind::Binary { op, .. } => !matches!(op, BinaryOp::And | BinaryOp::Or),
+        ExprKind::Checked { kind, .. } => matches!(kind, CheckedKind::Range(_) | CheckedKind::DivZero),
+        _ => false,
+    };
+    kind && e.repr == Some(Repr::I32) && e.children().iter().all(|c| !wide_int(c, p) || c.repr == Some(Repr::I32))
+}
+
+/// Ein Operand in 32 Bit: schmal gerechnet, wo es geht, sonst gerechnet
+/// und gekuerzt — exakt, weil sein Intervall in `i32` liegt.
+fn narrow_operand(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
+    if narrow_ok(e, p) {
+        return lower_narrow(e, p, m, vars);
+    }
+    let v = lower(e, p, m, vars)?;
+    Ok(to_i32(v, e.ty, p, m))
+}
+
+/// Auf `i32`, mit dem Vorzeichen des Quelltyps.
+fn to_i32(v: Lowered, ty: TypeId, p: &Program, m: &mut Module) -> Lowered {
+    let i32_ = LlvmType::Int(32);
+    let LlvmType::Int(bits) = &v.ty else { return v };
+    match bits {
+        32 => v,
+        b if *b > 32 => fit(v, &i32_, m),
+        _ => {
+            let op = if int_is_signed(ty, p) { "sext" } else { "zext" };
+            let r = m.inst(&format!("{op} {} {} to i32", v.ty, v.value));
+            Lowered { value: r.to_string(), ty: i32_ }
+        }
+    }
+}
+
+/// Der Knoten in 32 Bit (Lemma 3.4); `narrow_ok` hat die Art geprueft.
+fn lower_narrow(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
+    let i32_ = LlvmType::Int(32);
+    let value = match &e.kind {
+        ExprKind::Int(n) => return Ok(Lowered { value: n.to_string(), ty: i32_ }),
+        ExprKind::Duration(d) => return Ok(Lowered { value: d.to_string(), ty: i32_ }),
+        ExprKind::Var(id) => {
+            let v = match vars.address(*id, m) {
+                Some((ptr, ty)) => {
+                    let r = m.inst(&format!("load {ty}, ptr {ptr}"));
+                    Lowered { value: r.to_string(), ty }
+                }
+                None => vars.var(*id, m).ok_or(NotYet { what: "unbekannte Variable" })?,
+            };
+            return Ok(to_i32(v, e.ty, p, m));
+        }
+        ExprKind::Unary { op, expr } => {
+            let x = narrow_operand(expr, p, m, vars)?;
+            match op {
+                UnaryOp::Neg => m.inst(&format!("sub i32 0, {}", x.value)),
+                _ => m.inst(&format!("xor i32 {}, -1", x.value)),
+            }
+        }
+        ExprKind::Binary { op, lhs, rhs } => {
+            let a = narrow_operand(lhs, p, m, vars)?;
+            let b = narrow_operand(rhs, p, m, vars)?;
+            let text = match op {
+                BinaryOp::Add => "add",
+                BinaryOp::Sub => "sub",
+                BinaryOp::Mul => "mul",
+                BinaryOp::Div => "sdiv",
+                BinaryOp::Rem => "srem",
+                BinaryOp::BitAnd => "and",
+                BinaryOp::BitOr => "or",
+                BinaryOp::BitXor => "xor",
+                BinaryOp::Shl => "shl",
+                BinaryOp::Shr => "ashr",
+                _ => return Err(NotYet { what: "Vergleich in 32 Bit" }),
+            };
+            m.inst(&format!("{text} i32 {}, {}", a.value, b.value))
+        }
+        ExprKind::Cond { cond, then, otherwise } => {
+            let c = lower(cond, p, m, vars)?;
+            let a = narrow_operand(then, p, m, vars)?;
+            let b = narrow_operand(otherwise, p, m, vars)?;
+            m.inst(&format!("select i1 {}, i32 {}, i32 {}", c.value, a.value, b.value))
+        }
+        ExprKind::Cast { expr, .. } => return narrow_operand(expr, p, m, vars),
+        ExprKind::Checked { expr, kind } => {
+            let v = narrow_operand(expr, p, m, vars)?;
+            match kind {
+                CheckedKind::Range(r) if r.origin != takt_mir::types::RangeOrigin::Proven => {
+                    // Eine Grenze ausserhalb von `i32` prueft in 64 Bit.
+                    let in_i32 = |c: &takt_mir::types::Const| const_i64(c).is_some_and(|x| i32::try_from(x).is_ok());
+                    if in_i32(&r.lo) && in_i32(&r.hi) {
+                        runtime_check(kind, &v, m, vars)?;
+                    } else {
+                        let wide = fit(v.clone(), &LlvmType::Int(64), m);
+                        runtime_check(kind, &wide, m, vars)?;
+                    }
+                }
+                CheckedKind::DivZero => runtime_check(kind, &v, m, vars)?,
+                _ => {}
+            }
+            return Ok(v);
+        }
+        _ => return Err(NotYet { what: "Knoten in 32 Bit" }),
+    };
+    Ok(Lowered { value: value.to_string(), ty: i32_ })
 }
 
 /// Bringt einen Ganzzahlwert auf die Breite `ty`: `sext` beim Laden aus
@@ -2041,6 +2169,14 @@ fn binary(
     // auf `bool`: Beide Operanden sind total (4.1), also darf beides eine
     // Instruktion sein. Ein Kurzschluss waere hier eine Verhaltensaenderung
     // ohne Gewinn — es gibt keine Seiteneffekte, die er spaeren koennte.
+    if matches!(op, BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Eq | BinaryOp::Ne)
+        && [lhs, rhs].iter().all(|x| wide_int(x, p) && x.repr == Some(Repr::I32))
+    {
+        let a = narrow_operand(lhs, p, m, vars)?;
+        let b = narrow_operand(rhs, p, m, vars)?;
+        let r = m.inst(&compare(op, &a, &b, false, int_is_signed(lhs.ty, p)));
+        return Ok(Lowered { value: r.to_string(), ty: LlvmType::Int(1) });
+    }
     let a = lower(lhs, p, m, vars)?;
     let b = lower(rhs, p, m, vars)?;
     let b = if matches!(op, BinaryOp::Shl | BinaryOp::Shr) { int_to(b, &a.ty, m) } else { b };

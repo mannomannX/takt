@@ -71,6 +71,8 @@ pub struct Walk<'p> {
     /// Stellen und Art der Pruefungen, die die Analyse erlassen hat; der
     /// zweite Durchlauf (`prove`) streicht sie.
     pub proven: Vec<(Span, u8)>,
+    /// Stellen und Art der Pruefungen, die ein Besuch nicht erlassen hat.
+    pub kept: Vec<(Span, u8)>,
     /// Bewiesenes Intervall je Stelle, fuer die Annotation `Expr::range`.
     pub ranges: Vec<(Span, Range)>,
     /// Tiefe der `for`-Schleifen: entscheidet ueber die Warnung.
@@ -88,6 +90,7 @@ impl<'p> Walk<'p> {
             program,
             checks: Vec::new(),
             proven: Vec::new(),
+            kept: Vec::new(),
             ranges: Vec::new(),
             loop_depth: 0,
             in_action: false,
@@ -521,6 +524,7 @@ impl<'p> Walk<'p> {
             let wide = matches!(kind, CheckedKind::Overflow) && self.width_of(node.ty).is_none_or(|w| w.bits() == 64);
             let warns = !wide && (self.loop_depth > 0 || self.in_action);
             self.checks.push(ImplicitCheck { cause, span: node.span, warns, relational });
+            self.kept.push((node.span, tag(kind)));
         }
         result
     }

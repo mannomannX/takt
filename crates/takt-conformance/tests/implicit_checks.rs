@@ -66,4 +66,10 @@ fn every_unproven_check_becomes_a_branch_and_every_proven_one_none() {
     for mark in ["geprueft_", "index_ok", "with.overflow", "; Range"] {
         assert!(!fine.contains(mark), "`proven_fine` traegt `{mark}`:\n{fine}");
     }
+    // Lemma 3.4: `n + 1` mit `n in 0..100` rechnet in 32 Bit.
+    let hot = functions_of(&ir, "proven_fine_loop");
+    assert!(hot.contains("add i32"), "die Addition laeuft in i32:
+{hot}");
+    assert!(!hot.contains("add i64"), "keine 64-Bit-Addition im `loop:`:
+{hot}");
 }

@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use takt_diag::Span;
 
 use crate::Program;
+use crate::analysis::domain::{Domain, Interval, Intervals};
 use crate::analysis::walk::tag;
 use crate::expr::{CheckedKind, Expr, ExprKind};
 use crate::stmt::{Block, Place, Stmt, StmtKind};
@@ -21,26 +22,46 @@ use crate::types::{Range, RangeOrigin};
 pub struct Proofs {
     /// Stellen und Art der erlassenen Pruefungen.
     pub dropped: BTreeSet<(u32, u32, u8)>,
-    /// Bewiesenes Intervall je Stelle.
+    /// Stellen, die ein Besuch (etwa eine abgerollte Runde) nicht erlassen
+    /// hat: dort bleibt die Pruefung.
+    pub kept: BTreeSet<(u32, u32, u8)>,
+    /// Bewiesenes Intervall je Stelle, ueber alle Besuche vereinigt.
     pub ranges: BTreeMap<(u32, u32), Range>,
 }
 
 impl Proofs {
     /// Sammelt die Ergebnisse eines Durchlaufs.
-    pub fn add(&mut self, proven: &[(Span, u8)], ranges: &[(Span, Range)]) {
+    pub fn add(&mut self, proven: &[(Span, u8)], kept: &[(Span, u8)], ranges: &[(Span, Range)]) {
         for (s, k) in proven {
             let (f, at) = key(*s);
             self.dropped.insert((f, at, *k));
         }
+        for (s, k) in kept {
+            let (f, at) = key(*s);
+            self.kept.insert((f, at, *k));
+        }
         for (s, r) in ranges {
-            self.ranges.insert(key(*s), *r);
+            let k = key(*s);
+            let joined = match self.ranges.get(&k) {
+                Some(old) => Intervals::join(&Interval::from_range(old), &Interval::from_range(r)).to_range(),
+                None => Some(*r),
+            };
+            match joined {
+                Some(j) => {
+                    self.ranges.insert(k, j);
+                }
+                None => {
+                    self.ranges.remove(&k);
+                }
+            }
         }
     }
 
-    /// Ist die Pruefung an dieser Stelle bewiesen?
+    /// Ist die Pruefung an dieser Stelle in jedem Besuch bewiesen?
     fn is_dropped(&self, s: Span, kind: &CheckedKind) -> bool {
         let (f, at) = key(s);
-        self.dropped.contains(&(f, at, tag(kind)))
+        let k = (f, at, tag(kind));
+        self.dropped.contains(&k) && !self.kept.contains(&k)
     }
 
     /// Das bewiesene Intervall an dieser Stelle.
