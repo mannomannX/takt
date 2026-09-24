@@ -116,7 +116,7 @@ Gemessen am UART-Objekt (`test_uart_c6_hw.takt`, `riscv32imac`, `-Os`, Flags aus
 | S5 Handler-Fenster als Funktion je Strom | — | **Gemessen, verworfen** (FB-251). Das UART-Programm hat fünf Handler-Fenster insgesamt, höchstens zwei auf demselben Strom; ein Fenster ist etwa 40 Byte Gerüst. |
 | S6 Rahmen als Tabellen | — | **Gemessen, verworfen** (FB-252). `takt_mcu_init_with` 506 Byte: vier `memset`, sechs Parameter-Stores (60 Byte), zwanzig Aufrufe; `takt_mcu_commit` 152 Byte für 13 Treiberaufrufe. Eine Tabelle spart die Stores, nicht die Aufrufe — unter 50 Byte. Der große Posten aus der ersten Runde war die Dump-Tabelle (FB-231), die steht schon. |
 | P3 Beweispflichten an `takt prove` | — | Plumbing umgesetzt (FB-253), ohne Solver auf dieser Maschine nicht gemessen. `takt prove --save-proof DATEI` schreibt die als unerreichbar bewiesenen Prüfstellen mit dem SHA-256 der Quelle als `.takt-proof`; `takt check/build/sim … --proof DATEI` prüft den Hash (Prüfung 65) und lässt die Stellen im Codegen aus — Range-Knoten bleiben als `Proven` stehen, der Interpreter prüft sie weiter. Der Prover führt jetzt jede implizite Prüfung (Range, Divisor, Endlichkeit) als Stelle mit demselben Namen wie `takt check --checks`. Grenze: `Index`, `Overflow`, `Shift`, `Convert` modelliert der Prover nicht; die zehn relationalen Ringindizes des UART-Programms bleiben. |
-| R3 Bip-Puffer | — | Nicht angefasst: Die Planung stellt ihn unter „erst, wenn die Laufzeit der Elemente drückt“; der Schritt liegt bei 24 µs je Tick, weit unter der Periode. Bleibt offen. |
+| R3 `bytes`-Bindungen als Sicht in den Ring | — | **Vollständig umgesetzt, gemessen, verworfen** (FB-254); die Umsetzung liegt auf dem Zweig `r3-stream-views`. Elemente als `{ len, Bytes }` auf vier Byte im Ring, `takt_stream_ref` als Sicht, Element über der Naht aus einem Puffer je Strom, Bindungen ohne `drop_oldest` als Zeiger, Rust-Referenzring gleich. Board: Schrittzeit 25,1 auf 25,1 µs (p99 29,2 auf 29,9), `.bss` +2,5 KB (Kopfwort und Rundung je Element, Puffer je Strom), `.rwtext` +0,5 KB, Stack unverändert, Objekt −16 Byte. Die Kopie je Element war beim Messprogramm rund 0,3 µs; was blieb, war das Nullen des Rests bis zur Kapazität, und das geht ohne Sicht. In `main`: kein Nullen mehr, `76_stream_views.takt` als Differenztest an der Naht. |
 
 ### Was P1/P2 konkret gebracht haben
 
@@ -132,4 +132,8 @@ UART nach P2: 42 Prüfungen — 29 `Declared` (Zähler `x += 1` in `0..1_000_000
 
 Die Tabelle in 2 nahm an, dass P1/P2 Prüfungen *entfernen*; tatsächlich fehlten dem Codegen Prüfungen, und die Analyse hat die neuen sofort wegbewiesen, wo es ging. Der ehrliche Stand: 9 416 Byte, Faktor 3,4 zu C — mit vollständigen Prüfungen. Die verbleibenden 56 Fault-Zweige (31 Range, 7 Überlauf-Instanzen, 4 Konversion, 12 Index, Rest Streams) sind P3-Material; jeder kostet 6–12 Byte.
 
-### Offen   
+### Offen
+
+- `NonFinite` und `Domain` für Gleitkomma stehen als Knotenart bereit, aber weder Sema noch Codegen erzeugen sie; der Interpreter faultet bei nicht endlichem Ergebnis (4.2). Dieselbe Lücke wie FB-242, für `float`; die Warnpolitik aus 3.4 passt dort nicht (jede Gleitkommaoperation wäre eine Prüfung ohne Beweisweg).
+- P3 braucht einen Solver auf dem Rechner; das Plumbing steht.
+- Sichten auf Stromelemente (R3) lohnen erst bei vielen großen Elementen je Tick: Gewinn ≈ Elemente je Tick × Kopie. Der Zweig `r3-stream-views` hält die vollständige Umsetzung bereit.

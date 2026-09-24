@@ -1,0 +1,66 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output sum :int in 0..999999 @hw("o/sum") safe=0)
+(output first :int in 0..999 @hw("o/first") safe=0)
+(output last :int in 0..999 @hw("o/last") safe=0)
+(output len :int in 0..999 @hw("o/len") safe=0)
+(output kept :int in 0..999 @hw("o/kept") safe=0)
+(output tail :int in 0..999999 @hw("o/tail") safe=0)
+(output old :int in 0..999999 @hw("o/old") safe=0)
+(output nxt :int in 0..999 @hw("o/nxt") safe=0)
+(output pk :int in 0..999 @hw("o/pk") safe=0)
+(stream frames :bytes<16> capacity=4 capacity_bytes=40 overflow=fault)
+(stream loose :bytes<16> capacity=3 capacity_bytes=24 overflow=drop_oldest)
+(fn checksum (b:bytes<16>) -> int in 0..999999
+  (var acc :int in 0..999999 0)
+  (for i in (range 16)
+    (if (>= i (.len b))
+      (break))
+    (= acc (% (+ acc (* (as (index b i) int) (+ i 1))) 100000)))
+  (return acc))
+(machine producer
+  (var n :int in 0..999 0)
+  (var buf :bytes<16> default)
+  (initial RUN)
+  (state RUN
+    (loop
+      (.clear buf)
+      (var k :int in 0..15 (% (+ (* n 4) 3) 16))
+      (for i in (range 16)
+        (if (>= i k)
+          (break))
+        (var put (.push buf (as (% (+ n i) 200) u8))))
+      (send frames buf)
+      (if (== (% n 3) 0)
+        (send loose buf))
+      (= n (+ n 1)))))
+(machine consumer
+  (var keep :bytes<16> default)
+  (var total :int in 0..999999 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (for g in loose
+        (= old (call checksum (.data g)))))
+    (on frames as f
+      (= sum (call checksum (.data f)))
+      (= len (.len (.data f)))
+      (= first (as (index (.data f) 0) int))
+      (= last (as (index (.data f) (- (.len (.data f)) 1)) int))
+      (var rest :bytes<16> (slice (.data f) 1 (.len (.data f))))
+      (= total (% (+ total (.len rest)) 100000))
+      (= tail total)
+      (= keep (.data f))
+      (= kept (.len keep)))))
+(machine watcher
+  (initial WAIT)
+  (state WAIT
+    (when (as frames x) -> LOOK
+      (= nxt (as (index (.data x) 0) int))))
+  (state LOOK
+    (loop
+      (var empty :bytes<16> default)
+      (var p :bytes<16>? (.peek frames))
+      (= pk (.len (.or p empty))))
+    (when true -> WAIT)))

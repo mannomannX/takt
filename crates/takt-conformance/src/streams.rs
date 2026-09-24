@@ -52,9 +52,6 @@ struct Stream {
     id: i64,
     /// Name des Kanals, fuer den Kommentar im C.
     name: String,
-    /// Kapazitaet der Bytes eines Elements: `line<N>` → N, ein Record →
-    /// seine kanonische Byteform.
-    cap: u32,
     /// Die Elemente in Reihenfolge, nach der Schrankenpruefung.
     elements: Vec<Element>,
 }
@@ -118,7 +115,7 @@ fn collect_streams(p: &Program, stimulus: &[Stimulus]) -> Vec<Stream> {
         if elements.is_empty() {
             continue;
         }
-        streams.push(Stream { id: i64::from(i as u32), name: c.name.clone(), cap, elements });
+        streams.push(Stream { id: i64::from(i as u32), name: c.name.clone(), elements });
     }
     streams
 }
@@ -195,17 +192,6 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus], trace: Trace) {
     let _ = writeln!(s, "}};");
     let _ = writeln!(s, "static const int g_elem_count = (int)(sizeof g_elems / sizeof g_elems[0]);\n");
 
-    // Die Kapazitaet je Strom: so viele Bytes schreibt `takt_stream_at`
-    // hinter `t` und die Laenge.
-    let _ = writeln!(s, "static int takt_stream_cap(int s) {{");
-    let _ = writeln!(s, "    switch (s) {{");
-    for st in &streams {
-        let _ = writeln!(s, "    case {}: return {}; /* {} */", st.id, st.cap, st.name);
-    }
-    let _ = writeln!(s, "    default: return 0;");
-    let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "}}\n");
-
     // 9.6: Sichtbar ist, was geliefert *und* noch nicht untersucht ist.
     // `g_tick` ist der laufende Tick des Rahmens; ein Element wird im
     // Tick seiner Lieferung sichtbar (8.6: der Rand liefert sofort).
@@ -235,7 +221,6 @@ pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus], trace: Trace) {
     let _ = writeln!(s, "        memcpy(t, &when, sizeof when);");
     let _ = writeln!(s, "        memcpy(p, &e->len, sizeof e->len);");
     let _ = writeln!(s, "        memcpy(p + 4, e->bytes, (size_t)e->len);");
-    let _ = writeln!(s, "        memset(p + 4 + e->len, 0, (size_t)(takt_stream_cap(s) - e->len));");
     let _ = writeln!(s, "        return e->seq;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    return 0;");
@@ -278,7 +263,6 @@ struct Dynamic {
     /// Nummer, wie der erzeugte Code sie uebergibt.
     id: i64,
     name: String,
-    elem: TypeId,
     capacity: u32,
     /// `capacity_bytes` (8.6); die Sema setzt den Default.
     capacity_bytes: u32,
@@ -295,7 +279,6 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
         .map(|(i, st)| Dynamic {
             id: -1 - i as i64,
             name: st.name.clone(),
-            elem: st.elem,
             capacity: st.capacity,
             capacity_bytes: st.capacity_bytes.unwrap_or(st.capacity.saturating_mul(payload_cap(p, st.elem))),
             readers: st.readers.iter().map(|m| m.0).collect(),
@@ -316,7 +299,6 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
         out.push(Dynamic {
             id: in_id as i64,
             name: c.name.clone(),
-            elem,
             capacity,
             capacity_bytes: c.attrs.capacity_bytes.unwrap_or(capacity.saturating_mul(payload_cap(p, elem))),
             readers,
@@ -430,16 +412,6 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    default: return -1;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
-    // Die Kapazitaet eines Elements: so viel Platz nimmt `takt_int_bind`
-    // hinter `t` und der Laenge.
-    let _ = writeln!(s, "static int takt_int_bytes(int k) {{");
-    let _ = writeln!(s, "    switch (k) {{");
-    for (i, d) in dyns.iter().enumerate() {
-        let _ = writeln!(s, "    case {i}: return {};", payload_cap(p, d.elem));
-    }
-    let _ = writeln!(s, "    default: return 0;");
-    let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static struct takt_idesc *takt_int_desc(int k, int i) {{");
     let _ = writeln!(s, "    int j = g_int_head[k] + i;");
     let _ = writeln!(s, "    if (j >= g_int_cap[k]) j -= g_int_cap[k];");
@@ -486,7 +458,6 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    memcpy(t, &when, sizeof when);");
     let _ = writeln!(s, "    memcpy(p, &len, sizeof len);");
     let _ = writeln!(s, "    takt_int_read(k, e->off, p + 4, len);");
-    let _ = writeln!(s, "    memset(p + 4 + len, 0, (size_t)(takt_int_bytes(k) - len));");
     let _ = writeln!(s, "    return takt_int_seq_at(k, first + i);");
     let _ = writeln!(s, "}}");
     // 8.6: Zwei Schranken, Elemente und Bytes — wie `Buffer::push`.

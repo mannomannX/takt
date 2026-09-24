@@ -1,0 +1,85 @@
+# 76 — `bytes`-Elemente an der Naht des Rings (8.6): Der Ring ist knapp
+# bemessen, damit Elemente ueber das Ende reichen. Laenge, Index,
+# Teilbereich, Aufruf, `next`, `peek`, das Kopieren aus der Bindung und
+# ein Strom mit `drop_oldest` ergeben im Interpreter und nativ dasselbe.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output sum   : int in 0..999999 @ hw("o/sum")   with safe = 0
+output first : int in 0..999    @ hw("o/first") with safe = 0
+output last  : int in 0..999    @ hw("o/last")  with safe = 0
+output len   : int in 0..999    @ hw("o/len")   with safe = 0
+output kept  : int in 0..999    @ hw("o/kept")  with safe = 0
+output tail  : int in 0..999999 @ hw("o/tail")  with safe = 0
+output old   : int in 0..999999 @ hw("o/old")   with safe = 0
+output nxt   : int in 0..999    @ hw("o/nxt")   with safe = 0
+output pk    : int in 0..999    @ hw("o/pk")    with safe = 0
+
+stream<bytes<16>> frames with capacity = 4, capacity_bytes = 40, overflow = fault
+stream<bytes<16>> loose with capacity = 3, capacity_bytes = 24, overflow = drop_oldest
+
+fn checksum(b: bytes<16>) -> int in 0..999999:
+    var acc : int in 0..999999 = 0
+    for i in range(16):
+        if i >= b.len:
+            break
+        acc = (acc + (b[i] as int) * (i + 1)) % 100000
+    return acc
+
+machine producer:
+    var n   : int in 0..999 = 0
+    var buf : bytes<16> = default
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # Laengen 3, 7, 11, 15, 3, … — der Ring laeuft nach wenigen Ticks um.
+            buf.clear()
+            var k : int in 0..15 = (n * 4 + 3) % 16
+            for i in range(16):
+                if i >= k:
+                    break
+                var put = buf.push(((n + i) % 200) as u8)
+            send frames, buf
+            if n % 3 == 0:
+                send loose, buf
+            n = n + 1
+
+machine consumer:
+    var keep  : bytes<16> = default
+    var total : int in 0..999999 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            for g in loose:
+                old = checksum(g.data)
+        on frames as f:
+            sum = checksum(f.data)
+            len = f.data.len
+            first = f.data[0] as int
+            last = f.data[f.data.len - 1] as int
+            var rest : bytes<16> = f.data[1..f.data.len]
+            total = (total + rest.len) % 100000
+            tail = total
+            keep = f.data
+            kept = keep.len
+
+machine watcher:
+    initial WAIT
+
+    state WAIT:
+        when frames as x:
+            nxt = x.data[0] as int
+            -> LOOK
+
+    state LOOK:
+        loop:
+            var empty : bytes<16> = default
+            var p     : bytes<16>? = frames.peek()
+            pk = p.or(empty).len
+        when true: -> WAIT
