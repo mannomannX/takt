@@ -19,6 +19,7 @@ const PROGRAMS: &[&str] = &[
     "17_nested.takt",
     "46_matrices.takt",
     "71_places.takt",
+    "78_length_guards.takt",
 ];
 
 /// Wachstum, das noch keine Meldung ist: zwei Prozent oder 64 Byte.

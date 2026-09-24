@@ -1,0 +1,104 @@
+# 78 — Laengenschranken (3.4): `if i >= b.len: break` vor `b[i]`, die
+# Laengenpruefung vor `b[off + n]` und die Schleifeninvariante eines
+# Zaehlers brauchen keine Pruefung im erzeugten Code. Wo die Laenge sich
+# nach der Schranke aendert, bleibt die Pruefung und faultet im
+# Interpreter wie nativ.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+const HDR : int = 4
+
+record Hdr:
+    len : u16
+
+output sum   : int @ hw("o/sum")   with safe = 0
+output pair  : int @ hw("o/pair")  with safe = 0
+output code  : int @ hw("o/code")  with safe = 0
+output stale : int @ hw("o/stale") with safe = 0
+
+machine guarded:
+    var b : bytes<64> = default
+    var n : int in 0..64 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # Jeden Tick ein Byte mehr, Inhalt ist die Position.
+            if n < 64:
+                var _p = b.push(n as u8)
+                n = n + 1
+            var s : int in 0..99 = 0
+            for i in range(1024):
+                if i >= b.len:
+                    break
+                s = (s + (b[i] as int)) % 100
+            sum = s
+
+machine offset:
+    var b : bytes<64> = default
+    var k : int in 0..3 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            if b.len < 8:
+                var _p = b.push((b.len * 3) as u8)
+            var hh = Hdr(len = k as u16)
+            if (b.len as int) < HDR + (hh.len as int) + 2:
+                pair = -1
+            else:
+                pair = (b[HDR + (hh.len as int)] as int) * 256 + (b[HDR + (hh.len as int) + 1] as int)
+            k = (k + 1) % 4
+
+machine counter:
+    var b : bytes<64> = default
+    var n : int in 0..64 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # Jedes vierte Byte ist null.
+            if n < 64:
+                var _p = b.push((n % 4) as u8)
+                n = n + 1
+            var c : int in 1..255 = 1
+            for i in range(1024):
+                if i >= b.len:
+                    break
+                if b[i] != 0:
+                    c += 1
+                if b[i] == 0 or c == 255:
+                    c = 1
+            code = c
+
+machine emptied:
+    fault -> SAFE
+    var b : bytes<8> = default
+    var t : int in 0..10 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            if b.len < 8:
+                var _p = b.push(1)
+            if t < 10:
+                t = t + 1
+            var s : int in 0..99 = 0
+            for i in range(8):
+                if i >= b.len:
+                    break
+                # Im dritten Tick leert sich der Puffer hinter der Schranke.
+                if t == 3:
+                    b.clear()
+                s = (s + (b[i] as int)) % 100
+            stale = s
+
+    state SAFE:
+        enter:
+            stale = 7

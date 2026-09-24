@@ -1,0 +1,79 @@
+(system
+  (language 1)
+  (tick 10ms))
+(const HDR :int 4)
+(record Hdr
+  (len: u16))
+(output sum :int @hw("o/sum") safe=0)
+(output pair :int @hw("o/pair") safe=0)
+(output code :int @hw("o/code") safe=0)
+(output stale :int @hw("o/stale") safe=0)
+(machine guarded
+  (var b :bytes<64> default)
+  (var n :int in 0..64 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (if (< n 64)
+        (var _p (.push b (as n u8)))
+        (= n (+ n 1)))
+      (var s :int in 0..99 0)
+      (for i in (range 1024)
+        (if (>= i (.len b))
+          (break))
+        (= s (% (+ s (as (index b i) int)) 100)))
+      (= sum s))))
+(machine offset
+  (var b :bytes<64> default)
+  (var k :int in 0..3 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (if (< (.len b) 8)
+        (var _p (.push b (as (* (.len b) 3) u8))))
+      (var hh (Hdr len=(as k u16)))
+      (if (< (as (.len b) int) (+ (+ HDR (as (.len hh) int)) 2))
+        (= pair (- 1)))
+      (else
+        (= pair (+ (* (as (index b (+ HDR (as (.len hh) int))) int) 256) (as (index b (+ (+ HDR (as (.len hh) int)) 1)) int))))
+      (= k (% (+ k 1) 4)))))
+(machine counter
+  (var b :bytes<64> default)
+  (var n :int in 0..64 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (if (< n 64)
+        (var _p (.push b (as (% n 4) u8)))
+        (= n (+ n 1)))
+      (var c :int in 1..255 1)
+      (for i in (range 1024)
+        (if (>= i (.len b))
+          (break))
+        (if (!= (index b i) 0)
+          (+= c 1))
+        (if (or (== (index b i) 0) (== c 255))
+          (= c 1)))
+      (= code c))))
+(machine emptied
+  (fault -> SAFE)
+  (var b :bytes<8> default)
+  (var t :int in 0..10 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (if (< (.len b) 8)
+        (var _p (.push b 1)))
+      (if (< t 10)
+        (= t (+ t 1)))
+      (var s :int in 0..99 0)
+      (for i in (range 8)
+        (if (>= i (.len b))
+          (break))
+        (if (== t 3)
+          (.clear b))
+        (= s (% (+ s (as (index b i) int)) 100)))
+      (= stale s)))
+  (state SAFE
+    (enter
+      (= stale 7))))
