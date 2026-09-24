@@ -563,9 +563,6 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
             }
             return Ok(());
         };
-        if let Some(x) = module.entries.iter_mut().find(|x| x.name == e.name) {
-            x.emitted = true;
-        }
         let mark = module.mark();
         let ptr = crate::ty::LlvmType::Ptr;
         module.begin_with(
@@ -602,6 +599,9 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
         }
         module.label(&end);
         module.end(None);
+        if let Some(x) = module.entries.iter_mut().find(|x| x.name == e.name) {
+            x.emitted = true;
+        }
     }
 }
 
@@ -645,9 +645,6 @@ const LOOP_ATTRS: &[&str] = &["noalias", "", "noalias", "noalias", "", ""];
 fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     let leaves = machine::leaves(m);
     while let Some(l) = module.loops.iter().find(|l| l.machine == m.name && !l.emitted).cloned() {
-        if let Some(x) = module.loops.iter_mut().find(|x| x.name == l.name) {
-            x.emitted = true;
-        }
         let mark = module.mark();
         let ptr = crate::ty::LlvmType::Ptr;
         let params =
@@ -683,6 +680,9 @@ fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Modul
         module.label(&format!("fault_{}_any{}", m.name, ctx.tag));
         module.void_inst("ret i8 2");
         module.end(None);
+        if let Some(x) = module.loops.iter_mut().find(|x| x.name == l.name) {
+            x.emitted = true;
+        }
     }
     Ok(())
 }

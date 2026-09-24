@@ -3,6 +3,7 @@
 //! ueberspringen sich ohne Solver (`TAKT_SOLVER`, `z3`, `cvc5`).
 
 use takt_mir::Program;
+use takt_mir::analysis::proof::{Site, parse, render};
 use takt_prove::{CheckVerdict, ContractVerdict, Solver, Verdict, classify, encode, find, prove, verify_contracts};
 
 fn compile(src: &str) -> Program {
@@ -130,4 +131,62 @@ fn a_true_but_not_inductive_property_stays_unproven_with_a_reason() {
     let reports = prove(&model, &p, 3, &solver, 60).expect("Solver laeuft");
     let Verdict::Unproven { reason } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
     assert!(reason.contains("Induktionsschritt offen"), "{reason}");
+}
+
+/// P3 (11.3): Eine implizite Range-Pruefung, die ein Uebergang unerreichbar
+/// macht, ist bewiesen; die Beweisdatei laesst sie im Codegen aus.
+#[test]
+fn an_unreachable_implicit_check_is_proven_and_its_proof_drops_it() {
+    let Some(solver) = solver() else { return };
+    let src = "system:
+    language = 1
+    tick     = 10 ms
+
+output y : int @ hw(\"o/y\") with safe = 0
+
+machine counter:
+    fault -> SAFE
+    var x : int in 0..100 = 0
+    initial RUN
+    state RUN:
+        loop:
+            x = x + 1
+            y = x
+        when x >= 50:
+            -> RESET
+    state RESET:
+        loop:
+            x = 0
+            -> RUN
+    state SAFE:
+        enter:
+            y = 7
+";
+    let p = compile(src);
+    let model = encode(&p).expect("kodierbar");
+    let sites = classify(&model, &p, 5, &solver, 60).expect("Solver laeuft");
+    let site = sites.iter().find(|s| s.kind == "range").expect("Range-Stelle");
+    assert_eq!(site.verdict, CheckVerdict::Unreachable { k: 5 }, "{site:?}");
+
+    let hash = takt_mir::review::hash_of(src.as_bytes());
+    let text = render(&hash, &[Site { start: site.start, kind: site.kind.clone(), k: 5 }]);
+    let proof = parse(&text).expect("Beweisdatei");
+    let options =
+        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let out = takt_sema::compile_with(src, &options, Some(&proof));
+    assert!(!out.has_errors(), "{:?}", out.diagnostics);
+    assert_eq!(out.report.checks.get("Declared").copied().unwrap_or(0), 0, "{:?}", out.report.checks);
+}
+
+/// P3: Eine implizite Range-Pruefung mit Pfad — der Interpreter bestaetigt
+/// den Fault.
+#[test]
+fn a_reachable_implicit_check_gets_its_path() {
+    let Some(solver) = solver() else { return };
+    let p = corpus_with("19_faults.takt", "");
+    let model = encode(&p).expect("kodierbar");
+    let sites = classify(&model, &p, 3, &solver, 60).expect("Solver laeuft");
+    let site = sites.iter().find(|s| s.kind == "range").expect("Range-Stelle");
+    let CheckVerdict::Reachable { at, .. } = &site.verdict else { panic!("{site:?}") };
+    assert_eq!((*at, site.machine.as_str()), (1, "f"));
 }

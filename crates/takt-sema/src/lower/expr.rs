@@ -1072,7 +1072,28 @@ impl Lowerer<'_> {
                 value
             }
         };
-        Some(Expr::new(ExprKind::Intrinsic { op, args: out }, ty, span))
+        // 4.2: `sqrt` unter null ist ein `Domain`-Fault, ein nicht endliches
+        // Ergebnis ein `NonFinite`-Fault.
+        if op == Intrinsic::Sqrt
+            && let Some(x) = out.pop()
+        {
+            let (t, at) = (x.ty, x.span);
+            out.push(Expr::new(ExprKind::Checked { expr: Box::new(x), kind: CheckedKind::Domain }, t, at));
+        }
+        let e = Expr::new(ExprKind::Intrinsic { op, args: out }, ty, span);
+        Some(match op {
+            Intrinsic::Sqrt | Intrinsic::Fma | Intrinsic::Interp => self.finite(e),
+            _ => e,
+        })
+    }
+
+    /// `Checked{NonFinite}` um ein Gleitkomma- oder Matrixergebnis (4.2).
+    pub fn finite(&mut self, e: Expr) -> Expr {
+        if !matches!(self.ty(e.ty), Type::Float { .. } | Type::Mat { .. }) {
+            return e;
+        }
+        let (ty, span) = (e.ty, e.span);
+        Expr::new(ExprKind::Checked { expr: Box::new(e), kind: CheckedKind::NonFinite }, ty, span)
     }
 
     // ------------------------------------------------------------ Zugriffe
@@ -1158,7 +1179,8 @@ impl Lowerer<'_> {
                 let uid = self.unit_id(&unit, span)?;
                 let width = self.float_width();
                 let ty = self.intern(Type::Float { width, unit: Some(uid), range: None });
-                Some(Expr::new(ExprKind::Convert { expr: Box::new(b), kind: ConvertKind::As, unit: uid }, ty, span))
+                let e = Expr::new(ExprKind::Convert { expr: Box::new(b), kind: ConvertKind::As, unit: uid }, ty, span);
+                Some(self.finite(e))
             }
             ("to", Type::Float { width, .. }) => {
                 let unit = self.unit_arg(args, span)?;
@@ -1167,7 +1189,8 @@ impl Lowerer<'_> {
                 let uid = self.unit_id(&unit, span)?;
                 let width = *width;
                 let ty = self.intern(Type::Float { width, unit: Some(uid), range: None });
-                Some(Expr::new(ExprKind::Convert { expr: Box::new(b), kind: ConvertKind::To, unit: uid }, ty, span))
+                let e = Expr::new(ExprKind::Convert { expr: Box::new(b), kind: ConvertKind::To, unit: uid }, ty, span);
+                Some(self.finite(e))
             }
             // 3.2: Auf Ganzzahlen ist `.to(U)` eine Multiplikation mit dem
             // ganzzahligen Faktor (Pruefung 38); Overflow ist ein Fault wie 4.1.
@@ -1206,11 +1229,7 @@ impl Lowerer<'_> {
                 }
                 let scalar = self.without_unit(b.ty);
                 let factor = Expr::new(ExprKind::Int(k as i64), scalar, span);
-                Some(Expr::new(
-                    ExprKind::Binary { op: BinaryOp::Mul, lhs: Box::new(b), rhs: Box::new(factor) },
-                    ty,
-                    span,
-                ))
+                Some(self.arith_checked(BinaryOp::Mul, b, factor, ty, span))
             }
             ("to_float", Type::Int { .. }) => {
                 let unit = self.unit_arg(args, span)?;
@@ -1219,11 +1238,9 @@ impl Lowerer<'_> {
                 let uid = self.unit_id(&unit, span)?;
                 let width = self.float_width();
                 let ty = self.intern(Type::Float { width, unit: Some(uid), range: None });
-                Some(Expr::new(
-                    ExprKind::Convert { expr: Box::new(b), kind: ConvertKind::ToFloat, unit: uid },
-                    ty,
-                    span,
-                ))
+                let e =
+                    Expr::new(ExprKind::Convert { expr: Box::new(b), kind: ConvertKind::ToFloat, unit: uid }, ty, span);
+                Some(self.finite(e))
             }
             ("bit", Type::Int { .. }) => {
                 let int = self.tys.int;
@@ -1352,7 +1369,8 @@ impl Lowerer<'_> {
                     self.error(SC3, span, format!("`{member}` verlangt Fliesskomma-Elemente"));
                     return None;
                 }
-                Some(Expr::new(ExprKind::Accessor { base: Box::new(b), accessor: acc, args: vec![] }, ty, span))
+                let e = Expr::new(ExprKind::Accessor { base: Box::new(b), accessor: acc, args: vec![] }, ty, span);
+                Some(if matches!(acc, Accessor::Mean | Accessor::Rms) { self.finite(e) } else { e })
             }
             ("get", Type::Map { key, value, .. }) => {
                 let (key, value) = (*key, *value);
@@ -2247,8 +2265,14 @@ impl Lowerer<'_> {
                 return None;
             }
         };
+        let narrowing = matches!(
+            (&from_t, &to_t),
+            (Type::Float { width: FloatWidth::F64, .. }, Type::Float { width: FloatWidth::F32, .. })
+        );
         let cast = Expr::new(ExprKind::Cast { expr: Box::new(x), to: target }, target, span);
-        if checked {
+        if narrowing {
+            Some(self.finite(cast))
+        } else if checked {
             Some(Expr::new(ExprKind::Checked { expr: Box::new(cast), kind: CheckedKind::Convert }, target, span))
         } else {
             Some(cast)
@@ -2515,18 +2539,17 @@ impl Lowerer<'_> {
     /// Knoten stehen um Ergebnis, Divisor und Operation, bis die
     /// Intervallanalyse sie wegbeweist (3.4).
     pub fn arith_checked(&mut self, mop: BinaryOp, a: Expr, b: Expr, result: TypeId, span: Span) -> Expr {
-        let literal = |e: &Expr| matches!(e.kind, ExprKind::Int(_) | ExprKind::Duration(_));
         let integral = matches!(self.ty(result), Type::Int { .. } | Type::Duration { .. });
-        let arith =
-            integral && matches!(mop, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem);
-        let folded = literal(&a) && literal(&b);
+        let floating = matches!(self.ty(result), Type::Float { .. } | Type::Mat { .. });
+        let arith = matches!(mop, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem);
         let bits = match self.ty(result) {
             Type::Int { width, .. } => i64::from(width.bits()),
             _ => 64,
         };
         let shift_checked = matches!(mop, BinaryOp::Shl | BinaryOp::Shr)
             && !matches!(b.kind, ExprKind::Int(v) if (0..bits).contains(&v));
-        let b = if arith && matches!(mop, BinaryOp::Div | BinaryOp::Rem) && !literal(&b) {
+        let nonzero = matches!(b.kind, ExprKind::Int(v) | ExprKind::Duration(v) if v != 0);
+        let b = if integral && matches!(mop, BinaryOp::Div | BinaryOp::Rem) && !nonzero {
             let (ty, at) = (b.ty, b.span);
             Expr::new(ExprKind::Checked { expr: Box::new(b), kind: CheckedKind::DivZero }, ty, at)
         } else {
@@ -2535,8 +2558,10 @@ impl Lowerer<'_> {
         let e = Expr::new(ExprKind::Binary { op: mop, lhs: Box::new(a), rhs: Box::new(b) }, result, span);
         let kind = if shift_checked {
             Some(CheckedKind::Shift)
-        } else if arith && !folded {
+        } else if integral && arith {
             Some(CheckedKind::Overflow)
+        } else if floating && arith && mop != BinaryOp::Rem {
+            Some(CheckedKind::NonFinite)
         } else {
             None
         };

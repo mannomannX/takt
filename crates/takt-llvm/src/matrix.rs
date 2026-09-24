@@ -25,7 +25,7 @@ pub fn shape(ty: &LlvmType) -> Option<(usize, usize, LlvmType)> {
     elem.is_float().then(|| (*rows as usize, *cols as usize, (**elem).clone()))
 }
 
-fn suffix(t: &LlvmType) -> &'static str {
+pub(crate) fn suffix(t: &LlvmType) -> &'static str {
     if *t == LlvmType::F32 { "f32" } else { "f64" }
 }
 

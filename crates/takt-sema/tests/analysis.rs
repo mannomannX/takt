@@ -916,3 +916,22 @@ machine m:
     assert!(out.diagnostics.iter().any(|d| d.code == "SC-65"), "{:?}", out.diagnostics);
     assert!(out.program.is_none(), "eine fremde Beweisdatei uebersetzt nicht");
 }
+
+#[test]
+fn a_float_operation_is_a_non_finite_check_that_never_warns() {
+    let (_, r, w) = compile(
+        "\
+machine m:
+    var x : float = 1.5
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(3):
+                x = x * 2.0
+            n = 1
+",
+    );
+    assert_eq!(count(&r, "NonFinite"), 1, "die Multiplikation kann unendlich werden: {:?}", r.checks);
+    assert_eq!(count(&r, "Arith"), 0, "kein Ganzzahlfall: {:?}", r.checks);
+    assert!(!w.iter().any(|w| w.contains("SC-24")), "Gleitkomma warnt nicht (Pruefung 4): {w:?}");
+}

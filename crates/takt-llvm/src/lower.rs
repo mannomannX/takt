@@ -118,6 +118,9 @@ pub fn program_with_diagnostics(
         crate::machine::declare_state(machine, &st, &mut m);
         let vars = crate::step::init_vars_function(machine, &st, p, &mut m);
         let enter = crate::step::enter_function(machine, &st, p, &mut m);
+        if let Err(e) = &enter {
+            skipped.push(Skipped { machine: machine.name.clone(), reason: format!("enter: {}", e.what) });
+        }
         let _ = crate::step::init_function(machine, &st, p, &mut m, vars.is_err() || enter.is_err());
         if !machine.persist.is_empty() {
             let snapshot = crate::persist::snapshot_function(machine, &st, p, &mut m);

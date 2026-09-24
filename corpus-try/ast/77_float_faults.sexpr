@@ -1,0 +1,64 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output big :float @hw("o/big") safe=0.0)
+(output inv :float @hw("o/inv") safe=0.0)
+(output root :float @hw("o/root") safe=0.0)
+(output narrow :float @hw("o/narrow") safe=0.0)
+(output prod :float @hw("o/prod") safe=0.0)
+(machine overflow
+  (fault -> SAFE)
+  (var x :float 1.0e300)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= x (* x 1000.0))
+      (= big x)))
+  (state SAFE
+    (enter
+      (= big 7.0))))
+(machine by_zero
+  (fault -> SAFE)
+  (var d :float 3.0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= inv (/ 1.0 d))
+      (= d (- d 1.0))))
+  (state SAFE
+    (enter
+      (= inv 7.0))))
+(machine below_zero
+  (fault -> SAFE)
+  (var v :float 4.0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= root (call sqrt v))
+      (= v (- v 3.0))))
+  (state SAFE
+    (enter
+      (= root 7.0))))
+(machine narrowing
+  (fault -> SAFE)
+  (var w :float 1.0e30)
+  (initial RUN)
+  (state RUN
+    (loop
+      (var s :f32 (as w f32))
+      (= narrow (as s float))
+      (= w (* w 1.0e5))))
+  (state SAFE
+    (enter
+      (= narrow 7.0))))
+(machine fused
+  (fault -> SAFE)
+  (var a :float 1.0e100)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= prod (call fma a a 1.0))
+      (= a (* a a))))
+  (state SAFE
+    (enter
+      (= prod 7.0))))

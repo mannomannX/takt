@@ -37,6 +37,10 @@ pub fn find() -> Solver {
     }
     candidates.push(PathBuf::from("z3"));
     candidates.push(PathBuf::from("cvc5"));
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        let bin = PathBuf::from(home).join(".takt").join("bin");
+        candidates.extend(["z3", "cvc5"].map(|n| bin.join(n)));
+    }
     for path in candidates {
         if Command::new(&path).arg("--version").output().is_ok_and(|o| o.status.success()) {
             return Solver::At(path);
@@ -368,12 +372,24 @@ fn confirm_requires(
 fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &str, depth: u32) -> Option<u64> {
     let trace = Trace::parse(stimulus).ok()?;
     let r = run(program, &trace, &RunOptions { ticks: u64::from(depth), ..Default::default() }).ok()?;
-    let name = format!("{} @{}", site.kind, site.start);
-    let fired = r.coverage.hits.get(&(takt_interp::CoverKind::CheckFailed, site.machine.clone(), name)).copied();
-    if fired.unwrap_or(0) == 0 {
-        return None;
+    // Eine implizite Pruefung (11.3) bestaetigt der Fault ihrer Art.
+    let fault_kind = match site.kind.as_str() {
+        "check" => "CheckFailed",
+        "expect" => "Expect",
+        "range" => "RangeFault",
+        "div" => "Arithmetic(DivZero)",
+        "ovf" => "Arithmetic(Overflow)",
+        "fin" => "Arithmetic(NonFinite)",
+        "dom" => "Arithmetic(Domain)",
+        _ => return None,
+    };
+    if matches!(site.kind.as_str(), "check" | "expect") {
+        let name = format!("{} @{}", site.kind, site.start);
+        let fired = r.coverage.hits.get(&(takt_interp::CoverKind::CheckFailed, site.machine.clone(), name)).copied();
+        if fired.unwrap_or(0) == 0 {
+            return None;
+        }
     }
-    let fault_kind = if site.kind == "check" { "CheckFailed" } else { "Expect" };
     r.trace
         .lines
         .iter()

@@ -1323,7 +1323,7 @@ fn prove(args: &Args) -> bool {
             };
             if !solver.works() {
                 eprintln!(
-                    "{path}: kein Solver — `z3` oder `cvc5` auf den PATH, `TAKT_SOLVER` oder `--solver` setzen (13.3)"
+                    "{path}: kein Solver — `z3` oder `cvc5` auf den PATH oder nach `~/.takt/bin`, `TAKT_SOLVER` oder `--solver` setzen (13.3)"
                 );
                 return false;
             }

@@ -722,6 +722,18 @@ fn intrinsic(
             m.label(&go_on);
             m.inst(&format!("fptosi {} {r} to i64", x.ty))
         }
+        Intrinsic::Sqrt => {
+            let x = a(0)?;
+            let s = crate::matrix::suffix(&x.ty);
+            m.needs_intrinsic(&format!("{} @llvm.sqrt.{s}({})", x.ty, x.ty));
+            m.inst(&format!("call {} @llvm.sqrt.{s}({} {})", x.ty, x.ty, x.value))
+        }
+        Intrinsic::Fma => {
+            let (x, y, z) = (a(0)?, a(1)?, a(2)?);
+            let (t, s) = (&x.ty, crate::matrix::suffix(&x.ty));
+            m.needs_intrinsic(&format!("{t} @llvm.fma.{s}({t}, {t}, {t})"));
+            m.inst(&format!("call {t} @llvm.fma.{s}({t} {}, {t} {}, {t} {})", x.value, y.value, z.value))
+        }
         _ => return Err(NotYet { what: op.name() }),
     };
     Ok(Lowered { value: value.to_string(), ty: want.clone() })
@@ -847,9 +859,18 @@ fn runtime_check(
         // Ein Divisor von null ist ein `ArithmeticFault` (4.1). Geprueft
         // wird der *Divisor*; die MIR setzt den Knoten um ihn.
         K::DivZero => m.inst(&format!("icmp ne {} {}, 0", value.ty, value.value)).to_string(),
+        // 4.2: Ein nicht endliches Ergebnis faultet; `sqrt` unter null ebenso.
+        K::NonFinite => finite_condition(value, m)?,
+        K::Domain => match &value.ty {
+            LlvmType::F32 | LlvmType::F64 => {
+                let zero = float_literal(0.0, &value.ty);
+                m.inst(&format!("fcmp oge {} {}, {zero}", value.ty, value.value)).to_string()
+            }
+            _ => return Err(NotYet { what: "Definitionsbereich auf Nicht-Gleitkomma" }),
+        },
         // Ueberlauf, Schiebebetrag und Konversion brauchen die Operanden;
         // `checked_expr` setzt sie um.
-        K::Overflow | K::NonFinite | K::Domain | K::Convert | K::Shift => {
+        K::Overflow | K::Convert | K::Shift => {
             return Err(NotYet { what: "Pruefung ohne Operanden" });
         }
         // `Valid` steht vor dem Wert (siehe oben), `Missing` ist das
@@ -1185,6 +1206,45 @@ fn int_to(v: Lowered, ty: &LlvmType, m: &mut Module) -> Lowered {
     let op = if from > to { "trunc" } else { "zext" };
     let r = m.inst(&format!("{op} {} {} to {ty}", v.ty, v.value));
     Lowered { value: r.to_string(), ty: ty.clone() }
+}
+
+/// Sind alle Gleitkommawerte eines Werts endlich? `fabs` und `maximum`
+/// tragen `inf` und `NaN` durch, ein `fcmp one` gegen `inf` prueft beides.
+fn finite_condition(value: &Lowered, m: &mut Module) -> Result<String, NotYet> {
+    let mut items = Vec::new();
+    let elem = float_items(&value.ty, &value.value, &mut items, m)?;
+    let suffix = crate::matrix::suffix(&elem);
+    m.needs_intrinsic(&format!("{elem} @llvm.fabs.{suffix}({elem})"));
+    m.needs_intrinsic(&format!("{elem} @llvm.maximum.{suffix}({elem}, {elem})"));
+    let mut acc: Option<String> = None;
+    for x in items {
+        let a = m.inst(&format!("call {elem} @llvm.fabs.{suffix}({elem} {x})"));
+        acc = Some(match acc {
+            None => a.to_string(),
+            Some(p) => m.inst(&format!("call {elem} @llvm.maximum.{suffix}({elem} {p}, {elem} {a})")).to_string(),
+        });
+    }
+    let acc = acc.ok_or(NotYet { what: "Endlichkeit ohne Gleitkommawert" })?;
+    Ok(m.inst(&format!("fcmp one {elem} {acc}, 0x7FF0000000000000")).to_string())
+}
+
+/// Die Gleitkommawerte eines Werts, Matrizen elementweise.
+fn float_items(ty: &LlvmType, value: &str, items: &mut Vec<String>, m: &mut Module) -> Result<LlvmType, NotYet> {
+    match ty {
+        LlvmType::F32 | LlvmType::F64 => {
+            items.push(value.to_string());
+            Ok(ty.clone())
+        }
+        LlvmType::Array(inner, n) => {
+            let mut elem = None;
+            for i in 0..*n {
+                let v = m.inst(&format!("extractvalue {ty} {value}, {i}"));
+                elem = Some(float_items(inner, &v.to_string(), items, m)?);
+            }
+            elem.ok_or(NotYet { what: "leere Matrix" })
+        }
+        _ => Err(NotYet { what: "Endlichkeit dieses Typs" }),
+    }
 }
 
 /// Der Name einer Pruefungsart, fuer die Marke.

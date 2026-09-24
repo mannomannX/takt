@@ -303,7 +303,8 @@ impl Lowerer<'_> {
             }
             _ => return None,
         };
-        Some(Expr::new(ExprKind::MatOp { op, args: vec![b] }, ty, span))
+        let e = Expr::new(ExprKind::MatOp { op, args: vec![b] }, ty, span);
+        Some(if matches!(op, MatOp::Inv | MatOp::Det) { self.finite(e) } else { e })
     }
 
     /// `solve(A, b)`: `x` mit `A · x = b`, getypt wie `A.inv() * b` (3.11).
@@ -365,7 +366,8 @@ impl Lowerer<'_> {
         self.note_scratch(n * n + n * cb.len(), n);
         let rows = ca.iter().map(|c| k.div(c)).collect();
         let ty = self.mat_type((rows, cb), span)?;
-        Some(Expr::new(ExprKind::MatOp { op: MatOp::Solve, args: vec![a, b] }, ty, span))
+        let e = Expr::new(ExprKind::MatOp { op: MatOp::Solve, args: vec![a, b] }, ty, span);
+        Some(self.finite(e))
     }
 
     /// Ein Index vom Typ `int in 0..len-1`: ein Literal in der Range oder

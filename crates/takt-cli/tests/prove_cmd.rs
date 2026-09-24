@@ -26,8 +26,10 @@ fn the_export_writes_both_queries_and_names_the_reach() {
     let text = std::fs::read_to_string(&file).expect("Export");
     assert!(text.contains("; BMC") && text.contains("; Induktionsschritt"), "{text}");
     assert!(text.contains("; Eigenschaft `pump_off_when_high`"), "{text}");
-    // Eine Eigenschaft und eine Pruefstelle (B3), je BMC und Induktion.
-    assert_eq!(text.matches("(check-sat)").count(), 4, "{text}");
+    // Eine Eigenschaft, die `check`-Stelle und zwei Endlichkeitsstellen
+    // (B3, 4.2), je BMC und Induktion.
+    assert!(text.contains("; Pruefstelle `fin`"), "{text}");
+    assert_eq!(text.matches("(check-sat)").count(), 8, "{text}");
     let _ = std::fs::remove_dir_all(&out_dir);
 }
 

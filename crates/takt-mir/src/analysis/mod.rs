@@ -143,7 +143,7 @@ pub fn analyze(program: &mut Program, external: &[(u32, u8)]) -> (Vec<Diagnostic
     }
     report.sites = seen.values().copied().collect();
     // Ursachen ohne Fund erscheinen mit 0, damit die Zeile stabil bleibt.
-    for c in [CheckCause::Declared, CheckCause::Index, CheckCause::Convert, CheckCause::Arith] {
+    for c in [CheckCause::Declared, CheckCause::Index, CheckCause::Convert, CheckCause::Arith, CheckCause::NonFinite] {
         report.checks.entry(c.name()).or_default();
     }
 
@@ -199,6 +199,7 @@ fn message(c: CheckCause) -> String {
         CheckCause::Index => "impliziter Index-Check in einer Schleife oder einem Aktionsblock",
         CheckCause::Convert => "implizite Konversionspruefung in einer Schleife oder einem Aktionsblock",
         CheckCause::Arith => "implizite Arithmetikpruefung in einer Schleife oder einem Aktionsblock",
+        CheckCause::NonFinite => "implizite Endlichkeitspruefung in einer Schleife oder einem Aktionsblock",
     }
     .to_string()
 }

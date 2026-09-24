@@ -31,6 +31,8 @@ pub enum CheckCause {
     Convert,
     /// Division, Overflow, Shift.
     Arith,
+    /// Gleitkomma: nicht endliches Ergebnis, `sqrt` unter null (4.2).
+    NonFinite,
 }
 
 impl CheckCause {
@@ -41,6 +43,7 @@ impl CheckCause {
             CheckCause::Index => "Index",
             CheckCause::Convert => "Convert",
             CheckCause::Arith => "Arith",
+            CheckCause::NonFinite => "NonFinite",
         }
     }
 }
@@ -515,15 +518,17 @@ impl<'p> Walk<'p> {
                 let i = self.expr(inner, f);
                 (CheckCause::Arith, !i.contains_zero(), i)
             }
-            CheckedKind::NonFinite | CheckedKind::Domain => (CheckCause::Arith, false, self.expr(inner, f)),
+            CheckedKind::NonFinite | CheckedKind::Domain => (CheckCause::NonFinite, false, self.expr(inner, f)),
         };
         if proven {
             // 3.4: „Ist das Intervall des Ausdrucks enthalten → keine
             // Pruefung."
             self.proven.push((node.span, tag(kind)));
         } else {
-            // Ein Ueberlauf in 64 Bit warnt nicht (Pruefung 4).
-            let wide = matches!(kind, CheckedKind::Overflow) && self.width_of(node.ty).is_none_or(|w| w.bits() == 64);
+            // Ein Ueberlauf in 64 Bit warnt nicht (Pruefung 4), Gleitkomma
+            // hat keinen Beweisweg.
+            let wide = matches!(kind, CheckedKind::NonFinite | CheckedKind::Domain)
+                || matches!(kind, CheckedKind::Overflow) && self.width_of(node.ty).is_none_or(|w| w.bits() == 64);
             let warns = !wide && (self.loop_depth > 0 || self.in_action);
             self.checks.push(ImplicitCheck { cause, span: node.span, warns, relational, tag: tag(kind) });
             self.kept.push((node.span, tag(kind)));

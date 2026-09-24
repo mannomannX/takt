@@ -1,0 +1,95 @@
+# 77 — Gleitkomma faultet nicht endlich (4.2): Ueberlauf zu unendlich,
+# Division durch null, `sqrt` unter null, `f64` nach `f32` und `fma`
+# faulten im erzeugten Code wie im Interpreter, und das Sichere danach
+# ist dasselbe.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output big    : float @ hw("o/big")    with safe = 0.0
+output inv    : float @ hw("o/inv")    with safe = 0.0
+output root   : float @ hw("o/root")   with safe = 0.0
+output narrow : float @ hw("o/narrow") with safe = 0.0
+output prod   : float @ hw("o/prod")   with safe = 0.0
+
+machine overflow:
+    fault -> SAFE
+    var x : float = 1.0e300
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # 1e303, 1e306, dann unendlich.
+            x = x * 1000.0
+            big = x
+
+    state SAFE:
+        enter:
+            big = 7.0
+
+machine by_zero:
+    fault -> SAFE
+    var d : float = 3.0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # 1/3, 1/2, 1/1, dann 1/0.
+            inv = 1.0 / d
+            d = d - 1.0
+
+    state SAFE:
+        enter:
+            inv = 7.0
+
+machine below_zero:
+    fault -> SAFE
+    var v : float = 4.0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # sqrt(4), sqrt(1), dann sqrt(-2).
+            root = sqrt(v)
+            v = v - 3.0
+
+    state SAFE:
+        enter:
+            root = 7.0
+
+machine narrowing:
+    fault -> SAFE
+    var w : float = 1.0e30
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # 1e30 und 1e35 passen in f32, 1e40 nicht.
+            var s : f32 = w as f32
+            narrow = s as float
+            w = w * 1.0e5
+
+    state SAFE:
+        enter:
+            narrow = 7.0
+
+machine fused:
+    fault -> SAFE
+    var a : float = 1.0e100
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # 1e200, dann 1e400.
+            prod = fma(a, a, 1.0)
+            a = a * a
+
+    state SAFE:
+        enter:
+            prod = 7.0
