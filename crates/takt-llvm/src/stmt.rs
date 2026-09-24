@@ -273,12 +273,14 @@ impl Vars for StateVars<'_> {
     fn var(&self, id: takt_mir::VarId, m: &mut Module) -> Option<Lowered> {
         let (ptr, ty) = self.address(id, m)?;
         let v = m.inst(&format!("load {ty}, ptr {ptr}"));
-        Some(Lowered { value: v.to_string(), ty })
+        let want = ty::lower(self.machine.vars.get(id.index())?.ty, self.program)?;
+        Some(crate::expr::fit(Lowered { value: v.to_string(), ty }, &want, m))
     }
 
+    /// Die Adresse und die Speicherform (`ty::storage`).
     fn address(&self, id: takt_mir::VarId, m: &mut Module) -> Option<(Reg, LlvmType)> {
         let def = self.machine.vars.get(id.index())?;
-        let ty = ty::lower(def.ty, self.program)?;
+        let ty = ty::storage(def.ty, self.program)?;
         Some((self.state.field_ptr(&self.machine.name, Role::Var, id.index(), m)?, ty))
     }
 
@@ -983,7 +985,16 @@ fn assign(target: &Place, value: &Expr, ctx: &mut Ctx<'_>, m: &mut Module) -> Re
         }
         return Ok(());
     }
-    let (dst, _) = place(target, ctx, m)?;
+    let (dst, ty) = place(target, ctx, m)?;
+    // Eine Bereichsganzzahl liegt schmaler, als gerechnet wird (3.4).
+    if let LlvmType::Int(_) = &ty
+        && ty::lower(value.ty, ctx.program).is_some_and(|want| want != ty)
+    {
+        let v = lower_expr(value, ctx.program, m, &vars)?;
+        let v = crate::expr::fit(v, &ty, m);
+        m.write(&ty, &v.value, &dst.to_string());
+        return Ok(());
+    }
     crate::expr::store(value, &dst.to_string(), Some(target), ctx.program, m, &vars)
 }
 
@@ -1216,7 +1227,7 @@ fn place(target: &Place, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(Reg, Llvm
         }
         Place::Var(id) => {
             let def = ctx.machine.vars.get(id.index()).ok_or(NotYet { what: "Variable" })?;
-            let ty = ty::lower(def.ty, ctx.program).ok_or(NotYet { what: "Variablentyp" })?;
+            let ty = ty::storage(def.ty, ctx.program).ok_or(NotYet { what: "Variablentyp" })?;
             let ptr = ctx.field(Role::Var, id.index(), m).ok_or(NotYet { what: "Variable im Zustand" })?;
             Ok((ptr, ty))
         }

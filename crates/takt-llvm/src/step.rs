@@ -1291,6 +1291,8 @@ fn emit_init(
                 module.abort(mark);
                 return Err(NotYet { what: "Variable im Zustand" });
             };
+            let ty = crate::ty::storage(v.ty, p).unwrap_or_else(|| value.ty.clone());
+            let value = crate::expr::fit(value, &ty, module);
             module.write(&value.ty, &value.value, &ptr.to_string());
         }
     }

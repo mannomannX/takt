@@ -8,7 +8,7 @@
 
 use crate::machine::{Guard, Machine, MachineKind, TransTrigger};
 use crate::pattern::Pattern;
-use crate::types::{FloatWidth, IntWidth, Type};
+use crate::types::{FloatWidth, Type};
 use crate::{Program, TypeId};
 
 /// Woher die Zahl eines Postens stammt (11.5).
@@ -471,17 +471,13 @@ fn elem_bytes(p: &Program, ty: TypeId) -> u32 {
 pub fn type_bytes(p: &Program, ty: TypeId) -> u32 {
     match p.types.list.get(ty.index()) {
         Some(Type::Bool) => 1,
-        Some(Type::Int { width, .. }) => match width {
-            IntWidth::I8 | IntWidth::U8 => 1,
-            IntWidth::I16 | IntWidth::U16 => 2,
-            IntWidth::I32 | IntWidth::U32 => 4,
-            _ => 8,
-        },
+        Some(t @ (Type::Int { .. } | Type::Duration { .. })) => {
+            crate::types::storage_width(t).map_or(8, |w| w.bits() / 8)
+        }
         Some(Type::Float { width, .. }) => match width {
             FloatWidth::F32 => 4,
             FloatWidth::F64 => 8,
         },
-        Some(Type::Duration { .. }) => 8,
         Some(Type::Enum(_)) => 1,
         Some(Type::Record(r)) => {
             let def = &p.records[r.index()];

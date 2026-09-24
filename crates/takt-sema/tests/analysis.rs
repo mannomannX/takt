@@ -852,3 +852,29 @@ fn a_proven_range_check_stays_in_the_mir_as_proven() {
     };
     assert_eq!(range.origin, RangeOrigin::Proven);
 }
+
+#[test]
+fn a_check_is_proven_only_when_every_unrolled_round_proves_it() {
+    use takt_mir::expr::{CheckedKind, ExprKind};
+    use takt_mir::stmt::StmtKind;
+    use takt_mir::types::RangeOrigin;
+    // Runde 0 und 1 passen in 0..5, Runde 2 (6) nicht: die Pruefung bleibt.
+    let (p, r, _) = compile(
+        "machine m:
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(3):
+                var y : int in 0..5 = i * 3
+                n = y
+",
+    );
+    assert_eq!(count(&r, "Declared"), 1, "die dritte Runde verletzt die Range: {:?}", r.checks);
+    let m = p.machines.iter().find(|m| m.name == "m").expect("Maschine");
+    let StmtKind::ForRange { body, .. } = &m.states[0].loop_block.stmts[0].kind else { panic!("Schleife") };
+    let StmtKind::Assign { value, .. } = &body.stmts[0].kind else { panic!("Zuweisung") };
+    let ExprKind::Checked { kind: CheckedKind::Range(range), .. } = &value.kind else {
+        panic!("die Pruefung steht noch: {value:?}")
+    };
+    assert_eq!(range.origin, RangeOrigin::Declared, "kein Besuch allein beweist sie");
+}

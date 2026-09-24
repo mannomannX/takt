@@ -235,10 +235,12 @@ pub fn publish_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
             module.abort(mark);
             return Err(NotYet { what: "pub var in Psi" });
         };
+        let stored = ty::storage(v.ty, p).unwrap_or_else(|| ty.clone());
         let src = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {field}"));
-        let val = module.inst(&format!("load {ty}, ptr {src}"));
+        let val = module.inst(&format!("load {stored}, ptr {src}"));
+        let val = crate::expr::fit(crate::expr::Lowered { value: val.to_string(), ty: stored }, &ty, module);
         let dst = module.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {}", next + off));
-        module.void_inst(&format!("store {ty} {val}, ptr {dst}"));
+        module.void_inst(&format!("store {ty} {}, ptr {dst}", val.value));
     }
     module.end(None);
     Ok(())

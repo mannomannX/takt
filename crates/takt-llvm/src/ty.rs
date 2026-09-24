@@ -147,6 +147,15 @@ impl LlvmType {
 /// 11.2: Werte ueber dieser Schwelle werden per Zeiger uebergeben.
 pub const BY_POINTER: u64 = 64;
 
+/// Der Typ, in dem eine Variable im Zustand liegt: Bereichsganzzahlen in
+/// der schmalsten Breite (3.4), gerechnet wird im Typ aus [`lower`].
+pub fn storage(ty: TypeId, p: &Program) -> Option<LlvmType> {
+    match p.types.list.get(ty.index())? {
+        t @ (Type::Int { .. } | Type::Duration { .. }) => Some(LlvmType::Int(bits(takt_mir::types::storage_width(t)?))),
+        _ => lower(ty, p),
+    }
+}
+
 /// Der LLVM-Typ zu einem MIR-Typ.
 ///
 /// `None` heisst: Der Typ ist im Codegen noch nicht abgebildet. Das ist

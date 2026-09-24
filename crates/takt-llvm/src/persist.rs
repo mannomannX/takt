@@ -93,6 +93,13 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
+    /// Laedt eine Variable aus ihrer Speicherform in die gerechnete Breite.
+    fn load_stored(&mut self, ty: TypeId, src: Reg, llvm: &LlvmType) -> Result<String, NotYet> {
+        let stored = crate::ty::storage(ty, self.p).ok_or(NotYet { what: "persist-Typ im Codegen" })?;
+        let v = self.module.inst(&format!("load {stored}, ptr {src}"));
+        Ok(crate::expr::fit(crate::expr::Lowered { value: v.to_string(), ty: stored }, llvm, self.module).value)
+    }
+
     fn store_at(&mut self, off: Reg, ty: &str, value: &str) {
         let dst = self.module.inst(&format!("getelementptr i8, ptr {}, i64 {off}", self.out));
         self.module.void_inst(&format!("store {ty} {value}, ptr {dst}, align 1"));
@@ -109,8 +116,8 @@ impl Writer<'_> {
                 self.module.inst(&format!("add i64 {off}, 1"))
             }
             Type::Int { width, .. } => {
-                let v = self.module.inst(&format!("load {llvm}, ptr {src}"));
-                self.store_at(off, &llvm.to_string(), &v.to_string());
+                let v = self.load_stored(ty, src, &llvm)?;
+                self.store_at(off, &llvm.to_string(), &v);
                 self.module.inst(&format!("add i64 {off}, {}", width.bits() / 8))
             }
             Type::Float { width, .. } => {
@@ -124,8 +131,8 @@ impl Writer<'_> {
                 self.module.inst(&format!("add i64 {off}, {n}"))
             }
             Type::Duration { .. } => {
-                let v = self.module.inst(&format!("load i64, ptr {src}"));
-                self.store_at(off, "i64", &v.to_string());
+                let v = self.load_stored(ty, src, &llvm)?;
+                self.store_at(off, "i64", &v);
                 self.module.inst(&format!("add i64 {off}, 8"))
             }
             Type::Enum(_) => {
@@ -270,6 +277,14 @@ struct Reader<'a> {
 }
 
 impl Reader<'_> {
+    /// Schreibt einen gerechneten Wert in die Speicherform der Variablen.
+    fn store_narrow(&mut self, ty: TypeId, v: Reg, llvm: &LlvmType, dst: Reg) -> Result<(), NotYet> {
+        let stored = crate::ty::storage(ty, self.p).ok_or(NotYet { what: "persist-Typ im Codegen" })?;
+        let w = crate::expr::fit(crate::expr::Lowered { value: v.to_string(), ty: llvm.clone() }, &stored, self.module);
+        self.module.void_inst(&format!("store {stored} {}, ptr {dst}", w.value));
+        Ok(())
+    }
+
     fn load_at(&mut self, off: Reg, ty: &str) -> Reg {
         let src = self.module.inst(&format!("getelementptr i8, ptr {}, i64 {off}", self.input));
         self.module.inst(&format!("load {ty}, ptr {src}, align 1"))
@@ -311,7 +326,7 @@ impl Reader<'_> {
             Type::Int { width, range, .. } => {
                 let v = self.load_at(off, &llvm.to_string());
                 if store {
-                    self.module.void_inst(&format!("store {llvm} {v}, ptr {dst}"));
+                    self.store_narrow(ty, v, &llvm, dst)?;
                 } else if range.is_some() {
                     let ext = if width.signed() { "sext" } else { "zext" };
                     let wide =
@@ -344,7 +359,7 @@ impl Reader<'_> {
             Type::Duration { range } => {
                 let v = self.load_at(off, "i64");
                 if store {
-                    self.module.void_inst(&format!("store i64 {v}, ptr {dst}"));
+                    self.store_narrow(ty, v, &llvm, dst)?;
                 } else {
                     self.int_range(v, range);
                 }

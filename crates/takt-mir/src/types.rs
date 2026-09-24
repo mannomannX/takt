@@ -397,3 +397,32 @@ impl TypeTable {
         &self.list[id.index()]
     }
 }
+
+/// Die schmalste Breite, die eine deklarierte Range fasst (3.4,
+/// Darstellungsverengung): `int in 0..1_000_000` liegt in vier Byte.
+/// Schmale Typen behalten ihre Breite, eine Range ohne Ganzzahlgrenzen
+/// die deklarierte.
+pub fn storage_width(ty: &Type) -> Option<IntWidth> {
+    let (width, range) = match ty {
+        Type::Int { width, range, .. } => (*width, *range),
+        Type::Duration { range } => (IntWidth::I64, *range),
+        _ => return None,
+    };
+    let Some(Range { lo: Const::Int(lo) | Const::Duration(lo), hi: Const::Int(hi) | Const::Duration(hi), .. }) = range
+    else {
+        return Some(width);
+    };
+    if width.bits() < 64 {
+        return Some(width);
+    }
+    let fits = |bits: u32| lo >= -(1i64 << (bits - 1)) && hi < (1i64 << (bits - 1));
+    Some(if fits(8) {
+        IntWidth::I8
+    } else if fits(16) {
+        IntWidth::I16
+    } else if fits(32) {
+        IntWidth::I32
+    } else {
+        IntWidth::I64
+    })
+}

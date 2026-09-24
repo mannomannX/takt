@@ -1035,6 +1035,19 @@ fn width_bounds(w: IntWidth) -> (i128, i128) {
     if w.signed() { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) }
 }
 
+/// Bringt einen Ganzzahlwert auf die Breite `ty`: `sext` beim Laden aus
+/// der schmalen Speicherform, `trunc` beim Schreiben (exakt, weil die
+/// Range-Pruefung den Wert eingrenzt).
+pub(crate) fn fit(v: Lowered, ty: &LlvmType, m: &mut Module) -> Lowered {
+    let (LlvmType::Int(from), LlvmType::Int(to)) = (&v.ty, ty) else { return v };
+    if from == to {
+        return v;
+    }
+    let op = if from > to { "trunc" } else { "sext" };
+    let r = m.inst(&format!("{op} {} {} to {ty}", v.ty, v.value));
+    Lowered { value: r.to_string(), ty: ty.clone() }
+}
+
 /// Bringt einen nichtnegativen Ganzzahlwert auf eine andere Breite.
 fn int_to(v: Lowered, ty: &LlvmType, m: &mut Module) -> Lowered {
     let (LlvmType::Int(from), LlvmType::Int(to)) = (&v.ty, ty) else { return v };

@@ -133,7 +133,7 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     for (i, v) in m.vars.iter().enumerate() {
         tys.push(match instance_block(m, takt_mir::VarId(i as u32)) {
             Some(b) => crate::block::instance_of(p.blocks.get(b.index())?, p)?.llvm(),
-            None => ty::lower(v.ty, p)?,
+            None => ty::storage(v.ty, p)?,
         });
     }
     // 11.2: Zustandslokale und gehobene Variablen von Geschwistern teilen

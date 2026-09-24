@@ -1,9 +1,9 @@
 01_minimal.takt 524
 03_sequences_and_faults.takt 2752
-04_blocks_and_multirate.takt 3434
-13_framing.takt 834
+04_blocks_and_multirate.takt 3432
+13_framing.takt 842
 30_idle.takt 432
-13_protocol_analysis.takt 906
+13_protocol_analysis.takt 824
 17_nested.takt 656
 46_matrices.takt 3438
-71_places.takt 2302
+71_places.takt 2304
