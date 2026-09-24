@@ -867,6 +867,12 @@ fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
 /// Ticks zu spaet. `n` kommt in Basis-Ticks und wird durch die Periode
 /// geteilt, weil der Zaehler Aktivierungen zaehlt (7.2).
 ///
+/// Alle Zaehler, wie [`machine::advance_timers`] am Schrittende: `after`
+/// liest den Zaehler seines Zustands, und nur den ersten vorzuruecken
+/// liess jede Frist ausserhalb des ersten Zustands verschlafen (FB-268).
+/// Die Schleife steht einmal je Modul, nicht entrollt je Maschine: Der
+/// Pfad ist kalt, und ein Zustand mehr soll kein Objekt wachsen lassen.
+///
 /// Die `every`-Zaehler bleiben unberuehrt — 9.9 sagt es ausdruecklich,
 /// und in `idle` gibt es kein `loop:`, also auch kein `every`.
 pub fn advance_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
@@ -876,19 +882,44 @@ pub fn advance_function(m: &Machine, st: &StateStruct, module: &mut Module) -> R
         &crate::ty::LlvmType::Void,
         &[crate::ty::LlvmType::Ptr, crate::ty::LlvmType::Int(64)],
     );
-    let Some(t_i) = st.index_of(Role::TimeInState, 0) else {
-        module.end(None);
-        return Ok(());
-    };
-    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
-    let base = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {t_i}"));
-    let cell = module.inst(&format!("getelementptr inbounds [{} x i64], ptr {base}, i32 0, i32 0", st.depth));
-    let old = module.inst(&format!("load i64, ptr {cell}"));
-    let activations = module.inst(&format!("sdiv i64 %1, {period}"));
-    let new = module.inst(&format!("add i64 {old}, {activations}"));
-    module.void_inst(&format!("store i64 {new}, ptr {cell}"));
+    if let Some(first) = machine::timer_cell(m, st, 0, module) {
+        advance_loop(module);
+        let activations = module.inst(&format!("sdiv i64 %1, {period}"));
+        let n = machine::timers(m);
+        module.void_inst(&format!("call void @takt_advance_timers(ptr {first}, i32 {n}, i64 {activations})"));
+    }
     module.end(None);
     Ok(())
+}
+
+/// `takt_advance_timers(timers, n, delta)`: alle `n` Zaehler um `delta`
+/// weiter. Einmal je Modul, nicht eingebettet und nicht entrollt — sonst
+/// stuende je Zustand ein Zaehlerschritt im Objekt (bei 26 Zustaenden
+/// 400 Byte fuer einen kalten Pfad).
+fn advance_loop(module: &mut Module) {
+    if module.has_declared("@takt_advance_timers(") {
+        return;
+    }
+    module.declare(
+        "define internal void @takt_advance_timers(ptr %timers, i32 %n, i64 %delta) noinline nounwind {
+  br label %kopf
+kopf:
+  %i = phi i32 [ 0, %0 ], [ %i1, %zelle ]
+  %fertig = icmp eq i32 %i, %n
+  br i1 %fertig, label %ende, label %zelle
+zelle:
+  %cp = getelementptr inbounds i64, ptr %timers, i32 %i
+  %c = load i64, ptr %cp
+  %c1 = add i64 %c, %delta
+  store i64 %c1, ptr %cp
+  %i1 = add i32 %i, 1
+  br label %kopf, !llvm.loop !9000
+ende:
+  ret void
+}
+!9000 = distinct !{!9000, !9001}
+!9001 = !{!\"llvm.loop.unroll.disable\"}",
+    );
 }
 
 /// `<maschine>_idle(st) -> i1`: Ist die Maschine bereit zu schlafen (9.9)?

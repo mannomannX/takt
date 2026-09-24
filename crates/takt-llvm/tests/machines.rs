@@ -995,3 +995,19 @@ fn interp_keeps_the_operation_order_of_the_interpreter() {
 {ir}"
     );
 }
+
+/// **Der virtuelle Schlaf rueckt jeden Zeitzaehler vor** (9.9, FB-268).
+///
+/// `after` liest den Zaehler seines Zustands, der Schritt erhoeht alle;
+/// `_advance` muss es ebenso halten, sonst verschlaeft jede Frist
+/// ausserhalb des ersten Zustands — in `59_persist_idle` die von `SLEEP`.
+#[test]
+fn virtual_sleep_advances_every_timer() {
+    let p = corpus("59_persist_idle.takt");
+    let m = &p.machines[0];
+    let ir = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", "t").ir;
+    let head = format!("@{}_advance(", m.name);
+    let start = ir.find(&head).unwrap_or_else(|| panic!("kein `{head}` in der IR"));
+    let call = ir[start..].lines().find(|l| l.contains("@takt_advance_timers(")).unwrap_or_else(|| panic!("{ir}"));
+    assert!(call.contains(&format!("i32 {}, i64", machine::timers(m))), "{call}");
+}
