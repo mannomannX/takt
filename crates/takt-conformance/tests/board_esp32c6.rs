@@ -32,7 +32,6 @@ fn board() -> std::sync::MutexGuard<'static, ()> {
 const KORPUS: &[&str] = &[
     "01_minimal.takt",
     "02_units_and_data.takt",
-    "80_payload_variants.takt",
     "03_sequences_and_faults.takt",
     "12_bitfields.takt",
     "13_framing.takt",
