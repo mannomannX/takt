@@ -192,17 +192,17 @@ driver machine uart_port with polling = unchecked:
             # nie auf Lese-Modifiziere-Schreibe (3.7). Ein ungesehenes
             # Ereignis kann damit nicht verlorengehen.
             if ir.word.rxfifo_ovf:
-                overruns += 1
+                overruns = min(overruns + 1, 1_000_000)
                 uart_ic.word.rxfifo_ovf = true
                 alert true, "uart RX overrun (#{overruns})"
             if ir.word.frame_err:
-                frame_errs += 1
+                frame_errs = min(frame_errs + 1, 1_000_000)
                 uart_ic.word.frame_err = true
             if ir.word.parity_err:
-                parity_errs += 1
+                parity_errs = min(parity_errs + 1, 1_000_000)
                 uart_ic.word.parity_err = true
             if ir.word.brk_det:
-                breaks += 1
+                breaks = min(breaks + 1, 1_000_000)
                 uart_ic.word.brk_det = true
 
             # ---- RX-Pump: ein Byte je Tick.
@@ -218,18 +218,18 @@ driver machine uart_port with polling = unchecked:
                                     frame = ir.word.frame_err,
                                     parity = ir.word.parity_err,
                                     brk = ir.word.brk_det)
-                rx_bytes += 1
+                rx_bytes = min(rx_bytes + 1, 1_000_000_000)
 
             # ---- TX-Pump: solange die FIFO Platz hat. Die 128 Byte des C6
             # minus acht Reserve — am Rand verschluckt ein Ueberlauf
             # Zeichen, und acht Byte kosten nichts.
-            var room : int in 0..128 = 120 - (st.word.txfifo_cnt as int)
+            var room : int in 0..128 = max(120 - (st.word.txfifo_cnt as int), 0)
             var sent : int in 0..128 = 0
             for ev in tx_raw:
                 if sent >= room or not cts_ok:
                     break
                 uart_dr = UartData(word = ev.data as u32)
-                tx_bytes += 1
+                tx_bytes = min(tx_bytes + 1, 1_000_000_000)
                 sent += 1
 
             if tx_raw.count > 0 and sent == 0:
@@ -247,7 +247,7 @@ driver machine uart_port with polling = unchecked:
             if (tx_raw.count > 0) or (sent > 0) or (st.word.txfifo_cnt > 0):
                 de_hold = DE_HOLD
             elif de_hold > 0 s:
-                de_hold -= tick
+                de_hold = max(de_hold - tick, 0 s)
 
             if RX_BREAK_IS_FAULT:
                 check not ir.word.brk_det, "uart break detected on RX line"
@@ -381,7 +381,7 @@ machine uart_framer follows uart_port:
                     if i >= enc.len:
                         break
                     send tx_raw, enc[i]
-                frames_out += 1
+                frames_out = min(frames_out + 1, 1_000_000)
             else:
                 alert true, "cobs encode overflow ({f.data.len} bytes)"
             break
@@ -399,21 +399,21 @@ machine uart_framer follows uart_port:
         on rx_raw as ev:
             # Leitungsfehler auf Byteebene verwerfen den ganzen Frame.
             if ev.data.frame or ev.data.parity or ev.data.brk:
-                decode_errors += 1
+                decode_errors = min(decode_errors + 1, 1_000_000)
                 -> RESYNC
             if ev.data.b == 0:
                 if acc.len > 0:
                     cobs_decode(acc, out)
                     if out.len > 0:
                         send rx_frames, out
-                        frames_in += 1
+                        frames_in = min(frames_in + 1, 1_000_000)
                     else:
-                        decode_errors += 1
+                        decode_errors = min(decode_errors + 1, 1_000_000)
                 acc.clear()
             else:
                 var put = acc.push(ev.data.b)
                 if not put:
-                    too_long += 1
+                    too_long = min(too_long + 1, 1_000_000)
                     -> RESYNC
 
     state RESYNC:
@@ -466,7 +466,7 @@ machine uart_link every 500 us:
         on rx_frames as f:
             var h = LinkHeader.decode(f.data)
             if not h.valid:
-                crc_errors += 1
+                crc_errors = min(crc_errors + 1, 1_000_000)
                 last_err = CRC
             else:
                 var hh = h  # durch h.valid dominiert
@@ -476,7 +476,7 @@ machine uart_link every 500 us:
                     var body = f.data[HDR_LEN..HDR_LEN + (hh.len as int)]
                     var want = ((f.data[HDR_LEN + (hh.len as int)] as u16) << 8) | (f.data[HDR_LEN + (hh.len as int) + 1] as u16)
                     if crc16_ccitt(body, 0xFFFF) != want:
-                        crc_errors += 1
+                        crc_errors = min(crc_errors + 1, 1_000_000)
                         last_err = CRC
                         send tx_frames, make_ctrl(NAK, hh.seq)
                     else:
@@ -484,7 +484,7 @@ machine uart_link every 500 us:
                             case DATA:
                                 if hh.seq == rx_seq:
                                     send app_rx, body
-                                    delivered += 1
+                                    delivered = min(delivered + 1, 1_000_000)
                                     rx_seq = wrapping_add(rx_seq, 1)
                                 send tx_frames, make_ctrl(ACK, hh.seq)
                             case ACK: pass  # in SENDING behandelt
@@ -509,7 +509,7 @@ machine uart_link every 500 us:
             state TRANSMIT:
                 enter:
                     send tx_frames, make_data(tx_seq, pending)
-                    attempts += 1
+                    attempts = min(attempts + 1, 8)
                 when true: -> AWAIT_ACK
 
             state AWAIT_ACK:
@@ -529,7 +529,7 @@ machine uart_link every 500 us:
 
             state BACKOFF_ST:
                 enter:
-                    retransmits += 1
+                    retransmits = min(retransmits + 1, 1_000_000)
                 when attempts > RETRIES: -> LINK_DOWN
                 after BACKOFF: -> TRANSMIT
 
@@ -636,16 +636,16 @@ output link_up    : bool          @ hw("o/link_up") with safe = false
 # Der MCU-Rahmen schreibt nur Ausgaenge in den Trace; die Zaehler der
 # Schichten werden darum gespiegelt, damit ein Lauf am Board sagt, wo
 # ein Frame verlorengeht.
-output d_rx   : int in 0..999999 @ hw("o/d_rx")   with safe = 0
-output d_tx   : int in 0..999999 @ hw("o/d_tx")   with safe = 0
-output d_ovf  : int in 0..999999 @ hw("o/d_ovf")  with safe = 0
-output d_ferr : int in 0..999999 @ hw("o/d_ferr") with safe = 0
-output d_fin  : int in 0..999999 @ hw("o/d_fin")  with safe = 0
-output d_fout : int in 0..999999 @ hw("o/d_fout") with safe = 0
-output d_dec  : int in 0..999999 @ hw("o/d_dec")  with safe = 0
-output d_long : int in 0..999999 @ hw("o/d_long") with safe = 0
-output d_crc  : int in 0..999999 @ hw("o/d_crc")  with safe = 0
-output d_retx : int in 0..999999 @ hw("o/d_retx") with safe = 0
+output d_rx   : int in 0..1_000_000_000 @ hw("o/d_rx")   with safe = 0
+output d_tx   : int in 0..1_000_000_000 @ hw("o/d_tx")   with safe = 0
+output d_ovf  : int in 0..1_000_000 @ hw("o/d_ovf")  with safe = 0
+output d_ferr : int in 0..1_000_000 @ hw("o/d_ferr") with safe = 0
+output d_fin  : int in 0..1_000_000 @ hw("o/d_fin")  with safe = 0
+output d_fout : int in 0..1_000_000 @ hw("o/d_fout") with safe = 0
+output d_dec  : int in 0..1_000_000 @ hw("o/d_dec")  with safe = 0
+output d_long : int in 0..1_000_000 @ hw("o/d_long") with safe = 0
+output d_crc  : int in 0..1_000_000 @ hw("o/d_crc")  with safe = 0
+output d_retx : int in 0..1_000_000 @ hw("o/d_retx") with safe = 0
 
 machine source every 1 s:
     var n : int in 0..999 = 0

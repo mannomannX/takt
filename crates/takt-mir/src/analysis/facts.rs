@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::VarId;
 use crate::analysis::domain::{Domain, Interval};
+use crate::analysis::term::Term;
 
 /// Der Zustand der Analyse an einer Stelle.
 #[derive(Clone, Debug, PartialEq)]
@@ -28,6 +29,10 @@ pub struct Facts {
     /// hat — nur die Kennzahl der Oktagon-Kandidaten liest sie
     /// (plan/m6.md 2.12); die Intervalle wissen nichts davon.
     relations: BTreeSet<(u32, u32)>,
+    /// Differenzschranken `a - b <= c` zwischen Termen (3.4, der
+    /// Differenzanteil der Oktagone): ein dominierender Vergleich traegt
+    /// sie ein, eine Zuweisung an eine ihrer Variablen loescht sie.
+    bounds: BTreeMap<(Term, Term), i128>,
 }
 
 impl Default for Facts {
@@ -38,6 +43,7 @@ impl Default for Facts {
             dominated: BTreeMap::new(),
             reachable: true,
             relations: BTreeSet::new(),
+            bounds: BTreeMap::new(),
         }
     }
 }
@@ -75,6 +81,22 @@ impl Facts {
         self.relations.iter().any(|(a, b)| *a == v.0 || *b == v.0)
     }
 
+    /// Ab hier gilt `a - b <= c`.
+    pub fn bound(&mut self, a: Term, b: Term, c: i128) {
+        let e = self.bounds.entry((a, b)).or_insert(c);
+        *e = (*e).min(c);
+    }
+
+    /// Die bekannte Schranke von `a - b`.
+    pub fn difference(&self, a: &Term, b: &Term) -> Option<i128> {
+        self.bounds.get(&(a.clone(), b.clone())).copied()
+    }
+
+    /// Eine Zuweisung an `v` loescht jede Schranke, die `v` nennt.
+    pub fn forget(&mut self, v: VarId) {
+        self.bounds.retain(|(a, b), _| !a.mentions(v) && !b.mentions(v));
+    }
+
     // ------------------------------------------------------------ Intervalle
 
     /// Intervall einer Variablen.
@@ -86,6 +108,7 @@ impl Facts {
     pub fn assign(&mut self, v: VarId, i: Interval) {
         self.vars.insert(v.0, i);
         self.assigned.insert(v.0, true);
+        self.forget(v);
     }
 
     /// Setzt nur das Intervall (Verfeinerung in einem Zweig), ohne die
@@ -110,6 +133,7 @@ impl Facts {
     pub fn declare(&mut self, v: VarId, i: Interval) {
         self.vars.insert(v.0, i);
         self.assigned.insert(v.0, true);
+        self.forget(v);
     }
 
     // ------------------------------------------------------------- Dominanz
@@ -149,7 +173,8 @@ impl Facts {
         let dominated =
             a.dominated.iter().filter(|(k, v)| **v && b.dominates(k)).map(|(k, _)| (k.clone(), true)).collect();
         let relations = a.relations.intersection(&b.relations).copied().collect();
-        Facts { vars, assigned, dominated, reachable: true, relations }
+        let bounds = a.bounds.iter().filter_map(|(k, x)| b.bounds.get(k).map(|y| (k.clone(), (*x).max(*y)))).collect();
+        Facts { vars, assigned, dominated, reachable: true, relations, bounds }
     }
 
     /// Weitung an einer nicht abgerollten Schleife (3.4): Variablen, die der
@@ -167,6 +192,7 @@ impl Facts {
             self.vars.insert(v.0, wide);
         }
         self.relations.retain(|(a, b)| !written.iter().any(|w| w.0 == *a || w.0 == *b));
+        self.bounds.retain(|(a, b), _| !written.iter().any(|w| a.mentions(*w) || b.mentions(*w)));
     }
 
     fn is_assigned_raw(&self, k: u32) -> bool {

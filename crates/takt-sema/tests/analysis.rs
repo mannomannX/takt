@@ -935,3 +935,102 @@ machine m:
     assert_eq!(count(&r, "Arith"), 0, "kein Ganzzahlfall: {:?}", r.checks);
     assert!(!w.iter().any(|w| w.contains("SC-24")), "Gleitkomma warnt nicht (Pruefung 4): {w:?}");
 }
+
+/// 3.4 (Differenzschranken): `if i >= b.len: break` traegt `i < b.len` bis
+/// zur naechsten Zuweisung an `i` oder `b`.
+#[test]
+fn a_length_guard_before_break_proves_the_index() {
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var b : bytes<64> = default
+    initial RUN
+    state RUN:
+        loop:
+            var s : int in 0..99 = 0
+            for i in range(1024):
+                if i >= b.len:
+                    break
+                s = (s + (b[i] as int)) % 100
+            n = s
+",
+    );
+    assert_eq!(count(&r, "Index"), 0, "{:?}", r.checks);
+    assert_eq!(r.relational, 0, "{:?}", r.checks);
+}
+
+#[test]
+fn a_length_that_changed_after_the_guard_keeps_the_check() {
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var b : bytes<64> = default
+    initial RUN
+    state RUN:
+        loop:
+            var s : int in 0..99 = 0
+            for i in range(1024):
+                if i >= b.len:
+                    break
+                b.clear()
+                s = (s + (b[i] as int)) % 100
+            n = s
+",
+    );
+    assert_eq!(count(&r, "Index"), 1, "{:?}", r.checks);
+}
+
+/// Der Vergleich traegt eine Konstante: `len >= off + k + 2` beweist
+/// `off + k` und `off + k + 1`.
+#[test]
+fn a_guard_with_an_offset_proves_the_offset_index() {
+    let (_, r, _) = compile(
+        "\
+const HDR : int = 4
+
+record Hdr:
+    len : u16
+
+machine m:
+    var b : bytes<64> = default
+    var k : u16 = 0
+    initial RUN
+    state RUN:
+        loop:
+            var hh = Hdr(len = k)
+            if (b.len as int) < HDR + (hh.len as int) + 2:
+                n = 1
+            else:
+                var lo = b[HDR + (hh.len as int)] as int
+                var hi = b[HDR + (hh.len as int) + 1] as int
+                n = (lo + hi) % 100
+",
+    );
+    assert_eq!(count(&r, "Index"), 0, "{:?}", r.checks);
+}
+
+/// 3.4: `code` bleibt am Schleifenkopf unter 255, weil der Koerper es bei
+/// 255 zuruecksetzt — das findet erst der absteigende Durchlauf nach der
+/// Weitung.
+#[test]
+fn narrowing_after_widening_finds_the_loop_invariant() {
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var b : bytes<64> = default
+    initial RUN
+    state RUN:
+        loop:
+            var code : int in 1..255 = 1
+            for i in range(1024):
+                if i >= b.len:
+                    break
+                if b[i] != 0:
+                    code += 1
+                if b[i] == 0 or code == 255:
+                    code = 1
+            n = code % 100
+",
+    );
+    assert_eq!(count(&r, "Declared"), 0, "{:?}", r.checks);
+}

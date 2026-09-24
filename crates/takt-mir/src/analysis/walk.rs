@@ -9,6 +9,7 @@ use takt_diag::Span;
 
 use crate::analysis::domain::{Domain, Interval, Intervals};
 use crate::analysis::facts::Facts;
+use crate::analysis::term::{Lin, Term, lin, term};
 use crate::expr::{Accessor, BinaryOp, CheckedKind, Expr, ExprKind, UnaryOp};
 use crate::stmt::{Block, Place, Stmt, StmtKind};
 use crate::types::{Const, IntWidth, Range, Type};
@@ -19,6 +20,10 @@ use crate::{Program, VarId};
 /// Schwelle werden abgerollt analysiert"). Der Wert ist eine Konstante des
 /// Compilers und erscheint im Report.
 pub const UNROLL_LIMIT: u64 = 256;
+
+/// Absteigende Durchlaeufe nach der Weitung einer Schleife (3.4): Der
+/// Kopf beginnt an der deklarierten Range und wird enger, bis er stabil ist.
+const NARROW_ROUNDS: u32 = 3;
 
 /// Warum eine implizite Pruefung noetig war (3.4, Kennzahl nach Ursache).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -86,6 +91,8 @@ pub struct Walk<'p> {
     in_action: bool,
     /// Deklarierte Range je Variable, fuer die Weitung.
     declared: Vec<Option<Range>>,
+    /// Die Stelle, deren Index gerade geprueft wird (Zuweisungsstelle).
+    index_base: Option<Term>,
 }
 
 impl<'p> Walk<'p> {
@@ -100,7 +107,27 @@ impl<'p> Walk<'p> {
             loop_depth: 0,
             in_action: false,
             declared,
+            index_base: None,
         }
+    }
+
+    /// Ein Durchlauf, der nichts zaehlt.
+    fn probe(&self) -> Walk<'p> {
+        Walk::new(self.program, self.declared.clone())
+    }
+
+    fn lin(&self, e: &Expr) -> Option<Lin> {
+        lin(e, &self.program.types.list)
+    }
+
+    fn term(&self, e: &Expr) -> Option<Term> {
+        term(e, &self.program.types.list)
+    }
+
+    /// Gilt `e < base.len` als Differenzschranke?
+    fn below_len(&self, e: &Expr, base: &Term, f: &Facts) -> bool {
+        let Some(Lin { term: Some(t), c }) = self.lin(e) else { return false };
+        f.difference(&t, &Term::Len(Box::new(base.clone()))).is_some_and(|d| d <= -1 - c)
     }
 
     /// Betritt einen Aktionsblock (`enter`, `exit`, Transitionsaktion,
@@ -131,6 +158,9 @@ impl<'p> Walk<'p> {
                     f.assign(*v, i);
                 } else {
                     self.place(target, f);
+                    if let Some(v) = Term::root(target) {
+                        f.forget(v);
+                    }
                 }
             }
             StmtKind::Check { cond, .. } => {
@@ -203,9 +233,12 @@ impl<'p> Walk<'p> {
             }
             StmtKind::Abort { .. } | StmtKind::Goto(_) | StmtKind::Break => f.cut(),
             StmtKind::Observe(o) => self.observe(o, f),
-            StmtKind::MethodCall { target, args, .. } => {
+            StmtKind::MethodCall { target, receiver, args, .. } => {
                 for a in args {
                     self.expr(a, f);
+                }
+                if let Some(v) = Term::root(receiver) {
+                    f.forget(v);
                 }
                 if let Some(Place::Var(v)) = target {
                     f.assign(*v, Interval::Top);
@@ -259,11 +292,24 @@ impl<'p> Walk<'p> {
             f.declare(var, Interval::Int { lo: 0, hi: i128::from(n.saturating_sub(1)) });
         } else {
             f.declare(var, if n > 0 { Interval::Int { lo: 0, hi: i128::from(n - 1) } } else { Interval::Top });
+            let entry = f.clone();
             let written = written_vars(body);
             let declared: Vec<Option<Range>> = self.declared.clone();
             f.widen::<Intervals>(&written, |v| {
                 declared.get(v.0 as usize).and_then(|r| r.as_ref()).map_or(Interval::Top, Interval::from_range)
             });
+            // Narrowing: der geweitete Kopf ist eine Invariante; was ein
+            // Durchlauf davon bis zum Ende traegt, vereint mit dem Eintritt,
+            // ist eine engere. Erst der letzte Durchlauf zaehlt.
+            for _ in 0..NARROW_ROUNDS {
+                let mut end = f.clone();
+                self.probe().block(body, &mut end);
+                let next = Facts::join::<Intervals>(&entry, &end);
+                if next == *f {
+                    break;
+                }
+                *f = next;
+            }
             self.bounded_body(body, f);
         }
         // Eine Schleife verlaesst man immer; `break` schneidet nur sie ab.
@@ -330,6 +376,34 @@ impl<'p> Walk<'p> {
         if let (Interval::Int { lo, hi }, ExprKind::Var(v)) = (l, &rhs.kind) {
             f.refine(*v, bound(flip(op), lo, hi));
         }
+        if op == BinaryOp::Ne {
+            for (side, other) in [(lhs, r), (rhs, l)] {
+                if let (ExprKind::Var(v), Interval::Int { lo, hi }) = (&side.kind, other)
+                    && lo == hi
+                {
+                    let now = f.interval(*v).without(lo);
+                    f.refine(*v, now);
+                }
+            }
+        }
+        // Zwei Terme: `a + ca op b + cb` als Differenzschranke.
+        if let (Some(a), Some(b)) = (self.lin(lhs), self.lin(rhs))
+            && let (Some(ta), Some(tb)) = (a.term, b.term)
+            && ta != tb
+        {
+            let d = b.c - a.c;
+            match op {
+                BinaryOp::Lt => f.bound(ta, tb, d - 1),
+                BinaryOp::Le => f.bound(ta, tb, d),
+                BinaryOp::Gt => f.bound(tb, ta, -d - 1),
+                BinaryOp::Ge => f.bound(tb, ta, -d),
+                BinaryOp::Eq => {
+                    f.bound(ta.clone(), tb.clone(), d);
+                    f.bound(tb, ta, -d);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Wertet einen Ausdruck aus, ohne Pruefungen zu zaehlen.
@@ -346,7 +420,9 @@ impl<'p> Walk<'p> {
             Place::Field(b, _) => self.place(b, f),
             Place::Index(b, i) => {
                 self.place(b, f);
+                self.index_base = Term::of_place(b);
                 self.expr(i, f);
+                self.index_base = None;
             }
             Place::Index2(b, r, c) => {
                 self.place(b, f);
@@ -465,18 +541,23 @@ impl<'p> Walk<'p> {
             }
             // Der Knoten umschliesst den Zugriff oder (an einer Stelle) den Index.
             CheckedKind::Index { len } => {
-                let (i, value) = match &inner.kind {
-                    ExprKind::Index { index, .. } => {
+                let (i, value, index, base) = match &inner.kind {
+                    ExprKind::Index { base, index } => {
+                        self.index_base = None;
                         self.expr(inner, f);
-                        (self.eval_only(index, f), Interval::Top)
+                        (self.eval_only(index, f), Interval::Top, &**index, self.term(base))
                     }
                     _ => {
+                        let base = self.index_base.take();
                         let i = self.expr(inner, f);
-                        (i, i)
+                        (i, i, inner, base)
                     }
                 };
                 let r = Interval::Int { lo: 0, hi: i128::from(*len) - 1 };
-                (CheckCause::Index, *len > 0 && contained(i, r), if *len > 0 { value.meet(r) } else { value })
+                let by_interval = *len > 0 && contained(i, r);
+                let by_bound = matches!(i, Interval::Int { lo, .. } if lo >= 0)
+                    && base.is_some_and(|b| self.below_len(index, &b, f));
+                (CheckCause::Index, by_interval || by_bound, if *len > 0 { value.meet(r) } else { value })
             }
             CheckedKind::Convert => match &inner.kind {
                 ExprKind::Cast { expr, to } => {
@@ -647,6 +728,8 @@ fn negate(op: BinaryOp) -> BinaryOp {
         BinaryOp::Le => BinaryOp::Gt,
         BinaryOp::Gt => BinaryOp::Le,
         BinaryOp::Ge => BinaryOp::Lt,
+        BinaryOp::Eq => BinaryOp::Ne,
+        BinaryOp::Ne => BinaryOp::Eq,
         other => other,
     }
 }

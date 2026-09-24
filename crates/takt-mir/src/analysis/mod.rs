@@ -24,6 +24,7 @@ pub mod schedulability;
 pub mod schedule;
 pub mod size;
 pub mod stack;
+pub mod term;
 pub mod walk;
 
 use std::collections::{BTreeMap, BTreeSet};

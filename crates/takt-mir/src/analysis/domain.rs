@@ -52,6 +52,16 @@ impl Interval {
     }
 
     /// Die Teile unter und ueber der Null; `Bottom`, wo keiner ist.
+    /// Ohne den Randpunkt `c`; ein innerer Punkt aendert nichts.
+    pub fn without(self, c: i128) -> Interval {
+        match self {
+            Interval::Int { lo, hi } if lo == c && hi == c => Interval::Bottom,
+            Interval::Int { lo, hi } if lo == c => Interval::Int { lo: lo + 1, hi },
+            Interval::Int { lo, hi } if hi == c => Interval::Int { lo, hi: hi - 1 },
+            other => other,
+        }
+    }
+
     fn without_zero(self) -> (Interval, Interval) {
         match self {
             Interval::Int { lo, hi } => (
