@@ -834,13 +834,20 @@ pub(crate) fn psi_commit(s: &mut String, p: &Program, driven: &[&takt_mir::machi
         else {
             continue;
         };
-        let _ =
-            writeln!(s, "{indent}memcpy(image + {}, latch + {src}, {}); /* Psi {} */", bank + off, ty.size(), c.name);
+        let dst = bank + off;
+        // Ein Skalar als Zuweisung: `memcpy` unbekannter Ausrichtung wird auf RV32 ein Aufruf je Byte.
+        let _ = match c_type(&ty, false) {
+            Some(ct) => {
+                writeln!(s, "{indent}*({ct} *)(image + {dst}) = *(const {ct} *)(latch + {src}); /* Psi {} */", c.name)
+            }
+            None => writeln!(s, "{indent}memcpy(image + {dst}, latch + {src}, {}); /* Psi {} */", ty.size(), c.name),
+        };
     }
+    // Bank und Regionen sind 8-ausgerichtet (psi.rs); die Byte-Schleife kostete auf RV32 rund 10 us je Tick.
     let _ = writeln!(
         s,
-        "{indent}for (unsigned i = 0; i < {}; i++) image[{first} + i] = image[{next} + i]; /* Psi */",
-        bank_size(p)
+        "{indent}for (unsigned i = 0; i < {}; i++) ((unsigned long long *)(image + {first}))[i] = ((const unsigned long long *)(image + {next}))[i]; /* Psi */",
+        bank_size(p) / 8
     );
     for m in driven {
         let Some(id) = p.machines.iter().position(|x| x.name == m.name) else { continue };
