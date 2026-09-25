@@ -1,29 +1,36 @@
-# takt-hw 3
+# takt-hw 5
 # WeAct Black Pill (STM32F401CCU6, Cortex-M4F): Kalibrierung, Speicher,
 # Geraete und Kanaele fuer 29_heartbeat.takt (8.10).
 #
-# **Die Zeiten sind geschaetzt, nicht gemessen.** Sie stammen aus den
-# Zyklenangaben des ARMv7E-M-Handbuchs bei 84 MHz (ein Zyklus = 11905 ps)
-# und dienen dazu, die Rechnung zu pruefen, nicht die Hardware. `takt
-# bench` ersetzt sie durch Messwerte, sobald der Rueckkanal steht
-# (FB-91); bis dahin ist jede Aussage daraus eine Ueberschlagsrechnung.
+# **Gemessen mit `takt bench` auf Board 1** (2026-09-25, 200 Wiederholungen
+# je Kern, 84 MHz, Flash mit Prefetch und ohne Caches). Der Bericht daneben
+# (`stm32f401.report`) nennt Streuung und Umstaende. Die Tabelle ist um
+# 3690476/2564996 gestreckt, damit sie jeden Referenzkern deckt; den Faktor
+# treibt der Fault-Pfad des Sequenzkerns mit dem Hook der Runtime (FB-295).
+# `guard` und `jitter` je Kanal misst erst `takt driver-test` (FB-285).
 # `ram` und `flash` stehen im Datenblatt; die ersten 16 KiB Flash gehoeren
 # dem HID-Bootloader, das Journal liegt in zwei 16-KiB-Sektoren dahinter.
 [target.thumbv7em]
 core_hz = 84000000
-i32 = 11905
-i64 = 35715
-f32 = 11905
-f64 = 1190500
-mem = 23810
-call = 47620
+i32 = 17129
+i64 = 29976
+f32 = 168698
+f64 = 1466976
+mem = 51385
+call = 241512
 native = 0
-t_io = 120000
+t_io = 1511905
 ram = 65536
 flash = 245760
 nvm_sector_bytes = 16384
 nvm_sectors = 2
 nvm_min_interval = 10000000000
+i32_div = 149070
+i64_div = 2819490
+f32_div = 411435
+f64_div = 3038232
+tick_jitter_ns = 0
+stack_reserve = 600
 
 [device.gpio]
 driver = "stm32f4-gpio"
