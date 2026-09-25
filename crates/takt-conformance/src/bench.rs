@@ -608,7 +608,8 @@ pub struct Outcome {
     /// Stack-Tiefe des leeren Programms in der Tickschleife unter Last: die
     /// Reserve fuer Runtime, Treiber und ISRs (12.3).
     pub stack_reserve: Option<u64>,
-    /// Die Streuung der Tickbeginne, Spitze zu Spitze (7.3).
+    /// Um wie viel der Abstand zweier Tickbeginne die Periode hoechstens
+    /// ueberschreitet (7.3).
     pub tick_jitter_ns: Option<i64>,
 }
 
@@ -679,19 +680,20 @@ fn summary_value(text: &str, label: &str) -> Option<u64> {
     words.next()?.parse().ok()
 }
 
-/// Die Streuung der Tickbeginne aus den Zeitzeilen (`t=… time took=…
-/// drift=…`, grammar/trace.md), Spitze zu Spitze.
+/// Um wie viel der Abstand zweier Tickbeginne die Periode hoechstens
+/// ueberschreitet, aus den Zeitzeilen (`t=… time took=… drift=…`,
+/// grammar/trace.md): das groesste `drift[k] - drift[k-1]`, nie unter null.
 ///
 /// Pruefung 59 rechnet mit `P_m + jitter`, dem laengsten Abstand zweier
 /// Aktivierungen. Ein fester Versatz aller Tickbeginne verschiebt keinen
-/// Abstand; der erste Lauf auf Board 1 meldete ihn als 121 µs Jitter
-/// (FB-291).
+/// Abstand, und ein spaeter Anlauf von Tick 0 verkuerzt nur den ersten;
+/// Board 1 meldete beides als Jitter, erst 121, dann 157 µs (FB-291).
 fn tick_jitter(text: &str) -> Option<i64> {
     let drifts: Vec<i64> = text
         .lines()
         .filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok())
         .collect();
-    Some(drifts.iter().max()? - drifts.iter().min()?)
+    drifts.windows(2).map(|w| (w[1] - w[0]).max(0)).max()
 }
 
 impl Outcome {
@@ -858,11 +860,16 @@ mod tests {
         assert_eq!(tick_jitter(text), Some(18));
     }
 
-    /// Ein fester Versatz aller Tickbeginne ist kein Jitter (FB-291).
+    /// Ein fester Versatz aller Tickbeginne ist kein Jitter, und ein spaeter
+    /// Anlauf auch nicht: Er verkuerzt den ersten Abstand, statt ihn zu
+    /// verlaengern — so lief es auf Board 1 (FB-291).
     #[test]
     fn a_constant_drift_is_no_jitter() {
         let text = "t=1 time took=120 drift=-120000 slept=0\nt=2 time took=121 drift=-120000 slept=0\n";
         assert_eq!(tick_jitter(text), Some(0));
+        let late_start = "t=0 time took=15000 drift=35000 slept=0\nt=1 time took=10000 drift=-122000 slept=0\n\
+                          t=2 time took=10000 drift=-122000 slept=0\n";
+        assert_eq!(tick_jitter(late_start), Some(0));
         assert_eq!(tick_jitter("takt end\n"), None);
     }
 
