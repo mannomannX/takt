@@ -514,8 +514,7 @@ fn a_transition_between_siblings_leaves_the_parent_alone() {
     let m = &p.machines[0];
     let find = |n: &str| takt_mir::StateId(m.states.iter().position(|s| s.name == n).expect(n) as u32);
     let (warmup, active) = (find("WARMUP"), find("ACTIVE"));
-    let raus = takt_llvm::machine::exiting(m, warmup, active);
-    let rein = takt_llvm::machine::entering(m, warmup, active);
+    let (raus, rein) = takt_llvm::machine::crossing(m, Some(warmup), Some((active, active)));
     assert_eq!(raus, vec![warmup], "nur das Geschwister wird verlassen");
     assert_eq!(rein, vec![active], "nur das Geschwister wird betreten");
 }
@@ -526,8 +525,25 @@ fn a_transition_out_of_a_hierarchy_exits_the_whole_chain() {
     let p = corpus("17_nested.takt");
     let m = &p.machines[0];
     let find = |n: &str| takt_mir::StateId(m.states.iter().position(|s| s.name == n).expect(n) as u32);
-    let raus = takt_llvm::machine::exiting(m, find("WARMUP"), find("SAFE"));
+    let (raus, _) = takt_llvm::machine::crossing(m, Some(find("WARMUP")), Some((find("SAFE"), find("SAFE"))));
     assert_eq!(raus, vec![find("WARMUP"), find("RUNNING")], "erst das Blatt, dann sein Elternteil");
+}
+
+/// 9.3: Der gemeinsame Vorfahr liegt echt oberhalb des *Zielzustands*, nicht
+/// nur oberhalb des Blatts, in dem das Betreten endet. Ein Uebergang auf
+/// den eigenen Elternzustand verlaesst und betritt ihn neu; der eines
+/// Blatts auf sich selbst laesst den Elternzustand stehen.
+#[test]
+fn the_common_ancestor_lies_strictly_above_the_target_state() {
+    let p = corpus("17_nested.takt");
+    let m = &p.machines[0];
+    let find = |n: &str| takt_mir::StateId(m.states.iter().position(|s| s.name == n).expect(n) as u32);
+    let (running, warmup, active) = (find("RUNNING"), find("WARMUP"), find("ACTIVE"));
+    let (raus, rein) = takt_llvm::machine::crossing(m, Some(active), Some((running, warmup)));
+    assert_eq!(raus, vec![active, running], "der Elternzustand wird verlassen");
+    assert_eq!(rein, vec![running, warmup], "und neu betreten, bis zu seinem `initial`");
+    let (raus, rein) = takt_llvm::machine::crossing(m, Some(warmup), Some((warmup, warmup)));
+    assert_eq!((raus, rein), (vec![warmup], vec![warmup]), "nur das Blatt selbst");
 }
 
 /// Marken muessen je erzeugter Verzweigung eindeutig sein: Ein Blatt

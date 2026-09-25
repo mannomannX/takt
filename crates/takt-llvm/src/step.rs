@@ -135,19 +135,26 @@ fn write_step(
     // wie er Blaetter hatte (FB-222).
     // Ausserhalb der Blaetter (FAULTED, 5.3) laeuft kein Nutzercode:
     // Der Zustandsraum ist statisch, alles andere geht ans Ende.
+    // `FAULTED` steht hinter dem letzten Blatt (5.3); dort laufen nur die
+    // Uebergaenge, die der Nutzer fuer `FAULTED` deklariert.
     let root = format!("baum_{}", m.name);
+    let faulted = if m.faulted.transitions.is_empty() { end.clone() } else { format!("faulted_{}", m.name) };
     let live = module.inst(&format!("icmp ult i8 {cur}, {}", leaves.len()));
-    module.void_inst(&format!("br i1 {live}, label %{root}, label %{end}"));
+    module.void_inst(&format!("br i1 {live}, label %{root}, label %{faulted}"));
     module.label(&root);
-    let jump = Jump { leaves, end: &end, conf: &slot };
+    let jump = Jump { leaves, end: &end };
     level(None, leaves, &jump, &mut ctx, module)?;
-    // 5.3: Ein Fault auf einer geteilten Ebene nimmt den Trampolin des
+    if faulted != end {
+        module.label(&faulted);
+        faulted_transitions(&mut ctx, module, &end)?;
+    }
+    // 5.3: Ein Fault auf einer geteilten Ebene nimmt den Fault-Pfad des
     // Blatts, das gerade aktiv ist.
     module.label(&format!("fault_{}_any", m.name));
     let arms: Vec<String> =
-        leaves.iter().enumerate().map(|(i, id)| format!("i8 {i}, label %fault_{}_{}", m.name, id.index())).collect();
+        leaves.iter().enumerate().map(|(i, id)| format!("i8 {i}, label %{}", ctx.fault_path(Some(*id)))).collect();
     module.void_inst(&format!("switch i8 {cur}, label %{end} [ {} ]", arms.join(" ")));
-    fault_trampolines(st, &jump, &mut ctx, module)?;
+    fault_paths(&mut ctx, module, &end)?;
 
     module.label(&end);
     // `t_in_state` zaehlt die Ticks im aktiven Zustand (5.2, 11.2). Ein
@@ -213,20 +220,19 @@ fn level(
     if let (Some(leaf), [only]) = (node, here)
         && leaf == *only
     {
-        let i = jump.leaves.iter().position(|l| *l == leaf).ok_or(NotYet { what: "Blatt" })?;
         // Die Uebergaenge vom Blatt aufwaerts: Der innerste Zustand
         // entscheidet zuerst (5.2), und innerhalb einer Ebene gewinnt der
         // erste passende in Quelltextreihenfolge.
         for anc in machine::path_to(machine, leaf).iter().rev() {
             let list = machine.states[anc.index()].transitions.clone();
-            transitions(&list, *anc, i, jump.leaves, ctx, m, jump.end, jump.conf)?;
+            transitions(&list, Some(*anc), Some(leaf), ctx, m, jump.end)?;
         }
         m.void_inst(&format!("br label %{}", jump.end));
         // 5.2 Regel 5: Ein Fault fuehrt sofort zum Fault-Ziel des
         // innersten Zustands, der eines deklariert (Fault-Wald, 5.3). Die
-        // Trampoline entstehen am Ende des Schritts, je Gruppe gleicher
+        // Fault-Pfade entstehen am Ende des Schritts, je Gruppe gleicher
         // Ketten einer.
-        ctx.fault_leaves.push(leaf);
+        ctx.fault_path(Some(leaf));
         return Ok(());
     }
     // Die Kinder auf den Wegen zu den Blaettern hier, in Blattreihenfolge.
@@ -267,34 +273,35 @@ fn level(
     Ok(())
 }
 
-/// Die Uebergaenge eines Zustands (5.2).
+/// Die Uebergaenge eines Zustands (5.2): `at` ist der Zustand, dem sie
+/// gehoeren, `from` das aktive Blatt — in `FAULTED` beide `None` (5.3).
 ///
 /// Sie werden in Quelltextreihenfolge geprueft; der erste, dessen Guard
 /// haelt, gewinnt und verlaesst den Zustand. 8.7 verlangt dieselbe
 /// Reihenfolge fuer Handler — der Quelltext ist die Prioritaet, damit sie
 /// dasteht, statt hergeleitet werden zu muessen.
-#[allow(clippy::too_many_arguments)]
 fn transitions(
     list: &[Transition],
-    at: StateId,
-    from: usize,
-    leaves: &[StateId],
+    at: Option<StateId>,
+    from: Option<StateId>,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
     end: &str,
-    conf_slot: &crate::emit::Reg,
 ) -> Result<(), NotYet> {
     for t in list {
-        let c = match &t.trigger {
-            TransTrigger::When(Guard::Expr(cond)) => {
+        let c = match (&t.trigger, at) {
+            (TransTrigger::When(Guard::Expr(cond)), _) => {
                 let vars = ctx.vars();
                 lower_expr(cond, ctx.program, m, &vars)?
             }
-            TransTrigger::After(d) => after(d, at, ctx, m)?,
-            TransTrigger::When(Guard::Match { subject, kind, pattern, binding }) => {
+            (TransTrigger::After(d), Some(at)) => after(d, at, ctx, m)?,
+            // In `FAULTED` laeuft keine Verweildauer; der Interpreter
+            // laesst `after` dort nie feuern.
+            (TransTrigger::After(_), None) => continue,
+            (TransTrigger::When(Guard::Match { subject, kind, pattern, binding }), _) => {
                 match_guard(subject, *kind, pattern, *binding, ctx, m)?
             }
-            TransTrigger::When(Guard::Next { stream, binding }) => next_element(*stream, *binding, ctx, m)?,
+            (TransTrigger::When(Guard::Next { stream, binding }), _) => next_element(*stream, *binding, ctx, m)?,
         };
         // Die Marke muss je *erzeugter* Verzweigung eindeutig sein, nicht
         // je Zustand: Ein Blatt fuehrt auch die Uebergaenge seiner
@@ -304,70 +311,81 @@ fn transitions(
         let (take, skip) = (format!("uebergang{id}_{name}"), format!("bleibt{id}_{name}"));
         m.void_inst(&format!("br i1 {}, label %{take}, label %{skip}", c.value));
         m.label(&take);
-        // 5.3 und 6.2: Ein Uebergang zeigt nicht immer auf einen Zustand.
-        // Die beiden anderen Ziele gehen verschiedene Wege, und der
-        // Unterschied ist der Fault selbst.
-        let to = match t.target {
-            Target::State(to) => to,
-            // Der Timeout einer Sequenz (6.2) *ist* ein Fault: Er wird
-            // vorgemerkt und nimmt dann den Fault-Pfad des Blatts —
-            // denselben, den ein gescheiterter `check` nimmt. Der Pfad
-            // endet in `end`, hier kommt nichts nach.
-            Target::Fault(kind) => {
-                pending(ctx, m, kind);
-                m.void_inst(&format!("br label %fault_{}_{}{}", ctx.machine.name, leaves[from].index(), ctx.tag));
-                m.label(&skip);
-                continue;
-            }
-            // `-> FAULTED` (5.3) ist kein Fault, sondern ein Ziel: Die
-            // Konfiguration wird leer, kein Nutzercode laeuft mehr, und
-            // die Outputs stehen auf `safe`. Der Interpreter setzt hier
-            // keinen `last_fault`, also tut es der Codegen auch nicht.
-            Target::Faulted => {
-                leave_configuration(ctx, m, leaves.len());
-                safe_outputs(ctx, m)?;
-                m.void_inst(&format!("br label %{end}"));
-                m.label(&skip);
-                continue;
-            }
-        };
-        // 5.2: Ein Uebergang auf einen zusammengesetzten Zustand betritt
-        // dessen `initial`-Kind, und das rekursiv bis zu einem Blatt.
-        let leaf = machine::initial_leaf(ctx.machine, to).ok_or(NotYet { what: "Zielzustand ohne `initial`" })?;
-        let Some(index) = leaves.iter().position(|l| *l == leaf) else {
-            return Err(NotYet { what: "Zielblatt" });
-        };
-        if let Some(slot) = ctx.machine.layout.saved_paths.iter().position(|s| *s == to) {
-            resume_into(ctx, m, leaves[from], to, slot, conf_slot, &t.actions, leaves, end, &skip)?;
+        // Der Timeout einer Sequenz (6.2) *ist* ein Fault: Er wird
+        // vorgemerkt und nimmt dann den Fault-Pfad des Blatts — denselben,
+        // den ein gescheiterter `check` nimmt.
+        if let Target::Fault(kind) = t.target {
+            pending(ctx, m, kind);
+            let fault = ctx.vars().fault_label().ok_or(NotYet { what: "Fault-Marke" })?;
+            m.void_inst(&format!("br label %{fault}"));
+            m.label(&skip);
             continue;
         }
-        // 5.2 gibt die Reihenfolge vor: `exit:` des verlassenen Zustands,
-        // dann der Aktionsblock des Uebergangs (Modus ENTRY), dann
-        // `enter:` des betretenen. Wer sie vertauscht, laesst `enter:` auf
-        // einem Zustand laufen, den `exit:` noch aufraeumt.
-        // 5.2: `exit:` laeuft vom verlassenen Blatt aufwaerts bis unter
-        // den gemeinsamen Vorfahren, `enter:` von dort abwaerts bis zum
-        // neuen Blatt. Wer nur Blatt und Ziel nimmt, laesst die
-        // Zwischenebenen aus — und ein `enter:` auf einer Zwischenebene
-        // ist genau die Stelle, an der ein Ablauf seine Vorbedingung
-        // herstellt.
-        enter_leaf(ctx, m, leaves[from], leaf, index, conf_slot, Some(&t.actions))?;
-        // 5.2 Regel 4 (Entry-Tick): Die `loop:`-Bloecke der neu betretenen
-        // Zustaende laufen noch in diesem Tick — die darueberliegenden
-        // liefen bereits. `check`s wirken, `-> ZIEL` ist wirkungslos, und
-        // `on`-Handler laufen nicht (das Fenster ist leer).
-        //
-        // Ohne sie erreichte ein Zustand seine Invarianten einen Tick zu
-        // spaet, und die Outputs des Ticks stuenden auf den Werten des
-        // alten Zustands.
-        // 5.2 Regel 4: Im Entry-Tick ist `-> ZIEL` wirkungslos. Der
-        // Interpreter erreicht das mit `Mode::Entry`; hier wird das
-        // Sprungziel fuer die Dauer dieser Bloecke entfernt.
-        entry_tick(ctx, m, leaves[from], leaf)?;
-        m.void_inst(&format!("br label %{end}"));
+        // 9.3 (`step_m`): Die Aktionen laufen vor dem Wechsel, im Modus
+        // ENTRY und noch in der alten Konfiguration. Ein Fault darin ist
+        // einer des Blatts, das der Uebergang verlassen wollte — `exit:`
+        // laeuft dann einmal, auf dem Fault-Pfad, statt zweimal.
+        block(&t.actions, ctx, m)?;
+        change(t.target, from, ctx, m, end)?;
         m.label(&skip);
     }
     Ok(())
+}
+
+/// `FAULTED` (5.3): kein Nutzercode, nur die Uebergaenge, die der Nutzer
+/// dort deklariert. Ihre Guards scheitern nicht (Pruefung 9); ein Fault in
+/// ihren Aktionen fuehrt nach `FAULTED` zurueck, in die Senke des
+/// Fault-Walds.
+fn faulted_transitions(ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYet> {
+    let list = ctx.machine.faulted.transitions.clone();
+    ctx.leaf = None;
+    let label = ctx.fault_path(None);
+    let outer = ctx.fault.replace(label);
+    let done = transitions(&list, None, None, ctx, m, end);
+    ctx.fault = outer;
+    done?;
+    m.void_inst(&format!("br label %{end}"));
+    Ok(())
+}
+
+/// Ein Uebergang oder ein `->` auf sein Ziel (9.3, `resolve_m` mit `GOTO`);
+/// endet mit dem Sprung an `end`.
+///
+/// Ein `resume`-Zustand betritt den gespeicherten Blattpfad, ohne einen
+/// sein `initial` (5.12). `FAULTED` ist ein Ziel wie jedes andere, nur
+/// ohne Eintritt (5.3).
+fn change(target: Target, from: Option<StateId>, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYet> {
+    let from_val = from.map_or_else(|| "-1".to_string(), |s| s.index().to_string());
+    let source = match from {
+        Some(leaf) => Source::Leaf(leaf, &from_val),
+        None => Source::Faulted,
+    };
+    let to = match target {
+        Target::State(to) => to,
+        Target::Faulted => return switch(ctx, m, source, Goal::Faulted, end),
+        // Ein Fault-Ziel entsteht nur aus dem Timeout einer Sequenz (6.2),
+        // und der nimmt den Fault-Pfad, keinen Wechsel.
+        Target::Fault(_) => return Err(NotYet { what: "Wechsel auf ein Fault-Ziel" }),
+    };
+    if let Some(slot) = ctx.machine.layout.saved_paths.iter().position(|s| *s == to) {
+        let ptr = ctx.field(Role::Saved, slot, m).ok_or(NotYet { what: "`saved`-Slot" })?;
+        let saved = m.inst(&format!("load i32, ptr {ptr}"));
+        let (k, name) = (ctx.next_label(m), ctx.machine.name.clone());
+        let under: Vec<StateId> = machine::leaves(ctx.machine)
+            .into_iter()
+            .filter(|l| machine::path_to(ctx.machine, *l).contains(&to))
+            .collect();
+        for (n, leaf) in under.into_iter().enumerate() {
+            let (hit, next) = (format!("resume{k}_{name}_{n}"), format!("resume{k}_{name}_{n}_sonst"));
+            let cond = m.inst(&format!("icmp eq i32 {saved}, {}", leaf.index()));
+            m.void_inst(&format!("br i1 {cond}, label %{hit}, label %{next}"));
+            m.label(&hit);
+            switch(ctx, m, source, Goal::State { to, leaf }, end)?;
+            m.label(&next);
+        }
+    }
+    let leaf = machine::initial_leaf(ctx.machine, to).ok_or(NotYet { what: "Zielzustand ohne `initial`" })?;
+    switch(ctx, m, source, Goal::State { to, leaf }, end)
 }
 
 /// Setzt die Outputs der Maschine auf ihren `safe`-Wert (5.3).
@@ -436,103 +454,178 @@ fn fault_code(kind: takt_mir::machine::FaultKind) -> u32 {
     }
 }
 
-/// `-> FAULTED`: die Konfiguration wird leer (5.3, 9.3).
-///
-/// Es gibt keinen Zustand mehr, in dem Code laeuft. Der Interpreter
-/// setzt `conf` auf die leere Folge; im erzeugten Code steht dafuer der
-/// Index hinter dem letzten Blatt — der `switch` der Schrittfunktion
-/// trifft ihn nicht, und damit laeuft nichts mehr.
-fn leave_configuration(ctx: &Ctx<'_>, m: &mut Module, leaves: usize) {
-    let Some(conf_i) = ctx.state.index_of(Role::Conf, 0) else { return };
-    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
-    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
-    let cell = m.inst(&format!("getelementptr inbounds [{} x i8], ptr {base}, i32 0, i32 0", ctx.state.depth));
-    // Der Index hinter dem letzten Blatt: Der `switch` der
-    // Schrittfunktion kennt nur 0..leaves und trifft ihn nicht.
-    m.void_inst(&format!("store i8 {leaves}, ptr {cell}"));
+/// Woher ein Wechsel kommt (9.3).
+#[derive(Clone, Copy)]
+enum Source<'a> {
+    /// Ein Blatt, dazu seine Nummer als Operand — ein Register, wenn sich
+    /// Blaetter einen Fault-Pfad teilen.
+    Leaf(StateId, &'a str),
+    /// `FAULTED`, die leere Konfiguration (5.3).
+    Faulted,
+    /// Tick 0 (9.4): die leere Konfiguration vor dem ersten Eintritt. Der
+    /// maschinenweite `loop:` laeuft im Entry-Tick mit (5.1).
+    Start,
 }
 
-/// Der Wechsel von einem Blatt zu einem anderen (5.2).
-///
-/// **Eine Stelle fuer beide Ausloeser.** Ein Uebergang (`when`/`after`)
-/// und ein `->` im Block tun dasselbe; 5.2 gibt die Reihenfolge vor, und
-/// zwei Kopien waeren zwei Gelegenheiten, sie verschieden auszulegen.
-///
-/// Die Reihenfolge: `exit:` vom verlassenen Blatt aufwaerts bis unter den
-/// gemeinsamen Vorfahren, dann der Aktionsblock (nur ein Uebergang hat
-/// einen), dann `enter:` von dort abwaerts bis zum neuen Blatt. Wer nur
-/// Blatt und Ziel nimmt, laesst die Zwischenebenen aus — und ein `enter:`
-/// dort ist genau die Stelle, an der ein Ablauf seine Vorbedingung
-/// herstellt.
-/// 5.12: Was verlassen wird, merkt sich sein Blatt.
-fn save_paths(ctx: &mut Ctx<'_>, m: &mut Module, from: StateId, leaf: StateId) {
-    save_paths_of(ctx, m, from, leaf, &from.index().to_string());
+/// Das Ziel eines Wechsels (9.3).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Goal {
+    /// Ein Zustand und das Blatt, in dem sein Betreten endet: `initial`
+    /// abwaerts oder der gespeicherte Pfad (5.12).
+    State { to: StateId, leaf: StateId },
+    /// `FAULTED`, die leere Konfiguration (5.3).
+    Faulted,
 }
 
-/// Wie [`save_paths`], mit dem verlassenen Blatt als Operand.
-fn save_paths_of(ctx: &mut Ctx<'_>, m: &mut Module, from: StateId, leaf: StateId, from_val: &str) {
-    for id in machine::exiting(ctx.machine, from, leaf) {
-        let Some(slot) = ctx.machine.layout.saved_paths.iter().position(|s| *s == id) else { continue };
+impl Goal {
+    /// Zielzustand und Blatt, wie [`machine::crossing`] sie nimmt.
+    fn pair(self) -> Option<(StateId, StateId)> {
+        match self {
+            Goal::State { to, leaf } => Some((to, leaf)),
+            Goal::Faulted => None,
+        }
+    }
+}
+
+/// Der Konfigurationswechsel (9.3, `switch`) samt Entry-Tick; endet mit
+/// dem Sprung an `end`.
+///
+/// **Eine Stelle fuer alle Ausloeser.** Uebergang, `->` im Block,
+/// Fault-Pfad, der Weg aus `FAULTED` und Tick 0 tun dasselbe, in der
+/// Reihenfolge des Interpreters: (1) die neue Konfiguration, (2) `exit:`
+/// der verlassenen Zustaende innen nach aussen, (3) `t_in_state`, Zaehler
+/// und zustandslokale Variablen der betretenen, (4) ihr `enter:` aussen
+/// nach innen, danach ihre `loop:`-Bloecke im Entry-Modus (5.2 Regel 4).
+/// Zwei Kopien waeren zwei Gelegenheiten, sie verschieden auszulegen.
+///
+/// Ab (1) gilt die neue Konfiguration auch fuer Faults: Ein Block, der
+/// scheitert, nimmt den Fault-Pfad des neuen Blatts, und die restlichen
+/// laufen nicht mehr. Die `exit:`-Bloecke sehen trotzdem noch die
+/// verlassene Verweildauer — `t_in_state` beginnt erst in (3) neu.
+fn switch(ctx: &mut Ctx<'_>, m: &mut Module, source: Source<'_>, goal: Goal, end: &str) -> Result<(), NotYet> {
+    let (from, from_val) = match source {
+        Source::Leaf(leaf, value) => (Some(leaf), value),
+        Source::Faulted | Source::Start => (None, "-1"),
+    };
+    let (exited, entered) = machine::crossing(ctx.machine, from, goal.pair());
+    // 5.12: Was verlassen wird, merkt sich sein Blatt.
+    for id in &exited {
+        let Some(slot) = ctx.machine.layout.saved_paths.iter().position(|s| s == id) else { continue };
         let Some(ptr) = ctx.field(Role::Saved, slot, m) else { continue };
         m.void_inst(&format!("store i32 {from_val}, ptr {ptr}"));
     }
+    // (1) `FAULTED` ist der Index hinter dem letzten Blatt: Der `switch`
+    // der Schrittfunktion trifft ihn nicht, und kein Nutzercode laeuft.
+    let leaves = machine::leaves(ctx.machine);
+    let into = match goal {
+        Goal::State { leaf, .. } => Some(leaf),
+        Goal::Faulted => None,
+    };
+    let index = match into {
+        Some(leaf) => leaves.iter().position(|l| *l == leaf).ok_or(NotYet { what: "Zielblatt" })?,
+        None => leaves.len(),
+    };
+    let cell = conf_cell(ctx, m)?;
+    m.void_inst(&format!("store i8 {index}, ptr {cell}"));
+    // 11.2: `pc` nennt ab hier das neue Blatt, auch fuer einen Fault in
+    // seinem `enter:`.
+    if let Some(leaf) = into
+        && m.instrument != crate::target::Instrument::Off
+    {
+        crate::stmt::mark(leaf.0, ctx, m);
+    }
+    let outer = (ctx.leaf, ctx.fault.take());
+    ctx.leaf = into;
+    let label = ctx.fault_path(into);
+    ctx.fault = Some(label);
+    let done = switch_blocks(ctx, m, &exited, &entered, into, matches!(source, Source::Start), end);
+    (ctx.leaf, ctx.fault) = outer;
+    done
 }
 
-/// 5.12: Ein Uebergang auf einen `resume`-Zustand betritt den gespeicherten
-/// Blattpfad; ohne gespeicherten Pfad das `initial`-Kind.
-#[allow(clippy::too_many_arguments)]
-fn resume_into(
+/// (2) bis (4) und der Entry-Tick eines Wechsels, siehe [`switch`].
+fn switch_blocks(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
-    from: StateId,
-    to: StateId,
-    slot: usize,
-    conf_slot: &crate::emit::Reg,
-    actions: &takt_mir::stmt::Block,
-    leaves: &[StateId],
+    exited: &[StateId],
+    entered: &[StateId],
+    into: Option<StateId>,
+    first: bool,
     end: &str,
-    skip: &str,
 ) -> Result<(), NotYet> {
-    let initial = machine::initial_leaf(ctx.machine, to).ok_or(NotYet { what: "Zielzustand ohne `initial`" })?;
-    let under: Vec<(usize, StateId)> = leaves
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| machine::path_to(ctx.machine, **l).contains(&to))
-        .map(|(i, l)| (i, *l))
-        .collect();
-    let Some(ptr) = ctx.field(Role::Saved, slot, m) else { return Err(NotYet { what: "`saved`-Slot" }) };
-    let saved = m.inst(&format!("load i32, ptr {ptr}"));
-    let tail = format!("resume_{}_{}", ctx.machine.name, to.index());
-    for (n, (index, leaf)) in under.iter().enumerate() {
-        let hit = format!("{tail}_hit{n}");
-        let next = format!("{tail}_next{n}");
-        let cond = m.inst(&format!("icmp eq i32 {saved}, {}", leaf.index()));
-        m.void_inst(&format!("br i1 {cond}, label %{hit}, label %{next}"));
-        m.label(&hit);
-        enter_leaf(ctx, m, from, *leaf, *index, conf_slot, Some(actions))?;
-        entry_tick(ctx, m, from, *leaf)?;
-        m.void_inst(&format!("br label %{end}"));
-        m.label(&next);
+    for id in exited {
+        block(&ctx.machine.states[id.index()].exit.clone(), ctx, m)?;
     }
-    let index = leaves.iter().position(|l| *l == initial).ok_or(NotYet { what: "Zielblatt" })?;
-    enter_leaf(ctx, m, from, initial, index, conf_slot, Some(actions))?;
-    entry_tick(ctx, m, from, initial)?;
+    let Some(leaf) = into else {
+        // `FAULTED` fuehrt keinen Nutzercode aus; die Outputs gehen noch
+        // in diesem Tick auf `safe`, wie im Interpreter (5.3).
+        safe_outputs(ctx, m)?;
+        m.void_inst(&format!("br label %{end}"));
+        return Ok(());
+    };
+    for id in entered {
+        enter_state(ctx, m, *id, *id == leaf)?;
+    }
+    for id in entered {
+        block(&ctx.machine.states[id.index()].enter.clone(), ctx, m)?;
+    }
+    entry_call(ctx, m, leaf, entered.to_vec(), first)?;
     m.void_inst(&format!("br label %{end}"));
-    m.label(skip);
     Ok(())
 }
 
-/// 5.2 Regel 4: die `loop:`-Bloecke der betretenen Zustaende, `-> ZIEL`
-/// wirkungslos.
+/// (3) eines Wechsels fuer einen betretenen Zustand, wie `enter_state` im
+/// Interpreter: `t_in_state`, die `every`- und Bestaetigungszaehler und die
+/// zustandslokalen Variablen beginnen neu (9.3). Das Blatt setzt dazu den
+/// Zaehler, den `time_in_state` liest.
+fn enter_state(ctx: &mut Ctx<'_>, m: &mut Module, s: StateId, leaf: bool) -> Result<(), NotYet> {
+    reset_timer(ctx, s.index(), m);
+    if leaf {
+        reset_timer(ctx, ctx.machine.states.len(), m);
+    }
+    reset_counters(ctx, Some(s), m);
+    // Ohne das behielte eine Variable den Wert des letzten Aufenthalts —
+    // im Overlay (11.2) den eines Geschwisters.
+    for v in ctx.machine.states[s.index()].vars.clone() {
+        init_var(v, ctx, m)?;
+    }
+    Ok(())
+}
+
+/// Eine Variable auf ihren Anfangswert (9.4; 9.3, Schritt 3). Ohne
+/// Anfangswert bleibt sie stehen: Die Sema verlangt, dass sie vor dem
+/// ersten Lesen zugewiesen wird (Pruefungen 6 und 25).
+fn init_var(v: takt_mir::VarId, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let def = &ctx.machine.vars[v.index()];
+    let Some(init) = def.init.clone() else { return Ok(()) };
+    // Eine Blockinstanz: die Parameter aus den Argumenten, der Zustand aus
+    // den Initialwerten des Blocks (5.7).
+    if let Some(b) = machine::instance_block(ctx.machine, v) {
+        return init_instance(b, &init, v.index(), ctx, m);
+    }
+    let declared = def.ty;
+    let vars = ctx.vars();
+    let value = crate::expr::lower(&init, ctx.program, m, &vars)?;
+    let ptr = ctx.field(Role::Var, v.index(), m).ok_or(NotYet { what: "Variable im Zustand" })?;
+    let ty = crate::ty::storage(declared, ctx.program).unwrap_or_else(|| value.ty.clone());
+    let value = crate::expr::fit(value, &ty, m);
+    m.write(&value.ty, &value.value, &ptr.to_string());
+    Ok(())
+}
+
+/// Der Zeiger auf `conf[0]`, die Nummer des aktiven Blatts (11.2).
+fn conf_cell(ctx: &Ctx<'_>, m: &mut Module) -> Result<crate::emit::Reg, NotYet> {
+    let conf_i = ctx.state.index_of(Role::Conf, 0).ok_or(NotYet { what: "conf im Zustand" })?;
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
+    let base = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+    Ok(m.inst(&format!("getelementptr inbounds [{} x i8], ptr {base}, i32 0, i32 0", ctx.state.depth)))
+}
+
 /// Der Entry-Tick eines Wechsels (5.2 Regel 4) als Aufruf: Die `loop:`-
 /// Bloecke der betretenen Zustaende stehen einmal je (Blatt, Eintritts-
 /// menge) in einer eigenen Funktion — vorher an jeder Uebergangsstelle
-/// noch einmal (FB-224). Ihr Fault-Trampolin ist der des *neuen* Blatts,
-/// wie 5.2 es verlangt.
-fn entry_tick(ctx: &mut Ctx<'_>, m: &mut Module, from: StateId, leaf: StateId) -> Result<(), NotYet> {
-    entry_call(ctx, m, leaf, machine::entering(ctx.machine, from, leaf), false)
-}
-
+/// noch einmal (FB-224). Ihr Fault-Pfad ist der des *neuen* Blatts, wie
+/// 5.2 es verlangt, und ein `-> ZIEL` darin ist wirkungslos.
 fn entry_call(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
@@ -577,10 +670,6 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
         let mut ctx = Ctx::new(m, st, p);
         ctx.leaf = Some(leaf);
         ctx.tag = format!("_e{}", e.name.rsplit("_entry").next().unwrap_or("0"));
-        let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
-        let conf_i = st.index_of(Role::Conf, 0).ok_or(NotYet { what: "conf im Zustand" })?;
-        let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
-        let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
         let end = format!("ende_{}", e.name);
         let body = |ctx: &mut Ctx<'_>, module: &mut Module| -> Result<(), NotYet> {
             let index = leaves.iter().position(|l| *l == leaf).ok_or(NotYet { what: "Blatt" })?.to_string();
@@ -591,7 +680,8 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
                 loop_call(ctx, module, Some(StateId(*id)), &index, true, &end)?;
             }
             module.void_inst(&format!("br label %{end}"));
-            fault_path(st, leaf, &Jump { leaves: &leaves, end: &end, conf: &slot }, ctx, module)
+            ctx.fault_path(Some(leaf));
+            fault_paths(ctx, module, &end)
         };
         if let Err(err) = body(&mut ctx, module) {
             module.abort(mark);
@@ -652,6 +742,7 @@ fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Modul
         let args = module.begin_with("internal ", &l.name, &crate::ty::LlvmType::Int(8), &params, LOOP_ATTRS, "");
         let state = l.state.map(StateId);
         let mut ctx = Ctx::new(m, st, p);
+        ctx.fault_suffix = "_w";
         ctx.leaf_reg = Some(args[4]);
         ctx.entry_reg = Some(args[5]);
         ctx.region = leaves
@@ -679,44 +770,16 @@ fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Modul
         }
         module.label(&format!("fault_{}_any{}", m.name, ctx.tag));
         module.void_inst("ret i8 2");
+        // Die Fault-Pfade der Wechsel, die ein `->` hier ausloest: Sie
+        // beenden den Schritt wie das `->` selbst.
+        if let Err(err) = fault_paths(&mut ctx, module, &end) {
+            module.abort(mark);
+            return Err(err);
+        }
         module.end(None);
         if let Some(x) = module.loops.iter_mut().find(|x| x.name == l.name) {
             x.emitted = true;
         }
-    }
-    Ok(())
-}
-
-fn enter_leaf(
-    ctx: &mut Ctx<'_>,
-    m: &mut Module,
-    from: StateId,
-    leaf: StateId,
-    index: usize,
-    conf_slot: &crate::emit::Reg,
-    actions: Option<&takt_mir::stmt::Block>,
-) -> Result<(), NotYet> {
-    save_paths(ctx, m, from, leaf);
-    for id in machine::exiting(ctx.machine, from, leaf) {
-        block(&ctx.machine.states[id.index()].exit.clone(), ctx, m)?;
-    }
-    if let Some(a) = actions {
-        block(&a.clone(), ctx, m)?;
-    }
-    for id in machine::entering(ctx.machine, from, leaf) {
-        block(&ctx.machine.states[id.index()].enter.clone(), ctx, m)?;
-    }
-    m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
-    if m.instrument != crate::target::Instrument::Off {
-        crate::stmt::mark(leaf.0, ctx, m);
-    }
-    reset_timers(ctx, &machine::entering(ctx.machine, from, leaf), m);
-    // 5.8/5.6: Die `every`- und Bestaetigungszaehler der betretenen
-    // Zustaende beginnen neu. Vor den `loop:`-Bloecken darunter, weil die
-    // im selben Tick laufen (5.2 Regel 4) und das `every` dort steht —
-    // ein Reset danach setzte zurueck, was gerade feuerte.
-    for id in machine::entering(ctx.machine, from, leaf) {
-        reset_counters(ctx, Some(id), m);
     }
     Ok(())
 }
@@ -735,10 +798,10 @@ fn enter_leaf(
 /// darin duerfte also nicht wirken. Hier gilt darum dieselbe Regel wie
 /// bei `dispatch`: Der Entry-Zweig senkt den Block ohne Goto.
 pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYet> {
-    let leaves = machine::leaves(ctx.machine);
     let Some(from) = ctx.leaf else {
         // Eine geteilte Ebene: Welche Zustaende verlassen werden, weiss
         // erst das Blatt — ein Arm je Blatt darunter.
+        let leaves = machine::leaves(ctx.machine);
         let leaf_reg = ctx.leaf_reg.ok_or(NotYet { what: "`->` ausserhalb eines Blattzweigs" })?;
         let region = ctx.region.clone();
         let k = ctx.next_label(m);
@@ -757,45 +820,11 @@ pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Res
         ctx.leaf = None;
         return Ok(());
     };
-    let Some(from_index) = leaves.iter().position(|l| *l == from) else {
-        return Err(NotYet { what: "`->` aus einem unbekannten Blatt" });
-    };
-    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
-    let conf_i = ctx.state.index_of(Role::Conf, 0).ok_or(NotYet { what: "conf im Zustand" })?;
-    let conf = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
-    let slot = m.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", ctx.state.depth));
-    match target {
-        Target::State(to) => {
-            let leaf = machine::initial_leaf(ctx.machine, to).ok_or(NotYet { what: "Zielzustand ohne `initial`" })?;
-            let Some(index) = leaves.iter().position(|l| *l == leaf) else {
-                return Err(NotYet { what: "Zielblatt" });
-            };
-            enter_leaf(ctx, m, leaves[from_index], leaf, index, &slot, None)?;
-            // 5.2 Regel 4: Die `loop:`-Bloecke der neu betretenen
-            // Zustaende laufen noch in diesem Tick. Der Interpreter tut
-            // es in `switch` (`exec_chain(… Mode::Entry)`), und zwar fuer
-            // *jeden* Wechsel — auch fuer ein `->` im Block.
-            //
-            // Ohne das zaehlte ein Zaehler im Ziel einen Tick zu spaet;
-            // der Strukturfuzzer fand es an `c = c + 1; -> S1` mit einem
-            // zweiten `c = c + 10` im Ziel (FB-122).
-            //
-            // Im Entry-Modus ist ein weiteres `->` wirkungslos, darum
-            // wird das Sprungziel fuer die Dauer entfernt.
-            entry_tick(ctx, m, leaves[from_index], leaf)?;
-        }
-        // `-> FAULTED` (5.3): die Konfiguration wird leer, die Outputs
-        // gehen auf `safe`. Wie beim Uebergang.
-        Target::Faulted => {
-            leave_configuration(ctx, m, leaves.len());
-            safe_outputs(ctx, m)?;
-        }
-        // Ein Fault-Ziel als Anweisung gibt es nicht: `Target::Fault`
-        // entsteht nur aus dem Timeout einer Sequenz (6.2), und der ist
-        // ein Uebergang, keine Anweisung.
-        Target::Fault(_) => return Err(NotYet { what: "`->` auf ein Fault-Ziel" }),
-    }
-    m.void_inst(&format!("br label %{end}"));
+    // Derselbe Wechsel wie bei einem Uebergang, samt Entry-Tick: Der
+    // Interpreter fuehrt ihn in `switch` fuer *jeden* Wechsel aus, auch
+    // fuer ein `->` im Block. Ohne den Entry-Tick zaehlte ein Zaehler im
+    // Ziel einen Tick zu spaet (FB-122).
+    change(target, Some(from), ctx, m, end)?;
     // Was nach dem Sprung kaeme, ist unerreichbar; LLVM verlangt fuer den
     // folgenden Code trotzdem einen Block.
     let k = ctx.next_label(m);
@@ -808,7 +837,7 @@ pub fn goto(target: Target, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Res
 /// Ohne das Zuruecksetzen misst `after d` die Zeit elapsed dem Start der
 /// Maschine statt elapsed dem Eintritt — der haeufigste Fehler, den eine
 /// handgeschriebene Zustandsmaschine macht.
-fn reset_timers(ctx: &Ctx<'_>, entered: &[StateId], m: &mut Module) {
+fn reset_timer(ctx: &Ctx<'_>, i: usize, m: &mut Module) {
     // 0, wie im Interpreter (`enter_state`): Ein Zustand, der im Tick k
     // betreten wird, liest dort `t_in_state == 0` — der Entry-Modus
     // (5.2 Regel 4) laeuft noch in diesem Tick und sieht die Null.
@@ -816,9 +845,7 @@ fn reset_timers(ctx: &Ctx<'_>, entered: &[StateId], m: &mut Module) {
     // Die Erhoehung am Ende des Schritts macht daraus 1 fuer den
     // naechsten Tick. Ein `-1` hier haette den Entry-Modus -1 lesen
     // lassen und jede `after`-Frist um einen Tick verschoben.
-    let leaf = ctx.machine.states.len();
-    for i in entered.iter().map(|s| s.index()).chain([leaf]) {
-        let Some(cell) = machine::timer_cell(ctx.machine, ctx.state, i, m) else { return };
+    if let Some(cell) = machine::timer_cell(ctx.machine, ctx.state, i, m) {
         m.void_inst(&format!("store i64 0, ptr {cell}"));
     }
 }
@@ -1231,6 +1258,10 @@ pub fn exit_all_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
     let cur = module.inst(&format!("load i8, ptr {slot}"));
     let end = format!("exit_all_{}_end", crate::fns::sanitized(&m.name));
     let mut ctx = Ctx::new(m, st, p);
+    // 5.11: Scheitert ein `exit:`-Block, entfallen die restlichen; weiter
+    // wirkt der Fault nicht, die Instanz wird ohnehin verworfen und ihre
+    // Outputs gehen auf `safe`.
+    ctx.fault = Some(end.clone());
     for (i, leaf) in leaves.iter().enumerate() {
         let hit = format!("exit_all_{}_{i}", crate::fns::sanitized(&m.name));
         let next = format!("exit_all_{}_n{i}", crate::fns::sanitized(&m.name));
@@ -1299,57 +1330,24 @@ fn emit_init(
     // — und ohne sie stuende dort die Null, die der Speicher mitbringt.
     if vars {
         for (i, v) in m.vars.iter().enumerate() {
-            let Some(init) = v.init.clone() else { continue };
-            let id = takt_mir::VarId(i as u32);
-            // Eine Blockinstanz: die Parameter aus den Argumenten, der
-            // Zustand aus den Initialwerten des Blocks (5.7).
-            if let Some(b) = machine::instance_block(m, id) {
-                if let Err(e) = init_instance(b, &init, i, &mut ctx, module) {
-                    module.abort(mark);
-                    return Err(e);
-                }
+            // Zustandslokale und gehobene Variablen setzt der Eintritt
+            // ihres Zustands (9.3, Schritt 3) — hier stuenden die aller
+            // Zustaende im Overlay uebereinander (11.2).
+            if matches!(v.scope, takt_mir::machine::VarScope::State(_) | takt_mir::machine::VarScope::Lifted(_)) {
                 continue;
             }
-            let vars = ctx.vars();
-            let value = match crate::expr::lower(&init, p, module, &vars) {
-                Ok(v) => v,
-                Err(e) => {
-                    module.abort(mark);
-                    return Err(e);
-                }
-            };
-            let Some(ptr) = ctx.field(Role::Var, i, module) else {
-                module.abort(mark);
-                return Err(NotYet { what: "Variable im Zustand" });
-            };
-            let ty = crate::ty::storage(v.ty, p).unwrap_or_else(|| value.ty.clone());
-            let value = crate::expr::fit(value, &ty, module);
-            module.write(&value.ty, &value.value, &ptr.to_string());
-        }
-    }
-    if enter {
-        // Die ganze Kette von der Wurzel bis zum Blatt wird betreten (5.2).
-        for id in machine::path_to(m, leaf) {
-            let enter = m.states[id.index()].enter.clone();
-            if let Err(e) = block(&enter, &mut ctx, module) {
+            if let Err(e) = init_var(takt_mir::VarId(i as u32), &mut ctx, module) {
                 module.abort(mark);
                 return Err(e);
             }
         }
-        // 5.2 Regel 4: Der Anfangszustand laeuft im Tick 0 im Entry-Modus —
-        // „wie eine Maschine bei Tick 0" (1012). Seine `check`s wirken also
-        // schon dort, und ein Fault fuehrt vor dem ersten Commit zum
-        // Fault-Ziel. Ohne das stuenden die Outputs des Ticks 0 auf den
-        // Werten eines Zustands, den die Maschine bereits verlassen hat.
-        let kette: Vec<takt_mir::StateId> = machine::path_to(m, leaf);
-        // Die Zaehler der betretenen Zustaende und die der Maschinenebene
-        // beginnen bei `-1` („noch nicht gesetzt", 5.8). Der Speicher kommt
-        // genullt, und die Null waere ein gueltiger Zeitpunkt — das `every`
-        // liefe dann schon im Tick 0 statt nach `d`.
+    }
+    if enter {
+        // Die Zaehler der Maschinenebene beginnen bei `-1` („noch nicht
+        // gesetzt", 5.8). Der Speicher kommt genullt, und die Null waere
+        // ein gueltiger Zeitpunkt — das `every` liefe dann schon im Tick 0
+        // statt nach `d`.
         reset_counters(&ctx, None, module);
-        for id in &kette {
-            reset_counters(&ctx, Some(*id), module);
-        }
         // 5.12: Kein gespeicherter Pfad vor dem ersten Austritt; die Null
         // des genullten Speichers waere ein gueltiges Blatt.
         for slot in 0..m.layout.saved_paths.len() {
@@ -1357,16 +1355,16 @@ fn emit_init(
                 module.void_inst(&format!("store i32 -1, ptr {ptr}"));
             }
         }
+        // 9.4: Der Anfangszustand wird betreten wie bei jedem Wechsel (9.3),
+        // aus der leeren Konfiguration und die ganze Kette hinab. Er laeuft
+        // im Tick 0 im Entry-Modus, „wie eine Maschine bei Tick 0" (5.2
+        // Regel 4), mit dem maschinenweiten `loop:`: Ein `check`, der dort
+        // scheitert, fuehrt vor dem ersten Commit zum Fault-Ziel.
         let end_at = format!("init_ende_{}", m.name);
-        if let Err(e) = entry_call(&mut ctx, module, leaf, kette.clone(), true) {
-            module.abort(mark);
-            return Err(e);
-        }
-        module.void_inst(&format!("br label %{end_at}"));
-        // Der Fault-Pfad des Anfangszustands: Ein `check`, der schon im
-        // Tick 0 scheitert, fuehrt zum Fault-Ziel (5.2 Regel 5). Ohne ihn
-        // spraenge der Zweig ins Leere — die Marke steht nur im Schritt.
-        if let Err(e) = fault_path(st, leaf, &Jump { leaves: &leaves, end: &end_at, conf: &slot }, &mut ctx, module) {
+        let first = Goal::State { to: m.initial, leaf };
+        let done = switch(&mut ctx, module, Source::Start, first, &end_at)
+            .and_then(|()| fault_paths(&mut ctx, module, &end_at));
+        if let Err(e) = done {
             module.abort(mark);
             return Err(e);
         }
@@ -1996,162 +1994,120 @@ fn text_has(
     Ok(m.inst(&format!("load i1, ptr {hit_ptr}")))
 }
 
-/// Der Fault-Pfad eines Blattzustands (5.2 Regel 5, 5.3).
+/// Die Fault-Pfade einer Funktion, bis keiner mehr fehlt (5.2 Regel 5,
+/// 5.3; `resolve_m` mit `FAULT`).
 ///
-/// Ein `check`, der scheitert, springt hierher. Der Pfad tut, was 5.2
-/// verlangt: Er merkt den Fault vor (`last_fault`, fuer `m.last_fault`),
-/// betritt das Fault-Ziel und fuehrt dessen `enter:` und `loop:` im
-/// Entry-Modus aus.
+/// Ein `check`, der scheitert, springt in den Pfad seines Blatts. Der Pfad
+/// merkt den Fault vor, bricht die Jobs der Maschine ab und wechselt zum
+/// Fault-Ziel — mit `exit:`, `enter:` und Entry-Tick wie jeder Wechsel.
 ///
 /// **Warum je Blatt und nicht einmal je Maschine.** Das Fault-Ziel haengt
 /// am innersten Zustand, der eines deklariert (Fault-Wald, 5.3); zwei
-/// Blaetter koennen verschiedene haben. Ein gemeinsamer Trampolin
-/// muesste die Konfiguration erneut auswerten — er haette den `switch`
-/// ein zweites Mal.
-fn fault_path(
-    st: &StateStruct,
-    from: takt_mir::StateId,
-    target: &Jump<'_>,
-    ctx: &mut Ctx<'_>,
-    m: &mut Module,
-) -> Result<(), NotYet> {
-    m.label(&format!("fault_{}_{}{}", ctx.machine.name, from.index(), ctx.tag));
-    fault_body(st, from, &from.index().to_string(), target, ctx, m)
+/// Blaetter koennen verschiedene haben. Blaetter mit demselben Ziel und
+/// demselben erzeugten Code teilen sich einen Pfad, das verlassene Blatt
+/// geht als Wert hinein.
+///
+/// **Warum eine Arbeitsliste.** Scheitert ein Block beim Betreten des
+/// Fault-Ziels, gilt schon dessen Blatt (9.3), und dessen Pfad muss in
+/// derselben Funktion stehen. Der Fault-Wald ist azyklisch und endet in
+/// `FAULTED` (Pruefung 9), die Liste waechst also nur endlich.
+fn fault_paths(ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYet> {
+    let md = ctx.machine;
+    let mut done: Vec<Option<StateId>> = Vec::new();
+    loop {
+        let open: Vec<Option<StateId>> = ctx.fault_paths.iter().copied().filter(|f| !done.contains(f)).collect();
+        if open.is_empty() {
+            return Ok(());
+        }
+        let mut groups: Vec<(FaultKey, Vec<Option<StateId>>)> = Vec::new();
+        for from in open {
+            done.push(from);
+            let goal = fault_goal(md, from)?;
+            let (exited, entered) = machine::crossing(md, from, goal.pair());
+            let exits = exited
+                .into_iter()
+                .filter(|id| !md.states[id.index()].exit.stmts.is_empty() || md.layout.saved_paths.contains(id))
+                .collect();
+            let key = (goal, exits, entered);
+            match groups.iter_mut().find(|(g, _)| *g == key) {
+                Some((_, members)) => members.push(from),
+                None => groups.push((key, vec![from])),
+            }
+        }
+        for (_, members) in groups {
+            let group = format!("fault_{}_g{}{}{}", md.name, ctx.next_label(m), ctx.tag, ctx.fault_suffix);
+            let value = |from: Option<StateId>| from.map_or_else(|| "-1".to_string(), |s| s.index().to_string());
+            let mut arms = Vec::new();
+            for from in &members {
+                let label = ctx.fault_path(*from);
+                m.label(&label);
+                m.void_inst(&format!("br label %{group}"));
+                arms.push(format!("[ {}, %{label} ]", value(*from)));
+            }
+            m.label(&group);
+            let from_val = match members.as_slice() {
+                [only] => value(*only),
+                _ => m.inst(&format!("phi i32 {}", arms.join(", "))).to_string(),
+            };
+            fault_body(members[0], &from_val, ctx, m, end)?;
+        }
+    }
 }
 
-/// Der Rumpf eines Fault-Trampolins; `from_val` ist das verlassene Blatt
-/// als Operand, `from` ein Vertreter mit denselben Ketten.
+/// Ziel, verlassene Zustaende mit `exit:` oder `saved`, betretene: was den
+/// erzeugten Code eines Fault-Pfads bestimmt.
+type FaultKey = (Goal, Vec<StateId>, Vec<StateId>);
+
+/// Wohin ein Fault ab `from` fuehrt (5.3): zum Fault-Ziel des Blatts, dort
+/// `initial` abwaerts — nie der gespeicherte Pfad (5.12). `FAULTED` ist die
+/// Senke des Fault-Walds: Ein Fault dort, etwa in einem `exit:` auf dem
+/// Weg hinein, fuehrt nach `FAULTED` zurueck.
+fn fault_goal(m: &Machine, from: Option<StateId>) -> Result<Goal, NotYet> {
+    match from.map(|s| m.fault_target_of(s)) {
+        Some(takt_mir::machine::FaultTarget::State(to)) => {
+            let leaf = machine::initial_leaf(m, to).ok_or(NotYet { what: "Fault-Ziel ohne `initial`" })?;
+            Ok(Goal::State { to, leaf })
+        }
+        _ => Ok(Goal::Faulted),
+    }
+}
+
+/// Der Rumpf eines Fault-Pfads; `from` ist ein Vertreter der Gruppe,
+/// `from_val` das verlassene Blatt als Operand.
 fn fault_body(
-    st: &StateStruct,
-    from: takt_mir::StateId,
+    from: Option<StateId>,
     from_val: &str,
-    target: &Jump<'_>,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
+    end: &str,
 ) -> Result<(), NotYet> {
-    let machine_def = ctx.machine;
-    let (leaves, end, conf_slot) = (target.leaves, target.end, target.conf);
+    let md = ctx.machine;
     m.void_inst(&format!("call void @{}(i32 {}, i32 {from_val})", crate::abi::Abi::FAULT, ctx.machine_index));
     // Der Fault wird vorgemerkt; `pending` traegt ihn fuer die
     // Abort-Phase (5.4), die die Runtime fuehrt.
-    if let Some(pending) = st.index_of(Role::Pending, 0) {
-        let state_ty = format!("%{}_state", crate::fns::sanitized(&machine_def.name));
+    if let Some(pending) = ctx.state.index_of(Role::Pending, 0) {
+        let state_ty = format!("%{}_state", crate::fns::sanitized(&md.name));
         let field = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {pending}"));
         let flag = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 0"));
         m.void_inst(&format!("store i1 true, ptr {flag}"));
     }
     // 5.3: Ein Fault-Uebergang bricht die laufenden Jobs der Maschine ab.
-    for slot in 0..machine_def.layout.job_slots.len() {
+    for slot in 0..md.layout.job_slots.len() {
         m.void_inst(&format!("call void @{}(i32 {}, i32 {slot})", crate::abi::Abi::JOB_CANCEL, ctx.machine_index));
     }
-    let target = machine_def.fault_target_of(from);
-    let takt_mir::machine::FaultTarget::State(to) = target else {
-        // `FAULTED` fuehrt keinen Nutzercode aus (5.2 Regel 5), und die
-        // Outputs gehen auf `safe` — noch in diesem Tick, nicht erst im
-        // naechsten: Der Interpreter tut es an derselben Stelle, und ein
-        // Ventil, das remaining stand, bliebe sonst einen Tick laenger remaining.
-        leave_configuration(ctx, m, leaves.len());
-        safe_outputs(ctx, m)?;
-        m.void_inst(&format!("br label %{end}"));
-        return Ok(());
+    let source = match from {
+        Some(leaf) => Source::Leaf(leaf, from_val),
+        None => Source::Faulted,
     };
-    let Some(leaf) = machine::initial_leaf(machine_def, to) else {
-        m.void_inst("ret void");
-        return Ok(());
-    };
-    let Some(index) = leaves.iter().position(|l| *l == leaf) else {
-        m.void_inst("ret void");
-        return Ok(());
-    };
-    // 5.2 Regel 3: `exit:` des verlassenen, `enter:` des betretenen
-    // Zustands. Ein Fault-Uebergang laeuft sonst wie jeder andere.
-    save_paths_of(ctx, m, from, leaf, from_val);
-    for id in machine::exiting(machine_def, from, leaf) {
-        block(&machine_def.states[id.index()].exit.clone(), ctx, m)?;
-    }
-    for id in machine::entering(machine_def, from, leaf) {
-        block(&machine_def.states[id.index()].enter.clone(), ctx, m)?;
-    }
-    m.void_inst(&format!("store i8 {index}, ptr {conf_slot}"));
-    reset_timers(ctx, &machine::entering(machine_def, from, leaf), m);
-    // Auch der Fault-Pfad betritt einen Zustand: seine Zaehler beginnen
-    // neu (5.8, 5.6).
-    for id in machine::entering(machine_def, from, leaf) {
-        reset_counters(ctx, Some(id), m);
-    }
-    // Entry-Modus: Die `loop:`-Bloecke des Fault-Ziels laufen noch in
-    // diesem Tick (5.2 Regel 4 und 5) — und ein `->` darin ist dort
-    // wirkungslos, wie in jedem Entry-Tick.
-    entry_tick(ctx, m, from, leaf)?;
-    m.void_inst(&format!("br label %{end}"));
-    Ok(())
+    switch(ctx, m, source, fault_goal(md, from)?, end)
 }
 
-/// Ziel, `FAULTED`, verlassene Zustaende mit `exit:` oder `saved`, betretene.
-type FaultKey = (Option<StateId>, bool, Vec<StateId>, Vec<StateId>);
-
-/// Die Fault-Trampoline des Schritts: Blaetter mit demselben Ziel und
-/// demselben erzeugten Code teilen einen, das verlassene Blatt geht als
-/// Wert hinein (5.3).
-fn fault_trampolines(st: &StateStruct, jump: &Jump<'_>, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
-    let md = ctx.machine;
-    let name = md.name.clone();
-    let leaves = std::mem::take(&mut ctx.fault_leaves);
-    let key = |leaf: StateId| -> FaultKey {
-        match md.fault_target_of(leaf) {
-            takt_mir::machine::FaultTarget::State(to) => match machine::initial_leaf(md, to) {
-                Some(l) => {
-                    let exits = machine::exiting(md, leaf, l)
-                        .into_iter()
-                        .filter(|id| !md.states[id.index()].exit.stmts.is_empty() || md.layout.saved_paths.contains(id))
-                        .collect();
-                    (Some(l), false, exits, machine::entering(md, leaf, l))
-                }
-                None => (None, false, Vec::new(), Vec::new()),
-            },
-            _ => (None, true, Vec::new(), Vec::new()),
-        }
-    };
-    let mut groups: Vec<(FaultKey, Vec<StateId>)> = Vec::new();
-    for leaf in leaves {
-        let k = key(leaf);
-        match groups.iter_mut().find(|(g, _)| *g == k) {
-            Some((_, members)) => members.push(leaf),
-            None => groups.push((k, vec![leaf])),
-        }
-    }
-    for (g, (_, members)) in groups.iter().enumerate() {
-        let group = format!("fault_{name}_g{g}{}", ctx.tag);
-        for leaf in members {
-            m.label(&format!("fault_{name}_{}{}", leaf.index(), ctx.tag));
-            m.void_inst(&format!("br label %{group}"));
-        }
-        m.label(&group);
-        let arms: Vec<String> =
-            members.iter().map(|l| format!("[ {}, %fault_{name}_{}{} ]", l.index(), l.index(), ctx.tag)).collect();
-        let from_val = if members.len() == 1 {
-            members[0].index().to_string()
-        } else {
-            m.inst(&format!("phi i32 {}", arms.join(", "))).to_string()
-        };
-        ctx.leaf = Some(members[0]);
-        fault_body(st, members[0], &from_val, jump, ctx, m)?;
-    }
-    Ok(())
-}
-
-/// Wohin ein Fault-Pfad fuehrt und wo er endet.
-///
-/// Die drei gehoeren zusammen: Sie beschreiben denselben Zweig, und
-/// einzeln durchgereicht waeren sie drei Gelegenheiten, den falschen zu
-/// nehmen.
+/// Wohin ein Zweig des Schritts fuehrt und wo er endet.
 struct Jump<'a> {
     /// Die Blattzustaende der Maschine, fuer die Nummer des Ziels.
     leaves: &'a [StateId],
     /// Die Marke am Ende des Schritts.
     end: &'a str,
-    /// Der Zeiger auf `conf[0]`.
-    conf: &'a crate::emit::Reg,
 }
 
 /// `<besitzer>_triggers(st, in, par, out)`: die Trigger-Phase (7.5).

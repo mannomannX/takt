@@ -1290,6 +1290,9 @@ impl Enc<'_> {
                 }
             }
         } else {
+            // Was betreten wird, liest `time_in_state` des neuen Blatts; die
+            // exit-Bloecke davor lasen noch das verlassene.
+            let entry = Cx { leaf: new_leaf, ..cx.entry() };
             let entered: Vec<StateId> = new[common..].to_vec();
             for s in &entered {
                 let loc = self.loc_timer(m, *s);
@@ -1336,12 +1339,11 @@ impl Enc<'_> {
     /// aus gewechselt wird — keines in `FAULTED`.
     fn resolve(&mut self, cx: &Cx<'_>, leaf: Option<StateId>, exit: &Exit, env: &Env, depth: u32) -> R<Env> {
         let m = cx.m.expect("Maschine");
+        // `FAULTED` ist die Senke des Fault-Walds (5.3): Ein Fault auf dem
+        // Weg hinein fuehrt dorthin zurueck.
         let fault_target = match leaf {
             Some(l) => self.fault_target(m, l),
-            None => match self.machine(m).fault_target {
-                FaultTarget::State(s) => Target::State(s),
-                FaultTarget::Faulted => Target::Faulted,
-            },
+            None => Target::Faulted,
         };
         let mut out = env.clone();
         match &exit.kind {

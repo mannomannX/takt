@@ -631,11 +631,18 @@ pub fn resolve_m(
                 }
                 env.state.last_fault = Some(f.clone());
                 cancel_jobs(env);
-                let leaf = env.state.leaf();
-                let target = f.target.unwrap_or(match fault_target(env.machine(loaded), leaf) {
-                    FaultTarget::State(s) => Target::State(s),
-                    FaultTarget::Faulted => Target::Faulted,
-                });
+                // `FAULTED` ist die Senke des Fault-Walds (5.3, Lemma 9.3.1):
+                // Ein Fault dort — in einem exit-Block auf dem Weg hinein
+                // oder in den Aktionen eines Uebergangs hinaus — fuehrt
+                // nach `FAULTED` zurueck, nicht zum Fault-Ziel der Maschine.
+                let target = if env.state.faulted {
+                    Target::Faulted
+                } else {
+                    f.target.unwrap_or(match fault_target(env.machine(loaded), env.state.leaf()) {
+                        FaultTarget::State(s) => Target::State(s),
+                        FaultTarget::Faulted => Target::Faulted,
+                    })
+                };
                 env.observe_fault(&f, target_name(loaded, env, target));
                 out = switch(loaded, env, target, tick, true);
             }
@@ -717,8 +724,6 @@ pub fn switch(
         common = common.min(depth - 1);
     }
     let first_entry = old.is_empty() && !env.state.faulted;
-    env.state.conf = new.clone();
-    env.state.faulted = matches!(target, Target::Faulted);
     // 5.12: Was verlassen wird, merkt sich sein Blatt.
     if let Some(leaf) = old.last().copied() {
         for s in &old[common..] {
@@ -727,15 +732,25 @@ pub fn switch(
             }
         }
     }
-    // (2) exit-Bloecke der verlassenen Zustaende, innen nach aussen
+    // (2) exit-Bloecke der verlassenen Zustaende, innen nach aussen. Sie
+    // sehen noch die verlassene Konfiguration: `time_in_state` ist die
+    // Verweildauer ihres Blatts, nicht die eines Ziels, das noch nicht
+    // betreten ist.
+    let mut exited = Ok(Out::Normal);
     for s in old[common..].iter().rev() {
         let block = env.machine(loaded).states[s.index()].exit.clone();
         let mut ctx = env.ctx(loaded, tick);
-        match ctx.exec_block(&block, Mode::Entry) {
-            Ok(Out::Normal) => {}
-            Ok(other) => return Ok(other),
-            Err(e) => return Err(e),
+        exited = ctx.exec_block(&block, Mode::Entry);
+        if !matches!(exited, Ok(Out::Normal)) {
+            break;
         }
+    }
+    // (1) Die neue Konfiguration gilt auch, wenn ein exit-Block scheiterte:
+    // Die restlichen entfallen, und der Fault wird mit ihr behandelt (9.3).
+    env.state.conf = new.clone();
+    env.state.faulted = matches!(target, Target::Faulted);
+    if !matches!(exited, Ok(Out::Normal)) {
+        return exited;
     }
     if env.state.faulted {
         // FAULTED fuehrt keinen Nutzercode aus; die Outputs stehen auf safe (5.3)
@@ -819,7 +834,14 @@ pub fn exit_all(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) ->
     for s in env.state.conf.clone().iter().rev() {
         let block = env.machine(loaded).states[s.index()].exit.clone();
         let mut ctx = env.ctx(loaded, tick);
-        ctx.exec_block(&block, Mode::Entry)?;
+        // Scheitert ein exit-Block, entfallen die restlichen; weiter wirkt
+        // der Fault nicht, die Instanz wird ohnehin verworfen und ihre
+        // Outputs gehen auf `safe`.
+        match ctx.exec_block(&block, Mode::Entry) {
+            Err(Trap::Fault(_)) => break,
+            Err(e) => return Err(e),
+            Ok(_) => {}
+        }
     }
     env.state.conf.clear();
     Ok(())

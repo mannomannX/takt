@@ -429,61 +429,24 @@ pub fn initial_leaf(m: &Machine, from: StateId) -> Option<StateId> {
     None
 }
 
-/// Die Zustaende, deren `exit:` bei einem Uebergang laeuft (5.2).
+/// Die Zustaende, die ein Wechsel verlaesst und betritt (9.3, `switch`):
+/// verlassen innen nach aussen, betreten aussen nach innen.
 ///
-/// Vom verlassenen Blatt aufwaerts bis unter den gemeinsamen Vorfahren mit
-/// dem Ziel. Der Vorfahre selbst bleibt aktiv und wird nicht verlassen —
-/// ein Uebergang zwischen zwei Geschwistern raeumt nicht ihren Elternteil
-/// ab.
-pub fn exiting(m: &Machine, from: StateId, to: StateId) -> Vec<StateId> {
-    let common = common_ancestor(m, from, to);
-    let mut out = Vec::new();
-    let mut cur = Some(from);
-    while let Some(id) = cur {
-        if Some(id) == common {
-            break;
-        }
-        out.push(id);
-        cur = m.states[id.index()].parent;
+/// Der kleinste gemeinsame Vorfahr liegt echt oberhalb des Zielzustands,
+/// nicht nur oberhalb des Blatts, in dem das Betreten endet — wie im
+/// Interpreter. Ein Uebergang auf einen Vorfahren verlaesst ihn also und
+/// betritt ihn neu, ebenso einer auf sich selbst; zwischen zwei
+/// Geschwistern bleibt der Elternzustand aktiv. `from` ist das verlassene
+/// Blatt, `to` der Zielzustand mit dem Blatt darunter; `None` ist auf
+/// beiden Seiten `FAULTED`, die leere Konfiguration (5.3).
+pub fn crossing(m: &Machine, from: Option<StateId>, to: Option<(StateId, StateId)>) -> (Vec<StateId>, Vec<StateId>) {
+    let old = from.map(|s| path_to(m, s)).unwrap_or_default();
+    let new = to.map(|(_, leaf)| path_to(m, leaf)).unwrap_or_default();
+    let mut common = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    if let Some((goal, _)) = to {
+        common = common.min(path_to(m, goal).len().saturating_sub(1));
     }
-    out
-}
-
-/// Die Zustaende, deren `enter:` bei einem Uebergang laeuft (5.2).
-///
-/// Von unter dem gemeinsamen Vorfahren abwaerts bis zum neuen Blatt, in
-/// dieser Richtung: Ein `enter:` weiter oben stellt her, worauf das
-/// darunter sich verlaesst.
-pub fn entering(m: &Machine, from: StateId, to: StateId) -> Vec<StateId> {
-    let common = common_ancestor(m, from, to);
-    let mut out: Vec<StateId> = Vec::new();
-    let mut cur = Some(to);
-    while let Some(id) = cur {
-        if Some(id) == common {
-            break;
-        }
-        out.push(id);
-        cur = m.states[id.index()].parent;
-    }
-    out.reverse();
-    out
-}
-
-/// Der naechste gemeinsame Vorfahre zweier Zustaende; `None`, wenn sie in
-/// verschiedenen Baeumen der obersten Ebene stehen.
-fn common_ancestor(m: &Machine, a: StateId, b: StateId) -> Option<StateId> {
-    let pa = path_to(m, a);
-    let pb = path_to(m, b);
-    let mut common = None;
-    for (x, y) in pa.iter().zip(&pb) {
-        if x != y {
-            break;
-        }
-        common = Some(*x);
-    }
-    // Ein Zustand ist nicht sein eigener Vorfahre: Ein Uebergang auf sich
-    // selbst verlaesst und betritt ihn (5.2, Selbstuebergang).
-    if common == Some(a) && a == b { None } else { common }
+    (old[common..].iter().rev().copied().collect(), new[common..].to_vec())
 }
 
 /// Der Block, dessen Instanz in dieser Variablen steht (5.7).

@@ -64,8 +64,13 @@ pub struct Ctx<'a> {
     pub end: Option<String>,
     /// In einer `loop:`-Funktion: wahr im Entry-Tick, wo `->` nicht wirkt.
     pub entry_reg: Option<Reg>,
-    /// Blaetter, deren Fault-Trampolin am Ende des Schritts entsteht.
-    pub fault_leaves: Vec<takt_mir::StateId>,
+    /// Die Fault-Pfade, die am Ende der Funktion entstehen: je Blatt einer,
+    /// `None` fuer den aus `FAULTED` (5.3).
+    pub fault_paths: Vec<Option<takt_mir::StateId>>,
+    /// Anhang ihrer Marken. In einer `loop:`-Funktion fuehrt die Marke
+    /// eines Blatts zurueck in den Schritt; die Pfade eines Wechsels dort
+    /// brauchen eigene.
+    pub fault_suffix: &'static str,
     /// Ein Fault-Ziel ausserhalb des Schritts (Trigger-Phase, 7.5).
     pub fault: Option<String>,
 }
@@ -87,7 +92,8 @@ impl<'a> Ctx<'a> {
             breaks: Vec::new(),
             end: None,
             entry_reg: None,
-            fault_leaves: Vec::new(),
+            fault_paths: Vec::new(),
+            fault_suffix: "",
             fault: None,
         }
     }
@@ -134,12 +140,28 @@ impl<'a> Ctx<'a> {
     /// Der Name des Fault-Trampolins des laufenden Blatts (5.3).
     ///
     /// Je Blatt einer, weil das Fault-Ziel am innersten Zustand haengt,
-    /// der eines deklariert (Fault-Wald).
+    /// der eines deklariert (Fault-Wald). Ein gesetztes `fault` geht vor,
+    /// wie bei `StateVars::fault_label`: Im Wechsel gilt der Pfad des
+    /// neuen Blatts, auch fuer `send` und `at` in seinem `enter:`.
     pub fn trampoline(&self) -> String {
+        if let Some(f) = &self.fault {
+            return f.clone();
+        }
         match self.leaf {
             Some(leaf) => format!("fault_{}_{}{}", self.machine.name, leaf.index(), self.tag),
             None => format!("fault_{}_any{}", self.machine.name, self.tag),
         }
+    }
+
+    /// Die Marke des Fault-Pfads ab `from` in dieser Funktion; `None` ist
+    /// `FAULTED` (5.3). Der Pfad wird vorgemerkt und am Ende der Funktion
+    /// geschrieben.
+    pub fn fault_path(&mut self, from: Option<takt_mir::StateId>) -> String {
+        if !self.fault_paths.contains(&from) {
+            self.fault_paths.push(from);
+        }
+        let at = from.map_or_else(|| "faulted".to_string(), |s| s.index().to_string());
+        format!("fault_{}_{at}{}{}", self.machine.name, self.tag, self.fault_suffix)
     }
 }
 
