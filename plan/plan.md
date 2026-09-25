@@ -64,11 +64,13 @@ M0 Fundament ──► M1 Kernsemantik ──► M2 Ströme/Protokolle ──►
                      └────────────── M5 Embedded (nach M4) ◄──────────────────────────────┘
                                           │
                                           ▼
-                                    M6 v1.1-Vertikalen ──► Board 2 (ESP32-C6) ──► M8 v1.2 ──► M9 v2 ──► M7 Werkzeuge/Migration
+                                    M6 v1.1-Vertikalen ──► Board 2 (ESP32-C6) ──► M8 v1.2 ──► M10 Abschluss ──► M9 v2 ──► M7 Werkzeuge/Migration
 ```
 Innerhalb eines Meilensteins gilt B (Scheiben Ende-zu-Ende bis zur jeweils höchsten vorhandenen Schicht); zwischen Meilensteinen gilt die Reihenfolge, weil jede Stufe die Schnittstelle der nächsten festlegt.
 
 **Reihenfolge nach M6 (2026-09-17).** Erst der Bring-up des ESP32-C6 als Board 2 (`plan/esp32c6.md`), dann M8, dann M9, zuletzt M7. Die Gründe: Kein Takt-Programm ist bisher auf einem Mikrocontroller gelaufen, und der C6 liefert diesen Nachweis mit einem Kabel; jede Sprachstufe hat bisher Fehler gefunden, die Werkzeuge nicht finden (die Treiberbeispiele in `feedback/` warten auf v1.2); Knoten (12.9), Treibermaschinen und Trigger auf I/O-Knoten gehören sachlich zusammen, also v1.2 vor v2; LSP, `import-c` und Orakel sind am billigsten, wenn die Sprache fertig ist — sonst wird die Abbildung nach v1.2 und v2 zweimal gebaut.
+
+**Reihenfolge nach M8 (2026-09-25).** Vor M9 kommt M10 (`plan/m10.md`): der Abschluss von allem, was außerhalb von M7 und M9 noch offen ist — die Restposten von M5 (Board 1 mit Adapter und Probe, `takt bench`, `driver-test`, Gate mit Zahlen, Konformitätsbericht), von M6 (Profile `rtos` und `boot`, Startmuster 12.7, 14.8 auf Hardware), der MCU-Rahmen (`at`, `sys`, Jobs im eigenen Kontext, Watchdog, `mmio`-Helfer), Speicherschutz nach 12.3, die Bibliothek nach 11.4 und ein Audit der 18 M1-Zeilen, die seit der ersten Inventur `teilweise` heißen. Die Gründe: Der Adapter und die Probe liegen seit dem 25.09. vor und lösen die längste Kette (Bring-up vor Kalibrierung vor Gate); M9 braucht aus M10 nur den fertigen MCU-Rahmen; und v2 sollte auf einer v1.2 aufsetzen, deren Inventur ohne Rest grün ist.
 
 | Meilenstein | Inhalt | Abnahmekriterium (Exit) |
 |---|---|---|
@@ -81,7 +83,8 @@ Innerhalb eines Meilensteins gilt B (Scheiben Ende-zu-Ende bis zur jeweils höch
 | **M6 v1.1-Vertikalen** (jede Ende-zu-Ende: Sema → Interpreter → Codegen → Runtime → Konformität) | Jobs und Chunk-Natives; Konstantenvariablen in Generics `[const N]` (3.12); die Stromausfall-Kampagne zu `persist` (das Journal selbst steht in M5); `tunable`; `follows`; Szenarien und Kampagnen; dimensionierte Matrizen; Oktagone; Einheiten auf Integern; Geräteprofile (8.10); System-Channels; Profile `rtos` und `boot`; Projekt-Natives; `property` als beschränkte Temporallogik mit Monitoren in Simulation und Hardware sowie `takt prove` (k-Induktion/BMC); `map<K, V, N>` mit deterministischem Hash; Operator-Metadaten; Leser für ältere Aufzeichnungs- und Konfigurationsformate | 14.8 auf Hardware mit Flash-Modell-Kampagne; Satz 9.9.1 als Test (Trace mit und ohne Schlaf gleich); Eigenschaftsmonitore bitidentisch zwischen Interpreter und Hardware; `map`-Iteration bitidentisch über Zielklassen; Inventur v1.1 grün |
 | **M7 Werkzeuge und Migration** | LSP mit Live-Zustandsanzeige; `takt import-c` (Klassifikation, Abbildung, Check-Einfügung); Orakel-Modus; Protokollpakete | ein realer C-Baustein migriert und per Orakel abgenommen |
 | **M8 v1.2** ✔ | Gescopte Instanzen (Lebenszyklus in `switch`, Spitzenlast über Konfigurationen, Overlay), `resume` (tiefe History, `saved` außerhalb des Overlays), Trigger mit `arm`/`disarm`/`fired`/`armed` (Knotenregel, Simulation mit `bound`), `capture<T, N>` als Stream-Element mit Armierung, Generics über Typen (Monomorphisierung, Fähigkeiten, azyklischer Instanziierungsgraph), Treiberstufe `port`, Anforderungsreferenzen, beschränkte QP-Löser; Prüfungen 52–55 aktiv | Inventur v1.2 grün; Konformität aktualisiert; Satz 9.4.1 mit gescopten Instanzen als Test (Aktivität aus der Konfiguration zu Tick-Beginn). **Stand 2026-09-22: alle 23 Schritte fertig** (`plan/m8.md` Abschnitt 8). Differentialkorpus 51 Programme, Interpreter und Codegen ohne Abweichung; auf Board 2 sechs Tests grün, darunter der 43-Programm-Korpus und der UART0-Treiber auf echten Registern |
-| **M9 v2 (nach M8, vor M7)** | Verteilte Ausführung nach 12.9: Knotenticks, `hops`-Verlauf von Ψ, Abort über Knoten, Verbindungsverlust als Degradation/Fault, Aufzeichnung je Knoten, atomares Deployment; Bytecode-VM als Verbraucher der versionierten MIR — geplant in `plan/m9.md` als M9a (Verbund) und M9b (VM) | MIR-Platzhalter, Grammatik und Prüfung 58 existieren seit M0; keine Änderung an v1-Programmen nötig |
+| **M9 v2 (nach M10, vor M7)** | Verteilte Ausführung nach 12.9: Knotenticks, `hops`-Verlauf von Ψ, Abort über Knoten, Verbindungsverlust als Degradation/Fault, Aufzeichnung je Knoten, atomares Deployment; Bytecode-VM als Verbraucher der versionierten MIR — geplant in `plan/m9.md` als M9a (Verbund) und M9b (VM) | MIR-Platzhalter, Grammatik und Prüfung 58 existieren seit M0; keine Änderung an v1-Programmen nötig |
+| **M10 Abschluss vor v2 (nach M8, vor M9)** | Board 1 (STM32F401) mit Adapter und Probe im Board-Korpus; ein Zugriffskern für beide Boards; `takt bench` und `takt driver-test` nach 13.8 mit Bericht und Konfiguration Version 5; SC-12/28/32 mit Zahlen; MCU-Rahmen vollständig (`at`, `sys`, Jobs im eigenen Kontext nach 4.5, Watchdog, `mmio`-Helfer); Profile `rtos` (RTIC 2) und `boot` (Slots, 14.8 auf Hardware); Startmuster 12.7 als Korpus; 8.10 vollständig, 12.4 mit `safe`-Export; MPU-Regionen nach 12.3; `sin_fast`-Familie, 11.4 vollständig, Natives kuratiert; Konformitätsbericht als Format; Audit der M1-Zeilen; `plan/cert.md` — geplant in `plan/m10.md`, 25 Schritte | Inventur außerhalb von M7 und M9 ohne `offen`, `teilweise`, `definiert`, `zurückgestellt`; M5-Exit erfüllt (14.7 auf Hardware, Konformitätsbericht je Zielklasse); beide Boards kalibriert |
 
 Warum diese Reihenfolge und keine andere: M0 enthält das gesamte Reservierungspaket (Editionen, reservierte Namen, Grammatik und MIR-Platzhalter aller späteren Konstrukte), weil jede dieser Reservierungen später nur noch als Breaking Change nachholbar wäre; M1 vor M2, weil Streams auf dem Tick-, Fault- und Cursor-Modell aufsetzen; M3 vor M4, weil die Darstellungsverengung und das Kostenmodell den Codegen steuern und ohne Intervallanalyse jede Stelle einen Laufzeit-Check bekäme — der Codegen würde später umgebaut; M4 vor M5, weil die Runtime-Kern-Schnittstelle (Prozessabbild, HAL-Traits) auf Linux mit Simulationstreibern billiger stabilisiert wird als auf Hardware; M6 als Vertikalen, weil diese Features voneinander unabhängig sind und parallel laufen können.
 
@@ -217,6 +220,22 @@ Handshake als Atomaritätsinvariante — und teilt M9 in M9a (Verbund, 17
 Schritte, Hardware: Host und ESP32-C6 über UART) und M9b (Bytecode-VM,
 7 Schritte, verschiebbar). Die VM ist die Option aus 16 und zugleich der
 Schatten-Interpreter für v3.
+
+**Entscheidung (2026-09-25): M10 ist geplant — `plan/m10.md`.** Nach
+M8 bleiben 90 Inventurzeilen ohne `fertig` oder `rationale`; 8 gehören
+zu M7, 13 zu M9, die 69 übrigen sind Restposten von M5, M6 und der
+ersten Inventur. M10 bündelt sie in acht Strängen und 25 Schritten und
+stellt M9 dahinter. Sechs Entscheidungen, die die Referenz erzwingt oder
+offen lässt, stehen in `plan/m10.md` 2: Jobs auf der MCU laufen in einem
+eigenen Kontext mit eigenem Stack, den der Tick unterbricht (4.5, 12.3);
+der Speicherschutz trennt Programmzustand, Runtime und Treiberpuffer in
+MPU-Regionen, der Programmzustand ist nur im Schritt beschreibbar
+(12.3); 12.4 meint Heartbeat und `safe`-Export, nicht Watchdog und MPU;
+8.11 bekommt keine neue Prüfung („keine neue Semantik“); der
+`mmio`-Zugriff wird ein Helfer im IR mit Rumpf je Ziel; Board 1 wird
+über eine Probe geflasht und zurückgesetzt, der Adapter bleibt die
+Telemetrieleitung. `rtos` bindet zuerst RTIC 2 auf dem F401; die
+Bindung mit Funkstack ist Nachzug.
 
 **Entscheidung (2026-09-17): blockierendes NVM — `plan/nvm.md`.** Board 2
 zeigte, dass ein Journal-Schreibvorgang den Tick anhält, wo Code und

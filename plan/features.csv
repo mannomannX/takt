@@ -32,7 +32,7 @@ SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit
 SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),fertig,
 SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),fertig,
 SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),fertig,
-SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M1 (Kernsemantik),teilweise,
+SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M10 (aus M1),teilweise,
 SEM-3.5,Semantik/Abschnitt,3.5,Qualität von Input-Channels,,M1 (Kernsemantik),fertig,
 SEM-3.6,Semantik/Abschnitt,3.6,Typinferenz,,M1 (Kernsemantik),fertig,
 SEM-3.7,Semantik/Abschnitt,3.7,Records und Summentypen,,M1 (Kernsemantik),fertig,
@@ -42,7 +42,7 @@ SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernseman
 SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M6 (v1.1),fertig,"Sema `lower/matrix.rs`, Interpreter `takt-interp/src/matrix.rs`, Codegen `takt-llvm/src/matrix.rs`, Numerik `libtaktm::mat`; Korpus `46_matrices.takt` differentiell (Schritt 18)"
 SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),fertig,"Typvariablen (M8 Schritt 3): `GenericVar::Type` mit Faehigkeit, Unifikation in `solve_call`, Memo mit Typnamen; Korpus `62_type_generics.takt`"
 SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),fertig,
-SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M1 (Kernsemantik),teilweise,
+SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M10 (aus M1),teilweise,
 SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),fertig,
 SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),fertig,
 SEM-4.5,Semantik/Abschnitt,4.5,Native Funktionen mit Kostenvertrag,,M1 (Kernsemantik),fertig,
@@ -66,8 +66,8 @@ SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig,
 SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),fertig,"`system: overrun = fault | alert` seit plan/nvm.md Schritt 1; ein Journal-Vorgang ueber die Frist zaehlt als Ueberlauf (Schritt 3); vier Kennzahlen aus `drift` und `took` je Tick, `time`-Metazeile und `takt timing` (plan/esp32c6.md Schritt 8)"
 SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M6 (v1.1),fertig,`sys/clock` am eingebauten Geraet `sys` (Pruefung 60); `takt-rt-linux::wall_clock_ns` fuer den Treiberrand
 SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),fertig,
-SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M2 (Ströme),teilweise,
-SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M6 (mit 8.10),offen,
+SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M10 (aus M2),teilweise,
+SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M10 (aus M6),offen,
 SEM-8.3,Semantik/Abschnitt,8.3,Simulation und HIL,,M2 (Ströme),fertig,
 SEM-8.4,Semantik/Abschnitt,8.4,Parameter und Profile,,M2 (Ströme),fertig,
 SEM-8.5,Semantik/Abschnitt,8.5,Commands und Operator-Interaktion,,M2 (Ströme),fertig,
@@ -75,24 +75,24 @@ SEM-8.6,Semantik/Abschnitt,8.6,Ereignisströme (`stream<E>`),,M2 (Ströme),ferti
 SEM-8.7,Semantik/Abschnitt,8.7,"Muster, Captures, Handler",,M2 (Ströme),fertig,
 SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),fertig,
 SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),fertig,"`capture<T,N>` (M8 Schritte 12 und 13): Accessoren, Byteform mit 24-Byte-Kopf, Stimulusform `t;pre;post;rate;[…]`, `CaptureCmd` im Prelude, Codegen als Struct; Korpus `66_capture.takt`, Differential gruen. TTL-Adapter (PA9) fuer die Messung offen"
-SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M6,teilweise,
-SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M6 (v1.1),offen,
+SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M10 (aus M6),teilweise,
+SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M10 (aus M6),offen,
 SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),fertig,
 SEM-9.1,Semantik/Abschnitt,9.1,Objekte,,M1/M2 (Interpreter),fertig,
 SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),fertig,
 SEM-9.3,Semantik/Abschnitt,9.3,Schritt einer Maschine,,M1/M2 (Interpreter),fertig,
 SEM-9.4,Semantik/Abschnitt,9.4,System-Tick und Sätze,,M1/M2 (Interpreter),fertig,
-SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M1/M2 (Interpreter),teilweise,
+SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M10 (aus M1/M2),teilweise,
 SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),fertig,
 SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),fertig,
 SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig,
 SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M5 (Embedded),fertig,
 SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M5 (Embedded),fertig,
-SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,je Meilenstein,offen,
+SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M10 (Audit),offen,
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),fertig,
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),fertig,
-SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M6 (stdlib),offen,
-SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M3 (Gate),teilweise,
+SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M10 (aus M6),offen,
+SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M10 (aus M3),teilweise,
 SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),fertig,"Eingänge im MCU-Rahmen (2026-09-22): `takt_in_<pfad>(&value, &quality)` als Gegenstück zu `takt_out_*`, schwach gebunden und vom Linker geprüft; der Treiber liefert die Qualität mit (12.6), ohne Antwort bleibt der Eintrag `Bad` (3.5). Belegt am ESP32-C6 mit dem BOOT-Taster"
 SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4 (Codegen),fertig,
 RT-8.6-Strompuffer,Umsetzung,12.1,"Strompuffer der Runtime (`takt-rt-core::stream`): Ring ueber geliehenen Feldern statt Const-Generics, feste Slots und Byte-Ring in einer Struktur (FB-115)",,M4/M5 (Runtime),fertig,
@@ -115,23 +115,23 @@ CG-11.5-SizeGemessen,Umsetzung,11.5,`takt size` gegen das Objekt geprueft: die D
 CG-11.5-FlashPosten,Umsetzung,11.5,"Der Posten „Flash (Code, Konstanten)"" wird gemessen statt `offen`: braucht ein festes Ziel",,M5 (Embedded),fertig,
 CG-12.3-StackTiefe,Umsetzung,12.3,"Stacktiefe als laengster Pfad im Aufrufgraphen plus Rahmen je Funktion; die Messung steht (`inspect::stack_frame`), die Rechnung kommt mit dem Profil",,M5 (Embedded),fertig,
 CG-13.4-Objektcode,Umsetzung,13.4,Objektcode gegen Quelle nachvollziehen (Zertifizierung): baut auf `inspect::symbols` auf,,M9 (v2),offen,
-SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M5 (Embedded),teilweise,"RV32IMAC: Korpus auf dem ESP32-C6 mit 0 Abweichungen (2026-09-17, board_esp32c6.rs); Cortex-M offen (Board 1)"
-SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M5 (Embedded),teilweise,
+SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M10 (aus M5),teilweise,"RV32IMAC: Korpus auf dem ESP32-C6 mit 0 Abweichungen (2026-09-17, board_esp32c6.rs); Cortex-M offen (Board 1)"
+SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M10 (aus M5),teilweise,
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig,
-SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M5 (Embedded),teilweise,TTL-Adapter (PA9)
+SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M10 (aus M5),teilweise,Adapter und Probe liegen vor (2026-09-25); Messung M10 Schritt 10/11
 SEM-12.7,Semantik/Abschnitt,12.7,"Plattformschnittstelle (System-Channels, v1.1)",v1.1,M6,fertig,"Geraet `sys` mit zehn Kanaelen in Pruefung 60, `EfuseBlock`/`EfuseCmd` im Prelude, `sys/reboot` und `sys/jump` beenden den Lauf, irreversible Outputs im Kopf und in `takt test`"
-SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M6 (v1.1),teilweise,"`system: target` als Enum, Instrumentierungs-Default aus Profil und Ziel (`takt build --instrument`); `rtos` und `boot` blockiert (plan/m6.md 2.13)"
+SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M10 (aus M6),teilweise,"`system: target` als Enum, Instrumentierungs-Default aus Profil und Ziel (`takt build --instrument`); `rtos` und `boot` blockiert (plan/m6.md 2.13)"
 SEM-12.9,Semantik/Abschnitt,12.9,"Verteilte Ausführung (v2): Regeln, die schon heute gelten",v2,M9 (v2),offen,
 SEM-12.10,Semantik/Abschnitt,12.10,"Treiberstufe (v1.2): Register, Ports und Gerätemodelle",v1.2,M8 (Treiberstufe),fertig,"M8 Schritte 14-22: `port … @ mmio(…)` nur in `driver machine` (Prüfung 64), Zugriffe sofort und in Programmordnung (`load`/`store volatile`), Zugriffsarten am Bitfeld ohne RMW für `w1c`, Kostenklasse `mem`, Gerätemodell als Sim-Paar `mmio/ADR/r` und `mmio/ADR/w`, Prüfung 59 mit `polling = unchecked`. Abnahme `feedback/test_uart.takt`. M8 Schritt 20: auf Silizium belegt — `driver machine uart0` liest STATUS an 0x6000_001C, prüft `txfifo_cnt < 120` und schreibt zehn Bytes einzeln an 0x6000_0000; die Zeilen erscheinen am CP210x des Boards, lückenlos aufsteigend (`a_driver_machine_writes_uart0_registers`)"
 SEM-13.1,Semantik/Abschnitt,13.1,Referenzinterpreter und differentielles Testen,,M4 (Codegen),fertig,
 SEM-13.2,Semantik/Abschnitt,13.2,Coverage aus der Simulation,,M6 (v1.1),fertig,
 SEM-13.3,Semantik/Abschnitt,13.3,Eigenschaftsprüfung (v1.1),v1.1,M6,fertig,"Monitore im Interpreter und nativ (Schritt 19), Kodierung, Export, Solver und Pruefstellen-Klassifikation (Schritte 20-22); Reichweite: Invarianten ohne Zeitoperatoren, kein Strom/Handler/Job in der Kodierung"
-SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M5 (Embedded),offen,
+SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M10 (aus M5),offen,
 SEM-13.4-Anforderungen,Semantik/Abschnitt,13.4,"Anforderungsreferenzen im Report: `takt check --report` listet je `req`-ID ihre Stellen, `takt test` die Szenarien dazu (v1.2)",v1.2,M8,fertig,"`takt-mir::requirements`; `verify` zaehlt fuer die Coverage wie ein `check`; Korpus `61_requirements.takt`, `takt-cli/tests/report.rs`"
 SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4 (Codegen),fertig,
 SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,fertig,
 SEM-13.7,Semantik/Abschnitt,13.7,Kampagnen (v1.1),v1.1,M6,fertig,
-SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M5 (Embedded),offen,TTL-Adapter (PA9)
+SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M10 (aus M5),teilweise,"Kalibrierung und Referenzkerne umgesetzt bis auf die Laeufe (2026-09-25): F401 einmal BOOT0 + NRST, danach ohne Hand; C6 nicht angeschlossen; FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
 SEM-13.9,Semantik/Abschnitt,13.9,Migration aus C: `takt import-c` und Orakel-Modus (v1.1),v1.1,M7 (Werkzeuge),offen,
 SEM-14.1,Semantik/Abschnitt,14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),fertig,
 SEM-14.2,Semantik/Abschnitt,14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,M4 (Codegen),fertig,
@@ -139,7 +139,7 @@ SEM-14.3,Semantik/Abschnitt,14.3,Parametrisierte Maschine mit Instanzen (Ventilr
 SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig,
 SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig,
 SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig,
-SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),teilweise,"Persistenz und Schlaf auf dem ESP32-C6 (plan/esp32c6.md 6: 35_persist, 56_idle_timer); 14.7 selbst braucht Eingaenge vom Board (MCU-Rahmen ohne takt_in_*)"
+SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M10 (aus M5),teilweise,"Persistenz und Schlaf auf dem ESP32-C6 (plan/esp32c6.md 6: 35_persist, 56_idle_timer); 14.7 selbst braucht Eingaenge vom Board (MCU-Rahmen ohne takt_in_*)"
 SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),fertig,Wortlaut in `corpus-try/sim/14_8/program.takt` mit den kuratierten Namen (FB-166); im Interpreter mit Flash-Modell und Signaturpruefung
 G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),fertig,
 G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),fertig,
@@ -568,7 +568,7 @@ SC-8,Statische Prüfung,10,"Maschinen: eindeutige Zustandsnamen, `initial` vorha
 SC-9,Statische Prüfung,10,Fault-Wald azyklisch; `FAULTED` erreichbar; Guards der Transitionen aus `FAULTED` ohne implizite Prüfungen,F,M3 (Gate),fertig,
 SC-10,Statische Prüfung,10,Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige,W,M3 (Gate),fertig,
 SC-11,Statische Prüfung,10,Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick,F,M3 (Gate),fertig,
-SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M5 (Embedded),teilweise,TTL-Adapter (PA9) — nur die Messung; die Rechnung steht
+SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M10 (aus M5),teilweise,"Messung: `takt bench` umgesetzt bis auf die Laeufe (2026-09-25): F401 einmal BOOT0 + NRST, danach ohne Hand; C6 nicht angeschlossen — die Rechnung steht; Kostenanalyse nach 9.3/9.4.3 (FB-281)"
 SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle,F,M3 (Gate),fertig,
 SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),fertig,
 SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden",W,M3 (Gate),fertig,
@@ -581,14 +581,14 @@ SC-21,Statische Prüfung,10,`at`/`pulse`: Block enthält nur Zuweisungen an skal
 SC-22,Statische Prüfung,10,"`idle`: keine `loop:`/Handler in Zustand und Vorfahren; Guards nur über Wake-Quellen, Konstanten, Params, Maschinenvariablen",F,M5 (Embedded),fertig,
 SC-23,Statische Prüfung,10,"`persist`: POD-Typ, Maschinenebene, nicht in Szenarien; Typ-Hash stabil",F,M5 (Embedded),fertig,
 SC-24,Statische Prüfung,10,"Shift-Beträge, `as`-Konversionen, `vec`-Indizes, Slices: Range beweisbar oder impliziter Check",W,M3 (Gate),fertig,
-SC-25,Statische Prüfung,10,"Zustandslokale und gehobene Variablen (Sequenz-`var`, Captures): Definite Assignment je Eintritt",F,M3 (Gate),teilweise,
+SC-25,Statische Prüfung,10,"Zustandslokale und gehobene Variablen (Sequenz-`var`, Captures): Definite Assignment je Eintritt",F,M10 (aus M3),teilweise,
 SC-26,Statische Prüfung,10,Szenarien schreiben nur `sim`-Outputs; Single-Writer gegenüber Modellmaschinen,F,M3 (Gate),fertig,
 SC-27,Statische Prüfung,10,`every d:` nur in `loop:`; `on`-Handler nur auf deklarierten Streams,F,M3 (Gate),fertig,
-SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0` („tick-granular"", 7.5); deklarierte `jitter`-Anforderung größer als gemessener Wert erfüllt, sonst Fehler (8.1)",W / F,M6 (mit 8.10),teilweise,TTL-Adapter (PA9) — nur die Messung; die Rechnung steht
+SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0` („tick-granular"", 7.5); deklarierte `jitter`-Anforderung größer als gemessener Wert erfüllt, sonst Fehler (8.1)",W / F,M10 (aus M6),teilweise,"`jitter` je Output aus dem Boardmodus von `driver-test` (FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`) — die Rechnung steht"
 SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M6 (mit 8.10),fertig,Rechnung in `calibrated.rs` (`check_bindings`); Urteil mit gemessenem `jitter` der Hardware-Konfiguration (8.10)
 SC-30,Statische Prüfung,10,"`mat`: Formprüfung bei `+ - *`, `inv`/`solve` nur quadratisch, R, C ≤ 16, Indizes in Range (3.11)",F,M3 (Gate),fertig,"Form bei `+ - *`, `inv`/`det`/`cholesky`/`solve` quadratisch, Indizes statisch vom Typ `int in 0..R-1`; keine Obergrenze, ab 16 Lint SC-42"
 SC-31,Statische Prüfung,10,"Native Funktionen: nur die kuratierte Menge (v1), `cost`, `stack` und `total` deklariert, Argumente fester Größe (4.5)",F,M3 (Gate),fertig,
-SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration. Blockierendes NVM (12.3): ein `persist`-Schreibvorgang kostet `⌈(nvm_erase_ns + 2·nvm_program_ns) / T₀⌉` Perioden — unter `overrun = fault` ohne `idle`-Zustand ein Fehler, mit `idle` ein Hinweis (Schreiben im Schlaf), unter `alert` eine Warnung; fehlt `nvm_blocking` auf einem Ziel mit `iram`, ist die Prüfung nicht entscheidbar",F,M5 (Embedded),teilweise,"TTL-Adapter (PA9) — nur die Messung; die Rechnung steht. NVM-Klausel fertig (plan/nvm.md Schritt 2, `takt-sema/tests/calibrated.rs`)"
+SC-32,Statische Prüfung,10,"Schedulability mit Abort-Phase, klassenweise: `Σ_c (Peak_c + Σ F_m,c) · c_target[c] ≤ T₀ − T_IO` (7.2); `tick_source` existiert in der Hardware-Konfiguration. Blockierendes NVM (12.3): ein `persist`-Schreibvorgang kostet `⌈(nvm_erase_ns + 2·nvm_program_ns) / T₀⌉` Perioden — unter `overrun = fault` ohne `idle`-Zustand ein Fehler, mit `idle` ein Hinweis (Schreiben im Schlaf), unter `alert` eine Warnung; fehlt `nvm_blocking` auf einem Ziel mit `iram`, ist die Prüfung nicht entscheidbar",F,M10 (aus M5),teilweise,"Messung: `takt bench` umgesetzt bis auf die Laeufe (2026-09-25): F401 einmal BOOT0 + NRST, danach ohne Hand; C6 nicht angeschlossen — die Rechnung steht; Kostenanalyse nach 9.3/9.4.3 (FB-281). NVM-Klausel fertig (plan/nvm.md Schritt 2, `takt-sema/tests/calibrated.rs`)"
 SC-33,Statische Prüfung,10,"`follows`: Kanten azyklisch; Follower liest nur gefolgte Maschinen frisch; keine frischen Lesevorgänge in Aktionsblöcken der Abort-Phase (7.2). **Warnung**, wenn ein Follower eine gefolgte Größe liest, die auch auf seinem Fault-Pfad vorkommt: Dort gilt Ψ_k statt des frischen Werts, die Bedeutung wechselt also still zwischen Schritt- und Abort-Phase (5.4)",F / W,M3 (Gate),fertig,
 SC-34,Statische Prüfung,10,"Dimensionierte Matrizen: Einheitentupel passen (Produkt, Addition, Inverse), Literale bilden ein äußeres Produkt, variable Indizes nur bei gleichen Einheiten (3.11)",F,M3 (Gate),fertig,"`lower/matrix.rs`: Produkt, Addition, Inverse, Cholesky, `solve`, Literale, variable Indizes"
 SC-35,Statische Prüfung,10,"`tunable param` nicht in Compile-Zeit-Konstanten (Array-Größen, Kapazitäten, `repeat`) (8.4)",F,M3 (Gate),fertig,
@@ -614,7 +614,7 @@ SC-54,Statische Prüfung,10,`resume` nur an Zuständen mit Kindern; Fault-Ziele 
 SC-55,Statische Prüfung,10,Trigger: Guard und Outputs knotenlokal; `arm`/`disarm` nur aus der deklarierenden Maschine (7.5),F,M3 (Gate),fertig,"`checks.rs::check_triggers`: `bound > 0`, `d >= bound`, `then` nur Outputs, `when` ohne Zustand, ein Armierer; die Guardform prueft `trigger_decl`. `checks/SC-55/`"
 SC-56,Statische Prüfung,10,"`property`: nur lesend, alle Zeitoperatoren beschränkt (13.3)",F,M3 (Gate),fertig,"`lower/property.rs`: Fenster positiv und Vielfaches des Ticks, `always`/`never` nicht unter beschraenkten Operatoren, Atome `bool`"
 SC-57,Statische Prüfung,10,`map`: Schlüssel POD mit Gleichheit (3.9),F,M3 (Gate),fertig,
-SC-58,Statische Prüfung,10,Knoten (12.9): `follows` knotenlokal; `hops` aus der Topologie berechenbar; Knotentick Vielfaches von `system.tick`,F,M3 (Gate),definiert,
+SC-58,Statische Prüfung,10,Knoten (12.9): `follows` knotenlokal; `hops` aus der Topologie berechenbar; Knotentick Vielfaches von `system.tick`,F,M9 (v2),definiert,
 SC-59,Statische Prüfung,10,"Treiberstufe (12.10, v1.2): Ein gepolltes Gerät läuft zwischen zwei Ticks nicht über — `fifo_depth[d] / byte_rate[d] >= P_m + jitter[tick_source] + wcet_poll[d]`, alle vier Größen aus der Hardware-Konfiguration (8.10) beziehungsweise der Konformitätsmessung (13.8). Fehlt eine, ist die Prüfung nicht entscheidbar: Sie verlangt die Messung oder die ausdrückliche Freigabe `with polling = unchecked`, die im Lauf-Header erscheint. Verletzung nennt drei Auswege: Periode senken, Gerät in die TCB geben (12.6), oder DMA statt Polling",F,M8 (mit port),fertig,"M8 Schritt 18: `takt_sema::calibrated::polling`; Zuordnung Treiber zu Gerät über den Portkanal `mmio/ADR/r` und dessen `device` (8.10) — kein zweiter Bindungsweg; fehlende Größe ist ein Fehler, `with polling = unchecked` der ausdrückliche Verzicht; `checks/SC-59/` mit `hardware.hw`, `tests/polling.rs`. Auf Board 2 mit `polling = unchecked`, weil dem C6 die Kalibrierung fehlt (M7)"
 SC-60,Statische Prüfung,10,"Channel-Bindung gegen die Hardware-Konfiguration (8.10): Einheit, Skalierung und Range eines `@ hw(…)`-Channels stimmen mit der Konfiguration überein. Ein Programm, das `float[bar]` bindet, während die Konfiguration `psi` führt, ist sonst unentdeckt — die Einheitenrechnung aus 3.2 endet am Channel-Rand. Fehlt die Konfiguration, entfällt die Prüfung (keine Eingabe, kein Urteil)",F,M6 (mit 8.10),fertig,
 SC-61,Statische Prüfung,10,"`check c, ""…"" within d`: Die gerechnete Safe-State-Latenz (Satz 9.4.5) hält die geforderte Frist ein. Verglichen wird in Ticks (`d / T₀`); die Meldung nennt die Aufschlüsselung nach Erkennung, Bestätigung, Fault-Pfad und Commit, weil die Zahl sonst nicht zu verbessern ist",F,M3 (Gate),fertig,
@@ -632,11 +632,11 @@ OBL-T8,Beweisverpflichtung,9.4.2,T8,,M1/M2 (Interpreter),fertig,
 OBL-T9,Beweisverpflichtung,9.4.2,T9,,M1/M2 (Interpreter),fertig,
 OBL-T10,Beweisverpflichtung,9.4.2,T10,,M1/M2 (Interpreter),fertig,
 OBL-T11,Beweisverpflichtung,9.4.2,T11,,M1/M2 (Interpreter),fertig,
-OBL-T12,Beweisverpflichtung,9.4.2,T12,,M6 (v1.1),offen,
+OBL-T12,Beweisverpflichtung,9.4.2,T12,,M10 (aus M6),offen,
 OBL-T13,Beweisverpflichtung,9.4.2,T13,,M1/M2 (Interpreter),fertig,
 OBL-T14,Beweisverpflichtung,9.4.2,T14,,M1/M2 (Interpreter),fertig,
 OBL-T15,Beweisverpflichtung,9.4.2,T15,,M1/M2 (Interpreter),fertig,
-OBL-T16,Beweisverpflichtung,9.4.2,T16,,M6 (v1.1),offen,
+OBL-T16,Beweisverpflichtung,9.4.2,T16,,M10 (aus M6),offen,
 PAR-1.4-Inputs,Absatz/Regel,1.4,Inputs,,M0 (Parser/MIR-Entwurf),fertig,
 PAR-1.4-Outputs,Absatz/Regel,1.4,Outputs,,M0 (Parser/MIR-Entwurf),fertig,
 PAR-1.4-Veröffentlichte_Variablen,Absatz/Regel,1.4,Veröffentlichte Variablen,,M0 (Parser/MIR-Entwurf),fertig,
@@ -654,23 +654,23 @@ PAR-2.5-Reservierte_Membernamen,Absatz/Regel,2.5,Reservierte Membernamen,,M0 (Pa
 PAR-2.5-Offene_Enums,Absatz/Regel,2.5,Offene Enums,,M0 (Parser/MIR-Entwurf),fertig,
 PAR-2.5-Verdeckung_und_Additivität,Absatz/Regel,2.5,Verdeckung und Additivität,,M0 (Parser/MIR-Entwurf),fertig,
 PAR-2.5-Operator_Metadaten_v1.1,Absatz/Regel,2.5,Operator-Metadaten (v1.1),v1.1,M6,fertig,"Parser, MIR (`Meta`) und Hash-Trennung standen seit M0/M5; Schritt 25 prueft alle sechs Traeger und die Hashes (`takt-sema/tests/operator_metadata.rs`)"
-PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M1 (Kernsemantik),teilweise,
-PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M1 (Kernsemantik),teilweise,
-PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M1 (Kernsemantik),teilweise,
+PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M10 (aus M1),teilweise,
+PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M10 (aus M1),teilweise,
+PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M10 (aus M1),teilweise,
 PAR-3.2-Entdimensionieren,Absatz/Regel,3.2,Entdimensionieren,,M1 (Kernsemantik),fertig,
 PAR-3.2-Einheiten_auf_Integern_v1.1,Absatz/Regel,3.2,Einheiten auf Integern (v1.1),v1.1,M6,fertig,
-PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymorphie in Funktionen und Blöcken,,M1 (Kernsemantik),teilweise,
-PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M1 (Kernsemantik),teilweise,
+PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymorphie in Funktionen und Blöcken,,M10 (aus M1),teilweise,
+PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M10 (aus M1),teilweise,
 PAR-3.3-Lexikalische_Regel,Absatz/Regel,3.3,Lexikalische Regel,,M1 (Kernsemantik),fertig,
-PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M1 (Kernsemantik),teilweise,
-PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M1 (Kernsemantik),teilweise,
-PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M6,zurueckgestellt,"Kennzahl aus M6 Schritt 27 (`takt check --report`, `davon relational`): 8 von 116 verbliebenen impliziten Pruefungen sind Oktagon-Kandidaten (7 %, in 45, 14.7, 14.8); die Domaene wird nicht gebaut, bis die Zahl es traegt (FB-175)"
+PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M10 (aus M1),teilweise,
+PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M10 (aus M1),teilweise,
+PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M10 (aus M6),zurueckgestellt,"Kennzahl aus M6 Schritt 27 (`takt check --report`, `davon relational`): 8 von 116 verbliebenen impliziten Pruefungen sind Oktagon-Kandidaten (7 %, in 45, 14.7, 14.8); die Domaene wird nicht gebaut, bis die Zahl es traegt (FB-175)"
 PAR-3.4-Darstellungsverengung,Absatz/Regel,3.4,Darstellungsverengung,,M1 (Kernsemantik),fertig,
-PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Absatz/Regel,3.5,Implizite Validitätsprüfung (Entscheidung),,M1 (Kernsemantik),teilweise,
+PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Absatz/Regel,3.5,Implizite Validitätsprüfung (Entscheidung),,M10 (aus M1),teilweise,
 PAR-3.5-Rand_Durchsetzung,Absatz/Regel,3.5,Rand-Durchsetzung,,M1 (Kernsemantik),fertig,
 PAR-3.5-Entprellte_Qualität,Absatz/Regel,3.5,Entprellte Qualität,,M1 (Kernsemantik),fertig,
 PAR-3.7-Drahtformat_Details,Absatz/Regel,3.7,Drahtformat-Details,,M1 (Kernsemantik),fertig,
-PAR-3.7-default,Absatz/Regel,3.7,`default`,,M1 (Kernsemantik),teilweise,
+PAR-3.7-default,Absatz/Regel,3.7,`default`,,M10 (aus M1),teilweise,
 PAR-3.7-Records_als_Konstanten_Arrays_von_Records_als_Gerätetabellen,Absatz/Regel,3.7,"Records als Konstanten, Arrays von Records als Gerätetabellen",,M1 (Kernsemantik),fertig,
 PAR-3.8-Ergebnis_mit_Fehlercode_T_E,Absatz/Regel,3.8,Ergebnis mit Fehlercode `T!E`,,M1 (Kernsemantik),fertig,
 PAR-3.9-inout_Parameter,Absatz/Regel,3.9,`inout`-Parameter,,M1 (Kernsemantik),fertig,
@@ -678,21 +678,21 @@ PAR-3.9-Backpatching_einen_Rahmen_zusammensetzen,Absatz/Regel,3.9,Backpatching: 
 PAR-3.11-Uniforme_Form_v1,Absatz/Regel,3.11,Uniforme Form (v1),,M6 (v1.1),fertig,"`lower/matrix.rs`, `takt-interp/src/matrix.rs`, Numerik in `libtaktm::mat`"
 PAR-3.11-Dimensionierte_Form_v1.1,Absatz/Regel,3.11,Dimensionierte Form (v1.1),v1.1,M6,fertig,"`unitvec` als `Entity::Unitvec`, Tupel in `lower/matrix.rs` (kanonische Form `c_1 = 1`), zur Laufzeit ein `mat<m, n>`"
 PAR-4.2-Breite_von_float,Absatz/Regel,4.2,Breite von `float`,,M1 (Kernsemantik),fertig,
-PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M1 (Kernsemantik),teilweise,
+PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M10 (aus M1),teilweise,
 PAR-4.2-fma,Absatz/Regel,4.2,`fma`,,M1 (Kernsemantik),fertig,
 PAR-4.2-Reduktionen,Absatz/Regel,4.2,Reduktionen,,M1 (Kernsemantik),fertig,
-PAR-4.2-Subnormale_in_Zuständen,Absatz/Regel,4.2,Subnormale in Zuständen,,M1 (Kernsemantik),teilweise,
+PAR-4.2-Subnormale_in_Zuständen,Absatz/Regel,4.2,Subnormale in Zuständen,,M10 (aus M1),teilweise,
 PAR-4.4-Das_Ergebnisziel_ist_optional,Absatz/Regel,4.4,Das Ergebnisziel ist optional,,M1 (Kernsemantik),fertig,
 PAR-4.5-Chunk_Natives,Absatz/Regel,4.5,Chunk-Natives,,M1 (Kernsemantik),fertig,
 PAR-4.5-Jobs,Absatz/Regel,4.5,Jobs,,M6 (v1.1),fertig,
-PAR-5.1-Richtlinie_für_Regelkreise,Absatz/Regel,5.1,Richtlinie für Regelkreise,,M6 (stdlib),offen,
+PAR-5.1-Richtlinie_für_Regelkreise,Absatz/Regel,5.1,Richtlinie für Regelkreise,,M10 (aus M6),offen,
 PAR-5.3-Statische_Regel,Absatz/Regel,5.3,Statische Regel:,,M1 (Kernsemantik),fertig,
 PAR-5.6-Interlock,Absatz/Regel,5.6,Interlock,,M1 (Kernsemantik),fertig,
-PAR-5.6-Permissive,Absatz/Regel,5.6,Permissive,,M6 (stdlib),offen,
+PAR-5.6-Permissive,Absatz/Regel,5.6,Permissive,,M10 (aus M6),offen,
 PAR-5.6-Alert,Absatz/Regel,5.6,Alert,,M1 (Kernsemantik),fertig,
 PAR-5.6-Alerts_in_Schleifen,Absatz/Regel,5.6,Alerts in Schleifen,,M1 (Kernsemantik),fertig,
 PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),fertig,
-PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M6 (mit 8.10),offen,
+PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M10 (aus M6),offen,
 PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),fertig,
 PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M5 (Embedded),fertig,"in der Simulation geprueft: `corpus-try/45_journal_cut.takt`, Kampagne `power_cut` ueber jede Stelle (M6 Schritt 14); im Flash des ESP32-C6 (nvm.rs, FB-197); Log je Slot seit Version 2 (plan/nvm.md Schritt 4)"
 PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M5 (Embedded),fertig,
@@ -704,11 +704,11 @@ PAR-7.2-Budget_je_Maschine,Absatz/Regel,7.2,Budget je Maschine,,M1 (Kernsemantik
 PAR-7.5-Zeitgestempelte_Eingaben,Absatz/Regel,7.5,Zeitgestempelte Eingaben,,M1 (Kernsemantik),fertig,
 PAR-7.5-Geplante_Ausgaben,Absatz/Regel,7.5,Geplante Ausgaben,,M1 (Kernsemantik),fertig,
 PAR-7.5-Latenzformel,Absatz/Regel,7.5,Latenzformel,,M1 (Kernsemantik),fertig,
-PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M5 (Embedded),offen,TTL-Adapter (PA9)
+PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M10 (aus M5),offen,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test` (Boardmodus misst `jitter` je Output)"
 PAR-7.5-Trigger_v1.2_Regeln_auf_dem_I_O_Knoten,Absatz/Regel,7.5,Trigger (v1.2): Regeln auf dem I/O-Knoten,v1.2,M8,fertig,"Sema, Interpreter und Codegen (M8 Schritte 9 bis 11): Trigger-Phase vor den Schritten, eigener Cursor je Trigger, `event` als Bindungsrecord, Ausgabe fuer `event.t + d` geplant; `<besitzer>_triggers` im erzeugten Code, Differential gruen. MCU-Rahmen noch ohne Phase"
 PAR-8.3-Sim_Build,Absatz/Regel,8.3,Sim-Build:,,M2 (Ströme),fertig,
 PAR-8.3-Plant_Modelle,Absatz/Regel,8.3,Plant-Modelle,,M2 (Ströme),fertig,
-PAR-8.3-HIL_Umschaltung,Absatz/Regel,8.3,HIL-Umschaltung:,,M2 (Ströme),teilweise,
+PAR-8.3-HIL_Umschaltung,Absatz/Regel,8.3,HIL-Umschaltung:,,M10 (aus M2),teilweise,
 PAR-8.3-Sim_Ausführung,Absatz/Regel,8.3,Sim-Ausführung,,M2 (Ströme),fertig,
 PAR-8.4-Tunables_v1.1,Absatz/Regel,8.4,Tunables (v1.1),v1.1,M6,fertig,
 PAR-8.6-Motivation,Absatz/Regel,8.6,Motivation,,M2 (Ströme),fertig,
@@ -729,7 +729,7 @@ PAR-8.7-Bindung_als_Wrapper,Absatz/Regel,8.7,"Bindung als Wrapper (Entscheidung,
 THM-Lemma-9.3.1,Satz/Lemma,9.3.1,Lemma 9.3.1,,M1/M2 (Interpreter),fertig,
 THM-Satz-9.4.1,Satz/Lemma,9.4.1,Satz 9.4.1,,M1/M2 (Interpreter),fertig,
 THM-Satz-9.4.2,Satz/Lemma,9.4.2,Satz 9.4.2,,M1/M2 (Interpreter),fertig,
-THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),fertig,
+THM-Satz-9.4.3,Satz/Lemma,9.4.3,Satz 9.4.3,,M1/M2 (Interpreter),fertig,"FB-278, FB-281 (2026-09-25): Ruempfe, Ketten, Waechter, Wechsel, Fault-Pfad, Fenster, Muster, Senden, Einheitsvektoren aus dem Codegen"
 PAR-9.4-Bemerkung_Loop_Sprache,Absatz/Regel,9.4,Bemerkung (Loop-Sprache),,M1/M2 (Interpreter),rationale,
 THM-Satz-9.4.4,Satz/Lemma,9.4.4,Satz 9.4.4,,M4 (Codegen),fertig,
 THM-Satz-9.4.5,Satz/Lemma,9.4.5,Satz 9.4.5,,M1/M2 (Interpreter),fertig,
@@ -744,14 +744,14 @@ PAR-11.2-DFA_Tabellen,Absatz/Regel,11.2,DFA-Tabellen,,M4 (Codegen),fertig,
 PAR-11.3-Compile_Zeit_Auswertung,Absatz/Regel,11.3,Compile-Zeit-Auswertung,,M4 (Codegen),fertig,
 PAR-11.3-Versionierte_Formate,Absatz/Regel,11.3,Versionierte Formate,,M4 (Codegen),fertig,
 PAR-11.3-Reproduzierbare_Builds,Absatz/Regel,11.3,Reproduzierbare Builds,,M4 (Codegen),fertig,
-PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M5 (Embedded),offen,
+PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M10 (aus M5),offen,
 PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M5 (Embedded),fertig,"ESP32-C6 (plan/esp32c6.md Schritt 7): RAM-Residenz von Tick-ISR, Wartepfad und erzeugtem Code (`#[ram]`, `rwtext_hook.x`); `esp-storage` ohne `critical-section`; `takt size` weist `iram` aus; `idle` als Light-Sleep (Schritt 6). Die Sektorloeschung kostet trotzdem Perioden — sie ist unteilbar und laenger als der Tick (FB-197); die Semantik bleibt unberuehrt. Seit plan/nvm.md: Kosten in 8.10, Pruefung 32, Schreiben im Schlaffenster, Log-Journal, Residenznachweis in `takt size`."
-PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M6 (v1.1),offen,
-PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M6 (v1.1),offen,
+PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M10 (aus M6),offen,
+PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M10 (aus M6),offen,
 PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M5 (Embedded),fertig,
-PAR-12.7-Start_Channels,Absatz/Regel,12.7,Start-Channels,,M6 (v1.1),offen,
+PAR-12.7-Start_Channels,Absatz/Regel,12.7,Start-Channels,,M10 (aus M6),offen,
 PAR-12.7-Irreversible_Outputs,Absatz/Regel,12.7,Irreversible Outputs,,M6 (v1.1),fertig,
-PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M5 (Embedded),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)
+PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M10 (aus M5),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)
 PAR-13.3-Sprache,Absatz/Regel,13.3,Sprache,,M6 (v1.1),fertig,`TProp` aus dem AST (`lower/property.rs`)
 PAR-13.3-Semantik,Absatz/Regel,13.3,Semantik,,M6 (v1.1),fertig,"`takt-interp/src/property.rs`: Tick-Rand-Snapshots, dreiwertig auf dem endlichen Lauf, Entscheidung bei geschlossenem Fenster"
 PAR-13.3-Verwendung,Absatz/Regel,13.3,Verwendung,,M6 (v1.1),fertig,"Monitor in `takt test`/`RunResult.properties`, nativ mit `with monitor = true`; `takt prove` mit Export und Solver (k-Induktion/BMC), Gegenbeispiel als Stimulus"
@@ -759,7 +759,7 @@ PAR-13.3-Umgebungsannahmen_assumption,Absatz/Regel,13.3,Umgebungsannahmen (`assu
 PAR-13.3-Kanal_Attribute_gelten_automatisch_als_Annahmen,Absatz/Regel,13.3,Kanal-Attribute gelten automatisch als Annahmen,,M6 (v1.1),fertig,"Kanal-Ranges und `max_slew` als Annahmen (FB-259); `debounce`/`max_age` betreffen die Qualitaet, Inputs gelten als gueltig"
 PAR-13.3-Kompositionalität,Absatz/Regel,13.3,Kompositionalität,,M6 (v1.1),fertig,"`takt prove` je Maschine (`encode_machine`, `classify_compositional`; FB-259), Tests in `with_solver.rs`"
 PAR-13.5-Lauf_Verdikt,Absatz/Regel,13.5,Lauf-Verdikt,,M4 (Codegen),fertig,
-PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M5 (Embedded),offen,TTL-Adapter (PA9) — nur die Messung; Format und Leser stehen
+PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M10 (aus M5),teilweise,"umgesetzt bis auf die Laeufe (2026-09-25): F401 einmal BOOT0 + NRST, danach ohne Hand; C6 nicht angeschlossen"
 PAR-13.9-Klassifikation,Absatz/Regel,13.9,Klassifikation,,M7 (Werkzeuge),offen,
 PAR-13.9-Abbildungsregeln,Absatz/Regel,13.9,Abbildungsregeln,,M7 (Werkzeuge),offen,
 PAR-13.9-Grundregel_des_Importers,Absatz/Regel,13.9,Grundregel des Importers,,M7 (Werkzeuge),offen,
@@ -774,8 +774,8 @@ FN-9-dispatch,Semantikfunktion,9,dispatch,,M1/M2 (Interpreter),fertig,
 FN-9-exec,Semantikfunktion,9,exec,,M1/M2 (Interpreter),fertig,
 FN-9-exec_chain,Semantikfunktion,9,exec_chain,,M1/M2 (Interpreter),fertig,
 FN-9-resolve_m,Semantikfunktion,9,resolve_m,,M1/M2 (Interpreter),fertig,
-FN-9-sleep,Semantikfunktion,9,sleep,,M6 (v1.1),offen,
-FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M6 (v1.1),offen,
+FN-9-sleep,Semantikfunktion,9,sleep,,M10 (aus M6),offen,
+FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M10 (aus M6),offen,
 FN-9-step_m,Semantikfunktion,9,step_m,,M1/M2 (Interpreter),fertig,
 FN-9-tick,Semantikfunktion,9,tick,,M1/M2 (Interpreter),fertig,
 FN-9-windows,Semantikfunktion,9,windows,,M1/M2 (Interpreter),fertig,
@@ -810,7 +810,7 @@ DESUGAR-step_name,Desugaring-Regel,6.2,"`step ""name"":`",,M1 (Kernsemantik),fer
 DESUGAR-Statement_mit_auch_in_if_elif_else,Desugaring-Regel,6.2,Statement mit `->` (auch in `if`/`elif`/`else`),,M1 (Kernsemantik),fertig,
 DESUGAR-Ende_ohne,Desugaring-Regel,6.2,Ende ohne `->`,,M1 (Kernsemantik),fertig,
 DESUGAR-var_x_e_in_der_Sequenz,Desugaring-Regel,6.2,`var x = e` in der Sequenz,,M1 (Kernsemantik),fertig,
-DESUGAR-until_g_as_m,Desugaring-Regel,6.2,`until g as m`,,M1 (Kernsemantik),teilweise,
+DESUGAR-until_g_as_m,Desugaring-Regel,6.2,`until g as m`,,M10 (aus M1),teilweise,
 DESUGAR-until_c_timeout_d_X,Desugaring-Regel,6.2,`until c timeout d -> X`,,M1 (Kernsemantik),fertig,
 DESUGAR-until_c_timeout_d_else,Desugaring-Regel,6.2,`until c timeout d else:`,,M1 (Kernsemantik),fertig,
 DESUGAR-measure_verify_verdict_send_at_job,Desugaring-Regel,6.2,"`measure`, `verify`, `verdict`, `send`, `at`, `job`",,M1 (Kernsemantik),fertig,
@@ -823,29 +823,29 @@ DIST-rule6,Regel,12.9,Verbindungsverlust.,v2,M9 (v2),offen,
 DIST-rule7,Regel,12.9,Jobs,v2,M9 (v2),offen,
 DIST-rule8,Regel,12.9,Aufzeichnung,v2,M9 (v2),offen,
 DIST-rule9,Regel,12.9,Simulation.,v2,M9 (v2),offen,
-RAND-1,Regel/Prüfung,12.6,"Zeitstempel innerhalb `(t_(k-1), t_k]`",,M5 (Embedded),teilweise,TTL-Adapter (PA9)
-RAND-2,Regel/Prüfung,12.6,"Zeitstempel und `seq` streng steigend, `seq` lückenlos, `len(D) <= MAXPT` je Stream, Qualitätsflags konsistent (`Bad` ohne Wert, Alter monoton)",,M5 (Embedded),teilweise,TTL-Adapter (PA9)
+RAND-1,Regel/Prüfung,12.6,"Zeitstempel innerhalb `(t_(k-1), t_k]`",,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
+RAND-2,Regel/Prüfung,12.6,"Zeitstempel und `seq` streng steigend, `seq` lückenlos, `len(D) <= MAXPT` je Stream, Qualitätsflags konsistent (`Bad` ohne Wert, Alter monoton)",,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
 RAND-3,Regel/Prüfung,12.6,Werte innerhalb deklarierter Ranges (3.5),,M4/M5 (Runtime),fertig,
 RAND-4,Regel/Prüfung,12.6,`max_slew` (3.5),,M4/M5 (Runtime),fertig,
-RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M5 (Embedded),teilweise,TTL-Adapter (PA9)
-RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M5 (Embedded),teilweise,TTL-Adapter (PA9)
-RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M5 (Embedded),teilweise,TTL-Adapter (PA9)
+RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
+RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
+RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
 PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4 (Codegen),fertig,
-PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M5 (Embedded),teilweise,"Tick, Journal und Schlaf auf dem ESP32-C6 (plan/esp32c6.md); Watchdog und Eingaenge offen"
-PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M6 (v1.1),offen,RTOS auf Board 1 + TTL-Adapter (PA9); Schnitt in plan/m6.md 2.13
-PROFIL-boot,Profil/Eintrag,12.8,boot,,M6 (v1.1),offen,Startpartition auf einem Board + TTL-Adapter (PA9); Schnitt in plan/m6.md 2.13
+PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M10 (aus M5),teilweise,"Tick, Journal und Schlaf auf dem ESP32-C6 (plan/esp32c6.md); Watchdog und Eingaenge offen"
+PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M10 (aus M6),offen,RTOS auf Board 1 + TTL-Adapter (PA9); Schnitt in plan/m6.md 2.13
+PROFIL-boot,Profil/Eintrag,12.8,boot,,M10 (aus M6),offen,Startpartition auf einem Board + TTL-Adapter (PA9); Schnitt in plan/m6.md 2.13
 FAULT-CheckFailed,Fault-Art,5.3,CheckFailed,,M1 (Kernsemantik),fertig,
 FAULT-Expect,Fault-Art,5.3,Expect,,M1 (Kernsemantik),fertig,
 FAULT-Timeout,Fault-Art,5.3,Timeout,,M1 (Kernsemantik),fertig,
 FAULT-SensorFault,Fault-Art,5.3,SensorFault,,M1 (Kernsemantik),fertig,
 FAULT-MissingValue,Fault-Art,5.3,MissingValue,,M1 (Kernsemantik),fertig,
-FAULT-ArithmeticFault_Overflow_DivZero_NonFinite_Domain_Singular,Fault-Art,5.3,ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular),,M1 (Kernsemantik),teilweise,
+FAULT-ArithmeticFault_Overflow_DivZero_NonFinite_Domain_Singular,Fault-Art,5.3,ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular),,M10 (aus M1),teilweise,
 FAULT-RangeFault,Fault-Art,5.3,RangeFault,,M1 (Kernsemantik),fertig,
 FAULT-StreamOverflow,Fault-Art,5.3,StreamOverflow,,M1 (Kernsemantik),fertig,
-FAULT-TimingFault,Fault-Art,5.3,TimingFault,,M1 (Kernsemantik),teilweise,
-FAULT-ScheduleOverflow,Fault-Art,5.3,ScheduleOverflow,,M1 (Kernsemantik),teilweise,
+FAULT-TimingFault,Fault-Art,5.3,TimingFault,,M10 (aus M1),teilweise,
+FAULT-ScheduleOverflow,Fault-Art,5.3,ScheduleOverflow,,M10 (aus M1),teilweise,
 FAULT-Abort,Fault-Art,5.3,Abort,,M1 (Kernsemantik),fertig,
-FAULT-Runtime_Overrun_Driver_Watchdog_Hardware_Node,Fault-Art,5.3,Runtime(Overrun | Driver | Watchdog | Hardware | Node),,M1 (Kernsemantik),teilweise,
+FAULT-Runtime_Overrun_Driver_Watchdog_Hardware_Node,Fault-Art,5.3,Runtime(Overrun | Driver | Watchdog | Hardware | Node),,M10 (aus M1),teilweise,
 FAULT-Node,Fault-Art,5.3,Node,,M9 (v2),offen,
 QUAL-Good,Qualität,3.5,Good,,M1 (Kernsemantik),fertig,
 QUAL-Suspect,Qualität,3.5,Suspect,,M1 (Kernsemantik),fertig,
@@ -873,11 +873,11 @@ LIB-writer,Standardbibliothek,11.4,block writer[const N],,M6 (stdlib),fertig,
 LIB-pid_i,Standardbibliothek,11.4,"block pid_i[O, E] / lowpass_i[U]",,M6 (stdlib),fertig,
 LIB-qp_box,Standardbibliothek,11.4,block qp_box[const N in 1..16],v1.2,M8 (QP),fertig,"M8 Schritt 21: projizierter Gradient in Takt im Prelude, nicht als Native — damit sind Interpreter und Codegen per Konstruktion einig (Satz 9.4.4) und die TCB wächst nicht. Schrittweite 1/||H||_inf (Gerschgorin), `iters` vor der statischen Schranke MAX_QP_ITERS. Korpus `69_qp_box.takt`, Differential grün, `qp_box_solves_a_two_by_two_problem`"
 LIB-sha256_init,Standardbibliothek,11.4,native fn sha256 / hmac_sha256 / sha256_init / sha256_update / sha256_final,,M6 (stdlib),fertig,
-LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M6 (stdlib),teilweise,"ecdsa_p256_verify in takt-crypto (p256 0.13, Feature ecdsa, Vektoren RFC 6979); rsa3072_verify und aes_gcm_decrypt offen, bis ein Programm sie braucht (plan/m6.md 2.4)"
+LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M10 (aus M6),teilweise,"ecdsa_p256_verify in takt-crypto (p256 0.13, Feature ecdsa, Vektoren RFC 6979); rsa3072_verify und aes_gcm_decrypt offen, bis ein Programm sie braucht (plan/m6.md 2.4)"
 LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M6 (stdlib),fertig,
 LIB-solve,Standardbibliothek,11.4,fn solve,,M6 (stdlib),fertig,"`solve(A, b)` als eingebauter Aufruf (`lower/matrix.rs`), Methoden in `mat_member`"
 LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M4 (libtaktm),fertig,
-LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M6 (stdlib),offen,
+LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M10 (aus M6),offen,
 CLI-tcb,Werkzeug,11.1,takt tcb review,v1.2,M8 (Review),fertig,"M8 Schritt 22: schreibt eine Zeile in `natives.review`. Das Datum steht im Aufruf und kommt nicht aus der Systemuhr — ein Werkzeug, das dieselbe Eingabe zweimal verschieden beantwortet, passt nicht zu reproduzierbaren Builds (11.3)"
 CLI-check,Werkzeug,11.1,takt check,,M0-M3,fertig,
 CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig,
@@ -887,7 +887,7 @@ CLI-timing,Werkzeug,11.1,takt timing,,M5 (Embedded),fertig,"die vier Kennzahlen 
 CLI-verify-trace,Werkzeug,11.1,takt verify-trace,,M6 (v1.1),fertig,"Hashkette h_k = H(h_{k-1} ‖ Zeilen des Ticks k) im Kopf der Aufzeichnung (`#! kette`), T6 in grammar/trace.md (A3)"
 CLI-test,Werkzeug,11.1,takt test,,M6 (v1.1),fertig,`--out DIR` schreibt je Szenario `NAME.trace` (FB-190)
 CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
-CLI-driver-test,Werkzeug,11.1,takt driver-test,,M5 (Embedded),offen,TTL-Adapter (PA9)
+CLI-driver-test,Werkzeug,11.1,takt driver-test,,M10 (aus M5),offen,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
 CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),fertig,"`--export DATEI.smt2 --depth k`, sonst Solver (`--solver`, `TAKT_SOLVER`, `z3`/`cvc5`): Eigenschaften bewiesen/verletzt/unbewiesen, Pruefstellen bewiesen unerreichbar/erreichbar mit Pfad/unentschieden, Gegenbeispiele als Stimulus im Interpreter bestaetigt (`takt-prove/src/solve.rs`)"
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig,
 CLI-build,Werkzeug,11.1,takt build,,M5 (Embedded),fertig,uebersetzt und assembliert je Ziel; bindet nicht — Startcode und Speicherkarte gehoeren zum Board (`--emit ir|obj|consts|consts-rs`)
@@ -895,7 +895,7 @@ CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig,"`--baseline DATEI` vergleich
 CLI-cost,Werkzeug,11.1,takt cost,,M3 (Gate),fertig,Operationsvektoren je Maschine und Zustand (9.4.3)
 CLI-latency,Werkzeug,11.1,takt latency,,M3 (Gate),fertig,
 CLI-graph,Werkzeug,11.1,takt graph,,M4 (Codegen),fertig,
-CLI-bench,Werkzeug,11.1,takt bench,,M5 (Embedded),offen,TTL-Adapter (PA9)
+CLI-bench,Werkzeug,11.1,takt bench,,M10 (aus M5),teilweise,"umgesetzt bis auf die Laeufe (2026-09-25): F401 einmal BOOT0 + NRST, danach ohne Hand; C6 nicht angeschlossen"
 CLI-tune,Werkzeug,11.1,takt tune,,M6 (v1.1),fertig,
 CLI-migrate,Werkzeug,11.1,takt migrate,,M7 (Werkzeuge),offen,
 CLI-import-c,Werkzeug,11.1,takt import-c,,M7 (Werkzeuge),offen,
@@ -908,8 +908,8 @@ EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Vent
 EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig,
 EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig,
 EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig,
-EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M5 (Embedded),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)
-EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),teilweise,`corpus-try/sim/14_8/` mit drei Szenarien und Golden-Traces (M6 Schritt 17); differentiell offen: `ecdsa_p256_verify` hat keinen C-Rahmen (examples.rs OPEN)
+EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M10 (aus M5),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)
+EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M10 (aus M6),teilweise,`corpus-try/sim/14_8/` mit drei Szenarien und Golden-Traces (M6 Schritt 17); differentiell offen: `ecdsa_p256_verify` hat keinen C-Rahmen (examples.rs OPEN)
 PRINC-1,Leitentscheidung,0.2,Synchron-zyklische Multirate-Ausführung.,,Doku/Rationale,rationale,
 PRINC-2,Leitentscheidung,0.2,Drei Konstruktebenen.,,Doku/Rationale,rationale,
 PRINC-3,Leitentscheidung,0.2,"Hierarchische Zustände, Parallelität nur zwischen Maschinen.",,Doku/Rationale,rationale,
@@ -1085,10 +1085,10 @@ CON-System-Channels_sys/…,Konstrukt (2.4),2.4,System-Channels `sys/…`,,M0 (P
 CON-native_fn,Konstrukt (2.4),2.4,`native fn`,,M0 (Parser/MIR-Entwurf),fertig,
 CON-tick_source,Konstrukt (2.4),2.4,`tick_source`,,M0 (Parser/MIR-Entwurf),fertig,
 "CON-jitter,_max_slew",Konstrukt (2.4),2.4,"`jitter`, `max_slew`",,M0 (Parser/MIR-Entwurf),fertig,
-FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M0 (Parser/MIR-Entwurf),teilweise,Version 7; jede aeltere Version lesbar (`takt-mir/tests/roundtrip.rs`)
+FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M10 (aus M0),teilweise,Version 7; jede aeltere Version lesbar (`takt-mir/tests/roundtrip.rs`)
 FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M4 (Codegen),fertig,"Version 2 (Parametervektor im Kopf); Version 1 lesbar (`takt-interp/tests/recording_versions.rs`, Schritt 26)"
 FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M6 (mit 8.10),fertig,"Version 4 (NVM-Zeiten, `nvm_blocking`); Version 1 lesbar (`takt-sema/tests/hardware.rs`)"
-FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M5 (Embedded),offen,
+FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M10 (aus M5),fertig,"`grammar/conformance-report.md`, `takt-conformance/src/report.rs`: Schreiber, strenger Leser, Roundtrip (2026-09-25)"
 FMT-Journal-Slot,Versioniertes Format,11.3,"`persist`-Journal, Slot-Kopf (`TKPJ`, 5.9)",,M5 (Embedded),fertig,"Version 2 (Log je Slot, plan/nvm.md 2.4); ein Slot der Version 0 mit gueltiger Pruefsumme laedt (`takt-rt-core/tests/journal.rs`)"
 FMT-Coverage,Versioniertes Format,11.3,"Coverage-Datei (`# takt-coverage 1`, 13.2)",,M6,fertig,"nur Schreiber: `Coverage::render`; ein Leser kommt mit dem Werkzeug, das sie auswertet"
 FMT-Size-Baseline,Versioniertes Format,11.3,"Baseline von `takt size` (`# takt-size 1`, 11.5)",,M6,fertig,"Version 1; aeltere lesbar, neuere abgelehnt (`takt-mir/tests/size_baseline.rs`)"
@@ -1106,3 +1106,5 @@ SEM-3.9-inout,Semantik/Absatz,3.9,"`inout`: Aufruf als Anweisung schreibt zuruec
 system-Eintrag-overrun,system-Eintrag,2.3,"system_item: ""overrun""",,M0 (Parser/MIR-Entwurf),fertig,"plan/nvm.md Schritt 1: Parser, Formatter, S-Ausdruck, Senkung nach `Config.overrun`, Konstanten; `58_persist_alert.takt`"
 DEC-Blockierendes_NVM,Entscheidung,16,"Blockierendes NVM → deklarierte Kosten (8.10), Prüfung 32, Schreiben im Schlaffenster, `overrun = alert`; asynchroner Treiber als Option mit Residenznachweis",,Doku/Rationale,rationale,
 FMT-Trace-Zeitzeile,Versioniertes Format,11.3,"Trace-Metazeile `time` (7.3, grammar/trace.md T1)",,M5 (Embedded),fertig,"ausserhalb von T5, T6 und jedem Vergleich; nur native Runtimes schreiben sie"
+RT-Job_Kontext,Umsetzung,4.5,"Job-Kontext auf der MCU: eigener Stack mit Wächter, vom Tick unterbrochen (`baremetal`), als Task (`rtos`); Warteschlange K_j",,M10,offen,
+FMT-HW-Konfiguration_v5,Versioniertes Format,11.3,"Hardware-Konfiguration Version 5: Kalibrierung (`c_target`, `t_io`, `tick_jitter`), Messwerte, Stack-Reserven, alle Felder aus 8.10; Leser für Version 4",,M10,teilweise,"Version 5 mit Divisionsgewichten, `tick_jitter_ns`, `guard_ns`; Messwerte ueber `with_values`, Kommentare bleiben (2026-09-25). Offen: jedes Feld aus 8.10 (M10 Schritt 12)"
