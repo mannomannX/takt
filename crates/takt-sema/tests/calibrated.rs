@@ -122,6 +122,23 @@ fn an_incomplete_calibration_names_what_it_misses() {
     assert!(!w.is_error(), "eine fehlende Messung ist kein Programmfehler");
 }
 
+/// **Eine Last in `native` braucht ihr Gewicht.** Ohne Natives verlangt
+/// die Tabelle es nicht; nennt eine Deklaration `cost = {native: …}`
+/// (4.5), waere der Aufruf mit Gewicht null zeitlos — die Pruefung
+/// urteilt dann nicht, sondern nennt die Luecke.
+#[test]
+fn a_native_load_needs_the_native_weight() {
+    let p = compile(&format!(
+        "{KOPF}native fn crc32(b: bytes<16>) -> u32 with cost = {{native: 50}}, stack = 64, total\n\n\
+         machine m:\n    var b : bytes<16> = default\n    var c : u32 = 0\n\n    initial S\n\n    state S:\n        \
+         loop:\n            c = crc32(b)\n            led = c > 0\n"
+    ));
+    let d = takt_sema::calibrated::check(&p, &ziel(), Span::new(0, 0));
+    let w = d.iter().find(|d| d.code == "SC-32").expect("SC-32 meldet");
+    assert!(format!("{w}").contains("native"), "die Meldung nennt `native`: {w}");
+    assert!(!w.is_error(), "eine fehlende Messung ist kein Programmfehler");
+}
+
 /// Ein Ziel, dessen Journal den Kern anhaelt (12.3): 200 ms je Loeschung,
 /// 5 ms je Programmiervorgang, bei 10 ms Tick also 21 Perioden.
 fn blockierendes_ziel(blocking: Option<bool>) -> Target {

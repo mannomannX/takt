@@ -127,8 +127,16 @@ fn the_report_names_what_the_overlay_saves() {
 fn the_budget_is_the_peak_over_configurations_not_the_sum() {
     let three = schedulability::load(&ok(THREE));
     let two = schedulability::load(&ok(TWO));
-    // Die dritte Instanz liegt exklusiv: Sie hebt die Spitze nicht.
-    assert_eq!(three.peak, two.peak, "die exklusive Instanz zaehlte in die Summe");
+    // Die dritte Instanz liegt exklusiv: Ihre Rechenlast hebt die Spitze
+    // nicht. Was bleibt, ist ihr Ein- und Ausschalten, wenn `ctrl` den
+    // Zustand wechselt (9.3 Schritte 2 und 3): ein Speicherzugriff im Tick
+    // des Besitzers, kein Tick der Instanz.
+    assert_eq!(
+        takt_mir::fns::CostVec { mem: two.peak.mem, ..three.peak },
+        two.peak,
+        "die exklusive Instanz zaehlte in die Summe"
+    );
+    assert_eq!(three.peak.mem, two.peak.mem + 1, "das Schalten der dritten Instanz");
 }
 
 /// 11.5: `persist` liegt in Sigma und wird nie ueberlagert — der Posten

@@ -22,12 +22,14 @@
 //! wie sie zustande kam, ist eine Zahl ohne Herkunft.
 //!
 //! ```text
-//! # takt-hw 3
+//! # takt-hw 5
 //! [target.thumbv7em]
 //! core_hz = 84000000
 //! i32 = 11900        # Pikosekunden je Operation
 //! f64 = 1190000
+//! i32_div = 142800   # je Division (7.2)
 //! t_io = 120000
+//! tick_jitter_ns = 1500
 //! ram = 65536
 //! flash = 262144
 //!
@@ -40,7 +42,8 @@
 //! safe = false
 //! device = gpio
 //! port = "PC13 active_low"   # undurchsichtig, geht ans Board (8.10)
-//! jitter_ns = 250000         # gemessen (13.8)
+//! guard_ns = 4000            # gemessen (13.8)
+//! jitter_ns = 250000
 //! ```
 //!
 //! **Pikosekunden, nicht Nanosekunden.** Eine `i32`-Operation dauert bei
@@ -68,8 +71,10 @@ use crate::fns::{CostClass, CostVec};
 ///
 /// 2: NVM-Geometrie fuer das `persist`-Journal (5.9). 3: Geraete, Kanaele,
 /// Speicher und Stack-Reserven (8.10). 4: NVM-Zeiten und `nvm_blocking`
-/// (12.3, Pruefung 32).
-pub const FORMAT_VERSION: u32 = 4;
+/// (12.3, Pruefung 32). 5: eigene Gewichte der Division (7.2), der
+/// Tick-Jitter je Ziel und `guard` je Output (7.5, 8.10) — die Messwerte
+/// von `takt bench` und `takt driver-test` (13.8).
+pub const FORMAT_VERSION: u32 = 5;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -79,10 +84,19 @@ const MAGIC: &str = "takt-hw";
 /// **Die Tabelle, die Operationen zu Zeit macht.** `takt cost` zaehlt,
 /// was eine Aktivierung an Operationen braucht; erst das Skalarprodukt
 /// mit dieser Tabelle ergibt eine Dauer.
+///
+/// **Division hat eigene Gewichte** (7.2), je Zahlklasse eines. Fehlt eines
+/// — eine Tabelle bis Version 4 —, wiegt eine Division wie ihre Klasse, das
+/// Modell jener Tabellen. Und eine Division wiegt nie weniger als ihre
+/// Klasse: Nur dann bleibt das komponentenweise Maximum ueber Zweige
+/// (9.4.3) eine obere Schranke der Zeit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CTarget {
     /// Pikosekunden je Operation, in der Reihenfolge von [`CostClass::ALL`].
     ps: [u64; 7],
+    /// Pikosekunden je Division in `i32`, `i64`, `f32`, `f64`; null heisst
+    /// nicht gemessen.
+    div_ps: [u64; 4],
 }
 
 impl CTarget {
@@ -96,6 +110,24 @@ impl CTarget {
         self.ps[c as usize] = ps;
     }
 
+    /// Das gemessene Gewicht einer Division, falls es eines gibt.
+    pub fn measured_division(&self, c: CostClass) -> Option<u64> {
+        division_index(c).map(|i| self.div_ps[i]).filter(|ps| *ps > 0)
+    }
+
+    /// Das Gewicht einer Division in Pikosekunden: das gemessene, aber nie
+    /// weniger als das der Klasse.
+    pub fn division(&self, c: CostClass) -> u64 {
+        self.measured_division(c).unwrap_or(0).max(self.of(c))
+    }
+
+    /// Setzt das Gewicht einer Division; ausserhalb der Zahlklassen wirkungslos.
+    pub fn set_division(&mut self, c: CostClass, ps: u64) {
+        if let Some(i) = division_index(c) {
+            self.div_ps[i] = ps;
+        }
+    }
+
     /// Ist die Tabelle vollstaendig?
     ///
     /// **Eine Null ist kein Messwert.** Fehlt auch nur eine Klasse, ist
@@ -104,7 +136,7 @@ impl CTarget {
     /// wo sie nichts weiss. Einzige Ausnahme ist `native` — ein Programm
     /// ohne native Funktionen braucht das Gewicht nicht, und es zu
     /// verlangen hiesse, eine Messung fuer etwas zu fordern, das nicht
-    /// vorkommt.
+    /// vorkommt. Ob ein Programm es braucht, sagt [`CTarget::missing_for`].
     pub fn is_complete(&self) -> bool {
         CostClass::ALL.iter().all(|c| *c == CostClass::Native || self.of(*c) > 0)
     }
@@ -114,14 +146,29 @@ impl CTarget {
         CostClass::ALL.iter().copied().filter(|c| *c != CostClass::Native && self.of(*c) == 0).collect()
     }
 
-    /// Die Dauer eines Operationsvektors in Pikosekunden (9.4.3).
+    /// Die Klassen ohne Messwert, die ein Operationsvektor braucht: jede
+    /// ausser `native` immer, `native`, sobald `n` Operationen darin hat —
+    /// eine Deklaration `cost = {native: …}` (4.5) waere sonst zeitlos.
+    pub fn missing_for(&self, n: CostVec) -> Vec<CostClass> {
+        CostClass::ALL
+            .iter()
+            .copied()
+            .filter(|c| self.of(*c) == 0 && (*c != CostClass::Native || n.of(*c) > 0))
+            .collect()
+    }
+
+    /// Die Dauer eines Operationsvektors in Pikosekunden (9.4.3, 7.2).
     ///
-    /// `Σ_c N_c · c_target[c]`. Saettigt statt zu ueberlaufen: Ein
-    /// Programm mit absurd vielen Operationen soll eine absurd grosse
-    /// Dauer melden und daran scheitern, nicht eine kleine und
-    /// durchgehen.
+    /// `Σ_c (N_c − D_c) · c_target[c] + D_c · c_div[c]` mit `D_c` den
+    /// Divisionen der Klasse. Saettigt statt zu ueberlaufen: Ein Programm
+    /// mit absurd vielen Operationen soll eine absurd grosse Dauer melden
+    /// und daran scheitern, nicht eine kleine und durchgehen.
     pub fn duration_ps(&self, n: CostVec) -> u64 {
-        CostClass::ALL.iter().fold(0u64, |acc, c| acc.saturating_add(n.of(*c).saturating_mul(self.of(*c))))
+        CostClass::ALL.iter().fold(0u64, |acc, c| {
+            let div = n.divisions(*c).min(n.of(*c));
+            acc.saturating_add((n.of(*c) - div).saturating_mul(self.of(*c)))
+                .saturating_add(div.saturating_mul(self.division(*c)))
+        })
     }
 
     /// Dieselbe Dauer in Nanosekunden, kaufmaennisch gerundet.
@@ -130,6 +177,28 @@ impl CTarget {
     /// sonst ueber Zeit spricht (3.3). Gerechnet wird in Pikosekunden.
     pub fn duration_ns(&self, n: CostVec) -> u64 {
         self.duration_ps(n).saturating_add(500) / 1000
+    }
+}
+
+/// Die Stelle einer Zahlklasse in den Divisionsgewichten.
+fn division_index(c: CostClass) -> Option<usize> {
+    match c {
+        CostClass::I32 => Some(0),
+        CostClass::I64 => Some(1),
+        CostClass::F32 => Some(2),
+        CostClass::F64 => Some(3),
+        CostClass::Mem | CostClass::Call | CostClass::Native => None,
+    }
+}
+
+/// Der Schluessel des Divisionsgewichts einer Zahlklasse (`i32_div`, …).
+pub fn division_key(c: CostClass) -> Option<&'static str> {
+    match c {
+        CostClass::I32 => Some("i32_div"),
+        CostClass::I64 => Some("i64_div"),
+        CostClass::F32 => Some("f32_div"),
+        CostClass::F64 => Some("f64_div"),
+        CostClass::Mem | CostClass::Call | CostClass::Native => None,
     }
 }
 
@@ -149,6 +218,9 @@ pub struct Target {
     /// Referenz nicht; gemessen wird die Differenz zwischen Tickperiode
     /// und dem, was das Programm davon nutzt (13.8).
     pub t_io_ps: u64,
+    /// Der gemessene Tick-Jitter in Nanosekunden: die groesste Abweichung
+    /// des Tickbeginns von seiner Frist (7.3, 13.8).
+    pub tick_jitter_ns: Option<i64>,
     /// Die NVM-Geometrie hinter `persist var`, falls das Ziel eine hat.
     pub nvm: Option<NvmGeometry>,
     /// Speicher und Stack-Reserven (11.5, 12.3).
@@ -213,6 +285,9 @@ pub struct HwChannel {
     pub port: Option<String>,
     /// Rate in Hertz.
     pub rate_hz: Option<u64>,
+    /// Gemessene Treiberlatenz eines Outputs in Nanosekunden: So frueh muss
+    /// eine geplante Ausgabe feststehen (`guard`, 7.5, 13.8).
+    pub guard_ns: Option<i64>,
     /// Gemessener Jitter eines Outputs in Nanosekunden (13.8).
     pub jitter_ns: Option<i64>,
     /// Gemessene Abtastlatenz eines Inputs in Nanosekunden (13.8).
@@ -469,6 +544,7 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
             );
         }
         "t_io" => target.t_io_ps = number(value, line)?,
+        "tick_jitter_ns" => target.tick_jitter_ns = Some(number(value, line)? as i64),
         "nvm_sector_bytes" => nvm_of(target).sector_bytes = number(value, line)? as u32,
         "nvm_sectors" => nvm_of(target).sectors = number(value, line)? as u32,
         "nvm_min_interval" => nvm_of(target).default_min_interval_ns = number(value, line)? as i64,
@@ -481,12 +557,17 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
         "stack_reserve" => target.memory.stack_reserve = Some(number(value, line)?),
         "stack_margin" => target.memory.stack_margin = Some(number(value, line)?),
         _ => {
+            if let Some(class) = CostClass::ALL.iter().find(|c| division_key(**c) == Some(key)) {
+                target.c_target.set_division(*class, number(value, line)?);
+                return Ok(());
+            }
             let class = CostClass::ALL.iter().find(|c| c.name() == key).ok_or_else(|| ParseError {
                 line,
                 message: format!(
-                    "unbekannter Schluessel `{key}`; bekannt: core_hz, t_io, ram, flash, iram, stack_reserve, \
-                     stack_margin, nvm_sector_bytes, nvm_sectors, nvm_min_interval, nvm_erase_ns, nvm_program_ns, \
-                     nvm_blocking und die Klassen {}",
+                    "unbekannter Schluessel `{key}`; bekannt: core_hz, t_io, tick_jitter_ns, ram, flash, iram, \
+                     stack_reserve, stack_margin, nvm_sector_bytes, nvm_sectors, nvm_min_interval, nvm_erase_ns, \
+                     nvm_program_ns, nvm_blocking, die Klassen {} und die Divisionen i32_div, i64_div, f32_div, \
+                     f64_div",
                     CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
                 ),
             })?;
@@ -543,6 +624,7 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
         "device" => channel.device = Some(text(value)),
         "port" => channel.port = Some(text(value)),
         "rate_hz" => channel.rate_hz = Some(number(value, line)?),
+        "guard_ns" => channel.guard_ns = Some(number(value, line)? as i64),
         "jitter_ns" => channel.jitter_ns = Some(number(value, line)? as i64),
         "latency_ns" => channel.latency_ns = Some(number(value, line)? as i64),
         _ => {
@@ -550,7 +632,7 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: direction, raw, unit, range, safe, device, port, \
-                     rate_hz, jitter_ns, latency_ns"
+                     rate_hz, guard_ns, jitter_ns, latency_ns"
                 ),
             });
         }
@@ -562,6 +644,93 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
 fn magic_version(line: &str) -> Option<u32> {
     let rest = line.trim().strip_prefix('#')?.trim().strip_prefix(MAGIC)?;
     rest.split_whitespace().next()?.parse().ok()
+}
+
+/// Traegt Messwerte in eine bestehende Konfiguration ein, ohne sie neu zu
+/// schreiben.
+///
+/// **Die Datei gehoert einem Menschen.** Sie traegt Kommentare, die sagen,
+/// woher eine Zahl kommt und was an ihr unsicher ist; [`render`] wuerde sie
+/// verwerfen. Darum ersetzt diese Funktion nur die Werte der genannten
+/// Schluessel im Abschnitt `[target.<ziel>]` — ein Kommentar hinter einem
+/// Wert bleibt stehen —, haengt fehlende Schluessel an das Ende des
+/// Abschnitts an, legt einen fehlenden Abschnitt an und hebt die
+/// Formatversion im Kopf auf die dieses Schreibers. Das Ergebnis wird
+/// gelesen, bevor es zurueckkommt: Was diese Funktion schreibt, ist lesbar.
+pub fn with_values(text: &str, target: &str, values: &[(&str, String)]) -> Result<String, ParseError> {
+    let header = format!("[target.{target}]");
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    match lines.iter().position(|l| magic_version(l).is_some()) {
+        Some(i) => lines[i] = format!("# {MAGIC} {FORMAT_VERSION}"),
+        None => lines.insert(0, format!("# {MAGIC} {FORMAT_VERSION}")),
+    }
+    let start = match lines.iter().position(|l| l.split('#').next().unwrap_or("").trim() == header) {
+        Some(i) => i,
+        None => {
+            if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push(header.clone());
+            lines.len() - 1
+        }
+    };
+    let end =
+        lines[start + 1..].iter().position(|l| l.trim_start().starts_with('[')).map_or(lines.len(), |i| start + 1 + i);
+    let mut last_value = start;
+    for (i, line) in lines.iter().enumerate().take(end).skip(start + 1) {
+        if line.split('#').next().unwrap_or("").contains('=') {
+            last_value = i;
+        }
+    }
+    let mut appended = Vec::new();
+    for (key, value) in values {
+        let found = (start + 1..end)
+            .find(|i| lines[*i].split('#').next().unwrap_or("").split_once('=').is_some_and(|(k, _)| k.trim() == *key));
+        match found {
+            Some(i) => {
+                let comment = lines[i].find('#').map(|at| lines[i][at..].to_string());
+                lines[i] = match comment {
+                    Some(c) => format!("{key} = {value}   {c}"),
+                    None => format!("{key} = {value}"),
+                };
+            }
+            None => appended.push(format!("{key} = {value}")),
+        }
+    }
+    let at = last_value + 1;
+    for (offset, line) in appended.into_iter().enumerate() {
+        lines.insert(at + offset, line);
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    parse(&out)?;
+    Ok(out)
+}
+
+/// Die Werte eines Ziels, wie `takt bench` sie misst, fuer [`with_values`]:
+/// Kerntakt, alle Klassen, gemessene Divisionen, `T_IO`, Tick-Jitter und
+/// Stack-Reserve, soweit vorhanden.
+pub fn measured_values(t: &Target) -> Vec<(&'static str, String)> {
+    let mut v = Vec::new();
+    if let Some(hz) = t.core_hz {
+        v.push(("core_hz", hz.to_string()));
+    }
+    for c in CostClass::ALL {
+        v.push((c.name(), t.c_target.of(c).to_string()));
+    }
+    for c in CostClass::ALL {
+        if let (Some(key), Some(ps)) = (division_key(c), t.c_target.measured_division(c)) {
+            v.push((key, ps.to_string()));
+        }
+    }
+    v.push(("t_io", t.t_io_ps.to_string()));
+    if let Some(j) = t.tick_jitter_ns {
+        v.push(("tick_jitter_ns", j.to_string()));
+    }
+    if let Some(r) = t.memory.stack_reserve {
+        v.push(("stack_reserve", r.to_string()));
+    }
+    v
 }
 
 /// Schreibt eine Konfiguration im kanonischen Format.
@@ -580,7 +749,15 @@ pub fn render(hw: &Hardware) -> String {
         for c in CostClass::ALL {
             s.push_str(&format!("{} = {}\n", c.name(), target.c_target.of(c)));
         }
+        for c in CostClass::ALL {
+            if let (Some(key), Some(ps)) = (division_key(c), target.c_target.measured_division(c)) {
+                s.push_str(&format!("{key} = {ps}\n"));
+            }
+        }
         s.push_str(&format!("t_io = {}\n", target.t_io_ps));
+        if let Some(j) = target.tick_jitter_ns {
+            s.push_str(&format!("tick_jitter_ns = {j}\n"));
+        }
         if let Some(nvm) = target.nvm {
             s.push_str(&format!("nvm_sector_bytes = {}\n", nvm.sector_bytes));
             s.push_str(&format!("nvm_sectors = {}\n", nvm.sectors));
@@ -650,7 +827,7 @@ pub fn render(hw: &Hardware) -> String {
         if let Some(v) = c.rate_hz {
             s.push_str(&format!("rate_hz = {v}\n"));
         }
-        for (key, value) in [("jitter_ns", c.jitter_ns), ("latency_ns", c.latency_ns)] {
+        for (key, value) in [("guard_ns", c.guard_ns), ("jitter_ns", c.jitter_ns), ("latency_ns", c.latency_ns)] {
             if let Some(v) = value {
                 s.push_str(&format!("{key} = {v}\n"));
             }
@@ -714,9 +891,13 @@ t_io = 120000
     fn a_missing_class_makes_the_table_incomplete() {
         let ohne_mem = BEISPIEL.replace("mem = 23800\n", "");
         let hw = parse(&ohne_mem).expect("lesbar");
-        let c = hw.target("thumbv7em").expect("Ziel").c_target;
+        let mut c = hw.target("thumbv7em").expect("Ziel").c_target;
         assert!(!c.is_complete());
         assert_eq!(c.missing(), vec![CostClass::Mem]);
+        // `native` fehlt erst, wenn die Last sie braucht.
+        c.set(CostClass::Mem, 1);
+        assert!(c.missing_for(CostVec { i32: 5, ..CostVec::default() }).is_empty());
+        assert_eq!(c.missing_for(CostVec { native: 1, ..CostVec::default() }), vec![CostClass::Native]);
     }
 
     /// `native` darf fehlen: Ein Programm ohne native Funktionen braucht
@@ -798,5 +979,83 @@ t_io = 120000
         assert_eq!(hw.target("thumbv7em").expect("Ziel").nvm.expect("NVM").blocking_write_ns(), None);
         let e = parse(&format!("{BEISPIEL}nvm_blocking = maybe\n")).expect_err("abgelehnt");
         assert!(e.message.contains("weder `true` noch `false`"), "{e}");
+    }
+
+    /// **Division hat eigene Gewichte** (7.2): Eine Division zaehlt in ihrer
+    /// Klasse und wiegt mit dem eigenen Gewicht.
+    #[test]
+    fn a_division_weighs_with_its_own_weight() {
+        let hw = parse(&format!("{BEISPIEL}i32_div = 142800\n")).expect("lesbar");
+        let c = hw.target("thumbv7em").expect("Ziel").c_target;
+        let n = CostVec { i32: 10, i32_div: 2, ..CostVec::default() };
+        // 8 · 11900 + 2 · 142800
+        assert_eq!(c.duration_ps(n), 8 * 11_900 + 2 * 142_800);
+        assert_eq!(c.measured_division(CostClass::I32), Some(142_800));
+    }
+
+    /// Ohne Messung wiegt eine Division wie ihre Klasse: das Modell der
+    /// Tabellen bis Version 4.
+    #[test]
+    fn an_unmeasured_division_weighs_like_its_class() {
+        let c = parse(BEISPIEL).expect("lesbar").target("thumbv7em").expect("Ziel").c_target;
+        let with = CostVec { f64: 3, f64_div: 3, ..CostVec::default() };
+        let without = CostVec { f64: 3, ..CostVec::default() };
+        assert_eq!(c.duration_ps(with), c.duration_ps(without));
+        assert_eq!(c.measured_division(CostClass::F64), None);
+    }
+
+    /// **Eine Division wiegt nie weniger als ihre Klasse.** Sonst waere das
+    /// komponentenweise Maximum ueber Zweige (9.4.3) keine Schranke mehr:
+    /// Ein Zweig mit Divisionen koennte teurer sein als die Summe, die der
+    /// Vektor des Maximums ergibt.
+    #[test]
+    fn the_maximum_over_branches_stays_a_bound() {
+        let hw = parse(&format!("{BEISPIEL}i32_div = 1000\n")).expect("lesbar");
+        let c = hw.target("thumbv7em").expect("Ziel").c_target;
+        assert_eq!(c.division(CostClass::I32), 11_900, "geklemmt auf das Klassengewicht");
+        let divides = CostVec { i32: 4, i32_div: 4, ..CostVec::default() };
+        let adds = CostVec { i32: 6, ..CostVec::default() };
+        let bound = c.duration_ps(divides.max(adds));
+        assert!(bound >= c.duration_ps(divides) && bound >= c.duration_ps(adds));
+    }
+
+    /// **Messwerte ersetzen Werte, nicht Kommentare.** Die Datei gehoert
+    /// einem Menschen: Was er ueber eine Zahl geschrieben hat, bleibt; die
+    /// Zahl selbst wird ersetzt, fehlende Schluessel kommen dazu, und der
+    /// Kopf nennt die neue Version.
+    #[test]
+    fn measured_values_keep_the_comments() {
+        let text = "# takt-hw 3\n# Von Hand.\n[target.thumbv7em]\ni32 = 11905   # geschaetzt\nram = 65536\n\n[device.gpio]\ndriver = \"x\"\n";
+        let out =
+            with_values(text, "thumbv7em", &[("i32", "12000".into()), ("i32_div", "140000".into())]).expect("lesbar");
+        assert!(out.starts_with("# takt-hw 5\n# Von Hand.\n"), "{out}");
+        assert!(out.contains("i32 = 12000   # geschaetzt"), "{out}");
+        assert!(out.contains("ram = 65536\ni32_div = 140000\n"), "angehaengt am Ende des Abschnitts: {out}");
+        let hw = parse(&out).expect("lesbar");
+        assert_eq!(hw.target("thumbv7em").expect("Ziel").c_target.measured_division(CostClass::I32), Some(140_000));
+        assert!(hw.devices.contains_key("gpio"));
+    }
+
+    /// Ein fehlendes Ziel bekommt seinen Abschnitt.
+    #[test]
+    fn a_missing_target_gets_its_section() {
+        let out = with_values("# takt-hw 4\n", "riscv32imac", &[("core_hz", "160000000".into())]).expect("lesbar");
+        assert_eq!(parse(&out).expect("lesbar").target("riscv32imac").and_then(|t| t.core_hz), Some(160_000_000));
+    }
+
+    /// Version 5 schreibt, was `takt bench` und `driver-test` messen, und
+    /// liest es wieder.
+    #[test]
+    fn measured_values_round_trip() {
+        let text = format!(
+            "{BEISPIEL}i32_div = 142800\nf64_div = 9000000\ntick_jitter_ns = 1500\n\n\
+             [channel ui/led]\ndirection = output\nguard_ns = 4000\njitter_ns = 250\n"
+        );
+        let hw = parse(&text.replace("takt-hw 1", "takt-hw 5")).expect("lesbar");
+        assert_eq!(hw.target("thumbv7em").expect("Ziel").tick_jitter_ns, Some(1_500));
+        assert_eq!(hw.channel("ui/led").expect("Kanal").guard_ns, Some(4_000));
+        let rendered = render(&hw);
+        assert!(rendered.starts_with("# takt-hw 5\n"), "{rendered}");
+        assert_eq!(parse(&rendered).expect("Rundreise"), Hardware { format_version: 5, ..hw });
     }
 }

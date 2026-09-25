@@ -15,10 +15,13 @@
 //! zwei Groessenordnungen ueber `c_target[i32]` (7.2).
 //!
 //! **Warum je Zustand.** Eine Maschine ist eine Summe aus dem, was immer
-//! laeuft (`loop:`, Handler), und dem teuersten Zustand — und „teuerster
-//! Zustand" ist je Klasse ein anderer, weil das Maximum komponentenweise
-//! ist. Wer kuerzen will, muss wissen, welcher Zustand welche Klasse
-//! treibt; die Summe allein sagt es nicht.
+//! laeuft (`loop:`, Handler der Maschinenebene), und dem teuersten Tick
+//! einer Kette — und „teuerster" ist je Klasse ein anderer, weil das
+//! Maximum komponentenweise ist. Die Zeile eines Zustands ist der
+//! teuerste Tick, dessen innerster Zustand er ist: seine Kette, ihre
+//! Waechter und der teuerste Wechsel hinaus (9.3). Wer kuerzen will, muss
+//! wissen, welcher Zustand welche Klasse treibt; die Summe allein sagt es
+//! nicht.
 
 use crate::Program;
 use crate::fns::{CostClass, CostVec};
@@ -74,22 +77,19 @@ pub struct StateCost {
 /// hiesse, jede Datei um Zahlen zu vergroessern, die ein Werkzeug
 /// gelegentlich anzeigt (siehe [`super::cost::Activation`]).
 pub fn report(p: &Program) -> Report {
-    let types = p.types.list.clone();
-    let natives: Vec<CostVec> = p.natives.iter().map(|n| n.cost).collect();
-    let machines = p
-        .machines
-        .iter()
-        .filter(|m| !matches!(m.kind, MachineKind::Template))
-        .map(|m| machine_cost(m, &types, &natives))
-        .collect();
+    let machines =
+        p.machines.iter().filter(|m| !matches!(m.kind, MachineKind::Template)).map(|m| machine_cost(p, m)).collect();
     Report { machines }
 }
 
-fn machine_cost(m: &Machine, types: &[crate::types::Type], natives: &[CostVec]) -> MachineCost {
-    let a = super::cost::activation(m, types, natives);
+fn machine_cost(p: &Program, m: &Machine) -> MachineCost {
+    let a = super::cost::activation(p, m);
     let fault_path = m.budget.as_ref().map_or_else(CostVec::default, |b| b.fault_path);
 
-    let states = m
+    // Eine Klasse treibt `FAULTED`, wenn sein Tick in ihr ueber jeder
+    // Kette liegt — er traegt `base` nicht, also der Vergleich mit Summe.
+    let chains = a.states.iter().fold(CostVec::default(), |acc, c| acc.max(*c)) + a.base;
+    let mut states: Vec<StateCost> = m
         .states
         .iter()
         .enumerate()
@@ -99,10 +99,17 @@ fn machine_cost(m: &Machine, types: &[crate::types::Type], natives: &[CostVec]) 
             drives: CostClass::ALL
                 .iter()
                 .copied()
-                .filter(|c| a.states[i].of(*c) > 0 && a.driver(*c) == Some(i))
+                .filter(|c| a.states[i].of(*c) > 0 && a.driver(*c) == Some(i) && chains.of(*c) >= a.faulted.of(*c))
                 .collect(),
         })
         .collect();
+    if !a.faulted.is_zero() {
+        states.push(StateCost {
+            name: "FAULTED".into(),
+            cost: a.faulted,
+            drives: CostClass::ALL.iter().copied().filter(|c| a.faulted.of(*c) > chains.of(*c)).collect(),
+        });
+    }
 
     MachineCost { name: m.name.clone(), period: m.period, activation: a.total, fault_path, base: a.base, states }
 }
@@ -134,6 +141,11 @@ impl MachineCost {
             format!("  {} ({})", self.name, period),
             format!("    {:<22}{}", "B_m je Aktivierung", row(self.activation)),
         ];
+        // 7.2: Divisionen haben eigene Gewichte; die Zeile sagt, wie viele
+        // der Operationen darueber es sind.
+        if CostClass::ALL.iter().any(|c| self.activation.divisions(*c) > 0) {
+            out.push(format!("    {:<22}{}", "  davon Divisionen", division_row(self.activation)));
+        }
         if !self.fault_path.is_zero() {
             out.push(format!("    {:<22}{}", "F_m Fault-Pfad", row(self.fault_path)));
         }
@@ -160,6 +172,16 @@ fn header() -> String {
 
 /// Eine Zeile aus sieben Zahlen; eine Null bleibt leer, damit die Spalte
 /// mit einem Wert ins Auge faellt.
+fn division_row(c: CostVec) -> String {
+    CostClass::ALL
+        .iter()
+        .map(|k| match c.divisions(*k) {
+            0 => format!("{:>8}", "."),
+            v => format!("{v:>8}"),
+        })
+        .collect()
+}
+
 fn row(c: CostVec) -> String {
     CostClass::ALL
         .iter()

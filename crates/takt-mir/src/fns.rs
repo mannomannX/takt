@@ -7,7 +7,16 @@ use crate::ids::*;
 use crate::machine::VarDef;
 use crate::stmt::Block;
 
-/// Kostenvektor ueber den sieben Operationsklassen (9.4.3).
+/// Kostenvektor ueber den sieben Operationsklassen (9.4.3), mit den
+/// Divisionen je Zahlklasse.
+///
+/// **Division hat eigene Gewichte** (7.2): Je nach Kern ist sie ein
+/// Hardwarebefehl oder ein Bibliotheksaufruf, und sie kostet ein
+/// Vielfaches einer Addition — auf dem RV32IMAC rund das Dreissigfache.
+/// Eine Division zaehlt darum weiter in ihrer Klasse, wie 9.4.3 es sagt,
+/// und die Felder `*_div` halten fest, wie viele der Operationen einer
+/// Klasse Divisionen (und Reste) sind. Die Zeitschranke gewichtet sie mit
+/// dem eigenen Gewicht aus der Kalibrierung (13.8).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub struct CostVec {
@@ -18,27 +27,76 @@ pub struct CostVec {
     pub mem: u64,
     pub call: u64,
     pub native: u64,
+    /// Davon Divisionen in `i32`.
+    pub i32_div: u64,
+    /// Davon Divisionen in `i64`.
+    pub i64_div: u64,
+    /// Davon Divisionen in `f32`.
+    pub f32_div: u64,
+    /// Davon Divisionen in `f64`.
+    pub f64_div: u64,
 }
 
 impl std::ops::Add for CostVec {
     type Output = CostVec;
 
-    /// Komponentenweise Summe (`N(s1; s2)`, 9.4.3).
+    /// Komponentenweise Summe (`N(s1; s2)`, 9.4.3), saettigend: Eine
+    /// Schranke, die ueberlaeuft, waere keine mehr.
     fn add(self, o: CostVec) -> CostVec {
         CostVec {
-            i32: self.i32 + o.i32,
-            i64: self.i64 + o.i64,
-            f32: self.f32 + o.f32,
-            f64: self.f64 + o.f64,
-            mem: self.mem + o.mem,
-            call: self.call + o.call,
-            native: self.native + o.native,
+            i32: self.i32.saturating_add(o.i32),
+            i64: self.i64.saturating_add(o.i64),
+            f32: self.f32.saturating_add(o.f32),
+            f64: self.f64.saturating_add(o.f64),
+            mem: self.mem.saturating_add(o.mem),
+            call: self.call.saturating_add(o.call),
+            native: self.native.saturating_add(o.native),
+            i32_div: self.i32_div.saturating_add(o.i32_div),
+            i64_div: self.i64_div.saturating_add(o.i64_div),
+            f32_div: self.f32_div.saturating_add(o.f32_div),
+            f64_div: self.f64_div.saturating_add(o.f64_div),
         }
     }
 }
 
 impl CostVec {
+    /// Keine Operation.
+    pub const ZERO: CostVec = CostVec {
+        i32: 0,
+        i64: 0,
+        f32: 0,
+        f64: 0,
+        mem: 0,
+        call: 0,
+        native: 0,
+        i32_div: 0,
+        i64_div: 0,
+        f32_div: 0,
+        f64_div: 0,
+    };
+
+    /// Das `n`-fache (`n · N(s)`, 9.4.3), saettigend wie die Summe.
+    pub fn times(self, n: u64) -> CostVec {
+        CostVec {
+            i32: self.i32.saturating_mul(n),
+            i64: self.i64.saturating_mul(n),
+            f32: self.f32.saturating_mul(n),
+            f64: self.f64.saturating_mul(n),
+            mem: self.mem.saturating_mul(n),
+            call: self.call.saturating_mul(n),
+            native: self.native.saturating_mul(n),
+            i32_div: self.i32_div.saturating_mul(n),
+            i64_div: self.i64_div.saturating_mul(n),
+            f32_div: self.f32_div.saturating_mul(n),
+            f64_div: self.f64_div.saturating_mul(n),
+        }
+    }
+
     /// Komponentenweises Maximum (`max` ueber Zweige, 9.4.3).
+    ///
+    /// Auch die Divisionen gehen komponentenweise: Die Schranke bleibt eine,
+    /// solange eine Division nicht billiger gewichtet ist als ihre Klasse —
+    /// das haelt [`crate::hardware::CTarget`] fest.
     pub fn max(self, o: CostVec) -> CostVec {
         CostVec {
             i32: self.i32.max(o.i32),
@@ -48,6 +106,48 @@ impl CostVec {
             mem: self.mem.max(o.mem),
             call: self.call.max(o.call),
             native: self.native.max(o.native),
+            i32_div: self.i32_div.max(o.i32_div),
+            i64_div: self.i64_div.max(o.i64_div),
+            f32_div: self.f32_div.max(o.f32_div),
+            f64_div: self.f64_div.max(o.f64_div),
+        }
+    }
+
+    /// Wie viele Operationen einer Klasse Divisionen sind; null ausserhalb
+    /// der vier Zahlklassen.
+    pub fn divisions(self, c: CostClass) -> u64 {
+        match c {
+            CostClass::I32 => self.i32_div,
+            CostClass::I64 => self.i64_div,
+            CostClass::F32 => self.f32_div,
+            CostClass::F64 => self.f64_div,
+            CostClass::Mem | CostClass::Call | CostClass::Native => 0,
+        }
+    }
+
+    /// Eine Operation der Klasse `c`.
+    pub fn op(c: CostClass) -> CostVec {
+        let one = CostVec::default();
+        match c {
+            CostClass::I32 => CostVec { i32: 1, ..one },
+            CostClass::I64 => CostVec { i64: 1, ..one },
+            CostClass::F32 => CostVec { f32: 1, ..one },
+            CostClass::F64 => CostVec { f64: 1, ..one },
+            CostClass::Mem => CostVec { mem: 1, ..one },
+            CostClass::Call => CostVec { call: 1, ..one },
+            CostClass::Native => CostVec { native: 1, ..one },
+        }
+    }
+
+    /// Eine Operation der Klasse `c`, die eine Division ist.
+    pub fn division(c: CostClass) -> CostVec {
+        let one = CostVec::default();
+        match c {
+            CostClass::I32 => CostVec { i32: 1, i32_div: 1, ..one },
+            CostClass::I64 => CostVec { i64: 1, i64_div: 1, ..one },
+            CostClass::F32 => CostVec { f32: 1, f32_div: 1, ..one },
+            CostClass::F64 => CostVec { f64: 1, f64_div: 1, ..one },
+            CostClass::Mem | CostClass::Call | CostClass::Native => one,
         }
     }
 
@@ -64,7 +164,7 @@ impl CostVec {
         }
     }
 
-    /// Summe ueber alle Klassen.
+    /// Summe ueber alle Klassen; eine Division zaehlt einmal, in ihrer Klasse.
     ///
     /// Nur fuer Vergleiche und Anteile im Bericht: Operationen
     /// verschiedener Klassen kosten verschieden viel, und was sie in Zeit

@@ -181,6 +181,287 @@ machine m:
     assert!(b.activation.i32 > 0 || b.activation.i64 > 0, "die Addition zaehlt: {:?}", b.activation);
 }
 
+/// **Division hat eigene Gewichte** (7.2): Eine Division und ein Rest
+/// zaehlen in ihrer Klasse und dazu als Division; die LU-Zerlegung einer
+/// 2×2-Inversen teilt einmal, das Einsetzen je Spalte zweimal.
+#[test]
+fn a_division_counts_in_its_class_and_as_a_division() {
+    let (p, _, _) = compile(
+        "\
+machine m:
+    var x : float = 1.5
+    initial RUN
+    state RUN:
+        loop:
+            var a : int in 0..9 = 5
+            n = a / 3 + a % 4
+            x = x / 2.0
+",
+    );
+    let b = p.machines[0].budget.expect("Budget").activation;
+    assert_eq!(b.i32_div + b.i64_div, 2, "eine Division, ein Rest: {b:?}");
+    assert_eq!(b.f64_div, 1, "{b:?}");
+    assert!(b.i32 + b.i64 >= 3, "die Addition dazu: {b:?}");
+
+    let (p, _, _) = compile(
+        "\
+machine m:
+    var s : mat<2, 2> = [[2.0, 1.0], [1.0, 3.0]]
+    initial RUN
+    state RUN:
+        loop:
+            s = s.inv()
+",
+    );
+    let b = p.machines[0].budget.expect("Budget").activation;
+    assert_eq!(b.f64_div, 1 + 2 * 2, "LU n(n-1)/2, Einsetzen n je Spalte: {b:?}");
+    assert!(b.f64 >= b.f64_div, "{b:?}");
+}
+
+/// **Ein Aufruf kostet seinen Rumpf** (9.4.3: `N(f(args)) = Σ cost(args) +
+/// N(body f)`). Zwei Aufrufe einer Funktion mit einer Schleife ueber vier
+/// Runden zu je drei Operationen und dem Schleifenzaehler (zwei), dazu die
+/// Eins der Schleife: `2 · (1 + 4 · (3 + 2)) = 42` Operationen und zwei
+/// Aufrufe — nicht nur die zwei Aufrufe, wie bis FB-278.
+#[test]
+fn a_call_costs_its_body() {
+    let (p, _, _) = compile(
+        "\
+fn mix(x: int in 0..65535, y: int in 0..65535) -> int in 0..65535:
+    var r : int in 0..65535 = x
+    for i in range(4):
+        r = (r * 181 + y) & 65535
+    return r
+
+machine m:
+    var a : int in 0..65535 = 1
+    initial RUN
+    state RUN:
+        loop:
+            a = mix(a, 7)
+            a = mix(a, 9)
+",
+    );
+    let b = p.machines[0].budget.expect("Budget").activation;
+    assert_eq!(b.call, 2, "{b:?}");
+    assert_eq!(b.i32, 42, "vier Runden zu drei Operationen und dem Zaehler, zweimal: {b:?}");
+    let f = p.fns.iter().find(|f| f.name == "mix").expect("mix");
+    assert_eq!(f.cost.map(|c| c.i32), Some(21), "der Rumpf steht in `Fn::cost`");
+}
+
+/// Die Kosten eines Zustands im Bericht (FB-281).
+fn state_cost(p: &Program, name: &str) -> takt_mir::fns::CostVec {
+    let r = takt_mir::analysis::budget::report(p);
+    r.machines[0].states.iter().find(|s| s.name == name).map(|s| s.cost).expect("Zustand")
+}
+
+/// **Ein Wechsel kostet im Tick, in dem er geschieht** (9.3, 5.2 Regel 3
+/// und 4): Der Tick, der `BUSY` betritt, fuehrt dessen `enter:` und
+/// `loop:` im Modus ENTRY aus. `IDLE` rechnet selbst kein Gleitkomma —
+/// sein teuerster Tick schon.
+#[test]
+fn a_transition_tick_costs_the_entry_of_its_target() {
+    let (p, _, _) = compile(
+        "\
+machine m:
+    var a : int in 0..99 = 0
+    var x : float = 0.0
+    initial IDLE
+    state IDLE:
+        loop:
+            n = 0
+        when a < 99: -> BUSY
+    state BUSY:
+        enter:
+            x = x * 1.5 + 0.25
+        loop:
+            x = x * 0.5
+            n = 1
+        when a > 50: -> IDLE
+        exit:
+            x = x + 1.0
+",
+    );
+    let (idle, busy) = (state_cost(&p, "IDLE"), state_cost(&p, "BUSY"));
+    assert!(idle.f64 > 0, "der Tick hinein traegt `enter:` und `loop:` von BUSY: {idle:?}");
+    assert!(busy.f64 > 0, "der Tick hinaus traegt `loop:` und `exit:`: {busy:?}");
+    let b = p.machines[0].budget.expect("Budget").activation;
+    assert!(b.f64 >= idle.f64.max(busy.f64), "{b:?}");
+}
+
+/// **Eine Kette kostet alle ihre Ebenen** (9.3 `exec_chain`): Der innere
+/// Zustand zahlt den `loop:` des aeusseren mit.
+#[test]
+fn a_nested_state_costs_its_whole_chain() {
+    let (p, _, _) = compile(
+        "\
+machine m:
+    var a : int in 0..99 = 0
+    var x : float = 0.0
+    initial OUTER
+    state OUTER:
+        initial INNER
+        loop:
+            x = x * 0.5
+        state INNER:
+            loop:
+                a = (a + 1) % 50
+                n = 0
+",
+    );
+    let inner = state_cost(&p, "INNER");
+    assert!(inner.f64 > 0 && inner.i32 + inner.i64 > 0, "beide Ebenen: {inner:?}");
+}
+
+/// **Der Fault-Pfad betritt das Fault-Ziel** (9.4.3 `F_m`, 5.2 Regel 5):
+/// `enter:` von SAFE laeuft im Tick des Faults und steht darum in `F_m`.
+#[test]
+fn the_fault_path_enters_the_fault_target() {
+    let (p, _, _) = compile(
+        "\
+machine m:
+    fault -> SAFE
+    var a : int in 0..9 = 1
+    var x : float = 0.0
+    initial RUN
+    state RUN:
+        loop:
+            check a < 9, \"zu gross\"
+            n = a
+    state SAFE:
+        enter:
+            x = x * 0.5
+        loop:
+            n = 0
+",
+    );
+    let b = p.machines[0].budget.expect("Budget");
+    assert!(b.fault_path.f64 > 0, "SAFE.enter steht im Fault-Pfad: {:?}", b.fault_path);
+}
+
+/// **Ein Handler laeuft je Element des Fensters** (9.4.3 `N(dispatch(st))
+/// = CAP · (…)`): Die Kosten wachsen linear mit der Kapazitaet.
+#[test]
+fn a_handler_runs_once_per_element_of_the_window() {
+    let with = |capacity: u32| {
+        let (p, _, _) = compile(&format!(
+            "\
+input rx : stream<line<16>> @ hw(\"rx\") with max_rate = 1000 Hz, capacity = {capacity}
+
+machine m:
+    var k : int in 0..999 = 0
+    initial RUN
+    state RUN:
+        loop:
+            n = 0
+        on rx as l:
+            k = (k + 1) % 1000
+"
+        ));
+        p.machines[0].budget.expect("Budget").activation
+    };
+    let (a, b, c) = (with(8), with(16), with(24));
+    assert!(b.mem > a.mem && b.i32 > a.i32, "mehr Fenster, mehr Arbeit: {a:?} {b:?}");
+    assert_eq!(b.mem - a.mem, c.mem - b.mem, "linear in CAP");
+    assert_eq!(b.i32 - a.i32, c.i32 - b.i32, "linear in CAP");
+}
+
+/// **`send` kostet seinen Text** (9.4.3 `N(send o, e) = cost(e) +
+/// len_max(e)`): acht Zeichen mehr, mindestens acht Bytes mehr.
+#[test]
+fn a_send_costs_its_text() {
+    let with = |text: &str| {
+        let (p, _, _) = compile(&format!(
+            "\
+output tx : stream<line<32>> @ hw(\"tx\") with max_rate = 1000 Hz, capacity = 64
+
+machine m:
+    var a : int in 0..99 = 0
+    initial RUN
+    state RUN:
+        loop:
+            send tx, \"{text}\"
+            n = 0
+"
+        ));
+        p.machines[0].budget.expect("Budget").activation
+    };
+    let (short, long) = (with("T{a}"), with("T{a}abcdefgh"));
+    assert!(long.mem >= short.mem + 8, "{short:?} {long:?}");
+}
+
+/// **`has` sucht an jeder Stelle** (8.7, `step::text_has`): teurer als
+/// `matches`, das den Text einmal liest.
+#[test]
+fn has_costs_more_than_matches() {
+    let with = |kind: &str| {
+        let (p, _, _) = compile(&format!(
+            "\
+input rx : stream<line<32>> @ hw(\"rx\") with max_rate = 1000 Hz, capacity = 4
+
+machine m:
+    var k : int in 0..999 = 0
+    initial RUN
+    state RUN:
+        loop:
+            n = 0
+        on rx {kind} \"OK\":
+            k = (k + 1) % 1000
+"
+        ));
+        p.machines[0].budget.expect("Budget").activation
+    };
+    let (matches, has) = (with("matches"), with("has"));
+    assert!(has.mem > matches.mem, "{matches:?} {has:?}");
+}
+
+/// **Jeder Waechter der Kette zaehlt** (9.3: `trans(C)` wird ausgewertet,
+/// bis einer zutrifft — im schlimmsten Fall keiner).
+#[test]
+fn every_guard_of_the_chain_counts() {
+    let with = |guards: &str| {
+        let (p, _, _) = compile(&format!(
+            "\
+machine m:
+    var x : float = 0.5
+    initial RUN
+    state RUN:
+        loop:
+            n = 0
+{guards}
+    state DONE:
+        loop:
+            n = 1
+"
+        ));
+        state_cost(&p, "RUN")
+    };
+    let one = with("        when x * 2.0 > 1.0: -> DONE");
+    let two = with("        when x * 2.0 > 1.0: -> DONE\n        when x * 3.0 > 2.0: -> DONE");
+    assert!(two.f64 > one.f64, "der zweite Waechter rechnet mit: {one:?} {two:?}");
+}
+
+/// Der Schritt einer Blockinstanz kostet seinen Rumpf (5.7, 9.4.3).
+#[test]
+fn a_block_step_costs_its_body() {
+    let (p, _, _) = compile(
+        "\
+machine m:
+    var lp = lowpass[bar](tau = 100 ms)
+    var y : float[bar] = 0 bar
+    initial RUN
+    state RUN:
+        loop:
+            y = lp.step(1 bar, tick)
+",
+    );
+    let b = p.machines[0].budget.expect("Budget").activation;
+    let step = p.blocks.iter().find(|d| d.name.starts_with("lowpass")).and_then(|d| d.step).expect("step");
+    let body = p.fns[step.index()].cost.expect("Kosten des Schritts");
+    assert!(body.f64 > 0, "der Filter rechnet: {body:?}");
+    assert!(b.f64 >= body.f64 && b.call >= 1, "die Aktivierung traegt den Schritt: {b:?}");
+}
+
 #[test]
 fn the_memory_report_separates_reliable_from_open() {
     // 11.5: jeder Posten traegt seine Herkunft, summiert wird nur

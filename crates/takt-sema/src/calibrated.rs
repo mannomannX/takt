@@ -56,7 +56,7 @@ pub fn check(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
     out.extend(journal_blocking(p, target, span));
 
     let Some(verdict) = load.judge(&target.c_target, target.t_io_ps) else {
-        let fehlend: Vec<&str> = target.c_target.missing().iter().map(|c| c.name()).collect();
+        let fehlend: Vec<&str> = target.c_target.missing_for(load.total()).iter().map(|c| c.name()).collect();
         out.push(
             Diagnostic::new(
                 Severity::Warning,
@@ -585,7 +585,7 @@ fn tick_jitter(p: &Program, hw: &Hardware) -> Option<u64> {
 /// `wcet_poll`: was eine Aktivierung der Treibermaschine kostet (9.4.3).
 fn poll_wcet_ns(m: &takt_mir::machine::Machine, target: &Target) -> Option<u64> {
     let budget = m.budget?;
-    if !target.c_target.missing().is_empty() {
+    if !target.c_target.missing_for(budget.activation + budget.fault_path).is_empty() {
         return None;
     }
     Some(ns(target.c_target.duration_ps(budget.activation + budget.fault_path)))

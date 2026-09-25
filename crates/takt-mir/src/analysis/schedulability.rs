@@ -77,11 +77,11 @@ impl Load {
 
     /// Das Urteil mit einer Kalibrierung.
     ///
-    /// `None`, wenn die Tabelle unvollstaendig ist: Eine fehlende Klasse
-    /// machte das Skalarprodukt zu klein, und ein „passt" auf zu kleiner
-    /// Grundlage ist schlimmer als kein Urteil.
+    /// `None`, wenn der Tabelle eine Klasse fehlt, die die Last braucht:
+    /// Eine fehlende Klasse machte das Skalarprodukt zu klein, und ein
+    /// „passt" auf zu kleiner Grundlage ist schlimmer als kein Urteil.
     pub fn judge(&self, c: &CTarget, t_io_ps: u64) -> Option<Verdict> {
-        if !c.is_complete() {
+        if !c.missing_for(self.total()).is_empty() {
             return None;
         }
         Some(Verdict { needed_ps: c.duration_ps(self.total()), available_ps: self.tick_ps.saturating_sub(t_io_ps) })

@@ -214,7 +214,7 @@ codec_enum!(StmtKind {
 
 // ---------------------------------------------------------------- Funktionen
 
-codec_struct!(CostVec { 1 one i32, 2 one i64, 3 one f32, 4 one f64, 5 one mem, 6 one call, 7 one native });
+codec_struct!(CostVec { 1 one i32, 2 one i64, 3 one f32, 4 one f64, 5 one mem, 6 one call, 7 one native, 8 one i32_div, 9 one i64_div, 10 one f32_div, 11 one f64_div });
 codec_enum!(GenericArgVal { 0 Unit(1 one u), 1 Type(1 one t), 2 Const(1 one c) });
 codec_struct!(GenericOrigin { 1 one template, 2 rep args });
 codec_struct!(FnParam { 1 one name, 2 one ty, 3 one inout, 4 opt default, 5 meta span });
