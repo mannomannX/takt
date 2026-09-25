@@ -110,6 +110,48 @@ fn run_interpreted(p: &Program) -> String {
     }
 }
 
+/// **Der virtuelle Schlaf ist unsichtbar** (Satz 9.9.1): Jedes
+/// Korpusprogramm mit einem `idle`-Zustand liefert schlafend denselben
+/// Trace wie der Interpreter, der nie schlaeft — und der Rahmen hat
+/// dabei tatsaechlich geschlafen. Auf dem Wirt, damit `_advance` (9.9)
+/// nicht erst auf dem Board geprueft wird (FB-268, FB-273).
+#[test]
+fn virtual_sleep_is_invisible() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let mut failed = Vec::new();
+    let mut slept = 0;
+    for name in KORPUS {
+        let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        if !src.contains(" idle:") {
+            continue;
+        }
+        let p = corpus(name);
+        let native = match common::run_native_sleeping(&clang, &p, name, TICKS) {
+            Ok(t) => t,
+            Err(e) => {
+                failed.push(format!("{name}: laesst sich nicht bauen:\n{e}"));
+                continue;
+            }
+        };
+        slept += native.lines().filter(|l| l.contains(" slept=")).count();
+        let diffs = compare(&run_interpreted(&p), &native);
+        if !diffs.is_empty() {
+            failed.push(format!(
+                "{name}: {} Abweichungen mit Schlaf, etwa {:?}",
+                diffs.len(),
+                &diffs[..diffs.len().min(4)]
+            ));
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    assert!(slept > 0, "kein Programm hat geschlafen");
+}
+
 /// **Die Abnahme.** Interpreter und erzeugter Code liefern dieselben
 /// Outputs (Satz 9.4.4).
 #[test]

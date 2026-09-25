@@ -7,19 +7,30 @@
 //! Ring, die Zahlen und das Verwerfen macht `takt-rt-baremetal` fuer
 //! jedes Board gleich.
 //!
-//! Ein Paket nach dem anderen (FB-267): Nach `wr_done` nimmt das FIFO
-//! erst wieder Bytes, wenn das Rohflag `serial_in_empty` das Abholen
-//! meldet — `serial_in_ep_data_free` allein trog unter Last, und ein
-//! volles FIFO schickt sich selbst ab, darum bleibt ein Paket unter 64
-//! Byte. Das Abholen weckt den Kern ueber den Interrupt (FB-264), der nur
-//! maskiert; das Flag liest die Leitung selbst, so geht es auch ohne
-//! Interrupts, etwa im Panic-Pfad.
+//! **Der Vertrag der Leitung** (Espressif, `usb_serial_jtag_ll.h`; FB-267,
+//! FB-272). Ein Byte nur, solange `serial_in_ep_data_free` steht. Ein
+//! volles FIFO von 64 Byte schickt sich selbst ab, und ein 64-Byte-Paket
+//! ist fuer den Host eine *unvollstaendige* USB-Transaktion, die er erst
+//! mit einem kuerzeren oder einem leeren Paket ausliefert — genau das
+//! Verstummen unter Last, bei dem alte Bytes spaeter nachkamen. Darum
+//! bleibt ein Paket hier unter 64 Byte und geht immer ueber `wr_done`:
+//! Jedes Paket ist eine ganze Transaktion. Und nach `wr_done` nimmt das
+//! FIFO das naechste Paket erst, wenn das Rohflag `serial_in_empty` das
+//! Abholen meldet; `serial_in_ep_data_free` allein trog unter Last. Der
+//! Interrupt dazu maskiert nur und weckt den Kern (FB-264); das Flag liest
+//! die Leitung selbst, so geht es auch ohne Interrupts, etwa im Panic-Pfad.
+//!
+//! Die Gegenrichtung liest die Leitung bei jedem Abschicken leer, damit
+//! ein ungelesenes Paket den Host nicht blockiert; steht `TAKT` darin,
+//! setzt sich der Chip zurueck (FB-266).
 
 use esp_hal::Blocking;
 use esp_hal::interrupt::Priority;
 use esp_hal::peripherals::USB_DEVICE;
 use esp_hal::usb::usb_serial_jtag::UsbSerialJtag;
 use takt_rt_baremetal::Port;
+
+use crate::usb::{Magic, chip_reset};
 
 /// Der Ring vor der Leitung: 2 KiB fangen einen Host ab, der 20 ms
 /// lang nicht liest, bei 500 us Tick und einer Zeitzeile je Tick.
@@ -35,6 +46,8 @@ pub struct UsbJtag {
     filled: u8,
     /// Abgeschickt und vom Host noch nicht abgeholt.
     in_flight: bool,
+    /// Der Wunsch nach einem Chip-Reset, byteweise aus der Gegenrichtung.
+    magic: Magic,
 }
 
 impl UsbJtag {
@@ -45,7 +58,7 @@ impl UsbJtag {
         // Handler nicht quittiert, waere ein Sturm.
         USB_DEVICE::regs().int_ena().reset();
         port.set_interrupt_handler(on_packet_taken);
-        UsbJtag { port, filled: 0, in_flight: false }
+        UsbJtag { port, filled: 0, in_flight: false, magic: Magic::default() }
     }
 
     /// Nimmt das Abholen zur Kenntnis: Das FIFO ist wieder frei.
@@ -54,6 +67,19 @@ impl UsbJtag {
         if self.in_flight && regs.int_raw().read().serial_in_empty().bit_is_set() {
             regs.int_clr().write(|w| w.serial_in_empty().clear_bit_by_one());
             self.in_flight = false;
+        }
+    }
+
+    /// Leert den Empfangspuffer, hoechstens ein Paket je Aufruf (4.1).
+    fn drain_rx(&mut self) {
+        let regs = USB_DEVICE::regs();
+        for _ in 0..64 {
+            if !regs.ep1_conf().read().serial_out_ep_data_avail().bit_is_set() {
+                return;
+            }
+            if self.magic.feed(regs.ep1().read().rdwr_byte().bits()) {
+                chip_reset();
+            }
         }
     }
 }
@@ -77,6 +103,7 @@ impl Port for UsbJtag {
 
     fn flush(&mut self) {
         self.settle();
+        self.drain_rx();
         if self.filled == 0 || self.in_flight {
             return;
         }

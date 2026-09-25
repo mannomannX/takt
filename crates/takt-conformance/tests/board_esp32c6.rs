@@ -9,6 +9,7 @@
 //! wie im Linux-Vergleich pruefen.
 
 use std::collections::BTreeSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -113,7 +114,64 @@ fn build(name: &str, fresh: bool) -> Result<PathBuf, String> {
 /// Wie [`build`], aber mit vollem Pfad und eigener Tickzahl: Nicht jedes
 /// Programm des Bring-ups liegt im Korpus, und nicht jedes ist nach den
 /// 60 Ticks des Konformitaetslaufs fertig.
+///
+/// Das Abbild kommt aus dem Zwischenspeicher, wenn es dort liegt (FB-270):
+/// Der Bau kostet rund 3 s je Programm, die Haelfte der Suite, und ergibt
+/// bei gleichen Eingaben dasselbe Abbild.
 fn build_program(program: &Path, fresh: bool, ticks: u64) -> Result<PathBuf, String> {
+    let cache = std::env::temp_dir().join("takt-board-images");
+    let cached = cache.join(format!("{:016x}.elf", image_key(program, fresh, ticks)?));
+    if cached.is_file() {
+        return Ok(cached);
+    }
+    let elf = build_program_uncached(program, fresh, ticks)?;
+    std::fs::create_dir_all(&cache)
+        .and_then(|()| std::fs::copy(&elf, &cached))
+        .map_err(|e| format!("{}: {e}", cached.display()))?;
+    Ok(cached)
+}
+
+/// Der Schluessel eines Abbilds: das Programm, `fresh` und `ticks`, und
+/// alles, was der Bau liest — die Quellen aller Crates, das Bring-up mit
+/// Bauskript, Linkerskript, Millicode und `Cargo.lock`. Aendert sich
+/// nichts davon, ist das Abbild dasselbe. Der Speicher liegt unter
+/// `takt-board-images` im Temp-Verzeichnis; loeschen erzwingt den Bau.
+fn image_key(program: &Path, fresh: bool, ticks: u64) -> Result<u64, String> {
+    let mut h = DefaultHasher::new();
+    std::fs::read(program).map_err(|e| format!("{}: {e}", program.display()))?.hash(&mut h);
+    (fresh, ticks).hash(&mut h);
+    let bringup = root().join("crates/takt-bringup-esp32c6");
+    for name in ["build.rs", "Cargo.toml", "Cargo.lock", "rwtext_hook.x", "millicode.S"] {
+        std::fs::read(bringup.join(name)).unwrap_or_default().hash(&mut h);
+    }
+    let crates = root().join("crates");
+    let mut sources: Vec<PathBuf> =
+        std::fs::read_dir(&crates).map_err(|e| e.to_string())?.flatten().map(|e| e.path().join("src")).collect();
+    sources.sort();
+    for dir in sources.iter().filter(|d| d.is_dir()) {
+        hash_tree(dir, &mut h)?;
+    }
+    Ok(h.finish())
+}
+
+/// Namen und Inhalte eines Verzeichnisbaums, in fester Ordnung.
+fn hash_tree(dir: &Path, h: &mut DefaultHasher) -> Result<(), String> {
+    let mut entries: Vec<PathBuf> =
+        std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries {
+        path.file_name().hash(h);
+        if path.is_dir() {
+            hash_tree(&path, h)?;
+        } else {
+            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?.hash(h);
+        }
+    }
+    Ok(())
+}
+
+/// Der Bau selbst: `cargo build` des Bring-ups mit dem Programm.
+fn build_program_uncached(program: &Path, fresh: bool, ticks: u64) -> Result<PathBuf, String> {
     let manifest = root().join("crates/takt-bringup-esp32c6/Cargo.toml");
     let mut cargo = Command::new("cargo");
     cargo
@@ -154,26 +212,54 @@ fn probe_rs(args: &[&str]) -> Result<(), String> {
 }
 
 /// `probe-rs` mit seiner Ausgabe. Steht der JTAG-Teil des USB-Serial-JTAG
-/// (DMI-Timeout, FB-264), verlangt der Test den Chip-Reset ueber die
-/// Konsole, und der Aufruf wird einmal wiederholt.
+/// (DMI-Timeout, FB-264) oder kehrt `probe-rs` gar nicht zurueck — ein
+/// `reset` hing einmal 19 Minuten —, verlangt der Test den Chip-Reset
+/// ueber die Konsole, und der Aufruf wird einmal wiederholt.
 fn probe_rs_output(args: &[&str]) -> Result<String, String> {
-    let run = || {
-        let out = Command::new("probe-rs").args(args).output().map_err(|e| format!("probe-rs: {e}"))?;
-        if out.status.success() {
-            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-        } else {
-            Err(String::from_utf8_lossy(&out.stderr).into_owned())
-        }
-    };
-    match run() {
+    match probe_rs_bounded(args) {
         Err(e) if e.contains("DMI") => {
             let port = std::env::var("TAKT_ESP32C6_PORT").map_err(|_| e.clone())?;
             eprintln!("JTAG antwortet nicht; Chip-Reset ueber die Konsole");
             reenumerate_via_console(&port)?;
-            run()
+            probe_rs_bounded(args)
         }
         r => r,
     }
+}
+
+/// Ein `probe-rs`-Aufruf mit Frist; die Pipes liest je ein Thread, damit
+/// ein gespraechiger Aufruf nicht an ihnen haengt.
+fn probe_rs_bounded(args: &[&str]) -> Result<String, String> {
+    let mut child = Command::new("probe-rs")
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("probe-rs: {e}"))?;
+    let drain = |pipe: Option<std::process::ChildStdout>, err: Option<std::process::ChildStderr>| {
+        std::thread::spawn(move || {
+            let mut text = Vec::new();
+            match (pipe, err) {
+                (Some(mut p), _) => drop(p.read_to_end(&mut text)),
+                (_, Some(mut e)) => drop(e.read_to_end(&mut text)),
+                _ => {}
+            }
+            String::from_utf8_lossy(&text).into_owned()
+        })
+    };
+    let (stdout, stderr) = (drain(child.stdout.take(), None), drain(None, child.stderr.take()));
+    let until = Instant::now() + Duration::from_secs(90);
+    while child.try_wait().map_err(|e| format!("probe-rs: {e}"))?.is_none() {
+        if Instant::now() > until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("probe-rs kehrt nicht zurueck (DMI)".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let status = child.wait().map_err(|e| format!("probe-rs: {e}"))?;
+    let (stdout, stderr) = (stdout.join().unwrap_or_default(), stderr.join().unwrap_or_default());
+    if status.success() { Ok(stdout) } else { Err(stderr) }
 }
 
 /// Setzt das Board zurueck und liest den Trace bis `takt end`.
@@ -299,22 +385,58 @@ fn reenumerate(port: &str) -> Result<(), String> {
     settle_port(port)
 }
 
-/// Derselbe Wunsch ueber die Konsole, wenn JTAG nicht antwortet: `TAKT`
-/// in den Empfangspuffer, dann der Reset ueber RTS — der Puffer ueberlebt
-/// ihn, und das Bring-up liest ihn beim Start.
+/// Derselbe Wunsch ueber die Konsole, wenn JTAG nicht antwortet: erst ein
+/// Reset ueber RTS, damit der Start einen alten, ungelesenen Puffer leert
+/// (sonst blockiert der Host beim Schreiben), dann `TAKT` in den
+/// Empfangspuffer und ein zweiter Reset — der Puffer ueberlebt ihn, und
+/// das Bring-up liest ihn beim Start. EN liegt tief, solange RTS steht und
+/// DTR nicht (die Logik des USB-Serial-JTAG, wie bei esptool). Meldet sich
+/// das Geraet schon unterwegs ab — ein alter Puffer trug den Wunsch schon —,
+/// ist das der gewuenschte Ausgang, und der Rest entfaellt.
 fn reenumerate_via_console(port: &str) -> Result<(), String> {
-    let at = |e: &dyn std::fmt::Display| format!("{port}: {e}");
-    let mut serial = serialport::new(port, 115_200).timeout(Duration::from_millis(200)).open().map_err(|e| at(&e))?;
-    serial.write_data_terminal_ready(false).map_err(|e| at(&e))?;
-    serial.write_request_to_send(false).map_err(|e| at(&e))?;
-    std::thread::sleep(Duration::from_millis(100));
-    serial.write_all(b"TAKT").and_then(|()| serial.flush()).map_err(|e| at(&e))?;
-    std::thread::sleep(Duration::from_millis(100));
-    serial.write_request_to_send(true).map_err(|e| at(&e))?;
-    std::thread::sleep(Duration::from_millis(100));
-    serial.write_request_to_send(false).map_err(|e| at(&e))?;
+    let mut serial =
+        serialport::new(port, 115_200).timeout(Duration::from_secs(1)).open().map_err(|e| format!("{port}: {e}"))?;
+    let steps: [&Step; 4] = [
+        &|s| control_lines(s, true, 100),
+        &|s| control_lines(s, false, 400),
+        &|s| {
+            s.write_all(b"TAKT")?;
+            s.flush()?;
+            std::thread::sleep(Duration::from_millis(100));
+            Ok(())
+        },
+        &|s| control_lines(s, true, 100).and_then(|()| control_lines(s, false, 0)),
+    ];
+    let mut failure = None;
+    for step in steps {
+        if let Err(e) = step(&mut serial) {
+            // Ein abgemeldetes Geraet meldet der Treiber als Fehler; ob es das
+            // war, sagt die Portliste, nicht der Text.
+            failure = Some(format!("{port}: {e}"));
+            break;
+        }
+    }
     drop(serial);
-    settle_port(port)
+    if !port_listed(port, false, Duration::from_secs(3)) {
+        return Err(failure
+            .unwrap_or_else(|| "das USB-Geraet hat sich nicht abgemeldet: Bring-up ohne Neuanmeldung?".to_string()));
+    }
+    if !port_listed(port, true, Duration::from_secs(10)) {
+        return Err(format!("{port} kam nach der Neuanmeldung nicht zurueck"));
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    Ok(())
+}
+
+/// Ein Schritt an der Leitung.
+type Step = dyn Fn(&mut Box<dyn serialport::SerialPort>) -> serialport::Result<()>;
+
+/// DTR tief, RTS wie angegeben, dann warten: RTS mit tiefem DTR ist EN tief.
+fn control_lines(serial: &mut Box<dyn serialport::SerialPort>, rts: bool, wait_ms: u64) -> serialport::Result<()> {
+    serial.write_data_terminal_ready(false)?;
+    serial.write_request_to_send(rts)?;
+    std::thread::sleep(Duration::from_millis(wait_ms));
+    Ok(())
 }
 
 /// Wartet, bis der Port weg war und wieder da ist.
@@ -635,6 +757,20 @@ fn the_journal_writes_in_sleep_windows() {
     let p = corpus(name);
     let diffs = compare(&run_interpreted(&p), &text);
     assert!(diffs.is_empty(), "{diffs:?}");
+}
+
+/// **Der Wunsch ueber die Konsole setzt den Chip zurueck** (FB-264):
+/// `TAKT` in den Empfangspuffer, Reset ueber RTS — der Port geht und
+/// kommt, und JTAG antwortet danach, auch wenn es vorher stand.
+#[test]
+fn the_board_resets_on_console_request() {
+    let Ok(port) = std::env::var("TAKT_ESP32C6_PORT") else {
+        eprintln!("uebersprungen: TAKT_ESP32C6_PORT nennt kein Board");
+        return;
+    };
+    let _board = board();
+    reenumerate_via_console(&port).unwrap_or_else(|e| panic!("{e}"));
+    probe_rs_bounded(&["read", "--chip", "esp32c6", "b32", REENUMERATE_REG, "1"]).unwrap_or_else(|e| panic!("{e}"));
 }
 
 /// **Das Board meldet sein USB-Geraet auf Wunsch neu an** (FB-266).

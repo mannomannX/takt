@@ -51,7 +51,17 @@ pub fn build(p: &Program, machine: &str, ticks: u64) -> Harness {
 /// Bindung `sim` -> `hw` (8.3). Das Modell braucht dann nichts, was ein
 /// gewoehnliches Programm nicht auch braucht.
 pub fn build_all(p: &Program, ticks: u64, inputs: &[Stimulus]) -> Harness {
-    build_inner(p, None, None, ticks, inputs, &[])
+    build_inner(p, None, None, ticks, inputs, &[], false)
+}
+
+/// Baut den Rahmen fuer alle Maschinen mit virtuellem Schlaf (9.9), wie
+/// die Runtime auf einer MCU: Sind alle Maschinen `idle`, rueckt der
+/// Rahmen bis zur fruehesten `after`-Frist vor, ohne die Ticks dazwischen
+/// auszufuehren. Satz 9.9.1 verlangt denselben Trace wie ohne Schlaf —
+/// und der Pfad `_advance` des Codegens laeuft so auch auf dem Wirt
+/// (FB-268, FB-273).
+pub fn build_sleeping(p: &Program, ticks: u64) -> Harness {
+    build_inner(p, None, None, ticks, &[], &[], true)
 }
 
 /// Baut den Rahmen mit einer Journal-Nutzlast (5.9).
@@ -61,14 +71,14 @@ pub fn build_all(p: &Program, ticks: u64, inputs: &[Stimulus]) -> Harness {
 /// `_persist_restore`. Am Ende schreibt er `persist <hex>` — dieselben
 /// Bytes, die der Interpreter in seine Zeile schreibt (Satz 9.4.4).
 pub fn build_restoring(p: &Program, machine: Option<&str>, ticks: u64, inputs: &[Stimulus], payload: &[u8]) -> Harness {
-    build_inner(p, machine, None, ticks, inputs, payload)
+    build_inner(p, machine, None, ticks, inputs, payload, false)
 }
 
 /// Baut den Rahmen mit einem Szenario (13.6): dieselben Maschinen wie
 /// `takt test` — die laufenden samt dem gewaehlten Szenario, in
 /// Schrittordnung.
 pub fn build_scenario(p: &Program, scenario: &str, ticks: u64, inputs: &[Stimulus]) -> Harness {
-    build_inner(p, None, Some(scenario), ticks, inputs, &[])
+    build_inner(p, None, Some(scenario), ticks, inputs, &[], false)
 }
 
 /// Baut den Rahmen mit Eingaben (12.5).
@@ -78,7 +88,7 @@ pub fn build_scenario(p: &Program, scenario: &str, ticks: u64, inputs: &[Stimulu
 /// prueft die Abnahme die *Reaktion* auf Lieferungen und nicht nur den
 /// Anfangszustand.
 pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[Stimulus]) -> Harness {
-    build_inner(p, Some(machine), None, ticks, inputs, &[])
+    build_inner(p, Some(machine), None, ticks, inputs, &[], false)
 }
 
 /// Der gemeinsame Rumpf: `Some(name)` tickt eine Maschine, `None` alle —
@@ -90,6 +100,7 @@ fn build_inner(
     ticks: u64,
     inputs: &[Stimulus],
     payload: &[u8],
+    sleep: bool,
 ) -> Harness {
     let layout = crate::layout::of(p);
     // Die Maschinen, die der Rahmen fuehrt, in Schrittordnung — dieselbe,
@@ -161,6 +172,9 @@ fn build_inner(
         let _ = writeln!(s, "void {}_publish(void *st, void *in);", m.name);
         let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);
+        let _ = writeln!(s, "long long {}_deadline(void *st);", m.name);
+        let _ = writeln!(s, "void {}_advance(void *st, long long n);", m.name);
         if !m.persist.is_empty() {
             let _ = writeln!(s, "int {}_persist_snapshot(void *st, void *out, int cap);", m.name);
             let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
@@ -278,11 +292,8 @@ fn build_inner(
         let _ = writeln!(s, "    {0}_publish(state_{0}, image);", m.name);
     }
     scoped_lifecycle(&mut s, p, &layout, "    ");
-    psi_commit(&mut s, p, &driven, "    ");
-    sim_bindings(&mut s, p, "    ");
     // 8.8: Auch im Tick 0 holt der Treiber ab, was `enter` gesendet hat.
-    let _ = writeln!(s, "    takt_tx_commit(0);");
-    let _ = writeln!(s, "    takt_int_commit();");
+    commit_sequence(&mut s, p, &driven, "    ", "0");
     let _ = writeln!(s, "    dump(0);");
     for (i, _) in &monitors {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, 0);");
@@ -357,15 +368,7 @@ fn build_inner(
         );
     }
     scoped_lifecycle(&mut s, p, &layout, "        ");
-    psi_commit(&mut s, p, &driven, "        ");
-    // 8.3: Was ein Modell in diesem Tick auf einen `sim`-Output gestellt
-    // hat, liest das Programm im naechsten — Unit-Delay wie bei Ψ.
-    sim_bindings(&mut s, p, "        ");
-    // 8.8: Gesendet wird beim Commit des Ticks. Der Treiber holt seine
-    // Rate ab, bevor der Latch ausgeschrieben wird — sonst stuende die
-    // Zeile einen Tick spaeter als beim Interpreter.
-    let _ = writeln!(s, "        takt_tx_commit(g_tick);");
-    let _ = writeln!(s, "        takt_int_commit();");
+    commit_sequence(&mut s, p, &driven, "        ", "g_tick");
     let _ = writeln!(s, "        dump(g_tick);");
     // 13.3: nach dem Commit, wie `observe_properties` im Interpreter.
     for (i, _) in &monitors {
@@ -385,6 +388,9 @@ fn build_inner(
         let _ = writeln!(s, "        if (*({ct} *)(latch + {})) {{", slot.offset);
         let _ = writeln!(s, "            printf(\"t=%lld end boot_jump\\n\", g_tick); goto ende;");
         let _ = writeln!(s, "        }}");
+    }
+    if sleep {
+        virtual_sleep(&mut s, &driven, ticks);
     }
     let _ = writeln!(s, "    }}");
     if reboot_slot(p, &layout).is_some() || jump_slot(p, &layout).is_some() {
@@ -820,6 +826,56 @@ fn safe_outputs_of(s: &mut String, p: &Program, layout: &Layout, machine: &str, 
 /// Ψ_{k+1} wird Ψ_k (9.4): die zweite Bank in die erste kopieren, dann
 /// `fresh` und die Signale loeschen — ein Signal ist einen Tick sichtbar
 /// (5.8), und ohne `fresh` liest ein Follower wieder Ψ_k (7.2).
+/// Der Commit eines Ticks, fuer beide Rahmen und fuer Tick 0 dieselbe
+/// Folge (12.1): erst Ψ, dann die `sim`-Outputs an ihre `hw`-Inputs (8.3,
+/// Unit-Delay wie bei Ψ), dann die Sendepuffer (8.8: gesendet wird beim
+/// Commit, und der Treiber holt seine Rate ab, bevor der Latch
+/// ausgeschrieben wird) und die internen Ringe (8.6). Zwei Fassungen
+/// dieser Folge wichen einmal voneinander ab (FB-269).
+pub(crate) fn commit_sequence(
+    s: &mut String,
+    p: &Program,
+    driven: &[&takt_mir::machine::Machine],
+    indent: &str,
+    tick: &str,
+) {
+    psi_commit(s, p, driven, indent);
+    sim_bindings(s, p, indent);
+    let _ = writeln!(s, "{indent}takt_tx_commit({tick});");
+    let _ = writeln!(s, "{indent}takt_int_commit();");
+}
+
+/// `maybe_sleep()` nach 9.9 am Ende eines Ticks: Sind alle Maschinen
+/// `idle`, rueckt der Rahmen bis vor die frueheste `after`-Frist, wie
+/// `Runtime::sleep` — `n = d / T0 - 1`, und der Tick an der Frist laeuft.
+/// Die Zeitzeile traegt `slept`, wie auf dem Board; der Vergleich liest
+/// sie nicht. Wake-Kommandos, geplante Ausgaben und Jobs gibt es in
+/// diesem Rahmen nicht (keine Eingaben), also entscheiden die Maschinen.
+fn virtual_sleep(s: &mut String, driven: &[&takt_mir::machine::Machine], ticks: u64) {
+    let _ = writeln!(s, "        {{");
+    let _ = writeln!(s, "            _Bool idle = 1;");
+    let _ = writeln!(s, "            long long best = -1;");
+    for m in driven {
+        let _ = writeln!(s, "            idle = idle && {0}_idle(state_{0});", m.name);
+    }
+    for m in driven {
+        let _ = writeln!(s, "            if (idle) {{");
+        let _ = writeln!(s, "                long long d = {0}_deadline(state_{0});", m.name);
+        let _ = writeln!(s, "                if (d >= 0 && (best < 0 || d < best)) best = d;");
+        let _ = writeln!(s, "            }}");
+    }
+    let _ = writeln!(s, "            long long n = idle && best > 1 ? best - 1 : 0;");
+    let _ = writeln!(s, "            if (g_tick + n > {ticks}LL) n = {ticks}LL - g_tick;");
+    let _ = writeln!(s, "            if (n > 0) {{");
+    for m in driven {
+        let _ = writeln!(s, "                {0}_advance(state_{0}, n);", m.name);
+    }
+    let _ = writeln!(s, "                printf(\"t=%lld time took=0 drift=0 slept=%lld\\n\", g_tick, n);");
+    let _ = writeln!(s, "                g_tick += n;");
+    let _ = writeln!(s, "            }}");
+    let _ = writeln!(s, "        }}");
+}
+
 pub(crate) fn psi_commit(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], indent: &str) {
     use takt_llvm::psi::{Field, bank_size, field_offset, region_offset};
     let Some(first) = region_offset(takt_mir::MachineId(0), false, p) else { return };

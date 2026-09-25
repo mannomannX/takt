@@ -30,7 +30,8 @@ impl Watchdog for NoWatchdog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cadence {
     /// Alle wie viele Ticks die Ausgaenge gehen. `1` ist der
-    /// Konformitaetslauf: je Tick die Zeitzeile und nur die Aenderungen.
+    /// Konformitaetslauf: nur die Aenderungen, dazu die Zeitzeile —
+    /// je Tick, aber hoechstens eine je Millisekunde (FB-271).
     pub every: u64,
     /// Nach so vielen Ticks endet der Lauf; `0` heisst nie.
     pub limit: u64,
@@ -97,6 +98,9 @@ where
     }
     let every = cadence.every.max(1);
     let mut next = every;
+    // Unter einer Millisekunde Tick traegt die Leitung keine Zeile je
+    // Tick (FB-271); die Zeitzeile ist Statistik und darf duenner werden.
+    let time_every = (1_000_000 / rt.tick_ns()).max(1) as u64;
     loop {
         let tick = match persist.as_deref_mut() {
             Some(p) => rt.step_persisting(p),
@@ -106,6 +110,7 @@ where
         stats.overruns += u64::from(tick.overrun);
         rt.program.commit();
         if cadence.conformance()
+            && tick.k % time_every == 0
             && let Some(t) = telemetry()
         {
             t.write_time(&tick);

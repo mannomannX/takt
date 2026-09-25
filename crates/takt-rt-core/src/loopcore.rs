@@ -405,6 +405,11 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         &self.overrun
     }
 
+    /// Die nominale Periode in Nanosekunden (7.1).
+    pub fn tick_ns(&self) -> i64 {
+        self.tick_ns
+    }
+
     /// Nummer des naechsten Ticks.
     pub fn tick_number(&self) -> u64 {
         self.k

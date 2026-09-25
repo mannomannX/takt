@@ -71,6 +71,12 @@ pub fn run_native_all_with(
     run_native_inner(clang, p, name, None, ticks, inputs, &[])
 }
 
+/// Alle Maschinen mit virtuellem Schlaf (9.9): der Pfad `_advance`.
+#[allow(dead_code)]
+pub fn run_native_sleeping(clang: &Clang, p: &Program, name: &str, ticks: u64) -> Result<String, String> {
+    run_native_build(clang, p, name, ticks, harness::build_sleeping(p, ticks))
+}
+
 /// Alle Maschinen, mit einer Journal-Nutzlast beim Start (5.9).
 pub fn run_native_persist(
     clang: &Clang,
