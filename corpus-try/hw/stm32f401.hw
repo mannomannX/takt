@@ -8,6 +8,13 @@
 # 3690476/2564996 gestreckt, damit sie jeden Referenzkern deckt; den Faktor
 # treibt der Fault-Pfad des Sequenzkerns mit dem Hook der Runtime (FB-295).
 # `guard` und `jitter` je Kanal misst erst `takt driver-test` (FB-285).
+#
+# **Veraltet seit FB-300.** Die Gewichte gehoeren zum Kostenmodell vor
+# FB-298 und FB-299 (die Tabelle traegt kein `cost_model`): Damals zaehlte
+# eine Endlichkeitspruefung als Gleitkommaoperation, und `fma` und `sqrt`
+# hatten kein eigenes Gewicht. Der Compiler urteilt mit ihr nicht, bis
+# `takt bench` neu misst.
+#
 # `ram` und `flash` stehen im Datenblatt; die ersten 16 KiB Flash gehoeren
 # dem HID-Bootloader, das Journal liegt in zwei 16-KiB-Sektoren dahinter.
 [target.thumbv7em]

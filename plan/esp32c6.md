@@ -24,6 +24,14 @@ Präzision aus 7.5) beschreiben dann das Cache-Verhalten, nicht das
 RGB-LED der Espressif-DevKits hängt an einem WS2812 (IO8), nicht an
 einem Pin — sie bekommt ihre 24 Bit über den RMT-Baustein (`led.rs`).
 
+**Nachtrag 2026-09-26: kalibriert.** Seit Schritt 7 liegen der erzeugte
+Code, sein C-Rahmen und der Tick-Pfad im RAM, die Soft-Float-Grundrechenarten
+im ROM des Chips; eine Zeitmessung beschreibt damit den Kern, nicht den
+Cache. `takt bench` hat die Kostentabelle in drei Läufen gemessen (FB-297
+bis FB-300), gestreckt um 1,009; sie steht in `corpus-try/hw/esp32c6.hw`,
+der Bericht daneben. Was noch über den Cache läuft — `fma`, `sqrt` und die
+Trace-Hooks —, ist im warmen Fall gemessen (FB-301).
+
 | | |
 |---|---|
 | Kern | RV32IMAC, 160 MHz, ohne FPU (`f32` und `f64` aus `libtaktm`) |
@@ -74,8 +82,8 @@ architekturneutral und wird wiederverwendet.
 
 Schritte 1–4 sind der Bring-up (zwei bis vier Tage); 5–7 sind die
 Hardwareanteile aus M5 und M6, die dieses Board tragen kann. Was bei Board
-1 bleibt: FPU-Probe, Jitter- und Kostenmessung, `rtos` und `boot` auf dem
-STM32 — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
+1 bleibt: FPU-Probe, `rtos` und `boot` auf dem STM32 — Jitter und Kosten
+misst `takt bench` inzwischen auf beiden Boards — oder, falls sich ESP-IDF anbietet, `rtos` (FreeRTOS) und `boot`
 (Partitionstabelle, OTA) ebenfalls hier; das ist eine spätere Entscheidung.
 
 ## 4. Offene Punkte

@@ -1,11 +1,19 @@
-# takt-hw 4
+# takt-hw 7
 # ESP32-C6-DevKitM-1-N4 (ESP32-C6-MINI-1, RV32IMAC, 160 MHz, ohne FPU):
 # Speicher und Journal fuer die Profilfamilie `xip_flash` (12.3,
 # plan/esp32c6.md).
 #
-# **Die Kostentabelle fehlt bewusst.** Code laeuft ueber den Flash-Cache;
-# eine Zeitmessung beschriebe hier das Cache-Verhalten, nicht den Kern
-# (plan/esp32c6.md 1). Sie gehoert zu Board 1.
+# **Gemessen mit `takt bench` auf Board 2** (2026-09-25, 200 Wiederholungen
+# je Kern, 160 MHz), zum Kostenmodell 1. Der Bericht daneben
+# (`esp32c6.report`) nennt Streuung und Umstaende. Gestreckt um
+# 1993750/1976524, also kaum: Jeder Referenzkern liegt unter seiner Schranke.
+#
+# Was die Zahlen voraussetzen: Der erzeugte Code, sein C-Rahmen und der
+# Tick-Pfad liegen im RAM (`rwtext_hook.x`), die Soft-Float-Grundrechenarten
+# im ROM des Chips. `fma` und `sqrt` kommen aus dem Flash ueber den Cache;
+# gemessen ist der warme Fall, ein Fehlzugriff kann sie verlaengern
+# (FB-301). Ohne FPU sind Division, `fma` und `sqrt` Bibliotheksaufrufe
+# mit eigenem Gewicht (7.2).
 #
 # `ram` und `iram` nennen denselben Bereich, und das ist kein Fehler: Der
 # C6 hat einen einheitlichen HP-SRAM (`esp-hal` richtet 0x6E610 Byte ein,
@@ -18,6 +26,7 @@
 # Schreibvorgaenge: Loeschen hoechstens 49,9 ms, Programmieren hoechstens
 # 0,12 ms; hier mit Reserve.
 [target.riscv32imac]
+cost_model = 1
 core_hz = 160000000
 ram = 451600
 flash = 4194304
@@ -27,6 +36,24 @@ nvm_sectors = 2
 nvm_erase_ns = 60000000
 nvm_program_ns = 200000
 nvm_blocking = true
+i32 = 7566
+i64 = 24406
+f32 = 357983
+f64 = 562222
+mem = 28804
+call = 53431
+native = 0
+i32_div = 60287
+i64_div = 1035823
+f32_div = 1218641
+f64_div = 2371308
+f32_fma = 4349632
+f64_fma = 2829959
+f32_sqrt = 463838
+f64_sqrt = 1037972
+t_io = 2375000
+tick_jitter_ns = 0
+stack_reserve = 4580
 
 [device.led]
 driver = "esp32c6-rmt-ws2812"
