@@ -219,6 +219,14 @@ impl Binutils {
         out.status.success().then(|| parse_sections(&String::from_utf8_lossy(&out.stdout)))
     }
 
+    /// Das Rohabbild eines ELF (`objcopy -O binary`), wie ein Bootloader es
+    /// schreibt: die ladbaren Abschnitte ab der niedrigsten Adresse.
+    ///
+    /// Falsch, wenn das Werkzeug fehlt oder scheitert.
+    pub fn raw_image(&self, elf: &Path, out: &Path) -> bool {
+        Command::new(self.tool("objcopy")).args(["-O", "binary"]).arg(elf).arg(out).status().is_ok_and(|s| s.success())
+    }
+
     /// Die Abschnitte mit ihrer Lage im Abbild (`objdump -h`).
     pub fn section_ranges(&self, file: &Path) -> Option<Vec<SectionRange>> {
         let out = Command::new(self.tool("objdump")).arg("-h").arg(file).output().ok()?;

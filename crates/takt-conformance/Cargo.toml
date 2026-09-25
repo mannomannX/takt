@@ -13,10 +13,15 @@ takt-llvm = { path = "../takt-llvm" }
 takt-native = { path = "../takt-native" }
 takt-mir = { path = "../takt-mir" }
 takt-sema = { path = "../takt-sema" }
+# Die Boards am Host (`board`): der Trace kommt ueber USB-Serial-JTAG
+# (ESP32-C6) oder einen Adapter an USART1 (STM32F401).
+serialport = { version = "4", default-features = false, optional = true }
+
+[features]
+# Die Bring-ups binden nur den C-Rahmen (`mcu`) in ihr Bauskript und
+# lassen die Boards am Host mitsamt der seriellen Schnittstelle weg.
+default = ["board"]
+board = ["dep:serialport"]
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-# Board 2 (ESP32-C6): der Trace kommt ueber USB-Serial-JTAG (plan/esp32c6.md 5).
-serialport = { version = "4", default-features = false }

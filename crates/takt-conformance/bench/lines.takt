@@ -1,0 +1,32 @@
+# takt bench (13.8): DFA-Zeilenparsing bei 2 000 Zeilen je Sekunde.
+# `gen` schreibt je Tick zwei Zeilen in einen internen Strom, `parse` liest
+# sie im naechsten Tick (8.6): eine Messzeile `T<Kanal>=<Wert>` mit zwei
+# Platzhaltern und eine Quittung, die nur der Auffang-Handler nimmt.
+system:
+    language = 1
+    tick     = 1 ms
+
+stream<line<32>> feed with capacity = 8
+
+output digest : int in 0..65535 @ hw("bench/digest") with safe = 0
+
+machine gen:
+    var n : int in 0..999 = 0
+    initial RUN
+    state RUN:
+        loop:
+            n = (n + 7) % 1000
+            send feed, "T{n % 16}={n}"
+            send feed, "OK {n}"
+
+machine parse:
+    var sum   : int in 0..65535 = 0
+    var other : int in 0..65535 = 0
+    initial RUN
+    state RUN:
+        loop:
+            digest = (sum + other) % 65536
+        on feed matches "T{ch:int}={v:int}" as l:
+            sum = (sum + l.ch * 1000 + l.v) % 65536
+        on feed:
+            other = (other + 1) % 65536

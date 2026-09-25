@@ -1,0 +1,34 @@
+# takt bench (13.8): Sequenzschritt mit Fault-Pfad. Eine Pruefsequenz
+# faehrt je Runde eine Stufe an und prueft sie; jede siebte Stufe verletzt
+# ihre Erwartung. Der Fault-Pfad fuehrt nach `SAFE`, das die Verletzung
+# zaehlt und nach seiner Mindestverweildauer in die Sequenz zurueckkehrt.
+system:
+    language = 1
+    tick     = 1 ms
+
+output digest : int in 0..65535 @ hw("bench/digest") with safe = 0
+
+machine seq:
+    fault -> SAFE
+    var stage  : int in 0..6 = 0
+    var passed : int in 0..65535 = 0
+    var faults : int in 0..65535 = 0
+    initial TEST
+
+    loop:
+        digest = (passed * 7 + faults) % 65536
+
+    state TEST:
+        sequence:
+            step "anfahren":
+                stage = (stage + 1) % 7
+                expect stage != 6, "Stufe 6 verletzt"
+                wait 1 ms
+            step "zaehlen":
+                passed = (passed + 1) % 65536
+            -> TEST
+
+    state SAFE:
+        enter:
+            faults = (faults + 1) % 65536
+        after 1 ms: -> TEST

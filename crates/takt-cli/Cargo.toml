@@ -21,6 +21,9 @@ takt-llvm = { path = "../takt-llvm" }
 takt-sema = { path = "../takt-sema" }
 # Fuer `takt prove`: Transitionssystem und SMT-LIB2-Export (13.3).
 takt-prove = { path = "../takt-prove" }
+# Fuer `takt bench`: die Boards am Host, die Messkerne und der
+# Konformitaetsbericht (13.8).
+takt-conformance = { path = "../takt-conformance" }
 
 [lints]
 workspace = true

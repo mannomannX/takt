@@ -20,10 +20,16 @@
 //! clang beides in einem Zug uebersetzt — ein Rust-Gegenstueck braeuchte
 //! `unsafe` und `extern "C"`, was der Workspace verbietet.
 
+#[cfg(feature = "board")]
+pub mod bench;
+#[cfg(feature = "board")]
+pub mod board;
 pub mod harness;
 pub mod layout;
 pub mod limits;
 pub mod mcu;
+pub mod natives;
+pub mod report;
 pub mod run;
 pub mod stimulus;
 pub mod streams;

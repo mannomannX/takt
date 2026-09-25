@@ -4,6 +4,8 @@
 //! `dead_code` ist hier die Regel, nicht die Ausnahme.
 #![allow(dead_code)]
 
+pub mod board;
+
 use takt_conformance::harness;
 use takt_conformance::stimulus::Stimulus;
 use takt_llvm::toolchain::Clang;

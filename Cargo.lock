@@ -451,6 +451,7 @@ version = "0.1.0"
 name = "takt-cli"
 version = "0.1.0"
 dependencies = [
+ "takt-conformance",
  "takt-diag",
  "takt-interp",
  "takt-llvm",

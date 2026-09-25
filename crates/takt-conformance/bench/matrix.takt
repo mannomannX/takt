@@ -1,0 +1,20 @@
+# takt bench (13.8): 4×4-Matrix-Update je Tick — die Kovarianz eines
+# Kalman-Filters, `P = A·P·Aᵀ + Q`, in f32. `A` ist stabil, `P` strebt
+# einem Fixpunkt zu; der Digest liest das erste Diagonalelement.
+system:
+    language = 1
+    tick     = 1 ms
+    float    = f32
+
+output digest : int in 0..65535 @ hw("bench/digest") with safe = 0
+
+const A : mat<4, 4> = [[0.95, 0.1, 0.0, 0.0], [0.0, 0.95, 0.1, 0.0], [0.0, 0.0, 0.95, 0.1], [0.0, 0.0, 0.0, 0.95]]
+const Q : mat<4, 4> = [[0.01, 0.0, 0.0, 0.0], [0.0, 0.01, 0.0, 0.0], [0.0, 0.0, 0.01, 0.0], [0.0, 0.0, 0.0, 0.01]]
+
+machine kf:
+    var p : mat<4, 4> = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+    initial RUN
+    state RUN:
+        loop:
+            p = A * p * A.transpose() + Q
+            digest = floor(p[0, 0] * 1000000.0) % 65536

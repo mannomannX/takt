@@ -1,0 +1,47 @@
+# takt bench (13.8): PID-Schleife bei 1 kHz, in f32.
+#
+# Ein PID-Regler mit Begrenzung des Integrators (Anti-Windup) und der
+# Stellgroesse regelt eine Strecke erster Ordnung; der Sollwert springt
+# alle 500 Ticks. `digest` zaehlt die Ticks, in denen die Regelabweichung
+# unter einem Hundertstel liegt — ein ganzzahliger Wert, den die C-Referenz
+# `pid.c` genauso zaehlt, wenn sie dasselbe rechnet.
+
+system:
+    language = 1
+    tick     = 1 ms
+    float    = f32
+
+output digest : int in 0..1000000 @ hw("bench/digest") with safe = 0
+
+machine k:
+    var y       : float = 0.0
+    var integ   : float = 0.0
+    var e_last  : float = 0.0
+    var sp      : float = 1.0
+    var n       : int in 0..499 = 0
+    var settled : int in 0..1000000 = 0
+    initial RUN
+    state RUN:
+        loop:
+            if n == 499:
+                n = 0
+                sp = 2.0 - sp
+            else:
+                n = n + 1
+            var e = sp - y
+            integ = integ + e * 0.001
+            if integ > 10.0:
+                integ = 10.0
+            if integ < -10.0:
+                integ = -10.0
+            var d = (e - e_last) * 1000.0
+            e_last = e
+            var u = 2.0 * e + 0.5 * integ + 0.01 * d
+            if u > 5.0:
+                u = 5.0
+            if u < -5.0:
+                u = -5.0
+            y = y + (u - y) * 0.05
+            if e < 0.01 and e > -0.01 and settled < 1000000:
+                settled = settled + 1
+            digest = settled

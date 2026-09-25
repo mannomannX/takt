@@ -42,7 +42,7 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… | takt bench --board NAME (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -104,6 +104,9 @@ impl Args {
             "--steps",
             "--tick",
             "--params-profile",
+            "--board",
+            "--runs",
+            "--conformance",
         ];
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
         let mut i = 0;
@@ -155,12 +158,84 @@ fn main() -> ExitCode {
         "parse" => parse(&args),
         "tokens" => tokens(&args),
         "tcb" => tcb(&args),
+        "bench" => bench(&args),
         _ => {
             eprintln!("{USAGE}");
             false
         }
     };
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// `takt bench --board NAME [--runs N] [--hardware DATEI] [--conformance DATEI]`
+/// (13.8): die Kostentabelle des Boards, gemessen.
+///
+/// Das Board kommt aus der Umgebung wie in der Board-Suite
+/// (`TAKT_F401_PORT`, `TAKT_ESP32C6_PORT`). `--hardware` traegt die
+/// Messwerte in die Konfiguration ein, ohne ihre Kommentare zu verwerfen;
+/// `--conformance` schreibt den Konformitaetsbericht daneben — die Quelle der
+/// Zahlen (13.8). Ohne beide stehen die Zahlen nur in der Ausgabe.
+fn bench(args: &Args) -> bool {
+    use takt_conformance::board::Board;
+    let mut board: Box<dyn Board> = match args.value("--board") {
+        Some("stm32f401") => match takt_conformance::board::stm32f401::Stm32f401::from_env() {
+            Some(b) => Box::new(b),
+            None => return missing("TAKT_F401_PORT"),
+        },
+        Some("esp32c6") => match takt_conformance::board::esp32c6::Esp32c6::from_env() {
+            Some(b) => Box::new(b),
+            None => return missing("TAKT_ESP32C6_PORT"),
+        },
+        other => {
+            eprintln!("takt bench --board stm32f401|esp32c6 (war: {})", other.unwrap_or("nichts"));
+            return false;
+        }
+    };
+    let runs = args.value("--runs").and_then(|r| r.parse().ok()).unwrap_or(200);
+    let outcome = match takt_conformance::bench::run(board.as_mut(), runs, |line| eprintln!("  {line}")) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("takt bench: {e}");
+            return false;
+        }
+    };
+    for line in outcome.calibration.lines().into_iter().chain(outcome.kernel_lines()) {
+        println!("{line}");
+    }
+    let target = outcome.target(board.target());
+    let tool = format!("takt {}", env!("CARGO_PKG_VERSION"));
+    if let Some(path) = args.value("--conformance") {
+        let text = takt_conformance::report::render(&outcome.report(board.name(), board.target(), &tool));
+        if let Err(e) = std::fs::write(path, text) {
+            eprintln!("{path}: {e}");
+            return false;
+        }
+        println!("  Bericht: {path}");
+    }
+    if let Some(path) = args.value("--hardware") {
+        let old = std::fs::read_to_string(path).unwrap_or_default();
+        let values = takt_mir::hardware::measured_values(&target);
+        match takt_mir::hardware::with_values(&old, board.target(), &values) {
+            Ok(text) => {
+                if let Err(e) = std::fs::write(path, text) {
+                    eprintln!("{path}: {e}");
+                    return false;
+                }
+                println!("  Konfiguration: {path}");
+            }
+            Err(e) => {
+                eprintln!("{path}: {e}");
+                return false;
+            }
+        }
+    }
+    outcome.calibration.checks.iter().all(|c| c.measured_ps <= c.bound_ps)
+}
+
+/// Eine fehlende Umgebungsvariable fuer ein Board.
+fn missing(variable: &str) -> bool {
+    eprintln!("takt bench: `{variable}` nennt keinen Port (siehe plan/f401.md und plan/esp32c6.md)");
+    false
 }
 
 /// Pfad der Review-Datei; `--review` oder `natives.review` neben dem Programm.

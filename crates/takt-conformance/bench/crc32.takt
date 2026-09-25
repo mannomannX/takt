@@ -1,0 +1,40 @@
+# takt bench (13.8): CRC32 ueber 256 Byte je Tick.
+#
+# Der Puffer entsteht je Tick neu aus einem linearen Kongruenzgenerator,
+# damit der Compiler nichts vorausrechnen kann; `acc` verknuepft alle
+# Pruefsummen. Die C-Referenz `crc32.c` rechnet dasselbe, mit denselben
+# Pruefungen: Index gegen die Laenge des Puffers, `push` gegen seine
+# Kapazitaet.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output digest : u32 @ hw("bench/digest") with safe = 0
+
+const POLY : u32 = 0xEDB88320
+
+fn crc32(b: bytes<256>) -> u32:
+    var crc : u32 = 0xFFFFFFFF
+    for i in range(256):
+        crc = crc ^ (b[i] as u32)
+        for bit in range(8):
+            if (crc & 1) == 1:
+                crc = (crc >> 1) ^ POLY
+            else:
+                crc = crc >> 1
+    return crc ^ 0xFFFFFFFF
+
+machine k:
+    var buf  : bytes<256> = default
+    var seed : u32 = 12345
+    var acc  : u32 = 0
+    initial RUN
+    state RUN:
+        loop:
+            buf.clear()
+            for i in range(256):
+                seed = ((seed as int) * 1664525 + 1013904223).wrap_u32()
+                buf.push((seed >> 24) as u8)
+            acc = acc ^ crc32(buf)
+            digest = acc

@@ -1,0 +1,43 @@
+# takt bench (13.8): Pruefung von 16 Thermoelementen je Tick.
+#
+# Die Temperaturen kommen aus einem linearen Kongruenzgenerator zwischen
+# 300 und 402 Grad. Je Kanal: ein `alert` ueber der Warnschwelle (eine
+# Flanke je Kanal, 5.6), Minimum, Maximum und Mittel. `digest` zaehlt die
+# warmen Kanaele ueber alle Ticks; die C-Referenz `thermocouples.c` fuehrt
+# die Flanken der Alerts wie Takt.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output digest : int in 0..1000000 @ hw("bench/digest") with safe = 0
+
+const WARN : float = 350.0
+
+machine k:
+    var t     : [16] float = default
+    var seed  : u32 = 7
+    var lo    : float = 0.0
+    var hi    : float = 0.0
+    var mean  : float = 0.0
+    var warm  : int in 0..1000000 = 0
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(16):
+                seed = ((seed as int) * 1664525 + 1013904223).wrap_u32()
+                t[i] = 300.0 + ((seed >> 20) as float) * 0.025
+            lo = t[0]
+            hi = t[0]
+            var sum : float = 0.0
+            for i in range(16):
+                alert t[i] > WARN, "Thermoelement {i} warm"
+                if t[i] > WARN and warm < 1000000:
+                    warm = warm + 1
+                if t[i] < lo:
+                    lo = t[i]
+                if t[i] > hi:
+                    hi = t[i]
+                sum = sum + t[i]
+            mean = sum / 16.0
+            digest = warm
