@@ -1,10 +1,11 @@
-# takt-hw 1
+# takt-hw 7
 #
 # Prüfung 59 rechnet erst, wenn die vier Größen da sind. Diese
 # Konfiguration trägt sie, damit die Rechnung selbst getestet ist —
 # die Kalibrierung eines echten C6 ist ein M7-Punkt.
 
 [target.probe]
+cost_model = 1
 core_hz = 84000000
 i32 = 11905
 i64 = 35715

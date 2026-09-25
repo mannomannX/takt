@@ -26,8 +26,13 @@ native = 0
 t_io = 120000
 ";
 
+/// Die Tabelle zum Kostenmodell dieses Compilers.
+fn hw() -> String {
+    format!("{HW}cost_model = {}\n", takt_mir::analysis::cost::MODEL_VERSION)
+}
+
 fn ziel() -> Target {
-    hardware::parse(HW).expect("lesbar").target("probe").expect("Ziel").clone()
+    hardware::parse(&hw()).expect("lesbar").target("probe").expect("Ziel").clone()
 }
 
 fn compile(src: &str) -> takt_mir::Program {
@@ -143,7 +148,7 @@ fn a_native_load_needs_the_native_weight() {
 /// 5 ms je Programmiervorgang, bei 10 ms Tick also 21 Perioden.
 fn blockierendes_ziel(blocking: Option<bool>) -> Target {
     let mut text =
-        format!("{HW}iram = 65536\nnvm_sector_bytes = 4096\nnvm_erase_ns = 200000000\nnvm_program_ns = 5000000\n");
+        format!("{}iram = 65536\nnvm_sector_bytes = 4096\nnvm_erase_ns = 200000000\nnvm_program_ns = 5000000\n", hw());
     if let Some(b) = blocking {
         text.push_str(&format!("nvm_blocking = {b}\n"));
     }
@@ -156,6 +161,32 @@ const PERSIST: &str = "machine m:\n    persist var n : int in 0..10 = 0\n\n    i
 const PERSIST_IDLE: &str = "machine m:\n    persist var n : int in 0..10 = 0\n\n    initial RUN\n\n    state RUN:\n        \
                             loop:\n            led = true\n\n        after 200 ms: -> SLEEP\n\n    state SLEEP idle:\n        \
                             after 500 ms: -> RUN\n";
+
+/// **Eine Tabelle zu einem anderen Kostenmodell urteilt nicht** (13.8,
+/// FB-300): Ihre Gewichte gehoeren zu anderen Zaehlungen. Pruefung 32
+/// meldet das statt eines Urteils; der Speicher haengt nicht an den
+/// Gewichten und wird weiter geprueft.
+#[test]
+fn a_table_of_another_cost_model_does_not_judge() {
+    // 20 000 Operationen in `f64` zu je 1,19 µs passen nicht in 10 ms.
+    let p = compile(&format!(
+        "{KOPF}machine m:\n    var y : float = 1.0\n    initial S\n\n    state S:\n        loop:\n            \
+         for i in range(10000):\n                y = y * 0.5 + 1.0\n"
+    ));
+    let current =
+        hardware::parse(&format!("{}ram = 1\n", hw())).expect("lesbar").target("probe").expect("Ziel").clone();
+    let mut stale = current.clone();
+    stale.cost_model = None;
+    let judged = takt_sema::calibrated::check(&p, &current, Span::new(0, 0));
+    assert!(judged.iter().any(|d| d.code == "SC-32" && d.is_error()), "passende Tabelle urteilt: {judged:?}");
+    assert!(judged.iter().any(|d| d.code == "SC-39"), "Speicher: {judged:?}");
+    let d = takt_sema::calibrated::check(&p, &stale, Span::new(0, 0));
+    assert!(d.iter().any(|d| d.code == "SC-39"), "der Speicher wird weiter geprueft: {d:?}");
+    let sc32: Vec<String> = d.iter().filter(|d| d.code == "SC-32").map(|d| d.message.clone()).collect();
+    assert_eq!(sc32.len(), 1, "{sc32:?}");
+    assert!(sc32[0].contains("Kostenmodell"), "{sc32:?}");
+    assert!(d.iter().all(|d| !d.is_error() || d.code == "SC-39"), "kein Urteil aus der Tabelle: {d:?}");
+}
 
 fn sc32(p: &takt_mir::Program, target: &Target) -> Vec<takt_diag::Diagnostic> {
     takt_sema::calibrated::check(p, target, Span::new(0, 0)).into_iter().filter(|d| d.code == "SC-32").collect()

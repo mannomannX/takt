@@ -26,11 +26,16 @@ native = 0
 t_io = 120000
 ";
 
+/// Die Tabelle zum Kostenmodell dieses Compilers.
+fn target_text() -> String {
+    format!("{TARGET}cost_model = {}\n", takt_mir::analysis::cost::MODEL_VERSION)
+}
+
 /// Ein Gerät mit FIFO, die Tickquelle mit gemessenem Jitter, und der
 /// Lesekanal des Ports trägt das Gerät — das ist die ganze Bindung.
 fn hw_with(fifo: &str, rate: &str, jitter: &str) -> Hardware {
     let text = format!(
-        "{TARGET}\n\
+        "{}\n\
          [device.uart]\n\
          driver = \"uart-polled\"\n\
          {fifo}{rate}\n\
@@ -39,13 +44,14 @@ fn hw_with(fifo: &str, rate: &str, jitter: &str) -> Hardware {
          {jitter}\n\
          [channel mmio/0x60000000/r]\n\
          direction = input\n\
-         device = uart\n"
+         device = uart\n",
+        target_text()
     );
     hardware::parse(&text).expect("Konfiguration lesbar")
 }
 
 fn ziel() -> Target {
-    hardware::parse(TARGET).expect("lesbar").target("probe").expect("Ziel").clone()
+    hardware::parse(&target_text()).expect("lesbar").target("probe").expect("Ziel").clone()
 }
 
 fn compile(src: &str) -> takt_mir::Program {
@@ -142,8 +148,9 @@ fn a_device_without_a_fifo_is_not_polled() {
 fn a_device_no_port_points_at_is_not_attributed_to_a_machine() {
     let p = program(" every 10 ms", "");
     let text = format!(
-        "{TARGET}\n[device.uart]\ndriver = \"uart-polled\"\nfifo_depth = 8\nbyte_rate = 11520\n\n\
-         [channel sys/clock]\ndirection = input\njitter_ns = 250000\n"
+        "{}\n[device.uart]\ndriver = \"uart-polled\"\nfifo_depth = 8\nbyte_rate = 11520\n\n\
+         [channel sys/clock]\ndirection = input\njitter_ns = 250000\n",
+        target_text()
     );
     let hw = hardware::parse(&text).expect("lesbar");
     let d = takt_sema::calibrated::polling(&p, &hw, Some(&ziel()));

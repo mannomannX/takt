@@ -22,8 +22,9 @@
 //! wie sie zustande kam, ist eine Zahl ohne Herkunft.
 //!
 //! ```text
-//! # takt-hw 5
+//! # takt-hw 7
 //! [target.thumbv7em]
+//! cost_model = 1     # die Version des Kostenmodells der Gewichte
 //! core_hz = 84000000
 //! i32 = 11900        # Pikosekunden je Operation
 //! f64 = 1190000
@@ -75,8 +76,9 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// (12.3, Pruefung 32). 5: eigene Gewichte der Division (7.2), der
 /// Tick-Jitter je Ziel und `guard` je Output (7.5, 8.10) — die Messwerte
 /// von `takt bench` und `takt driver-test` (13.8). 6: eigene Gewichte von
-/// `fma` und `sqrt` (7.2).
-pub const FORMAT_VERSION: u32 = 6;
+/// `fma` und `sqrt` (7.2). 7: `cost_model`, die Version des Kostenmodells,
+/// zu der die Gewichte gemessen wurden.
+pub const FORMAT_VERSION: u32 = 7;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -210,6 +212,9 @@ pub struct Target {
     pub name: String,
     /// Kerntakt in Hertz; `None`, wenn die Messung ihn nicht festhielt.
     pub core_hz: Option<u32>,
+    /// Die Version des Kostenmodells, zu der die Tabelle gemessen wurde;
+    /// `None` bei Tabellen von Hand oder von vor Version 7.
+    pub cost_model: Option<u32>,
     /// Die Kostentabelle.
     pub c_target: CTarget,
     /// Was der Tick ausserhalb des Programms kostet, in Pikosekunden.
@@ -227,6 +232,21 @@ pub struct Target {
     pub nvm: Option<NvmGeometry>,
     /// Speicher und Stack-Reserven (11.5, 12.3).
     pub memory: Memory,
+}
+
+impl Target {
+    /// Gehoert die Kostentabelle zum Kostenmodell dieses Compilers?
+    ///
+    /// **Sonst ist sie keine Kalibrierung.** Aendert sich, wofuer eine
+    /// gezaehlte Operation steht, passen die Gewichte nicht mehr zu den
+    /// Zaehlungen: Seit FB-299 zaehlt eine Endlichkeitspruefung in `i32`, und
+    /// eine Tabelle, deren Gleitkommagewicht sie mitgemessen hatte, ergaebe
+    /// fuer Gleitkommacode eine Schranke von kaum mehr als der Haelfte. Eine
+    /// Tabelle ohne Version oder zu einer anderen gilt darum als nicht
+    /// kalibriert — `takt bench` misst sie neu.
+    pub fn fits_cost_model(&self) -> bool {
+        self.cost_model == Some(crate::analysis::cost::MODEL_VERSION)
+    }
 }
 
 /// Speicher eines Ziels (8.10: „Speicher und Stack"), in Byte.
@@ -545,6 +565,13 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
                 u32::try_from(n).map_err(|_| ParseError { line, message: format!("{n} Hz passt nicht in 32 Bit") })?,
             );
         }
+        "cost_model" => {
+            let n = number(value, line)?;
+            target.cost_model = Some(
+                u32::try_from(n)
+                    .map_err(|_| ParseError { line, message: format!("Kostenmodell {n} passt nicht in 32 Bit") })?,
+            );
+        }
         "t_io" => target.t_io_ps = number(value, line)?,
         "tick_jitter_ns" => target.tick_jitter_ns = Some(number(value, line)? as i64),
         "nvm_sector_bytes" => nvm_of(target).sector_bytes = number(value, line)? as u32,
@@ -566,7 +593,7 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
             let class = CostClass::ALL.iter().find(|c| c.name() == key).ok_or_else(|| ParseError {
                 line,
                 message: format!(
-                    "unbekannter Schluessel `{key}`; bekannt: core_hz, t_io, tick_jitter_ns, ram, flash, iram, \
+                    "unbekannter Schluessel `{key}`; bekannt: cost_model, core_hz, t_io, tick_jitter_ns, ram, flash, iram, \
                      stack_reserve, stack_margin, nvm_sector_bytes, nvm_sectors, nvm_min_interval, nvm_erase_ns, \
                      nvm_program_ns, nvm_blocking, die Klassen {} und die eigenen Gewichte {}",
                     CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "),
@@ -711,10 +738,13 @@ pub fn with_values<K: AsRef<str>>(text: &str, target: &str, values: &[(K, String
 }
 
 /// Die Werte eines Ziels, wie `takt bench` sie misst, fuer [`with_values`]:
-/// Kerntakt, alle Klassen, die gemessenen eigenen Gewichte, `T_IO`,
-/// Tick-Jitter und Stack-Reserve, soweit vorhanden.
+/// Kostenmodell, Kerntakt, alle Klassen, die gemessenen eigenen Gewichte,
+/// `T_IO`, Tick-Jitter und Stack-Reserve, soweit vorhanden.
 pub fn measured_values(t: &Target) -> Vec<(String, String)> {
     let mut v = Vec::new();
+    if let Some(model) = t.cost_model {
+        v.push(("cost_model".to_string(), model.to_string()));
+    }
     if let Some(hz) = t.core_hz {
         v.push(("core_hz".to_string(), hz.to_string()));
     }
@@ -746,6 +776,9 @@ pub fn render(hw: &Hardware) -> String {
     s.push_str("# Kalibrierung je Ziel (8.10, 13.8). Zeiten in Pikosekunden.\n");
     for target in hw.targets.values() {
         s.push_str(&format!("\n[target.{}]\n", target.name));
+        if let Some(model) = target.cost_model {
+            s.push_str(&format!("cost_model = {model}\n"));
+        }
         if let Some(hz) = target.core_hz {
             s.push_str(&format!("core_hz = {hz}\n"));
         }
@@ -1075,7 +1108,8 @@ t_io = 120000
     fn measured_values_round_trip() {
         let text = format!(
             "{BEISPIEL}i32_div = 142800\nf64_div = 9000000\nf32_fma = 35700\nf64_sqrt = 2000000\n\
-             tick_jitter_ns = 1500\n\n[channel ui/led]\ndirection = output\nguard_ns = 4000\njitter_ns = 250\n"
+             tick_jitter_ns = 1500\ncost_model = 1\n\n[channel ui/led]\ndirection = output\nguard_ns = 4000\n\
+             jitter_ns = 250\n"
         );
         let hw = parse(&text.replace("takt-hw 1", &format!("takt-hw {FORMAT_VERSION}"))).expect("lesbar");
         assert_eq!(hw.target("thumbv7em").expect("Ziel").tick_jitter_ns, Some(1_500));
@@ -1083,6 +1117,18 @@ t_io = 120000
         let rendered = render(&hw);
         assert!(rendered.starts_with(&format!("# takt-hw {FORMAT_VERSION}\n")), "{rendered}");
         assert!(rendered.contains("f32_fma = 35700\nf64_sqrt = 2000000\n"), "{rendered}");
+        assert!(rendered.contains("[target.thumbv7em]\ncost_model = 1\n"), "{rendered}");
         assert_eq!(parse(&rendered).expect("Rundreise"), hw);
+    }
+
+    /// Nur eine Tabelle zum Kostenmodell dieses Compilers ist eine
+    /// Kalibrierung; ohne Version oder zu einer anderen gilt sie als keine.
+    #[test]
+    fn a_table_counts_only_for_its_cost_model() {
+        let current = crate::analysis::cost::MODEL_VERSION;
+        let fits = |text: &str| parse(text).expect("lesbar").target("thumbv7em").expect("Ziel").fits_cost_model();
+        assert!(!fits(BEISPIEL), "ohne Version");
+        assert!(fits(&format!("{BEISPIEL}cost_model = {current}\n")));
+        assert!(!fits(&format!("{BEISPIEL}cost_model = {}\n", current + 1)));
     }
 }

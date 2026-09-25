@@ -54,6 +54,30 @@ pub fn check(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
     }
 
     out.extend(journal_blocking(p, target, span));
+    // Pruefung 39 haengt nicht an den Gewichten.
+    out.extend(memory_budget(p, target, span));
+
+    if !target.fits_cost_model() {
+        let gemessen =
+            target.cost_model.map_or("ohne Version des Kostenmodells".to_string(), |v| format!("zum Kostenmodell {v}"));
+        out.push(
+            Diagnostic::new(
+                Severity::Warning,
+                SC32,
+                span,
+                format!(
+                    "die Kalibrierung für `{}` ist {gemessen} gemessen, der Compiler zählt nach Kostenmodell {}",
+                    target.name,
+                    takt_mir::analysis::cost::MODEL_VERSION
+                ),
+            )
+            .with_suggestion(
+                "`takt bench` misst die Tabelle neu; mit Gewichten zu anderen Zählungen wäre die Schranke keine (13.8)"
+                    .to_string(),
+            ),
+        );
+        return out;
+    }
 
     let Some(verdict) = load.judge(&target.c_target, target.t_io_ps) else {
         let fehlend: Vec<&str> = target.c_target.missing_for(load.total()).iter().map(|c| c.name()).collect();
@@ -98,7 +122,6 @@ pub fn check(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
     }
 
     out.extend(declared_budgets(p, target, &load));
-    out.extend(memory_budget(p, target, span));
     out
 }
 
@@ -513,7 +536,7 @@ pub fn polling(p: &Program, hw: &Hardware, target: Option<&Target>) -> Vec<Diagn
         if jitter_ns.is_none() {
             missing.push("jitter_ns der Tickquelle");
         }
-        let wcet_ns = target.and_then(|t| poll_wcet_ns(machine, t));
+        let wcet_ns = target.filter(|t| t.fits_cost_model()).and_then(|t| poll_wcet_ns(machine, t));
         if wcet_ns.is_none() {
             missing.push("wcet_poll (Kalibrierung, 13.8)");
         }

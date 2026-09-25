@@ -343,7 +343,8 @@ fn check(args: &Args) -> bool {
         // Mit Kalibrierung urteilt SC-12 gleich (siehe unten); sein
         // Hinweis „noch nicht entscheidbar" waere daneben ein Widerspruch.
         let kalibriert = calibration(args);
-        for d in checked.diagnostics.iter().filter(|d| !(kalibriert.is_some() && d.code == "SC-12")) {
+        let urteilt = kalibriert.as_ref().is_some_and(|t| t.fits_cost_model());
+        for d in checked.diagnostics.iter().filter(|d| !(urteilt && d.code == "SC-12")) {
             if line_format {
                 println!("{}", map.render_line(d));
             } else {

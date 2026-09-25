@@ -691,6 +691,7 @@ impl Outcome {
         let mut t = takt_mir::hardware::Target {
             name: name.to_string(),
             core_hz: Some(self.calibration.core_hz),
+            cost_model: Some(takt_mir::analysis::cost::MODEL_VERSION),
             c_target: self.calibration.c_target,
             t_io_ps: self.calibration.t_io_ps,
             tick_jitter_ns: self.tick_jitter_ns,

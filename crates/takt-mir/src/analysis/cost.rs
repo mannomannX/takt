@@ -42,6 +42,18 @@ use crate::pattern::{CaptureKind, Format, FormatPiece, Pattern, PatternPiece};
 use crate::stmt::{Block, Method, Observe, Place, Stmt, StmtKind};
 use crate::types::{Const, FloatWidth, HandleKind, RangeOrigin, Type};
 
+/// Die Version des Kostenmodells (13.8).
+///
+/// Sie steigt, wenn sich aendert, wofuer eine gezaehlte Operation steht —
+/// dann passen gemessene Gewichte nicht mehr zu den Zaehlungen, und eine
+/// Schranke aus beiden waere keine. `takt bench` schreibt sie zur Tabelle,
+/// und eine Tabelle zu einer anderen Version gilt als nicht kalibriert
+/// ([`crate::hardware::Target::fits_cost_model`]).
+///
+/// 1: Division, `fma` und `sqrt` mit eigenem Gewicht (FB-298), die
+/// Endlichkeitspruefung als zwei `i32`-Operationen (FB-299).
+pub const MODEL_VERSION: u32 = 1;
+
 /// Die Eins aus 9.4.3 (`check`, `->`, `for`, `at`, `every`, ein Waechter,
 /// ein Wechsel): ein Vergleich und ein Sprung.
 const STEP: CostVec = CostVec { i32: 1, ..CostVec::ZERO };
