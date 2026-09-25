@@ -1071,9 +1071,18 @@ fn expr_cost(e: &Expr, ctx: &Ctx<'_>) -> CostVec {
         // 7.2: „Division hat eigene Gewichte"; der Rest geht ueber denselben
         // Dividierer.
         ExprKind::Binary { op: BinaryOp::Div | BinaryOp::Rem, .. } => CostVec::division(class(e, types)),
-        ExprKind::Binary { .. } | ExprKind::Unary { .. } | ExprKind::Cast { .. } | ExprKind::Convert { .. } => {
-            class_of(e, types)
-        }
+        // Ein Vergleich rechnet in der Klasse seiner Operanden, nicht in der
+        // seines Ergebnisses: `a < b` auf `f64` ist auf einem Kern ohne
+        // Doppel-FPU ein Aufruf der Bibliothek, kein `i32`-Vergleich.
+        ExprKind::Binary {
+            op: BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Eq | BinaryOp::Ne,
+            lhs,
+            ..
+        } => class_of(lhs, types),
+        // Eine Umwandlung kostet auch in der Klasse ihrer Quelle: `f64 as
+        // int` ist so teuer wie das Gleitkomma, aus dem sie rechnet.
+        ExprKind::Cast { expr, .. } | ExprKind::Convert { expr, .. } => class_of(e, types).max(class_of(expr, types)),
+        ExprKind::Binary { .. } | ExprKind::Unary { .. } => class_of(e, types),
         ExprKind::Index { .. } | ExprKind::Index2 { .. } | ExprKind::PortRead(_) => BYTE,
         ExprKind::Slice { .. } => BYTE + ctx.copy(e.ty),
         ExprKind::Cond { .. } => STEP,
