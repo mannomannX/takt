@@ -194,7 +194,16 @@ fn clocks(
     // nicht an und der Takt steigt trotzdem, liest der Kern Befehle aus
     // einem Flash, der noch nicht geliefert hat — ein HardFault beim
     // ersten Zugriff, sporadisch und schwer zu finden.
-    flash.acr().modify(|_, w| unsafe { w.latency().bits(2) });
+    //
+    // **Prefetch ja, Caches nein.** Ohne Prefetch wartet jeder Befehlsabruf
+    // die beiden Zyklen ab, und gerader Code laeuft mit einem Bruchteil des
+    // Takts (FB-287). Der Prefetch holt die naechste Flash-Zeile, waehrend
+    // der Kern die laufende abarbeitet; was er bringt, haengt nur am Code
+    // selbst. Die Caches des ART machten die Zeit eines Ticks vom Inhalt
+    // abhaengig, den der vorige Tick hinterliess — das Gate (7.2) braucht
+    // eine Schranke, und eine Messung mit warmem Cache ist keine fuer einen
+    // Tick mit kaltem.
+    flash.acr().modify(|_, w| unsafe { w.latency().bits(2) }.prften().set_bit().icen().clear_bit().dcen().clear_bit());
     if !wait_for(|| flash.acr().read().latency().bits() == 2) {
         return Err(InitError::ClockNotReady);
     }

@@ -21,8 +21,10 @@
 //! **Die C-Referenz fuer `takt bench`** (13.8) nennt `TAKT_BENCH_C`. Sie
 //! wird mit denselben Flags uebersetzt wie der erzeugte Code — das
 //! Verhaeltnis der Zeiten soll die Sprachen vergleichen, nicht die
-//! Optimierungsstufen —, und mit `-ffp-contract=off`, weil Takt nie
-//! stillschweigend zu `fma` zusammenzieht (4.2).
+//! Optimierungsstufen —, mit `-ffp-contract=off`, weil Takt nie
+//! stillschweigend zu `fma` zusammenzieht (4.2), und mit `-fno-math-errno`:
+//! Ohne sie wird `__builtin_fmaf` zum Bibliotheksaufruf statt zum Befehl,
+//! und Takt kennt kein `errno` (FB-287).
 
 use std::env;
 use std::fs;
@@ -189,7 +191,7 @@ fn bench_reference(out: &Path) -> PathBuf {
     let present = format!("/// Ist eine C-Referenz gebunden?\npub const PRESENT: bool = {};\n", given.is_some());
     fs::write(out.join("bench_reference.rs"), present).expect("bench_reference.rs schreiben");
     let obj = out.join("bench_reference.o");
-    translate(&src, &obj, &["-ffp-contract=off"]);
+    translate(&src, &obj, &["-ffp-contract=off", "-fno-math-errno"]);
     obj
 }
 

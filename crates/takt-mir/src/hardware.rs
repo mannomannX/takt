@@ -218,8 +218,9 @@ pub struct Target {
     /// Referenz nicht; gemessen wird die Differenz zwischen Tickperiode
     /// und dem, was das Programm davon nutzt (13.8).
     pub t_io_ps: u64,
-    /// Der gemessene Tick-Jitter in Nanosekunden: die groesste Abweichung
-    /// des Tickbeginns von seiner Frist (7.3, 13.8).
+    /// Der gemessene Tick-Jitter in Nanosekunden: die Streuung der
+    /// Tickbeginne, Spitze zu Spitze — um so viel kann der Abstand zweier
+    /// Aktivierungen von der Periode abweichen (7.3, 13.8, Pruefung 59).
     pub tick_jitter_ns: Option<i64>,
     /// Die NVM-Geometrie hinter `persist var`, falls das Ziel eine hat.
     pub nvm: Option<NvmGeometry>,

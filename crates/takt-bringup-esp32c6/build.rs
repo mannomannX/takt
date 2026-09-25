@@ -9,7 +9,8 @@
 //!
 //! **Die C-Referenz fuer `takt bench`** (13.8) nennt `TAKT_BENCH_C`, wie
 //! beim F401: dieselben Flags wie der erzeugte Code, dazu
-//! `-ffp-contract=off`, und im Archiv, also mit ihm im RAM (12.3).
+//! `-ffp-contract=off` und `-fno-math-errno`, und im Archiv, also mit ihm
+//! im RAM (12.3).
 
 use std::env;
 use std::fs;
@@ -184,7 +185,7 @@ fn bench_reference(out: &Path) -> PathBuf {
     let present = format!("/// Ist eine C-Referenz gebunden?\npub const PRESENT: bool = {};\n", given.is_some());
     fs::write(out.join("bench_reference.rs"), present).expect("bench_reference.rs schreiben");
     let obj = out.join("bench_reference.o");
-    translate(&src, &obj, &["-ffp-contract=off"]);
+    translate(&src, &obj, &["-ffp-contract=off", "-fno-math-errno"]);
     obj
 }
 

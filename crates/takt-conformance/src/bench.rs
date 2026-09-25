@@ -82,6 +82,17 @@ pub fn kernel_path(name: &str, extension: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("bench").join(format!("{name}.{extension}"))
 }
 
+/// Die beiden Kerne einer Probe, klein und gross.
+///
+/// Meist dieselbe Anweisungsfolge mit [`PAIRS`] Paaren. Die Probe `call`
+/// braucht eine andere Form, siehe [`call_kernel`].
+pub fn probe_kernels(probe: Probe) -> [String; 2] {
+    match probe {
+        Probe::Ops(CostClass::Call | CostClass::Native) => [call_kernel(false), call_kernel(true)],
+        _ => [class_kernel(probe, PAIRS.0), class_kernel(probe, PAIRS.1)],
+    }
+}
+
 /// Der Quelltext eines Klassenkerns mit `pairs` Paaren von Anweisungen.
 ///
 /// Jeder Kern haelt zwei Variablen, deren jede aus der anderen entsteht:
@@ -89,68 +100,116 @@ pub fn kernel_path(name: &str, extension: &str) -> PathBuf {
 /// Integer bleiben in beweisbaren Ranges (keine Pruefung, feste
 /// Darstellung), Fliesskomma nahe einem Fixpunkt fern von null (keine
 /// Subnormalen, kein Ueberlauf).
+///
+/// **`i64` rechnet mit 40 Bit.** Eine Maske auf 32 Bit liesse LLVM die
+/// Rechnung in 32 Bit fuehren, und die Probe maesse `i32` unter anderem
+/// Namen; das hat der erste Lauf auf Board 1 gezeigt (FB-287).
 pub fn class_kernel(probe: Probe, pairs: u32) -> String {
     let float = match probe {
         Probe::Ops(CostClass::F32) | Probe::Div(CostClass::F32) => "    float    = f32\n",
         _ => "",
     };
-    let (decl, pair, prelude) = match probe {
-        Probe::Ops(CostClass::I32) => {
-            ("int in 0..65535", "            a = (a * 181 + b) & 65535\n            b = (b * 157 + a) & 65535\n", "")
-        }
-        Probe::Ops(CostClass::I64) => (
-            "int in 0..4294967295",
-            "            a = (a * 1103515245 + b) & 4294967295\n            b = (b * 1664525 + a) & 4294967295\n",
+    let (decl, pair, prelude, init) = match probe {
+        Probe::Ops(CostClass::I32) => (
+            "int in 0..65535",
+            "            a = (a * 181 + b) & 65535\n            b = (b * 157 + a) & 65535\n",
             "",
+            ("1", "7"),
+        ),
+        Probe::Ops(CostClass::I64) => (
+            "int in 0..1099511627775",
+            "            a = ((a >> 7) * 12345 + b) & 1099511627775\n            b = ((b >> 5) * 5431 + a) & 1099511627775\n",
+            "",
+            ("123456789012", "987654321098"),
         ),
         Probe::Ops(CostClass::F32 | CostClass::F64) => {
-            ("float", "            a = a * 0.75 + b * 0.25\n            b = b * 0.5 + a * 0.5\n", "")
+            ("float", "            a = a * 0.75 + b * 0.25\n            b = b * 0.5 + a * 0.5\n", "", ("1.0", "3.0"))
         }
         Probe::Ops(CostClass::Mem) => (
             "int in 0..65535",
             "            a = t[(a + b) & 15]\n            b = t[(b + a) & 15]\n",
             "    var t : [16] int in 0..65535 = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3]\n",
+            ("1", "7"),
         ),
-        Probe::Ops(CostClass::Call | CostClass::Native) => {
-            ("int in 0..65535", "            a = mix(a, b)\n            b = mix(b, a)\n", "")
-        }
+        Probe::Ops(CostClass::Call | CostClass::Native) => return call_kernel(true),
         Probe::Div(CostClass::I32) => (
             "int in 0..65535",
             "            a = ((b * 16384 + 12345) / ((a & 255) + 1)) & 65535\n            b = ((a * 16384 + 54321) / ((b & 255) + 1)) & 65535\n",
             "",
+            ("1", "7"),
         ),
         Probe::Div(CostClass::I64) => (
             "int in 0..4294967295",
             "            a = ((b * 1073741824 + 12345) / ((a & 255) + 1)) & 4294967295\n            b = ((a * 1073741824 + 54321) / ((b & 255) + 1)) & 4294967295\n",
             "",
+            ("1", "7"),
         ),
-        Probe::Div(_) => {
-            ("float", "            a = (b + 1.5) / (a + 1.25)\n            b = (a + 2.5) / (b + 0.75)\n", "")
-        }
+        Probe::Div(_) => (
+            "float",
+            "            a = (b + 1.5) / (a + 1.25)\n            b = (a + 2.5) / (b + 0.75)\n",
+            "",
+            ("1.0", "3.0"),
+        ),
     };
-    let init = if decl == "float" { ("1.0", "3.0") } else { ("1", "7") };
-    // Ein Aufruf, den der Codegen nicht einbettet: Der Rumpf ist gross
-    // genug, und die Kostenanalyse zaehlt ihn mit (9.4.3).
-    let function = if matches!(probe, Probe::Ops(CostClass::Call | CostClass::Native)) {
-        "fn mix(x: int in 0..65535, y: int in 0..65535) -> int in 0..65535:\n    var r : int in 0..65535 = x\n    \
-         for i in range(4):\n        r = (r * 181 + y) & 65535\n    return r\n\n"
-    } else {
-        ""
-    };
-    let mut s = format!(
-        "# takt bench: {} ({pairs} Paare)\nsystem:\n    language = 1\n    tick     = 10 ms\n{float}\n\
-         output digest : {decl} @ hw(\"bench/digest\") with safe = {}\n\n{function}machine k:\n{prelude}    \
-         var a : {decl} = {}\n    var b : {decl} = {}\n    initial RUN\n    state RUN:\n        loop:\n",
-        probe.name(),
-        if decl == "float" { "0.0" } else { "0" },
-        init.0,
-        init.1
-    );
+    let mut s = kernel_head(&format!("{} ({pairs} Paare)", probe.name()), float, decl, "", prelude, init);
     for _ in 0..pairs {
         s.push_str(pair);
     }
     s.push_str("            digest = a\n");
     s
+}
+
+/// Paare der Probe `call`.
+const CALL_PAIRS: u32 = 20;
+
+/// Zeilen im Rumpf von `one`; `two` hat doppelt so viele.
+const CALL_BODY: usize = 10;
+
+/// Die Probe `call`: gleiche Rechenarbeit, verschieden viele Aufrufe.
+///
+/// **Warum nicht wie die anderen Proben.** Der erste Lauf auf Board 1 zog
+/// Aufrufe einer kleinen Funktion mit Schleife heran; das Gewicht kam bei
+/// null heraus, weil die Analyse Schleifenzaehler und Masken zaehlt, die
+/// der Compiler wegfaltet, und der Fehler der Rumpfoperationen den Aufruf
+/// verdeckte (FB-287). Hier rufen beide Kerne dieselben Rumpfzeilen auf:
+/// `two` ist `one` zweimal hintereinander, der kleine Kern ruft je Paar
+/// zweimal `two`, der grosse viermal `one`. Die Rumpfarbeit ist gleich,
+/// der Unterschied sind genau die Aufrufe. Die Ruempfe sind so gross,
+/// dass `-Os` sie nicht einbettet.
+pub fn call_kernel(fine: bool) -> String {
+    let line = "    r = (r * 181 + y) & 65535\n";
+    let function = |name: &str, lines: usize| {
+        format!(
+            "fn {name}(x: int in 0..65535, y: int in 0..65535) -> int in 0..65535:\n    var r : int in 0..65535 = x\n{}    \
+             return r\n\n",
+            line.repeat(lines)
+        )
+    };
+    let functions = function("one", CALL_BODY) + &function("two", 2 * CALL_BODY);
+    let pair = if fine {
+        "            a = one(a, b)\n            a = one(a, b)\n            b = one(b, a)\n            b = one(b, a)\n"
+    } else {
+        "            a = two(a, b)\n            b = two(b, a)\n"
+    };
+    let label = format!("call ({CALL_PAIRS} Paare, {})", if fine { "je Paar vier Aufrufe" } else { "je Paar zwei" });
+    let mut s = kernel_head(&label, "", "int in 0..65535", &functions, "", ("1", "7"));
+    for _ in 0..CALL_PAIRS {
+        s.push_str(pair);
+    }
+    s.push_str("            digest = a\n");
+    s
+}
+
+/// Kopf eines Klassenkerns bis zum `loop:` der Maschine.
+fn kernel_head(label: &str, float: &str, decl: &str, functions: &str, prelude: &str, init: (&str, &str)) -> String {
+    format!(
+        "# takt bench: {label}\nsystem:\n    language = 1\n    tick     = 10 ms\n{float}\n\
+         output digest : {decl} @ hw(\"bench/digest\") with safe = {}\n\n{functions}machine k:\n{prelude}    \
+         var a : {decl} = {}\n    var b : {decl} = {}\n    initial RUN\n    state RUN:\n        loop:\n",
+        if decl == "float" { "0.0" } else { "0" },
+        init.0,
+        init.1
+    )
 }
 
 /// Der leere Kern: ein Tick ohne Arbeit, fuer `T_IO` und die Stack-Reserve.
@@ -539,7 +598,7 @@ pub struct Outcome {
     /// Stack-Tiefe des leeren Programms in der Tickschleife unter Last: die
     /// Reserve fuer Runtime, Treiber und ISRs (12.3).
     pub stack_reserve: Option<u64>,
-    /// Die groesste Verspaetung eines Tickbeginns gegen seine Frist (7.3).
+    /// Die Streuung der Tickbeginne, Spitze zu Spitze (7.3).
     pub tick_jitter_ns: Option<i64>,
 }
 
@@ -562,10 +621,10 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
     for probe in Probe::ORDER {
         let mut costs = [CostVec::default(); 2];
         let mut series = [Series::default(); 2];
-        for (i, pairs) in [PAIRS.0, PAIRS.1].into_iter().enumerate() {
-            let source = class_kernel(probe, pairs);
-            costs[i] = cost_of(&source).map_err(|e| format!("Kern {} ({pairs}): {e}", probe.name()))?;
-            let m = measure(board, &write_kernel(&format!("{}_{pairs}", probe.name()), &source)?, None, runs)?;
+        for (i, source) in probe_kernels(probe).into_iter().enumerate() {
+            let size = ["klein", "gross"][i];
+            costs[i] = cost_of(&source).map_err(|e| format!("Kern {} {size}: {e}", probe.name()))?;
+            let m = measure(board, &write_kernel(&format!("{}_{size}", probe.name()), &source)?, None, runs)?;
             series[i] = m.takt;
         }
         log(&format!("{}: {} und {} Zyklen hoechstens", probe.name(), series[0].max, series[1].max));
@@ -610,13 +669,19 @@ fn summary_value(text: &str, label: &str) -> Option<u64> {
     words.next()?.parse().ok()
 }
 
-/// Die groesste Verspaetung eines Tickbeginns aus den Zeitzeilen
-/// (`t=… time took=… drift=…`, grammar/trace.md).
+/// Die Streuung der Tickbeginne aus den Zeitzeilen (`t=… time took=…
+/// drift=…`, grammar/trace.md), Spitze zu Spitze.
+///
+/// Pruefung 59 rechnet mit `P_m + jitter`, dem laengsten Abstand zweier
+/// Aktivierungen. Ein fester Versatz aller Tickbeginne verschiebt keinen
+/// Abstand; der erste Lauf auf Board 1 meldete ihn als 121 µs Jitter
+/// (FB-291).
 fn tick_jitter(text: &str) -> Option<i64> {
-    text.lines()
-        .filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse::<i64>().ok())
-        .map(i64::abs)
-        .max()
+    let drifts: Vec<i64> = text
+        .lines()
+        .filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok())
+        .collect();
+    Some(drifts.iter().max()? - drifts.iter().min()?)
 }
 
 impl Outcome {
@@ -780,7 +845,15 @@ mod tests {
                     takt schlief 0 ueberlaeufe 0 verspaetet 0 verloren 0 rueckstand 0 ns verworfen 0 journal \
                     geschrieben 0 fehlgeschlagen 0 flush 0 nvm loeschen 0 ns programmieren 0 ns stack 1432\ntakt end\n";
         assert_eq!(summary_value(text, "stack"), Some(1432));
-        assert_eq!(tick_jitter(text), Some(15));
+        assert_eq!(tick_jitter(text), Some(18));
+    }
+
+    /// Ein fester Versatz aller Tickbeginne ist kein Jitter (FB-291).
+    #[test]
+    fn a_constant_drift_is_no_jitter() {
+        let text = "t=1 time took=120 drift=-120000 slept=0\nt=2 time took=121 drift=-120000 slept=0\n";
+        assert_eq!(tick_jitter(text), Some(0));
+        assert_eq!(tick_jitter("takt end\n"), None);
     }
 
     #[test]
@@ -810,9 +883,9 @@ mod tests {
         let probes: Vec<(Probe, [CostVec; 2], [Series; 2])> = Probe::ORDER
             .iter()
             .map(|probe| {
-                let cost =
-                    |pairs| cost_of(&class_kernel(*probe, pairs)).unwrap_or_else(|e| panic!("{}: {e}", probe.name()));
-                (*probe, [cost(PAIRS.0), cost(PAIRS.1)], [series(1_000), series(9_000)])
+                let cost = |source: &str| cost_of(source).unwrap_or_else(|e| panic!("{}: {e}", probe.name()));
+                let [small, large] = probe_kernels(*probe);
+                (*probe, [cost(&small), cost(&large)], [series(1_000), series(9_000)])
             })
             .collect();
         let c = calibrate(84_000_000, &series(100), &probes, &[]).unwrap_or_else(|e| panic!("{e}"));
@@ -882,6 +955,27 @@ mod tests {
         };
         let line = outcome.kernel_lines().join("\n");
         assert!(line.contains("1.03") && line.contains("gleicher Digest"), "{line}");
+    }
+
+    /// Die Probe `call` unterscheidet sich nur in den Aufrufen: gleiche
+    /// Rumpfarbeit, doppelt so viele Aufrufe.
+    #[test]
+    fn the_call_probe_differs_only_in_calls() {
+        let [small, large] = probe_kernels(Probe::Ops(CostClass::Call));
+        let (s, l) = (cost_of(&small).expect("klein"), cost_of(&large).expect("gross"));
+        assert_eq!(l.call - s.call, u64::from(2 * CALL_PAIRS), "{s:?} {l:?}");
+        assert_eq!(difference(l, s).map(|d| d.i32 + d.i64 + d.mem), Ok(0), "{s:?} {l:?}");
+    }
+
+    /// Die Probe `i64` rechnet ueber 32 Bit hinaus, ohne Pruefung, und
+    /// zwei Kerngroessen unterscheiden sich nur in `i64`.
+    #[test]
+    fn the_i64_probe_needs_64_bits() {
+        let (small, checks) = analysis_of(&class_kernel(Probe::Ops(CostClass::I64), 2)).expect("uebersetzt");
+        let (large, _) = analysis_of(&class_kernel(Probe::Ops(CostClass::I64), 4)).expect("uebersetzt");
+        assert_eq!(checks, 0, "keine implizite Pruefung");
+        let d = difference(large, small).expect("waechst");
+        assert!(d.i64 > 0 && d.i32 == 0 && d.mem == 0, "{d:?}");
     }
 
     /// Eine Probe mit fremden Operationen wird abgewiesen.

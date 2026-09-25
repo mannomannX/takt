@@ -54,8 +54,8 @@ fn digests(trace: &str) -> Vec<u64> {
 }
 
 /// Der Digest je Tick der C-Referenz, auf dem Wirt uebersetzt: dieselben
-/// Gleitkommaregeln wie auf dem Board (`-ffp-contract=off`), ein Aufruf je
-/// Tick.
+/// Gleitkommaregeln wie auf dem Board (`-ffp-contract=off`,
+/// `-fno-math-errno`), ein Aufruf je Tick.
 fn native(clang: &Clang, name: &str) -> Result<Vec<u64>, String> {
     let dir = std::env::temp_dir().join(format!("takt-bench-reference-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -74,7 +74,7 @@ fn native(clang: &Clang, name: &str) -> Result<Vec<u64>, String> {
     .map_err(|e| e.to_string())?;
     let mut cmd = std::process::Command::new(clang.path().ok_or("clang")?);
     let build = Clang::deterministic(&mut cmd)
-        .args(["-O2", "-ffp-contract=off", "-Wall", "-Wextra", "-Werror"])
+        .args(["-O2", "-ffp-contract=off", "-fno-math-errno", "-Wall", "-Wextra", "-Werror"])
         .arg(kernel_path(name, "c"))
         .arg(&main)
         .arg("-o")

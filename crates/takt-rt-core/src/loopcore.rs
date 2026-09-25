@@ -168,6 +168,14 @@ impl Tick {
     }
 }
 
+/// Die logische Zeit am Ende von Tick `k` (12.1): ein Vielfaches von `T0`
+/// und *nicht* die gemessene Zeit — sonst haengt der Trace an der Uhr, und
+/// Satz 9.4.1 gilt nicht mehr. Jeder, der [`Program::tick`] ruft, rechnet
+/// sie so.
+pub fn tick_end(k: u64, tick_ns: i64) -> i64 {
+    (k as i64).saturating_add(1).saturating_mul(tick_ns)
+}
+
 /// Das Programm, das die Schleife ausfuehrt.
 ///
 /// Die Semantik liegt hinter diesem Trait: Der Interpreter fuehrt sie ueber
@@ -299,10 +307,8 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
             self.program.raise_overrun();
         }
 
-        // sample_inputs() bis commit_outputs(): die Semantik. Die logische
-        // Zeit ist ein Vielfaches von T0 und *nicht* die gemessene — sonst
-        // haengt der Trace an der Uhr, und Satz 9.4.1 gilt nicht mehr.
-        let now = (self.k as i64).saturating_add(1).saturating_mul(self.tick_ns);
+        // sample_inputs() bis commit_outputs(): die Semantik.
+        let now = tick_end(self.k, self.tick_ns);
         self.program.tick(self.k, now);
         let took = self.clock.now() - began;
 

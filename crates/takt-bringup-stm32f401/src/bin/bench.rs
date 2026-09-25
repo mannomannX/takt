@@ -22,7 +22,7 @@ use stm32f4::stm32f401::{Peripherals, interrupt};
 use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Generated, WfiSleep, cycles, stack};
 use takt_rt_baremetal::Sleep;
 use takt_rt_baremetal::bench::{series, subnormal_failures, write_series, write_value};
-use takt_rt_core::Program;
+use takt_rt_core::{Program, tick_end};
 
 mod takt {
     #![allow(dead_code)]
@@ -105,18 +105,23 @@ fn main() -> ! {
     let mut program = Generated::init(false);
     let mut k = 0u64;
     for _ in 0..WARMUP {
-        program.tick(k, 0);
+        program.tick(k, tick_end(k, takt::TICK_NS));
         k += 1;
     }
     let takt = cortex_m::interrupt::free(|_| {
         series(runs, cycles::now, || {
-            program.tick(k, 0);
+            program.tick(k, tick_end(k, takt::TICK_NS));
             k += 1;
         })
     });
     write_series(&mut uart, "takt", &takt, program.output(0) as u64);
 
     if reference::PRESENT {
+        // Das Programm hat mit `init` Tick 0 hinter sich; die Referenz
+        // rechnet ihn hier nach. Sonst laege der Kern einen Tick vorn, und
+        // die Digests liessen sich nicht vergleichen (FB-287).
+        // SAFETY: die C-Referenz, ein Durchlauf ohne Argumente.
+        unsafe { takt_bench_reference() };
         for _ in 0..WARMUP {
             // SAFETY: die C-Referenz, ein Durchlauf ohne Argumente.
             unsafe { takt_bench_reference() };
