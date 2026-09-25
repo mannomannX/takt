@@ -6,14 +6,14 @@
 # **Gemessen mit `takt bench` auf Board 2** (2026-09-25, 200 Wiederholungen
 # je Kern, 160 MHz), zum Kostenmodell 1. Der Bericht daneben
 # (`esp32c6.report`) nennt Streuung und Umstaende. Gestreckt um
-# 1993750/1976524, also kaum: Jeder Referenzkern liegt unter seiner Schranke.
+# 1993750/1966137, also kaum: Jeder Referenzkern liegt unter seiner Schranke.
 #
-# Was die Zahlen voraussetzen: Der erzeugte Code, sein C-Rahmen und der
-# Tick-Pfad liegen im RAM (`rwtext_hook.x`), die Soft-Float-Grundrechenarten
-# im ROM des Chips. `fma` und `sqrt` kommen aus dem Flash ueber den Cache;
-# gemessen ist der warme Fall, ein Fehlzugriff kann sie verlaengern
-# (FB-301). Ohne FPU sind Division, `fma` und `sqrt` Bibliotheksaufrufe
-# mit eigenem Gewicht (7.2).
+# Was die Zahlen voraussetzen: Der erzeugte Code, sein C-Rahmen, der
+# Tick-Pfad und die Mathematik aus `compiler_builtins` (`fma`, `sqrt`)
+# liegen im RAM (`rwtext_hook.x`, FB-301), die Soft-Float-Grundrechenarten
+# im ROM des Chips. Aus dem Flash ueber den Cache kommen nur noch die
+# Trace-Hooks der Runtime (FB-295). Ohne FPU sind Division, `fma` und
+# `sqrt` Bibliotheksaufrufe mit eigenem Gewicht (7.2).
 #
 # `ram` und `iram` nennen denselben Bereich, und das ist kein Fehler: Der
 # C6 hat einen einheitlichen HP-SRAM (`esp-hal` richtet 0x6E610 Byte ein,
@@ -36,24 +36,24 @@ nvm_sectors = 2
 nvm_erase_ns = 60000000
 nvm_program_ns = 200000
 nvm_blocking = true
-i32 = 7566
-i64 = 24406
-f32 = 357983
-f64 = 562222
-mem = 28804
-call = 53431
+i32 = 7666
+i64 = 24510
+f32 = 359787
+f64 = 565073
+mem = 27847
+call = 53555
 native = 0
-i32_div = 60287
-i64_div = 1035823
-f32_div = 1218641
-f64_div = 2371308
-f32_fma = 4349632
-f64_fma = 2829959
-f32_sqrt = 463838
-f64_sqrt = 1037972
-t_io = 2375000
+i32_div = 60207
+i64_div = 1041435
+f32_div = 1225290
+f64_div = 2383914
+f32_fma = 4361499
+f64_fma = 2848752
+f32_sqrt = 461272
+f64_sqrt = 1029888
+t_io = 2387500
 tick_jitter_ns = 0
-stack_reserve = 4580
+stack_reserve = 4564
 
 [device.led]
 driver = "esp32c6-rmt-ws2812"
