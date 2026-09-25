@@ -82,9 +82,9 @@ impl Abi {
     /// **Die Warteschlange gehoert der Runtime, nicht dem Maschinen-
     /// zustand.** 11.2 sagt es woertlich: „`sched`-Warteschlangen als
     /// feste Arrays im Runtime-Anteil des Outputs". Das folgt der
-    /// Zustaendigkeit — `apply_scheduled(k)` laeuft zu Tick-Beginn ueber
-    /// *alle* Outputs, bevor irgendeine Maschine schreitet (9.8), und
-    /// der Tickschritt kann das nicht tun.
+    /// Zustaendigkeit — `apply_scheduled(k)` laeuft nach allen
+    /// Maschinenschritten ueber *alle* Outputs, vor dem Commit (9.8,
+    /// 12.1), und der Tickschritt einer Maschine kann das nicht tun.
     ///
     /// Das Ergebnis sagt, ob geplant werden konnte: `false` heisst
     /// `TimingFault` (der Zeitpunkt liegt nicht in der Zukunft) oder

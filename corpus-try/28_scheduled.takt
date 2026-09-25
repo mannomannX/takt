@@ -16,6 +16,7 @@ system:
 
 output y : int in 0..9 @ sim("y")
 output z : int in 0..9 @ sim("z")
+output w : int in 0..9 @ sim("w")
 
 machine m:
     initial A
@@ -35,3 +36,17 @@ machine m:
             at 30 ms:
                 z = 7
         after 200 ms: -> A
+
+machine late:
+    initial A
+
+    state A:
+        enter:
+            at now + 30 ms:
+                w = 4
+        loop:
+            # Im Tick, in dem der geplante Wert faellig wird, schreibt die
+            # Maschine selbst: Der geplante gewinnt, weil er nach den
+            # Schritten in den Latch geht (9.8, 12.1).
+            w = 1
+        after 100 ms: -> A

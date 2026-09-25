@@ -1,0 +1,24 @@
+# 82 — Eine geplante Ausgabe haelt den Schlaf auf (9.8, 9.9): Das System
+# schlaeft nur, wenn alle Maschinen `idle` sind und keine geplante
+# Ausgabe aussteht. Der Wert faellt in Tick 5, die Frist des Zustands
+# erst in Tick 10; schliefe das System darueber hinweg, stuende `v = 5`
+# erst in Tick 10 im Trace — und verdraengte dort den Eintritt in DONE.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output v : int in 0..9 @ sim("v")
+
+machine sleeper:
+    initial WAIT
+
+    state WAIT idle:
+        enter:
+            at 50 ms:
+                v = 5
+        after 100 ms: -> DONE
+
+    state DONE idle:
+        enter:
+            v = 7

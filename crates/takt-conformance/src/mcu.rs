@@ -60,6 +60,9 @@ pub fn build_with(p: &Program, diagnostics: takt_llvm::Diagnostics) -> McuHarnes
     // gehen an das Board.
     crate::streams::emit(&mut s, p, &[], crate::streams::Trace::Board);
     storage(&mut s, p, &layout, &driven);
+    // 9.8: die geplanten Schreibvorgaenge, hinter dem Latch, weil
+    // `apply_scheduled` ihn schreibt.
+    crate::harness::scheduled(&mut s, p, &layout);
     declarations(&mut s, &driven);
     init(&mut s, p, &layout, &driven);
     tick(&mut s, p, &layout, &driven);
@@ -104,6 +107,9 @@ fn monitors(p: &Program) -> Vec<(usize, &takt_mir::program::Property)> {
 /// Stelle. Der Vergleich mit dem Interpreter braucht nicht mehr.
 fn runtime_abi(s: &mut String, p: &Program) {
     let _ = writeln!(s, "static long long g_tick = 0;");
+    // Der zuletzt ausgefuehrte Tick: Im Schlaf rueckt `g_tick` vor (9.9),
+    // die Ausgaben, die der Dump danach schreibt, gehoeren aber zu ihm.
+    let _ = writeln!(s, "static long long g_done = 0;");
     crate::harness::scope_flags(s, p);
     let _ = writeln!(s, "unsigned char takt_fn_fault = 0;\n");
 
@@ -263,6 +269,7 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "void takt_mcu_sample(void);");
     let _ = writeln!(s, "void takt_mcu_tick(long long k) {{");
     let _ = writeln!(s, "    g_tick = k;");
+    let _ = writeln!(s, "    g_done = k;");
     let _ = writeln!(s, "    takt_fn_fault = 0;");
     crate::harness::aging(s, p, layout, "    ");
     let _ = writeln!(s, "    takt_mcu_sample();");
@@ -280,9 +287,9 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
 ///
 /// 9.9 nennt sechs Konjunkte. Je Maschine beantwortet der erzeugte Code
 /// zwei (`idle`-Zustand, kein `pending`); ein anliegendes Wake-Kommando
-/// prueft der Rahmen, weil er das Prozessabbild besitzt. Die uebrigen drei
-/// sind auf der MCU gegenstandslos: Es gibt dort keine geplanten Ausgaben,
-/// keine Jobs und keine Stroeme — also auch keine Wake-Fenster.
+/// und ausstehende geplante Ausgaben prueft der Rahmen, weil ihm
+/// Prozessabbild und Warteschlangen gehoeren. Jobs kennt der MCU-Rahmen
+/// noch nicht (M10 Schritt 7).
 fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Systemschlaf (9.9). */");
     let _ = writeln!(s, "_Bool takt_mcu_idle(void) {{");
@@ -295,6 +302,9 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
             if p.commands.iter().any(|c| c.name == slot.name && c.wake) {
                 let _ = writeln!(s, "    if (image[{}]) return 0; /* {} weckt */", slot.offset, slot.name);
             }
+        }
+        if !crate::harness::queued_outputs(p).is_empty() {
+            let _ = writeln!(s, "    if (takt_sched_pending()) return 0;");
         }
         for m in driven {
             let _ = writeln!(s, "    if (!{0}_idle(state_{0})) return 0;", m.name);
@@ -512,7 +522,7 @@ fn telemetry(
     let _ = writeln!(s, "        if (!all && takt_same(v, g_shown + o->off, o->size)) continue;");
     let _ = writeln!(s, "        memcpy(g_shown + o->off, v, o->size);");
     let _ = writeln!(s, "        takt_board_trace(\"t=\");");
-    let _ = writeln!(s, "        takt_board_trace_i64(g_tick);");
+    let _ = writeln!(s, "        takt_board_trace_i64(g_done);");
     let _ = writeln!(s, "        takt_board_trace(\"out \");");
     let _ = writeln!(s, "        takt_board_trace(o->name);");
     let _ = writeln!(s, "        if (o->count) {{");
@@ -548,7 +558,7 @@ fn program_counters(s: &mut String, p: &Program, driven: &[&takt_mir::machine::M
             continue;
         };
         let _ = writeln!(s, "    takt_board_trace(\"t=\");");
-        let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
+        let _ = writeln!(s, "    takt_board_trace_i64(g_done);");
         let _ = writeln!(s, "    takt_board_trace(\"pc {} \");", m.name);
         let _ = writeln!(s, "    takt_board_trace_i64(*(int *)(state_{} + {at}));", m.name);
         let _ = writeln!(s, "    takt_board_trace(\"\\n\");");

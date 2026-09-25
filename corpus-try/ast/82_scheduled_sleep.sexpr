@@ -1,0 +1,14 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output v :int in 0..9 @sim("v"))
+(machine sleeper
+  (initial WAIT)
+  (state WAIT idle
+    (enter
+      (at 50ms
+        (= v 5)))
+    (after 100ms -> DONE))
+  (state DONE idle
+    (enter
+      (= v 7))))

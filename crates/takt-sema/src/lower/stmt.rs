@@ -103,6 +103,20 @@ impl Lowerer<'_> {
                 let t = &mut self.program.triggers[id.index()];
                 if t.owner.is_none() {
                     t.owner = Some(owner);
+                    // 9.8: Was der Trigger plant, braucht beim Besitzer
+                    // eine Warteschlange (11.2).
+                    let targets: Vec<ChannelId> = t
+                        .then
+                        .stmts
+                        .iter()
+                        .filter_map(|s| match &s.kind {
+                            StmtKind::Assign { target: takt_mir::stmt::Place::Output(c), .. } => Some(*c),
+                            _ => None,
+                        })
+                        .collect();
+                    for c in targets {
+                        self.add_output_queue(c);
+                    }
                 }
                 StmtKind::Arm { trigger: id, on: *arm }
             }

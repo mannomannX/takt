@@ -121,7 +121,6 @@ fn build_inner(
     let _ = writeln!(s, "#include <string.h>\n");
     let _ = writeln!(s, "static void takt_tx_commit(long long);");
     let _ = writeln!(s, "static void takt_int_commit(void);");
-    let _ = writeln!(s, "static void takt_apply_scheduled(long long);");
 
     // Die Runtime-Aufrufe (`takt-llvm/src/abi.rs`). Sie schreiben in den
     // Trace, damit der Vergleich sie sieht.
@@ -263,10 +262,6 @@ fn build_inner(
     }
     let _ = writeln!(s, "    for (g_tick = 1; g_tick <= {ticks}; g_tick++) {{");
     aging(&mut s, p, &layout, "        ");
-    // 9.8: `apply_scheduled(k)` stellt zu Tick-Beginn, was faellig ist —
-    // vor jedem Maschinenschritt, damit die Maschinen den Wert im selben
-    // Tick lesen. Die Simulation wendet `T` im Tick `ceil(T / T0)` an.
-    let _ = writeln!(s, "        takt_apply_scheduled(g_tick * {}LL);", p.config.tick);
     // 4.5: Faellige Jobs werden zu Tick-Beginn sichtbar, wie `poll_jobs` im Interpreter.
     if p.machines.iter().any(|m| !m.layout.job_slots.is_empty()) {
         let _ = writeln!(s, "        takt_jobs_poll();");
@@ -323,7 +318,7 @@ fn build_inner(
         let _ = writeln!(s, "        }}");
     }
     if sleep {
-        virtual_sleep(&mut s, &driven, ticks);
+        virtual_sleep(&mut s, p, &driven, ticks);
     }
     let _ = writeln!(s, "    }}");
     if reboot_slot(p, &layout).is_some() || jump_slot(p, &layout).is_some() {
@@ -540,62 +535,83 @@ fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout) {
     }
 }
 
-/// Die geplanten Schreibvorgaenge (9.8).
+/// Die geplanten Schreibvorgaenge (9.8), fuer beide Rahmen.
 ///
 /// **Der Rahmen ist hier die Runtime.** 11.2 legt `sched` in den
 /// Runtime-Anteil des Outputs, und 9.8 gibt die Regeln vor: sortiert
 /// nach `T`, hoechstens `K_o` Eintraege je Output, gleiche `T`
-/// ueberschreiben einander, und `apply_scheduled(k)` stellt zu
-/// Tick-Beginn, was faellig ist.
+/// ueberschreiben einander. Eine Warteschlange je Output aus
+/// [`queued_outputs`] — so viele, wie `takt size` rechnet (11.5); ein
+/// Programm ohne `at`, `pulse` und `cancel` bekommt keine.
 ///
 /// `takt_schedule` liefert `false`, wenn der Zeitpunkt nicht in der
 /// Zukunft liegt (`TimingFault`) oder die Warteschlange voll ist
 /// (`ScheduleOverflow`) — beides Faults der Maschine, die der erzeugte
-/// Code an seinem Fault-Pfad behandelt.
-fn scheduled(s: &mut String, p: &Program, layout: &Layout) {
+/// Code an seinem Fault-Pfad behandelt. `takt_apply_scheduled` ruft
+/// [`commit_sequence`].
+pub(crate) fn scheduled(s: &mut String, p: &Program, layout: &Layout) {
+    let queues = queued_outputs(p);
+    if queues.is_empty() {
+        return;
+    }
+    let n = queues.len();
     // K_o aus 7.5; `takt size` rechnet mit derselben Zahl.
     let _ = writeln!(s, "#define TAKT_K_O 4");
     let _ = writeln!(s, "struct takt_sched {{ long long t; long long v; }};");
-    let n = p.channels.len().max(1);
     let _ = writeln!(s, "static struct takt_sched g_sched[{n}][TAKT_K_O];");
     let _ = writeln!(s, "static int g_sched_n[{n}];");
+    let _ = writeln!(s, "static int takt_sched_slot(int o) {{");
+    let _ = writeln!(s, "    switch (o) {{");
+    for (q, c) in queues.iter().enumerate() {
+        let _ = writeln!(s, "    case {}: return {q}; /* {} */", c.index(), p.channels[c.index()].name);
+    }
+    let _ = writeln!(s, "    default: return -1;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
     let _ = writeln!(s, "_Bool takt_schedule(int o, long long t, long long v) {{");
-    let _ = writeln!(s, "    if (o < 0 || o >= {n}) return 0;");
+    let _ = writeln!(s, "    int q = takt_sched_slot(o);");
+    let _ = writeln!(s, "    if (q < 0) return 0;");
     // 9.8: `T <= now` ist ein `TimingFault`; in der Simulation ist
     // `guard` null.
     let _ = writeln!(s, "    if (t <= g_tick * {}LL) return 0;", p.config.tick);
     // Gleiche `T`: die spaetere Anweisung gewinnt (9.8).
-    let _ = writeln!(s, "    for (int i = 0; i < g_sched_n[o]; i++)");
-    let _ = writeln!(s, "        if (g_sched[o][i].t == t) {{ g_sched[o][i].v = v; return 1; }}");
-    let _ = writeln!(s, "    if (g_sched_n[o] >= TAKT_K_O) return 0;");
-    let _ = writeln!(s, "    g_sched[o][g_sched_n[o]].t = t;");
-    let _ = writeln!(s, "    g_sched[o][g_sched_n[o]].v = v;");
-    let _ = writeln!(s, "    g_sched_n[o]++;");
+    let _ = writeln!(s, "    for (int i = 0; i < g_sched_n[q]; i++)");
+    let _ = writeln!(s, "        if (g_sched[q][i].t == t) {{ g_sched[q][i].v = v; return 1; }}");
+    let _ = writeln!(s, "    if (g_sched_n[q] >= TAKT_K_O) return 0;");
+    let _ = writeln!(s, "    g_sched[q][g_sched_n[q]].t = t;");
+    let _ = writeln!(s, "    g_sched[q][g_sched_n[q]].v = v;");
+    let _ = writeln!(s, "    g_sched_n[q]++;");
     let _ = writeln!(s, "    return 1;");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_cancel(int o) {{ if (o >= 0 && o < {n}) g_sched_n[o] = 0; }}");
+    let _ = writeln!(s, "void takt_cancel(int o) {{ int q = takt_sched_slot(o); if (q >= 0) g_sched_n[q] = 0; }}");
+    // 9.9: Schlaf nur, wenn alle `sched[o]` leer sind.
+    let _ = writeln!(s, "static _Bool takt_sched_pending(void) {{");
+    let _ = writeln!(s, "    for (int q = 0; q < {n}; q++) if (g_sched_n[q]) return 1;");
+    let _ = writeln!(s, "    return 0;");
+    let _ = writeln!(s, "}}");
 
     // `apply_scheduled(k)`: Was faellig ist, geht in den Latch. Sind
     // mehrere faellig, gewinnt der spaeteste Zeitpunkt (9.8).
     let _ = writeln!(s, "static void takt_apply_scheduled(long long now) {{");
-    let _ = writeln!(s, "    for (int o = 0; o < {n}; o++) {{");
+    let _ = writeln!(s, "    for (int q = 0; q < {n}; q++) {{");
     let _ = writeln!(s, "        long long best_t = -1; long long best_v = 0; int hit = 0;");
     let _ = writeln!(s, "        int k = 0;");
-    let _ = writeln!(s, "        for (int i = 0; i < g_sched_n[o]; i++) {{");
-    let _ = writeln!(s, "            if (g_sched[o][i].t <= now) {{");
-    let _ = writeln!(s, "                if (!hit || g_sched[o][i].t > best_t) {{");
-    let _ = writeln!(s, "                    best_t = g_sched[o][i].t; best_v = g_sched[o][i].v; hit = 1;");
+    let _ = writeln!(s, "        for (int i = 0; i < g_sched_n[q]; i++) {{");
+    let _ = writeln!(s, "            if (g_sched[q][i].t <= now) {{");
+    let _ = writeln!(s, "                if (!hit || g_sched[q][i].t > best_t) {{");
+    let _ = writeln!(s, "                    best_t = g_sched[q][i].t; best_v = g_sched[q][i].v; hit = 1;");
     let _ = writeln!(s, "                }}");
     let _ = writeln!(s, "            }} else {{");
-    let _ = writeln!(s, "                g_sched[o][k++] = g_sched[o][i];");
+    let _ = writeln!(s, "                g_sched[q][k++] = g_sched[q][i];");
     let _ = writeln!(s, "            }}");
     let _ = writeln!(s, "        }}");
-    let _ = writeln!(s, "        g_sched_n[o] = k;");
+    let _ = writeln!(s, "        g_sched_n[q] = k;");
     let _ = writeln!(s, "        if (!hit) continue;");
-    let _ = writeln!(s, "        switch (o) {{");
-    for slot in &layout.outputs {
+    let _ = writeln!(s, "        switch (q) {{");
+    for (q, c) in queues.iter().enumerate() {
+        let name = &p.channels[c.index()].name;
+        let Some(slot) = layout.outputs.iter().find(|slot| slot.name == *name) else { continue };
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let Some(id) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
         // Der Wert kam als `i64` an; im Latch steht er in seinem Typ.
         // Ein `double` traegt dieselben Bits, eine Ganzzahl wird
         // verengt — beides genau die Umkehrung von `at` im Codegen.
@@ -604,12 +620,23 @@ fn scheduled(s: &mut String, p: &Program, layout: &Layout) {
         } else {
             format!("*({ct} *)(latch + {}) = ({ct})best_v;", slot.offset)
         };
-        let _ = writeln!(s, "        case {id}: {back} break; /* {} */", slot.name);
+        let _ = writeln!(s, "        case {q}: {back} break; /* {name} */");
     }
     let _ = writeln!(s, "        default: break;");
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}\n");
+}
+
+/// Die Outputs mit `sched`-Warteschlange in der Reihenfolge ihrer Plaetze:
+/// je Maschine ausser Vorlagen, was `at`, `pulse` und `cancel` treffen
+/// (`Layout::output_queues`).
+pub(crate) fn queued_outputs(p: &Program) -> Vec<takt_mir::ChannelId> {
+    p.machines
+        .iter()
+        .filter(|m| m.kind != takt_mir::machine::MachineKind::Template)
+        .flat_map(|m| m.layout.output_queues.iter().copied())
+        .collect()
 }
 
 /// Speist die `sim`-Outputs in die `hw`-Inputs derselben Adresse (8.3).
@@ -869,6 +896,12 @@ pub(crate) fn commit_sequence(
     tick: &str,
 ) {
     psi_commit(s, p, driven, indent);
+    // 9.8, 12.1: Was in diesem Tick faellig wird, geht nach den Schritten
+    // in den Latch, vor dem Commit — ein geplanter Wert gewinnt gegen eine
+    // Zuweisung desselben Ticks, und die `sim`-Bindung sieht ihn.
+    if !queued_outputs(p).is_empty() {
+        let _ = writeln!(s, "{indent}takt_apply_scheduled({tick} * {}LL);", p.config.tick);
+    }
     sim_bindings(s, p, indent);
     let _ = writeln!(s, "{indent}takt_tx_commit({tick});");
     let _ = writeln!(s, "{indent}takt_int_commit();");
@@ -878,11 +911,14 @@ pub(crate) fn commit_sequence(
 /// `idle`, rueckt der Rahmen bis vor die frueheste `after`-Frist, wie
 /// `Runtime::sleep` — `n = d / T0 - 1`, und der Tick an der Frist laeuft.
 /// Die Zeitzeile traegt `slept`, wie auf dem Board; der Vergleich liest
-/// sie nicht. Wake-Kommandos, geplante Ausgaben und Jobs gibt es in
-/// diesem Rahmen nicht (keine Eingaben), also entscheiden die Maschinen.
-fn virtual_sleep(s: &mut String, driven: &[&takt_mir::machine::Machine], ticks: u64) {
+/// sie nicht. Wake-Kommandos und Jobs gibt es in diesem Rahmen nicht
+/// (keine Eingaben); ausstehende geplante Ausgaben verbieten den Schlaf.
+fn virtual_sleep(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], ticks: u64) {
     let _ = writeln!(s, "        {{");
     let _ = writeln!(s, "            _Bool idle = 1;");
+    if !queued_outputs(p).is_empty() {
+        let _ = writeln!(s, "            idle = !takt_sched_pending();");
+    }
     let _ = writeln!(s, "            long long best = -1;");
     for m in driven {
         let _ = writeln!(s, "            idle = idle && {0}_idle(state_{0});", m.name);

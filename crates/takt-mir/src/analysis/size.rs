@@ -265,8 +265,15 @@ pub fn size(p: &Program) -> Size {
     let image: u64 = p.channels.iter().map(|c| u64::from(type_bytes(p, c.ty)) * 2).sum();
     items.push(Item { name: "Prozessabbild und Psi".into(), bytes: image, origin: Origin::Exact });
 
-    // K_o: hoechstens vier geplante Schreibvorgaenge je Output (9.8).
-    let sched: u64 = allocated.clone().map(|m| m.layout.output_queues.len() as u64 * 4 * 16).sum();
+    // K_o: hoechstens vier geplante Schreibvorgaenge je Output (9.8). Die
+    // Warteschlange gehoert dem Output (11.2), nicht dem Zustand; auch die
+    // einer gescopten Instanz ueberlagert sich darum nicht.
+    let sched: u64 = p
+        .machines
+        .iter()
+        .filter(|m| m.kind != MachineKind::Template)
+        .map(|m| m.layout.output_queues.len() as u64 * 4 * 16)
+        .sum();
     items.push(Item { name: "sched-Warteschlangen".into(), bytes: sched, origin: Origin::Exact });
 
     let scratch: u64 = allocated.map(|m| u64::from(m.layout.scratch_bytes.unwrap_or(0))).sum();

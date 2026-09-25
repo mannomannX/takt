@@ -3,6 +3,7 @@
   (tick 10ms))
 (output y :int in 0..9 @sim("y"))
 (output z :int in 0..9 @sim("z"))
+(output w :int in 0..9 @sim("w"))
 (machine m
   (initial A)
   (state A
@@ -16,3 +17,12 @@
       (at 30ms
         (= z 7)))
     (after 200ms -> A)))
+(machine late
+  (initial A)
+  (state A
+    (enter
+      (at (+ now 30ms)
+        (= w 4)))
+    (loop
+      (= w 1))
+    (after 100ms -> A)))
