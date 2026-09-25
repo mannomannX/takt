@@ -13,6 +13,11 @@ use common::board::{TICKS, agreement, last_output, natives_agree};
 use takt_conformance::board::stm32f401::Stm32f401;
 use takt_conformance::board::{self, Board, CORPUS, Options};
 
+/// Was der F401 nicht fasst: `45_journal_cut` haelt ein Flash-Modell mit
+/// zwei Sektoren im RAM, und `.bss` laeuft um gut 47 KiB ueber die 64 KiB
+/// des Chips (Pruefung 39); auf dem C6 laeuft es.
+const TOO_BIG: &[&str] = &["45_journal_cut.takt"];
+
 /// Ein Board, mehrere Tests: cargo fuehrt Tests nebenlaeufig aus, das Board
 /// und sein Port vertragen nur einen Lauf zugleich.
 static BOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -50,7 +55,8 @@ fn the_board_agrees_with_the_interpreter() {
     let Some((mut board, _guard)) = board() else { return };
     // `TAKT_F401_ONLY=42_map.takt` fuer einen einzelnen Fall.
     let only = std::env::var("TAKT_F401_ONLY").ok();
-    let failed = agreement(&mut board, CORPUS, only.as_deref());
+    let names: Vec<&str> = CORPUS.iter().copied().filter(|n| !TOO_BIG.contains(n)).collect();
+    let failed = agreement(&mut board, &names, only.as_deref());
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 

@@ -25,8 +25,8 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 /// Der Differentialkorpus, soweit der MCU-Rahmen ihn traegt: ohne
-/// Systemkanaele (32, 34), geplante Ausgaben (28) und Jobs (40), die er
-/// noch nicht kennt (plan/m10.md Schritte 5–7).
+/// Systemkanaele (32, 34), geplante Ausgaben (28), Jobs (40) und den Port
+/// auf `mmio` (68), die er noch nicht kennt (plan/m10.md Schritte 5–7, 9).
 pub const CORPUS: &[&str] = &[
     "01_minimal.takt",
     "02_units_and_data.takt",
@@ -56,6 +56,7 @@ pub const CORPUS: &[&str] = &[
     "41_tunables.takt",
     "42_map.takt",
     "43_sent.takt",
+    "45_journal_cut.takt",
     "46_matrices.takt",
     "47_monitors.takt",
     "49_record_streams.takt",
@@ -71,7 +72,21 @@ pub const CORPUS: &[&str] = &[
     "59_persist_idle.takt",
     "60_resume.takt",
     "62_type_generics.takt",
+    "63_scoped_instances.takt",
+    "64_scoped_exit.takt",
+    "69_qp_box.takt",
+    "70_padded_record.takt",
+    "71_places.takt",
+    "72_handler_levels.takt",
+    "73_after_levels.takt",
+    "74_instance_index.takt",
+    "75_implicit_checks.takt",
+    "76_stream_views.takt",
+    "77_float_faults.takt",
+    "78_length_guards.takt",
+    "79_byte_literals.takt",
     "80_payload_variants.takt",
+    "81_persist_variants.takt",
 ];
 
 /// Die Zeile, mit der jedes Bring-up seinen Lauf beendet.

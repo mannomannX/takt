@@ -104,6 +104,7 @@ fn monitors(p: &Program) -> Vec<(usize, &takt_mir::program::Property)> {
 /// Stelle. Der Vergleich mit dem Interpreter braucht nicht mehr.
 fn runtime_abi(s: &mut String, p: &Program) {
     let _ = writeln!(s, "static long long g_tick = 0;");
+    crate::harness::scope_flags(s, p);
     let _ = writeln!(s, "unsigned char takt_fn_fault = 0;\n");
 
     // 3.3: `now` ist die Dauer seit dem Start — Tickzahl mal T0.
@@ -206,20 +207,7 @@ fn storage(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::ma
 /// Die Signaturen des erzeugten Codes (11.2).
 fn declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Der erzeugte Code (11.2). */");
-    for m in driven {
-        let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "void {}_publish(void *st, void *in);", m.name);
-        let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
-        if !m.persist.is_empty() {
-            let _ = writeln!(s, "int {}_persist_snapshot(void *st, void *out, int cap);", m.name);
-            let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
-        }
-        let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);
-        let _ = writeln!(s, "long long {}_deadline(void *st);", m.name);
-        let _ = writeln!(s, "void {}_advance(void *st, long long n);", m.name);
-    }
+    crate::harness::machine_declarations(s, driven);
     let _ = writeln!(s);
 }
 
@@ -258,10 +246,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
     }
     let _ = writeln!(s, "    int restored = takt_mcu_persist_restore(persist, persist_len);");
-    for m in driven {
-        let _ = writeln!(s, "    {0}_enter(state_{0}, image, params, latch);", m.name);
-        let _ = writeln!(s, "    {0}_publish(state_{0}, image);", m.name);
-    }
+    crate::harness::enter_machines(s, p, layout, driven, "    ");
     // Was `enter` und das erste `loop:` im Tick 0 senden, wird hier
     // sichtbar (FB-269).
     crate::harness::commit_sequence(s, p, driven, "    ", "0");
@@ -281,16 +266,7 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "    takt_fn_fault = 0;");
     crate::harness::aging(s, p, layout, "    ");
     let _ = writeln!(s, "    takt_mcu_sample();");
-    for m in driven {
-        // Die Periode: Eine Maschine mit `n_m > 1` laeuft nur jeden
-        // n-ten Tick (7.2, Zaehler-Scheduling); danach `publish` (9.4).
-        let condition = if m.period > 1 { format!("if (k % {} == 0) ", m.period) } else { String::new() };
-        let _ = writeln!(
-            s,
-            "    {condition}{{ {0}_step(state_{0}, image, params, latch); {0}_publish(state_{0}, image); }}",
-            m.name
-        );
-    }
+    crate::harness::steps(s, p, layout, driven, "    ", "k");
     crate::harness::commit_sequence(s, p, driven, "    ", "k");
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, k);");

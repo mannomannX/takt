@@ -126,11 +126,7 @@ fn build_inner(
     // Die Runtime-Aufrufe (`takt-llvm/src/abi.rs`). Sie schreiben in den
     // Trace, damit der Vergleich sie sieht.
     let _ = writeln!(s, "static long long g_tick = 0;");
-    // 5.11: je gescopter Instanz, ob sie zu Beginn des vorigen Ticks
-    // aktiv war — der Vergleich liefert Ein- und Austritt.
-    for (owner, _, i) in scoped_of(p) {
-        let _ = writeln!(s, "static _Bool g_scope_{owner}_{i} = 0;");
-    }
+    scope_flags(&mut s, p);
     // Das Fault-Flag der reinen Funktionen (4.1, `abi::Abi::FAULT_FLAG`).
     // Es gehoert der Runtime; der Rahmen stellt es bereit und setzt es je
     // Tick zurueck, wie es die Abort-Phase taete.
@@ -166,29 +162,7 @@ fn build_inner(
     crate::streams::emit(&mut s, p, inputs, crate::streams::Trace::Stdio);
 
     natives(&mut s, p);
-    for m in &driven {
-        let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "void {}_publish(void *st, void *in);", m.name);
-        let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);
-        let _ = writeln!(s, "long long {}_deadline(void *st);", m.name);
-        let _ = writeln!(s, "void {}_advance(void *st, long long n);", m.name);
-        if !m.persist.is_empty() {
-            let _ = writeln!(s, "int {}_persist_snapshot(void *st, void *out, int cap);", m.name);
-            let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
-        }
-        // 5.11: das Aktivitaetspraedikat je gescopter Instanz und die
-        // `exit:`-Bloecke fuer ihren Austritt.
-        for (i, _) in m.states.iter().flat_map(|st| st.instances.iter()).enumerate() {
-            let _ = writeln!(s, "_Bool {}_scope_{i}(void *st);", m.name);
-        }
-        let _ = writeln!(s, "void {}_exit_all(void *st, void *in, void *par, void *out);", m.name);
-        if !m.layout.trigger_flags.is_empty() {
-            let _ = writeln!(s, "void {}_triggers(void *st, void *in, void *par, void *out);", m.name);
-        }
-    }
+    machine_declarations(&mut s, &driven);
     // 13.3: Laufzeitmonitore laufen nur, wenn der Rahmen alle Maschinen
     // fuehrt — eine Eigenschaft liest jede.
     let monitors: Vec<(usize, &takt_mir::program::Property)> = match machine {
@@ -277,21 +251,10 @@ fn build_inner(
     for m in &driven {
         let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
     }
-    // 5.11: Eine gescopte Instanz betritt nichts, solange ihr Scope
-    // steht nicht; `scoped_lifecycle` nach dem `enter` des Besitzers
-    // holt sie herein.
-    let scoped_names: Vec<String> = scoped_of(p).into_iter().map(|(_, inst, _)| inst).collect();
     for m in &persisting {
         let _ = writeln!(s, "    {0}_persist_restore(state_{0}, persist_in, persist_in_len);", m.name);
     }
-    for m in &driven {
-        if scoped_names.contains(&m.name) {
-            continue;
-        }
-        let _ = writeln!(s, "    {0}_enter(state_{0}, image, params, latch);", m.name);
-        let _ = writeln!(s, "    {0}_publish(state_{0}, image);", m.name);
-    }
-    scoped_lifecycle(&mut s, p, &layout, "    ");
+    enter_machines(&mut s, p, &layout, &driven, "    ");
     // 8.8: Auch im Tick 0 holt der Treiber ab, was `enter` gesendet hat.
     commit_sequence(&mut s, p, &driven, "    ", "0");
     let _ = writeln!(s, "    dump(0);");
@@ -337,37 +300,7 @@ fn build_inner(
             slot.offset
         );
     }
-    // 7.2: Eine Maschine laeuft in jedem `period`-ten Tick. Ohne die
-    // Bedingung liefe ein `every 50 ms`-Modell bei 10 ms Tick fuenfmal
-    // zu oft, und sein Wert stuende im Trace an der falschen Stelle.
-    // 7.5: Die Trigger-Phase liegt vor den Schritten, wie im Interpreter
-    // zwischen Zustellung und Schritt.
-    for m in &driven {
-        if !m.layout.trigger_flags.is_empty() {
-            let _ = writeln!(s, "        {0}_triggers(state_{0}, image, params, latch);", m.name);
-        }
-    }
-    let scoped = scoped_of(p);
-    for m in &driven {
-        let condition = match (m.period.max(1), m.phase) {
-            (1, _) => String::new(),
-            (per, 0) => format!("if (g_tick % {per} == 0) "),
-            (per, ph) => format!("if (g_tick % {per} == {ph}) "),
-        };
-        // 5.11: Eine gescopte Instanz schreitet nur, solange ihr Scope
-        // steht; der Stand ist der zu Tick-Beginn.
-        let condition = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
-            Some((owner, _, i)) if condition.is_empty() => format!("if (g_scope_{owner}_{i}) "),
-            Some((owner, _, i)) => format!("{} if (g_scope_{owner}_{i}) ", condition.trim_end()),
-            None => condition,
-        };
-        let _ = writeln!(
-            s,
-            "        {condition}{{ {0}_step(state_{0}, image, params, latch); {0}_publish(state_{0}, image); }}",
-            m.name
-        );
-    }
-    scoped_lifecycle(&mut s, p, &layout, "        ");
+    steps(&mut s, p, &layout, &driven, "        ", "g_tick");
     commit_sequence(&mut s, p, &driven, "        ", "g_tick");
     let _ = writeln!(s, "        dump(g_tick);");
     // 13.3: nach dem Commit, wie `observe_properties` im Interpreter.
@@ -765,6 +698,102 @@ fn range_check(p: &Program, ty: takt_mir::TypeId) -> Option<(&'static str, Strin
         _ => return None,
     };
     Some((ct, literal(&r.lo), literal(&r.hi)))
+}
+
+/// Die Signaturen des erzeugten Codes je Maschine (11.2), fuer beide
+/// Rahmen.
+pub(crate) fn machine_declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
+    for m in driven {
+        let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "void {}_publish(void *st, void *in);", m.name);
+        let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
+        let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);
+        let _ = writeln!(s, "long long {}_deadline(void *st);", m.name);
+        let _ = writeln!(s, "void {}_advance(void *st, long long n);", m.name);
+        if !m.persist.is_empty() {
+            let _ = writeln!(s, "int {}_persist_snapshot(void *st, void *out, int cap);", m.name);
+            let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
+        }
+        // 5.11: das Aktivitaetspraedikat je gescopter Instanz und die
+        // `exit:`-Bloecke fuer ihren Austritt.
+        for (i, _) in m.states.iter().flat_map(|st| st.instances.iter()).enumerate() {
+            let _ = writeln!(s, "_Bool {}_scope_{i}(void *st);", m.name);
+        }
+        let _ = writeln!(s, "void {}_exit_all(void *st, void *in, void *par, void *out);", m.name);
+        if !m.layout.trigger_flags.is_empty() {
+            let _ = writeln!(s, "void {}_triggers(void *st, void *in, void *par, void *out);", m.name);
+        }
+    }
+}
+
+/// 5.11: je gescopter Instanz, ob sie zu Beginn des vorigen Ticks aktiv
+/// war — der Vergleich liefert Ein- und Austritt.
+pub(crate) fn scope_flags(s: &mut String, p: &Program) {
+    for (owner, _, i) in scoped_of(p) {
+        let _ = writeln!(s, "static _Bool g_scope_{owner}_{i} = 0;");
+    }
+}
+
+/// Die Eintritte vor dem ersten Tick, in Schrittordnung und nach jedem
+/// `publish`, damit Follower schon im Tick 0 frisch lesen (7.2, 9.4).
+/// Eine gescopte Instanz betritt nichts, solange ihr Scope nicht steht;
+/// `scoped_lifecycle` nach dem `enter` des Besitzers holt sie herein
+/// (5.11).
+pub(crate) fn enter_machines(
+    s: &mut String,
+    p: &Program,
+    layout: &Layout,
+    driven: &[&takt_mir::machine::Machine],
+    indent: &str,
+) {
+    let scoped: Vec<String> = scoped_of(p).into_iter().map(|(_, inst, _)| inst).collect();
+    for m in driven.iter().filter(|m| !scoped.contains(&m.name)) {
+        let _ = writeln!(s, "{indent}{0}_enter(state_{0}, image, params, latch);", m.name);
+        let _ = writeln!(s, "{indent}{0}_publish(state_{0}, image);", m.name);
+    }
+    scoped_lifecycle(s, p, layout, indent);
+}
+
+/// Die Schritte eines Ticks, fuer beide Rahmen: erst die Trigger-Phase
+/// (7.5, wie im Interpreter zwischen Zustellung und Schritt), dann jede
+/// Maschine in Schrittordnung — in jedem `period`-ten Tick mit ihrer
+/// Phase (7.2), eine gescopte Instanz nur, solange ihr Scope zu
+/// Tick-Beginn steht —, zuletzt der Lebenszyklus der gescopten Instanzen
+/// (5.11). `tick` ist der Ausdruck der Tickzahl.
+pub(crate) fn steps(
+    s: &mut String,
+    p: &Program,
+    layout: &Layout,
+    driven: &[&takt_mir::machine::Machine],
+    indent: &str,
+    tick: &str,
+) {
+    for m in driven {
+        if !m.layout.trigger_flags.is_empty() {
+            let _ = writeln!(s, "{indent}{0}_triggers(state_{0}, image, params, latch);", m.name);
+        }
+    }
+    let scoped = scoped_of(p);
+    for m in driven {
+        let condition = match (m.period.max(1), m.phase) {
+            (1, _) => String::new(),
+            (per, 0) => format!("if ({tick} % {per} == 0) "),
+            (per, ph) => format!("if ({tick} % {per} == {ph}) "),
+        };
+        let condition = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
+            Some((owner, _, i)) if condition.is_empty() => format!("if (g_scope_{owner}_{i}) "),
+            Some((owner, _, i)) => format!("{} if (g_scope_{owner}_{i}) ", condition.trim_end()),
+            None => condition,
+        };
+        let _ = writeln!(
+            s,
+            "{indent}{condition}{{ {0}_step(state_{0}, image, params, latch); {0}_publish(state_{0}, image); }}",
+            m.name
+        );
+    }
+    scoped_lifecycle(s, p, layout, indent);
 }
 
 /// Die gescopten Instanzen mit ihrem Besitzer und der Nummer, unter der
