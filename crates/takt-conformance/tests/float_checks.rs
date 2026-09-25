@@ -49,4 +49,10 @@ fn every_float_result_is_checked_for_finiteness() {
 
     let narrowing = functions_of(&ir, "narrowing");
     assert!(narrowing.contains("fcmp one float"), "`as f32` prueft das Ergebnis:\n{narrowing}");
+
+    // Das Matrixprodukt prueft jedes seiner vier Elemente, ohne
+    // `llvm.maximum`: Das waere ohne FPU je Element ein Bibliotheksaufruf.
+    let matrix = functions_of(&ir, "matrix");
+    assert!(matrix.matches("fcmp one double").count() >= 4, "je Element ein Vergleich:\n{matrix}");
+    assert!(!ir.contains("@llvm.maximum"), "keine Kette ueber `maximum`");
 }

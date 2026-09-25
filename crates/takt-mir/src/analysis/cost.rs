@@ -1093,8 +1093,14 @@ fn expr_cost(e: &Expr, ctx: &Ctx<'_>) -> CostVec {
         ExprKind::Intrinsic { op: Intrinsic::Interp, args } => interp_cost(e, args, ctx),
         ExprKind::Intrinsic { .. } => class_of(e, types) + CostVec { call: 1, ..CostVec::ZERO },
         ExprKind::Checked { kind: CheckedKind::Range(r), .. } if r.origin == RangeOrigin::Proven => CostVec::ZERO,
-        // Eine implizite Pruefung ist ein Vergleich und ein Sprung.
-        ExprKind::Checked { .. } => class_of(e, types),
+        // Eine implizite Pruefung ist ein Vergleich und ein Sprung; die
+        // Endlichkeit einer Matrix vergleicht jedes Element.
+        ExprKind::Checked { .. } => match types.get(e.ty.index()) {
+            Some(Type::Mat { rows, cols, .. }) => {
+                CostVec::op(float_class(ctx)).times(u64::from(*rows) * u64::from(*cols))
+            }
+            _ => class_of(e, types),
+        },
         ExprKind::Format(f) => format_cost(f, ctx),
         ExprKind::Matches { subject, kind, pattern, binding } => {
             let bind = if binding.is_some() { ctx.copy_always(subject.ty) } else { CostVec::ZERO };
@@ -1266,6 +1272,14 @@ fn class(e: &Expr, types: &[Type]) -> CostClass {
             _ => CostClass::I64,
         },
         _ => CostClass::I32,
+    }
+}
+
+/// Die Klasse der Breite von `float` (4.2): Matrizen rechnen in ihr (3.11).
+fn float_class(ctx: &Ctx<'_>) -> CostClass {
+    match ctx.p.config.float_width {
+        FloatWidth::F32 => CostClass::F32,
+        FloatWidth::F64 => CostClass::F64,
     }
 }
 

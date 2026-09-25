@@ -248,10 +248,17 @@ impl Lowerer<'_> {
                 return None;
             }
         };
-        Some(Expr::new(ExprKind::Binary { op, lhs: Box::new(a), rhs: Box::new(b) }, result, span))
+        // 4.2: Ein nicht endliches Element faultet, wie jede Gleitkommaoperation.
+        Some(self.finite(Expr::new(ExprKind::Binary { op, lhs: Box::new(a), rhs: Box::new(b) }, result, span)))
     }
 
     /// `A.transpose()`, `A.inv()`, `A.det()`, `A.cholesky()` (3.11).
+    ///
+    /// `transpose` und `cholesky` brauchen keine Endlichkeitspruefung: Die
+    /// Eingabe ist endlich, das Transponieren rechnet nicht, und bei
+    /// `cholesky` geht jedes Element unter der Diagonale quadriert in eine
+    /// spaetere Diagonale ein — ein unendliches macht sie negativ oder
+    /// `NaN`, und das Ergebnis ist `none`.
     pub fn mat_member(&mut self, b: Expr, member: &str, args: Option<&[ast::Arg]>, span: Span) -> Option<Expr> {
         if args.is_some_and(|a| !a.is_empty()) {
             self.error(SC3, span, format!("`{member}()` nimmt keine Argumente"));

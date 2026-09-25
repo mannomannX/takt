@@ -1414,24 +1414,26 @@ fn int_to(v: Lowered, ty: &LlvmType, m: &mut Module) -> Lowered {
     Lowered { value: r.to_string(), ty: ty.clone() }
 }
 
-/// Sind alle Gleitkommawerte eines Werts endlich? `fabs` und `maximum`
-/// tragen `inf` und `NaN` durch, ein `fcmp one` gegen `inf` prueft beides.
+/// Sind alle Gleitkommawerte eines Werts endlich? Je Element ein `fcmp one`
+/// des Betrags gegen `inf` — falsch fuer `inf` und `NaN` —, verknuepft mit
+/// `and`. LLVM erkennt darin den Vergleich der Bits und braucht dafuer
+/// keine Gleitkommaeinheit; eine Kette ueber `llvm.maximum` wurde auf dem
+/// RV32IMAC je Element ein Aufruf von `fmaximumf`.
 fn finite_condition(value: &Lowered, m: &mut Module) -> Result<String, NotYet> {
     let mut items = Vec::new();
     let elem = float_items(&value.ty, &value.value, &mut items, m)?;
     let suffix = crate::matrix::suffix(&elem);
     m.needs_intrinsic(&format!("{elem} @llvm.fabs.{suffix}({elem})"));
-    m.needs_intrinsic(&format!("{elem} @llvm.maximum.{suffix}({elem}, {elem})"));
     let mut acc: Option<String> = None;
     for x in items {
         let a = m.inst(&format!("call {elem} @llvm.fabs.{suffix}({elem} {x})"));
+        let finite = m.inst(&format!("fcmp one {elem} {a}, 0x7FF0000000000000"));
         acc = Some(match acc {
-            None => a.to_string(),
-            Some(p) => m.inst(&format!("call {elem} @llvm.maximum.{suffix}({elem} {p}, {elem} {a})")).to_string(),
+            None => finite.to_string(),
+            Some(p) => m.inst(&format!("and i1 {p}, {finite}")).to_string(),
         });
     }
-    let acc = acc.ok_or(NotYet { what: "Endlichkeit ohne Gleitkommawert" })?;
-    Ok(m.inst(&format!("fcmp one {elem} {acc}, 0x7FF0000000000000")).to_string())
+    acc.ok_or(NotYet { what: "Endlichkeit ohne Gleitkommawert" })
 }
 
 /// Die Gleitkommawerte eines Werts, Matrizen elementweise.

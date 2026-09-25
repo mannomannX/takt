@@ -6,6 +6,7 @@
 (output root :float @hw("o/root") safe=0.0)
 (output narrow :float @hw("o/narrow") safe=0.0)
 (output prod :float @hw("o/prod") safe=0.0)
+(output grown :float @hw("o/grown") safe=0.0)
 (machine overflow
   (fault -> SAFE)
   (var x :float 1.0e300)
@@ -62,3 +63,14 @@
   (state SAFE
     (enter
       (= prod 7.0))))
+(machine matrix
+  (fault -> SAFE)
+  (var g :mat<2, 2> (array (array 1.0e150 0.0) (array 0.0 1.0e150)))
+  (initial RUN)
+  (state RUN
+    (loop
+      (= g (* g g))
+      (= grown (index g 0 0))))
+  (state SAFE
+    (enter
+      (= grown 7.0))))

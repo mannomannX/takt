@@ -1,7 +1,7 @@
 # 77 — Gleitkomma faultet nicht endlich (4.2): Ueberlauf zu unendlich,
-# Division durch null, `sqrt` unter null, `f64` nach `f32` und `fma`
-# faulten im erzeugten Code wie im Interpreter, und das Sichere danach
-# ist dasselbe.
+# Division durch null, `sqrt` unter null, `f64` nach `f32`, `fma` und ein
+# Matrixprodukt faulten im erzeugten Code wie im Interpreter, und das
+# Sichere danach ist dasselbe.
 
 system:
     language = 1
@@ -12,6 +12,7 @@ output inv    : float @ hw("o/inv")    with safe = 0.0
 output root   : float @ hw("o/root")   with safe = 0.0
 output narrow : float @ hw("o/narrow") with safe = 0.0
 output prod   : float @ hw("o/prod")   with safe = 0.0
+output grown  : float @ hw("o/grown")  with safe = 0.0
 
 machine overflow:
     fault -> SAFE
@@ -93,3 +94,19 @@ machine fused:
     state SAFE:
         enter:
             prod = 7.0
+
+machine matrix:
+    fault -> SAFE
+    var g : mat<2, 2> = [[1.0e150, 0.0], [0.0, 1.0e150]]
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # 1e300 auf der Diagonale, dann 1e600.
+            g = g * g
+            grown = g[0, 0]
+
+    state SAFE:
+        enter:
+            grown = 7.0
