@@ -9,7 +9,7 @@
 //! wie im Linux-Vergleich pruefen.
 
 use std::collections::BTreeSet;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -153,13 +153,26 @@ fn probe_rs(args: &[&str]) -> Result<(), String> {
     probe_rs_output(args).map(|_| ())
 }
 
-/// `probe-rs` mit seiner Ausgabe.
+/// `probe-rs` mit seiner Ausgabe. Steht der JTAG-Teil des USB-Serial-JTAG
+/// (DMI-Timeout, FB-264), verlangt der Test den Chip-Reset ueber die
+/// Konsole, und der Aufruf wird einmal wiederholt.
 fn probe_rs_output(args: &[&str]) -> Result<String, String> {
-    let out = Command::new("probe-rs").args(args).output().map_err(|e| format!("probe-rs: {e}"))?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).into_owned())
+    let run = || {
+        let out = Command::new("probe-rs").args(args).output().map_err(|e| format!("probe-rs: {e}"))?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).into_owned())
+        }
+    };
+    match run() {
+        Err(e) if e.contains("DMI") => {
+            let port = std::env::var("TAKT_ESP32C6_PORT").map_err(|_| e.clone())?;
+            eprintln!("JTAG antwortet nicht; Chip-Reset ueber die Konsole");
+            reenumerate_via_console(&port)?;
+            run()
+        }
+        r => r,
     }
 }
 
@@ -283,6 +296,24 @@ const REENUMERATE_MAGIC: &str = "0x54414b54";
 fn reenumerate(port: &str) -> Result<(), String> {
     probe_rs(&["write", "--chip", "esp32c6", "b32", REENUMERATE_REG, REENUMERATE_MAGIC])?;
     probe_rs(&["reset", "--chip", "esp32c6"])?;
+    settle_port(port)
+}
+
+/// Derselbe Wunsch ueber die Konsole, wenn JTAG nicht antwortet: `TAKT`
+/// in den Empfangspuffer, dann der Reset ueber RTS — der Puffer ueberlebt
+/// ihn, und das Bring-up liest ihn beim Start.
+fn reenumerate_via_console(port: &str) -> Result<(), String> {
+    let at = |e: &dyn std::fmt::Display| format!("{port}: {e}");
+    let mut serial = serialport::new(port, 115_200).timeout(Duration::from_millis(200)).open().map_err(|e| at(&e))?;
+    serial.write_data_terminal_ready(false).map_err(|e| at(&e))?;
+    serial.write_request_to_send(false).map_err(|e| at(&e))?;
+    std::thread::sleep(Duration::from_millis(100));
+    serial.write_all(b"TAKT").and_then(|()| serial.flush()).map_err(|e| at(&e))?;
+    std::thread::sleep(Duration::from_millis(100));
+    serial.write_request_to_send(true).map_err(|e| at(&e))?;
+    std::thread::sleep(Duration::from_millis(100));
+    serial.write_request_to_send(false).map_err(|e| at(&e))?;
+    drop(serial);
     settle_port(port)
 }
 
