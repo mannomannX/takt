@@ -30,14 +30,14 @@ small = 290 290 290
 large = 738 738 738
 
 [probe f32]
-ps = 117250
-ops = 384
-small = 981 981 981
-large = 4763 4763 4763
+ps = 194568
+ops = 192
+small = 888 888 888
+large = 4410 4410 4410
 
 [probe f64]
-ps = 1019594
-ops = 384
+ps = 2015377
+ops = 192
 small = 8408 8408 8408
 large = 41296 41296 41296
 
@@ -66,16 +66,40 @@ small = 2950 2963 2972
 large = 14019 14019 14019
 
 [probe f32_div]
-ps = 285960
+ps = 350632
 ops = 64
-small = 1192 1192 1192
-large = 5881 5881 5881
+small = 1089 1089 1089
+large = 5450 5450 5450
 
 [probe f64_div]
-ps = 2111666
+ps = 3107452
 ops = 64
 small = 9566 9566 9566
 large = 48325 48325 48325
+
+[probe f32_fma]
+ps = 220052
+ops = 64
+small = 467 467 467
+large = 1778 1778 1778
+
+[probe f64_fma]
+ps = 6268601
+ops = 64
+small = 8636 8636 8636
+large = 42464 42464 42464
+
+[probe f32_sqrt]
+ps = 242374
+ops = 64
+small = 849 849 849
+large = 4500 4500 4500
+
+[probe f64_sqrt]
+ps = 2757564
+ops = 64
+small = 8949 8949 8949
+large = 45699 45699 45699
 
 [check i32 klein]
 measured_ps = 2928572
@@ -94,20 +118,20 @@ measured_ps = 8785715
 bound_ps = 12143926
 
 [check f32 klein]
-measured_ps = 11678572
-bound_ps = 18746614
+measured_ps = 10571429
+bound_ps = 17633206
 
 [check f32 gross]
-measured_ps = 56702381
-bound_ps = 83526646
+measured_ps = 52500000
+bound_ps = 77959606
 
 [check f64 klein]
 measured_ps = 100095239
-bound_ps = 143381302
+bound_ps = 143381254
 
 [check f64 gross]
 measured_ps = 491619048
-bound_ps = 706700086
+bound_ps = 706699846
 
 [check mem klein]
 measured_ps = 2869048
@@ -142,36 +166,68 @@ measured_ps = 166892858
 bound_ps = 239073446
 
 [check f32_div klein]
-measured_ps = 14190477
-bound_ps = 22630406
+measured_ps = 12964286
+bound_ps = 21225878
 
 [check f32_div gross]
-measured_ps = 70011905
-bound_ps = 102945606
+measured_ps = 64880953
+bound_ps = 95922966
 
 [check f64_div klein]
 measured_ps = 113880953
-bound_ps = 168521398
+bound_ps = 168521430
 
 [check f64_div gross]
 measured_ps = 575297620
-bound_ps = 832400566
+bound_ps = 832400726
+
+[check f32_fma klein]
+measured_ps = 5559524
+bound_ps = 8165462
+
+[check f32_fma gross]
+measured_ps = 21166667
+bound_ps = 30620886
+
+[check f64_fma klein]
+measured_ps = 102809524
+bound_ps = 147406374
+
+[check f64_fma gross]
+measured_ps = 505523810
+bound_ps = 726825446
+
+[check f32_sqrt klein]
+measured_ps = 10107143
+bound_ps = 18185590
+
+[check f32_sqrt gross]
+measured_ps = 53571429
+bound_ps = 80721526
+
+[check f64_sqrt klein]
+measured_ps = 106535715
+bound_ps = 159918678
+
+[check f64_sqrt gross]
+measured_ps = 544035715
+bound_ps = 789386966
 
 [check pid]
-measured_ps = 4511905
-bound_ps = 8749807
+measured_ps = 3761905
+bound_ps = 9075398
 
 [check thermocouples]
-measured_ps = 241107143
-bound_ps = 280978929
+measured_ps = 201023810
+bound_ps = 395596245
 
 [check lines]
 measured_ps = 39988096
 bound_ps = 173146653
 
 [check matrix]
-measured_ps = 9000000
-bound_ps = 35005794
+measured_ps = 18690477
+bound_ps = 57339366
 
 [check crc32]
 measured_ps = 63690477
@@ -182,13 +238,13 @@ measured_ps = 5202381
 bound_ps = 5202399
 
 [kernel pid]
-takt = 379 379 379
-c = 148 148 148
+takt = 316 316 316
+c = 153 153 153
 same_digest = true
 implicit_checks = 12
 
 [kernel thermocouples]
-takt = 20146 20195 20253
+takt = 16787 16832 16886
 c = 15151 15204 15258
 same_digest = true
 implicit_checks = 4
@@ -200,10 +256,10 @@ same_digest = true
 implicit_checks = 3
 
 [kernel matrix]
-takt = 748 753 756
-c = 3193 3193 3193
+takt = 1562 1567 1570
+c = 3281 3281 3281
 same_digest = true
-implicit_checks = 2
+implicit_checks = 3
 
 [kernel crc32]
 takt = 5332 5342 5350

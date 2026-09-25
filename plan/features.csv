@@ -131,7 +131,7 @@ SEM-13.4-Anforderungen,Semantik/Abschnitt,13.4,"Anforderungsreferenzen im Report
 SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4 (Codegen),fertig,
 SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,fertig,
 SEM-13.7,Semantik/Abschnitt,13.7,Kampagnen (v1.1),v1.1,M6,fertig,
-SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M10 (aus M5),teilweise,"Kalibrierung und Referenzkerne auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 braucht einen neuen Lauf, seine Tabelle gehoert zum alten Modell (FB-300); offen: `fma`/`sqrt` im RAM (FB-301), Hooks der Runtime (FB-295), Natives am Einstieg (FB-293); FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
+SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M10 (aus M5),teilweise,"Kalibrierung und Referenzkerne auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 zum selben Modell neu gemessen (Lauf 6, Streckung 1,44 durch den Fault-Hook); offen: Hooks der Runtime (FB-295), Natives am Einstieg (FB-293); FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
 SEM-13.9,Semantik/Abschnitt,13.9,Migration aus C: `takt import-c` und Orakel-Modus (v1.1),v1.1,M7 (Werkzeuge),offen,
 SEM-14.1,Semantik/Abschnitt,14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),fertig,
 SEM-14.2,Semantik/Abschnitt,14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,M4 (Codegen),fertig,
@@ -568,7 +568,7 @@ SC-8,Statische Prüfung,10,"Maschinen: eindeutige Zustandsnamen, `initial` vorha
 SC-9,Statische Prüfung,10,Fault-Wald azyklisch; `FAULTED` erreichbar; Guards der Transitionen aus `FAULTED` ohne implizite Prüfungen,F,M3 (Gate),fertig,
 SC-10,Statische Prüfung,10,Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige,W,M3 (Gate),fertig,
 SC-11,Statische Prüfung,10,Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick,F,M3 (Gate),fertig,
-SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M10 (aus M5),teilweise,"Messung: `takt bench` auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 braucht einen neuen Lauf, seine Tabelle gehoert zum alten Modell (FB-300); offen: `fma`/`sqrt` im RAM (FB-301), Hooks der Runtime (FB-295), Natives am Einstieg (FB-293) — die Rechnung steht; Kostenanalyse nach 9.3/9.4.3 (FB-281)"
+SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M10 (aus M5),teilweise,"Messung: `takt bench` auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 zum selben Modell neu gemessen (Lauf 6, Streckung 1,44 durch den Fault-Hook); offen: Hooks der Runtime (FB-295), Natives am Einstieg (FB-293) — die Rechnung steht; Kostenanalyse nach 9.3/9.4.3 (FB-281)"
 SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle,F,M3 (Gate),fertig,
 SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),fertig,
 SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden",W,M3 (Gate),fertig,
@@ -759,7 +759,7 @@ PAR-13.3-Umgebungsannahmen_assumption,Absatz/Regel,13.3,Umgebungsannahmen (`assu
 PAR-13.3-Kanal_Attribute_gelten_automatisch_als_Annahmen,Absatz/Regel,13.3,Kanal-Attribute gelten automatisch als Annahmen,,M6 (v1.1),fertig,"Kanal-Ranges und `max_slew` als Annahmen (FB-259); `debounce`/`max_age` betreffen die Qualitaet, Inputs gelten als gueltig"
 PAR-13.3-Kompositionalität,Absatz/Regel,13.3,Kompositionalität,,M6 (v1.1),fertig,"`takt prove` je Maschine (`encode_machine`, `classify_compositional`; FB-259), Tests in `with_solver.rs`"
 PAR-13.5-Lauf_Verdikt,Absatz/Regel,13.5,Lauf-Verdikt,,M4 (Codegen),fertig,
-PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M10 (aus M5),teilweise,"auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 braucht einen neuen Lauf, seine Tabelle gehoert zum alten Modell (FB-300); offen: `fma`/`sqrt` im RAM (FB-301), Hooks der Runtime (FB-295), Natives am Einstieg (FB-293)"
+PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M10 (aus M5),teilweise,"auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 zum selben Modell neu gemessen (Lauf 6, Streckung 1,44 durch den Fault-Hook); offen: Hooks der Runtime (FB-295), Natives am Einstieg (FB-293)"
 PAR-13.9-Klassifikation,Absatz/Regel,13.9,Klassifikation,,M7 (Werkzeuge),offen,
 PAR-13.9-Abbildungsregeln,Absatz/Regel,13.9,Abbildungsregeln,,M7 (Werkzeuge),offen,
 PAR-13.9-Grundregel_des_Importers,Absatz/Regel,13.9,Grundregel des Importers,,M7 (Werkzeuge),offen,
@@ -895,7 +895,7 @@ CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig,"`--baseline DATEI` vergleich
 CLI-cost,Werkzeug,11.1,takt cost,,M3 (Gate),fertig,Operationsvektoren je Maschine und Zustand (9.4.3)
 CLI-latency,Werkzeug,11.1,takt latency,,M3 (Gate),fertig,
 CLI-graph,Werkzeug,11.1,takt graph,,M4 (Codegen),fertig,
-CLI-bench,Werkzeug,11.1,takt bench,,M10 (aus M5),teilweise,"auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 braucht einen neuen Lauf, seine Tabelle gehoert zum alten Modell (FB-300); offen: `fma`/`sqrt` im RAM (FB-301), Hooks der Runtime (FB-295), Natives am Einstieg (FB-293)"
+CLI-bench,Werkzeug,11.1,takt bench,,M10 (aus M5),teilweise,"auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 zum selben Modell neu gemessen (Lauf 6, Streckung 1,44 durch den Fault-Hook); offen: Hooks der Runtime (FB-295), Natives am Einstieg (FB-293)"
 CLI-tune,Werkzeug,11.1,takt tune,,M6 (v1.1),fertig,
 CLI-migrate,Werkzeug,11.1,takt migrate,,M7 (Werkzeuge),offen,
 CLI-import-c,Werkzeug,11.1,takt import-c,,M7 (Werkzeuge),offen,
