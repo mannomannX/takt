@@ -46,6 +46,22 @@ use crate::types::{Const, FloatWidth, HandleKind, RangeOrigin, Type};
 /// ein Wechsel): ein Vergleich und ein Sprung.
 const STEP: CostVec = CostVec { i32: 1, ..CostVec::ZERO };
 
+/// Je Aktivierung einer Maschine, bevor Nutzercode laeuft: `conf` laden
+/// und ins Blatt verzweigen (11.2).
+const DISPATCH: CostVec = CostVec { i32: 2, mem: 1, ..CostVec::ZERO };
+
+/// Je Zaehler `t_in_state` und Aktivierung: laden, erhoehen, speichern.
+/// Der erzeugte Code schreibt alle fort, einen je Zustand und einen fuer
+/// das Blatt, nicht nur die der Kette (`advance_timers`).
+const TIMER: CostVec = CostVec { i64: 1, mem: 1, ..CostVec::ZERO };
+
+/// Ein `loop:`-Block und der Entry-Tick eines Wechsels laufen als eigene
+/// Funktion (FB-224): der Aufruf und die Auswertung seines Ergebnisses.
+const BLOCK_CALL: CostVec = CostVec { call: 1, i32: 1, ..CostVec::ZERO };
+
+/// Ein Aufruf der Runtime: der Fault-Hook, der Abbruch eines Jobs (5.3).
+const RUNTIME_CALL: CostVec = CostVec { call: 1, ..CostVec::ZERO };
+
 /// Je Durchlauf einer Schleife: weiterzaehlen und vergleichen. 9.4.3
 /// schreibt `1 + n·N(s)`; ohne diesen Anteil laege eine enge Schleife um
 /// das Doppelte ueber ihrer Schranke.
@@ -378,7 +394,14 @@ impl<'a> Tree<'a> {
         let own_entry: Vec<CostVec> =
             m.states.iter().enumerate().map(|(i, s)| own_entry(m, StateId(i as u32), s, &ctx)).collect();
         let exit = m.states.iter().map(|s| block_cost(&s.exit, &ctx) + BYTE.times(s.instances.len() as u64)).collect();
-        let run = m.states.iter().map(|s| block_cost(&s.loop_block, &ctx) + dispatch(&s.handlers, &ctx)).collect();
+        let run = m
+            .states
+            .iter()
+            .map(|s| {
+                let call = if s.loop_block.stmts.is_empty() { CostVec::ZERO } else { BLOCK_CALL };
+                call + BYTE.times(s.vars.len() as u64) + block_cost(&s.loop_block, &ctx) + dispatch(&s.handlers, &ctx)
+            })
+            .collect();
         let guards = m
             .states
             .iter()
@@ -458,7 +481,33 @@ impl<'a> Tree<'a> {
         let above = &to[..to.len() - 1];
         let shared = from.iter().zip(above).take_while(|(a, b)| a == b).count();
         let between = above[shared..].iter().fold(CostVec::ZERO, |acc, s| acc + self.own_entry[s.index()]);
-        STEP + self.exits(from, shared) + between + self.entry.get(q.index()).copied().unwrap_or_default()
+        // `conf`, `pc` und je betretenem Zustand sein Zaehler, dazu der des
+        // Blatts; der Entry-Tick ist ein Aufruf (9.3, 11.2).
+        let entered = to.len().saturating_sub(shared) as u64;
+        let machinery = BYTE.times(entered + 3) + BLOCK_CALL;
+        STEP + machinery + self.exits(from, shared) + between + self.entry.get(q.index()).copied().unwrap_or_default()
+    }
+
+    /// Der Weg nach `FAULTED`: `conf` und die `safe`-Werte der eigenen
+    /// Outputs (5.3).
+    fn faulted_switch(&self) -> CostVec {
+        let own = self.ctx.p.machines.iter().position(|x| std::ptr::eq(x, self.m));
+        let safe = self
+            .ctx
+            .p
+            .channels
+            .iter()
+            .filter(|c| own.is_some_and(|i| c.owner == Some(crate::ids::MachineId(i as u32))) && c.attrs.safe.is_some())
+            .count();
+        STEP + BYTE.times(1 + safe as u64)
+    }
+
+    /// Was jede Aktivierung vor und nach dem Nutzercode tut: verteilen, die
+    /// Zaehler fortschreiben, die Variablen der Maschine laden und
+    /// speichern (LLVM haelt sie im Aufruf in Registern).
+    fn frame(&self) -> CostVec {
+        let own = self.m.vars.iter().filter(|v| v.scope == crate::machine::VarScope::Machine).count();
+        DISPATCH + TIMER.times(self.m.states.len() as u64 + 1) + BYTE.times(own as u64)
     }
 
     /// Was ein Ziel von der Kette `from` aus kostet. Ein Fault-Ziel geht
@@ -466,7 +515,7 @@ impl<'a> Tree<'a> {
     fn target(&self, from: &[StateId], t: Target) -> CostVec {
         match t {
             Target::State(q) => self.switch(from, q),
-            Target::Faulted => STEP + self.exits(from, 0),
+            Target::Faulted => self.faulted_switch() + self.exits(from, 0),
             Target::Fault(_) => STEP,
         }
     }
@@ -474,7 +523,8 @@ impl<'a> Tree<'a> {
     /// `B_m` je Kette (9.3, 9.4.3).
     fn activation(&self) -> Activation {
         let ctx = &self.ctx;
-        let base = block_cost(&self.m.loop_block, ctx) + dispatch(&self.m.handlers, ctx);
+        let machine_loop = if self.m.loop_block.stmts.is_empty() { CostVec::ZERO } else { BLOCK_CALL };
+        let base = self.frame() + machine_loop + block_cost(&self.m.loop_block, ctx) + dispatch(&self.m.handlers, ctx);
         let mut machine_gotos = gotos(&self.m.loop_block);
         for h in &self.m.handlers {
             machine_gotos.extend(gotos(&h.body));
@@ -517,7 +567,7 @@ impl<'a> Tree<'a> {
         let guards = ts.iter().fold(CostVec::ZERO, |acc, t| acc + trigger_cost(&t.trigger, ctx));
         let fire =
             ts.iter().fold(CostVec::ZERO, |acc, t| acc.max(block_cost(&t.actions, ctx) + self.target(&[], t.target)));
-        guards + fire
+        self.frame() + guards + fire
     }
 
     /// `F_m`: der teuerste Fault-Pfad ab einer Kette (9.4.3).
@@ -547,11 +597,12 @@ impl<'a> Tree<'a> {
         // `last_fault` setzen, geplante Ausgaben verwerfen, Jobs abbrechen,
         // Trigger entschaerfen (5.3).
         let book = STEP
-            + BYTE.times(1 + (layout.output_queues.len() + layout.job_slots.len() + layout.trigger_flags.len()) as u64);
+            + BYTE.times(1 + (layout.output_queues.len() + layout.trigger_flags.len()) as u64)
+            + RUNTIME_CALL.times(1 + layout.job_slots.len() as u64);
         let mut worst = CostVec::ZERO;
         for target in self.fault_targets(&from) {
             let path = match target {
-                FaultTarget::Faulted => self.exits(&from, 0) + STEP,
+                FaultTarget::Faulted => self.exits(&from, 0) + self.faulted_switch(),
                 FaultTarget::State(q) => {
                     let next = self
                         .entered_leaves(q)
@@ -571,8 +622,11 @@ impl<'a> Tree<'a> {
     /// innersten Zustands, der eines deklariert, sonst das der Maschine
     /// (5.2 Regel 5), dazu die eigenen Ziele der `check`s der Kette.
     fn fault_targets(&self, from: &[StateId]) -> Vec<FaultTarget> {
-        let declared = from.iter().rev().find_map(|s| self.m.states[s.index()].fault_target);
-        let mut out = vec![declared.unwrap_or(self.m.fault_target)];
+        // 5.3: Der als Fault-Ziel der Maschine deklarierte Zustand erbt
+        // nicht von ihr, sein Ziel ist `FAULTED` — sonst fuehrte er auf
+        // sich selbst.
+        let inherited = from.last().map_or(self.m.fault_target, |s| self.m.fault_target_of(*s));
+        let mut out = vec![inherited];
         let mut blocks: Vec<&Block> = vec![&self.m.loop_block];
         blocks.extend(self.m.handlers.iter().map(|h| &h.body));
         for s in from {
@@ -587,7 +641,7 @@ impl<'a> Tree<'a> {
                     let target = match t {
                         Target::State(q) => FaultTarget::State(*q),
                         Target::Faulted => FaultTarget::Faulted,
-                        Target::Fault(_) => declared.unwrap_or(self.m.fault_target),
+                        Target::Fault(_) => inherited,
                     };
                     if !out.contains(&target) {
                         out.push(target);

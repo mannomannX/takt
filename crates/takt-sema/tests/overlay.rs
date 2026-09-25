@@ -88,9 +88,6 @@ machine ctrl:
         when mode == 1: -> SECOND
 
     state SECOND:
-        loop:
-            pass
-
         when mode == 0: -> FIRST
 "#;
 

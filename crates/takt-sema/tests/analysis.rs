@@ -243,7 +243,9 @@ machine m:
 /// N(body f)`). Zwei Aufrufe einer Funktion mit einer Schleife ueber vier
 /// Runden zu je drei Operationen und dem Schleifenzaehler (zwei), dazu die
 /// Eins der Schleife: `2 · (1 + 4 · (3 + 2)) = 42` Operationen und zwei
-/// Aufrufe — nicht nur die zwei Aufrufe, wie bis FB-278.
+/// Aufrufe — nicht nur die zwei Aufrufe, wie bis FB-278. Dazu kommt die
+/// Maschinerie der Aktivierung: der Aufruf des `loop:` (eine Operation
+/// und ein Aufruf) und das Verteilen ueber `conf` (zwei Operationen).
 #[test]
 fn a_call_costs_its_body() {
     let (p, _, _) = compile(
@@ -264,8 +266,8 @@ machine m:
 ",
     );
     let b = p.machines[0].budget.expect("Budget").activation;
-    assert_eq!(b.call, 2, "{b:?}");
-    assert_eq!(b.i32, 42, "vier Runden zu drei Operationen und dem Zaehler, zweimal: {b:?}");
+    assert_eq!(b.call, 3, "zwei Aufrufe von `mix`, einer des `loop:`: {b:?}");
+    assert_eq!(b.i32, 45, "vier Runden zu drei Operationen und dem Zaehler, zweimal, dazu drei: {b:?}");
     let f = p.fns.iter().find(|f| f.name == "mix").expect("mix");
     assert_eq!(f.cost.map(|c| c.i32), Some(21), "der Rumpf steht in `Fn::cost`");
 }
@@ -526,9 +528,10 @@ machine m:
     );
     let b = p.machines[0].budget.expect("Budget aus M3");
     assert!(b.activation.i32 + b.activation.i64 > 0, "die Aktivierung kostet: {:?}", b.activation);
-    // Ohne Uebergaenge aus `FAULTED` ist der Fault-Pfad leer; entscheidend
-    // ist, dass er *getrennt* gefuehrt wird.
-    assert_eq!(b.fault_path.call, 0, "der Fault-Pfad ist eigenstaendig: {:?}", b.fault_path);
+    // Der Fault-Pfad fuehrt seine eigenen Aufrufe: je Fault den Hook der
+    // Runtime (RUN nach SAFE, SAFE nach `FAULTED`) und den Entry-Tick in
+    // SAFE — nicht die der Aktivierung.
+    assert_eq!(b.fault_path.call, 3, "der Fault-Pfad ist eigenstaendig: {:?}", b.fault_path);
 }
 
 #[test]
