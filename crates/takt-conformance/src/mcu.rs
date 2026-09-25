@@ -262,8 +262,14 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let _ = writeln!(s, "    {0}_enter(state_{0}, image, params, latch);", m.name);
         let _ = writeln!(s, "    {0}_publish(state_{0}, image);", m.name);
     }
+    // Dieselbe Folge wie im Linux-Rahmen: Was `enter` und das erste
+    // `loop:` im Tick 0 senden, wird hier sichtbar; ohne `takt_int_commit`
+    // blieben die Elemente „neu", der Leser saehe sie einen Tick spaeter,
+    // und der Sender liefe in den Ueberlauf (FB-269).
     crate::harness::psi_commit(s, p, driven, "    ");
+    crate::harness::sim_bindings(s, p, "    ");
     let _ = writeln!(s, "    takt_tx_commit(0);");
+    let _ = writeln!(s, "    takt_int_commit();");
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, 0);");
     }

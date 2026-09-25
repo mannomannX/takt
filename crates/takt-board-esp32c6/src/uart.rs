@@ -41,6 +41,9 @@ impl UsbJtag {
     /// Bindet die Schnittstelle; sie ist mit dem Chip da.
     pub fn new(usb: USB_DEVICE<'static>) -> UsbJtag {
         let mut port = UsbSerialJtag::new(usb);
+        // Nur, was die Leitung selbst armiert: Eine fremde Quelle, die der
+        // Handler nicht quittiert, waere ein Sturm.
+        USB_DEVICE::regs().int_ena().reset();
         port.set_interrupt_handler(on_packet_taken);
         UsbJtag { port, filled: 0, in_flight: false }
     }

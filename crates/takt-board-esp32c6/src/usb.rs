@@ -5,7 +5,8 @@
 //! Host ein Abstecken, der Block wird derweil zurueckgesetzt, und danach
 //! zaehlt der Host neu. Den Wunsch schreibt der Host ueber JTAG in LP_AON
 //! STORE0, das einen Reset ueberlebt und sonst niemand nutzt; der Start
-//! liest und loescht ihn.
+//! liest und loescht ihn. Steht der JTAG-Teil selbst (DMI-Timeout), hilft
+//! das nicht: Der sitzt im Debug-Modul, und nur der Strom setzt ihn zurueck.
 
 use esp_hal::delay::Delay;
 use esp_hal::peripherals::{IO_MUX, LP_AON, PCR, USB_DEVICE};

@@ -150,8 +150,17 @@ fn build_program(program: &Path, fresh: bool, ticks: u64) -> Result<PathBuf, Str
 }
 
 fn probe_rs(args: &[&str]) -> Result<(), String> {
+    probe_rs_output(args).map(|_| ())
+}
+
+/// `probe-rs` mit seiner Ausgabe.
+fn probe_rs_output(args: &[&str]) -> Result<String, String> {
     let out = Command::new("probe-rs").args(args).output().map_err(|e| format!("probe-rs: {e}"))?;
-    if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).into_owned()) }
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).into_owned())
+    }
 }
 
 /// Setzt das Board zurueck und liest den Trace bis `takt end`.
@@ -169,8 +178,11 @@ fn capture(port: &str, elf: &Path, ticks: u64) -> Result<String, String> {
         let text = match capture_once(port) {
             Ok(text) => text,
             Err(e) if attempt < 2 => {
-                eprintln!("{e}; neuer Versuch");
+                eprintln!("{e}; {}", if attempt == 0 { "neuer Versuch" } else { "Neuanmeldung des USB-Geraets" });
                 last = e;
+                if attempt == 1 {
+                    reenumerate(port)?;
+                }
                 continue;
             }
             Err(e) => return Err(e),
@@ -255,16 +267,10 @@ fn tick_over_jtag(elf: &Path) -> Result<u32, String> {
     let symbols = Binutils::best_for(Target::RISCV32IMAC).symbols(elf).ok_or("`nm` fehlt: kein Blick auf `g_tick`")?;
     let g_tick = symbols.iter().find(|s| s.name == "g_tick").ok_or("kein `g_tick` im Abbild")?;
     let address = format!("{:#x}", g_tick.address);
-    let out = Command::new("probe-rs")
-        .args(["read", "--chip", "esp32c6", "b32", &address, "1"])
-        .output()
-        .map_err(|e| format!("probe-rs: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("JTAG antwortet nicht (Kabel neu stecken):\n{}", String::from_utf8_lossy(&out.stderr)));
-    }
+    let out = probe_rs_output(&["read", "--chip", "esp32c6", "b32", &address, "1"])
+        .map_err(|e| format!("JTAG antwortet nicht (Kabel neu stecken):\n{e}"))?;
     // `40802478: 0000003c`
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
+    out.lines()
         .find_map(|l| l.split_once(": ").and_then(|(_, v)| u32::from_str_radix(v.trim(), 16).ok()))
         .ok_or_else(|| "probe-rs read: kein Wert".to_string())
 }
@@ -277,6 +283,11 @@ const REENUMERATE_MAGIC: &str = "0x54414b54";
 fn reenumerate(port: &str) -> Result<(), String> {
     probe_rs(&["write", "--chip", "esp32c6", "b32", REENUMERATE_REG, REENUMERATE_MAGIC])?;
     probe_rs(&["reset", "--chip", "esp32c6"])?;
+    settle_port(port)
+}
+
+/// Wartet, bis der Port weg war und wieder da ist.
+fn settle_port(port: &str) -> Result<(), String> {
     if !port_listed(port, false, Duration::from_secs(3)) {
         return Err("das USB-Geraet hat sich nicht abgemeldet: Bring-up ohne Neuanmeldung?".to_string());
     }
