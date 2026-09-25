@@ -104,6 +104,16 @@ pub fn probe_kernels(probe: Probe) -> [String; 2] {
 /// **`i64` rechnet mit 40 Bit.** Eine Maske auf 32 Bit liesse LLVM die
 /// Rechnung in 32 Bit fuehren, und die Probe maesse `i32` unter anderem
 /// Namen; das hat der erste Lauf auf Board 1 gezeigt (FB-287).
+///
+/// **`i32` verschmilzt nicht.** `(a * 181 + b) & 65535` wurde auf dem F401
+/// ein einziger `MLA`: Multiplikation und Addition in einem Befehl, und die
+/// Maske fiel weg, weil die naechste Zeile nur die unteren Bits las. Die
+/// Probe mass ein Drittel Zyklus je gezaehlter Operation, und die Tabelle
+/// musste um 2,91 gestreckt werden, sobald Code die Maske brauchte
+/// (FB-291). Jetzt schiebt jede Zeile um einen Betrag aus einem Register:
+/// Thumb-2 kennt dafuer keinen verschmolzenen Operanden, und der Schub
+/// liest die oberen Bits, also bleibt die Maske stehen — fuenf
+/// Operationen, fuenf Befehle.
 pub fn class_kernel(probe: Probe, pairs: u32) -> String {
     let float = match probe {
         Probe::Ops(CostClass::F32) | Probe::Div(CostClass::F32) => "    float    = f32\n",
@@ -112,7 +122,7 @@ pub fn class_kernel(probe: Probe, pairs: u32) -> String {
     let (decl, pair, prelude, init) = match probe {
         Probe::Ops(CostClass::I32) => (
             "int in 0..65535",
-            "            a = (a * 181 + b) & 65535\n            b = (b * 157 + a) & 65535\n",
+            "            a = ((a * 181) ^ (b >> (a & 7))) & 65535\n            b = ((b * 157) ^ (a >> (b & 7))) & 65535\n",
             "",
             ("1", "7"),
         ),

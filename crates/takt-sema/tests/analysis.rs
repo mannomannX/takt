@@ -163,6 +163,27 @@ machine m:
     assert_eq!(r.narrowed, r.integer_exprs, "hier ist alles beweisbar schmal");
 }
 
+/// 3.4: `|` und `^` nicht negativer Operanden haben hoechstens so viele
+/// Bits wie der groessere, und der Ausdruck bleibt in 32 Bit. Ohne die
+/// Regel galt ihr Ergebnis als unbeschraenkt, und `takt bench` zaehlte die
+/// Operation als `i64` (FB-291).
+#[test]
+fn bitwise_or_and_xor_keep_the_bits_of_their_operands() {
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var a : int in 0..65535 = 1
+    var b : int in 0..65535 = 7
+    initial RUN
+    state RUN:
+        loop:
+            a = ((a * 181) ^ (b >> (a & 7))) & 65535
+            b = (b | (a * 3)) & 65535
+",
+    );
+    assert_eq!(r.narrowed, r.integer_exprs, "alles beweisbar schmal: {} von {}", r.narrowed, r.integer_exprs);
+}
+
 #[test]
 fn every_machine_gets_a_cost_budget() {
     // 9.4.3: `B_m` und `F_m` als Vektoren ueber sieben Klassen.

@@ -469,6 +469,7 @@ impl<'p> Walk<'p> {
                     BinaryOp::Rem => a % b,
                     BinaryOp::Shr => shr(a, b),
                     BinaryOp::BitAnd => bit_and(a, b),
+                    BinaryOp::BitOr | BinaryOp::BitXor => bit_or(a, b),
                     _ => Interval::Top,
                 }
             }
@@ -753,6 +754,18 @@ fn bit_and(a: Interval, b: Interval) -> Interval {
     match (cap(a), cap(b)) {
         (Some(x), Some(y)) => Interval::Int { lo: 0, hi: x.min(y) },
         (Some(x), None) | (None, Some(x)) => Interval::Int { lo: 0, hi: x },
+        _ => Interval::Top,
+    }
+}
+
+/// `a | b` und `a ^ b` nicht negativer Operanden: hoechstens so viele Bits
+/// wie der groessere von beiden, also `0 .. 2^Bits - 1`.
+fn bit_or(a: Interval, b: Interval) -> Interval {
+    match (a, b) {
+        (Interval::Int { lo: al, hi: ah }, Interval::Int { lo: bl, hi: bh }) if al >= 0 && bl >= 0 => {
+            let bits = 128 - ah.max(bh).leading_zeros();
+            Interval::Int { lo: 0, hi: i128::MAX >> (127 - bits.min(127)) }
+        }
         _ => Interval::Top,
     }
 }
