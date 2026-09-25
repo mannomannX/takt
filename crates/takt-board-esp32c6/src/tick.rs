@@ -84,4 +84,9 @@ impl TickSource for SystimerTick {
             crate::wfi();
         }
     }
+
+    #[esp_hal::ram]
+    fn wait_event(&mut self) {
+        crate::wfi();
+    }
 }

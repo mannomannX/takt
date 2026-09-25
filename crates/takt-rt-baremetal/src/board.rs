@@ -44,6 +44,14 @@ pub trait TickSource {
     /// Flags, nicht eine Warteschleife: Ein Kern, der zwischen den Ticks
     /// rechnet, verbraucht Strom fuer nichts und heizt die Messung auf.
     fn wait_for_tick(&mut self);
+
+    /// Wartet auf das naechste Ereignis, das den Kern weckt — spaetestens
+    /// auf den Tick. Ein Board, das zwischen den Ticks etwas zu tun hat
+    /// (den Ring leeren, wenn der Host ein Paket abgeholt hat), kehrt
+    /// frueher zurueck; die Uhr prueft danach die Frist erneut.
+    fn wait_event(&mut self) {
+        self.wait_for_tick();
+    }
 }
 
 /// Der Hardware-Watchdog (12.3, 12.4).

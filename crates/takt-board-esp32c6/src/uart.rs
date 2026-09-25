@@ -6,8 +6,17 @@
 //! „nimmt das FIFO noch ein Byte?" und „Paket abschicken", ohne Zeit. Den
 //! Ring, die Zahlen und das Verwerfen macht `takt-rt-baremetal` fuer
 //! jedes Board gleich.
+//!
+//! Ein Paket nach dem anderen (FB-267): Nach `wr_done` nimmt das FIFO
+//! erst wieder Bytes, wenn das Rohflag `serial_in_empty` das Abholen
+//! meldet — `serial_in_ep_data_free` allein trog unter Last, und ein
+//! volles FIFO schickt sich selbst ab, darum bleibt ein Paket unter 64
+//! Byte. Das Abholen weckt den Kern ueber den Interrupt (FB-264), der nur
+//! maskiert; das Flag liest die Leitung selbst, so geht es auch ohne
+//! Interrupts, etwa im Panic-Pfad.
 
 use esp_hal::Blocking;
+use esp_hal::interrupt::Priority;
 use esp_hal::peripherals::USB_DEVICE;
 use esp_hal::usb::usb_serial_jtag::UsbSerialJtag;
 use takt_rt_baremetal::Port;
@@ -16,37 +25,64 @@ use takt_rt_baremetal::Port;
 /// lang nicht liest, bei 500 us Tick und einer Zeitzeile je Tick.
 const RING: usize = 2048;
 
+/// Bytes je Paket, unter der Puffergroesse von 64.
+const PACKET: u8 = 63;
+
 /// Die Leitung.
 pub struct UsbJtag {
     port: UsbSerialJtag<'static, Blocking>,
-    /// Seit dem letzten Abschicken kam ein Byte ins FIFO.
-    pending: bool,
+    /// Bytes im FIFO seit dem letzten Abschicken.
+    filled: u8,
+    /// Abgeschickt und vom Host noch nicht abgeholt.
+    in_flight: bool,
 }
 
 impl UsbJtag {
     /// Bindet die Schnittstelle; sie ist mit dem Chip da.
     pub fn new(usb: USB_DEVICE<'static>) -> UsbJtag {
-        UsbJtag { port: UsbSerialJtag::new(usb), pending: false }
+        let mut port = UsbSerialJtag::new(usb);
+        port.set_interrupt_handler(on_packet_taken);
+        UsbJtag { port, filled: 0, in_flight: false }
     }
+
+    /// Nimmt das Abholen zur Kenntnis: Das FIFO ist wieder frei.
+    fn settle(&mut self) {
+        let regs = USB_DEVICE::regs();
+        if self.in_flight && regs.int_raw().read().serial_in_empty().bit_is_set() {
+            regs.int_clr().write(|w| w.serial_in_empty().clear_bit_by_one());
+            self.in_flight = false;
+        }
+    }
+}
+
+/// Der Host hat das Paket abgeholt: nur wecken und maskieren, das Flag
+/// liest [`UsbJtag::settle`].
+#[esp_hal::handler(priority = Priority::Priority1)]
+fn on_packet_taken() {
+    USB_DEVICE::regs().int_ena().modify(|_, w| w.serial_in_empty().clear_bit());
 }
 
 impl Port for UsbJtag {
     fn try_write(&mut self, b: u8) -> bool {
-        let taken = self.port.write_byte_nb(b).is_ok();
-        self.pending |= taken;
-        taken
+        self.settle();
+        if self.in_flight || self.filled == PACKET || self.port.write_byte_nb(b).is_err() {
+            return false;
+        }
+        self.filled += 1;
+        true
     }
 
     fn flush(&mut self) {
-        // `wr_done` nur fuer ein angefangenes Paket bei freiem FIFO: Bei
-        // belegtem Endpunkt — der Host hat das letzte Paket noch nicht
-        // abgeholt — setzt es den Endpunkt fest, bis der Block zurueckgesetzt
-        // wird (FB-267); genau das passiert unter Last, wenn der Ring voll
-        // ist und vor jedem Byte die Leitung versucht wird.
-        if self.pending && USB_DEVICE::regs().ep1_conf().read().serial_in_ep_data_free().bit_is_set() {
-            let _ = self.port.flush_tx_nb();
-            self.pending = false;
+        self.settle();
+        if self.filled == 0 || self.in_flight {
+            return;
         }
+        let regs = USB_DEVICE::regs();
+        regs.int_clr().write(|w| w.serial_in_empty().clear_bit_by_one());
+        self.in_flight = true;
+        self.filled = 0;
+        let _ = self.port.flush_tx_nb();
+        regs.int_ena().modify(|_, w| w.serial_in_empty().set_bit());
     }
 }
 

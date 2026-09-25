@@ -179,7 +179,11 @@ fn main() -> ! {
         u.flush();
     }
 
-    let clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS);
+    let clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS).with_idle(|| {
+        if let Some(u) = uart() {
+            u.flush();
+        }
+    });
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
     let mut rt = Runtime::new(program, clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
     let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);

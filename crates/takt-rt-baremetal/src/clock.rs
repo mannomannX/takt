@@ -23,19 +23,35 @@ use takt_rt_core::Clock;
 ///
 /// Sie besitzt den Timer nicht, sie liest ihn: Der Besitz liegt beim
 /// Board-Crate, das auch die ISR stellt.
-#[derive(Debug)]
-pub struct TimerClock<T> {
+pub struct TimerClock<T, F = fn()> {
     timer: T,
     /// Nominale Periode aus `system: tick`, in Nanosekunden.
     nominal_ns: i64,
+    /// Laeuft nach jedem Wecken vor der Frist, etwa um den Ring zu leeren.
+    idle: F,
 }
+
+impl<T: core::fmt::Debug, F> core::fmt::Debug for TimerClock<T, F> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TimerClock").field("timer", &self.timer).field("nominal_ns", &self.nominal_ns).finish()
+    }
+}
+
+fn nothing() {}
 
 impl<T: TickSource> TimerClock<T> {
     /// Bindet einen Timer an die nominale Periode.
     pub fn new(timer: T, nominal_ns: i64) -> TimerClock<T> {
-        TimerClock { timer, nominal_ns }
+        TimerClock { timer, nominal_ns, idle: nothing }
     }
 
+    /// Mit einer Arbeit fuer die Zeit zwischen den Ticks.
+    pub fn with_idle<F: FnMut()>(self, idle: F) -> TimerClock<T, F> {
+        TimerClock { timer: self.timer, nominal_ns: self.nominal_ns, idle }
+    }
+}
+
+impl<T: TickSource, F: FnMut()> TimerClock<T, F> {
     /// Die zuletzt gemessene Periode gegenueber der nominalen (7.1).
     pub fn period(&self) -> Period {
         Period { nominal_ns: self.nominal_ns, measured_ns: self.timer.last_period_ns() }
@@ -47,7 +63,7 @@ impl<T: TickSource> TimerClock<T> {
     }
 }
 
-impl<T: TickSource> Clock for TimerClock<T> {
+impl<T: TickSource, F: FnMut()> Clock for TimerClock<T, F> {
     /// Die feine Zeit des Timers, fuer `took` und `drift` (7.3); die
     /// logische Zeit rechnet die Schleife aus der Tickzahl (7.1).
     fn now(&self) -> i64 {
@@ -63,7 +79,8 @@ impl<T: TickSource> Clock for TimerClock<T> {
     fn wait_until(&mut self, deadline: i64) {
         let target = if self.nominal_ns > 0 { u64::try_from(deadline / self.nominal_ns).unwrap_or(0) } else { 0 };
         while self.timer.ticks() < target {
-            self.timer.wait_for_tick();
+            self.timer.wait_event();
+            (self.idle)();
         }
     }
 }
