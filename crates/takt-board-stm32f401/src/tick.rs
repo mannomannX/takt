@@ -109,6 +109,12 @@ impl TickSource for Tim2Tick {
         takt_board_support::clock::elapsed_ns(self.timer_hz, counts)
     }
 
+    /// Ein `wfi`: Der Tick weckt, aber auch die Leitung, die zwischen den
+    /// Ticks ihren FIFO leert und nachgefuellt werden will.
+    fn wait_event(&mut self) {
+        cortex_m::asm::wfi();
+    }
+
     fn wait_for_tick(&mut self) {
         let start = count();
         // `wfi` statt Warteschleife: Ein Kern, der zwischen den Ticks

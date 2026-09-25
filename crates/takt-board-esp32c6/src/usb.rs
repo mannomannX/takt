@@ -15,9 +15,11 @@
 use esp_hal::peripherals::{LP_AON, RTC_TIMER, USB_DEVICE};
 use esp_hal::rtc_cntl::{Rtc, RwdtStage, RwdtStageAction};
 use esp_hal::time::Duration;
+use takt_board_support::console::MAGIC;
+pub use takt_board_support::console::Magic;
 
 /// `TAKT` in STORE0 oder in der Konsole: Der Host verlangt einen Chip-Reset.
-pub const REENUMERATE_MAGIC: u32 = 0x5441_4B54;
+pub const REENUMERATE_MAGIC: u32 = MAGIC;
 
 /// Setzt den Chip auf RTC-Ebene zurueck, wenn der Host es verlangt hat.
 pub fn reenumerate_if_requested() {
@@ -39,25 +41,6 @@ pub fn chip_reset() -> ! {
     rtc.rwdt.enable();
     loop {
         core::hint::spin_loop();
-    }
-}
-
-/// Erkennt `TAKT` in einem Bytestrom, ueber Aufrufe hinweg.
-#[derive(Default)]
-pub struct Magic {
-    matched: usize,
-}
-
-impl Magic {
-    /// Wahr mit dem letzten Byte von `TAKT`.
-    pub fn feed(&mut self, b: u8) -> bool {
-        let magic = REENUMERATE_MAGIC.to_be_bytes();
-        self.matched = if b == magic[self.matched] { self.matched + 1 } else { usize::from(b == magic[0]) };
-        if self.matched == magic.len() {
-            self.matched = 0;
-            return true;
-        }
-        false
     }
 }
 

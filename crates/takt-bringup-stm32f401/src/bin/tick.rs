@@ -27,7 +27,7 @@
 //! - **Die LED blinkt** im Sekundentakt. Steht sie, haengt das Programm;
 //!   blinkt sie falsch, stimmt die Periode nicht. Das sieht man aus drei
 //!   Metern, ohne Werkzeug.
-//! - **USART1 (PA9, 115200 8N1)** meldet je Sekunde Tickzahl, gemessene
+//! - **USART1 (PA9, 921600 8N1)** meldet je Sekunde Tickzahl, gemessene
 //!   Periode und die Abweichung von der nominalen.
 //! - **Der DWT** misst eine feste Rechenschleife. Die Zahl ist der erste
 //!   Datenpunkt fuer `c_target` (13.8) — noch keine Kalibrierung, aber
@@ -104,6 +104,13 @@ fn TIM2() {
     tick::on_timer_interrupt(elapsed);
 }
 
+/// Die Leitung: senden ohne zu warten, und der Host kann das Board
+/// zurueckverlangen.
+#[interrupt]
+fn USART1() {
+    takt_board_stm32f401::uart::on_interrupt();
+}
+
 #[entry]
 fn main() -> ! {
     let dp = Peripherals::take().expect("Peripherie");
@@ -122,7 +129,9 @@ fn main() -> ! {
     // **Kein `expect` hier.** Ein Panic haelt an, und `panic-halt` laesst
     // die LED stehen, wo sie gerade war — ein Zustand, der wie „laeuft"
     // aussehen kann. Ein Fehlercode blinkt stattdessen.
-    let Ok(mut uart) = takt_board_stm32f401::telemetry(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, 115_200) else {
+    let Ok(mut uart) =
+        takt_board_stm32f401::telemetry(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, takt_board_stm32f401::BAUD)
+    else {
         blink_error(&led, 4);
     };
 
@@ -132,22 +141,44 @@ fn main() -> ! {
     cycles::enable(&mut dcb, &mut dwt);
 
     // Den Tick-Interrupt freigeben — ohne ihn zaehlt niemand.
-    unsafe { cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::TIM2) };
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::TIM2);
+        cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::USART1);
+    }
 
     banner(&mut uart, &clock);
+    // Die Taktregister roh: Ein Takt, der nicht der konfigurierte ist,
+    // faellt sonst nicht auf, weil Timer und Sollwert an derselben Uhr
+    // haengen.
+    for (name, v) in [
+        ("RCC_CR     ", dp.RCC.cr().read().bits()),
+        ("RCC_CFGR   ", dp.RCC.cfgr().read().bits()),
+        ("RCC_PLLCFGR", dp.RCC.pllcfgr().read().bits()),
+    ] {
+        uart.write("  ");
+        uart.write(name);
+        for b in v.to_be_bytes() {
+            uart.write(" ");
+            uart.write_hex8(b);
+        }
+        uart.newline();
+        uart.flush();
+    }
 
     let mut next_report = REPORT_EVERY;
     loop {
         clock.wait_for_tick();
+        // Je Tick einmal: Die Leitung fuehrt einen Wunsch des Hosts aus.
+        uart.flush();
         let now = clock.ticks();
 
         if now >= next_report {
             // **Erst die LED, dann der Bericht.** Die Telemetrie dauert
-            // bei 115200 Baud rund zehn Millisekunden und blockiert
-            // solange; stuende sie davor, verschoebe sie die Flanke um
-            // zehn Ticks. Sichtbar waere das nicht, aber die LED ist hier
-            // das Messgeraet, und ein Messgeraet, das auf die Ausgabe
-            // wartet, misst die Ausgabe mit.
+            // rund eine Millisekunde und blockiert solange; stuende sie
+            // davor, verschoebe sie die Flanke um einen Tick. Sichtbar
+            // waere das nicht, aber die LED ist hier das Messgeraet, und
+            // ein Messgeraet, das auf die Ausgabe wartet, misst die
+            // Ausgabe mit.
             led.toggle();
             report(&mut uart, &clock, now);
 

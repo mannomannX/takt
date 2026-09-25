@@ -48,9 +48,11 @@
 #![no_std]
 #![allow(unsafe_code, reason = "Registerzugriff ueber die PAC; 9.5 fuehrt Treiber in der TCB")]
 
+pub mod bootloader;
 pub mod cycles;
 pub mod guard;
 pub mod led;
+pub mod stack;
 pub mod tick;
 pub mod uart;
 
@@ -58,7 +60,7 @@ pub use guard::{Canary, Iwdg, WfiSleep, reboot};
 pub use led::Led;
 pub use takt_mcu_program::Generated;
 pub use tick::{Tim2Tick, on_timer_interrupt};
-pub use uart::{Telemetry, Usart1, telemetry};
+pub use uart::{BAUD, Telemetry, Usart1, telemetry};
 
 /// Was ein einzelnes Board beitraegt.
 ///
@@ -153,6 +155,7 @@ pub fn init(
     let counts = takt_board_support::counts_for(TIMER_HZ, tick_ns).map_err(InitError::Period)?;
     let psc = takt_board_support::prescaler_for(CORE_HZ, TIMER_HZ).ok_or(InitError::ClockNotReady)?;
     let pllm = takt_board_support::pll::divider_m(board.hse_hz).ok_or(InitError::UnsupportedCrystal)?;
+    ieee_mode();
     clocks(rcc, flash, pwr, pllm)?;
     start_tim2(rcc, tim2, psc, counts);
     Ok(Tim2Tick::new(TIMER_HZ, counts, CORE_HZ))
@@ -204,12 +207,7 @@ fn clocks(
     // und `CORE_HZ` luegt. Jede Zeitmessung waere dann falsch, ohne dass
     // irgendetwas auffiele — genau die Sorte Fehler, gegen die 7.1 die
     // gemessene Periode stellt.
-    rcc.cfgr().modify(|_, w| unsafe { w.sw().bits(0b00) });
-    if !wait_for(|| rcc.cfgr().read().sws().bits() == 0b00) {
-        return Err(InitError::ClockNotReady);
-    }
-    rcc.cr().modify(|_, w| w.pllon().clear_bit());
-    if !wait_for(|| rcc.cr().read().pllrdy().bit_is_clear()) {
+    if !run_on_hsi(rcc) {
         return Err(InitError::ClockNotReady);
     }
 
@@ -240,7 +238,15 @@ fn clocks(
     // `CORE_HZ` uebergeben bekommt und diese Zeile die Zusage dazu ist.
     // Ein Reset-Wert, auf den man sich stillschweigend verlaesst, ist
     // eine Annahme ohne Beleg.
+    //
+    // AHB ohne Teiler, ausdruecklich: Die Anwendung kann aus dem
+    // HID-Bootloader, dem DFU-Bootloader des ROM oder ueber eine Probe
+    // gestartet werden, und jeder Weg hinterlaesst seine eigenen
+    // Registerwerte. Ein Teiler hier wuerde Kern, Timer und UART gemeinsam
+    // verlangsamen, ohne dass die gemessene Periode es zeigte — Timer und
+    // Sollwert haengen an derselben Uhr.
     rcc.cfgr().modify(|_, w| unsafe {
+        w.hpre().bits(0b0000);
         w.ppre1().bits(0b100);
         w.ppre2().bits(0b000)
     });
@@ -249,6 +255,46 @@ fn clocks(
         return Err(InitError::ClockNotReady);
     }
     Ok(())
+}
+
+/// Die FPU im IEEE-Modus (4.2): kein Flush-to-Zero, keine Default-NaN, kein
+/// alternatives Halbformat, Runden zur naechsten.
+///
+/// 4.2 verlangt es von der Runtime, nicht vom Resetwert: Wer die Anwendung
+/// startete — HID-Bootloader, DFU-Bootloader, Probe —, ist unbekannt, und
+/// ein gesetztes `FZ` liesse jede Subnormale still zu null werden (Satz
+/// 9.4.4 waere verletzt, ohne dass ein Test auf dem Wirt es saehe).
+/// `FPDSCR` ist der Startwert von `FPSCR` in jedem Handler und bekommt
+/// dasselbe.
+fn ieee_mode() {
+    use cortex_m::register::fpscr::{self, RMode};
+    let mut f = fpscr::read();
+    f.set_fz(false);
+    f.set_dn(false);
+    f.set_ahp(false);
+    f.set_rmode(RMode::Nearest);
+    // SAFETY: nur die Modusbits; die Flags der Ausnahmen bleiben.
+    unsafe { fpscr::write(f) };
+    // AHP, DN, FZ und RMode stehen in FPDSCR auf den Bits 22 bis 26.
+    // SAFETY: ein Register des Kerns, das nur diese Funktion schreibt.
+    unsafe { (*cortex_m::peripheral::FPU::PTR).fpdscr.modify(|v| v & !(0x1F << 22)) };
+}
+
+/// Der Systemtakt auf HSI, die PLL aus: der Ausgangspunkt jeder
+/// Taktaenderung, fuer den Aufbau wie fuer die Uebergabe an den Bootloader.
+///
+/// Falsch, wenn eine Stufe nicht binnen der Schranke kam.
+pub(crate) fn run_on_hsi(rcc: &stm32f4::stm32f401::rcc::RegisterBlock) -> bool {
+    rcc.cr().modify(|_, w| w.hsion().set_bit());
+    if !wait_for(|| rcc.cr().read().hsirdy().bit_is_set()) {
+        return false;
+    }
+    rcc.cfgr().modify(|_, w| unsafe { w.sw().bits(0b00) });
+    if !wait_for(|| rcc.cfgr().read().sws().bits() == 0b00) {
+        return false;
+    }
+    rcc.cr().modify(|_, w| w.pllon().clear_bit());
+    wait_for(|| rcc.cr().read().pllrdy().bit_is_clear())
 }
 
 /// Wartet beschraenkt auf eine Bedingung.

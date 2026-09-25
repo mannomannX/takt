@@ -6,6 +6,10 @@
 //! Die Linker-Argumente stehen hier und nicht in `.cargo/config.toml`: Die
 //! Konfigurationsdatei gilt nur, wenn `cargo` aus diesem Verzeichnis laeuft,
 //! und ein Bau von aussen erzeugte sonst still ein Binary ohne Speicherkarte.
+//!
+//! **Die C-Referenz fuer `takt bench`** (13.8) nennt `TAKT_BENCH_C`, wie
+//! beim F401: dieselben Flags wie der erzeugte Code, dazu
+//! `-ffp-contract=off`, und im Archiv, also mit ihm im RAM (12.3).
 
 use std::env;
 use std::fs;
@@ -36,6 +40,7 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     ram_resident(&out);
     build_takt_program(&out);
+    native_vectors(&out);
 }
 
 /// Legt Takt-Code und tick-gelesene Konstanten ins RAM (12.3).
@@ -70,13 +75,14 @@ fn build_takt_program(out: &Path) {
     run_takt_build(&program, &["--emit", "ir"], &ir);
     run_takt_build(&program, &["--emit", "consts-rs"], &out.join("takt_consts.rs"));
     let (obj, obj_rahmen) = (out.join("takt_programm.o"), out.join("takt_rahmen.o"));
-    translate(&ir, &obj);
-    translate(&rahmen, &obj_rahmen);
+    translate(&ir, &obj, &[]);
+    translate(&rahmen, &obj_rahmen, &[]);
     let millicode = Path::new(env!("CARGO_MANIFEST_DIR")).join("millicode.S");
     println!("cargo:rerun-if-changed={}", millicode.display());
     let obj_mc = out.join("millicode.o");
     assemble(&millicode, &obj_mc);
-    archive(out, &[&obj, &obj_rahmen, &obj_mc]);
+    let reference = bench_reference(out);
+    archive(out, &[&obj, &obj_rahmen, &obj_mc, &reference]);
     println!("cargo:rustc-link-arg=--icf=all");
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=taktprogramm");
@@ -144,8 +150,45 @@ fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
     }
 }
 
+/// Die Vektoren der kuratierten Natives fuer das Messprogramm `natives`
+/// (13.8), aus der Spezifikation `grammar/takt-native.md`.
+fn native_vectors(out: &Path) {
+    let spec = takt_conformance::natives::spec_path();
+    println!("cargo:rerun-if-changed={}", spec.display());
+    let text = fs::read_to_string(&spec).unwrap_or_else(|e| panic!("{}: {e}", spec.display()));
+    let vectors = takt_conformance::natives::vectors(&text).unwrap_or_else(|e| panic!("{}: {e}", spec.display()));
+    fs::write(out.join("native_vectors.rs"), takt_conformance::natives::table_source(&vectors))
+        .expect("native_vectors.rs schreiben");
+}
+
 /// Uebersetzt eine Quelle (IR oder C) mit den Groessenflags des Ziels.
-fn translate(src: &Path, obj: &Path) {
+/// Die C-Referenz fuer `takt bench` als Objekt: die Datei aus
+/// `TAKT_BENCH_C` oder schwache Definitionen, die niemand ruft, solange
+/// `bench_reference.rs` sagt, dass keine da ist.
+fn bench_reference(out: &Path) -> PathBuf {
+    println!("cargo:rerun-if-env-changed=TAKT_BENCH_C");
+    let given = env::var("TAKT_BENCH_C").ok();
+    let src = match &given {
+        Some(path) => {
+            println!("cargo:rerun-if-changed={path}");
+            PathBuf::from(path)
+        }
+        None => {
+            let stub = out.join("bench_reference_none.c");
+            let text = "__attribute__((weak)) void takt_bench_reference(void) {}\n\
+                        __attribute__((weak)) unsigned long long takt_bench_reference_digest(void) { return 0; }\n";
+            fs::write(&stub, text).expect("bench_reference_none.c schreiben");
+            stub
+        }
+    };
+    let present = format!("/// Ist eine C-Referenz gebunden?\npub const PRESENT: bool = {};\n", given.is_some());
+    fs::write(out.join("bench_reference.rs"), present).expect("bench_reference.rs schreiben");
+    let obj = out.join("bench_reference.o");
+    translate(&src, &obj, &["-ffp-contract=off"]);
+    obj
+}
+
+fn translate(src: &Path, obj: &Path, extra: &[&str]) {
     let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Programm") };
     let ok = Command::new(&clang)
         .args([
@@ -158,6 +201,7 @@ fn translate(src: &Path, obj: &Path) {
             "-mabi=ilp32",
         ])
         .args(takt_llvm::toolchain::object_flags("riscv32-unknown-none-elf"))
+        .args(extra)
         .arg(src)
         .arg("-o")
         .arg(obj)

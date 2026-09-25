@@ -32,6 +32,7 @@
 
 #![no_std]
 
+pub mod bench;
 pub mod board;
 pub mod clock;
 pub mod run;

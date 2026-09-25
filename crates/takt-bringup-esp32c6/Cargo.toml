@@ -12,13 +12,16 @@ rust-version = "1.86"
 [workspace]
 
 [build-dependencies]
-takt-conformance = { path = "../takt-conformance" }
+takt-conformance = { path = "../takt-conformance", default-features = false }
 takt-diag = { path = "../takt-diag" }
 takt-llvm = { path = "../takt-llvm" }
 takt-mir = { path = "../takt-mir" }
 takt-sema = { path = "../takt-sema" }
 
 [dependencies]
+# Fuer das Messprogramm `natives` (13.8): die kuratierten Natives, wie
+# ein Programm sie ruft.
+takt-native = { path = "../takt-native" }
 takt-board-esp32c6 = { path = "../takt-board-esp32c6" }
 takt-board-support = { path = "../takt-board-support" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }
@@ -28,6 +31,8 @@ takt-rt-core = { path = "../takt-rt-core" }
 esp-hal = { version = "1.2.1", features = ["esp32c6", "unstable"] }
 # App-Deskriptor im Abbild: der ROM-Bootloader und `probe-rs` verlangen ihn.
 esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32c6"] }
+# Gesperrte Interrupts um eine Messung (`bench`); die Umsetzung stellt `esp-hal`.
+critical-section = "1.2"
 
 [profile.dev]
 panic = "abort"

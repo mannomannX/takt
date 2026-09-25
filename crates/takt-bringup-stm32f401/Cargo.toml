@@ -16,13 +16,16 @@ rust-version = "1.85"
 # *Wirt*, nicht auf dem Ziel — darum `build-dependencies` und nicht
 # `dependencies`.
 [build-dependencies]
-takt-conformance = { path = "../takt-conformance" }
+takt-conformance = { path = "../takt-conformance", default-features = false }
 takt-diag = { path = "../takt-diag" }
 takt-llvm = { path = "../takt-llvm" }
 takt-mir = { path = "../takt-mir" }
 takt-sema = { path = "../takt-sema" }
 
 [dependencies]
+# Fuer das Messprogramm `natives` (13.8): die kuratierten Natives, wie
+# ein Programm sie ruft.
+takt-native = { path = "../takt-native" }
 takt-board-stm32f401 = { path = "../takt-board-stm32f401" }
 takt-board-support = { path = "../takt-board-support" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }

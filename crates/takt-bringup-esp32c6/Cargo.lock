@@ -1423,6 +1423,7 @@ version = "0.1.0"
 name = "takt-bringup-esp32c6"
 version = "0.1.0"
 dependencies = [
+ "critical-section",
  "esp-bootloader-esp-idf",
  "esp-hal",
  "takt-board-esp32c6",
@@ -1431,6 +1432,7 @@ dependencies = [
  "takt-diag",
  "takt-llvm",
  "takt-mir",
+ "takt-native",
  "takt-rt-baremetal",
  "takt-rt-core",
  "takt-sema",

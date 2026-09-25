@@ -21,7 +21,7 @@
 //!
 //! ## Was man sieht
 //!
-//! Auf USART1 (PA9, 115200 8N1) erscheint, was der Latch enthaelt —
+//! Auf USART1 (PA9, 921600 8N1) erscheint, was der Latch enthaelt —
 //! dieselben `out`-Zeilen, die der Interpreter schreibt
 //! (`grammar/trace.md`). Damit laesst sich der Hardwarelauf gegen
 //! `takt sim` halten, und das ist der Kern des M5-Exits.
@@ -42,7 +42,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
-use takt_board_stm32f401::{Board, CORE_HZ, Generated, Led, Telemetry, WfiSleep, cycles, tick};
+use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Generated, Led, Telemetry, WfiSleep, cycles, tick};
 use takt_rt_baremetal::{Cadence, JournalStats, NoWatchdog, Sleep};
 use takt_rt_core::{FakeNvm, Persist, Policy, Profile, Runtime};
 
@@ -51,8 +51,6 @@ mod takt {
     include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
 }
 use takt::{OVERRUN_ALERT, TICK_NS};
-
-const BAUD: u32 = 115_200;
 
 /// Alle wie viele Ticks die Ausgaenge im Betrieb ausgegeben werden: jeden,
 /// wenn eine Zeile ein Zehntel der Periode fuellt, sonst jeden hundertsten.
@@ -80,7 +78,7 @@ static mut UART: Option<Telemetry> = None;
 static mut LED: Option<Led> = None;
 
 fn uart() -> Option<&'static mut Telemetry> {
-    unsafe { (*&raw mut UART).as_mut() }
+    unsafe { (&raw mut UART).as_mut().and_then(Option::as_mut) }
 }
 
 /// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
@@ -142,7 +140,7 @@ pub extern "C" fn takt_board_trace_hex8(value: u8) {
 /// weiss nur diese Zeile.
 #[unsafe(no_mangle)]
 pub extern "C" fn takt_out_ui_led(value: u8) {
-    let Some(led) = (unsafe { (*&raw mut LED).as_mut() }) else { return };
+    let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return };
     if value != 0 {
         led.on();
     } else {
@@ -160,8 +158,17 @@ fn TIM2() {
     tick::on_timer_interrupt(elapsed);
 }
 
+/// Die Leitung: senden ohne zu warten, und der Host kann das Board
+/// zurueckverlangen.
+#[interrupt]
+fn USART1() {
+    takt_board_stm32f401::uart::on_interrupt();
+}
+
 #[entry]
 fn main() -> ! {
+    // Zuerst: Die Abschlusszeile meldet, wie tief der Stack unter Last reichte.
+    takt_board_stm32f401::stack::paint();
     let dp = Peripherals::take().expect("Peripherie");
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
     let board = Board::WEACT_BLACKPILL;
@@ -186,12 +193,21 @@ fn main() -> ! {
 
     let (mut dcb, mut dwt) = (cp.DCB, cp.DWT);
     cycles::enable(&mut dcb, &mut dwt);
-    unsafe { cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::TIM2) };
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::TIM2);
+        cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::USART1);
+    }
 
     banner(timer.nominal_ns());
     unsafe { LED = Some(led) };
 
-    let clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS);
+    // Zwischen den Ticks fuellt die Schleife die Leitung nach, sooft ein
+    // Interrupt den Kern weckt: Sie nimmt nur ab, was in ihren FIFO passt.
+    let clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS).with_idle(|| {
+        if let Some(u) = uart() {
+            u.flush();
+        }
+    });
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
     let mut rt = Runtime::new(Generated::init(false), clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
     let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
@@ -199,11 +215,17 @@ fn main() -> ! {
     let no_journal = None::<&mut Persist<'_, FakeNvm<0>>>;
     let stats = takt_rt_baremetal::run(&mut rt, no_journal, Cadence::of(limit, TRACE_EVERY, TRACE_PC), uart);
     if let Some(u) = uart() {
-        takt_rt_baremetal::report(u, rt.overrun(), &stats, &JournalStats::default());
+        let stack = Some(takt_board_stm32f401::stack::high_water());
+        takt_rt_baremetal::report(u, rt.overrun(), &stats, &JournalStats::default(), stack);
     }
+    // Nach dem Lauf bleibt die Leitung offen: Der Host holt das Board mit
+    // `TAKT` zurueck, um das naechste Programm zu schreiben (FB-275).
     let mut sleep = WfiSleep;
     loop {
         sleep.sleep_until_event();
+        if let Some(u) = uart() {
+            u.flush();
+        }
     }
 }
 

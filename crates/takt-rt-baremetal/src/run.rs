@@ -135,11 +135,16 @@ where
 }
 
 /// Die Bilanz als letzte Zeile, dann `takt end`; leert den Ring.
+///
+/// `stack` ist die Tiefe des Stacks unter Last in Byte, wenn das Board sie
+/// gemessen hat (Painting, 13.8): Aus dem Lauf eines leeren Programms wird
+/// die Stack-Reserve von Runtime, Treibern und ISRs (12.3).
 pub fn report<P: Port, const R: usize>(
     t: &mut Telemetry<P, R>,
     overrun: &Overrun,
     stats: &Stats,
     journal: &JournalStats,
+    stack: Option<u32>,
 ) {
     let dropped = u64::from(t.dropped());
     let counts = [
@@ -170,6 +175,10 @@ pub fn report<P: Port, const R: usize>(
     t.write(" ns programmieren ");
     t.write_i64(journal.program_ns);
     t.write(" ns");
+    if let Some(bytes) = stack {
+        t.write(" stack ");
+        t.write_u64(u64::from(bytes));
+    }
     t.newline();
     t.write("takt end");
     t.newline();

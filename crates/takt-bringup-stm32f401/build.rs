@@ -17,6 +17,12 @@
 //!
 //! **Welches Programm?** `takt.toml` neben `Cargo.toml` nennt den Pfad
 //! (FB-141); `TAKT_PROGRAM` sticht nur fuer einen einmaligen Versuch.
+//!
+//! **Die C-Referenz fuer `takt bench`** (13.8) nennt `TAKT_BENCH_C`. Sie
+//! wird mit denselben Flags uebersetzt wie der erzeugte Code — das
+//! Verhaeltnis der Zeiten soll die Sprachen vergleichen, nicht die
+//! Optimierungsstufen —, und mit `-ffp-contract=off`, weil Takt nie
+//! stillschweigend zu `fma` zusammenzieht (4.2).
 
 use std::env;
 use std::fs;
@@ -38,6 +44,7 @@ fn main() {
     println!("cargo:rustc-link-arg=--nmagic");
 
     build_takt_program(&out);
+    native_vectors(&out);
 }
 
 /// Uebersetzt das Takt-Programm und bindet es als Objekt ein.
@@ -73,9 +80,10 @@ fn build_takt_program(out: &Path) {
     run_takt_build(&program, &["--emit", "ir"], &ir);
     run_takt_build(&program, &["--emit", "consts-rs"], &out.join("takt_consts.rs"));
     let (obj, obj_rahmen) = (out.join("takt_programm.o"), out.join("takt_rahmen.o"));
-    translate(&ir, &obj);
-    translate(&rahmen, &obj_rahmen);
-    archive(out, &[&obj, &obj_rahmen]);
+    translate(&ir, &obj, &[]);
+    translate(&rahmen, &obj_rahmen, &[]);
+    let reference = bench_reference(out);
+    archive(out, &[&obj, &obj_rahmen, &reference]);
     println!("cargo:rustc-link-arg=--icf=all");
 
     println!("cargo:rustc-link-search=native={}", out.display());
@@ -159,12 +167,50 @@ fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
     }
 }
 
+/// Die C-Referenz fuer `takt bench` als Objekt: die Datei aus
+/// `TAKT_BENCH_C` oder schwache Definitionen, die niemand ruft, solange
+/// `bench_reference.rs` sagt, dass keine da ist.
+fn bench_reference(out: &Path) -> PathBuf {
+    println!("cargo:rerun-if-env-changed=TAKT_BENCH_C");
+    let given = env::var("TAKT_BENCH_C").ok();
+    let src = match &given {
+        Some(path) => {
+            println!("cargo:rerun-if-changed={path}");
+            PathBuf::from(path)
+        }
+        None => {
+            let stub = out.join("bench_reference_none.c");
+            let text = "__attribute__((weak)) void takt_bench_reference(void) {}\n\
+                        __attribute__((weak)) unsigned long long takt_bench_reference_digest(void) { return 0; }\n";
+            fs::write(&stub, text).expect("bench_reference_none.c schreiben");
+            stub
+        }
+    };
+    let present = format!("/// Ist eine C-Referenz gebunden?\npub const PRESENT: bool = {};\n", given.is_some());
+    fs::write(out.join("bench_reference.rs"), present).expect("bench_reference.rs schreiben");
+    let obj = out.join("bench_reference.o");
+    translate(&src, &obj, &["-ffp-contract=off"]);
+    obj
+}
+
+/// Die Vektoren der kuratierten Natives fuer das Messprogramm `natives`
+/// (13.8), aus der Spezifikation `grammar/takt-native.md`.
+fn native_vectors(out: &Path) {
+    let spec = takt_conformance::natives::spec_path();
+    println!("cargo:rerun-if-changed={}", spec.display());
+    let text = fs::read_to_string(&spec).unwrap_or_else(|e| panic!("{}: {e}", spec.display()));
+    let vectors = takt_conformance::natives::vectors(&text).unwrap_or_else(|e| panic!("{}: {e}", spec.display()));
+    fs::write(out.join("native_vectors.rs"), takt_conformance::natives::table_source(&vectors))
+        .expect("native_vectors.rs schreiben");
+}
+
 /// Uebersetzt eine Quelle (IR oder C) mit den Groessenflags des Ziels.
-fn translate(src: &Path, obj: &Path) {
+fn translate(src: &Path, obj: &Path, extra: &[&str]) {
     let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Programm") };
     let ok = Command::new(&clang)
         .args(["-c", "-Wno-override-module", "-ffreestanding", "-nostdlib", "--target=thumbv7em-none-eabihf"])
         .args(takt_llvm::toolchain::object_flags("thumbv7em-none-eabihf"))
+        .args(extra)
         .arg(src)
         .arg("-o")
         .arg(obj)
@@ -221,8 +267,46 @@ fn find_takt() -> Option<PathBuf> {
         dir = parent;
         let p = dir.join(&profile).join(exe);
         if p.exists() {
+            assert_fresh(&p);
             return Some(p);
         }
     }
     None
+}
+
+/// Ein `takt`, das aelter ist als der Compiler, baut stillschweigend das
+/// Objekt von gestern (FB-193, auf dem C6 gefunden). Der Vergleich ist
+/// grob — Aenderungszeit gegen jede Quelle der Compiler-Crates —, aber er
+/// faellt genau dann, wenn es darauf ankommt.
+fn assert_fresh(takt: &Path) {
+    let Ok(built) = fs::metadata(takt).and_then(|m| m.modified()) else { return };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    for krate in ["takt-syntax", "takt-diag", "takt-mir", "takt-sema", "takt-interp", "takt-llvm", "takt-cli"] {
+        walk(&root.join("crates").join(krate).join("src"), &mut newest);
+    }
+    if let Some((t, file)) = newest
+        && t > built
+    {
+        panic!(
+            "{} ist aelter als {}; `cargo build -p takt-cli --release` vor dem Bring-up (FB-193)",
+            takt.display(),
+            file.display()
+        );
+    }
+}
+
+fn walk(dir: &Path, newest: &mut Option<(std::time::SystemTime, PathBuf)>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            walk(&path, newest);
+        } else if path.extension().is_some_and(|x| x == "rs")
+            && let Ok(t) = fs::metadata(&path).and_then(|m| m.modified())
+            && newest.as_ref().is_none_or(|(n, _)| t > *n)
+        {
+            *newest = Some((t, path));
+        }
+    }
 }

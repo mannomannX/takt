@@ -25,15 +25,16 @@ MEMORY
  */
 _stack_start = ORIGIN(RAM) + LENGTH(RAM);
 
-/* **Zur Ausrichtungswarnung des Linkers.** Er meldet, dass `.text` bei
- * 0x08004194 nicht auf 8 ausgerichtet ist — die Vektortabelle ist 404
- * Byte lang, und 404 teilt nicht durch 8. Das ist folgenlos: Thumb-Code
- * braucht 2 Byte Ausrichtung, Sprungtabellen 4, und beides ist erfuellt.
- *
- * Die 8 fordert der C-Rahmen (12.1) fuer seine statischen Puffer, weil
- * Prozessabbild und Latch `long long` enthalten. Die liegen aber in
- * `.bss`, wo der Linker sie ohnehin ausrichtet — nicht in `.text`.
+/* `.text` beginnt auf der naechsten 8-Byte-Grenze hinter der
+ * Vektortabelle. `cortex-m-rt` legt es direkt dahinter (404 Byte, also
+ * bei 0x08004194), aber die f64-Routinen aus `compiler_builtins`
+ * (`__adddf3`, `__muldf3`, `__divdf3`) verlangen 8 Byte Ausrichtung —
+ * jedes Programm mit f64 auf diesem Kern ohne f64-FPU zieht sie herein.
+ * Der Linker richtete die Routinen selbst richtig aus und warnte nur
+ * ueber den Anfang des Abschnitts; hier wird die Ursache behoben statt
+ * die Warnung hingenommen.
  */
+_stext = ALIGN(ADDR(.vector_table) + SIZEOF(.vector_table), 8);
 
 /* Der Schutzbereich aus 12.3.
  *

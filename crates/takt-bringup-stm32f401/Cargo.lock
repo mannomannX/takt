@@ -440,6 +440,7 @@ dependencies = [
  "takt-diag",
  "takt-llvm",
  "takt-mir",
+ "takt-native",
  "takt-rt-baremetal",
  "takt-rt-core",
  "takt-sema",

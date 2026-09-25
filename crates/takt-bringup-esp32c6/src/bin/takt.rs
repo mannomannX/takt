@@ -50,10 +50,15 @@ static mut LED: Option<Ws2812> = None;
 static mut BTN: Option<Button> = None;
 
 fn uart() -> Option<&'static mut Telemetry> {
-    unsafe { (*&raw mut UART).as_mut() }
+    unsafe { (&raw mut UART).as_mut().and_then(Option::as_mut) }
 }
 
 /// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt einen nullterminierten Zeiger auf statischen
+/// Text; die Schranke haelt einen Zeiger ohne Null auf (4.1, von Hand).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_board_trace(text: *const u8) {
     let Some(uart) = uart() else { return };
@@ -104,7 +109,7 @@ pub extern "C" fn takt_board_trace_hex8(value: u8) {
 /// Der Output `ui_led` des Programms auf der RGB-LED.
 #[unsafe(no_mangle)]
 pub extern "C" fn takt_out_ui_led(value: u8) {
-    let Some(led) = (unsafe { (*&raw mut LED).as_mut() }) else { return };
+    let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return };
     if value != 0 {
         led.on();
     } else {
@@ -117,9 +122,13 @@ pub extern "C" fn takt_out_ui_led(value: u8) {
 /// Ein wackelnder Kontakt meldet `Suspect` statt `Good`: Der Wert ist da,
 /// aber noch nicht stabil (12.6). Ohne Treiber bliebe der Eintrag `Bad`,
 /// und das waere hier falsch — der Taster ist verdrahtet.
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_in_ui_button(value: *mut u8, quality: *mut u8) -> bool {
-    let Some(btn) = (unsafe { (*&raw mut BTN).as_mut() }) else { return false };
+pub unsafe extern "C" fn takt_in_ui_button(value: *mut u8, quality: *mut u8) -> bool {
+    let Some(btn) = (unsafe { (&raw mut BTN).as_mut().and_then(Option::as_mut) }) else { return false };
     let (level, stable) = btn.poll();
     unsafe {
         *value = u8::from(level);
@@ -130,6 +139,8 @@ pub extern "C" fn takt_in_ui_button(value: *mut u8, quality: *mut u8) -> bool {
 
 #[main]
 fn main() -> ! {
+    // Zuerst: Die Abschlusszeile meldet, wie tief der Stack unter Last reichte.
+    takt_board_esp32c6::stack::paint();
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     takt_board_esp32c6::reenumerate_if_requested();
     let mut telemetry = takt_board_esp32c6::telemetry(peripherals.USB_DEVICE);
@@ -158,7 +169,7 @@ fn main() -> ! {
     // Ohne `persist` im Programm gibt es kein Journal und keinen Flash-Zugriff.
     let (mut current, mut stored) = ([0u8; PERSIST_BOUND], [0u8; PERSIST_BOUND]);
     let mut persist = None;
-    if PERSIST_BOUND > 0 {
+    if PERSIST_BOUND != 0 {
         let mut nvm = FlashNvm::new(peripherals.FLASH, JOURNAL_AT).with_blocking_ns(NVM_BLOCKING_NS);
         if FRESH_JOURNAL && !nvm.wipe() {
             report("journal: loeschen scheiterte");
@@ -193,7 +204,8 @@ fn main() -> ! {
         JournalStats { writes: p.journal().writes(), failures: p.journal().failures(), erase_ns, program_ns }
     });
     if let Some(u) = uart() {
-        takt_rt_baremetal::report(u, rt.overrun(), &stats, &journal);
+        let stack = Some(takt_board_esp32c6::stack::high_water());
+        takt_rt_baremetal::report(u, rt.overrun(), &stats, &journal, stack);
     }
     let mut sleep = takt_board_esp32c6::WfiSleep;
     loop {
