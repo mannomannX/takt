@@ -1414,20 +1414,30 @@ fn int_to(v: Lowered, ty: &LlvmType, m: &mut Module) -> Lowered {
     Lowered { value: r.to_string(), ty: ty.clone() }
 }
 
-/// Sind alle Gleitkommawerte eines Werts endlich? Je Element ein `fcmp one`
-/// des Betrags gegen `inf` — falsch fuer `inf` und `NaN` —, verknuepft mit
-/// `and`. LLVM erkennt darin den Vergleich der Bits und braucht dafuer
-/// keine Gleitkommaeinheit; eine Kette ueber `llvm.maximum` wurde auf dem
-/// RV32IMAC je Element ein Aufruf von `fmaximumf`.
+/// Sind alle Gleitkommawerte eines Werts endlich? Geprueft auf den Bits:
+/// Nicht endlich ist ein Wert genau dann, wenn sein Exponent nur aus
+/// Einsen besteht (`inf`, `NaN`). Je Element das Bitmuster um eins nach
+/// links — das Vorzeichen faellt heraus — und ein vorzeichenloser Vergleich
+/// mit dem Exponenten aus lauter Einsen, verknuepft mit `and`.
+///
+/// **Nicht als `fcmp` gegen `inf` und nicht als Maske.** Beides erkennt
+/// LLVM als Endlichkeitstest und schreibt es als `fcmp` um; fuer einen
+/// Wert, den es als nichtnegativ kennt, ohne den Betrag, und daraus wurden
+/// ohne Doppel-FPU je Pruefung ein Aufruf von `__unorddf2` und einer von
+/// `__eqdf2` (FB-299). Die Schiebung bleibt auf jedem Ziel ein Vergleich
+/// der Bits; `a_finiteness_check_stays_a_bit_test_without_an_fpu` haelt
+/// das gegen neue LLVM-Versionen fest.
 fn finite_condition(value: &Lowered, m: &mut Module) -> Result<String, NotYet> {
     let mut items = Vec::new();
     let elem = float_items(&value.ty, &value.value, &mut items, m)?;
-    let suffix = crate::matrix::suffix(&elem);
-    m.needs_intrinsic(&format!("{elem} @llvm.fabs.{suffix}({elem})"));
+    // Der Exponent aus lauter Einsen, um eins nach links: 0xFF000000 und
+    // 0xFFE0000000000000.
+    let (int, limit) = if elem == LlvmType::F32 { ("i32", "-16777216") } else { ("i64", "-9007199254740992") };
     let mut acc: Option<String> = None;
     for x in items {
-        let a = m.inst(&format!("call {elem} @llvm.fabs.{suffix}({elem} {x})"));
-        let finite = m.inst(&format!("fcmp one {elem} {a}, 0x7FF0000000000000"));
+        let bits = m.inst(&format!("bitcast {elem} {x} to {int}"));
+        let shifted = m.inst(&format!("shl {int} {bits}, 1"));
+        let finite = m.inst(&format!("icmp ult {int} {shifted}, {limit}"));
         acc = Some(match acc {
             None => finite.to_string(),
             Some(p) => m.inst(&format!("and i1 {p}, {finite}")).to_string(),

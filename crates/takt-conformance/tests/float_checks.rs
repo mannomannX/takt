@@ -40,19 +40,22 @@ fn every_float_result_is_checked_for_finiteness() {
     let p = corpus("77_float_faults.takt");
     let ir = common::ir_of(&p);
 
+    // Auf den Bits: ohne Vorzeichen, verglichen mit dem Exponenten aus
+    // lauter Einsen.
     let overflow = functions_of(&ir, "overflow");
-    assert!(overflow.contains("@llvm.fabs.f64("), "das Produkt wird geprueft:\n{overflow}");
-    assert!(overflow.contains("fcmp one double"), "gegen unendlich und NaN:\n{overflow}");
+    assert!(overflow.contains("bitcast double"), "das Produkt wird geprueft:\n{overflow}");
+    assert!(overflow.contains("shl i64"), "das Vorzeichen faellt heraus:\n{overflow}");
+    assert!(overflow.contains("icmp ult i64"), "gegen unendlich und NaN:\n{overflow}");
 
     let root = functions_of(&ir, "below_zero");
     assert!(root.contains("fcmp oge double"), "`sqrt` prueft sein Argument:\n{root}");
 
     let narrowing = functions_of(&ir, "narrowing");
-    assert!(narrowing.contains("fcmp one float"), "`as f32` prueft das Ergebnis:\n{narrowing}");
+    assert!(narrowing.contains("icmp ult i32"), "`as f32` prueft das Ergebnis:\n{narrowing}");
 
-    // Das Matrixprodukt prueft jedes seiner vier Elemente, ohne
-    // `llvm.maximum`: Das waere ohne FPU je Element ein Bibliotheksaufruf.
+    // Das Matrixprodukt prueft jedes seiner vier Elemente. Kein Vergleich
+    // in Gleitkomma: Ohne FPU waere das je Element ein Bibliotheksaufruf.
     let matrix = functions_of(&ir, "matrix");
-    assert!(matrix.matches("fcmp one double").count() >= 4, "je Element ein Vergleich:\n{matrix}");
-    assert!(!ir.contains("@llvm.maximum"), "keine Kette ueber `maximum`");
+    assert!(matrix.matches("bitcast double").count() >= 4, "je Element ein Vergleich:\n{matrix}");
+    assert!(!ir.contains("@llvm.maximum") && !ir.contains("fcmp one"), "kein Vergleich in Gleitkomma");
 }

@@ -169,6 +169,64 @@ fn llvm_does_not_contract_a_multiply_and_add_into_an_fma() {
     );
 }
 
+/// 4.2: Die Pruefung auf Endlichkeit bleibt auf einem Kern ohne FPU ein
+/// Vergleich der Bits (FB-299).
+///
+/// LLVM erkennt Endlichkeitstests und schreibt sie als `fcmp` um; fuer
+/// einen Wert, den es als nichtnegativ kennt, fiel dabei der Betrag weg,
+/// und ohne Doppel-FPU wurden aus der Pruefung zwei Bibliotheksaufrufe.
+/// Geprueft wird der Fall, der das ausloeste — eine vorzeichenlose Zahl als
+/// `f64` mal eine Konstante —, dazu `f32` und ein Wert mit unbekanntem
+/// Vorzeichen. Eine neue LLVM-Version muss ihn bestehen.
+#[test]
+fn a_finiteness_check_stays_a_bit_test_without_an_fpu() {
+    let Clang::At(clang) = clang_or_skip!() else { return };
+    let dir = Temp::new("finite");
+    let src = "\
+system:
+    language = 1
+    tick     = 10 ms
+
+output digest : float @ hw(\"digest\") with safe = 0.0
+
+machine m:
+    var seed : u32 = 7
+    var x : float = 1.5
+    var y : f32 = 2.5
+    initial RUN
+    state RUN:
+        loop:
+            seed = ((seed as int) * 1664525 + 1013904223).wrap_u32()
+            x = 300.0 + ((seed >> 20) as float) * 0.025
+            y = ((seed >> 24) as f32) * 0.5
+            x = x * (x - 301.0)
+            digest = x + y as float
+";
+    let o = takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let p = takt_sema::compile(src, &o).program.expect("uebersetzt");
+    let target = takt_llvm::Target::RISCV32IMAC;
+    let instrument = takt_llvm::Instrument::default_for(p.config.runtime_profile(), target);
+    let ir = takt_llvm::lower::program_with(&p, target.triple, "finite", instrument).ir;
+    let (ll, asm) = (dir.0.join("finite.ll"), dir.0.join("finite.s"));
+    std::fs::write(&ll, &ir).expect("IR schreibbar");
+    let ok = std::process::Command::new(&clang)
+        .args(["-S", "-Wno-override-module", "-ffreestanding", "-nostdlib"])
+        .arg(format!("--target={}", target.triple))
+        .arg(format!("-march={}", target.march))
+        .args(takt_llvm::toolchain::object_flags(target.triple))
+        .arg(&ll)
+        .arg("-o")
+        .arg(&asm)
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(ok, "clang schlug fehl");
+    let text = std::fs::read_to_string(&asm).expect("Assembler lesbar");
+    assert!(text.contains("__muldf3"), "die Arithmetik laeuft in Software:\n{text}");
+    for compare in ["__unorddf2", "__eqdf2", "__nedf2", "__unordsf2", "__eqsf2", "__nesf2"] {
+        assert!(!text.contains(compare), "eine Pruefung ruft `{compare}`:\n{text}");
+    }
+}
+
 /// 11.3: Reproduzierbare Builds.
 ///
 /// Geprueft wird der *Inhalt* der Objektdatei, nicht ihr Kopf: Das

@@ -1098,14 +1098,18 @@ fn expr_cost(e: &Expr, ctx: &Ctx<'_>) -> CostVec {
         ExprKind::Intrinsic { op: Intrinsic::Sqrt, .. } => CostVec::heavy_op(Heavy::Sqrt, class(e, types)),
         ExprKind::Intrinsic { .. } => class_of(e, types) + CostVec { call: 1, ..CostVec::ZERO },
         ExprKind::Checked { kind: CheckedKind::Range(r), .. } if r.origin == RangeOrigin::Proven => CostVec::ZERO,
-        // Eine implizite Pruefung ist ein Vergleich und ein Sprung; die
-        // Endlichkeit einer Matrix vergleicht jedes Element.
-        ExprKind::Checked { .. } => match types.get(e.ty.index()) {
-            Some(Type::Mat { rows, cols, .. }) => {
-                CostVec::op(float_class(ctx)).times(u64::from(*rows) * u64::from(*cols))
-            }
-            _ => class_of(e, types),
-        },
+        // Die Endlichkeit prueft der Codegen auf den Bits: je Element eine
+        // Maske und ein Vergleich in `i32`, auch fuer `f64`, dessen
+        // Exponent im oberen Wort steht (`finite_condition`).
+        ExprKind::Checked { kind: CheckedKind::NonFinite, .. } => {
+            let elements = match types.get(e.ty.index()) {
+                Some(Type::Mat { rows, cols, .. }) => u64::from(*rows) * u64::from(*cols),
+                _ => 1,
+            };
+            CostVec::op(CostClass::I32).times(2 * elements)
+        }
+        // Jede andere implizite Pruefung ist ein Vergleich und ein Sprung.
+        ExprKind::Checked { .. } => class_of(e, types),
         ExprKind::Format(f) => format_cost(f, ctx),
         ExprKind::Matches { subject, kind, pattern, binding } => {
             let bind = if binding.is_some() { ctx.copy_always(subject.ty) } else { CostVec::ZERO };
