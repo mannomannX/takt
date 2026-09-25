@@ -230,10 +230,14 @@ macro_rules! codec_id {
 }
 pub(crate) use codec_id;
 
-/// Schreibt ein Feld nach Modus: `one`, `opt`, `rep`, `meta` (Positionen,
-/// Bindungen, Metadaten: nur ausserhalb der Logikform), `meta opt`.
+/// Schreibt ein Feld nach Modus: `one`, `dflt` (wie `one`; fehlt es beim
+/// Lesen, gilt der Default), `opt`, `rep`, `meta` (Positionen, Bindungen,
+/// Metadaten: nur ausserhalb der Logikform), `meta opt`.
 macro_rules! write_field {
     ($w:ident, $tag:literal, one, $e:expr) => {
+        Field::write(&$e, $w, $tag)
+    };
+    ($w:ident, $tag:literal, dflt, $e:expr) => {
         Field::write(&$e, $w, $tag)
     };
     ($w:ident, $tag:literal, opt, $e:expr) => {
@@ -259,6 +263,9 @@ pub(crate) use write_field;
 macro_rules! read_field {
     ($n:ident, $r:ident, $tag:literal, one) => {
         read_one(&$n, $r, $tag)?
+    };
+    ($n:ident, $r:ident, $tag:literal, dflt) => {
+        read_opt(&$n, $r, $tag)?.unwrap_or_default()
     };
     ($n:ident, $r:ident, $tag:literal, opt) => {
         read_opt(&$n, $r, $tag)?

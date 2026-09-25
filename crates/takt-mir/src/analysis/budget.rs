@@ -24,7 +24,7 @@
 //! nicht.
 
 use crate::Program;
-use crate::fns::{CostClass, CostVec};
+use crate::fns::{CostClass, CostVec, Heavy};
 use crate::machine::{Machine, MachineKind};
 
 /// Der Kostenbericht eines Programms.
@@ -141,10 +141,14 @@ impl MachineCost {
             format!("  {} ({})", self.name, period),
             format!("    {:<22}{}", "B_m je Aktivierung", row(self.activation)),
         ];
-        // 7.2: Divisionen haben eigene Gewichte; die Zeile sagt, wie viele
-        // der Operationen darueber es sind.
-        if CostClass::ALL.iter().any(|c| self.activation.divisions(*c) > 0) {
-            out.push(format!("    {:<22}{}", "  davon Divisionen", division_row(self.activation)));
+        // 7.2: Division, `fma` und `sqrt` haben eigene Gewichte; je Art eine
+        // Zeile, wie viele der Operationen darueber es sind.
+        for (h, label) in
+            [(Heavy::Div, "  davon Divisionen"), (Heavy::Fma, "  davon fma"), (Heavy::Sqrt, "  davon Wurzeln")]
+        {
+            if CostClass::ALL.iter().any(|c| self.activation.heavy(h, *c) > 0) {
+                out.push(format!("    {label:<22}{}", heavy_row(self.activation, h)));
+            }
         }
         if !self.fault_path.is_zero() {
             out.push(format!("    {:<22}{}", "F_m Fault-Pfad", row(self.fault_path)));
@@ -172,10 +176,10 @@ fn header() -> String {
 
 /// Eine Zeile aus sieben Zahlen; eine Null bleibt leer, damit die Spalte
 /// mit einem Wert ins Auge faellt.
-fn division_row(c: CostVec) -> String {
+fn heavy_row(c: CostVec, h: Heavy) -> String {
     CostClass::ALL
         .iter()
-        .map(|k| match c.divisions(*k) {
+        .map(|k| match c.heavy(h, *k) {
             0 => format!("{:>8}", "."),
             v => format!("{v:>8}"),
         })

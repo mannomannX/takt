@@ -30,7 +30,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use takt_mir::fns::{CostClass, CostVec};
+use takt_mir::fns::{CostClass, CostVec, Heavy};
 use takt_mir::hardware::CTarget;
 
 use crate::board::{Board, Options};
@@ -40,31 +40,52 @@ use crate::board::{Board, Options};
 pub enum Probe {
     /// Gewoehnliche Operationen einer Klasse.
     Ops(CostClass),
-    /// Divisionen einer Zahlklasse (7.2).
-    Div(CostClass),
+    /// Operationen eigenen Gewichts einer Zahlklasse (7.2): Division,
+    /// `fma`, `sqrt`.
+    Heavy(Heavy, CostClass),
 }
 
 impl Probe {
     /// Die Reihenfolge der Kalibrierung: Jede Probe braucht nur Klassen, die
     /// vor ihr stehen.
-    pub const ORDER: [Probe; 10] = [
+    pub const ORDER: [Probe; 14] = [
         Probe::Ops(CostClass::I32),
         Probe::Ops(CostClass::I64),
         Probe::Ops(CostClass::F32),
         Probe::Ops(CostClass::F64),
         Probe::Ops(CostClass::Mem),
         Probe::Ops(CostClass::Call),
-        Probe::Div(CostClass::I32),
-        Probe::Div(CostClass::I64),
-        Probe::Div(CostClass::F32),
-        Probe::Div(CostClass::F64),
+        Probe::Heavy(Heavy::Div, CostClass::I32),
+        Probe::Heavy(Heavy::Div, CostClass::I64),
+        Probe::Heavy(Heavy::Div, CostClass::F32),
+        Probe::Heavy(Heavy::Div, CostClass::F64),
+        Probe::Heavy(Heavy::Fma, CostClass::F32),
+        Probe::Heavy(Heavy::Fma, CostClass::F64),
+        Probe::Heavy(Heavy::Sqrt, CostClass::F32),
+        Probe::Heavy(Heavy::Sqrt, CostClass::F64),
     ];
 
-    /// Der Name wie in der Hardware-Konfiguration (`i32`, `i32_div`).
-    pub fn name(self) -> &'static str {
+    /// Der Name wie in der Hardware-Konfiguration (`i32`, `i32_div`, `f32_fma`).
+    pub fn name(self) -> String {
         match self {
-            Probe::Ops(c) => c.name(),
-            Probe::Div(c) => takt_mir::hardware::division_key(c).unwrap_or("div"),
+            Probe::Ops(c) => c.name().to_string(),
+            Probe::Heavy(h, c) => takt_mir::hardware::heavy_key(h, c).unwrap_or_else(|| h.suffix().to_string()),
+        }
+    }
+
+    /// Eine der Operationen, die die Probe misst.
+    fn one(self) -> CostVec {
+        match self {
+            Probe::Ops(c) => CostVec::op(c),
+            Probe::Heavy(h, c) => CostVec::heavy_op(h, c),
+        }
+    }
+
+    /// Wie viele der Operationen eines Vektors die Probe misst.
+    pub fn count(self, v: CostVec) -> u64 {
+        match self {
+            Probe::Ops(c) => v.ordinary(c),
+            Probe::Heavy(h, c) => v.heavy(h, c),
         }
     }
 }
@@ -116,7 +137,7 @@ pub fn probe_kernels(probe: Probe) -> [String; 2] {
 /// Operationen, fuenf Befehle.
 pub fn class_kernel(probe: Probe, pairs: u32) -> String {
     let float = match probe {
-        Probe::Ops(CostClass::F32) | Probe::Div(CostClass::F32) => "    float    = f32\n",
+        Probe::Ops(CostClass::F32) | Probe::Heavy(_, CostClass::F32) => "    float    = f32\n",
         _ => "",
     };
     let (decl, pair, prelude, init) = match probe {
@@ -142,24 +163,31 @@ pub fn class_kernel(probe: Probe, pairs: u32) -> String {
             ("1", "7"),
         ),
         Probe::Ops(CostClass::Call | CostClass::Native) => return call_kernel(true),
-        Probe::Div(CostClass::I32) => (
+        Probe::Heavy(Heavy::Div, CostClass::I32) => (
             "int in 0..65535",
             "            a = ((b * 16384 + 12345) / ((a & 255) + 1)) & 65535\n            b = ((a * 16384 + 54321) / ((b & 255) + 1)) & 65535\n",
             "",
             ("1", "7"),
         ),
-        Probe::Div(CostClass::I64) => (
+        Probe::Heavy(Heavy::Div, CostClass::I64) => (
             "int in 0..4294967295",
             "            a = ((b * 1073741824 + 12345) / ((a & 255) + 1)) & 4294967295\n            b = ((a * 1073741824 + 54321) / ((b & 255) + 1)) & 4294967295\n",
             "",
             ("1", "7"),
         ),
-        Probe::Div(_) => (
+        Probe::Heavy(Heavy::Div, _) => (
             "float",
             "            a = (b + 1.5) / (a + 1.25)\n            b = (a + 2.5) / (b + 0.75)\n",
             "",
             ("1.0", "3.0"),
         ),
+        // Reine `fma`-Ketten mit dem Fixpunkt 1,2.
+        Probe::Heavy(Heavy::Fma, _) => {
+            ("float", "            a = fma(b, 0.75, 0.3)\n            b = fma(a, 0.75, 0.3)\n", "", ("1.0", "3.0"))
+        }
+        Probe::Heavy(Heavy::Sqrt, _) => {
+            ("float", "            a = sqrt(b + 1.25)\n            b = sqrt(a + 2.5)\n", "", ("1.0", "3.0"))
+        }
     };
     let mut s = kernel_head(&format!("{} ({pairs} Paare)", probe.name()), float, decl, "", prelude, init);
     for _ in 0..pairs {
@@ -427,10 +455,7 @@ pub fn calibrate(
     let mut rows = Vec::new();
     for (probe, [small_cost, large_cost], [small, large]) in probes {
         let delta = difference(*large_cost, *small_cost)?;
-        let count = match probe {
-            Probe::Ops(c) => delta.of(*c) - delta.divisions(*c),
-            Probe::Div(c) => delta.divisions(*c),
-        };
+        let count = probe.count(delta);
         if count == 0 {
             return Err(format!(
                 "Probe {}: der Unterschied der Kerne enthaelt keine Operation der Klasse",
@@ -441,7 +466,7 @@ pub fn calibrate(
         // frueheren Probe oder aus dieser.
         let weighed = |p: Probe| known.contains(&p) || *probe == p;
         for c in CostClass::ALL {
-            let ops = delta.of(c) - delta.divisions(c);
+            let ops = delta.ordinary(c);
             if ops > 0 && !weighed(Probe::Ops(c)) {
                 return Err(format!(
                     "Probe {}: {} Operationen der Klasse {} ohne Gewicht",
@@ -450,22 +475,20 @@ pub fn calibrate(
                     c.name()
                 ));
             }
-            if delta.divisions(c) > 0 && !weighed(Probe::Div(c)) {
-                return Err(format!("Probe {}: Divisionen der Klasse {} ohne Gewicht", probe.name(), c.name()));
+            for h in Heavy::ALL {
+                if delta.heavy(h, c) > 0 && !weighed(Probe::Heavy(h, c)) {
+                    return Err(format!("Probe {}: `{}` in {} ohne Gewicht", probe.name(), h.suffix(), c.name()));
+                }
             }
         }
         let elapsed = ps(large.max.saturating_sub(small.max), core_hz);
         // Der Anteil der bestimmten Klassen, ohne die gemessene.
-        let mut rest = delta;
-        match probe {
-            Probe::Ops(c) => set_count(&mut rest, *c, 0),
-            Probe::Div(c) => set_division(&mut rest, *c, 0),
-        }
+        let rest = delta.zip(probe.one().times(count), u64::saturating_sub);
         let known_ps = table.duration_ps(rest);
         let weight = elapsed.saturating_sub(known_ps).div_ceil(count).max(1);
         match probe {
             Probe::Ops(c) => table.set(*c, weight),
-            Probe::Div(c) => table.set_division(*c, weight),
+            Probe::Heavy(h, c) => table.set_heavy(*h, *c, weight),
         }
         known.push(*probe);
         rows.push(ProbeRow { probe: *probe, delta, small: *small, large: *large, ps: weight });
@@ -513,57 +536,23 @@ pub fn stretched(table: &CTarget, (num, den): (u64, u64)) -> CTarget {
     let mut out = CTarget::default();
     for c in CostClass::ALL {
         out.set(c, scale(table.of(c)));
-        if let Some(d) = table.measured_division(c) {
-            out.set_division(c, scale(d));
+        for h in Heavy::ALL {
+            if let Some(ps) = table.measured(h, c) {
+                out.set_heavy(h, c, scale(ps));
+            }
         }
     }
     out
 }
 
+/// Der Unterschied zweier Kostenvektoren, komponentenweise.
 fn difference(a: CostVec, b: CostVec) -> Result<CostVec, String> {
-    let sub = |x: u64, y: u64, what: &str| {
-        x.checked_sub(y).ok_or_else(|| format!("der grosse Kern hat weniger {what} als der kleine"))
-    };
-    Ok(CostVec {
-        i32: sub(a.i32, b.i32, "i32")?,
-        i64: sub(a.i64, b.i64, "i64")?,
-        f32: sub(a.f32, b.f32, "f32")?,
-        f64: sub(a.f64, b.f64, "f64")?,
-        mem: sub(a.mem, b.mem, "mem")?,
-        call: sub(a.call, b.call, "call")?,
-        native: sub(a.native, b.native, "native")?,
-        i32_div: sub(a.i32_div, b.i32_div, "i32-Divisionen")?,
-        i64_div: sub(a.i64_div, b.i64_div, "i64-Divisionen")?,
-        f32_div: sub(a.f32_div, b.f32_div, "f32-Divisionen")?,
-        f64_div: sub(a.f64_div, b.f64_div, "f64-Divisionen")?,
-    })
-}
-
-/// Setzt die Zahl der gewoehnlichen Operationen einer Klasse; ihre
-/// Divisionen bleiben.
-fn set_count(v: &mut CostVec, c: CostClass, ops: u64) {
-    let total = ops + v.divisions(c);
-    match c {
-        CostClass::I32 => v.i32 = total,
-        CostClass::I64 => v.i64 = total,
-        CostClass::F32 => v.f32 = total,
-        CostClass::F64 => v.f64 = total,
-        CostClass::Mem => v.mem = total,
-        CostClass::Call => v.call = total,
-        CostClass::Native => v.native = total,
+    if a.max(b) != a {
+        return Err(format!(
+            "der grosse Kern hat nicht in jeder Klasse mehr Operationen als der kleine: {a:?} gegen {b:?}"
+        ));
     }
-}
-
-/// Setzt die Zahl der Divisionen einer Klasse; die Klasse zaehlt sie mit.
-fn set_division(v: &mut CostVec, c: CostClass, div: u64) {
-    let ops = v.of(c) - v.divisions(c);
-    match c {
-        CostClass::I32 => (v.i32_div, v.i32) = (div, ops + div),
-        CostClass::I64 => (v.i64_div, v.i64) = (div, ops + div),
-        CostClass::F32 => (v.f32_div, v.f32) = (div, ops + div),
-        CostClass::F64 => (v.f64_div, v.f64) = (div, ops + div),
-        CostClass::Mem | CostClass::Call | CostClass::Native => {}
-    }
+    Ok(a.zip(b, u64::saturating_sub))
 }
 
 /// Wo die erzeugten Kerne liegen: ein fester Ort, damit der
@@ -739,12 +728,9 @@ impl Outcome {
                 .probes
                 .iter()
                 .map(|r| ProbeEntry {
-                    name: r.probe.name().to_string(),
+                    name: r.probe.name(),
                     ps: r.ps,
-                    ops: match r.probe {
-                        Probe::Ops(k) => r.delta.of(k) - r.delta.divisions(k),
-                        Probe::Div(k) => r.delta.divisions(k),
-                    },
+                    ops: r.probe.count(r.delta),
                     small: spread(&r.small),
                     large: spread(&r.large),
                 })
@@ -982,6 +968,20 @@ mod tests {
         let (s, l) = (cost_of(&small).expect("klein"), cost_of(&large).expect("gross"));
         assert_eq!(l.call - s.call, u64::from(2 * CALL_PAIRS), "{s:?} {l:?}");
         assert_eq!(difference(l, s).map(|d| d.i32 + d.i64 + d.mem), Ok(0), "{s:?} {l:?}");
+    }
+
+    /// Die Proben fuer `fma` und `sqrt` zaehlen je Zeile genau eine
+    /// Operation ihrer Art; was sonst dazukommt, hat ein Gewicht aus einer
+    /// frueheren Probe.
+    #[test]
+    fn the_fma_and_sqrt_probes_count_one_per_line() {
+        for (h, c) in [(Heavy::Fma, CostClass::F32), (Heavy::Sqrt, CostClass::F64)] {
+            let probe = Probe::Heavy(h, c);
+            let [small, large] = probe_kernels(probe);
+            let d = difference(cost_of(&large).expect("gross"), cost_of(&small).expect("klein")).expect("waechst");
+            assert_eq!(probe.count(d), u64::from(2 * (PAIRS.1 - PAIRS.0)), "{}: {d:?}", probe.name());
+            assert_eq!(d.heavy(Heavy::Div, c), 0, "{}: {d:?}", probe.name());
+        }
     }
 
     /// Die Probe `i64` rechnet ueber 32 Bit hinaus, ohne Pruefung, und

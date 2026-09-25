@@ -68,7 +68,9 @@ key: 99/bytes -> 8e 03
 
 Ein Knoten ist die Folge seiner Felder in aufsteigender Nummer, wie der Schreiber sie erzeugt;
 der Leser verlangt keine Reihenfolge. Multiplizität je Feld laut Schema: `one` genau einmal
-(fehlt es, Fehler `Missing`; doppelt, `Duplicate`), `opt` höchstens einmal, `rep` beliebig oft
+(fehlt es, Fehler `Missing`; doppelt, `Duplicate`), `dflt` wie `one`, aber fehlt es, gilt beim
+Lesen der Default — für Zahlen, die eine spätere Version einem Knoten hinzufügt und deren
+Default sagt, was ältere Dateien meinten —, `opt` höchstens einmal, `rep` beliebig oft
 (jedes Element ein eigenes Feld derselben Nummer), `meta` wie `opt` mit Default beim Lesen —
 Positionen, Bindungen und Metadaten, die in der Logikform fehlen (Abschnitt H).
 
@@ -102,7 +104,7 @@ einem Versionssprung eingetragen.
 
 ```
 magic             8 Bytes  "TAKT-MIR"
-format_version    u16 LE   (8)
+format_version    u16 LE   (9)
 edition           u32 LE   (2.5; auch in Config.edition)
 compiler_version  Varint-Länge + UTF-8
 strings           Varint-Anzahl, je String Varint-Länge + UTF-8
@@ -115,7 +117,9 @@ Varianten, jeweils überspringbar), 7 (`DeclaredBudget.wcet_ns`, Feld 3 — opti
 ältere Leser überspringbar; die Versionsnummer steigt trotzdem, weil ein Leser wissen muss,
 ob ein fehlendes `wcet` bedeutet „nicht deklariert“ oder „aus einer Datei, die es nicht
 kannte“), 8 (`Config.overrun`, Feld 10 — Metadatum ohne Logikanteil, 7.3; fehlt es, gilt
-`fault`). Ein Leser mit kleinerer
+`fault`), 9 (`CostVec` Felder 8 bis 15, `dflt`: je Zahlklasse die Divisionen, `fma` und
+Wurzeln unter ihren Operationen, 7.2; fehlen sie, gilt null — so rechneten die Dateien, die sie
+nicht kannten). Ein Leser mit kleinerer
 `format_version` als die Datei lehnt sie ab (`UnsupportedVersion`);
 alles andere liest er, Unbekanntes überspringend. Der Kopf ist ohne Stringtabelle lesbar
 (`read_header`), damit Werkzeuge Edition und Compiler-Version ohne Vollparse zeigen.

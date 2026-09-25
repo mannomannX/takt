@@ -470,8 +470,8 @@ pub fn full_program() -> Program {
         cost: Some(CostVec {
             i32: 1,
             i64: 2,
-            f32: 3,
-            f64: 4,
+            f32: 5,
+            f64: 6,
             mem: 5,
             call: 6,
             native: 7,
@@ -479,6 +479,10 @@ pub fn full_program() -> Program {
             i64_div: 1,
             f32_div: 2,
             f64_div: 3,
+            f32_fma: 2,
+            f64_fma: 1,
+            f32_sqrt: 1,
+            f64_sqrt: 2,
         }),
         stack: Some(16),
         origin: Some(GenericOrigin {

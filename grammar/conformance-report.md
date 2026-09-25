@@ -32,14 +32,14 @@ wäre einer weniger.
 | `[run]` | ja | `date` (`"JJJJ-MM-TT"`, UTC), `board`, `target` (Zielklasse wie `takt build --target`, 12.8), `profile` (12.8), `tool` (Werkzeug mit Version), `core_hz`, `runs` (Messungen je Kern) |
 | `[calibration]` | höchstens | `t_io_ps` (7.2), `stretch` (Bruch `z/n`, `1/1` ohne Streckung), `stack_reserve` (Byte, 12.3; fehlt ohne Messung), `subnormal_failures` (4.2) |
 | `[probe <name>]` | je Gewicht | `ps` (Gewicht vor der Streckung), `ops` (Unterschied der Operationen zwischen kleinem und großem Kern), `small`, `large` (Streuungen) |
-| `[check <name>]` | je Kern | `measured_ps` (Maximum), `bound_ps` (`Σ N_c · c_target[c] + T_IO` der gestreckten Tabelle) |
+| `[check <name>]` | je Kern | `measured_ps` (Maximum), `bound_ps` (`Σ N_c · c_target[c] + T_IO` der gestreckten Tabelle, dazu das Mehrgewicht jeder Division, jedes `fma` und jeder Wurzel, 7.2) |
 | `[kernel <name>]` | je Referenzkern | `takt`, `c` (Streuungen), `same_digest` (`true`/`false`), `implicit_checks` (3.4) |
 | `[native <name>]` | je kuratierter Native | `vectors` (gerechnete Vektoren aus `grammar/takt-native.md`), `same_result` (`true`, wenn jedes Ergebnis dem des Wirts gleicht), `stack` (größter gemessener Bedarf je Aufruf in Byte), `contract` (die Zusage `stack`, 4.5) |
 | `[corpus]` | höchstens | `programs`, `deviations` |
 
 `<name>` einer Probe ist der Schlüssel der Hardware-Konfiguration (`i32`,
-`mem`, `f64_div`); ein Kern heißt nach seiner Probe mit `klein` oder `groß`
-oder nach dem Referenzkern aus 13.8.
+`mem`, `f64_div`, `f32_fma`, `f64_sqrt`); ein Kern heißt nach seiner Probe
+mit `klein` oder `groß` oder nach dem Referenzkern aus 13.8.
 
 ## R3 Was ein Bericht zusagt
 

@@ -236,7 +236,8 @@ machine m:
     );
     let b = p.machines[0].budget.expect("Budget").activation;
     assert_eq!(b.f64_div, 1 + 2 * 2, "LU n(n-1)/2, Einsetzen n je Spalte: {b:?}");
-    assert!(b.f64 >= b.f64_div, "{b:?}");
+    assert_eq!(b.f64_fma, 1 + 2 * 2, "LU eine Elimination, Einsetzen n(n-1) je Spalte: {b:?}");
+    assert!(b.f64 >= b.f64_div + b.f64_fma, "{b:?}");
 }
 
 /// **Ein Aufruf kostet seinen Rumpf** (9.4.3: `N(f(args)) = Σ cost(args) +

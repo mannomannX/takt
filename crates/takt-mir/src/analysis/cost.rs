@@ -35,7 +35,7 @@
 use crate::Program;
 use crate::TypeId;
 use crate::expr::{Accessor, BinaryOp, CheckedKind, Expr, ExprKind, Intrinsic, MatOp, MatchKind, Repr, StreamRef};
-use crate::fns::{BlockDef, CostClass, CostVec};
+use crate::fns::{BlockDef, CostClass, CostVec, Heavy};
 use crate::ids::{FnId, StateId};
 use crate::machine::{Budget, FaultTarget, Guard, Handler, Machine, Target, TransTrigger, VarDef};
 use crate::pattern::{CaptureKind, Format, FormatPiece, Pattern, PatternPiece};
@@ -861,7 +861,7 @@ fn format_cost(f: &Format, ctx: &Ctx<'_>) -> CostVec {
                             let digits = decimal_digits(magnitude);
                             // Erst zaehlen, wie viele Stellen es sind, dann
                             // mit Nullen fuellen, dann schreiben.
-                            let count = (CostVec::division(CostClass::I64) + ITERATION).times(digits);
+                            let count = (CostVec::heavy_op(Heavy::Div, CostClass::I64) + ITERATION).times(digits);
                             c = c + count + TEXT_BYTE.times(width.max(1) + 1) + DECIMAL_DIGIT.times(digits);
                         }
                         _ => {
@@ -1067,10 +1067,10 @@ fn place_cost(p: &Place, ctx: &Ctx<'_>) -> CostVec {
 /// Kosten eines Ausdrucks: die Operation selbst plus ihre Kinder.
 fn expr_cost(e: &Expr, ctx: &Ctx<'_>) -> CostVec {
     let types = ctx.types();
-    let own = mat_cost(e, types).unwrap_or_else(|| match &e.kind {
-        // 7.2: „Division hat eigene Gewichte"; der Rest geht ueber denselben
+    let own = mat_cost(e, ctx).unwrap_or_else(|| match &e.kind {
+        // 7.2: Division hat eigene Gewichte; der Rest geht ueber denselben
         // Dividierer.
-        ExprKind::Binary { op: BinaryOp::Div | BinaryOp::Rem, .. } => CostVec::division(class(e, types)),
+        ExprKind::Binary { op: BinaryOp::Div | BinaryOp::Rem, .. } => CostVec::heavy_op(Heavy::Div, class(e, types)),
         // Ein Vergleich rechnet in der Klasse seiner Operanden, nicht in der
         // seines Ergebnisses: `a < b` auf `f64` ist auf einem Kern ohne
         // Doppel-FPU ein Aufruf der Bibliothek, kein `i32`-Vergleich.
@@ -1091,6 +1091,11 @@ fn expr_cost(e: &Expr, ctx: &Ctx<'_>) -> CostVec {
         ExprKind::Call { callee, .. } => ctx.function(*callee) + CostVec { call: 1, ..CostVec::ZERO },
         ExprKind::NativeCall { native, .. } => ctx.native(*native),
         ExprKind::Intrinsic { op: Intrinsic::Interp, args } => interp_cost(e, args, ctx),
+        // 7.2: `fma` und `sqrt` haben eigene Gewichte. Ohne Befehl dafuer
+        // ruft der Kern eine Bibliotheksfunktion; der Aufruf steckt im
+        // gemessenen Gewicht.
+        ExprKind::Intrinsic { op: Intrinsic::Fma, .. } => CostVec::heavy_op(Heavy::Fma, class(e, types)),
+        ExprKind::Intrinsic { op: Intrinsic::Sqrt, .. } => CostVec::heavy_op(Heavy::Sqrt, class(e, types)),
         ExprKind::Intrinsic { .. } => class_of(e, types) + CostVec { call: 1, ..CostVec::ZERO },
         ExprKind::Checked { kind: CheckedKind::Range(r), .. } if r.origin == RangeOrigin::Proven => CostVec::ZERO,
         // Eine implizite Pruefung ist ein Vergleich und ein Sprung; die
@@ -1129,7 +1134,7 @@ fn interp_cost(e: &Expr, args: &[Expr], ctx: &Ctx<'_>) -> CostVec {
         _ => ctx.table,
     };
     let class = class(e, ctx.types());
-    let segment = CostVec::op(class).times(5) + CostVec::division(class) + CostVec::op(CostClass::I32);
+    let segment = CostVec::op(class).times(5) + CostVec::heavy_op(Heavy::Div, class) + CostVec::op(CostClass::I32);
     segment.times(points.saturating_sub(1)) + CostVec::op(class).times(2)
 }
 
@@ -1186,9 +1191,10 @@ fn accessor_cost(e: &Expr, base: &Expr, accessor: Accessor, args: &[Expr], ctx: 
             };
             let each =
                 CostVec::op(class) + BYTE + if accessor == Accessor::Rms { CostVec::op(class) } else { CostVec::ZERO };
+            let divide = CostVec::heavy_op(Heavy::Div, class);
             let finish = match accessor {
-                Accessor::Mean => CostVec::division(class),
-                Accessor::Rms => CostVec::division(class) + CostVec::op(class) + CostVec { call: 1, ..CostVec::ZERO },
+                Accessor::Mean => divide,
+                Accessor::Rms => divide + CostVec::heavy_op(Heavy::Sqrt, class),
                 _ => CostVec::ZERO,
             };
             each.times(n) + finish
@@ -1211,53 +1217,104 @@ fn accessor_cost(e: &Expr, base: &Expr, accessor: Accessor, args: &[Expr], ctx: 
     }
 }
 
-/// Kosten einer Matrixoperation (3.11, 9.4.3): elementweise R·C, Produkt
-/// R·C·K, die LU-Verfahren n³ — in der Breite von `float` — und der
-/// Scratch als Speicherzugriffe.
-fn mat_cost(e: &Expr, types: &[Type]) -> Option<CostVec> {
+/// Kosten einer Matrixoperation (3.11, 9.4.3) in der Breite von `float`,
+/// gezaehlt, wie der Codegen sie ausfuehrt (`takt_llvm::matrix`):
+/// elementweise R·C Operationen, ein Produkt R·C `fma`-Ketten ueber K, die
+/// Verfahren ueber die LU und Cholesky wie unten. Die Pruefung auf
+/// Endlichkeit steht als eigener Knoten darum.
+fn mat_cost(e: &Expr, ctx: &Ctx<'_>) -> Option<CostVec> {
+    let types = ctx.types();
     let dims = |ty: TypeId| match types.get(ty.index()) {
         Some(Type::Mat { rows, cols, .. }) => Some((u64::from(*rows), u64::from(*cols))),
         _ => None,
     };
-    let float = types.iter().find_map(|t| if let Type::Float { width, .. } = t { Some(*width) } else { None });
-    let class = match float {
-        Some(FloatWidth::F32) => CostClass::F32,
-        _ => CostClass::F64,
-    };
-    // `total` Operationen, davon `div` Divisionen.
-    let ops = |total: u64, div: u64| {
-        CostVec::op(class).times(total.saturating_sub(div)) + CostVec::division(class).times(div)
-    };
-    let mem = |n: u64| BYTE.times(n);
-    // Die Divisionen stehen, wie `libtaktm::mat` sie ausfuehrt: die LU
-    // teilt je Spalte durch das Pivot (n(n-1)/2), das Rueckwaertseinsetzen
-    // je Loesungsspalte n-mal, Cholesky je Spalte durch die Diagonale.
-    let lu = |n: u64| n * n.saturating_sub(1) / 2;
+    let class = float_class(ctx);
+    let op = CostVec::op(class);
     Some(match &e.kind {
         ExprKind::Binary { op: BinaryOp::Mul, lhs, rhs } => match (dims(lhs.ty), dims(rhs.ty)) {
-            (Some((r, k)), Some((_, c))) => ops(r * k * c, 0),
-            (Some((r, c)), None) | (None, Some((r, c))) => ops(r * c, 0),
+            (Some((r, k)), Some((_, c))) => CostVec::heavy_op(Heavy::Fma, class).times(r * c * k),
+            (Some((r, c)), None) | (None, Some((r, c))) => op.times(r * c),
             _ => return None,
         },
-        ExprKind::Binary { op, .. } => {
+        ExprKind::Binary { op: BinaryOp::Div, .. } => {
             let (r, c) = dims(e.ty)?;
-            ops(r * c, if *op == BinaryOp::Div { r * c } else { 0 })
+            CostVec::heavy_op(Heavy::Div, class).times(r * c)
         }
-        ExprKind::MatOp { op, args } => {
+        ExprKind::Binary { .. } => {
+            let (r, c) = dims(e.ty)?;
+            op.times(r * c)
+        }
+        ExprKind::MatOp { op: mat, args } => {
             let (n, k) = dims(args.first()?.ty)?;
-            match op {
-                MatOp::Transpose => mem(n * k),
-                MatOp::Det => ops(n * n * n, lu(n)) + mem(n * n),
-                MatOp::Inv => ops(2 * n * n * n, lu(n) + n * n) + mem(2 * n * n),
+            match mat {
+                MatOp::Transpose => BYTE.times(n * k),
+                // Das Vorzeichen aus den Vertauschungen, dann das Produkt
+                // der Diagonale.
+                MatOp::Det => lu_cost(n, class) + CostVec::op(CostClass::I32).times(3) + (BYTE + op).times(n),
+                // Die Einheitsmatrix Spalte fuer Spalte eingesetzt, das
+                // Ergebnis aus dem Scratch geladen.
+                MatOp::Inv => lu_cost(n, class) + lu_solve_cost(n, n, class) + BYTE.times(n * n),
                 MatOp::Solve => {
                     let (_, c) = dims(args.get(1)?.ty)?;
-                    ops(n * n * n + n * n * c, lu(n) + n * c) + mem(n * n + n * c)
+                    lu_cost(n, class) + lu_solve_cost(n, c, class) + BYTE.times(2 * n * c)
                 }
-                MatOp::Cholesky => ops(n * n * n, lu(n)) + mem(n * n),
+                MatOp::Cholesky => cholesky_cost(n, class),
             }
         }
         _ => return None,
     })
+}
+
+/// Die LU-Zerlegung wie `takt_llvm::matrix::lu`: Die Matrix und die
+/// Permutation in den Scratch; je Spalte die Pivotsuche (je Kandidat
+/// laden, Betrag, Vergleich, zwei `select`), der Test auf null, der Tausch
+/// zweier Zeilen und ihrer Permutation samt Zaehler, dann je Zeile darunter
+/// eine Division und eine Negation und je Spalte rechts davon ein `fma`
+/// mit zwei Lese- und einem Schreibzugriff.
+fn lu_cost(n: u64, class: CostClass) -> CostVec {
+    let (op, int) = (CostVec::op(class), CostVec::op(CostClass::I32));
+    let (fma, div) = (CostVec::heavy_op(Heavy::Fma, class), CostVec::heavy_op(Heavy::Div, class));
+    let mut c = BYTE.times(n * n + n);
+    for k in 0..n {
+        let below = n - k - 1;
+        let search = BYTE + op + (BYTE + op.times(2) + int.times(2)).times(below);
+        let swap = op + int.times(2) + BYTE.times(4 * n + 4) + int.times(3);
+        let eliminate = BYTE + (BYTE.times(2) + div + op + (BYTE.times(3) + fma).times(below)).times(below);
+        c = c + search + swap + eliminate;
+    }
+    c
+}
+
+/// Vorwaerts- und Rueckwaertseinsetzen wie `takt_llvm::matrix::lu_solve`,
+/// je Loesungsspalte: je Zeile die rechte Seite ueber die Permutation, je
+/// Eintrag neben der Diagonale zwei Lesezugriffe, eine Negation und ein
+/// `fma`, rueckwaerts dazu die Division durch die Diagonale.
+fn lu_solve_cost(n: u64, cols: u64, class: CostClass) -> CostVec {
+    let entry = BYTE.times(2) + CostVec::op(class) + CostVec::heavy_op(Heavy::Fma, class);
+    let triangle = n * n.saturating_sub(1) / 2;
+    let forward = (BYTE.times(3) + CostVec::op(CostClass::I32).times(2)).times(n) + entry.times(triangle);
+    let backward = (BYTE.times(3) + CostVec::heavy_op(Heavy::Div, class)).times(n) + entry.times(triangle);
+    (forward + backward).times(cols)
+}
+
+/// Cholesky wie `takt_llvm::matrix::cholesky`: Nullen in den Scratch; je
+/// Spalte die Diagonale als `fma`-Kette ueber die Eintraege links davon,
+/// ihr Vorzeichen und die Wurzel, dann je Zeile darunter eine Kette und
+/// eine Division; zuletzt das Ergebnis laden.
+fn cholesky_cost(n: u64, class: CostClass) -> CostVec {
+    let op = CostVec::op(class);
+    let fma = CostVec::heavy_op(Heavy::Fma, class);
+    let mut c = BYTE.times(2 * n * n);
+    for j in 0..n {
+        let diagonal = (BYTE + op + fma).times(j)
+            + op
+            + CostVec::op(CostClass::I32)
+            + CostVec::heavy_op(Heavy::Sqrt, class)
+            + BYTE;
+        let column = (BYTE.times(2) + op + fma).times(j) + CostVec::heavy_op(Heavy::Div, class) + BYTE;
+        c = c + diagonal + column.times(n - j - 1);
+    }
+    c
 }
 
 /// Die Operationsklasse eines Ausdrucks nach Typ und gewaehlter Darstellung.

@@ -28,6 +28,7 @@
 //! i32 = 11900        # Pikosekunden je Operation
 //! f64 = 1190000
 //! i32_div = 142800   # je Division (7.2)
+//! f32_fma = 35700    # je `fma`, ebenso `f32_sqrt` je Wurzel
 //! t_io = 120000
 //! tick_jitter_ns = 1500
 //! ram = 65536
@@ -62,7 +63,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::fns::{CostClass, CostVec};
+use crate::fns::{CostClass, CostVec, Heavy};
 
 /// Formatversion dieses Schreibers (11.3).
 ///
@@ -73,8 +74,9 @@ use crate::fns::{CostClass, CostVec};
 /// Speicher und Stack-Reserven (8.10). 4: NVM-Zeiten und `nvm_blocking`
 /// (12.3, Pruefung 32). 5: eigene Gewichte der Division (7.2), der
 /// Tick-Jitter je Ziel und `guard` je Output (7.5, 8.10) — die Messwerte
-/// von `takt bench` und `takt driver-test` (13.8).
-pub const FORMAT_VERSION: u32 = 5;
+/// von `takt bench` und `takt driver-test` (13.8). 6: eigene Gewichte von
+/// `fma` und `sqrt` (7.2).
+pub const FORMAT_VERSION: u32 = 6;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -85,18 +87,19 @@ const MAGIC: &str = "takt-hw";
 /// was eine Aktivierung an Operationen braucht; erst das Skalarprodukt
 /// mit dieser Tabelle ergibt eine Dauer.
 ///
-/// **Division hat eigene Gewichte** (7.2), je Zahlklasse eines. Fehlt eines
-/// — eine Tabelle bis Version 4 —, wiegt eine Division wie ihre Klasse, das
-/// Modell jener Tabellen. Und eine Division wiegt nie weniger als ihre
-/// Klasse: Nur dann bleibt das komponentenweise Maximum ueber Zweige
-/// (9.4.3) eine obere Schranke der Zeit.
+/// **Division, `fma` und `sqrt` haben eigene Gewichte** (7.2), je
+/// Zahlklasse eines. Fehlt eines — die Division in Tabellen bis Version 4,
+/// `fma` und `sqrt` bis Version 5 —, wiegt die Operation wie ihre Klasse,
+/// das Modell jener Tabellen. Und keine wiegt weniger als ihre Klasse: Nur
+/// dann bleibt das komponentenweise Maximum ueber Zweige (9.4.3) eine obere
+/// Schranke der Zeit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CTarget {
     /// Pikosekunden je Operation, in der Reihenfolge von [`CostClass::ALL`].
     ps: [u64; 7],
-    /// Pikosekunden je Division in `i32`, `i64`, `f32`, `f64`; null heisst
-    /// nicht gemessen.
-    div_ps: [u64; 4],
+    /// Pikosekunden je Operation eigenen Gewichts, nach [`Heavy::ALL`] und
+    /// [`CostClass::ALL`]; null heisst nicht gemessen.
+    heavy_ps: [[u64; 7]; 3],
 }
 
 impl CTarget {
@@ -110,21 +113,23 @@ impl CTarget {
         self.ps[c as usize] = ps;
     }
 
-    /// Das gemessene Gewicht einer Division, falls es eines gibt.
-    pub fn measured_division(&self, c: CostClass) -> Option<u64> {
-        division_index(c).map(|i| self.div_ps[i]).filter(|ps| *ps > 0)
+    /// Das gemessene Gewicht einer Operation der Art `h` in der Klasse `c`,
+    /// falls es eines gibt.
+    pub fn measured(&self, h: Heavy, c: CostClass) -> Option<u64> {
+        Some(self.heavy_ps[h as usize][c as usize]).filter(|ps| *ps > 0)
     }
 
-    /// Das Gewicht einer Division in Pikosekunden: das gemessene, aber nie
-    /// weniger als das der Klasse.
-    pub fn division(&self, c: CostClass) -> u64 {
-        self.measured_division(c).unwrap_or(0).max(self.of(c))
+    /// Das Gewicht einer Operation der Art `h` in Pikosekunden: das
+    /// gemessene, aber nie weniger als das der Klasse.
+    pub fn heavy(&self, h: Heavy, c: CostClass) -> u64 {
+        self.measured(h, c).unwrap_or(0).max(self.of(c))
     }
 
-    /// Setzt das Gewicht einer Division; ausserhalb der Zahlklassen wirkungslos.
-    pub fn set_division(&mut self, c: CostClass, ps: u64) {
-        if let Some(i) = division_index(c) {
-            self.div_ps[i] = ps;
+    /// Setzt das Gewicht einer Operation der Art `h`; wo es die Art in der
+    /// Klasse nicht gibt, wirkungslos.
+    pub fn set_heavy(&mut self, h: Heavy, c: CostClass, ps: u64) {
+        if h.exists_in(c) {
+            self.heavy_ps[h as usize][c as usize] = ps;
         }
     }
 
@@ -159,15 +164,20 @@ impl CTarget {
 
     /// Die Dauer eines Operationsvektors in Pikosekunden (9.4.3, 7.2).
     ///
-    /// `Σ_c (N_c − D_c) · c_target[c] + D_c · c_div[c]` mit `D_c` den
-    /// Divisionen der Klasse. Saettigt statt zu ueberlaufen: Ein Programm
-    /// mit absurd vielen Operationen soll eine absurd grosse Dauer melden
-    /// und daran scheitern, nicht eine kleine und durchgehen.
+    /// `Σ_c N_c · c_target[c] + Σ_h H_h,c · (c_h[c] − c_target[c])` mit
+    /// `H_h,c` den Operationen der Art `h` in der Klasse: Jede zaehlt in
+    /// ihrer Klasse und traegt dazu bei, was sie mehr kostet. Das bleibt
+    /// eine Schranke, auch wenn das Maximum ueber Zweige mehr Operationen
+    /// eigenen Gewichts traegt als Operationen der Klasse. Saettigt statt zu
+    /// ueberlaufen: Ein Programm mit absurd vielen Operationen soll eine
+    /// absurd grosse Dauer melden und daran scheitern, nicht eine kleine und
+    /// durchgehen.
     pub fn duration_ps(&self, n: CostVec) -> u64 {
         CostClass::ALL.iter().fold(0u64, |acc, c| {
-            let div = n.divisions(*c).min(n.of(*c));
-            acc.saturating_add((n.of(*c) - div).saturating_mul(self.of(*c)))
-                .saturating_add(div.saturating_mul(self.division(*c)))
+            let extra = Heavy::ALL.iter().fold(0u64, |sum, h| {
+                sum.saturating_add(n.heavy(*h, *c).saturating_mul(self.heavy(*h, *c) - self.of(*c)))
+            });
+            acc.saturating_add(n.of(*c).saturating_mul(self.of(*c))).saturating_add(extra)
         })
     }
 
@@ -180,26 +190,17 @@ impl CTarget {
     }
 }
 
-/// Die Stelle einer Zahlklasse in den Divisionsgewichten.
-fn division_index(c: CostClass) -> Option<usize> {
-    match c {
-        CostClass::I32 => Some(0),
-        CostClass::I64 => Some(1),
-        CostClass::F32 => Some(2),
-        CostClass::F64 => Some(3),
-        CostClass::Mem | CostClass::Call | CostClass::Native => None,
-    }
+/// Der Schluessel des eigenen Gewichts einer Art in einer Klasse
+/// (`i32_div`, `f32_fma`, `f64_sqrt`), wo es die Art dort gibt.
+pub fn heavy_key(h: Heavy, c: CostClass) -> Option<String> {
+    h.exists_in(c).then(|| format!("{}_{}", c.name(), h.suffix()))
 }
 
-/// Der Schluessel des Divisionsgewichts einer Zahlklasse (`i32_div`, …).
-pub fn division_key(c: CostClass) -> Option<&'static str> {
-    match c {
-        CostClass::I32 => Some("i32_div"),
-        CostClass::I64 => Some("i64_div"),
-        CostClass::F32 => Some("f32_div"),
-        CostClass::F64 => Some("f64_div"),
-        CostClass::Mem | CostClass::Call | CostClass::Native => None,
-    }
+/// Alle Arten mit ihren Klassen, in der Reihenfolge der Konfiguration.
+fn heavy_pairs() -> impl Iterator<Item = (Heavy, CostClass)> {
+    Heavy::ALL
+        .into_iter()
+        .flat_map(|h| CostClass::ALL.into_iter().filter(move |c| h.exists_in(*c)).map(move |c| (h, c)))
 }
 
 /// Ein Ziel mit seiner Kalibrierung (8.10, „Kalibrierung je Ziel").
@@ -558,8 +559,8 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
         "stack_reserve" => target.memory.stack_reserve = Some(number(value, line)?),
         "stack_margin" => target.memory.stack_margin = Some(number(value, line)?),
         _ => {
-            if let Some(class) = CostClass::ALL.iter().find(|c| division_key(**c) == Some(key)) {
-                target.c_target.set_division(*class, number(value, line)?);
+            if let Some((h, c)) = heavy_pairs().find(|(h, c)| heavy_key(*h, *c).as_deref() == Some(key)) {
+                target.c_target.set_heavy(h, c, number(value, line)?);
                 return Ok(());
             }
             let class = CostClass::ALL.iter().find(|c| c.name() == key).ok_or_else(|| ParseError {
@@ -567,9 +568,9 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: core_hz, t_io, tick_jitter_ns, ram, flash, iram, \
                      stack_reserve, stack_margin, nvm_sector_bytes, nvm_sectors, nvm_min_interval, nvm_erase_ns, \
-                     nvm_program_ns, nvm_blocking, die Klassen {} und die Divisionen i32_div, i64_div, f32_div, \
-                     f64_div",
-                    CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", ")
+                     nvm_program_ns, nvm_blocking, die Klassen {} und die eigenen Gewichte {}",
+                    CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "),
+                    heavy_pairs().filter_map(|(h, c)| heavy_key(h, c)).collect::<Vec<_>>().join(", ")
                 ),
             })?;
             target.c_target.set(*class, number(value, line)?);
@@ -658,7 +659,7 @@ fn magic_version(line: &str) -> Option<u32> {
 /// Abschnitts an, legt einen fehlenden Abschnitt an und hebt die
 /// Formatversion im Kopf auf die dieses Schreibers. Das Ergebnis wird
 /// gelesen, bevor es zurueckkommt: Was diese Funktion schreibt, ist lesbar.
-pub fn with_values(text: &str, target: &str, values: &[(&str, String)]) -> Result<String, ParseError> {
+pub fn with_values<K: AsRef<str>>(text: &str, target: &str, values: &[(K, String)]) -> Result<String, ParseError> {
     let header = format!("[target.{target}]");
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     match lines.iter().position(|l| magic_version(l).is_some()) {
@@ -685,8 +686,9 @@ pub fn with_values(text: &str, target: &str, values: &[(&str, String)]) -> Resul
     }
     let mut appended = Vec::new();
     for (key, value) in values {
+        let key = key.as_ref();
         let found = (start + 1..end)
-            .find(|i| lines[*i].split('#').next().unwrap_or("").split_once('=').is_some_and(|(k, _)| k.trim() == *key));
+            .find(|i| lines[*i].split('#').next().unwrap_or("").split_once('=').is_some_and(|(k, _)| k.trim() == key));
         match found {
             Some(i) => {
                 let comment = lines[i].find('#').map(|at| lines[i][at..].to_string());
@@ -709,27 +711,27 @@ pub fn with_values(text: &str, target: &str, values: &[(&str, String)]) -> Resul
 }
 
 /// Die Werte eines Ziels, wie `takt bench` sie misst, fuer [`with_values`]:
-/// Kerntakt, alle Klassen, gemessene Divisionen, `T_IO`, Tick-Jitter und
-/// Stack-Reserve, soweit vorhanden.
-pub fn measured_values(t: &Target) -> Vec<(&'static str, String)> {
+/// Kerntakt, alle Klassen, die gemessenen eigenen Gewichte, `T_IO`,
+/// Tick-Jitter und Stack-Reserve, soweit vorhanden.
+pub fn measured_values(t: &Target) -> Vec<(String, String)> {
     let mut v = Vec::new();
     if let Some(hz) = t.core_hz {
-        v.push(("core_hz", hz.to_string()));
+        v.push(("core_hz".to_string(), hz.to_string()));
     }
     for c in CostClass::ALL {
-        v.push((c.name(), t.c_target.of(c).to_string()));
+        v.push((c.name().to_string(), t.c_target.of(c).to_string()));
     }
-    for c in CostClass::ALL {
-        if let (Some(key), Some(ps)) = (division_key(c), t.c_target.measured_division(c)) {
+    for (h, c) in heavy_pairs() {
+        if let (Some(key), Some(ps)) = (heavy_key(h, c), t.c_target.measured(h, c)) {
             v.push((key, ps.to_string()));
         }
     }
-    v.push(("t_io", t.t_io_ps.to_string()));
+    v.push(("t_io".to_string(), t.t_io_ps.to_string()));
     if let Some(j) = t.tick_jitter_ns {
-        v.push(("tick_jitter_ns", j.to_string()));
+        v.push(("tick_jitter_ns".to_string(), j.to_string()));
     }
     if let Some(r) = t.memory.stack_reserve {
-        v.push(("stack_reserve", r.to_string()));
+        v.push(("stack_reserve".to_string(), r.to_string()));
     }
     v
 }
@@ -750,8 +752,8 @@ pub fn render(hw: &Hardware) -> String {
         for c in CostClass::ALL {
             s.push_str(&format!("{} = {}\n", c.name(), target.c_target.of(c)));
         }
-        for c in CostClass::ALL {
-            if let (Some(key), Some(ps)) = (division_key(c), target.c_target.measured_division(c)) {
+        for (h, c) in heavy_pairs() {
+            if let (Some(key), Some(ps)) = (heavy_key(h, c), target.c_target.measured(h, c)) {
                 s.push_str(&format!("{key} = {ps}\n"));
             }
         }
@@ -982,42 +984,65 @@ t_io = 120000
         assert!(e.message.contains("weder `true` noch `false`"), "{e}");
     }
 
-    /// **Division hat eigene Gewichte** (7.2): Eine Division zaehlt in ihrer
-    /// Klasse und wiegt mit dem eigenen Gewicht.
+    /// **Division, `fma` und `sqrt` haben eigene Gewichte** (7.2): Jede
+    /// zaehlt in ihrer Klasse und wiegt mit ihrem eigenen Gewicht.
     #[test]
-    fn a_division_weighs_with_its_own_weight() {
-        let hw = parse(&format!("{BEISPIEL}i32_div = 142800\n")).expect("lesbar");
+    fn a_heavy_operation_weighs_with_its_own_weight() {
+        let hw = parse(&format!("{BEISPIEL}i32_div = 142800\nf32_fma = 35700\nf32_sqrt = 166600\n")).expect("lesbar");
         let c = hw.target("thumbv7em").expect("Ziel").c_target;
         let n = CostVec { i32: 10, i32_div: 2, ..CostVec::default() };
         // 8 · 11900 + 2 · 142800
         assert_eq!(c.duration_ps(n), 8 * 11_900 + 2 * 142_800);
-        assert_eq!(c.measured_division(CostClass::I32), Some(142_800));
+        let n = CostVec { f32: 5, f32_fma: 3, f32_sqrt: 1, ..CostVec::default() };
+        assert_eq!(c.duration_ps(n), 11_900 + 3 * 35_700 + 166_600);
+        assert_eq!(c.measured(Heavy::Div, CostClass::I32), Some(142_800));
+        assert_eq!(c.measured(Heavy::Fma, CostClass::F32), Some(35_700));
     }
 
-    /// Ohne Messung wiegt eine Division wie ihre Klasse: das Modell der
-    /// Tabellen bis Version 4.
+    /// Ohne Messung wiegt eine solche Operation wie ihre Klasse: das Modell
+    /// der Tabellen bis Version 4 fuer die Division, bis 5 fuer `fma`.
     #[test]
-    fn an_unmeasured_division_weighs_like_its_class() {
+    fn an_unmeasured_heavy_operation_weighs_like_its_class() {
         let c = parse(BEISPIEL).expect("lesbar").target("thumbv7em").expect("Ziel").c_target;
-        let with = CostVec { f64: 3, f64_div: 3, ..CostVec::default() };
+        let with = CostVec { f64: 3, f64_div: 2, f64_fma: 1, ..CostVec::default() };
         let without = CostVec { f64: 3, ..CostVec::default() };
         assert_eq!(c.duration_ps(with), c.duration_ps(without));
-        assert_eq!(c.measured_division(CostClass::F64), None);
+        assert_eq!(c.measured(Heavy::Div, CostClass::F64), None);
+        assert_eq!(c.measured(Heavy::Fma, CostClass::F64), None);
     }
 
-    /// **Eine Division wiegt nie weniger als ihre Klasse.** Sonst waere das
-    /// komponentenweise Maximum ueber Zweige (9.4.3) keine Schranke mehr:
-    /// Ein Zweig mit Divisionen koennte teurer sein als die Summe, die der
-    /// Vektor des Maximums ergibt.
+    /// Ganzzahlen kennen kein `fma`: Der Schluessel fehlt, und ein Gewicht
+    /// dafuer bleibt wirkungslos.
+    #[test]
+    fn integers_have_no_fma() {
+        assert_eq!(heavy_key(Heavy::Fma, CostClass::I32), None);
+        assert_eq!(heavy_key(Heavy::Sqrt, CostClass::F64).as_deref(), Some("f64_sqrt"));
+        let e = parse(&format!("{BEISPIEL}i32_fma = 1000\n")).expect_err("unbekannt");
+        assert!(e.message.contains("f32_fma"), "{e}");
+        let mut c = CTarget::default();
+        c.set_heavy(Heavy::Fma, CostClass::I64, 1_000);
+        assert_eq!(c.measured(Heavy::Fma, CostClass::I64), None);
+    }
+
+    /// **Keine Operation eigenen Gewichts wiegt weniger als ihre Klasse.**
+    /// Sonst waere das komponentenweise Maximum ueber Zweige (9.4.3) keine
+    /// Schranke mehr: Ein Zweig mit Divisionen koennte teurer sein als die
+    /// Summe, die der Vektor des Maximums ergibt. Das gilt auch, wenn das
+    /// Maximum mehr solche Operationen traegt als Operationen der Klasse —
+    /// hier eine Division aus dem einen Zweig und ein `fma` aus dem anderen.
     #[test]
     fn the_maximum_over_branches_stays_a_bound() {
-        let hw = parse(&format!("{BEISPIEL}i32_div = 1000\n")).expect("lesbar");
+        let hw = parse(&format!("{BEISPIEL}i32_div = 1000\nf32_div = 50000\nf32_fma = 30000\n")).expect("lesbar");
         let c = hw.target("thumbv7em").expect("Ziel").c_target;
-        assert_eq!(c.division(CostClass::I32), 11_900, "geklemmt auf das Klassengewicht");
+        assert_eq!(c.heavy(Heavy::Div, CostClass::I32), 11_900, "geklemmt auf das Klassengewicht");
         let divides = CostVec { i32: 4, i32_div: 4, ..CostVec::default() };
         let adds = CostVec { i32: 6, ..CostVec::default() };
         let bound = c.duration_ps(divides.max(adds));
         assert!(bound >= c.duration_ps(divides) && bound >= c.duration_ps(adds));
+        let divide = CostVec { f32: 1, f32_div: 1, ..CostVec::default() };
+        let fuse = CostVec { f32: 1, f32_fma: 1, ..CostVec::default() };
+        let bound = c.duration_ps(divide.max(fuse));
+        assert!(bound >= c.duration_ps(divide) && bound >= c.duration_ps(fuse), "{bound}");
     }
 
     /// **Messwerte ersetzen Werte, nicht Kommentare.** Die Datei gehoert
@@ -1029,11 +1054,11 @@ t_io = 120000
         let text = "# takt-hw 3\n# Von Hand.\n[target.thumbv7em]\ni32 = 11905   # geschaetzt\nram = 65536\n\n[device.gpio]\ndriver = \"x\"\n";
         let out =
             with_values(text, "thumbv7em", &[("i32", "12000".into()), ("i32_div", "140000".into())]).expect("lesbar");
-        assert!(out.starts_with("# takt-hw 5\n# Von Hand.\n"), "{out}");
+        assert!(out.starts_with(&format!("# takt-hw {FORMAT_VERSION}\n# Von Hand.\n")), "{out}");
         assert!(out.contains("i32 = 12000   # geschaetzt"), "{out}");
         assert!(out.contains("ram = 65536\ni32_div = 140000\n"), "angehaengt am Ende des Abschnitts: {out}");
         let hw = parse(&out).expect("lesbar");
-        assert_eq!(hw.target("thumbv7em").expect("Ziel").c_target.measured_division(CostClass::I32), Some(140_000));
+        assert_eq!(hw.target("thumbv7em").expect("Ziel").c_target.measured(Heavy::Div, CostClass::I32), Some(140_000));
         assert!(hw.devices.contains_key("gpio"));
     }
 
@@ -1044,19 +1069,20 @@ t_io = 120000
         assert_eq!(parse(&out).expect("lesbar").target("riscv32imac").and_then(|t| t.core_hz), Some(160_000_000));
     }
 
-    /// Version 5 schreibt, was `takt bench` und `driver-test` messen, und
-    /// liest es wieder.
+    /// Was `takt bench` und `driver-test` messen, wird geschrieben und
+    /// wieder gelesen.
     #[test]
     fn measured_values_round_trip() {
         let text = format!(
-            "{BEISPIEL}i32_div = 142800\nf64_div = 9000000\ntick_jitter_ns = 1500\n\n\
-             [channel ui/led]\ndirection = output\nguard_ns = 4000\njitter_ns = 250\n"
+            "{BEISPIEL}i32_div = 142800\nf64_div = 9000000\nf32_fma = 35700\nf64_sqrt = 2000000\n\
+             tick_jitter_ns = 1500\n\n[channel ui/led]\ndirection = output\nguard_ns = 4000\njitter_ns = 250\n"
         );
-        let hw = parse(&text.replace("takt-hw 1", "takt-hw 5")).expect("lesbar");
+        let hw = parse(&text.replace("takt-hw 1", &format!("takt-hw {FORMAT_VERSION}"))).expect("lesbar");
         assert_eq!(hw.target("thumbv7em").expect("Ziel").tick_jitter_ns, Some(1_500));
         assert_eq!(hw.channel("ui/led").expect("Kanal").guard_ns, Some(4_000));
         let rendered = render(&hw);
-        assert!(rendered.starts_with("# takt-hw 5\n"), "{rendered}");
-        assert_eq!(parse(&rendered).expect("Rundreise"), Hardware { format_version: 5, ..hw });
+        assert!(rendered.starts_with(&format!("# takt-hw {FORMAT_VERSION}\n")), "{rendered}");
+        assert!(rendered.contains("f32_fma = 35700\nf64_sqrt = 2000000\n"), "{rendered}");
+        assert_eq!(parse(&rendered).expect("Rundreise"), hw);
     }
 }

@@ -8,15 +8,16 @@ use crate::machine::VarDef;
 use crate::stmt::Block;
 
 /// Kostenvektor ueber den sieben Operationsklassen (9.4.3), mit den
-/// Divisionen je Zahlklasse.
+/// Operationen eigenen Gewichts je Zahlklasse.
 ///
-/// **Division hat eigene Gewichte** (7.2): Je nach Kern ist sie ein
-/// Hardwarebefehl oder ein Bibliotheksaufruf, und sie kostet ein
-/// Vielfaches einer Addition — auf dem RV32IMAC rund das Dreissigfache.
-/// Eine Division zaehlt darum weiter in ihrer Klasse, wie 9.4.3 es sagt,
-/// und die Felder `*_div` halten fest, wie viele der Operationen einer
-/// Klasse Divisionen (und Reste) sind. Die Zeitschranke gewichtet sie mit
-/// dem eigenen Gewicht aus der Kalibrierung (13.8).
+/// **Division, `fma` und `sqrt` haben eigene Gewichte** (7.2): Je nach Kern
+/// sind sie ein Hardwarebefehl oder ein Bibliotheksaufruf, und ohne FPU
+/// oder Dividierer kosten sie ein Vielfaches einer Addition. Eine solche
+/// Operation zaehlt weiter in ihrer Klasse, wie 9.4.3 es sagt, und die
+/// Felder `*_div`, `*_fma` und `*_sqrt` halten fest, wie viele der
+/// Operationen einer Klasse von welcher Art ([`Heavy`]) sind. Die
+/// Zeitschranke gewichtet sie mit dem eigenen Gewicht aus der Kalibrierung
+/// (13.8).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub struct CostVec {
@@ -35,6 +36,14 @@ pub struct CostVec {
     pub f32_div: u64,
     /// Davon Divisionen in `f64`.
     pub f64_div: u64,
+    /// Davon `fma` in `f32`.
+    pub f32_fma: u64,
+    /// Davon `fma` in `f64`.
+    pub f64_fma: u64,
+    /// Davon Wurzeln in `f32`.
+    pub f32_sqrt: u64,
+    /// Davon Wurzeln in `f64`.
+    pub f64_sqrt: u64,
 }
 
 impl std::ops::Add for CostVec {
@@ -43,19 +52,7 @@ impl std::ops::Add for CostVec {
     /// Komponentenweise Summe (`N(s1; s2)`, 9.4.3), saettigend: Eine
     /// Schranke, die ueberlaeuft, waere keine mehr.
     fn add(self, o: CostVec) -> CostVec {
-        CostVec {
-            i32: self.i32.saturating_add(o.i32),
-            i64: self.i64.saturating_add(o.i64),
-            f32: self.f32.saturating_add(o.f32),
-            f64: self.f64.saturating_add(o.f64),
-            mem: self.mem.saturating_add(o.mem),
-            call: self.call.saturating_add(o.call),
-            native: self.native.saturating_add(o.native),
-            i32_div: self.i32_div.saturating_add(o.i32_div),
-            i64_div: self.i64_div.saturating_add(o.i64_div),
-            f32_div: self.f32_div.saturating_add(o.f32_div),
-            f64_div: self.f64_div.saturating_add(o.f64_div),
-        }
+        self.zip(o, u64::saturating_add)
     }
 }
 
@@ -73,56 +70,72 @@ impl CostVec {
         i64_div: 0,
         f32_div: 0,
         f64_div: 0,
+        f32_fma: 0,
+        f64_fma: 0,
+        f32_sqrt: 0,
+        f64_sqrt: 0,
     };
+
+    /// `f` komponentenweise ueber beide Vektoren.
+    pub fn zip(self, o: CostVec, f: impl std::ops::Fn(u64, u64) -> u64) -> CostVec {
+        CostVec {
+            i32: f(self.i32, o.i32),
+            i64: f(self.i64, o.i64),
+            f32: f(self.f32, o.f32),
+            f64: f(self.f64, o.f64),
+            mem: f(self.mem, o.mem),
+            call: f(self.call, o.call),
+            native: f(self.native, o.native),
+            i32_div: f(self.i32_div, o.i32_div),
+            i64_div: f(self.i64_div, o.i64_div),
+            f32_div: f(self.f32_div, o.f32_div),
+            f64_div: f(self.f64_div, o.f64_div),
+            f32_fma: f(self.f32_fma, o.f32_fma),
+            f64_fma: f(self.f64_fma, o.f64_fma),
+            f32_sqrt: f(self.f32_sqrt, o.f32_sqrt),
+            f64_sqrt: f(self.f64_sqrt, o.f64_sqrt),
+        }
+    }
 
     /// Das `n`-fache (`n · N(s)`, 9.4.3), saettigend wie die Summe.
     pub fn times(self, n: u64) -> CostVec {
-        CostVec {
-            i32: self.i32.saturating_mul(n),
-            i64: self.i64.saturating_mul(n),
-            f32: self.f32.saturating_mul(n),
-            f64: self.f64.saturating_mul(n),
-            mem: self.mem.saturating_mul(n),
-            call: self.call.saturating_mul(n),
-            native: self.native.saturating_mul(n),
-            i32_div: self.i32_div.saturating_mul(n),
-            i64_div: self.i64_div.saturating_mul(n),
-            f32_div: self.f32_div.saturating_mul(n),
-            f64_div: self.f64_div.saturating_mul(n),
-        }
+        self.zip(CostVec::ZERO, |a, _| a.saturating_mul(n))
     }
 
     /// Komponentenweises Maximum (`max` ueber Zweige, 9.4.3).
     ///
-    /// Auch die Divisionen gehen komponentenweise: Die Schranke bleibt eine,
-    /// solange eine Division nicht billiger gewichtet ist als ihre Klasse —
-    /// das haelt [`crate::hardware::CTarget`] fest.
+    /// Auch die Operationen eigenen Gewichts gehen komponentenweise: Die
+    /// Schranke bleibt eine, solange keine von ihnen leichter gewichtet ist
+    /// als ihre Klasse — das haelt [`crate::hardware::CTarget`] fest.
     pub fn max(self, o: CostVec) -> CostVec {
-        CostVec {
-            i32: self.i32.max(o.i32),
-            i64: self.i64.max(o.i64),
-            f32: self.f32.max(o.f32),
-            f64: self.f64.max(o.f64),
-            mem: self.mem.max(o.mem),
-            call: self.call.max(o.call),
-            native: self.native.max(o.native),
-            i32_div: self.i32_div.max(o.i32_div),
-            i64_div: self.i64_div.max(o.i64_div),
-            f32_div: self.f32_div.max(o.f32_div),
-            f64_div: self.f64_div.max(o.f64_div),
+        self.zip(o, u64::max)
+    }
+
+    /// Das Feld der Art `h` in der Klasse `c`, wo es die Art dort gibt.
+    fn heavy_mut(&mut self, h: Heavy, c: CostClass) -> Option<&mut u64> {
+        match (h, c) {
+            (Heavy::Div, CostClass::I32) => Some(&mut self.i32_div),
+            (Heavy::Div, CostClass::I64) => Some(&mut self.i64_div),
+            (Heavy::Div, CostClass::F32) => Some(&mut self.f32_div),
+            (Heavy::Div, CostClass::F64) => Some(&mut self.f64_div),
+            (Heavy::Fma, CostClass::F32) => Some(&mut self.f32_fma),
+            (Heavy::Fma, CostClass::F64) => Some(&mut self.f64_fma),
+            (Heavy::Sqrt, CostClass::F32) => Some(&mut self.f32_sqrt),
+            (Heavy::Sqrt, CostClass::F64) => Some(&mut self.f64_sqrt),
+            _ => None,
         }
     }
 
-    /// Wie viele Operationen einer Klasse Divisionen sind; null ausserhalb
-    /// der vier Zahlklassen.
-    pub fn divisions(self, c: CostClass) -> u64 {
-        match c {
-            CostClass::I32 => self.i32_div,
-            CostClass::I64 => self.i64_div,
-            CostClass::F32 => self.f32_div,
-            CostClass::F64 => self.f64_div,
-            CostClass::Mem | CostClass::Call | CostClass::Native => 0,
-        }
+    /// Wie viele Operationen der Klasse `c` von der Art `h` sind; null, wo
+    /// es die Art in der Klasse nicht gibt.
+    pub fn heavy(mut self, h: Heavy, c: CostClass) -> u64 {
+        self.heavy_mut(h, c).map_or(0, |n| *n)
+    }
+
+    /// Die gewoehnlichen Operationen einer Klasse: alle ausser denen
+    /// eigenen Gewichts.
+    pub fn ordinary(self, c: CostClass) -> u64 {
+        Heavy::ALL.iter().fold(self.of(c), |n, h| n.saturating_sub(self.heavy(*h, c)))
     }
 
     /// Eine Operation der Klasse `c`.
@@ -139,16 +152,14 @@ impl CostVec {
         }
     }
 
-    /// Eine Operation der Klasse `c`, die eine Division ist.
-    pub fn division(c: CostClass) -> CostVec {
-        let one = CostVec::default();
-        match c {
-            CostClass::I32 => CostVec { i32: 1, i32_div: 1, ..one },
-            CostClass::I64 => CostVec { i64: 1, i64_div: 1, ..one },
-            CostClass::F32 => CostVec { f32: 1, f32_div: 1, ..one },
-            CostClass::F64 => CostVec { f64: 1, f64_div: 1, ..one },
-            CostClass::Mem | CostClass::Call | CostClass::Native => one,
+    /// Eine Operation der Klasse `c` von der Art `h`; wo es die Art in der
+    /// Klasse nicht gibt, eine gewoehnliche.
+    pub fn heavy_op(h: Heavy, c: CostClass) -> CostVec {
+        let mut v = CostVec::op(c);
+        if let Some(n) = v.heavy_mut(h, c) {
+            *n = 1;
         }
+        v
     }
 
     /// Der Wert einer Klasse.
@@ -164,7 +175,8 @@ impl CostVec {
         }
     }
 
-    /// Summe ueber alle Klassen; eine Division zaehlt einmal, in ihrer Klasse.
+    /// Summe ueber alle Klassen; eine Operation eigenen Gewichts zaehlt
+    /// einmal, in ihrer Klasse.
     ///
     /// Nur fuer Vergleiche und Anteile im Bericht: Operationen
     /// verschiedener Klassen kosten verschieden viel, und was sie in Zeit
@@ -177,6 +189,44 @@ impl CostVec {
     /// Ist der Vektor ueberall null?
     pub fn is_zero(self) -> bool {
         self.sum() == 0
+    }
+}
+
+/// Operationen mit eigenem Gewicht (7.2): Je nach Kern sind sie ein
+/// Hardwarebefehl oder ein Bibliotheksaufruf. Sie zaehlen in ihrer Klasse
+/// und daneben fuer sich ([`CostVec::heavy`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Heavy {
+    /// Division und Rest.
+    Div,
+    /// `fma(a, b, c)`, korrekt gerundet (4.2), auch in den Skalarprodukten
+    /// der Matrizen.
+    Fma,
+    /// Die Quadratwurzel, korrekt gerundet (4.2).
+    Sqrt,
+}
+
+impl Heavy {
+    /// Alle Arten.
+    pub const ALL: [Heavy; 3] = [Heavy::Div, Heavy::Fma, Heavy::Sqrt];
+
+    /// Gibt es die Art in der Klasse? Division in allen vier Zahlklassen,
+    /// `fma` und `sqrt` nur im Fliesskomma.
+    pub fn exists_in(self, c: CostClass) -> bool {
+        match self {
+            Heavy::Div => matches!(c, CostClass::I32 | CostClass::I64 | CostClass::F32 | CostClass::F64),
+            Heavy::Fma | Heavy::Sqrt => matches!(c, CostClass::F32 | CostClass::F64),
+        }
+    }
+
+    /// Die Endung ihres Schluessels in der Hardware-Konfiguration
+    /// (`i32_div`, `f32_fma`, `f64_sqrt`).
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Heavy::Div => "div",
+            Heavy::Fma => "fma",
+            Heavy::Sqrt => "sqrt",
+        }
     }
 }
 

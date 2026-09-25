@@ -159,6 +159,25 @@ fn reader_rejects_bad_wire_and_truncation() {
     assert!(matches!(takt_mir::format::wire::slice(&[1, 2], 1, u64::MAX), Err(takt_mir::FormatError::Truncated)));
 }
 
+/// Ein Feld im Modus `dflt` (W3) fehlt in aelteren Dateien und liest sich
+/// als null: ein Kostenvektor ohne die Felder 8 bis 15.
+#[test]
+fn a_cost_vector_without_its_later_fields_reads_as_zero() {
+    use takt_mir::format::codec::Field;
+    let mut w = Writer::new(false);
+    w.begin();
+    for tag in 1..=7 {
+        w.varint(tag, u64::from(tag));
+    }
+    w.end(1);
+    let (_, bytes) = w.finish();
+    let root = Node::parse("Wurzel", &bytes).expect("Knoten");
+    let v = takt_mir::fns::CostVec::read(root.one(1).expect("Feld"), &Reader::new(vec![])).expect("lesbar");
+    let seven =
+        takt_mir::fns::CostVec { i32: 1, i64: 2, f32: 3, f64: 4, mem: 5, call: 6, native: 7, ..Default::default() };
+    assert_eq!(v, seven);
+}
+
 /// Fehlermeldungen nennen Knoten und Feldnummer, auch fuer Primitive.
 #[test]
 fn errors_name_node_and_field() {
