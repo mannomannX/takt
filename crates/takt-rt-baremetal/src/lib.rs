@@ -40,7 +40,7 @@ pub mod telemetry;
 pub mod tolerance;
 
 pub use board::{HardwareWatchdog, Sleep, StackGuard, TickSource};
-pub use clock::TimerClock;
+pub use clock::{LogicalClock, TimerClock};
 pub use run::{Cadence, JournalStats, NoWatchdog, Stats, Traced, report, run};
 pub use telemetry::{DRAIN_ROUNDS, Port, Telemetry};
 pub use tolerance::Period;

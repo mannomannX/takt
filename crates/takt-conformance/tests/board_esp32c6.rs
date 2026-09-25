@@ -34,9 +34,10 @@ fn bringup_program(name: &str) -> std::path::PathBuf {
     board::root().join("crates/takt-bringup-esp32c6/programs").join(name)
 }
 
-/// Baut ein Korpusprogramm, schreibt es und liest seinen Trace.
+/// Baut ein Korpusprogramm, schreibt es und liest seinen Trace — in
+/// Echtzeit: Die Tests damit pruefen Schlaf und Journal an der Uhr.
 fn run_corpus(board: &mut Esp32c6, name: &str, fresh: bool) -> String {
-    let options = Options { ticks: TICKS, fresh, bin: Bin::Takt };
+    let options = Options { ticks: TICKS, fresh, bin: Bin::Takt, timed: true };
     board
         .build(&board::corpus_path(name), &options)
         .and_then(|elf| board.run(&elf, &options))
@@ -81,8 +82,9 @@ fn a_driver_machine_writes_uart0_registers() {
     };
     let Some((board, _guard)) = board() else { return };
     // Zehn Ticks je Zeile, plus Rand: Der Lauf muss ueber `WANT` Zeilen
-    // hinaus reichen, sonst haelt das Programm mittendrin.
-    let options = Options { ticks: (WANT as u64 + 4) * 10, fresh: true, bin: Bin::Takt };
+    // hinaus reichen, sonst haelt das Programm mittendrin. In Echtzeit,
+    // weil die UART die Bytes mit ihrer Rate abnimmt.
+    let options = Options { ticks: (WANT as u64 + 4) * 10, fresh: true, bin: Bin::Takt, timed: true };
     let elf = board.build(&bringup_program("uart0_port.takt"), &options).unwrap_or_else(|e| panic!("{e}"));
     board.download(&elf).unwrap_or_else(|e| panic!("{e}"));
 
@@ -175,7 +177,7 @@ fn a_board_input_reaches_the_process_image() {
 fn persistence_survives_a_reset() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "35_persist.takt";
-    let options = Options { ticks: TICKS, fresh: false, bin: Bin::Takt };
+    let options = Options { ticks: TICKS, fresh: false, bin: Bin::Takt, timed: false };
     let elf = board.build(&board::corpus_path(name), &options).unwrap_or_else(|e| panic!("{name}: {e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
     let end = last_output(&first, "count").unwrap_or_else(|| panic!("kein `count` im ersten Lauf:\n{first}"));

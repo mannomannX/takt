@@ -43,8 +43,8 @@ use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
 use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Generated, Led, Telemetry, WfiSleep, cycles, tick};
-use takt_rt_baremetal::{Cadence, JournalStats, NoWatchdog, Sleep};
-use takt_rt_core::{FakeNvm, Persist, Policy, Profile, Runtime};
+use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Sleep, TimerClock};
+use takt_rt_core::{Clock, FakeNvm, Persist, Policy, Profile, Runtime};
 
 mod takt {
     #![allow(dead_code)]
@@ -63,6 +63,12 @@ const TRACE_EVERY: u64 = {
 /// Konformitaetslauf: `TAKT_TICKS` beim Bau gesetzt heisst jeden Tick
 /// ausgeben und nach so vielen Ticks `takt end`.
 const TICKS: Option<&str> = option_env!("TAKT_TICKS");
+
+/// Ein Konformitaetslauf zaehlt in logischer Zeit und verliert keine
+/// Zeile, auch wenn die Leitung den Trace langsamer nimmt, als der Tick
+/// dauert (FB-292). `TAKT_TIMED` beim Bau laesst die Uhr laufen, fuer den
+/// Tick-Jitter von `takt bench`.
+const LOGICAL: bool = TICKS.is_some() && option_env!("TAKT_TIMED").is_none();
 
 /// `TAKT_INSTRUMENT=statements`: den Programmzaehler je Tick mitgeben (11.2).
 const TRACE_PC: bool = matches!(option_env!("TAKT_INSTRUMENT"), Some(m) if matches!(m.as_bytes(), b"statements"));
@@ -165,6 +171,20 @@ fn USART1() {
     takt_board_stm32f401::uart::on_interrupt();
 }
 
+/// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
+fn conduct(clock: impl Clock) {
+    let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
+    let mut rt = Runtime::new(Generated::init(false), clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
+    let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
+    // Kein Journal: Das Board hat noch keinen `Nvm`-Treiber (5.9).
+    let no_journal = None::<&mut Persist<'_, FakeNvm<0>>>;
+    let stats = takt_rt_baremetal::run(&mut rt, no_journal, Cadence::of(limit, TRACE_EVERY, TRACE_PC), uart);
+    if let Some(u) = uart() {
+        let stack = Some(takt_board_stm32f401::stack::high_water());
+        takt_rt_baremetal::report(u, rt.overrun(), &stats, &JournalStats::default(), stack);
+    }
+}
+
 #[entry]
 fn main() -> ! {
     // Zuerst: Die Abschlusszeile meldet, wie tief der Stack unter Last reichte.
@@ -187,6 +207,7 @@ fn main() -> ! {
             cortex_m::asm::wfi();
         }
     };
+    let telemetry = if LOGICAL { telemetry.lossless() } else { telemetry };
     // Erst jetzt sichtbar machen: Ein Trace vor der Einrichtung schriebe
     // in ein nicht konfiguriertes Register.
     unsafe { UART = Some(telemetry) };
@@ -201,22 +222,22 @@ fn main() -> ! {
     banner(timer.nominal_ns());
     unsafe { LED = Some(led) };
 
-    // Zwischen den Ticks fuellt die Schleife die Leitung nach, sooft ein
-    // Interrupt den Kern weckt: Sie nimmt nur ab, was in ihren FIFO passt.
-    let clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS).with_idle(|| {
-        if let Some(u) = uart() {
-            u.flush();
-        }
-    });
-    let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
-    let mut rt = Runtime::new(Generated::init(false), clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
-    let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
-    // Kein Journal: Das Board hat noch keinen `Nvm`-Treiber (5.9).
-    let no_journal = None::<&mut Persist<'_, FakeNvm<0>>>;
-    let stats = takt_rt_baremetal::run(&mut rt, no_journal, Cadence::of(limit, TRACE_EVERY, TRACE_PC), uart);
-    if let Some(u) = uart() {
-        let stack = Some(takt_board_stm32f401::stack::high_water());
-        takt_rt_baremetal::report(u, rt.overrun(), &stats, &JournalStats::default(), stack);
+    if LOGICAL {
+        // Zwischen den Ticks leert die Schleife die Leitung ganz; dann
+        // steht die Uhr auf der Frist.
+        conduct(LogicalClock::new(|| {
+            if let Some(u) = uart() {
+                u.drain(DRAIN_ROUNDS);
+            }
+        }));
+    } else {
+        // Zwischen den Ticks fuellt die Schleife die Leitung nach, sooft ein
+        // Interrupt den Kern weckt: Sie nimmt nur ab, was in ihren FIFO passt.
+        conduct(TimerClock::new(timer, TICK_NS).with_idle(|| {
+            if let Some(u) = uart() {
+                u.flush();
+            }
+        }));
     }
     // Nach dem Lauf bleibt die Leitung offen: Der Host holt das Board mit
     // `TAKT` zurueck, um das naechste Programm zu schreiben (FB-275).

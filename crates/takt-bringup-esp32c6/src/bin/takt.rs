@@ -15,8 +15,8 @@ use core::fmt::Write as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use takt_board_esp32c6::{Button, FlashNvm, Generated, Telemetry, Ws2812, route_uart0};
-use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, NoWatchdog, Sleep};
-use takt_rt_core::{Journal, Loaded, Persist, Policy, Profile, Runtime};
+use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Sleep, TimerClock};
+use takt_rt_core::{Clock, Journal, Loaded, Persist, Policy, Profile, Runtime};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -33,6 +33,12 @@ const TRACE_EVERY: u64 = 100;
 /// heisst jeden Tick ausgeben, nach so vielen Ticks das Journal schreiben,
 /// `takt end` und Halt.
 const TICKS: Option<&str> = option_env!("TAKT_TICKS");
+
+/// Ein Konformitaetslauf zaehlt in logischer Zeit und verliert keine
+/// Zeile, auch wenn die Leitung den Trace langsamer nimmt, als der Tick
+/// dauert (FB-292, FB-271). `TAKT_TIMED` beim Bau laesst die Uhr laufen,
+/// fuer den Tick-Jitter von `takt bench`.
+const LOGICAL: bool = TICKS.is_some() && option_env!("TAKT_TIMED").is_none();
 
 /// `TAKT_FRESH_JOURNAL` beim Bau gesetzt: das Journal vor dem Lauf
 /// loeschen, damit der Lauf wie der Interpreter ohne Speicher beginnt.
@@ -137,6 +143,22 @@ pub unsafe extern "C" fn takt_in_ui_button(value: *mut u8, quality: *mut u8) -> 
     true
 }
 
+/// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
+fn conduct(program: Generated, clock: impl Clock, persist: &mut Option<Persist<'_, FlashNvm>>) {
+    let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
+    let mut rt = Runtime::new(program, clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
+    let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
+    let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut(), Cadence::of(limit, TRACE_EVERY, TRACE_PC), uart);
+    let journal = persist.as_ref().map_or(JournalStats::default(), |p| {
+        let (erase_ns, program_ns) = p.journal().device().measured_ns();
+        JournalStats { writes: p.journal().writes(), failures: p.journal().failures(), erase_ns, program_ns }
+    });
+    if let Some(u) = uart() {
+        let stack = Some(takt_board_esp32c6::stack::high_water());
+        takt_rt_baremetal::report(u, rt.overrun(), &stats, &journal, stack);
+    }
+}
+
 #[main]
 fn main() -> ! {
     // Zuerst: Die Abschlusszeile meldet, wie tief der Stack unter Last reichte.
@@ -156,6 +178,7 @@ fn main() -> ! {
     telemetry.write_i64(timer.nominal_ns());
     telemetry.write(" ns");
     telemetry.newline();
+    let telemetry = if LOGICAL { telemetry.lossless() } else { telemetry };
     unsafe { UART = Some(telemetry) };
     if let Ok(led) = Ws2812::new(peripherals.RMT, peripherals.GPIO8) {
         unsafe { LED = Some(led) };
@@ -190,22 +213,22 @@ fn main() -> ! {
         u.flush();
     }
 
-    let clock = takt_rt_baremetal::TimerClock::new(timer, TICK_NS).with_idle(|| {
-        if let Some(u) = uart() {
-            u.flush();
-        }
-    });
-    let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
-    let mut rt = Runtime::new(program, clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
-    let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
-    let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut(), Cadence::of(limit, TRACE_EVERY, TRACE_PC), uart);
-    let journal = persist.as_ref().map_or(JournalStats::default(), |p| {
-        let (erase_ns, program_ns) = p.journal().device().measured_ns();
-        JournalStats { writes: p.journal().writes(), failures: p.journal().failures(), erase_ns, program_ns }
-    });
-    if let Some(u) = uart() {
-        let stack = Some(takt_board_esp32c6::stack::high_water());
-        takt_rt_baremetal::report(u, rt.overrun(), &stats, &journal, stack);
+    if LOGICAL {
+        // Zwischen den Ticks leert die Schleife die Leitung ganz; dann
+        // steht die Uhr auf der Frist.
+        let clock = LogicalClock::new(|| {
+            if let Some(u) = uart() {
+                u.drain(DRAIN_ROUNDS);
+            }
+        });
+        conduct(program, clock, &mut persist);
+    } else {
+        let clock = TimerClock::new(timer, TICK_NS).with_idle(|| {
+            if let Some(u) = uart() {
+                u.flush();
+            }
+        });
+        conduct(program, clock, &mut persist);
     }
     let mut sleep = takt_board_esp32c6::WfiSleep;
     loop {

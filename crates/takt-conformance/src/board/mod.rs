@@ -77,6 +77,21 @@ pub const CORPUS: &[&str] = &[
 /// Die Zeile, mit der jedes Bring-up seinen Lauf beendet.
 pub const END: &str = "takt end";
 
+/// Ein Trace mit Luecken ist keiner: Verwirft die Telemetrie des Boards
+/// Bytes (`takt schlief … verworfen N`, 12.2), meldete der Vergleich jede
+/// Zeile hinter der Luecke als Abweichung (FB-292).
+pub(crate) fn complete(text: String) -> Result<String, String> {
+    let dropped = text.lines().find(|l| l.contains("takt schlief ")).and_then(|line| {
+        let mut words = line.split_whitespace();
+        words.by_ref().find(|w| *w == "verworfen")?;
+        words.next()?.parse::<u64>().ok()
+    });
+    match dropped {
+        Some(n) if n > 0 => Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292)")),
+        _ => Ok(text),
+    }
+}
+
 /// Welches Programm des Bring-ups das Takt-Programm bindet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Bin {
@@ -105,22 +120,33 @@ pub struct Options {
     pub fresh: bool,
     /// Welches Programm.
     pub bin: Bin,
+    /// In Echtzeit: Der Tick kommt vom Timer, und die Telemetrie verwirft,
+    /// was die Leitung nicht nimmt (12.2). Sonst laeuft `takt` in logischer
+    /// Zeit mit verlustfreiem Trace — ein Konformitaetslauf vergleicht nur
+    /// die Semantik (FB-292).
+    pub timed: bool,
 }
 
 impl Options {
     /// Ein Konformitaetslauf ueber `ticks` Ticks mit leerem Journal.
     pub fn fresh(ticks: u64) -> Options {
-        Options { ticks, fresh: true, bin: Bin::Takt }
+        Options { ticks, fresh: true, bin: Bin::Takt, timed: false }
+    }
+
+    /// Ein Lauf ueber `ticks` Ticks in Echtzeit, fuer das, was nur die
+    /// Uhr zeigt: Tick-Jitter und Stack unter Last (13.8).
+    pub fn timed(ticks: u64) -> Options {
+        Options { ticks, fresh: true, bin: Bin::Takt, timed: true }
     }
 
     /// Ein Messkern mit `runs` Messungen und seiner C-Referenz.
     pub fn bench(runs: u64, reference: Option<PathBuf>) -> Options {
-        Options { ticks: runs, fresh: true, bin: Bin::Bench { reference } }
+        Options { ticks: runs, fresh: true, bin: Bin::Bench { reference }, timed: false }
     }
 
     /// Die Vektoren der kuratierten Natives.
     pub fn natives() -> Options {
-        Options { ticks: 0, fresh: false, bin: Bin::Natives }
+        Options { ticks: 0, fresh: false, bin: Bin::Natives, timed: false }
     }
 }
 
@@ -189,7 +215,7 @@ impl Bringup {
     fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
         let mut h = DefaultHasher::new();
         std::fs::read(program).map_err(|e| format!("{}: {e}", program.display()))?.hash(&mut h);
-        (options.ticks, options.fresh, self.triple).hash(&mut h);
+        (options.ticks, options.fresh, options.timed, self.triple).hash(&mut h);
         match &options.bin {
             Bin::Takt => 0u8.hash(&mut h),
             Bin::Bench { reference } => {
@@ -239,6 +265,11 @@ impl Bringup {
             cargo.env("TAKT_FRESH_JOURNAL", "1");
         } else {
             cargo.env_remove("TAKT_FRESH_JOURNAL");
+        }
+        if options.timed {
+            cargo.env("TAKT_TIMED", "1");
+        } else {
+            cargo.env_remove("TAKT_TIMED");
         }
         match &options.bin {
             Bin::Bench { reference: Some(c) } => cargo.env("TAKT_BENCH_C", c),
@@ -416,4 +447,19 @@ pub(crate) fn port_listed(port: &str, present: bool, within: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(100));
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verworfene Bytes machen den Lauf unbrauchbar, ein vollstaendiger
+    /// und einer ohne Abschlusszeile gehen durch.
+    #[test]
+    fn a_trace_with_dropped_bytes_is_refused() {
+        let summary = |n: u32| format!("t=1 out a 1\ntakt schlief 0 ueberlaeufe 0 verworfen {n} journal 0\ntakt end\n");
+        assert!(complete(summary(25076)).is_err_and(|e| e.contains("25076")));
+        assert!(complete(summary(0)).is_ok());
+        assert!(complete("bench takt min 1\ntakt end\n".to_string()).is_ok());
+    }
 }

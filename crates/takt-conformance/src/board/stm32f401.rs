@@ -162,7 +162,7 @@ impl Board for Stm32f401 {
             run_bounded(&self.dfu_util, &args, DOWNLOAD).map(|_| ()).map_err(|e| format!("{}: {e}", self.dfu_util))
         })?;
         if text.contains(super::END) {
-            Ok(text)
+            super::complete(text)
         } else {
             Err(format!("kein `takt end` binnen {} s; gelesen:\n{text}", TRACE.as_secs()))
         }

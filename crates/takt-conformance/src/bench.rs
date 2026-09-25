@@ -612,7 +612,7 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
     let frame_path = write_kernel("frame", &frame_source)?;
     let frame = measure(board, &frame_path, None, runs)?;
     log(&format!("Rahmen: {} Zyklen hoechstens", frame.takt.max));
-    let options = Options::fresh(LOOP_TICKS);
+    let options = Options::timed(LOOP_TICKS);
     let elf = board.build(&frame_path, &options)?;
     let looped = board.run(&elf, &options)?;
     let (stack_reserve, tick_jitter_ns) = (summary_value(&looped, "stack"), tick_jitter(&looped));

@@ -85,10 +85,54 @@ impl<T: TickSource, F: FnMut()> Clock for TimerClock<T, F> {
     }
 }
 
+/// Die logische Zeit als Uhr, fuer Konformitaetslaeufe (13.8).
+///
+/// Ein Konformitaetslauf vergleicht die Semantik mit dem Interpreter (Satz
+/// 9.4.4), und die kennt nur die logische Zeit `k · T0`. Diese Uhr steht
+/// darum auf der Frist, sobald die Schleife auf sie wartet: Vorher laeuft
+/// `idle` (die Leitung leeren), und kein Tick ist je zu spaet — auch wenn
+/// die Leitung den Trace eines Ticks langsamer abnimmt, als der Tick
+/// dauert (FB-292). Die Zeitzeilen sagen dann nichts; ueber die Echtzeit
+/// urteilen die Laeufe mit [`TimerClock`].
+pub struct LogicalClock<F> {
+    now: i64,
+    idle: F,
+}
+
+impl<F: FnMut()> LogicalClock<F> {
+    /// Beginnt bei null.
+    pub fn new(idle: F) -> LogicalClock<F> {
+        LogicalClock { now: 0, idle }
+    }
+}
+
+impl<F: FnMut()> Clock for LogicalClock<F> {
+    fn now(&self) -> i64 {
+        self.now
+    }
+
+    fn wait_until(&mut self, deadline: i64) {
+        (self.idle)();
+        self.now = self.now.max(deadline);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use core::cell::Cell;
+
+    /// Die logische Uhr steht nach dem Warten auf der Frist, nie davor und
+    /// nie zurueck, und sie leert vorher die Leitung.
+    #[test]
+    fn the_logical_clock_stands_on_the_deadline() {
+        let idled = Cell::new(0);
+        let mut clock = LogicalClock::new(|| idled.set(idled.get() + 1));
+        clock.wait_until(3_000);
+        assert_eq!((clock.now(), idled.get()), (3_000, 1));
+        clock.wait_until(1_000);
+        assert_eq!(clock.now(), 3_000, "die Zeit laeuft nicht zurueck");
+    }
 
     /// Ein Timer, dessen Zaehler der Test stellt — die Attrappe, die
     /// belegt, dass dieses Crate ohne Board baut (plan/m5.md 2.2).

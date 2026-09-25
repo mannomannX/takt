@@ -34,19 +34,34 @@ pub struct Telemetry<P: Port, const N: usize> {
     head: usize,
     len: usize,
     dropped: u32,
+    lossless: bool,
 }
 
 impl<P: Port, const N: usize> Telemetry<P, N> {
     /// Ueber einer Leitung.
     pub fn new(port: P) -> Self {
-        Telemetry { port, ring: [0; N], head: 0, len: 0, dropped: 0 }
+        Telemetry { port, ring: [0; N], head: 0, len: 0, dropped: 0, lossless: false }
+    }
+
+    /// Verlustfrei: Ist der Ring voll, wartet [`Telemetry::write_byte`], bis
+    /// die Leitung ihn geleert hat, statt zu verwerfen — hoechstens
+    /// [`DRAIN_ROUNDS`] Anlaeufe lang. Nur fuer Laeufe, in denen die Zeit
+    /// nicht zaehlt (13.8, [`crate::LogicalClock`]); im Betrieb verbietet
+    /// 12.2 das Warten.
+    pub fn lossless(mut self) -> Self {
+        self.lossless = true;
+        self
     }
 
     /// Ein Byte in den Ring; ist er voll, geht erst die Leitung, dann
     /// faellt es weg.
     pub fn write_byte(&mut self, b: u8) {
         if self.len == N {
-            self.flush();
+            if self.lossless {
+                self.drain(DRAIN_ROUNDS);
+            } else {
+                self.flush();
+            }
             if self.len == N {
                 self.dropped = self.dropped.saturating_add(1);
                 return;
@@ -228,6 +243,19 @@ mod tests {
         }
         assert_eq!((t.pending(), t.dropped()), (8, 2));
         assert!(!t.drain(3));
+    }
+
+    /// Verlustfrei wartet der Ring auf die Leitung, statt zu verwerfen;
+    /// nimmt sie gar nichts, zaehlt er nach der Schranke doch.
+    #[test]
+    fn a_lossless_ring_waits_for_the_line() {
+        let mut t = Telemetry::<_, 8>::new(line(3)).lossless();
+        t.write("0123456789abcdefghij");
+        assert!(t.drain(10));
+        assert_eq!((text(&t).as_str(), t.dropped()), ("0123456789abcdefghij", 0));
+        let mut stuck = Telemetry::<_, 4>::new(line(0)).lossless();
+        stuck.write("0123456");
+        assert_eq!(stuck.dropped(), 3);
     }
 
     #[test]
