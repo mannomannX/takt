@@ -113,7 +113,9 @@ impl Esp32c6 {
         // Nach dem Flashen legt der USB-Serial-JTAG neu an; ein Handle von
         // davor liefert nichts. Darum kurz warten und je Versuch neu oeffnen.
         std::thread::sleep(Duration::from_millis(500));
-        capture(&self.port, BAUD, TRACE, || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ()))
+        // USB staut selbst zurueck; XON/XOFF braucht es hier nicht.
+        let flow = serialport::FlowControl::None;
+        capture(&self.port, BAUD, flow, TRACE, || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ()))
     }
 
     /// Der Tickzaehler des Bring-ups (`g_tick`), ueber JTAG gelesen.

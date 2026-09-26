@@ -157,7 +157,9 @@ impl Board for Stm32f401 {
         let bin = self.image(elf)?;
         self.to_bootloader()?;
         let address = format!("{APP:#010x}:leave");
-        let text = capture(&self.port, BAUD, TRACE, || {
+        // Der Adapter haelt das Board an, statt Bytes zu verlieren, wenn der
+        // Wirt nicht abholt (FB-306).
+        let text = capture(&self.port, BAUD, serialport::FlowControl::Software, TRACE, || {
             let args = ["-a", "0", "-d", DFU_ID, "-s", &address, "-D", &bin.to_string_lossy()];
             run_bounded(&self.dfu_util, &args, DOWNLOAD).map(|_| ()).map_err(|e| format!("{}: {e}", self.dfu_util))
         })?;

@@ -21,6 +21,14 @@
 //! der Interrupt nicht, der Bootloader liefe sonst im Handler-Modus; er
 //! merkt sich den Wunsch, und das naechste [`Port::flush`] fuehrt ihn aus.
 //!
+//! **XON/XOFF (FB-306).** Der Adapter hat keinen Rueckstau: Holt der Wirt
+//! unter Last nicht rechtzeitig ab, laeuft ein Puffer ueber, und Bytes
+//! fehlen (FB-304). Mit XON/XOFF sendet der Adapter `XOFF`, bevor das
+//! geschieht, und `XON`, wenn wieder Platz ist; so lange haelt der
+//! Interrupt das Senden an. Der Trace ist Text (grammar/trace.md), die
+//! beiden Steuerzeichen kommen darin nicht vor, und der Erkenner sieht sie
+//! nicht.
+//!
 //! Pins: PA9 (TX) und PA10 (RX), die Standardbelegung von USART1 auf
 //! diesem Board.
 
@@ -49,6 +57,13 @@ static TX: ByteFifo<512> = ByteFifo::new();
 
 /// Der Host hat das Board zurueckverlangt; gesetzt vom Interrupt.
 static HANDBACK: AtomicBool = AtomicBool::new(false);
+
+/// Weitersenden und Anhalten (FB-306).
+const XON: u8 = 0x11;
+const XOFF: u8 = 0x13;
+
+/// Der Adapter hat `XOFF` gesandt und noch kein `XON`.
+static PAUSED: AtomicBool = AtomicBool::new(false);
 
 /// Der Erkenner der Gegenrichtung; nur der Interrupt fuehrt ihn fort.
 static RECOGNIZER: Mutex<Cell<Magic>> = Mutex::new(Cell::new(Magic::new()));
@@ -103,27 +118,18 @@ impl Usart1 {
 
 /// Vom Interrupt-Handler `USART1` des Programms zu rufen.
 ///
-/// Senden: je `TXE` ein Byte aus dem FIFO; ist er leer, schweigt der
-/// Sende-Interrupt, bis [`Port::flush`] ihn wieder weckt. Empfangen: was im
-/// Register steht, geht in den Erkenner. `SR` vor `DR` zu lesen loescht
-/// auch einen Ueberlauf (RM0368, `ORE`), der sonst den Interrupt stehen
-/// liesse; die Schranke haelt einen Sturm von Rahmenfehlern auf (4.1, von
-/// Hand).
+/// Empfangen zuerst, damit ein `XOFF` vor dem naechsten Byte wirkt: `XON`
+/// und `XOFF` schalten das Senden, alles andere geht in den Erkenner. `SR`
+/// vor `DR` zu lesen loescht auch einen Ueberlauf (RM0368, `ORE`), der sonst
+/// den Interrupt stehen liesse; die Schranke haelt einen Sturm von
+/// Rahmenfehlern auf (4.1, von Hand). Senden: je `TXE` ein Byte aus dem
+/// FIFO; ist er leer oder die Leitung angehalten, schweigt der
+/// Sende-Interrupt, bis [`Port::flush`] oder `XON` ihn wieder weckt.
 pub fn on_interrupt() {
     // SAFETY: Der Interrupt besitzt den Sendeweg ab dem FIFO und das
     // Empfangsregister; das Programm schreibt nur `TXEIE` (unter
     // `interrupt::free`) und nie `DR`.
     let usart = unsafe { &*USART1::ptr() };
-    if usart.cr1().read().txeie().bit_is_set() && usart.sr().read().txe().bit_is_set() {
-        match TX.pop() {
-            Some(b) => {
-                usart.dr().write(|w| unsafe { w.dr().bits(u16::from(b)) });
-            }
-            None => {
-                usart.cr1().modify(|_, w| w.txeie().clear_bit());
-            }
-        }
-    }
     cortex_m::interrupt::free(|cs| {
         let cell = RECOGNIZER.borrow(cs);
         let mut magic = cell.get();
@@ -132,12 +138,31 @@ pub fn on_interrupt() {
             if sr.rxne().bit_is_clear() && sr.ore().bit_is_clear() {
                 break;
             }
-            if magic.feed(usart.dr().read().dr().bits() as u8) {
-                HANDBACK.store(true, Ordering::Relaxed);
+            match usart.dr().read().dr().bits() as u8 {
+                XOFF => PAUSED.store(true, Ordering::Relaxed),
+                XON => {
+                    PAUSED.store(false, Ordering::Relaxed);
+                    usart.cr1().modify(|_, w| w.txeie().set_bit());
+                }
+                b => {
+                    if magic.feed(b) {
+                        HANDBACK.store(true, Ordering::Relaxed);
+                    }
+                }
             }
         }
         cell.set(magic);
     });
+    if usart.cr1().read().txeie().bit_is_set() && usart.sr().read().txe().bit_is_set() {
+        match if PAUSED.load(Ordering::Relaxed) { None } else { TX.pop() } {
+            Some(b) => {
+                usart.dr().write(|w| unsafe { w.dr().bits(u16::from(b)) });
+            }
+            None => {
+                usart.cr1().modify(|_, w| w.txeie().clear_bit());
+            }
+        }
+    }
 }
 
 impl Port for Usart1 {
@@ -150,7 +175,7 @@ impl Port for Usart1 {
         if HANDBACK.load(Ordering::Relaxed) {
             crate::bootloader::enter();
         }
-        if !TX.is_empty() {
+        if !TX.is_empty() && !PAUSED.load(Ordering::Relaxed) {
             cortex_m::interrupt::free(|_| self.usart.cr1().modify(|_, w| w.txeie().set_bit()));
         }
     }

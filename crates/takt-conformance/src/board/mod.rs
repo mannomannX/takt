@@ -417,16 +417,23 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<St
 /// haben. Der Leser ist ein eigener Thread: Ein `read`, das trotz Timeout
 /// nicht zurueckkehrt (FB-266), haelt so nur ihn, nicht den Aufrufer.
 ///
+/// `flow` ist die Flusskontrolle der Leitung: XON/XOFF, wo sie keinen
+/// eigenen Rueckstau hat (FB-306).
+///
 /// Ohne [`END`] ist das Ergebnis der Text, der bis dahin kam: Ob das ein
 /// Befund ist, entscheidet der Aufrufer.
 pub(crate) fn capture(
     port: &str,
     baud: u32,
+    flow: serialport::FlowControl,
     within: Duration,
     start: impl FnOnce() -> Result<(), String>,
 ) -> Result<String, String> {
-    let mut serial =
-        serialport::new(port, baud).timeout(Duration::from_millis(200)).open().map_err(|e| format!("{port}: {e}"))?;
+    let mut serial = serialport::new(port, baud)
+        .flow_control(flow)
+        .timeout(Duration::from_millis(200))
+        .open()
+        .map_err(|e| format!("{port}: {e}"))?;
     let (tx, rx) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
     let reader = std::thread::spawn({
