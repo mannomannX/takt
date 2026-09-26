@@ -22,6 +22,9 @@ takt-rt-core = { path = "../takt-rt-core" }
 # die eine bewusste Abweichung von "PAC statt HAL" — die Speicherkarte eines
 # XIP-Chips mit ROM-Bootloader selbst zu schreiben waere Arbeit ohne Erkenntnis.
 esp-hal = { version = "1.2.1", features = ["esp32c6", "unstable"] }
+# Der Zaehler der Starts im RTC-RAM (12.7): `esp-hal` nimmt dort nur Typen,
+# die jedes Bitmuster vertragen, und von den Atomics nur diese.
+portable-atomic = { version = "1", default-features = false }
 # Das `persist`-Journal im SPI-Flash (5.9); byteweise lesen, weil die
 # Nutzlast keine Wortgrenzen kennt.
 #

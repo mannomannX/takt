@@ -64,7 +64,7 @@ use esp_hal::timer::Timer;
 use esp_hal::timer::systimer::{Alarm, SystemTimer, Unit};
 
 pub use button::Button;
-pub use guard::{WfiSleep, reboot};
+pub use guard::WfiSleep;
 pub use led::Ws2812;
 pub use nvm::FlashNvm;
 pub use pins::route_uart0;

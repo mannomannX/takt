@@ -60,13 +60,15 @@ fn slept(text: &str) -> Option<u64> {
 /// **`DEEP_SLEEP_FOR` schlaeft und weckt nach seiner Weckzeit** (12.7,
 /// FB-309). Der erste Lauf geht nach 300 ms fuer zwei Sekunden in den
 /// Tiefschlaf; der zweite beginnt mit `boot_reason = DEEP_SLEEP_WAKE` und
-/// zeigt es an `woke`. Ein freier Lauf in Echtzeit: Nur dort fuehrt das
-/// Board das Kommando aus, ein Konformitaetslauf endet mit dem Trace.
+/// `reset_count = 0`, denn der Tiefschlaf war ein geordnetes Ende. Ein
+/// freier Lauf in Echtzeit: Nur dort fuehrt das Board das Kommando aus,
+/// ein Konformitaetslauf endet mit dem Trace.
 ///
 /// Im Tiefschlaf ist der USB-Serial-JTAG aus: Dass der Port verschwindet
 /// und erst nach der Weckzeit zurueckkommt, belegt den Schlaf selbst. Die
-/// Konsole bleibt nach dem Wecken stumm (FB-311), also liest der Test die
-/// Weckursache und den Tick ueber JTAG.
+/// Konsole bleibt nach dem Wecken stumm (FB-311), also liest der Test
+/// Weckursache, Zaehler und Tick ueber JTAG — der Zaehler belegt dabei,
+/// dass der RTC-RAM den Tiefschlaf ueberlebt.
 #[test]
 fn a_deep_sleep_ends_after_its_duration() {
     let Some((mut board, _guard)) = board() else { return };
@@ -82,6 +84,8 @@ fn a_deep_sleep_ends_after_its_duration() {
     std::thread::sleep(Duration::from_millis(500));
     let reason = board.word_over_jtag(&elf, |n| n.contains("BOOT_REASON")).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(reason, 3, "der zweite Lauf beginnt mit `DEEP_SLEEP_WAKE` (12.7)");
+    let count = board.word_over_jtag(&elf, |n| n.contains("RESET_COUNT")).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(count, 0, "ein Tiefschlaf ist ein geordnetes Ende (12.7)");
     let (a, b) = (board.tick_over_jtag(&elf), board.tick_over_jtag(&elf));
     assert!(matches!((&a, &b), (Ok(x), Ok(y)) if y > x), "der zweite Lauf tickt: {a:?} {b:?}");
 }
@@ -89,8 +93,10 @@ fn a_deep_sleep_ends_after_its_duration() {
 /// **`reboot = RESTART` startet den Chip neu, und der neue Lauf weiss es**
 /// (12.7): Der erste Lauf startet nach 300 ms neu; der zweite beginnt mit
 /// `boot_reason = SOFTWARE` und zeigt es eine Sekunde spaeter an `again`,
-/// wenn der Wirt die Leitung wieder offen hat. Ein freier Lauf in Echtzeit,
-/// wie beim Tiefschlaf.
+/// wenn der Wirt die Leitung wieder offen hat. Beide Laeufe zeigen
+/// `reset_count = 0` — das Einschalten und ein befohlener Neustart zaehlen
+/// nicht — und `image_state = CONFIRMED`, denn ohne Startstufe gibt es ein
+/// Image. Ein freier Lauf in Echtzeit, wie beim Tiefschlaf.
 ///
 /// Der Neustart ist ein Software-Reset des HP-Systems: Der USB-Serial-JTAG
 /// bleibt angemeldet, und die Konsole traegt den zweiten Lauf.
@@ -104,6 +110,10 @@ fn a_restart_begins_again_with_software_as_the_reason() {
     assert!(first.contains("end restart"), "der erste Lauf endet mit dem Kommando:\n{first}");
     let second = board.listen(Duration::from_secs(4)).unwrap_or_else(|e| panic!("{e}"));
     assert!(second.contains("out again 1"), "der zweite Lauf beginnt mit `SOFTWARE`:\n{second}");
+    for (run, text) in [("erste", &first), ("zweite", &second)] {
+        assert!(text.contains("out count 0"), "der {run} Lauf zaehlt keinen Start (12.7):\n{text}");
+        assert!(text.contains("out image CONFIRMED"), "ohne Startstufe ist das Image bestaetigt:\n{text}");
+    }
 }
 
 /// **Eine `driver machine` schreibt UART0** (12.10, M8 Schritt 20).

@@ -118,8 +118,11 @@ misst `takt bench` inzwischen auf beiden Boards — oder, falls sich ESP-IDF anb
   des HP-Systems (`CoreSw`): Der USB-Serial-JTAG bleibt angemeldet, und der
   nächste Lauf liest `SOFTWARE`. Den Reset auf RTC-Ebene behält der Host
   für die Neuanmeldung (FB-266); er setzt auch das LP-System zurück, eine
-  Notiz in `LP_AON STORE0` überlebt ihn nicht, und er meldet sich als
-  `WATCHDOG`. `DEEP_SLEEP_FOR(d)` schläft über `LowPower` mit dem
+  Notiz in `LP_AON STORE0` überlebt ihn nicht, und er meldet sich wie das
+  Einschalten als `POWER_ON` (M10 Schritt 6b; der Watchdog der Runtime ist
+  der MWDT). `reset_count` steht im RTC-RAM (`#[ram(rtc_fast,
+  persistent)]`), den die Laufzeitumgebung nur beim Einschalten nullt; er
+  überlebt Software-Reset und Tiefschlaf, belegt über JTAG nach dem Wecken. `DEEP_SLEEP_FOR(d)` schläft über `LowPower` mit dem
   RTC-Zeitgeber; der Port verschwindet und kommt nach `d` wieder, und der
   nächste Lauf liest `DEEP_SLEEP_WAKE`. Danach bleibt die Konsole stumm,
   bis ein Reset kommt (FB-311); der Boardtest liest darum über JTAG.

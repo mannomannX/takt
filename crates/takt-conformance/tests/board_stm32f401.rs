@@ -40,7 +40,8 @@ fn board() -> Option<(Stm32f401, std::sync::MutexGuard<'static, ()>)> {
 /// Board das Kommando aus, ein Konformitaetslauf endet mit dem Trace.
 ///
 /// Die Leitung bleibt offen: In der ersten Sekunde darf kein neuer Start
-/// kommen, danach der zweite Lauf mit `woke`.
+/// kommen, danach der zweite Lauf mit `woke` und `reset_count = 0`, denn
+/// der Tiefschlaf war ein geordnetes Ende.
 #[test]
 fn a_deep_sleep_ends_after_its_duration() {
     let Some((mut board, _guard)) = board() else { return };
@@ -54,13 +55,16 @@ fn a_deep_sleep_ends_after_its_duration() {
     let second = board.listen(Duration::from_secs(6)).unwrap_or_else(|e| panic!("{e}"));
     assert!(second.contains("takt auf stm32f401"), "kein neuer Start nach dem Tiefschlaf:\n{second}");
     assert!(second.contains("out woke 1"), "der zweite Lauf beginnt mit `DEEP_SLEEP_WAKE`:\n{second}");
+    assert!(second.contains("out count 0"), "ein Tiefschlaf ist ein geordnetes Ende (12.7):\n{second}");
 }
 
 /// **`reboot = RESTART` startet den Chip neu, und der neue Lauf weiss es**
 /// (12.7): Der erste Lauf startet nach 300 ms neu; der zweite beginnt mit
 /// `boot_reason = SOFTWARE` und zeigt es eine Sekunde spaeter an `again`,
-/// wenn der Wirt die Leitung wieder offen hat. Ein freier Lauf in Echtzeit,
-/// wie beim Tiefschlaf.
+/// wenn der Wirt die Leitung wieder offen hat. Beide Laeufe zeigen
+/// `reset_count = 0` — das Einschalten und ein befohlener Neustart zaehlen
+/// nicht — und `image_state = CONFIRMED`, denn ohne Startstufe gibt es ein
+/// Image. Ein freier Lauf in Echtzeit, wie beim Tiefschlaf.
 #[test]
 fn a_restart_begins_again_with_software_as_the_reason() {
     let Some((mut board, _guard)) = board() else { return };
@@ -71,6 +75,10 @@ fn a_restart_begins_again_with_software_as_the_reason() {
     assert!(first.contains("end restart"), "der erste Lauf endet mit dem Kommando:\n{first}");
     let second = board.listen(Duration::from_secs(4)).unwrap_or_else(|e| panic!("{e}"));
     assert!(second.contains("out again 1"), "der zweite Lauf beginnt mit `SOFTWARE`:\n{second}");
+    for (run, text) in [("erste", &first), ("zweite", &second)] {
+        assert!(text.contains("out count 0"), "der {run} Lauf zaehlt keinen Start (12.7):\n{text}");
+        assert!(text.contains("out image CONFIRMED"), "ohne Startstufe ist das Image bestaetigt:\n{text}");
+    }
 }
 
 /// **Das Board kommt ohne Hand zurueck** (FB-275): Zwei Laeufe

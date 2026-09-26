@@ -749,6 +749,7 @@ PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Re
 PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M10 (aus M6),offen,
 PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M10 (aus M6),offen,
 PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M5 (Embedded),fertig,"FB-309: `DEEP_SLEEP` ohne Zeitgeber, `DEEP_SLEEP_FOR(duration)` mit Weckzeit, Wake-Quellen mit `deep_wake` in der Konfiguration, Prüfung 60 warnt ohne Weckquelle; Interpreter, beide Rahmen, Runtime, Tiefschlaf und `DEEP_SLEEP_WAKE` auf beiden Boards (`a_deep_sleep_ends_after_its_duration`)"
+PAR-12.7-Reset_Ursache_und_Zaehler,Absatz/Regel,12.7,Reset-Ursache und Zähler,,M10,teilweise,"M10 Schritt 6b: `boot_reason` und `reset_count` auf beiden Boards (F401 Backup-Register, C6 RTC-RAM), `image_state = CONFIRMED` ohne Startstufe; die Zählregel in `takt-board-support` (`only_starts_without_an_orderly_end_count`), Boardtests für Neustart und Tiefschlaf. Offen: der Watchdog-Pfad auf dem Board (Schritt 8), die Linux-Runtime (Schritt 15)"
 PAR-12.7-Start_Channels,Absatz/Regel,12.7,Start-Channels,,M10 (aus M6),offen,
 PAR-12.7-Irreversible_Outputs,Absatz/Regel,12.7,Irreversible Outputs,,M6 (v1.1),fertig,
 PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M10 (aus M5),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)

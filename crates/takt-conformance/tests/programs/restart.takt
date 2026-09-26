@@ -1,15 +1,21 @@
 # Neustart auf dem Board (12.7): Der erste Lauf startet nach 300 ms neu,
 # der zweite beginnt mit `SOFTWARE` und zeigt es eine Sekunde spaeter an
 # `again` — spaet genug, dass der Wirt nach dem Ende des ersten Laufs
-# wieder mitliest. Danach startet er nicht wieder.
+# wieder mitliest. Beide zeigen `reset_count` und `image_state`: Ein
+# befohlener Neustart zaehlt nicht, und ohne Startstufe ist das Image
+# bestaetigt. Danach startet er nicht wieder.
 
 system:
     language = 1
     tick     = 10 ms
 
 input  boot_reason : BootReason @ hw("sys/boot_reason")
+input  reset_count : int        @ hw("sys/reset_count")
+input  image_state : ImageState @ hw("sys/image_state")
 output reboot      : RebootCmd  @ hw("sys/reboot") with safe = NONE
 output again       : bool       @ hw("ui/led")     with safe = false
+output count       : int        @ hw("test/count") with safe = -1
+output image       : ImageState @ hw("test/image") with safe = TRIAL
 
 machine m:
     initial START
@@ -20,6 +26,8 @@ machine m:
 
     state RESTARTING:
         enter:
+            count = reset_count
+            image = image_state
             reboot = RESTART
 
     state WAITING:
@@ -28,3 +36,5 @@ machine m:
     state AGAIN:
         enter:
             again = true
+            count = reset_count
+            image = image_state

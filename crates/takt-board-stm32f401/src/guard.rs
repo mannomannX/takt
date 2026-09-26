@@ -4,7 +4,6 @@
 //! ist eine *Verteidigung*, keine Funktion — sie tun im Normalbetrieb
 //! nichts und werden nur sichtbar, wenn etwas schiefgeht.
 
-use cortex_m::peripheral::SCB;
 use stm32f4::stm32f401::{IWDG, RCC};
 use takt_rt_baremetal::{HardwareWatchdog, Sleep, StackGuard};
 
@@ -122,12 +121,4 @@ impl Sleep for WfiSleep {
         cortex_m::asm::wfi();
         tick::count().saturating_sub(before)
     }
-}
-
-/// Loest einen Systemreset aus (12.7: `reboot`).
-///
-/// Die Runtime schreibt vorher ausstehende `persist`-Aenderungen und
-/// setzt die Outputs auf `safe`; hier bleibt nur der Reset selbst.
-pub fn reboot() -> ! {
-    SCB::sys_reset()
 }

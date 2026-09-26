@@ -57,7 +57,7 @@ pub mod stack;
 pub mod tick;
 pub mod uart;
 
-pub use guard::{Canary, Iwdg, WfiSleep, reboot};
+pub use guard::{Canary, Iwdg, WfiSleep};
 pub use led::Led;
 pub use takt_mcu_program::Generated;
 pub use tick::{Tim2Tick, on_timer_interrupt};

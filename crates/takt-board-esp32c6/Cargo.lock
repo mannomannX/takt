@@ -1095,6 +1095,7 @@ dependencies = [
  "critical-section",
  "esp-hal",
  "esp-storage",
+ "portable-atomic",
  "takt-board-support",
  "takt-mcu-program",
  "takt-rt-baremetal",

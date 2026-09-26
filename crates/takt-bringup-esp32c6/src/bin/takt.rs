@@ -11,11 +11,12 @@
 #![allow(unsafe_code, reason = "C-ABI des Rahmens; 9.5 fuehrt Treiber in der TCB")]
 
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicI32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use takt_board_esp32c6::{Button, FlashNvm, Generated, Telemetry, Ws2812, route_uart0};
+use takt_board_esp32c6::{Button, FlashNvm, Generated, Telemetry, Ws2812, platform, route_uart0};
+use takt_board_support::platform::image_state;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Sleep, TimerClock};
 use takt_rt_core::{Clock, Journal, Loaded, Persist, PlatformCommand, Policy, Profile, Runtime};
 
@@ -141,6 +142,39 @@ pub unsafe extern "C" fn takt_in_sys_boot_reason(value: *mut i32, quality: *mut 
     true
 }
 
+/// Die Starts in Folge ohne geordnetes Ende (12.7), beim Start gezaehlt.
+static RESET_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Der Treiber fuer `input … @ hw("sys/reset_count")` (12.7).
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild; `int`
+/// liegt dort als `long long`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_sys_reset_count(value: *mut i64, quality: *mut u8) -> bool {
+    unsafe {
+        *value = i64::from(RESET_COUNT.load(Ordering::Relaxed));
+        *quality = 0;
+    }
+    true
+}
+
+/// Der Treiber fuer `input … @ hw("sys/image_state")` (12.7): Ohne
+/// Startstufe gibt es ein Image, und es ist bestaetigt.
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_sys_image_state(value: *mut i32, quality: *mut u8) -> bool {
+    unsafe {
+        *value = image_state::CONFIRMED;
+        *quality = 0;
+    }
+    true
+}
+
 /// Der Input `ui_button` aus dem BOOT-Taster an IO9 (12.1 Schritt 2).
 ///
 /// Ein wackelnder Kontakt meldet `Suspect` statt `Good`: Der Wert ist da,
@@ -192,8 +226,8 @@ fn platform(command: Option<PlatformCommand>) {
         u.finish(DRAIN_ROUNDS);
     }
     match command {
-        PlatformCommand::Restart => takt_board_esp32c6::platform::restart(),
-        PlatformCommand::DeepSleep(duration) => takt_board_esp32c6::platform::deep_sleep(duration),
+        PlatformCommand::Restart => platform::restart(),
+        PlatformCommand::DeepSleep(duration) => platform::deep_sleep(duration),
         // TODO(M10 Schritt 17): Der Sprung braucht Slots, die erst das
         // Profil `boot` einrichtet; bis dahin haelt das Board mit
         // `safe`-Ausgaengen an und sagt es.
@@ -207,7 +241,9 @@ fn main() -> ! {
     takt_board_esp32c6::stack::paint();
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     takt_board_esp32c6::reenumerate_if_requested();
-    BOOT_REASON.store(takt_board_esp32c6::platform::boot_reason(), Ordering::Relaxed);
+    let boot_reason = platform::boot_reason();
+    BOOT_REASON.store(boot_reason, Ordering::Relaxed);
+    RESET_COUNT.store(platform::reset_count(boot_reason), Ordering::Relaxed);
     let mut telemetry = takt_board_esp32c6::telemetry(peripherals.USB_DEVICE);
     let Ok(timer) = takt_board_esp32c6::init(peripherals.SYSTIMER, TICK_NS) else {
         telemetry.write("takt: Periode nicht einrichtbar");

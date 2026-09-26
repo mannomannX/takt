@@ -1,14 +1,17 @@
 # Tiefschlaf mit Weckzeit auf dem Board (12.7, FB-309): Der erste Lauf
 # schlaeft zwei Sekunden, der zweite beginnt mit `DEEP_SLEEP_WAKE` und zeigt
-# es an `woke`. Nach dem Wecken schlaeft er nicht wieder.
+# es an `woke`, dazu `reset_count`: Ein Tiefschlaf ist ein geordnetes Ende
+# und zaehlt nicht. Nach dem Wecken schlaeft er nicht wieder.
 
 system:
     language = 1
     tick     = 10 ms
 
 input  boot_reason : BootReason @ hw("sys/boot_reason")
+input  reset_count : int        @ hw("sys/reset_count")
 output reboot      : RebootCmd  @ hw("sys/reboot") with safe = NONE
 output woke        : bool       @ hw("ui/led")     with safe = false
+output count       : int        @ hw("test/count") with safe = -1
 
 machine m:
     initial START
@@ -19,8 +22,10 @@ machine m:
 
     state SLEEP:
         enter:
+            count = reset_count
             reboot = DEEP_SLEEP_FOR(duration = 2 s)
 
     state AWAKE:
         enter:
             woke = true
+            count = reset_count

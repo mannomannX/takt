@@ -1,5 +1,5 @@
 //! Die Plattformschnittstelle ohne Register (12.7): was jedes Board zur
-//! Reset-Ursache und zum Tiefschlaf rechnet.
+//! Reset-Ursache, zum Zaehler der Starts und zum Tiefschlaf rechnet.
 
 /// `BootReason` aus dem Prelude als Diskriminante. Die Reihenfolge steht
 /// in 12.7, und das Enum ist offen (2.5): Neue Varianten kommen hinten
@@ -13,6 +13,29 @@ pub mod boot_reason {
     pub const SOFTWARE: i32 = 2;
     /// Der Tiefschlaf ist zu Ende (`DEEP_SLEEP`, `DEEP_SLEEP_FOR`).
     pub const DEEP_SLEEP_WAKE: i32 = 3;
+}
+
+/// `ImageState` aus dem Prelude als Diskriminante.
+pub mod image_state {
+    /// Das Image ist bestaetigt; ohne Startstufe ist es das einzige (12.7).
+    pub const CONFIRMED: i32 = 0;
+}
+
+/// Was ein Lauf fuer `reset_count` hinterlaesst, der geordnet endet: Das
+/// Board schreibt es vor einem Kommando an die Plattform (12.7).
+pub const ORDERLY_END: u32 = u32::MAX;
+
+/// `sys/reset_count` (12.7): die Starts in Folge ohne geordnetes Ende.
+///
+/// `stored` ist, was der vorige Lauf hinterliess — seine Zahl oder
+/// [`ORDERLY_END`]. Nach dem Einschalten zaehlt es nicht, was dort steht.
+/// Die Zahl bleibt unter [`ORDERLY_END`] stehen, statt ihn zu erreichen.
+pub fn reset_count(boot_reason: i32, stored: u32) -> u32 {
+    if boot_reason == boot_reason::POWER_ON || stored == ORDERLY_END {
+        0
+    } else {
+        stored.saturating_add(1).min(ORDERLY_END - 1)
+    }
 }
 
 /// Die kuerzeste Weckzeit, die ein Board schlaeft: Eine kuerzere Frist
@@ -86,6 +109,16 @@ mod tests {
         let week = rtc_wakeup(7 * day, LSE);
         assert_eq!((week.wucksel, week.wutr), (0b110, u16::MAX));
         assert_eq!(week.rest_ns, 7 * day - 131_072 * 1_000_000_000);
+    }
+
+    #[test]
+    fn only_starts_without_an_orderly_end_count() {
+        assert_eq!(reset_count(boot_reason::WATCHDOG, 0), 1);
+        assert_eq!(reset_count(boot_reason::WATCHDOG, 1), 2);
+        assert_eq!(reset_count(boot_reason::SOFTWARE, ORDERLY_END), 0);
+        assert_eq!(reset_count(boot_reason::DEEP_SLEEP_WAKE, ORDERLY_END), 0);
+        assert_eq!(reset_count(boot_reason::POWER_ON, 7), 0);
+        assert_eq!(reset_count(boot_reason::WATCHDOG, ORDERLY_END - 1), ORDERLY_END - 1);
     }
 
     #[test]

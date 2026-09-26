@@ -1,5 +1,9 @@
-//! Die Plattformschnittstelle des Boards (12.7): Reset-Ursache und
-//! Tiefschlaf. Den Neustart macht [`crate::reboot`].
+//! Die Plattformschnittstelle des Boards (12.7): Reset-Ursache, Zaehler der
+//! Starts, Neustart und Tiefschlaf.
+//!
+//! **Der Zaehler steht im Backup-Register 3** der RTC: Es ueberlebt Reset,
+//! Watchdog und Standby, das Ausschalten nicht — genau die Lebensdauer, die
+//! 12.7 fuer `reset_count` verlangt.
 //!
 //! **Tiefschlaf ist Standby** (RM0368 5.3.7): Kern und RAM sind aus, der
 //! Wakeup-Timer der RTC weckt, und das Wecken ist ein Reset mit `SBF` in
@@ -12,14 +16,18 @@
 //! ueberleben, und [`continue_deep_sleep`] schlaeft ihn beim Start weiter,
 //! bevor das Programm laeuft.
 
+use cortex_m::peripheral::SCB;
 use stm32f4::stm32f401::{PWR, RCC, RTC, pwr, rcc, rtc};
-use takt_board_support::platform::{RtcWakeup, boot_reason as reason, rtc_wakeup};
+use takt_board_support::platform::{ORDERLY_END, RtcWakeup, boot_reason as reason, rtc_wakeup};
 
 use crate::{CORE_HZ, cycles};
 
 /// Kennung eines Tiefschlafs, der noch einen Rest hat (Backup-Register 0);
 /// der Rest in Nanosekunden steht in den Registern 1 und 2.
 const PENDING: u32 = u32::from_le_bytes(*b"TIEF");
+
+/// Das Backup-Register mit `reset_count` (12.7).
+const COUNT: usize = 3;
 
 const LSE_HZ: u32 = 32_768;
 const LSI_HZ: u32 = 32_000;
@@ -57,6 +65,22 @@ pub fn boot_reason() -> i32 {
     r
 }
 
+/// `sys/reset_count` zu `boot_reason` (12.7); zaehlt diesen Start. Einmal
+/// beim Start zu rufen, nach [`boot_reason`].
+pub fn reset_count(boot_reason: i32) -> u32 {
+    let (_, _, rtc) = registers();
+    let count = takt_board_support::platform::reset_count(boot_reason, rtc.bkpr(COUNT).read().bits());
+    backup(COUNT, count);
+    count
+}
+
+/// `reboot = RESTART`: der Systemreset; der naechste Start meldet
+/// `SOFTWARE` und zaehlt von vorn.
+pub fn restart() -> ! {
+    backup(COUNT, ORDERLY_END);
+    SCB::sys_reset()
+}
+
 /// Schlaeft einen Tiefschlaf weiter, der noch einen Rest hat, und kehrt
 /// sonst zurueck. Als Erstes beim Start zu rufen.
 pub fn continue_deep_sleep() {
@@ -76,6 +100,7 @@ pub fn continue_deep_sleep() {
 /// `DEEP_SLEEP_WAKE`. Das Board hat keinen Input am WKUP-Pin, also weckt
 /// ohne Zeitgeber nur ein Reset.
 pub fn deep_sleep(duration_ns: Option<i64>) -> ! {
+    backup(COUNT, ORDERLY_END);
     let (rcc, pwr, rtc) = registers();
     rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
     pwr.cr().modify(|_, w| w.dbp().set_bit());
@@ -161,6 +186,15 @@ fn disarm(rtc: &rtc::RegisterBlock) {
     rtc.isr().modify(|_, w| w.wutf().clear_bit());
     lock(rtc);
     rtc.bkpr(0).write(|w| unsafe { w.bits(0) });
+}
+
+/// Schreibt das Backup-Register `n`; die Domaene ist nur dafuer offen.
+fn backup(n: usize, value: u32) {
+    let (rcc, pwr, rtc) = registers();
+    rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
+    pwr.cr().modify(|_, w| w.dbp().set_bit());
+    rtc.bkpr(n).write(|w| unsafe { w.bits(value) });
+    pwr.cr().modify(|_, w| w.dbp().clear_bit());
 }
 
 fn unlock(rtc: &rtc::RegisterBlock) {

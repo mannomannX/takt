@@ -42,7 +42,8 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
-use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Generated, Led, Telemetry, WfiSleep, cycles, tick};
+use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Generated, Led, Telemetry, WfiSleep, cycles, platform, tick};
+use takt_board_support::platform::image_state;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Sleep, TimerClock};
 use takt_rt_core::{Clock, FakeNvm, Persist, PlatformCommand, Policy, Profile, Runtime};
 
@@ -154,6 +155,39 @@ pub unsafe extern "C" fn takt_in_sys_boot_reason(value: *mut i32, quality: *mut 
     true
 }
 
+/// Die Starts in Folge ohne geordnetes Ende (12.7), beim Start gezaehlt.
+static RESET_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Der Treiber fuer `input … @ hw("sys/reset_count")` (12.7).
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild; `int`
+/// liegt dort als `long long`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_sys_reset_count(value: *mut i64, quality: *mut u8) -> bool {
+    unsafe {
+        *value = i64::from(RESET_COUNT.load(Ordering::Relaxed));
+        *quality = 0;
+    }
+    true
+}
+
+/// Der Treiber fuer `input … @ hw("sys/image_state")` (12.7): Ohne
+/// Startstufe gibt es ein Image, und es ist bestaetigt.
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_sys_image_state(value: *mut i32, quality: *mut u8) -> bool {
+    unsafe {
+        *value = image_state::CONFIRMED;
+        *quality = 0;
+    }
+    true
+}
+
 /// Der Treiber fuer `output led : bool @ hw("ui/led")`.
 ///
 /// Der Name ist die Adresse: Der Rahmen bildet `hw("ui/led")` auf
@@ -217,8 +251,8 @@ fn platform(command: Option<PlatformCommand>) {
         u.finish(DRAIN_ROUNDS);
     }
     match command {
-        PlatformCommand::Restart => takt_board_stm32f401::reboot(),
-        PlatformCommand::DeepSleep(duration) => takt_board_stm32f401::platform::deep_sleep(duration),
+        PlatformCommand::Restart => platform::restart(),
+        PlatformCommand::DeepSleep(duration) => platform::deep_sleep(duration),
         // TODO(M10 Schritt 17): Der Sprung braucht Slots, die erst das
         // Profil `boot` einrichtet; bis dahin haelt das Board mit
         // `safe`-Ausgaengen an und sagt es.
@@ -235,8 +269,10 @@ fn platform(command: Option<PlatformCommand>) {
 #[entry]
 fn main() -> ! {
     // Ein Tiefschlaf mit Rest schlaeft weiter, bevor irgendetwas laeuft (12.7).
-    takt_board_stm32f401::platform::continue_deep_sleep();
-    BOOT_REASON.store(takt_board_stm32f401::platform::boot_reason(), Ordering::Relaxed);
+    platform::continue_deep_sleep();
+    let boot_reason = platform::boot_reason();
+    BOOT_REASON.store(boot_reason, Ordering::Relaxed);
+    RESET_COUNT.store(platform::reset_count(boot_reason), Ordering::Relaxed);
     // Dann: Die Abschlusszeile meldet, wie tief der Stack unter Last reichte.
     takt_board_stm32f401::stack::paint();
     let dp = Peripherals::take().expect("Peripherie");

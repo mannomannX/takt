@@ -111,6 +111,9 @@ where
     // Tick (FB-271); die Zeitzeile ist Statistik und darf duenner werden.
     let time_every = (1_000_000 / rt.tick_ns()).max(1) as u64;
     stats.command = rt.program.command();
+    // Ob der Stand des letzten Ticks schon ausgegeben ist; im
+    // Konformitaetslauf ist es jeder, auch der Anfangszustand.
+    let mut shown = cadence.conformance();
     while stats.command.is_none() {
         let tick = match persist.as_deref_mut() {
             Some(p) => rt.step_persisting(p),
@@ -126,7 +129,8 @@ where
             t.write_time(&tick);
         }
         let k = rt.tick_number();
-        if k >= next {
+        shown = k >= next;
+        if shown {
             next = k + every;
             rt.program.dump(!cadence.conformance());
             if cadence.pc {
@@ -143,6 +147,11 @@ where
     }
     stats.flushed = persist.is_some_and(|p| p.flush(&mut rt.program));
     if stats.command.is_some() {
+        // Den Tick, der das Kommando traegt, zeigt auch ein freier Lauf,
+        // der sonst nur jeden `every`-ten ausgibt: Er erklaert das Ende.
+        if !shown {
+            rt.program.dump(!cadence.conformance());
+        }
         rt.program.end();
         rt.program.commit();
         rt.program.dump(!cadence.conformance());
@@ -217,6 +226,10 @@ mod tests {
         ticks: u64,
         ended: Cell<bool>,
         committed_after_end: Cell<bool>,
+        /// Der letzte Tick, dessen ganzer Stand vor dem Ende ausgegeben
+        /// wurde, und wie oft das geschah.
+        shown: Cell<Option<u64>>,
+        full_dumps: Cell<u32>,
     }
 
     impl Program for Ending {
@@ -234,7 +247,12 @@ mod tests {
             self.committed_after_end.set(self.ended.get());
         }
 
-        fn dump(&self, _all: bool) {}
+        fn dump(&self, all: bool) {
+            if all && !self.ended.get() {
+                self.shown.set(Some(self.ticks));
+                self.full_dumps.set(self.full_dumps.get() + 1);
+            }
+        }
 
         fn pc(&self) {}
 
@@ -252,12 +270,22 @@ mod tests {
     }
 
     fn run_until(at: u64) -> (Stats, Ending) {
-        let program = Ending { at, ticks: 0, ended: Cell::new(false), committed_after_end: Cell::new(false) };
+        run_with(at, Cadence::of(60, 1, false))
+    }
+
+    fn run_with(at: u64, cadence: Cadence) -> (Stats, Ending) {
+        let program = Ending {
+            at,
+            ticks: 0,
+            ended: Cell::new(false),
+            committed_after_end: Cell::new(false),
+            shown: Cell::new(None),
+            full_dumps: Cell::new(0),
+        };
         let clock = LogicalClock::new(|| {});
         let mut rt = Runtime::new(program, clock, NoWatchdog, (), Profile::BAREMETAL, 1_000_000, Policy::Fault);
-        let stats = run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, Cadence::of(60, 1, false), || {
-            None::<&'static mut Telemetry<NoLine, 8>>
-        });
+        let stats =
+            run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, cadence, || None::<&'static mut Telemetry<NoLine, 8>>);
         (stats, rt.program)
     }
 
@@ -269,6 +297,17 @@ mod tests {
         assert_eq!(stats.command, Some(PlatformCommand::Jump(1)));
         assert_eq!(program.ticks, 3);
         assert!(program.ended.get() && program.committed_after_end.get());
+    }
+
+    /// Ein freier Lauf gibt nur jeden hundertsten Tick aus; den Tick mit dem
+    /// Kommando zeigt er trotzdem, vor den `safe`-Werten — und ohne ihn
+    /// doppelt zu zeigen, wenn er ohnehin dran war.
+    #[test]
+    fn a_free_run_shows_the_tick_of_its_command() {
+        for at in [30, 100, 0] {
+            let (_, program) = run_with(at, Cadence::of(0, 100, false));
+            assert_eq!((program.shown.get(), program.full_dumps.get()), (Some(at), 1), "Kommando ab Tick {at}");
+        }
     }
 
     /// Setzt schon der Anfangszustand das Kommando, laeuft kein Tick.

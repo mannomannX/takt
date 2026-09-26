@@ -1,4 +1,4 @@
-//! Schlaf und Neustart (9.9, 12.3).
+//! Schlaf (9.9, 12.3); den Neustart macht [`crate::platform::restart`].
 
 use takt_rt_baremetal::Sleep;
 
@@ -16,9 +16,4 @@ impl Sleep for WfiSleep {
         crate::wfi();
         tick::count().saturating_sub(before)
     }
-}
-
-/// Startet den Chip neu.
-pub fn reboot() -> ! {
-    esp_hal::system::software_reset()
 }
