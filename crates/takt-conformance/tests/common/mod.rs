@@ -143,5 +143,16 @@ fn run_native_build(clang: &Clang, p: &Program, name: &str, ticks: u64, h: harne
     let out = std::process::Command::new(&exe).output().map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let _ = std::fs::remove_dir_all(&dir);
-    Ok(text)
+    finished(&out.status, text)
+}
+
+/// Ein Lauf, der abbricht, liefert einen abgeschnittenen Trace, und der
+/// Vergleich prueft nur, was beide Seiten melden (FB-305): Der Abbruch
+/// ist der Befund, nicht die Zeilen davor.
+pub fn finished(status: &std::process::ExitStatus, text: String) -> Result<String, String> {
+    if status.success() {
+        return Ok(text);
+    }
+    let tail: Vec<&str> = text.lines().rev().take(4).collect();
+    Err(format!("der Lauf brach ab ({status}); zuletzt:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n")))
 }

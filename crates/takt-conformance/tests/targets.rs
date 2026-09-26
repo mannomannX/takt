@@ -129,7 +129,7 @@ fn run_for(target: Target, p: &takt_mir::Program, name: &str, machine: Option<&s
     .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&run.stdout).to_string();
     let _ = std::fs::remove_dir_all(&dir);
-    Ok(text)
+    common::finished(&run.status, text)
 }
 
 /// **Die Abnahme von Schritt 11.** Dasselbe Programm liefert auf beiden

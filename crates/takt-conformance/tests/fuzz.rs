@@ -177,7 +177,7 @@ fn generated_programs_agree() {
         let native = match crate::common::run_native(&clang, &p, &format!("fuzz{runde}"), &machine, TICKS) {
             Ok(t) => t,
             Err(e) => {
-                errors.push(format!("`{expr}`: laesst sich nicht bauen:\n{e}"));
+                errors.push(format!("`{expr}`: kein nativer Lauf:\n{e}"));
                 continue;
             }
         };

@@ -16,7 +16,11 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 65] = [
+///
+/// `68_uart_port` fehlt: Ein Port ist nativ ein Zugriff auf seine absolute
+/// Adresse, und dort hat der Wirt keinen Speicher (FB-261). Der Lauf brach
+/// ab, und der leere Trace widersprach nichts (FB-305).
+const KORPUS: [&str; 64] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -66,7 +70,6 @@ const KORPUS: [&str; 65] = [
     "62_type_generics.takt",
     "63_scoped_instances.takt",
     "64_scoped_exit.takt",
-    "68_uart_port.takt",
     "69_qp_box.takt",
     "70_padded_record.takt",
     "71_places.takt",
@@ -135,7 +138,7 @@ fn virtual_sleep_is_invisible() {
         let native = match common::run_native_sleeping(&clang, &p, name, TICKS) {
             Ok(t) => t,
             Err(e) => {
-                failed.push(format!("{name}: laesst sich nicht bauen:\n{e}"));
+                failed.push(format!("{name}: kein nativer Lauf:\n{e}"));
                 continue;
             }
         };
@@ -170,16 +173,22 @@ fn the_interpreter_and_the_generated_code_agree() {
         let native = match common::run_native_all(&clang, &p, name, TICKS) {
             Ok(t) => t,
             Err(e) => {
-                failed.push(format!("{name}: laesst sich nicht bauen:\n{e}"));
+                failed.push(format!("{name}: kein nativer Lauf:\n{e}"));
                 continue;
             }
         };
         let interpreted = run_interpreted(&p);
+        // Der Vergleich prueft nur Ausgaenge, die beide Seiten melden; einer,
+        // den der Rahmen nie schreibt, fiele sonst durch (FB-305).
+        let missing: Vec<String> = common::board::output_names(&interpreted)
+            .difference(&common::board::output_names(&native))
+            .cloned()
+            .collect();
         let diffs = compare(&interpreted, &native);
-        if !diffs.is_empty() {
+        if !missing.is_empty() || !diffs.is_empty() {
             let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
             failed.push(format!(
-                "{name}: {} Abweichungen\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
+                "{name}: {} Abweichungen, fehlende Ausgaenge {missing:?}\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
                 diffs.len(),
                 list.join("\n"),
                 interpreted.lines().take(12).collect::<Vec<_>>().join("\n"),

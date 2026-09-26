@@ -82,7 +82,7 @@ fn the_reference_examples_agree_on_both_paths() {
         let native = match common::run_native_all(&clang, &p, name, TICKS) {
             Ok(t) => t,
             Err(e) => {
-                failed.push(format!("{name}: laesst sich nicht bauen:\n{e}"));
+                failed.push(format!("{name}: kein nativer Lauf:\n{e}"));
                 continue;
             }
         };

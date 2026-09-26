@@ -68,6 +68,14 @@ pub const LIMITS: &[Limit] = &[
                vergleichen statt der Outputs danach; das ist ein eigener Vergleich.",
     },
     Limit {
+        was: "Registerports auf dem Wirt (12.10)",
+        warum: "Ein Port ist im erzeugten Code ein `volatile`-Zugriff auf seine absolute \
+                Adresse; der Wirt hat dort keinen Speicher, und der Lauf bricht ab. \
+                `68_uart_port` steht darum nicht im Differential (FB-261, FB-305), und Ports \
+                prueft nur der Interpreter (`ports.rs`).",
+        wann: "M10 Schritt 9: ein Helfer im IR, dessen Rumpf auf dem Wirt den Rahmen ruft.",
+    },
+    Limit {
         was: "aarch64",
         warum: "Verglichen wird x86-64 gegen den Interpreter. Satz 9.4.4 verlangt auch \
                 x86-64 gegen aarch64 — dieselbe Rechnung auf anderer Hardware.",
