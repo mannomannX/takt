@@ -4,59 +4,76 @@
 //! ist eine *Verteidigung*, keine Funktion — sie tun im Normalbetrieb
 //! nichts und werden nur sichtbar, wenn etwas schiefgeht.
 
-use stm32f4::stm32f401::{IWDG, RCC};
-use takt_rt_baremetal::{HardwareWatchdog, Sleep, StackGuard};
+use stm32f4::stm32f401::{IWDG, iwdg};
+use takt_rt_baremetal::{Sleep, StackGuard};
+use takt_rt_core::Watchdog;
 
 use crate::tick;
 
 /// Der unabhaengige Watchdog (IWDG) des F401 (12.3).
 ///
-/// Er laeuft auf dem internen 32-kHz-Oszillator und damit unabhaengig vom
+/// Er laeuft am internen RC-Oszillator (LSI) und damit unabhaengig vom
 /// Systemtakt — genau das will 12.3: Ein Watchdog, der an derselben Uhr
-/// haengt wie das Programm, faellt mit ihr zusammen aus.
-pub struct Iwdg {
-    iwdg: IWDG,
-    /// Kam der letzte Reset vom Watchdog?
-    ///
-    /// Beim Start aus dem RCC gelesen und gemerkt: Das Flag muss geloescht
-    /// werden, damit der *naechste* Reset es wieder setzen kann, und
-    /// danach ist die Information weg.
-    was_watchdog: bool,
-}
+/// haengt wie das Programm, faellt mit ihr zusammen aus. Nach seiner Frist
+/// setzt er den Chip zurueck, und der naechste Start meldet `WATCHDOG`
+/// (`platform::boot_reason`).
+///
+/// **Einmal gestartet, haelt ihn nur ein Reset an** (RM0368 17.3). Er
+/// zaehlt im Standby weiter und im Bootloader, der ihn nicht bedient; darum
+/// gehen Tiefschlaf und Rueckgabe an den Host ueber einen Reset
+/// ([`crate::platform::deep_sleep`], [`crate::bootloader::request`]).
+#[derive(Clone, Copy, Debug)]
+pub struct Iwdg;
+
+/// Der LSI laut Datenblatt zwischen 17 und 47 kHz; die Frist rechnet mit
+/// dem schnellsten, damit der Watchdog nie vor ihr zuschlaegt.
+const LSI_MAX_HZ: u32 = 47_000;
+
+/// Schranke fuer das Warten, bis der IWDG Vorteiler und Nachladewert
+/// uebernommen hat — hoechstens fuenf Takte des LSI (4.1, von Hand).
+const SETTLE: u32 = 100_000;
 
 impl Iwdg {
-    /// Liest die Reset-Ursache und startet den Watchdog.
-    ///
-    /// `period_ms` ist die Frist, nach der ohne `kick` zurueckgesetzt
-    /// wird. Sie muss ueber der Tickperiode liegen, mit Reserve: Ein
-    /// Watchdog, der bei einem einzelnen langen Tick zuschlaegt, macht aus
-    /// einem `Runtime(Overrun)` einen Neustart — und verliert damit die
-    /// Diagnose, die 7.3 vorsieht.
-    pub fn start(iwdg: IWDG, rcc: &RCC, period_ms: u32) -> Iwdg {
-        // 12.3: „Outputs auf `safe` bei Reset-Ursache Watchdog vor
-        // Neustart." Die Ursache steht im RCC und ueberlebt den Reset.
-        let was_watchdog = rcc.csr().read().wdgrstf().bit_is_set();
-        rcc.csr().modify(|_, w| w.rmvf().set_bit());
-
-        // Der IWDG will eine Entsperrsequenz, bevor er Register annimmt.
-        iwdg.kr().write(|w| unsafe { w.key().bits(0x5555) });
-        // Vorteiler 32: 32 kHz / 32 = 1 kHz, also ein Zaehlschritt je
-        // Millisekunde. Damit ist `period_ms` unmittelbar der Zaehlerwert.
-        iwdg.pr().write(|w| unsafe { w.pr().bits(0b011) });
-        iwdg.rlr().write(|w| unsafe { w.rl().bits(period_ms.min(0x0FFF) as u16) });
+    /// Startet den Watchdog mit der Frist `timeout_ns`, oder gibt einem
+    /// laufenden eine neue, und bestaetigt ihn.
+    pub fn arm(timeout_ns: i64) -> Iwdg {
+        let (pr, rlr) = takt_board_support::watchdog::iwdg(timeout_ns, LSI_MAX_HZ);
+        let iwdg = registers();
         iwdg.kr().write(|w| unsafe { w.key().bits(0xCCCC) });
+        iwdg.kr().write(|w| unsafe { w.key().bits(0x5555) });
+        settle(iwdg);
+        iwdg.pr().write(|w| unsafe { w.pr().bits(pr) });
+        iwdg.rlr().write(|w| unsafe { w.rl().bits(rlr) });
+        settle(iwdg);
+        Iwdg::feed();
+        Iwdg
+    }
 
-        Iwdg { iwdg, was_watchdog }
+    /// Setzt die Frist zurueck; ohne gestarteten Watchdog wirkungslos.
+    pub fn feed() {
+        registers().kr().write(|w| unsafe { w.key().bits(0xAAAA) });
     }
 }
 
-impl HardwareWatchdog for Iwdg {
+impl Watchdog for Iwdg {
     fn kick(&mut self) {
-        self.iwdg.kr().write(|w| unsafe { w.key().bits(0xAAAA) });
+        Iwdg::feed();
     }
+}
 
-    fn reset_was_watchdog(&self) -> bool {
-        self.was_watchdog
+fn registers() -> &'static iwdg::RegisterBlock {
+    // SAFETY: Der Watchdog hat keinen Zustand ausser seinen Registern, und
+    // jeder Zugriff steht fuer sich.
+    unsafe { &*IWDG::ptr() }
+}
+
+/// Wartet, bis eine Aenderung von Vorteiler und Nachladewert uebernommen
+/// ist (`PVU`, `RVU`); erst dann nimmt der IWDG die naechste an.
+fn settle(iwdg: &iwdg::RegisterBlock) {
+    for _ in 0..SETTLE {
+        if iwdg.sr().read().bits() == 0 {
+            break;
+        }
     }
 }
 

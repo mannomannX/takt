@@ -135,8 +135,11 @@ misst `takt bench` inzwischen auf beiden Boards — oder, falls sich ESP-IDF anb
   `a_board_input_reaches_the_process_image`. Damit ist 14.7 nicht mehr am
   Rahmen blockiert, sondern nur noch an seinen eigenen Treibern (AFE,
   Ladegerät als Wake-Quelle).
-- Watchdog: `esp-hal` hält RWDT und MWDT beim Start an; die Schleife läuft
-  mit einem leeren `Watchdog` (12.3 verlangt einen echten).
+- ~~Watchdog: `esp-hal` hält RWDT und MWDT beim Start an; die Schleife läuft
+  mit einem leeren `Watchdog` (12.3 verlangt einen echten).~~ — erledigt in
+  M10 Schritt 8: Der MWDT0 (`watchdog.rs`) wacht im Betrieb und setzt das
+  HP-System zurück (`TG0_WDT_HPSYS`); die Konsole übersteht es, und der
+  nächste Lauf meldet `WATCHDOG`.
 - ~~`build.rs` nimmt das `takt`-Werkzeug aus dem Release-Verzeichnis, auch
   wenn es älter ist als der Compiler (FB-193)~~ — erledigt: das Skript
   prüft den Stand und weist ein veraltetes Werkzeug ab; `cargo build -p

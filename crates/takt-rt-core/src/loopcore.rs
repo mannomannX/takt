@@ -19,10 +19,20 @@ pub trait Clock {
     fn wait_until(&mut self, deadline: i64);
 }
 
-/// Der Watchdog (12.4).
+/// Der Watchdog (12.3, 12.4).
 pub trait Watchdog {
     /// Bestaetigt, dass der Tick durchgelaufen ist.
     fn kick(&mut self);
+}
+
+/// Ein Watchdog, der nur im Betrieb wacht: `None` in einem Lauf, der auf
+/// die Leitung warten darf (13.8).
+impl<W: Watchdog> Watchdog for Option<W> {
+    fn kick(&mut self) {
+        if let Some(w) = self {
+            w.kick();
+        }
+    }
 }
 
 /// Telemetrie und Aufzeichnung (12.1: `record_and_telemeter()`).
@@ -283,6 +293,10 @@ pub struct Runtime<P, C, W, S> {
     k: u64,
     /// Absoluter Zeitpunkt, an dem der naechste Tick beginnt.
     deadline: i64,
+    /// Die erste Tickgrenze, an der die Schleife auf dem Weg zur Frist den
+    /// Watchdog bestaetigt: nach virtuellen Ticks die erste geschlafene,
+    /// sonst die Frist selbst.
+    beat_from: i64,
     /// Im vorigen Tick ist die Periode uebergelaufen (7.3: der Fault wirkt
     /// im naechsten Tick).
     pending_overrun: bool,
@@ -305,6 +319,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
             overrun: Overrun::new(policy),
             k: 0,
             deadline: start,
+            beat_from: start,
             pending_overrun: false,
         }
     }
@@ -316,7 +331,15 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// bestaetigte er einen Tick, der noch nicht durchgelaufen ist, und
     /// haette seinen Zweck verloren (12.4).
     pub fn step(&mut self) -> Tick {
-        // wait_for_tick_boundary()
+        // wait_for_tick_boundary(): Nach virtuellen Ticks (9.9) liegt die
+        // Frist mehrere Perioden voraus. Die Schleife wartet Periode fuer
+        // Periode und bestaetigt den Watchdog an jeder Grenze — er sieht
+        // auch im Schlaf, dass die Tickquelle lebt (12.3).
+        while self.beat_from < self.deadline {
+            self.clock.wait_until(self.beat_from);
+            self.watchdog.kick();
+            self.beat_from = self.beat_from.saturating_add(self.tick_ns);
+        }
         self.clock.wait_until(self.deadline);
         let began = self.clock.now();
         let drift = began - self.deadline;
@@ -352,6 +375,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         // Der naechste Tick beginnt eine Periode nach diesem — absolut
         // gerechnet, damit ein zu spaeter Tick die folgenden nicht
         // verschiebt (12.2). Der Tick wird nie uebersprungen (7.3).
+        self.beat_from = self.deadline.saturating_add(self.tick_ns);
         self.deadline = self.deadline.saturating_add(self.tick_ns.saturating_mul(1 + tick.slept as i64));
         tick
     }

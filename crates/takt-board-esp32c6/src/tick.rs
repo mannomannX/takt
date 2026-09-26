@@ -76,17 +76,16 @@ impl TickSource for SystimerTick {
         takt_board_support::clock::period_ns(self.timer_hz, LAST_COUNTS.load(Ordering::Relaxed))
     }
 
-    /// Im RAM, weil sie waehrend eines Flash-Schreibvorgangs laeuft (12.3).
+    /// Ein `wfi`, ausser der Tick ist schon da; geprueft bei gesperrten
+    /// Interrupts (FB-296) — `wfi` weckt auch dann, und die ISR laeuft
+    /// danach. Im RAM, weil sie waehrend eines Flash-Schreibvorgangs laeuft
+    /// (12.3).
     #[esp_hal::ram]
-    fn wait_for_tick(&mut self) {
-        let start = count();
-        while count() == start {
-            crate::wfi();
-        }
-    }
-
-    #[esp_hal::ram]
-    fn wait_event(&mut self) {
-        crate::wfi();
+    fn wait_event(&mut self, target: u64) {
+        critical_section::with(|_| {
+            if count() < target {
+                crate::wfi();
+            }
+        });
     }
 }

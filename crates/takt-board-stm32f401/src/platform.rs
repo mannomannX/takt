@@ -11,10 +11,15 @@
 //! nicht an, am internen RC (LSI, nominal 32 kHz, laut RM0368 17 bis
 //! 47 kHz) — dann weckt das Board so ungenau, wie der RC geht.
 //!
+//! **Erst ein Reset, dann der Standby.** Den Watchdog haelt nur ein Reset
+//! an, und im Standby zaehlte er weiter (RM0368 17.3). Darum merkt sich
+//! [`deep_sleep`] die Weckzeit in Backup-Registern der RTC und setzt den
+//! Chip zurueck; [`continue_deep_sleep`] schlaeft beim naechsten Start,
+//! bevor der Watchdog wieder laeuft.
+//!
 //! **Laenger, als der Timer zaehlt** (2^17 s), schlaeft das Board in
-//! Abschnitten. Den Rest tragen Backup-Register der RTC, die den Standby
-//! ueberleben, und [`continue_deep_sleep`] schlaeft ihn beim Start weiter,
-//! bevor das Programm laeuft.
+//! Abschnitten. Den Rest tragen dieselben Register, die den Standby
+//! ueberleben, und jeder Start nach einem Abschnitt schlaeft weiter.
 
 use cortex_m::peripheral::SCB;
 use stm32f4::stm32f401::{PWR, RCC, RTC, pwr, rcc, rtc};
@@ -22,9 +27,13 @@ use takt_board_support::platform::{ORDERLY_END, RtcWakeup, boot_reason as reason
 
 use crate::{CORE_HZ, cycles};
 
-/// Kennung eines Tiefschlafs, der noch einen Rest hat (Backup-Register 0);
-/// der Rest in Nanosekunden steht in den Registern 1 und 2.
+/// Kennung eines Tiefschlafs, der bevorsteht oder einen Rest hat
+/// (Backup-Register 0); was zu schlafen bleibt, steht in Nanosekunden in
+/// den Registern 1 und 2.
 const PENDING: u32 = u32::from_le_bytes(*b"TIEF");
+
+/// Was zu schlafen bleibt, wenn kein Zeitgeber weckt (`DEEP_SLEEP`).
+const WITHOUT_TIMER: u64 = u64::MAX;
 
 /// Das Backup-Register mit `reset_count` (12.7).
 const COUNT: usize = 3;
@@ -81,34 +90,37 @@ pub fn restart() -> ! {
     SCB::sys_reset()
 }
 
-/// Schlaeft einen Tiefschlaf weiter, der noch einen Rest hat, und kehrt
-/// sonst zurueck. Als Erstes beim Start zu rufen.
+/// Schlaeft einen Tiefschlaf, der bevorsteht oder noch einen Rest hat, und
+/// kehrt sonst zurueck. Als Erstes beim Start zu rufen: Der Watchdog ist
+/// dann noch aus.
 pub fn continue_deep_sleep() {
     let (rcc, pwr, rtc) = registers();
     rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
-    if pwr.csr().read().sbf().bit_is_clear() || rtc.bkpr(0).read().bits() != PENDING {
+    if rtc.bkpr(0).read().bits() != PENDING {
         return;
     }
-    let rest = i64::from(rtc.bkpr(1).read().bits()) | (i64::from(rtc.bkpr(2).read().bits()) << 32);
+    let rest = u64::from(rtc.bkpr(1).read().bits()) | (u64::from(rtc.bkpr(2).read().bits()) << 32);
     pwr.cr().modify(|_, w| w.dbp().set_bit());
-    arm(rtc, rtc_wakeup(rest, rtc_hz(rcc)));
+    if rest == WITHOUT_TIMER {
+        disarm(rtc);
+    } else {
+        arm(rtc, rtc_wakeup(i64::try_from(rest).unwrap_or(i64::MAX), rtc_hz(rcc)));
+    }
     standby(pwr)
 }
 
 /// `reboot = DEEP_SLEEP_FOR(duration)` oder `DEEP_SLEEP` (`None`): Standby,
 /// bis die Weckzeit vergangen ist; der naechste Start meldet
-/// `DEEP_SLEEP_WAKE`. Das Board hat keinen Input am WKUP-Pin, also weckt
-/// ohne Zeitgeber nur ein Reset.
+/// `DEEP_SLEEP_WAKE` und zaehlt von vorn. Das Board hat keinen Input am
+/// WKUP-Pin, also weckt ohne Zeitgeber nur ein Reset. Geschlafen wird
+/// nach einem Reset, der den Watchdog anhaelt ([`continue_deep_sleep`]).
 pub fn deep_sleep(duration_ns: Option<i64>) -> ! {
+    let rest = duration_ns.map_or(WITHOUT_TIMER, |d| u64::try_from(d).unwrap_or(0));
     backup(COUNT, ORDERLY_END);
-    let (rcc, pwr, rtc) = registers();
-    rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
-    pwr.cr().modify(|_, w| w.dbp().set_bit());
-    match duration_ns {
-        Some(d) => arm(rtc, rtc_wakeup(d, rtc_hz(rcc))),
-        None => disarm(rtc),
-    }
-    standby(pwr)
+    backup(1, rest as u32);
+    backup(2, (rest >> 32) as u32);
+    backup(0, PENDING);
+    SCB::sys_reset()
 }
 
 /// Der Takt der RTC; waehlt ihn beim ersten Mal. Die Backup-Domaene
@@ -188,8 +200,15 @@ fn disarm(rtc: &rtc::RegisterBlock) {
     rtc.bkpr(0).write(|w| unsafe { w.bits(0) });
 }
 
+/// Liest das Backup-Register `n`.
+pub(crate) fn backup_read(n: usize) -> u32 {
+    let (rcc, _, rtc) = registers();
+    rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
+    rtc.bkpr(n).read().bits()
+}
+
 /// Schreibt das Backup-Register `n`; die Domaene ist nur dafuer offen.
-fn backup(n: usize, value: u32) {
+pub(crate) fn backup(n: usize, value: u32) {
     let (rcc, pwr, rtc) = registers();
     rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
     pwr.cr().modify(|_, w| w.dbp().set_bit());

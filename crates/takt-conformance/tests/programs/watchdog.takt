@@ -1,0 +1,50 @@
+# Watchdog auf dem Board (12.3, 12.7): Jeder Lauf zeigt Reset-Ursache und
+# `reset_count`, schlaeft eine Sekunde in `idle` — der Watchdog darf dabei
+# nicht zuschlagen, die Schleife bestaetigt ihn je geschlafenem Tick — und
+# rechnet dann einen Tick lang weit ueber seine Frist. Der Watchdog setzt
+# zurueck, und der naechste Lauf beginnt mit `WATCHDOG` und einem Start
+# mehr. Der dritte Lauf bleibt stehen. `AWAKE` haelt laenger als hundert
+# Ticks, damit auch ein Board, das im Betrieb nur jeden hundertsten Tick
+# ausgibt, `rested` zeigt.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  boot_reason : BootReason @ hw("sys/boot_reason")
+input  reset_count : int        @ hw("sys/reset_count")
+output reason      : BootReason @ hw("test/reason") with safe = TRIAL
+output count       : int        @ hw("test/count")  with safe = -1
+output rested      : bool       @ hw("ui/led")      with safe = false
+
+machine m:
+    var acc : int = 1
+    initial SHOW
+
+    state SHOW:
+        enter:
+            reason = boot_reason
+            count = reset_count
+        after 200 ms: -> REST
+
+    state REST idle:
+        after 1 s: -> AWAKE
+
+    state AWAKE:
+        enter:
+            rested = true
+        after 1200 ms: -> DECIDE
+
+    state DECIDE:
+        when reset_count >= 2: -> DONE
+        when true: -> HEAVY
+
+    state HEAVY:
+        enter:
+            for i in range(1000):
+                for j in range(3000):
+                    acc = (acc * 1103515245 + 12345) % 2147483648
+
+    state DONE:
+        enter:
+            rested = false

@@ -17,9 +17,9 @@
 //! **Die Gegenrichtung liest derselbe Interrupt.** Steht `TAKT` darin, gibt
 //! die Anwendung das Board an den Host zurueck (`bootloader`, FB-275) —
 //! derselbe Wunsch wie auf dem ESP32-C6. Wer erst beim naechsten Tick
-//! nachsaehe, faende von vier Bytes am Stueck nur das letzte. Springen darf
-//! der Interrupt nicht, der Bootloader liefe sonst im Handler-Modus; er
-//! merkt sich den Wunsch, und das naechste [`Port::flush`] fuehrt ihn aus.
+//! nachsaehe, faende von vier Bytes am Stueck nur das letzte. Den Chip
+//! zuruecksetzen darf der Interrupt nicht mitten in einem Schritt; er merkt
+//! sich den Wunsch, und das naechste [`Port::flush`] fuehrt ihn aus.
 //!
 //! **XON/XOFF (FB-306).** Der Adapter hat keinen Rueckstau: Holt der Wirt
 //! unter Last nicht rechtzeitig ab, laeuft ein Puffer ueber, und Bytes
@@ -173,7 +173,7 @@ impl Port for Usart1 {
     /// Weckt den Sende-Interrupt und fuehrt einen Wunsch des Hosts aus.
     fn flush(&mut self) {
         if HANDBACK.load(Ordering::Relaxed) {
-            crate::bootloader::enter();
+            crate::bootloader::request();
         }
         if !TX.is_empty() && !PAUSED.load(Ordering::Relaxed) {
             cortex_m::interrupt::free(|_| self.usart.cr1().modify(|_, w| w.txeie().set_bit()));

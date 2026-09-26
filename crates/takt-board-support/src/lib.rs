@@ -25,6 +25,7 @@ pub mod fifo;
 pub mod platform;
 pub mod pll;
 pub mod uart;
+pub mod watchdog;
 
 pub use clock::{PeriodError, counts_for, ns_per_count, prescaler_for};
 pub use counter::Counter64;

@@ -116,6 +116,37 @@ fn a_restart_begins_again_with_software_as_the_reason() {
     }
 }
 
+/// **Ein ausgelassener Kick setzt zurueck, und der naechste Lauf weiss es**
+/// (12.3, 12.7). Jeder Lauf zeigt Reset-Ursache und `reset_count`, schlaeft
+/// eine Sekunde in `idle` und rechnet dann einen Tick lang weit ueber die
+/// Frist des Watchdogs. Der erste Lauf beginnt beim Einschalten mit 0, die
+/// beiden folgenden mit `WATCHDOG` und 1 und 2; der dritte bleibt stehen.
+/// Dass jeder Lauf vor dem Reset `rested` zeigt, belegt den Schlaf: Die
+/// Schleife bestaetigt den Watchdog je geschlafenem Tick.
+///
+/// Der MWDT setzt das HP-System zurueck wie ein Software-Reset; der
+/// USB-Serial-JTAG bleibt angemeldet, und die Konsole traegt alle drei
+/// Laeufe.
+#[test]
+fn a_missed_kick_resets_and_counts() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true };
+    let program = board::root().join("crates/takt-conformance/tests/programs/watchdog.takt");
+    let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
+    let text = board.run_for(&elf, Duration::from_secs(14)).unwrap_or_else(|e| panic!("{e}"));
+    // Je Lauf ein Abschnitt ab der Marke; davor steht nur der Start.
+    let runs: Vec<&str> = text.split(board::MARK).skip(1).collect();
+    let first = |run: &str, name: &str| {
+        let key = format!(" out {name} ");
+        run.lines().find_map(|l| l.split_once(key.as_str()).map(|(_, v)| v.trim().to_string()))
+    };
+    let counts: Vec<String> = runs.iter().filter_map(|r| first(r, "count")).collect();
+    assert_eq!(counts, ["0", "1", "2"], "ein Start mehr je Watchdog (12.7):\n{text}");
+    let reasons: Vec<String> = runs.iter().filter_map(|r| first(r, "reason")).collect();
+    assert_eq!(reasons.get(1..), Some(&["WATCHDOG".to_string(), "WATCHDOG".to_string()][..]), "{text}");
+    assert!(runs.iter().all(|r| r.contains("out rested 1")), "jeder Lauf schlief vor dem Reset:\n{text}");
+}
+
 /// **Eine `driver machine` schreibt UART0** (12.10, M8 Schritt 20).
 ///
 /// Der Nachweis der Treiberstufe auf echten Registern: Zwei Ports, ein

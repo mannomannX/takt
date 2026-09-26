@@ -27,7 +27,7 @@ pub struct TimerClock<T, F = fn()> {
     timer: T,
     /// Nominale Periode aus `system: tick`, in Nanosekunden.
     nominal_ns: i64,
-    /// Laeuft nach jedem Wecken vor der Frist, etwa um den Ring zu leeren.
+    /// Laeuft vor jedem Schlaf bis zur Frist, etwa um den Ring zu leeren.
     idle: F,
 }
 
@@ -76,11 +76,15 @@ impl<T: TickSource, F: FnMut()> Clock for TimerClock<T, F> {
     /// (9.9) rueckt die Schleife ihre Frist um mehrere Perioden vor; wer
     /// dann nur auf das naechste Ereignis wartete, liefe der Zeit davon.
     /// Liegt die Frist schon zurueck, wird nicht mehr gewartet.
+    ///
+    /// **Die Arbeit vor dem Schlaf, nicht nach dem Wecken** (FB-296): Der
+    /// Tick an der Frist beginnt, sobald er da ist, statt erst nach dem
+    /// Nachfuellen der Leitung.
     fn wait_until(&mut self, deadline: i64) {
         let target = if self.nominal_ns > 0 { u64::try_from(deadline / self.nominal_ns).unwrap_or(0) } else { 0 };
         while self.timer.ticks() < target {
-            self.timer.wait_event();
             (self.idle)();
+            self.timer.wait_event(target);
         }
     }
 }
@@ -120,7 +124,10 @@ impl<F: FnMut()> Clock for LogicalClock<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::cell::Cell;
+    use core::cell::{Cell, RefCell};
+
+    extern crate std;
+    use std::vec::Vec;
 
     /// Die logische Uhr steht nach dem Warten auf der Frist, nie davor und
     /// nie zurueck, und sie leert vorher die Leitung.
@@ -156,9 +163,34 @@ mod tests {
             self.count.get() as i64 * self.period_ns
         }
 
-        fn wait_for_tick(&mut self) {
-            self.waits.set(self.waits.get() + 1);
-            self.count.set(self.count.get() + 1);
+        fn wait_event(&mut self, target: u64) {
+            if self.count.get() < target {
+                self.waits.set(self.waits.get() + 1);
+                self.count.set(self.count.get() + 1);
+            }
+        }
+    }
+
+    /// Ein Timer, dessen Zaehler auch die Idle-Arbeit des Tests sieht.
+    struct SharedTimer<'a>(&'a Cell<u64>);
+
+    impl TickSource for SharedTimer<'_> {
+        fn ticks(&self) -> u64 {
+            self.0.get()
+        }
+
+        fn last_period_ns(&self) -> i64 {
+            MS
+        }
+
+        fn now_ns(&self) -> i64 {
+            self.0.get() as i64 * MS
+        }
+
+        fn wait_event(&mut self, target: u64) {
+            if self.0.get() < target {
+                self.0.set(self.0.get() + 1);
+            }
         }
     }
 
@@ -188,6 +220,25 @@ mod tests {
         clock.wait_until(MS);
         assert_eq!(clock.timer.waits.get(), 0);
         assert_eq!(clock.now() - MS, 2 * MS, "zwei Perioden Rueckstand");
+    }
+
+    /// Die Arbeit zwischen den Ticks laeuft vor jedem Schlaf und nicht nach
+    /// dem Ereignis an der Frist: Der Tick beginnt, sobald er da ist.
+    #[test]
+    fn idle_work_comes_before_the_sleep_not_after_the_last_wake() {
+        let count = Cell::new(0);
+        let seen = RefCell::new(Vec::new());
+        let mut clock = TimerClock::new(SharedTimer(&count), MS).with_idle(|| seen.borrow_mut().push(count.get()));
+        clock.wait_until(2 * MS);
+        assert_eq!(*seen.borrow(), [0, 1]);
+    }
+
+    /// Ohne eigenes `wait_for_tick` wartet eine Tickquelle genau ein Ereignis ab.
+    #[test]
+    fn waiting_for_a_tick_waits_for_one_event() {
+        let mut timer = FakeTimer { count: Cell::new(4), period_ns: MS, ..FakeTimer::default() };
+        timer.wait_for_tick();
+        assert_eq!((timer.count.get(), timer.waits.get()), (5, 1));
     }
 
     #[test]

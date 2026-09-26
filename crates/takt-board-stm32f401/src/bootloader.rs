@@ -7,24 +7,55 @@
 //! Board ein DFU-Geraet; `dfu-util` schreibt das naechste Abbild und
 //! startet es.
 //!
-//! **Ein Sprung, kein Reset.** Nach einem Reset liefe zuerst der
-//! HID-Bootloader von WeAct, der Takte und USB fuer sich einrichtet und
-//! dessen Speicherbelegung niemand kennt; ein Wunsch, der ihn im RAM
-//! ueberdauern muesste, haette keinen sicheren Platz. Der Sprung aus der
-//! Anwendung raeumt stattdessen selbst auf, wie ST es fuer den Sprung aus
-//! Anwendungscode beschreibt — Interrupts und SysTick aus, der Takt zurueck
-//! auf HSI, PLL und HSE aus —, und setzt zusaetzlich jede Peripherie ueber
+//! **Erst ein Reset, dann der Sprung.** Den Watchdog haelt nur ein Reset
+//! an (12.3), und der Bootloader bedient ihn nicht; er setzte den Chip
+//! mitten im Schreiben zurueck. Darum merkt sich [`request`] den Wunsch im
+//! Backup-Register 4 und setzt den Chip zurueck. Nach dem Reset laeuft
+//! zuerst der HID-Bootloader von WeAct, der Takte und USB fuer sich
+//! einrichtet; das Backup-Register laesst er stehen, RAM haette keinen
+//! sicheren Platz. Der Start fragt den Wunsch als Erstes ab
+//! ([`enter_if_requested`], aus [`crate::init`]) und springt. Der Sprung
+//! raeumt auf, was der HID-Bootloader hinterliess, wie ST es fuer den
+//! Sprung aus Anwendungscode beschreibt — Interrupts und SysTick aus, der
+//! Takt zurueck auf HSI, PLL und HSE aus —, und setzt jede Peripherie ueber
 //! ihr Reset-Bit zurueck. Der Bootloader findet den Chip so vor wie nach
 //! einem Start mit BOOT0.
 
 use cortex_m::peripheral::{NVIC, SCB, SYST};
 use stm32f4::stm32f401::{FLASH, RCC, SYSCFG};
 
+use crate::platform::{backup, backup_read};
+
 /// Der Systemspeicher des F401 mit dem Bootloader von ST (AN2606).
 const SYSTEM_MEMORY: u32 = 0x1FFF_0000;
 
+/// Der Wunsch nach dem Bootloader, im Backup-Register [`WISH`].
+const REQUESTED: u32 = u32::from_le_bytes(*b"DFU!");
+const WISH: usize = 4;
+
+/// Der Host hat das Board zurueckverlangt: merkt es sich und setzt den
+/// Chip zurueck; kehrt nicht zurueck.
+pub fn request() -> ! {
+    backup(WISH, REQUESTED);
+    SCB::sys_reset()
+}
+
+/// Gibt das Board an den Bootloader, wenn der vorige Lauf es verlangt
+/// hat; sonst kehrt sie zurueck. Als Erstes beim Start zu rufen.
+///
+/// Die Reset-Ursache dieses Starts gilt dem Wunsch, nicht dem Programm,
+/// das danach kommt: Sie wird geloescht, und das naechste Programm beginnt
+/// wie nach dem Einschalten (12.7).
+pub fn enter_if_requested() {
+    if backup_read(WISH) == REQUESTED {
+        backup(WISH, 0);
+        crate::platform::boot_reason();
+        enter();
+    }
+}
+
 /// Gibt das Board an den DFU-Bootloader des ROM; kehrt nicht zurueck.
-pub fn enter() -> ! {
+fn enter() -> ! {
     cortex_m::interrupt::disable();
     // SAFETY: Ab hier laeuft nichts mehr von der Anwendung: Interrupts sind
     // aus, und jedes Register, das die folgenden Zeilen anfassen, geht

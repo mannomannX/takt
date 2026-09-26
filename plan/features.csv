@@ -832,7 +832,7 @@ RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M10 (aus 
 RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
 RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
 PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4 (Codegen),fertig,
-PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M10 (aus M5),teilweise,"Tick, Journal und Schlaf auf dem ESP32-C6 (plan/esp32c6.md); Watchdog und Eingaenge offen"
+PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M10 (aus M5),teilweise,"Tick, Journal und Schlaf auf dem ESP32-C6 (plan/esp32c6.md); Watchdog auf beiden Boards (M10 Schritt 8, `a_missed_kick_resets_and_counts`), Eingänge über `takt_in_*`; offen: Jobs (Schritt 7)"
 PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M10 (aus M6),offen,RTOS auf Board 1 + TTL-Adapter (PA9); Schnitt in plan/m6.md 2.13
 PROFIL-boot,Profil/Eintrag,12.8,boot,,M10 (aus M6),offen,Startpartition auf einem Board + TTL-Adapter (PA9); Schnitt in plan/m6.md 2.13
 FAULT-CheckFailed,Fault-Art,5.3,CheckFailed,,M1 (Kernsemantik),fertig,

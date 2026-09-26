@@ -84,6 +84,21 @@ impl Stm32f401 {
         capture(&self.port, BAUD, serialport::FlowControl::Software, within, || Ok(()))
     }
 
+    /// Schreibt das Abbild, startet es und liest bis `takt end`, hoechstens
+    /// `within` lang — auch einen Lauf, der nicht endet oder ueber Resets
+    /// hinweg geht (12.3, 12.7).
+    pub fn run_for(&mut self, elf: &Path, within: Duration) -> Result<String, String> {
+        let bin = self.image(elf)?;
+        self.to_bootloader()?;
+        let address = format!("{APP:#010x}:leave");
+        // Der Adapter haelt das Board an, statt Bytes zu verlieren, wenn der
+        // Wirt nicht abholt (FB-306).
+        capture(&self.port, BAUD, serialport::FlowControl::Software, within, || {
+            let args = ["-a", "0", "-d", DFU_ID, "-s", &address, "-D", &bin.to_string_lossy()];
+            run_bounded(&self.dfu_util, &args, DOWNLOAD).map(|_| ()).map_err(|e| format!("{}: {e}", self.dfu_util))
+        })
+    }
+
     /// Steht das Board im DFU-Bootloader?
     pub fn in_bootloader(&self) -> Result<bool, String> {
         let listed = run_bounded(&self.dfu_util, &["-l"], Duration::from_secs(15))
@@ -161,15 +176,7 @@ impl Board for Stm32f401 {
     }
 
     fn run(&mut self, elf: &Path, _options: &Options) -> Result<String, String> {
-        let bin = self.image(elf)?;
-        self.to_bootloader()?;
-        let address = format!("{APP:#010x}:leave");
-        // Der Adapter haelt das Board an, statt Bytes zu verlieren, wenn der
-        // Wirt nicht abholt (FB-306).
-        let text = capture(&self.port, BAUD, serialport::FlowControl::Software, TRACE, || {
-            let args = ["-a", "0", "-d", DFU_ID, "-s", &address, "-D", &bin.to_string_lossy()];
-            run_bounded(&self.dfu_util, &args, DOWNLOAD).map(|_| ()).map_err(|e| format!("{}: {e}", self.dfu_util))
-        })?;
+        let text = self.run_for(elf, TRACE)?;
         if text.contains(super::END) {
             super::complete(text)
         } else {

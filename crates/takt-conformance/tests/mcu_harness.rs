@@ -457,6 +457,19 @@ fn a_bound_input_becomes_a_driver_symbol() {
     assert!(src.contains("ist Bad (3.5)"), "{src}");
 }
 
+/// **Auch der Start tastet ab** (9.4, FB-316): Ein `enter:` des
+/// Anfangszustands liest die Eingaenge von Tick 0 wie im Interpreter; ohne
+/// Abtastung saehe es `Bad` und faultete auf dem Board.
+#[test]
+fn the_start_samples_before_it_enters() {
+    let src = takt_conformance::mcu::build(&program(INPUTS)).source;
+    let at = src.find("int takt_mcu_init_with(").expect("Startfunktion");
+    let init = &src[at..];
+    let sample = init.find("takt_mcu_sample();").expect("Abtastung im Start");
+    let enter = init.find("m_enter(").expect("Eintritt");
+    assert!(sample < enter, "`sample` muss vor `enter` stehen:\n{init}");
+}
+
 /// **Ein `sim`-Eingang bekommt kein Symbol.** Zu ihm gehoert kein Geraet;
 /// ihn stellt das Modell im selben Tick (8.3).
 #[test]

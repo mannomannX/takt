@@ -221,6 +221,7 @@ fn declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
 fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Einmal vor dem ersten Tick (12.1, Schritt 1). */");
     let _ = writeln!(s, "int takt_mcu_persist_restore(const void *in, int len);");
+    let _ = writeln!(s, "void takt_mcu_sample(void);");
     let _ = writeln!(s, "int takt_mcu_init_with(const void *persist, int persist_len) {{");
     let _ = writeln!(s, "    for (unsigned i = 0; i < sizeof image; i++) image[i] = 0;");
     let _ = writeln!(s, "    for (unsigned i = 0; i < sizeof latch; i++) latch[i] = 0;");
@@ -255,6 +256,9 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let _ = writeln!(s, "    {0}_init_vars(state_{0}, image, params, latch);", m.name);
     }
     let _ = writeln!(s, "    int restored = takt_mcu_persist_restore(persist, persist_len);");
+    // 9.4: Auch Tick 0 beginnt mit `I_0 = sample()`; ein `enter:` des
+    // Anfangszustands liest die Eingaenge wie im Interpreter (FB-316).
+    let _ = writeln!(s, "    takt_mcu_sample();");
     crate::harness::enter_machines(s, p, layout, driven, "    ");
     // Was `enter` und das erste `loop:` im Tick 0 senden, wird hier
     // sichtbar (FB-269).

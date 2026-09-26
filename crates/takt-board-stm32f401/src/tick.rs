@@ -109,19 +109,14 @@ impl TickSource for Tim2Tick {
         takt_board_support::clock::elapsed_ns(self.timer_hz, counts)
     }
 
-    /// Ein `wfi`: Der Tick weckt, aber auch die Leitung, die zwischen den
-    /// Ticks ihren FIFO leert und nachgefuellt werden will.
-    fn wait_event(&mut self) {
-        cortex_m::asm::wfi();
-    }
-
-    fn wait_for_tick(&mut self) {
-        let start = count();
-        // `wfi` statt Warteschleife: Ein Kern, der zwischen den Ticks
-        // rechnet, verbraucht Strom fuer nichts und heizt die Messung auf
-        // (12.3). Der Timer-Interrupt weckt ihn.
-        while count() == start {
-            cortex_m::asm::wfi();
-        }
+    /// Ein `wfi`, ausser der Tick ist schon da; geprueft bei gesperrten
+    /// Interrupts (FB-296). Der Tick weckt, aber auch die Leitung, die
+    /// zwischen den Ticks ihren FIFO leert und nachgefuellt werden will.
+    fn wait_event(&mut self, target: u64) {
+        cortex_m::interrupt::free(|_| {
+            if count() < target {
+                cortex_m::asm::wfi();
+            }
+        });
     }
 }

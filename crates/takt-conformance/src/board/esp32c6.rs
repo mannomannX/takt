@@ -118,6 +118,17 @@ impl Esp32c6 {
         capture(&self.port, BAUD, flow, TRACE, || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ()))
     }
 
+    /// Schreibt das Abbild, startet es und liest bis `takt end`, hoechstens
+    /// `within` lang — auch einen Lauf, der nicht endet oder ueber Resets
+    /// hinweg geht (12.3, 12.7). Ohne die Genesung aus [`Esp32c6::capture`]:
+    /// Wer ueber Resets liest, will sie sehen.
+    pub fn run_for(&mut self, elf: &Path, within: Duration) -> Result<String, String> {
+        self.download(elf)?;
+        std::thread::sleep(Duration::from_millis(500));
+        let reset = || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ());
+        capture(&self.port, BAUD, serialport::FlowControl::None, within, reset)
+    }
+
     /// Liest, was das Board von sich aus schreibt, ohne es zurueckzusetzen —
     /// nach einem Neustart, den das Programm befiehlt (12.7).
     pub fn listen(&self, within: Duration) -> Result<String, String> {

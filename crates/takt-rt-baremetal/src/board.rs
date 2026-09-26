@@ -38,39 +38,29 @@ pub trait TickSource {
     /// `took` und `drift` (7.3). Monoton, ab einem beliebigen Nullpunkt.
     fn now_ns(&self) -> i64;
 
+    /// Schlaeft bis zum naechsten Interrupt, ausser der Zaehler steht schon
+    /// bei `target` — spaetestens also bis zum Tick. Ein Board, das
+    /// zwischen den Ticks etwas zu tun hat (den Ring leeren, wenn der Host
+    /// ein Paket abgeholt hat), kehrt frueher zurueck; die Uhr prueft danach
+    /// die Frist erneut.
+    ///
+    /// **Pruefung und Schlaf sind eins** (FB-296): Kaeme der Tick zwischen
+    /// „noch nicht erreicht" und `wfi`, schliefe der Kern eine Periode zu
+    /// lang. Darum prueft das Board bei gesperrten Interrupts — `wfi` weckt
+    /// auch dann, und die ISR laeuft gleich danach.
+    fn wait_event(&mut self, target: u64);
+
     /// Wartet, bis das naechste Tick-Ereignis vorliegt.
     ///
-    /// Auf einer MCU ist das ein `WFI` mit anschliessender Pruefung des
-    /// Flags, nicht eine Warteschleife: Ein Kern, der zwischen den Ticks
-    /// rechnet, verbraucht Strom fuer nichts und heizt die Messung auf.
-    fn wait_for_tick(&mut self);
-
-    /// Wartet auf das naechste Ereignis, das den Kern weckt — spaetestens
-    /// auf den Tick. Ein Board, das zwischen den Ticks etwas zu tun hat
-    /// (den Ring leeren, wenn der Host ein Paket abgeholt hat), kehrt
-    /// frueher zurueck; die Uhr prueft danach die Frist erneut.
-    fn wait_event(&mut self) {
-        self.wait_for_tick();
+    /// Ein `wfi` je Ereignis, keine Warteschleife: Ein Kern, der zwischen
+    /// den Ticks rechnet, verbraucht Strom fuer nichts und heizt die
+    /// Messung auf.
+    fn wait_for_tick(&mut self) {
+        let target = self.ticks().saturating_add(1);
+        while self.ticks() < target {
+            self.wait_event(target);
+        }
     }
-}
-
-/// Der Hardware-Watchdog (12.3, 12.4).
-///
-/// Anders als [`takt_rt_core::Watchdog`] kennt er die Reset-Ursache: 12.3
-/// verlangt, dass Outputs nach einem Watchdog-Reset auf `safe` stehen,
-/// *bevor* das Programm neu startet. Das ist keine Aufgabe der Schleife,
-/// sondern des Starts — die Schleife sieht nur noch das Ergebnis.
-pub trait HardwareWatchdog {
-    /// Bestaetigt den durchgelaufenen Tick.
-    fn kick(&mut self);
-
-    /// Kam der letzte Reset vom Watchdog?
-    ///
-    /// Wahr heisst: Der vorige Lauf ist nicht sauber beendet worden. Der
-    /// Start setzt dann alle Outputs auf `safe` (12.3) und vermerkt es im
-    /// Lauf-Header (11.3) — ein Neustart nach Watchdog ist ein Befund,
-    /// kein Normalfall.
-    fn reset_was_watchdog(&self) -> bool;
 }
 
 /// Der Schutzbereich unter dem Stack (12.3).

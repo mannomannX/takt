@@ -163,6 +163,16 @@ fn the_watchdog_is_kicked_once_per_tick() {
     assert_eq!(rt.watchdog.0, 5);
 }
 
+/// Ohne Watchdog wird nichts bestaetigt; mit ihm jeder Tick.
+#[test]
+fn an_absent_watchdog_is_never_kicked() {
+    let mut absent: Option<Kicks> = None;
+    absent.kick();
+    let mut present = Some(Kicks::default());
+    present.kick();
+    assert!(absent.is_none() && present.is_some_and(|k| k.0 == 1));
+}
+
 // --- Schlaf (9.9) -------------------------------------------------------
 
 /// Satz 9.9.1: Der Schlaf ist unsichtbar — die uebersprungenen Ticks
@@ -179,6 +189,21 @@ fn sleeping_advances_logical_time_exactly() {
     // Der naechste ausgefuehrte Tick ist der an der Frist.
     let second = rt.step();
     assert_eq!(second.now, 10 * T0, "der Tick an der Frist wird ausgefuehrt");
+}
+
+/// 12.3: Auch im Schlaf sieht der Watchdog jede Tickgrenze — sonst schluege
+/// er in einem langen `idle` zu, obwohl die Tickquelle lebt.
+#[test]
+fn the_watchdog_is_kicked_at_every_slept_tick() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
+    assert_eq!(rt.step().slept, 8);
+    rt.step();
+    assert_eq!(rt.watchdog.0, 2 + 8, "zwei Schritte und acht geschlafene Ticks");
+    let waits: Vec<i64> = (0..=9).map(|k| k * T0).collect();
+    assert_eq!(clock.borrow().waits, waits, "Periode fuer Periode bis zur Frist");
 }
 
 /// Ohne erlaubten Schlaf wird nicht geschlafen — der Default eines

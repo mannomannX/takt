@@ -42,16 +42,26 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
-use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Generated, Led, Telemetry, WfiSleep, cycles, platform, tick};
+use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Generated, Iwdg, Led, Telemetry, WfiSleep, cycles, platform, tick};
 use takt_board_support::platform::image_state;
-use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Sleep, TimerClock};
+use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock};
 use takt_rt_core::{Clock, FakeNvm, Persist, PlatformCommand, Policy, Profile, Runtime};
 
 mod takt {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
 }
-use takt::{OVERRUN_ALERT, TICK_NS};
+use takt::{NVM_BLOCKING_NS, OVERRUN_ALERT, TICK_NS};
+
+/// Die Frist des Watchdogs im Betrieb (12.3): zwei Perioden und ein
+/// blockierender NVM-Vorgang (8.10). Ein Tick, der darueber hinaus
+/// ueberzieht, ist kein Ueberlauf mehr (7.3), sondern ein Stillstand.
+const WATCHDOG_NS: i64 = 2 * TICK_NS + NVM_BLOCKING_NS;
+
+/// Die Frist fuer das geordnete Ende eines Laufs (12.7): Abschlusszeile
+/// und Leitung warten je hoechstens `DRAIN_ROUNDS` Anlaeufe auf den Host,
+/// zusammen weit unter dieser Frist.
+const END_OF_RUN_NS: i64 = 8_000_000_000;
 
 /// Alle wie viele Ticks die Ausgaenge im Betrieb ausgegeben werden: jeden,
 /// wenn eine Zeile ein Zehntel der Periode fuellt, sonst jeden hundertsten.
@@ -225,11 +235,17 @@ fn USART1() {
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
 fn conduct(clock: impl Clock) {
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
-    let mut rt = Runtime::new(Generated::init(false), clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
     let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
+    // Der Watchdog wacht im Betrieb (12.3); ein Konformitaetslauf wartet
+    // auf die Leitung und ist kein Betrieb.
+    let watchdog = (limit == 0).then(|| Iwdg::arm(WATCHDOG_NS));
+    let mut rt = Runtime::new(Generated::init(false), clock, watchdog, (), Profile::BAREMETAL, TICK_NS, policy);
     // Kein Journal: Das Board hat noch keinen `Nvm`-Treiber (5.9).
     let no_journal = None::<&mut Persist<'_, FakeNvm<0>>>;
     let stats = takt_rt_baremetal::run(&mut rt, no_journal, Cadence::of(limit, TRACE_EVERY, TRACE_PC), uart);
+    if rt.watchdog.is_some() {
+        Iwdg::arm(END_OF_RUN_NS);
+    }
     if let Some(u) = uart() {
         let stack = Some(takt_board_stm32f401::stack::high_water());
         takt_rt_baremetal::report(u, rt.overrun(), &stats, &JournalStats::default(), stack);
@@ -327,12 +343,15 @@ fn main() -> ! {
     }
     // Nach dem Lauf bleibt die Leitung offen: Der Host holt das Board mit
     // `TAKT` zurueck, um das naechste Programm zu schreiben (FB-275).
+    // Der Watchdog laeuft nach einem Lauf im Betrieb weiter; das Board
+    // haelt an, statt neu zu starten.
     let mut sleep = WfiSleep;
     loop {
         sleep.sleep_until_event();
         if let Some(u) = uart() {
             u.flush();
         }
+        Iwdg::feed();
     }
 }
 

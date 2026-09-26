@@ -15,9 +15,9 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use takt_board_esp32c6::{Button, FlashNvm, Generated, Telemetry, Ws2812, platform, route_uart0};
+use takt_board_esp32c6::{Button, FlashNvm, Generated, Mwdt, Telemetry, Ws2812, platform, route_uart0};
 use takt_board_support::platform::image_state;
-use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Sleep, TimerClock};
+use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock};
 use takt_rt_core::{Clock, Journal, Loaded, Persist, PlatformCommand, Policy, Profile, Runtime};
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -27,6 +27,16 @@ mod takt {
     include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
 }
 use takt::{LOGIC_HASH, NVM_BLOCKING_NS, OVERRUN_ALERT, PERSIST_BOUND, PERSIST_MIN_INTERVAL_NS, TICK_NS};
+
+/// Die Frist des Watchdogs im Betrieb (12.3): zwei Perioden und ein
+/// blockierender NVM-Vorgang (8.10). Ein Tick, der darueber hinaus
+/// ueberzieht, ist kein Ueberlauf mehr (7.3), sondern ein Stillstand.
+const WATCHDOG_NS: i64 = 2 * TICK_NS + NVM_BLOCKING_NS;
+
+/// Die Frist fuer das geordnete Ende eines Laufs (12.7): Abschlusszeile
+/// und Leitung warten je hoechstens `DRAIN_ROUNDS` Anlaeufe auf den Host,
+/// zusammen weit unter dieser Frist.
+const END_OF_RUN_NS: i64 = 8_000_000_000;
 
 /// Alle wie viele Ticks die Ausgaenge im Betrieb ausgegeben werden.
 const TRACE_EVERY: u64 = 100;
@@ -198,9 +208,15 @@ pub unsafe extern "C" fn takt_in_ui_button(value: *mut u8, quality: *mut u8) -> 
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
 fn conduct(program: Generated, clock: impl Clock, persist: &mut Option<Persist<'_, FlashNvm>>) {
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
-    let mut rt = Runtime::new(program, clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
     let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
+    // Der Watchdog wacht im Betrieb (12.3); ein Konformitaetslauf wartet
+    // auf die Leitung und ist kein Betrieb.
+    let watchdog = (limit == 0).then(|| Mwdt::arm(WATCHDOG_NS));
+    let mut rt = Runtime::new(program, clock, watchdog, (), Profile::BAREMETAL, TICK_NS, policy);
     let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut(), Cadence::of(limit, TRACE_EVERY, TRACE_PC), uart);
+    if rt.watchdog.is_some() {
+        Mwdt::arm(END_OF_RUN_NS);
+    }
     let journal = persist.as_ref().map_or(JournalStats::default(), |p| {
         let (erase_ns, program_ns) = p.journal().device().measured_ns();
         JournalStats { writes: p.journal().writes(), failures: p.journal().failures(), erase_ns, program_ns }
@@ -310,9 +326,12 @@ fn main() -> ! {
         });
         conduct(program, clock, &mut persist);
     }
+    // Der Watchdog laeuft nach einem Lauf im Betrieb weiter; das Board
+    // haelt an, statt neu zu starten.
     let mut sleep = takt_board_esp32c6::WfiSleep;
     loop {
         sleep.sleep_until_event();
+        Mwdt::feed();
     }
 }
 

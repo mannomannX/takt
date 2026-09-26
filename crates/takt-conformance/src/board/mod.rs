@@ -98,7 +98,7 @@ pub const CORPUS: &[&str] = &[
 pub const END: &str = "takt end";
 
 /// Die Zeile, ab der das Board zaehlt, was es sendet (FB-304).
-const MARK: &str = "takt trace\r\n";
+pub const MARK: &str = "takt trace\r\n";
 
 /// Ein Trace mit Luecken ist keiner: Jede Zeile hinter der Luecke waere
 /// eine Abweichung. Bytes fehlen, wenn die Telemetrie des Boards sie
