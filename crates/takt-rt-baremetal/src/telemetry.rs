@@ -34,13 +34,14 @@ pub struct Telemetry<P: Port, const N: usize> {
     head: usize,
     len: usize,
     dropped: u32,
+    sent: u32,
     lossless: bool,
 }
 
 impl<P: Port, const N: usize> Telemetry<P, N> {
     /// Ueber einer Leitung.
     pub fn new(port: P) -> Self {
-        Telemetry { port, ring: [0; N], head: 0, len: 0, dropped: 0, lossless: false }
+        Telemetry { port, ring: [0; N], head: 0, len: 0, dropped: 0, sent: 0, lossless: false }
     }
 
     /// Verlustfrei: Ist der Ring voll, wartet [`Telemetry::write_byte`], bis
@@ -69,6 +70,7 @@ impl<P: Port, const N: usize> Telemetry<P, N> {
         }
         self.ring[(self.head + self.len) % N] = b;
         self.len += 1;
+        self.sent = self.sent.saturating_add(1);
     }
 
     /// Gibt an die Leitung, was sie nimmt, und schliesst das Paket ab.
@@ -94,6 +96,21 @@ impl<P: Port, const N: usize> Telemetry<P, N> {
     /// Wie viele Bytes ohne Platz verworfen wurden.
     pub fn dropped(&self) -> u32 {
         self.dropped
+    }
+
+    /// Die Zeile `takt trace`, ab der [`Telemetry::sent`] zaehlt: Was davor
+    /// kommt, gehoert nicht sicher zum Lauf — Bootmeldungen, ein Kopf, den
+    /// der Wirt je nach Start verpasst (FB-304).
+    pub fn mark(&mut self) {
+        self.write("takt trace");
+        self.newline();
+        self.sent = 0;
+    }
+
+    /// Wie viele Bytes seit [`Telemetry::mark`] in den Ring gingen; die
+    /// Abschlusszeile nennt sie, und der Wirt vergleicht mit dem, was ankam.
+    pub fn sent(&self) -> u32 {
+        self.sent
     }
 
     /// Wie viele Bytes noch im Ring stehen.
@@ -271,6 +288,21 @@ mod tests {
         assert!(t.drain(10));
         assert_eq!(text(&t), "abcdefghijklmnopqrstuvwxyz");
         assert_eq!(t.dropped(), 0);
+    }
+
+    /// Die Bilanz zaehlt ab der Marke, was in den Ring ging — Verworfenes
+    /// nicht, denn das kommt nie an.
+    #[test]
+    fn the_count_starts_at_the_mark_and_skips_dropped_bytes() {
+        let mut t = Telemetry::<_, 64>::new(line(64));
+        t.write("Kopf\r\n");
+        t.mark();
+        t.write("t=1 out a 1\r\n");
+        assert_eq!(t.sent(), 13);
+        let mut full = Telemetry::<_, 16>::new(line(0));
+        full.mark();
+        full.write("0123456789");
+        assert_eq!((full.sent(), full.dropped()), (4, 6));
     }
 
     #[test]

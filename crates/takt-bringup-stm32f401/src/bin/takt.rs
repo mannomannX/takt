@@ -266,5 +266,6 @@ fn banner(nominal_ns: i64) {
     uart.write(if cycles::running() { "laeuft" } else { "STEHT" });
     uart.newline();
     uart.newline();
+    uart.mark();
     uart.flush();
 }

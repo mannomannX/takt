@@ -94,18 +94,40 @@ pub const CORPUS: &[&str] = &[
 /// Die Zeile, mit der jedes Bring-up seinen Lauf beendet.
 pub const END: &str = "takt end";
 
-/// Ein Trace mit Luecken ist keiner: Verwirft die Telemetrie des Boards
-/// Bytes (`takt schlief … verworfen N`, 12.2), meldete der Vergleich jede
-/// Zeile hinter der Luecke als Abweichung (FB-292).
+/// Die Zeile, ab der das Board zaehlt, was es sendet (FB-304).
+const MARK: &str = "takt trace\r\n";
+
+/// Ein Trace mit Luecken ist keiner: Jede Zeile hinter der Luecke waere
+/// eine Abweichung. Bytes fehlen, wenn die Telemetrie des Boards sie
+/// verwirft (`verworfen N`, 12.2, FB-292) oder wenn sie auf dem Weg zum
+/// Wirt verloren gehen (FB-304). Fuer den zweiten Fall nennt die
+/// Abschlusszeile, wie viele Bytes das Board ab [`MARK`] sandte
+/// (`gesendet N`), und ebenso viele muessen bis zu ihr angekommen sein.
+///
+/// Ohne Marke und Bilanz (Messkern, Natives) gibt es nichts zu zaehlen.
 pub(crate) fn complete(text: String) -> Result<String, String> {
-    let dropped = text.lines().find(|l| l.contains("takt schlief ")).and_then(|line| {
-        let mut words = line.split_whitespace();
-        words.by_ref().find(|w| *w == "verworfen")?;
+    let summary = text.rfind("takt schlief ");
+    let value = |word: &str| {
+        let mut words = text[summary?..].lines().next()?.split_whitespace();
+        words.by_ref().find(|w| *w == word)?;
         words.next()?.parse::<u64>().ok()
-    });
-    match dropped {
-        Some(n) if n > 0 => Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292)")),
-        _ => Ok(text),
+    };
+    if let Some(n) = value("verworfen").filter(|n| *n > 0) {
+        return Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292)"));
+    }
+    let mark = text[..summary.unwrap_or(text.len())].rfind(MARK);
+    match (mark, summary.zip(value("gesendet"))) {
+        (None, None) => Ok(text),
+        (Some(m), Some((s, sent))) => {
+            let arrived = s - (m + MARK.len());
+            if u64::try_from(arrived).is_ok_and(|a| a == sent) {
+                Ok(text)
+            } else {
+                Err(format!("Trace unvollstaendig: das Board sandte {sent} Byte, angekommen sind {arrived} (FB-304)"))
+            }
+        }
+        (Some(_), None) => Err("Trace unvollstaendig: nach `takt trace` fehlt die Bilanz (FB-304)".into()),
+        (None, Some(_)) => Err("Trace unvollstaendig: vor der Bilanz fehlt `takt trace` (FB-304)".into()),
     }
 }
 
@@ -429,13 +451,18 @@ pub(crate) fn capture(
     });
     let started = start();
     let deadline = Instant::now() + within;
-    let mut text = String::new();
+    // Rohbytes, erst am Ende dekodiert: Ein Zeichen, das auf zwei Pakete
+    // faellt, bliebe sonst zweimal ein Ersatzzeichen, und die Bilanz
+    // (FB-304) zaehlte falsch.
+    let mut raw: Vec<u8> = Vec::new();
+    let end = END.as_bytes();
     let result = started.and_then(|()| {
         loop {
             match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                 Ok(Ok(bytes)) => {
-                    text.push_str(&String::from_utf8_lossy(&bytes));
-                    if text.contains(END) {
+                    let from = raw.len().saturating_sub(end.len());
+                    raw.extend_from_slice(&bytes);
+                    if raw[from..].windows(end.len()).any(|w| w == end) {
                         break Ok(());
                     }
                 }
@@ -449,7 +476,7 @@ pub(crate) fn capture(
     while !reader.is_finished() && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(20));
     }
-    result.map(|()| text)
+    result.map(|()| String::from_utf8_lossy(&raw).into_owned())
 }
 
 /// Wartet, bis das System den Port fuehrt (`present`) oder nicht mehr.
@@ -470,13 +497,42 @@ pub(crate) fn port_listed(port: &str, present: bool, within: Duration) -> bool {
 mod tests {
     use super::*;
 
+    /// Ein Lauf des Boards: Kopf, Marke, `body`, Bilanz mit `sent`.
+    fn run(body: &str, dropped: u32, sent: usize) -> String {
+        format!(
+            "takt auf stm32f401\r\n\r\ntakt trace\r\n{body}takt schlief 0 ueberlaeufe 0 verworfen {dropped} \
+             gesendet {sent} journal geschrieben 0\r\ntakt end\r\n"
+        )
+    }
+
     /// Verworfene Bytes machen den Lauf unbrauchbar, ein vollstaendiger
     /// und einer ohne Abschlusszeile gehen durch.
     #[test]
     fn a_trace_with_dropped_bytes_is_refused() {
-        let summary = |n: u32| format!("t=1 out a 1\ntakt schlief 0 ueberlaeufe 0 verworfen {n} journal 0\ntakt end\n");
-        assert!(complete(summary(25076)).is_err_and(|e| e.contains("25076")));
-        assert!(complete(summary(0)).is_ok());
+        let body = "t=1 out a 1\r\n";
+        assert!(complete(run(body, 25076, body.len())).is_err_and(|e| e.contains("25076")));
+        assert!(complete(run(body, 0, body.len())).is_ok());
         assert!(complete("bench takt min 1\ntakt end\n".to_string()).is_ok());
+    }
+
+    /// Was zwischen Board und Wirt verloren ging, zeigt die Bilanz: Sie
+    /// zaehlt ab der Marke, auch ueber Zeilen hinweg, deren Umbruch fehlt.
+    #[test]
+    fn a_trace_that_lost_bytes_on_the_way_is_refused() {
+        let body = "t=1 out a 1\r\nt=2 out a 2\r\n";
+        assert!(complete(run(body, 0, body.len())).is_ok());
+        let lost = run("t=1 out a 1t=2 out a 2\r\n", 0, body.len());
+        assert!(complete(lost).is_err_and(|e| e.contains("sandte 26 Byte, angekommen sind 24")));
+    }
+
+    /// Fehlt die Marke oder die Bilanz, ist nichts zu zaehlen — und das
+    /// ist selbst ein Befund, solange die andere Haelfte da ist.
+    #[test]
+    fn a_trace_needs_both_the_mark_and_the_count() {
+        let body = "t=1 out a 1\r\n";
+        let unmarked = run(body, 0, body.len()).replace("takt trace", "takt trce");
+        assert!(complete(unmarked).is_err_and(|e| e.contains("fehlt `takt trace`")));
+        let uncounted = run(body, 0, body.len()).replace("gesendet", "gesndet");
+        assert!(complete(uncounted).is_err_and(|e| e.contains("fehlt die Bilanz")));
     }
 }

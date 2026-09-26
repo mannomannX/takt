@@ -178,6 +178,7 @@ fn main() -> ! {
     telemetry.write_i64(timer.nominal_ns());
     telemetry.write(" ns");
     telemetry.newline();
+    telemetry.mark();
     let telemetry = if LOGICAL { telemetry.lossless() } else { telemetry };
     unsafe { UART = Some(telemetry) };
     if let Ok(led) = Ws2812::new(peripherals.RMT, peripherals.GPIO8) {

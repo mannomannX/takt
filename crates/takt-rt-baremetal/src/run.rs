@@ -146,7 +146,7 @@ pub fn report<P: Port, const R: usize>(
     journal: &JournalStats,
     stack: Option<u32>,
 ) {
-    let dropped = u64::from(t.dropped());
+    let (dropped, sent) = (u64::from(t.dropped()), u64::from(t.sent()));
     let counts = [
         ("takt schlief ", stats.slept),
         (" ueberlaeufe ", stats.overruns),
@@ -161,6 +161,8 @@ pub fn report<P: Port, const R: usize>(
     t.write_i64(overrun.worst_drift);
     t.write(" ns verworfen ");
     t.write_u64(dropped);
+    t.write(" gesendet ");
+    t.write_u64(sent);
     let journal_counts = [
         (" journal geschrieben ", u64::from(journal.writes)),
         (" fehlgeschlagen ", u64::from(journal.failures)),
