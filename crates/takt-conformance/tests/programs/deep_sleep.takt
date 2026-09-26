@@ -1,0 +1,26 @@
+# Tiefschlaf mit Weckzeit auf dem Board (12.7, FB-309): Der erste Lauf
+# schlaeft zwei Sekunden, der zweite beginnt mit `DEEP_SLEEP_WAKE` und zeigt
+# es an `woke`. Nach dem Wecken schlaeft er nicht wieder.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  boot_reason : BootReason @ hw("sys/boot_reason")
+output reboot      : RebootCmd  @ hw("sys/reboot") with safe = NONE
+output woke        : bool       @ hw("ui/led")     with safe = false
+
+machine m:
+    initial START
+
+    state START:
+        when boot_reason == DEEP_SLEEP_WAKE: -> AWAKE
+        after 300 ms: -> SLEEP
+
+    state SLEEP:
+        enter:
+            reboot = DEEP_SLEEP_FOR(duration = 2 s)
+
+    state AWAKE:
+        enter:
+            woke = true

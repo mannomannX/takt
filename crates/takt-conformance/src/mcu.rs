@@ -293,33 +293,44 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
 fn platform(s: &mut String, p: &Program, layout: &Layout) {
     let reboot = crate::harness::reboot_slot(p, layout);
     let jump = crate::harness::jump_slot(p, layout);
-    let _ = writeln!(s, "/* 12.7: 0 nichts, 1 Neustart, 2 Tiefschlaf, 256 + v Sprung in Slot v - 1. */");
-    let _ = writeln!(s, "int takt_mcu_command(void) {{");
+    let _ = writeln!(
+        s,
+        "/* 12.7: 0 nichts, 1 Neustart, 2 Tiefschlaf ohne Zeitgeber, 3 Sprung in Slot `arg`, 4 Tiefschlaf `arg` ns. */"
+    );
+    let _ = writeln!(s, "int takt_mcu_command(long long *arg) {{");
+    let _ = writeln!(s, "    *arg = -1;");
     if let Some(r) = &reboot {
         let _ = writeln!(s, "    switch (*({} *)(latch + {})) {{", r.ct, r.slot.offset);
-        for (d, name) in &r.commands {
-            let code = if *name == "restart" { 1 } else { 2 };
-            let _ = writeln!(s, "    case {d}: return {code};");
+        for (d, command) in &r.commands {
+            let body = match command {
+                crate::harness::Reboot::Restart => "return 1;".to_string(),
+                crate::harness::Reboot::DeepSleep => "return 2;".to_string(),
+                crate::harness::Reboot::DeepSleepFor => {
+                    format!("*arg = *(long long *)(latch + {}); return 4;", r.slot.offset + 8)
+                }
+            };
+            let _ = writeln!(s, "    case {d}: {body}");
         }
         let _ = writeln!(s, "    default: break;");
         let _ = writeln!(s, "    }}");
     }
     if let Some((slot, ct)) = jump {
+        let at = slot.offset;
         let _ = writeln!(
             s,
-            "    if (*({ct} *)(latch + {})) return 256 + (int)*({ct} *)(latch + {});",
-            slot.offset, slot.offset
+            "    if (*({ct} *)(latch + {at})) {{ *arg = (long long)*({ct} *)(latch + {at}) - 1; return 3; }}"
         );
     }
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_mcu_end(void) {{");
-    let _ = writeln!(s, "    int c = takt_mcu_command();");
+    let _ = writeln!(s, "    long long arg;");
+    let _ = writeln!(s, "    int c = takt_mcu_command(&arg);");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(g_done);");
     let _ = writeln!(
         s,
-        "    takt_board_trace(c == 1 ? \"end restart\\n\" : c == 2 ? \"end deep_sleep\\n\" : \"end boot_jump\\n\");"
+        "    takt_board_trace(c == 1 ? \"end restart\\n\" : c == 3 ? \"end boot_jump\\n\" : \"end deep_sleep\\n\");"
     );
     crate::harness::safe_outputs(s, p, layout);
     let _ = writeln!(s, "}}\n");
@@ -434,6 +445,7 @@ fn telemetry(
         return;
     }
     let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md); ohne `all` nur die geaenderten. */");
+    let _ = writeln!(s, "{}", crate::harness::DURATION_C);
     let _ = writeln!(s, "{}", crate::layout::c_buffer("g_shown", layout.latch));
     let _ = writeln!(s, "struct takt_variant;");
     let _ = writeln!(s, "struct takt_field {{ const struct takt_variant *names; unsigned char kind, n_names; }};");
@@ -454,7 +466,13 @@ fn telemetry(
             t => (t, 0),
         };
         let payload = payload_variants(p, &slot.name);
-        let Some(kind) = value_kind(elem, slot.signed).or(payload.as_ref().map(|_| 4)) else { continue };
+        let duration = p
+            .channels
+            .iter()
+            .find(|c| c.name == slot.name)
+            .is_some_and(|c| matches!(p.types.get(c.ty), takt_mir::types::Type::Duration { .. }));
+        let kind = if duration { Some(DURATION) } else { value_kind(elem, slot.signed) };
+        let Some(kind) = kind.or(payload.as_ref().map(|_| 4)) else { continue };
         kinds.push(kind);
         let variants = enum_variants(p, &slot.name).unwrap_or_default();
         let mut vptr = "0".to_string();
@@ -527,6 +545,10 @@ fn telemetry(
     let _ = writeln!(s, "    }} else if (f->kind == 0x41) takt_board_trace(v ? \"true\" : \"false\");");
     let _ = writeln!(s, "    else if (f->kind == 0x84) takt_board_trace_f64((double)*(const float *)at);");
     let _ = writeln!(s, "    else if (f->kind == 0x88) takt_board_trace_f64(*(const double *)at);");
+    let _ = writeln!(
+        s,
+        "    else if (f->kind == {DURATION}) {{ takt_board_trace_i64(takt_dur_value(v)); takt_board_trace(takt_dur_unit(v)); }}"
+    );
     let _ = writeln!(s, "    else if (f->kind & 0x40) takt_board_trace_u64((unsigned long long)v);");
     let _ = writeln!(s, "    else takt_board_trace_i64(v);");
     let _ = writeln!(s, "}}");
@@ -553,6 +575,14 @@ fn telemetry(
     for kind in kinds.iter().filter(|k| *k & 0x80 != 0) {
         let ct = kind_c_type(*kind);
         let _ = writeln!(s, "    if (o->kind == {kind}) {{ takt_board_trace_f64((double)*(const {ct} *)v); return; }}");
+    }
+    if kinds.contains(&DURATION) {
+        let _ = writeln!(s, "    if (o->kind == {DURATION}) {{");
+        let _ = writeln!(s, "        long long d = takt_load(o->kind, v);");
+        let _ = writeln!(s, "        takt_board_trace_i64(takt_dur_value(d));");
+        let _ = writeln!(s, "        takt_board_trace(takt_dur_unit(d));");
+        let _ = writeln!(s, "        return;");
+        let _ = writeln!(s, "    }}");
     }
     let _ = writeln!(s, "    if (o->kind & 0x40) takt_board_trace_u64((unsigned long long)takt_load(o->kind, v));");
     let _ = writeln!(s, "    else takt_board_trace_i64(takt_load(o->kind, v));");
@@ -608,8 +638,12 @@ fn program_counters(s: &mut String, p: &Program, driven: &[&takt_mir::machine::M
     let _ = writeln!(s, "}}\n");
 }
 
+/// Die Art einer Dauer: acht Byte mit Vorzeichen, geschrieben in ihrer
+/// groessten ganzzahligen Einheit wie im Interpreter (T2).
+const DURATION: u8 = 0x28;
+
 /// Die Art eines Werts in der Ausgabetabelle: Breite in Bytes, `0x40`
-/// ohne Vorzeichen, `0x80` Fliesskomma.
+/// ohne Vorzeichen, `0x80` Fliesskomma, `0x20` Dauer.
 fn value_kind(ty: &takt_llvm::ty::LlvmType, signed: bool) -> Option<u8> {
     use takt_llvm::ty::LlvmType;
     Some(match (ty, signed) {
@@ -628,7 +662,7 @@ fn kind_c_type(kind: u8) -> &'static str {
         0x01 => "signed char",
         0x02 => "short",
         0x04 => "int",
-        0x08 => "long long",
+        0x08 | DURATION => "long long",
         0x41 => "unsigned char",
         0x42 => "unsigned short",
         0x44 => "unsigned int",
@@ -655,6 +689,7 @@ fn payload_variants(p: &Program, name: &str) -> Option<Vec<Vec<(u8, Option<(Stri
         for f in &v.fields {
             let signed = matches!(p.types.get(f.ty), Type::Int { width, .. } if width.signed());
             let kind = match p.types.get(f.ty) {
+                Type::Duration { .. } => DURATION,
                 Type::Enum(inner) => {
                     let def = p.enums.get(inner.index())?;
                     let table: Vec<String> = def
@@ -701,12 +736,16 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 /// nur luegen oder schweigen. Die schwache Voreinstellung antwortet
 /// nicht und laesst den Eintrag, wie `init` ihn gesetzt hat: `Bad` (3.5).
 ///
-/// Eingaenge mit `sim(...)` oder ohne Bindung bekommen keinen Aufruf; sie
-/// stellt das Modell im selben Tick (8.3).
+/// Eingaenge mit `sim(...)` oder ohne Bindung bekommen keinen Aufruf, und
+/// ebenso keiner, den ein `sim`-Output derselben Adresse speist: Im
+/// Sim-Build ist das Modell seine Quelle, und ein Treiber, der zu
+/// Tickbeginn laese, ueberschriebe es (8.3).
 fn sample(s: &mut String, p: &Program, layout: &Layout) {
+    let fed = crate::harness::sim_fed_inputs(p);
     let bound: Vec<(&crate::layout::Slot, String, u64)> = layout
         .inputs
         .iter()
+        .filter(|slot| !p.channels.iter().position(|c| c.name == slot.name).is_some_and(|i| fed.contains(&i)))
         .filter_map(|slot| {
             let name = slot.address.as_ref().map(|a| format!("takt_in_{}", a.ident()))?;
             Some((slot, name, crate::harness::quality_offset(p, &slot.name)?))

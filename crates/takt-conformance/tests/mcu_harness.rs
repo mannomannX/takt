@@ -114,7 +114,7 @@ fn the_harness_exports_what_the_loop_needs() {
     for name in ["takt_mcu_init", "takt_mcu_tick", "takt_mcu_dump", "takt_mcu_pc", "takt_mcu_end"] {
         assert!(src.contains(&format!("void {name}")), "`{name}` fehlt im Rahmen");
     }
-    assert!(src.contains("int takt_mcu_command(void)"), "`takt_mcu_command` fehlt im Rahmen (12.7)");
+    assert!(src.contains("int takt_mcu_command(long long *arg)"), "`takt_mcu_command` fehlt im Rahmen (12.7)");
 }
 
 /// Der Rahmen bedient jede Funktion, die der erzeugte Code ruft.

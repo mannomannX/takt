@@ -504,6 +504,33 @@ machine m:
     assert!(!text.contains("t=6 "), "nach dem Kommando laeuft nichts mehr:\n{text}");
 }
 
+/// **`DEEP_SLEEP_FOR` beendet den Lauf wie `DEEP_SLEEP`** und traegt seine
+/// Weckzeit im Trace, als Wert des Outputs (12.7).
+#[test]
+fn deep_sleep_for_ends_the_run_and_shows_its_duration() {
+    let p = compile(
+        "\
+output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
+
+machine m:
+    initial RUN
+    state RUN:
+        after 5 ms: -> OFF
+    state OFF:
+        enter:
+            reboot = DEEP_SLEEP_FOR(duration = 10 min)
+",
+    );
+    let out =
+        run(&p, &Trace::default(), &RunOptions { ticks: 50, profile: None, order_seed: None, ..Default::default() })
+            .expect("Lauf");
+    assert_eq!(out.ended, takt_interp::Ended::DeepSleep);
+    let text = out.trace.render();
+    assert!(text.contains("t=5 out reboot DEEP_SLEEP_FOR(10 min)"), "die Weckzeit steht im Trace:\n{text}");
+    assert!(text.contains("t=5 end deep_sleep"), "{text}");
+    assert!(text.contains("t=5 out reboot NONE"), "danach `safe`:\n{text}");
+}
+
 /// `reboot = RESTART` endet ebenso, mit anderem Grund (12.7).
 #[test]
 fn restart_ends_the_run_with_its_own_reason() {

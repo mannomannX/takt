@@ -1,0 +1,38 @@
+(system
+  (language 1)
+  (tick 10ms))
+(enum Plan
+  (IDLE)
+  (WAIT (d: Duration))
+  (MOVE (steps: int in 0..100) (d: Duration)))
+(output delay :Duration @hw("o/delay") safe=0s)
+(output plan :Plan @hw("o/plan") safe=IDLE)
+(output waited :Duration @hw("o/waited") safe=0s)
+(machine m
+  (var k :int in 0..4 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (var p :Plan IDLE)
+      (if (== k 0)
+        (= delay 90min)
+        (= p (MOVE steps=3 d=2s)))
+      (elif (== k 1)
+        (= delay 1500ms)
+        (= p (WAIT d=250us)))
+      (elif (== k 2)
+        (= delay 7ns)
+        (= p (WAIT d=(- 3ms))))
+      (elif (== k 3)
+        (= delay 36h))
+      (else
+        (= delay 0s))
+      (= plan p)
+      (match p
+        (case (WAIT d)
+          (= waited d))
+        (case (MOVE steps d)
+          (= waited d))
+        (case _
+          (= waited 0s)))
+      (= k (% (+ k 1) 5)))))

@@ -77,6 +77,13 @@ impl Stm32f401 {
         &self.port
     }
 
+    /// Liest, was das Board von sich aus schreibt, ohne es neu zu starten —
+    /// nach dem Wecken aus dem Tiefschlaf (12.7). Die Leitung bleibt dabei
+    /// offen, nur das Board schweigt, solange es schlaeft.
+    pub fn listen(&self, within: Duration) -> Result<String, String> {
+        capture(&self.port, BAUD, serialport::FlowControl::Software, within, || Ok(()))
+    }
+
     /// Steht das Board im DFU-Bootloader?
     pub fn in_bootloader(&self) -> Result<bool, String> {
         let listed = run_bounded(&self.dfu_util, &["-l"], Duration::from_secs(15))

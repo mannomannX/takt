@@ -25,6 +25,12 @@ pub trait Port {
 
     /// Schickt ab, was die Leitung gesammelt hat (ein USB-Paket).
     fn flush(&mut self) {}
+
+    /// Ob alles, was die Leitung angenommen hat, hinaus ist und nicht mehr
+    /// in ihrem eigenen Puffer steht (FB-314).
+    fn idle(&mut self) -> bool {
+        true
+    }
 }
 
 /// Der Ring vor der Leitung.
@@ -87,6 +93,19 @@ impl<P: Port, const N: usize> Telemetry<P, N> {
         for _ in 0..rounds {
             self.flush();
             if self.len == 0 {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Wie [`Telemetry::drain`], und dazu, bis die Leitung auch ihren
+    /// eigenen Puffer abgegeben hat; wahr, wenn alles hinaus ist. Vor einem
+    /// Reset oder Tiefschlaf (12.7), der diesen Puffer mitnaehme (FB-314).
+    pub fn finish(&mut self, rounds: u32) -> bool {
+        for _ in 0..rounds {
+            self.flush();
+            if self.len == 0 && self.port.idle() {
                 return true;
             }
         }
@@ -201,12 +220,15 @@ mod tests {
 
     use super::*;
 
-    /// Eine Leitung, die je Paket `cap` Bytes nimmt.
+    /// Eine Leitung, die je Paket `cap` Bytes nimmt und ein Byte noch
+    /// `lag` Pakete lang in ihrem eigenen Puffer haelt.
     struct Line {
         cap: usize,
         room: usize,
         sent: Vec<u8>,
         packets: usize,
+        lag: usize,
+        busy: usize,
     }
 
     impl Port for Line {
@@ -216,17 +238,23 @@ mod tests {
             }
             self.room -= 1;
             self.sent.push(b);
+            self.busy = self.lag;
             true
         }
 
         fn flush(&mut self) {
             self.packets += 1;
             self.room = self.cap;
+            self.busy = self.busy.saturating_sub(1);
+        }
+
+        fn idle(&mut self) -> bool {
+            self.busy == 0
         }
     }
 
     fn line(cap: usize) -> Line {
-        Line { cap, room: cap, sent: Vec::new(), packets: 0 }
+        Line { cap, room: cap, sent: Vec::new(), packets: 0, lag: 0, busy: 0 }
     }
 
     fn text<const N: usize>(t: &Telemetry<Line, N>) -> String {
@@ -288,6 +316,19 @@ mod tests {
         assert!(t.drain(10));
         assert_eq!(text(&t), "abcdefghijklmnopqrstuvwxyz");
         assert_eq!(t.dropped(), 0);
+    }
+
+    /// Ein leerer Ring heisst nicht, dass alles hinaus ist: `finish` wartet
+    /// auch auf den Puffer der Leitung, begrenzt wie `drain`.
+    #[test]
+    fn finish_waits_until_the_line_is_idle() {
+        let mut t = Telemetry::<_, 16>::new(Line { lag: 3, ..line(4) });
+        t.write("abcdefghij");
+        assert!(t.drain(10) && !t.port.idle());
+        assert!(t.finish(10) && t.port.idle());
+        let mut stuck = Telemetry::<_, 16>::new(Line { lag: 100, ..line(4) });
+        stuck.write("abc");
+        assert!(!stuck.finish(10));
     }
 
     /// Die Bilanz zaehlt ab der Marke, was in den Ring ging — Verworfenes

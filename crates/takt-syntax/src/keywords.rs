@@ -320,7 +320,7 @@ pub const OPEN_ENUMS: &[(&str, &[&str])] = &[
     ),
     ("BootReason", &["POWER_ON", "WATCHDOG", "SOFTWARE", "DEEP_SLEEP_WAKE", "TRIAL"]),
     ("ImageState", &["CONFIRMED", "TRIAL"]),
-    ("RebootCmd", &["NONE", "RESTART", "DEEP_SLEEP"]),
+    ("RebootCmd", &["NONE", "RESTART", "DEEP_SLEEP", "DEEP_SLEEP_FOR"]),
     ("Quality", &["Good", "Suspect", "Stale", "Bad"]),
     ("JobErr", &[]),
     ("Reason", &[]),

@@ -57,6 +57,55 @@ fn slept(text: &str) -> Option<u64> {
     text.lines().find_map(|l| l.strip_prefix("takt schlief ")?.split_whitespace().next()?.parse().ok())
 }
 
+/// **`DEEP_SLEEP_FOR` schlaeft und weckt nach seiner Weckzeit** (12.7,
+/// FB-309). Der erste Lauf geht nach 300 ms fuer zwei Sekunden in den
+/// Tiefschlaf; der zweite beginnt mit `boot_reason = DEEP_SLEEP_WAKE` und
+/// zeigt es an `woke`. Ein freier Lauf in Echtzeit: Nur dort fuehrt das
+/// Board das Kommando aus, ein Konformitaetslauf endet mit dem Trace.
+///
+/// Im Tiefschlaf ist der USB-Serial-JTAG aus: Dass der Port verschwindet
+/// und erst nach der Weckzeit zurueckkommt, belegt den Schlaf selbst. Die
+/// Konsole bleibt nach dem Wecken stumm (FB-311), also liest der Test die
+/// Weckursache und den Tick ueber JTAG.
+#[test]
+fn a_deep_sleep_ends_after_its_duration() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true };
+    let program = board::root().join("crates/takt-conformance/tests/programs/deep_sleep.takt");
+    let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
+    let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
+    assert!(first.contains("end deep_sleep"), "der erste Lauf endet mit dem Kommando:\n{first}");
+    assert!(board.port_gone(Duration::from_secs(3)), "der Port blieb: kein Tiefschlaf");
+    let slept = Instant::now();
+    assert!(board.listen_port(Duration::from_secs(8)), "der Port kam nicht zurueck: kein Wecken");
+    assert!(slept.elapsed() >= Duration::from_millis(1500), "zu frueh geweckt: {:?}", slept.elapsed());
+    std::thread::sleep(Duration::from_millis(500));
+    let reason = board.word_over_jtag(&elf, |n| n.contains("BOOT_REASON")).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(reason, 3, "der zweite Lauf beginnt mit `DEEP_SLEEP_WAKE` (12.7)");
+    let (a, b) = (board.tick_over_jtag(&elf), board.tick_over_jtag(&elf));
+    assert!(matches!((&a, &b), (Ok(x), Ok(y)) if y > x), "der zweite Lauf tickt: {a:?} {b:?}");
+}
+
+/// **`reboot = RESTART` startet den Chip neu, und der neue Lauf weiss es**
+/// (12.7): Der erste Lauf startet nach 300 ms neu; der zweite beginnt mit
+/// `boot_reason = SOFTWARE` und zeigt es eine Sekunde spaeter an `again`,
+/// wenn der Wirt die Leitung wieder offen hat. Ein freier Lauf in Echtzeit,
+/// wie beim Tiefschlaf.
+///
+/// Der Neustart ist ein Software-Reset des HP-Systems: Der USB-Serial-JTAG
+/// bleibt angemeldet, und die Konsole traegt den zweiten Lauf.
+#[test]
+fn a_restart_begins_again_with_software_as_the_reason() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true };
+    let program = board::root().join("crates/takt-conformance/tests/programs/restart.takt");
+    let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
+    let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
+    assert!(first.contains("end restart"), "der erste Lauf endet mit dem Kommando:\n{first}");
+    let second = board.listen(Duration::from_secs(4)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(second.contains("out again 1"), "der zweite Lauf beginnt mit `SOFTWARE`:\n{second}");
+}
+
 /// **Eine `driver machine` schreibt UART0** (12.10, M8 Schritt 20).
 ///
 /// Der Nachweis der Treiberstufe auf echten Registern: Zwei Ports, ein

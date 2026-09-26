@@ -11,6 +11,7 @@
 #![allow(unsafe_code, reason = "C-ABI des Rahmens; 9.5 fuehrt Treiber in der TCB")]
 
 use core::fmt::Write as _;
+use core::sync::atomic::{AtomicI32, Ordering};
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
@@ -123,6 +124,23 @@ pub extern "C" fn takt_out_ui_led(value: u8) {
     }
 }
 
+/// Womit dieser Lauf begann (12.7), beim Start aus der Reset-Ursache gelesen.
+static BOOT_REASON: AtomicI32 = AtomicI32::new(0);
+
+/// Der Treiber fuer `input … @ hw("sys/boot_reason")` (12.7).
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_sys_boot_reason(value: *mut i32, quality: *mut u8) -> bool {
+    unsafe {
+        *value = BOOT_REASON.load(Ordering::Relaxed);
+        *quality = 0;
+    }
+    true
+}
+
 /// Der Input `ui_button` aus dem BOOT-Taster an IO9 (12.1 Schritt 2).
 ///
 /// Ein wackelnder Kontakt meldet `Suspect` statt `Good`: Der Wert ist da,
@@ -166,18 +184,20 @@ fn conduct(program: Generated, clock: impl Clock, persist: &mut Option<Persist<'
 ///
 /// Ein Konformitaetslauf endet wie der Wirtsrahmen mit dem Trace, und das
 /// Board bleibt fuer das naechste Programm erreichbar; nur im Betrieb
-/// fuehrt es das Kommando aus.
+/// fuehrt es das Kommando aus. Vorher geht die Leitung ganz hinaus: Reset
+/// und Tiefschlaf naehmen mit, was noch in ihrem Puffer steht (FB-314).
 fn platform(command: Option<PlatformCommand>) {
+    let Some(command) = command else { return };
+    if let Some(u) = uart() {
+        u.finish(DRAIN_ROUNDS);
+    }
     match command {
-        // Der Reset auf RTC-Ebene, wie der EN-Pin (FB-264).
-        Some(PlatformCommand::Restart) => takt_board_esp32c6::usb::chip_reset(),
-        // TODO(FB-309): Tiefschlaf braucht eine Weckquelle, die 12.7 nicht
-        // nennt, der Sprung Slots (Profil `boot`, M10 Schritt 17). Bis dahin
-        // haelt das Board mit `safe`-Ausgaengen an und sagt es.
-        Some(PlatformCommand::DeepSleep | PlatformCommand::Jump(_)) => {
-            report("takt: Kommando an die Plattform ist hier nicht abgebildet (FB-309)");
-        }
-        None => {}
+        PlatformCommand::Restart => takt_board_esp32c6::platform::restart(),
+        PlatformCommand::DeepSleep(duration) => takt_board_esp32c6::platform::deep_sleep(duration),
+        // TODO(M10 Schritt 17): Der Sprung braucht Slots, die erst das
+        // Profil `boot` einrichtet; bis dahin haelt das Board mit
+        // `safe`-Ausgaengen an und sagt es.
+        PlatformCommand::Jump(_) => report("takt: der Sprung in einen Slot braucht das Profil `boot`"),
     }
 }
 
@@ -187,6 +207,7 @@ fn main() -> ! {
     takt_board_esp32c6::stack::paint();
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     takt_board_esp32c6::reenumerate_if_requested();
+    BOOT_REASON.store(takt_board_esp32c6::platform::boot_reason(), Ordering::Relaxed);
     let mut telemetry = takt_board_esp32c6::telemetry(peripherals.USB_DEVICE);
     let Ok(timer) = takt_board_esp32c6::init(peripherals.SYSTIMER, TICK_NS) else {
         telemetry.write("takt: Periode nicht einrichtbar");

@@ -118,12 +118,36 @@ impl Esp32c6 {
         capture(&self.port, BAUD, flow, TRACE, || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ()))
     }
 
+    /// Liest, was das Board von sich aus schreibt, ohne es zurueckzusetzen —
+    /// nach einem Neustart, den das Programm befiehlt (12.7).
+    pub fn listen(&self, within: Duration) -> Result<String, String> {
+        capture(&self.port, BAUD, serialport::FlowControl::None, within, || Ok(()))
+    }
+
+    /// Wartet, bis der Port verschwindet: Im Tiefschlaf ist der
+    /// USB-Serial-JTAG aus (12.7).
+    pub fn port_gone(&self, within: Duration) -> bool {
+        port_listed(&self.port, false, within)
+    }
+
+    /// Wartet, bis der Port wieder da ist: Der Chip ist aus dem Tiefschlaf
+    /// erwacht (12.7).
+    pub fn listen_port(&self, within: Duration) -> bool {
+        port_listed(&self.port, true, within)
+    }
+
     /// Der Tickzaehler des Bring-ups (`g_tick`), ueber JTAG gelesen.
     pub fn tick_over_jtag(&self, elf: &Path) -> Result<u32, String> {
+        self.word_over_jtag(elf, |name| name == "g_tick")
+    }
+
+    /// Ein Wort des laufenden Programms ueber JTAG, am ersten Symbol, auf
+    /// dessen Namen `wanted` passt — auch wenn die Konsole schweigt.
+    pub fn word_over_jtag(&self, elf: &Path, wanted: impl Fn(&str) -> bool) -> Result<u32, String> {
         let symbols =
-            Binutils::best_for(Target::RISCV32IMAC).symbols(elf).ok_or("`nm` fehlt: kein Blick auf `g_tick`")?;
-        let g_tick = symbols.iter().find(|s| s.name == "g_tick").ok_or("kein `g_tick` im Abbild")?;
-        let address = format!("{:#x}", g_tick.address);
+            Binutils::best_for(Target::RISCV32IMAC).symbols(elf).ok_or("`nm` fehlt: kein Blick ins Abbild")?;
+        let symbol = symbols.iter().find(|s| wanted(&s.name)).ok_or("das Symbol fehlt im Abbild")?;
+        let address = format!("{:#x}", symbol.address);
         let out = self
             .probe_rs(&["read", "--chip", "esp32c6", "b32", &address, "1"])
             .map_err(|e| format!("JTAG antwortet nicht (Kabel neu stecken):\n{e}"))?;

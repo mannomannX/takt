@@ -16,7 +16,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 65] = [
+const KORPUS: [&str; 66] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -82,6 +82,7 @@ const KORPUS: [&str; 65] = [
     "45_journal_cut.takt",
     "81_persist_variants.takt",
     "82_scheduled_sleep.takt",
+    "83_durations.takt",
 ];
 
 /// Wie viele Ticks verglichen werden.
@@ -590,6 +591,53 @@ fn the_two_implementations_agree_on_triggers() {
         interpreted,
         native
     );
+}
+
+/// **Eine Dauer in einem Record schreibt der Rahmen wie der Interpreter**
+/// (T2): in ihrer groessten ganzzahligen Einheit, als Feld von
+/// `Name(f1, f2)`. Den MCU-Rahmen betrifft das noch nicht, er schreibt
+/// keine Record-Ausgaenge (FB-312).
+#[test]
+fn a_duration_in_a_record_is_written_alike() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let src = "\
+system:
+    language = 1
+    tick     = 10 ms
+
+record Timing:
+    period : Duration
+    count  : int
+
+output timing : Timing @ sim(\"o/timing\")
+
+machine m:
+    var k : int in 0..2 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            if k == 0:
+                timing = Timing(period = 90 min, count = k)
+            else:
+                timing = Timing(period = 250 us, count = k)
+            k = (k + 1) % 2
+";
+    let options =
+        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let p = takt_sema::compile(src, &options).program.expect("Programm");
+    let native = common::run_native_all(&clang, &p, "record_duration", 4).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: 4, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    assert!(native.contains("out timing Timing(90 min, 0)"), "{native}");
+    assert!(native.contains("out timing Timing(250 us, 1)"), "{native}");
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
 }
 
 /// **Der QP-Loeser trifft die bekannte Loesung** (11.4, Satz 9.4.4).

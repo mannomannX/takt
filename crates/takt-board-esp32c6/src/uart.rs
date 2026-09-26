@@ -114,6 +114,12 @@ impl Port for UsbJtag {
         let _ = self.port.flush_tx_nb();
         regs.int_ena().modify(|_, w| w.serial_in_empty().set_bit());
     }
+
+    /// Nichts mehr im FIFO, und der Host hat das letzte Paket abgeholt.
+    fn idle(&mut self) -> bool {
+        self.settle();
+        self.filled == 0 && !self.in_flight
+    }
 }
 
 /// Die Telemetrie des Boards.

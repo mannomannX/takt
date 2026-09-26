@@ -58,7 +58,7 @@ enum Reason open: STALE, OUT_OF_RANGE, IMPLAUSIBLE, DRIVER, NODE
 enum JobErr open: CANCELLED, FAILED, PENDING
 enum BootReason open: POWER_ON, WATCHDOG, SOFTWARE, DEEP_SLEEP_WAKE, TRIAL
 enum ImageState open: CONFIRMED, TRIAL
-enum RebootCmd open: NONE, RESTART, DEEP_SLEEP
+enum RebootCmd open: NONE, RESTART, DEEP_SLEEP, DEEP_SLEEP_FOR(duration: Duration)
 
 # Start-Channels der Plattform (12.7): der eFuse-Block und sein Kommando.
 record EfuseBlock:

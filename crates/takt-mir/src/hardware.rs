@@ -77,8 +77,9 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// Tick-Jitter je Ziel und `guard` je Output (7.5, 8.10) — die Messwerte
 /// von `takt bench` und `takt driver-test` (13.8). 6: eigene Gewichte von
 /// `fma` und `sqrt` (7.2). 7: `cost_model`, die Version des Kostenmodells,
-/// zu der die Gewichte gemessen wurden.
-pub const FORMAT_VERSION: u32 = 7;
+/// zu der die Gewichte gemessen wurden. 8: `deep_wake`, ob ein Input den
+/// Chip aus dem Tiefschlaf weckt (12.7).
+pub const FORMAT_VERSION: u32 = 8;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -314,6 +315,9 @@ pub struct HwChannel {
     pub jitter_ns: Option<i64>,
     /// Gemessene Abtastlatenz eines Inputs in Nanosekunden (13.8).
     pub latency_ns: Option<i64>,
+    /// Weckt der Input den Chip aus dem Tiefschlaf (12.7)? Eine Tatsache
+    /// des Boards: Nicht jeder Pin, der aus `idle` weckt, arbeitet ohne RAM.
+    pub deep_wake: Option<bool>,
 }
 
 /// Was das Journal vom nichtfluechtigen Speicher wissen muss (5.9, 11.5).
@@ -656,12 +660,13 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
         "guard_ns" => channel.guard_ns = Some(number(value, line)? as i64),
         "jitter_ns" => channel.jitter_ns = Some(number(value, line)? as i64),
         "latency_ns" => channel.latency_ns = Some(number(value, line)? as i64),
+        "deep_wake" => channel.deep_wake = Some(boolean(value, line)?),
         _ => {
             return Err(ParseError {
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: direction, raw, unit, range, safe, device, port, \
-                     rate_hz, guard_ns, jitter_ns, latency_ns"
+                     rate_hz, guard_ns, jitter_ns, latency_ns, deep_wake"
                 ),
             });
         }
@@ -867,6 +872,9 @@ pub fn render(hw: &Hardware) -> String {
             if let Some(v) = value {
                 s.push_str(&format!("{key} = {v}\n"));
             }
+        }
+        if let Some(v) = c.deep_wake {
+            s.push_str(&format!("deep_wake = {v}\n"));
         }
     }
     s
@@ -1119,6 +1127,17 @@ t_io = 120000
         assert!(rendered.contains("f32_fma = 35700\nf64_sqrt = 2000000\n"), "{rendered}");
         assert!(rendered.contains("[target.thumbv7em]\ncost_model = 1\n"), "{rendered}");
         assert_eq!(parse(&rendered).expect("Rundreise"), hw);
+    }
+
+    /// Ob ein Input aus dem Tiefschlaf weckt, steht am Kanal und reist mit
+    /// (12.7); ein Leser vor Version 8 kennt den Schluessel nicht.
+    #[test]
+    fn deep_wake_round_trips() {
+        let text = format!("# takt-hw {FORMAT_VERSION}\n[channel gpio/btn]\ndirection = input\ndeep_wake = true\n");
+        let hw = parse(&text).expect("lesbar");
+        assert_eq!(hw.channel("gpio/btn").expect("Kanal").deep_wake, Some(true));
+        assert_eq!(parse(&render(&hw)).expect("Rundreise"), hw);
+        assert!(parse("# takt-hw 8\n[channel gpio/btn]\ndeep_wake = vielleicht\n").is_err());
     }
 
     /// Nur eine Tabelle zum Kostenmodell dieses Compilers ist eine

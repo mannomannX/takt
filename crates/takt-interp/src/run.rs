@@ -405,8 +405,8 @@ fn scenario_done(sim: &Sim<'_>, s: MachineId) -> bool {
 
 /// Beendet ein System-Channel den Lauf (12.7)?
 ///
-/// `sys/reboot` traegt `RESTART` und `DEEP_SLEEP`, `sys/jump` einen
-/// Slot ungleich null. Beide wirken nach dem Commit.
+/// `sys/reboot` traegt `RESTART`, `DEEP_SLEEP` und `DEEP_SLEEP_FOR`,
+/// `sys/jump` einen Slot ungleich null. Beide wirken nach dem Commit.
 fn end_of(sim: &Sim<'_>) -> Option<Ended> {
     reboot_of(sim).or_else(|| boot_jump_of(sim))
 }
@@ -443,7 +443,7 @@ fn reboot_of(sim: &Sim<'_>) -> Option<Ended> {
     let Value::Enum { variant, .. } = sim.image.outputs.get(i)? else { return None };
     match def.variants.get(*variant as usize)?.name.as_str() {
         "RESTART" => Some(Ended::Restart),
-        "DEEP_SLEEP" => Some(Ended::DeepSleep),
+        "DEEP_SLEEP" | "DEEP_SLEEP_FOR" => Some(Ended::DeepSleep),
         _ => None,
     }
 }

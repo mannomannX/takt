@@ -37,7 +37,7 @@
 #![allow(unsafe_code, reason = "Interrupt-Handler und C-ABI; 9.5 fuehrt Treiber in der TCB")]
 
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 use cortex_m_rt::entry;
 use panic_halt as _;
@@ -137,6 +137,23 @@ pub extern "C" fn takt_board_trace_hex8(value: u8) {
     uart.write_hex8(value);
 }
 
+/// Womit dieser Lauf begann (12.7), beim Start aus der Reset-Ursache gelesen.
+static BOOT_REASON: AtomicI32 = AtomicI32::new(0);
+
+/// Der Treiber fuer `input … @ hw("sys/boot_reason")` (12.7).
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_sys_boot_reason(value: *mut i32, quality: *mut u8) -> bool {
+    unsafe {
+        *value = BOOT_REASON.load(Ordering::Relaxed);
+        *quality = 0;
+    }
+    true
+}
+
 /// Der Treiber fuer `output led : bool @ hw("ui/led")`.
 ///
 /// Der Name ist die Adresse: Der Rahmen bildet `hw("ui/led")` auf
@@ -192,27 +209,35 @@ fn conduct(clock: impl Clock) {
 ///
 /// Ein Konformitaetslauf endet wie der Wirtsrahmen mit dem Trace, und das
 /// Board bleibt fuer das naechste Programm erreichbar; nur im Betrieb
-/// fuehrt es das Kommando aus.
+/// fuehrt es das Kommando aus. Vorher geht die Leitung ganz hinaus: Reset
+/// und Tiefschlaf naehmen mit, was noch in ihrem Puffer steht (FB-314).
 fn platform(command: Option<PlatformCommand>) {
+    let Some(command) = command else { return };
+    if let Some(u) = uart() {
+        u.finish(DRAIN_ROUNDS);
+    }
     match command {
-        Some(PlatformCommand::Restart) => cortex_m::peripheral::SCB::sys_reset(),
-        // TODO(FB-309): Tiefschlaf braucht eine Weckquelle, die 12.7 nicht
-        // nennt, der Sprung Slots (Profil `boot`, M10 Schritt 17). Bis dahin
-        // haelt das Board mit `safe`-Ausgaengen an und sagt es.
-        Some(PlatformCommand::DeepSleep | PlatformCommand::Jump(_)) => {
+        PlatformCommand::Restart => takt_board_stm32f401::reboot(),
+        PlatformCommand::DeepSleep(duration) => takt_board_stm32f401::platform::deep_sleep(duration),
+        // TODO(M10 Schritt 17): Der Sprung braucht Slots, die erst das
+        // Profil `boot` einrichtet; bis dahin haelt das Board mit
+        // `safe`-Ausgaengen an und sagt es.
+        PlatformCommand::Jump(_) => {
             if let Some(u) = uart() {
-                u.write("takt: Kommando an die Plattform ist hier nicht abgebildet (FB-309)");
+                u.write("takt: der Sprung in einen Slot braucht das Profil `boot`");
                 u.newline();
                 u.drain(DRAIN_ROUNDS);
             }
         }
-        None => {}
     }
 }
 
 #[entry]
 fn main() -> ! {
-    // Zuerst: Die Abschlusszeile meldet, wie tief der Stack unter Last reichte.
+    // Ein Tiefschlaf mit Rest schlaeft weiter, bevor irgendetwas laeuft (12.7).
+    takt_board_stm32f401::platform::continue_deep_sleep();
+    BOOT_REASON.store(takt_board_stm32f401::platform::boot_reason(), Ordering::Relaxed);
+    // Dann: Die Abschlusszeile meldet, wie tief der Stack unter Last reichte.
     takt_board_stm32f401::stack::paint();
     let dp = Peripherals::take().expect("Peripherie");
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");

@@ -52,6 +52,7 @@ pub mod bootloader;
 pub mod cycles;
 pub mod guard;
 pub mod led;
+pub mod platform;
 pub mod stack;
 pub mod tick;
 pub mod uart;

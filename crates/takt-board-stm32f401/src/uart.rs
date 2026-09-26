@@ -179,6 +179,11 @@ impl Port for Usart1 {
             cortex_m::interrupt::free(|_| self.usart.cr1().modify(|_, w| w.txeie().set_bit()));
         }
     }
+
+    /// Der FIFO ist leer, und `TC` meldet auch das letzte Stoppbit gesendet.
+    fn idle(&mut self) -> bool {
+        TX.is_empty() && self.usart.sr().read().tc().bit_is_set()
+    }
 }
 
 /// Die Telemetrie des Boards.

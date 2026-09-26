@@ -22,6 +22,7 @@ pub mod console;
 pub mod counter;
 pub mod cycles;
 pub mod fifo;
+pub mod platform;
 pub mod pll;
 pub mod uart;
 

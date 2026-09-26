@@ -18,4 +18,4 @@ machine m:
     state OFF:
         enter:
             led = false
-            reboot = DEEP_SLEEP
+            reboot = DEEP_SLEEP_FOR(duration = 10 s)

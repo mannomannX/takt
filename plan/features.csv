@@ -748,7 +748,7 @@ PAR-12.3-Speicherschutz,Absatz/Regel,12.3,Speicherschutz,,M10 (aus M5),offen,
 PAR-12.3-Targets_mit_XIP_Flash_und_Cache_Stall_Profilfamilie_xip_flash,Absatz/Regel,12.3,Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`),,M5 (Embedded),fertig,"ESP32-C6 (plan/esp32c6.md Schritt 7): RAM-Residenz von Tick-ISR, Wartepfad und erzeugtem Code (`#[ram]`, `rwtext_hook.x`); `esp-storage` ohne `critical-section`; `takt size` weist `iram` aus; `idle` als Light-Sleep (Schritt 6). Die Sektorloeschung kostet trotzdem Perioden — sie ist unteilbar und laenger als der Tick (FB-197); die Semantik bleibt unberuehrt. Seit plan/nvm.md: Kosten in 8.10, Pruefung 32, Schreiben im Schlaffenster, Log-Journal, Residenznachweis in `takt size`."
 PAR-12.7-Muster_TRIAL_SELFTEST_CONFIRM,Absatz/Regel,12.7,Muster TRIAL → SELFTEST → CONFIRM,,M10 (aus M6),offen,
 PAR-12.7-Neustart_aus_sicherem_Zustand,Absatz/Regel,12.7,Neustart aus sicherem Zustand,,M10 (aus M6),offen,
-PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M5 (Embedded),fertig,
+PAR-12.7-Tiefschlaf,Absatz/Regel,12.7,Tiefschlaf,,M5 (Embedded),fertig,"FB-309: `DEEP_SLEEP` ohne Zeitgeber, `DEEP_SLEEP_FOR(duration)` mit Weckzeit, Wake-Quellen mit `deep_wake` in der Konfiguration, Prüfung 60 warnt ohne Weckquelle; Interpreter, beide Rahmen, Runtime, Tiefschlaf und `DEEP_SLEEP_WAKE` auf beiden Boards (`a_deep_sleep_ends_after_its_duration`)"
 PAR-12.7-Start_Channels,Absatz/Regel,12.7,Start-Channels,,M10 (aus M6),offen,
 PAR-12.7-Irreversible_Outputs,Absatz/Regel,12.7,Irreversible Outputs,,M6 (v1.1),fertig,
 PAR-12.8-Zielklassen,Absatz/Regel,12.8,Zielklassen,,M10 (aus M5),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)

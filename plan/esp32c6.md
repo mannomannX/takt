@@ -110,9 +110,19 @@ misst `takt bench` inzwischen auf beiden Boards — oder, falls sich ESP-IDF anb
   Zeile mitzuschreiben, oder ob der Korpuslauf aus dem RAM-Log
   nachgelagert liest (M5 4, Punkt 1). Schritt 4 schreibt alle 100 Ticks
   ohne verpasste Ticks; jede Zeile mitzuschreiben ist noch nicht gemessen.
-- Der MCU-Rahmen trägt keine geplanten Ausgaben (`at`, 7.5), keine
-  Systemkanäle (`sys/reboot`, `sys/jump`) und keine Jobs; die vier Programme
-  bleiben dem Linux-Vergleich vorbehalten, bis der Rahmen sie hat.
+- ~~Der MCU-Rahmen trägt keine geplanten Ausgaben (`at`, 7.5), keine
+  Systemkanäle (`sys/reboot`, `sys/jump`) und keine Jobs~~ — `at` seit
+  M10 Schritt 5, `sys/reboot` und `sys/jump` seit Schritt 6a, 28, 32 und 34
+  im Board-Korpus. Offen sind die Jobs (Schritt 7, Korpus 40).
+- **Plattformkommandos (12.7, FB-309).** `RESTART` ist der Software-Reset
+  des HP-Systems (`CoreSw`): Der USB-Serial-JTAG bleibt angemeldet, und der
+  nächste Lauf liest `SOFTWARE`. Den Reset auf RTC-Ebene behält der Host
+  für die Neuanmeldung (FB-266); er setzt auch das LP-System zurück, eine
+  Notiz in `LP_AON STORE0` überlebt ihn nicht, und er meldet sich als
+  `WATCHDOG`. `DEEP_SLEEP_FOR(d)` schläft über `LowPower` mit dem
+  RTC-Zeitgeber; der Port verschwindet und kommt nach `d` wieder, und der
+  nächste Lauf liest `DEEP_SLEEP_WAKE`. Danach bleibt die Konsole stumm,
+  bis ein Reset kommt (FB-311); der Boardtest liest darum über JTAG.
 - ~~Eingänge vom Board~~ — **erledigt 2026-09-22.** Der MCU-Rahmen hat
   jetzt `takt_in_*` als Gegenstück zu `takt_out_*`: Aus `hw("ui/button")`
   wird `takt_in_ui_button(&value, &quality)`, schwach gebunden wie die

@@ -38,7 +38,7 @@ unsafe extern "C" {
     fn takt_mcu_advance(n: i64);
     fn takt_mcu_persist_snapshot(out: *mut c_void, cap: i32) -> i32;
     fn takt_mcu_persist_restore(bytes: *const c_void, len: i32) -> i32;
-    fn takt_mcu_command() -> i32;
+    fn takt_mcu_command(arg: *mut i64) -> i32;
     fn takt_mcu_end();
 }
 
@@ -141,11 +141,14 @@ impl Program for Generated {
     }
 
     fn command(&self) -> Option<PlatformCommand> {
-        // SAFETY: liest nur den statischen Zustand des Rahmens.
-        match unsafe { takt_mcu_command() } {
+        let mut arg = 0i64;
+        // SAFETY: liest nur den statischen Zustand des Rahmens und schreibt `arg`.
+        match unsafe { takt_mcu_command(&mut arg) } {
             1 => Some(PlatformCommand::Restart),
-            2 => Some(PlatformCommand::DeepSleep),
-            n => u8::try_from(n - 257).ok().map(PlatformCommand::Jump),
+            2 => Some(PlatformCommand::DeepSleep(None)),
+            3 => u8::try_from(arg).ok().map(PlatformCommand::Jump),
+            4 => Some(PlatformCommand::DeepSleep(Some(arg))),
+            _ => None,
         }
     }
 

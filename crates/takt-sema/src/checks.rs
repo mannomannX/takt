@@ -1044,6 +1044,28 @@ impl Lowerer<'_> {
             }
         }
         self.diags.extend(diags);
+        self.check_deep_sleep_wake();
+    }
+
+    /// Pruefung 60 (12.7): `DEEP_SLEEP` schlaeft ohne Zeitgeber, bis eine
+    /// Wake-Quelle weckt. Hat das Programm keinen Input mit `wake = true`,
+    /// wacht es nur durch einen Reset auf; mit Konfiguration prueft
+    /// `calibrated::check_bindings`, ob eine davon aus dem Tiefschlaf weckt.
+    fn check_deep_sleep_wake(&mut self) {
+        let Some(span) = deep_sleep_without_timer(&self.program) else { return };
+        if self.program.channels.iter().any(|c| c.dir == Direction::Input && c.attrs.wake) {
+            return;
+        }
+        self.diags.push(
+            Diagnostic::warning(
+                SC60,
+                span,
+                "`DEEP_SLEEP` ohne Wake-Quelle: das Geraet wacht nur durch einen Reset auf (12.7)",
+            )
+            .with_suggestion(
+                "`DEEP_SLEEP_FOR(duration = …)` mit Weckzeit, oder ein Input mit `wake = true`".to_string(),
+            ),
+        );
     }
 
     fn fits_sys(&self, ty: TypeId, want: SysType) -> bool {
@@ -1858,6 +1880,36 @@ fn walk_stmts(stmts: &[Stmt], depth: u32, f: &mut dyn FnMut(&Stmt, u32)) {
             _ => {}
         }
     }
+}
+
+/// Wo ein Programm `reboot = DEEP_SLEEP` schreibt, den Tiefschlaf ohne
+/// Zeitgeber (12.7); `None`, wenn nirgends.
+pub fn deep_sleep_without_timer(p: &Program) -> Option<takt_diag::Span> {
+    let reboot = p
+        .channels
+        .iter()
+        .position(|c| c.dir == Direction::Output && matches!(&c.binding, Binding::Hw(a) if a.text() == "sys/reboot"))?;
+    let Type::Enum(e) = p.types.get(p.channels[reboot].ty) else { return None };
+    let def = p.enums.get(e.index())?;
+    if def.name != "RebootCmd" {
+        return None;
+    }
+    let sleep = def.variants.iter().position(|v| v.name == "DEEP_SLEEP")? as u32;
+    let mut found = None;
+    for m in &p.machines {
+        for_each_stmt(m, &mut |s| {
+            let StmtKind::Assign { target: Place::Output(c), value } = &s.kind else { return };
+            if found.is_some() || c.index() != reboot {
+                return;
+            }
+            walk_expr(value, &mut |x| {
+                if matches!(&x.kind, ExprKind::Variant { enum_id, variant, .. } if enum_id == e && *variant == sleep) {
+                    found = Some(s.span);
+                }
+            });
+        });
+    }
+    found
 }
 
 /// Jede Anweisung eines Blocks.

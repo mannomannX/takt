@@ -178,11 +178,11 @@ pub fn lower(ty: TypeId, p: &Program) -> Option<LlvmType> {
                 LlvmType::Int(32)
             } else {
                 // Diskriminante und je Feld ein 8-Byte-Fach (11.2): so viele
-                // wie die groesste Variante braucht, ungenutzte null.
+                // wie die groesste Variante braucht, ungenutzte null. Eine
+                // Dauer liegt darin wie jede Ganzzahl, als `i64` (3.2).
                 let width = e.variants.iter().map(|v| v.fields.len()).max()? as u32;
                 for f in e.variants.iter().flat_map(|v| v.fields.iter()) {
-                    let scalar = matches!(lower(f.ty, p)?, LlvmType::Int(_) | LlvmType::F32 | LlvmType::F64);
-                    if !scalar || matches!(p.types.get(f.ty), Type::Duration { .. }) {
+                    if !matches!(lower(f.ty, p)?, LlvmType::Int(_) | LlvmType::F32 | LlvmType::F64) {
                         return None;
                     }
                 }

@@ -1,0 +1,30 @@
+# Neustart auf dem Board (12.7): Der erste Lauf startet nach 300 ms neu,
+# der zweite beginnt mit `SOFTWARE` und zeigt es eine Sekunde spaeter an
+# `again` — spaet genug, dass der Wirt nach dem Ende des ersten Laufs
+# wieder mitliest. Danach startet er nicht wieder.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  boot_reason : BootReason @ hw("sys/boot_reason")
+output reboot      : RebootCmd  @ hw("sys/reboot") with safe = NONE
+output again       : bool       @ hw("ui/led")     with safe = false
+
+machine m:
+    initial START
+
+    state START:
+        when boot_reason == SOFTWARE: -> WAITING
+        after 300 ms: -> RESTARTING
+
+    state RESTARTING:
+        enter:
+            reboot = RESTART
+
+    state WAITING:
+        after 1 s: -> AGAIN
+
+    state AGAIN:
+        enter:
+            again = true

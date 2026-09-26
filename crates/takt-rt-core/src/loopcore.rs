@@ -182,9 +182,11 @@ pub fn tick_end(k: u64, tick_ns: i64) -> i64 {
 pub enum PlatformCommand {
     /// `reboot = RESTART`: Neustart des Chips.
     Restart,
-    /// `reboot = DEEP_SLEEP`: Tiefschlaf ohne RAM-Erhalt; der naechste Lauf
-    /// beginnt mit `boot_reason = DEEP_SLEEP_WAKE`.
-    DeepSleep,
+    /// `reboot = DEEP_SLEEP` oder `DEEP_SLEEP_FOR(duration)`: Tiefschlaf
+    /// ohne RAM-Erhalt, bis die Weckzeit in Nanosekunden vergangen ist
+    /// (`None`: ohne Zeitgeber) oder eine Wake-Quelle weckt; der naechste
+    /// Lauf beginnt mit `boot_reason = DEEP_SLEEP_WAKE`.
+    DeepSleep(Option<i64>),
     /// `boot_jump = k + 1`: Sprung in Slot `k`.
     Jump(u8),
 }

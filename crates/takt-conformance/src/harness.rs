@@ -125,6 +125,7 @@ fn build_inner(
     // Die Runtime-Aufrufe (`takt-llvm/src/abi.rs`). Sie schreiben in den
     // Trace, damit der Vergleich sie sieht.
     let _ = writeln!(s, "static long long g_tick = 0;");
+    let _ = writeln!(s, "{DURATION_C}");
     scope_flags(&mut s, p);
     // Das Fault-Flag der reinen Funktionen (4.1, `abi::Abi::FAULT_FLAG`).
     // Es gehoert der Runtime; der Rahmen stellt es bereit und setzt es je
@@ -265,6 +266,8 @@ fn build_inner(
     for (i, _) in &monitors {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, 0);");
     }
+    // 12.7: Auch der Anfangszustand kann das Kommando setzen.
+    platform_end(&mut s, p, &layout, "    ");
     let _ = writeln!(s, "    for (g_tick = 1; g_tick <= {ticks}; g_tick++) {{");
     aging(&mut s, p, &layout, "        ");
     // 4.5: Faellige Jobs werden zu Tick-Beginn sichtbar, wie `poll_jobs` im Interpreter.
@@ -308,21 +311,7 @@ fn build_inner(
     for (i, _) in &monitors {
         let _ = writeln!(s, "        takt_monitor_{i}(monitor_{i}, image, params, latch, g_tick);");
     }
-    // 12.7: `reboot` beendet den Lauf, danach stehen die Outputs auf `safe`.
-    if let Some(RebootSlot { slot, ct, commands }) = reboot_slot(p, &layout) {
-        let _ = writeln!(s, "        switch (*({ct} *)(latch + {})) {{", slot.offset);
-        for (d, name) in commands {
-            let _ = writeln!(s, "        case {d}: printf(\"t=%lld end {name}\\n\", g_tick); goto ende;");
-        }
-        let _ = writeln!(s, "        default: break;");
-        let _ = writeln!(s, "        }}");
-    }
-    // 12.7: `sys/jump` beendet den Lauf ebenso, sobald der Slot nicht null ist.
-    if let Some((slot, ct)) = jump_slot(p, &layout) {
-        let _ = writeln!(s, "        if (*({ct} *)(latch + {})) {{", slot.offset);
-        let _ = writeln!(s, "            printf(\"t=%lld end boot_jump\\n\", g_tick); goto ende;");
-        let _ = writeln!(s, "        }}");
-    }
+    platform_end(&mut s, p, &layout, "        ");
     if sleep {
         virtual_sleep(&mut s, p, &driven, ticks);
     }
@@ -350,6 +339,7 @@ fn build_inner(
     let _ = writeln!(s, "}}");
 
     // `dump` steht hinter `main`, damit die Deklaration oben genuegt.
+    // T2: Eine Dauer steht in ihrer groessten ganzzahligen Einheit.
     let mut dump = String::new();
     let _ = writeln!(dump, "\nstatic void dump(long long t) {{");
     for slot in &layout.outputs {
@@ -372,6 +362,15 @@ fn build_inner(
         }
         if let Some(text) = record_dump(p, slot) {
             dump.push_str(&text);
+            continue;
+        }
+        if is_duration(p, &slot.name) {
+            let _ = writeln!(
+                dump,
+                "    {{ long long v = *(long long *)(latch + {}); \
+                 printf(\"t=%lld out {} %lld %s\\n\", t, takt_dur_value(v), takt_dur_unit(v)); }}",
+                slot.offset, slot.name
+            );
             continue;
         }
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
@@ -407,6 +406,48 @@ fn build_inner(
     Harness { source: s, layout }
 }
 
+/// Eine Dauer in der groessten ganzzahligen Einheit, wie `takt_mir::dump::duration`
+/// sie schreibt (T2); beide Rahmen nehmen dieselben Funktionen.
+pub(crate) const DURATION_C: &str = "\
+static const long long takt_dur_factor[7] = { 86400000000000LL, 3600000000000LL, 60000000000LL, 1000000000LL, \
+1000000LL, 1000LL, 1LL };
+static const char *const takt_dur_name[7] = { \"d\", \"h\", \"min\", \"s\", \"ms\", \"us\", \"ns\" };
+static inline int takt_dur_index(long long ns) {
+    int i = 0;
+    if (ns == 0) return 6;
+    while (i < 6 && ns % takt_dur_factor[i] != 0) i++;
+    return i;
+}
+static inline long long takt_dur_value(long long ns) { return ns / takt_dur_factor[takt_dur_index(ns)]; }
+static inline const char *takt_dur_unit(long long ns) { return takt_dur_name[takt_dur_index(ns)]; }";
+
+/// Ist der Ausgang eine Dauer (3.3)?
+fn is_duration(p: &Program, name: &str) -> bool {
+    p.channels
+        .iter()
+        .find(|c| c.name == name)
+        .is_some_and(|c| matches!(p.types.get(c.ty), takt_mir::types::Type::Duration { .. }))
+}
+
+/// Das Ende eines Laufs durch ein Kommando an die Plattform (12.7):
+/// `sys/reboot` oder `sys/jump`, nach dem Commit des Ticks.
+fn platform_end(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
+    if let Some(RebootSlot { slot, ct, commands }) = reboot_slot(p, layout) {
+        let _ = writeln!(s, "{indent}switch (*({ct} *)(latch + {})) {{", slot.offset);
+        for (d, command) in commands {
+            let name = command.name();
+            let _ = writeln!(s, "{indent}case {d}: printf(\"t=%lld end {name}\\n\", g_tick); goto ende;");
+        }
+        let _ = writeln!(s, "{indent}default: break;");
+        let _ = writeln!(s, "{indent}}}");
+    }
+    if let Some((slot, ct)) = jump_slot(p, layout) {
+        let _ = writeln!(s, "{indent}if (*({ct} *)(latch + {})) {{", slot.offset);
+        let _ = writeln!(s, "{indent}    printf(\"t=%lld end boot_jump\\n\", g_tick); goto ende;");
+        let _ = writeln!(s, "{indent}}}");
+    }
+}
+
 /// Ein Enum mit Feldern: `NAME(f1, f2)` wie `value_text` (9.3), die Felder
 /// aus ihren 8-Byte-Faechern hinter der Diskriminante (11.2).
 fn payload_enum_dump(p: &Program, slot: &crate::layout::Slot) -> Option<String> {
@@ -435,6 +476,9 @@ fn payload_enum_dump(p: &Program, slot: &crate::layout::Slot) -> Option<String> 
                     ("%.17g".to_string(), format!("(double)*(float *)&f[{k}]"))
                 }
                 Type::Float { .. } => ("%.17g".to_string(), format!("*(double *)&f[{k}]")),
+                Type::Duration { .. } => {
+                    ("%lld %s".to_string(), format!("takt_dur_value(f[{k}]), takt_dur_unit(f[{k}])"))
+                }
                 Type::Int { width, .. } if width.signed() => ("%lld".to_string(), format!("(long long)f[{k}]")),
                 Type::Int { .. } => ("%llu".to_string(), format!("(unsigned long long)f[{k}]")),
                 Type::Enum(inner) => {
@@ -506,6 +550,10 @@ fn field_text(p: &Program, ty: takt_mir::TypeId, llvm: &takt_llvm::ty::LlvmType,
             let names: String =
                 def.variants.iter().map(|v| format!("{at_value} == {} ? \"{}\" : ", v.discriminant, v.name)).collect();
             Some(("%s".to_string(), format!(", ({names}\"?\")")))
+        }
+        (Type::Duration { .. }, LlvmType::Int(64)) => {
+            let v = format!("*(long long *)(latch + {at})");
+            Some(("%lld %s".to_string(), format!(", takt_dur_value({v}), takt_dur_unit({v})")))
         }
         (Type::Int { width, .. }, LlvmType::Int(_)) => {
             let ct = c_type(llvm, width.signed())?;
@@ -582,6 +630,10 @@ pub(crate) fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::
     for slot in &layout.outputs {
         let Some(i) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
         let Some(safe) = &p.channels[i].attrs.safe else { continue };
+        if let Some(text) = safe_payload(p, slot, safe) {
+            s.push_str(&text);
+            continue;
+        }
         // Ein Array elementweise; sein `safe` ist ein Array-Literal (3.6).
         if let (takt_llvm::ty::LlvmType::Array(elem, _), takt_mir::expr::ExprKind::Array(items)) =
             (&slot.ty, &safe.kind)
@@ -601,6 +653,31 @@ pub(crate) fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::
         let Some(text) = literal(p, safe) else { continue };
         let _ = writeln!(s, "    *({ct} *)(latch + {}) = {text}; /* {} auf safe (5.3) */", slot.offset, slot.name);
     }
+}
+
+/// Der `safe`-Wert eines Enums mit Nutzlast (11.2): die Diskriminante als
+/// `int` vorn, die Felder in ihren 8-Byte-Faechern, ungenutzte Faecher null
+/// — `==` vergleicht auch sie.
+fn safe_payload(p: &Program, slot: &crate::layout::Slot, safe: &takt_mir::expr::Expr) -> Option<String> {
+    use takt_llvm::ty::LlvmType;
+    use takt_mir::expr::ExprKind;
+    let LlvmType::Struct(_) = &slot.ty else { return None };
+    let ExprKind::Variant { enum_id, variant, fields } = &safe.kind else { return None };
+    let def = p.enums.get(enum_id.index())?;
+    let v = def.variants.get(*variant as usize)?;
+    let mut s = format!("    memset(latch + {}, 0, {});\n", slot.offset, slot.size);
+    let _ =
+        writeln!(s, "    *(int *)(latch + {}) = {}; /* {} auf safe (5.3) */", slot.offset, v.discriminant, slot.name);
+    for (k, field) in fields.iter().enumerate() {
+        let at = slot.offset + 8 + 8 * k as u64;
+        let ct = match takt_llvm::ty::lower(v.fields.get(k)?.ty, p)? {
+            LlvmType::F32 => "float",
+            LlvmType::F64 => "double",
+            _ => "long long",
+        };
+        let _ = writeln!(s, "    *({ct} *)(latch + {at}) = {};", literal(p, field)?);
+    }
+    Some(s)
 }
 
 /// Die geplanten Schreibvorgaenge (9.8), fuer beide Rahmen.
@@ -793,6 +870,22 @@ fn range_check(p: &Program, ty: takt_mir::TypeId) -> Option<(&'static str, Strin
         _ => return None,
     };
     Some((ct, literal(&r.lo), literal(&r.hi)))
+}
+
+/// Die `hw`-Eingaenge, die ein `sim`-Output derselben Adresse speist (8.3):
+/// Im Sim-Build ist das Modell ihre Quelle, kein Treiber.
+pub(crate) fn sim_fed_inputs(p: &Program) -> Vec<usize> {
+    use takt_mir::program::{Binding, Direction};
+    p.channels
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.dir == Direction::Input)
+        .filter(|(_, c)| {
+            let Binding::Hw(addr) = &c.binding else { return false };
+            p.channels.iter().any(|o| o.dir == Direction::Output && matches!(&o.binding, Binding::Sim(a) if a == addr))
+        })
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// Die Signaturen des erzeugten Codes je Maschine (11.2), fuer beide
@@ -1164,24 +1257,49 @@ pub(crate) fn jump_slot<'a>(p: &Program, layout: &'a Layout) -> Option<(&'a crat
     Some((slot, c_type(&slot.ty, slot.signed)?))
 }
 
+/// Was ein Kommando an `sys/reboot` verlangt (12.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reboot {
+    /// `RESTART`.
+    Restart,
+    /// `DEEP_SLEEP`: ohne Zeitgeber.
+    DeepSleep,
+    /// `DEEP_SLEEP_FOR(duration)`: die Weckzeit im ersten Fach.
+    DeepSleepFor,
+}
+
+impl Reboot {
+    /// Der Grund im Trace, wie der Interpreter ihn schreibt.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Reboot::Restart => "restart",
+            Reboot::DeepSleep | Reboot::DeepSleepFor => "deep_sleep",
+        }
+    }
+}
+
 /// Wo `sys/reboot` im Latch steht und welche Kommandos es kennt.
 pub(crate) struct RebootSlot<'a> {
     pub(crate) slot: &'a crate::layout::Slot,
     pub(crate) ct: &'static str,
-    pub(crate) commands: Vec<(i64, &'static str)>,
+    pub(crate) commands: Vec<(i64, Reboot)>,
 }
 
 /// Der Latch-Platz von `sys/reboot` mit seinen Kommandos (12.7).
 ///
-/// `RESTART` und `DEEP_SLEEP` beenden den Lauf; die Namen stehen klein im
-/// Trace, wie der Interpreter sie schreibt.
+/// `RESTART`, `DEEP_SLEEP` und `DEEP_SLEEP_FOR` beenden den Lauf. Mit der
+/// Weckzeit hat `RebootCmd` Felder, und die Diskriminante steht als `int`
+/// vorn im Struct (11.2).
 pub(crate) fn reboot_slot<'a>(p: &Program, layout: &'a Layout) -> Option<RebootSlot<'a>> {
     let slot = layout.outputs.iter().find(|s| {
         p.channels.iter().any(|c| {
             c.name == s.name && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/reboot")
         })
     })?;
-    let ct = c_type(&slot.ty, slot.signed)?;
+    let ct = match &slot.ty {
+        takt_llvm::ty::LlvmType::Struct(_) => "int",
+        t => c_type(t, slot.signed)?,
+    };
     // 12.7: `RebootCmd` ist vordefiniert; ein fremdes Enum an derselben
     // Adresse ist kein Kommando. Derselbe Test wie im Interpreter.
     let takt_mir::types::Type::Enum(e) =
@@ -1193,11 +1311,12 @@ pub(crate) fn reboot_slot<'a>(p: &Program, layout: &'a Layout) -> Option<RebootS
         return None;
     }
     let variants = enum_variants(p, &slot.name)?;
-    let commands: Vec<(i64, &'static str)> = variants
+    let commands: Vec<(i64, Reboot)> = variants
         .iter()
         .filter_map(|(d, name)| match name.as_str() {
-            "RESTART" => Some((*d, "restart")),
-            "DEEP_SLEEP" => Some((*d, "deep_sleep")),
+            "RESTART" => Some((*d, Reboot::Restart)),
+            "DEEP_SLEEP" => Some((*d, Reboot::DeepSleep)),
+            "DEEP_SLEEP_FOR" => Some((*d, Reboot::DeepSleepFor)),
             _ => None,
         })
         .collect();

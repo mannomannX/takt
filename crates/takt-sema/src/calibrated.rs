@@ -302,7 +302,30 @@ pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
         out.extend(jitter_check(p, c, entry, tick));
         out.extend(sweep_check(p, c, entry));
     }
+    out.extend(deep_wake_check(p, hw));
     out
+}
+
+/// Pruefung 60 (12.7): `DEEP_SLEEP` wacht nur ueber eine Wake-Quelle auf, die
+/// der Chip ohne RAM bedient. Ohne jede Wake-Quelle hat `checks.rs` schon
+/// gewarnt; hier zaehlt, ob die Konfiguration eine davon `deep_wake` nennt.
+fn deep_wake_check(p: &Program, hw: &Hardware) -> Option<Diagnostic> {
+    let span = crate::checks::deep_sleep_without_timer(p)?;
+    let wakes: Vec<&takt_mir::program::Channel> =
+        p.channels.iter().filter(|c| c.dir == takt_mir::program::Direction::Input && c.attrs.wake).collect();
+    let deep = wakes.iter().any(
+        |c| matches!(&c.binding, Binding::Hw(a) if hw.channel(&a.text()).is_some_and(|e| e.deep_wake == Some(true))),
+    );
+    (!wakes.is_empty() && !deep).then(|| {
+        Diagnostic::warning(
+            SC60,
+            span,
+            "`DEEP_SLEEP`: keine Wake-Quelle weckt nach der Konfiguration aus dem Tiefschlaf (12.7)",
+        )
+        .with_suggestion(
+            "`deep_wake = true` am Kanal, wenn das Board es kann, oder `DEEP_SLEEP_FOR(duration = …)`".to_string(),
+        )
+    })
 }
 
 /// Prüfung 29: Sweep-Schritte gegen den gemessenen Jitter eines Outputs,
