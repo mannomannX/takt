@@ -44,7 +44,7 @@ use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
 use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Generated, Led, Telemetry, WfiSleep, cycles, tick};
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Sleep, TimerClock};
-use takt_rt_core::{Clock, FakeNvm, Persist, Policy, Profile, Runtime};
+use takt_rt_core::{Clock, FakeNvm, Persist, PlatformCommand, Policy, Profile, Runtime};
 
 mod takt {
     #![allow(dead_code)]
@@ -182,6 +182,31 @@ fn conduct(clock: impl Clock) {
     if let Some(u) = uart() {
         let stack = Some(takt_board_stm32f401::stack::high_water());
         takt_rt_baremetal::report(u, rt.overrun(), &stats, &JournalStats::default(), stack);
+    }
+    if limit == 0 {
+        platform(stats.command);
+    }
+}
+
+/// Fuehrt ein Kommando an die Plattform aus (12.7).
+///
+/// Ein Konformitaetslauf endet wie der Wirtsrahmen mit dem Trace, und das
+/// Board bleibt fuer das naechste Programm erreichbar; nur im Betrieb
+/// fuehrt es das Kommando aus.
+fn platform(command: Option<PlatformCommand>) {
+    match command {
+        Some(PlatformCommand::Restart) => cortex_m::peripheral::SCB::sys_reset(),
+        // TODO(FB-309): Tiefschlaf braucht eine Weckquelle, die 12.7 nicht
+        // nennt, der Sprung Slots (Profil `boot`, M10 Schritt 17). Bis dahin
+        // haelt das Board mit `safe`-Ausgaengen an und sagt es.
+        Some(PlatformCommand::DeepSleep | PlatformCommand::Jump(_)) => {
+            if let Some(u) = uart() {
+                u.write("takt: Kommando an die Plattform ist hier nicht abgebildet (FB-309)");
+                u.newline();
+                u.drain(DRAIN_ROUNDS);
+            }
+        }
+        None => {}
     }
 }
 

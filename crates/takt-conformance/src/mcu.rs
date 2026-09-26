@@ -243,6 +243,9 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let Some(value) = crate::harness::param_literal(p, i) else { continue };
         let _ = writeln!(s, "    *({ct} *)(params + {}) = {value}; /* {} */", slot.offset, slot.name);
     }
+    // 9.4: Der Lauf beginnt mit den Outputs auf `safe`, vor jedem Init —
+    // wie `Sim::new` und der Wirtsrahmen.
+    crate::harness::safe_outputs(s, p, layout);
 
     // 5.9: Defaults, dann die geladenen Werte, dann erst enter: — wie
     // der Interpreter zwischen init_vars und machine::init laedt; nach
@@ -281,6 +284,45 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "}}\n");
 
     sleep(s, p.config.tick, layout, p, driven);
+    platform(s, p, layout);
+}
+
+/// `takt_mcu_command` und `takt_mcu_end`: das Kommando an die Plattform
+/// (12.7) und das Ende des Laufs, wie im Wirtsrahmen — die Zeile `end`,
+/// dann alle Ausgaenge auf `safe`. Ausfuehren muss es das Board.
+fn platform(s: &mut String, p: &Program, layout: &Layout) {
+    let reboot = crate::harness::reboot_slot(p, layout);
+    let jump = crate::harness::jump_slot(p, layout);
+    let _ = writeln!(s, "/* 12.7: 0 nichts, 1 Neustart, 2 Tiefschlaf, 256 + v Sprung in Slot v - 1. */");
+    let _ = writeln!(s, "int takt_mcu_command(void) {{");
+    if let Some(r) = &reboot {
+        let _ = writeln!(s, "    switch (*({} *)(latch + {})) {{", r.ct, r.slot.offset);
+        for (d, name) in &r.commands {
+            let code = if *name == "restart" { 1 } else { 2 };
+            let _ = writeln!(s, "    case {d}: return {code};");
+        }
+        let _ = writeln!(s, "    default: break;");
+        let _ = writeln!(s, "    }}");
+    }
+    if let Some((slot, ct)) = jump {
+        let _ = writeln!(
+            s,
+            "    if (*({ct} *)(latch + {})) return 256 + (int)*({ct} *)(latch + {});",
+            slot.offset, slot.offset
+        );
+    }
+    let _ = writeln!(s, "    return 0;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "void takt_mcu_end(void) {{");
+    let _ = writeln!(s, "    int c = takt_mcu_command();");
+    let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "    takt_board_trace_i64(g_done);");
+    let _ = writeln!(
+        s,
+        "    takt_board_trace(c == 1 ? \"end restart\\n\" : c == 2 ? \"end deep_sleep\\n\" : \"end boot_jump\\n\");"
+    );
+    crate::harness::safe_outputs(s, p, layout);
+    let _ = writeln!(s, "}}\n");
 }
 
 /// `takt_mcu_idle` und `takt_mcu_deadline`: darf geschlafen werden (9.9)?

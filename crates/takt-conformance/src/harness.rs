@@ -578,7 +578,7 @@ fn number_format(ty: &takt_llvm::ty::LlvmType, signed: bool) -> (&'static str, &
 /// Nur Literale: Ein berechneter `safe`-Wert braeuchte den Interpreter,
 /// und der Rahmen soll ohne ihn auskommen (dieselbe Grenze wie bei den
 /// Parametern).
-fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout) {
+pub(crate) fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout) {
     for slot in &layout.outputs {
         let Some(i) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
         let Some(safe) = &p.channels[i].attrs.safe else { continue };
@@ -1155,7 +1155,7 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 }
 
 /// Wo `sys/jump` im Latch steht (12.7).
-fn jump_slot<'a>(p: &Program, layout: &'a Layout) -> Option<(&'a crate::layout::Slot, &'static str)> {
+pub(crate) fn jump_slot<'a>(p: &Program, layout: &'a Layout) -> Option<(&'a crate::layout::Slot, &'static str)> {
     let slot = layout.outputs.iter().find(|s| {
         p.channels.iter().any(|c| {
             c.name == s.name && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/jump")
@@ -1165,17 +1165,17 @@ fn jump_slot<'a>(p: &Program, layout: &'a Layout) -> Option<(&'a crate::layout::
 }
 
 /// Wo `sys/reboot` im Latch steht und welche Kommandos es kennt.
-struct RebootSlot<'a> {
-    slot: &'a crate::layout::Slot,
-    ct: &'static str,
-    commands: Vec<(i64, &'static str)>,
+pub(crate) struct RebootSlot<'a> {
+    pub(crate) slot: &'a crate::layout::Slot,
+    pub(crate) ct: &'static str,
+    pub(crate) commands: Vec<(i64, &'static str)>,
 }
 
 /// Der Latch-Platz von `sys/reboot` mit seinen Kommandos (12.7).
 ///
 /// `RESTART` und `DEEP_SLEEP` beenden den Lauf; die Namen stehen klein im
 /// Trace, wie der Interpreter sie schreibt.
-fn reboot_slot<'a>(p: &Program, layout: &'a Layout) -> Option<RebootSlot<'a>> {
+pub(crate) fn reboot_slot<'a>(p: &Program, layout: &'a Layout) -> Option<RebootSlot<'a>> {
     let slot = layout.outputs.iter().find(|s| {
         p.channels.iter().any(|c| {
             c.name == s.name && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/reboot")

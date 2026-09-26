@@ -3,7 +3,7 @@
 //! was daraus ein Lauf macht — Ausgaenge im Takt der Leitung, ein Paket
 //! je Tick, am Ende die Bilanz.
 
-use takt_rt_core::{Clock, Nvm, Overrun, Persist, Program, Runtime, Sink, Watchdog};
+use takt_rt_core::{Clock, Nvm, Overrun, Persist, PlatformCommand, Program, Runtime, Sink, Watchdog};
 
 use crate::telemetry::{DRAIN_ROUNDS, Port, Telemetry};
 
@@ -17,6 +17,10 @@ pub trait Traced: Program {
 
     /// Der Programmzaehler je Maschine (11.2).
     fn pc(&self);
+
+    /// Der Lauf endet mit einem Kommando an die Plattform (12.7): die
+    /// Zeile `end` in den Trace, dann alle Ausgaenge auf `safe`.
+    fn end(&self);
 }
 
 /// Kein Hardware-Watchdog angebunden.
@@ -59,6 +63,8 @@ pub struct Stats {
     pub overruns: u64,
     /// Das Journal hat am Ende geschrieben (5.9).
     pub flushed: bool,
+    /// Das Kommando, mit dem der Lauf endete (12.7); `None` an der Tickgrenze.
+    pub command: Option<PlatformCommand>,
 }
 
 /// Das Journal in Zahlen, fuer die Bilanz.
@@ -74,7 +80,10 @@ pub struct JournalStats {
     pub program_ns: i64,
 }
 
-/// Laeuft, bis `cadence.limit` erreicht ist.
+/// Laeuft, bis `cadence.limit` erreicht ist oder das Programm der
+/// Plattform ein Kommando gibt (12.7). Dann schreibt das Journal synchron,
+/// und erst danach gehen alle Ausgaenge auf `safe` — auch wenn schon der
+/// Anfangszustand das Kommando setzt.
 ///
 /// `telemetry` holt die Leitung je Aufruf, wie der erzeugte Rahmen sie
 /// ueber `takt_board_trace` holt — so gibt es nie zwei Griffe zugleich.
@@ -101,7 +110,8 @@ where
     // Unter einer Millisekunde Tick traegt die Leitung keine Zeile je
     // Tick (FB-271); die Zeitzeile ist Statistik und darf duenner werden.
     let time_every = (1_000_000 / rt.tick_ns()).max(1) as u64;
-    loop {
+    stats.command = rt.program.command();
+    while stats.command.is_none() {
         let tick = match persist.as_deref_mut() {
             Some(p) => rt.step_persisting(p),
             None => rt.step(),
@@ -126,11 +136,17 @@ where
         if let Some(t) = telemetry() {
             t.flush();
         }
+        stats.command = rt.program.command();
         if cadence.limit > 0 && k >= cadence.limit {
             break;
         }
     }
     stats.flushed = persist.is_some_and(|p| p.flush(&mut rt.program));
+    if stats.command.is_some() {
+        rt.program.end();
+        rt.program.commit();
+        rt.program.dump(!cadence.conformance());
+    }
     stats
 }
 
@@ -185,4 +201,81 @@ pub fn report<P: Port, const R: usize>(
     t.write("takt end");
     t.newline();
     t.drain(DRAIN_ROUNDS);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::cell::Cell;
+    use takt_rt_core::{FakeNvm, Policy, Profile};
+
+    use crate::{LogicalClock, Telemetry};
+
+    /// Setzt ab Tick `at` ein Kommando und merkt sich, was die Schleife tat.
+    struct Ending {
+        at: u64,
+        ticks: u64,
+        ended: Cell<bool>,
+        committed_after_end: Cell<bool>,
+    }
+
+    impl Program for Ending {
+        fn tick(&mut self, k: u64, _now: i64) {
+            self.ticks = k + 1;
+        }
+
+        fn command(&self) -> Option<PlatformCommand> {
+            (self.ticks >= self.at).then_some(PlatformCommand::Jump(1))
+        }
+    }
+
+    impl Traced for Ending {
+        fn commit(&self) {
+            self.committed_after_end.set(self.ended.get());
+        }
+
+        fn dump(&self, _all: bool) {}
+
+        fn pc(&self) {}
+
+        fn end(&self) {
+            self.ended.set(true);
+        }
+    }
+
+    struct NoLine;
+
+    impl Port for NoLine {
+        fn try_write(&mut self, _b: u8) -> bool {
+            true
+        }
+    }
+
+    fn run_until(at: u64) -> (Stats, Ending) {
+        let program = Ending { at, ticks: 0, ended: Cell::new(false), committed_after_end: Cell::new(false) };
+        let clock = LogicalClock::new(|| {});
+        let mut rt = Runtime::new(program, clock, NoWatchdog, (), Profile::BAREMETAL, 1_000_000, Policy::Fault);
+        let stats = run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, Cadence::of(60, 1, false), || {
+            None::<&'static mut Telemetry<NoLine, 8>>
+        });
+        (stats, rt.program)
+    }
+
+    /// Das Kommando beendet den Lauf nach seinem Tick; die `safe`-Werte
+    /// gehen danach noch an die Treiber (12.7).
+    #[test]
+    fn a_platform_command_ends_the_run_after_its_tick() {
+        let (stats, program) = run_until(3);
+        assert_eq!(stats.command, Some(PlatformCommand::Jump(1)));
+        assert_eq!(program.ticks, 3);
+        assert!(program.ended.get() && program.committed_after_end.get());
+    }
+
+    /// Setzt schon der Anfangszustand das Kommando, laeuft kein Tick.
+    #[test]
+    fn a_command_from_the_start_ends_the_run_before_the_first_tick() {
+        let (stats, program) = run_until(0);
+        assert_eq!(stats.command, Some(PlatformCommand::Jump(1)));
+        assert_eq!(program.ticks, 0);
+    }
 }

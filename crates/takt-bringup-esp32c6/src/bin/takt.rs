@@ -16,7 +16,7 @@ use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use takt_board_esp32c6::{Button, FlashNvm, Generated, Telemetry, Ws2812, route_uart0};
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Sleep, TimerClock};
-use takt_rt_core::{Clock, Journal, Loaded, Persist, Policy, Profile, Runtime};
+use takt_rt_core::{Clock, Journal, Loaded, Persist, PlatformCommand, Policy, Profile, Runtime};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -156,6 +156,28 @@ fn conduct(program: Generated, clock: impl Clock, persist: &mut Option<Persist<'
     if let Some(u) = uart() {
         let stack = Some(takt_board_esp32c6::stack::high_water());
         takt_rt_baremetal::report(u, rt.overrun(), &stats, &journal, stack);
+    }
+    if limit == 0 {
+        platform(stats.command);
+    }
+}
+
+/// Fuehrt ein Kommando an die Plattform aus (12.7).
+///
+/// Ein Konformitaetslauf endet wie der Wirtsrahmen mit dem Trace, und das
+/// Board bleibt fuer das naechste Programm erreichbar; nur im Betrieb
+/// fuehrt es das Kommando aus.
+fn platform(command: Option<PlatformCommand>) {
+    match command {
+        // Der Reset auf RTC-Ebene, wie der EN-Pin (FB-264).
+        Some(PlatformCommand::Restart) => takt_board_esp32c6::usb::chip_reset(),
+        // TODO(FB-309): Tiefschlaf braucht eine Weckquelle, die 12.7 nicht
+        // nennt, der Sprung Slots (Profil `boot`, M10 Schritt 17). Bis dahin
+        // haelt das Board mit `safe`-Ausgaengen an und sagt es.
+        Some(PlatformCommand::DeepSleep | PlatformCommand::Jump(_)) => {
+            report("takt: Kommando an die Plattform ist hier nicht abgebildet (FB-309)");
+        }
+        None => {}
     }
 }
 

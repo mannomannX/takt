@@ -176,6 +176,19 @@ pub fn tick_end(k: u64, tick_ns: i64) -> i64 {
     (k as i64).saturating_add(1).saturating_mul(tick_ns)
 }
 
+/// Was die Plattform nach dem Commit eines Ticks ausfuehrt (12.7); der Lauf
+/// endet damit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlatformCommand {
+    /// `reboot = RESTART`: Neustart des Chips.
+    Restart,
+    /// `reboot = DEEP_SLEEP`: Tiefschlaf ohne RAM-Erhalt; der naechste Lauf
+    /// beginnt mit `boot_reason = DEEP_SLEEP_WAKE`.
+    DeepSleep,
+    /// `boot_jump = k + 1`: Sprung in Slot `k`.
+    Jump(u8),
+}
+
 /// Das Programm, das die Schleife ausfuehrt.
 ///
 /// Die Semantik liegt hinter diesem Trait: Der Interpreter fuehrt sie ueber
@@ -240,6 +253,12 @@ pub trait Program {
     /// `None`, wenn der Lauf gescheitert ist. Es geht als `done`/`result`
     /// in das Eingangsbild des naechsten Schritts.
     fn job_done(&mut self, _slot: u32, _result: Option<&[u8]>) {}
+
+    /// Steht nach dem Commit ein Kommando an die Plattform (12.7)? Der Lauf
+    /// endet dann: `persist` synchron, danach alle Ausgaenge auf `safe`.
+    fn command(&self) -> Option<PlatformCommand> {
+        None
+    }
 }
 
 /// Die Schleife.

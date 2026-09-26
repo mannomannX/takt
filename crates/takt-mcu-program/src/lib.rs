@@ -23,7 +23,7 @@
 use core::ffi::c_void;
 
 use takt_rt_baremetal::Traced;
-use takt_rt_core::Program;
+use takt_rt_core::{PlatformCommand, Program};
 
 unsafe extern "C" {
     fn takt_mcu_init();
@@ -38,6 +38,8 @@ unsafe extern "C" {
     fn takt_mcu_advance(n: i64);
     fn takt_mcu_persist_snapshot(out: *mut c_void, cap: i32) -> i32;
     fn takt_mcu_persist_restore(bytes: *const c_void, len: i32) -> i32;
+    fn takt_mcu_command() -> i32;
+    fn takt_mcu_end();
 }
 
 /// Das gebundene Programm.
@@ -92,6 +94,11 @@ impl Traced for Generated {
         // SAFETY: liest nur den statischen Zustand des Rahmens.
         unsafe { takt_mcu_pc() };
     }
+
+    fn end(&self) {
+        // SAFETY: schreibt die Zeile `end` und die `safe`-Werte in den Latch des Rahmens.
+        unsafe { takt_mcu_end() };
+    }
 }
 
 impl Program for Generated {
@@ -131,6 +138,15 @@ impl Program for Generated {
             }
         };
         usize::try_from(n).unwrap_or(0)
+    }
+
+    fn command(&self) -> Option<PlatformCommand> {
+        // SAFETY: liest nur den statischen Zustand des Rahmens.
+        match unsafe { takt_mcu_command() } {
+            1 => Some(PlatformCommand::Restart),
+            2 => Some(PlatformCommand::DeepSleep),
+            n => u8::try_from(n - 257).ok().map(PlatformCommand::Jump),
+        }
     }
 
     fn tick(&mut self, k: u64, _now: i64) {

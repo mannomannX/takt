@@ -24,9 +24,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-/// Der Differentialkorpus, soweit der MCU-Rahmen ihn traegt: ohne
-/// Systemkanaele (32, 34), Jobs (40) und den Port auf `mmio` (68), die er
-/// noch nicht kennt (plan/m10.md Schritte 6, 7, 9).
+/// Der Differentialkorpus, soweit er auf ein Board gehoert: ohne Jobs (40),
+/// die der MCU-Rahmen noch nicht kennt (plan/m10.md Schritt 7), und ohne den
+/// Port auf `mmio` (68), dessen Adresse ein Register des C6 ist.
 pub const CORPUS: &[&str] = &[
     "01_minimal.takt",
     "02_units_and_data.takt",
@@ -49,7 +49,9 @@ pub const CORPUS: &[&str] = &[
     "26_samples.takt",
     "27_every.takt",
     "28_scheduled.takt",
+    "32_reboot.takt",
     "33_enum_param.takt",
+    "34_boot_jump.takt",
     "35_persist.takt",
     "36_int_units.takt",
     "37_follows.takt",
