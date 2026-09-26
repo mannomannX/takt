@@ -128,6 +128,17 @@ impl Module {
         let _ = writeln!(head, "; {name}");
         let _ = writeln!(head, "; erzeugt von takt-llvm; strikte FP nach Referenz 4.2:");
         let _ = writeln!(head, "; keine Fast-Math-Flags, contract=off, keine Reassoziation");
+        // Ohne `source_filename` nennt das Objekt die Datei, aus der clang
+        // die IR las — und die traegt beim Bauen eine Prozessnummer (FB-308).
+        let source: String = name
+            .bytes()
+            .map(|b| match b {
+                b'"' | b'\\' => format!("\\{b:02X}"),
+                b' '..=b'~' => char::from(b).to_string(),
+                _ => format!("\\{b:02X}"),
+            })
+            .collect();
+        let _ = writeln!(head, "source_filename = \"{source}\"");
         let _ = writeln!(head, "target triple = \"{triple}\"");
         Module {
             entries: Vec::new(),

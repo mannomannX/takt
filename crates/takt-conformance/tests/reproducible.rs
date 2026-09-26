@@ -76,7 +76,8 @@ fn the_same_source_yields_the_same_ir() {
 /// Der Pfad ist der haeufigste Weg, auf dem ein Build seine Umgebung ins
 /// Ergebnis traegt (Debug-Info, `__FILE__`, Fehlermeldungen). 11.3
 /// verlangt ausdruecklich „keine Zeitstempel oder Pfade im Binary", also
-/// wird aus zwei verschieden tiefen Verzeichnissen uebersetzt.
+/// wird aus zwei verschieden tiefen Verzeichnissen uebersetzt — und unter
+/// zwei Dateinamen, wie `takt build` sie je Prozess vergibt (FB-308).
 #[test]
 fn the_same_ir_yields_the_same_object() {
     let Clang::At(path) = find() else {
@@ -94,19 +95,18 @@ fn the_same_ir_yields_the_same_object() {
     std::fs::create_dir_all(&tief).expect("Verzeichnis");
 
     let mut objekte = Vec::new();
-    for (i, dir) in [&flach, &tief].into_iter().enumerate() {
+    for (i, (dir, file)) in [(&flach, "programm.ll"), (&tief, "takt-build-4711.ll")].into_iter().enumerate() {
         // Zwei Uebersetzungen in derselben Sekunde truegen denselben
         // Zeitstempel und waeren zufaellig gleich (FB-165).
         if i == 1 {
             std::thread::sleep(std::time::Duration::from_millis(1100));
         }
-        let ll = dir.join("programm.ll");
         let obj = dir.join("programm.o");
-        std::fs::write(&ll, &ir).expect("IR");
+        std::fs::write(dir.join(file), &ir).expect("IR");
         let mut cmd = std::process::Command::new(&path);
         let out = Clang::deterministic(&mut cmd)
             .current_dir(dir)
-            .args(["-Wno-override-module", "-O1", "-c", "programm.ll", "-o", "programm.o"])
+            .args(["-Wno-override-module", "-O1", "-c", file, "-o", "programm.o"])
             .output()
             .expect("clang");
         assert!(out.status.success(), "clang: {}", String::from_utf8_lossy(&out.stderr));
@@ -121,8 +121,9 @@ fn the_same_ir_yields_the_same_object() {
     // Und der Pfad steht auch nicht als Text darin — ein Objekt, das
     // zufaellig gleich gross ist, aber den Pfad traegt, waere ein
     // Fehlschlag, den der Vergleich oben nicht immer faengt.
-    let text = String::from_utf8_lossy(&objekte[0]).to_string();
+    let text = String::from_utf8_lossy(&objekte[1]).to_string();
     assert!(!text.contains("noch_tiefer"), "der Pfad steht im Objekt");
+    assert!(!text.contains("4711"), "der Dateiname steht im Objekt");
 }
 
 /// **Stufe 3**: Zwei vollstaendige Uebersetzungen ergeben dasselbe
