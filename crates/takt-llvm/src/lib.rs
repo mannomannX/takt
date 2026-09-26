@@ -22,6 +22,7 @@
 //! - `fns`: reine Funktionen als LLVM-Funktionen (4.4).
 //! - `image`: der Aufbau des Prozessabbilds, die ABI zur Runtime (9.1).
 //! - `machine`: Zustands-Struct und Tickschritt einer Maschine (11.2).
+//! - `mmio`: die Helfer der Registerports, ihr Rumpf je Ziel (12.10).
 //! - `stmt`: Anweisungen, Checks und der Fault-Zweig (11.2).
 //! - `scope`: was der Codegen deckt, gemessen an echten Programmen.
 //! - `step`: die Schrittfunktion einer Maschine (11.2, 9.4).
@@ -44,6 +45,7 @@ pub mod inspect;
 pub mod lower;
 pub mod machine;
 pub mod matrix;
+pub mod mmio;
 pub mod monitor;
 pub mod persist;
 pub mod psi;

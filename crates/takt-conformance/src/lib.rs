@@ -29,6 +29,7 @@ pub mod layout;
 pub mod limits;
 pub mod mcu;
 pub mod natives;
+mod ports;
 pub mod report;
 pub mod run;
 pub mod stimulus;

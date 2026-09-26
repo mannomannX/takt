@@ -270,7 +270,9 @@ struct Dynamic {
 }
 
 /// Die Ringe des Laufs: erst die internen Stroeme, dann die gekoppelten
-/// Eingaenge.
+/// Eingaenge, dann die Schreibstroeme der Registerports (12.10). Diese
+/// speist auf dem Wirt der Rahmen (`ports.rs`); auf dem Board schreibt der
+/// Port ins Register, und ihr Ring bleibt leer wie ein Strom ohne Quelle.
 fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
     let mut out: Vec<Dynamic> = p
         .streams
@@ -284,7 +286,8 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
             readers: st.readers.iter().map(|m| m.0).collect(),
         })
         .collect();
-    for (in_id, _, elem) in coupled(p) {
+    let ports = crate::ports::write_streams(p).into_iter().map(|(_, c, elem)| (c, elem));
+    for (in_id, elem) in coupled(p).into_iter().map(|(i, _, elem)| (i, elem)).chain(ports) {
         let c = &p.channels[in_id];
         let readers = p
             .machines

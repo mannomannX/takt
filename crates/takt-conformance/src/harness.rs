@@ -210,6 +210,9 @@ fn build_inner(
     // und der Rahmen ist hier die Runtime. Hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.
     scheduled(&mut s, p, &layout);
+    // 12.10: Registerports lesen den Latch des Modells und schreiben in
+    // die Ringe der Stroeme, also hinter beidem.
+    crate::ports::emit(&mut s, p);
 
     let _ = writeln!(s, "int main(void) {{");
     for m in &driven {
@@ -243,6 +246,7 @@ fn build_inner(
     // damit ein `enter:`-Block schon den sicheren Wert sieht.
     safe_outputs(&mut s, p, &layout);
     sim_bindings(&mut s, p, "    ");
+    crate::ports::sample(&mut s, p, "    ");
     // Wie `Sim::init`: erst die Variablen aller Maschinen, dann die
     // geladenen Werte (5.9), dann die Eintritte in Schrittordnung — und
     // nach jedem `fresh[m] = publish_m(v_m)`, damit ein Follower schon im
@@ -256,6 +260,7 @@ fn build_inner(
     enter_machines(&mut s, p, &layout, &driven, "    ");
     // 8.8: Auch im Tick 0 holt der Treiber ab, was `enter` gesendet hat.
     commit_sequence(&mut s, p, &driven, "    ", "0");
+    crate::ports::sample(&mut s, p, "    ");
     let _ = writeln!(s, "    dump(0);");
     for (i, _) in &monitors {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, 0);");
@@ -297,6 +302,7 @@ fn build_inner(
     }
     steps(&mut s, p, &layout, &driven, "        ", "g_tick");
     commit_sequence(&mut s, p, &driven, "        ", "g_tick");
+    crate::ports::sample(&mut s, p, "        ");
     let _ = writeln!(s, "        dump(g_tick);");
     // 13.3: nach dem Commit, wie `observe_properties` im Interpreter.
     for (i, _) in &monitors {
@@ -361,6 +367,10 @@ fn build_inner(
             continue;
         }
         if let Some(text) = payload_enum_dump(p, slot) {
+            dump.push_str(&text);
+            continue;
+        }
+        if let Some(text) = record_dump(p, slot) {
             dump.push_str(&text);
             continue;
         }
@@ -451,6 +461,64 @@ fn payload_enum_dump(p: &Program, slot: &crate::layout::Slot) -> Option<String> 
     let _ = writeln!(s, "    default: printf(\"t=%lld out {} ?\\n\", t);", slot.name);
     let _ = writeln!(s, "    }} }}");
     Some(s)
+}
+
+/// Ein Record: `Name(f1, f2)` wie `value_text` (9.3), die Felder an ihren
+/// Versaetzen im Latch.
+fn record_dump(p: &Program, slot: &crate::layout::Slot) -> Option<String> {
+    let c = p.channels.iter().find(|c| c.name == slot.name)?;
+    if !matches!(p.types.get(c.ty), takt_mir::types::Type::Record(_)) {
+        return None;
+    }
+    let (fmt, args) = field_text(p, c.ty, &slot.ty, slot.offset)?;
+    Some(format!("    printf(\"t=%lld out {} {fmt}\\n\", t{args});\n", slot.name))
+}
+
+/// `printf`-Format und Argumente eines Werts an `at` im Latch: Skalare,
+/// Enums ohne Felder und Records daraus. Eine Dauer schreibt der
+/// Interpreter mit Einheit; sie und alles Uebrige bleiben aussen vor.
+fn field_text(p: &Program, ty: takt_mir::TypeId, llvm: &takt_llvm::ty::LlvmType, at: u64) -> Option<(String, String)> {
+    use takt_llvm::ty::LlvmType;
+    use takt_mir::types::Type;
+    match (p.types.get(ty), llvm) {
+        (Type::Record(r), LlvmType::Struct(fields)) => {
+            let def = p.records.get(r.index())?;
+            let (mut fmt, mut args) = (format!("{}(", def.name), String::new());
+            for (i, f) in def.fields.iter().enumerate() {
+                let (ff, fa) = field_text(p, f.ty, fields.get(i)?, at + llvm.field_offset(i))?;
+                fmt.push_str(if i > 0 { ", " } else { "" });
+                fmt.push_str(&ff);
+                args.push_str(&fa);
+            }
+            fmt.push(')');
+            Some((fmt, args))
+        }
+        (Type::Bool, LlvmType::Int(1)) => {
+            Some(("%s".to_string(), format!(", *(unsigned char *)(latch + {at}) ? \"true\" : \"false\"")))
+        }
+        (Type::Enum(e), LlvmType::Int(_)) => {
+            let def = p.enums.get(e.index())?;
+            if def.variants.iter().any(|v| !v.fields.is_empty()) {
+                return None;
+            }
+            let ct = c_type(llvm, true)?;
+            let at_value = format!("*({ct} *)(latch + {at})");
+            let names: String =
+                def.variants.iter().map(|v| format!("{at_value} == {} ? \"{}\" : ", v.discriminant, v.name)).collect();
+            Some(("%s".to_string(), format!(", ({names}\"?\")")))
+        }
+        (Type::Int { width, .. }, LlvmType::Int(_)) => {
+            let ct = c_type(llvm, width.signed())?;
+            let (fmt, cast) = number_format(llvm, width.signed());
+            Some((fmt.to_string(), format!(", {cast}(*({ct} *)(latch + {at}))")))
+        }
+        (Type::Float { .. }, LlvmType::F32 | LlvmType::F64) => {
+            let ct = c_type(llvm, true)?;
+            let (fmt, cast) = number_format(llvm, true);
+            Some((fmt.to_string(), format!(", {cast}(*({ct} *)(latch + {at}))")))
+        }
+        _ => None,
+    }
 }
 
 /// `printf`-Format und Cast fuer einen Skalar: Fliesskomma mit 17

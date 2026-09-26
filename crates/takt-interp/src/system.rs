@@ -411,8 +411,9 @@ impl Outer for MachineEnv<'_, '_> {
 
     /// 12.10: Ein Port ist im Sim-Build ein Channel-Paar. Gelesen wird der
     /// `sim`-Output `mmio/ADR/r`, den ein Modell stellt — mit Unit-Delay
-    /// wie jeder Modellwert (8.3); ist er ein Strom, entnimmt jedes Lesen
-    /// ein Element.
+    /// wie jeder Modellwert (8.3), also der committete Wert: Der Latch
+    /// hinge davon ab, ob das Modell vor dem Treiber schreitet (Satz 9.4.1).
+    /// Ist er ein Strom, entnimmt jedes Lesen ein Element.
     fn port_read(&mut self, p: PortId) -> EvalResult<Value> {
         let port = &self.loaded.program.ports[p.index()];
         let want = format!("mmio/{:#x}/r", port.address);
@@ -424,11 +425,12 @@ impl Outer for MachineEnv<'_, '_> {
         if matches!(self.loaded.ty(program.channels[i].ty), Type::Stream(_)) {
             return Ok(self.image.port_next(&want).unwrap_or_else(|| Value::default_for(ty, program)));
         }
-        Ok(self.image.output(ChannelId(i as u32)).clone())
+        Ok(self.image.committed_output(ChannelId(i as u32)).clone())
     }
 
     /// 12.10: Ein Schreibvorgang wird ein Element des Eingangsstroms
-    /// `mmio/ADR/w` — in Reihenfolge, auch mehrere je Tick.
+    /// `mmio/ADR/w` — in Reihenfolge, auch mehrere je Tick, sichtbar ab dem
+    /// naechsten Tick (`Image::deliver_port_writes`).
     fn port_write(&mut self, p: PortId, v: Value) -> EvalResult<()> {
         let port = &self.loaded.program.ports[p.index()];
         let want = format!("mmio/{:#x}/w", port.address);
@@ -436,7 +438,7 @@ impl Outer for MachineEnv<'_, '_> {
             return Ok(());
         };
         let t = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(self.tick_ns);
-        self.image.push_element(ChannelId(i as u32), t, v, false);
+        self.image.queue_port_write(ChannelId(i as u32), t, v);
         Ok(())
     }
 
@@ -854,6 +856,7 @@ impl<'p> Sim<'p> {
         self.publish_all();
         self.image.commit_published();
         self.drain_tx(0);
+        self.image.deliver_port_writes();
         self.image.commit_outputs();
         Ok(())
     }
@@ -1364,6 +1367,7 @@ impl<'p> Sim<'p> {
         let now = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(tick_ns);
         self.image.apply_scheduled(now);
         self.drain_tx(now);
+        self.image.deliver_port_writes();
         self.image.commit_outputs();
         for state in &mut self.states {
             state.raised_signals.iter_mut().for_each(|s| *s = false);

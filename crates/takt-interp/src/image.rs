@@ -56,6 +56,9 @@ pub struct Image {
     port_queues: HashMap<String, VecDeque<Value>>,
     /// Das zuletzt entnommene Element je Adresse.
     port_last: HashMap<String, Value>,
+    /// Schreibvorgaenge an Registerports in diesem Tick, zugestellt nach
+    /// allen Schritten (12.10).
+    port_writes: Vec<(ChannelId, i64, Value)>,
     /// Inputs, die der Stimulus in diesem Tick gesetzt hat; ihre
     /// `sim`-Bindung ruht so lange (8.3).
     driven: Vec<bool>,
@@ -207,6 +210,7 @@ impl Image {
             hw_inputs,
             port_queues: HashMap::new(),
             port_last: HashMap::new(),
+            port_writes: Vec::new(),
             driven,
             channel_bufs,
             stream_bufs,
@@ -285,6 +289,21 @@ impl Image {
         match self.channel_bufs.get_mut(&c) {
             Some(buf) => buf.push(t, value, bytes, drop_oldest),
             None => Delivery::Ok,
+        }
+    }
+
+    /// Merkt einen Schreibvorgang an einem Registerport vor (12.10).
+    pub fn queue_port_write(&mut self, c: ChannelId, t: i64, value: Value) {
+        self.port_writes.push((c, t, value));
+    }
+
+    /// Stellt die Schreibvorgaenge des Ticks zu, in Reihenfolge. Nach allen
+    /// Schritten, damit ein Modell sie im naechsten Tick sieht, ob es vor
+    /// oder nach dem Treiber schreitet (Satz 9.4.1) — wie ein Element eines
+    /// internen Stroms (9.6).
+    pub fn deliver_port_writes(&mut self) {
+        for (c, t, value) in std::mem::take(&mut self.port_writes) {
+            self.push_element(c, t, value, false);
         }
     }
 

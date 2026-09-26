@@ -63,10 +63,10 @@ impl Lowered {
 
 /// Senkt ein Programm nach LLVM-IR (11.2).
 ///
-/// `triple` bestimmt allein den Kopf der Ausgabe — der Rumpf ist fuer
-/// jedes Ziel derselbe. Genau darauf beruht Satz 9.4.4: Bit-Gleichheit
-/// ist damit eine Aussage ueber *eine* Uebersetzung, nicht ueber mehrere
-/// Programme.
+/// `triple` bestimmt den Kopf der Ausgabe und die Rumpfe der
+/// Port-Helfer (12.10, [`crate::mmio`]) — sonst ist die IR fuer jedes Ziel
+/// dieselbe. Genau darauf beruht Satz 9.4.4: Bit-Gleichheit ist damit eine
+/// Aussage ueber *eine* Uebersetzung, nicht ueber mehrere Programme.
 pub fn program(p: &Program, triple: &str, module_name: &str) -> Lowered {
     program_with(p, triple, module_name, crate::target::Instrument::Off)
 }

@@ -108,6 +108,12 @@ pub struct Module {
     /// assembliert nicht — und das faellt ohne diese Buchfuehrung erst
     /// auf, wenn LLVM die Datei liest.
     terminated: bool,
+    /// Die Port-Helfer, die das Modul ruft, in der Reihenfolge des ersten
+    /// Bedarfs (12.10, [`crate::mmio`]).
+    mmio: Vec<(crate::mmio::Access, LlvmType)>,
+    /// Laeuft das Ziel ohne Betriebssystem? Das bestimmt den Rumpf der
+    /// Port-Helfer und sonst nichts.
+    bare_metal: bool,
 }
 
 impl Module {
@@ -138,6 +144,8 @@ impl Module {
             block: String::new(),
             intrinsics: std::collections::BTreeSet::new(),
             terminated: false,
+            mmio: Vec::new(),
+            bare_metal: crate::target::Target::by_triple(triple).is_some_and(crate::target::Target::is_bare_metal),
         }
     }
 
@@ -318,6 +326,29 @@ impl Module {
         name
     }
 
+    /// Liest einen Registerport an `at` (12.10) ueber seinen Helfer.
+    pub fn mmio_read(&mut self, ty: &LlvmType, at: &Reg) -> Reg {
+        let f = self.mmio_helper(crate::mmio::Access::Read, ty);
+        self.inst(&format!("call {ty} @{f}(ptr {at})"))
+    }
+
+    /// Schreibt einen Registerport an `at` (12.10) ueber seinen Helfer.
+    pub fn mmio_write(&mut self, ty: &LlvmType, at: &Reg, value: &str) {
+        let f = self.mmio_helper(crate::mmio::Access::Write, ty);
+        self.void_inst(&format!("call void @{f}(ptr {at}, {ty} {value})"));
+    }
+
+    fn mmio_helper(&mut self, access: crate::mmio::Access, ty: &LlvmType) -> String {
+        let i = match self.mmio.iter().position(|(a, t)| *a == access && t == ty) {
+            Some(i) => i,
+            None => {
+                self.mmio.push((access, ty.clone()));
+                self.mmio.len() - 1
+            }
+        };
+        crate::mmio::name(access, i)
+    }
+
     /// Ob der Kopf `text` schon enthaelt (fuer Definitionen, die einmal je Modul stehen).
     pub fn has_declared(&self, text: &str) -> bool {
         self.head.contains(text)
@@ -477,7 +508,8 @@ impl Module {
         for sig in &self.intrinsics {
             let _ = writeln!(decls, "declare {sig}");
         }
-        format!("{}{decls}{}", self.head, self.body)
+        let ports = crate::mmio::definitions(&self.mmio, self.bare_metal);
+        format!("{}{decls}{}{ports}", self.head, self.body)
     }
 }
 

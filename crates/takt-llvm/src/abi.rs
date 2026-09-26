@@ -120,6 +120,15 @@ impl Abi {
     /// und innerhalb eines Schritts laeuft immer nur ein Aufruf.
     pub const FAULT_FLAG: &'static str = "takt_fn_fault";
 
+    /// Ein Registerport liest (12.10): `(adresse, ziel, laenge)`, auf einem
+    /// Ziel mit Betriebssystem. Die Runtime bildet die Adresse ab, der
+    /// Testrahmen auf das Geraetemodell wie der Interpreter; auf einer MCU
+    /// ist der Zugriff `volatile` an der Adresse ([`crate::mmio`]).
+    pub const MMIO_READ: &'static str = "takt_mmio_read";
+
+    /// Ein Registerport schreibt (12.10): `(adresse, quelle, laenge)`.
+    pub const MMIO_WRITE: &'static str = "takt_mmio_write";
+
     /// Schreibt die Deklarationen in den Modulkopf.
     ///
     /// Alle nehmen `(machine: i32, site: i32, ...)`: Die Stelle ist das,
@@ -145,6 +154,9 @@ impl Abi {
         // `job_begin` liest die Argumente und schreibt spaeter das Abbild.
         m.declare(&format!("declare void @{}(i32, i32, i32, ptr, i32) nounwind willreturn", Abi::JOB_BEGIN));
         m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::JOB_CANCEL));
+        // 12.10: Die Runtime liest das Modell und schreibt Ziel und Stroeme.
+        m.declare(&format!("declare void @{}(i64, ptr, i32) nounwind willreturn", Abi::MMIO_READ));
+        m.declare(&format!("declare void @{}(i64, ptr, i32) nounwind willreturn", Abi::MMIO_WRITE));
         // `append` kopiert eine ganze Folge in einem Zug (3.9); LLVM
         // kennt das als Intrinsic, und eine Schleife braeuchte eine
         // Schranke, die 4.1 ohnehin verlangt.

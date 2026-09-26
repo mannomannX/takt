@@ -1026,13 +1026,14 @@ fn fn_for<V: Slots>(
 /// `x = e`: Wert berechnen, in den Speicherort schreiben.
 fn assign(target: &Place, value: &Expr, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let vars = ctx.vars();
-    // 12.10: Ein Portzugriff ist `volatile` — sofort und in
-    // Programmreihenfolge, nicht umgeordnet oder zusammengefasst. `memset`,
-    // `memmove` und `sret` tragen das nicht, also bleibt es beim `store`.
+    // 12.10: Ein Portzugriff geschieht sofort und in Programmreihenfolge,
+    // nicht umgeordnet oder zusammengefasst. `memset`, `memmove` und `sret`
+    // tragen das nicht, also bleibt es beim einzelnen Zugriff ueber den
+    // Helfer ([`crate::mmio`]).
     if roots_in_port(target) {
         let v = lower_expr(value, ctx.program, m, &vars)?;
         let (ptr, _) = place(target, ctx, m)?;
-        m.void_inst(&format!("store volatile {} {}, ptr {ptr}", v.ty, v.value));
+        m.mmio_write(&v.ty, &ptr, &v.value);
         return Ok(());
     }
     // Ein Index im Ziel kann faulten; der Interpreter rechnet den Wert

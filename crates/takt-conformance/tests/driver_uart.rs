@@ -82,12 +82,16 @@ fn the_whole_program_lowers_to_native_code() {
         )
     );
 
-    // 12.10: Jeder Portzugriff steht an seiner Adresse und ist `volatile` —
-    // sonst duerfte LLVM zwei Registerlesevorgaenge zusammenfassen.
+    // 12.10: Jeder Portzugriff steht an seiner Adresse und ist auf der MCU
+    // `volatile`, auf dem Wirt ein Aufruf der Runtime — sonst duerfte LLVM
+    // zwei Registerlesevorgaenge zusammenfassen (FB-261).
     for address in [0x4000_1000u64, 0x4000_1004, 0x4000_1008, 0x4000_100C] {
         let want = format!("inttoptr i64 {address} to ptr");
         assert!(lowered.ir.contains(&want), "Portadresse {address:#x} fehlt im IR");
     }
-    assert!(lowered.ir.contains("load volatile"), "kein `load volatile` im IR");
-    assert!(lowered.ir.contains("store volatile"), "kein `store volatile` im IR");
+    assert!(lowered.ir.contains("call void @takt_mmio_read("), "kein Lesen ueber die Runtime im IR");
+    assert!(lowered.ir.contains("call void @takt_mmio_write("), "kein Schreiben ueber die Runtime im IR");
+    let mcu = takt_llvm::lower::program(&p, takt_llvm::Target::RISCV32IMAC.triple, "test_uart").ir;
+    assert!(mcu.contains("load volatile"), "kein `load volatile` im IR der MCU");
+    assert!(mcu.contains("store volatile"), "kein `store volatile` im IR der MCU");
 }

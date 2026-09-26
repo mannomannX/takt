@@ -226,11 +226,12 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
             let v = m.inst(&format!("load i1, ptr {armed}"));
             Ok(Lowered { value: v.to_string(), ty: LlvmType::Int(1) })
         }
-        // 12.10: `load volatile` an der Adresse — sofort, nicht umgeordnet.
+        // 12.10: sofort, nicht umgeordnet — auf der MCU `load volatile` an
+        // der Adresse, auf dem Wirt ueber die Runtime ([`crate::mmio`]).
         ExprKind::PortRead(id) => {
             let port = p.ports.get(id.index()).ok_or(NotYet { what: "Port" })?;
             let ptr = m.inst(&format!("inttoptr i64 {} to ptr", port.address));
-            let v = m.inst(&format!("load volatile {want}, ptr {ptr}"));
+            let v = m.mmio_read(&want, &ptr);
             Ok(Lowered { value: v.to_string(), ty: want.clone() })
         }
         ExprKind::Unary { op, expr } => unary(*op, expr, &want, p, m, vars),

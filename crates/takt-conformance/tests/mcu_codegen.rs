@@ -120,6 +120,39 @@ fn every_target_gets_the_same_ir() {
     }
 }
 
+/// **Registerports sind die eine Stelle, an der die IR vom Ziel abhaengt**
+/// (12.10, FB-261). Ihr Helfer ist auf der MCU ein `volatile`-Zugriff, auf
+/// dem Wirt ein Aufruf der Runtime; vor den Rumpfen der Helfer ist die IR
+/// fuer jedes Ziel dieselbe, und die MCU-Form uebersetzt fuer beide Ziele.
+#[test]
+fn ports_differ_only_in_their_helpers() {
+    let p = corpus("68_uart_port.takt");
+    let split = |target: Target| {
+        let ir = common::ir_for(&p, target.triple).replace(target.triple, "<triple>");
+        let (program, helpers) =
+            ir.split_once(takt_llvm::mmio::HEADER).unwrap_or_else(|| panic!("{}: keine Port-Helfer", target.name));
+        (program.to_string(), helpers.to_string())
+    };
+    let (program, host) = split(Target::X86_64_LINUX);
+    let (_, mcu) = split(Target::RISCV32IMAC);
+    for target in Target::ALL {
+        let (rest, helpers) = split(target);
+        assert_eq!(rest, program, "{} weicht vor den Port-Helfern ab", target.name);
+        assert_eq!(&helpers, if target.is_bare_metal() { &mcu } else { &host }, "{}", target.name);
+    }
+    assert!(mcu.contains("load volatile") && mcu.contains("store volatile") && mcu.contains("alwaysinline"), "{mcu}");
+    assert!(!mcu.contains("@takt_mmio_read("), "die MCU ruft keine Runtime:\n{mcu}");
+    assert!(host.contains("call void @takt_mmio_read(") && !host.contains("volatile"), "{host}");
+
+    let clang = takt_llvm::toolchain::find();
+    if matches!(clang, Clang::Missing) {
+        return;
+    }
+    for target in [Target::THUMBV7EM, Target::RISCV32IMAC] {
+        compile_for(&clang, target, &p, "68_uart_port.takt").unwrap_or_else(|e| panic!("{}: {e}", target.name));
+    }
+}
+
 /// Die MCU-Ziele liegen in verschiedenen Zielklassen — und das ist der
 /// Grund, warum gerade diese beiden das Paar bilden (12.8, plan/m5.md 2.1).
 #[test]

@@ -68,12 +68,13 @@ pub const LIMITS: &[Limit] = &[
                vergleichen statt der Outputs danach; das ist ein eigener Vergleich.",
     },
     Limit {
-        was: "Registerports auf dem Wirt (12.10)",
-        warum: "Ein Port ist im erzeugten Code ein `volatile`-Zugriff auf seine absolute \
-                Adresse; der Wirt hat dort keinen Speicher, und der Lauf bricht ab. \
-                `68_uart_port` steht darum nicht im Differential (FB-261, FB-305), und Ports \
-                prueft nur der Interpreter (`ports.rs`).",
-        wann: "M10 Schritt 9: ein Helfer im IR, dessen Rumpf auf dem Wirt den Rahmen ruft.",
+        was: "Registerports, deren Modell den Lesekanal als Strom stellt (12.10)",
+        warum: "Ein Register, das beim Lesen weiterschaltet (ein FIFO-Datenregister), stellt \
+                das Modell als `stream<Regs>`. Der Wirtsrahmen bildet nur einen Pegel ab und \
+                bricht den Bau des Rahmens fuer einen Strom mit `#error` ab; kein \
+                Korpusprogramm liest ein solches Register.",
+        wann: "Mit dem ersten Korpusprogramm, das eines liest: eine Warteschlange je Port, \
+               gespeist aus dem Sendepuffer des Modells wie `Image::port_queues`.",
     },
     Limit {
         was: "aarch64",

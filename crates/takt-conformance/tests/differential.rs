@@ -16,11 +16,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-///
-/// `68_uart_port` fehlt: Ein Port ist nativ ein Zugriff auf seine absolute
-/// Adresse, und dort hat der Wirt keinen Speicher (FB-261). Der Lauf brach
-/// ab, und der leere Trace widersprach nichts (FB-305).
-const KORPUS: [&str; 64] = [
+const KORPUS: [&str; 65] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -70,6 +66,7 @@ const KORPUS: [&str; 64] = [
     "62_type_generics.takt",
     "63_scoped_instances.takt",
     "64_scoped_exit.takt",
+    "68_uart_port.takt",
     "69_qp_box.takt",
     "70_padded_record.takt",
     "71_places.takt",

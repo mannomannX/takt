@@ -235,6 +235,11 @@ impl Target {
         Target::KNOWN.into_iter().find(|t| t.name == name)
     }
 
+    /// Das Ziel zu einem Triple, wie es im Kopf der IR steht.
+    pub fn by_triple(triple: &str) -> Option<Target> {
+        Target::KNOWN.into_iter().find(|t| t.triple == triple)
+    }
+
     /// Gehoeren zwei Ziele derselben Zielklasse an (12.8)?
     ///
     /// Innerhalb einer Klasse ist die IR dieselbe. Zwischen Klassen ist
