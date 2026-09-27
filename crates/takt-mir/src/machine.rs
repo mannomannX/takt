@@ -80,7 +80,6 @@ pub enum ArithKind {
 pub enum RuntimeKind {
     Overrun,
     Driver,
-    Watchdog,
     Hardware,
     /// Ab v2.
     Node,
@@ -100,7 +99,6 @@ pub enum FaultKind {
     StreamOverflow,
     Timing,
     ScheduleOverflow,
-    JobOverflow,
     Abort,
     Runtime(RuntimeKind),
 }

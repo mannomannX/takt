@@ -296,7 +296,6 @@ fn fault_kind_value(loaded: &Loaded<'_>, kind: FaultKind) -> Value {
         FaultKind::StreamOverflow => "STREAM_OVERFLOW",
         FaultKind::Timing => "TIMING",
         FaultKind::ScheduleOverflow => "SCHEDULE_OVERFLOW",
-        FaultKind::JobOverflow => "JOB_OVERFLOW",
         FaultKind::Abort => "ABORT",
         FaultKind::Runtime(_) => "RUNTIME",
     };

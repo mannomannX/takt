@@ -38,7 +38,7 @@ unit degF  = affine(degR, 459.67)
 
 # --- offene Enums (2.5) ------------------------------------------------
 enum ArithKind: OVERFLOW, DIV_ZERO, NON_FINITE, DOMAIN, SINGULAR
-enum RuntimeKind: OVERRUN, DRIVER, WATCHDOG, HARDWARE, NODE
+enum RuntimeKind: OVERRUN, DRIVER, HARDWARE, NODE
 
 enum FaultKind open:
     CHECK_FAILED
@@ -51,7 +51,6 @@ enum FaultKind open:
     STREAM_OVERFLOW
     TIMING
     SCHEDULE_OVERFLOW
-    JOB_OVERFLOW
     ABORT
     RUNTIME(kind: RuntimeKind)
 

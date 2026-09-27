@@ -688,7 +688,6 @@ fn fault_name(kind: takt_mir::machine::FaultKind) -> String {
         F::StreamOverflow => "StreamOverflow".into(),
         F::Timing => "TimingFault".into(),
         F::ScheduleOverflow => "ScheduleOverflow".into(),
-        F::JobOverflow => "JobOverflow".into(),
         F::Abort => "Abort".into(),
         F::Runtime(k) => format!("Runtime({k:?})"),
     }

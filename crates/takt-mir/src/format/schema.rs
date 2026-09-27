@@ -237,10 +237,11 @@ codec_struct!(VarDef { 1 one name, 2 one ty, 3 opt init, 4 one scope, 5 one publ
 codec_struct!(PersistVar { 1 one var, 2 opt min_interval, 3 one type_hash });
 codec_struct!(SignalDef { 1 one name, 2 meta span });
 codec_unit_enum!(ArithKind { 0 Overflow, 1 DivZero, 2 NonFinite, 3 Domain, 4 Singular });
-codec_unit_enum!(RuntimeKind { 0 Overrun, 1 Driver, 2 Watchdog, 3 Hardware, 4 Node });
+// Die Nummern 2 (`Watchdog`) und 10 (`JobOverflow`) sind frei (FB-324).
+codec_unit_enum!(RuntimeKind { 0 Overrun, 1 Driver, 3 Hardware, 4 Node });
 codec_enum!(FaultKind {
     0 CheckFailed, 1 Expect, 2 Timeout, 3 SensorFault, 4 MissingValue, 5 Arithmetic(1 one k), 6 Range,
-    7 StreamOverflow, 8 Timing, 9 ScheduleOverflow, 10 JobOverflow, 11 Abort, 12 Runtime(1 one k),
+    7 StreamOverflow, 8 Timing, 9 ScheduleOverflow, 11 Abort, 12 Runtime(1 one k),
 });
 codec_enum!(FaultTarget { 0 State(1 one s), 1 Faulted });
 codec_enum!(Target { 0 State(1 one s), 1 Faulted, 2 Fault(1 one k) });

@@ -448,7 +448,6 @@ fn fault_code(kind: takt_mir::machine::FaultKind) -> u32 {
         F::StreamOverflow => 7,
         F::Timing => 8,
         F::ScheduleOverflow => 9,
-        F::JobOverflow => 10,
         F::Abort => 11,
         F::Runtime(_) => 12,
     }

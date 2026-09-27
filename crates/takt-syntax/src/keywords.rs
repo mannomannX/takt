@@ -306,17 +306,7 @@ pub const CAPTURE_NAMES: &[&str] = &["t", "seq", "text", "data"];
 pub const OPEN_ENUMS: &[(&str, &[&str])] = &[
     (
         "FaultKind",
-        &[
-            "CheckFailed",
-            "Timeout",
-            "Expect",
-            "Abort",
-            "Runtime",
-            "MissingValue",
-            "SensorFault",
-            "StreamOverflow",
-            "JobOverflow",
-        ],
+        &["CheckFailed", "Timeout", "Expect", "Abort", "Runtime", "MissingValue", "SensorFault", "StreamOverflow"],
     ),
     ("BootReason", &["POWER_ON", "WATCHDOG", "SOFTWARE", "DEEP_SLEEP_WAKE", "TRIAL"]),
     ("ImageState", &["CONFIRMED", "TRIAL"]),
