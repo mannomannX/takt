@@ -15,7 +15,7 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use takt_board_esp32c6::{Button, FlashNvm, Generated, Mwdt, Telemetry, Ws2812, platform, route_uart0};
+use takt_board_esp32c6::{Button, FlashNvm, Generated, JobContext, Mwdt, Telemetry, Ws2812, platform, route_uart0};
 use takt_board_support::platform::image_state;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock};
 use takt_rt_core::{Clock, Journal, Loaded, Persist, PlatformCommand, Policy, Profile, Runtime};
@@ -309,12 +309,19 @@ fn main() -> ! {
         u.flush();
     }
 
+    // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
+    // der Tick holt den Kern zurueck.
+    let mut jobs = JobContext::start();
     if LOGICAL {
-        // Zwischen den Ticks leert die Schleife die Leitung ganz; dann
-        // steht die Uhr auf der Frist.
+        // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet
+        // jeden Job zu Ende; dann steht die Uhr auf der Frist. In logischer
+        // Zeit haelt so jeder Job seine Dauer (4.5).
         let clock = LogicalClock::new(|| {
             if let Some(u) = uart() {
                 u.drain(DRAIN_ROUNDS);
+            }
+            if let Some(context) = jobs.as_mut() {
+                context.finish();
             }
         });
         conduct(program, clock, &mut persist);
@@ -322,6 +329,9 @@ fn main() -> ! {
         let clock = TimerClock::new(timer, TICK_NS).with_idle(|| {
             if let Some(u) = uart() {
                 u.flush();
+            }
+            if let Some(context) = jobs.as_mut() {
+                context.run();
             }
         });
         conduct(program, clock, &mut persist);

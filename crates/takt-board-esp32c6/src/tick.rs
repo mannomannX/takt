@@ -25,6 +25,8 @@ pub(crate) fn set_counts_per_tick(counts: u32) {
 #[esp_hal::ram]
 pub fn on_timer_interrupt(elapsed_counts: u32) {
     LAST_COUNTS.store(elapsed_counts, Ordering::Relaxed);
+    // 4.5: Ein Job, der gerade rechnet, gibt den Kern an die Hauptschleife.
+    crate::jobs::preempt();
 }
 
 /// Tick-Ereignisse seit dem Start des SYSTIMER.

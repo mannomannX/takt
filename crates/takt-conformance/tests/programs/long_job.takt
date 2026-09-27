@@ -1,0 +1,42 @@
+# Ein Job, der laenger rechnet als ein Tick (4.5, 12.3): SHA-256 ueber
+# 4096 Byte braucht auf beiden Boards mehr als eine Millisekunde. Er rechnet
+# in der Wartezeit zwischen den Ticks, der Tick unterbricht ihn und keiner
+# verspaetet sich; sein Ergebnis erscheint nach der Dauer von 20 ms.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+native job sha256(b: bytes<4096>) -> bytes<32> with cost = 60000, stack = 512, duration = 20 ms, total
+
+output word  : u32  @ hw("o/word")  with safe = 0
+output ready : bool @ hw("o/ready") with safe = false
+
+fn first(d: bytes<32>) -> u32:
+    return (d[0] as u32) | ((d[1] as u32) << 8) | ((d[2] as u32) << 16) | ((d[3] as u32) << 24)
+
+machine m:
+    var msg : bytes<4096> = default
+    var d   : bytes<32>   = default
+    initial FILL
+
+    state FILL:
+        loop:
+            for i in range(256):
+                msg.push(i as u8)
+        when msg.len >= 4096: -> HASH
+
+    state HASH:
+        sequence:
+            job v = sha256(msg)
+            until v.done timeout 100 ms -> FAILED
+            d = v.result.or(default)
+            word = first(d)
+            ready = true
+            -> DONE
+
+    state DONE:
+        when false: -> FILL
+
+    state FAILED:
+        when false: -> FILL

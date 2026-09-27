@@ -44,6 +44,7 @@
 pub mod button;
 pub mod cycles;
 pub mod guard;
+pub mod jobs;
 pub mod led;
 pub mod nvm;
 pub mod panic;
@@ -66,6 +67,7 @@ use esp_hal::timer::systimer::{Alarm, SystemTimer, Unit};
 
 pub use button::Button;
 pub use guard::WfiSleep;
+pub use jobs::JobContext;
 pub use led::Ws2812;
 pub use nvm::FlashNvm;
 pub use pins::route_uart0;

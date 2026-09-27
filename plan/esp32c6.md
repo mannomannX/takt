@@ -113,7 +113,9 @@ misst `takt bench` inzwischen auf beiden Boards — oder, falls sich ESP-IDF anb
 - ~~Der MCU-Rahmen trägt keine geplanten Ausgaben (`at`, 7.5), keine
   Systemkanäle (`sys/reboot`, `sys/jump`) und keine Jobs~~ — `at` seit
   M10 Schritt 5, `sys/reboot` und `sys/jump` seit Schritt 6a, 28, 32 und 34
-  im Board-Korpus. Offen sind die Jobs (Schritt 7, Korpus 40).
+  im Board-Korpus; die Jobs seit Schritt 7 (Korpus 40, `jobs.rs`: ein Faden
+  auf eigenem Stack, umgeschaltet in einem Software-Interrupt, den
+  `esp-hal` direkt an CPU-Unterbrechung 1 bindet).
 - **Plattformkommandos (12.7, FB-309).** `RESTART` ist der Software-Reset
   des HP-Systems (`CoreSw`): Der USB-Serial-JTAG bleibt angemeldet, und der
   nächste Lauf liest `SOFTWARE`. Den Reset auf RTC-Ebene behält der Host

@@ -63,6 +63,7 @@ pub fn build_with(p: &Program, diagnostics: takt_llvm::Diagnostics) -> McuHarnes
     // 9.8: die geplanten Schreibvorgaenge, hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.
     crate::harness::scheduled(&mut s, p, &layout);
+    jobs(&mut s, p);
     declarations(&mut s, &driven);
     init(&mut s, p, &layout, &driven);
     tick(&mut s, p, &layout, &driven);
@@ -217,6 +218,179 @@ fn declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s);
 }
 
+/// Wie viel Stack der Job-Kontext ueber den groessten `stack`-Vertrag der
+/// Jobs hinaus bekommt, wenn das Board nichts anderes sagt: Rahmen und
+/// Verteiler des Jobs, die Umschaltung und — wo Interrupts auf dem Stack
+/// des unterbrochenen Fadens laufen — die Interrupts selbst.
+// TODO(M10 Schritt 12): die Reserve aus der Hardware-Konfiguration (8.10),
+// wie die des Hauptstacks.
+const JOB_STACK_RESERVE: u32 = 1024;
+
+/// 4.5: Jobs auf der MCU. Der Start kopiert die Argumente in den Slot und
+/// reiht ihn ein; gerechnet wird im Job-Kontext der Runtime, einem Faden
+/// mit eigenem Stack, den der Tick unterbricht (12.3). Sichtbar wird das
+/// Ergebnis fruehestens nach seiner Dauer (logische Ausfuehrungszeit) —
+/// wie im Modell des Interpreters, solange der Job sie haelt.
+///
+/// **Zwei Faeden, ein Uebergabepunkt.** Die Slots gehoeren der
+/// Hauptschleife: Nur sie startet, bricht ab und macht sichtbar. Dem
+/// Job-Kontext gehoert ein Auftrag (`g_work_*`): Die Hauptschleife fuellt
+/// ihn, solange der Kontext ruht (`takt_mcu_job_dispatch`), der Kontext
+/// rechnet ihn und meldet `g_work_finished`, die Hauptschleife holt das
+/// Ergebnis ab. Ein Neustart oder Abbruch waehrend der Rechnung erhoeht
+/// die Generation des Slots, und ein Ergebnis zur alten verfaellt.
+///
+/// Ohne Jobs bleiben die Einstiege, damit das Board sie ohne Unterschied
+/// rufen kann.
+fn jobs(s: &mut String, p: &Program) {
+    let _ = writeln!(s, "/* Jobs (4.5): Slots der Hauptschleife, ein Auftrag fuer den Job-Kontext. */");
+    let Some((slots, out_max)) = crate::harness::job_tables(s, p) else {
+        let _ = writeln!(s, "int takt_mcu_job_dispatch(void) {{ return 0; }}");
+        let _ = writeln!(s, "void takt_mcu_job_work(void) {{}}");
+        let _ = writeln!(s, "int takt_mcu_jobs_busy(void) {{ return 0; }}");
+        let _ = writeln!(s, "unsigned char *takt_mcu_job_stack(unsigned int *size) {{ *size = 0; return 0; }}\n");
+        return;
+    };
+    // So gross wie der Puffer, den der erzeugte Code fuer die Argumente anlegt.
+    let in_max = crate::harness::job_slots(p)
+        .iter()
+        .map(|(_, _, n)| {
+            let params = &p.natives[n.index()].params;
+            params.iter().map(|q| 4 + u64::from(takt_mir::bytes::max_size(p, q.ty).unwrap_or(0))).sum::<u64>()
+        })
+        .max()
+        .unwrap_or(0)
+        .max(4);
+    let stack = crate::harness::job_slots(p).iter().map(|(_, _, n)| p.natives[n.index()].stack).max().unwrap_or(0);
+    let names: Vec<String> = crate::harness::job_slots(p)
+        .iter()
+        .map(|(mi, j, _)| {
+            let m = &p.machines[*mi];
+            let handle = m.layout.job_slots[*j].handle;
+            format!("\"{} {}\"", m.name, m.vars.get(handle.index()).map_or("?", |v| v.name.as_str()))
+        })
+        .collect();
+
+    let _ = writeln!(s, "enum {{ TAKT_JOB_FREE, TAKT_JOB_WAITING, TAKT_JOB_RUNNING, TAKT_JOB_DONE }};");
+    let _ = writeln!(
+        s,
+        "typedef struct {{ unsigned char state, gen; int native; long long due, order; int in_len, out_len; unsigned char in[{in_max}], out[{out_max}]; }} takt_mcu_job;"
+    );
+    let _ = writeln!(s, "static takt_mcu_job g_jobs[{slots}];");
+    let _ = writeln!(s, "static long long g_job_order;");
+    let _ = writeln!(s, "static const char *const takt_job_names[{slots}] = {{ {} }};", names.join(", "));
+    let _ = writeln!(s, "static volatile int g_work_slot = -1, g_work_finished;");
+    let _ = writeln!(s, "static unsigned char g_work_gen;");
+    let _ = writeln!(s, "static int g_work_native, g_work_in_len, g_work_out_len;");
+    let _ = writeln!(s, "static unsigned char g_work_in[{in_max}], g_work_out[{out_max}];");
+    let _ = writeln!(s, "#ifndef TAKT_JOB_STACK_RESERVE");
+    let _ = writeln!(s, "#define TAKT_JOB_STACK_RESERVE {JOB_STACK_RESERVE}");
+    let _ = writeln!(s, "#endif");
+    let _ = writeln!(
+        s,
+        "static unsigned char takt_job_stack_mem[{stack} + TAKT_JOB_STACK_RESERVE] __attribute__((aligned(16)));"
+    );
+    let _ = writeln!(s, "unsigned char *takt_mcu_job_stack(unsigned int *size) {{");
+    let _ = writeln!(s, "    *size = sizeof takt_job_stack_mem; return takt_job_stack_mem;");
+    let _ = writeln!(s, "}}");
+
+    let _ = writeln!(s, "void takt_job_begin(int m, int slot, int native, const unsigned char *args, int len) {{");
+    let _ = writeln!(s, "    int i = takt_job_base[m] + slot; takt_mcu_job *j = &g_jobs[i];");
+    let _ = writeln!(s, "    if (len > (int)sizeof j->in) len = (int)sizeof j->in;");
+    let _ = writeln!(s, "    memcpy(j->in, args, (size_t)len); j->in_len = len; j->native = native;");
+    let _ = writeln!(s, "    j->state = TAKT_JOB_WAITING; j->gen++; j->order = ++g_job_order;");
+    let _ = writeln!(s, "    j->due = g_tick + takt_job_ticks[i];");
+    let _ = writeln!(s, "    takt_job_image(i, 0, 0, 2); /* Err(PENDING) */");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "void takt_job_cancel(int m, int slot) {{");
+    let _ = writeln!(s, "    int i = takt_job_base[m] + slot;");
+    let _ = writeln!(s, "    if (g_jobs[i].state == TAKT_JOB_FREE) return;");
+    let _ = writeln!(s, "    g_jobs[i].state = TAKT_JOB_FREE; g_jobs[i].gen++;");
+    let _ = writeln!(s, "    takt_job_image(i, 1, 0, 0); /* Err(CANCELLED) */");
+    let _ = writeln!(s, "}}");
+
+    let _ = writeln!(s, "/* Hauptschleife: Ein fertiger Auftrag geht in seinen Slot, wenn der noch auf ihn wartet. */");
+    let _ = writeln!(s, "static void takt_jobs_collect(void) {{");
+    let _ = writeln!(s, "    takt_mcu_job *j;");
+    let _ = writeln!(s, "    if (g_work_slot < 0 || !g_work_finished) return;");
+    let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
+    let _ = writeln!(s, "    j = &g_jobs[g_work_slot];");
+    let _ = writeln!(s, "    if (j->state == TAKT_JOB_RUNNING && j->gen == g_work_gen) {{");
+    let _ = writeln!(s, "        memcpy(j->out, g_work_out, (size_t)g_work_out_len); j->out_len = g_work_out_len;");
+    let _ = writeln!(s, "        j->state = TAKT_JOB_DONE;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    g_work_finished = 0; g_work_slot = -1;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(
+        s,
+        "/* Hauptschleife: Der ruhende Kontext bekommt den aeltesten wartenden Job; wahr, wenn er zu rechnen hat. */"
+    );
+    let _ = writeln!(s, "int takt_mcu_job_dispatch(void) {{");
+    let _ = writeln!(s, "    int i, next = -1;");
+    let _ = writeln!(s, "    takt_jobs_collect();");
+    let _ = writeln!(s, "    if (g_work_slot >= 0) return 1;");
+    let _ = writeln!(s, "    for (i = 0; i < {slots}; i++)");
+    let _ = writeln!(
+        s,
+        "        if (g_jobs[i].state == TAKT_JOB_WAITING && (next < 0 || g_jobs[i].order < g_jobs[next].order)) next = i;"
+    );
+    let _ = writeln!(s, "    if (next < 0) return 0;");
+    let _ = writeln!(s, "    memcpy(g_work_in, g_jobs[next].in, (size_t)g_jobs[next].in_len);");
+    let _ = writeln!(s, "    g_work_in_len = g_jobs[next].in_len; g_work_native = g_jobs[next].native;");
+    let _ = writeln!(s, "    g_work_gen = g_jobs[next].gen; g_jobs[next].state = TAKT_JOB_RUNNING;");
+    let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
+    let _ = writeln!(s, "    g_work_finished = 0; g_work_slot = next;");
+    let _ = writeln!(s, "    return 1;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "/* Job-Kontext: rechnet den Auftrag, den die Hauptschleife gegeben hat. */");
+    let _ = writeln!(s, "void takt_mcu_job_work(void) {{");
+    let _ = writeln!(s, "    int native;");
+    let _ = writeln!(s, "    if (g_work_slot < 0 || g_work_finished) return;");
+    let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
+    let _ = writeln!(s, "    native = g_work_native;");
+    let _ = writeln!(s, "    {{");
+    crate::harness::job_call(s, p, "g_work_in", "g_work_in_len", "g_work_out", "g_work_out_len", "        ");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
+    let _ = writeln!(s, "    g_work_finished = 1;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "/* 12.1: zu Tickbeginn. Ein fertiges Ergebnis wird sichtbar, wenn seine Dauer um ist. */");
+    let _ = writeln!(s, "static void takt_jobs_poll(void) {{");
+    let _ = writeln!(s, "    int i, b;");
+    let _ = writeln!(s, "    takt_jobs_collect();");
+    let _ = writeln!(s, "    for (i = 0; i < {slots}; i++) {{");
+    let _ = writeln!(s, "        if (g_jobs[i].state != TAKT_JOB_DONE || g_jobs[i].due > g_tick) continue;");
+    let _ = writeln!(s, "        g_jobs[i].state = TAKT_JOB_FREE; takt_job_image(i, 1, 1, 0);");
+    let _ = writeln!(
+        s,
+        "        for (b = 0; b < g_jobs[i].out_len; b++) image[takt_job_at[i] + 8 + b] = g_jobs[i].out[b];"
+    );
+    let _ = writeln!(s, "        takt_board_trace(\"t=\"); takt_board_trace_i64(g_tick);");
+    let _ = writeln!(
+        s,
+        "        takt_board_trace(\" job \"); takt_board_trace(takt_job_names[i]); takt_board_trace(\" done\\n\");"
+    );
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(
+        s,
+        "/* 9.9: Mit einem Job, der wartet, rechnet oder noch nicht sichtbar ist, schlaeft das System nicht. */"
+    );
+    let _ = writeln!(s, "int takt_mcu_jobs_busy(void) {{");
+    let _ = writeln!(s, "    int i;");
+    let _ = writeln!(s, "    for (i = 0; i < {slots}; i++) if (g_jobs[i].state != TAKT_JOB_FREE) return 1;");
+    let _ = writeln!(s, "    return 0;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "static void takt_jobs_init(void) {{");
+    let _ = writeln!(s, "    int i;");
+    let _ = writeln!(
+        s,
+        "    for (i = 0; i < {slots}; i++) {{ g_jobs[i].state = TAKT_JOB_FREE; takt_job_image(i, 0, 0, 2); }}"
+    );
+    let _ = writeln!(s, "    g_work_slot = -1; g_work_finished = 0;");
+    let _ = writeln!(s, "}}\n");
+}
+
 /// `takt_mcu_init`: einmal vor dem ersten Tick.
 fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Einmal vor dem ersten Tick (12.1, Schritt 1). */");
@@ -243,6 +417,9 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
         let Some(value) = crate::harness::param_literal(p, i) else { continue };
         let _ = writeln!(s, "    *({ct} *)(params + {}) = {value}; /* {} */", slot.offset, slot.name);
+    }
+    if !crate::harness::job_slots(p).is_empty() {
+        let _ = writeln!(s, "    takt_jobs_init();");
     }
     // 9.4: Der Lauf beginnt mit den Outputs auf `safe`, vor jedem Init —
     // wie `Sim::new` und der Wirtsrahmen.
@@ -279,6 +456,11 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "    g_done = k;");
     let _ = writeln!(s, "    takt_fn_fault = 0;");
     crate::harness::aging(s, p, layout, "    ");
+    // 4.5: Was fertig und faellig ist, wird zu Tickbeginn sichtbar, wie
+    // `poll_jobs` im Interpreter und im Wirtsrahmen.
+    if !crate::harness::job_slots(p).is_empty() {
+        let _ = writeln!(s, "    takt_jobs_poll();");
+    }
     let _ = writeln!(s, "    takt_mcu_sample();");
     crate::harness::steps(s, p, layout, driven, "    ", "k");
     crate::harness::commit_sequence(s, p, driven, "    ", "k");
@@ -345,8 +527,8 @@ fn platform(s: &mut String, p: &Program, layout: &Layout) {
 /// 9.9 nennt sechs Konjunkte. Je Maschine beantwortet der erzeugte Code
 /// zwei (`idle`-Zustand, kein `pending`); ein anliegendes Wake-Kommando
 /// und ausstehende geplante Ausgaben prueft der Rahmen, weil ihm
-/// Prozessabbild und Warteschlangen gehoeren. Jobs kennt der MCU-Rahmen
-/// noch nicht (M10 Schritt 7).
+/// Prozessabbild und Warteschlangen gehoeren — und laufende Jobs (4.5):
+/// Mit ihnen schlaeft das System nicht.
 fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Systemschlaf (9.9). */");
     let _ = writeln!(s, "_Bool takt_mcu_idle(void) {{");
@@ -363,6 +545,7 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
         if !crate::harness::queued_outputs(p).is_empty() {
             let _ = writeln!(s, "    if (takt_sched_pending()) return 0;");
         }
+        let _ = writeln!(s, "    if (takt_mcu_jobs_busy()) return 0;");
         for m in driven {
             let _ = writeln!(s, "    if (!{0}_idle(state_{0})) return 0;", m.name);
         }

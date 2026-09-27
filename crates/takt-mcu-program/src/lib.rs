@@ -40,6 +40,44 @@ unsafe extern "C" {
     fn takt_mcu_persist_restore(bytes: *const c_void, len: i32) -> i32;
     fn takt_mcu_command(arg: *mut i64) -> i32;
     fn takt_mcu_end();
+    fn takt_mcu_job_dispatch() -> i32;
+    fn takt_mcu_job_work();
+    fn takt_mcu_job_stack(size: *mut u32) -> *mut u8;
+}
+
+/// Die Jobs des Rahmens (4.5) fuer den Job-Kontext eines Boards: Die
+/// Hauptschleife gibt Auftraege, der Kontext rechnet sie.
+pub mod jobs {
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    /// Gibt dem ruhenden Job-Kontext den aeltesten wartenden Job; wahr,
+    /// wenn er etwas zu rechnen hat. Nur aus der Hauptschleife.
+    pub fn dispatch() -> bool {
+        // SAFETY: Slots und Auftrag liegen statisch im Rahmen; die
+        // Hauptschleife schreibt den Auftrag nur, solange der Kontext ruht.
+        unsafe { super::takt_mcu_job_dispatch() != 0 }
+    }
+
+    /// Rechnet den Auftrag. Nur im Job-Kontext.
+    pub fn work() {
+        // SAFETY: Den Auftrag fasst die Hauptschleife nicht an, bis der
+        // Kontext ihn als fertig meldet.
+        unsafe { super::takt_mcu_job_work() }
+    }
+
+    /// Der Stack des Job-Kontexts: so gross wie der groesste `stack`-Vertrag
+    /// der Jobs plus Reserve. `None` ohne Jobs und bei jedem weiteren Aufruf.
+    pub fn stack() -> Option<&'static mut [u8]> {
+        static TAKEN: AtomicBool = AtomicBool::new(false);
+        if TAKEN.swap(true, Ordering::Relaxed) {
+            return None;
+        }
+        let mut size = 0u32;
+        // SAFETY: Der Rahmen liefert einen statischen Puffer dieser
+        // Groesse, und `TAKEN` gibt ihn hoechstens einmal heraus.
+        let at = unsafe { super::takt_mcu_job_stack(&mut size) };
+        (size > 0 && !at.is_null()).then(|| unsafe { core::slice::from_raw_parts_mut(at, size as usize) })
+    }
 }
 
 /// Das gebundene Programm.

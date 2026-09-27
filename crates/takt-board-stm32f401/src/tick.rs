@@ -44,6 +44,8 @@ static LAST_CYCLES: AtomicU32 = AtomicU32::new(0);
 pub fn on_timer_interrupt(elapsed_cycles: u32) {
     TICKS.tick();
     LAST_CYCLES.store(elapsed_cycles, Ordering::Relaxed);
+    // 4.5: Ein Job, der gerade rechnet, gibt den Kern an die Hauptschleife.
+    crate::jobs::preempt();
 }
 
 /// Der Tickzaehler.

@@ -11,14 +11,56 @@ pub const TICKS: u64 = 60;
 
 /// Ein Programm des Korpus, fuer die Simulation uebersetzt.
 pub fn corpus(name: &str) -> Program {
-    let path = board::corpus_path(name);
-    let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    program(&board::corpus_path(name))
+}
+
+/// Ein Programm, fuer die Simulation uebersetzt.
+pub fn program(path: &std::path::Path) -> Program {
+    let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let options =
         takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
-    assert!(errors.is_empty(), "{name}:\n{}", errors.join("\n"));
-    out.program.unwrap_or_else(|| panic!("{name}: kein Programm"))
+    assert!(errors.is_empty(), "{}:\n{}", path.display(), errors.join("\n"));
+    out.program.unwrap_or_else(|| panic!("{}: kein Programm", path.display()))
+}
+
+/// **Ein Job, der laenger rechnet als ein Tick, verspaetet keinen** (4.5,
+/// 12.3). `long_job.takt` rechnet SHA-256 ueber 4096 Byte bei 1 ms Tick in
+/// Echtzeit: Das Ergebnis stimmt mit dem Interpreter ueberein und erscheint
+/// nach seiner Dauer, und kein Tick beginnt um mehr als eine Zehntelperiode
+/// spaeter als im Mittel. Liefe der Job im Schritt oder ohne Unterbrechung,
+/// begaenne der Tick danach um die Dauer seiner Rechnung zu spaet.
+///
+/// Gemessen wird die Verspaetung gegen den Median, nicht der Sprung zum
+/// vorigen Tick: Kehrt der Kern aus dem Job zurueck statt aus `wfi`,
+/// beginnt der Tick frueher (auf dem C6 um die Aufwachzeit), und der
+/// naechste saehe sonst wie verspaetet aus. Die ersten beiden Ticks laufen
+/// noch an.
+pub fn long_job_keeps_the_tick(board: &mut dyn Board) -> Vec<String> {
+    let path = board::root().join("crates/takt-conformance/tests/programs/long_job.takt");
+    let options = Options::timed(TICKS);
+    let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("kein Lauf: {e}")],
+    };
+    let mut failed = Vec::new();
+    let diffs = compare(&run_interpreted(&program(&path)), &text);
+    if !diffs.is_empty() {
+        failed.push(format!("{} Abweichungen: {diffs:?}\n{text}", diffs.len()));
+    }
+    let mut drifts: Vec<i64> = text
+        .lines()
+        .filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok())
+        .skip(2)
+        .collect();
+    drifts.sort_unstable();
+    let median = drifts.get(drifts.len() / 2).copied().unwrap_or(0);
+    let late = drifts.last().map_or(0, |d| d - median);
+    if drifts.len() < 50 || late > 100_000 {
+        failed.push(format!("{} Zeitzeilen, ein Tick {late} ns spaeter als im Mittel:\n{text}", drifts.len()));
+    }
+    failed
 }
 
 /// Der Soll-Trace ueber [`TICKS`] Ticks.

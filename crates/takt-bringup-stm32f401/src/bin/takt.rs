@@ -42,7 +42,9 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
-use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Generated, Iwdg, Led, Telemetry, WfiSleep, cycles, platform, tick};
+use takt_board_stm32f401::{
+    BAUD, Board, CORE_HZ, Generated, Iwdg, JobContext, Led, Telemetry, WfiSleep, cycles, platform, tick,
+};
 use takt_board_support::platform::image_state;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock};
 use takt_rt_core::{Clock, FakeNvm, Persist, PlatformCommand, Policy, Profile, Runtime};
@@ -324,12 +326,19 @@ fn main() -> ! {
     banner(timer.nominal_ns());
     unsafe { LED = Some(led) };
 
+    // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
+    // der Tick holt den Kern zurueck.
+    let mut jobs = JobContext::start();
     if LOGICAL {
-        // Zwischen den Ticks leert die Schleife die Leitung ganz; dann
-        // steht die Uhr auf der Frist.
+        // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet
+        // jeden Job zu Ende; dann steht die Uhr auf der Frist. In logischer
+        // Zeit haelt so jeder Job seine Dauer (4.5).
         conduct(LogicalClock::new(|| {
             if let Some(u) = uart() {
                 u.drain(DRAIN_ROUNDS);
+            }
+            if let Some(context) = jobs.as_mut() {
+                context.finish();
             }
         }));
     } else {
@@ -338,6 +347,9 @@ fn main() -> ! {
         conduct(TimerClock::new(timer, TICK_NS).with_idle(|| {
             if let Some(u) = uart() {
                 u.flush();
+            }
+            if let Some(context) = jobs.as_mut() {
+                context.run();
             }
         }));
     }

@@ -14,7 +14,7 @@ use takt_llvm::toolchain::Clang;
 
 mod common;
 
-const KORPUS: [&str; 3] = ["01_minimal.takt", "16_timing.takt", "19_faults.takt"];
+const KORPUS: [&str; 4] = ["01_minimal.takt", "16_timing.takt", "19_faults.takt", "40_jobs.takt"];
 
 fn corpus(name: &str) -> takt_mir::Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
@@ -455,6 +455,46 @@ fn a_bound_input_becomes_a_driver_symbol() {
 
     // 3.5: Ein Input ohne Treiber ist `Bad`, und `init` setzt das.
     assert!(src.contains("ist Bad (3.5)"), "{src}");
+}
+
+/// **Jobs laufen im Kontext, sichtbar nach ihrer Dauer** (4.5, M10
+/// Schritt 7). Der Start reiht ein, der Job-Kontext rechnet den Auftrag,
+/// den die Hauptschleife ihm gibt, und zu Tickbeginn wird sichtbar, was
+/// fertig und faellig ist — vor der Abtastung, wie im Wirtsrahmen. Mit
+/// einem Job, der laeuft, schlaeft das System nicht (9.9).
+#[test]
+fn a_job_runs_in_the_context_and_shows_after_its_duration() {
+    let src = takt_conformance::mcu::build(&corpus("40_jobs.takt")).source;
+    for symbol in [
+        "void takt_job_begin(",
+        "void takt_job_cancel(",
+        "int takt_mcu_job_dispatch(void)",
+        "void takt_mcu_job_work(void)",
+        "int takt_mcu_jobs_busy(void)",
+        "unsigned char *takt_mcu_job_stack(unsigned int *size)",
+    ] {
+        assert!(
+            src.contains(symbol),
+            "{symbol} fehlt:
+{src}"
+        );
+    }
+    assert!(
+        src.contains("g_jobs[i].due > g_tick"),
+        "sichtbar erst nach der Dauer:
+{src}"
+    );
+    let at = src.find("void takt_mcu_tick(").expect("Tickfunktion");
+    let tick = &src[at..];
+    let poll = tick.find("takt_jobs_poll();").expect("Jobs zu Tickbeginn");
+    let sample = tick.find("takt_mcu_sample();").expect("Abtastung");
+    assert!(poll < sample, "{tick}");
+    let at = src.find("_Bool takt_mcu_idle(void)").expect("Schlafbedingung");
+    assert!(src[at..].contains("if (takt_mcu_jobs_busy()) return 0;"), "{src}");
+
+    // Ohne Jobs bleiben die Einstiege, und das Board ruft sie ohne Unterschied.
+    let plain = takt_conformance::mcu::build(&corpus("01_minimal.takt")).source;
+    assert!(plain.contains("int takt_mcu_job_dispatch(void) { return 0; }"), "{plain}");
 }
 
 /// **Auch der Start tastet ab** (9.4, FB-316): Ein `enter:` des

@@ -1443,21 +1443,25 @@ void takt_native_sha256_final(const unsigned char *cb, int cn, unsigned char *ou
 }
 "#;
 
-/// 4.5: Jobs im Rahmen. Das Ergebnis der reinen Funktion steht beim Start
-/// fest; der Slot im Abbild wird `done`, sobald `duration` in Ticks
-/// vergangen ist — wie das Modell des Interpreters. Ein Argument kommt als
-/// Folge kanonischer Bloecke (`u32` Laenge, Bytes), ein `bytes<N>` darin
-/// als Laenge und Daten (5.9).
-fn jobs(s: &mut String, p: &Program) {
-    use takt_mir::fns::NativeKind;
-    let slots: Vec<(usize, usize, takt_mir::NativeId)> = p
-        .machines
+/// Die Job-Slots eines Programms, flach ueber die Maschinen wie im Abbild:
+/// Maschine, Slot in ihr, native Funktion.
+pub(crate) fn job_slots(p: &Program) -> Vec<(usize, usize, takt_mir::NativeId)> {
+    p.machines
         .iter()
         .enumerate()
         .flat_map(|(mi, m)| m.layout.job_slots.iter().enumerate().map(move |(j, s)| (mi, j, s.native)))
-        .collect();
+        .collect()
+}
+
+/// Was beide Rahmen ueber ihre Jobs wissen (4.5): Versatz jedes Slots im
+/// Abbild, seine Dauer in Ticks, der erste Slot je Maschine und die Helfer
+/// aus `JOBS_C`. Gibt die Zahl der Slots und die groesste Ergebnislaenge
+/// zurueck; `None`, wenn das Programm keine Jobs startet.
+pub(crate) fn job_tables(s: &mut String, p: &Program) -> Option<(usize, u64)> {
+    use takt_mir::fns::NativeKind;
+    let slots = job_slots(p);
     if slots.is_empty() || !p.natives.iter().any(|n| n.kind == NativeKind::Job) {
-        return;
+        return None;
     }
     let t0 = p.config.tick.max(1);
     let out_max = slots
@@ -1484,35 +1488,51 @@ fn jobs(s: &mut String, p: &Program) {
         base.push(acc.to_string());
         acc += m.layout.job_slots.len();
     }
-    let _ = writeln!(
-        s,
-        "typedef struct {{ int active; long long due; int out_len; unsigned char out[{out_max}]; }} takt_job;"
-    );
-    let _ = writeln!(s, "static takt_job g_jobs[{}];", slots.len());
     let _ = writeln!(s, "static const long long takt_job_at[{}] = {{ {} }};", slots.len(), at.join(", "));
     let _ = writeln!(s, "static const int takt_job_ticks[{}] = {{ {} }};", slots.len(), ticks.join(", "));
     let _ = writeln!(s, "static const int takt_job_base[{}] = {{ {} }};", base.len().max(1), base.join(", "));
     s.push_str(JOBS_C);
-    let _ = writeln!(s, "void takt_job_begin(int m, int slot, int native, const unsigned char *args, int len) {{");
-    let _ = writeln!(s, "    int i = takt_job_base[m] + slot; takt_job *j = &g_jobs[i];");
-    let _ = writeln!(s, "    const unsigned char *a[8]; int n[8]; int k = 0, p = 0;");
-    let _ = writeln!(s, "    for (k = 0; k < 8; k++) {{ a[k] = args; n[k] = 0; }}");
+    Some((slots.len(), out_max))
+}
+
+/// Ruft die native Funktion eines Jobs (4.5): `native` waehlt sie, `args`
+/// und `len` sind die Folge kanonischer Bloecke (`u32` Laenge, Bytes), ein
+/// `bytes<N>` darin als Laenge und Daten (5.9); das Ergebnis geht in
+/// kanonischer Form nach `out`, seine Laenge nach `out_len`.
+pub(crate) fn job_call(s: &mut String, p: &Program, args: &str, len: &str, out: &str, out_len: &str, indent: &str) {
+    let _ = writeln!(s, "{indent}const unsigned char *a[8]; int n[8]; int k = 0, p = 0;");
+    let _ = writeln!(s, "{indent}for (k = 0; k < 8; k++) {{ a[k] = {args}; n[k] = 0; }}");
     let _ = writeln!(
         s,
-        "    for (k = 0; k < 8 && p + 4 <= len; k++) {{ n[k] = (int)takt_job_le32(args + p); a[k] = args + p + 4; p += 4 + n[k]; }}"
+        "{indent}for (k = 0; k < 8 && p + 4 <= {len}; k++) {{ n[k] = (int)takt_job_le32({args} + p); a[k] = {args} + p + 4; p += 4 + n[k]; }}"
     );
-    let _ = writeln!(s, "    j->out_len = 0;");
-    let _ = writeln!(s, "    switch (native) {{");
+    let _ = writeln!(s, "{indent}{out_len} = 0;");
+    let _ = writeln!(s, "{indent}switch (native) {{");
     for (idx, n) in p.natives.iter().enumerate() {
-        if n.kind != NativeKind::Job {
+        if n.kind != takt_mir::fns::NativeKind::Job {
             continue;
         }
-        if let Some(case) = job_case(n) {
-            let _ = writeln!(s, "    case {idx}: {{ {case} }} break;");
+        if let Some(case) = job_case(n, out, out_len) {
+            let _ = writeln!(s, "{indent}case {idx}: {{ {case} }} break;");
         }
     }
-    let _ = writeln!(s, "    default: break;");
-    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "{indent}default: break;");
+    let _ = writeln!(s, "{indent}}}");
+}
+
+/// 4.5: Jobs im Rahmen. Das Ergebnis der reinen Funktion steht beim Start
+/// fest; der Slot im Abbild wird `done`, sobald `duration` in Ticks
+/// vergangen ist — wie das Modell des Interpreters.
+fn jobs(s: &mut String, p: &Program) {
+    let Some((slots, out_max)) = job_tables(s, p) else { return };
+    let _ = writeln!(
+        s,
+        "typedef struct {{ int active; long long due; int out_len; unsigned char out[{out_max}]; }} takt_job;"
+    );
+    let _ = writeln!(s, "static takt_job g_jobs[{slots}];");
+    let _ = writeln!(s, "void takt_job_begin(int m, int slot, int native, const unsigned char *args, int len) {{");
+    let _ = writeln!(s, "    int i = takt_job_base[m] + slot; takt_job *j = &g_jobs[i];");
+    job_call(s, p, "args", "len", "j->out", "j->out_len", "    ");
     let _ = writeln!(s, "    j->active = 1; j->due = g_tick + takt_job_ticks[i];");
     let _ = writeln!(s, "    takt_job_image(i, 0, 0, 2); /* Err(PENDING) */");
     let _ = writeln!(s, "}}");
@@ -1525,7 +1545,7 @@ fn jobs(s: &mut String, p: &Program) {
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static void takt_jobs_poll(void) {{");
     let _ = writeln!(s, "    int i, b;");
-    let _ = writeln!(s, "    for (i = 0; i < {}; i++) {{", slots.len());
+    let _ = writeln!(s, "    for (i = 0; i < {slots}; i++) {{");
     let _ = writeln!(s, "        if (!g_jobs[i].active || g_jobs[i].due > g_tick) continue;");
     let _ = writeln!(s, "        g_jobs[i].active = 0; takt_job_image(i, 1, 1, 0);");
     let _ = writeln!(
@@ -1536,15 +1556,14 @@ fn jobs(s: &mut String, p: &Program) {
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
-        "static void takt_jobs_init(void) {{ int i; for (i = 0; i < {}; i++) takt_job_image(i, 0, 0, 2); }}",
-        slots.len()
+        "static void takt_jobs_init(void) {{ int i; for (i = 0; i < {slots}; i++) takt_job_image(i, 0, 0, 2); }}"
     );
     let _ = writeln!(s);
 }
 
 /// Der Aufruf einer `native job` im Rahmen: Argumente nach Art, das
-/// Ergebnis in kanonischer Form nach `j->out`.
-fn job_case(n: &takt_mir::fns::Native) -> Option<String> {
+/// Ergebnis in kanonischer Form nach `out`, seine Laenge nach `out_len`.
+fn job_case(n: &takt_mir::fns::Native, out: &str, out_len: &str) -> Option<String> {
     use takt_native::Kind;
     let sig = takt_native::Native::by_name(&n.name)?.signature();
     let args: Vec<String> = sig
@@ -1558,14 +1577,14 @@ fn job_case(n: &takt_mir::fns::Native) -> Option<String> {
         .collect();
     let call = format!("takt_native_{}({})", n.name, args.join(", "));
     Some(match sig.ret {
-        Kind::U32 => format!("unsigned int v = {call}; takt_job_put32(j->out, v); j->out_len = 4;"),
+        Kind::U32 => format!("unsigned int v = {call}; takt_job_put32({out}, v); {out_len} = 4;"),
         Kind::U16 => format!(
-            "unsigned short v = {call}; j->out[0] = (unsigned char)v; j->out[1] = (unsigned char)(v >> 8); j->out_len = 2;"
+            "unsigned short v = {call}; {out}[0] = (unsigned char)v; {out}[1] = (unsigned char)(v >> 8); {out_len} = 2;"
         ),
-        Kind::U8 | Kind::Bool => format!("j->out[0] = {call}; j->out_len = 1;"),
-        Kind::Digest => format!("takt_native_{}({}, j->out); j->out_len = 36;", n.name, args.join(", ")),
+        Kind::U8 | Kind::Bool => format!("{out}[0] = {call}; {out_len} = 1;"),
+        Kind::Digest => format!("takt_native_{}({}, {out}); {out_len} = 36;", n.name, args.join(", ")),
         Kind::Sha256Ctx => format!(
-            "takt_native_{}({}, j->out); j->out_len = 44 + (int)takt_job_le32(j->out + 32);",
+            "takt_native_{}({}, {out}); {out_len} = 44 + (int)takt_job_le32({out} + 32);",
             n.name,
             args.join(", ")
         ),

@@ -11,7 +11,7 @@ mod common;
 use std::io::Read;
 use std::time::{Duration, Instant};
 
-use common::board::{TICKS, agreement, corpus, last_output, natives_agree, run_interpreted};
+use common::board::{TICKS, agreement, corpus, last_output, long_job_keeps_the_tick, natives_agree, run_interpreted};
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
 use takt_conformance::board::{self, Bin, Board, CORPUS, Options};
 use takt_conformance::compare;
@@ -114,6 +114,16 @@ fn a_restart_begins_again_with_software_as_the_reason() {
         assert!(text.contains("out count 0"), "der {run} Lauf zaehlt keinen Start (12.7):\n{text}");
         assert!(text.contains("out image CONFIRMED"), "ohne Startstufe ist das Image bestaetigt:\n{text}");
     }
+}
+
+/// **Ein Job, der laenger rechnet als ein Tick, verspaetet keinen** (4.5,
+/// 12.3, M10 Schritt 7): SHA-256 ueber 4096 Byte im Job-Faden, den jeder
+/// Tick unterbricht (`long_job_keeps_the_tick`).
+#[test]
+fn a_long_job_runs_between_the_ticks() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = long_job_keeps_the_tick(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
 /// **Ein ausgelassener Kick setzt zurueck, und der naechste Lauf weiss es**
