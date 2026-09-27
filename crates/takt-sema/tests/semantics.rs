@@ -406,6 +406,37 @@ machine m:
 }
 
 #[test]
+fn an_invalid_input_is_logged_measured_and_counted_as_a_violation() {
+    // 3.5: `log` und `measure` schreiben `<invalid>`, `verify` zaehlt eine
+    // Verletzung — keine der Beobachtungen faultet, auch ueber eine
+    // Funktion hinweg nicht.
+    let body = "\
+input  p     : float[bar] in 0..100 bar @ hw(\"d/p\")
+output p_sim : float[bar]               @ sim(\"d/p\")
+output x     : int                      @ hw(\"o/x\") with safe = 0
+
+fn scaled(v: float[bar]) -> float:
+    return v / (1 bar)
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            log \"p {p}\"
+            measure level = scaled(p)
+            verify p < 50 bar, \"unter der Grenze\"
+            x = 1
+";
+    let stim = "t=0 in p 10 bar\nt=1 in p bad reason=Driver\n";
+    let trace = simulate(body, stim, 1);
+    assert!(trace.contains("t=0 measure m level 10.0\n"), "{trace}");
+    assert!(trace.contains("t=1 log m \"p <invalid>\"\n"), "{trace}");
+    assert!(trace.contains("t=1 measure m level <invalid>\n"), "{trace}");
+    assert!(trace.contains("t=1 verify m fail \"unter der Grenze\"\n"), "{trace}");
+    assert!(!trace.contains("fault"), "eine Beobachtung faultet nie (5.6): {trace}");
+}
+
+#[test]
 fn an_alert_in_a_loop_reports_every_element() {
     // 5.6: eine Alert-Stelle in einer Schleife hat je Durchlauf eine eigene
     // Flanke; sonst meldete nur das erste betroffene Element.

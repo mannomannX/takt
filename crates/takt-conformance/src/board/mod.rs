@@ -93,6 +93,7 @@ pub const CORPUS: &[&str] = &[
     "82_scheduled_sleep.takt",
     "83_durations.takt",
     "84_defaults.takt",
+    "85_observe_invalid.takt",
 ];
 
 /// Die Zeile, mit der jedes Bring-up seinen Lauf beendet.

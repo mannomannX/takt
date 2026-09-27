@@ -1,0 +1,35 @@
+# 85 — Beobachtung auf einem ungueltigen Channel (3.5, 5.6, FB-320): Ohne
+# Stimulus ist `p` ungueltig. `alert`, `log`, `measure` und `verify` lesen
+# es ohne Dominanz und faulten trotzdem nie — der Alert feuert mit Zusatz,
+# `measure` schreibt `<invalid>`, `verify` zaehlt eine Verletzung. Die
+# Steuerung laeuft weiter; derselbe Ausdruck in einer Zuweisung faultet.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  p     : float[bar] in 0..100 bar @ hw("daq/p")   with max_age = 50 ms
+output count : u32                      @ hw("o/count") with safe = 0
+output shown : bool                     @ hw("o/shown") with safe = false
+
+fn above(x: float[bar], limit: float[bar]) -> bool:
+    return x > limit
+
+machine watch:
+    var n : u32 in 0..100 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            alert above(p, 80 bar), "pressure high"
+            log "pressure {p}"
+            measure level = p / (1 bar)
+            verify p < 90 bar, "pressure within limits"
+            n = min(n + 1, 100)
+            count = n
+        when n >= 5: -> USE
+
+    state USE:
+        loop:
+            shown = p > 1 bar
+            count = n

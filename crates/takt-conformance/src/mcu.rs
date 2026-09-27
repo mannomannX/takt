@@ -119,13 +119,13 @@ fn runtime_abi(s: &mut String, p: &Program) {
 
     // Jede Beobachtungszeile traegt ihren Tick, wie beim Interpreter
     // (`grammar/trace.md`): Ohne ihn laesst sie sich keinem Tick zuordnen.
-    for (name, args, kind, flag) in [
-        ("takt_alert", "int m, int site, unsigned char on", "alert", Some("on")),
-        ("takt_log", "int m, int site", "log", None),
-        ("takt_fault", "int m, int site", "fault", None),
-        ("takt_abort", "int m, int site", "abort", None),
-        ("takt_verify", "int m, int site, unsigned char ok", "verify", Some("ok")),
-        ("takt_verdict", "int m, int site, unsigned char pass", "verdict", Some("pass")),
+    for (name, args, kind, flags) in [
+        ("takt_alert", "int m, int site, unsigned char on, unsigned char invalid", "alert", &["on", "invalid"][..]),
+        ("takt_log", "int m, int site", "log", &[]),
+        ("takt_fault", "int m, int site", "fault", &[]),
+        ("takt_abort", "int m, int site", "abort", &[]),
+        ("takt_verify", "int m, int site, unsigned char ok", "verify", &["ok"]),
+        ("takt_verdict", "int m, int site, unsigned char pass", "verdict", &["pass"]),
     ] {
         let _ = writeln!(s, "void {name}({args}) {{");
         let _ = writeln!(s, "    takt_board_trace(\"t=\");");
@@ -133,7 +133,7 @@ fn runtime_abi(s: &mut String, p: &Program) {
         let _ = writeln!(s, "    takt_board_trace(\"{kind} \");");
         let _ = writeln!(s, "    takt_board_trace_i64(m);");
         let _ = writeln!(s, "    takt_board_trace_i64(site);");
-        if let Some(f) = flag {
+        for f in flags {
             let _ = writeln!(s, "    takt_board_trace_i64({f} ? 1 : 0);");
         }
         let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
@@ -156,7 +156,7 @@ fn runtime_abi(s: &mut String, p: &Program) {
     // Verstoss gegen die Aliasing-Regeln von C, und ein Compiler darf ihn
     // wegoptimieren. Fuer acht Byte erzeugt jeder Compiler daraus einen
     // Registertausch.
-    let _ = writeln!(s, "void takt_measure(int m, int site, double v) {{");
+    let _ = writeln!(s, "void takt_measure(int m, int site, double v, unsigned char invalid) {{");
     let _ = writeln!(s, "    unsigned long long bits;");
     let _ = writeln!(s, "    __builtin_memcpy(&bits, &v, sizeof bits);");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
@@ -164,6 +164,10 @@ fn runtime_abi(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    takt_board_trace(\"measure \");");
     let _ = writeln!(s, "    takt_board_trace_i64(m);");
     let _ = writeln!(s, "    takt_board_trace_i64(site);");
+    let _ = writeln!(s, "    if (invalid) {{");
+    let _ = writeln!(s, "        takt_board_trace(\"<invalid>\\n\");");
+    let _ = writeln!(s, "        return;");
+    let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    takt_board_trace(\"bits \");");
     let _ = writeln!(s, "    takt_board_trace_i64((long long)bits);");
     let _ = writeln!(s, "    takt_board_trace(\"\\n\");");

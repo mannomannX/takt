@@ -1128,51 +1128,55 @@ fn branch(cond: &Expr, then: &Block, otherwise: &Block, ctx: &mut Ctx<'_>, m: &m
 /// Aufruf.
 fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let machine = ctx.machine_index;
-    // Ohne Diagnose bleiben die Ausdruecke (ihre Pruefungen wirken), die
-    // Aufrufe entfallen; `alert` ist ein Betriebssignal (5.6) und bleibt.
+    // Ohne Diagnose entfallen die Aufrufe und mit ihnen die Ausdruecke:
+    // Eine Beobachtung faultet nicht, ihre Ausdruecke wirken also nicht.
+    // `alert` ist ein Betriebssignal (5.6) und bleibt.
     let silent = m.diagnostics == crate::target::Diagnostics::None && !matches!(o, Observe::Alert { .. });
+    if silent {
+        ctx.next_site();
+        return Ok(());
+    }
     match o {
         Observe::Alert { cond, .. } => {
-            let vars = ctx.vars();
-            let c = lower_expr(cond, ctx.program, m, &vars)?;
+            // 3.5: Ein ungueltiger Wert laesst den Alert feuern, mit Zusatz.
+            let (c, invalid) = observed(cond, "true", ctx, m, |v, _| Ok(v))?;
             let site = ctx.next_site();
             // Die Flanke bildet die Runtime: Sie kennt den vorigen Wert,
             // der erzeugte Code muesste ihn sonst im Zustand fuehren.
-            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {})", Abi::ALERT, c.value));
+            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {}, i1 {invalid})", Abi::ALERT, c.value));
             Ok(())
         }
         Observe::Log(_) => {
             let site = ctx.next_site();
-            if !silent {
-                m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site})", Abi::LOG));
-            }
+            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site})", Abi::LOG));
             Ok(())
         }
         Observe::Measure { value, .. } => {
-            let vars = ctx.vars();
-            let v = lower_expr(value, ctx.program, m, &vars)?;
             // Der Report rechnet in `double`, unabhaengig von der Breite
             // des Programms (13.2): Ein Messwert ist eine Zahl fuer
             // Menschen, keine, mit der weitergerechnet wird.
-            let as_double = match v.ty {
-                LlvmType::F64 => v.value.clone(),
-                LlvmType::F32 => m.inst(&format!("fpext float {} to double", v.value)).to_string(),
-                LlvmType::Int(_) => m.inst(&format!("sitofp {} {} to double", v.ty, v.value)).to_string(),
-                _ => return Err(NotYet { what: "`measure` auf diesem Typ" }),
-            };
+            let (v, invalid) = observed(value, "0.0", ctx, m, |v, m| {
+                let value = match v.ty {
+                    LlvmType::F64 => v.value,
+                    LlvmType::F32 => m.inst(&format!("fpext float {} to double", v.value)).to_string(),
+                    LlvmType::Int(_) => m.inst(&format!("sitofp {} {} to double", v.ty, v.value)).to_string(),
+                    _ => return Err(NotYet { what: "`measure` auf diesem Typ" }),
+                };
+                Ok(Lowered { value, ty: LlvmType::F64 })
+            })?;
             let site = ctx.next_site();
-            if !silent {
-                m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, double {as_double})", Abi::MEASURE));
-            }
+            m.void_inst(&format!(
+                "call void @{}(i32 {machine}, i32 {site}, double {}, i1 {invalid})",
+                Abi::MEASURE,
+                v.value
+            ));
             Ok(())
         }
         Observe::Verify { cond, .. } => {
-            let vars = ctx.vars();
-            let c = lower_expr(cond, ctx.program, m, &vars)?;
+            // 3.5: Ein ungueltiger Wert zaehlt als Verletzung.
+            let (c, _) = observed(cond, "false", ctx, m, |v, _| Ok(v))?;
             let site = ctx.next_site();
-            if !silent {
-                m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {})", Abi::VERIFY, c.value));
-            }
+            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {})", Abi::VERIFY, c.value));
             Ok(())
         }
         // `verdict pass | fail` (13.2): das Urteil eines Tests. Wie
@@ -1181,12 +1185,40 @@ fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet>
         Observe::Verdict { pass, .. } => {
             let site = ctx.next_site();
             let v = u8::from(*pass);
-            if !silent {
-                m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {v})", Abi::VERDICT));
-            }
+            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {v})", Abi::VERDICT));
             Ok(())
         }
     }
+}
+
+/// Der Ausdruck einer Beobachtung (3.5, 5.6): Eine Beobachtung faultet nie.
+///
+/// Jede Pruefung darin springt an eine eigene Marke statt in den Fault-Pfad
+/// der Maschine, wie der Interpreter den Fault dort abfaengt; dann gilt
+/// `fallback`. `finish` formt den gueltigen Wert, bevor die Pfade
+/// zusammenlaufen. Das zweite Ergebnis ist das Flag „ungueltig“.
+fn observed(
+    e: &Expr,
+    fallback: &str,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+    finish: impl FnOnce(Lowered, &mut Module) -> Result<Lowered, NotYet>,
+) -> Result<(Lowered, String), NotYet> {
+    let n = ctx.next_label(m);
+    let name = ctx.machine.name.clone();
+    let invalid_at = format!("beob{n}_ungueltig_{name}");
+    let done_at = format!("beob{n}_{name}");
+    let mut vars = ctx.vars();
+    vars.fault = Some(invalid_at.clone());
+    let v = lower_expr(e, ctx.program, m, &vars)?;
+    let v = finish(v, m)?;
+    let valid_from = m.block().to_string();
+    m.void_inst(&format!("br label %{done_at}"));
+    m.label(&invalid_at);
+    m.label(&done_at);
+    let value = m.inst(&format!("phi {} [ {}, %{valid_from} ], [ {fallback}, %{invalid_at} ]", v.ty, v.value));
+    let invalid = m.inst(&format!("phi i1 [ false, %{valid_from} ], [ true, %{invalid_at} ]"));
+    Ok((Lowered { value: value.to_string(), ty: v.ty }, invalid.to_string()))
 }
 
 /// Der Speicherort eines Zuweisungsziels und sein Typ (11.2).

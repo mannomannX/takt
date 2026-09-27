@@ -131,8 +131,11 @@ fn build_inner(
     // Es gehoert der Runtime; der Rahmen stellt es bereit und setzt es je
     // Tick zurueck, wie es die Abort-Phase taete.
     let _ = writeln!(s, "unsigned char takt_fn_fault = 0;");
-    let _ = writeln!(s, "void takt_alert(int m, int site, unsigned char on) {{");
-    let _ = writeln!(s, "    printf(\"t=%lld alert %d %d %d\\n\", g_tick, m, site, on ? 1 : 0);");
+    let _ = writeln!(s, "void takt_alert(int m, int site, unsigned char on, unsigned char invalid) {{");
+    let _ = writeln!(
+        s,
+        "    printf(\"t=%lld alert %d %d %d%s\\n\", g_tick, m, site, on ? 1 : 0, invalid ? \" invalid\" : \"\");"
+    );
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_log(int m, int site) {{ printf(\"t=%lld log %d %d\\n\", g_tick, m, site); }}");
     // 5.3: der Fault-Uebergang, mit Maschine und verlassenem Zustand.
@@ -141,8 +144,9 @@ fn build_inner(
     // mal T0, wie im Interpreter. Die Runtime fuehrt sie, weil alle
     // Maschinen dieselbe Uhr lesen (12.1).
     let _ = writeln!(s, "long long takt_now(void) {{ return g_tick * {}LL; }}", p.config.tick);
-    let _ = writeln!(s, "void takt_measure(int m, int site, double v) {{");
-    let _ = writeln!(s, "    printf(\"t=%lld measure %d %d %.17g\\n\", g_tick, m, site, v);");
+    let _ = writeln!(s, "void takt_measure(int m, int site, double v, unsigned char invalid) {{");
+    let _ = writeln!(s, "    if (invalid) printf(\"t=%lld measure %d %d <invalid>\\n\", g_tick, m, site);");
+    let _ = writeln!(s, "    else printf(\"t=%lld measure %d %d %.17g\\n\", g_tick, m, site, v);");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_verify(int m, int site, unsigned char ok) {{");
     let _ = writeln!(s, "    printf(\"t=%lld verify %d %d %d\\n\", g_tick, m, site, ok ? 1 : 0);");

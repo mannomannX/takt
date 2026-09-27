@@ -30,18 +30,22 @@ impl Abi {
     /// `alert cond, "text"` (9.3): Eine Flanke wird gemeldet.
     ///
     /// `machine` und `site` identifizieren die Stelle, `active` ist der
-    /// Wert der Bedingung in diesem Tick. Die Runtime bildet daraus die
-    /// Flanke — sie kennt den vorigen Wert, der erzeugte Code muesste ihn
-    /// sonst im Zustand fuehren.
+    /// Wert der Bedingung in diesem Tick, `invalid` sagt, dass sie an einem
+    /// ungueltigen Wert scheiterte — dann ist `active` gesetzt, und die
+    /// Meldung traegt den Zusatz „sensor invalid“ (3.5). Die Runtime bildet
+    /// daraus die Flanke — sie kennt den vorigen Wert, der erzeugte Code
+    /// muesste ihn sonst im Zustand fuehren.
     pub const ALERT: &'static str = "takt_alert";
 
     /// `log "text"` (9.3).
     pub const LOG: &'static str = "takt_log";
 
-    /// `measure name = e` (13.2): ein Messwert fuer den Report.
+    /// `measure name = e` (13.2): ein Messwert fuer den Report; mit
+    /// `invalid` ist er `<invalid>` (3.5).
     pub const MEASURE: &'static str = "takt_measure";
 
-    /// `verify cond, "text"` (13.2): eine Pruefung mit Verdikt.
+    /// `verify cond, "text"` (13.2): eine Pruefung mit Verdikt; ein
+    /// ungueltiger Wert kommt als Verletzung an (3.5).
     pub const VERIFY: &'static str = "takt_verify";
 
     /// `abort "text"` (5.4): Fault fuer *alle* Maschinen im selben Tick.
@@ -139,9 +143,9 @@ impl Abi {
         // Plan: fuer LLVM „unzugaenglicher" Speicher. So bleiben Ladungen
         // aus Zustand und Abbild ueber den Aufruf hinweg gueltig.
         const RT: &str = "nounwind willreturn memory(inaccessiblemem: readwrite)";
-        m.declare(&format!("declare void @{}(i32, i32, i1) {RT}", Abi::ALERT));
+        m.declare(&format!("declare void @{}(i32, i32, i1, i1) {RT}", Abi::ALERT));
         m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::LOG));
-        m.declare(&format!("declare void @{}(i32, i32, double) {RT}", Abi::MEASURE));
+        m.declare(&format!("declare void @{}(i32, i32, double, i1) {RT}", Abi::MEASURE));
         m.declare(&format!("declare void @{}(i32, i32, i1) {RT}", Abi::VERIFY));
         m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::ABORT));
         m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::FAULT));
