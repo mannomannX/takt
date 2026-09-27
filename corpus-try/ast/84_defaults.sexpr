@@ -1,0 +1,74 @@
+(system
+  (language 1)
+  (tick 10ms))
+(enum Kind layout=u8
+  (A =7)
+  (B =9))
+(enum Mode
+  (SLOW =3)
+  (FAST =4))
+(enum Err
+  (X =5)
+  (Y =6))
+(enum Lone
+  (ONLY))
+(record Slot
+  (kind: Kind)
+  (mode: Mode)
+  (n: u16))
+(output kind :u32 @hw("o/kind") safe=0)
+(output mode :u32 @hw("o/mode") safe=0)
+(output value :u32 @hw("o/value") safe=0)
+(output error :u32 @hw("o/error") safe=0)
+(output lone :u32 @hw("o/lone") safe=0)
+(fn pick (n:u32) -> u32!Err
+  (if (> n 3)
+    (return (ERR Y)))
+  (if (> n 2)
+    (return (ERR X)))
+  (return (OK n)))
+(fn single (n:u32) -> u32!Lone
+  (if (> n 1)
+    (return (ERR ONLY)))
+  (return (OK n)))
+(machine m
+  (var k :Kind default)
+  (var slots :[3]Slot default)
+  (var r :u32!Err default)
+  (var n :u32 in 0..10 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (match k
+        (case A
+          (= kind 1))
+        (case B
+          (= kind 2)))
+      (match (.mode (index slots 2))
+        (case SLOW
+          (= mode (+ 3 (as (.n (index slots 2)) u32))))
+        (case FAST
+          (= mode 4)))
+      (match r
+        (case (OK v)
+          (= value (+ v 10)))
+        (case (ERR e)
+          (= value 99)))
+      (match (call pick n)
+        (case (OK v)
+          (= error v))
+        (case (ERR e)
+          (match e
+            (case X
+              (= error 50))
+            (case Y
+              (= error 60)))))
+      (match (call single n)
+        (case (OK v)
+          (= lone v))
+        (case (ERR e)
+          (= lone 70)))
+      (= n (call min (+ n 1) 10))
+      (if (== n 5)
+        (= k B)
+        (= r (ERR X))))))

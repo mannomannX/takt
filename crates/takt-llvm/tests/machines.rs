@@ -944,17 +944,16 @@ fn match_tests_the_cases_in_source_order() {
     );
 }
 
-/// 3.8: Bei `T!E` steht die Fehlerdiskriminante im Feld 1, nicht im
-/// Feld 0 — dort steht der Wert.
+/// 3.8: `match` auf `T!E` entscheidet am Flag im Feld 2, nicht an den
+/// Diskriminanten des Fehlers — bei `OK` ist das Fehlerfeld unbestimmt,
+/// und ein Fehler-Enum mit einer Variante hat keine zweite (FB-318).
 #[test]
-fn a_result_matches_on_its_error_field() {
+fn a_result_matches_on_its_flag() {
     let p = corpus("13_protocol_analysis.takt");
     let ir = ir_of(&p);
-    // Der Vergleich laeuft auf `i32`; er kaeme auf dem Feld 0 nie
-    // zustande, weil dort der Record steht.
     assert!(
-        ir.contains("icmp eq i32"),
-        "kein Vergleich der Diskriminante:
+        ir.contains(", 2\n") && ir.contains("icmp eq i1"),
+        "kein Vergleich des Flags:
 {ir}"
     );
 }

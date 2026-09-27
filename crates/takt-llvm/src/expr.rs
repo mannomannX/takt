@@ -206,8 +206,7 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
         // Speicher fuer etwas, das sich nie aendert.
         ExprKind::Str(s) => text_literal(s, &want),
         ExprKind::Var(id) => vars.var(*id, m).ok_or(NotYet { what: "unbekannte Variable" }),
-        ExprKind::Default => default_of(&want),
-        ExprKind::None => default_of(&want),
+        ExprKind::Default | ExprKind::None => default_of(e.ty, &want, p),
         // `ok(v)` und `err(e)` bauen ein `T!E` (3.8); `lift` hebt einen
         // Wert in ein `T?`.
         ExprKind::Ok(v) | ExprKind::Lift(v) => wrap(v, true, &want, p, m, vars),
@@ -2088,13 +2087,57 @@ fn map_get_into(
 /// und den der Linker in `.bss` legt. Das ist nicht nur kuerzer als Feld
 /// fuer Feld zu schreiben, es ist auch das, was 12.3 fuer den
 /// Speicherbedarf annimmt: Nullen kosten kein Flash.
-fn default_of(want: &LlvmType) -> Result<Lowered, NotYet> {
-    match want {
-        LlvmType::Void => Err(NotYet { what: "`default` ohne Typ" }),
-        // Eine leere Sammlung ist `{ len = 0, data = beliebig }`; die
-        // Elemente jenseits der Laenge sind nicht lesbar (3.9).
-        _ => Ok(Lowered { value: "zeroinitializer".into(), ty: want.clone() }),
+fn default_of(ty: TypeId, want: &LlvmType, p: &Program) -> Result<Lowered, NotYet> {
+    if *want == LlvmType::Void {
+        return Err(NotYet { what: "`default` ohne Typ" });
     }
+    let value = default_const(ty, want, p)?.unwrap_or_else(|| "zeroinitializer".into());
+    Ok(Lowered { value, ty: want.clone() })
+}
+
+/// Der Standardwert eines Typs als Konstante (3.7); `None`, wo er aus
+/// lauter Nullbits besteht.
+///
+/// Das gilt fuer Zahlen, `false`, `none` und leere Sammlungen (`{ len = 0,
+/// data = beliebig }`, die Elemente jenseits der Laenge sind nicht lesbar,
+/// 3.9). Nicht fuer die erste Variante eines Enums, deren Diskriminante
+/// die MIR vergibt, und nicht fuer `T!E`, dessen Standardwert `OK(default)`
+/// ist — das Flag steht dort auf `true`.
+fn default_const(ty: TypeId, want: &LlvmType, p: &Program) -> Result<Option<String>, NotYet> {
+    Ok(match (p.types.list.get(ty.index()), want) {
+        (Some(Type::Enum(id)), _) => {
+            let first = p.enums.get(id.index()).and_then(|e| e.variants.first()).ok_or(NotYet { what: "Enum" })?;
+            match want {
+                _ if first.discriminant == 0 => None,
+                LlvmType::Struct(parts) => {
+                    Some(format!("{{ i32 {}, {} zeroinitializer }}", first.discriminant, parts[1]))
+                }
+                _ => Some(first.discriminant.to_string()),
+            }
+        }
+        (Some(Type::Result { ok, .. }), LlvmType::Struct(parts)) => {
+            let value = default_const(*ok, &parts[0], p)?.unwrap_or_else(|| "zeroinitializer".into());
+            Some(format!("{{ {} {value}, i32 0, i1 true }}", parts[0]))
+        }
+        (Some(Type::Record(id)), LlvmType::Struct(parts)) => {
+            let r = p.records.get(id.index()).ok_or(NotYet { what: "Record" })?;
+            let mut fields = Vec::with_capacity(parts.len());
+            for (f, part) in r.fields.iter().zip(parts) {
+                fields.push(default_const(f.ty, part, p)?);
+            }
+            fields.iter().any(Option::is_some).then(|| {
+                let items: Vec<String> = fields
+                    .iter()
+                    .zip(parts)
+                    .map(|(v, part)| format!("{part} {}", v.as_deref().unwrap_or("zeroinitializer")))
+                    .collect();
+                format!("{{ {} }}", items.join(", "))
+            })
+        }
+        (Some(Type::Array { elem, len }), LlvmType::Array(part, _)) => default_const(*elem, part, p)?
+            .map(|v| format!("[{}]", vec![format!("{part} {v}"); *len as usize].join(", "))),
+        _ => None,
+    })
 }
 
 /// Ein Aufruf einer reinen Funktion (4.4).

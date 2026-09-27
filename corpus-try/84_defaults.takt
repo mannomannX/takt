@@ -1,0 +1,80 @@
+# 84 — `default` und `match` auf `T!E` (3.7, 3.8, FB-318): Der Standardwert
+# eines Enums ist seine erste Variante, auch wenn ihre Diskriminante nicht
+# null ist; der eines `T!E` ist `OK(default)`. `match` unterscheidet `OK`
+# und `ERR` am Flag, nicht an den Diskriminanten des Fehlers, und bindet
+# den Fehler auch dann, wenn er so breit ist wie der Wert.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+enum Kind layout u8: A = 7, B = 9
+enum Mode: SLOW = 3, FAST = 4
+enum Err: X = 5, Y = 6
+enum Lone: ONLY
+
+record Slot:
+    kind : Kind
+    mode : Mode
+    n    : u16
+
+output kind  : u32 @ hw("o/kind")  with safe = 0
+output mode  : u32 @ hw("o/mode")  with safe = 0
+output value : u32 @ hw("o/value") with safe = 0
+output error : u32 @ hw("o/error") with safe = 0
+output lone  : u32 @ hw("o/lone")  with safe = 0
+
+fn pick(n: u32) -> u32!Err:
+    if n > 3:
+        return ERR(Y)
+    if n > 2:
+        return ERR(X)
+    return OK(n)
+
+fn single(n: u32) -> u32!Lone:
+    if n > 1:
+        return ERR(ONLY)
+    return OK(n)
+
+machine m:
+    var k     : Kind = default
+    var slots : [3] Slot = default
+    var r     : u32!Err = default
+    var n     : u32 in 0..10 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            match k:
+                case A:
+                    kind = 1
+                case B:
+                    kind = 2
+            match slots[2].mode:
+                case SLOW:
+                    mode = 3 + (slots[2].n as u32)
+                case FAST:
+                    mode = 4
+            match r:
+                case OK(v):
+                    value = v + 10
+                case ERR(e):
+                    value = 99
+            match pick(n):
+                case OK(v):
+                    error = v
+                case ERR(e):
+                    match e:
+                        case X:
+                            error = 50
+                        case Y:
+                            error = 60
+            match single(n):
+                case OK(v):
+                    lone = v
+                case ERR(e):
+                    lone = 70
+            n = min(n + 1, 10)
+            if n == 5:
+                k = B
+                r = ERR(X)

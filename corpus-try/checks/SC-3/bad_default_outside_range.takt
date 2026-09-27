@@ -1,0 +1,27 @@
+# `default` ist 0 bzw. `0 U` (3.7); liegt das nicht in einer Range des
+# Typs, verletzte der Standardwert die Tick-Rand-Invariante (3.4), bevor
+# der erste Tick laeuft — auch in einem Feld, einem Element oder dem Wert
+# von `OK`.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+enum Fail: X
+
+record Slot:
+    n : int in 1..8
+    p : float[bar] in 1 bar..5 bar
+
+output n : int @ hw("o/n") with safe = 0
+
+machine m:
+    var i : int in 1..4 = default             # ~ SC-3
+    var d : Duration in 1 ms..5 ms = default  # ~ SC-3
+    var s : Slot = default                    # ~ SC-3
+    var a : [2] int in -3..-1 = default       # ~ SC-3
+    var r : int in 2..3!Fail = default        # ~ SC-3
+    initial RUN
+    state RUN:
+        loop:
+            n = 1

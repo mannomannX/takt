@@ -1692,16 +1692,13 @@ fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m
     let n = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let end_at = format!("match{n}_{name}");
-    // Bei einem Summentyp wird die Diskriminante verglichen; die MIR
-    // legt sie als Feld 0 ab, wenn die Variante Felder traegt, sonst ist
-    // der Wert selbst die Diskriminante (3.7).
-    // Woher die Diskriminante kommt, sagt der Typ: Bei `T!E` steht sie im
-    // Feld 1 (3.8: Wert, Fehler, Flag), bei einem Summentyp mit Feldern
-    // im Feld 0. Ein fieldloses Enum *ist* seine Diskriminante.
+    // Verglichen wird, was die Variante unterscheidet: bei `T!E` das Flag
+    // (3.8: Wert, Fehler, Flag), bei einem Summentyp mit Feldern die
+    // Diskriminante im Feld 0. Ein feldloses Enum *ist* seine Diskriminante.
     let disc = match (&value.ty, ctx.program.types.list.get(subject.ty.index())) {
         (LlvmType::Struct(_), Some(takt_mir::types::Type::Result { .. })) => {
-            let d = m.inst(&format!("extractvalue {} {}, 1", value.ty, value.value));
-            Lowered { value: d.to_string(), ty: LlvmType::Int(32) }
+            let d = m.inst(&format!("extractvalue {} {}, 2", value.ty, value.value));
+            Lowered { value: d.to_string(), ty: LlvmType::Int(1) }
         }
         (LlvmType::Struct(_), _) => {
             let d = m.inst(&format!("extractvalue {} {}, 0", value.ty, value.value));
@@ -1721,8 +1718,7 @@ fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m
                 return Ok(());
             }
             takt_mir::stmt::ArmPattern::Variant { variant, fields } => {
-                let def = enum_of(subject.ty, ctx.program).ok_or(NotYet { what: "Enum des `match`" })?;
-                let d = def.variants.get(*variant as usize).ok_or(NotYet { what: "Variante" })?.discriminant;
+                let d = tag_of(subject.ty, *variant, ctx.program).ok_or(NotYet { what: "Variante des `match`" })?;
                 let ok = m.inst(&format!("icmp eq {} {}, {d}", disc.ty, disc.value));
                 m.void_inst(&format!("br i1 {ok}, label %{hit}, label %{go_on}"));
                 m.label(&hit);
@@ -1767,13 +1763,15 @@ fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m
     Ok(())
 }
 
-/// Das Enum hinter einem `match`-Subjekt.
-fn enum_of(ty: takt_mir::TypeId, p: &Program) -> Option<&takt_mir::types::EnumDef> {
+/// Woran eine Variante des `match`-Subjekts zu erkennen ist: bei einem
+/// Enum die Diskriminante aus der MIR, bei `T!E` das Flag (`OK` ist die
+/// Variante 0, `ERR` die Variante 1, 3.8).
+fn tag_of(ty: takt_mir::TypeId, variant: u32, p: &Program) -> Option<String> {
     match p.types.list.get(ty.index())? {
-        takt_mir::types::Type::Enum(e) => p.enums.get(e.index()),
-        // Bei `T!E` steht die Fehlerdiskriminante im Feld 1; das Enum
-        // ist das der Fehlerseite (3.8).
-        takt_mir::types::Type::Result { err, .. } => p.enums.get(err.index()),
+        takt_mir::types::Type::Enum(e) => {
+            Some(p.enums.get(e.index())?.variants.get(variant as usize)?.discriminant.to_string())
+        }
+        takt_mir::types::Type::Result { .. } => Some((variant == 0).to_string()),
         _ => None,
     }
 }
@@ -1803,7 +1801,6 @@ fn bind_fields(
     {
         let arr = arr.clone();
         let payload = m.inst(&format!("extractvalue {} {}, 1", value.ty, value.value));
-        let _ = variant;
         for (k, var) in fields.iter().enumerate() {
             let def = ctx.machine.vars.get(var.index()).ok_or(NotYet { what: "Bindung" })?;
             let want = ty::storage(def.ty, ctx.program).ok_or(NotYet { what: "Typ der Bindung" })?;
@@ -1817,13 +1814,16 @@ fn bind_fields(
     if fields.len() > 1 {
         return Err(NotYet { what: "`case` mit mehreren Feldbindungen" });
     }
-    // Bei `T!E` traegt Feld 0 den Wert und Feld 1 den Fehler; welches
-    // gemeint ist, sagt der Typ der Bindung.
+    // Bei `T!E` traegt Feld 0 den Wert von `OK` und Feld 1 den Fehler von
+    // `ERR` — die Variante sagt, welches; der Typ nicht, wenn beide gleich
+    // breit sind.
     let var = fields[0];
     let def = ctx.machine.vars.get(var.index()).ok_or(NotYet { what: "Bindung" })?;
     let want = ty::lower(def.ty, ctx.program).ok_or(NotYet { what: "Typ der Bindung" })?;
-    let index = parts.iter().position(|t| *t == want).ok_or(NotYet { what: "Feld der Variante" })?;
-    let v = m.inst(&format!("extractvalue {} {}, {index}", value.ty, value.value));
+    if parts.get(variant as usize) != Some(&want) {
+        return Err(NotYet { what: "Feld der Variante" });
+    }
+    let v = m.inst(&format!("extractvalue {} {}, {variant}", value.ty, value.value));
     let ptr = ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })?;
     m.void_inst(&format!("store {want} {v}, ptr {ptr}"));
     Ok(())

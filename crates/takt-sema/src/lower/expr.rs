@@ -143,6 +143,16 @@ impl Lowerer<'_> {
                         self.error(SC3, span, "`default` nur fuer POD-Typen (3.7)");
                         return None;
                     }
+                    if let Some(bad) = self.default_outside_range(h) {
+                        let name = self.type_name(bad);
+                        self.error_hint(
+                            SC3,
+                            span,
+                            format!("`default` liegt ausserhalb der Range von `{name}` (3.7)"),
+                            "einen Anfangswert aus der Range angeben",
+                        );
+                        return None;
+                    }
                     Some(Expr::new(ExprKind::Default, h, span))
                 }
                 None => {

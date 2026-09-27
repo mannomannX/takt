@@ -1,0 +1,22 @@
+# `default` in einer Range, die 0 enthaelt, und in Typen, deren Standardwert
+# keinen Wert traegt (leere Sammlung, `none`).
+
+system:
+    language = 1
+    tick     = 1 ms
+
+record Slot:
+    n : int in 0..8
+    p : float[bar] in -1 bar..5 bar
+
+output n : int @ hw("o/n") with safe = 0
+
+machine m:
+    var i : int in -4..4 = default
+    var s : Slot = default
+    var v : vec<int in 1..4, 3> = default
+    var o : int in 1..4? = default
+    initial RUN
+    state RUN:
+        loop:
+            n = i

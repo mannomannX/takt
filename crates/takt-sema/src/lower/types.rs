@@ -630,6 +630,34 @@ fn const_name(c: &Const) -> String {
 }
 
 impl Lowerer<'_> {
+    /// Der Typ mit einer Range, die den Standardwert nicht enthaelt (3.7),
+    /// dort, wo `default` ihn setzt: im Typ selbst, in den Feldern eines
+    /// Records, im Element eines Arrays, in der ersten Variante, im Wert
+    /// von `OK`. Leere Sammlungen und `none` tragen keinen Wert.
+    pub(super) fn default_outside_range(&self, ty: TypeId) -> Option<TypeId> {
+        let zero = match self.ty(ty) {
+            Type::Int { range: Some(r), .. } => Some((takt_interp::Value::Int(0), *r)),
+            Type::Float { range: Some(r), .. } => Some((takt_interp::Value::F64(0.0), *r)),
+            Type::Duration { range: Some(r) } => Some((takt_interp::Value::Duration(0), *r)),
+            _ => None,
+        };
+        if let Some((v, r)) = zero {
+            return (!takt_interp::eval::in_range(&v, &r)).then_some(ty);
+        }
+        let inner: Vec<TypeId> = match self.ty(ty) {
+            Type::Record(id) => self.program.records[id.index()].fields.iter().map(|f| f.ty).collect(),
+            Type::Enum(id) => self.program.enums[id.index()]
+                .variants
+                .first()
+                .map(|v| v.fields.iter().map(|f| f.ty).collect())
+                .unwrap_or_default(),
+            Type::Array { elem, .. } => vec![*elem],
+            Type::Result { ok, .. } => vec![*ok],
+            _ => Vec::new(),
+        };
+        inner.into_iter().find_map(|t| self.default_outside_range(t))
+    }
+
     /// Traegt der Typ irgendwo eine Fliesskommazahl?
     fn contains_float(&self, ty: TypeId) -> bool {
         match self.ty(ty) {
