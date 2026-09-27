@@ -351,17 +351,31 @@ impl Lowerer<'_> {
         let (name, span) = match decl {
             ast::UnitDecl::Scaled { name, span, .. } | ast::UnitDecl::Affine { name, span, .. } => (name, *span),
         };
-        if self.units.get(&name.name).is_some() {
+        // Ein Name mit SI-Praefix vor einer vordefinierten Einheit (`mV`)
+        // ist selbst vordefiniert, auch wenn ihn noch niemand benutzt hat.
+        if self.units.get(&name.name).is_some()
+            || self
+                .units
+                .lookup(&mut self.program, &name.name)
+                .is_some_and(|id| self.program.units[id.index()].predefined)
+        {
             self.error(SC2, name.span, format!("Einheit `{}` ist schon definiert (3.2)", name.name));
             return;
         }
         let result = match decl {
-            ast::UnitDecl::Scaled { factor, unit, .. } => {
+            ast::UnitDecl::Scaled { factor, divisor, unit, .. } => {
                 let text = match factor {
                     ast::Number::Int(i) => i.text.clone(),
                     ast::Number::Float(f) => f.text.clone(),
                 };
-                let Some(scale) = rational_from_text(&text) else {
+                let divisor = match divisor {
+                    Some(d) => rational_from_text(&d.text).map(|d| d.num).filter(|d| *d > 0),
+                    None => Some(1),
+                };
+                let Some(scale) = rational_from_text(&text)
+                    .zip(divisor)
+                    .and_then(|(s, d)| crate::units::rat_mul(s, takt_mir::types::Rational { num: 1, den: d as u64 }))
+                else {
                     self.error(SC3, span, "Faktor nicht exakt darstellbar");
                     return;
                 };

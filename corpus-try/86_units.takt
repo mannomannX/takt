@@ -1,0 +1,78 @@
+# 86 — Einheiten und generische Bibliothek im erzeugten Code (3.2, 11.4,
+# FB-321): Umrechnungen mit rationalem Faktor (`bar` nach `psi`), affine
+# (`degC`, `degF` ueber `degR = 5/9 K`) und ganzzahlige (`sector` nach `B`)
+# rechnen nativ wie im Interpreter; ebenso die Funktionen und Bloecke der
+# Bibliothek mit Einheitenvariablen, die sonst nur die Simulation sieht.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+unit sector = 4 KiB
+
+output psi_of   : float[psi]   @ hw("o/psi")     with safe = 0 psi
+output bar_of   : float[bar]   @ hw("o/bar")     with safe = 0 bar
+output kelvin   : float[K]     @ hw("o/kelvin")  with safe = 0 K
+output celsius  : float[degC]  @ hw("o/celsius") with safe = 0 degC
+output fahr_k   : float[K]     @ hw("o/fahr_k")  with safe = 0 K
+output fahr_c   : float[degC]  @ hw("o/fahr_c")  with safe = 0 degC
+output volts    : float[V]     @ hw("o/volts")   with safe = 0 V
+output share    : float        @ hw("o/share")   with safe = 0.0
+output bytes_of : u32[B]       @ hw("o/bytes")   with safe = 0 B
+output mixed    : float[bar]   @ hw("o/mixed")   with safe = 0 bar
+output mapped   : float[pct]   @ hw("o/mapped")  with safe = 0 pct
+output banded   : float[bar]   @ hw("o/banded")  with safe = 0 bar
+output area     : float[bar*s] @ hw("o/area")    with safe = 0 bar*s
+output smooth   : float[bar]   @ hw("o/smooth")  with safe = 0 bar
+output high     : bool         @ hw("o/high")    with safe = false
+output slope    : float[bar/s] @ hw("o/slope")   with safe = 0 bar/s
+output limited  : float[bar]   @ hw("o/limited") with safe = 0 bar
+output drive    : float[pct]   @ hw("o/drive")   with safe = 0 pct
+output mean     : float[bar]   @ hw("o/mean")    with safe = 0 bar
+output rms      : float[bar]   @ hw("o/rms")     with safe = 0 bar
+output agreed   : float[bar]   @ hw("o/agreed")  with safe = 0 bar
+
+machine units:
+    var p      : float[bar] in 0 bar..100 bar = 1 bar
+    var t      : float[degC] = 20 degC
+    var f      : float[degF] = 32 degF
+    var n      : u32[sector] in 0 sector..100 sector = 1 sector
+    var acc    = integrate[bar](limit = 5 bar*s)
+    var lp     = lowpass[bar](tau = 50 ms)
+    var hyst   = hysteresis[bar](lo = 2 bar, hi = 4 bar)
+    var slope_ = rate[bar]()
+    var rl     = rate_limiter[bar](max_rate = 10 bar/s)
+    var ctl    = pid(kp = 2 pct/bar, ki = 1 pct/bar/s, kd = 0.1 pct*s/bar, lo = 0 pct, hi = 100 pct)
+    var win    = window_mean[bar, 4]()
+    var wrms   = window_rms[bar, 4]()
+    var vote   = vote2oo3[bar](tol = 0.5 bar)
+    initial RUN
+
+    state RUN:
+        loop:
+            p = clamp(p + 0.37 bar, 0 bar, 100 bar)
+            t = t + 1.5 K
+            f = f + 2.25 degR
+            n = min(n + 1 sector, 100 sector)
+            psi_of = p.to(psi)
+            bar_of = psi_of.to(bar)
+            kelvin = t.to(K)
+            celsius = kelvin.to(degC)
+            fahr_k = f.to(K)
+            fahr_c = f.to(degC)
+            volts = (p / (1 bar) * 125 mV).to(V)
+            share = (p / (100 bar) * 100 pct) / (1 pct)
+            bytes_of = (n * 1).to(B)
+            mixed = lerp(p, 2 * p, 0.25)
+            mapped = map_range(p, 0 bar, 10 bar, 0 pct, 100 pct)
+            banded = deadband(p - 3 bar, 0.5 bar)
+            area = acc.step(p, 10 ms)
+            smooth = lp.step(p, 10 ms)
+            high = hyst.step(p)
+            slope = slope_.step(p, 10 ms)
+            limited = rl.step(2 * p, 10 ms)
+            drive = ctl.step(5 bar - p, 10 ms)
+            mean = win.step(p)
+            rms = wrms.step(p)
+            var v = vote.step(p, p + 0.2 bar, p + 3 bar)
+            agreed = v.or(0 bar)

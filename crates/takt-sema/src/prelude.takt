@@ -33,6 +33,8 @@ unit B     = 1
 unit Ah    = 3600 C
 unit Wh    = 3600 J
 unit degC  = affine(K, 273.15)
+unit degR  = 5/9 K
+unit degF  = affine(degR, 459.67)
 
 # --- offene Enums (2.5) ------------------------------------------------
 enum ArithKind: OVERFLOW, DIV_ZERO, NON_FINITE, DOMAIN, SINGULAR

@@ -376,6 +376,8 @@ pub enum UnitDecl {
         name: Ident,
         /// Faktor.
         factor: Number,
+        /// Nenner eines Faktors als Bruch (`5/9 K`, 3.2).
+        divisor: Option<IntLit>,
         /// Bezugseinheit.
         unit: Option<UnitExpr>,
         /// Position.

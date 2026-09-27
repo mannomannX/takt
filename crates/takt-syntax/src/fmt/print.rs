@@ -360,8 +360,12 @@ impl Emitter<'_, '_> {
         self.cell();
         self.op("=");
         match u {
-            UnitDecl::Scaled { unit, .. } => {
+            UnitDecl::Scaled { divisor, unit, .. } => {
                 self.fmt_number();
+                if divisor.is_some() {
+                    self.op("/");
+                    self.any(false);
+                }
                 if let Some(unit) = unit {
                     self.fmt_unit_lit(unit);
                 }

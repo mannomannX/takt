@@ -165,9 +165,10 @@ impl Printer {
                     }
                 });
             }
-            Item::Unit(UnitDecl::Scaled { name, factor, unit, .. }) => {
+            Item::Unit(UnitDecl::Scaled { name, factor, divisor, unit, .. }) => {
+                let divisor = divisor.as_ref().map(|d| format!("/{}", d.text)).unwrap_or_default();
                 let unit = unit.as_ref().map(|u| format!(" {}", unit_expr(u))).unwrap_or_default();
-                self.line(&format!("(unit {} {}{unit})", name.name, number(factor)));
+                self.line(&format!("(unit {} {}{divisor}{unit})", name.name, number(factor)));
             }
             Item::Unit(UnitDecl::Affine { name, base, offset, .. }) => {
                 self.line(&format!("(unit {} affine {} {})", name.name, unit_expr(base), number(offset)));

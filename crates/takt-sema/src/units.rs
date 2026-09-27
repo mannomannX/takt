@@ -192,8 +192,11 @@ const PREFIXES: &[(&str, i32)] = &[
     ("a", -18),
 ];
 
-/// Binaere Praefixe fuer `B`.
+/// Binaere Praefixe fuer `B`, das keine SI-Praefixe nimmt (3.2).
 const BINARY: &[(&str, u32)] = &[("Ki", 10), ("Mi", 20), ("Gi", 30), ("Ti", 40)];
+
+/// Das Byte (3.2).
+const BYTE: &str = "B";
 
 /// Basiseinheiten (3.2) mit Dimensionsvektor.
 const BASE: &[(&str, Dim)] = &[
@@ -239,8 +242,8 @@ impl Units {
         }
         for (prefix, exp) in BINARY {
             if let Some(rest) = name.strip_prefix(prefix) {
-                if rest == "B" {
-                    let base = self.by_name.get("B").copied()?;
+                if rest == BYTE {
+                    let base = self.by_name.get(BYTE).copied()?;
                     let factor = rat_mul(program.units[base.index()].factor, Rational::int(1i64 << exp))?;
                     return self
                         .declare(
@@ -260,7 +263,7 @@ impl Units {
         for (prefix, exp) in PREFIXES {
             let Some(rest) = name.strip_prefix(prefix) else { continue };
             let Some(base) = self.by_name.get(rest).copied() else { continue };
-            if !self.infos[base.index()].prefixable {
+            if !self.infos[base.index()].prefixable || rest == BYTE {
                 continue;
             }
             let def = program.units[base.index()].clone();

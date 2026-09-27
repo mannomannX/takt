@@ -462,9 +462,10 @@ impl<'t, 's> Parser<'t, 's> {
             return Ok(UnitDecl::Affine { name, base, offset, span: self.span_from(start) });
         }
         let factor = self.parse_number()?;
+        let divisor = if self.eat_op("/") { Some(self.parse_int_lit()?) } else { None };
         let unit = if self.at_unit_start() { Some(self.parse_unit_lit()?) } else { None };
         self.expect_newline()?;
-        Ok(UnitDecl::Scaled { name, factor, unit, span: self.span_from(start) })
+        Ok(UnitDecl::Scaled { name, factor, divisor, unit, span: self.span_from(start) })
     }
 
     /// `const_decl`

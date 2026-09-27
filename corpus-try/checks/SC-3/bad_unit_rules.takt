@@ -1,0 +1,42 @@
+# Die Regeln der Einheiten (3.1, 3.2) mit je einem Verstoss: `B` nimmt nur
+# binaere Praefixe, ein Index traegt keine Einheit, ein affiner Wert hat
+# keinen Betrag und kein Vielfaches, `degF` rechnet Differenzen in `degR`, `.to` verlangt gleiche Dimension,
+# Vergleich und Summe gleiche Einheiten, eine Range einheitliche Grenzen,
+# eine Einheit einen Faktor ungleich null, eine Einheitenvariable ihre
+# Deklaration; `f32` und `f64` mischen nie.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+unit slot        = 1
+unit none_at_all = 0 m  # ~ SC-3
+
+fn undeclared(x: float[U]) -> float[U]:  # ~ SC-3
+    return x
+
+output o : u8 @ hw("o/o") with safe = 0
+
+machine m:
+    var n : u32[kB] = 1 kB  # ~ SC-3
+    var i : int[slot] in 0 slot..3 slot = 1 slot
+    var a : [4] u8 = [10, 20, 30, 40]
+    var t : float[degC] = 20 degC
+    var f : float[degF] = 50 degF
+    var p : float[bar] = 2 bar
+    var q : float[psi] = 3 psi
+    var r : float[bar] in 0 bar..10 = 1 bar      # ~ SC-3
+    var s : float[bar] in 0 bar..10 psi = 1 bar  # ~ SC-3
+    var x : f32 = 1.0
+    var y : f64 = 2.0
+    initial RUN
+    state RUN:
+        loop:
+            o = a[i]          # ~ SC-3
+            var b1 = abs(t)   # ~ SC-3
+            var b2 = t * 2.0  # ~ SC-3
+            var b3 = -t       # ~ SC-3
+            var b4 = p.to(K)  # ~ SC-3
+            var b5 = p < q    # ~ SC-3
+            var b6 = x + y    # ~ SC-3
+            var b7 = f + 1 K  # ~ SC-3

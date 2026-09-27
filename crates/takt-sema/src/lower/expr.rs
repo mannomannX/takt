@@ -928,6 +928,13 @@ impl Lowerer<'_> {
                     self.error(SC3, span, format!("`abs` auf `{n}`"));
                     return None;
                 }
+                // Ein Betrag setzt einen Nullpunkt voraus; ein affiner Wert
+                // ist ein Punkt, kein Vektor (3.2). `min` und `max`
+                // vergleichen nur und sind darum erlaubt wie `<`.
+                if self.affine_type(ty0) {
+                    self.error_hint(SC3, span, "`abs` auf einer affinen Einheit (3.2)", "Differenzen in `K` rechnen");
+                    return None;
+                }
                 self.base(ty0)
             }
             Intrinsic::Min | Intrinsic::Max => {
@@ -936,17 +943,6 @@ impl Lowerer<'_> {
                 if !(self.is_numeric(ty0) || self.is_duration(ty0)) {
                     let n = self.type_name(ty0);
                     self.error(SC3, span, format!("`{}` auf `{n}`", op.name()));
-                    return None;
-                }
-                // Ein Betrag setzt einen Nullpunkt voraus; ein affiner Wert
-                // ist ein Punkt, kein Vektor (3.2).
-                if self.affine_type(ty0) {
-                    self.error_hint(
-                        SC3,
-                        span,
-                        format!("`{}` auf einer affinen Einheit (3.2)", op.name()),
-                        "Differenzen in `K` rechnen",
-                    );
                     return None;
                 }
                 self.base(ty0)
@@ -1929,16 +1925,34 @@ impl Lowerer<'_> {
         }
     }
 
+    /// Ein Index ist eine Ganzzahl ohne Einheit (3.1): Wer mehrere
+    /// Nummernraeume fuehrt, trennt sie mit Range-Typen und benannten
+    /// Umrechnungen, nicht mit Einheiten.
+    fn index_int(&mut self, i: &Expr, span: Span) -> Option<()> {
+        if !self.is_int(i.ty) {
+            let n = self.type_name(i.ty);
+            self.error(SC3, span, format!("Index muss eine Ganzzahl sein, gefunden `{n}`"));
+            return None;
+        }
+        if matches!(self.ty(i.ty), Type::Int { unit: Some(_), .. }) {
+            let n = self.type_name(i.ty);
+            self.error_hint(
+                SC3,
+                span,
+                format!("ein Index traegt keine Einheit, gefunden `{n}` (3.1)"),
+                "entdimensionieren: `x / (1 U)` (3.2)",
+            );
+            return None;
+        }
+        Some(())
+    }
+
     /// Der Index in ein Instanz-Array (5.11), gegen die Laenge geprueft
     /// (3.4): ein Literal beim Uebersetzen, alles andere zur Laufzeit.
     fn machine_index(&mut self, index: &ast::Expr, len: u32) -> Option<Expr> {
         let int = self.tys.int;
         let i = self.expr(index, Some(int))?;
-        if !self.is_int(i.ty) {
-            let n = self.type_name(i.ty);
-            self.error(SC3, index.span, format!("Index muss eine Ganzzahl sein, gefunden `{n}`"));
-            return None;
-        }
+        self.index_int(&i, index.span)?;
         let proven = match &i.kind {
             ExprKind::Int(v) => {
                 if *v < 0 || (*v as u64) >= u64::from(len) {
@@ -2091,11 +2105,7 @@ impl Lowerer<'_> {
         };
         let int = self.tys.int;
         let i = self.expr(index, Some(int))?;
-        if !self.is_int(i.ty) {
-            let n = self.type_name(i.ty);
-            self.error(SC3, index.span, format!("Index muss eine Ganzzahl sein, gefunden `{n}`"));
-            return None;
-        }
+        self.index_int(&i, index.span)?;
         let proven = self.index_proven(&i, len);
         let e = Expr::new(ExprKind::Index { base: Box::new(b), index: Box::new(i) }, elem, span);
         let _ = raw;
@@ -2629,20 +2639,20 @@ impl Lowerer<'_> {
             }
             return Some(self.base(a_ty));
         }
-        // Basiseinheit der affinen Einheit (K fuer degC)
+        // Die Einheit der Differenzen einer affinen Einheit: dieselbe
+        // Dimension und derselbe Faktor, ohne Versatz — `K` fuer `degC`,
+        // `degR` fuer `degF`. Die Rohwerte beider stehen im selben Mass.
         let base_of = |this: &Self, u: &Unit| -> Unit {
             let id = match u.factors.as_slice() {
                 [(crate::units::Atom::Named(id), 1)] => *id,
                 _ => return u.clone(),
             };
-            let dim = this.program.units[id.index()].dimension;
+            let (dim, factor) = (this.program.units[id.index()].dimension, this.program.units[id.index()].factor);
             let base = this
                 .program
                 .units
                 .iter()
-                .position(|d| {
-                    d.dimension == dim && d.affine_offset.is_none() && d.factor == takt_mir::types::Rational::int(1)
-                })
+                .position(|d| d.dimension == dim && d.affine_offset.is_none() && d.factor == factor)
                 .map(|i| UnitId(i as u32));
             base.map_or_else(|| u.clone(), Unit::named)
         };

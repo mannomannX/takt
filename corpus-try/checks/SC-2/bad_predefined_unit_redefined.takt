@@ -1,0 +1,19 @@
+# Eine Neudefinition einer vordefinierten Einheit ist ein Fehler (3.2) —
+# auch eines Namens mit SI-Praefix, den noch niemand benutzt hat.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+unit V    = 2 W/A     # ~ SC-2
+unit mV   = 2 V       # ~ SC-2
+unit kHz  = 1000 1/s  # ~ SC-2
+unit mile = 1609.344 m
+
+output o : int @ hw("o/o") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            o = 1
