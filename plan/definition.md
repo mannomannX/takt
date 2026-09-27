@@ -1736,7 +1736,7 @@ sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereigni
 | 10 | Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige | W |
 | 11 | Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick | F |
 | 12 | Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke | F mit Vorschlag |
-| 13 | Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle | F |
+| 13 | Bindung je Build: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle; ein benutzter Channel ohne Bindung (`none`) ist im HW-Build ein Fehler (8.1) | F |
 | 14 | Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout | W |
 | 15 | Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden | W |
 | 16 | Format-Strings: Platzhalter existieren, Typen formatierbar, Puffergröße | F |

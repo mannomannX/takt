@@ -1,0 +1,19 @@
+# Ein Output braucht `safe` (8.1): Die Runtime schreibt ihn bei `FAULTED`,
+# beim Anhalten und bei Heartbeat-Verlust. Ein `sim`-Output speist nur die
+# Simulation und ein Ausgabestrom hat keinen Pegel; beide brauchen keinen.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+output v     : bool @ hw("o/v")  # ~ SC-3
+output v_sim : bool @ sim("o/w")
+output ok    : bool @ hw("o/ok") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            v = true
+            v_sim = true
+            ok = true

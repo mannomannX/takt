@@ -106,3 +106,23 @@ fn the_plant_model_is_an_ordinary_machine() {
     assert!(matches!(model_out.binding, Binding::Sim(_)), "`p_sim` traegt eine `sim`-Bindung");
     assert_eq!(model_out.dir, Direction::Output);
 }
+
+/// **Ein Channel ohne Bindung ist im Hardware-Build nicht benutzbar** (8.1):
+/// `none` erlaubt die Deklaration, und die Simulation darf ihn per
+/// Stimulus treiben; auf dem Ziel gibt es nichts, woraus er liest. Wer ihn
+/// nur deklariert, bekommt keinen Fehler.
+#[test]
+fn an_unbound_channel_in_use_fails_the_hardware_build() {
+    let src = QUELLE
+        .replace("output v ", "input  spare : bool @ none\ninput  later : bool @ none\noutput v ")
+        .replace("v = p.valid and p > 2 bar", "v = spare.or(false)");
+    let codes = |kind: takt_sema::Build| -> Vec<String> {
+        let options = takt_sema::Options { policy: takt_diag::Policy::default(), build: kind, profile: None };
+        let out = takt_sema::compile(&src, &options);
+        out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect()
+    };
+    assert!(codes(takt_sema::Build::Sim).is_empty(), "{:?}", codes(takt_sema::Build::Sim));
+    let hw = codes(takt_sema::Build::Hw);
+    assert_eq!(hw.len(), 1, "genau `spare`, nicht das unbenutzte `later`: {hw:?}");
+    assert!(hw[0].contains("SC-13") && hw[0].contains("`spare`"), "{hw:?}");
+}

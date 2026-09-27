@@ -171,6 +171,7 @@ impl Lowerer<'_> {
         self.check_reachability();
         self.check_termination();
         self.check_simulation();
+        self.check_unbound();
         self.check_unused();
         self.check_definite_assignment();
     }
@@ -1497,8 +1498,57 @@ impl Lowerer<'_> {
         self.diags.extend(diags);
     }
 
+    /// Pruefung 13 im Hardware-Build: Ein Channel ohne Bindung (`none`) darf
+    /// deklariert, aber nicht benutzt werden (8.1) — auf dem Ziel gibt es
+    /// nichts, woraus er liest oder wohin er schreibt.
+    fn check_unbound(&mut self) {
+        if self.options.build != crate::Build::Hw {
+            return;
+        }
+        let read = self.read_channels();
+        let diags: Vec<Diagnostic> = self
+            .program
+            .channels
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| {
+                matches!(c.binding, Binding::None) && (c.owner.is_some() || read.contains(&ChannelId(*i as u32)))
+            })
+            .map(|(_, c)| {
+                Diagnostic::error(SC13, c.span, format!("Channel `{}` ohne Bindung im Hardware-Build benutzt", c.name))
+                    .with_suggestion("mit `@ hw(\"…\")` binden (8.1)")
+            })
+            .collect();
+        self.diags.extend(diags);
+    }
+
     /// Pruefung 15: Outputs ohne Schreiber, Inputs ohne Leser.
     fn check_unused(&mut self) {
+        let read = self.read_channels();
+        let mut diags = Vec::new();
+        for (i, c) in self.program.channels.iter().enumerate() {
+            let id = ChannelId(i as u32);
+            match c.dir {
+                Direction::Output if c.owner.is_none() && !matches!(c.binding, Binding::Sim(_)) => {
+                    diags.push(
+                        Diagnostic::warning(SC15, c.span, format!("Output `{}` wird nie geschrieben", c.name))
+                            .with_suggestion("Zuweisung ergaenzen oder Channel entfernen"),
+                    );
+                }
+                Direction::Input if !read.contains(&id) => {
+                    diags.push(
+                        Diagnostic::warning(SC15, c.span, format!("Input `{}` wird nie gelesen", c.name))
+                            .with_suggestion("Verwendung ergaenzen oder Channel entfernen"),
+                    );
+                }
+                _ => {}
+            }
+        }
+        self.diags.extend(diags);
+    }
+
+    /// Die Channels, die eine Maschine oder ein Trigger liest.
+    fn read_channels(&self) -> HashSet<ChannelId> {
         let mut read: HashSet<ChannelId> = HashSet::new();
         for m in &self.program.machines {
             for_each_expr_machine(m, &mut |e| {
@@ -1523,26 +1573,7 @@ impl Lowerer<'_> {
                 }
             }
         }
-        let mut diags = Vec::new();
-        for (i, c) in self.program.channels.iter().enumerate() {
-            let id = ChannelId(i as u32);
-            match c.dir {
-                Direction::Output if c.owner.is_none() && !matches!(c.binding, Binding::Sim(_)) => {
-                    diags.push(
-                        Diagnostic::warning(SC15, c.span, format!("Output `{}` wird nie geschrieben", c.name))
-                            .with_suggestion("Zuweisung ergaenzen oder Channel entfernen"),
-                    );
-                }
-                Direction::Input if !read.contains(&id) => {
-                    diags.push(
-                        Diagnostic::warning(SC15, c.span, format!("Input `{}` wird nie gelesen", c.name))
-                            .with_suggestion("Verwendung ergaenzen oder Channel entfernen"),
-                    );
-                }
-                _ => {}
-            }
-        }
-        self.diags.extend(diags);
+        read
     }
 
     /// Pruefung 25: eine gehobene Variable wird in einem Segment gelesen,
