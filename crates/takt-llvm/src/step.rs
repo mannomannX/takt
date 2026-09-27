@@ -2090,9 +2090,15 @@ fn fault_body(
         let flag = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 0"));
         m.void_inst(&format!("store i1 true, ptr {flag}"));
     }
-    // 5.3: Ein Fault-Uebergang bricht die laufenden Jobs der Maschine ab.
+    // 5.3: Ein Fault-Uebergang bricht die laufenden Jobs der Maschine ab
+    // und leert die Warteschlangen ihrer geplanten Ausgaben — ein Safe-Wert
+    // darf nie von einem Wert ueberschrieben werden, den ein verlassener
+    // Zustand geplant hat.
     for slot in 0..md.layout.job_slots.len() {
         m.void_inst(&format!("call void @{}(i32 {}, i32 {slot})", crate::abi::Abi::JOB_CANCEL, ctx.machine_index));
+    }
+    for o in &md.layout.output_queues {
+        m.void_inst(&format!("call void @{}(i32 {})", crate::abi::Abi::CANCEL, o.0));
     }
     let source = match from {
         Some(leaf) => Source::Leaf(leaf, from_val),

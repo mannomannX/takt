@@ -560,6 +560,12 @@ impl Outer for MachineEnv<'_, '_> {
             )));
         }
         let queue = self.image.sched.entry(o).or_default();
+        // Gleiche T: die spaetere Anweisung gewinnt und belegt keinen
+        // weiteren Platz (9.8).
+        if let Some(slot) = queue.iter_mut().find(|(at, _)| *at == t) {
+            slot.1 = v;
+            return Ok(());
+        }
         if queue.len() as u32 >= MAX_SCHED {
             let name = self.loaded.program.channels[o.index()].name.clone();
             return Err(Trap::Fault(Fault::new(
@@ -569,8 +575,6 @@ impl Outer for MachineEnv<'_, '_> {
                 self.tick,
             )));
         }
-        // Sortiert nach T; gleiche T: die spaetere Anweisung gewinnt (9.8).
-        queue.retain(|(at, _)| *at != t);
         queue.push((t, v));
         queue.sort_by_key(|(at, _)| *at);
         Ok(())

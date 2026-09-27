@@ -222,4 +222,18 @@ machine m:
 ",
     );
     assert!(t.contains("fault m Arithmetic") && t.contains("singulaer"), "{t}");
+    // `solve` auf derselben Matrix faultet ebenso (3.11).
+    let t = trace(
+        "
+output d : float @ hw(\"o/d\") with safe = 0
+machine m:
+    var a : mat<2, 2> = [[1, 2], [2, 4]]
+    initial RUN
+    state RUN:
+        loop:
+            var x = solve(a, [[1], [2]])
+            d = x[0, 0]
+",
+    );
+    assert!(t.contains("fault m Arithmetic(Singular)"), "{t}");
 }

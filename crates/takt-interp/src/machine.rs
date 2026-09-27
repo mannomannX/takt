@@ -631,6 +631,10 @@ pub fn resolve_m(
                 }
                 env.state.last_fault = Some(f.clone());
                 cancel_jobs(env);
+                // 5.3: Ein Safe-Wert darf nie von einem Wert ueberschrieben
+                // werden, den ein verlassener Zustand geplant hat.
+                let queues = env.machine(loaded).layout.output_queues.clone();
+                env.image.cancel_all_scheduled(&queues);
                 // `FAULTED` ist die Senke des Fault-Walds (5.3, Lemma 9.3.1):
                 // Ein Fault dort — in einem exit-Block auf dem Weg hinein
                 // oder in den Aktionen eines Uebergangs hinaus — fuehrt

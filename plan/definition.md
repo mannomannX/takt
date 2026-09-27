@@ -1174,8 +1174,9 @@ Zustand pro Output o:  sched[o] : nach T sortierte Warteschlange der Kapazitaet 
                        nur fuer Outputs, die in einem at- oder pulse-Statement vorkommen (statisch bekannt); sonst kein Speicher
 exec(at T: o = v):
     T <= now + guard(o)      => (s, FAULT TimingFault(o))        # guard: Treiberlatenz; in der Simulation 0
+    (T, _) in sched[o]       => (s[sched[o](T) := v], NORMAL)     # gleiche T: spaetere Anweisung gewinnt, kein weiterer Platz
     len(sched[o]) == K_o     => (s, FAULT ScheduleOverflow(o))
-    sonst                    => (s[sched[o] += (T, v)], NORMAL)   # gleiche T: spaetere Anweisung gewinnt
+    sonst                    => (s[sched[o] += (T, v)], NORMAL)
 pulse o = v for d            == o = v; at now + d: o = <Latch-Wert von o vor diesem Statement>
 ```
 Die Runtime schreibt `o` zum Hardware-Zeitpunkt `T`; der Latch-Wert von `o` ist ab dem Tick, der `T` enthält, `v` (die Simulation wendet den Wert im Tick `ceil(T / T0)` an). Ein Fault-Übergang der Maschine leert `sched` aller ihrer Outputs (5.3).
@@ -1696,8 +1697,9 @@ exec(at T: b, s, m):
   if out is FAULT f: return (s, FAULT f)
   for (o, v) in writes(b):
       if T <= now + guard(o):        return (s, FAULT TimingFault(o))
+      if (T, _) in sched[o]:         s'.sched[o](T) := v; continue   # gleiche T: spaetere Anweisung gewinnt, kein weiterer Platz
       if len(sched[o]) == K_o:       return (s, FAULT ScheduleOverflow(o))
-      s'.sched[o].insert((T, v))                        # sortiert nach T; gleiche T: spaetere Anweisung gewinnt
+      s'.sched[o].insert((T, v))                        # sortiert nach T
   return (s', NORMAL)
 apply_scheduled(k): for o, for (T, v) in sched[o] with T in tick k: L[o] = v; entferne (T, v)
 cancel_all_scheduled(m): sched[o] = [] fuer alle o von m
@@ -2979,3 +2981,5 @@ Die Änderung bricht Programme, die Felder direkt lasen (`f.id` wird `f.data.id`
 **Einheiten nach 3.2 durchgesetzt, `degF` über einen Bruch (3.1, 3.2; FB-321).** Das Audit von M10 fand fünf Regeln aus 3.2, die der Compiler nicht hielt. `degF` fehlte, weil sich sein Faktor 5/9 als Dezimalzahl nicht exakt schreiben lässt; `unit_decl` nimmt darum einen Bruch als Faktor (`unit degR = 5/9 K`), und `degF` ist affin über der Rankine-Skala wie `degC` über `K`. Ein Bruch statt eines eingebauten Sonderfalls, weil 3.2 jeden Faktor als rationale Zahl führt und ein Projekt sonst dieselbe Lücke für seine eigenen Einheiten hätte. Dazu: `B` nahm auch SI-Präfixe (`kB`), obwohl 3.2 nur binäre nennt; ein Name mit Präfix vor einer vordefinierten Einheit (`unit mV = 2 V`) ließ sich neu definieren, weil er erst beim ersten Gebrauch entsteht; ein Index mit Einheit (`int[slot]`) war zulässig, obwohl 3.1 ihn ausschließt; die Differenz eines `degF` galt als `K`, obwohl ihr Rohwert in Fahrenheit-Graden steht (`degF + 2.25 K` addierte 2,25 °F); und die Prüfung auf affine Werte stand bei `min`/`max` statt bei `abs` — `max` vergleicht nur und ist erlaubt wie `<`, `abs` setzt einen Nullpunkt voraus. Die Tabelle der affinen Operationen nennt beides jetzt. Zwei Sätze von 3.2 sagten mehr, als gemeint war: „Potenzen mit ganzzahligem Exponenten“ meint die Exponenten der Einheiten, einen Wert potenziert die Multiplikation; und die Inferenz der Einheitenvariablen ist der Ausschnitt der Unifikation, den die Festlegungen des Lowerings (Punkt 1) beschreiben, nicht das volle Verfahren.
 
 **Zwei Fault-Arten ohne Auslöser (5.3, 4.5, 9.2, 12.3; FB-324).** `Runtime(Watchdog)` und `JobOverflow` standen in der Referenz, aber nichts konnte sie auslösen. Der Watchdog hat seit M10 Schritt 8 eine Frist über zwei Perioden; ein Tick, der länger braucht, ist schon `Runtime(Overrun)`, und läuft die Frist ab, steht die Schleife, die den Fault zustellen müsste — die Plattform setzt zurück, und der nächste Lauf erfährt es aus `boot_reason = WATCHDOG`. Eine Frühwarnung vor dem Reset hätte einen Auslöser gegeben, aber nur einen zweiten Namen für einen Überlauf, und nicht jede Plattform hat sie (der IWDG des F401 nicht). `JobOverflow` setzte in 9.2 eine Liste laufender Jobs voraus, die über K_j wachsen kann; Prüfung 44 begrenzt aber die *Handles*, und jede Implementierung führt einen Job je Handle: Ein `job` auf einem laufenden Handle ersetzt den Job, so wie T16 den Start „total“ nennt. Eine Fault-Art, die nie eintritt, lädt zu Handlern ein, die nie laufen; beide entfallen aus 5.3, 9.2, T16, dem Prelude und der MIR. Die Nummern des MIR-Formats bleiben, wo sie waren.
+
+**Ersetzen vor Überlauf bei geplanten Ausgaben (7.5, 9.8; FB-325).** 9.8 prüfte die Kapazität vor dem Ersetzen: Stand `sched[o]` voll und plante ein Programm denselben Zeitpunkt neu, faultete es mit `ScheduleOverflow`, obwohl der neue Wert keinen Platz braucht. Der Interpreter folgte dem Text, der erzeugte Code ersetzte zuerst — Satz 9.4.4 hing an der Reihenfolge. Gewählt ist das Ersetzen zuerst: Ein Programm, das einen festen Zeitpunkt Tick für Tick nachführt, soll nicht davon abhängen, wie viele andere Einträge gerade warten. Die Tabelle in 7.5 und 9.8 nennen den Fall jetzt vor der Kapazität.

@@ -1,0 +1,115 @@
+# 87 — Faults, die sonst kein Korpusprogramm ausloest (5.3, 7.5, 4.5): je
+# Maschine einer, zu einem festen Tick, damit das Differential den Tick
+# vergleicht, an dem der Output auf `safe` faellt. `at now` ist
+# `TimingFault`; der fuenfte geplante Zeitpunkt eines Outputs ist
+# `ScheduleOverflow`, derselbe Zeitpunkt noch einmal ersetzt den Wert und
+# belegt keinen Platz, auch in einer vollen Warteschlange (FB-325); ein
+# Fault leert die Warteschlange, und der Output bleibt auf `safe`. `%`
+# durch null, ein Ueberlauf von `i64` und die Inverse einer singulaeren
+# Matrix sind `ArithmeticFault`. Ein Job, der auf einem laufenden Handle
+# neu startet, ersetzt den laufenden (4.5).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, duration = 25 ms, total
+
+output timed   : u32   @ hw("o/timed")   with safe = 0
+output planned : u32   @ hw("o/planned") with safe = 0
+output count   : u32   @ hw("o/count")   with safe = 0
+output crowded : u32   @ hw("o/crowded") with safe = 0
+output rest    : int   @ hw("o/rest")    with safe = 0
+output big_out : i64   @ hw("o/big")     with safe = 0
+output inv_out : float @ hw("o/inv")     with safe = 0.0
+output word    : u32   @ hw("o/word")    with safe = 0
+output ready   : u32   @ hw("o/ready")   with safe = 0
+
+fn first(d: bytes<32>) -> u32:
+    return (d[0] as u32) | ((d[1] as u32) << 8) | ((d[2] as u32) << 16) | ((d[3] as u32) << 24)
+
+machine timing:
+    var n : u32 in 0..100 = 0
+    initial RUN
+    state RUN:
+        loop:
+            n = min(n + 1, 100)
+            timed = n
+            if n == 3:
+                at now: timed = 99
+
+machine plan:
+    var n : u32 in 0..100 = 0
+    initial RUN
+    state RUN:
+        loop:
+            n = min(n + 1, 100)
+            if n == 1:
+                at now + 30 ms: planned = 1
+                at now + 30 ms: planned = 2
+
+machine crowd:
+    var n : u32 in 0..100 = 0
+    initial RUN
+    state RUN:
+        loop:
+            n = min(n + 1, 100)
+            count = n
+            if n == 1:
+                at now + 100 ms: crowded = 1
+                at now + 200 ms: crowded = 2
+                at now + 300 ms: crowded = 3
+                at now + 400 ms: crowded = 4
+            if n == 2:
+                at now + 390 ms: crowded = 5
+            if n == 3:
+                at now + 600 ms: crowded = 6
+
+machine divide:
+    var d : int in -5..5 = 3
+    initial RUN
+    state RUN:
+        loop:
+            d = max(d - 1, -5)
+            rest = 17 % d
+
+machine grow:
+    var big : i64 = 9223372036854775000
+    initial RUN
+    state RUN:
+        loop:
+            big = big + 400
+            big_out = big
+
+machine invert:
+    var a : float = 2.0
+    initial RUN
+    state RUN:
+        loop:
+            a = a - 1.0
+            var m : mat<2, 2> = [[a, 1], [a, 1]]
+            var v : mat<2, 2> = [[1, 0], [0, 1]] + m * 0.0
+            if a < 0.5:
+                v = m.inv()
+            inv_out = v[0, 0]
+
+machine restart:
+    var msg : bytes<64> = default
+    var d   : bytes<32> = default
+    initial RUN
+    state RUN:
+        sequence:
+            msg.push(0x61)
+            job v = sha256(msg)
+            wait 10 ms
+            msg.push(0x62)
+            job v = sha256(msg)
+            until v.done timeout 1 s -> FAILED
+            d = v.result.or(default)
+            word = first(d)
+            ready = 1
+            -> DONE
+    state DONE:
+        when false: -> RUN
+    state FAILED:
+        when false: -> RUN

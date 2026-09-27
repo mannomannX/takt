@@ -1178,3 +1178,31 @@ driver machine pump:
     assert!(trace.contains("t=1 out sum 5\n"), "1, 2 und dann wieder 2:\n{trace}");
     assert!(trace.contains("t=2 out sum 11\n"), "3, 4 und wieder 4:\n{trace}");
 }
+
+#[test]
+fn every_fault_kind_of_the_corpus_arrives_at_its_tick() {
+    // Korpus 87: je Maschine ein Fault, den kein anderes Programm ausloest.
+    // Das Differential sieht nur die Outputs; die Art steht im Trace des
+    // Interpreters (5.3, 7.5, 9.8, FB-324, FB-325).
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/87_fault_kinds.takt");
+    let src = std::fs::read_to_string(path).expect("Korpus 87");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let program = takt_sema::compile(&src, &options).program.expect("Programm");
+    let trace = run(&program, &Trace::default(), &RunOptions { ticks: 30, ..Default::default() }).expect("Lauf");
+    let trace = trace.trace.render();
+    for line in [
+        "t=1 fault invert Arithmetic(Singular)",
+        "t=2 fault timing TimingFault",
+        "t=2 fault crowd ScheduleOverflow",
+        "t=2 fault divide Arithmetic(DivZero)",
+        "t=2 fault grow Arithmetic(Overflow)",
+        "t=3 out planned 2\n",
+        "t=4 job restart v done\n",
+    ] {
+        assert!(trace.contains(line), "`{line}` fehlt:\n{trace}");
+    }
+    // Derselbe Zeitpunkt in der vollen Warteschlange ersetzt, statt zu
+    // faulten; der Fault leert sie, kein geplanter Wert ueberschreibt `safe`.
+    assert!(!trace.contains("t=1 fault crowd"), "{trace}");
+    assert!(trace.lines().filter(|l| l.contains(" out crowded ")).all(|l| l.ends_with(" 0")), "{trace}");
+}
