@@ -139,6 +139,10 @@ block lowpass[U](tau: Duration):
             init = true
         var a : float = dt.as(s) / (tau.as(s) + dt.as(s))
         y = y + a * (x - y)
+        # 4.2: Ein Zustand, der gegen null abklingt, erreicht sonst die
+        # Subnormalen; das Totband ist auf allen Zielen dasselbe.
+        if abs(y) < 1e-30 U:
+            y = 0 U
         return y
 
 block hysteresis[U](lo: float[U], hi: float[U]):

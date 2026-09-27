@@ -108,6 +108,36 @@ machine m every 10 ms:
 }
 
 #[test]
+fn a_decaying_lowpass_stops_at_zero_before_the_subnormals() {
+    // 4.2: Mit tau = dt halbiert jeder Schritt den Zustand; nach 100
+    // Schritten laege er unter 1e-30 und ohne Totband bald in den
+    // Subnormalen. Das Totband setzt ihn dort auf null.
+    let p = compile(
+        "input x : float[bar] in -10 bar..10 bar @ hw(\"a/x\") with max_age = 3 s
+output y : float[bar] @ hw(\"o/y\") with safe = 0 bar
+machine m every 10 ms:
+    var f = lowpass[bar](tau = 10 ms)
+    initial RUN
+    state RUN:
+        loop:
+            y = f.step(x, 10 ms)
+",
+    );
+    let t = trace(
+        &p,
+        "t=0 in x 1 bar
+t=10 in x 0 bar
+",
+        2000,
+    );
+    let values: Vec<f64> =
+        t.lines().filter_map(|l| l.split_once(" out y ")?.1.strip_suffix(" bar")?.parse().ok()).collect();
+    assert!(values.iter().all(|v| *v == 0.0 || v.abs() >= 1e-30), "unter dem Totband: {t}");
+    assert_eq!(values.last(), Some(&0.0), "{t}");
+    assert!(values.len() <= 102, "{} Werte bis null: {t}", values.len());
+}
+
+#[test]
 fn an_integer_pid_clamps_at_its_limits() {
     // Verstaerkungen je Schritt in int[O/E]: 2 mpct/mK * 1000 mK plus das
     // Integral 1000 mpct je Schritt, gedeckelt bei hi.
