@@ -1,0 +1,27 @@
+(system
+  (language 1)
+  (tick 10ms))
+(enum Mode
+  (OFF)
+  (ON)
+  (SERVICE))
+(record Limits
+  (lo: i16)
+  (hi: u8))
+(record Status
+  (mode: Mode)
+  (good: bool)
+  (count: u16)
+  (period: Duration)
+  (level: float)
+  (limits: Limits))
+(output status :Status @sim("o/status"))
+(machine m
+  (var k :int in 0..199 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (% (+ k 1) 200))
+      (var mode :Mode (if (== (% k 3) 0) ON SERVICE))
+      (var limits :Limits (Limits lo=(as (- 0 k) i16) hi=(as k u8)))
+      (= status (Status mode=mode good=(== (% k 2) 0) count=(as (* k 7) u16) period=(* 250us k) level=(* (as k float) 0.5) limits=limits)))))

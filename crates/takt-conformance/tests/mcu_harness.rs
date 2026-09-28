@@ -282,6 +282,22 @@ fn an_enum_output_carries_its_name() {
     assert!(src.contains("switch (*"), "ein Enum-Ausgang wird verzweigt, nicht als Zahl geschrieben:\n{src}");
 }
 
+/// Ein Record-Ausgang steht in der Tabelle (FB-312): als Variante mit dem
+/// Namen des Records, ein verschachtelter Record als Feld, das auf seine
+/// eigene Variante zeigt. Vorher fiel er aus der Tabelle, und die
+/// Board-Abnahme meldete ihn als fehlenden Ausgang.
+#[test]
+fn a_record_output_is_in_the_table() {
+    let p = corpus("96_record_outputs.takt");
+    let src = takt_conformance::mcu::build(&p).source;
+    let rec = |name: &str| p.records.iter().position(|r| r.name == name).expect(name);
+    let (status, limits) = (rec("Status"), rec("Limits"));
+    assert!(src.contains(&format!("g_rec{status}[] = {{ {{ 0LL, \"Status\", g_rec{status}_f, 6 }} }}")), "{src}");
+    assert!(src.contains(&format!("g_rec{limits}[] = {{ {{ 0LL, \"Limits\", g_rec{limits}_f, 2 }} }}")), "{src}");
+    assert!(src.contains(&format!("{{ g_rec{limits}, ")), "das Feld `limits` zeigt auf seine Variante:\n{src}");
+    assert!(src.contains(&format!("{{ \"status\", g_rec{status}, ")), "der Ausgang steht in der Tabelle:\n{src}");
+}
+
 /// **Der Rahmen rechnet nicht mit `double`** (12.3, 4.2; FB-143).
 ///
 /// `takt_measure` gab seinen Wert als `(long long)(v * 1000000.0)` aus.

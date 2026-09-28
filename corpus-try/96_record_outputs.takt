@@ -1,0 +1,42 @@
+# 96 — Record-Ausgaenge (9.3, FB-312): Ein Record erscheint im Trace als
+# `Name(f1, f2)`, auch verschachtelt und mit Enum, Wahrheitswert,
+# schmalen Ganzzahlen, Dauer und Gleitkomma. Beide Rahmen schreiben ihn
+# wie der Interpreter; der MCU-Rahmen liess Records bisher aus.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+enum Mode: OFF, ON, SERVICE
+
+record Limits:
+    lo : i16
+    hi : u8
+
+record Status:
+    mode   : Mode
+    good   : bool
+    count  : u16
+    period : Duration
+    level  : float
+    limits : Limits
+
+output status : Status @ sim("o/status")
+
+machine m:
+    var k : int in 0..199 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 200
+            var mode   : Mode = ON if k % 3 == 0 else SERVICE
+            var limits : Limits = Limits(lo = (0 - k) as i16, hi = k as u8)
+            status = Status(
+                mode = mode,
+                good = k % 2 == 0,
+                count = (k * 7) as u16,
+                period = 250 us * k,
+                level = (k as float) * 0.5,
+                limits = limits
+            )
