@@ -68,9 +68,10 @@ fn all_of() -> Vec<Pattern> {
 /// Die Texte, gegen die jedes Muster laeuft.
 ///
 /// Sie decken die Raender ab: leer, knapp daneben, der kleinste `int`
-/// (FB-114/FB-95), fuehrende Nullen, Hex in beiden Schreibweisen, und
-/// Text, der nur teilweise passt.
-const TEXTS: [&str; 28] = [
+/// (FB-114/FB-95), das Vorzeichen `+` und der Ueberlauf (FB-349),
+/// fuehrende Nullen, Hex in beiden Schreibweisen, und Text, der nur
+/// teilweise passt.
+const TEXTS: [&str; 35] = [
     "",
     "READY",
     "READ",
@@ -81,6 +82,11 @@ const TEXTS: [&str; 28] = [
     "Boot v-1",
     "Boot v-9223372036854775808",
     "Boot v9223372036854775807",
+    "Boot v9223372036854775808",
+    "Boot v-9223372036854775809",
+    "Boot v9999999999999999999",
+    "Boot v+5",
+    "Erasing sector +7",
     "Boot v007",
     "Boot v",
     "Boot vx",
@@ -90,6 +96,8 @@ const TEXTS: [&str; 28] = [
     "-1--2",
     "12-34",
     "addr 0x7E8",
+    "addr 0x7fffffffffffffff",
+    "addr 0x8000000000000000",
     "addr 0X7e8",
     "addr 7E8",
     "addr ",
@@ -212,7 +220,7 @@ fn the_generated_matcher_agrees_with_takt_match() {
 }
 
 /// Was `takt-match` zu jedem Paar sagt, in derselben Schreibweise wie
-/// der Treiber.
+/// der Treiber. Ein Wert ausserhalb des Bereichs ist kein Treffer (8.7).
 fn oracle(pattern_of: &[Pattern]) -> Vec<String> {
     let mut out = Vec::new();
     for mu in pattern_of {
@@ -226,15 +234,24 @@ fn oracle(pattern_of: &[Pattern]) -> Vec<String> {
                 PatternPiece::Capture { kind, .. } => Some(kind),
                 _ => None,
             });
-            for s in &hit.spans[..hit.count as usize] {
-                let roh = s.of(t.as_bytes());
-                let value_of = match kinds.next() {
-                    Some(CaptureKind::Int) => takt_match::parse_int(roh).map_or("?".into(), |v| v.to_string()),
-                    Some(CaptureKind::Hex) => takt_match::parse_hex(roh).map_or("?".into(), |v| v.to_string()),
-                    _ => String::from_utf8_lossy(roh).to_string(),
-                };
+            let values: Option<Vec<String>> = hit.spans[..hit.count as usize]
+                .iter()
+                .map(|s| {
+                    let roh = s.of(t.as_bytes());
+                    match kinds.next() {
+                        Some(CaptureKind::Int) => takt_match::parse_int(roh).map(|v| v.to_string()),
+                        Some(CaptureKind::Hex) => takt_match::parse_hex(roh).map(|v| v.to_string()),
+                        _ => Some(String::from_utf8_lossy(roh).to_string()),
+                    }
+                })
+                .collect();
+            let Some(values) = values else {
+                out.push("0".to_string());
+                continue;
+            };
+            for v in values {
                 line_of.push(' ');
-                line_of.push_str(&value_of);
+                line_of.push_str(&v);
             }
             out.push(line_of);
         }

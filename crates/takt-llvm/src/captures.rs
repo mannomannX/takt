@@ -112,7 +112,10 @@ pub fn walk(
                 // Ziffern, das Vorzeichen kommt getrennt — sonst liefe
                 // `-` in die Stellenrechnung.
                 let (start, negative) = match kind {
-                    CaptureKind::Int => signed(bytes, len, at_ptr, ok_ptr, m),
+                    CaptureKind::Int => {
+                        let (start, minus) = signed(bytes, len, at_ptr, ok_ptr, m);
+                        (start, Some(minus))
+                    }
                     CaptureKind::Hex => (hex(bytes, len, at_ptr, ok_ptr, m), None),
                     CaptureKind::Word => {
                         bounded(bytes, len, at_ptr, ok_ptr, Class::Word, WORD_MAX, m);
@@ -128,10 +131,17 @@ pub fn walk(
                     // Entscheidung wie in `takt-match`.
                     CaptureKind::Float => return Err(NotYet { what: "`{x:float}` im Handler-Muster" }),
                 };
+                let end_pos = m.inst(&format!("load i32, ptr {at_ptr}"));
+                // Der Wertebereich gehoert zum Urteil (8.7): Ein Ueberlauf
+                // trifft nicht, ob gebunden wird oder nicht.
+                let value = match (kind, negative) {
+                    (CaptureKind::Int, Some(minus)) => Some(parse_int(bytes, start, end_pos, minus, ok_ptr, m)),
+                    (CaptureKind::Hex, _) => Some(parse_hex(bytes, start, end_pos, ok_ptr, m)),
+                    _ => None,
+                };
                 // `{_}` bindet nicht (8.7) und belegt kein Feld.
                 if let Some((z, (idx, ty))) = target.zip(target.and_then(|z| z.fields.get(cap_index))) {
-                    let end_pos = m.inst(&format!("load i32, ptr {at_ptr}"));
-                    let where_to = Slot { target: z, index: *idx, ty, start, end_at: end_pos, negative };
+                    let where_to = Slot { target: z, index: *idx, ty, start, end_at: end_pos, value };
                     store_capture(kind, &where_to, bytes, m)?;
                 }
                 cap_index += 1;
@@ -263,24 +273,27 @@ fn bounded(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, class_of: Class, max:
     m.void_inst(&format!("store i1 {new_ok}, ptr {ok_ptr}"));
 }
 
-/// `{n:int}`: ein optionales `-`, dann Ziffern (8.7).
+/// `{n:int}`: ein optionales `+` oder `-`, dann Ziffern (8.7).
 ///
-/// Liefert den Beginn der Ziffern und das Vorzeichen. Beides getrennt,
-/// weil der Wert nur aus den Ziffern entsteht: Ein `-` in der
+/// Liefert den Beginn der Ziffern und ob ein `-` davor stand. Beides
+/// getrennt, weil der Wert nur aus den Ziffern entsteht: Ein `-` in der
 /// Stellenrechnung waere eine Ziffer mit dem Wert -3.
-fn signed(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, m: &mut Module) -> (Reg, Option<Reg>) {
+fn signed(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, m: &mut Module) -> (Reg, Reg) {
     let at = m.inst(&format!("load i32, ptr {at_ptr}"));
     let in_text = m.inst(&format!("icmp slt i32 {at}, {len}"));
     let safe = m.inst(&format!("select i1 {in_text}, i32 {at}, i32 0"));
     let p = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {safe}"));
     let b = m.inst(&format!("load i8, ptr {p}"));
     let is_minus = m.inst(&format!("icmp eq i8 {b}, 45"));
+    let is_plus = m.inst(&format!("icmp eq i8 {b}, 43"));
+    let is_sign = m.inst(&format!("or i1 {is_minus}, {is_plus}"));
+    let sign = m.inst(&format!("and i1 {is_sign}, {in_text}"));
     let minus = m.inst(&format!("and i1 {is_minus}, {in_text}"));
     let after = m.inst(&format!("add i32 {at}, 1"));
-    let start = m.inst(&format!("select i1 {minus}, i32 {after}, i32 {at}"));
+    let start = m.inst(&format!("select i1 {sign}, i32 {after}, i32 {at}"));
     m.void_inst(&format!("store i32 {start}, ptr {at_ptr}"));
     bounded(bytes, len, at_ptr, ok_ptr, Class::Digit, INT_MAX_DIGITS, m);
-    (start, Some(minus))
+    (start, minus)
 }
 
 /// `{x:hex}`: ein optionales `0x`, dann Hexziffern (8.7).
@@ -404,8 +417,8 @@ struct Slot<'a> {
     start: Reg,
     /// Ende der Spanne.
     end_at: Reg,
-    /// Das Vorzeichen, falls `signed` eines verbraucht hat.
-    negative: Option<Reg>,
+    /// Der Wert eines `int` oder `hex`, schon gerechnet.
+    value: Option<Reg>,
 }
 
 /// Legt den Wert eines Platzhalters in sein Feld der Bindung (8.7).
@@ -414,19 +427,14 @@ struct Slot<'a> {
 /// gerechneten Versatz: Die Ausrichtung kennt erst das Datenlayout des
 /// Targets, und `LlvmType::size()` laesst sie bewusst weg (11.2).
 fn store_capture(kind: &CaptureKind, where_to: &Slot<'_>, bytes: Reg, m: &mut Module) -> Result<(), NotYet> {
-    let (field, ty, start, end_at, negative) =
-        (where_to.index, where_to.ty, where_to.start, where_to.end_at, where_to.negative);
+    let (field, ty, start, end_at) = (where_to.index, where_to.ty, where_to.start, where_to.end_at);
     let target = m.inst(&format!(
         "getelementptr inbounds {}, ptr {}, i32 0, i32 {field}",
         where_to.target.record, where_to.target.slot
     ));
     match kind {
-        CaptureKind::Int => {
-            let v = parse_int(bytes, start, end_at, negative, m);
-            m.void_inst(&format!("store i64 {v}, ptr {target}"));
-        }
-        CaptureKind::Hex => {
-            let v = parse_hex(bytes, start, end_at, m);
+        CaptureKind::Int | CaptureKind::Hex => {
+            let v = where_to.value.ok_or(NotYet { what: "Zahlcapture ohne Wert" })?;
             m.void_inst(&format!("store i64 {v}, ptr {target}"));
         }
         // `word` und `str<N>` liefern Text; er wandert als
@@ -450,18 +458,14 @@ fn store_capture(kind: &CaptureKind, where_to: &Slot<'_>, bytes: Reg, m: &mut Mo
 /// Negativ aufgebaut, wie `takt-match::parse_int`: Der
 /// Zweierkomplementbereich ist asymmetrisch, und
 /// `-9223372036854775808` waere positiv nicht darstellbar (FB-114,
-/// derselbe Fall wie FB-95).
-fn parse_int(bytes: Reg, start: Reg, end_at: Reg, negative: Option<Reg>, m: &mut Module) -> Reg {
+/// derselbe Fall wie FB-95). Ein Ueberlauf loescht das Urteil (FB-349).
+fn parse_int(bytes: Reg, start: Reg, end_at: Reg, negative: Reg, ok_ptr: Reg, m: &mut Module) -> Reg {
     let k = m.next_label();
     let (head, body, done) = (format!("pi{k}"), format!("pi{k}_rumpf"), format!("pi{k}_fertig"));
-    // Das Vorzeichen kommt von `signed`, das es verbraucht hat; hier
-    // zurueckzulesen hiesse, dieselbe Stelle zweimal zu deuten.
-    let negative = match negative {
-        Some(r) => r,
-        None => m.inst("and i1 false, false"),
-    };
     let acc_ptr = m.alloca("i64");
     m.void_inst(&format!("store i64 0, ptr {acc_ptr}"));
+    let bad_ptr = m.alloca("i1");
+    m.void_inst(&format!("store i1 false, ptr {bad_ptr}"));
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 {start}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
@@ -477,26 +481,64 @@ fn parse_int(bytes: Reg, start: Reg, end_at: Reg, negative: Option<Reg>, m: &mut
     let d8 = m.inst(&format!("sub i8 {byte}, 48"));
     let d = m.inst(&format!("zext i8 {d8} to i64"));
     let acc = m.inst(&format!("load i64, ptr {acc_ptr}"));
-    let scaled = m.inst(&format!("mul i64 {acc}, 10"));
     // Negativ aufbauen; am Ende wird bei Bedarf negiert.
-    let minus = m.inst(&format!("sub i64 {scaled}, {d}"));
+    let (scaled, over_mul) = checked("smul", &acc.to_string(), "10", m);
+    let (minus, over_sub) = checked("ssub", &scaled.to_string(), &d.to_string(), m);
     m.void_inst(&format!("store i64 {minus}, ptr {acc_ptr}"));
+    note_overflow(bad_ptr, &[over_mul, over_sub], m);
     let next_i = m.inst(&format!("add i32 {i}, 1"));
     m.void_inst(&format!("store i32 {next_i}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 
     m.label(&done);
     let acc = m.inst(&format!("load i64, ptr {acc_ptr}"));
-    let positive = m.inst(&format!("sub i64 0, {acc}"));
+    let (positive, over_neg) = checked("ssub", "0", &acc.to_string(), m);
+    let plus = m.inst(&format!("xor i1 {negative}, true"));
+    let over_plus = m.inst(&format!("and i1 {plus}, {over_neg}"));
+    note_overflow(bad_ptr, &[over_plus], m);
+    clear_on_overflow(bad_ptr, ok_ptr, m);
     m.inst(&format!("select i1 {negative}, i64 {acc}, i64 {positive}"))
 }
 
+/// `a op b` mit `llvm.<op>.with.overflow.i64`: der Wert und ob er
+/// uebergelaufen ist.
+fn checked(op: &str, a: &str, b: &str, m: &mut Module) -> (Reg, Reg) {
+    let decl = format!("declare {{ i64, i1 }} @llvm.{op}.with.overflow.i64(i64, i64)");
+    if !m.has_declared(&decl) {
+        m.declare(&decl);
+    }
+    let pair = m.inst(&format!("call {{ i64, i1 }} @llvm.{op}.with.overflow.i64(i64 {a}, i64 {b})"));
+    let value = m.inst(&format!("extractvalue {{ i64, i1 }} {pair}, 0"));
+    let over = m.inst(&format!("extractvalue {{ i64, i1 }} {pair}, 1"));
+    (value, over)
+}
+
+/// Merkt einen Ueberlauf im Flag.
+fn note_overflow(bad_ptr: Reg, overs: &[Reg], m: &mut Module) {
+    let mut bad = m.inst(&format!("load i1, ptr {bad_ptr}"));
+    for over in overs {
+        bad = m.inst(&format!("or i1 {bad}, {over}"));
+    }
+    m.void_inst(&format!("store i1 {bad}, ptr {bad_ptr}"));
+}
+
+/// 8.7: Ein Wert ausserhalb des Bereichs ist kein Treffer.
+fn clear_on_overflow(bad_ptr: Reg, ok_ptr: Reg, m: &mut Module) {
+    let bad = m.inst(&format!("load i1, ptr {bad_ptr}"));
+    let fine = m.inst(&format!("xor i1 {bad}, true"));
+    let ok = m.inst(&format!("load i1, ptr {ok_ptr}"));
+    let still = m.inst(&format!("and i1 {ok}, {fine}"));
+    m.void_inst(&format!("store i1 {still}, ptr {ok_ptr}"));
+}
+
 /// Die Hexziffern zwischen `start` und `ende` als `i64` (8.7).
-fn parse_hex(bytes: Reg, start: Reg, end_at: Reg, m: &mut Module) -> Reg {
+fn parse_hex(bytes: Reg, start: Reg, end_at: Reg, ok_ptr: Reg, m: &mut Module) -> Reg {
     let k = m.next_label();
     let (head, body, done) = (format!("ph{k}"), format!("ph{k}_rumpf"), format!("ph{k}_fertig"));
     let acc_ptr = m.alloca("i64");
     m.void_inst(&format!("store i64 0, ptr {acc_ptr}"));
+    let bad_ptr = m.alloca("i1");
+    m.void_inst(&format!("store i1 false, ptr {bad_ptr}"));
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 {start}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
@@ -519,14 +561,16 @@ fn parse_hex(bytes: Reg, start: Reg, end_at: Reg, m: &mut Module) -> Reg {
     let d8 = m.inst(&format!("select i1 {is_digit_char}, i8 {from_digit}, i8 {letter}"));
     let d = m.inst(&format!("zext i8 {d8} to i64"));
     let acc = m.inst(&format!("load i64, ptr {acc_ptr}"));
-    let scaled = m.inst(&format!("mul i64 {acc}, 16"));
-    let sum_val = m.inst(&format!("add i64 {scaled}, {d}"));
+    let (scaled, over_mul) = checked("smul", &acc.to_string(), "16", m);
+    let (sum_val, over_add) = checked("sadd", &scaled.to_string(), &d.to_string(), m);
     m.void_inst(&format!("store i64 {sum_val}, ptr {acc_ptr}"));
+    note_overflow(bad_ptr, &[over_mul, over_add], m);
     let next_i = m.inst(&format!("add i32 {i}, 1"));
     m.void_inst(&format!("store i32 {next_i}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 
     m.label(&done);
+    clear_on_overflow(bad_ptr, ok_ptr, m);
     m.inst(&format!("load i64, ptr {acc_ptr}"))
 }
 
