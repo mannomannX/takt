@@ -1674,6 +1674,16 @@ fn check_stmt(
     }
 }
 
+/// Verlaesst jeder Pfad des Blocks den Zustand (`->`)? Dann erreicht ihn
+/// kein Weg ins naechste Segment (6.2).
+fn always_leaves(stmts: &[Stmt]) -> bool {
+    match stmts.last().map(|s| &s.kind) {
+        Some(StmtKind::Goto(_)) => true,
+        Some(StmtKind::If { then, otherwise, .. }) => always_leaves(&then.stmts) && always_leaves(&otherwise.stmts),
+        _ => false,
+    }
+}
+
 fn check_seq_items(
     items: &[SeqItem],
     assigned: &mut HashSet<VarId>,
@@ -1689,8 +1699,15 @@ fn check_seq_items(
                 check_seq_items(body, assigned, lifted, m, diags);
             }
             SeqItem::Step { body, .. } => check_seq_items(body, assigned, lifted, m, diags),
-            SeqItem::Until { guard, .. } => {
-                if let Guard::Match { binding: Some(b), .. } | Guard::Next { binding: b, .. } = guard {
+            SeqItem::Until { guard, timeout, .. } => {
+                // 6.2: Ein weicher Timeout fuehrt die Sequenz mit dem
+                // naechsten Segment fort, ohne dass der Capture ihn traegt.
+                let soft = matches!(
+                    timeout,
+                    Some(takt_mir::machine::Timeout { action: takt_mir::machine::TimeoutAction::Else(b), .. })
+                        if !always_leaves(&b.stmts)
+                );
+                if let (false, Guard::Match { binding: Some(b), .. } | Guard::Next { binding: b, .. }) = (soft, guard) {
                     assigned.insert(*b);
                 }
             }

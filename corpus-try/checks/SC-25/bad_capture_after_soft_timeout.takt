@@ -1,0 +1,29 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-25: Ein weicher Timeout fuehrt die Sequenz ohne Capture fort (6.2);
+# danach ist `p` nicht zugewiesen.
+
+record Pulse:
+    pin : u8
+
+stream<Pulse> pulses with capacity = 8
+
+output first : int in 0..255 @ sim("f")
+
+machine writer:
+    initial RUN
+
+    state RUN:
+        loop:
+            send pulses, Pulse(pin = 3)
+
+machine waiter:
+    initial WAIT
+
+    state WAIT:
+        sequence:
+            until pulses as p timeout 5 ms else:
+                log "kein Puls"
+            first = p.data.pin as int  # ~ SC-25
