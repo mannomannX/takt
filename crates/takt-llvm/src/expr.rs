@@ -13,6 +13,7 @@ use takt_mir::TypeId;
 use takt_mir::expr::{
     Accessor, BinaryOp, CheckedKind, ConvertKind, Expr, ExprKind, Intrinsic, JobField, Repr, UnaryOp,
 };
+use takt_mir::machine::{ArithKind, FaultKind};
 use takt_mir::program::Program;
 use takt_mir::stmt::Place;
 use takt_mir::types::{IntWidth, Type};
@@ -165,6 +166,13 @@ pub trait Vars {
         None
     }
 
+    /// Die Marke fuer einen Fault der Art `kind` (5.3): ein Block, der die
+    /// Art ablegt und in den Fault-Pfad springt ([`Module::fault_to`]).
+    fn fault_to(&self, kind: takt_mir::machine::FaultKind, m: &mut Module) -> Option<String> {
+        let target = self.fault_label()?;
+        Some(m.fault_to(&target, crate::abi::fault_code(kind)))
+    }
+
     /// Liest ein Command (8.5).
     ///
     /// Ein Command ist ein Puls, der genau einen Tick gilt; die Runtime
@@ -286,10 +294,35 @@ fn cond_expr(
         return Ok(Lowered { value: v.to_string(), ty: want.clone() });
     }
     let c = lower(cond, p, m, vars)?;
-    let a = lower(then, p, m, vars)?;
-    let b = lower(otherwise, p, m, vars)?;
-    let r = m.inst(&format!("select i1 {}, {} {}, {} {}", c.value, a.ty, a.value, b.ty, b.value));
-    Ok(Lowered { value: r.to_string(), ty: want.clone() })
+    either(&c.value, m, |m| lower(then, p, m, vars), |m| lower(otherwise, p, m, vars))
+}
+
+/// Wertet `then` nur aus, wenn `c` gilt, `otherwise` nur, wenn nicht, und
+/// fuehrt die Werte mit `phi` zusammen (4.3: `and`/`or` mit Kurzschluss,
+/// `a if c else b`). Ein `select` rechnete beide Seiten, und die
+/// Pruefungen der nicht gewaehlten — `x.valid and x > 5` — faulteten
+/// (FB-339). Wo keine Seite faulten kann, macht LLVM wieder ein `select`
+/// daraus.
+fn either(
+    c: &str,
+    m: &mut Module,
+    then: impl FnOnce(&mut Module) -> Result<Lowered, NotYet>,
+    otherwise: impl FnOnce(&mut Module) -> Result<Lowered, NotYet>,
+) -> Result<Lowered, NotYet> {
+    let n = m.next_label();
+    let (yes, no, done) = (format!("dann_{n}"), format!("sonst_{n}"), format!("weiter_{n}"));
+    m.void_inst(&format!("br i1 {c}, label %{yes}, label %{no}"));
+    m.label(&yes);
+    let a = then(m)?;
+    let from_a = m.block().to_string();
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&no);
+    let b = otherwise(m)?;
+    let from_b = m.block().to_string();
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
+    let r = m.inst(&format!("phi {} [ {}, %{from_a} ], [ {}, %{from_b} ]", a.ty, a.value, b.value));
+    Ok(Lowered { value: r.to_string(), ty: a.ty })
 }
 
 /// `c ? a : b` an seine Stelle (11.2): ein grosser Wert wird nie als
@@ -915,7 +948,7 @@ fn intrinsic(
             };
             m.needs_intrinsic(&format!("{} @llvm.{name}.{}({})", x.ty, x.ty, x.ty));
             let r = m.inst(&format!("call {} @llvm.{name}.{}({} {})", x.ty, x.ty, x.ty, x.value));
-            let Some(target) = vars.fault_label() else {
+            let Some(target) = vars.fault_to(FaultKind::Range, m) else {
                 return Err(NotYet { what: "Rundung ohne Fault-Pfad" });
             };
             let lo = float_literal(i64::MIN as f64, &x.ty);
@@ -979,17 +1012,24 @@ fn decode(
 
 /// Prueft das Fault-Flag nach einem Aufruf (4.1).
 ///
-/// Wer keinen Fault-Pfad hat — eine Funktion, die eine andere ruft —
-/// reicht ihn weiter: Ihr eigenes Ziel ist der Ausgang, der das Flag
-/// setzt, und es steht bereits.
+/// Steht es, nimmt der Aufrufer seinen Fault-Pfad mit der Art aus dem
+/// Flag; wer keinen hat — eine Funktion, die eine andere ruft —, reicht
+/// sie ueber seinen Ausgang weiter. Das Flag wird dabei geloescht: Bliebe
+/// es stehen, faultete der naechste Aufruf, auch in einer anderen
+/// Maschine desselben Ticks (FB-337).
 fn propagate_fault(m: &mut Module, vars: &dyn Vars) -> Result<(), NotYet> {
     let Some(target) = vars.fault_label() else {
         return Err(NotYet { what: "Aufruf ohne Fault-Pfad" });
     };
-    let flag = m.inst(&format!("load i8, ptr @{}", crate::abi::Abi::FAULT_FLAG));
-    let ok = m.inst(&format!("icmp eq i8 {flag}, 0"));
-    let go_on = format!("nach_aufruf{}", m.next_label());
-    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
+    let flag = m.inst(&format!("load i32, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    let ok = m.inst(&format!("icmp eq i32 {flag}, 0"));
+    let n = m.next_label();
+    let (go_on, taken) = (format!("nach_aufruf{n}"), format!("fault_aus_aufruf{n}"));
+    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{taken}"));
+    m.label(&taken);
+    m.void_inst(&format!("store i32 0, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    m.fault_code_at(&flag.to_string());
+    m.void_inst(&format!("br label %{target}"));
     m.label(&go_on);
     Ok(())
 }
@@ -1083,7 +1123,7 @@ fn runtime_check(
         // Auspacken (3.8).
         K::Valid | K::Missing => return Ok(()),
     };
-    let Some(target) = vars.fault_label() else {
+    let Some(target) = vars.fault_to(kind.fault(), m) else {
         return Err(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" });
     };
     let go_on = format!("geprueft_{}_{}", kind_name(kind), m.next_label());
@@ -1121,11 +1161,19 @@ fn checked_expr(
             lower(inner, p, m, vars)
         }
         // 3.8: `Missing` prueft, dass ein Wert da ist, *und* packt ihn aus.
+        // Das Flag steht bei `T?` und `T!E` im letzten Feld; ohne Wert ist
+        // es ein `MissingValue` (FB-338).
         K::Missing => {
             let x = lower(inner, p, m, vars)?;
-            if let LlvmType::Struct(_) = &x.ty
+            if let LlvmType::Struct(parts) = &x.ty
                 && x.ty != *want
             {
+                let target =
+                    vars.fault_to(FaultKind::MissingValue, m).ok_or(NotYet { what: "Auspacken ohne Fault-Pfad" })?;
+                let flag = m.inst(&format!("extractvalue {} {}, {}", x.ty, x.value, parts.len() - 1));
+                let go_on = format!("vorhanden_{}", m.next_label());
+                m.void_inst(&format!("br i1 {flag}, label %{go_on}, label %{target}"));
+                m.label(&go_on);
                 let v = m.inst(&format!("extractvalue {} {}, 0", x.ty, x.value));
                 return Ok(Lowered { value: v.to_string(), ty: want.clone() });
             }
@@ -1171,7 +1219,9 @@ fn overflow_checked(
     let b = lower(rhs, p, m, vars)?;
     let LlvmType::Int(bits) = a.ty else { return Err(NotYet { what: "Ueberlaufpruefung auf Nicht-Ganzzahl" }) };
     let signed = int_is_signed(lhs.ty, p);
-    let target = vars.fault_label().ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
+    let target = vars
+        .fault_to(FaultKind::Arithmetic(ArithKind::Overflow), m)
+        .ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
     let value = match op {
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
             let word = match op {
@@ -1227,7 +1277,7 @@ fn shift_checked(
     let a = lower(lhs, p, m, vars)?;
     let b = lower(rhs, p, m, vars)?;
     let LlvmType::Int(bits) = a.ty else { return Err(NotYet { what: "Schiebepruefung auf Nicht-Ganzzahl" }) };
-    let target = vars.fault_label().ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
+    let target = vars.fault_to(FaultKind::Range, m).ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
     guard(&format!("icmp ult {} {}, {bits}", b.ty, b.value), "shift", &target, m);
     let amount = int_to(b, &a.ty, m);
     let text = match op {
@@ -1256,7 +1306,7 @@ fn convert_checked(
     };
     let (slo, shi) = width_bounds(from);
     let (lo, hi) = width_bounds(dst);
-    let target = vars.fault_label().ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
+    let target = vars.fault_to(FaultKind::Range, m).ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
     let signed = from.signed();
     if lo > slo {
         guard(&format!("icmp {} {} {}, {lo}", if signed { "sge" } else { "uge" }, x.ty, x.value), "conv", &target, m);
@@ -1362,9 +1412,12 @@ fn lower_narrow(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Resul
         }
         ExprKind::Cond { cond, then, otherwise } => {
             let c = lower(cond, p, m, vars)?;
-            let a = narrow_operand(then, p, m, vars)?;
-            let b = narrow_operand(otherwise, p, m, vars)?;
-            m.inst(&format!("select i1 {}, i32 {}, i32 {}", c.value, a.value, b.value))
+            return either(
+                &c.value,
+                m,
+                |m| narrow_operand(then, p, m, vars),
+                |m| narrow_operand(otherwise, p, m, vars),
+            );
         }
         ExprKind::Cast { expr, .. } => return narrow_operand(expr, p, m, vars),
         ExprKind::Checked { expr, kind } => {
@@ -1509,7 +1562,7 @@ fn const_i64(c: &takt_mir::types::Const) -> Option<i64> {
 /// Wert, und ihn zu lesen waere die stille Korruption, die 12.6
 /// ausschliesst.
 fn valid_or_fault(channel: takt_mir::ChannelId, m: &mut Module, vars: &dyn Vars) -> Result<(), NotYet> {
-    let Some(target) = vars.fault_label() else {
+    let Some(target) = vars.fault_to(FaultKind::SensorFault, m) else {
         return Err(NotYet { what: "Gueltigkeitspruefung ohne Fault-Pfad" });
     };
     let q = vars.quality(channel, crate::image::Slot::Quality, m).ok_or(NotYet { what: "Qualitaet im Abbild" })?;
@@ -1818,7 +1871,7 @@ fn index_of(
         };
         // Ein `icmp ult` faengt beide Enden: negativ ist vorzeichenlos
         // groesser als jede Laenge.
-        let target = vars.fault_label().ok_or(NotYet { what: "Indexpruefung ohne Fault-Pfad" })?;
+        let target = vars.fault_to(FaultKind::Range, m).ok_or(NotYet { what: "Indexpruefung ohne Fault-Pfad" })?;
         guard(&format!("icmp ult {} {}, {grenze}", i.ty, i.value), "index", &target, m);
     }
     let base_ptr = match (&place, &x) {
@@ -2505,7 +2558,7 @@ fn psi_read(
     // 3.4: Der Index wird hier geprueft; sein `Checked { Index }` traegt
     // keinen Zweig (`runtime_check`).
     let ok = m.inst(&format!("icmp ult {} {}, {len}", i.ty, i.value));
-    let target = vars.fault_label().ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
+    let target = vars.fault_to(FaultKind::Range, m).ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
     let go_on = format!("geprueft_instanz_{}", m.next_label());
     m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
     m.label(&go_on);
@@ -2560,10 +2613,19 @@ fn binary(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
-    // `and`/`or` sind in Takt nicht kurzschluessig verschieden von `&`/`|`
-    // auf `bool`: Beide Operanden sind total (4.1), also darf beides eine
-    // Instruktion sein. Ein Kurzschluss waere hier eine Verhaltensaenderung
-    // ohne Gewinn — es gibt keine Seiteneffekte, die er spaeren koennte.
+    // `and`/`or` mit Kurzschluss: Der rechte Operand kann faulten — eine
+    // implizite Pruefung, die der linke gerade ausschliessen soll.
+    if matches!(op, BinaryOp::And | BinaryOp::Or) {
+        let a = lower(lhs, p, m, vars)?;
+        let short = if op == BinaryOp::And { "false" } else { "true" };
+        let constant = |_: &mut Module| Ok(Lowered { value: short.into(), ty: LlvmType::Int(1) });
+        let rest = |m: &mut Module| lower(rhs, p, m, vars);
+        return if op == BinaryOp::And {
+            either(&a.value, m, rest, constant)
+        } else {
+            either(&a.value, m, constant, rest)
+        };
+    }
     if matches!(op, BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Eq | BinaryOp::Ne)
         && [lhs, rhs].iter().all(|x| wide_int(x, p) && x.repr == Some(Repr::I32))
     {
@@ -2611,8 +2673,10 @@ fn binary(
         BinaryOp::Div => format!("udiv {} {}, {}", a.ty, a.value, b.value),
         BinaryOp::Rem if signed => format!("srem {} {}, {}", a.ty, a.value, b.value),
         BinaryOp::Rem => format!("urem {} {}, {}", a.ty, a.value, b.value),
-        BinaryOp::BitAnd | BinaryOp::And => format!("and {} {}, {}", a.ty, a.value, b.value),
-        BinaryOp::BitOr | BinaryOp::Or => format!("or {} {}, {}", a.ty, a.value, b.value),
+        BinaryOp::BitAnd => format!("and {} {}, {}", a.ty, a.value, b.value),
+        BinaryOp::BitOr => format!("or {} {}, {}", a.ty, a.value, b.value),
+        // Oben mit Kurzschluss gesenkt.
+        BinaryOp::And | BinaryOp::Or => return Err(NotYet { what: "`and`/`or` ohne Kurzschluss" }),
         BinaryOp::BitXor => format!("xor {} {}, {}", a.ty, a.value, b.value),
         BinaryOp::Shl => format!("shl {} {}, {}", a.ty, a.value, b.value),
         // 3.10: `>>` auf vorzeichenbehafteten Werten ist arithmetisch.

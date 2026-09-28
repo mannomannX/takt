@@ -51,9 +51,10 @@ impl Abi {
     /// `abort "text"` (5.4): Fault fuer *alle* Maschinen im selben Tick.
     pub const ABORT: &'static str = "takt_abort";
 
-    /// Ein Fault-Uebergang (5.3): Maschine und der verlassene Zustand. Die
-    /// Runtime schreibt ihn in den Trace, damit ein nativer Lauf sagt, *wo*
-    /// er vom Interpreter abwich — nicht nur, dass die Outputs anders sind.
+    /// Ein Fault-Uebergang (5.3): Maschine, der verlassene Zustand und die
+    /// Art ([`fault_code`]). Die Runtime schreibt ihn in den Trace, damit
+    /// ein nativer Lauf sagt, *wo* und *warum* er vom Interpreter abwich —
+    /// nicht nur, dass die Outputs anders sind.
     pub const FAULT: &'static str = "takt_fault";
 
     /// `now` (3.3): die Dauer seit dem Start des Laufs.
@@ -90,10 +91,10 @@ impl Abi {
     /// Maschinenschritten ueber *alle* Outputs, vor dem Commit (9.8,
     /// 12.1), und der Tickschritt einer Maschine kann das nicht tun.
     ///
-    /// Das Ergebnis sagt, ob geplant werden konnte: `false` heisst
-    /// `TimingFault` (der Zeitpunkt liegt nicht in der Zukunft) oder
-    /// `ScheduleOverflow` (K_o erreicht). Beide sind Faults der
-    /// Maschine, also nimmt der Aufrufer seinen Fault-Pfad.
+    /// Das Ergebnis ist null, wenn geplant werden konnte, sonst die Art
+    /// ([`fault_code`]): `TimingFault` (der Zeitpunkt liegt nicht in der
+    /// Zukunft) oder `ScheduleOverflow` (K_o erreicht). Beide sind Faults
+    /// der Maschine, also nimmt der Aufrufer seinen Fault-Pfad.
     ///
     /// Der Wert geht als `i64`: Der Latch traegt je Output einen Wert
     /// fester Groesse, und `double` passt bitgleich hinein
@@ -115,9 +116,10 @@ impl Abi {
     /// Das Fault-Flag einer reinen Funktion (4.1).
     ///
     /// Eine Funktion hat keinen eigenen Fault-Pfad — sie faultet den
-    /// Aufrufer. Sie setzt darum dieses Flag, und der Aufrufer prueft es
-    /// nach dem Aufruf; trifft er es gesetzt, nimmt er seinen eigenen
-    /// Fault-Pfad.
+    /// Aufrufer. Sie legt darum die Art ([`fault_code`]) in dieses Flag,
+    /// und der Aufrufer liest es nach dem Aufruf; steht es nicht auf null,
+    /// loescht er es und nimmt seinen eigenen Fault-Pfad mit dieser Art.
+    /// Dasselbe Flag traegt die Art aus einer `loop:`-Funktion hinaus.
     ///
     /// Eine Stelle genuegt: 9.4 kennt keinen nebenlaeufigen Zugriff auf
     /// den Zustand einer Maschine (Satz 9.4.1, die Schritte kommutieren),
@@ -148,12 +150,12 @@ impl Abi {
         m.declare(&format!("declare void @{}(i32, i32, double, i1) {RT}", Abi::MEASURE));
         m.declare(&format!("declare void @{}(i32, i32, i1) {RT}", Abi::VERIFY));
         m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::ABORT));
-        m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::FAULT));
+        m.declare(&format!("declare void @{}(i32, i32, i32) {RT}", Abi::FAULT));
         m.declare(&format!("declare i64 @{}() nounwind willreturn memory(inaccessiblemem: read)", Abi::NOW));
         m.declare(&format!("declare void @{}(i32, i32, i1) {RT}", Abi::VERDICT));
         m.declare(&format!("declare void @{}(i32, i64) {RT}", Abi::PROPERTY));
-        // 9.8: `(channel, T, wert) -> konnte geplant werden`.
-        m.declare(&format!("declare i1 @{}(i32, i64, i64) {RT}", Abi::SCHEDULE));
+        // 9.8: `(channel, T, wert) -> 0 oder die Art des Faults`.
+        m.declare(&format!("declare i32 @{}(i32, i64, i64) {RT}", Abi::SCHEDULE));
         m.declare(&format!("declare void @{}(i32) {RT}", Abi::CANCEL));
         // `job_begin` liest die Argumente und schreibt spaeter das Abbild.
         m.declare(&format!("declare void @{}(i32, i32, i32, ptr, i32) nounwind willreturn", Abi::JOB_BEGIN));
@@ -164,7 +166,7 @@ impl Abi {
         // `append` kopiert eine ganze Folge in einem Zug (3.9); LLVM
         // kennt das als Intrinsic, und eine Schleife braeuchte eine
         // Schranke, die 4.1 ohnehin verlangt.
-        m.declare(&format!("@{} = external global i8", Abi::FAULT_FLAG));
+        m.declare(&format!("@{} = external global i32", Abi::FAULT_FLAG));
         m.declare("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)");
         m.declare("declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)");
         m.declare("declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)");
@@ -175,3 +177,26 @@ impl Abi {
 
 /// Der Typ eines Meldungsindex.
 pub const SITE: LlvmType = LlvmType::Int(32);
+
+/// Die Art eines Faults als Zahl der ABI (5.3): eins plus die Variante von
+/// `FaultKind` im Prelude, die Nutzlast (`ArithKind`, `RuntimeKind`) acht
+/// Bit darueber. Null heisst „kein Fault“ — so traegt dieselbe Zahl das
+/// Flag einer Funktion und das Ergebnis von `takt_schedule`.
+pub fn fault_code(kind: takt_mir::machine::FaultKind) -> u32 {
+    use takt_mir::machine::FaultKind as F;
+    let (variant, payload) = match kind {
+        F::CheckFailed => (0, 0),
+        F::Expect => (1, 0),
+        F::Timeout => (2, 0),
+        F::SensorFault => (3, 0),
+        F::MissingValue => (4, 0),
+        F::Arithmetic(k) => (5, k as u32),
+        F::Range => (6, 0),
+        F::StreamOverflow => (7, 0),
+        F::Timing => (8, 0),
+        F::ScheduleOverflow => (9, 0),
+        F::Abort => (10, 0),
+        F::Runtime(k) => (11, k as u32),
+    };
+    1 + variant + (payload << 8)
+}

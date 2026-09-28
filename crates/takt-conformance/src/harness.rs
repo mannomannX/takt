@@ -127,10 +127,10 @@ fn build_inner(
     let _ = writeln!(s, "static long long g_tick = 0;");
     let _ = writeln!(s, "{DURATION_C}");
     scope_flags(&mut s, p);
-    // Das Fault-Flag der reinen Funktionen (4.1, `abi::Abi::FAULT_FLAG`).
-    // Es gehoert der Runtime; der Rahmen stellt es bereit und setzt es je
-    // Tick zurueck, wie es die Abort-Phase taete.
-    let _ = writeln!(s, "unsigned char takt_fn_fault = 0;");
+    // Das Fault-Flag der reinen Funktionen (4.1, `abi::Abi::FAULT_FLAG`):
+    // die Art des Faults, den der Aufrufer liest und loescht.
+    let _ = writeln!(s, "unsigned int takt_fn_fault = 0;");
+    fault_names(&mut s, p);
     let _ = writeln!(s, "void takt_alert(int m, int site, unsigned char on, unsigned char invalid) {{");
     let _ = writeln!(
         s,
@@ -138,8 +138,12 @@ fn build_inner(
     );
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_log(int m, int site) {{ printf(\"t=%lld log %d %d\\n\", g_tick, m, site); }}");
-    // 5.3: der Fault-Uebergang, mit Maschine und verlassenem Zustand.
-    let _ = writeln!(s, "void takt_fault(int m, int from) {{ printf(\"t=%lld fault %d %d\\n\", g_tick, m, from); }}");
+    // 5.3: der Fault-Uebergang mit Maschine und Art, wie der Interpreter
+    // ihn schreibt; der verlassene Zustand steht nicht in dessen Zeile.
+    let _ = writeln!(s, "void takt_fault(int m, int from, int code) {{");
+    let _ = writeln!(s, "    (void)from;");
+    let _ = writeln!(s, "    printf(\"t=%lld fault %s %s\\n\", g_tick, takt_machine_name(m), takt_fault_name(code));");
+    let _ = writeln!(s, "}}");
     // 3.3: `now` ist die Dauer seit dem Start des Laufs — die Tickzahl
     // mal T0, wie im Interpreter. Die Runtime fuehrt sie, weil alle
     // Maschinen dieselbe Uhr lesen (12.1).
@@ -717,20 +721,23 @@ pub(crate) fn scheduled(s: &mut String, p: &Program, layout: &Layout) {
     let _ = writeln!(s, "    default: return -1;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "_Bool takt_schedule(int o, long long t, long long v) {{");
+    // Das Ergebnis ist null oder die Art des Faults (`abi::fault_code`).
+    let timing = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Timing);
+    let overflow = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::ScheduleOverflow);
+    let _ = writeln!(s, "int takt_schedule(int o, long long t, long long v) {{");
     let _ = writeln!(s, "    int q = takt_sched_slot(o);");
-    let _ = writeln!(s, "    if (q < 0) return 0;");
+    let _ = writeln!(s, "    if (q < 0) return {overflow};");
     // 9.8: `T <= now` ist ein `TimingFault`; in der Simulation ist
     // `guard` null.
-    let _ = writeln!(s, "    if (t <= g_tick * {}LL) return 0;", p.config.tick);
+    let _ = writeln!(s, "    if (t <= g_tick * {}LL) return {timing};", p.config.tick);
     // Gleiche `T`: die spaetere Anweisung gewinnt (9.8).
     let _ = writeln!(s, "    for (int i = 0; i < g_sched_n[q]; i++)");
-    let _ = writeln!(s, "        if (g_sched[q][i].t == t) {{ g_sched[q][i].v = v; return 1; }}");
-    let _ = writeln!(s, "    if (g_sched_n[q] >= TAKT_K_O) return 0;");
+    let _ = writeln!(s, "        if (g_sched[q][i].t == t) {{ g_sched[q][i].v = v; return 0; }}");
+    let _ = writeln!(s, "    if (g_sched_n[q] >= TAKT_K_O) return {overflow};");
     let _ = writeln!(s, "    g_sched[q][g_sched_n[q]].t = t;");
     let _ = writeln!(s, "    g_sched[q][g_sched_n[q]].v = v;");
     let _ = writeln!(s, "    g_sched_n[q]++;");
-    let _ = writeln!(s, "    return 1;");
+    let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_cancel(int o) {{ int q = takt_sched_slot(o); if (q >= 0) g_sched_n[q] = 0; }}");
     // 9.9: Schlaf nur, wenn alle `sched[o]` leer sind.
@@ -786,6 +793,27 @@ pub(crate) fn queued_outputs(p: &Program) -> Vec<takt_mir::ChannelId> {
         .filter(|m| m.kind != takt_mir::machine::MachineKind::Template)
         .flat_map(|m| m.layout.output_queues.iter().copied())
         .collect()
+}
+
+/// Die Namen, mit denen die Rahmen einen Fault schreiben: die Maschine
+/// und die Art wie im Trace des Interpreters (`FaultKind::name`), die Art
+/// nach ihrer Zahl in der ABI (`abi::fault_code`).
+pub(crate) fn fault_names(s: &mut String, p: &Program) {
+    let names: Vec<String> = p.machines.iter().map(|m| format!("\"{}\"", m.name)).collect();
+    let _ = writeln!(s, "static const char *const takt_machine_names[{}] = {{ {} }};", names.len().max(1), {
+        if names.is_empty() { "\"?\"".to_string() } else { names.join(", ") }
+    });
+    let _ = writeln!(s, "static const char *takt_machine_name(int m) {{");
+    let _ = writeln!(s, "    return m >= 0 && m < {} ? takt_machine_names[m] : \"?\";", names.len());
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "static const char *takt_fault_name(int code) {{");
+    let _ = writeln!(s, "    switch (code) {{");
+    for kind in takt_mir::machine::FaultKind::all() {
+        let _ = writeln!(s, "    case {}: return \"{}\";", takt_llvm::abi::fault_code(kind), kind.name());
+    }
+    let _ = writeln!(s, "    default: return \"?\";");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
 }
 
 /// Speist die `sim`-Outputs in die `hw`-Inputs derselben Adresse (8.3).

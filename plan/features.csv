@@ -840,10 +840,10 @@ FAULT-Expect,Fault-Art,5.3,Expect,,M1 (Kernsemantik),fertig,
 FAULT-Timeout,Fault-Art,5.3,Timeout,,M1 (Kernsemantik),fertig,
 FAULT-SensorFault,Fault-Art,5.3,SensorFault,,M1 (Kernsemantik),fertig,
 FAULT-MissingValue,Fault-Art,5.3,MissingValue,,M1 (Kernsemantik),fertig,
-FAULT-ArithmeticFault_Overflow_DivZero_NonFinite_Domain_Singular,Fault-Art,5.3,ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular),,M10 (aus M1),teilweise,Art des Faults im erzeugten Code und im Differential (FB-330); `Domain` fuer `log`/`asin` nativ mit M10 Schritt 19
+FAULT-ArithmeticFault_Overflow_DivZero_NonFinite_Domain_Singular,Fault-Art,5.3,ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular),,M10 (aus M1),teilweise,`last_fault` im erzeugten Code (FB-340); `Domain` fuer `log`/`asin` nativ mit M10 Schritt 19. Art im Trace und im Differential seit FB-330
 FAULT-RangeFault,Fault-Art,5.3,RangeFault,,M1 (Kernsemantik),fertig,
 FAULT-StreamOverflow,Fault-Art,5.3,StreamOverflow,,M1 (Kernsemantik),fertig,
-FAULT-TimingFault,Fault-Art,5.3,TimingFault,,M10 (aus M1),teilweise,`guard(o)` aus der Konfiguration auf dem Ziel (FB-331)
+FAULT-TimingFault,Fault-Art,5.3,TimingFault,,M10 (aus M1),teilweise,`guard(o)` aus der Konfiguration auf dem Ziel (FB-331); Art im Differential seit FB-330
 FAULT-ScheduleOverflow,Fault-Art,5.3,ScheduleOverflow,,M10 (aus M1),fertig,
 FAULT-Abort,Fault-Art,5.3,Abort,,M1 (Kernsemantik),fertig,
 FAULT-Runtime_Overrun_Driver_Watchdog_Hardware_Node,Fault-Art,5.3,Runtime(Overrun | Driver | Watchdog | Hardware | Node),,M10 (aus M1),teilweise,"Zustellung von Overrun, Driver und Hardware an die Maschinen (FB-332); `Watchdog` entfaellt (FB-324), `Node` ist v2"

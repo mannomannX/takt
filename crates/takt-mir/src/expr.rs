@@ -433,6 +433,22 @@ pub enum CheckedKind {
     Missing,
 }
 
+impl CheckedKind {
+    /// Der Fault, den eine gescheiterte Pruefung ausloest (4.1, 3.4, 3.5, 3.8).
+    pub fn fault(&self) -> crate::machine::FaultKind {
+        use crate::machine::{ArithKind, FaultKind};
+        match self {
+            Self::DivZero => FaultKind::Arithmetic(ArithKind::DivZero),
+            Self::Overflow => FaultKind::Arithmetic(ArithKind::Overflow),
+            Self::NonFinite => FaultKind::Arithmetic(ArithKind::NonFinite),
+            Self::Domain => FaultKind::Arithmetic(ArithKind::Domain),
+            Self::Index { .. } | Self::Range(_) | Self::Convert | Self::Shift => FaultKind::Range,
+            Self::Valid => FaultKind::SensorFault,
+            Self::Missing => FaultKind::MissingValue,
+        }
+    }
+}
+
 /// Inhalt eines Ausdrucks (2.6 in plan/mir.md).
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]

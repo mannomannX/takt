@@ -18,6 +18,10 @@ use crate::emit::{Module, Reg, float_literal};
 use crate::expr::{Lowered, NotYet, Vars, lower};
 use crate::ty::LlvmType;
 
+/// Eine singulaere Matrix bei `inv` und `solve` (3.11).
+const SINGULAR: takt_mir::machine::FaultKind =
+    takt_mir::machine::FaultKind::Arithmetic(takt_mir::machine::ArithKind::Singular);
+
 /// Zeilen, Spalten und Elementtyp, wenn `ty` eine Matrix ist.
 pub fn shape(ty: &LlvmType) -> Option<(usize, usize, LlvmType)> {
     let LlvmType::Array(row, rows) = ty else { return None };
@@ -363,7 +367,7 @@ fn inv(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
-    let fault = vars.fault_label().ok_or(NotYet { what: "Matrixinversion ohne Fault-Pfad" })?;
+    let fault = vars.fault_to(SINGULAR, m).ok_or(NotYet { what: "Matrixinversion ohne Fault-Pfad" })?;
     let lu = lu(a, n, t, OnSingular::Fault(fault), m);
     let out = mem_of(m, want);
     let (one, zero) = (float_literal(1.0, t), float_literal(0.0, t));
@@ -387,7 +391,7 @@ fn solve(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
-    let fault = vars.fault_label().ok_or(NotYet { what: "`solve` ohne Fault-Pfad" })?;
+    let fault = vars.fault_to(SINGULAR, m).ok_or(NotYet { what: "`solve` ohne Fault-Pfad" })?;
     let (_, k, _) = shape(&b.ty).ok_or(NotYet { what: "rechte Seite von `solve`" })?;
     let lu = lu(a, n, t, OnSingular::Fault(fault), m);
     let bm = mem_of(m, &b.ty);

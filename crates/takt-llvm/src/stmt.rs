@@ -153,6 +153,12 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// Der Trampolin fuer einen Fault der Art `kind` (5.3), ueber den
+    /// Block, der die Art ablegt.
+    pub fn trampoline_for(&self, kind: takt_mir::machine::FaultKind, m: &mut Module) -> String {
+        m.fault_to(&self.trampoline(), crate::abi::fault_code(kind))
+    }
+
     /// Die Marke des Fault-Pfads ab `from` in dieser Funktion; `None` ist
     /// `FAULTED` (5.3). Der Pfad wird vorgemerkt und am Ende der Funktion
     /// geschrieben.
@@ -637,7 +643,8 @@ fn send(
     let ok = m.inst(&format!("call i1 @{}(i32 {sid}, ptr {bytes}, i32 {len})", crate::stream::Streams::SEND));
     // 8.8: `len > tx.free` ist ein `StreamOverflow`.
     let go_on = format!("gesendet{}_{}", m.next_label(), ctx.machine.name);
-    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{}", ctx.trampoline()));
+    let fault = ctx.trampoline_for(takt_mir::machine::FaultKind::StreamOverflow, m);
+    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{fault}"));
     m.label(&go_on);
     Ok(())
 }
@@ -764,7 +771,9 @@ fn at(time: &Expr, body: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<()
             LlvmType::Int(n) => m.inst(&format!("sext i{n} {} to i64", v.value)).to_string(),
             _ => return Err(NotYet { what: "`at` mit einem zusammengesetzten Wert" }),
         };
-        let ok = m.inst(&format!("call i1 @{}(i32 {}, i64 {}, i64 {word})", Abi::SCHEDULE, c.0, t.value));
+        let code = m.inst(&format!("call i32 @{}(i32 {}, i64 {}, i64 {word})", Abi::SCHEDULE, c.0, t.value));
+        let ok = m.inst(&format!("icmp eq i32 {code}, 0"));
+        m.fault_code_at(&code.to_string());
         let go_on = format!("geplant{}_{}", m.next_label(), ctx.machine.name);
         m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{}", ctx.trampoline()));
         m.label(&go_on);
@@ -1096,8 +1105,14 @@ fn check(cond: &Expr, kind: takt_mir::stmt::CheckKind, ctx: &mut Ctx<'_>, m: &mu
         return Err(NotYet { what: "Bedingung ist kein `bool`" });
     }
     let go_on = format!("weiter{}_{}", m.next_label(), ctx.machine.name);
-    let _ = kind;
-    m.void_inst(&format!("br i1 {}, label %{go_on}, label %{}", c.value, ctx.trampoline()));
+    let fault = ctx.trampoline_for(
+        match kind {
+            takt_mir::stmt::CheckKind::Check => takt_mir::machine::FaultKind::CheckFailed,
+            takt_mir::stmt::CheckKind::Expect => takt_mir::machine::FaultKind::Expect,
+        },
+        m,
+    );
+    m.void_inst(&format!("br i1 {}, label %{go_on}, label %{fault}", c.value));
     m.label(&go_on);
     Ok(())
 }
@@ -1306,7 +1321,9 @@ fn index_guard(
         }
         _ => return Err(NotYet { what: "Index auf diesem Typ" }),
     };
-    let target = vars.fault_label().ok_or(NotYet { what: "Indexpruefung ohne Fault-Pfad" })?;
+    let target = vars
+        .fault_to(takt_mir::machine::FaultKind::Range, m)
+        .ok_or(NotYet { what: "Indexpruefung ohne Fault-Pfad" })?;
     let ok = m.inst(&format!("icmp ult {} {}, {bound}", i.ty, i.value));
     let go_on = format!("index_ok{}", m.next_label());
     m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));

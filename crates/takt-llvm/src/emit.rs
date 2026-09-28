@@ -114,6 +114,12 @@ pub struct Module {
     /// Laeuft das Ziel ohne Betriebssystem? Das bestimmt den Rumpf der
     /// Port-Helfer und sonst nichts.
     bare_metal: bool,
+    /// Der Platz der laufenden Funktion fuer die Art des Faults, den sie
+    /// nimmt (5.3); angelegt beim ersten Bedarf.
+    fault_slot: Option<Reg>,
+    /// Die Bloecke, die eine Art ablegen und in einen Fault-Pfad springen
+    /// ([`Module::fault_to`]): Ziel und Art, geschrieben am Ende der Funktion.
+    fault_stubs: Vec<(String, u32)>,
 }
 
 impl Module {
@@ -157,6 +163,8 @@ impl Module {
             terminated: false,
             mmio: Vec::new(),
             bare_metal: crate::target::Target::by_triple(triple).is_some_and(crate::target::Target::is_bare_metal),
+            fault_slot: None,
+            fault_stubs: Vec::new(),
         }
     }
 
@@ -213,6 +221,8 @@ impl Module {
         let _ = writeln!(self.body, "\ndefine {linkage}{ret} @{name}({}) nounwind{extra} {{", sig.join(", "));
         self.entry_at = self.body.len();
         self.slots = 0;
+        self.fault_slot = None;
+        self.fault_stubs.clear();
         // Der Eintrittsblock bekommt eine Nummer wie ein Register.
         self.next = params.len() as u32 + 1;
         self.open = true;
@@ -228,22 +238,67 @@ impl Module {
     /// Ist der laufende Block schon terminiert, entsteht kein zweiter
     /// `ret` — LLVM liesse ihn nicht zu.
     pub fn end(&mut self, ret: Option<(&LlvmType, String)>) {
-        if self.terminated {
-            let _ = writeln!(self.body, "}}");
-            self.open = false;
-            return;
-        }
-        match ret {
-            Some((t, v)) => {
-                let _ = writeln!(self.body, "  ret {t} {v}");
-            }
-            None => {
-                let _ = writeln!(self.body, "  ret void");
+        if !self.terminated {
+            match ret {
+                Some((t, v)) => {
+                    let _ = writeln!(self.body, "  ret {t} {v}");
+                }
+                None => {
+                    let _ = writeln!(self.body, "  ret void");
+                }
             }
         }
+        self.write_fault_stubs();
         let _ = writeln!(self.body, "}}");
         self.open = false;
         self.terminated = true;
+    }
+
+    /// Der Platz fuer die Art des Faults in der laufenden Funktion, mit
+    /// null vorbelegt: Ein Fault-Pfad liest ihn, und null ist „keine Art“.
+    pub fn fault_slot(&mut self) -> Reg {
+        if let Some(slot) = self.fault_slot {
+            return slot;
+        }
+        // Ohne `lifetime.start`: Der Platz lebt in der ganzen Funktion, auch
+        // in den Fault-Pfaden an ihrem Ende.
+        let slot = Reg::Named(self.slots);
+        self.slots += 1;
+        let lines = format!("  {slot} = alloca i32\n  store i32 0, ptr {slot}\n");
+        self.body.insert_str(self.entry_at, &lines);
+        self.entry_at += lines.len();
+        self.fault_slot = Some(slot);
+        slot
+    }
+
+    /// Die Marke, ueber die ein Fault der Art `code` nach `target` springt
+    /// (5.3): ein Block, der die Art in [`Module::fault_slot`] legt. Je Ziel
+    /// und Art entsteht einer, am Ende der Funktion.
+    pub fn fault_to(&mut self, target: &str, code: u32) -> String {
+        if !self.fault_stubs.iter().any(|(t, c)| t == target && *c == code) {
+            self.fault_stubs.push((target.to_string(), code));
+        }
+        format!("{target}_k{code}")
+    }
+
+    /// Legt eine erst zur Laufzeit bekannte Art in den Platz — das Flag
+    /// einer gerufenen Funktion, das Ergebnis von `takt_schedule` —, bevor
+    /// der Aufrufer verzweigt.
+    pub fn fault_code_at(&mut self, code: &str) {
+        let slot = self.fault_slot();
+        self.void_inst(&format!("store i32 {code}, ptr {slot}"));
+    }
+
+    fn write_fault_stubs(&mut self) {
+        if self.fault_stubs.is_empty() {
+            return;
+        }
+        let slot = self.fault_slot();
+        for (target, code) in std::mem::take(&mut self.fault_stubs) {
+            let _ = writeln!(self.body, "{target}_k{code}:");
+            let _ = writeln!(self.body, "  store i32 {code}, ptr {slot}");
+            let _ = writeln!(self.body, "  br label %{target}");
+        }
     }
 
     /// Wie [`Module::begin`], aber mit `sret`-Attribut fuer die Rueckgabe.
@@ -258,6 +313,8 @@ impl Module {
             writeln!(self.body, "\ndefine internal {} @{name}({}) nounwind {{", sig.llvm_ret(), sig_text.join(", "));
         self.entry_at = self.body.len();
         self.slots = 0;
+        self.fault_slot = None;
+        self.fault_stubs.clear();
         self.next = params.len() as u32 + 1;
         self.open = true;
         self.terminated = false;

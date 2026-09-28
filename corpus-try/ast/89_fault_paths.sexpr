@@ -1,0 +1,47 @@
+(system
+  (language 1)
+  (tick 10ms))
+(input p :float[bar] in 0..100[bar] @hw("daq/p") max_age=50ms)
+(output a_out :int @hw("o/a") safe=0)
+(output b_out :int @hw("o/b") safe=0)
+(output c_out :int @hw("o/c") safe=0)
+(output high :bool @hw("o/high") safe=false)
+(output any :bool @hw("o/any") safe=false)
+(output shown :float[bar] @hw("o/shown") safe=0[bar])
+(fn inc (x:int in 0..100) -> int in 0..100
+  (return (call min (+ x 1) 100)))
+(fn quotient (d:int in (- 5)..5) -> int
+  (return (/ 10 d)))
+(fn pick (n:int in 0..100) -> int?
+  (if (> n 2)
+    (return none))
+  (return n))
+(machine a
+  (var d :int in (- 5)..5 2)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= d (call max (- d 1) (- 5)))
+      (= a_out (call quotient d)))))
+(machine b
+  (var n :int in 0..100 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= n (call inc n))
+      (= b_out n))))
+(machine c
+  (var n :int in 0..100 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= n (call inc n))
+      (var x :int (call pick n))
+      (= c_out x))))
+(machine guard
+  (initial RUN)
+  (state RUN
+    (loop
+      (= high (and (.valid p) (> p 5[bar])))
+      (= any (or (not (.valid p)) (> p 5[bar])))
+      (= shown (if (.valid p) p 0[bar])))))

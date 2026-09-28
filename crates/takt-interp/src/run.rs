@@ -666,30 +666,17 @@ fn collect(
                 if fault_is_fail {
                     *fail = true;
                 }
-                LineKind::Fault { machine, kind: fault_name(*kind), message: message.clone(), target: target.clone() }
+                LineKind::Fault {
+                    machine,
+                    kind: takt_mir::machine::FaultKind::name(*kind),
+                    message: message.clone(),
+                    target: target.clone(),
+                }
             }
             Observation::Signal { name } => LineKind::Signal { machine, name: name.clone() },
             Observation::Job { handle } => LineKind::Job { machine, handle: handle.clone() },
         };
         writer.lines.push(TraceLine { tick, kind });
-    }
-}
-
-fn fault_name(kind: takt_mir::machine::FaultKind) -> String {
-    use takt_mir::machine::FaultKind as F;
-    match kind {
-        F::CheckFailed => "CheckFailed".into(),
-        F::Expect => "Expect".into(),
-        F::Timeout => "Timeout".into(),
-        F::SensorFault => "SensorFault".into(),
-        F::MissingValue => "MissingValue".into(),
-        F::Arithmetic(k) => format!("Arithmetic({k:?})"),
-        F::Range => "RangeFault".into(),
-        F::StreamOverflow => "StreamOverflow".into(),
-        F::Timing => "TimingFault".into(),
-        F::ScheduleOverflow => "ScheduleOverflow".into(),
-        F::Abort => "Abort".into(),
-        F::Runtime(k) => format!("Runtime({k:?})"),
     }
 }
 

@@ -103,6 +103,38 @@ pub enum FaultKind {
     Runtime(RuntimeKind),
 }
 
+impl FaultKind {
+    /// Jede Art mit jeder Nutzlast, in der Reihenfolge des Prelude.
+    pub fn all() -> Vec<FaultKind> {
+        use ArithKind as A;
+        use RuntimeKind as R;
+        let mut out = vec![Self::CheckFailed, Self::Expect, Self::Timeout, Self::SensorFault, Self::MissingValue];
+        out.extend([A::Overflow, A::DivZero, A::NonFinite, A::Domain, A::Singular].map(Self::Arithmetic));
+        out.extend([Self::Range, Self::StreamOverflow, Self::Timing, Self::ScheduleOverflow, Self::Abort]);
+        out.extend([R::Overrun, R::Driver, R::Hardware, R::Node].map(Self::Runtime));
+        out
+    }
+
+    /// Der Name im Trace (`grammar/trace.md`): `CheckFailed`,
+    /// `Arithmetic(DivZero)`, `Runtime(Overrun)`.
+    pub fn name(self) -> String {
+        match self {
+            Self::CheckFailed => "CheckFailed".into(),
+            Self::Expect => "Expect".into(),
+            Self::Timeout => "Timeout".into(),
+            Self::SensorFault => "SensorFault".into(),
+            Self::MissingValue => "MissingValue".into(),
+            Self::Arithmetic(k) => format!("Arithmetic({k:?})"),
+            Self::Range => "RangeFault".into(),
+            Self::StreamOverflow => "StreamOverflow".into(),
+            Self::Timing => "TimingFault".into(),
+            Self::ScheduleOverflow => "ScheduleOverflow".into(),
+            Self::Abort => "Abort".into(),
+            Self::Runtime(k) => format!("Runtime({k:?})"),
+        }
+    }
+}
+
 /// Fault-Ziel φ(s) (5.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FaultTarget {

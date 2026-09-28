@@ -315,8 +315,7 @@ fn transitions(
         // vorgemerkt und nimmt dann den Fault-Pfad des Blatts — denselben,
         // den ein gescheiterter `check` nimmt.
         if let Target::Fault(kind) = t.target {
-            pending(ctx, m, kind);
-            let fault = ctx.vars().fault_label().ok_or(NotYet { what: "Fault-Marke" })?;
+            let fault = ctx.vars().fault_to(kind, m).ok_or(NotYet { what: "Fault-Marke" })?;
             m.void_inst(&format!("br label %{fault}"));
             m.label(&skip);
             continue;
@@ -415,42 +414,6 @@ fn safe_outputs(ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         m.write(&value.ty, &value.value, &ptr.to_string());
     }
     Ok(())
-}
-
-/// Merkt einen Fault vor, bevor der Fault-Pfad ihn aufnimmt (5.4).
-///
-/// `pending` ist `{ i1 gueltig, i32 Art, i32 Ursprung }`. Der Fault-Pfad
-/// setzt das Flag selbst; hier kommt die *Art* dazu, weil nur der
-/// Uebergang sie kennt — ein Timeout ist ein anderer Fault als ein
-/// gescheiterter `check`, und die Abort-Phase (5.4) reicht ihn weiter.
-fn pending(ctx: &Ctx<'_>, m: &mut Module, kind: takt_mir::machine::FaultKind) {
-    let Some(i) = ctx.state.index_of(Role::Pending, 0) else { return };
-    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
-    let field = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}"));
-    let art = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 1"));
-    m.void_inst(&format!("store i32 {}, ptr {art}", fault_code(kind)));
-}
-
-/// Die Fault-Art als Zahl, in der Reihenfolge von `FaultKind` (5.3).
-///
-/// Die Runtime liest sie aus `pending`; die Zahlen sind darum Teil der
-/// ABI und stehen neben `abi.rs`, nicht im Code verstreut.
-fn fault_code(kind: takt_mir::machine::FaultKind) -> u32 {
-    use takt_mir::machine::FaultKind as F;
-    match kind {
-        F::CheckFailed => 0,
-        F::Expect => 1,
-        F::Timeout => 2,
-        F::SensorFault => 3,
-        F::MissingValue => 4,
-        F::Arithmetic(_) => 5,
-        F::Range => 6,
-        F::StreamOverflow => 7,
-        F::Timing => 8,
-        F::ScheduleOverflow => 9,
-        F::Abort => 11,
-        F::Runtime(_) => 12,
-    }
 }
 
 /// Woher ein Wechsel kommt (9.3).
@@ -716,12 +679,17 @@ fn loop_call(
     let r = m.inst(&format!("call i8 @{name}(ptr %0, ptr %1, ptr %2, ptr %3, i8 {leaf}, i1 {entry})"));
     let k = ctx.next_label(m);
     let (on, out) = (format!("weiter{k}_{}", ctx.machine.name), format!("abbruch{k}_{}", ctx.machine.name));
-    m.void_inst(&format!(
-        "switch i8 {r}, label %{on} [ i8 1, label %{end} i8 2, label %{} i8 3, label %{out} ]",
-        ctx.trampoline()
-    ));
+    let fault = format!("fault_aus_loop{k}_{}", ctx.machine.name);
+    m.void_inst(&format!("switch i8 {r}, label %{on} [ i8 1, label %{end} i8 2, label %{fault} i8 3, label %{out} ]"));
     m.label(&out);
     m.void_inst("ret void");
+    // Die Art bringt die `loop:`-Funktion im Flag mit; gelesen wird es
+    // geloescht wie nach jedem Aufruf (FB-337).
+    m.label(&fault);
+    let code = m.inst(&format!("load i32, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    m.void_inst(&format!("store i32 0, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    m.fault_code_at(&code.to_string());
+    m.void_inst(&format!("br label %{}", ctx.trampoline()));
     m.label(&on);
     Ok(())
 }
@@ -763,11 +731,17 @@ fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Modul
         module.void_inst("ret i8 0");
         module.label(&end);
         module.void_inst("ret i8 1");
+        // Ein Fault verlaesst die Funktion mit 2; die Art geht im Flag mit.
         for leaf in &ctx.region {
             module.label(&format!("fault_{}_{}{}", m.name, leaf.index(), ctx.tag));
-            module.void_inst("ret i8 2");
+            module.void_inst(&format!("br label %fault_{}_raus{}", m.name, ctx.tag));
         }
         module.label(&format!("fault_{}_any{}", m.name, ctx.tag));
+        module.void_inst(&format!("br label %fault_{}_raus{}", m.name, ctx.tag));
+        module.label(&format!("fault_{}_raus{}", m.name, ctx.tag));
+        let slot = module.fault_slot();
+        let code = module.inst(&format!("load i32, ptr {slot}"));
+        module.void_inst(&format!("store i32 {code}, ptr @{}", crate::abi::Abi::FAULT_FLAG));
         module.void_inst("ret i8 2");
         // Die Fault-Pfade der Wechsel, die ein `->` hier ausloest: Sie
         // beenden den Schritt wie das `->` selbst.
@@ -2081,14 +2055,23 @@ fn fault_body(
     end: &str,
 ) -> Result<(), NotYet> {
     let md = ctx.machine;
-    m.void_inst(&format!("call void @{}(i32 {}, i32 {from_val})", crate::abi::Abi::FAULT, ctx.machine_index));
-    // Der Fault wird vorgemerkt; `pending` traegt ihn fuer die
-    // Abort-Phase (5.4), die die Runtime fuehrt.
+    // Die Art hat die Sprungstelle abgelegt (`Module::fault_to`).
+    let slot = m.fault_slot();
+    let code = m.inst(&format!("load i32, ptr {slot}"));
+    m.void_inst(&format!(
+        "call void @{}(i32 {}, i32 {from_val}, i32 {code})",
+        crate::abi::Abi::FAULT,
+        ctx.machine_index
+    ));
+    // Der Fault wird vorgemerkt; `pending` traegt ihn mit seiner Art fuer
+    // die Abort-Phase (5.4), die die Runtime fuehrt.
     if let Some(pending) = ctx.state.index_of(Role::Pending, 0) {
         let state_ty = format!("%{}_state", crate::fns::sanitized(&md.name));
         let field = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {pending}"));
         let flag = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 0"));
         m.void_inst(&format!("store i1 true, ptr {flag}"));
+        let art = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 1"));
+        m.void_inst(&format!("store i32 {code}, ptr {art}"));
     }
     // 5.3: Ein Fault-Uebergang bricht die laufenden Jobs der Maschine ab
     // und leert die Warteschlangen ihrer geplanten Ausgaben — ein Safe-Wert

@@ -226,11 +226,13 @@ fn body(f: &FnDef, p: &Program, args: &[Reg], sig: &Signature, m: &mut Module) -
             _ => m.void_inst("unreachable"),
         }
     }
-    // 4.1: Eine reine Funktion hat keinen Fault-Pfad — sie setzt das Flag
-    // und kehrt zurueck. Der Aufrufer prueft es und nimmt seinen eigenen
-    // Pfad (`abi::Abi::FAULT_FLAG`).
+    // 4.1: Eine reine Funktion hat keinen Fault-Pfad — sie legt die Art
+    // ins Flag und kehrt zurueck. Der Aufrufer prueft es und nimmt seinen
+    // eigenen Pfad (`abi::Abi::FAULT_FLAG`).
     m.label(&format!("fn_fault_{}", sanitized(&f.name)));
-    m.void_inst(&format!("store i8 1, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    let slot = m.fault_slot();
+    let code = m.inst(&format!("load i32, ptr {slot}"));
+    m.void_inst(&format!("store i32 {code}, ptr @{}", crate::abi::Abi::FAULT_FLAG));
     match ret {
         LlvmType::Void => m.void_inst("ret void"),
         // Der Wert ist bedeutungslos: Der Aufrufer liest ihn nicht, wenn
@@ -397,11 +399,13 @@ fn block_body(
             _ => m.void_inst("unreachable"),
         }
     }
-    // 4.1: Eine reine Funktion hat keinen Fault-Pfad — sie setzt das Flag
-    // und kehrt zurueck. Der Aufrufer prueft es und nimmt seinen eigenen
-    // Pfad (`abi::Abi::FAULT_FLAG`).
+    // 4.1: Eine reine Funktion hat keinen Fault-Pfad — sie legt die Art
+    // ins Flag und kehrt zurueck. Der Aufrufer prueft es und nimmt seinen
+    // eigenen Pfad (`abi::Abi::FAULT_FLAG`).
     m.label(&format!("fn_fault_{}", sanitized(&f.name)));
-    m.void_inst(&format!("store i8 1, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    let slot = m.fault_slot();
+    let code = m.inst(&format!("load i32, ptr {slot}"));
+    m.void_inst(&format!("store i32 {code}, ptr @{}", crate::abi::Abi::FAULT_FLAG));
     match ret {
         LlvmType::Void => m.void_inst("ret void"),
         // Der Wert ist bedeutungslos: Der Aufrufer liest ihn nicht, wenn

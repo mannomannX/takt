@@ -3,6 +3,9 @@
 //! **Was verglichen wird.** Die Outputs je Tick, in kanonischer Ordnung.
 //! 9.4.4 spricht von Outputs, und plan/m4.md 2.5 hat daraus die Abnahme
 //! gemacht: Der Trace ist die Zusage, der Zustand ein Diagnosewerkzeug.
+//! Dazu die Faults je Tick nach Maschine und Art (FB-330): Zwei Wege, die
+//! im selben Tick aus verschiedenen Gruenden faulten, fielen an den
+//! Outputs nicht auf — beide stehen danach auf `safe`.
 //!
 //! **Was nicht verglichen wird, und warum das dasteht.** Der Testrahmen
 //! ist keine Runtime (siehe `harness`): Er hat keine Treiber, also keine
@@ -107,7 +110,49 @@ pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
             }
         }
     }
+    // Faults nur, soweit beide Traces reichen: Ein Lauf, der frueher
+    // endet, hat die spaeteren nicht verpasst, sondern nicht erreicht.
+    let horizon = last_tick(interpreter).min(last_tick(native));
+    let (fa, fb) = (faults(interpreter), faults(native));
+    let fault_ticks: std::collections::BTreeSet<u64> =
+        fa.keys().chain(fb.keys()).copied().filter(|t| Some(*t) <= horizon).collect();
+    for tick in fault_ticks {
+        let (x, y) = (fa.get(&tick), fb.get(&tick));
+        if x != y {
+            let render = |v: Option<&Vec<(String, String)>>| {
+                v.map_or(String::new(), |v| v.iter().map(|(m, k)| format!("{m} {k}")).collect::<Vec<_>>().join(", "))
+            };
+            out.push(Difference { tick, output: "fault".into(), interpreter: render(x), native: render(y) });
+        }
+    }
     out
+}
+
+/// Die Faults eines Traces (`t=<tick> fault <maschine> <art> …`): je Tick
+/// Maschine und Art, sortiert — die Reihenfolge der Maschinen in einem
+/// Tick ist keine Zusage (Satz 9.4.1).
+fn faults(text: &str) -> BTreeMap<u64, Vec<(String, String)>> {
+    let mut out: BTreeMap<u64, Vec<(String, String)>> = BTreeMap::new();
+    for line in text.lines() {
+        let mut w = line.split_whitespace();
+        let Some(t) = w.next().and_then(|s| s.strip_prefix("t=")).and_then(|s| s.parse::<u64>().ok()) else {
+            continue;
+        };
+        if w.next() != Some("fault") {
+            continue;
+        }
+        let (Some(machine), Some(kind)) = (w.next(), w.next()) else { continue };
+        out.entry(t).or_default().push((machine.to_string(), kind.to_string()));
+    }
+    for list in out.values_mut() {
+        list.sort();
+    }
+    out
+}
+
+/// Der letzte Tick, den ein Trace nennt.
+fn last_tick(text: &str) -> Option<u64> {
+    text.lines().filter_map(|l| l.split_whitespace().next()?.strip_prefix("t=")?.parse::<u64>().ok()).max()
 }
 
 /// Die Outputs eines Ticks, jeder mit seinen Werten in Reihenfolge.

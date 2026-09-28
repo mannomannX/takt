@@ -112,7 +112,8 @@ fn runtime_abi(s: &mut String, p: &Program) {
     // die Ausgaben, die der Dump danach schreibt, gehoeren aber zu ihm.
     let _ = writeln!(s, "static long long g_done = 0;");
     crate::harness::scope_flags(s, p);
-    let _ = writeln!(s, "unsigned char takt_fn_fault = 0;\n");
+    let _ = writeln!(s, "unsigned int takt_fn_fault = 0;\n");
+    crate::harness::fault_names(s, p);
 
     // 3.3: `now` ist die Dauer seit dem Start — Tickzahl mal T0.
     let _ = writeln!(s, "long long takt_now(void) {{ return g_tick * {}LL; }}\n", p.config.tick);
@@ -122,7 +123,6 @@ fn runtime_abi(s: &mut String, p: &Program) {
     for (name, args, kind, flags) in [
         ("takt_alert", "int m, int site, unsigned char on, unsigned char invalid", "alert", &["on", "invalid"][..]),
         ("takt_log", "int m, int site", "log", &[]),
-        ("takt_fault", "int m, int site", "fault", &[]),
         ("takt_abort", "int m, int site", "abort", &[]),
         ("takt_verify", "int m, int site, unsigned char ok", "verify", &["ok"]),
         ("takt_verdict", "int m, int site, unsigned char pass", "verdict", &["pass"]),
@@ -139,6 +139,19 @@ fn runtime_abi(s: &mut String, p: &Program) {
         let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
         let _ = writeln!(s, "}}");
     }
+
+    // 5.3: der Fault-Uebergang mit Maschine und Art, wie der Interpreter
+    // ihn schreibt.
+    let _ = writeln!(s, "void takt_fault(int m, int from, int code) {{");
+    let _ = writeln!(s, "    (void)from;");
+    let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
+    let _ = writeln!(s, "    takt_board_trace(\"fault \");");
+    let _ = writeln!(s, "    takt_board_trace(takt_machine_name(m));");
+    let _ = writeln!(s, "    takt_board_trace(\" \");");
+    let _ = writeln!(s, "    takt_board_trace(takt_fault_name(code));");
+    let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+    let _ = writeln!(s, "}}\n");
 
     // **Das Bitmuster, nicht der gerechnete Wert.** Eine erste Fassung gab
     // `(long long)(v * 1000000.0)` aus — Mikroeinheiten, weil es ohne
@@ -458,7 +471,6 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "void takt_mcu_tick(long long k) {{");
     let _ = writeln!(s, "    g_tick = k;");
     let _ = writeln!(s, "    g_done = k;");
-    let _ = writeln!(s, "    takt_fn_fault = 0;");
     crate::harness::aging(s, p, layout, "    ");
     // 4.5: Was fertig und faellig ist, wird zu Tickbeginn sichtbar, wie
     // `poll_jobs` im Interpreter und im Wirtsrahmen.
