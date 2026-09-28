@@ -208,6 +208,29 @@ fn jitter_is_read_at_an_output_only() {
 }
 
 #[test]
+fn the_gate_names_what_it_could_not_decide() {
+    // 8.10, M10 Schritt 13: Eine fehlende Zahl ist eine Meldung, keine
+    // Annahme; was das Programm nicht hat, ist ohne Belang.
+    use takt_sema::calibrated::{Gate, gate, polling};
+    let p = compile(PROGRAM);
+    let bare: Vec<(u32, Gate)> = gate(&p, None, None, &[]);
+    let of = |rows: &[(u32, Gate)], n: u32| rows.iter().find(|(k, _)| *k == n).map(|(_, g)| g.clone()).expect("Zeile");
+    assert!(matches!(of(&bare, 12), Gate::NotApplicable(_)), "{bare:?}");
+    assert!(matches!(of(&bare, 28), Gate::Undecidable(ref m) if m.contains("pwm")), "{bare:?}");
+    assert!(matches!(of(&bare, 32), Gate::Undecidable(ref m) if m.contains("Kalibrierung")), "{bare:?}");
+    assert!(matches!(of(&bare, 60), Gate::Undecidable(ref m) if m.contains("Konfiguration")), "{bare:?}");
+
+    let cfg = hw(&CONFIG.replace("jitter_ns = 50000", "jitter_ns = 250000"));
+    let target = cfg.target("thumbv7em").expect("Ziel");
+    let mut diags = check(&p, target, Span::default());
+    diags.extend(check_bindings(&p, &cfg));
+    diags.extend(polling(&p, &cfg, Some(target)));
+    let judged = gate(&p, Some(target), Some(&cfg), &diags);
+    assert!(matches!(of(&judged, 28), Gate::Violated(ref m) if m.contains("250000")), "{judged:?}");
+    assert!(matches!(of(&judged, 60), Gate::Ok), "{judged:?}");
+}
+
+#[test]
 fn the_memory_budget_is_judged_against_the_target() {
     // Pruefung 39: 64 KiB passen; 64 Byte nicht.
     let p = compile(PROGRAM);

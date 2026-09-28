@@ -402,6 +402,7 @@ fn check(args: &Args) -> bool {
         }
         // Pruefung 12, 32 und 39 brauchen das Ziel, 28, 59 und 60 die Kanaele
         // der Konfiguration (8.10); ohne sie bleibt es beim Hinweis.
+        let mut gated = Vec::new();
         if let Some(program) = &checked.program {
             let span = takt_diag::Span::new(0, 0);
             let mut diags = Vec::new();
@@ -421,12 +422,13 @@ fn check(args: &Args) -> bool {
                     None => ok = false,
                 }
             }
-            for d in diags {
-                println!("{}", if line_format { map.render_line(&d) } else { map.render(&d) });
+            for d in &diags {
+                println!("{}", if line_format { map.render_line(d) } else { map.render(d) });
                 if d.is_error() {
                     ok = false;
                 }
             }
+            gated = diags;
             if let Some(out) = args.value("--hw-export") {
                 ok &= hw_export(program, out);
             }
@@ -451,6 +453,9 @@ fn check(args: &Args) -> bool {
                 }
             }
             if let Some(program) = &checked.program {
+                for line in gate_lines(program, kalibriert.as_ref(), hardware(args).as_ref(), &gated) {
+                    println!("  {line}");
+                }
                 for line in requirement_lines(&takt_mir::requirements::index(program), &map, None) {
                     println!("  {line}");
                 }
@@ -458,6 +463,38 @@ fn check(args: &Args) -> bool {
         }
     }
     ok
+}
+
+/// Der Abschnitt „Gate" des Reports (13.4, 8.10): je Pruefung, die Zahlen
+/// des Ziels braucht, ob sie urteilt und wie.
+fn gate_lines(
+    program: &takt_mir::Program,
+    target: Option<&takt_mir::hardware::Target>,
+    hw: Option<&takt_mir::hardware::Hardware>,
+    diags: &[takt_diag::Diagnostic],
+) -> Vec<String> {
+    use takt_sema::calibrated::Gate;
+    let mut out = vec!["Gate:                 Pruefungen mit Zahlen des Ziels (8.10)".to_string()];
+    for (n, gate) in takt_sema::calibrated::gate(program, target, hw, diags) {
+        let what = match n {
+            12 => "Kostenbudget",
+            28 => "Jitter",
+            29 => "Sweep-Schritte",
+            32 => "Schedulability",
+            39 => "Speicher",
+            59 => "Polling",
+            _ => "Bindungen",
+        };
+        let verdict = match gate {
+            Gate::Ok => "ok".to_string(),
+            Gate::Warned(m) => format!("ok, Warnung: {m}"),
+            Gate::Violated(m) => format!("verletzt: {m}"),
+            Gate::Undecidable(m) => format!("nicht entscheidbar: {m}"),
+            Gate::NotApplicable(why) => format!("ohne Belang: {why}"),
+        };
+        out.push(format!("  {n:>2} {what:<15} {verdict}"));
+    }
+    out
 }
 
 /// Der Abschnitt „Anforderungen" des Reports (13.4): je `req`-ID ihre

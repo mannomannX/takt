@@ -423,7 +423,14 @@ fn jitter_check(p: &Program, c: &takt_mir::program::Channel, entry: &HwChannel, 
                 Severity::Warning,
                 SC28,
                 c.span,
-                format!("`{}`: gemessener Jitter {jitter} ns ≥ Tick {tick} ns, `at` wirkt tick-granular (7.5)", c.name),
+                if entry.tick_granular == Some(true) {
+                    format!("`{}` wird nur zu Tickbeginn geschrieben, `at` wirkt tick-granular (7.5)", c.name)
+                } else {
+                    format!(
+                        "`{}`: gemessener Jitter {jitter} ns ≥ Tick {tick} ns, `at` wirkt tick-granular (7.5)",
+                        c.name
+                    )
+                },
             )
             .with_suggestion("einen Timer-Compare-Pin nehmen oder die Anforderung streichen".to_string()),
         );
@@ -717,6 +724,98 @@ pub fn reviewed(p: &Program, review: &Review, source_of: &dyn Fn(&str) -> Option
 }
 
 /// Pikosekunden als Nanosekunden, kaufmännisch gerundet.
+/// Das Urteil einer Prüfung, die Zahlen des Ziels braucht (8.10, 13.4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Gate {
+    /// Geprüft, nichts gefunden.
+    Ok,
+    /// Geprüft, ohne Fehler, mit Warnung; die erste.
+    Warned(String),
+    /// Geprüft, mit Fehler; die erste Meldung.
+    Violated(String),
+    /// Eine Zahl fehlt: Eine Lücke ist keine Annahme (8.10).
+    Undecidable(String),
+    /// Das Programm hat nichts, worüber die Prüfung urteilt.
+    NotApplicable(&'static str),
+}
+
+/// Die Prüfungen des Gates mit Urteil: 12, 28, 29, 32, 39, 59 und 60.
+///
+/// `diags` sind die Meldungen von [`check`], [`check_bindings`] und
+/// [`polling`] zu `target` und `hw`. Eine Prüfung ist verletzt, wenn sie
+/// einen Fehler meldet, nicht entscheidbar, wenn ihr eine Zahl fehlt —
+/// ohne Kalibrierung, ohne Konfiguration, ohne Messwert —, und ohne Belang,
+/// wenn das Programm nichts hat, worüber sie urteilt.
+pub fn gate(p: &Program, target: Option<&Target>, hw: Option<&Hardware>, diags: &[Diagnostic]) -> Vec<(u32, Gate)> {
+    let queued: Vec<takt_mir::ChannelId> =
+        p.machines.iter().flat_map(|m| m.layout.output_queues.iter().copied()).collect();
+    // Ein Output mit `at` oder einer `jitter`-Anforderung braucht seinen
+    // gemessenen Jitter; `sim` und `none` schreibt die Simulation exakt.
+    let timed: Vec<&takt_mir::program::Channel> = p
+        .channels
+        .iter()
+        .enumerate()
+        .filter(|(i, c)| queued.contains(&takt_mir::ChannelId(*i as u32)) || c.attrs.jitter.is_some())
+        .map(|(_, c)| c)
+        .filter(|c| matches!(c.binding, Binding::Hw(_)))
+        .collect();
+    let measured = |c: &takt_mir::program::Channel| {
+        let Binding::Hw(a) = &c.binding else { return true };
+        hw.and_then(|hw| hw.channel(&a.text())).is_some_and(|e| e.jitter_ns.is_some() || e.tick_granular == Some(true))
+    };
+    let unmeasured: Vec<&str> = timed.iter().filter(|c| !measured(c)).map(|c| c.name.as_str()).collect();
+    let jitter = |none: &'static str, relevant: bool| {
+        if !relevant {
+            Some(Gate::NotApplicable(none))
+        } else if !unmeasured.is_empty() {
+            Some(Gate::Undecidable(format!("kein gemessener `jitter` für {}", unmeasured.join(", "))))
+        } else {
+            None
+        }
+    };
+    let calibrated = |why: &str| {
+        target.is_none().then(|| Gate::Undecidable(format!("keine Kalibrierung (`--hardware`, `--target`), {why}")))
+    };
+    let configured =
+        || hw.is_none().then(|| Gate::Undecidable("keine Hardware-Konfiguration (`--hardware`)".to_string()));
+    let judged = |code: &str| {
+        let mine: Vec<&Diagnostic> = diags.iter().filter(|d| d.code == code).collect();
+        let open = |d: &&&Diagnostic| {
+            ["nicht entscheidbar", "unvollständig", "Kostenmodell"].iter().any(|w| d.message.contains(w))
+        };
+        if let Some(d) = mine.iter().find(open) {
+            return Gate::Undecidable(d.message.clone());
+        }
+        if let Some(d) = mine.iter().find(|d| d.is_error()) {
+            return Gate::Violated(d.message.clone());
+        }
+        mine.iter().find(|d| d.severity == Severity::Warning).map_or(Gate::Ok, |d| Gate::Warned(d.message.clone()))
+    };
+    let wcet = p.machines.iter().any(|m| m.declared_budget.is_some_and(|b| b.wcet_ns.is_some()));
+    let limits = target.is_some_and(|t| t.memory.ram.is_some() || t.memory.flash.is_some());
+    let sweeps = p.campaigns.iter().any(|c| c.sweeps.iter().any(|s| matches!(s, Sweep::Range { .. })));
+    let polls = p.machines.iter().any(|m| m.driver && !m.polling_unchecked);
+    let bound = p.channels.iter().any(|c| matches!(c.binding, Binding::Hw(_)));
+    let rows = [
+        (
+            12,
+            if wcet { calibrated("kein Budget in Zeit") } else { Some(Gate::NotApplicable("kein `wcet` deklariert")) },
+        ),
+        (28, jitter("kein `hw`-Output mit `at` oder `jitter`-Anforderung", !timed.is_empty())),
+        (29, jitter("kein Sweep über einen Parameter in `at`", sweeps && !queued.is_empty())),
+        (32, calibrated("keine Rechenlast in Zeit")),
+        (
+            39,
+            calibrated("keine Speichergrenzen").or_else(|| {
+                (!limits).then(|| Gate::Undecidable("das Ziel nennt weder `ram` noch `flash`".to_string()))
+            }),
+        ),
+        (59, if polls { configured() } else { Some(Gate::NotApplicable("keine gepollte `driver machine`")) }),
+        (60, if bound { configured() } else { Some(Gate::NotApplicable("keine `hw`-Bindung")) }),
+    ];
+    rows.into_iter().map(|(n, pre)| (n, pre.unwrap_or_else(|| judged(&format!("SC-{n}"))))).collect()
+}
+
 fn ns(ps: u64) -> u64 {
     ps.saturating_add(500) / 1000
 }

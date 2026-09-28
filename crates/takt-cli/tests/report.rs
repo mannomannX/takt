@@ -47,3 +47,19 @@ fn a_program_without_requirements_has_no_section() {
     assert!(out.status.success(), "{stdout}");
     assert!(!stdout.contains("Anforderungen:"), "{stdout}");
 }
+
+/// **Das Gate urteilt je Pruefung** (8.10, 13.4): ohne Kalibrierung nicht
+/// entscheidbar, mit ihr ok — eine fehlende Zahl ist keine Annahme.
+#[test]
+fn the_gate_says_which_checks_could_not_decide() {
+    let out = takt(&["check", "crates/takt-conformance/tests/programs/guard.takt", "--report"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    assert!(stdout.contains("Gate:"), "{stdout}");
+    assert!(stdout.contains("32 Schedulability  nicht entscheidbar: keine Kalibrierung"), "{stdout}");
+    let hw = ["--hardware", "corpus-try/hw/esp32c6.hw", "--target", "riscv32imac"];
+    let out = takt(&[&["check", "crates/takt-conformance/tests/programs/guard.takt", "--report"][..], &hw].concat());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("39 Speicher        ok\n"), "{stdout}");
+    assert!(stdout.contains("28 Jitter          ok, Warnung: `probe` wird nur zu Tickbeginn geschrieben"), "{stdout}");
+}
