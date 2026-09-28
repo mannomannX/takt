@@ -34,7 +34,8 @@ fn every_format_version_reads_and_runs_like_today() {
     assert!(want.contains("state m OPEN"), "der Stimulus soll beide Zustaende zeigen:\n{want}");
     for version in 2..=FORMAT_VERSION {
         let path = dir().join(format!("v{version}.mir"));
-        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e} (Datei der Version fehlt)", path.display()));
+        let bytes =
+            std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e} (Datei der Version fehlt)", path.display()));
         let (header, old) = read_program(&bytes).unwrap_or_else(|e| panic!("v{version}: {e:?}"));
         assert_eq!(header.format_version, version, "v{version}: Kopf");
         let names = |p: &takt_mir::Program| {
