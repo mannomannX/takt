@@ -63,6 +63,51 @@ pub fn long_job_keeps_the_tick(board: &mut dyn Board) -> Vec<String> {
     failed
 }
 
+/// **Ein Tick ueber seiner Periode faultet im naechsten jede Maschine**
+/// (7.3, 5.4, FB-332). `overrun.takt` laesst die Last wachsen, bis ein Tick
+/// laenger rechnet als seine Periode, aber weit unter der Frist des
+/// Watchdogs. Die Schleife meldet den Ueberlauf, der Rahmen schreibt
+/// `runtime Overrun` und stellt `Runtime(Overrun)` im naechsten Tick zu:
+/// `ramp` nimmt seinen Fault-Pfad und `bystander` auch, obwohl sie nichts
+/// rechnet. Danach laeuft der Lauf ohne Reset zu Ende, und der Interpreter
+/// spielt ihn mit der Zeile `runtime` als Stimulus nach (12.5).
+pub fn overrun_reaches_every_machine(board: &mut dyn Board) -> Vec<String> {
+    const RUN: u64 = 300;
+    let path = board::root().join("crates/takt-conformance/tests/programs/overrun.takt");
+    let options = Options::timed(RUN);
+    let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("kein Lauf: {e}")],
+    };
+    let tick_of = |needle: &str| {
+        text.lines()
+            .find(|l| l.contains(needle))
+            .and_then(|l| l.strip_prefix("t=")?.split_whitespace().next()?.parse::<u64>().ok())
+    };
+    let raised = tick_of(" runtime Overrun");
+    let (ramp, bystander) = (tick_of(" fault ramp Runtime(Overrun)"), tick_of(" fault bystander Runtime(Overrun)"));
+    let Some(at) = raised.filter(|_| raised == ramp && raised == bystander) else {
+        return vec![format!(
+            "nicht im selben Tick: runtime {raised:?}, ramp {ramp:?}, bystander {bystander:?}\n{text}"
+        )];
+    };
+    let mut failed = Vec::new();
+    if text.matches(" runtime Overrun").count() != 1 {
+        failed.push(format!("mehr als ein Ueberlauf; `SAFE` rechnet nicht mehr:\n{text}"));
+    }
+    let stimulus = takt_interp::Trace::parse(&format!("t={at} runtime Overrun\n")).expect("Stimulus");
+    let options = takt_interp::RunOptions { ticks: RUN, ..Default::default() };
+    let replayed = match takt_interp::run(&program(&path), &stimulus, &options) {
+        Ok(r) => r.trace.render(),
+        Err(e) => return vec![format!("Interpreter: {e:?}")],
+    };
+    let diffs = compare(&replayed, &text);
+    if !diffs.is_empty() {
+        failed.push(format!("{} Abweichungen vom nachgespielten Lauf: {diffs:?}\n{text}", diffs.len()));
+    }
+    failed
+}
+
 /// Der Soll-Trace ueber [`TICKS`] Ticks.
 pub fn run_interpreted(p: &Program) -> String {
     let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };

@@ -11,7 +11,10 @@ mod common;
 use std::io::Read;
 use std::time::{Duration, Instant};
 
-use common::board::{TICKS, agreement, corpus, last_output, long_job_keeps_the_tick, natives_agree, run_interpreted};
+use common::board::{
+    TICKS, agreement, corpus, last_output, long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine,
+    run_interpreted,
+};
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
 use takt_conformance::board::{self, Bin, Board, CORPUS, Options};
 use takt_conformance::compare;
@@ -123,6 +126,15 @@ fn a_restart_begins_again_with_software_as_the_reason() {
 fn a_long_job_runs_between_the_ticks() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = long_job_keeps_the_tick(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Ein Ueberlauf faultet im naechsten Tick jede Maschine** (7.3, 5.4,
+/// FB-332): `overrun_reaches_every_machine`.
+#[test]
+fn an_overrun_faults_every_machine_in_the_next_tick() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = overrun_reaches_every_machine(&mut board);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 

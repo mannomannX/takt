@@ -33,6 +33,9 @@ pub enum LineKind {
     Tune { name: String, value: String, accepted: bool },
     /// `abort`
     Abort,
+    /// `runtime <art> [<output>]`: ein Runtime-Fault (5.3); `Driver`
+    /// nennt den Output, dessen Besitzer ihn bekommt.
+    Runtime { kind: String, output: Option<String> },
     /// `out <channel> <wert>`
     Output { channel: String, value: String },
     /// `state <maschine> <pfad>`
@@ -171,6 +174,13 @@ fn parse_line(line: &str) -> Result<TraceLine, String> {
             }
         }
         "abort" => LineKind::Abort,
+        "runtime" => {
+            let (kind, output) = split_first(args);
+            LineKind::Runtime {
+                kind: nonempty(kind, "`runtime <art> [<output>]`")?.to_string(),
+                output: (!output.is_empty()).then(|| output.to_string()),
+            }
+        }
         "out" => {
             let (channel, value) = split_first(args);
             LineKind::Output {
@@ -380,6 +390,8 @@ pub(crate) fn render_line(line: &TraceLine) -> String {
         }
         LineKind::Command { name } => format!("t={t} cmd {name}"),
         LineKind::Abort => format!("t={t} abort"),
+        LineKind::Runtime { kind, output: None } => format!("t={t} runtime {kind}"),
+        LineKind::Runtime { kind, output: Some(o) } => format!("t={t} runtime {kind} {o}"),
         LineKind::Output { channel, value } => format!("t={t} out {channel} {value}"),
         LineKind::State { machine, path } => format!("t={t} state {machine} {path}"),
         LineKind::Published { machine, var, value } => format!("t={t} pub {machine} {var} {value}"),

@@ -142,6 +142,26 @@ pub fn deliver_function(m: &Machine, st: &StateStruct, module: &mut Module) -> R
     Ok(())
 }
 
+/// `<maschine>_pend(st, art)`: merkt einen Fault fuer den naechsten Schritt
+/// vor (Operator-Abort, Runtime-Fault; 5.4, 9.6). Der Schritt nimmt ihn
+/// zu Beginn statt seines Rumpfs, wie der Interpreter `pending` zustellt.
+pub fn pend_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
+    let field = st.index_of(Role::Deliver, 0).ok_or(NotYet { what: "`deliver` im Zustand" })?;
+    let args = module.begin_with(
+        "",
+        &format!("{}_pend", m.name),
+        &crate::ty::LlvmType::Void,
+        &[crate::ty::LlvmType::Ptr, crate::ty::LlvmType::Int(32)],
+        &["noalias", ""],
+        "minsize",
+    );
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {field}"));
+    module.void_inst(&format!("store i32 {}, ptr {at}", args[1]));
+    module.end(None);
+    Ok(())
+}
+
 /// Der Anfang des Schritts: eine vorgemerkte Zustellung (`deliver`, 5.4).
 ///
 /// Steht eine Art im Feld, nimmt der Schritt statt seines Rumpfs den

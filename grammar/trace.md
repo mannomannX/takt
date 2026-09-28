@@ -31,6 +31,7 @@ Leerzeichen, außer im Rest einer Meldung.
 | `in` | Stimulus | `in <channel> <wert>` oder `in <channel> <qualität> [reason=<grund>] [age=<dauer>]` |
 | `cmd` | Stimulus | `cmd <command>` — ein Tick lang wahr (8.5) |
 | `abort` | Stimulus | `abort` — Operator-Abort für alle Maschinen (5.4) |
+| `runtime` | Stimulus | `runtime <art> [<output>]` — ein Runtime-Fault (5.3, 7.3, 12.6), zugestellt wie ein Operator-Abort (5.4): `Overrun` und `Hardware` für alle Maschinen, `Driver <output>` für den Besitzer des Outputs. Die native Runtime schreibt die Zeile, wenn sie den Fault erhebt; als Stimulus spielt der Interpreter ihn nach (12.5) |
 | `tune` | Stimulus, Golden | `tune <name> <wert>` — ein Tunable gilt ab dieser Tick-Grenze (8.4); der Golden-Trace zeichnet jede Zeile auf, eine verworfene mit ` rejected` |
 | `out` | Golden | `out <channel> <wert>` — beim Commit, nur bei Änderung und in Tick 0 |
 | `state` | Golden | `state <maschine> <pfad>` — Blattpfad mit `.`, nur bei Änderung und in Tick 0 |
@@ -72,6 +73,8 @@ t=1 in tank_p bad reason=OutOfRange
 t=2 in lox_temp 90 K stale age=120 ms
 t=3 cmd start
 t=4 abort
+t=5 runtime Overrun
+t=6 runtime Driver valve
 ```
 
 Ein Strom trägt kein Latch, sondern ein *Element* je Zeile (8.6): der Wert
@@ -134,7 +137,7 @@ t=3 in tank_p bad reason=Driver
 
 Innerhalb eines Ticks:
 
-1. `in`, `cmd`, `abort` in Channel- beziehungsweise Command-Indexreihenfolge.
+1. `in`, `cmd`, `abort`, `runtime` in Channel- beziehungsweise Command-Indexreihenfolge.
 2. je Maschine in Indexreihenfolge: `log`, `alert`, `measure`, `verify`,
    `verdict`, `signal`, `fault`, `state` in Ausführungsreihenfolge.
 3. `pub` in Maschinen- und Variablenindexreihenfolge.

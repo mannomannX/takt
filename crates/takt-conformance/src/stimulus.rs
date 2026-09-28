@@ -43,13 +43,32 @@ pub enum Stimulus {
         /// Der Wert als Text, wie ihn der Trace schreibt.
         text: String,
     },
+    /// `abort`: Operator-Abort fuer alle Maschinen (5.4).
+    Abort {
+        /// Tick, an dem er anliegt.
+        tick: u64,
+    },
+    /// `runtime <art> [<output>]`: ein Runtime-Fault (5.3), fuer alle
+    /// Maschinen oder den Besitzer des Outputs.
+    Runtime {
+        /// Tick, an dem er zugestellt wird.
+        tick: u64,
+        /// Die Art.
+        kind: takt_mir::machine::RuntimeKind,
+        /// Der Output eines `Driver`-Faults.
+        output: Option<String>,
+    },
 }
 
 impl Stimulus {
     /// Der Tick, an dem diese Eingabe anliegt.
     pub fn tick(&self) -> u64 {
         match self {
-            Stimulus::Command { tick, .. } | Stimulus::Element { tick, .. } | Stimulus::Tune { tick, .. } => *tick,
+            Stimulus::Command { tick, .. }
+            | Stimulus::Element { tick, .. }
+            | Stimulus::Tune { tick, .. }
+            | Stimulus::Abort { tick }
+            | Stimulus::Runtime { tick, .. } => *tick,
         }
     }
 
@@ -61,5 +80,30 @@ impl Stimulus {
     /// Ein Stromelement, kurz geschrieben.
     pub fn element(tick: u64, channel: &str, text: &str) -> Stimulus {
         Stimulus::Element { tick, channel: channel.to_string(), text: text.to_string() }
+    }
+
+    /// Commands, Aborts und Runtime-Faults aus einem Trace — die Eingaben,
+    /// die beide Seiten ohne Treiber annehmen.
+    pub fn from_trace(trace: &takt_interp::Trace) -> Vec<Stimulus> {
+        use takt_interp::trace::LineKind;
+        use takt_mir::machine::RuntimeKind;
+        trace
+            .lines
+            .iter()
+            .filter_map(|l| match &l.kind {
+                LineKind::Command { name } => Some(Stimulus::cmd(l.tick, name)),
+                LineKind::Abort => Some(Stimulus::Abort { tick: l.tick }),
+                LineKind::Runtime { kind, output } => {
+                    let kind = match kind.as_str() {
+                        "Overrun" => RuntimeKind::Overrun,
+                        "Driver" => RuntimeKind::Driver,
+                        "Hardware" => RuntimeKind::Hardware,
+                        _ => RuntimeKind::Node,
+                    };
+                    Some(Stimulus::Runtime { tick: l.tick, kind, output: output.clone() })
+                }
+                _ => None,
+            })
+            .collect()
     }
 }

@@ -1,0 +1,44 @@
+# Ein Tick ueber seiner Periode (7.3, 5.4, FB-332): Die Last waechst jeden
+# Tick ein wenig, bis ein Tick laenger rechnet als seine Periode, aber weit
+# unter der Frist des Watchdogs. Im naechsten Tick bekommen alle Maschinen
+# `Runtime(Overrun)` und nehmen ihren Fault-Pfad, auch die, die nichts
+# rechnet; die Runtime schreibt die Zeile `runtime Overrun`, mit der sich der
+# Lauf nachspielen laesst (12.5).
+
+system:
+    language = 1
+    tick     = 5 ms
+
+output load    : int  @ hw("test/count") with safe = -1
+output tripped : bool @ hw("ui/led")     with safe = false
+
+machine ramp:
+    var n   : int in 0..1000 = 0
+    var acc : int = 1
+    fault -> SAFE
+    initial RAMP
+
+    state RAMP:
+        loop:
+            n = min(n + 1, 1000)
+            load = n
+            for i in range(1_000_000):
+                if i >= n * 200:
+                    break
+                acc = (acc * 1103515245 + 12345) % 2147483648
+
+    state SAFE:
+        enter:
+            tripped = true
+
+machine bystander:
+    fault -> PARKED
+    initial WATCH
+
+    state WATCH:
+        loop:
+            pass
+
+    state PARKED:
+        loop:
+            pass

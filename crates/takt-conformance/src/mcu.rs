@@ -480,9 +480,27 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
 fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Ein Tick (12.1, Schritte 2 bis 10). */");
     let _ = writeln!(s, "void takt_mcu_sample(void);");
+    // 7.3: Die Schleife meldet einen Ueberlauf vor dem naechsten Tick
+    // (`Program::raise_overrun`); er wirkt fuer alle Maschinen in diesem
+    // Tick und steht als Zeile `runtime` im Trace, damit der Lauf sich
+    // nachspielen laesst (12.5).
+    let _ = writeln!(s, "static _Bool g_overrun;");
+    let _ = writeln!(s, "void takt_mcu_overrun(void) {{ g_overrun = 1; }}");
     let _ = writeln!(s, "void takt_mcu_tick(long long k) {{");
     let _ = writeln!(s, "    g_tick = k;");
     let _ = writeln!(s, "    g_done = k;");
+    let _ = writeln!(s, "    if (g_overrun) {{");
+    let _ = writeln!(s, "        g_overrun = 0;");
+    let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "        takt_board_trace_i64(k);");
+    let _ = writeln!(s, "        takt_board_trace(\"runtime Overrun\\n\");");
+    let _ = writeln!(
+        s,
+        "        for (int m = 0; m < {}; m++) takt_pend(m, {});",
+        p.machines.len(),
+        takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Runtime(takt_mir::machine::RuntimeKind::Overrun))
+    );
+    let _ = writeln!(s, "    }}");
     crate::harness::aging(s, p, layout, "    ");
     // 4.5: Was fertig und faellig ist, wird zu Tickbeginn sichtbar, wie
     // `poll_jobs` im Interpreter und im Wirtsrahmen.

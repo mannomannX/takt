@@ -33,11 +33,13 @@ pub const LIMITS: &[Limit] = &[
                sie beiden Seiten; er ist bereits die erste HAL-Implementierung (Prinzip 4).",
     },
     Limit {
-        was: "Runtime-Faults und Operator-Abort (5.4)",
-        warum: "Die Abort-Phase fuer `abort` steht in beiden Rahmen (`<m>_deliver`, Korpus 90). \
-                Runtime-Faults (`Overrun`, `Driver`, `Hardware`) und der Operator-Abort als \
-                Stimulus erreichen den erzeugten Code noch nicht.",
-        wann: "FB-332, Teil B: vorgemerkt zu Beginn des Schritts, Zeile `runtime` im Trace.",
+        was: "Erzeuger von Runtime-Faults auf dem Wirt (5.3)",
+        warum: "Abort-Phase, Operator-Abort und Runtime-Faults stehen in beiden Rahmen \
+                (FB-332); auf dem Wirt kommen Runtime-Faults nur als Stimulus (`runtime`), \
+                weil der Rahmen keine Uhr und keinen Treiber hat. `Overrun` erhebt die \
+                MCU-Schleife selbst.",
+        wann: "`Driver` mit dem Treiberrand (M10 Schritt 11), `Hardware` mit Tick-Toleranz \
+               und MPU (Schritt 18).",
     },
     Limit {
         was: "Mehrere Maschinen und ihre Perioden (7.2)",

@@ -304,6 +304,9 @@ fn build_inner(
         let condition = ticks_of.iter().map(|t| format!("g_tick == {t}")).collect::<Vec<_>>().join(" || ");
         let _ = writeln!(s, "        image[{slot}] = ({condition}) ? 1 : 0; /* {name} */");
     }
+    // 5.4: Operator-Abort und Runtime-Faults von aussen werden vorgemerkt,
+    // wie `apply_stimulus` im Interpreter.
+    pended(&mut s, p, inputs, "        ");
     // 8.4: Ein Tunable gilt ab seiner Tick-Grenze; der Rahmen schreibt den
     // Parametervektor vor dem Schritt, wie `apply_stimulus` im Interpreter.
     for stim in inputs {
@@ -802,9 +805,19 @@ pub(crate) fn queued_outputs(p: &Program) -> Vec<takt_mir::ChannelId> {
         .collect()
 }
 
-/// `raised[m]` (5.4): ein vorgemerkter Abort je Maschine.
+/// `raised[m]` (5.4): ein Abort, den `abort` in diesem Tick erhoben hat;
+/// `pending[m]` (5.4, 9.6): ein Fault von aussen — Operator-Abort,
+/// Runtime-Fault —, zugestellt zu Beginn des naechsten Schritts oder, wenn
+/// die Maschine nicht aktiv ist, in der Abort-Phase. Ein Abort verdraengt
+/// einen Runtime-Fault, nicht umgekehrt.
 pub(crate) fn raised(s: &mut String, p: &Program) {
-    let _ = writeln!(s, "static _Bool g_raised[{}];", p.machines.len().max(1));
+    let n = p.machines.len().max(1);
+    let abort = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Abort);
+    let _ = writeln!(s, "static _Bool g_raised[{n}];");
+    let _ = writeln!(s, "static int g_pending[{n}];");
+    let _ = writeln!(s, "static void takt_pend(int m, int code) {{");
+    let _ = writeln!(s, "    if (g_pending[m] != {abort}) g_pending[m] = code;");
+    let _ = writeln!(s, "}}");
 }
 
 /// Die Abort-Phase (5.4, 9.4): Nach den Schritten nimmt jede Maschine mit
@@ -821,10 +834,11 @@ pub(crate) fn abort_phase(
     let scoped = scoped_of(p);
     for m in driven {
         let Some(i) = p.machines.iter().position(|x| x.name == m.name) else { continue };
-        let condition = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
-            Some((owner, _, n)) => format!("g_raised[{i}] && g_scope_{owner}_{n}"),
-            None => format!("g_raised[{i}]"),
+        let scope = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
+            Some((owner, _, n)) => format!(" && g_scope_{owner}_{n}"),
+            None => String::new(),
         };
+        let (condition, pending) = (format!("g_raised[{i}]{scope}"), format!("g_pending[{i}]{scope}"));
         let active = match (m.period.max(1), m.phase) {
             (1, _) => "1".to_string(),
             (per, ph) => format!("{tick} % {per} == {ph}"),
@@ -834,8 +848,42 @@ pub(crate) fn abort_phase(
             "{indent}if ({condition}) {{ {0}_deliver(state_{0}, image, params, latch, {abort}, {active}); {0}_publish(state_{0}, image); }}",
             m.name
         );
+        // Ein vorgemerkter Fault einer Maschine, die in diesem Tick nicht
+        // schritt; ein Abort aus `raised` geht vor, der Fault wartet.
+        let _ = writeln!(
+            s,
+            "{indent}else if ({pending}) {{ {0}_deliver(state_{0}, image, params, latch, g_pending[{i}], {active}); g_pending[{i}] = 0; {0}_publish(state_{0}, image); }}",
+            m.name
+        );
     }
     let _ = writeln!(s, "{indent}memset(g_raised, 0, sizeof g_raised);");
+}
+
+/// Merkt Operator-Aborts und Runtime-Faults des Stimulus in ihrem Tick vor:
+/// einen `Driver`-Fault beim Besitzer seines Outputs, alles andere bei
+/// jeder Maschine.
+fn pended(s: &mut String, p: &Program, inputs: &[Stimulus], indent: &str) {
+    use takt_mir::machine::{FaultKind, RuntimeKind};
+    let every = format!("for (int m = 0; m < {}; m++)", p.machines.len());
+    for stim in inputs {
+        let (tick, code, owner) = match stim {
+            Stimulus::Abort { tick } => (*tick, takt_llvm::abi::fault_code(FaultKind::Abort), None),
+            Stimulus::Runtime { tick, kind, output } => {
+                let owner = match (kind, output) {
+                    (RuntimeKind::Driver, Some(o)) => {
+                        p.channels.iter().find(|c| c.name == *o).and_then(|c| c.owner).map(|m| m.index())
+                    }
+                    _ => None,
+                };
+                (*tick, takt_llvm::abi::fault_code(FaultKind::Runtime(*kind)), owner)
+            }
+            _ => continue,
+        };
+        let _ = match owner {
+            Some(m) => writeln!(s, "{indent}if (g_tick == {tick}) takt_pend({m}, {code});"),
+            None => writeln!(s, "{indent}if (g_tick == {tick}) {every} takt_pend(m, {code});"),
+        };
+    }
 }
 
 /// Die Namen, mit denen die Rahmen einen Fault schreiben: die Maschine
@@ -972,6 +1020,7 @@ pub(crate) fn machine_declarations(s: &mut String, driven: &[&takt_mir::machine:
         let _ = writeln!(s, "void {}_publish(void *st, void *in);", m.name);
         let _ =
             writeln!(s, "void {}_deliver(void *st, void *in, void *par, void *out, int code, _Bool active);", m.name);
+        let _ = writeln!(s, "void {}_pend(void *st, int code);", m.name);
         let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);
@@ -1052,9 +1101,12 @@ pub(crate) fn steps(
             Some((owner, _, i)) => format!("{} if (g_scope_{owner}_{i}) ", condition.trim_end()),
             None => condition,
         };
+        // 9.6: Ein vorgemerkter Fault geht zu Beginn des Schritts in den
+        // Zustand; der Schritt nimmt ihn statt seines Rumpfs.
+        let i = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
         let _ = writeln!(
             s,
-            "{indent}{condition}{{ {0}_step(state_{0}, image, params, latch); {0}_publish(state_{0}, image); }}",
+            "{indent}{condition}{{ if (g_pending[{i}]) {{ {0}_pend(state_{0}, g_pending[{i}]); g_pending[{i}] = 0; }} {0}_step(state_{0}, image, params, latch); {0}_publish(state_{0}, image); }}",
             m.name
         );
     }

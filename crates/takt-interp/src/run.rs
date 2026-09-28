@@ -583,6 +583,40 @@ fn apply_stimulus(
                     }
                 }
             }
+            // 5.3, 5.4: Ein Runtime-Fault wird vorgemerkt wie ein
+            // Operator-Abort; einen vorgemerkten Abort verdraengt er nicht.
+            LineKind::Runtime { kind, output } => {
+                use takt_mir::machine::{FaultKind, RuntimeKind};
+                let kind = match kind.as_str() {
+                    "Overrun" => RuntimeKind::Overrun,
+                    "Driver" => RuntimeKind::Driver,
+                    "Hardware" => RuntimeKind::Hardware,
+                    "Node" => RuntimeKind::Node,
+                    other => return Err(Trap::Bug(format!("Stimulus: Runtime-Fault `{other}` gibt es nicht"))),
+                };
+                let owner = match (kind, output) {
+                    (RuntimeKind::Driver, Some(o)) => match channel_by_name(program, o) {
+                        Some(c) => program.channels[c.index()].owner,
+                        None => return Err(Trap::Bug(format!("Stimulus: Output `{o}` gibt es nicht"))),
+                    },
+                    (RuntimeKind::Driver, None) => {
+                        return Err(Trap::Bug("Stimulus: `runtime Driver` braucht den Output".into()));
+                    }
+                    _ => None,
+                };
+                for (i, state) in sim.states.iter_mut().enumerate() {
+                    let meant = owner.is_none_or(|o| o.index() == i);
+                    let abort_waits = state.pending.as_ref().is_some_and(|f| f.kind == FaultKind::Abort);
+                    if meant && !state.faulted && !abort_waits {
+                        state.pending = Some(crate::value::Fault::new(
+                            FaultKind::Runtime(kind),
+                            format!("Runtime-Fault {kind:?}"),
+                            takt_diag::Span::default(),
+                            tick,
+                        ));
+                    }
+                }
+            }
             _ => {}
         }
     }

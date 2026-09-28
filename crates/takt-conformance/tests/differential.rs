@@ -717,3 +717,44 @@ fn the_two_implementations_agree_on_capture_windows() {
         native
     );
 }
+
+/// **Faults von aussen kommen auf beiden Wegen gleich an** (5.3, 5.4,
+/// FB-332): ein Operator-Abort, ein Ueberlauf fuer alle Maschinen und ein
+/// Treiberfehler fuer den Besitzer eines Outputs, als Stimulus — die
+/// Zeilen, mit denen eine Aufzeichnung sie nachspielt (12.5). Korpus 90 hat
+/// eine inaktive Maschine (`slow`), eine mit Latch und eine ohne Fault-Ziel;
+/// ein Runtime-Fault ist nicht idempotent und eskaliert.
+#[test]
+fn faults_from_outside_arrive_alike() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("90_abort.takt");
+    let stimulus = takt_interp::Trace::parse(
+        "t=12 abort
+t=20 runtime Overrun
+t=25 runtime Driver b_out
+t=26 runtime Driver b_out
+t=31 runtime Hardware
+",
+    )
+    .expect("Stimulus");
+    let inputs = Stimulus::from_trace(&stimulus);
+    assert_eq!(inputs.len(), 5, "Abort und vier Runtime-Faults");
+    let native =
+        common::run_native_all_with(&clang, &p, "von_aussen", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+    for kind in ["Abort", "Runtime(Overrun)", "Runtime(Driver)", "Runtime(Hardware)"] {
+        assert!(interpreted.contains(kind), "`{kind}` fehlt im Interpreter:\n{interpreted}");
+    }
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen:\n{}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}",
+        diffs.len(),
+        diffs.iter().take(8).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n")
+    );
+}

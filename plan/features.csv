@@ -846,7 +846,7 @@ FAULT-StreamOverflow,Fault-Art,5.3,StreamOverflow,,M1 (Kernsemantik),fertig,
 FAULT-TimingFault,Fault-Art,5.3,TimingFault,,M10 (aus M1),teilweise,`guard(o)` aus der Konfiguration auf dem Ziel (FB-331); Art im Differential seit FB-330
 FAULT-ScheduleOverflow,Fault-Art,5.3,ScheduleOverflow,,M10 (aus M1),fertig,
 FAULT-Abort,Fault-Art,5.3,Abort,,M1 (Kernsemantik),fertig,
-FAULT-Runtime_Overrun_Driver_Watchdog_Hardware_Node,Fault-Art,5.3,Runtime(Overrun | Driver | Watchdog | Hardware | Node),,M10 (aus M1),teilweise,"Zustellung von Overrun, Driver und Hardware an die Maschinen (FB-332); `Watchdog` entfaellt (FB-324), `Node` ist v2"
+FAULT-Runtime_Overrun_Driver_Watchdog_Hardware_Node,Fault-Art,5.3,Runtime(Overrun | Driver | Watchdog | Hardware | Node),,M10 (aus M1),teilweise,"Zustellung und Aufzeichnung seit FB-332, `Overrun` auf beiden Boards; die Erzeuger von `Driver` (Treiberrand, M10 Schritt 11) und `Hardware` (Tick-Toleranz, MPU, Schritt 18) auf dem Ziel fehlen. `Watchdog` entfaellt (FB-324), `Node` ist v2"
 FAULT-Node,Fault-Art,5.3,Node,,M9 (v2),offen,
 QUAL-Good,Qualität,3.5,Good,,M1 (Kernsemantik),fertig,
 QUAL-Suspect,Qualität,3.5,Suspect,,M1 (Kernsemantik),fertig,
