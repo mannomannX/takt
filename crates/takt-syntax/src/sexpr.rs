@@ -281,7 +281,8 @@ impl Printer {
             Item::Instance(i) => self.instance(i),
             Item::Scenario(s) => {
                 let every = s.every.as_ref().map(|d| format!(" every={}", duration(d))).unwrap_or_default();
-                self.node("scenario", &format!("{}{every}", string(&s.name)), |p| p.machine_body(&s.body));
+                let head = format!("{}{every}{}", string(&s.name), attrs(&s.attrs));
+                self.node("scenario", &head, |p| p.machine_body(&s.body));
             }
             Item::Campaign(c) => self.node("campaign", &c.name.name, |p| {
                 for item in &c.items {
@@ -676,6 +677,7 @@ fn attrs(list: &[Attr]) -> String {
                     .join(",")
             ),
             AttrKind::PollingUnchecked => "polling=unchecked".to_string(),
+            AttrKind::FaultIsFail(b) => format!("fault_is_fail={b}"),
             AttrKind::MaxAge(d) => format!("max_age={}", duration(d)),
             AttrKind::Rate(e) => format!("rate={}", expr(e)),
             AttrKind::MaxRate(e) => format!("max_rate={}", expr(e)),

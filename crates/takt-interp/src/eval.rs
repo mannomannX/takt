@@ -4,7 +4,7 @@
 
 use takt_diag::Span;
 use takt_mir::expr::*;
-use takt_mir::machine::FaultKind;
+use takt_mir::machine::{ArithKind, FaultKind};
 use takt_mir::stmt::Place;
 use takt_mir::types::{Const, FloatWidth, IntWidth, Range, Type};
 use takt_mir::{TypeId, VarId};
@@ -316,7 +316,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
             }
             ExprKind::Convert { expr, kind, unit } => {
                 let v = self.eval(expr)?;
-                self.convert(v, *kind, *unit, expr.ty, e.ty, span)
+                self.convert(v, *kind, *unit, expr.ty, e.ty)
             }
             ExprKind::Format(f) => {
                 // 8.8: der Text entsteht in einem festen Puffer; die
@@ -426,9 +426,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 };
                 arith::int_binary(op, a.as_int().expect("int"), b.as_int().expect("int"), width, span, self.tick)
             }
-            (Value::F32(_) | Value::F64(_), Value::F32(_) | Value::F64(_)) => {
-                arith::float_binary(op, &a, &b, span, self.tick)
-            }
+            (Value::F32(_) | Value::F64(_), Value::F32(_) | Value::F64(_)) => arith::float_binary(op, &a, &b),
             (Value::Mat { .. }, _) | (_, Value::Mat { .. }) => crate::matrix::binary(op, &a, &b, span, self.tick),
             (Value::Duration(_), _) | (_, Value::Duration(_)) => arith::duration_binary(op, &a, &b, span, self.tick),
             _ => match op {
@@ -718,15 +716,11 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 let width = self.float_width(elem_ty);
                 let mut acc_v = Value::float(width, 0.0);
                 for x in items {
-                    let term = if acc == Accessor::Rms {
-                        arith::float_binary(BinaryOp::Mul, x, x, span, self.tick)?
-                    } else {
-                        x.clone()
-                    };
-                    acc_v = arith::float_binary(BinaryOp::Add, &acc_v, &term, span, self.tick)?;
+                    let term = if acc == Accessor::Rms { arith::float_binary(BinaryOp::Mul, x, x)? } else { x.clone() };
+                    acc_v = arith::float_binary(BinaryOp::Add, &acc_v, &term)?;
                 }
                 let n = Value::float_from_int(width, items.len() as i128);
-                let mean = arith::float_binary(BinaryOp::Div, &acc_v, &n, span, self.tick)?;
+                let mean = arith::float_binary(BinaryOp::Div, &acc_v, &n)?;
                 if acc == Accessor::Rms {
                     arith::finite(width, mean.as_f64().expect("float").sqrt(), span, self.tick)
                 } else {
@@ -771,7 +765,6 @@ impl<'p, 'o> Ctx<'p, 'o> {
         unit: takt_mir::UnitId,
         from_ty: TypeId,
         to_ty: TypeId,
-        span: Span,
     ) -> EvalResult<Value> {
         let dst = self.loaded.unit(unit);
         match kind {
@@ -782,7 +775,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 let per = i128::from(dst.factor.num) * 1_000_000_000 / i128::from(dst.factor.den);
                 let a = Value::float_from_int(width, i128::from(ns));
                 let b = Value::float_from_int(width, per);
-                arith::float_binary(BinaryOp::Div, &a, &b, span, self.tick)
+                arith::float_binary(BinaryOp::Div, &a, &b)
             }
             // `to` auf Ganzzahlen loest das Sema in eine Multiplikation auf;
             // `to_float` rechnet ab dem exakten Ganzzahlwert wie `to` auf Fliesskomma.
@@ -808,17 +801,17 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 // Basiswert = (x + off_src) * f_src; Ergebnis = Basiswert / f_dst - off_dst
                 if let Some(off) = offset {
                     let o = rational(width, off.num, off.den);
-                    x = arith::float_binary(BinaryOp::Add, &x, &o, span, self.tick)?;
+                    x = arith::float_binary(BinaryOp::Add, &x, &o)?;
                 }
                 let num = i128::from(factor.num) * i128::from(dst.factor.den);
                 let den = i128::from(factor.den) * i128::from(dst.factor.num);
                 let p = Value::float_from_int(width, num);
                 let q = Value::float_from_int(width, den);
-                x = arith::float_binary(BinaryOp::Mul, &x, &p, span, self.tick)?;
-                x = arith::float_binary(BinaryOp::Div, &x, &q, span, self.tick)?;
+                x = arith::float_binary(BinaryOp::Mul, &x, &p)?;
+                x = arith::float_binary(BinaryOp::Div, &x, &q)?;
                 if let Some(off) = dst.affine_offset {
                     let o = rational(width, off.num, off.den);
-                    x = arith::float_binary(BinaryOp::Sub, &x, &o, span, self.tick)?;
+                    x = arith::float_binary(BinaryOp::Sub, &x, &o)?;
                 }
                 Ok(x)
             }
@@ -848,6 +841,20 @@ impl<'p, 'o> Ctx<'p, 'o> {
                 } else {
                     let text = crate::format::display(&v, None, inner.ty, self);
                     Err(self.fault(FaultKind::Range, format!("{text} ausserhalb der Range"), span))
+                }
+            }
+            // 4.2 (FB-294): Gleitkomma prueft der Knoten — am Ende einer
+            // Kette, wie der Codegen; die Operationen darin rechnen frei.
+            CheckedKind::NonFinite => {
+                let v = self.eval(inner)?;
+                match v {
+                    Value::F32(x) if !x.is_finite() => {
+                        Err(self.fault(FaultKind::Arithmetic(ArithKind::NonFinite), "Ergebnis nicht endlich", span))
+                    }
+                    Value::F64(x) if !x.is_finite() => {
+                        Err(self.fault(FaultKind::Arithmetic(ArithKind::NonFinite), "Ergebnis nicht endlich", span))
+                    }
+                    other => Ok(other),
                 }
             }
             // Validitaet, Index, Division, Ueberlauf, Konversion, Shift: die

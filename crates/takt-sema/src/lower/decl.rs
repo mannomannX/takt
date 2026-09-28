@@ -755,6 +755,12 @@ impl Lowerer<'_> {
                         self.error(SC3, a.span, "`polling` nur an einer Maschine (Pruefung 59)");
                     }
                 }
+                // Am Szenario liest es `lower_machine`; sonst ist es ein Fehler.
+                ast::AttrKind::FaultIsFail(_) => {
+                    if dir.is_some() {
+                        self.error(SC3, a.span, "`fault_is_fail` nur an einem Szenario (13.5)");
+                    }
+                }
             }
         }
         let _ = span;

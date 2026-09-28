@@ -511,11 +511,12 @@ impl<'t, 's> Parser<'t, 's> {
                 self.expect_word("unchecked")?;
                 AttrKind::PollingUnchecked
             }
+            "fault_is_fail" => AttrKind::FaultIsFail(self.parse_bool_word()?),
             other => {
                 return Err(self.error_at(
                     name_tok,
                     format!("unbekanntes Attribut `{other}`"),
-                    Some("Attribute: safe max_age rate max_rate capacity framing overflow wake jitter max_slew debounce capacity_bytes expect_len irreversible label display group doc budget polling"),
+                    Some("Attribute: safe max_age rate max_rate capacity framing overflow wake jitter max_slew debounce capacity_bytes expect_len irreversible label display group doc budget polling fault_is_fail"),
                 ));
             }
         };

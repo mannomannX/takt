@@ -22,7 +22,7 @@ use takt_mir::program::Program;
 use crate::emit::Module;
 use crate::expr::{NotYet, Vars, lower as lower_expr};
 use crate::machine::{self, Role, StateStruct};
-use crate::stmt::{Ctx, block};
+use crate::stmt::{Ctx, FaultFrom, block};
 
 /// Schreibt die vollstaendige Schrittfunktion einer Maschine.
 ///
@@ -270,8 +270,11 @@ fn write_step(
     // 5.3: Ein Fault auf einer geteilten Ebene nimmt den Fault-Pfad des
     // Blatts, das gerade aktiv ist.
     module.label(&format!("fault_{}_any", m.name));
-    let arms: Vec<String> =
-        leaves.iter().enumerate().map(|(i, id)| format!("i8 {i}, label %{}", ctx.fault_path(Some(*id)))).collect();
+    let arms: Vec<String> = leaves
+        .iter()
+        .enumerate()
+        .map(|(i, id)| format!("i8 {i}, label %{}", ctx.fault_path(FaultFrom::State(*id))))
+        .collect();
     module.void_inst(&format!("switch i8 {cur}, label %{end} [ {} ]", arms.join(" ")));
     fault_paths(&mut ctx, module, &end)?;
 
@@ -358,7 +361,7 @@ fn level(
         // innersten Zustands, der eines deklariert (Fault-Wald, 5.3). Die
         // Fault-Pfade entstehen am Ende des Schritts, je Gruppe gleicher
         // Ketten einer.
-        ctx.fault_path(Some(leaf));
+        ctx.fault_path(FaultFrom::State(leaf));
         return Ok(());
     }
     // Die Kinder auf den Wegen zu den Blaettern hier, in Blattreihenfolge.
@@ -468,7 +471,7 @@ fn transitions(
 fn faulted_transitions(ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYet> {
     let list = ctx.machine.faulted.transitions.clone();
     ctx.leaf = None;
-    let label = ctx.fault_path(None);
+    let label = ctx.fault_path(FaultFrom::Faulted);
     let outer = ctx.fault.replace(label);
     let done = transitions(&list, None, None, ctx, m, end);
     ctx.fault = outer;
@@ -561,6 +564,10 @@ enum Source<'a> {
     /// Tick 0 (9.4): die leere Konfiguration vor dem ersten Eintritt. Der
     /// maschinenweite `loop:` laeuft im Entry-Tick mit (5.1).
     Start,
+    /// Kein Zustand aktiv nach einem Fault in einem `exit:` der obersten
+    /// Ebene (FB-289); anders als `Start` lief der `loop:` der Maschine in
+    /// diesem Tick schon.
+    Root,
 }
 
 /// Das Ziel eines Wechsels (9.3).
@@ -601,7 +608,7 @@ impl Goal {
 fn switch(ctx: &mut Ctx<'_>, m: &mut Module, source: Source<'_>, goal: Goal, end: &str) -> Result<(), NotYet> {
     let (from, from_val) = match source {
         Source::Leaf(leaf, value) => (Some(leaf), value),
-        Source::Faulted | Source::Start => (None, "-1"),
+        Source::Faulted | Source::Start | Source::Root => (None, "-1"),
     };
     let (exited, entered) = machine::crossing(ctx.machine, from, goal.pair());
     // 5.12: Was verlassen wird, merkt sich sein Blatt.
@@ -632,14 +639,24 @@ fn switch(ctx: &mut Ctx<'_>, m: &mut Module, source: Source<'_>, goal: Goal, end
     }
     let outer = (ctx.leaf, ctx.fault.take());
     ctx.leaf = into;
-    let label = ctx.fault_path(into);
-    ctx.fault = Some(label);
-    let done = switch_blocks(ctx, m, &exited, &entered, into, matches!(source, Source::Start), end);
+    // FB-289: Ein Fault in `exit:` nimmt den Pfad ab dem kleinsten
+    // gemeinsamen Vorfahren — die Zustaende darunter sind verlassen, die
+    // neuen noch nicht betreten. Fuehrt der Wechsel nach `FAULTED`, bleibt
+    // die Senke das Ziel (5.3).
+    let exit_from = match (into, exited.last()) {
+        (Some(_), Some(outer)) => ctx.machine.states[outer.index()].parent.map_or(FaultFrom::Root, FaultFrom::State),
+        _ => FaultFrom::of(into),
+    };
+    let paths = (ctx.fault_path(exit_from), ctx.fault_path(FaultFrom::of(into)));
+    let done = switch_blocks(ctx, m, &exited, &entered, into, matches!(source, Source::Start), paths, end);
     (ctx.leaf, ctx.fault) = outer;
     done
 }
 
 /// (2) bis (4) und der Entry-Tick eines Wechsels, siehe [`switch`].
+///
+/// `paths` sind die Fault-Pfade fuer `exit:` und fuer alles danach.
+#[allow(clippy::too_many_arguments)]
 fn switch_blocks(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
@@ -647,11 +664,15 @@ fn switch_blocks(
     entered: &[StateId],
     into: Option<StateId>,
     first: bool,
+    paths: (String, String),
     end: &str,
 ) -> Result<(), NotYet> {
+    let (exit_path, path) = paths;
+    ctx.fault = Some(exit_path);
     for id in exited {
         block(&ctx.machine.states[id.index()].exit.clone(), ctx, m)?;
     }
+    ctx.fault = Some(path);
     let Some(leaf) = into else {
         // `FAULTED` fuehrt keinen Nutzercode aus; die Outputs gehen noch
         // in diesem Tick auf `safe`, wie im Interpreter (5.3).
@@ -776,7 +797,7 @@ pub fn entry_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut 
                 loop_call(ctx, module, Some(StateId(*id)), &index, true, &end)?;
             }
             module.void_inst(&format!("br label %{end}"));
-            ctx.fault_path(Some(leaf));
+            ctx.fault_path(FaultFrom::State(leaf));
             fault_paths(ctx, module, &end)
         };
         if let Err(err) = body(&mut ctx, module) {
@@ -2250,17 +2271,17 @@ fn text_has(
 /// `FAULTED` (Pruefung 9), die Liste waechst also nur endlich.
 fn fault_paths(ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYet> {
     let md = ctx.machine;
-    let mut done: Vec<Option<StateId>> = Vec::new();
+    let mut done: Vec<FaultFrom> = Vec::new();
     loop {
-        let open: Vec<Option<StateId>> = ctx.fault_paths.iter().copied().filter(|f| !done.contains(f)).collect();
+        let open: Vec<FaultFrom> = ctx.fault_paths.iter().copied().filter(|f| !done.contains(f)).collect();
         if open.is_empty() {
             return Ok(());
         }
-        let mut groups: Vec<(FaultKey, Vec<Option<StateId>>)> = Vec::new();
+        let mut groups: Vec<(FaultKey, Vec<FaultFrom>)> = Vec::new();
         for from in open {
             done.push(from);
             let goal = fault_goal(md, from)?;
-            let (exited, entered) = machine::crossing(md, from, goal.pair());
+            let (exited, entered) = machine::crossing(md, active(from), goal.pair());
             let exits = exited
                 .into_iter()
                 .filter(|id| !md.states[id.index()].exit.stmts.is_empty() || md.layout.saved_paths.contains(id))
@@ -2273,7 +2294,13 @@ fn fault_paths(ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYe
         }
         for (_, members) in groups {
             let group = format!("fault_{}_g{}{}{}", md.name, ctx.next_label(m), ctx.tag, ctx.fault_suffix);
-            let value = |from: Option<StateId>| from.map_or_else(|| "-1".to_string(), |s| s.index().to_string());
+            // Was ein verlassener `resume`-Zustand sich merkt (5.12): das
+            // Blatt, ab einem Vorfahren dessen `initial` — dorthin fuehrt
+            // der Interpreter den gespeicherten Pfad abwaerts.
+            let value = |from: FaultFrom| match from {
+                FaultFrom::State(s) => machine::initial_leaf(md, s).unwrap_or(s).index().to_string(),
+                FaultFrom::Root | FaultFrom::Faulted => "-1".to_string(),
+            };
             let mut arms = Vec::new();
             for from in &members {
                 let label = ctx.fault_path(*from);
@@ -2295,29 +2322,38 @@ fn fault_paths(ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYe
 /// erzeugten Code eines Fault-Pfads bestimmt.
 type FaultKey = (Goal, Vec<StateId>, Vec<StateId>);
 
-/// Wohin ein Fault ab `from` fuehrt (5.3): zum Fault-Ziel des Blatts, dort
-/// `initial` abwaerts — nie der gespeicherte Pfad (5.12). `FAULTED` ist die
-/// Senke des Fault-Walds: Ein Fault dort, etwa in einem `exit:` auf dem
-/// Weg hinein, fuehrt nach `FAULTED` zurueck.
-fn fault_goal(m: &Machine, from: Option<StateId>) -> Result<Goal, NotYet> {
-    match from.map(|s| m.fault_target_of(s)) {
-        Some(takt_mir::machine::FaultTarget::State(to)) => {
+/// Der aktive Zustand, ab dem ein Fault-Pfad verlaesst; `None` heisst:
+/// keiner.
+fn active(from: FaultFrom) -> Option<StateId> {
+    match from {
+        FaultFrom::State(s) => Some(s),
+        FaultFrom::Root | FaultFrom::Faulted => None,
+    }
+}
+
+/// Wohin ein Fault ab `from` fuehrt (5.3): zum Fault-Ziel des Zustands,
+/// ohne aktiven Zustand zu dem der Maschine, dort `initial` abwaerts — nie
+/// der gespeicherte Pfad (5.12). `FAULTED` ist die Senke des Fault-Walds:
+/// Ein Fault dort, etwa in einem `exit:` auf dem Weg hinein, fuehrt nach
+/// `FAULTED` zurueck.
+fn fault_goal(m: &Machine, from: FaultFrom) -> Result<Goal, NotYet> {
+    let target = match from {
+        FaultFrom::State(s) => m.fault_target_of(s),
+        FaultFrom::Root => m.fault_target,
+        FaultFrom::Faulted => takt_mir::machine::FaultTarget::Faulted,
+    };
+    match target {
+        takt_mir::machine::FaultTarget::State(to) => {
             let leaf = machine::initial_leaf(m, to).ok_or(NotYet { what: "Fault-Ziel ohne `initial`" })?;
             Ok(Goal::State { to, leaf })
         }
-        _ => Ok(Goal::Faulted),
+        takt_mir::machine::FaultTarget::Faulted => Ok(Goal::Faulted),
     }
 }
 
 /// Der Rumpf eines Fault-Pfads; `from` ist ein Vertreter der Gruppe,
 /// `from_val` das verlassene Blatt als Operand.
-fn fault_body(
-    from: Option<StateId>,
-    from_val: &str,
-    ctx: &mut Ctx<'_>,
-    m: &mut Module,
-    end: &str,
-) -> Result<(), NotYet> {
+fn fault_body(from: FaultFrom, from_val: &str, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYet> {
     let md = ctx.machine;
     // Die Art hat die Sprungstelle abgelegt (`Module::fault_to`).
     let slot = m.fault_slot();
@@ -2351,8 +2387,9 @@ fn fault_body(
         m.void_inst(&format!("call void @{}(i32 {})", crate::abi::Abi::CANCEL, o.0));
     }
     let source = match from {
-        Some(leaf) => Source::Leaf(leaf, from_val),
-        None => Source::Faulted,
+        FaultFrom::State(s) => Source::Leaf(s, from_val),
+        FaultFrom::Root => Source::Root,
+        FaultFrom::Faulted => Source::Faulted,
     };
     switch(ctx, m, source, fault_goal(md, from)?, end)
 }

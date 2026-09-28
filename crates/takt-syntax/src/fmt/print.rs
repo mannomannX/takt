@@ -524,7 +524,7 @@ impl Emitter<'_, '_> {
             }
             AttrKind::Framing(f) => self.fmt_framing(f),
             AttrKind::Overflow(_) | AttrKind::Wake(_) | AttrKind::Irreversible => self.name(),
-            AttrKind::PollingUnchecked => self.name(),
+            AttrKind::PollingUnchecked | AttrKind::FaultIsFail(_) => self.name(),
             AttrKind::Label(_) | AttrKind::Group(_) | AttrKind::Doc(_) => self.name(),
             AttrKind::Display(u) => self.fmt_unit_expr(u),
             AttrKind::Budget(items) => {
@@ -1182,6 +1182,7 @@ impl Emitter<'_, '_> {
             self.sp("every");
             self.fmt_duration_lit();
         }
+        self.fmt_attrs(&s.attrs, false);
         self.op(":");
         self.newline();
         self.indent();

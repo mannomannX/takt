@@ -243,9 +243,11 @@ machine m:
 }
 
 /// Scheitert ein `exit:`, entfallen die restlichen Bloecke, und der Fault
-/// wird ebenfalls mit der neuen Konfiguration behandelt (9.3).
+/// wird ab dem kleinsten gemeinsamen Vorfahren behandelt (9.3, FB-289):
+/// B ist noch nicht betreten, sein Fault-Ziel SAFE_B gilt nicht, sondern
+/// das der Maschine, SAFE.
 #[test]
-fn a_fault_in_an_exit_block_is_handled_in_the_new_configuration() {
+fn a_fault_in_an_exit_block_is_handled_from_the_common_ancestor() {
     let body = "\
 machine m:
     fault -> SAFE
@@ -273,7 +275,7 @@ machine m:
             probe = 40
 ";
     let Some(trace) = agree(body, "switch_exit_fault", 6) else { return };
-    assert_eq!(probe_at(&trace, 1), "30", "{trace}");
+    assert_eq!(probe_at(&trace, 1), "40", "{trace}");
 }
 
 /// Auch der Weg nach `FAULTED` verlaesst die Konfiguration: Die

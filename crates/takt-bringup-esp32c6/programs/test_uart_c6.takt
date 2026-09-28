@@ -49,7 +49,6 @@ system:
     float         = f32        # der C6 hat keine FPU (4.2, 12.8)
     target        = baremetal  # 12.8
     output_timing = asap       # Latenz vor Jitter (16)
-    fault_is_fail = false      # die Szenarien loesen Faults absichtlich aus (13.8)
 
 # ============================================================================
 # 1. Einheiten und Grundtypen
@@ -835,7 +834,7 @@ scenario "a flipped bit costs one retransmit":
 
 # Eine volle Sende-FIFO haelt den Sender an; nach `TX_STALL_LIMIT` faultet
 # der Port, legt die Leitung still und versucht es nach 100 ms erneut.
-scenario "a full tx fifo faults the port until it drains":
+scenario "a full tx fifo faults the port until it drains" with fault_is_fail = false:
     initial RUN
     state RUN:
         sequence:
@@ -853,7 +852,7 @@ scenario "a full tx fifo faults the port until it drains":
 
 # Eine Gegenstelle, die nicht antwortet, kostet den Link nach `RETRIES`
 # Wiederholungen; er kommt zurueck, sobald die Leitung steht.
-scenario "a silent peer takes the link down":
+scenario "a silent peer takes the link down" with fault_is_fail = false:
     initial RUN
     state RUN:
         sequence:

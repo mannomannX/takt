@@ -857,12 +857,13 @@ impl<'t, 's> Parser<'t, 's> {
         self.expect_kw("scenario")?;
         let name = self.string()?;
         let every = if self.eat_kw("every") { Some(self.parse_duration_lit()?) } else { None };
+        let attrs = self.parse_with_attrs()?;
         self.expect_op(":")?;
         self.expect_newline()?;
         self.expect_indent()?;
         let body = self.parse_machine_body()?;
         self.expect_dedent()?;
-        Ok(ScenarioDecl { name, every, body, span: self.span_from(start) })
+        Ok(ScenarioDecl { name, every, attrs, body, span: self.span_from(start) })
     }
 
     /// `campaign_decl`

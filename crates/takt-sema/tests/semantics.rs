@@ -1244,3 +1244,48 @@ machine m:
     assert!(trace.contains("t=2 state m SAFE\n"), "{trace}");
     assert!(!trace.contains("out valve true"), "kein unsicherer Commit: {trace}");
 }
+
+/// **Hinter einem `expect` laeuft nur, was die Erwartung voraussetzt**
+/// (6.2, FB-283): Scheitert sie im Eintrittstick, wird die Zuweisung
+/// dahinter nicht committet — der Output bleibt `safe`, auch ohne dass das
+/// Fault-Ziel ihn neu setzt. Gilt sie, laeuft die Zuweisung im selben Tick.
+#[test]
+fn an_assignment_after_a_failed_expect_is_not_committed() {
+    let body = "\
+input  ready     : bool @ hw(\"d/ready\")
+output ready_sim : bool @ sim(\"d/ready\")
+output valve     : bool @ hw(\"plc/do0\") with safe = false
+
+machine m:
+    fault -> SAFE
+    initial RUN
+    state RUN:
+        sequence:
+            expect ready, \"nicht bereit\"
+            valve = true
+            wait 5 ms
+    state SAFE:
+        loop: pass
+";
+    let failed = simulate(body, "t=0 in ready false\n", 3);
+    assert!(failed.contains("t=0 fault m Expect \"nicht bereit\" -> SAFE\n"), "{failed}");
+    assert!(!failed.contains("out valve true"), "die Zuweisung lief trotz gescheiterter Erwartung: {failed}");
+    let held = simulate(body, "t=0 in ready true\n", 3);
+    assert!(held.contains("t=0 out valve true\n"), "im Eintrittstick: {held}");
+}
+
+/// **Ein Fault in `exit:` beginnt beim kleinsten gemeinsamen Vorfahren**
+/// (9.3, FB-289): Das Ziel des Wechsels ist noch nicht betreten, sein
+/// `exit:` laeuft nicht, und das Fault-Ziel ist das des Vorfahren.
+#[test]
+fn a_fault_in_exit_is_handled_from_the_common_ancestor() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/99_exit_fault.takt"))
+        .expect("Quelle");
+    let options = Options { policy: Policy::default(), build: Build::Sim, ..Default::default() };
+    let program = takt_sema::compile(&src, &options).program.expect("Programm");
+    let trace =
+        run(&program, &Trace::default(), &RunOptions { ticks: 10, ..Default::default() }).expect("Lauf").trace.render();
+    assert!(trace.contains("t=2 fault m RangeFault"), "{trace}");
+    assert!(trace.contains("-> RECOVER\n"), "Fault-Ziel von WORK, nicht SAFE: {trace}");
+    assert!(!trace.contains("out mark 42"), "`exit:` des nie betretenen Ziels lief: {trace}");
+}

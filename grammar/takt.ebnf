@@ -102,6 +102,7 @@ attr           := "safe" "=" const_expr | "max_age" "=" duration_lit | "rate" "=
                 | "label" "=" STRING | "display" "=" unit_expr | "group" "=" STRING | "doc" "=" STRING   (* Metadaten, 2.5; v1.1 *)
                 | "budget" "=" "{" budget_item { "," budget_item } "}"                  (* je Maschine, 7.2 *)   (* @check 62 *)
                 | "polling" "=" "unchecked"                          (* je Maschine, v1.2 *)   (* @check 59 *)
+                | "fault_is_fail" "=" ( "true" | "false" )             (* je Szenario, 13.5 *)
 budget_item    := ( "ram" | "wcet" ) "=" const_expr                                     (* wcet: braucht c_target, 13.8 *)
 framing        := "raw" | "lines" | "cobs" | "length_prefixed" "(" IDENT ")" | "fixed" "(" INT ")"
 command_decl   := "command" IDENT [ "with" attr { "," attr } ] NEWLINE                          (* wake: 5.10; Metadaten: 2.5 *)
@@ -166,7 +167,7 @@ tprop_atom     := "always" "(" tprop ")" | "never" "(" tprop ")"
                 | "eventually" "[" duration_lit "]" "(" tprop ")" | "stable" "[" duration_lit "]" "(" tprop ")"
                 | "once" "[" duration_lit "]" "(" tprop ")"
                 | "(" tprop ")" | cmp_expr   (* Atom: Vergleich, Musterpruefung oder Wert; not/and/or gehoeren zur Eigenschaft, die Bedingungsform a if c else b steht nur in Argumenten *)
-scenario_decl  := "scenario" STRING [ "every" duration_lit ] ":" NEWLINE INDENT machine_body DEDENT      (* @stage v1.1 — 13.6 *)   (* @check 26 *)
+scenario_decl  := "scenario" STRING [ "every" duration_lit ] [ "with" attr { "," attr } ] ":" NEWLINE INDENT machine_body DEDENT      (* @stage v1.1 — 13.6 *)   (* @check 26 *)
 campaign_decl  := "campaign" IDENT ":" NEWLINE INDENT { campaign_item } DEDENT                            (* @stage v1.1 — 13.7 *)
 campaign_item  := "program" STRING NEWLINE | "profile" UPPER_IDENT NEWLINE   (* @check 29 *)
                 | "sweep" UPPER_IDENT "=" ( const_expr ".." const_expr "step" const_expr

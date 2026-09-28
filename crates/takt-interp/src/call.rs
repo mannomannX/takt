@@ -370,12 +370,12 @@ impl Ctx<'_, '_> {
                     let ((x0, y0), (x1, y1)) = (&pair[0], &pair[1]);
                     if x.compare(x1).is_some_and(|o| o.is_le()) {
                         // y0 + (y1 - y0) * (x - x0) / (x1 - x0), jede Operation gerundet
-                        let dy = arith::float_binary(BinaryOp::Sub, y1, y0, span, tick)?;
-                        let dx = arith::float_binary(BinaryOp::Sub, &x, x0, span, tick)?;
-                        let w = arith::float_binary(BinaryOp::Sub, x1, x0, span, tick)?;
-                        let t = arith::float_binary(BinaryOp::Mul, &dy, &dx, span, tick)?;
-                        let q = arith::float_binary(BinaryOp::Div, &t, &w, span, tick)?;
-                        let r = arith::float_binary(BinaryOp::Add, y0, &q, span, tick)?;
+                        let dy = arith::float_binary(BinaryOp::Sub, y1, y0)?;
+                        let dx = arith::float_binary(BinaryOp::Sub, &x, x0)?;
+                        let w = arith::float_binary(BinaryOp::Sub, x1, x0)?;
+                        let t = arith::float_binary(BinaryOp::Mul, &dy, &dx)?;
+                        let q = arith::float_binary(BinaryOp::Div, &t, &w)?;
+                        let r = arith::float_binary(BinaryOp::Add, y0, &q)?;
                         return arith::finite(width, r.as_f64().expect("float"), span, tick);
                     }
                 }

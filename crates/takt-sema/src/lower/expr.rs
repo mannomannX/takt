@@ -2623,6 +2623,16 @@ impl Lowerer<'_> {
         let shift_checked = matches!(mop, BinaryOp::Shl | BinaryOp::Shr)
             && !matches!(b.kind, ExprKind::Int(v) if (0..bits).contains(&v));
         let nonzero = matches!(b.kind, ExprKind::Int(v) | ExprKind::Duration(v) if v != 0);
+        // 4.2 (FB-294): Durch `+`, `-`, `*` und den Zaehler einer Division
+        // pflanzt sich ein nicht endlicher Wert immer fort. Die Pruefung am
+        // Ergebnis deckt darum die eines Operanden, der selbst eine solche
+        // Operation ist; der Divisor behaelt seine, denn `x / Inf` ist 0.
+        let (a, b) = if matches!(self.ty(result), Type::Float { .. }) && arith {
+            let b = if mop == BinaryOp::Div { b } else { unchecked_chain(b) };
+            (unchecked_chain(a), b)
+        } else {
+            (a, b)
+        };
         let b = if integral && matches!(mop, BinaryOp::Div | BinaryOp::Rem) && !nonzero {
             let (ty, at) = (b.ty, b.span);
             Expr::new(ExprKind::Checked { expr: Box::new(b), kind: CheckedKind::DivZero }, ty, at)
@@ -2926,4 +2936,26 @@ fn libtaktm_fun(op: Intrinsic) -> Option<libtaktm::Fun> {
         | Intrinsic::SaturatingSub
         | Intrinsic::Interp => return None,
     })
+}
+
+/// Ein Operand einer Gleitkommakette ohne seine eigene Endlichkeitspruefung
+/// (4.2, FB-294): `+`, `-`, `*` und `/` darunter, auch hinter einem
+/// unaeren Minus. Alles andere behaelt sie — ein Aufruf, `sqrt` oder eine
+/// Umwandlung prueft am eigenen Ergebnis.
+fn unchecked_chain(e: Expr) -> Expr {
+    match e.kind {
+        ExprKind::Checked { expr, kind: CheckedKind::NonFinite }
+            if matches!(
+                expr.kind,
+                ExprKind::Binary { op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div, .. }
+            ) =>
+        {
+            *expr
+        }
+        ExprKind::Unary { op: UnaryOp::Neg, expr } => {
+            let (ty, span) = (e.ty, e.span);
+            Expr::new(ExprKind::Unary { op: UnaryOp::Neg, expr: Box::new(unchecked_chain(*expr)) }, ty, span)
+        }
+        kind => Expr { kind, ..e },
+    }
 }

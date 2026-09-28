@@ -1,0 +1,33 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output mark :int in 0..99 @sim("o/mark"))
+(output place :int in 0..9 @sim("o/place"))
+(machine m
+  (var n :int in 0..10 0)
+  (var next :int in 0..20 11)
+  (fault -> SAFE)
+  (initial WORK)
+  (state WORK
+    (fault -> RECOVER)
+    (initial A)
+    (state A
+      (enter
+        (= place 1))
+      (after 20ms -> B)
+      (exit
+        (= n next)))
+    (state B
+      (var seen :int in 0..99 42)
+      (enter
+        (= place 2))
+      (exit
+        (= mark seen))))
+  (state RECOVER
+    (enter
+      (= place 3)
+      (= next (- next 1)))
+    (after 30ms -> WORK))
+  (state SAFE
+    (enter
+      (= place 9))))

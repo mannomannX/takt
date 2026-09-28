@@ -549,6 +549,9 @@ pub enum AttrKind {
     Budget(Vec<BudgetItem>),
     /// `polling = unchecked` je Maschine (Pruefung 59).
     PollingUnchecked,
+    /// `fault_is_fail = …` je Szenario (13.5): ueberschreibt den Wert aus
+    /// `system:` fuer dessen Lauf.
+    FaultIsFail(bool),
 }
 
 /// Ein Posten in `budget = {…}` (7.2).
@@ -1104,6 +1107,8 @@ pub struct ScenarioDecl {
     pub name: StrLit,
     /// Periode.
     pub every: Option<DurationLit>,
+    /// `with …` (13.5: `fault_is_fail`).
+    pub attrs: Vec<Attr>,
     /// Rumpf.
     pub body: MachineBody,
     /// Position.

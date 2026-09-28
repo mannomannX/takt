@@ -126,6 +126,12 @@ impl Rig {
         self.e(ExprKind::Binary { op, lhs: Box::new(a), rhs: Box::new(b) }, ty)
     }
 
+    /// Die Endlichkeitspruefung, wie das Sema sie um eine Kette setzt (4.2).
+    fn finite(&self, e: Expr) -> Expr {
+        let ty = e.ty;
+        self.e(ExprKind::Checked { expr: Box::new(e), kind: CheckedKind::NonFinite }, ty)
+    }
+
     fn call(&self, op: Intrinsic, args: Vec<Expr>, ty: TypeId) -> Expr {
         self.e(ExprKind::Intrinsic { op, args }, ty)
     }
@@ -230,17 +236,22 @@ fn float_arithmetic_has_no_nan_or_inf() {
     let r = Rig::new(FloatWidth::F64);
     assert_eq!(r.eval(&r.bin(BinaryOp::Add, r.f64(0.1), r.f64(0.2), r.t_f64)), Ok(Value::F64(0.1 + 0.2)));
     assert_eq!(
-        r.fault(&r.bin(BinaryOp::Mul, r.f64(1e308), r.f64(10.0), r.t_f64)),
+        r.fault(&r.finite(r.bin(BinaryOp::Mul, r.f64(1e308), r.f64(10.0), r.t_f64))),
         FaultKind::Arithmetic(ArithKind::NonFinite)
     );
     assert_eq!(
-        r.fault(&r.bin(BinaryOp::Div, r.f64(1.0), r.f64(0.0), r.t_f64)),
+        r.fault(&r.finite(r.bin(BinaryOp::Div, r.f64(1.0), r.f64(0.0), r.t_f64))),
         FaultKind::Arithmetic(ArithKind::NonFinite)
     );
     assert_eq!(
-        r.fault(&r.bin(BinaryOp::Div, r.f64(0.0), r.f64(0.0), r.t_f64)),
+        r.fault(&r.finite(r.bin(BinaryOp::Div, r.f64(0.0), r.f64(0.0), r.t_f64))),
         FaultKind::Arithmetic(ArithKind::NonFinite)
     );
+    // FB-294: Die Pruefung steht am Knoten; eine Kette darunter rechnet
+    // frei, und `Inf - Inf` meldet sich am Ende.
+    let inf = r.bin(BinaryOp::Mul, r.f64(1e308), r.f64(10.0), r.t_f64);
+    let chain = r.bin(BinaryOp::Sub, inf.clone(), inf, r.t_f64);
+    assert_eq!(r.fault(&r.finite(chain)), FaultKind::Arithmetic(ArithKind::NonFinite));
     assert_eq!(r.fault(&r.call(Intrinsic::Sqrt, vec![r.f64(-1.0)], r.t_f64)), FaultKind::Arithmetic(ArithKind::Domain));
     assert_eq!(r.fault(&r.call(Intrinsic::Log, vec![r.f64(0.0)], r.t_f64)), FaultKind::Arithmetic(ArithKind::Domain));
     assert_eq!(r.fault(&r.call(Intrinsic::Asin, vec![r.f64(2.0)], r.t_f64)), FaultKind::Arithmetic(ArithKind::Domain));
@@ -261,7 +272,7 @@ fn float_arithmetic_has_no_nan_or_inf() {
     let sum32 = r.bin(BinaryOp::Add, r.f32(0.1), r.f32(0.2), r.t_f32);
     assert_eq!(r.eval(&sum32), Ok(Value::F32(0.1f32 + 0.2f32)));
     assert_eq!(
-        r.fault(&r.bin(BinaryOp::Mul, r.f32(1e38), r.f32(10.0), r.t_f32)),
+        r.fault(&r.finite(r.bin(BinaryOp::Mul, r.f32(1e38), r.f32(10.0), r.t_f32))),
         FaultKind::Arithmetic(ArithKind::NonFinite)
     );
     assert_eq!(r.eval(&r.call(Intrinsic::Sqrt, vec![r.f32(2.0)], r.t_f32)), Ok(Value::F32(2.0f32.sqrt())));

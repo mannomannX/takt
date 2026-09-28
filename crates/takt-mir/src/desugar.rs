@@ -73,6 +73,21 @@ struct Seg {
     enter: Vec<Stmt>,
     loop_stmts: Vec<Stmt>,
     transitions: Vec<Proto>,
+    /// Der Einmal-Block des letzten `expect` in `loop_stmts`: Was im
+    /// Segment dahinter steht, laeuft darin nach der Pruefung (6.2).
+    after_expect: Option<usize>,
+}
+
+/// Eine Anweisung an ihren Platz im Segment: in `enter:`, hinter einem
+/// `expect` in dessen Einmal-Block (6.2).
+fn push_after_expect(seg: &mut Seg, s: Stmt) {
+    match seg.after_expect {
+        Some(i) => match &mut seg.loop_stmts[i].kind {
+            StmtKind::If { then, .. } => then.stmts.push(s),
+            _ => unreachable!("der Einmal-Block eines `expect` ist ein `if`"),
+        },
+        None => seg.enter.push(s),
+    }
 }
 
 struct Builder<'a> {
@@ -131,7 +146,13 @@ impl<'a> Builder<'a> {
         let mut state = State::new(format!("{parent_name}.S{i}"), Some(self.parent));
         state.step_name = self.pending_name.take();
         let id = self.m.add_state(state);
-        self.segs.push(Seg { id, enter: Vec::new(), loop_stmts: self.active_checks.clone(), transitions: Vec::new() });
+        self.segs.push(Seg {
+            id,
+            enter: Vec::new(),
+            loop_stmts: self.active_checks.clone(),
+            transitions: Vec::new(),
+            after_expect: None,
+        });
         self.closed = false;
         self.left = false;
     }
@@ -200,7 +221,8 @@ impl<'a> Builder<'a> {
     }
 
     /// Anweisung: `check` wird kontinuierlich, `->` beendet das Segment,
-    /// alles andere gehoert in `enter:` des Segments.
+    /// alles andere gehoert in `enter:` des Segments — hinter einem `expect`
+    /// in dessen Einmal-Block, nach der Pruefung (6.2, FB-283).
     fn stmt(&mut self, s: &Stmt) -> Result<(), Diagnostic> {
         match &s.kind {
             StmtKind::Check { kind: CheckKind::Check, .. } => {
@@ -234,7 +256,7 @@ impl<'a> Builder<'a> {
             }
             _ => {
                 check_no_goto(s)?;
-                self.cur().enter.push(s.clone());
+                push_after_expect(self.cur(), s.clone());
                 Ok(())
             }
         }
@@ -283,7 +305,9 @@ impl<'a> Builder<'a> {
     }
 
     /// `expect e` → `check e` (Fault-Art `Expect`) in `loop:` von `S_i`,
-    /// genau einmal im Entry-Tick, danach durch ein Flag deaktiviert.
+    /// genau einmal im Entry-Tick, danach durch ein Flag deaktiviert. Die
+    /// Anweisungen dahinter im selben Segment folgen im selben Block: Sie
+    /// laufen nur, wenn die Erwartung gilt (6.2).
     fn expect(&mut self, cond: Expr, message: Option<crate::pattern::Format>, req: Option<String>, span: Span) {
         let seg_id = self.cur().id;
         self.expect_count += 1;
@@ -308,7 +332,9 @@ impl<'a> Builder<'a> {
             },
             span,
         );
-        self.cur().loop_stmts.push(guarded);
+        let seg = self.cur();
+        seg.loop_stmts.push(guarded);
+        seg.after_expect = Some(seg.loop_stmts.len() - 1);
     }
 
     /// `repeat n:` → Koerper in eigenen Segmenten; nach dem letzten Segment
@@ -421,19 +447,22 @@ impl<'a> Builder<'a> {
     fn finish(mut self, span: Span) {
         let n = self.segs.len();
         let ids: Vec<StateId> = self.segs.iter().map(|s| s.id).collect();
-        for (i, seg) in self.segs.drain(..).enumerate() {
-            let holds = seg.transitions.is_empty();
-            let state = &mut self.m.states[seg.id.index()];
-            state.enter.stmts = seg.enter;
-            if holds && i + 1 == n {
-                state.enter.stmts.push(Stmt::new(
+        let segs = std::mem::take(&mut self.segs);
+        for (i, mut seg) in segs.into_iter().enumerate() {
+            if seg.transitions.is_empty() && i + 1 == n {
+                // `done` am Ende der Sequenz, wie jede Anweisung dort: hinter
+                // einem `expect` erst nach der Pruefung.
+                let done = Stmt::new(
                     StmtKind::Assign {
                         target: Place::Var(self.done),
                         value: Expr::new(ExprKind::Bool(true), self.bool_ty, span),
                     },
                     span,
-                ));
+                );
+                push_after_expect(&mut seg, done);
             }
+            let state = &mut self.m.states[seg.id.index()];
+            state.enter.stmts = seg.enter;
             state.loop_block.stmts = seg.loop_stmts;
             state.transitions = seg
                 .transitions

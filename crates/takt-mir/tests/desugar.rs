@@ -243,12 +243,38 @@ fn expect_checks_once_via_flag() {
     let expected = "\
         state IGNITION.S0:
             var expect_1 = true
-            enter:
-                done = true
             loop:
                 if expect_1:
                     expect (chamber_p > IGNITION_P)
                     expect_1 = false
+                    done = true
+";
+    assert!(out.contains(expected), "{out}");
+}
+
+/// Was hinter einem `expect` steht, laeuft nach der Pruefung im selben
+/// Einmal-Block (6.2, FB-283): Scheitert die Erwartung, laeuft es nicht.
+/// Was davor steht, bleibt in `enter:`.
+#[test]
+fn statements_after_an_expect_follow_the_check() {
+    let r = Rig::new();
+    let items = vec![
+        SeqItem::Stmt(r.set(r.fuel_main, true)),
+        SeqItem::Expect { cond: r.pressure_ok(), message: None, req: None, span: Span::default() },
+        SeqItem::Stmt(r.set(r.igniter, true)),
+    ];
+    let out = r.run(items);
+    let expected = "\
+        state IGNITION.S0:
+            var expect_1 = true
+            enter:
+                fuel_main = true
+            loop:
+                if expect_1:
+                    expect (chamber_p > IGNITION_P)
+                    expect_1 = false
+                    igniter = true
+                    done = true
 ";
     assert!(out.contains(expected), "{out}");
 }

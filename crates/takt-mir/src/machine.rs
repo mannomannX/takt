@@ -529,6 +529,9 @@ pub struct Machine {
     pub driver: bool,
     /// `with polling = unchecked`: Pruefung 59 ausdruecklich freigegeben.
     pub polling_unchecked: bool,
+    /// Ein Szenario mit `with fault_is_fail = …` (13.5): Es gilt fuer
+    /// dessen Lauf statt des Werts aus `system:`.
+    pub fault_is_fail: Option<bool>,
     /// Parameter einer Vorlage.
     pub params: Vec<crate::fns::FnParam>,
     /// Periode `n_m` in Basis-Ticks.
@@ -594,6 +597,7 @@ impl Machine {
             kind: MachineKind::Regular,
             driver: false,
             polling_unchecked: false,
+            fault_is_fail: None,
             params: Vec::new(),
             period: 1,
             phase: 0,

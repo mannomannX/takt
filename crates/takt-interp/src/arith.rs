@@ -121,25 +121,29 @@ pub fn finite(width: FloatWidth, x: f64, span: Span, tick: u64) -> EvalResult<Va
 }
 
 /// Fliesskommaoperation; `f32` rechnet nativ in `f32` (IEEE, round-to-nearest-even).
-pub fn float_binary(op: BinaryOp, a: &Value, b: &Value, span: Span, tick: u64) -> EvalResult<Value> {
+///
+/// **Ohne Endlichkeitspruefung** (4.2, FB-294): Sie steht als Knoten
+/// `Checked{NonFinite}` in der MIR, wie der Codegen ihr folgt — am Ende
+/// einer Kette aus `+`, `-`, `*` und Zaehlern, nicht nach jeder Operation.
+pub fn float_binary(op: BinaryOp, a: &Value, b: &Value) -> EvalResult<Value> {
     match (a, b) {
         (Value::F32(x), Value::F32(y)) => {
             let (x, y) = (*x, *y);
             match op {
-                BinaryOp::Add => finite(FloatWidth::F32, f64::from(x + y), span, tick),
-                BinaryOp::Sub => finite(FloatWidth::F32, f64::from(x - y), span, tick),
-                BinaryOp::Mul => finite(FloatWidth::F32, f64::from(x * y), span, tick),
-                BinaryOp::Div => finite(FloatWidth::F32, f64::from(x / y), span, tick),
+                BinaryOp::Add => Ok(Value::F32(x + y)),
+                BinaryOp::Sub => Ok(Value::F32(x - y)),
+                BinaryOp::Mul => Ok(Value::F32(x * y)),
+                BinaryOp::Div => Ok(Value::F32(x / y)),
                 _ => compare_floats(op, f64::from(x), f64::from(y)),
             }
         }
         (Value::F64(x), Value::F64(y)) => {
             let (x, y) = (*x, *y);
             match op {
-                BinaryOp::Add => finite(FloatWidth::F64, x + y, span, tick),
-                BinaryOp::Sub => finite(FloatWidth::F64, x - y, span, tick),
-                BinaryOp::Mul => finite(FloatWidth::F64, x * y, span, tick),
-                BinaryOp::Div => finite(FloatWidth::F64, x / y, span, tick),
+                BinaryOp::Add => Ok(Value::F64(x + y)),
+                BinaryOp::Sub => Ok(Value::F64(x - y)),
+                BinaryOp::Mul => Ok(Value::F64(x * y)),
+                BinaryOp::Div => Ok(Value::F64(x / y)),
                 _ => compare_floats(op, x, y),
             }
         }

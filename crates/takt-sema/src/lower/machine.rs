@@ -167,6 +167,16 @@ impl Lowerer<'_> {
         m.meta = meta;
         m.declared_budget = self.declared_budget(&decl.attrs);
         m.polling_unchecked = decl.attrs.iter().any(|a| matches!(a.kind, ast::AttrKind::PollingUnchecked));
+        // 13.5: Ein Szenario, das einen Fault-Pfad prueft, erklaert es an sich.
+        for a in &decl.attrs {
+            if let ast::AttrKind::FaultIsFail(b) = a.kind {
+                if m.kind == MachineKind::Scenario {
+                    m.fault_is_fail = Some(b);
+                } else {
+                    self.error(SC3, a.span, "`fault_is_fail` nur an einem Szenario (13.5)");
+                }
+            }
+        }
         let tick = self.program.config.tick;
         if let Some(every) = &decl.every {
             if every.ns <= 0 {
@@ -1030,7 +1040,7 @@ impl Lowerer<'_> {
             node: None,
             every: decl.every.clone(),
             phase: None,
-            attrs: Vec::new(),
+            attrs: decl.attrs.clone(),
             body: decl.body.clone(),
             span: decl.span,
         };

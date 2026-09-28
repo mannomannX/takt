@@ -209,7 +209,7 @@ impl<'p> Run<'p> {
             }
         }
         writer.lines.append(&mut echo);
-        collect(&mut writer, &sim, 0, &mut verdict, &mut fail, &mut coverage);
+        collect(&mut writer, &sim, 0, fault_is_fail(program, scenario), &mut verdict, &mut fail, &mut coverage);
         writer.initial(&sim);
         observe_properties(&mut monitors, &sim, 0, &mut writer, &mut fail);
 
@@ -274,7 +274,16 @@ impl<'p> Run<'p> {
         self.writer.lines.append(&mut self.echo);
         self.sim.step()?;
         self.collect_steps(tick);
-        collect(&mut self.writer, &self.sim, tick, &mut self.verdict, &mut self.fail, &mut self.coverage);
+        let fault_is_fail = fault_is_fail(self.sim.loaded.program, self.scenario);
+        collect(
+            &mut self.writer,
+            &self.sim,
+            tick,
+            fault_is_fail,
+            &mut self.verdict,
+            &mut self.fail,
+            &mut self.coverage,
+        );
         self.writer.changes(&self.sim, tick);
         observe_properties(&mut self.monitors, &self.sim, tick, &mut self.writer, &mut self.fail);
         self.last = tick;
@@ -644,17 +653,23 @@ fn foreign_machine(p: &Program, name: &str, only: Option<MachineId>) -> Result<M
     Ok(m)
 }
 
+/// Ob ein Fault den Lauf zu FAIL macht (13.5): der Wert des Szenarios,
+/// sonst der aus `system:`.
+fn fault_is_fail(program: &Program, scenario: Option<MachineId>) -> bool {
+    scenario.and_then(|s| program.machines[s.index()].fault_is_fail).unwrap_or(program.config.fault_is_fail)
+}
+
 /// Sammelt die Beobachtungen eines Ticks in kanonischer Ordnung (T5).
 fn collect(
     writer: &mut Writer,
     sim: &Sim<'_>,
     tick: u64,
+    fault_is_fail: bool,
     verdict: &mut Verdict,
     fail: &mut bool,
     coverage: &mut Coverage,
 ) {
     let program = sim.loaded.program;
-    let fault_is_fail = program.config.fault_is_fail;
     let mut by_machine: Vec<(MachineId, &Observation)> = sim.observations.iter().map(|(m, o)| (*m, o)).collect();
     by_machine.sort_by_key(|(m, _)| m.0);
     for (id, obs) in by_machine {

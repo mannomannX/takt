@@ -129,6 +129,10 @@ pub struct MachineState {
     /// Zuletzt aktiver Blattpfad je `resume`-Zustand (5.12); `None` vor dem
     /// ersten Austritt.
     pub saved: Vec<Option<StateId>>,
+    /// Hat die Maschine ihren ersten Eintritt hinter sich? Eine leere
+    /// Konfiguration allein sagt es nicht: Nach einem Fault in einem
+    /// `exit:` der obersten Ebene ist ebenfalls kein Zustand aktiv (9.3).
+    pub started: bool,
 }
 
 /// Zaehler einer Maschine, geschluesselt nach Stelle und den Indizes der
@@ -183,6 +187,7 @@ impl MachineState {
             was_idle: false,
             faulted: false,
             saved: vec![None; m.states.len()],
+            started: false,
         }
     }
 
@@ -722,7 +727,8 @@ pub fn switch(
         let depth = chain_to(env.machine(loaded), s).len();
         common = common.min(depth - 1);
     }
-    let first_entry = old.is_empty() && !env.state.faulted;
+    let first_entry = !env.state.started;
+    env.state.started = true;
     // 5.12: Was verlassen wird, merkt sich sein Blatt.
     if let Some(leaf) = old.last().copied() {
         for s in &old[common..] {
@@ -744,13 +750,20 @@ pub fn switch(
             break;
         }
     }
-    // (1) Die neue Konfiguration gilt auch, wenn ein exit-Block scheiterte:
-    // Die restlichen entfallen, und der Fault wird mit ihr behandelt (9.3).
-    env.state.conf = new.clone();
-    env.state.faulted = matches!(target, Target::Faulted);
+    // Scheiterte ein exit-Block, entfallen die restlichen, und der Fault
+    // wird ab dem kleinsten gemeinsamen Vorfahren behandelt (9.3, FB-289):
+    // Die Zustaende darunter sind verlassen, die neuen noch nicht betreten,
+    // und der Fault-Pfad verlaesst nur, was aktiv war. Fuehrte der Wechsel
+    // nach `FAULTED`, bleibt die Senke das Ziel (5.3).
+    let faulted = matches!(target, Target::Faulted);
     if !matches!(exited, Ok(Out::Normal)) {
+        env.state.conf = if faulted { new } else { old[..common].to_vec() };
+        env.state.faulted = faulted;
         return exited;
     }
+    // (1) Die neue Konfiguration.
+    env.state.conf = new.clone();
+    env.state.faulted = faulted;
     if env.state.faulted {
         // FAULTED fuehrt keinen Nutzercode aus; die Outputs stehen auf safe (5.3)
         env.safe_outputs(loaded);

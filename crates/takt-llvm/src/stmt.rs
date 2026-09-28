@@ -67,9 +67,9 @@ pub struct Ctx<'a> {
     pub end: Option<String>,
     /// In einer `loop:`-Funktion: wahr im Entry-Tick, wo `->` nicht wirkt.
     pub entry_reg: Option<Reg>,
-    /// Die Fault-Pfade, die am Ende der Funktion entstehen: je Blatt einer,
-    /// `None` fuer den aus `FAULTED` (5.3).
-    pub fault_paths: Vec<Option<takt_mir::StateId>>,
+    /// Die Fault-Pfade, die am Ende der Funktion entstehen: je Quelle einer
+    /// (5.3, [`FaultFrom`]).
+    pub fault_paths: Vec<FaultFrom>,
     /// Anhang ihrer Marken. In einer `loop:`-Funktion fuehrt die Marke
     /// eines Blatts zurueck in den Schritt; die Pfade eines Wechsels dort
     /// brauchen eigene.
@@ -211,15 +211,38 @@ impl<'a> Ctx<'a> {
         m.fault_to(&self.trampoline(), crate::abi::fault_code(kind))
     }
 
-    /// Die Marke des Fault-Pfads ab `from` in dieser Funktion; `None` ist
-    /// `FAULTED` (5.3). Der Pfad wird vorgemerkt und am Ende der Funktion
-    /// geschrieben.
-    pub fn fault_path(&mut self, from: Option<takt_mir::StateId>) -> String {
+    /// Die Marke des Fault-Pfads ab `from` in dieser Funktion (5.3). Der
+    /// Pfad wird vorgemerkt und am Ende der Funktion geschrieben.
+    pub fn fault_path(&mut self, from: FaultFrom) -> String {
         if !self.fault_paths.contains(&from) {
             self.fault_paths.push(from);
         }
-        let at = from.map_or_else(|| "faulted".to_string(), |s| s.index().to_string());
+        let at = match from {
+            FaultFrom::State(s) => s.index().to_string(),
+            FaultFrom::Root => "wurzel".to_string(),
+            FaultFrom::Faulted => "faulted".to_string(),
+        };
         format!("fault_{}_{at}{}{}", self.machine.name, self.tag, self.fault_suffix)
+    }
+}
+
+/// Woher ein Fault-Pfad ausgeht (5.3, 9.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FaultFrom {
+    /// Ein aktiver Zustand: das Blatt, nach einem Fault in `exit:` der
+    /// kleinste gemeinsame Vorfahr des Wechsels (FB-289).
+    State(takt_mir::StateId),
+    /// Kein Zustand mehr aktiv: Ein `exit:` der obersten Ebene scheiterte,
+    /// und der Fault faellt auf das Fault-Ziel der Maschine.
+    Root,
+    /// `FAULTED`, die Senke des Fault-Walds.
+    Faulted,
+}
+
+impl FaultFrom {
+    /// Das Blatt `leaf` als Quelle, `None` als `FAULTED`.
+    pub fn of(leaf: Option<takt_mir::StateId>) -> FaultFrom {
+        leaf.map_or(FaultFrom::Faulted, FaultFrom::State)
     }
 }
 

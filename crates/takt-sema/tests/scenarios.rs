@@ -214,3 +214,40 @@ scenario \"fires\" every 1 ms:
     let c = run_scenario(&p, "fires").coverage;
     assert!(c.hits.keys().any(|(k, _, n)| *k == CoverKind::Irreversible && n == "fire"), "{c:?}");
 }
+
+/// **`fault_is_fail` gehoert zum Szenario** (13.5, FB-347): Ein Szenario,
+/// das einen Fault absichtlich ausloest, erklaert es an sich und besteht;
+/// dasselbe ohne die Erklaerung scheitert, und die uebrigen Szenarien
+/// behalten den strengen Wert aus `system:`.
+#[test]
+fn a_scenario_may_declare_that_its_fault_is_intended() {
+    let with = |attr: &str| {
+        format!(
+            "{PROGRAM}
+scenario \"overpressure trips\" every 1 ms{attr}:
+    initial RUN
+    state RUN:
+        sequence:
+            p_sim = 60 bar
+            wait 3 ms
+            verdict pass \"tripped\"
+"
+        )
+    };
+    let intended = ok(&with(" with fault_is_fail = false"));
+    let r = run_scenario(&intended, "overpressure trips");
+    assert!(r.trace.render().contains("fault dut CheckFailed"), "{}", r.trace.render());
+    assert_eq!(r.verdict, Verdict::Pass, "{}", r.trace.render());
+    assert_eq!(run_scenario(&intended, "pressure rises").verdict, Verdict::Pass);
+    let strict = ok(&with(""));
+    assert_eq!(run_scenario(&strict, "overpressure trips").verdict, Verdict::Fail);
+}
+
+/// `fault_is_fail` gilt nur am Szenario.
+#[test]
+fn fault_is_fail_on_a_machine_is_an_error() {
+    let (p, diags) = compile(
+        "output o : bool @ sim(\"o/x\") with safe = false\n\nmachine m with fault_is_fail = false:\n    initial A\n    state A:\n        loop: pass\n",
+    );
+    assert!(p.is_none() && diags.iter().any(|d| d.contains("nur an einem Szenario")), "{diags:?}");
+}
