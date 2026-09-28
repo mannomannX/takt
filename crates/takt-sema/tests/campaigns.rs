@@ -11,7 +11,7 @@ const HEAD: &str = "system:\n    language = 1\n    tick = 1 ms\n\n";
 
 fn compile(body: &str, build: Build) -> Result<Program, Vec<String>> {
     let src = format!("{HEAD}{body}");
-    let options = Options { policy: Policy::default(), build, profile: None };
+    let options = Options { policy: Policy::default(), build, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     if errors.is_empty() { Ok(out.program.expect("Programm")) } else { Err(errors) }
@@ -31,7 +31,7 @@ machine m:
 #[test]
 fn the_campaigns_of_the_corpus_lower() {
     let src = include_str!("../../../corpus-try/44_campaign.takt");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let p = takt_sema::compile(src, &options).program.expect("Programm");
     let [sweep, first] = p.campaigns.as_slice() else { panic!("{:?}", p.campaigns) };
     assert_eq!((sweep.name.as_str(), sweep.program.as_deref()), ("gain_sweep", Some("44_campaign.takt")));

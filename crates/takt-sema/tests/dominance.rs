@@ -16,7 +16,7 @@ record Head layout little:
 
 fn diagnostics(body: &str) -> Vec<String> {
     let src = format!("{HEAD}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     takt_sema::compile(&src, &options).diagnostics.iter().map(|d| format!("{d}")).collect()
 }
 

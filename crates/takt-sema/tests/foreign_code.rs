@@ -13,7 +13,7 @@ use takt_sema::{Build, Options};
 const HEAD: &str = "system:\n    language = 1\n    tick = 1 ms\n\n";
 
 fn options() -> Options {
-    Options { policy: Policy::default(), build: Build::Sim, profile: None }
+    Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() }
 }
 
 /// Uebersetzt ein Programm und verlangt Fehlerfreiheit.

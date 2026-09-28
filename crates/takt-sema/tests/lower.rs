@@ -7,7 +7,7 @@ use takt_mir::{MachineId, Program};
 use takt_sema::{Build, Compiled, Options};
 
 fn options() -> Options {
-    Options { policy: Policy::default(), build: Build::Sim, profile: None }
+    Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() }
 }
 
 /// Uebersetzt und verlangt Fehlerfreiheit.

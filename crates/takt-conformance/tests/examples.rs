@@ -51,7 +51,7 @@ const TICKS: u64 = 40;
 fn example(name: &str) -> Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/sim/{}/program.takt"), name);
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{name}:\n{}", errors.join("\n"));

@@ -11,7 +11,7 @@ const HEAD: &str = "system:\n    language = 1\n    tick = 10 ms\n\n";
 
 fn compile(body: &str) -> Result<Program, Vec<String>> {
     let src = format!("{HEAD}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     if errors.is_empty() { Ok(out.program.expect("Programm")) } else { Err(errors) }

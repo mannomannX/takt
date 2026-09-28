@@ -2,7 +2,12 @@
 fn main() {
     let path = std::env::args().nth(1).unwrap_or_else(|| "corpus-try/18_blocks.takt".into());
     let src = std::fs::read_to_string(&path).expect("lesbar");
-    let o = takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let o = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &o);
     let Some(p) = out.program else { return };
     for f in &p.fns {

@@ -1,11 +1,14 @@
 //! Die Hardware-Konfiguration (8.10), soweit die Analyse sie braucht.
 //!
-//! **Was hier steht.** 8.10 beschreibt acht Feldgruppen. Umgesetzt sind
-//! die, die ein Werkzeug liest: die Kalibrierung je Ziel (Pruefungen 12
-//! und 32), Speicher und Stack-Reserven je Ziel (Pruefung 39), Geraete
-//! und Kanaele mit Anschluss und Messwerten (Pruefungen 28 und 60; der
-//! Anschluss geht an das Board weiter, 9.5). Topologie und Herkunft
-//! kommen, wenn jemand danach fragt.
+//! **Was hier steht.** Jedes Feld aus 8.10 bis auf die Topologie (v2):
+//! die Kalibrierung je Ziel (Pruefungen 12 und 32), Speicher und
+//! Stack-Reserven je Ziel (Pruefung 39), Geraete mit ihrer Herkunft und
+//! Kanaele mit Anschluss, Kalibrierung und Messwerten (Pruefungen 28 und
+//! 60, `import channels`). Anschluss und Kalibrierung gehoeren dem Treiber;
+//! der Compiler reicht sie an das Board weiter (9.5). Weil der Leser
+//! unbekannte Schluessel ablehnt, muss er jedes Feld kennen, auch die, die
+//! kein Werkzeug auswertet: Sonst waere eine Konfiguration aus der
+//! Autodiscovery nicht lesbar.
 //!
 //! **Warum die Kalibrierung zuerst.** Ohne `c_target` ist die zentrale
 //! Zeitzusage der Sprache unbelegt: `takt cost` rechnet Operationen, aber
@@ -80,8 +83,10 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// `fma` und `sqrt` (7.2). 7: `cost_model`, die Version des Kostenmodells,
 /// zu der die Gewichte gemessen wurden. 8: `deep_wake`, ob ein Input den
 /// Chip aus dem Tiefschlaf weckt (12.7). 9: `tick_granular`, ob ein Output
-/// nur zu Tickbeginn geschrieben wird (7.5, 13.8).
-pub const FORMAT_VERSION: u32 = 9;
+/// nur zu Tickbeginn geschrieben wird (7.5, 13.8). 10: die uebrigen Felder
+/// aus 8.10 — `calibration`, `max_rate_hz` und `framing` am Kanal,
+/// `profile` (Herkunft) am Geraet.
+pub const FORMAT_VERSION: u32 = 10;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -287,6 +292,9 @@ pub struct Device {
     pub fifo_depth: Option<u32>,
     /// `byte_rate` gepollter Geraete.
     pub byte_rate: Option<u64>,
+    /// Herkunft: das Geraeteprofil, aus dem der Abschnitt stammt (EDS, ESI,
+    /// Registertabelle, DMX-Kanalplan; 8.10).
+    pub profile: Option<String>,
 }
 
 /// Ein Kanal (8.10), adressiert wie im Programm (`@ hw("…")`).
@@ -310,6 +318,13 @@ pub struct HwChannel {
     pub port: Option<String>,
     /// Rate in Hertz.
     pub rate_hz: Option<u64>,
+    /// Hoechstrate eines Stroms in Hertz (8.6).
+    pub max_rate_hz: Option<u64>,
+    /// Rahmung eines Stroms, wie im Programm geschrieben (8.8).
+    pub framing: Option<String>,
+    /// Kalibrierung vom Rohwert zur Einheit (`linear(a, b)`, `table(…)`,
+    /// 8.1): treiberspezifisch; der Compiler reicht sie weiter wie `port`.
+    pub calibration: Option<String>,
     /// Gemessene Treiberlatenz eines Outputs in Nanosekunden: So frueh muss
     /// eine geplante Ausgabe feststehen (`guard`, 7.5, 13.8).
     pub guard_ns: Option<i64>,
@@ -626,12 +641,13 @@ fn device_key(device: &mut Device, key: &str, value: &str, line: u32) -> Result<
         "cycle_ns" => device.cycle_ns = Some(number(value, line)? as i64),
         "fifo_depth" => device.fifo_depth = Some(number(value, line)? as u32),
         "byte_rate" => device.byte_rate = Some(number(value, line)?),
+        "profile" => device.profile = Some(text(value)),
         _ => {
             return Err(ParseError {
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: driver, address, heartbeat_ns, cycle_ns, fifo_depth, \
-                     byte_rate"
+                     byte_rate, profile"
                 ),
             });
         }
@@ -665,6 +681,9 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
         "device" => channel.device = Some(text(value)),
         "port" => channel.port = Some(text(value)),
         "rate_hz" => channel.rate_hz = Some(number(value, line)?),
+        "max_rate_hz" => channel.max_rate_hz = Some(number(value, line)?),
+        "framing" => channel.framing = Some(text(value)),
+        "calibration" => channel.calibration = Some(text(value)),
         "guard_ns" => channel.guard_ns = Some(number(value, line)? as i64),
         "jitter_ns" => channel.jitter_ns = Some(number(value, line)? as i64),
         "latency_ns" => channel.latency_ns = Some(number(value, line)? as i64),
@@ -675,7 +694,8 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: direction, raw, unit, range, safe, device, port, \
-                     rate_hz, guard_ns, jitter_ns, tick_granular, latency_ns, deep_wake"
+                     rate_hz, max_rate_hz, framing, calibration, guard_ns, jitter_ns, tick_granular, latency_ns, \
+                     deep_wake"
                 ),
             });
         }
@@ -866,6 +886,9 @@ pub fn render(hw: &Hardware) -> String {
         if let Some(v) = d.byte_rate {
             s.push_str(&format!("byte_rate = {v}\n"));
         }
+        if let Some(v) = &d.profile {
+            s.push_str(&format!("profile = \"{v}\"\n"));
+        }
     }
     for c in hw.channels.values() {
         s.push_str(&format!("\n[channel {}]\n", c.address));
@@ -889,6 +912,14 @@ pub fn render(hw: &Hardware) -> String {
         }
         if let Some(v) = c.rate_hz {
             s.push_str(&format!("rate_hz = {v}\n"));
+        }
+        if let Some(v) = c.max_rate_hz {
+            s.push_str(&format!("max_rate_hz = {v}\n"));
+        }
+        for (key, value) in [("framing", &c.framing), ("calibration", &c.calibration)] {
+            if let Some(v) = value {
+                s.push_str(&format!("{key} = \"{v}\"\n"));
+            }
         }
         for (key, value) in [("guard_ns", c.guard_ns), ("jitter_ns", c.jitter_ns), ("latency_ns", c.latency_ns)] {
             if let Some(v) = value {
@@ -1167,6 +1198,21 @@ t_io = 120000
         let out = with_channel_values(&out, "gpio/loop_in", &[("latency_ns", "90".to_string())]).expect("lesbar");
         assert!(out.ends_with("\n[channel gpio/loop_in]\nlatency_ns = 90\n"), "{out}");
         assert_eq!(parse(&render(&parse(&out).expect("lesbar"))).expect("lesbar"), parse(&out).expect("lesbar"));
+    }
+
+    #[test]
+    fn every_field_of_8_10_reads_and_round_trips() {
+        let text = format!(
+            "# takt-hw {FORMAT_VERSION}\n[device.daq1]\ndriver = \"ads131\"\nprofile = \"daq1.eds\"\n\n\
+             [channel daq1/ai0]\ndirection = input\nraw = i16\nunit = bar\ncalibration = \"linear(0.01, -5)\"\n\n\
+             [channel uart1/rx]\ndirection = input\nmax_rate_hz = 1000\nframing = \"cobs\"\n"
+        );
+        let hw = parse(&text).expect("lesbar");
+        assert_eq!(hw.devices["daq1"].profile.as_deref(), Some("daq1.eds"));
+        assert_eq!(hw.channel("daq1/ai0").and_then(|c| c.calibration.as_deref()), Some("linear(0.01, -5)"));
+        let rx = hw.channel("uart1/rx").expect("Kanal");
+        assert_eq!((rx.max_rate_hz, rx.framing.as_deref()), (Some(1000), Some("cobs")));
+        assert_eq!(parse(&render(&hw)).expect("lesbar"), hw);
     }
 
     #[test]

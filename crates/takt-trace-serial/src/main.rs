@@ -64,8 +64,12 @@ fn run(args: &[String]) -> Result<bool, String> {
     // Lauf sinnlos — und ein Fehler hier ist billiger als einer nach
     // dreissig Sekunden Warten am Board.
     let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Hw, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Hw,
+        profile: None,
+        ..Default::default()
+    };
     let checked = takt_sema::compile(&src, &options);
     let map = takt_diag::SourceMap::single(path, src.as_str());
     for d in checked.diagnostics.iter().filter(|d| d.is_error()) {

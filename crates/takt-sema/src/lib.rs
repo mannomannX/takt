@@ -22,7 +22,7 @@ use takt_mir::analysis::Report;
 use takt_mir::program::Program;
 use takt_syntax::Edition;
 use takt_syntax::ast::File;
-use takt_syntax::{parse_file, tokenize_in};
+use takt_syntax::{TokenKind, parse_file, tokenize_in};
 
 use crate::lower::Lowerer;
 
@@ -49,6 +49,10 @@ pub struct Options {
     pub build: Build,
     /// Gewaehltes Profil (8.4).
     pub profile: Option<String>,
+    /// Die Texte der Hardware-Konfigurationen aus `import channels from
+    /// "…"` (8.2), unter dem Pfad, wie er in der Quelle steht; wer
+    /// uebersetzt, liest sie neben dem Programm ([`channel_imports`]).
+    pub channel_imports: std::collections::BTreeMap<String, String>,
 }
 
 impl Options {
@@ -144,7 +148,10 @@ pub fn compile_with(src: &str, options: &Options, proof: Option<&takt_mir::analy
         }
     };
     sink.extend(names::check(&file, edition));
-    let (program, diags) = lower::run(&file, edition, options);
+    // 8.2: `import channels` bindet nur, was die Quelle nennt.
+    let toks = tokenize_in(src, edition);
+    let used = toks.tokens.iter().filter(|t| t.kind == TokenKind::Ident).map(|t| toks.text(t).to_string()).collect();
+    let (program, diags) = lower::run(&file, edition, options, Some(used));
     sink.extend(diags);
     let mut program = program.filter(|_| !sink.has_errors());
     // Das statische Gate laeuft nach dem Lowering auf der fertigen MIR
@@ -185,6 +192,20 @@ fn relabel_reserved(mut d: Diagnostic) -> Diagnostic {
     d
 }
 
+/// Die Pfade aus `import channels from "…"` (8.2), fuer den Aufrufer, der
+/// die Konfigurationen in [`Options::channel_imports`] legt.
+pub fn channel_imports(src: &str) -> Vec<String> {
+    let (edition, _) = edition::resolve(src);
+    let (file, _) = parse_file(&tokenize_in(src, edition));
+    file.items
+        .iter()
+        .filter_map(|item| match item {
+            takt_syntax::ast::Item::Import(takt_syntax::ast::Import::Channels { file, .. }) => Some(file.value.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Uebersetzt das Prelude allein; nur fuer Tests und Werkzeuge.
 pub fn compile_prelude() -> Compiled {
     compile("", &Options::default())
@@ -193,5 +214,5 @@ pub fn compile_prelude() -> Compiled {
 /// Zugriff auf den Elaborator fuer Werkzeuge (Dump, Tests).
 pub fn lower_file(file: &File, edition: Edition, options: &Options) -> (Option<Program>, Vec<Diagnostic>) {
     let _ = Lowerer::new(takt_mir::program::Config::new(edition.number(), 1_000_000), edition, options);
-    lower::run(file, edition, options)
+    lower::run(file, edition, options, None)
 }

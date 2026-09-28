@@ -1107,6 +1107,24 @@ impl Lowerer<'_> {
 
     // ------------------------------------------------------------ Zugriffe
 
+    /// `o.jitter` (7.5, 8.1): Zu welchem Jitter die Runtime den Output
+    /// schreibt, eine Dauer aus der Bindung. Sie haengt nicht an der Logik —
+    /// sonst waere der Logik-Hash von Sim- und HW-Build verschieden (8.3).
+    fn jitter(&mut self, c: ChannelId, args: Option<&[ast::Arg]>, span: Span) -> Option<Expr> {
+        if args.is_some() {
+            self.error(SC3, span, "`jitter` ist kein Aufruf");
+            return None;
+        }
+        let ch = &self.program.channels[c.index()];
+        if ch.dir != takt_mir::program::Direction::Output || matches!(self.ty(ch.ty), Type::Stream(_)) {
+            self.error(SC3, span, format!("`jitter` gibt es nur an einem Output, `{}` ist keiner (7.5)", ch.name));
+            return None;
+        }
+        let base = Expr::new(ExprKind::Output(c), ch.ty, span);
+        let accessor = ExprKind::Accessor { base: Box::new(base), accessor: Accessor::Jitter, args: vec![] };
+        Some(Expr::new(accessor, self.tys.duration, span))
+    }
+
     fn member(
         &mut self,
         base: &ast::Expr,
@@ -1138,6 +1156,11 @@ impl Lowerer<'_> {
                 if self.program.channels[c.index()].dir == takt_mir::program::Direction::Input && is_wrapper(member) {
                     let raw = self.input_read(c, base.span, true);
                     return self.wrapper_access(raw, name, args, span);
+                }
+                // 7.5: der gemessene Jitter aus der Bindung, kein Wert des
+                // Latches; in der Simulation null wie `guard`.
+                if member == "jitter" {
+                    return self.jitter(c, args, span);
                 }
             }
             // 7.5: `t.armed` ist ein `bool`, `t.fired` der Eingangsstrom.
@@ -1639,7 +1662,7 @@ impl Lowerer<'_> {
                 };
                 Some(Expr::new(ExprKind::Accessor { base: Box::new(b), accessor: acc, args: vec![] }, ty, span))
             }
-            ("pre" | "post" | "samples" | "remaining" | "jitter" | "time_warped", _) => {
+            ("pre" | "post" | "samples" | "remaining" | "time_warped", _) => {
                 self.stage(span, format!("`.{member}`").as_str(), Stage::V1_1);
                 None
             }

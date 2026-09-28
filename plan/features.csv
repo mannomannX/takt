@@ -66,8 +66,8 @@ SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig,
 SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),fertig,"`system: overrun = fault | alert` seit plan/nvm.md Schritt 1; ein Journal-Vorgang ueber die Frist zaehlt als Ueberlauf (Schritt 3); vier Kennzahlen aus `drift` und `took` je Tick, `time`-Metazeile und `takt timing` (plan/esp32c6.md Schritt 8)"
 SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M6 (v1.1),fertig,`sys/clock` am eingebauten Geraet `sys` (Pruefung 60); `takt-rt-linux::wall_clock_ns` fuer den Treiberrand
 SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),fertig,
-SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M10 (aus M2),teilweise,"`o.jitter`, Kalibrierung und Enum-Abbildung der Kanaele (FB-336, M10 Schritt 12)"
-SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M10 (aus M6),teilweise,"`import channels` und Aufzeichnung ungebundener Kanaele (FB-336, M10 Schritt 12)"
+SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M10 (aus M2),fertig,"`o.jitter` als Wert der Bindung (Simulation null, Ziel aus der Konfiguration); Kalibrierung (`calibration`, weitergereicht) und Enum-Abbildung (`raw` nennt das Enum) in der Konfiguration, M10 Schritt 12"
+SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M10 (aus M6),teilweise,`import channels` aufgeloest (M10 Schritt 12); die Aufzeichnung ungebundener Kanaele braucht Treiber in den Runtimes (FB-285)
 SEM-8.3,Semantik/Abschnitt,8.3,Simulation und HIL,,M2 (Ströme),fertig,
 SEM-8.4,Semantik/Abschnitt,8.4,Parameter und Profile,,M2 (Ströme),fertig,
 SEM-8.5,Semantik/Abschnitt,8.5,Commands und Operator-Interaktion,,M2 (Ströme),fertig,
@@ -75,7 +75,7 @@ SEM-8.6,Semantik/Abschnitt,8.6,Ereignisströme (`stream<E>`),,M2 (Ströme),ferti
 SEM-8.7,Semantik/Abschnitt,8.7,"Muster, Captures, Handler",,M2 (Ströme),fertig,
 SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),fertig,
 SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),fertig,"`capture<T,N>` (M8 Schritte 12 und 13): Accessoren, Byteform mit 24-Byte-Kopf, Stimulusform `t;pre;post;rate;[…]`, `CaptureCmd` im Prelude, Codegen als Struct; Korpus `66_capture.takt`, Differential gruen. TTL-Adapter (PA9) fuer die Messung offen"
-SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M10 (aus M6),teilweise,
+SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M10 (aus M6),fertig,"Version 10 liest jedes Feld der Tabelle bis auf die Topologie (v2, 12.9); Messwerte aus `takt bench` und `takt driver-test --board`"
 SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M10 (aus M6),fertig,
 SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),fertig,
 SEM-9.1,Semantik/Abschnitt,9.1,Objekte,,M1/M2 (Interpreter),fertig,
@@ -116,7 +116,7 @@ CG-11.5-FlashPosten,Umsetzung,11.5,"Der Posten „Flash (Code, Konstanten)"" wir
 CG-12.3-StackTiefe,Umsetzung,12.3,"Stacktiefe als laengster Pfad im Aufrufgraphen plus Rahmen je Funktion; die Messung steht (`inspect::stack_frame`), die Rechnung kommt mit dem Profil",,M5 (Embedded),fertig,
 CG-13.4-Objektcode,Umsetzung,13.4,Objektcode gegen Quelle nachvollziehen (Zertifizierung): baut auf `inspect::symbols` auf,,M9 (v2),offen,
 SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M10 (aus M5),teilweise,"RV32IMAC: Korpus auf dem ESP32-C6 mit 0 Abweichungen (2026-09-17, board_esp32c6.rs); Cortex-M offen (Board 1)"
-SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M10 (aus M5),teilweise,
+SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M10 (aus M5),teilweise,`takt check --hw-export` schreibt die `safe`-Werte (M10 Schritt 12); Heartbeat zu Geraeten braucht Treiber hinter dem Rand (FB-285)
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig,
 SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M10 (aus M5),teilweise,Adapter und Probe liegen vor (2026-09-25); Messung M10 Schritt 10/11
 SEM-12.7,Semantik/Abschnitt,12.7,"Plattformschnittstelle (System-Channels, v1.1)",v1.1,M6,fertig,"Geraet `sys` mit zehn Kanaelen in Pruefung 60, `EfuseBlock`/`EfuseCmd` im Prelude, `sys/reboot` und `sys/jump` beenden den Lauf, irreversible Outputs im Kopf und in `takt test`"

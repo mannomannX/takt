@@ -17,7 +17,7 @@ output rx_sim : stream<u8> @ sim(\"u/rx\")
 
 fn errors(body: &str) -> Vec<String> {
     let src = format!("{HEAD}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect()
 }

@@ -10,7 +10,7 @@ use takt_sema::{Build, Options};
 const PROGRAM: &str = include_str!("../../../corpus-try/45_journal_cut.takt");
 
 fn compile(src: &str) -> Result<takt_mir::Program, Vec<String>> {
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     if errors.is_empty() { Ok(out.program.expect("Programm")) } else { Err(errors) }

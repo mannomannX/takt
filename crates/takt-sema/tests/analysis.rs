@@ -15,7 +15,7 @@ const OUT: &str = "output n : int in 0..99 @ hw(\"o/n\") with safe = 0\n\n";
 /// Uebersetzt und liefert Programm samt Kennzahlen.
 fn compile(body: &str) -> (Program, Report, Vec<String>) {
     let src = format!("{HEAD}{OUT}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "unerwartete Fehler:\n{}", errors.join("\n"));
@@ -230,7 +230,7 @@ machine m:
             n = 1 if b > c else 0
 "
     );
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     assert!(out.diagnostics.iter().all(|d| !d.is_error()), "{:?}", out.diagnostics);
     assert_eq!(count(&out.report, "Declared"), 1, "nur `c`: {:?}", out.report.checks);
@@ -241,8 +241,12 @@ machine m:
 /// Ursache und Vorschlag. Ein bewiesenes Programm bleibt angenommen.
 #[test]
 fn certification_turns_every_unproven_check_into_an_error() {
-    let strict =
-        Options { policy: Policy { certification: true, ..Policy::default() }, build: Build::Sim, profile: None };
+    let strict = Options {
+        policy: Policy { certification: true, ..Policy::default() },
+        build: Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let errors = |body: &str, options: &Options| -> Vec<String> {
         let out = takt_sema::compile(&format!("{HEAD}{OUT}{body}"), options);
         out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect()
@@ -255,7 +259,7 @@ machine m:
         loop:
             n = big
 ";
-    let lenient = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let lenient = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     assert!(errors(unproven, &lenient).is_empty(), "ohne Zertifizierung eine Information");
     let found = errors(unproven, &strict);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -863,7 +867,7 @@ fn a_sequence_var_always_carries_an_initialiser() {
             -> RUN
 "
     );
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let codes: Vec<&str> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code).collect();
     assert!(codes.contains(&"P"), "ein `var` ohne Initialisierer ist ein Syntaxfehler, kein SC-25: {codes:?}");
@@ -897,7 +901,7 @@ fn an_assignment_inside_a_branch_counts_as_assignment() {
             -> RUN
 "
     );
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let codes: Vec<&str> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code).collect();
     assert!(
@@ -924,7 +928,7 @@ fn an_error_inside_a_format_string_points_at_the_placeholder() {
             n = zaehler
 "
     );
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let d = out.diagnostics.iter().find(|d| d.code == "SC-2").expect("der Tippfehler wird gemeldet");
     let at = src[d.span.start as usize..d.span.end as usize].to_string();
@@ -1029,7 +1033,7 @@ machine m:
 /// Die Warnungen eines Maschinenrumpfs als Text.
 fn warnings_of(body: &str) -> Vec<String> {
     let src = format!("{HEAD}{OUT}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     takt_sema::compile(&src, &options).diagnostics.iter().map(|d| format!("{d}")).collect()
 }
 
@@ -1047,7 +1051,7 @@ fn the_protocol_case_keeps_its_implicit_checks_low() {
     // deklariert und die Schranke vorher geprueft ist.
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/13_protocol_analysis.takt");
     let src = std::fs::read_to_string(path).expect("Messfall lesbar");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<&str> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code).collect();
     assert!(errors.is_empty(), "der Messfall uebersetzt: {errors:?}");
@@ -1081,7 +1085,7 @@ machine m:
             n = 0
 "
     );
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let text: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(text.iter().any(|t| t.contains("korrekt gerundet")), "`sin` wird abgelehnt: {text:?}");
@@ -1491,7 +1495,7 @@ machine m:
     let site = r.sites.iter().find(|s| s.cause.name() == "Declared").expect("die Stelle");
 
     let src = format!("{HEAD}{OUT}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let hash = takt_mir::review::hash_of(src.as_bytes());
     let proof = Proof { program: hash, sites: vec![Site { start: site.span.start, kind: "range".into(), k: 3 }] };
     let out = takt_sema::compile_with(&src, &options, Some(&proof));

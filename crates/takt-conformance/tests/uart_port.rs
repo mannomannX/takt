@@ -33,7 +33,12 @@ fn read(path: &str) -> String {
 const PORTED: &str = "crates/takt-bringup-esp32c6/programs/test_uart_c6.takt";
 
 fn ported() -> Program {
-    let options = takt_sema::Options { policy: Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&read(PORTED), &options);
     let fehler: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(fehler.is_empty(), "{}", fehler.join("\n"));

@@ -470,6 +470,22 @@ fn const_f64(c: &Const) -> Option<f64> {
     }
 }
 
+/// Die `safe`-Werte der gebundenen Outputs, je Adresse (12.4): Der
+/// Compiler exportiert sie in die Konfiguration, damit ein Geraet sie bei
+/// Heartbeat-Verlust selbst anwendet. `Err` nennt einen Output, dessen
+/// Wert sich nicht als Text der Konfiguration schreiben laesst.
+pub fn safe_values(p: &Program) -> Vec<Result<(String, String), String>> {
+    p.channels
+        .iter()
+        .filter(|c| c.dir == Direction::Output)
+        .filter_map(|c| {
+            let Binding::Hw(a) = &c.binding else { return None };
+            let safe = c.attrs.safe.as_ref()?;
+            Some(literal_text(p, safe).map(|text| (a.text(), text)).ok_or_else(|| c.name.clone()))
+        })
+        .collect()
+}
+
 /// Stimmt das `safe`-Literal des Programms mit dem Text der Konfiguration
 /// ueberein? Zahlen numerisch (`0` und `0.0` sind dasselbe), Wahrheitswerte
 /// und Varianten beim Namen; `None`, wenn das Literal keine Form hat, die

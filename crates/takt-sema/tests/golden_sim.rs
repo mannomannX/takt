@@ -64,7 +64,12 @@ fn split_csv(line: &str) -> Vec<String> {
 fn program(example: &str, profile: Option<&str>) -> takt_mir::Program {
     let path = root().join(example).join("program.takt");
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: profile.map(str::to_string) };
+    let options = Options {
+        policy: Policy::default(),
+        build: Build::Sim,
+        profile: profile.map(str::to_string),
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{example}: unerwartete Fehler:\n{}", errors.join("\n"));

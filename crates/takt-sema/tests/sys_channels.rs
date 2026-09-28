@@ -8,7 +8,7 @@ use takt_mir::{Program, hardware};
 use takt_sema::{Build, Options};
 
 fn compile(src: &str) -> Result<Program, Vec<String>> {
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     if errors.is_empty() { Ok(out.program.expect("Programm")) } else { Err(errors) }
@@ -18,7 +18,7 @@ const HEAD: &str = "system:\n    language = 1\n    tick = 1 ms\n\n";
 
 /// Die Warnungen von Pruefung 60, ohne und mit Konfiguration.
 fn deep_sleep_warnings(src: &str, hw: Option<&str>) -> Vec<String> {
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&format!("{HEAD}{src}"), &options);
     let program = out.program.expect("Programm");
     let mut diags = out.diagnostics;

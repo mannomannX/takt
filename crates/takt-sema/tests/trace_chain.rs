@@ -7,7 +7,12 @@ use takt_interp::{RunOptions, Trace, run};
 const PROGRAM: &str = include_str!("../../../corpus-try/37_follows.takt");
 
 fn compile(src: &str) -> takt_mir::Program {
-    let o = takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let o = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(src, &o);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{}", errors.join("\n"));

@@ -23,7 +23,12 @@ use takt_mir::program::Program;
 mod common;
 
 fn compile(src: &str) -> Program {
-    let options = takt_sema::Options { policy: Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(src, &options);
     let fehler: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(fehler.is_empty(), "{}", fehler.join("\n"));

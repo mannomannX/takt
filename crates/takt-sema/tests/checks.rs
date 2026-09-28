@@ -76,7 +76,7 @@ fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>) {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
         let src = std::fs::read_to_string(&path).expect("lesbar");
         let map = SourceMap::single(name.as_str(), src.as_str());
-        let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+        let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
         let checked = takt_sema::compile(&src, &options);
         let mut diagnostics = checked.diagnostics.clone();
         if let (Some(hw), Some(program)) = (&hw, &checked.program) {

@@ -12,7 +12,7 @@ fn root() -> PathBuf {
 }
 
 fn options() -> Options {
-    Options { policy: Policy::default(), build: Build::Sim, profile: None }
+    Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() }
 }
 
 /// Alle `.takt`-Dateien des Korpus, in stabiler Reihenfolge.

@@ -17,7 +17,7 @@ const HEAD: &str = "system:\n    language = 1\n    tick = 1 ms\n\n";
 
 fn compile(body: &str) -> Program {
     let src = format!("{HEAD}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "unerwartete Fehler:\n{}", errors.join("\n"));
@@ -266,7 +266,7 @@ fn the_size_bound_holds_for_the_corpus() {
     // kann `takt size` den Journal-Posten nicht rechnen (11.5).
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/35_persist.takt");
     let src = std::fs::read_to_string(path).expect("lesbar");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let p = takt_sema::compile(&src, &options).program.expect("Programm");
     let mut seen = 0;
     for m in &p.machines {

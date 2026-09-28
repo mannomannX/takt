@@ -25,8 +25,12 @@ machine m:
 ";
 
 fn run(steps: bool) -> takt_interp::RunResult {
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let p = takt_sema::compile(SRC, &options).program.expect("Programm");
     let options = RunOptions { ticks: 3, steps, ..Default::default() };
     takt_interp::run(&p, &Trace::default(), &options).expect("Lauf")

@@ -11,7 +11,7 @@ const HEAD: &str = "system:\n    language = 1\n    tick = 1 ms\n\n";
 
 fn compile(body: &str) -> takt_mir::Program {
     let src = format!("{HEAD}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Hw, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Hw, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "unerwartete Fehler:\n{}", errors.join("\n"));
@@ -193,6 +193,21 @@ fn a_tick_granular_output_adds_the_tick_to_its_jitter() {
 }
 
 #[test]
+fn jitter_is_read_at_an_output_only() {
+    // 7.5: `o.jitter` liest die Bindung eines Outputs, nicht einen Wert.
+    let src = format!("{HEAD}{}", PROGRAM.replace("v = p > 100 bar", "v = p.jitter > 1 us"));
+    let options = Options { build: Build::Hw, ..Default::default() };
+    let errors: Vec<String> = takt_sema::compile(&src, &options)
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(errors.iter().any(|e| e.contains("`jitter` gibt es nur an einem Output")), "{errors:?}");
+    compile(&PROGRAM.replace("v = p > 100 bar", "v = pwm.jitter > 1 us"));
+}
+
+#[test]
 fn the_memory_budget_is_judged_against_the_target() {
     // Pruefung 39: 64 KiB passen; 64 Byte nicht.
     let p = compile(PROGRAM);
@@ -210,7 +225,7 @@ fn the_corpus_configuration_matches_the_heartbeat_program() {
     let text = std::fs::read_to_string(format!("{root}/hw/stm32f401.hw")).expect("hw lesbar");
     let cfg = hardware::parse(&text).unwrap_or_else(|e| panic!("{e}"));
     let src = std::fs::read_to_string(format!("{root}/29_heartbeat.takt")).expect("Programm lesbar");
-    let options = Options { policy: Policy::default(), build: Build::Hw, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Hw, profile: None, ..Default::default() };
     let p = takt_sema::compile(&src, &options).program.expect("Programm");
     let diags = check_bindings(&p, &cfg);
     assert!(diags.iter().all(|d| !d.is_error()), "{:?}", codes(&diags));

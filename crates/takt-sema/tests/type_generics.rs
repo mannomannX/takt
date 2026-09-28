@@ -10,7 +10,7 @@ const HEAD: &str = "system:\n    language = 1\n    tick = 1 ms\n\n";
 
 fn compile(body: &str) -> (Option<Program>, Vec<String>) {
     let src = format!("{HEAD}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let diags: Vec<String> = out.diagnostics.iter().map(|d| format!("{d}")).collect();
     let errors = out.diagnostics.iter().any(|d| d.is_error());

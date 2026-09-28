@@ -43,7 +43,8 @@ const QUELLE: &str = "system:\n\
                       \x20           v = p.valid and p > 2 bar\n";
 
 fn build(kind: takt_sema::Build) -> Program {
-    let options = takt_sema::Options { policy: takt_diag::Policy::default(), build: kind, profile: None };
+    let options =
+        takt_sema::Options { policy: takt_diag::Policy::default(), build: kind, profile: None, ..Default::default() };
     let out = takt_sema::compile(QUELLE, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{kind:?}:\n{}", errors.join("\n"));
@@ -117,7 +118,12 @@ fn an_unbound_channel_in_use_fails_the_hardware_build() {
         .replace("output v ", "input  spare : bool @ none\ninput  later : bool @ none\noutput v ")
         .replace("v = p.valid and p > 2 bar", "v = spare.or(false)");
     let codes = |kind: takt_sema::Build| -> Vec<String> {
-        let options = takt_sema::Options { policy: takt_diag::Policy::default(), build: kind, profile: None };
+        let options = takt_sema::Options {
+            policy: takt_diag::Policy::default(),
+            build: kind,
+            profile: None,
+            ..Default::default()
+        };
         let out = takt_sema::compile(&src, &options);
         out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect()
     };

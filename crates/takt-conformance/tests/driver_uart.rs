@@ -21,7 +21,7 @@ const TICKS: u64 = 600;
 fn program() -> Program {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../feedback/test_uart.takt");
     let src = std::fs::read_to_string(path).expect("feedback/test_uart.takt lesbar");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let fehler: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(fehler.is_empty(), "{}", fehler.join("\n"));

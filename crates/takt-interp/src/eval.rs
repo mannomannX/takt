@@ -543,6 +543,10 @@ impl<'p, 'o> Ctx<'p, 'o> {
     }
 
     fn accessor(&mut self, base: &Expr, acc: Accessor, args: &[Expr], span: Span) -> EvalResult<Value> {
+        // 7.5: Die Simulation schreibt jeden Output exakt zu seiner Zeit.
+        if acc == Accessor::Jitter {
+            return Ok(Value::Duration(0));
+        }
         // Zaehler und freier Platz eines Stroms lesen den Puffer, nicht den
         // Wert des Ausdrucks (8.6, 8.8).
         if matches!(self.loaded.ty(base.ty), Type::Stream(_)) {

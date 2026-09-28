@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! takt check DATEI… [--warnings-as-errors] [--certification] [--format text|line]
-//!                   [--hardware DATEI.hw --target NAME]
+//!                   [--hardware DATEI.hw --target NAME] [--hw-export DATEI.hw]
 //!                   [--build sim|hw] [--params-profile P]
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--params-profile P] [--order random:SEED] [--steps OUT.steps]
@@ -88,6 +88,7 @@ impl Args {
             "--out",
             "--object",
             "--hardware",
+            "--hw-export",
             "--baseline",
             "--save-baseline",
             "--scenario",
@@ -382,7 +383,7 @@ fn check(args: &Args) -> bool {
             continue;
         };
         let map = SourceMap::single(path.as_str(), src.as_str());
-        let options = takt_sema::Options { policy, build: build_of(args), profile: profile_of(args) };
+        let options = sema_options(path, &src, policy, args);
         let Some(proof) = proof_of(args) else {
             ok = false;
             continue;
@@ -425,6 +426,9 @@ fn check(args: &Args) -> bool {
                 if d.is_error() {
                     ok = false;
                 }
+            }
+            if let Some(out) = args.value("--hw-export") {
+                ok &= hw_export(program, out);
             }
         }
         if checked.has_errors() {
@@ -496,7 +500,7 @@ fn latency(args: &Args) -> bool {
             continue;
         };
         let map = SourceMap::single(path.as_str(), src.as_str());
-        let options = takt_sema::Options { policy, build: build_of(args), profile: profile_of(args) };
+        let options = sema_options(path, &src, policy, args);
         let checked = takt_sema::compile(&src, &options);
         for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
             println!("{}", map.render(d));
@@ -528,7 +532,7 @@ fn graph(args: &Args) -> bool {
             continue;
         };
         let map = SourceMap::single(path.as_str(), src.as_str());
-        let options = takt_sema::Options { policy, build: build_of(args), profile: profile_of(args) };
+        let options = sema_options(path, &src, policy, args);
         let checked = takt_sema::compile(&src, &options);
         for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
             println!("{}", map.render(d));
@@ -868,7 +872,7 @@ fn cost(args: &Args) -> bool {
             continue;
         };
         let map = SourceMap::single(path.as_str(), src.as_str());
-        let options = takt_sema::Options { policy, build: build_of(args), profile: profile_of(args) };
+        let options = sema_options(path, &src, policy, args);
         let checked = takt_sema::compile(&src, &options);
         for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
             println!("{}", map.render(d));
@@ -896,7 +900,7 @@ fn size(args: &Args) -> bool {
             continue;
         };
         let map = SourceMap::single(path.as_str(), src.as_str());
-        let options = takt_sema::Options { policy, build: build_of(args), profile: profile_of(args) };
+        let options = sema_options(path, &src, policy, args);
         let checked = takt_sema::compile(&src, &options);
         for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
             println!("{}", map.render(d));
@@ -1188,10 +1192,50 @@ fn proof_of(args: &Args) -> Option<Option<takt_mir::analysis::proof::Proof>> {
     }
 }
 
+/// `takt check --hw-export DATEI` (12.4): die `safe`-Werte der gebundenen
+/// Outputs in die Konfiguration, ohne deren Kommentare zu verwerfen.
+fn hw_export(program: &takt_mir::Program, path: &str) -> bool {
+    let mut text = std::fs::read_to_string(path).unwrap_or_default();
+    for value in takt_sema::calibrated::safe_values(program) {
+        let (address, safe) = match value {
+            Ok(v) => v,
+            Err(name) => {
+                eprintln!("{path}: `safe` von `{name}` hat keine Form der Konfiguration (12.4)");
+                return false;
+            }
+        };
+        let values = [("direction", "output".to_string()), ("safe", safe)];
+        text = match takt_mir::hardware::with_channel_values(&text, &address, &values) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("{path}:{}: {}", e.line, e.message);
+                return false;
+            }
+        };
+    }
+    if let Err(e) = std::fs::write(path, text) {
+        eprintln!("{path}: {e}");
+        return false;
+    }
+    true
+}
+
+/// Die Optionen der Sema fuer eine Datei: Build und Profil aus den
+/// Argumenten, die Konfigurationen aus `import channels` neben dem
+/// Programm (8.2). Was sich nicht lesen laesst, meldet die Sema am Import.
+fn sema_options(path: &str, src: &str, policy: Policy, args: &Args) -> takt_sema::Options {
+    let dir = std::path::Path::new(path).parent().unwrap_or(std::path::Path::new("."));
+    let channel_imports = takt_sema::channel_imports(src)
+        .into_iter()
+        .filter_map(|file| Some((file.clone(), std::fs::read_to_string(dir.join(&file)).ok()?)))
+        .collect();
+    takt_sema::Options { policy, build: build_of(args), profile: profile_of(args), channel_imports }
+}
+
 fn compile_file(path: &str, args: &Args) -> Option<takt_mir::Program> {
     let src = read(path)?;
     let map = SourceMap::single(path, src.as_str());
-    let options = takt_sema::Options { policy: Policy::default(), build: build_of(args), profile: profile_of(args) };
+    let options = sema_options(path, &src, Policy::default(), args);
     let proof = proof_of(args)?;
     let out = takt_sema::compile_with(&src, &options, proof.as_ref());
     for d in &out.diagnostics {

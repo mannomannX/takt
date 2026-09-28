@@ -110,8 +110,12 @@ const TICKS: u64 = 60;
 fn corpus(name: &str) -> Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{name}:\n{}", errors.join("\n"));
@@ -643,14 +647,53 @@ machine m:
                 timing = Timing(period = 250 us, count = k)
             k = (k + 1) % 2
 ";
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let p = takt_sema::compile(src, &options).program.expect("Programm");
     let native = common::run_native_all(&clang, &p, "record_duration", 4).unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: 4, ..Default::default() };
     let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
     assert!(native.contains("out timing Timing(90 min, 0)"), "{native}");
     assert!(native.contains("out timing Timing(250 us, 1)"), "{native}");
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
+/// **`o.jitter` ist in beiden Implementierungen null** (7.5): Der Wert
+/// gehoert der Bindung, und ohne Hardware-Konfiguration schreiben beide
+/// Seiten exakt; der Codegen fragt die Runtime (`takt_jitter`).
+#[test]
+fn the_jitter_of_an_output_is_zero_without_a_configuration() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let src = "system:
+    language = 1
+    tick     = 1 ms
+
+output strobe : bool     @ hw(\"gpio/strobe\") with safe = false
+output spread : Duration @ hw(\"o/spread\") with safe = 0 s
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            spread = strobe.jitter
+            strobe = strobe.jitter < 5 us
+";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let p = takt_sema::compile(src, &options).program.expect("Programm");
+    let native = common::run_native_all(&clang, &p, "jitter", 3).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: 3, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    assert!(interpreted.contains("t=0 out strobe true"), "{interpreted}");
     let diffs = compare(&interpreted, &native);
     assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
 }

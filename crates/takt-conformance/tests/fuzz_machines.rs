@@ -131,7 +131,12 @@ fn machine_program(rng: &mut Rng) -> String {
 /// Programme, deren Ranges die Analyse nicht beweisen kann (3.4), und
 /// eine Ablehnung ist dann die richtige Antwort.
 fn compile(src: &str) -> Option<takt_mir::Program> {
-    let o = takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let o = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(src, &o);
     if out.diagnostics.iter().any(|d| d.is_error()) {
         return None;

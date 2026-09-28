@@ -358,8 +358,12 @@ pub fn cost_of(source: &str) -> Result<CostVec, String> {
 /// Kosten wie [`cost_of`] und die Zahl der impliziten Pruefungen, die im
 /// Kern blieben (3.4).
 pub fn analysis_of(source: &str) -> Result<(CostVec, u32), String> {
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Hw, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Hw,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(source, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     if !errors.is_empty() {

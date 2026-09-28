@@ -55,7 +55,7 @@ impl Sink for Slept {
 
 /// Der Trace des Laufs und wie viele Ticks die Schleife uebersprungen hat.
 fn traced(source: &str, stimulus: &str, may_sleep: bool, ticks: u64) -> (String, u64) {
-    let options = Options { policy: Diagnostics::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Diagnostics::default(), build: Build::Sim, profile: None, ..Default::default() };
     let p = takt_sema::compile(source, &options).program.expect("Programm");
     let stimulus = Trace::parse(stimulus).expect("Stimulus");
     let run = Run::new(&p, &stimulus, &RunOptions { ticks, ..Default::default() }).expect("Lauf");

@@ -17,8 +17,12 @@ pub fn corpus(name: &str) -> Program {
 /// Ein Programm, fuer die Simulation uebersetzt.
 pub fn program(path: &std::path::Path) -> Program {
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{}:\n{}", path.display(), errors.join("\n"));

@@ -444,6 +444,12 @@ fn access(
     if which == Accessor::Sent {
         return stream_sent(base, want, m);
     }
+    if which == Accessor::Jitter
+        && let ExprKind::Output(c) = base.kind
+    {
+        let ns = m.inst(&format!("call i64 @{}(i32 {})", crate::abi::Abi::JITTER, c.0));
+        return Ok(Lowered { value: ns.to_string(), ty: LlvmType::Int(64) });
+    }
     if which == Accessor::Peek {
         return stream_peek(base, want, p, m, vars);
     }

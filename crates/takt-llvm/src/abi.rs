@@ -106,6 +106,11 @@ impl Abi {
     /// Outputs.
     pub const CANCEL: &'static str = "takt_cancel";
 
+    /// `o.jitter` (7.5): der Jitter, zu dem die Runtime den Output schreibt,
+    /// in Nanosekunden. Er gehoert der Bindung, nicht der Logik — in der
+    /// Simulation null, auf dem Ziel aus der Hardware-Konfiguration.
+    pub const JITTER: &'static str = "takt_jitter";
+
     /// Ein Laufzeitmonitor meldet eine Verletzung (13.3): `(index, position)`.
     ///
     /// Der Index zaehlt die Eigenschaften des Programms; die Position ist
@@ -157,6 +162,7 @@ impl Abi {
         // 9.8: `(channel, T, wert) -> 0 oder die Art des Faults`.
         m.declare(&format!("declare i32 @{}(i32, i64, i64) {RT}", Abi::SCHEDULE));
         m.declare(&format!("declare void @{}(i32) {RT}", Abi::CANCEL));
+        m.declare(&format!("declare i64 @{}(i32) nounwind willreturn memory(none)", Abi::JITTER));
         // `job_begin` liest die Argumente und schreibt spaeter das Abbild.
         m.declare(&format!("declare void @{}(i32, i32, i32, ptr, i32) nounwind willreturn", Abi::JOB_BEGIN));
         m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::JOB_CANCEL));

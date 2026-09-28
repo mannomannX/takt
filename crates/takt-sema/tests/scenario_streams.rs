@@ -6,7 +6,12 @@
 use takt_diag::Policy;
 
 fn codes(src: &str) -> Vec<String> {
-    let options = takt_sema::Options { policy: Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     takt_sema::compile(src, &options).diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code.to_string()).collect()
 }
 

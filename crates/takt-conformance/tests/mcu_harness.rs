@@ -19,8 +19,12 @@ const KORPUS: [&str; 4] = ["01_minimal.takt", "16_timing.takt", "19_faults.takt"
 fn corpus(name: &str) -> takt_mir::Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     takt_sema::compile(&src, &options).program.unwrap_or_else(|| panic!("{path}: uebersetzt nicht"))
 }
 
@@ -111,8 +115,12 @@ fn the_harness_links_with_the_generated_code() {
 fn a_scheduled_output_carries_its_guard() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/programs/guard.takt");
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Hw, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Hw,
+        profile: None,
+        ..Default::default()
+    };
     let p = takt_sema::compile(&src, &options).program.expect("Programm");
     let hw = takt_mir::hardware::parse("# takt-hw 9\n[channel gpio/loop_out]\nguard_ns = 4338\n").expect("lesbar");
     let with = takt_conformance::mcu::build_with(&p, takt_llvm::Diagnostics::Ids, Some(&hw)).source;
@@ -120,6 +128,26 @@ fn a_scheduled_output_carries_its_guard() {
     assert!(with.contains("if (t <= g_tick * 1000000LL + g_guard[q]) return"), "{with}");
     let without = takt_conformance::mcu::build(&p).source;
     assert!(without.contains("static const long long g_guard[1] = { 0LL };"), "{without}");
+}
+
+/// **`o.jitter` kommt aus der Konfiguration** (7.5): gemessen, und bei
+/// einem Output, der nur zu Tickbeginn geschrieben wird, um den Tick mehr;
+/// ohne Konfiguration null wie in der Simulation.
+#[test]
+fn the_jitter_of_an_output_comes_from_the_configuration() {
+    let src = "system:\n    language = 1\n    tick = 1 ms\n\n\
+               output probe : bool @ hw(\"gpio/loop_out\") with safe = false\n\
+               output late  : bool @ hw(\"o/late\") with safe = false\n\n\
+               machine m:\n    initial RUN\n    state RUN:\n        loop:\n            late = probe.jitter > 1 ms\n";
+    let options = takt_sema::Options { build: takt_sema::Build::Hw, ..Default::default() };
+    let p = takt_sema::compile(src, &options).program.expect("Programm");
+    let hw =
+        takt_mir::hardware::parse("# takt-hw 9\n[channel gpio/loop_out]\njitter_ns = 36563\ntick_granular = true\n")
+            .expect("lesbar");
+    let with = takt_conformance::mcu::build_with(&p, takt_llvm::Diagnostics::Ids, Some(&hw)).source;
+    assert!(with.contains("case 0: return 1036563LL; /* probe */"), "{with}");
+    let without = takt_conformance::mcu::build(&p).source;
+    assert!(without.contains("long long takt_jitter(int o) {\n    switch (o) {\n    default: return 0;"), "{without}");
 }
 
 /// Der Rahmen nennt die Funktionen, die die Tickschleife braucht.
@@ -574,8 +602,12 @@ fn a_frame_with_inputs_compiles_and_links() {
 
 /// Ein Programm aus Quelltext, fuer die Rahmenpruefungen oben.
 fn program(src: &str) -> takt_mir::Program {
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Hw, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Hw,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(src, &options);
     let fehler: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(

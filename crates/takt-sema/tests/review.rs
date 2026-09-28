@@ -20,7 +20,12 @@ fn program(policy: &str) -> takt_mir::Program {
          machine m:\n    initial RUN\n\n    state RUN:\n        loop:\n            \
          sum = crc_custom(default)\n\n        after 1 s: -> RUN\n"
     );
-    let options = takt_sema::Options { policy: Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &options);
     let fehler: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(fehler.is_empty(), "{}", fehler.join("\n"));

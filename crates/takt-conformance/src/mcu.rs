@@ -69,6 +69,7 @@ pub fn build_with(
     // 9.8: die geplanten Schreibvorgaenge, hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.
     crate::harness::scheduled(&mut s, p, &layout, hw);
+    crate::harness::jitter(&mut s, p, hw);
     jobs(&mut s, p);
     declarations(&mut s, p, &driven);
     init(&mut s, p, &layout, &driven);

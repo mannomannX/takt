@@ -13,7 +13,7 @@ const HEAD: &str = "system:\n    language = 1\n    tick = 1 ms\n\n";
 /// Uebersetzt ein Programm und verlangt Fehlerfreiheit.
 fn compile(body: &str) -> Program {
     let src = format!("{HEAD}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "unerwartete Fehler:\n{}", errors.join("\n"));
@@ -575,7 +575,7 @@ machine m:
         loop:
             y = 0.1 bar
 ";
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "unerwartete Fehler:\n{}", errors.join("\n"));
@@ -834,7 +834,7 @@ machine m:
         loop:
             log \"{a as float}\"
 ";
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "unerwartete Fehler:\n{}", errors.join("\n"));
@@ -1107,7 +1107,7 @@ machine m:
 /// Fehlermeldungen eines Programms als Text.
 fn errors_of(body: &str) -> String {
     let src = format!("{HEAD}{body}");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect::<Vec<_>>().join("\n")
 }
@@ -1186,7 +1186,7 @@ fn every_fault_kind_of_the_corpus_arrives_at_its_tick() {
     // Interpreters (5.3, 7.5, 9.8, FB-324, FB-325).
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/87_fault_kinds.takt");
     let src = std::fs::read_to_string(path).expect("Korpus 87");
-    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let program = takt_sema::compile(&src, &options).program.expect("Programm");
     let trace = run(&program, &Trace::default(), &RunOptions { ticks: 30, ..Default::default() }).expect("Lauf");
     let trace = trace.trace.render();

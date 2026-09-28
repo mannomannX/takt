@@ -14,8 +14,12 @@ const PROGRAM: &str = "corpus-try/64_scoped_exit.takt";
 fn corpus(name: &str) -> takt_mir::Program {
     let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).join(name);
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &options);
     assert!(!out.has_errors(), "{name}: {:?}", out.diagnostics);
     out.program.expect("Programm")

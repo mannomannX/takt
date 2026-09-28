@@ -36,8 +36,12 @@ const KORPUS: [&str; 5] =
 fn corpus(name: &str) -> takt_mir::Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &options);
     out.program.unwrap_or_else(|| panic!("{path}: uebersetzt nicht"))
 }

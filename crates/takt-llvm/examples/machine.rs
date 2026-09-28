@@ -9,8 +9,12 @@ use takt_llvm::step::{init_function, step_function};
 fn main() {
     let path = std::env::args().nth(1).unwrap_or_else(|| "corpus-try/01_minimal.takt".into());
     let src = std::fs::read_to_string(&path).expect("Quelle lesbar");
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &options);
     for d in out.diagnostics.iter().filter(|d| d.is_error()) {
         eprintln!("{d}");

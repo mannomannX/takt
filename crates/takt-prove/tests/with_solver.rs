@@ -10,8 +10,12 @@ use takt_prove::{
 };
 
 fn compile(src: &str) -> Program {
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{}", errors.join("\n"));
@@ -174,8 +178,12 @@ machine counter:
     let hash = takt_mir::review::hash_of(src.as_bytes());
     let text = render(&hash, &[Site { start: site.start, kind: site.kind.clone(), k: 5 }]);
     let proof = parse(&text).expect("Beweisdatei");
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile_with(src, &options, Some(&proof));
     assert!(!out.has_errors(), "{:?}", out.diagnostics);
     assert_eq!(out.report.checks.get("Declared").copied().unwrap_or(0), 0, "{:?}", out.report.checks);

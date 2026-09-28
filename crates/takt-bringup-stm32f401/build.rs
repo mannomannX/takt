@@ -126,7 +126,6 @@ fn program_path() -> String {
     format!("{here}/{value}")
 }
 
-/// Uebersetzt das Programm, um den Rahmen dazu bauen zu koennen.
 /// Die Hardware-Konfiguration aus `TAKT_HARDWARE` (8.10): Sie gibt jedem
 /// geplanten Output sein `guard` (7.5). Ohne sie ist es null wie in der
 /// Simulation — ein Konformitaetslauf vergleicht mit dem Interpreter.
@@ -138,10 +137,25 @@ fn hardware() -> Option<takt_mir::hardware::Hardware> {
     Some(takt_mir::hardware::parse(&text).unwrap_or_else(|e| panic!("{path}:{}: {}", e.line, e.message)))
 }
 
+/// Uebersetzt das Programm, um den Rahmen dazu bauen zu koennen.
 fn compile(path: &str) -> Option<takt_mir::Program> {
     let src = fs::read_to_string(path).ok()?;
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Hw, profile: None };
+    // 8.2: die Konfigurationen aus `import channels`, neben dem Programm.
+    let dir = Path::new(path).parent().unwrap_or(Path::new("."));
+    let channel_imports = takt_sema::channel_imports(&src)
+        .into_iter()
+        .filter_map(|file| {
+            let at = dir.join(&file);
+            println!("cargo:rerun-if-changed={}", at.display());
+            Some((file, fs::read_to_string(at).ok()?))
+        })
+        .collect();
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Hw,
+        profile: None,
+        channel_imports,
+    };
     let checked = takt_sema::compile(&src, &options);
     if checked.program.is_none() {
         for d in checked.diagnostics.iter().filter(|d| d.is_error()) {

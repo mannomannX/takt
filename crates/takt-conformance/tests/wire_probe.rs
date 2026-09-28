@@ -13,7 +13,7 @@ fn config(name: &str) -> takt_mir::hardware::Hardware {
 
 #[test]
 fn the_probe_binds_to_every_board_configuration() {
-    let options = Options { policy: Policy::default(), build: Build::Hw, profile: None };
+    let options = Options { policy: Policy::default(), build: Build::Hw, profile: None, ..Default::default() };
     let out = takt_sema::compile(takt_conformance::wire::PROBE, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{}", errors.join("\n"));

@@ -33,8 +33,12 @@ fn main() {
 
     for path in &files {
         let Ok(src) = std::fs::read_to_string(path) else { continue };
-        let options =
-            takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+        let options = takt_sema::Options {
+            policy: takt_diag::Policy::default(),
+            build: takt_sema::Build::Sim,
+            profile: None,
+            ..Default::default()
+        };
         let out = takt_sema::compile(&src, &options);
         if out.diagnostics.iter().any(|d| d.is_error()) {
             continue;

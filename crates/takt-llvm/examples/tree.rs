@@ -5,8 +5,12 @@
 fn main() {
     let path = std::env::args().nth(1).expect("Datei angeben");
     let src = std::fs::read_to_string(&path).expect("lesbar");
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &options);
     let Some(p) = out.program else { return };
     for m in &p.machines {

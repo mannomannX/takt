@@ -1,7 +1,6 @@
 //! Phasen 1 und 3 (plan/m1.md 3.2): Tabellen aus Deklarationen, dann die
 //! Ruempfe; das Prelude durchlaeuft dieselben Phasen zuerst.
 
-use takt_diag::Stage;
 use takt_mir::expr::{Builtin, Intrinsic};
 use takt_mir::types::Type;
 use takt_syntax::ast;
@@ -33,6 +32,7 @@ impl Lowerer<'_> {
 
     /// Phase 1: Tabellen ohne Ruempfe.
     pub fn collect(&mut self, file: &ast::File) {
+        let mut imports = Vec::new();
         for item in &file.items {
             match item {
                 ast::Item::Enum(e) => self.register_enum(e),
@@ -50,9 +50,9 @@ impl Lowerer<'_> {
                         "Deklarationen in eine Datei legen (M7)",
                     );
                 }
-                ast::Item::Import(ast::Import::Channels { span, .. }) => {
-                    self.stage(*span, "`import channels`", Stage::V1_1)
-                }
+                // Nach allen Deklarationen: Die Typen der Kanaele nennen
+                // Einheiten und Enums, die weiter unten stehen koennen.
+                ast::Item::Import(ast::Import::Channels { file, span }) => imports.push((file.value.clone(), *span)),
                 ast::Item::System(_) => {}
                 ast::Item::Type(t) => self.type_alias(t),
                 ast::Item::Unitvec(u) => self.unitvec_decl(u),
@@ -90,6 +90,9 @@ impl Lowerer<'_> {
                 ast::Item::Machine(m) => self.register_machine(m),
                 ast::Item::Instance(_) | ast::Item::Scenario(_) | ast::Item::Campaign(_) | ast::Item::Trigger(_) => {}
             }
+        }
+        for (file, span) in imports {
+            self.import_channels(&file, span);
         }
         // Byteplan der `layout`-Records (3.7, Pruefung 46). Als Nachlauf,
         // weil ein verschachtelter Record die Groesse des inneren braucht;

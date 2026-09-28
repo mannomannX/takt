@@ -29,8 +29,12 @@ fn both(body: &str, name: &str, ticks: u64) -> Option<(String, String)> {
         return None;
     };
     let src = format!("{HEAD}{body}");
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &options);
     assert!(!out.has_errors(), "{name}: {:?}", out.diagnostics);
     let p = out.program.expect("Programm");

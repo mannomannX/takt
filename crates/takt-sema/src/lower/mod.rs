@@ -6,6 +6,7 @@ pub mod decl;
 pub mod expr;
 pub mod format;
 pub mod generics;
+pub mod import;
 pub mod layout;
 pub mod machine;
 pub mod matrix;
@@ -323,6 +324,9 @@ pub struct Lowerer<'a> {
     /// Untergrenze einer Range: ein einheitenloses Literal erbt die Einheit
     /// der Obergrenze (3.4, die einzige Ausnahme von 3.6).
     pub in_range_bound: bool,
+    /// Die Bezeichner der Quelle; `import channels` bindet nur, was darunter
+    /// ist (8.2). `None` bindet alles.
+    pub imports_used: Option<std::collections::BTreeSet<String>>,
     /// Eingebaute Typen.
     pub tys: Builtins,
     /// Zustandstypen je Maschine.
@@ -388,6 +392,7 @@ impl<'a> Lowerer<'a> {
             prelude: false,
             seq_timeout: None,
             in_range_bound: false,
+            imports_used: None,
             tys: Builtins {
                 bool,
                 int,
@@ -687,12 +692,18 @@ impl<'a> Lowerer<'a> {
 }
 
 /// Uebersetzt Prelude und Datei in die MIR (plan/m1.md 3.2).
-pub fn run(file: &ast::File, edition: Edition, options: &Options) -> (Option<Program>, Vec<Diagnostic>) {
+pub fn run(
+    file: &ast::File,
+    edition: Edition,
+    options: &Options,
+    used: Option<std::collections::BTreeSet<String>>,
+) -> (Option<Program>, Vec<Diagnostic>) {
     let prelude_ast = prelude_file(edition);
     let mut diags = Vec::new();
     let config = decl::config_from(file, edition.number(), &mut diags);
     let mut lo = Lowerer::new(config, edition, options);
     lo.diags = diags;
+    lo.imports_used = used;
     lo.declare_builtins();
     // Fehler aus dem `system:`-Block der Nutzerdatei stehen schon in `diags`
     // und zaehlen nicht zum Prelude.

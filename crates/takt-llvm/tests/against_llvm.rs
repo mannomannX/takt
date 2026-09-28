@@ -202,7 +202,12 @@ machine m:
             x = x * (x - 301.0)
             digest = x + y as float
 ";
-    let o = takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let o = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let p = takt_sema::compile(src, &o).program.expect("uebersetzt");
     let target = takt_llvm::Target::RISCV32IMAC;
     let instrument = takt_llvm::Instrument::default_for(p.config.runtime_profile(), target);

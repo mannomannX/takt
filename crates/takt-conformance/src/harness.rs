@@ -234,8 +234,9 @@ fn build_inner(
     // 11.2 nennt sie „feste Arrays im Runtime-Anteil des Outputs" —,
     // und der Rahmen ist hier die Runtime. Hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.
-    // 7.5: In der Simulation ist `guard` null.
+    // 7.5: In der Simulation sind `guard` und `jitter` null.
     scheduled(&mut s, p, &layout, None);
+    jitter(&mut s, p, None);
     // 12.10: Registerports lesen den Latch des Modells und schreiben in
     // die Ringe der Stroeme, also hinter beidem.
     crate::ports::emit(&mut s, p);
@@ -713,6 +714,26 @@ fn safe_payload(p: &Program, slot: &crate::layout::Slot, safe: &takt_mir::expr::
 
 /// Die geplanten Schreibvorgaenge (9.8), fuer beide Rahmen.
 ///
+/// `takt_jitter` (7.5): der Jitter je Output aus `hw`, bei einem Output,
+/// der nur zu Tickbeginn geschrieben wird, um den Tick mehr (`tick_granular`);
+/// ohne Konfiguration null wie in der Simulation.
+pub(crate) fn jitter(s: &mut String, p: &Program, hw: Option<&takt_mir::hardware::Hardware>) {
+    let _ = writeln!(s, "long long takt_jitter(int o) {{");
+    let _ = writeln!(s, "    switch (o) {{");
+    for (i, c) in p.channels.iter().enumerate() {
+        let (takt_mir::program::Binding::Hw(a), Some(hw)) = (&c.binding, hw) else { continue };
+        let Some(entry) = hw.channel(&a.text()) else { continue };
+        let granular = if entry.tick_granular == Some(true) { p.config.tick } else { 0 };
+        let ns = entry.jitter_ns.unwrap_or(0).saturating_add(granular);
+        if ns != 0 {
+            let _ = writeln!(s, "    case {i}: return {ns}LL; /* {} */", c.name);
+        }
+    }
+    let _ = writeln!(s, "    default: return 0;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+}
+
 /// **Der Rahmen ist hier die Runtime.** 11.2 legt `sched` in den
 /// Runtime-Anteil des Outputs, und 9.8 gibt die Regeln vor: sortiert
 /// nach `T`, hoechstens `K_o` Eintraege je Output, gleiche `T`

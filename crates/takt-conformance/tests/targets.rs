@@ -52,8 +52,12 @@ fn lade(path: &str) -> takt_mir::Program {
     let path = path.to_string();
     let name = path.clone();
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
     let out = takt_sema::compile(&src, &options);
     assert!(!out.diagnostics.iter().any(|d| d.is_error()), "{name}");
     out.program.expect("Programm")
