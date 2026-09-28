@@ -127,6 +127,56 @@ machine m:
 }
 
 #[test]
+fn a_check_in_an_action_block_warns() {
+    // 3.4, Warnpolitik: Auch in Aktionsbloecken — `enter:`, `exit:`, einer
+    // Transitionsaktion und `at` — ist eine implizite Pruefung eine
+    // Warnung: Dort faultet sie einen Uebergang, nicht nur einen Schritt.
+    let (_, r, w) = compile(
+        "\
+command go
+machine m:
+    var big : int in 0..999 = 500
+    initial A
+    state A:
+        enter:
+            n = big
+        when go:
+            n = big
+            -> B
+        exit:
+            n = big
+    state B:
+        loop:
+            at now + 10 ms: n = big
+",
+    );
+    assert_eq!(r.warned, 4, "je Aktionsblock eine Warnung: {:?}", r.checks);
+    assert_eq!(w.iter().filter(|w| w.contains("SC-24")).count(), 4, "{w:?}");
+}
+
+#[test]
+fn a_range_typed_intermediate_checks_once_and_proves_what_follows() {
+    // 3.4, Idiom: Eine Zwischengroesse mit Range-Typ erzwingt eine
+    // sichtbare Pruefung; alles danach kennt die Range, und die Pruefung
+    // in der Schleife faellt weg.
+    let (_, r, w) = compile(
+        "\
+machine m:
+    var big : int in 0..999 = 50
+    initial RUN
+    state RUN:
+        loop:
+            var small : int in 0..99 = big
+            for i in range(3):
+                n = small
+",
+    );
+    assert_eq!(r.warned, 0, "die Schleife ist bewiesen: {:?}", r.checks);
+    assert_eq!(count(&r, "Declared"), 1, "eine Pruefung an der Zwischengroesse: {:?}", r.checks);
+    assert!(!w.iter().any(|w| w.contains("SC-24")), "{w:?}");
+}
+
+#[test]
 fn the_metric_names_the_cause() {
     // 3.4: die Kennzahl ist nach Ursache aufgeschluesselt (FB-19).
     let (_, r, _) = compile(
@@ -780,8 +830,10 @@ fn the_protocol_case_keeps_its_implicit_checks_low() {
     let r = out.report;
     assert!(r.total_checks() <= 4, "Protokollcode bleibt unter vier impliziten Pruefungen: {:?}", r.checks);
     // `b[from + i]` in der CRC-Schleife ist relational (`from + i < len`);
-    // das beweist erst ein Oktagon (plan/m6.md 2.12).
+    // das beweist erst ein Oktagon (plan/m6.md 2.12). Die Kennzahl, auf der
+    // die Entscheidung gegen Oktagone steht (M6 Schritt 27), zaehlt ihn.
     assert_eq!(r.warned, 1, "nur der Ring-Index der CRC-Schleife steht in einer Schleife: {:?}", r.checks);
+    assert!(r.relational >= 1, "der Ring-Index ist ein Oktagon-Kandidat: {:?}", r.checks);
     assert!(r.narrowed > 0, "die Verengung greift auch hier: {} von {}", r.narrowed, r.integer_exprs);
 }
 

@@ -1206,3 +1206,41 @@ fn every_fault_kind_of_the_corpus_arrives_at_its_tick() {
     assert!(!trace.contains("t=1 fault crowd"), "{trace}");
     assert!(trace.lines().filter(|l| l.contains(" out crowded ")).all(|l| l.ends_with(" 0")), "{trace}");
 }
+
+#[test]
+fn a_state_entered_without_its_permissive_faults_before_the_commit() {
+    // 5.6: Der Guard einer `when`-Transition ist das Permissive. Wer den
+    // Zustand ohne ihn betritt — hier `force`, das den Druck nicht
+    // prueft —, den faengt der Check des Ziels im Eintrittstick: Der Fault
+    // kommt im selben Tick, das Fault-Ziel setzt das Ventil, und `valve =
+    // true` aus `enter:` erreicht den Commit nie (5.2, 9.3).
+    let body = "\
+input  p     : float[bar] in 0..100 bar @ hw(\"d/p\")
+output p_sim : float[bar]               @ sim(\"d/p\")
+output valve : bool                     @ hw(\"plc/do0\") with safe = false
+command open
+command force
+
+machine m:
+    fault -> SAFE
+    initial CLOSED
+    state CLOSED:
+        when open and p < 5 bar: -> OPEN
+        when force: -> OPEN
+    state OPEN:
+        enter:
+            valve = true
+        loop:
+            check p < 5 bar, \"Druck zu hoch\"
+    state SAFE:
+        enter:
+            valve = false
+        loop: pass
+";
+    let stim = "t=0 in p 10 bar\nt=1 in p 10 bar\nt=1 cmd open\nt=2 in p 10 bar\nt=2 cmd force\n";
+    let trace = simulate(body, stim, 4);
+    assert!(!trace.contains("t=1 state m OPEN"), "das Permissive haelt: {trace}");
+    assert!(trace.contains("t=2 fault m CheckFailed \"Druck zu hoch\" -> SAFE\n"), "{trace}");
+    assert!(trace.contains("t=2 state m SAFE\n"), "{trace}");
+    assert!(!trace.contains("out valve true"), "kein unsicherer Commit: {trace}");
+}

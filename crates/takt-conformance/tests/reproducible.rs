@@ -40,13 +40,30 @@ mod common;
 const NAME: &str = "23_patterns.takt";
 
 fn corpus(name: &str) -> Program {
+    built(name, takt_sema::Build::Sim)
+}
+
+fn built(name: &str, build: takt_sema::Build) -> Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    let options =
-        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let options = takt_sema::Options { policy: takt_diag::Policy::default(), build, profile: None };
     let out = takt_sema::compile(&src, &options);
     assert!(!out.diagnostics.iter().any(|d| d.is_error()), "{name}");
     out.program.unwrap_or_else(|| panic!("{name}: kein Programm"))
+}
+
+/// **Die HIL-Umschaltung aendert den erzeugten Code nicht** (8.3, 11.3):
+/// Sim- und HW-Build unterscheiden sich in der Bindungstabelle, nicht in
+/// der Logik. `builds.rs` prueft es am Logik-Hash der MIR; hier steht es
+/// fuer das, was auf das Ziel geht — die IR ist Zeichen fuer Zeichen
+/// dieselbe, auch fuer Programme mit `sim`-Modell und Stroemen.
+#[test]
+fn the_simulation_and_the_hardware_build_yield_the_same_ir() {
+    for name in [NAME, "15_quality.takt", "45_journal_cut.takt", "53_stream_kinds.takt"] {
+        let sim = common::ir_of(&built(name, takt_sema::Build::Sim));
+        let hw = common::ir_of(&built(name, takt_sema::Build::Hw));
+        assert!(sim == hw, "{name}: die IR der beiden Builds unterscheidet sich");
+    }
 }
 
 /// **Stufe 1**: Zweimal uebersetzen ergibt dieselbe IR.
