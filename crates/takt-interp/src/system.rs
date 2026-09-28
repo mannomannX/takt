@@ -528,6 +528,18 @@ impl Outer for MachineEnv<'_, '_> {
                     )));
                 }
                 tx.queued.extend(bytes);
+                // 5.6: Die Stelle des Verwurfs ist eine Alert-Stelle der
+                // Runtime; ohne Verwurf ist sie inaktiv.
+                if matches!(self.loaded.program.channels[c.index()].attrs.overflow, Some(Overflow::Drop)) {
+                    let name = self.loaded.program.channels[c.index()].name.clone();
+                    self.out.push(Observation::Alert {
+                        span,
+                        index: Vec::new(),
+                        active: false,
+                        message: format!("Sendepuffer `{name}`"),
+                        invalid: false,
+                    });
+                }
                 Ok(())
             }
             // Interner Stream: das Element wird im naechsten Tick sichtbar
@@ -574,6 +586,16 @@ impl Outer for MachineEnv<'_, '_> {
                     )));
                 }
                 self.image.stream_next[sid.index()].push((t, v, bytes));
+                if matches!(def.overflow, Overflow::Drop) {
+                    let name = def.name.clone();
+                    self.out.push(Observation::Alert {
+                        span,
+                        index: Vec::new(),
+                        active: false,
+                        message: format!("Stream `{name}`"),
+                        invalid: false,
+                    });
+                }
                 Ok(())
             }
             _ => bug("`send` auf einem Nicht-Stream"),
@@ -961,8 +983,14 @@ impl<'p> Sim<'p> {
                     Delivery::Dropped(n) => dropped += n,
                 }
             }
-            if dropped > 0 {
+            // 5.6: aktiv in dem Tick, in dem das Zustellen verdraengt hat.
+            if drop_oldest {
                 let name = def.name.clone();
+                let message = if dropped > 0 {
+                    format!("Stream `{name}` hat {dropped} Elemente verworfen")
+                } else {
+                    format!("Stream `{name}`")
+                };
                 for id in self.order.clone() {
                     if def.readers.contains(&id) {
                         self.observations.push((
@@ -970,8 +998,8 @@ impl<'p> Sim<'p> {
                             Observation::Alert {
                                 span: def.span,
                                 index: Vec::new(),
-                                active: true,
-                                message: format!("Stream `{name}` hat {dropped} Elemente verworfen"),
+                                active: dropped > 0,
+                                message: message.clone(),
                                 invalid: false,
                             },
                         ));
@@ -1050,20 +1078,19 @@ impl<'p> Sim<'p> {
                     *e = -1;
                 }
             }
-            if woke_up {
-                missed = state.dropped.iter().copied().fold(0u32, u32::saturating_add);
-            }
-            if woke_up && missed > 0 {
+            missed = state.dropped.iter().copied().fold(missed, u32::saturating_add);
+            // 5.6, 5.10: aktiv in dem Tick, in dem die Maschine aufwacht und
+            // je etwas verpasst hat; danach inaktiv bis zum naechsten Mal.
+            if missed > 0 {
                 let span = m.states.first().map_or_else(takt_diag::Span::default, |s| s.span);
+                let message = if woke_up {
+                    format!("StreamPaused: {missed} Elemente im Schlaf verworfen")
+                } else {
+                    "StreamPaused".to_string()
+                };
                 self.observations.push((
                     id,
-                    Observation::Alert {
-                        span,
-                        index: Vec::new(),
-                        active: true,
-                        message: format!("StreamPaused: {missed} Elemente im Schlaf verworfen"),
-                        invalid: false,
-                    },
+                    Observation::Alert { span, index: Vec::new(), active: woke_up, message, invalid: false },
                 ));
             }
         }

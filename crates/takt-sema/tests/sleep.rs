@@ -72,6 +72,52 @@ machine m:
     assert!(text.contains("t=15 out lost 9"), "{text}");
 }
 
+/// **Jedes Aufwachen meldet `StreamPaused`** (5.6, 5.10, FB-342): Der Alert
+/// der Runtime ist aktiv im Tick des Aufwachens und danach inaktiv — sonst
+/// erschiene nach dem ersten Mal keiner mehr, weil nur Flanken zaehlen.
+#[test]
+fn every_wake_up_reports_stream_paused() {
+    let p = compile(
+        "\
+input  noise     : stream<u8> @ hw(\"bus/noise\") with capacity = 4, max_rate = 2000 Hz
+output noise_sim : stream<u8> @ sim(\"bus/noise\")
+output led       : bool @ hw(\"ui/led\") with safe = false
+
+machine feeder:
+    initial GO
+    state GO:
+        loop:
+            send noise_sim, 1
+
+machine m:
+    initial SLEEP
+
+    state SLEEP idle:
+        after 5 ms: -> AWAKE
+
+    state AWAKE:
+        on noise as e:
+            led = true
+        after 3 ms: -> SLEEP
+",
+    );
+    let out = takt_interp::run(&p, &Trace::default(), &RunOptions { ticks: 24, ..Default::default() }).expect("Lauf");
+    let text = out.trace.render();
+    let edges: Vec<&str> = text.lines().filter(|l| l.contains("StreamPaused")).collect();
+    let want = [
+        "t=5 alert m on",
+        "t=6 alert m off",
+        "t=13 alert m on",
+        "t=14 alert m off",
+        "t=21 alert m on",
+        "t=22 alert m off",
+    ];
+    assert_eq!(edges.len(), want.len(), "{text}");
+    for (line, prefix) in edges.iter().zip(want) {
+        assert!(line.starts_with(prefix), "`{line}` statt `{prefix}`:\n{text}");
+    }
+}
+
 /// Konjunkt 3: Solange im Fenster eines Wake-Stroms ein Element steht,
 /// schlaeft das System nicht. Die Maschine laeuft alle 5 ms; was in Tick 3
 /// eintrifft, sieht sie erst in Tick 5, und bis dahin bleibt das System

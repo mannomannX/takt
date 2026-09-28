@@ -711,11 +711,10 @@ fn send(
     // 8.6, 8.8: Passt das Element nicht, faultet der Schreiber — ausser
     // mit `overflow = drop`: Dann verwirft er es und meldet einen Alert.
     if crate::machine::drops_when_full(stream, ctx.program) {
+        // 5.6: Die Stelle ist ein Alert der Runtime, aktiv, wenn verworfen.
         let (slot, _) = ctx.state.counters.alert(span).ok_or(NotYet { what: "verwerfendes `send` ohne Platz" })?;
-        let dropped = format!("verworfen{}_{}", m.next_label(), ctx.machine.name);
-        m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{dropped}"));
-        m.label(&dropped);
-        m.void_inst(&format!("call void @{}(i32 {}, i32 {slot}, i1 1, i1 0)", Abi::ALERT, ctx.machine_index));
+        let dropped = m.inst(&format!("xor i1 {ok}, true"));
+        m.void_inst(&format!("call void @{}(i32 {}, i32 {slot}, i1 {dropped}, i1 0)", Abi::ALERT, ctx.machine_index));
         m.void_inst(&format!("br label %{go_on}"));
     } else {
         let fault = ctx.trampoline_for(takt_mir::machine::FaultKind::StreamOverflow, m);
