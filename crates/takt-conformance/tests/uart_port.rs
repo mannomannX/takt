@@ -15,6 +15,12 @@
 use std::path::PathBuf;
 
 use takt_diag::Policy;
+use takt_interp::{CoverKind, Coverage, RunOptions, Trace, Verdict};
+use takt_mir::Program;
+use takt_mir::machine::MachineKind;
+
+/// Genug Ticks fuer jedes Szenario; das laengste braucht 325.
+const TICKS: u64 = 1_000;
 
 fn root() -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
@@ -22,6 +28,29 @@ fn root() -> PathBuf {
 
 fn read(path: &str) -> String {
     std::fs::read_to_string(root().join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+const PORTED: &str = "crates/takt-bringup-esp32c6/programs/test_uart_c6.takt";
+
+fn ported() -> Program {
+    let options = takt_sema::Options { policy: Policy::default(), build: takt_sema::Build::Sim, profile: None };
+    let out = takt_sema::compile(&read(PORTED), &options);
+    let fehler: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(fehler.is_empty(), "{}", fehler.join("\n"));
+    out.program.expect("Programm")
+}
+
+/// Die Szenarien des Programms, je ein Lauf ueber `stimulus`.
+fn scenario_runs(program: &Program, stimulus: &Trace) -> Vec<(String, takt_interp::RunResult)> {
+    program
+        .machines
+        .iter()
+        .filter(|m| m.kind == MachineKind::Scenario)
+        .map(|m| {
+            let options = RunOptions { ticks: TICKS, scenario: Some(m.name.clone()), ..Default::default() };
+            (m.name.clone(), takt_interp::run(program, stimulus, &options).expect("Lauf"))
+        })
+        .collect()
 }
 
 /// Der Teil zwischen zwei Abschnittsueberschriften, ohne sie.
@@ -37,7 +66,7 @@ fn section(text: &str, from: &str, to: &str) -> Vec<String> {
 #[test]
 fn only_the_driver_layer_differs_between_the_two_boards() {
     let original = read("feedback/test_uart.takt");
-    let ported = read("crates/takt-bringup-esp32c6/programs/test_uart_c6.takt");
+    let ported = read(PORTED);
 
     let a = section(&original, "# 3. L1 —", "# 7. Simulationsmodell");
     let b = section(&ported, "# 3. L1 —", "# 7. Simulationsmodell");
@@ -59,12 +88,7 @@ fn only_the_driver_layer_differs_between_the_two_boards() {
 /// Adressen, die die PAC des ESP32-C6 fuehrt — nicht an erfundenen.
 #[test]
 fn the_ported_driver_names_the_real_uart0_registers() {
-    let options = takt_sema::Options { policy: Policy::default(), build: takt_sema::Build::Sim, profile: None };
-    let src = read("crates/takt-bringup-esp32c6/programs/test_uart_c6.takt");
-    let out = takt_sema::compile(&src, &options);
-    let fehler: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
-    assert!(fehler.is_empty(), "{}", fehler.join("\n"));
-    let program = out.program.expect("Programm");
+    let program = ported();
 
     let mut addresses: Vec<u64> = program.ports.iter().map(|p| p.address).collect();
     addresses.sort_unstable();
@@ -78,26 +102,44 @@ fn the_ported_driver_names_the_real_uart0_registers() {
     }
 }
 
-/// **Beide Szenarien bestehen gegen das Modell des C6.** Ohne diese
+/// **Jedes Szenario besteht gegen das Modell des C6.** Ohne diese
 /// Zusicherung pruefte der Test oben nur, dass zwei Dateien gleich
 /// aussehen — nicht, dass der Stapel laeuft.
 #[test]
 fn the_ported_stack_passes_its_scenarios() {
-    let options = takt_sema::Options { policy: Policy::default(), build: takt_sema::Build::Sim, profile: None };
-    let src = read("crates/takt-bringup-esp32c6/programs/test_uart_c6.takt");
-    let program = takt_sema::compile(&src, &options).program.expect("Programm");
-
-    let names: Vec<String> = program
-        .machines
-        .iter()
-        .filter(|m| m.kind == takt_mir::machine::MachineKind::Scenario)
-        .map(|m| m.name.clone())
-        .collect();
-    assert_eq!(names.len(), 2, "{names:?}");
-
-    for name in names {
-        let options = takt_interp::RunOptions { ticks: 600, scenario: Some(name.clone()), ..Default::default() };
-        let result = takt_interp::run(&program, &takt_interp::Trace::default(), &options).expect("Lauf");
-        assert_eq!(result.verdict, takt_interp::Verdict::Pass, "{name}:\n{}", result.trace.render());
+    let runs = scenario_runs(&ported(), &Trace::default());
+    assert_eq!(runs.len(), 9, "{:?}", runs.iter().map(|(n, _)| n).collect::<Vec<_>>());
+    for (name, result) in runs {
+        assert_eq!(result.verdict, Verdict::Pass, "{name}:\n{}", result.trace.render());
     }
+}
+
+/// **Jede Reaktion des Treibers wird einmal ausgeloest** (13.8, was
+/// `takt driver-test` verlangt): Das Modell speist jeden Leitungsfehler
+/// ein, der Stimulus den Reset, und ueber alle Szenarien erreicht
+/// `uart_port` jeden Zustand und jede Transition. Die Stall-Pruefung ist
+/// dabei verletzt worden — frueher verschluckte die Sendepumpe bei voller
+/// FIFO ein Byte je Tick (8.6: untersucht heisst konsumiert), und der
+/// Stall kam nie zustande.
+#[test]
+fn every_reaction_of_the_driver_is_triggered() {
+    let program = ported();
+    let stimulus =
+        Trace::parse(&read("crates/takt-bringup-esp32c6/programs/test_uart_c6.stim.trace")).expect("Stimulus");
+    let mut coverage = Coverage::default();
+    for (name, result) in scenario_runs(&program, &stimulus) {
+        assert_eq!(result.verdict, Verdict::Pass, "{name}:\n{}", result.trace.render());
+        coverage.merge(&result.coverage);
+    }
+    let items: Vec<_> =
+        takt_interp::coverage::items(&program).into_iter().filter(|i| i.machine == "uart_port").collect();
+    let missing: Vec<&str> =
+        coverage.missing(&items).into_iter().filter(|i| i.kind != CoverKind::Check).map(|i| i.key.as_str()).collect();
+    assert!(missing.is_empty(), "nicht ausgeloest: {missing:?}");
+    let src = read(PORTED);
+    let stall = items
+        .iter()
+        .find(|i| src[i.span.start as usize..].starts_with("check tx_stalled_for"))
+        .expect("Stall-Pruefung");
+    assert!(coverage.has(CoverKind::CheckFailed, stall), "die Stall-Pruefung wurde nie verletzt");
 }

@@ -107,10 +107,54 @@ fn coverage_counts_states_transitions_and_checks() {
     assert!(has(CoverKind::Transition, "dut", "CLOSED->OPEN"), "{c:?}");
     assert!(has(CoverKind::Check, "dut", "check"), "{c:?}");
     assert!(!has(CoverKind::CheckFailed, "dut", "check"), "{c:?}");
-    let u = takt_interp::coverage::universe(&p);
-    assert_eq!(u.checks, 3, "ein `check`, ein `expect` und ein `verify` (13.4)");
+    let items = takt_interp::coverage::items(&p);
+    let checks = items.iter().filter(|i| i.kind == CoverKind::Check).count();
+    assert_eq!(checks, 1, "der `check` in `dut`; `expect` und `verify` stehen in Szenarien");
     let text = c.render();
     assert!(text.starts_with("# takt-coverage 1\n"), "{text}");
+}
+
+#[test]
+fn every_hit_names_a_site_and_the_gaps_are_listed() {
+    // 13.2: unbesuchte Stellen werden berichtet. Ein Treffer ohne Stelle
+    // hiesse, Interpreter und Nenner schluesselten verschieden.
+    let p = ok(&format!(
+        "{PROGRAM}
+stream<u8> ticks with capacity = 4
+machine counter:
+    var n : int in 0..1_000_000 = 0
+    initial COUNT
+    state COUNT:
+        loop:
+            send ticks, 1
+            verify n < 1_000_000, \"saturated\"
+            check n >= 0, \"negative\"
+        on ticks as t:
+            n += t.data as int
+        when n > 1_000: -> DONE
+    state DONE:
+        loop:
+            pass
+"
+    ));
+    let items = takt_interp::coverage::items(&p);
+    let mut c = run_scenario(&p, "pressure rises").coverage;
+    c.merge(&run_scenario(&p, "stays closed").coverage);
+    let kinds = [CoverKind::State, CoverKind::Transition, CoverKind::Check, CoverKind::Handler];
+    let scenario =
+        |name: &str| p.machines.iter().any(|m| m.name == name && m.kind == takt_mir::machine::MachineKind::Scenario);
+    for (kind, machine, key) in c.hits.keys().filter(|(k, m, _)| kinds.contains(k) && !scenario(m)) {
+        assert!(
+            items.iter().any(|i| i.kind == *kind && i.machine == *machine && i.key == *key),
+            "Treffer ohne Stelle: {kind:?} {machine} {key}"
+        );
+    }
+    let gaps: Vec<String> = c.missing(&items).iter().map(|i| format!("{} {}", i.machine, i.key)).collect();
+    assert_eq!(gaps.len(), 3, "{gaps:?}");
+    assert!(gaps[0].starts_with("dut OPEN->CLOSED @"), "{gaps:?}");
+    assert!(gaps[1].starts_with("counter COUNT->DONE @") && gaps[2] == "counter DONE", "{gaps:?}");
+    let checks = items.iter().filter(|i| i.kind == CoverKind::Check && i.machine == "counter").count();
+    assert_eq!(checks, 2, "`verify` zaehlt wie ein `check` (13.4)");
 }
 
 #[test]

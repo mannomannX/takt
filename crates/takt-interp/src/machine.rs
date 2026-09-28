@@ -345,8 +345,7 @@ fn take_transition(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64)
                 Out::Normal => {}
                 other => return Ok(other),
             }
-            let name =
-                format!("{}->{} @{}", m.states[state.index()].name, target_name(loaded, env, t.target), t.span.start);
+            let name = crate::coverage::transition_key(m, &m.states[state.index()].name, t);
             env.out.push(Observation::Cover { kind: CoverKind::Transition, name });
             return Ok(Out::Goto(t.target));
         }
@@ -368,7 +367,7 @@ fn faulted_transition(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u
                 Out::Normal => {}
                 other => return Ok(other),
             }
-            let name = format!("FAULTED->{} @{}", target_name(loaded, env, t.target), t.span.start);
+            let name = crate::coverage::transition_key(env.machine(loaded), "FAULTED", t);
             env.out.push(Observation::Cover { kind: CoverKind::Transition, name });
             return Ok(Out::Goto(t.target));
         }
@@ -668,11 +667,7 @@ fn fault_message(m: &Machine, leaf: Option<StateId>, kind: FaultKind) -> String 
 }
 
 fn target_name(loaded: &Loaded<'_>, env: &MachineEnv<'_, '_>, t: Target) -> String {
-    match t {
-        Target::Faulted => "FAULTED".to_string(),
-        Target::State(s) => env.machine(loaded).states[s.index()].name.clone(),
-        Target::Fault(k) => format!("[Fault {k:?}]"),
-    }
+    crate::coverage::target_name(env.machine(loaded), t)
 }
 
 /// Konfigurationswechsel in fester Reihenfolge (9.3, `switch`): neue

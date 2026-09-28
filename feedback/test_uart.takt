@@ -231,12 +231,15 @@ driver machine uart_port:
             # ---- TX-Pump: nur solange die FIFO Platz hat UND CTS erlaubt.
             var room : int in 0..16 = (16 - (st.flags.bits(20, 16) as int))
             var sent : int in 0..16 = 0
-            for ev in tx_raw:
-                if sent >= room or not cts_ok:
-                    break
-                uart_dr = UartData(byte = ev.data)  # `ev` ist die Bindung (8.7)
-                tx_bytes += 1
-                sent += 1
+            # Untersucht heisst konsumiert (8.6): Ein Byte, das die Schleife
+            # ansieht, ist fort. Ob Platz ist, steht darum vor dem Ansehen.
+            if room > 0 and cts_ok:
+                for ev in tx_raw:
+                    uart_dr = UartData(byte = ev.data)  # `ev` ist die Bindung (8.7)
+                    tx_bytes += 1
+                    sent += 1
+                    if sent >= room:
+                        break
 
             # ---- Stall-Erkennung: TX-Daten liegen an, aber nichts geht raus.
             if tx_raw.count > 0 and sent == 0:

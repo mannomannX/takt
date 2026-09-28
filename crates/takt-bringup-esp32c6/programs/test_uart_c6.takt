@@ -33,8 +33,8 @@
 #   L3  block line_assembler       — reiner, zustandsbehafteter Zeilenzusammenbau
 #                                    fuer Textprotokolle (framing = lines in Takt).
 #
-#   dazu: Simulationsmodell (loopback + Bitfehler-Injektion), Szenarien,
-#         Kampagne, property-Monitore.
+#   dazu: Simulationsmodell (Loopback und Fehlerinjektion), ein Szenario je
+#         Leitungsfehler, Kampagne, property-Monitore.
 #
 # Sprachfassung: Edition 1, Stufe v1.2 (port/driver machine, arm/disarm,
 # gescopte Instanzen, resume, Typvariablen). Alles was v1.1 ist, ist markiert.
@@ -49,7 +49,7 @@ system:
     float         = f32        # der C6 hat keine FPU (4.2, 12.8)
     target        = baremetal  # 12.8
     output_timing = asap       # Latenz vor Jitter (16)
-    fault_is_fail = true
+    fault_is_fail = false      # die Szenarien loesen Faults absichtlich aus (13.8)
 
 # ============================================================================
 # 1. Einheiten und Grundtypen
@@ -218,14 +218,17 @@ driver machine uart_port with polling = unchecked:
             # ---- TX-Pump: solange die FIFO Platz hat. Die 128 Byte des C6
             # minus acht Reserve — am Rand verschluckt ein Ueberlauf
             # Zeichen, und acht Byte kosten nichts.
-            var room : int in 0..128 = 120 - (st.word.txfifo_cnt as int)
+            var room : int in 0..128 = max(120 - (st.word.txfifo_cnt as int), 0)
             var sent : int in 0..128 = 0
-            for ev in tx_raw:
-                if sent >= room or not cts_ok:
-                    break
-                uart_dr = UartData(word = ev.data as u32)
-                tx_bytes += 1
-                sent += 1
+            # Untersucht heisst konsumiert (8.6): Ein Byte, das die Schleife
+            # ansieht, ist fort. Ob Platz ist, steht darum vor dem Ansehen.
+            if room > 0 and cts_ok:
+                for ev in tx_raw:
+                    uart_dr = UartData(word = ev.data as u32)
+                    tx_bytes += 1
+                    sent += 1
+                    if sent >= room:
+                        break
 
             if tx_raw.count > 0 and sent == 0:
                 tx_stalled_for += tick
@@ -621,6 +624,11 @@ property no_silent_loss: always(uart_framer.frames_in >= uart_link.delivered)
 # Das Modell spricht die Kanaele der Ports (12.10). Es bildet die
 # Loopback-Schaltung nach, die auf dem Board eine Drahtbruecke von
 # GPIO16 (TX) nach GPIO17 (RX) herstellt: Was hinausgeht, kommt zurueck.
+#
+# Ein Szenario traegt ihm Leitungsfehler auf (`inject`), und
+# `takt driver-test` verlangt, dass jede Reaktion des Treibers einmal
+# ausgeloest wurde (13.8). Den Reset-Uebergang loest der Stimulus
+# `test_uart_c6.stim.trace` aus; Kommandos kommen nicht aus Szenarien.
 # ============================================================================
 
 output st_sim : UartStatus @ sim("mmio/0x6000001c/r")
@@ -634,14 +642,30 @@ input  dr_w : stream<UartData>   @ sim("mmio/0x60000000/w") with capacity = 128,
 input  ic_w : stream<UartIntClr> @ sim("mmio/0x60000010/w") with capacity = 8, overflow = fault, max_rate = 4 kHz
 
 param BIT_ERROR_AT : int in 0..100000 = 0
-param CTS_DROP_AT  : Duration in 0 s..10 s = 0 s
+
+# Die Fehler, die ein Szenario dem Modell auftraegt. Rahmen- und
+# Paritaetsfehler kommen mit einem verdorbenen Zeichen, ein Break als
+# Nullbyte, wie auf der Leitung. `BIT_FLIP` kippt das zehnte Byte danach,
+# das bei einem Frame mit sieben Byte Nutzlast in der Nutzlast liegt.
+# `TX_FULL` und `MUTE` halten an, bis `HEAL` sie aufhebt.
+enum LineFault: OVERRUN, FRAMING, PARITY, BREAK, BIT_FLIP, TX_FULL, MUTE, HEAL
+
+stream<LineFault> inject with capacity = 4, overflow = fault
+
+const FLIP_BYTE : int = 10
 
 machine uart_model:
+    pub var cleared : int in 0..1_000_000 = 0  # Fehlerflags, die der Treiber loeschte
+
     var fifo      : [16] u8 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     var level     : int in 0..16 = 0
     var announced : int in 0..1 = 0
     var seen      : int in 0..1_000_000 = 0
     var shifting  : Duration in 0 s..10 ms = 0 s
+    var raised    : u32 = 0           # INT_RAW des naechsten Ticks
+    var flip_in   : int in 0..16 = 0  # so viele Bytes noch bis zum Bitfehler
+    var tx_full   : bool = false
+    var mute      : bool = false
 
     initial RUN
 
@@ -662,34 +686,57 @@ machine uart_model:
 
             # Solange das Schieberegister laeuft, steht ein Byte in der
             # TX-FIFO; danach ist sie leer. Der Treiber haengt `rs485_de`
-            # daran.
-            var tx : u32 = 1 if shifting > 0 s else 0
+            # daran. Eine volle FIFO meldet ihre 128 Byte.
+            var tx : u32 = 128 if tx_full else (1 if shifting > 0 s else 0)
             st_sim = UartStatus(word = (level as u32) | (tx << 16))
-            ir_sim = UartIntRaw(word = 0)
+
+            # Ein Flag steht einen Tick lang an, wie ein Byte der RX-FIFO:
+            # Der Treiber liest es in jeder Aktivierung, und sein Loeschen
+            # saehe das Modell erst einen Tick spaeter (12.10). Ob er
+            # loescht, zaehlt `cleared`.
+            ir_sim = UartIntRaw(word = raised)
+            raised = 0
 
             if level > 0:
                 announced = 1
             if shifting > 0 s:
                 shifting -= tick
 
-        # Das Modell erzeugt keine Fehler; der Handler haelt den Kanal
-        # gelesen, damit er nicht ueberlaeuft.
+        on inject as f:
+            match f.data:
+                case OVERRUN: raised = raised | 0x10
+                case FRAMING: raised = raised | 0x08
+                case PARITY: raised = raised | 0x04
+                case BREAK: raised = raised | 0x80
+                case BIT_FLIP: flip_in = FLIP_BYTE
+                case TX_FULL: tx_full = true
+                case MUTE: mute = true
+                case HEAL:
+                    tx_full = false
+                    mute = false
+            if (f.data == FRAMING or f.data == PARITY or f.data == BREAK) and level < 16:
+                fifo[level] = 0 if f.data == BREAK else 0x55
+                level += 1
+
+        # Der Treiber loescht jedes Flag mit einem eigenen Schreibvorgang.
         on ic_w as c:
-            pass
+            cleared += 1
 
         # Loopback: Jedes geschriebene Byte kehrt zurueck, gegebenenfalls
         # mit einem gekippten Bit.
         on dr_w as d:
             seen += 1
             var v : u8 = d.data.word.byte
-            if BIT_ERROR_AT != 0 and seen == BIT_ERROR_AT:
+            if (BIT_ERROR_AT != 0 and seen == BIT_ERROR_AT) or flip_in == 1:
                 v = v ^ 0x40
-            if level < 16:
+            if flip_in > 0:
+                flip_in -= 1
+            if level < 16 and not mute:
                 fifo[level] = v
                 level += 1
             shifting = 2 ms
 
-scenario "loopback delivers payload intact" every 100 us:
+scenario "loopback delivers payload intact":
     initial RUN
     state RUN:
         sequence:
@@ -697,13 +744,14 @@ scenario "loopback delivers payload intact" every 100 us:
             until app_rx as m timeout 100 ms
             verify m.data.len == 7, "payload length mismatch: {m.data.len}"
             verify uart_link.crc_errors == 0, "unexpected crc errors"
+            verify uart_link.retransmits == 0, "unexpected retransmits: {uart_link.retransmits}"
             verdict pass "loopback ok"
 
 # Das Szenario prueft die Fehlerbehandlung. Ohne `BIT_ERROR_AT` ist die
 # Leitung sauber und es gibt nichts zu erholen; die Kampagne setzt ihn
 # (`sweep`). Die Aussage gilt in beiden Faellen: Was ankommt, ist heil,
 # und retransmittiert wurde hoechstens einmal.
-scenario "single bit error triggers exactly one retransmit" every 100 us:
+scenario "single bit error triggers exactly one retransmit":
     initial RUN
     state RUN:
         sequence:
@@ -714,9 +762,114 @@ scenario "single bit error triggers exactly one retransmit" every 100 us:
             verify uart_link.crc_errors <= 1, "too many crc errors: {uart_link.crc_errors}"
             verdict pass "delivered intact after {uart_link.retransmits} retransmits"
 
+scenario "an overrun is counted and cleared":
+    initial RUN
+    state RUN:
+        sequence:
+            send inject, OVERRUN
+            wait 5 ms
+            verify uart_port.overruns == 1, "overruns: {uart_port.overruns}"
+            verify uart_model.cleared == 1, "flags cleared: {uart_model.cleared}"
+            verdict pass "overrun counted and cleared"
+
+# Ein Zeichen mit Rahmen- oder Paritaetsfehler oder ein Break verwirft den
+# Frame und schickt den Framer in die Resynchronisation; der naechste Frame
+# geht dabei verloren, der Link holt ihn mit einer Wiederholung nach.
+scenario "a framing error costs one frame":
+    initial RUN
+    state RUN:
+        sequence:
+            send inject, FRAMING
+            wait 5 ms
+            verify uart_port.frame_errs == 1, "frame errors: {uart_port.frame_errs}"
+            verify uart_framer.decode_errors == 1, "decode errors: {uart_framer.decode_errors}"
+            verify uart_model.cleared == 1, "flags cleared: {uart_model.cleared}"
+            send app_tx, "PING 3\n"
+            until app_rx as m timeout 500 ms
+            verify m.data.len == 7, "payload length mismatch: {m.data.len}"
+            verify uart_link.retransmits == 1, "retransmits: {uart_link.retransmits}"
+            verdict pass "framer resynced"
+
+scenario "a parity error costs one frame":
+    initial RUN
+    state RUN:
+        sequence:
+            send inject, PARITY
+            wait 5 ms
+            verify uart_port.parity_errs == 1, "parity errors: {uart_port.parity_errs}"
+            verify uart_framer.decode_errors == 1, "decode errors: {uart_framer.decode_errors}"
+            verify uart_model.cleared == 1, "flags cleared: {uart_model.cleared}"
+            send app_tx, "PING 4\n"
+            until app_rx as m timeout 500 ms
+            verify m.data.len == 7, "payload length mismatch: {m.data.len}"
+            verify uart_link.retransmits == 1, "retransmits: {uart_link.retransmits}"
+            verdict pass "framer resynced"
+
+scenario "a break costs one frame":
+    initial RUN
+    state RUN:
+        sequence:
+            send inject, BREAK
+            wait 5 ms
+            verify uart_port.breaks == 1, "breaks: {uart_port.breaks}"
+            verify uart_framer.decode_errors == 1, "decode errors: {uart_framer.decode_errors}"
+            verify uart_model.cleared == 1, "flags cleared: {uart_model.cleared}"
+            send app_tx, "PING 5\n"
+            until app_rx as m timeout 500 ms
+            verify m.data.len == 7, "payload length mismatch: {m.data.len}"
+            verify uart_link.retransmits == 1, "retransmits: {uart_link.retransmits}"
+            verdict pass "framer resynced"
+
+scenario "a flipped bit costs one retransmit":
+    initial RUN
+    state RUN:
+        sequence:
+            send inject, BIT_FLIP
+            wait 1 ms
+            send app_tx, "PING 6\n"
+            until app_rx as m timeout 500 ms
+            verify m.data.len == 7, "payload length mismatch: {m.data.len}"
+            verify uart_link.crc_errors == 1, "crc errors: {uart_link.crc_errors}"
+            verify uart_link.retransmits == 1, "retransmits: {uart_link.retransmits}"
+            verdict pass "delivered after one retransmit"
+
+# Eine volle Sende-FIFO haelt den Sender an; nach `TX_STALL_LIMIT` faultet
+# der Port, legt die Leitung still und versucht es nach 100 ms erneut.
+scenario "a full tx fifo faults the port until it drains":
+    initial RUN
+    state RUN:
+        sequence:
+            send inject, TX_FULL
+            wait 1 ms
+            send app_tx, "PING 7\n"
+            until uart_port.state == PORT_FAULT timeout 200 ms
+            verify not uart_port.line_ok, "line reported ok during a port fault"
+            send inject, HEAL
+            until uart_port.state == RUN timeout 200 ms
+            send app_tx, "PING 8\n"
+            until app_rx as m timeout 1 s
+            verify m.data.len == 7, "payload length mismatch: {m.data.len}"
+            verdict pass "port recovered"
+
+# Eine Gegenstelle, die nicht antwortet, kostet den Link nach `RETRIES`
+# Wiederholungen; er kommt zurueck, sobald die Leitung steht.
+scenario "a silent peer takes the link down":
+    initial RUN
+    state RUN:
+        sequence:
+            send inject, MUTE
+            wait 1 ms
+            send app_tx, "PING 9\n"
+            until uart_link.state == LINK_DOWN timeout 1 s
+            verify uart_link.last_err == TIMEOUT, "last error: {uart_link.last_err}"
+            send inject, HEAL
+            send app_tx, "PING 10"
+            until app_rx as m timeout 500 ms
+            verify m.data.len == 7, "payload length mismatch: {m.data.len}"
+            verdict pass "link back after {uart_link.retransmits} retransmits"
+
 campaign uart_robustness:
-    program "uart.takt"
+    program "test_uart_c6.takt"
     sweep BIT_ERROR_AT = [0, 1, 3, 7, 12]
-    sweep CTS_DROP_AT = 0 s..200 ms step 20 ms
     repeat 2
     stop_on fail

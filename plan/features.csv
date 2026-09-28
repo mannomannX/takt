@@ -888,7 +888,7 @@ CLI-timing,Werkzeug,11.1,takt timing,,M5 (Embedded),fertig,"die vier Kennzahlen 
 CLI-verify-trace,Werkzeug,11.1,takt verify-trace,,M6 (v1.1),fertig,"Hashkette h_k = H(h_{k-1} ‖ Zeilen des Ticks k) im Kopf der Aufzeichnung (`#! kette`), T6 in grammar/trace.md (A3)"
 CLI-test,Werkzeug,11.1,takt test,,M6 (v1.1),fertig,`--out DIR` schreibt je Szenario `NAME.trace` (FB-190)
 CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
-CLI-driver-test,Werkzeug,11.1,takt driver-test,,M10 (aus M5),offen,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
+CLI-driver-test,Werkzeug,11.1,takt driver-test,,M10 (aus M5),teilweise,"Wirtsmodus fuer Treiber in Takt fertig (M10 Schritt 11a); offen sind der Boardmodus (Schritt 11b: `guard`, `jitter`, Abtastlatenz) und Treiber in Rust hinter dem Rand (FB-285)"
 CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),fertig,"`--export DATEI.smt2 --depth k`, sonst Solver (`--solver`, `TAKT_SOLVER`, `z3`/`cvc5`): Eigenschaften bewiesen/verletzt/unbewiesen, Pruefstellen bewiesen unerreichbar/erreichbar mit Pfad/unentschieden, Gegenbeispiele als Stimulus im Interpreter bestaetigt (`takt-prove/src/solve.rs`)"
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig,
 CLI-build,Werkzeug,11.1,takt build,,M5 (Embedded),fertig,uebersetzt und assembliert je Ziel; bindet nicht — Startcode und Speicherkarte gehoeren zum Board (`--emit ir|obj|consts|consts-rs`)

@@ -8,6 +8,7 @@
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--params-profile P] [--order random:SEED] [--steps OUT.steps]
 //! takt test  DATEI [--ticks N] [--params-profile P] [--scenario NAME] [--coverage OUT.csv] [--out DIR]
+//! takt driver-test DATEI [--ticks N] [--stim S.trace] [--params-profile P] [--scenario NAME] [--out DIR]
 //! takt campaign DATEI [NAME] --ticks N [--stim S.trace] [--params-profile P] [--scenario NAME]
 //!                   [--out DIR] [--hardware DATEI.hw]
 //! takt tune  DATEI --ticks N --save PROFIL [--stim S.trace] [--params-profile P] [--out DATEI]
@@ -42,7 +43,7 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… | takt bench --board NAME (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|driver-test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… | takt bench --board NAME (siehe crates/takt-cli/src/main.rs)";
 
 struct Args {
     flags: Vec<String>,
@@ -142,6 +143,7 @@ fn main() -> ExitCode {
         "sim" => sim(&args),
         "test" => test(&args),
         "campaign" => campaign(&args),
+        "driver-test" => driver_test(&args),
         "prove" => prove(&args),
         "tune" => tune(&args),
         "run" => run_cmd(&args),
@@ -1319,19 +1321,74 @@ fn steps_with_positions(steps: &str, src: &str) -> String {
 }
 
 /// `takt test`: jedes Szenario als eigener Sim-Lauf (13.6); Verdikte je
-/// Szenario, Coverage als Vereinigung (13.2), und jeder irreversible Output
-/// muss von einem Szenario abgedeckt sein (12.7).
+/// Szenario, Coverage als Vereinigung mit den unerreichten Stellen (13.2),
+/// und jeder irreversible Output muss von einem Szenario abgedeckt sein (12.7).
 fn test(args: &Args) -> bool {
     let Some(path) = args.files.first() else {
         eprintln!("{USAGE}");
         return false;
     };
     let Some(program) = compile_file(path, args) else { return false };
+    scenarios(path, &program, args, &Trace::default()).is_some_and(|(ok, _)| ok)
+}
+
+/// `takt driver-test`, Wirtsmodus (13.8): ein Treiber in Takt gegen sein
+/// Geraetemodell. Die Szenarien laufen wie in `takt test`, Kommandos kommen
+/// aus `--stim`. Bestanden ist der Treiber, wenn kein Szenario scheitert und
+/// jeder Zustand, jede Transition und jeder Handler seiner `driver machine`s
+/// erreicht wurde: Das sind seine Reaktionen, und jede muss ein Szenario
+/// einmal ausgeloest haben. Eine Pruefstelle, die nie verletzt wurde, steht
+/// im Bericht; ihre Reaktion ist der Fault-Pfad, den die Zustaende schon
+/// verlangen, und eine Stelle hinter einem `param` gehoert in eine Kampagne.
+fn driver_test(args: &Args) -> bool {
+    use takt_interp::CoverKind;
+    let Some(path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let Some(program) = compile_file(path, args) else { return false };
+    let drivers: Vec<&str> = program.machines.iter().filter(|m| m.driver).map(|m| m.name.as_str()).collect();
+    if drivers.is_empty() {
+        eprintln!("{path}: keine `driver machine` (12.10)");
+        return false;
+    }
+    let Some(stimulus) = stimulus_of(args) else { return false };
+    let Some((mut ok, coverage)) = scenarios(path, &program, args, &stimulus) else { return false };
+    let Some(src) = read(path) else { return false };
+    let map = SourceMap::single(path.as_str(), src.as_str());
+    let items: Vec<_> =
+        takt_interp::coverage::items(&program).into_iter().filter(|i| drivers.contains(&i.machine.as_str())).collect();
+    println!("Treiber {}: {}", drivers.join(", "), coverage.summary(&items));
+    let quiet: Vec<_> = items
+        .iter()
+        .filter(|i| i.kind == CoverKind::Check && coverage.has(CoverKind::Check, i))
+        .filter(|i| !coverage.has(CoverKind::CheckFailed, i))
+        .collect();
+    for line in gap_lines(path, &map, &quiet) {
+        println!("{line} nie verletzt");
+    }
+    let unreached = coverage.missing(&items).into_iter().filter(|i| i.kind != CoverKind::Check).count();
+    if unreached > 0 {
+        println!("FAIL: {unreached} Reaktionen des Treibers von keinem Szenario ausgeloest (13.8)");
+        ok = false;
+    }
+    ok
+}
+
+/// Fuehrt jedes Szenario als eigenen Sim-Lauf aus und berichtet (13.6,
+/// 13.2, 13.4, 12.7); liefert, ob keines scheiterte, und die vereinigte
+/// Coverage. `None`, wenn ein Lauf oder eine Datei nicht zustande kam.
+fn scenarios(
+    path: &str,
+    program: &takt_mir::Program,
+    args: &Args,
+    stimulus: &Trace,
+) -> Option<(bool, takt_interp::Coverage)> {
     let ticks = match args.value("--ticks").map(str::parse::<u64>) {
         Some(Ok(n)) => n,
         Some(Err(e)) => {
             eprintln!("--ticks: {e}");
-            return false;
+            return None;
         }
         None => 100_000,
     };
@@ -1344,9 +1401,8 @@ fn test(args: &Args) -> bool {
         .collect();
     if scenarios.is_empty() {
         eprintln!("{path}: kein Szenario (13.6)");
-        return false;
+        return None;
     }
-    let universe = takt_interp::coverage::universe(&program);
     let mut coverage = takt_interp::Coverage::default();
     // 13.4: je Pruefstelle die Szenarien, die sie durchliefen.
     let mut by_scenario: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
@@ -1354,11 +1410,11 @@ fn test(args: &Args) -> bool {
     for name in &scenarios {
         let options =
             RunOptions { ticks, profile: profile_of(args), scenario: Some(name.clone()), ..Default::default() };
-        let result = match takt_interp::run(&program, &Trace::default(), &options) {
+        let result = match takt_interp::run(program, stimulus, &options) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("{path}: {name}: {e:?}");
-                return false;
+                return None;
             }
         };
         let last = result.trace.lines.iter().map(|l| l.tick).max().unwrap_or(0);
@@ -1372,7 +1428,7 @@ fn test(args: &Args) -> bool {
             let file = std::path::Path::new(dir).join(format!("{name}.trace"));
             if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&file, result.trace.render())) {
                 eprintln!("{}: {e}", file.display());
-                return false;
+                return None;
             }
         }
         ok &= result.verdict != Verdict::Fail;
@@ -1383,16 +1439,21 @@ fn test(args: &Args) -> bool {
         }
         coverage.merge(&result.coverage);
     }
-    println!("Coverage: {}", coverage.summary(universe));
-    // 13.4: welche Szenarien welche Anforderung durchliefen.
-    let index = takt_mir::requirements::index(&program);
-    if !index.is_empty() {
-        if let Some(src) = read(path) {
-            let map = SourceMap::single(path.as_str(), src.as_str());
-            for line in requirement_lines(&index, &map, Some(&by_scenario)) {
-                println!("{line}");
-            }
+    let src = read(path)?;
+    let map = SourceMap::single(path, src.as_str());
+    let items = takt_interp::coverage::items(program);
+    println!("Coverage: {}", coverage.summary(&items));
+    let gaps = coverage.missing(&items);
+    if !gaps.is_empty() {
+        println!("Nicht erreicht:");
+        for line in gap_lines(path, &map, &gaps) {
+            println!("{line}");
         }
+    }
+    // 13.4: welche Szenarien welche Anforderung durchliefen.
+    let index = takt_mir::requirements::index(program);
+    for line in requirement_lines(&index, &map, Some(&by_scenario)) {
+        println!("{line}");
     }
     for c in program.channels.iter().filter(|c| c.attrs.irreversible) {
         let covered = coverage.hits.keys().any(|(k, _, n)| *k == takt_interp::CoverKind::Irreversible && *n == c.name);
@@ -1404,10 +1465,28 @@ fn test(args: &Args) -> bool {
     if let Some(out) = args.value("--coverage") {
         if let Err(e) = std::fs::write(out, coverage.render()) {
             eprintln!("{out}: {e}");
-            return false;
+            return None;
         }
     }
-    ok
+    Some((ok, coverage))
+}
+
+/// Je Stelle eine Zeile `DATEI:ZEILE: MASCHINE ART NAME` (13.2).
+fn gap_lines(path: &str, map: &SourceMap, items: &[&takt_interp::coverage::Item]) -> Vec<String> {
+    items
+        .iter()
+        .map(|i| {
+            let (line, _) = map.line_col(i.span);
+            let name = i.key.rsplit_once(" @").map_or(i.key.as_str(), |(n, _)| n);
+            let what = match i.kind {
+                takt_interp::CoverKind::State => format!("Zustand {name}"),
+                takt_interp::CoverKind::Transition => format!("Transition {name}"),
+                takt_interp::CoverKind::Handler => "Handler".to_string(),
+                _ => name.to_string(),
+            };
+            format!("  {path}:{line}: {} {what}", i.machine)
+        })
+        .collect()
 }
 
 /// `takt prove`: die Schrittfunktion als Transitionssystem; `--export

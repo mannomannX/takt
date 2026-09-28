@@ -225,12 +225,15 @@ driver machine uart_port with polling = unchecked:
             # Zeichen, und acht Byte kosten nichts.
             var room : int in 0..128 = max(120 - (st.word.txfifo_cnt as int), 0)
             var sent : int in 0..128 = 0
-            for ev in tx_raw:
-                if sent >= room or not cts_ok:
-                    break
-                uart_dr = UartData(word = ev.data as u32)
-                tx_bytes = min(tx_bytes + 1, 1_000_000_000)
-                sent += 1
+            # Untersucht heisst konsumiert (8.6): Ein Byte, das die Schleife
+            # ansieht, ist fort. Ob Platz ist, steht darum vor dem Ansehen.
+            if room > 0 and cts_ok:
+                for ev in tx_raw:
+                    uart_dr = UartData(word = ev.data as u32)
+                    tx_bytes = min(tx_bytes + 1, 1_000_000_000)
+                    sent += 1
+                    if sent >= room:
+                        break
 
             if tx_raw.count > 0 and sent == 0:
                 tx_stalled_for += tick
