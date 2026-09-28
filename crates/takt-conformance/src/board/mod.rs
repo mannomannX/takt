@@ -108,6 +108,7 @@ pub const CORPUS: &[&str] = &[
     "97_fast_math.takt",
     // 12.7: die Startmuster; ohne Plattformwerte die Plattform ohne Startstufe.
     "sim/12_7/program.takt",
+    "sim/14_7/program.takt",
 ];
 
 /// Die Zeile, mit der jedes Bring-up seinen Lauf beendet.

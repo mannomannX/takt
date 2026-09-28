@@ -338,6 +338,41 @@ fn an_idle_state_sleeps_in_virtual_ticks() {
     assert!(diffs.is_empty(), "{diffs:?}");
 }
 
+/// **14.7 laeuft auf Board 2** (M10 Schritt 23): Selbsttest, Betrieb,
+/// `IDLE_WAIT` und nach zwei Minuten `STANDBY`, mit dem `persist`-Journal
+/// im Flash. AFE und Ladegeraet sind `sim`-Bindungen: Das Modell rechnet
+/// auf dem Board mit, und weil es nicht `idle` ist, schlaeft das System in
+/// `STANDBY` nicht (9.9) — den Schlaf belegt `56_idle_timer`. 12 500 Ticks
+/// in logischer Zeit, Tick fuer Tick gegen den Interpreter.
+#[test]
+fn the_battery_manager_of_14_7_runs_on_board_2() {
+    const TICKS_14_7: u64 = 12_500;
+    let Some((mut board, _guard)) = board() else { return };
+    let name = "sim/14_7/program.takt";
+    let options = Options::fresh(TICKS_14_7);
+    let text = board
+        .build(&board::corpus_path(name), &options)
+        .and_then(|elf| board.run(&elf, &options))
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert!(counter(&text, "journal geschrieben").is_some_and(|n| n >= 1), "kein Journal:\n{}", tail(&text));
+    let options = takt_interp::RunOptions { ticks: TICKS_14_7, ..Default::default() };
+    let interpreted =
+        takt_interp::run(&corpus(name), &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    // Die Board-Telemetrie traegt keine Zustaende; `STANDBY` zeigt sich dort
+    // an seinem `enter:` — LED aus, beide FETs offen.
+    let standby = interpreted.lines().find(|l| l.ends_with("state bms STANDBY")).expect("STANDBY im Interpreter");
+    let at = standby.split_whitespace().next().expect("Tick");
+    assert!(text.lines().any(|l| l.starts_with(&format!("{at} out led 0"))), "kein STANDBY:\n{}", tail(&text));
+    let diffs = compare(&interpreted, &text);
+    assert!(diffs.is_empty(), "{} Abweichungen, etwa {:?}", diffs.len(), &diffs[..diffs.len().min(6)]);
+}
+
+/// Die letzten Zeilen eines Traces, fuer Meldungen.
+fn tail(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(12)..].join("\n")
+}
+
 /// **Unter `overrun = alert` kostet das Journal Zeit, aber keine
 /// Semantik** (7.3, 12.3; plan/nvm.md 2.2, FB-197).
 ///

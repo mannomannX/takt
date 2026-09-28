@@ -150,6 +150,25 @@ fn the_jitter_of_an_output_comes_from_the_configuration() {
     assert!(without.contains("long long takt_jitter(int o) {\n    switch (o) {\n    default: return 0;"), "{without}");
 }
 
+/// **Ein `sim`-gespeister Eingang hat schon in Tick 0 seine Quelle**
+/// (8.3, FB-348): `init` bindet nach den `safe`-Werten und vor dem ersten
+/// `enter:`, wie der Wirtsrahmen und `Sim::new`.
+#[test]
+fn a_simulated_input_is_fed_before_tick_0() {
+    let src = "system:\n    language = 1\n    tick = 1 ms\n\n\
+               input  p     : float[bar] in 0..10 bar @ hw(\"daq/p\") with max_age = 10 ms\n\
+               output p_sim : float[bar] @ sim(\"daq/p\") with safe = 1 bar\n\
+               output high  : bool @ hw(\"o/high\") with safe = false\n\n\
+               machine m:\n    initial RUN\n    state RUN:\n        enter:\n            high = p > 5 bar\n";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let p = takt_sema::compile(src, &options).program.expect("Programm");
+    let frame = takt_conformance::mcu::build(&p).source;
+    let init = &frame[frame.find("int takt_mcu_init_with(").expect("init")..];
+    let fed = init.find("/* p_sim -> p */").expect("die Speisung in init");
+    let entered = init.find("_enter(").expect("der Eintritt");
+    assert!(fed < entered, "die Speisung steht nach dem Eintritt:\n{init}");
+}
+
 /// Der Rahmen nennt die Funktionen, die die Tickschleife braucht.
 ///
 /// `takt-rt-baremetal` ruft sie ueber den `Program`-Trait; fehlt eine,

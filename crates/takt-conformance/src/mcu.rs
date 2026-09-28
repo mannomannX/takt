@@ -469,8 +469,10 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let _ = writeln!(s, "    takt_jobs_init();");
     }
     // 9.4: Der Lauf beginnt mit den Outputs auf `safe`, vor jedem Init —
-    // wie `Sim::new` und der Wirtsrahmen.
+    // wie `Sim::new` und der Wirtsrahmen. Danach bindet die Simulation,
+    // damit Tick 0 die `safe`-Werte eines Modells liest (8.3).
     crate::harness::safe_outputs(s, p, layout);
+    crate::harness::sim_bindings(s, p, "    ");
 
     // 5.9: Defaults, dann die geladenen Werte, dann erst enter: — wie
     // der Interpreter zwischen init_vars und machine::init laedt; nach

@@ -139,7 +139,7 @@ SEM-14.3,Semantik/Abschnitt,14.3,Parametrisierte Maschine mit Instanzen (Ventilr
 SEM-14.4,Semantik/Abschnitt,14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig,
 SEM-14.5,Semantik/Abschnitt,14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig,
 SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig,
-SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M10 (aus M5),teilweise,"Persistenz und Schlaf auf dem ESP32-C6 (plan/esp32c6.md 6: 35_persist, 56_idle_timer); 14.7 selbst braucht Eingaenge vom Board (MCU-Rahmen ohne takt_in_*)"
+SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M10 (aus M5),fertig,"14.7 auf Board 2 (M10 Schritt 23): Selbsttest, Betrieb, `IDLE_WAIT`, `STANDBY` und `persist`-Journal, 12 500 Ticks gegen den Interpreter; AFE und Ladegeraet als `sim`-Bindungen, das Modell rechnet auf dem Board mit (darum kein Systemschlaf in `STANDBY`, 9.9). Letzter Beleg: AFE-Platine"
 SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),fertig,Wortlaut in `corpus-try/sim/14_8/program.takt` mit den kuratierten Namen (FB-166); im Interpreter mit Flash-Modell und Signaturpruefung
 G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),fertig,
 G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),fertig,
@@ -909,7 +909,7 @@ EX-14.3,Beispiel (Golden-Test),14.3,Parametrisierte Maschine mit Instanzen (Vent
 EX-14.4,Beispiel (Golden-Test),14.4,Funktionen und Blöcke (Standardbibliothek-Stil),,M4 (Codegen),fertig,
 EX-14.5,Beispiel (Golden-Test),14.5,Überwachung eines Thermoelement-Feldes,,M4 (Codegen),fertig,
 EX-14.6,Beispiel (Golden-Test),14.6,"Versorgungsunterbrechung mit Live-Log-Auswertung (Streams, Muster, geplante Ausgaben, Verdikte)",,M4 (Codegen),fertig,
-EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M10 (aus M5),teilweise,Board 2 = ESP32-C6 (plan/esp32c6.md)
+EX-14.7,Beispiel (Golden-Test),14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M10 (aus M5),fertig,"Board 2 = ESP32-C6, `sim`-AFE (M10 Schritt 23); Golden `charge`/`protect` im Interpreter, im Korpus beider Boards; letzter Beleg: AFE-Platine"
 EX-14.8,Beispiel (Golden-Test),14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M10 (aus M6),teilweise,`corpus-try/sim/14_8/` mit drei Szenarien und Golden-Traces (M6 Schritt 17); differentiell offen: `ecdsa_p256_verify` hat keinen C-Rahmen (examples.rs OPEN)
 PRINC-1,Leitentscheidung,0.2,Synchron-zyklische Multirate-Ausführung.,,Doku/Rationale,rationale,
 PRINC-2,Leitentscheidung,0.2,Drei Konstruktebenen.,,Doku/Rationale,rationale,
