@@ -1,0 +1,73 @@
+# 90 — Die Abort-Phase (5.4, 9.3, FB-332): `abort` faultet die eigene
+# Maschine sofort und jede andere im selben Tick, auch eine, die in diesem
+# Tick nicht aktiv ist. Ein weiterer Abort, solange der Latch steht,
+# eskaliert nicht nach `FAULTED`; nach einem normalen Uebergang wirkt der
+# naechste wieder. Eine Maschine ohne Fault-Ziel geht nach `FAULTED`.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output a_out : int @ hw("o/a") with safe = 0
+output b_out : int @ hw("o/b") with safe = 0
+output c_out : int @ hw("o/c") with safe = 0
+output d_out : int @ hw("o/d") with safe = 0
+
+machine boss:
+    var n : int in 0..100 = 0
+    fault -> HALT
+    initial RUN
+
+    state RUN:
+        loop:
+            n = min(n + 1, 100)
+            a_out = n
+            if n == 3 or n == 9:
+                abort "Halt"
+
+    state HALT:
+        enter:
+            a_out = 50
+        loop:
+            n = min(n + 1, 100)
+            if n == 5:
+                abort "noch einmal"
+        when n >= 7: -> RUN
+
+machine worker:
+    var n : int in 0..100 = 0
+    fault -> SAFE
+    initial RUN
+
+    state RUN:
+        loop:
+            n = min(n + 1, 100)
+            b_out = n
+
+    state SAFE:
+        enter:
+            b_out = 99
+        after 30 ms: -> RUN
+
+machine slow every 30 ms:
+    var n : int in 0..100 = 0
+    fault -> PARKED
+    initial RUN
+
+    state RUN:
+        loop:
+            n = min(n + 1, 100)
+            c_out = n
+
+    state PARKED:
+        enter:
+            c_out = 77
+
+machine plain:
+    var n : int in 0..100 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            n = min(n + 1, 100)
+            d_out = n

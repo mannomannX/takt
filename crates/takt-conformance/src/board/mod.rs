@@ -98,6 +98,7 @@ pub const CORPUS: &[&str] = &[
     "87_fault_kinds.takt",
     "88_capture_segments.takt",
     "89_fault_paths.takt",
+    "90_abort.takt",
 ];
 
 /// Die Zeile, mit der jedes Bring-up seinen Lauf beendet.

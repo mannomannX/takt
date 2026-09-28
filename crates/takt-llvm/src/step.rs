@@ -105,6 +105,102 @@ fn init_instance(
     crate::block::init_state(ptr, def, &inst, exit, p, module)
 }
 
+/// Die Bits, mit denen eine Zustellung im Feld `deliver` steht (5.4): die
+/// Art in den unteren, darueber, ob sie in der Abort-Phase kommt — nach dem
+/// Schritt der Maschine — und ob die Maschine in diesem Tick aktiv war.
+pub const DELIVER_PHASE: u32 = 1 << 30;
+/// Siehe [`DELIVER_PHASE`].
+pub const DELIVER_ACTIVE: u32 = 1 << 29;
+
+/// `<maschine>_deliver(st, in, par, out, art, aktiv)`: die Abort-Phase
+/// dieser Maschine (5.4, 9.4). Die Runtime stellt einen vorgemerkten Fault
+/// zu, nachdem alle Maschinen geschritten sind. Die Funktion legt ihn in
+/// den Zustand und ruft den Schritt, der dann nur seinen Fault-Pfad nimmt
+/// — dieselben Pfade wie bei einem Fault im Schritt, kein zweites Mal im
+/// Objekt.
+pub fn deliver_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
+    let field = st.index_of(Role::Deliver, 0).ok_or(NotYet { what: "`deliver` im Zustand" })?;
+    let ptr = crate::ty::LlvmType::Ptr;
+    let params =
+        [ptr.clone(), ptr.clone(), ptr.clone(), ptr, crate::ty::LlvmType::Int(32), crate::ty::LlvmType::Int(1)];
+    let args = module.begin_with(
+        "",
+        &format!("{}_deliver", m.name),
+        &crate::ty::LlvmType::Void,
+        &params,
+        &["noalias", "", "noalias", "noalias", "", ""],
+        "minsize",
+    );
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {field}"));
+    let active = module.inst(&format!("select i1 {}, i32 {DELIVER_ACTIVE}, i32 0", args[5]));
+    let flags = module.inst(&format!("or i32 {active}, {DELIVER_PHASE}"));
+    let value = module.inst(&format!("or i32 {}, {flags}", args[4]));
+    module.void_inst(&format!("store i32 {value}, ptr {at}"));
+    module.void_inst(&format!("call void @{}(ptr %0, ptr %1, ptr %2, ptr %3)", machine::step_name(m)));
+    module.end(None);
+    Ok(())
+}
+
+/// Der Anfang des Schritts: eine vorgemerkte Zustellung (`deliver`, 5.4).
+///
+/// Steht eine Art im Feld, nimmt der Schritt statt seines Rumpfs den
+/// Fault-Pfad des aktiven Blatts — in `FAULTED` keinen, und einen Abort
+/// nicht, solange der Latch steht (9.3). Kommt die Zustellung aus der
+/// Abort-Phase, ist der Schritt dieses Ticks schon gelaufen: Wird sie
+/// uebergangen, endet der Aufruf ohne Wirkung. Das Ergebnis ist der Platz,
+/// der sagt, ob der Epilog die Timer weiterzaehlt.
+fn deliver_prologue(
+    m: &Machine,
+    st: &StateStruct,
+    module: &mut Module,
+    cur: crate::emit::Reg,
+    leaves: usize,
+) -> Result<crate::emit::Reg, NotYet> {
+    let counting = module.alloca("i1");
+    module.void_inst(&format!("store i1 true, ptr {counting}"));
+    let field = st.index_of(Role::Deliver, 0).ok_or(NotYet { what: "`deliver` im Zustand" })?;
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {field}"));
+    let value = module.inst(&format!("load i32, ptr {at}"));
+    let none = module.inst(&format!("icmp eq i32 {value}, 0"));
+    let name = &m.name;
+    let (body, arrived) = (format!("rumpf_{name}"), format!("zustellung_{name}"));
+    module.void_inst(&format!("br i1 {none}, label %{body}, label %{arrived}"));
+    module.label(&arrived);
+    module.void_inst(&format!("store i32 0, ptr {at}"));
+    let code = module.inst(&format!("and i32 {value}, {}", DELIVER_ACTIVE - 1));
+    let phase = module.inst(&format!("and i32 {value}, {DELIVER_PHASE}"));
+    let in_phase = module.inst(&format!("icmp ne i32 {phase}, 0"));
+    let active = module.inst(&format!("and i32 {value}, {DELIVER_ACTIVE}"));
+    let was_active = module.inst(&format!("icmp ne i32 {active}, 0"));
+    let count = module.inst(&format!("select i1 {in_phase}, i1 {was_active}, i1 true"));
+    module.void_inst(&format!("store i1 {count}, ptr {counting}"));
+    // Uebergangen: in der Abort-Phase ohne Wirkung, am Schrittbeginn laeuft
+    // der Rumpf wie sonst.
+    let (skipped, gone) = (format!("uebergangen_{name}"), format!("ohne_wirkung_{name}"));
+    let live = module.inst(&format!("icmp ult i8 {cur}, {leaves}"));
+    let abort = crate::abi::fault_code(takt_mir::machine::FaultKind::Abort);
+    let is_abort = module.inst(&format!("icmp eq i32 {code}, {abort}"));
+    let latch = st.index_of(Role::AbortLatch, 0).ok_or(NotYet { what: "Abort-Latch im Zustand" })?;
+    let latch = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {latch}"));
+    let held = module.inst(&format!("load i1, ptr {latch}"));
+    let held = module.inst(&format!("and i1 {is_abort}, {held}"));
+    let dead = module.inst(&format!("xor i1 {live}, true"));
+    let skip = module.inst(&format!("or i1 {dead}, {held}"));
+    let take = format!("zustellen_{name}");
+    module.void_inst(&format!("br i1 {skip}, label %{skipped}, label %{take}"));
+    module.label(&skipped);
+    module.void_inst(&format!("br i1 {in_phase}, label %{gone}, label %{body}"));
+    module.label(&gone);
+    module.void_inst("ret void");
+    module.label(&take);
+    module.fault_code_at(&code.to_string());
+    module.void_inst(&format!("br label %fault_{name}_any"));
+    module.label(&body);
+    Ok(counting)
+}
+
 /// Der eigentliche Rumpf; `step_function` raeumt bei `Err` auf.
 fn write_step(
     m: &Machine,
@@ -129,6 +225,7 @@ fn write_step(
     // wirkungslos (5.2 Regel 4).
     ctx.end = Some(end.clone());
     ctx.leaf_reg = Some(cur);
+    let counting = deliver_prologue(m, st, module, cur, leaves.len())?;
     // Der Schritt ist ein Baum, kein Zweig je Blatt: Der Code einer Ebene
     // steht einmal, und ein `switch` ueber die Blaetter fuehrt darunter
     // weiter. Vorher stand der Handler eines Vorfahren so oft im Objekt,
@@ -158,8 +255,15 @@ fn write_step(
 
     module.label(&end);
     // `t_in_state` zaehlt die Ticks im aktiven Zustand (5.2, 11.2). Ein
-    // Uebergang hat ihn auf 0 gesetzt; hier waechst er um einen Tick.
+    // Uebergang hat ihn auf 0 gesetzt; hier waechst er um einen Tick —
+    // nach einer Zustellung in der Abort-Phase nur, wenn die Maschine in
+    // diesem Tick aktiv war (9.4 zaehlt nach der Abort-Phase).
+    let count = module.inst(&format!("load i1, ptr {counting}"));
+    let (timers, done) = (format!("zeit_{}", m.name), format!("gezaehlt_{}", m.name));
+    module.void_inst(&format!("br i1 {count}, label %{timers}, label %{done}"));
+    module.label(&timers);
     machine::advance_timers(m, st, module);
+    module.label(&done);
     // 9.6, `advance_cursors()`: `cur[s, m] = examined + 1`. Der Cursor
     // steht im Zustand der Maschine, nicht im Strom — nur der erzeugte
     // Code kann ihn schreiben; `takt_stream_examined` meldet dasselbe
@@ -354,6 +458,10 @@ fn faulted_transitions(ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(
 /// sein `initial` (5.12). `FAULTED` ist ein Ziel wie jedes andere, nur
 /// ohne Eintritt (5.3).
 fn change(target: Target, from: Option<StateId>, ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYet> {
+    // 9.3: Ein normaler Uebergang loest den Abort-Latch (5.4).
+    if let Some(latch) = ctx.field(Role::AbortLatch, 0, m) {
+        m.void_inst(&format!("store i1 false, ptr {latch}"));
+    }
     let from_val = from.map_or_else(|| "-1".to_string(), |s| s.index().to_string());
     let source = match from {
         Some(leaf) => Source::Leaf(leaf, &from_val),
@@ -2072,6 +2180,15 @@ fn fault_body(
         m.void_inst(&format!("store i1 true, ptr {flag}"));
         let art = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 1"));
         m.void_inst(&format!("store i32 {code}, ptr {art}"));
+    }
+    // 9.3: Ein Abort-Pfad setzt den Latch; bis zum naechsten normalen
+    // Uebergang uebergeht die Maschine weitere Aborts (5.4).
+    if let Some(latch) = ctx.field(Role::AbortLatch, 0, m) {
+        let abort = crate::abi::fault_code(takt_mir::machine::FaultKind::Abort);
+        let is_abort = m.inst(&format!("icmp eq i32 {code}, {abort}"));
+        let old = m.inst(&format!("load i1, ptr {latch}"));
+        let now = m.inst(&format!("or i1 {old}, {is_abort}"));
+        m.void_inst(&format!("store i1 {now}, ptr {latch}"));
     }
     // 5.3: Ein Fault-Uebergang bricht die laufenden Jobs der Maschine ab
     // und leert die Warteschlangen ihrer geplanten Ausgaben — ein Safe-Wert

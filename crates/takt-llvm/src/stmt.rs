@@ -442,11 +442,19 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
             method_call(target.as_ref(), receiver, *method, args, ctx, m)
         }
         StmtKind::Abort { .. } => {
-            // 5.4: `abort` faultet *alle* Maschinen im selben Tick. Der
-            // erzeugte Code kann das nicht selbst — er kennt die anderen
-            // nicht —, also ruft er die Runtime und verlaesst den Schritt.
+            // 5.4: `abort` faultet *alle* Maschinen im selben Tick. Die
+            // anderen kennt der erzeugte Code nicht — die Runtime merkt
+            // sie vor und stellt in der Abort-Phase zu (`<m>_deliver`).
+            // Die eigene Maschine nimmt ihren Fault-Pfad sofort, es sei
+            // denn, ihr Latch steht (9.3): Dann endet nur der Schritt.
             let site = ctx.next_site();
             m.void_inst(&format!("call void @{}(i32 {}, i32 {site})", Abi::ABORT, ctx.machine_index));
+            let latch = ctx.field(Role::AbortLatch, 0, m).ok_or(NotYet { what: "Abort-Latch im Zustand" })?;
+            let held = m.inst(&format!("load i1, ptr {latch}"));
+            let fault = ctx.trampoline_for(takt_mir::machine::FaultKind::Abort, m);
+            let stop = format!("abgebrochen{}_{}", m.next_label(), ctx.machine.name);
+            m.void_inst(&format!("br i1 {held}, label %{stop}, label %{fault}"));
+            m.label(&stop);
             m.void_inst(if ctx.entry_reg.is_some() { "ret i8 3" } else { "ret void" });
             Ok(())
         }

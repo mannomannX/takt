@@ -114,6 +114,7 @@ fn runtime_abi(s: &mut String, p: &Program) {
     crate::harness::scope_flags(s, p);
     let _ = writeln!(s, "unsigned int takt_fn_fault = 0;\n");
     crate::harness::fault_names(s, p);
+    crate::harness::raised(s, p);
 
     // 3.3: `now` ist die Dauer seit dem Start — Tickzahl mal T0.
     let _ = writeln!(s, "long long takt_now(void) {{ return g_tick * {}LL; }}\n", p.config.tick);
@@ -123,7 +124,6 @@ fn runtime_abi(s: &mut String, p: &Program) {
     for (name, args, kind, flags) in [
         ("takt_alert", "int m, int site, unsigned char on, unsigned char invalid", "alert", &["on", "invalid"][..]),
         ("takt_log", "int m, int site", "log", &[]),
-        ("takt_abort", "int m, int site", "abort", &[]),
         ("takt_verify", "int m, int site, unsigned char ok", "verify", &["ok"]),
         ("takt_verdict", "int m, int site, unsigned char pass", "verdict", &["pass"]),
     ] {
@@ -139,6 +139,18 @@ fn runtime_abi(s: &mut String, p: &Program) {
         let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
         let _ = writeln!(s, "}}");
     }
+
+    // 5.4: `abort` merkt den Fault fuer alle Maschinen vor; die
+    // Abort-Phase stellt ihn nach den Schritten zu.
+    let _ = writeln!(s, "void takt_abort(int m, int site) {{");
+    let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
+    let _ = writeln!(s, "    takt_board_trace(\"abort \");");
+    let _ = writeln!(s, "    takt_board_trace_i64(m);");
+    let _ = writeln!(s, "    takt_board_trace_i64(site);");
+    let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+    let _ = writeln!(s, "    memset(g_raised, 1, sizeof g_raised);");
+    let _ = writeln!(s, "}}\n");
 
     // 5.3: der Fault-Uebergang mit Maschine und Art, wie der Interpreter
     // ihn schreibt.
@@ -479,6 +491,7 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     }
     let _ = writeln!(s, "    takt_mcu_sample();");
     crate::harness::steps(s, p, layout, driven, "    ", "k");
+    crate::harness::abort_phase(s, p, driven, "    ", "k");
     crate::harness::commit_sequence(s, p, driven, "    ", "k");
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, k);");

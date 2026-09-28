@@ -33,12 +33,11 @@ pub const LIMITS: &[Limit] = &[
                sie beiden Seiten; er ist bereits die erste HAL-Implementierung (Prinzip 4).",
     },
     Limit {
-        was: "Die Abort-Phase (5.4)",
-        warum: "`abort` und Runtime-Faults wirken auf *alle* Maschinen im selben Tick. Der \
-                Rahmen fuehrt nur eine Maschine und kennt die Phase nicht; der erzeugte Code \
-                ruft `takt_abort`, und der Rahmen schreibt es in den Trace, mehr nicht.",
-        wann: "Schritt 5 (`takt-rt-linux`): Die Phase gehoert in die Runtime, nicht in den \
-               Testrahmen.",
+        was: "Runtime-Faults und Operator-Abort (5.4)",
+        warum: "Die Abort-Phase fuer `abort` steht in beiden Rahmen (`<m>_deliver`, Korpus 90). \
+                Runtime-Faults (`Overrun`, `Driver`, `Hardware`) und der Operator-Abort als \
+                Stimulus erreichen den erzeugten Code noch nicht.",
+        wann: "FB-332, Teil B: vorgemerkt zu Beginn des Schritts, Zeile `runtime` im Trace.",
     },
     Limit {
         was: "Mehrere Maschinen und ihre Perioden (7.2)",

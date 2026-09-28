@@ -80,6 +80,12 @@ pub enum Role {
     Pending,
     /// `last_fault`.
     LastFault,
+    /// Der Abort-Latch (5.4, 9.3): gesetzt mit einem Abort-Pfad, geloest
+    /// mit dem naechsten normalen Uebergang.
+    AbortLatch,
+    /// Eine Zustellung fuer den naechsten Aufruf des Schritts (5.4): die
+    /// Art und die Bits aus `step::DELIVER_PHASE`, null ohne.
+    Deliver,
     /// `pc`: die Zeile der letzten Anweisung, fuer die Instrumentierung.
     Pc,
     /// `saved[i]`: zuletzt aktives Blatt eines `resume`-Zustands (5.12);
@@ -172,6 +178,8 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     let fault = LlvmType::Struct(vec![LlvmType::Int(1), LlvmType::Int(32), LlvmType::Int(32)]);
     fields.push(field("pending".into(), fault.clone(), Role::Pending, 0));
     fields.push(field("last_fault".into(), fault, Role::LastFault, 0));
+    fields.push(field("abort_latched".into(), LlvmType::Int(1), Role::AbortLatch, 0));
+    fields.push(field("deliver".into(), LlvmType::Int(32), Role::Deliver, 0));
     fields.push(field("pc".into(), LlvmType::Int(32), Role::Pc, 0));
     for (i, _) in m.layout.saved_paths.iter().enumerate() {
         fields.push(field(format!("saved{i}"), LlvmType::Int(32), Role::Saved, i));

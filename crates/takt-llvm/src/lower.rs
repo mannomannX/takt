@@ -162,6 +162,9 @@ pub fn program_with_diagnostics(
         if let Err(e) = crate::step::step_function(machine, &st, p, &mut m) {
             skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.to_string() });
         }
+        if let Err(e) = crate::step::deliver_function(machine, &st, &mut m) {
+            skipped.push(Skipped { machine: machine.name.clone(), reason: format!("Abort-Phase: {}", e.what) });
+        }
         // Zuletzt: Was die Schritte an Entry-Tick-Funktionen angefordert haben.
         if let Err(e) = crate::step::entry_functions(machine, &st, p, &mut m) {
             skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.into() });

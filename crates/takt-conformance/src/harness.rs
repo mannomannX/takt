@@ -155,7 +155,13 @@ fn build_inner(
     let _ = writeln!(s, "void takt_verify(int m, int site, unsigned char ok) {{");
     let _ = writeln!(s, "    printf(\"t=%lld verify %d %d %d\\n\", g_tick, m, site, ok ? 1 : 0);");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_abort(int m, int site) {{ printf(\"t=%lld abort %d %d\\n\", g_tick, m, site); }}");
+    // 5.4: `abort` merkt den Fault fuer alle Maschinen vor; die
+    // Abort-Phase stellt ihn nach den Schritten zu (`abort_phase`).
+    raised(&mut s, p);
+    let _ = writeln!(s, "void takt_abort(int m, int site) {{");
+    let _ = writeln!(s, "    printf(\"t=%lld abort %d %d\\n\", g_tick, m, site);");
+    let _ = writeln!(s, "    memset(g_raised, 1, sizeof g_raised);");
+    let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_verdict(int m, int site, unsigned char pass) {{");
     let _ = writeln!(s, "    printf(\"t=%lld verdict %d %d %d\\n\", g_tick, m, site, pass ? 1 : 0);");
     let _ = writeln!(s, "}}");
@@ -312,6 +318,7 @@ fn build_inner(
         );
     }
     steps(&mut s, p, &layout, &driven, "        ", "g_tick");
+    abort_phase(&mut s, p, &driven, "        ", "g_tick");
     commit_sequence(&mut s, p, &driven, "        ", "g_tick");
     crate::ports::sample(&mut s, p, "        ");
     let _ = writeln!(s, "        dump(g_tick);");
@@ -795,6 +802,42 @@ pub(crate) fn queued_outputs(p: &Program) -> Vec<takt_mir::ChannelId> {
         .collect()
 }
 
+/// `raised[m]` (5.4): ein vorgemerkter Abort je Maschine.
+pub(crate) fn raised(s: &mut String, p: &Program) {
+    let _ = writeln!(s, "static _Bool g_raised[{}];", p.machines.len().max(1));
+}
+
+/// Die Abort-Phase (5.4, 9.4): Nach den Schritten nimmt jede Maschine mit
+/// vorgemerktem Abort ihren Fault-Pfad, in statischer Reihenfolge und
+/// unabhaengig davon, ob sie in diesem Tick aktiv war.
+pub(crate) fn abort_phase(
+    s: &mut String,
+    p: &Program,
+    driven: &[&takt_mir::machine::Machine],
+    indent: &str,
+    tick: &str,
+) {
+    let abort = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Abort);
+    let scoped = scoped_of(p);
+    for m in driven {
+        let Some(i) = p.machines.iter().position(|x| x.name == m.name) else { continue };
+        let condition = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
+            Some((owner, _, n)) => format!("g_raised[{i}] && g_scope_{owner}_{n}"),
+            None => format!("g_raised[{i}]"),
+        };
+        let active = match (m.period.max(1), m.phase) {
+            (1, _) => "1".to_string(),
+            (per, ph) => format!("{tick} % {per} == {ph}"),
+        };
+        let _ = writeln!(
+            s,
+            "{indent}if ({condition}) {{ {0}_deliver(state_{0}, image, params, latch, {abort}, {active}); {0}_publish(state_{0}, image); }}",
+            m.name
+        );
+    }
+    let _ = writeln!(s, "{indent}memset(g_raised, 0, sizeof g_raised);");
+}
+
 /// Die Namen, mit denen die Rahmen einen Fault schreiben: die Maschine
 /// und die Art wie im Trace des Interpreters (`FaultKind::name`), die Art
 /// nach ihrer Zahl in der ABI (`abi::fault_code`).
@@ -927,6 +970,8 @@ pub(crate) fn machine_declarations(s: &mut String, driven: &[&takt_mir::machine:
         let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_publish(void *st, void *in);", m.name);
+        let _ =
+            writeln!(s, "void {}_deliver(void *st, void *in, void *par, void *out, int code, _Bool active);", m.name);
         let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);

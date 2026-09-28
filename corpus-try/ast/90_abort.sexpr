@@ -1,0 +1,55 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output a_out :int @hw("o/a") safe=0)
+(output b_out :int @hw("o/b") safe=0)
+(output c_out :int @hw("o/c") safe=0)
+(output d_out :int @hw("o/d") safe=0)
+(machine boss
+  (var n :int in 0..100 0)
+  (fault -> HALT)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= n (call min (+ n 1) 100))
+      (= a_out n)
+      (if (or (== n 3) (== n 9))
+        (abort "Halt"))))
+  (state HALT
+    (enter
+      (= a_out 50))
+    (loop
+      (= n (call min (+ n 1) 100))
+      (if (== n 5)
+        (abort "noch einmal")))
+    (when (>= n 7) -> RUN)))
+(machine worker
+  (var n :int in 0..100 0)
+  (fault -> SAFE)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= n (call min (+ n 1) 100))
+      (= b_out n)))
+  (state SAFE
+    (enter
+      (= b_out 99))
+    (after 30ms -> RUN)))
+(machine slow every=30ms
+  (var n :int in 0..100 0)
+  (fault -> PARKED)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= n (call min (+ n 1) 100))
+      (= c_out n)))
+  (state PARKED
+    (enter
+      (= c_out 77))))
+(machine plain
+  (var n :int in 0..100 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= n (call min (+ n 1) 100))
+      (= d_out n))))
