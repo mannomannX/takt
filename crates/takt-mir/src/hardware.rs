@@ -22,7 +22,7 @@
 //! wie sie zustande kam, ist eine Zahl ohne Herkunft.
 //!
 //! ```text
-//! # takt-hw 7
+//! # takt-hw 9
 //! [target.thumbv7em]
 //! cost_model = 1     # die Version des Kostenmodells der Gewichte
 //! core_hz = 84000000
@@ -45,7 +45,8 @@
 //! device = gpio
 //! port = "PC13 active_low"   # undurchsichtig, geht ans Board (8.10)
 //! guard_ns = 4000            # gemessen (13.8)
-//! jitter_ns = 250000
+//! jitter_ns = 1500            # um den Tickbeginn
+//! tick_granular = true        # `at` faellt auf den Tick (7.5)
 //! ```
 //!
 //! **Pikosekunden, nicht Nanosekunden.** Eine `i32`-Operation dauert bei
@@ -78,8 +79,9 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// von `takt bench` und `takt driver-test` (13.8). 6: eigene Gewichte von
 /// `fma` und `sqrt` (7.2). 7: `cost_model`, die Version des Kostenmodells,
 /// zu der die Gewichte gemessen wurden. 8: `deep_wake`, ob ein Input den
-/// Chip aus dem Tiefschlaf weckt (12.7).
-pub const FORMAT_VERSION: u32 = 8;
+/// Chip aus dem Tiefschlaf weckt (12.7). 9: `tick_granular`, ob ein Output
+/// nur zu Tickbeginn geschrieben wird (7.5, 13.8).
+pub const FORMAT_VERSION: u32 = 9;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -311,8 +313,14 @@ pub struct HwChannel {
     /// Gemessene Treiberlatenz eines Outputs in Nanosekunden: So frueh muss
     /// eine geplante Ausgabe feststehen (`guard`, 7.5, 13.8).
     pub guard_ns: Option<i64>,
-    /// Gemessener Jitter eines Outputs in Nanosekunden (13.8).
+    /// Gemessener Jitter eines Outputs in Nanosekunden (13.8): wie weit der
+    /// Schreibzeitpunkt um den streut, zu dem die Runtime schreiben will.
     pub jitter_ns: Option<i64>,
+    /// Schreibt die Runtime den Output nur zu Tickbeginn (7.5)? Dann faellt
+    /// ein `at T` auf den Tick, der `T` enthaelt, und die Praezision ist T0,
+    /// gleich welcher Tick: Ein Jitter, der T0 enthielte, gaelte nur fuer
+    /// den Tick der Messung.
+    pub tick_granular: Option<bool>,
     /// Gemessene Abtastlatenz eines Inputs in Nanosekunden (13.8).
     pub latency_ns: Option<i64>,
     /// Weckt der Input den Chip aus dem Tiefschlaf (12.7)? Eine Tatsache
@@ -661,12 +669,13 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
         "jitter_ns" => channel.jitter_ns = Some(number(value, line)? as i64),
         "latency_ns" => channel.latency_ns = Some(number(value, line)? as i64),
         "deep_wake" => channel.deep_wake = Some(boolean(value, line)?),
+        "tick_granular" => channel.tick_granular = Some(boolean(value, line)?),
         _ => {
             return Err(ParseError {
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: direction, raw, unit, range, safe, device, port, \
-                     rate_hz, guard_ns, jitter_ns, latency_ns, deep_wake"
+                     rate_hz, guard_ns, jitter_ns, tick_granular, latency_ns, deep_wake"
                 ),
             });
         }
@@ -692,7 +701,20 @@ fn magic_version(line: &str) -> Option<u32> {
 /// Formatversion im Kopf auf die dieses Schreibers. Das Ergebnis wird
 /// gelesen, bevor es zurueckkommt: Was diese Funktion schreibt, ist lesbar.
 pub fn with_values<K: AsRef<str>>(text: &str, target: &str, values: &[(K, String)]) -> Result<String, ParseError> {
-    let header = format!("[target.{target}]");
+    with_section(text, &format!("[target.{target}]"), values)
+}
+
+/// Wie [`with_values`], fuer den Abschnitt `[channel <adresse>]`: die
+/// Messwerte von `takt driver-test` (13.8).
+pub fn with_channel_values<K: AsRef<str>>(
+    text: &str,
+    address: &str,
+    values: &[(K, String)],
+) -> Result<String, ParseError> {
+    with_section(text, &format!("[channel {address}]"), values)
+}
+
+fn with_section<K: AsRef<str>>(text: &str, header: &str, values: &[(K, String)]) -> Result<String, ParseError> {
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     match lines.iter().position(|l| magic_version(l).is_some()) {
         Some(i) => lines[i] = format!("# {MAGIC} {FORMAT_VERSION}"),
@@ -704,7 +726,7 @@ pub fn with_values<K: AsRef<str>>(text: &str, target: &str, values: &[(K, String
             if lines.last().is_some_and(|l| !l.trim().is_empty()) {
                 lines.push(String::new());
             }
-            lines.push(header.clone());
+            lines.push(header.to_string());
             lines.len() - 1
         }
     };
@@ -873,8 +895,10 @@ pub fn render(hw: &Hardware) -> String {
                 s.push_str(&format!("{key} = {v}\n"));
             }
         }
-        if let Some(v) = c.deep_wake {
-            s.push_str(&format!("deep_wake = {v}\n"));
+        for (key, value) in [("tick_granular", c.tick_granular), ("deep_wake", c.deep_wake)] {
+            if let Some(v) = value {
+                s.push_str(&format!("{key} = {v}\n"));
+            }
         }
     }
     s
@@ -1131,6 +1155,20 @@ t_io = 120000
 
     /// Ob ein Input aus dem Tiefschlaf weckt, steht am Kanal und reist mit
     /// (12.7); ein Leser vor Version 8 kennt den Schluessel nicht.
+    #[test]
+    fn channel_values_land_in_their_section() {
+        let text = "# takt-hw 8\n[channel gpio/loop_out]\ndirection = output   # die Bruecke\n\n[channel ui/led]\n";
+        let values = [("guard_ns", "120".to_string()), ("tick_granular", "true".to_string())];
+        let out = with_channel_values(text, "gpio/loop_out", &values).expect("lesbar");
+        let hw = parse(&out).expect("lesbar");
+        let c = hw.channel("gpio/loop_out").expect("Kanal");
+        assert_eq!((c.guard_ns, c.tick_granular), (Some(120), Some(true)));
+        assert!(out.contains("direction = output   # die Bruecke\nguard_ns = 120\ntick_granular = true\n"), "{out}");
+        let out = with_channel_values(&out, "gpio/loop_in", &[("latency_ns", "90".to_string())]).expect("lesbar");
+        assert!(out.ends_with("\n[channel gpio/loop_in]\nlatency_ns = 90\n"), "{out}");
+        assert_eq!(parse(&render(&parse(&out).expect("lesbar"))).expect("lesbar"), parse(&out).expect("lesbar"));
+    }
+
     #[test]
     fn deep_wake_round_trips() {
         let text = format!("# takt-hw {FORMAT_VERSION}\n[channel gpio/btn]\ndirection = input\ndeep_wake = true\n");

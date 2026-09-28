@@ -55,6 +55,7 @@ pub mod tick;
 pub mod uart;
 pub mod usb;
 pub mod watchdog;
+pub mod wire;
 
 use core::cell::{Cell, RefCell};
 
@@ -76,6 +77,7 @@ pub use tick::{SystimerTick, on_timer_interrupt};
 pub use uart::{Telemetry, UsbJtag, telemetry};
 pub use usb::reenumerate_if_requested;
 pub use watchdog::Mwdt;
+pub use wire::Wire;
 
 /// Der Kerntakt in Hertz, wie `esp_hal::init` ihn mit `CpuClock::max()` setzt.
 pub const CORE_HZ: u32 = 160_000_000;

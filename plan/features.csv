@@ -584,7 +584,7 @@ SC-24,Statische Prüfung,10,"Shift-Beträge, `as`-Konversionen, `vec`-Indizes, S
 SC-25,Statische Prüfung,10,"Zustandslokale und gehobene Variablen (Sequenz-`var`, Captures): Definite Assignment je Eintritt",F,M10 (aus M3),fertig,
 SC-26,Statische Prüfung,10,Szenarien schreiben nur `sim`-Outputs; Single-Writer gegenüber Modellmaschinen,F,M3 (Gate),fertig,
 SC-27,Statische Prüfung,10,`every d:` nur in `loop:`; `on`-Handler nur auf deklarierten Streams,F,M3 (Gate),fertig,
-SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0` („tick-granular"", 7.5); deklarierte `jitter`-Anforderung größer als gemessener Wert erfüllt, sonst Fehler (8.1)",W / F,M10 (aus M6),teilweise,"`jitter` je Output aus dem Boardmodus von `driver-test` (FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`) — die Rechnung steht"
+SC-28,Statische Prüfung,10,"`at` auf einen Output mit gemessenem `jitter >= T0` („tick-granular"", 7.5); deklarierte `jitter`-Anforderung größer als gemessener Wert erfüllt, sonst Fehler (8.1)",W / F,M10 (aus M6),teilweise,Rechnung mit `tick_granular` (7.5) und gemessenem `jitter` des C6; der F401 braucht die Bruecke A0-A1 fuer seine Messung
 SC-29,Statische Prüfung,10,Kampagne: Sweep-Schritt eines in `at` verwendeten Parameters ≥ `2 * jitter` (13.7),F,M6 (mit 8.10),fertig,Rechnung in `calibrated.rs` (`check_bindings`); Urteil mit gemessenem `jitter` der Hardware-Konfiguration (8.10)
 SC-30,Statische Prüfung,10,"`mat`: Formprüfung bei `+ - *`, `inv`/`solve` nur quadratisch, R, C ≤ 16, Indizes in Range (3.11)",F,M3 (Gate),fertig,"Form bei `+ - *`, `inv`/`det`/`cholesky`/`solve` quadratisch, Indizes statisch vom Typ `int in 0..R-1`; keine Obergrenze, ab 16 Lint SC-42"
 SC-31,Statische Prüfung,10,"Native Funktionen: nur die kuratierte Menge (v1), `cost`, `stack` und `total` deklariert, Argumente fester Größe (4.5)",F,M3 (Gate),fertig,
@@ -704,7 +704,7 @@ PAR-7.2-Budget_je_Maschine,Absatz/Regel,7.2,Budget je Maschine,,M1 (Kernsemantik
 PAR-7.5-Zeitgestempelte_Eingaben,Absatz/Regel,7.5,Zeitgestempelte Eingaben,,M1 (Kernsemantik),fertig,
 PAR-7.5-Geplante_Ausgaben,Absatz/Regel,7.5,Geplante Ausgaben,,M1 (Kernsemantik),fertig,
 PAR-7.5-Latenzformel,Absatz/Regel,7.5,Latenzformel,,M1 (Kernsemantik),fertig,
-PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M10 (aus M5),offen,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test` (Boardmodus misst `jitter` je Output)"
+PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M10 (aus M5),teilweise,"Gemessen auf dem C6 (`takt driver-test --board esp32c6`, `corpus-try/hw/esp32c6.hw`); der F401 braucht die Bruecke A0-A1. Treiber in Rust hinter dem Rand folgen mit FB-285"
 PAR-7.5-Trigger_v1.2_Regeln_auf_dem_I_O_Knoten,Absatz/Regel,7.5,Trigger (v1.2): Regeln auf dem I/O-Knoten,v1.2,M8,fertig,"Sema, Interpreter und Codegen (M8 Schritte 9 bis 11): Trigger-Phase vor den Schritten, eigener Cursor je Trigger, `event` als Bindungsrecord, Ausgabe fuer `event.t + d` geplant; `<besitzer>_triggers` im erzeugten Code, Differential gruen. MCU-Rahmen noch ohne Phase"
 PAR-8.3-Sim_Build,Absatz/Regel,8.3,Sim-Build:,,M2 (Ströme),fertig,
 PAR-8.3-Plant_Modelle,Absatz/Regel,8.3,Plant-Modelle,,M2 (Ströme),fertig,
@@ -888,7 +888,7 @@ CLI-timing,Werkzeug,11.1,takt timing,,M5 (Embedded),fertig,"die vier Kennzahlen 
 CLI-verify-trace,Werkzeug,11.1,takt verify-trace,,M6 (v1.1),fertig,"Hashkette h_k = H(h_{k-1} ‖ Zeilen des Ticks k) im Kopf der Aufzeichnung (`#! kette`), T6 in grammar/trace.md (A3)"
 CLI-test,Werkzeug,11.1,takt test,,M6 (v1.1),fertig,`--out DIR` schreibt je Szenario `NAME.trace` (FB-190)
 CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
-CLI-driver-test,Werkzeug,11.1,takt driver-test,,M10 (aus M5),teilweise,"Wirtsmodus fuer Treiber in Takt fertig (M10 Schritt 11a); offen sind der Boardmodus (Schritt 11b: `guard`, `jitter`, Abtastlatenz) und Treiber in Rust hinter dem Rand (FB-285)"
+CLI-driver-test,Werkzeug,11.1,takt driver-test,,M10 (aus M5),teilweise,"Wirtsmodus fuer Treiber in Takt fertig (Schritt 11a), Boardmodus auf dem C6 gemessen (11b); der F401 braucht die Bruecke A0-A1, Treiber in Rust hinter dem Rand folgen mit FB-285"
 CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),fertig,"`--export DATEI.smt2 --depth k`, sonst Solver (`--solver`, `TAKT_SOLVER`, `z3`/`cvc5`): Eigenschaften bewiesen/verletzt/unbewiesen, Pruefstellen bewiesen unerreichbar/erreichbar mit Pfad/unentschieden, Gegenbeispiele als Stimulus im Interpreter bestaetigt (`takt-prove/src/solve.rs`)"
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig,
 CLI-build,Werkzeug,11.1,takt build,,M5 (Embedded),fertig,uebersetzt und assembliert je Ziel; bindet nicht — Startcode und Speicherkarte gehoeren zum Board (`--emit ir|obj|consts|consts-rs`)

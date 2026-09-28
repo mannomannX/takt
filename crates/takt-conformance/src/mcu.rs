@@ -38,12 +38,18 @@ pub struct McuHarness {
 /// Anders als der Linux-Rahmen kennt dieser keine Tickzahl: Die Schleife
 /// laeuft, bis das Board ausgeht.
 pub fn build(p: &Program) -> McuHarness {
-    build_with(p, takt_llvm::Diagnostics::Ids)
+    build_with(p, takt_llvm::Diagnostics::Ids, None)
 }
 
-/// Wie [`build`], mit Diagnosestufe: ohne sie gibt `takt_mcu_dump` nichts
-/// aus und der Rahmen traegt kein Schattenlatch.
-pub fn build_with(p: &Program, diagnostics: takt_llvm::Diagnostics) -> McuHarness {
+/// Wie [`build`], mit Diagnosestufe und Hardware-Konfiguration: ohne
+/// Diagnosen gibt `takt_mcu_dump` nichts aus und der Rahmen traegt kein
+/// Schattenlatch; die Konfiguration gibt jedem geplanten Output sein
+/// `guard` (7.5), ohne sie ist es null wie in der Simulation.
+pub fn build_with(
+    p: &Program,
+    diagnostics: takt_llvm::Diagnostics,
+    hw: Option<&takt_mir::hardware::Hardware>,
+) -> McuHarness {
     let layout = crate::layout::of(p);
     // 7.2: in Schrittordnung, wie der Interpreter und der Testrahmen.
     let driven: Vec<&takt_mir::machine::Machine> = takt_mir::analysis::schedule::order(p)
@@ -62,7 +68,7 @@ pub fn build_with(p: &Program, diagnostics: takt_llvm::Diagnostics) -> McuHarnes
     storage(&mut s, p, &layout, &driven);
     // 9.8: die geplanten Schreibvorgaenge, hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.
-    crate::harness::scheduled(&mut s, p, &layout);
+    crate::harness::scheduled(&mut s, p, &layout, hw);
     jobs(&mut s, p);
     declarations(&mut s, p, &driven);
     init(&mut s, p, &layout, &driven);

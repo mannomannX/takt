@@ -181,28 +181,37 @@ pub struct Options {
     /// Zeit mit verlustfreiem Trace — ein Konformitaetslauf vergleicht nur
     /// die Semantik (FB-292).
     pub timed: bool,
+    /// Die Hardware-Konfiguration des Baus (8.10): Sie gibt geplanten
+    /// Outputs ihr `guard` (7.5). Ohne sie rechnet das Board wie die
+    /// Simulation.
+    pub hardware: Option<PathBuf>,
 }
 
 impl Options {
     /// Ein Konformitaetslauf ueber `ticks` Ticks mit leerem Journal.
     pub fn fresh(ticks: u64) -> Options {
-        Options { ticks, fresh: true, bin: Bin::Takt, timed: false }
+        Options { ticks, fresh: true, bin: Bin::Takt, timed: false, hardware: None }
+    }
+
+    /// Derselbe Lauf mit der Hardware-Konfiguration `path`.
+    pub fn with_hardware(self, path: PathBuf) -> Options {
+        Options { hardware: Some(path), ..self }
     }
 
     /// Ein Lauf ueber `ticks` Ticks in Echtzeit, fuer das, was nur die
     /// Uhr zeigt: Tick-Jitter und Stack unter Last (13.8).
     pub fn timed(ticks: u64) -> Options {
-        Options { ticks, fresh: true, bin: Bin::Takt, timed: true }
+        Options { ticks, fresh: true, bin: Bin::Takt, timed: true, hardware: None }
     }
 
     /// Ein Messkern mit `runs` Messungen und seiner C-Referenz.
     pub fn bench(runs: u64, reference: Option<PathBuf>) -> Options {
-        Options { ticks: runs, fresh: true, bin: Bin::Bench { reference }, timed: false }
+        Options { ticks: runs, fresh: true, bin: Bin::Bench { reference }, timed: false, hardware: None }
     }
 
     /// Die Vektoren der kuratierten Natives.
     pub fn natives() -> Options {
-        Options { ticks: 0, fresh: false, bin: Bin::Natives, timed: false }
+        Options { ticks: 0, fresh: false, bin: Bin::Natives, timed: false, hardware: None }
     }
 }
 
@@ -272,6 +281,9 @@ impl Bringup {
         let mut h = DefaultHasher::new();
         std::fs::read(program).map_err(|e| format!("{}: {e}", program.display()))?.hash(&mut h);
         (options.ticks, options.fresh, options.timed, self.triple).hash(&mut h);
+        if let Some(hw) = &options.hardware {
+            std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
+        }
         match &options.bin {
             Bin::Takt => 0u8.hash(&mut h),
             Bin::Bench { reference } => {
@@ -322,6 +334,10 @@ impl Bringup {
         } else {
             cargo.env_remove("TAKT_FRESH_JOURNAL");
         }
+        match &options.hardware {
+            Some(hw) => cargo.env("TAKT_HARDWARE", hw),
+            None => cargo.env_remove("TAKT_HARDWARE"),
+        };
         if options.timed {
             cargo.env("TAKT_TIMED", "1");
         } else {

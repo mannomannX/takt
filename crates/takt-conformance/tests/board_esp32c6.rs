@@ -40,7 +40,7 @@ fn bringup_program(name: &str) -> std::path::PathBuf {
 /// Baut ein Korpusprogramm, schreibt es und liest seinen Trace — in
 /// Echtzeit: Die Tests damit pruefen Schlaf und Journal an der Uhr.
 fn run_corpus(board: &mut Esp32c6, name: &str, fresh: bool) -> String {
-    let options = Options { ticks: TICKS, fresh, bin: Bin::Takt, timed: true };
+    let options = Options { ticks: TICKS, fresh, bin: Bin::Takt, timed: true, hardware: None };
     board
         .build(&board::corpus_path(name), &options)
         .and_then(|elf| board.run(&elf, &options))
@@ -75,7 +75,7 @@ fn slept(text: &str) -> Option<u64> {
 #[test]
 fn a_deep_sleep_ends_after_its_duration() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None };
     let program = board::root().join("crates/takt-conformance/tests/programs/deep_sleep.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
@@ -106,7 +106,7 @@ fn a_deep_sleep_ends_after_its_duration() {
 #[test]
 fn a_restart_begins_again_with_software_as_the_reason() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None };
     let program = board::root().join("crates/takt-conformance/tests/programs/restart.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
@@ -152,7 +152,7 @@ fn an_overrun_faults_every_machine_in_the_next_tick() {
 #[test]
 fn a_missed_kick_resets_and_counts() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None };
     let program = board::root().join("crates/takt-conformance/tests/programs/watchdog.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let text = board.run_for(&elf, Duration::from_secs(14)).unwrap_or_else(|e| panic!("{e}"));
@@ -167,6 +167,24 @@ fn a_missed_kick_resets_and_counts() {
     let reasons: Vec<String> = runs.iter().filter_map(|r| first(r, "reason")).collect();
     assert_eq!(reasons.get(1..), Some(&["WATCHDOG".to_string(), "WATCHDOG".to_string()][..]), "{text}");
     assert!(runs.iter().all(|r| r.contains("out rested 1")), "jeder Lauf schlief vor dem Reset:\n{text}");
+}
+
+/// **`guard` aus der Konfiguration wirkt auf dem Board** (7.5, FB-331):
+/// `at now + 1 us` liegt unter der gemessenen Treiberlatenz der Bruecke
+/// und ist ein `TimingFault`, `at now + 1 ms` geht durch. Derselbe Bau
+/// ohne Konfiguration rechnet wie die Simulation und laesst beides durch.
+#[test]
+fn a_schedule_inside_the_guard_is_a_timing_fault() {
+    let Some((mut board, _guard)) = board() else { return };
+    let program = board::root().join("crates/takt-conformance/tests/programs/guard.takt");
+    let mut run = |options: Options| {
+        board.build(&program, &options).and_then(|elf| board.run(&elf, &options)).unwrap_or_else(|e| panic!("{e}"))
+    };
+    let with = run(Options::fresh(20).with_hardware(board::root().join("corpus-try/hw/esp32c6.hw")));
+    assert!(with.lines().any(|l| l.contains("out probe 1")), "1 ms voraus geht durch:\n{with}");
+    assert!(with.lines().any(|l| l.contains("fault m") && l.contains("Timing")), "{with}");
+    let without = run(Options::fresh(20));
+    assert!(!without.contains("fault m"), "ohne Konfiguration ist guard null:\n{without}");
 }
 
 /// **Eine `driver machine` schreibt UART0** (12.10, M8 Schritt 20).
@@ -196,7 +214,7 @@ fn a_driver_machine_writes_uart0_registers() {
     // Zehn Ticks je Zeile, plus Rand: Der Lauf muss ueber `WANT` Zeilen
     // hinaus reichen, sonst haelt das Programm mittendrin. In Echtzeit,
     // weil die UART die Bytes mit ihrer Rate abnimmt.
-    let options = Options { ticks: (WANT as u64 + 4) * 10, fresh: true, bin: Bin::Takt, timed: true };
+    let options = Options { ticks: (WANT as u64 + 4) * 10, fresh: true, bin: Bin::Takt, timed: true, hardware: None };
     let elf = board.build(&bringup_program("uart0_port.takt"), &options).unwrap_or_else(|e| panic!("{e}"));
     board.download(&elf).unwrap_or_else(|e| panic!("{e}"));
 
@@ -289,7 +307,7 @@ fn a_board_input_reaches_the_process_image() {
 fn persistence_survives_a_reset() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "35_persist.takt";
-    let options = Options { ticks: TICKS, fresh: false, bin: Bin::Takt, timed: false };
+    let options = Options { ticks: TICKS, fresh: false, bin: Bin::Takt, timed: false, hardware: None };
     let elf = board.build(&board::corpus_path(name), &options).unwrap_or_else(|e| panic!("{name}: {e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
     let end = last_output(&first, "count").unwrap_or_else(|| panic!("kein `count` im ersten Lauf:\n{first}"));

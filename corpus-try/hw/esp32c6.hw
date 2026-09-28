@@ -1,4 +1,4 @@
-# takt-hw 7
+# takt-hw 9
 # ESP32-C6-DevKitM-1-N4 (ESP32-C6-MINI-1, RV32IMAC, 160 MHz, ohne FPU):
 # Speicher und Journal fuer die Profilfamilie `xip_flash` (12.3,
 # plan/esp32c6.md).
@@ -73,3 +73,25 @@ direction = input
 raw = bool
 device = button
 port = "GPIO9 active_low pull_up debounce=3"
+
+# Die Drahtbruecke GPIO7 an GPIO17: sonst UART0, als Messschleife von
+# `takt driver-test --board esp32c6` (13.8). Die Messwerte traegt der Lauf ein.
+[device.wire]
+driver = "esp32c6-gpio"
+
+[channel gpio/loop_out]
+direction = output
+raw = bool
+safe = false
+device = wire
+port = "GPIO7"
+guard_ns = 4338
+jitter_ns = 36563
+tick_granular = true
+
+[channel gpio/loop_in]
+direction = input
+raw = bool
+device = wire
+port = "GPIO17"
+latency_ns = 800

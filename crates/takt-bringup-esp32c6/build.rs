@@ -69,7 +69,8 @@ fn build_takt_program(out: &Path) {
     }
     let Some(p) = compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let rahmen = out.join("takt_rahmen.c");
-    if let Err(e) = fs::write(&rahmen, takt_conformance::mcu::build_with(&p, diagnostics()).source) {
+    let frame = takt_conformance::mcu::build_with(&p, diagnostics(), hardware().as_ref());
+    if let Err(e) = fs::write(&rahmen, frame.source) {
         panic!("Rahmen nicht schreibbar: {e}");
     }
     let ir = out.join("takt_programm.ll");
@@ -112,6 +113,17 @@ fn program_path() -> String {
         })
         .unwrap_or_else(|| panic!("{config}: kein `program = \"…\"`"));
     format!("{here}/{value}")
+}
+
+/// Die Hardware-Konfiguration aus `TAKT_HARDWARE` (8.10): Sie gibt jedem
+/// geplanten Output sein `guard` (7.5). Ohne sie ist es null wie in der
+/// Simulation — ein Konformitaetslauf vergleicht mit dem Interpreter.
+fn hardware() -> Option<takt_mir::hardware::Hardware> {
+    println!("cargo:rerun-if-env-changed=TAKT_HARDWARE");
+    let path = env::var("TAKT_HARDWARE").ok()?;
+    println!("cargo:rerun-if-changed={path}");
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    Some(takt_mir::hardware::parse(&text).unwrap_or_else(|e| panic!("{path}:{}: {}", e.line, e.message)))
 }
 
 fn compile(path: &str) -> Option<takt_mir::Program> {

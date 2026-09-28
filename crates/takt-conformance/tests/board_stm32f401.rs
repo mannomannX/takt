@@ -47,7 +47,7 @@ fn board() -> Option<(Stm32f401, std::sync::MutexGuard<'static, ()>)> {
 #[test]
 fn a_deep_sleep_ends_after_its_duration() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None };
     let program = board::root().join("crates/takt-conformance/tests/programs/deep_sleep.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
@@ -70,7 +70,7 @@ fn a_deep_sleep_ends_after_its_duration() {
 #[test]
 fn a_restart_begins_again_with_software_as_the_reason() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None };
     let program = board::root().join("crates/takt-conformance/tests/programs/restart.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
@@ -112,7 +112,7 @@ fn an_overrun_faults_every_machine_in_the_next_tick() {
 #[test]
 fn a_missed_kick_resets_and_counts() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None };
     let program = board::root().join("crates/takt-conformance/tests/programs/watchdog.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let text = board.run_for(&elf, Duration::from_secs(14)).unwrap_or_else(|e| panic!("{e}"));

@@ -34,6 +34,7 @@ pub mod report;
 pub mod run;
 pub mod stimulus;
 pub mod streams;
+pub mod wire;
 
 pub use harness::Harness;
 pub use limits::LIMITS;

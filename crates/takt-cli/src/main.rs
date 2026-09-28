@@ -9,6 +9,7 @@
 //!                   [--params-profile P] [--order random:SEED] [--steps OUT.steps]
 //! takt test  DATEI [--ticks N] [--params-profile P] [--scenario NAME] [--coverage OUT.csv] [--out DIR]
 //! takt driver-test DATEI [--ticks N] [--stim S.trace] [--params-profile P] [--scenario NAME] [--out DIR]
+//! takt driver-test --board stm32f401|esp32c6 [--hardware DATEI.hw]
 //! takt campaign DATEI [NAME] --ticks N [--stim S.trace] [--params-profile P] [--scenario NAME]
 //!                   [--out DIR] [--hardware DATEI.hw]
 //! takt tune  DATEI --ticks N --save PROFIL [--stim S.trace] [--params-profile P] [--out DATEI]
@@ -178,21 +179,7 @@ fn main() -> ExitCode {
 /// `--conformance` schreibt den Konformitaetsbericht daneben — die Quelle der
 /// Zahlen (13.8). Ohne beide stehen die Zahlen nur in der Ausgabe.
 fn bench(args: &Args) -> bool {
-    use takt_conformance::board::Board;
-    let mut board: Box<dyn Board> = match args.value("--board") {
-        Some("stm32f401") => match takt_conformance::board::stm32f401::Stm32f401::from_env() {
-            Some(b) => Box::new(b),
-            None => return missing("TAKT_F401_PORT"),
-        },
-        Some("esp32c6") => match takt_conformance::board::esp32c6::Esp32c6::from_env() {
-            Some(b) => Box::new(b),
-            None => return missing("TAKT_ESP32C6_PORT"),
-        },
-        other => {
-            eprintln!("takt bench --board stm32f401|esp32c6 (war: {})", other.unwrap_or("nichts"));
-            return false;
-        }
-    };
+    let Some(mut board) = board_of(args, "bench") else { return false };
     let runs = args.value("--runs").and_then(|r| r.parse().ok()).unwrap_or(200);
     let outcome = match takt_conformance::bench::run(board.as_mut(), runs, |line| eprintln!("  {line}")) {
         Ok(o) => o,
@@ -239,10 +226,64 @@ fn bench(args: &Args) -> bool {
     outcome.frame.subnormal == 0 && outcome.calibration.checks.iter().all(|c| c.measured_ps <= c.bound_ps)
 }
 
-/// Eine fehlende Umgebungsvariable fuer ein Board.
-fn missing(variable: &str) -> bool {
-    eprintln!("takt bench: `{variable}` nennt keinen Port (siehe plan/f401.md und plan/esp32c6.md)");
-    false
+/// Das Board aus `--board`; der Port kommt aus der Umgebung wie in der
+/// Board-Suite (`TAKT_F401_PORT`, `TAKT_ESP32C6_PORT`).
+fn board_of(args: &Args, command: &str) -> Option<Box<dyn takt_conformance::board::Board>> {
+    use takt_conformance::board::{esp32c6::Esp32c6, stm32f401::Stm32f401};
+    let (board, variable): (Option<Box<dyn takt_conformance::board::Board>>, &str) = match args.value("--board") {
+        Some("stm32f401") => (Stm32f401::from_env().map(|b| Box::new(b) as _), "TAKT_F401_PORT"),
+        Some("esp32c6") => (Esp32c6::from_env().map(|b| Box::new(b) as _), "TAKT_ESP32C6_PORT"),
+        other => {
+            eprintln!("takt {command} --board stm32f401|esp32c6 (war: {})", other.unwrap_or("nichts"));
+            return None;
+        }
+    };
+    if board.is_none() {
+        eprintln!("takt {command}: `{variable}` nennt keinen Port (siehe plan/f401.md und plan/esp32c6.md)");
+    }
+    board
+}
+
+/// `takt driver-test --board NAME [--hardware DATEI]`, Boardmodus (13.8):
+/// die Messschleife auf dem Board; `--hardware` traegt `guard_ns`,
+/// `jitter_ns` und `tick_granular` des Outputs und `latency_ns` des Inputs
+/// ein, ohne die Kommentare der Datei zu verwerfen.
+fn driver_test_board(args: &Args) -> bool {
+    let Some(mut board) = board_of(args, "driver-test") else { return false };
+    let measured = match takt_conformance::wire::measure(board.as_mut()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("takt driver-test: {}: {e}", board.name());
+            return false;
+        }
+    };
+    println!(
+        "{}: {} -> {}, {} Pegel: guard {} ns, jitter {} ns (tick-granular), Abtastung {} ns",
+        board.name(),
+        takt_conformance::wire::OUT,
+        takt_conformance::wire::IN,
+        measured.arrived,
+        measured.guard_ns,
+        measured.jitter_ns,
+        measured.latency_ns
+    );
+    let Some(path) = args.value("--hardware") else { return true };
+    let mut text = std::fs::read_to_string(path).unwrap_or_default();
+    for (address, values) in measured.values() {
+        text = match takt_mir::hardware::with_channel_values(&text, address, &values) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("{path}:{}: {}", e.line, e.message);
+                return false;
+            }
+        };
+    }
+    if let Err(e) = std::fs::write(path, text) {
+        eprintln!("{path}: {e}");
+        return false;
+    }
+    println!("  Konfiguration: {path}");
+    true
 }
 
 /// Pfad der Review-Datei; `--review` oder `natives.review` neben dem Programm.
@@ -742,6 +783,16 @@ fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardwar
         "pub const PERSIST_MIN_INTERVAL_NS: i64 = {};\n",
         takt_mir::persist::min_interval_ns(p).unwrap_or(0)
     ));
+    let addresses: Vec<String> = p
+        .channels
+        .iter()
+        .filter_map(|c| match &c.binding {
+            takt_mir::program::Binding::Hw(a) => Some(format!("{:?}", a.text())),
+            _ => None,
+        })
+        .collect();
+    s.push_str("\n/// Die `hw`-Adressen des Programms (8.10): Das Board richtet ein, was gebunden ist.\n");
+    s.push_str(&format!("pub const HW_ADDRESSES: &[&str] = &[{}];\n", addresses.join(", ")));
     if let Some(hw) = hw {
         for (ident, port) in ports(p, hw) {
             s.push_str("\n/// Anschluss aus der Hardware-Konfiguration (8.10); undurchsichtig, fuer das Board.\n");
@@ -1342,6 +1393,9 @@ fn test(args: &Args) -> bool {
 /// verlangen, und eine Stelle hinter einem `param` gehoert in eine Kampagne.
 fn driver_test(args: &Args) -> bool {
     use takt_interp::CoverKind;
+    if args.value("--board").is_some() {
+        return driver_test_board(args);
+    }
     let Some(path) = args.files.first() else {
         eprintln!("{USAGE}");
         return false;

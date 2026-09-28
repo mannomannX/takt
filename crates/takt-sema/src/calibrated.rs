@@ -300,7 +300,7 @@ pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
             }
         }
         out.extend(jitter_check(p, c, entry, tick));
-        out.extend(sweep_check(p, c, entry));
+        out.extend(sweep_check(p, c, entry, tick));
     }
     out.extend(deep_wake_check(p, hw));
     out
@@ -330,9 +330,9 @@ fn deep_wake_check(p: &Program, hw: &Hardware) -> Option<Diagnostic> {
 
 /// Prüfung 29: Sweep-Schritte gegen den gemessenen Jitter eines Outputs,
 /// den eine `at`-Anweisung mit dem Parameter stellt (13.7).
-fn sweep_check(p: &Program, c: &takt_mir::program::Channel, entry: &HwChannel) -> Vec<Diagnostic> {
+fn sweep_check(p: &Program, c: &takt_mir::program::Channel, entry: &HwChannel, tick: i64) -> Vec<Diagnostic> {
     let mut out = Vec::new();
-    let Some(jitter) = entry.jitter_ns else { return out };
+    let Some(jitter) = effective_jitter(entry, tick) else { return out };
     let Some(i) = p.channels.iter().position(|x| std::ptr::eq(x, c)) else { return out };
     let params = at_params(p, takt_mir::ChannelId(i as u32));
     for campaign in &p.campaigns {
@@ -387,10 +387,20 @@ fn params_in(e: &Expr, out: &mut Vec<takt_mir::ParamId>) {
     }
 }
 
+/// Der Jitter, mit dem `at` auf diesem Output rechnet (7.5): Schreibt die
+/// Runtime nur zu Tickbeginn, faellt `at T` auf den Tick, der `T` enthaelt,
+/// und der Schreibzeitpunkt streut um einen Tick mehr als gemessen.
+fn effective_jitter(entry: &HwChannel, tick: i64) -> Option<i64> {
+    if entry.tick_granular == Some(true) {
+        return Some(tick.saturating_add(entry.jitter_ns.unwrap_or(0)));
+    }
+    entry.jitter_ns
+}
+
 /// Prüfung 28: gemessener Jitter gegen `at` und gegen die Anforderung.
 fn jitter_check(p: &Program, c: &takt_mir::program::Channel, entry: &HwChannel, tick: i64) -> Vec<Diagnostic> {
     let mut out = Vec::new();
-    let Some(jitter) = entry.jitter_ns else { return out };
+    let Some(jitter) = effective_jitter(entry, tick) else { return out };
     if c.dir != Direction::Output {
         return out;
     }

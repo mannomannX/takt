@@ -1,0 +1,24 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# FB-331: `at T` mit `T <= now + guard` ist ein `TimingFault` (7.5, 9.8).
+# Die Bruecke des Boards hat eine gemessene Treiberlatenz von einigen
+# Mikrosekunden: 1 ms voraus geht durch, 1 us voraus nicht. Ohne
+# Hardware-Konfiguration ist `guard` null wie in der Simulation.
+
+output probe : bool @ hw("gpio/loop_out") with safe = false
+
+machine m:
+    initial FAR
+
+    state FAR:
+        enter:
+            at now + 1 ms:
+                probe = true
+        after 5 ms: -> NEAR
+
+    state NEAR:
+        enter:
+            at now + 1 us:
+                probe = false

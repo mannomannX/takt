@@ -179,6 +179,20 @@ fn a_jitter_requirement_above_the_measurement_passes_and_below_fails() {
 }
 
 #[test]
+fn a_tick_granular_output_adds_the_tick_to_its_jitter() {
+    // 7.5: Schreibt die Runtime nur zu Tickbeginn, faellt `at T` auf den
+    // Tick, der `T` enthaelt — 2 us gemessen plus 1 ms Tick sprengen die
+    // verlangten 100 us, und `at` wirkt tick-granular.
+    let granular = CONFIG.replace("jitter_ns = 50000", "jitter_ns = 2000\ntick_granular = true");
+    let p = compile(PROGRAM);
+    let diags = check_bindings(&p, &hw(&granular));
+    assert!(codes(&diags).iter().any(|c| c.contains("SC-28") && c.contains("1002000")), "{diags:?}");
+    let p = compile(&PROGRAM.replace("            pwm = 0.5", "            at now + 5 ms:\n                pwm = 0.5"));
+    let diags = check_bindings(&p, &hw(&granular));
+    assert!(codes(&diags).iter().any(|c| c.contains("SC-28") && c.contains("tick-granular")), "{diags:?}");
+}
+
+#[test]
 fn the_memory_budget_is_judged_against_the_target() {
     // Pruefung 39: 64 KiB passen; 64 Byte nicht.
     let p = compile(PROGRAM);

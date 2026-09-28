@@ -43,7 +43,7 @@ use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
 use takt_board_stm32f401::{
-    BAUD, Board, CORE_HZ, Generated, Iwdg, JobContext, Led, Telemetry, WfiSleep, cycles, platform, tick,
+    BAUD, Board, CORE_HZ, Generated, Iwdg, JobContext, Led, Telemetry, WfiSleep, Wire, cycles, platform, tick,
 };
 use takt_board_support::platform::image_state;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock};
@@ -53,7 +53,7 @@ mod takt {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
 }
-use takt::{NVM_BLOCKING_NS, OVERRUN_ALERT, TICK_NS};
+use takt::{HW_ADDRESSES, NVM_BLOCKING_NS, OVERRUN_ALERT, TICK_NS};
 
 /// Die Frist des Watchdogs im Betrieb (12.3): zwei Perioden und ein
 /// blockierender NVM-Vorgang (8.10). Ein Tick, der darueber hinaus
@@ -95,6 +95,13 @@ static mut UART: Option<Telemetry> = None;
 
 /// Die LED, die der Treiber `takt_out_ui_led` schaltet; aus demselben Grund.
 static mut LED: Option<Led> = None;
+
+/// Die Messschleife an PA0 und PA1, wenn das Programm sie bindet (13.8).
+static mut WIRE: Option<Wire> = None;
+
+fn wire() -> Option<&'static mut Wire> {
+    unsafe { (&raw mut WIRE).as_mut().and_then(Option::as_mut) }
+}
 
 fn uart() -> Option<&'static mut Telemetry> {
     unsafe { (&raw mut UART).as_mut().and_then(Option::as_mut) }
@@ -217,6 +224,30 @@ pub extern "C" fn takt_out_ui_led(value: u8) {
     }
 }
 
+/// Der Output `gpio/loop_out` auf PA0, ueber die Bruecke an PA1 (13.8).
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_gpio_loop_out(value: u8) {
+    if let Some(w) = wire() {
+        w.write(value != 0);
+    }
+}
+
+/// Der Input `gpio/loop_in` an PA1, das Ende der Bruecke (13.8).
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_gpio_loop_in(value: *mut u8, quality: *mut u8) -> bool {
+    let Some(w) = wire() else { return false };
+    let level = w.read();
+    unsafe {
+        *value = u8::from(level);
+        *quality = 0;
+    }
+    true
+}
+
 #[interrupt]
 fn TIM2() {
     let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
@@ -249,6 +280,12 @@ fn conduct(clock: impl Clock) {
         Iwdg::arm(END_OF_RUN_NS);
     }
     if let Some(u) = uart() {
+        // Die Messschleife vor der Bilanz: Nach `takt end` liest der Host nicht mehr.
+        if let Some(w) = wire() {
+            u.drain(DRAIN_ROUNDS);
+            let _ = w.stats.report(CORE_HZ, u);
+            u.newline();
+        }
         let stack = Some(takt_board_stm32f401::stack::high_water());
         takt_rt_baremetal::report(u, rt.overrun(), &stats, &JournalStats::default(), stack);
     }
@@ -315,6 +352,9 @@ fn main() -> ! {
     // Erst jetzt sichtbar machen: Ein Trace vor der Einrichtung schriebe
     // in ein nicht konfiguriertes Register.
     unsafe { UART = Some(telemetry) };
+    if HW_ADDRESSES.iter().any(|a| a.starts_with("gpio/loop_")) {
+        unsafe { WIRE = Some(Wire::new(dp.GPIOA, &dp.RCC)) };
+    }
 
     let (mut dcb, mut dwt) = (cp.DCB, cp.DWT);
     cycles::enable(&mut dcb, &mut dwt);

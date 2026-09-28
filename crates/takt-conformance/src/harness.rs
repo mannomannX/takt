@@ -234,7 +234,8 @@ fn build_inner(
     // 11.2 nennt sie „feste Arrays im Runtime-Anteil des Outputs" —,
     // und der Rahmen ist hier die Runtime. Hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.
-    scheduled(&mut s, p, &layout);
+    // 7.5: In der Simulation ist `guard` null.
+    scheduled(&mut s, p, &layout, None);
     // 12.10: Registerports lesen den Latch des Modells und schreiben in
     // die Ringe der Stroeme, also hinter beidem.
     crate::ports::emit(&mut s, p);
@@ -719,12 +720,14 @@ fn safe_payload(p: &Program, slot: &crate::layout::Slot, safe: &takt_mir::expr::
 /// [`queued_outputs`] — so viele, wie `takt size` rechnet (11.5); ein
 /// Programm ohne `at`, `pulse` und `cancel` bekommt keine.
 ///
-/// `takt_schedule` liefert `false`, wenn der Zeitpunkt nicht in der
-/// Zukunft liegt (`TimingFault`) oder die Warteschlange voll ist
-/// (`ScheduleOverflow`) — beides Faults der Maschine, die der erzeugte
-/// Code an seinem Fault-Pfad behandelt. `takt_apply_scheduled` ruft
+/// `takt_schedule` liefert `false`, wenn der Zeitpunkt nicht weiter als
+/// `guard` in der Zukunft liegt (`TimingFault`) oder die Warteschlange
+/// voll ist (`ScheduleOverflow`) — beides Faults der Maschine, die der
+/// erzeugte Code an seinem Fault-Pfad behandelt. `guard` ist die gemessene
+/// Treiberlatenz des Outputs aus `hw` (7.5, 8.10), ohne Konfiguration
+/// null wie in der Simulation. `takt_apply_scheduled` ruft
 /// [`commit_sequence`].
-pub(crate) fn scheduled(s: &mut String, p: &Program, layout: &Layout) {
+pub(crate) fn scheduled(s: &mut String, p: &Program, layout: &Layout, hw: Option<&takt_mir::hardware::Hardware>) {
     let queues = queued_outputs(p);
     if queues.is_empty() {
         return;
@@ -735,6 +738,17 @@ pub(crate) fn scheduled(s: &mut String, p: &Program, layout: &Layout) {
     let _ = writeln!(s, "struct takt_sched {{ long long t; long long v; }};");
     let _ = writeln!(s, "static struct takt_sched g_sched[{n}][TAKT_K_O];");
     let _ = writeln!(s, "static int g_sched_n[{n}];");
+    let guards: Vec<String> = queues
+        .iter()
+        .map(|c| {
+            let guard = match (&p.channels[c.index()].binding, hw) {
+                (takt_mir::program::Binding::Hw(a), Some(hw)) => hw.channel(&a.text()).and_then(|e| e.guard_ns),
+                _ => None,
+            };
+            format!("{}LL", guard.unwrap_or(0))
+        })
+        .collect();
+    let _ = writeln!(s, "static const long long g_guard[{n}] = {{ {} }};", guards.join(", "));
     let _ = writeln!(s, "static int takt_sched_slot(int o) {{");
     let _ = writeln!(s, "    switch (o) {{");
     for (q, c) in queues.iter().enumerate() {
@@ -749,9 +763,8 @@ pub(crate) fn scheduled(s: &mut String, p: &Program, layout: &Layout) {
     let _ = writeln!(s, "int takt_schedule(int o, long long t, long long v) {{");
     let _ = writeln!(s, "    int q = takt_sched_slot(o);");
     let _ = writeln!(s, "    if (q < 0) return {overflow};");
-    // 9.8: `T <= now` ist ein `TimingFault`; in der Simulation ist
-    // `guard` null.
-    let _ = writeln!(s, "    if (t <= g_tick * {}LL) return {timing};", p.config.tick);
+    // 7.5, 9.8: `T <= now + guard(o)` ist ein `TimingFault`.
+    let _ = writeln!(s, "    if (t <= g_tick * {}LL + g_guard[q]) return {timing};", p.config.tick);
     // Gleiche `T`: die spaetere Anweisung gewinnt (9.8).
     let _ = writeln!(s, "    for (int i = 0; i < g_sched_n[q]; i++)");
     let _ = writeln!(s, "        if (g_sched[q][i].t == t) {{ g_sched[q][i].v = v; return 0; }}");

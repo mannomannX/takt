@@ -103,6 +103,25 @@ fn the_harness_links_with_the_generated_code() {
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
 }
 
+/// **`guard` kommt aus der Konfiguration** (7.5, FB-331): Der Rahmen legt
+/// je geplanten Output die gemessene Treiberlatenz ab und plant nur, was
+/// weiter voraus liegt; ohne Konfiguration ist sie null wie in der
+/// Simulation.
+#[test]
+fn a_scheduled_output_carries_its_guard() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/programs/guard.takt");
+    let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let options =
+        takt_sema::Options { policy: takt_diag::Policy::default(), build: takt_sema::Build::Hw, profile: None };
+    let p = takt_sema::compile(&src, &options).program.expect("Programm");
+    let hw = takt_mir::hardware::parse("# takt-hw 9\n[channel gpio/loop_out]\nguard_ns = 4338\n").expect("lesbar");
+    let with = takt_conformance::mcu::build_with(&p, takt_llvm::Diagnostics::Ids, Some(&hw)).source;
+    assert!(with.contains("static const long long g_guard[1] = { 4338LL };"), "{with}");
+    assert!(with.contains("if (t <= g_tick * 1000000LL + g_guard[q]) return"), "{with}");
+    let without = takt_conformance::mcu::build(&p).source;
+    assert!(without.contains("static const long long g_guard[1] = { 0LL };"), "{without}");
+}
+
 /// Der Rahmen nennt die Funktionen, die die Tickschleife braucht.
 ///
 /// `takt-rt-baremetal` ruft sie ueber den `Program`-Trait; fehlt eine,

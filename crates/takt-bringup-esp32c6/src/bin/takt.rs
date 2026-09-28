@@ -15,7 +15,9 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use takt_board_esp32c6::{Button, FlashNvm, Generated, JobContext, Mwdt, Telemetry, Ws2812, platform, route_uart0};
+use takt_board_esp32c6::{
+    Button, CORE_HZ, FlashNvm, Generated, JobContext, Mwdt, Telemetry, Wire, Ws2812, platform, route_uart0,
+};
 use takt_board_support::platform::image_state;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock};
 use takt_rt_core::{Clock, Journal, Loaded, Persist, PlatformCommand, Policy, Profile, Runtime};
@@ -26,7 +28,7 @@ mod takt {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
 }
-use takt::{LOGIC_HASH, NVM_BLOCKING_NS, OVERRUN_ALERT, PERSIST_BOUND, PERSIST_MIN_INTERVAL_NS, TICK_NS};
+use takt::{HW_ADDRESSES, LOGIC_HASH, NVM_BLOCKING_NS, OVERRUN_ALERT, PERSIST_BOUND, PERSIST_MIN_INTERVAL_NS, TICK_NS};
 
 /// Die Frist des Watchdogs im Betrieb (12.3): zwei Perioden und ein
 /// blockierender NVM-Vorgang (8.10). Ein Tick, der darueber hinaus
@@ -66,9 +68,14 @@ const JOURNAL_AT: u32 = 0x9000;
 static mut UART: Option<Telemetry> = None;
 static mut LED: Option<Ws2812> = None;
 static mut BTN: Option<Button> = None;
+static mut WIRE: Option<Wire> = None;
 
 fn uart() -> Option<&'static mut Telemetry> {
     unsafe { (&raw mut UART).as_mut().and_then(Option::as_mut) }
+}
+
+fn wire() -> Option<&'static mut Wire> {
+    unsafe { (&raw mut WIRE).as_mut().and_then(Option::as_mut) }
 }
 
 /// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
@@ -133,6 +140,30 @@ pub extern "C" fn takt_out_ui_led(value: u8) {
     } else {
         led.off();
     }
+}
+
+/// Der Output `gpio/loop_out` auf GPIO7, ueber die Bruecke an GPIO17 (13.8).
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_gpio_loop_out(value: u8) {
+    if let Some(w) = wire() {
+        w.write(value != 0);
+    }
+}
+
+/// Der Input `gpio/loop_in` an GPIO17, das Ende der Bruecke (13.8).
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_gpio_loop_in(value: *mut u8, quality: *mut u8) -> bool {
+    let Some(w) = wire() else { return false };
+    let level = w.read();
+    unsafe {
+        *value = u8::from(level);
+        *quality = 0;
+    }
+    true
 }
 
 /// Womit dieser Lauf begann (12.7), beim Start aus der Reset-Ursache gelesen.
@@ -222,6 +253,12 @@ fn conduct(program: Generated, clock: impl Clock, persist: &mut Option<Persist<'
         JournalStats { writes: p.journal().writes(), failures: p.journal().failures(), erase_ns, program_ns }
     });
     if let Some(u) = uart() {
+        // Die Messschleife vor der Bilanz: Nach `takt end` liest der Host nicht mehr.
+        if let Some(w) = wire() {
+            u.drain(DRAIN_ROUNDS);
+            let _ = w.stats.report(CORE_HZ, u);
+            u.newline();
+        }
         let stack = Some(takt_board_esp32c6::stack::high_water());
         takt_rt_baremetal::report(u, rt.overrun(), &stats, &journal, stack);
     }
@@ -281,8 +318,13 @@ fn main() -> ! {
     }
     unsafe { BTN = Some(Button::new(peripherals.GPIO9)) };
     // 12.10: Ein `port @ mmio(...)` schreibt Register; die Verbindung zum
-    // Pad macht die GPIO-Matrix, nicht der Treiber.
-    route_uart0(peripherals.GPIO7, peripherals.GPIO17);
+    // Pad macht die GPIO-Matrix, nicht der Treiber. Dieselbe Bruecke ist
+    // die Messschleife, wenn das Programm sie bindet (13.8).
+    if HW_ADDRESSES.iter().any(|a| a.starts_with("gpio/loop_")) {
+        unsafe { WIRE = Some(Wire::new(peripherals.GPIO7, peripherals.GPIO17)) };
+    } else {
+        route_uart0(peripherals.GPIO7, peripherals.GPIO17);
+    }
 
     // 5.9: s0 kommt aus dem Journal, darum laden vor dem ersten Eintritt.
     // Ohne `persist` im Programm gibt es kein Journal und keinen Flash-Zugriff.
