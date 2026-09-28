@@ -152,7 +152,7 @@ pub fn compile_with(src: &str, options: &Options, proof: Option<&takt_mir::analy
     // Codegen und `takt size` benutzen dieselben Intervalle.
     let report = match &mut program {
         Some(p) => {
-            let (d, r) = takt_mir::analysis::analyze(p, &external);
+            let (d, r) = takt_mir::analysis::analyze(p, &external, options.policy.certification);
             sink.extend(d);
             takt_mir::analysis::cost::budgets(p);
             r

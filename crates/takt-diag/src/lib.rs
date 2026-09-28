@@ -156,7 +156,9 @@ impl fmt::Display for Diagnostic {
 pub struct Policy {
     /// Jede Warnung ist ein Fehler.
     pub warnings_as_errors: bool,
-    /// Zertifizierungsmodus: die fehlende Edition (SC-49) ist ein Fehler.
+    /// Zertifizierungsmodus: die fehlende Edition (SC-49) ist ein Fehler,
+    /// und jede unbewiesene implizite Pruefung (SC-24, 3.4) — die meldet
+    /// die Analyse selbst, weil nur sie die Stellen des Nutzers kennt.
     pub certification: bool,
 }
 

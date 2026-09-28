@@ -236,6 +236,89 @@ machine m:
     assert_eq!(count(&out.report, "Declared"), 1, "nur `c`: {:?}", out.report.checks);
 }
 
+/// 3.4, 10: „Zertifizierungsprojekte eskalieren die Kennzahl zu Fehlern" —
+/// jede unbewiesene implizite Pruefung, nicht nur die in Schleifen, mit
+/// Ursache und Vorschlag. Ein bewiesenes Programm bleibt angenommen.
+#[test]
+fn certification_turns_every_unproven_check_into_an_error() {
+    let strict =
+        Options { policy: Policy { certification: true, ..Policy::default() }, build: Build::Sim, profile: None };
+    let errors = |body: &str, options: &Options| -> Vec<String> {
+        let out = takt_sema::compile(&format!("{HEAD}{OUT}{body}"), options);
+        out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect()
+    };
+    let unproven = "\
+machine m:
+    var big : int in 0..999 = 500
+    initial RUN
+    state RUN:
+        loop:
+            n = big
+";
+    let lenient = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    assert!(errors(unproven, &lenient).is_empty(), "ohne Zertifizierung eine Information");
+    let found = errors(unproven, &strict);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("SC-24") && found[0].contains("Range-Check") && found[0].contains("clamp"), "{found:?}");
+    let proven = "\
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var a : int in 0..9 = 5
+            n = a + 1
+";
+    assert!(errors(proven, &strict).is_empty(), "{:?}", errors(proven, &strict));
+}
+
+/// 3.4 (Differenzschranken): Eine Zuweisung an eine Variable der Schranke
+/// loescht sie; der zweite Zugriff braucht seine Pruefung wieder.
+#[test]
+fn an_assignment_forgets_the_difference_bound() {
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var b : bytes<64> = default
+    var k : int in 0..1023 = 0
+    initial RUN
+    state RUN:
+        loop:
+            if k < b.len:
+                var x : int in 0..255 = b[k] as int
+                k = (k + 1) % 1024
+                var y : int in 0..255 = b[k] as int
+                n = (x + y) % 100
+",
+    );
+    assert_eq!(count(&r, "Index"), 1, "nur der Zugriff nach der Zuweisung: {:?}", r.checks);
+}
+
+/// 3.4 (Differenzschranken): Ein Zusammenfluss behaelt die schwaechere
+/// Schranke. Der eine Zweig traegt `k + 2 <= len`, der andere nur
+/// `k < len` — danach ist `b[k]` bewiesen, `b[k + 1]` nicht.
+#[test]
+fn a_join_keeps_the_weaker_difference_bound() {
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var b : bytes<64> = default
+    var k : int in 0..1023 = 0
+    initial RUN
+    state RUN:
+        loop:
+            if k + 2 <= b.len:
+                n = 1
+            else:
+                check k < b.len
+                n = 2
+            var x : int in 0..255 = b[k] as int
+            var y : int in 0..255 = b[k + 1] as int
+            n = (x + y) % 100
+",
+    );
+    assert_eq!(count(&r, "Index"), 1, "nur `b[k + 1]`: {:?}", r.checks);
+}
+
 #[test]
 fn only_a_check_in_a_loop_warns() {
     // 3.4, Warnpolitik: „Warnungen im engeren Sinn entstehen nur bei

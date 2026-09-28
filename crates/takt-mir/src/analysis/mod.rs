@@ -83,8 +83,11 @@ impl Report {
 
 /// Fuehrt die Analyse aus: annotiert die MIR und liefert Diagnosen und
 /// Kennzahlen. `external` sind Stellen aus einer Beweisdatei (11.3), als
-/// `(Versatz, Art)`; sie gelten zusaetzlich zu den eigenen Beweisen.
-pub fn analyze(program: &mut Program, external: &[(u32, u8)]) -> (Vec<Diagnostic>, Report) {
+/// `(Versatz, Art)`; sie gelten zusaetzlich zu den eigenen Beweisen. Mit
+/// `certification` ist jede unbewiesene implizite Pruefung im Programm des
+/// Nutzers ein Fehler (3.4: „Zertifizierungsprojekte eskalieren die
+/// Kennzahl zu Fehlern").
+pub fn analyze(program: &mut Program, external: &[(u32, u8)], certification: bool) -> (Vec<Diagnostic>, Report) {
     let mut diags = Vec::new();
     let mut report = Report::default();
     let mut all: Vec<ImplicitCheck> = Vec::new();
@@ -135,11 +138,19 @@ pub fn analyze(program: &mut Program, external: &[(u32, u8)]) -> (Vec<Diagnostic
         if c.relational {
             report.relational += 1;
         }
-        if c.warns && user.contains(&c.span.file.0) {
+        if !user.contains(&c.span.file.0) {
+            continue;
+        }
+        if c.warns {
             report.warned += 1;
-            diags.push(Diagnostic::warning(SC24, c.span, message(c.cause)).with_suggestion(
-                "Range deklarieren, `clamp` benutzen oder eine range-typisierte Zwischengroesse einfuehren (3.4)",
-            ));
+        }
+        let (what, fix) = describe(c.cause);
+        if certification {
+            let text = format!("{what} bleibt stehen; die Zertifizierung verlangt einen Beweis (3.4)");
+            diags.push(Diagnostic::error(SC24, c.span, text).with_suggestion(fix));
+        } else if c.warns {
+            let text = format!("{what} in einer Schleife oder einem Aktionsblock");
+            diags.push(Diagnostic::warning(SC24, c.span, text).with_suggestion(fix));
         }
     }
     report.sites = seen.values().copied().collect();
@@ -194,15 +205,28 @@ fn has_check(e: &Expr) -> bool {
 }
 
 /// Die Meldung zu einer Ursache.
-fn message(c: CheckCause) -> String {
+fn describe(c: CheckCause) -> (&'static str, &'static str) {
     match c {
-        CheckCause::Declared => "impliziter Range-Check in einer Schleife oder einem Aktionsblock",
-        CheckCause::Index => "impliziter Index-Check in einer Schleife oder einem Aktionsblock",
-        CheckCause::Convert => "implizite Konversionspruefung in einer Schleife oder einem Aktionsblock",
-        CheckCause::Arith => "implizite Arithmetikpruefung in einer Schleife oder einem Aktionsblock",
-        CheckCause::NonFinite => "implizite Endlichkeitspruefung in einer Schleife oder einem Aktionsblock",
+        CheckCause::Declared => (
+            "impliziter Range-Check",
+            "Range deklarieren, `clamp` benutzen oder eine range-typisierte Zwischengroesse einfuehren (3.4)",
+        ),
+        CheckCause::Index => (
+            "impliziter Index-Check",
+            "den Index vorher gegen die Laenge pruefen (`if i >= b.len: break`) oder ihm eine Range geben (3.4, 3.9)",
+        ),
+        CheckCause::Convert => {
+            ("implizite Konversionspruefung", "der Quelle eine Range geben, die in den Zieltyp passt (3.4, 3.10)")
+        }
+        CheckCause::Arith => (
+            "implizite Arithmetikpruefung",
+            "den Operanden Ranges geben, die Ueberlauf und Division durch null ausschliessen (3.4, 4.1)",
+        ),
+        CheckCause::NonFinite => (
+            "implizite Endlichkeitspruefung",
+            "den Operanden Ranges geben: Ein beschraenktes Ergebnis ist endlich (3.4, 4.2)",
+        ),
     }
-    .to_string()
 }
 
 /// Eine Maschine: jeder Zustand ist ein eigener Einstiegspunkt, weil

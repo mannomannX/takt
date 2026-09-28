@@ -99,6 +99,30 @@ machine m:
     );
 }
 
+/// 3.4, 8.4: Param-Ranges werden zur Ladezeit validiert. Ein Wert ausserhalb
+/// wird abgelehnt, nicht still uebernommen; einer innerhalb gilt.
+#[test]
+fn a_parameter_outside_its_range_is_rejected_on_load() {
+    let p = compile(
+        "\
+param GAIN : float in 0.0..2.0 = 1.0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = 1 if GAIN > 1.5 else 0
+",
+    )
+    .unwrap_or_else(|e| panic!("unerwartete Fehler:\n{e}"));
+    let with =
+        |value: &str| RunOptions { ticks: 2, overrides: vec![("GAIN".into(), value.into())], ..Default::default() };
+    let err = run(&p, &Trace::default(), &with("5.0")).expect_err("ausserhalb der Range");
+    assert!(format!("{err:?}").contains("ausserhalb der Range"), "{err:?}");
+    let ok = run(&p, &Trace::default(), &with("1.8")).expect("innerhalb der Range");
+    assert!(ok.trace.render().contains("t=0 out n 1"), "{}", ok.trace.render());
+}
+
 #[test]
 fn an_inout_argument_must_carry_the_parameter_range() {
     // 3.9: Das Argument ist eine Stelle; eine Pruefung davor liesse keine

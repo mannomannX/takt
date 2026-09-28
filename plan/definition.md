@@ -1729,7 +1729,7 @@ sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereigni
 | 1 | Tokenizer/Parser (Einrückung, Grammatik) | F |
 | 2 | Namensauflösung, Modul-Linking, Namenskonventionen | F / W |
 | 3 | Typ- und Einheiteninferenz, affine Regeln, Duration-Regeln | F |
-| 4 | Intervallanalyse: Ranges, Division, Overflow, Index; implizite Prüfungen | W bei jeder eingefügten Laufzeitprüfung (außer i64-Overflow und `NonFinite`, die keinen Beweisweg haben) |
+| 4 | Intervallanalyse: Ranges, Division, Overflow, Index; implizite Prüfungen | W bei jeder eingefügten Laufzeitprüfung (außer i64-Overflow und `NonFinite`, die an fast jeder Rechnung ohne Range stehen); Zertifizierungsmodus: F für jede unbewiesene |
 | 5 | Validitäts-Dominanz für Channel-Lesen | — (impliziter Check ist Default) |
 | 6 | Definite Assignment | F |
 | 7 | Single-Writer für Outputs und `pub var`; Channel-Richtung; jede `hw`-Adresse höchstens einmal gebunden | F |
@@ -1749,7 +1749,7 @@ sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereigni
 | 21 | `at`/`pulse`: Block enthält nur Zuweisungen an skalare Outputs; `T` vom Typ Duration; K_o | F |
 | 22 | `idle`: keine `loop:`/Handler in Zustand und Vorfahren; Guards nur über Wake-Quellen, Konstanten, Params, Maschinenvariablen | F |
 | 23 | `persist`: POD-Typ, Maschinenebene, nicht in Szenarien; Typ-Hash stabil | F |
-| 24 | Shift-Beträge, `as`-Konversionen, `vec`-Indizes, Slices: Range beweisbar oder impliziter Check | W |
+| 24 | Shift-Beträge, `as`-Konversionen, `vec`-Indizes, Slices: Range beweisbar oder impliziter Check | W (Zertifizierungsmodus: F) |
 | 25 | Zustandslokale und gehobene Variablen (Sequenz-`var`, Captures): Definite Assignment je Eintritt | F |
 | 26 | Szenarien schreiben nur `sim`-Outputs; Single-Writer gegenüber Modellmaschinen | F |
 | 27 | `every d:` nur in `loop:`; `on`-Handler nur auf deklarierten Streams | F |
