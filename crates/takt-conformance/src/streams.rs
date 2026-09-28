@@ -529,11 +529,13 @@ fn emit_send(s: &mut String, p: &Program, trace: Trace) {
         .filter(|(_, c)| c.dir == Direction::Output && matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))))
         .collect();
     // Je Strom so viel Platz wie seine Kapazitaet (8.8, Default 256), und
-    // fuer das Abgeholte so viel, wie ein Tick hoechstens abholt.
+    // fuer das Abgeholte so viel, wie ein Tick hoechstens abholt; ohne Rate
+    // der ganze Puffer.
     let cap = |c: &Channel| c.attrs.capacity.unwrap_or(256);
     let per_tick = |c: &Channel| match rate_hz(c) {
-        Some(hz) => u32::try_from((hz.saturating_mul(p.config.tick as u64) / 1_000_000_000).max(1)).unwrap_or(u32::MAX),
-        None => u32::MAX,
+        Some(hz) => u32::try_from((hz.saturating_mul(p.config.tick as u64) / 1_000_000_000).max(1))
+            .map_or(cap(c), |n| n.min(cap(c))),
+        None => cap(c),
     };
     let n = streams.len().max(1);
     let tx_max = streams.iter().map(|(_, c)| cap(c)).max().unwrap_or(1);

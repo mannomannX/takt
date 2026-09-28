@@ -13,6 +13,9 @@
 //! initialisiert es mit den Bytes, und [`Generated::ensure_init`] holt den
 //! Start ohne Journal nach, wenn keines da war.
 //!
+//! **Die Natives** ruft der erzeugte Code als `takt_native_*`; sie kommen
+//! aus `takt-native-abi`, derselben Rechnung wie im Interpreter (FB-293).
+//!
 //! **Die Gegenrichtung fehlt mit Absicht.** Der Rahmen ruft
 //! `takt_board_trace*`, um Traces auszugeben; die stellt das Programm, das
 //! ihn bindet — es weiss, wohin die Telemetrie geht.
@@ -22,6 +25,7 @@
 
 use core::ffi::c_void;
 
+use takt_native_abi as _;
 use takt_rt_baremetal::Traced;
 use takt_rt_core::{PlatformCommand, Program};
 

@@ -1,0 +1,39 @@
+[package]
+name = "takt-native-abi"
+version = "0.1.0"
+description = "Takt: die kuratierten Natives hinter der C-ABI des erzeugten Codes (Referenz 4.5)"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.86"
+
+# Eigener Workspace wie `takt-mcu-program`: Eine Funktion mit C-Namen, die
+# Zeiger liest, braucht `unsafe`, und `forbid` (13.4) laesst sich nicht
+# lokal aufheben. 9.5 fuehrt die Natives in der TCB.
+[workspace]
+
+# Die Rechnung steht in `takt-native` und `takt-crypto`; hier nur die
+# Grenze. Boards binden das Crate als rlib (ueber `takt-mcu-program`), der
+# Wirtsrahmen der Konformitaet als statische Bibliothek:
+# `cargo rustc --lib --crate-type staticlib --features host`.
+[features]
+# Der Panic-Handler fuer die statische Bibliothek des Wirts; ein Board
+# bringt seinen eigenen mit.
+host = []
+# `ecdsa_p256_verify` (4.5) mit seiner Abhaengigkeit `p256`.
+ecdsa = ["dep:takt-crypto", "takt-crypto/ecdsa"]
+
+[dependencies]
+takt-native = { path = "../takt-native" }
+takt-crypto = { path = "../takt-crypto", optional = true }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"

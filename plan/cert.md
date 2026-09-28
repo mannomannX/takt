@@ -48,6 +48,7 @@ Workspace ohne Zeile, keine Zeile ohne Crate.
 | takt-board-esp32c6 | Register des ESP32-C6 (SYSTIMER, USB-Serial-JTAG, GPIO, MWDT), CSR-Zugriffe, `wfi` |
 | takt-board-stm32f401 | Register des STM32F401 (TIM2, USART1, IWDG, GPIO, Flash), DWT, `wfi` |
 | takt-mcu-program | die C-ABI des erzeugten Programms und seines Rahmens (12.1) |
+| takt-native-abi | die C-Einstiege der kuratierten Natives (`takt_native_*`), die der erzeugte Code auf Wirt und Board ruft; gerechnet wird in `takt-native` und `takt-crypto` (4.5, FB-293) |
 | takt-bringup-esp32c6 | Treiberfunktionen `takt_out_*`/`takt_in_*` hinter der C-ABI, statische Peripherie |
 | takt-bringup-stm32f401 | dasselbe für die Black Pill; im Profil `rtos` dazu RTIC 2 und `rtic-sync` — das RTOS gehört dort zur TCB (12.8) |
 
@@ -79,10 +80,13 @@ geprüft; Projekt-Natives außerhalb dieser Menge verlangen
 Der Lauf-Header nennt, was ein Lauf davon benutzt hat (12.5,
 `takt-interp/src/record.rs`).
 
+Eine Implementierung je Native: Interpreter und Linux-Runtime rufen
+`takt-native` direkt, der erzeugte Code dieselbe Rechnung über die
+Einstiege aus `takt-native-abi` — der Rahmen bringt keine eigenen mit.
+Gemessen wird der Stack am Einstieg (FB-293).
+
 **Offen.** `rsa3072_verify`, `aes_gcm_decrypt` und `fft256` (11.4) fehlen
-der Menge noch (M10 Schritt 21, FB-345). Die Natives rufen auf dem Board
-noch aus dem Rust-Teil statt aus dem C-Rahmen (FB-293, Entscheidung
-offen).
+der Menge noch (M10 Schritt 21, FB-345).
 
 ## 3. Rückverfolgung (13.4)
 

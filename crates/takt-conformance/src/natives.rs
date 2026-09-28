@@ -107,21 +107,40 @@ pub struct Measured {
     pub index: usize,
     /// Das Ergebnis wie [`render`].
     pub output: String,
-    /// Der Stack-Bedarf des Aufrufs in Byte.
+    /// Der Stack-Bedarf seines Einstiegs in Byte.
     pub stack: u32,
+    /// Die weiteren Einstiege, die der Vektor ruft, mit ihrem Stack-Bedarf:
+    /// Anfang und Ende einer Kette `sha256_init/update/final`.
+    pub others: Vec<(Native, u32)>,
 }
 
-/// Liest die Zeilen `native <i> <ergebnis> stack <byte>`.
+/// Liest die Zeilen `native <i> <ergebnis> stack <byte> [<name> <byte>]...`.
 pub fn parse(text: &str) -> Result<Vec<Measured>, String> {
     text.lines()
         .filter_map(|l| l.trim().strip_prefix("native "))
-        .map(|rest| match rest.split_whitespace().collect::<Vec<_>>().as_slice() {
-            [i, output, "stack", n] => Ok(Measured {
+        .map(|rest| {
+            let bytes = |n: &str| n.parse::<u32>().map_err(|_| format!("`native {rest}`: keine Byte-Zahl"));
+            let words: Vec<&str> = rest.split_whitespace().collect();
+            let [i, output, "stack", n, others @ ..] = words.as_slice() else {
+                return Err(format!("unlesbar: `native {rest}`"));
+            };
+            if others.len() % 2 != 0 {
+                return Err(format!("unlesbar: `native {rest}`"));
+            }
+            let others = others
+                .chunks_exact(2)
+                .map(|pair| {
+                    let f =
+                        Native::by_name(pair[0]).ok_or_else(|| format!("`native {rest}`: `{}` unbekannt", pair[0]))?;
+                    Ok((f, bytes(pair[1])?))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(Measured {
                 index: i.parse().map_err(|_| format!("`native {rest}`: kein Index"))?,
                 output: output.to_string(),
-                stack: n.parse().map_err(|_| format!("`native {rest}`: keine Byte-Zahl"))?,
-            }),
-            _ => Err(format!("unlesbar: `native {rest}`")),
+                stack: bytes(n)?,
+                others,
+            })
         })
         .collect()
 }
@@ -166,23 +185,34 @@ pub fn judge(vectors: &[Vector], measured: &[Measured]) -> Result<Vec<Row>, Stri
         let want = takt_native::call(v.native, &inputs)
             .map(|o| render(&o))
             .ok_or_else(|| format!("Zeile {}: `{}` nimmt nicht {} Eingaben", v.line, v.native.name(), inputs.len()))?;
-        let at = match rows.iter().position(|r| r.native == v.native) {
-            Some(at) => at,
-            None => {
-                let contract = takt_native::cost_of(v.native).stack;
-                rows.push(Row { native: v.native, vectors: 0, deviations: Vec::new(), stack: 0, contract });
-                rows.len() - 1
-            }
-        };
-        let row = &mut rows[at];
+        let row = row_of(&mut rows, v.native);
         row.vectors += 1;
         row.stack = row.stack.max(m.stack);
         if m.output != want {
             row.deviations.push(v.line);
         }
+        for &(f, stack) in &m.others {
+            let row = row_of(&mut rows, f);
+            row.vectors += 1;
+            row.stack = row.stack.max(stack);
+        }
     }
     rows.sort_by_key(|r| Native::ALL.iter().position(|n| *n == r.native));
     Ok(rows)
+}
+
+/// Die Zeile einer Funktion, angelegt mit ihrer Zusage, wenn es sie noch
+/// nicht gibt.
+fn row_of(rows: &mut Vec<Row>, native: Native) -> &mut Row {
+    let at = match rows.iter().position(|r| r.native == native) {
+        Some(at) => at,
+        None => {
+            let contract = takt_native::cost_of(native).stack;
+            rows.push(Row { native, vectors: 0, deviations: Vec::new(), stack: 0, contract });
+            rows.len() - 1
+        }
+    };
+    &mut rows[at]
 }
 
 #[cfg(test)]
@@ -223,6 +253,7 @@ mod tests {
             index: i,
             output: render(&takt_native::call(Native::Crc32, &[v[i].inputs[0].as_slice()]).expect("rechnet")),
             stack: 12,
+            others: Vec::new(),
         };
         let rows = judge(&v, &[good(0), good(1)]).expect("vollstaendig");
         assert_eq!(rows.len(), 1);
@@ -238,8 +269,22 @@ mod tests {
         let text = "takt natives stm32f401\r\nnative 0 00000000d202ef8d stack 24\r\ntakt end\r\n";
         assert_eq!(
             parse(text).expect("lesbar"),
-            vec![Measured { index: 0, output: "00000000d202ef8d".into(), stack: 24 }]
+            vec![Measured { index: 0, output: "00000000d202ef8d".into(), stack: 24, others: Vec::new() }]
         );
         assert!(parse("native 0 zu kurz\n").is_err());
+        assert!(parse("native 0 00 stack 24 sha256_init\n").is_err());
+    }
+
+    /// Eine Kette misst Anfang und Ende mit; jede der drei Funktionen hat
+    /// ihre Zeile.
+    #[test]
+    fn a_chain_reports_each_entry() {
+        let v = vec![Vector { line: 70, native: Native::Sha256Update, inputs: vec![b"abc".to_vec()] }];
+        let digest = render(&takt_native::call(Native::Sha256Update, &[b"abc".as_slice()]).expect("rechnet"));
+        let text = format!("native 0 {digest} stack 400 sha256_init 40 sha256_final 420\n");
+        let rows = judge(&v, &parse(&text).expect("lesbar")).expect("vollstaendig");
+        let stacks: Vec<(Native, u32)> = rows.iter().map(|r| (r.native, r.stack)).collect();
+        assert_eq!(stacks, [(Native::Sha256Init, 40), (Native::Sha256Update, 400), (Native::Sha256Final, 420)]);
+        assert!(rows.iter().all(Row::same_result), "{rows:?}");
     }
 }

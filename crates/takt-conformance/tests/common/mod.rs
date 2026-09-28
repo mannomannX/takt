@@ -128,11 +128,13 @@ fn run_native_build(clang: &Clang, p: &Program, name: &str, ticks: u64, h: harne
     std::fs::write(&ll, ir_of(p)).map_err(|e| e.to_string())?;
     std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
     let path = clang.path().ok_or("clang")?;
+    let natives = harness::native_library()?;
     let mut cmd = std::process::Command::new(path);
     let build = Clang::deterministic(&mut cmd)
         .args(["-Wno-override-module", "-O1"])
         .arg(&ll)
         .arg(&c)
+        .arg(&natives)
         .arg("-o")
         .arg(&exe)
         .output()

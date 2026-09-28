@@ -1,5 +1,6 @@
 //! Die kuratierten Natives auf dem ESP32-C6 (13.8): je Vektor aus
-//! `grammar/takt-native.md` das Ergebnis und der Stack-Bedarf des Aufrufs.
+//! `grammar/takt-native.md` das Ergebnis und der Stack-Bedarf jedes
+//! Einstiegs aus `takt-native-abi`, den der erzeugte Code ruft (FB-293).
 //!
 //! Dasselbe Programm wie auf dem F401 (`takt-bringup-stm32f401`):
 //! `takt_conformance::natives` vergleicht die Ergebnisse mit dem Wirt und
@@ -10,7 +11,8 @@
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use takt_board_esp32c6::{WfiSleep, stack};
-use takt_native::{Native, Output};
+use takt_native::Native;
+use takt_native_abi::measure;
 use takt_rt_baremetal::bench::write_native;
 use takt_rt_baremetal::{DRAIN_ROUNDS, Sleep};
 
@@ -36,22 +38,9 @@ fn main() -> ! {
     uart.write("takt natives esp32c6");
     uart.newline();
     for (i, (name, inputs)) in vectors::VECTORS.iter().enumerate() {
-        let Some(f) = Native::by_name(name) else { continue };
-        let mut out = None;
-        let used = stack::usage_of(WINDOW, || out = core::hint::black_box(takt_native::call(f, inputs)));
-        let mut bytes = [0u8; 32];
-        let result: &[u8] = match out {
-            Some(Output::Scalar(v)) => {
-                bytes[..8].copy_from_slice(&v.to_be_bytes());
-                &bytes[..8]
-            }
-            Some(Output::Digest(d)) => {
-                bytes.copy_from_slice(&d);
-                &bytes
-            }
-            None => &[],
-        };
-        write_native(&mut uart, i, result, used);
+        let measured = Native::by_name(name).and_then(|f| measure::vector(f, inputs, &mut |call| stack::usage_of(WINDOW, call)));
+        let Some(run) = measured else { continue };
+        write_native(&mut uart, i, run.result(), run.stack, run.others());
         // Die naechste Messung sperrt die Interrupts; was im Ring steht,
         // muss vorher an die Leitung, sonst liefe er ueber.
         uart.drain(DRAIN_ROUNDS);

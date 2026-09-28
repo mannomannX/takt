@@ -40,14 +40,31 @@ fn a_context_survives_the_byte_form() {
     assert_eq!(a.finish(), b.finish());
 }
 
+/// Jeder Wert des Records ist ein Zustand (4.5 `total`): Ein voller
+/// Puffer ist der Block, den `update` als naechstes verdichtet haette.
+#[test]
+fn a_full_buffer_is_the_next_block() {
+    let block = [0x5au8; 64];
+    let mut buf = [0u8; CTX_MAX_BYTES];
+    Ctx::new().to_bytes(&mut buf).expect("Platz");
+    let mut full = buf[..32].to_vec();
+    full.extend_from_slice(&64u32.to_le_bytes());
+    full.extend_from_slice(&block);
+    full.extend_from_slice(&64u64.to_le_bytes());
+    let read = Ctx::from_bytes(&full).expect("ein voller Puffer ist ein Zustand");
+    assert_eq!(read.finish(), sha256(&block));
+}
+
 #[test]
 fn a_foreign_byte_form_is_refused() {
     let mut buf = [0u8; CTX_MAX_BYTES];
     let n = Ctx::new().to_bytes(&mut buf).expect("Platz");
     assert!(Ctx::from_bytes(&buf[..n]).is_some());
     assert!(Ctx::from_bytes(&buf[..n - 1]).is_none(), "zu kurz");
-    buf[32] = 64;
-    assert!(Ctx::from_bytes(&buf[..n + 64]).is_none(), "ein voller Block steht nie im Zustand");
+    let mut long = buf[..36].to_vec();
+    long[32] = 65;
+    long.resize(36 + 65 + 8, 0);
+    assert!(Ctx::from_bytes(&long).is_none(), "mehr als ein Block");
     let mut small = [0u8; 8];
     assert!(Ctx::new().to_bytes(&mut small).is_err(), "der Puffer ist zu klein");
 }

@@ -25,9 +25,10 @@ takt-mir = { path = "../takt-mir" }
 takt-sema = { path = "../takt-sema" }
 
 [dependencies]
-# Fuer das Messprogramm `natives` (13.8): die kuratierten Natives, wie
-# ein Programm sie ruft.
+# Fuer das Messprogramm `natives` (13.8): die kuratierten Natives und ihre
+# Einstiege, wie der erzeugte Code sie ruft.
 takt-native = { path = "../takt-native" }
+takt-native-abi = { path = "../takt-native-abi" }
 takt-board-stm32f401 = { path = "../takt-board-stm32f401" }
 takt-board-support = { path = "../takt-board-support" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }

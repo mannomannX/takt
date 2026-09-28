@@ -209,6 +209,7 @@ pub fn natives_agree(board: &mut dyn Board) -> Vec<String> {
     match takt_conformance::bench::natives_on(board, &program) {
         Ok(rows) => rows
             .iter()
+            .inspect(|r| eprintln!("{} {}: Stack {} von {} Byte", board.name(), r.native.name(), r.stack, r.contract))
             .filter(|r| !r.same_result() || !r.within_contract())
             .map(|r| {
                 format!(

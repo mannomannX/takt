@@ -6,7 +6,7 @@ system:
 # Schrittphase; `v.done` und `v.result` sind Inputs. Das Modell liefert das
 # Ergebnis nach `duration`, hier drei Ticks nach dem Start.
 
-native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, duration = 25 ms, total
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 25 ms, total
 
 output word  : u32  @ hw("o/word")  with safe = 0
 output ready : bool @ hw("o/ready") with safe = false

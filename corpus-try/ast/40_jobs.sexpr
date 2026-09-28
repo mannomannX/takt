@@ -1,7 +1,7 @@
 (system
   (language 1)
   (tick 10ms))
-(native-job sha256 (b:bytes<64>) -> bytes<32> cost=60000 stack=512 duration=25ms)
+(native-job sha256 (b:bytes<64>) -> bytes<32> cost=60000 stack=640 duration=25ms)
 (output word :u32 @hw("o/word") safe=0)
 (output ready :bool @hw("o/ready") safe=false)
 (fn first (d:bytes<32>) -> u32

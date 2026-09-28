@@ -738,6 +738,7 @@ dependencies = [
  "takt-mcu-program",
  "takt-mir",
  "takt-native",
+ "takt-native-abi",
  "takt-rt-baremetal",
  "takt-rt-core",
  "takt-rt-rtos",
@@ -805,6 +806,7 @@ version = "0.1.0"
 name = "takt-mcu-program"
 version = "0.1.0"
 dependencies = [
+ "takt-native-abi",
  "takt-rt-baremetal",
  "takt-rt-core",
 ]
@@ -819,6 +821,13 @@ dependencies = [
 [[package]]
 name = "takt-native"
 version = "0.1.0"
+
+[[package]]
+name = "takt-native-abi"
+version = "0.1.0"
+dependencies = [
+ "takt-native",
+]
 
 [[package]]
 name = "takt-rt-baremetal"

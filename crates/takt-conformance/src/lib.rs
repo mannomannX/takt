@@ -40,3 +40,10 @@ pub use harness::Harness;
 pub use limits::LIMITS;
 pub use run::{Difference, compare};
 pub use stimulus::Stimulus;
+
+/// Das Zielverzeichnis von `cargo`: `CARGO_TARGET_DIR`, sonst `target` in
+/// der Wurzel des Repositorys.
+pub fn target_dir() -> std::path::PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"), Into::into)
+}

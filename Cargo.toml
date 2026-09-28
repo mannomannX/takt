@@ -10,6 +10,8 @@ exclude = [
     "crates/takt-board-esp32c6",
     # Die C-ABI des erzeugten Rahmens, einmal fuer alle Boards; aus demselben Grund.
     "crates/takt-mcu-program",
+    # Die C-Einstiege der kuratierten Natives fuer den erzeugten Code (FB-293).
+    "crates/takt-native-abi",
 ]
 
 members = [

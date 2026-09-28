@@ -7,11 +7,11 @@ system:
 # Byteform, 5.9) und ein HMAC. Je das erste Wort des Digests, damit der
 # Trace es zeigt.
 
-native fn sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, total
-native fn sha256_init() -> Sha256Ctx with cost = 8, stack = 32, total
-native fn sha256_update(ctx: Sha256Ctx, chunk: bytes<64>) -> Sha256Ctx with cost = 2300, stack = 512, total
-native fn sha256_final(ctx: Sha256Ctx) -> bytes<32> with cost = 3600, stack = 512, total
-native fn hmac_sha256(key: bytes<64>, msg: bytes<64>) -> bytes<32> with cost = 90000, stack = 768, total
+native fn sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, total
+native fn sha256_init() -> Sha256Ctx with cost = 8, stack = 320, total
+native fn sha256_update(ctx: Sha256Ctx, chunk: bytes<64>) -> Sha256Ctx with cost = 2300, stack = 544, total
+native fn sha256_final(ctx: Sha256Ctx) -> bytes<32> with cost = 3600, stack = 640, total
+native fn hmac_sha256(key: bytes<64>, msg: bytes<64>) -> bytes<32> with cost = 90000, stack = 992, total
 
 output one_shot : u32 @ hw("o/one_shot") with safe = 0
 output chunked  : u32 @ hw("o/chunked")  with safe = 0

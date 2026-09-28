@@ -106,10 +106,17 @@ pub fn write_value<P: Port, const N: usize>(t: &mut Telemetry<P, N>, label: &str
     t.flush();
 }
 
-/// Eine Zeile `native <i> <ergebnis> stack <byte>` (13.8): das Ergebnis
-/// eines Vektors Byte fuer Byte in Hex, dazu der Stack-Bedarf des Aufrufs.
+/// Eine Zeile `native <i> <ergebnis> stack <byte> [<name> <byte>]...`
+/// (13.8): das Ergebnis eines Vektors Byte fuer Byte in Hex, der
+/// Stack-Bedarf seines Einstiegs und der weiteren Einstiege, die er ruft.
 /// `takt_conformance::natives` liest sie und vergleicht mit dem Wirt.
-pub fn write_native<P: Port, const N: usize>(t: &mut Telemetry<P, N>, index: usize, result: &[u8], stack: u32) {
+pub fn write_native<P: Port, const N: usize>(
+    t: &mut Telemetry<P, N>,
+    index: usize,
+    result: &[u8],
+    stack: u32,
+    others: &[(&str, u32)],
+) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     t.write("native ");
     t.write_u64(index as u64);
@@ -120,6 +127,12 @@ pub fn write_native<P: Port, const N: usize>(t: &mut Telemetry<P, N>, index: usi
     }
     t.write(" stack ");
     t.write_u64(u64::from(stack));
+    for (name, used) in others {
+        t.write(" ");
+        t.write(name);
+        t.write(" ");
+        t.write_u64(u64::from(*used));
+    }
     t.newline();
     t.flush();
 }

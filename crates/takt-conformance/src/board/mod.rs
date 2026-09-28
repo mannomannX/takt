@@ -107,6 +107,7 @@ pub const CORPUS: &[&str] = &[
     "96_record_outputs.takt",
     "97_fast_math.takt",
     "98_last_fault.takt",
+    "99_exit_fault.takt",
     // 12.7: die Startmuster; ohne Plattformwerte die Plattform ohne Startstufe.
     "sim/12_7/program.takt",
     "sim/14_7/program.takt",
@@ -271,24 +272,59 @@ impl Bringup {
     /// Das ELF fuer `program`, aus dem Zwischenspeicher oder frisch gebaut.
     ///
     /// Der Bau kostet einige Sekunden je Programm und ergibt bei gleichen
-    /// Eingaben dasselbe Abbild (FB-270). Der Speicher liegt unter
-    /// `takt-board-images` im Temp-Verzeichnis; loeschen erzwingt den Bau.
+    /// Eingaben dasselbe Abbild (FB-270). Der Speicher liegt im
+    /// Zielverzeichnis unter `takt-board-images/<tripel>-<stand>` und haelt
+    /// je Board nur den Stand der Quellen, gegen den gebaut wird: Ein neuer
+    /// Stand raeumt die frueheren weg. Ohne das wuchs er mit jeder Aenderung
+    /// an `src`, bis das Temp-Laufwerk voll war.
     pub fn build(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
-        let cache = std::env::temp_dir().join("takt-board-images");
-        let cached = cache.join(format!("{:016x}.elf", self.key(program, options)?));
+        let images = crate::target_dir().join("takt-board-images");
+        let stand = images.join(format!("{}-{:016x}", self.triple, self.sources()?));
+        let cached = stand.join(format!("{:016x}.elf", self.key(program, options)?));
         if cached.is_file() {
             return Ok(cached);
         }
         let elf = self.build_uncached(program, options)?;
-        std::fs::create_dir_all(&cache)
+        if !stand.is_dir() {
+            self.forget_stale(&images);
+        }
+        std::fs::create_dir_all(&stand)
             .and_then(|()| std::fs::copy(&elf, &cached))
             .map_err(|e| format!("{}: {e}", cached.display()))?;
         Ok(cached)
     }
 
-    /// Der Schluessel eines Abbilds: das Programm, die Optionen, die
-    /// C-Referenz und alles, was der Bau liest — die Quellen aller Crates
-    /// und die Dateien des Bring-ups. Aendert sich nichts davon, ist das
+    /// Entfernt die Abbilder frueherer Staende dieses Boards; gegen sie
+    /// baut niemand mehr.
+    fn forget_stale(&self, images: &Path) {
+        let prefix = format!("{}-", self.triple);
+        for entry in std::fs::read_dir(images).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+
+    /// Der Stand, gegen den gebaut wird: die Quellen aller Crates und die
+    /// Dateien des Bring-ups.
+    fn sources(&self) -> Result<u64, String> {
+        let mut h = DefaultHasher::new();
+        let dir = root().join(self.dir);
+        for name in self.inputs {
+            std::fs::read(dir.join(name)).unwrap_or_default().hash(&mut h);
+        }
+        let crates = root().join("crates");
+        let mut sources: Vec<PathBuf> =
+            std::fs::read_dir(&crates).map_err(|e| e.to_string())?.flatten().map(|e| e.path().join("src")).collect();
+        sources.sort();
+        for dir in sources.iter().filter(|d| d.is_dir()) {
+            hash_tree(dir, &mut h)?;
+        }
+        Ok(h.finish())
+    }
+
+    /// Der Schluessel eines Abbilds in seinem Stand: das Programm, die
+    /// Optionen und die C-Referenz. Aendert sich nichts davon, ist das
     /// Abbild dasselbe.
     fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
         let mut h = DefaultHasher::new();
@@ -311,17 +347,6 @@ impl Bringup {
                 let spec = crate::natives::spec_path();
                 std::fs::read(&spec).map_err(|e| format!("{}: {e}", spec.display()))?.hash(&mut h);
             }
-        }
-        let dir = root().join(self.dir);
-        for name in self.inputs {
-            std::fs::read(dir.join(name)).unwrap_or_default().hash(&mut h);
-        }
-        let crates = root().join("crates");
-        let mut sources: Vec<PathBuf> =
-            std::fs::read_dir(&crates).map_err(|e| e.to_string())?.flatten().map(|e| e.path().join("src")).collect();
-        sources.sort();
-        for dir in sources.iter().filter(|d| d.is_dir()) {
-            hash_tree(dir, &mut h)?;
         }
         Ok(h.finish())
     }

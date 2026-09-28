@@ -1236,6 +1236,24 @@ impl Lowerer<'_> {
             }
         }
         let stack = super::expr::parse_int(&decl.stack.text).unwrap_or(0) as u32;
+        // T5: Der `stack`-Vertrag geht als Blattkosten in die Stack-Schranke
+        // ein. Fuer eine kuratierte Funktion ist er gemessen (13.8); eine
+        // Deklaration darunter machte die Schranke falsch.
+        if let Some(f) = takt_native::Native::by_name(&decl.name.name).filter(|_| decl.from.is_none()) {
+            let contract = takt_native::cost_of(f).stack;
+            if stack < contract {
+                self.error_hint(
+                    SC31,
+                    decl.span,
+                    format!(
+                        "`stack = {stack}` liegt unter dem gemessenen Bedarf von `{}` ({contract} Byte, 4.5)",
+                        f.name()
+                    ),
+                    format!("`stack = {contract}` oder mehr"),
+                );
+                return;
+            }
+        }
         // 4.5, 9.5: Ein Projekt-Native erweitert die TCB; das Programm sagt
         // es mit `tcb_policy = allowlist(...)`, sonst bleibt es bei der
         // kuratierten Menge.

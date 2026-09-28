@@ -68,14 +68,18 @@ impl Ctx {
         self.total = self.total.wrapping_add(data.len() as u64);
     }
 
-    /// `sha256_final(ctx)`.
+    /// `sha256_final(ctx)`: `0x80`, Nullen bis Byte 56 des letzten Blocks,
+    /// dann die Laenge in Bit (FIPS 180-4, 5.1.1).
     pub fn finish(mut self) -> [u8; 32] {
         let bits = self.total.wrapping_mul(8);
-        self.update(&[0x80]);
-        while self.filled != 56 {
-            self.update(&[0]);
+        self.block[self.filled] = 0x80;
+        self.block[self.filled + 1..].fill(0);
+        if self.filled >= 56 {
+            compress(&mut self.h, &self.block);
+            self.block.fill(0);
         }
-        self.update(&bits.to_be_bytes());
+        self.block[56..].copy_from_slice(&bits.to_be_bytes());
+        compress(&mut self.h, &self.block);
         let mut out = [0u8; 32];
         for (chunk, w) in out.chunks_exact_mut(4).zip(self.h) {
             chunk.copy_from_slice(&w.to_be_bytes());
@@ -97,20 +101,28 @@ impl Ctx {
     }
 
     /// Liest die kanonische Form; `None`, wenn sie kein `Sha256Ctx` ist.
+    /// Jeder Wert des Records ist einer: Ein voller Puffer (64 Byte) ist
+    /// der Block, den `update` als naechstes verdichtet haette.
     pub fn from_bytes(b: &[u8]) -> Option<Ctx> {
         let mut h = [0u32; 8];
         for (i, w) in h.iter_mut().enumerate() {
             *w = u32::from_le_bytes(b.get(4 * i..4 * i + 4)?.try_into().ok()?);
         }
         let filled = u32::from_le_bytes(b.get(32..36)?.try_into().ok()?) as usize;
-        if filled > 63 {
+        if filled > 64 {
             return None;
         }
         let mut block = [0u8; 64];
         block[..filled].copy_from_slice(b.get(36..36 + filled)?);
         let n = 36 + filled;
         let total = u64::from_le_bytes(b.get(n..n + 8)?.try_into().ok()?);
-        (b.len() == n + 8).then_some(Ctx { h, block, filled, total })
+        if b.len() != n + 8 {
+            return None;
+        }
+        if filled == 64 {
+            compress(&mut h, &block);
+        }
+        Some(Ctx { h, block, filled: filled % 64, total })
     }
 }
 
@@ -147,18 +159,23 @@ pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     outer.finish()
 }
 
+/// Eine Runde je Wort des Nachrichtenplans (FIPS 180-4, 6.2.2). Der Plan
+/// liegt als Ring der letzten 16 Woerter: `w[t % 16]` traegt vor Runde `t`
+/// noch W(t-16) und wird zu W(t) — 64 statt 256 Byte Stack (4.5).
 fn compress(h: &mut [u32; 8], block: &[u8; 64]) {
-    let mut w = [0u32; 64];
+    let mut w = [0u32; 16];
     for (word, bytes) in w.iter_mut().zip(block.chunks_exact(4)) {
         *word = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
     }
-    for i in 16..64 {
-        let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-        let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-        w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
-    }
     let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = *h;
-    for (k, wi) in K.iter().zip(w) {
+    for (t, k) in K.iter().enumerate() {
+        if t >= 16 {
+            let (w15, w2) = (w[(t - 15) % 16], w[(t - 2) % 16]);
+            let s0 = w15.rotate_right(7) ^ w15.rotate_right(18) ^ (w15 >> 3);
+            let s1 = w2.rotate_right(17) ^ w2.rotate_right(19) ^ (w2 >> 10);
+            w[t % 16] = w[t % 16].wrapping_add(s0).wrapping_add(w[(t - 7) % 16]).wrapping_add(s1);
+        }
+        let wi = w[t % 16];
         let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
         let ch = (e & f) ^ (!e & g);
         let t1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(*k).wrapping_add(wi);

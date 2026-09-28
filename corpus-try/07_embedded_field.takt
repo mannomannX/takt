@@ -19,9 +19,9 @@ record SelftestResult:
     code   : int in 0..255
 
 native fn crc32c(b: bytes<256>) -> u32 with cost = {i32: 4000}, stack = 64, total
-native fn sha256_init() -> Sha256Ctx with cost = 200, stack = 64, total
-native fn sha256_update(ctx: Sha256Ctx, chunk: bytes<256>) -> Sha256Ctx with cost = {i32: 90000}, stack = 256, total
-native fn sha256_final(ctx: Sha256Ctx) -> bytes<32> with cost = 3000, stack = 256, total
+native fn sha256_init() -> Sha256Ctx with cost = 200, stack = 320, total
+native fn sha256_update(ctx: Sha256Ctx, chunk: bytes<256>) -> Sha256Ctx with cost = {i32: 90000}, stack = 544, total
+native fn sha256_final(ctx: Sha256Ctx) -> bytes<32> with cost = 3000, stack = 640, total
 native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 2048, duration = 120 ms, total
 
 input  cell_mv       : u16[mV] in 2000 mV..4500 mV @ hw("afe/cell0")         with max_age = 100 ms, max_slew = 200 mV/s

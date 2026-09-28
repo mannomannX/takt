@@ -23,24 +23,10 @@ use takt_sema::{Build, Options};
 
 mod common;
 
-/// Die Beispiele, die der M4-Exit nennt.
-///
-/// 14.8 laeuft im Interpreter mit Golden-Trace; nativ fehlt die
-/// Signaturpruefung im Rahmen (unten).
-const EXAMPLES: [&str; 7] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6", "14_7"];
-
-/// Die uebrigen, mit dem Konstrukt, an dem der Codegen abbricht.
-///
-/// Sie stehen hier und nicht im Kommentar, weil ein Test sie mitzaehlen
-/// soll: Was fehlt, ist Teil des Ergebnisses. Der Eintrag verschwindet,
-/// sobald das Konstrukt gesenkt wird — und dann faellt der Test auf, der
-/// ihn noch fuehrt.
-///
-/// 14.8: `ecdsa_p256_verify` liegt in `takt-crypto` (plan/m6.md 2.4). Der
-/// C-Rahmen hat keine Signaturpruefung, und ein Rust-Symbol mit
-/// C-Schnittstelle braeuchte `unsafe` — das der Workspace verbietet. Der
-/// Interpreter prueft die Signatur; der Rahmen bindet das Programm nicht.
-const OPEN: [(&str, &str); 1] = [("14_8", "ecdsa_p256_verify ohne C-Rahmen")];
+/// Die Beispiele der Referenz: die sechs des M4-Exits, 14.7 und 14.8. Die
+/// Signaturpruefung von 14.8 ruft der Rahmen ueber `takt-native-abi`
+/// (FB-293).
+const EXAMPLES: [&str; 8] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6", "14_7", "14_8"];
 
 /// Wie viele Ticks verglichen werden.
 ///
@@ -102,30 +88,4 @@ fn the_reference_examples_agree_on_both_paths() {
     }
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
     assert_eq!(checked, EXAMPLES.len(), "es wurden nicht alle Beispiele geprueft");
-}
-
-/// Was der M4-Exit noch schuldet.
-///
-/// `plan.md` verlangt „14.1–14.6 in Echtzeit auf der Box"; zwei davon
-/// laufen. Der Test haelt die Luecke fest, statt sie in einem Kommentar
-/// verschwinden zu lassen — und er schlaegt an, sobald ein Beispiel
-/// laeuft, das hier noch als offen steht.
-#[test]
-fn the_remaining_examples_name_what_is_missing() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
-    let mut unerwartet = Vec::new();
-    for (name, reason) in OPEN {
-        let p = example(name);
-        if let Ok(native) = common::run_native_all(&clang, &p, name, TICKS) {
-            if compare(&interpreted(&p), &native).is_empty() {
-                unerwartet.push(format!("{name} laeuft jetzt ({reason} ist gesenkt) — in BEISPIELE aufnehmen"));
-            }
-        }
-    }
-    assert!(unerwartet.is_empty(), "{}", unerwartet.join("\n"));
-    assert_eq!(EXAMPLES.len() + OPEN.len(), 8, "die sechs Beispiele des M4-Exits, 14.7 und 14.8");
 }

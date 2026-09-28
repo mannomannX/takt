@@ -97,11 +97,11 @@ fn blocks(args: &[u8]) -> Vec<&[u8]> {
     out
 }
 
-/// Ein `bytes<N>` steht im Block als Laenge und Daten; ein Record als
-/// seine kanonische Form.
+/// Ein `bytes<N>`, auch ein Digest, steht im Block als Laenge und Daten;
+/// ein Record als seine kanonische Form.
 fn payload(kind: Kind, block: &[u8]) -> &[u8] {
     match kind {
-        Kind::Bytes => {
+        Kind::Bytes | Kind::Digest => {
             let n = block.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).unwrap_or(0);
             block.get(4..4 + n).unwrap_or(&[])
         }

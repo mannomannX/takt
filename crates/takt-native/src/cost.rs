@@ -18,34 +18,42 @@ pub struct Cost {
     pub per_byte: u64,
     /// Feste Kosten des Aufrufs.
     pub call: u64,
-    /// Maximaler Stack-Bedarf in Byte (4.5, geht in 12.3 ein).
+    /// Maximaler Stack-Bedarf in Byte (4.5, geht in 12.3 ein): der am
+    /// Einstieg aus `takt-native-abi` gemessene groesste Bedarf beider Boards
+    /// (13.8, FB-293) plus ein Viertel, auf 32 Byte aufgerundet. Die Sema
+    /// lehnt eine Deklaration darunter ab.
     pub stack: u32,
 }
 
 /// Der Kostenvertrag einer Funktion.
 ///
-/// Die Zahlen sind die abgezaehlten Operationen der Implementierung, nicht
-/// gemessene Zeit: 9.4.3 rechnet in abstrakten Operationen, und die
-/// Umrechnung in Zeit ist die Kalibrierung aus M5.
+/// Die Operationen sind abgezaehlt, nicht gemessene Zeit: 9.4.3 rechnet in
+/// abstrakten Operationen, und die Umrechnung in Zeit ist die Kalibrierung
+/// aus M5. Der Stack ist gemessen; im Kommentar das Maximum (F401, C6 am
+/// 2026-09-28).
 pub fn cost_of(f: Native) -> Cost {
     match f {
         // Acht Runden je Byte, je Runde ein Test, ein Schieben und ein
-        // Xor; dazu das Xor des Bytes.
-        Native::Crc32 | Native::Crc32c => Cost { per_byte: 25, call: 2, stack: 16 },
-        Native::Crc16 => Cost { per_byte: 25, call: 2, stack: 16 },
-        // Eine Addition je Byte.
-        Native::Sum8 => Cost { per_byte: 1, call: 1, stack: 8 },
+        // Xor; dazu das Xor des Bytes. Stack 16.
+        Native::Crc32 | Native::Crc32c => Cost { per_byte: 25, call: 2, stack: 32 },
+        Native::Crc16 => Cost { per_byte: 25, call: 2, stack: 32 },
+        // Eine Addition je Byte. Stack 8.
+        Native::Sum8 => Cost { per_byte: 1, call: 1, stack: 32 },
         // Je 64-Byte-Block 64 Runden zu rund 20 Operationen und 48
         // Schedule-Schritte zu rund 10, dazu die Byteschleife: 32 je Byte.
-        // Das Finale fuellt bis zu zwei Bloecke; der Schedule braucht 256
-        // Byte Stack, der Zustand 112.
-        Native::Sha256 => Cost { per_byte: 32, call: 3600, stack: 512 },
+        // Das Finale fuellt bis zu zwei Bloecke. Stack 504: der Zustand
+        // (112), der Ring des Plans (64), die Runden.
+        Native::Sha256 => Cost { per_byte: 32, call: 3600, stack: 640 },
         // Zwei Hashes: innen 64 Byte Pad plus Nachricht, aussen 64 plus 32.
-        Native::HmacSha256 => Cost { per_byte: 32, call: 7200, stack: 768 },
-        Native::Sha256Init => Cost { per_byte: 0, call: 8, stack: 32 },
+        // Stack 792.
+        Native::HmacSha256 => Cost { per_byte: 32, call: 7200, stack: 992 },
+        // Stack 236: der Zustand und seine kanonische Form.
+        Native::Sha256Init => Cost { per_byte: 0, call: 8, stack: 320 },
         // Dazu das Lesen und Schreiben der kanonischen Form (108 Byte).
-        Native::Sha256Update => Cost { per_byte: 32, call: 240, stack: 512 },
-        Native::Sha256Final => Cost { per_byte: 0, call: 3600, stack: 512 },
+        // Stack 412.
+        Native::Sha256Update => Cost { per_byte: 32, call: 240, stack: 544 },
+        // Stack 488.
+        Native::Sha256Final => Cost { per_byte: 0, call: 3600, stack: 640 },
         // Der Start eines Jobs (4.5): Argumente kopieren; die Pruefung
         // selbst laeuft ausserhalb der Schrittphase in `takt-crypto`.
         Native::EcdsaP256Verify => Cost { per_byte: 0, call: 300, stack: 2048 },

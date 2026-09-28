@@ -24,11 +24,11 @@ fn errors(body: &str) -> String {
 
 #[test]
 fn a_declaration_must_match_the_curated_signature() {
-    let e = errors("native fn sha256_update(ctx: Sha256Ctx) -> Sha256Ctx with cost = 10, stack = 64, total\n");
+    let e = errors("native fn sha256_update(ctx: Sha256Ctx) -> Sha256Ctx with cost = 10, stack = 544, total\n");
     assert!(e.contains("SC-31") && e.contains("(Sha256Ctx, bytes<N>) -> Sha256Ctx"), "{e}");
     let e = errors("native fn crc16(b: bytes<8>) -> u32 with cost = 10, stack = 64, total\n");
     assert!(e.contains("-> u16"), "{e}");
-    let e = errors("native fn sha256(b: bytes<8>) -> bytes<16> with cost = 10, stack = 64, total\n");
+    let e = errors("native fn sha256(b: bytes<8>) -> bytes<16> with cost = 10, stack = 640, total\n");
     assert!(e.contains("-> bytes<32>"), "{e}");
 }
 
@@ -36,6 +36,16 @@ fn a_declaration_must_match_the_curated_signature() {
 fn a_duration_belongs_to_a_job() {
     let e = errors("native fn crc32(b: bytes<8>) -> u32 with cost = 10, stack = 64, duration = 1 ms, total\n");
     assert!(e.contains("nur an einem `native job`"), "{e}");
+}
+
+/// T5: Der `stack`-Vertrag ist Blattkosten der Stack-Schranke; unter dem
+/// gemessenen Bedarf waere sie falsch.
+#[test]
+fn a_stack_below_the_measured_need_is_refused() {
+    let e = errors("native fn sha256(b: bytes<8>) -> bytes<32> with cost = 10, stack = 512, total\n");
+    assert!(e.contains("SC-31") && e.contains("`stack = 640` oder mehr"), "{e}");
+    compile("native fn sha256(b: bytes<8>) -> bytes<32> with cost = 10, stack = 4096, total\n")
+        .expect("mehr ist erlaubt");
 }
 
 #[test]
@@ -172,7 +182,7 @@ fn a_project_native_needs_the_tcb_policy_and_lands_in_the_manifest() {
 
 #[test]
 fn the_manifest_names_takt_native_and_takt_crypto() {
-    let p = compile("native fn sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, total\n")
+    let p = compile("native fn sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, total\n")
         .expect("uebersetzt");
     let header = takt_interp::record::Header::of(&p, None, &[], 1).render();
     assert!(header.contains("#! tcb takt-native\n"), "{header}");

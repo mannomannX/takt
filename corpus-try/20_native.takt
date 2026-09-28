@@ -8,7 +8,7 @@ system:
     language = 1
     tick     = 10 ms
 
-native fn crc32(b: bytes<64>) -> u32 with cost = 1600, stack = 16, total
+native fn crc32(b: bytes<64>) -> u32 with cost = 1600, stack = 32, total
 
 output pruefsumme : u32  @ hw("ui/crc") with safe = 0
 output stimmt     : bool @ hw("ui/ok")  with safe = false

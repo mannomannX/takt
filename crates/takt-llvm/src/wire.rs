@@ -131,6 +131,15 @@ fn read_field(buf: Reg, at: u32, ty: TypeId, endian: Endian, p: &Program, m: &mu
             }
             Ok(Field { value: cur, ty: target })
         }
+        // Ein `bytes<N>` belegt im Draht seine Kapazitaet und hat gelesen
+        // die Laenge N, wie im Interpreter.
+        Some(Type::Bytes { cap }) => {
+            let ptr = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {at}"));
+            let data = m.inst(&format!("load [{cap} x i8], ptr {ptr}, align 1"));
+            let with_len = m.inst(&format!("insertvalue {target} undef, i32 {cap}, 0"));
+            let v = m.inst(&format!("insertvalue {target} {with_len}, [{cap} x i8] {data}, 1"));
+            Ok(Field { value: v.to_string(), ty: target })
+        }
         _ => Err(NotYet { what: "Feld dieses Typs im Drahtformat" }),
     }
 }
@@ -155,6 +164,21 @@ fn write_field(
             let item = m.inst(&format!("extractvalue {field_ty} {operand}, {i}")).to_string();
             write_field(data, at + i * w, *elem, &item, &elem_ty, endian, p, m)?;
         }
+        return Ok(());
+    }
+    // Ein `bytes<N>` mit seiner Laenge, der Rest des Feldes mit Nullen.
+    if let Some(Type::Bytes { cap }) = p.types.list.get(ty.index()) {
+        let tmp = m.alloca(field_ty);
+        m.write(field_ty, operand, &tmp.to_string());
+        let len_ptr = m.inst(&format!("getelementptr inbounds {field_ty}, ptr {tmp}, i32 0, i32 0"));
+        let len = m.inst(&format!("load i32, ptr {len_ptr}"));
+        let short = m.inst(&format!("icmp ult i32 {len}, {cap}"));
+        let n = m.inst(&format!("select i1 {short}, i32 {len}, i32 {cap}"));
+        let n64 = m.inst(&format!("zext i32 {n} to i64"));
+        let slot = m.inst(&format!("getelementptr inbounds i8, ptr {data}, i64 {at}"));
+        let src = m.inst(&format!("getelementptr inbounds {field_ty}, ptr {tmp}, i32 0, i32 1"));
+        m.void_inst(&format!("call void @llvm.memset.p0.i64(ptr {slot}, i8 0, i64 {cap}, i1 false)"));
+        m.void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {slot}, ptr {src}, i64 {n64}, i1 false)"));
         return Ok(());
     }
     let width = field_size(ty, p).ok_or(NotYet { what: "Feldgroesse" })?;

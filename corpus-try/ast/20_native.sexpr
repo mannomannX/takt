@@ -1,7 +1,7 @@
 (system
   (language 1)
   (tick 10ms))
-(native-fn crc32 (b:bytes<64>) -> u32 cost=1600 stack=16)
+(native-fn crc32 (b:bytes<64>) -> u32 cost=1600 stack=32)
 (output pruefsumme :u32 @hw("ui/crc") safe=0)
 (output stimmt :bool @hw("ui/ok") safe=false)
 (machine rahmen

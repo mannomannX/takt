@@ -9,7 +9,7 @@ use takt_sema::{Build, Options};
 
 const HEAD: &str = "system:\n    language = 1\n    tick = 10 ms\n\n";
 const JOB: &str =
-    "native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, duration = 25 ms, total\n";
+    "native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 25 ms, total\n";
 
 fn compile(body: &str) -> Result<Program, Vec<String>> {
     let src = format!("{HEAD}{body}");
@@ -105,7 +105,7 @@ machine m:
 #[test]
 fn a_job_needs_a_native_job() {
     let e = errors(
-        "native fn sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, total
+        "native fn sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, total
 machine m:
     var msg : bytes<64> = default
     initial RUN
@@ -137,7 +137,7 @@ machine m:
 #[test]
 fn a_handle_keeps_its_native() {
     let e = errors(&format!(
-        "{JOB}native job crc32(b: bytes<64>) -> u32 with cost = 1600, stack = 16, duration = 1 ms, total
+        "{JOB}native job crc32(b: bytes<64>) -> u32 with cost = 1600, stack = 32, duration = 1 ms, total
 machine m:
     var msg : bytes<64> = default
     initial RUN

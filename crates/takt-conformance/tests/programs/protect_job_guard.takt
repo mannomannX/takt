@@ -8,7 +8,7 @@ system:
 # `Runtime(Hardware)`. Der Job gibt dem Rahmen seinen Stack; gerechnet
 # wird er in diesem Lauf nicht.
 
-native job sha256(b: bytes<4096>) -> bytes<32> with cost = 60000, stack = 512, duration = 20 ms, total
+native job sha256(b: bytes<4096>) -> bytes<32> with cost = 60000, stack = 640, duration = 20 ms, total
 
 output probe : bool           @ hw("test/job_guard_write") with safe = false
 output alive : int in 0..1000 @ hw("o/alive")              with safe = 0

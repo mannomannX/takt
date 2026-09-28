@@ -13,7 +13,7 @@ system:
     language = 1
     tick     = 10 ms
 
-native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, duration = 25 ms, total
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 25 ms, total
 
 output timed   : u32   @ hw("o/timed")   with safe = 0
 output planned : u32   @ hw("o/planned") with safe = 0
