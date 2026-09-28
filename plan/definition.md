@@ -1460,7 +1460,7 @@ Transaktionen (SDO-Zugriff, Modbus-Lesen mit Antwort) sind mit den vorhandenen K
 ### 8.11 Geräte mit Kommando und Status
 Sektorlöschung, Programmierung, DMA-Transfers, Kalibrierungen sind Transaktionen, keine Werte. Das Muster braucht keine neue Semantik, aber eine Konvention und ein Simulationsmodell:
 ```
-output flash_cmd    : FlashCmd            @ hw("flash/cmd")    with safe = NONE  # NONE, ERASE(sector), PROGRAM(addr, len), READ(addr, len)
+output flash_cmd    : FlashCmd            @ hw("flash/cmd")    with safe = NONE  # NONE, ERASE(sector), PROGRAM(addr, size), READ(addr, size)
 output flash_data   : stream<u8>          @ hw("flash/tx")     with max_rate = 4 MHz, capacity = 4096
 input  flash_status : FlashStatus         @ hw("flash/status") with max_age = 10 ms  # IDLE, BUSY, DONE, ERROR(code)
 input  flash_rx     : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
@@ -1471,7 +1471,7 @@ sequence:
 ```
 Der Treiber (TCB) führt das Kommando aus; das Programm sieht nur Zustände — genau wie beim Ventil. Die Bibliothek der Simulationsmodelle liefert ein **Flash-Modell** als Maschine (Sektorzeiten, Busy-Verhalten, Rücklesen) mit **Stromausfall-Injektion**: ein Parameter `CUT_AT_BYTE` bricht einen Programmiervorgang mitten im Sektor ab und lässt den Rest unbestimmt. Ein `campaign`-Sweep darüber prüft die Stromausfallsicherheit eines Schreibpfads oder des `persist`-Journals (5.9) deterministisch und reproduzierbar — dieselbe Methodik wie die Versorgungsunterbrechung in Beispiel 14.6.
 
-`FlashCmd` und `FlashStatus` stehen im Prelude, ebenso das Modell als Maschinenvorlage `flash_model(cmd, data, status, rx, sectors, t_erase, t_program, cut_at_byte)`: Das Programm bindet seine Channels beim Instanziieren — `cmd` und `data` sind seine `hw`-Outputs, `status` und `rx` seine `sim`-Outputs an den Adressen von `flash_status` und `flash_rx` (8.3). Sektoren haben 4096 Byte, programmiert wird byteweise, gelöscht liest `0xFF`; `PROGRAM` nimmt die Bytes aus `data.sent` (8.8), `READ` liefert den Bereich als ein Element von `rx`; `cut_at_byte > 0` lässt den Strom nach so vielen programmierten Bytes des Laufs — über alle `PROGRAM`-Kommandos gezählt — einmal wegbleiben: der Vorgang endet mit `ERROR(code = 1)`, geschrieben ist, was davor kam, der Rest bleibt gelöscht; ein Bereich außerhalb der `sectors` meldet `ERROR(code = 2)`. Ein Instanzargument darf ein `param` sein (kein `tunable`: die Instanz wird einmal gebildet), damit ein Sweep das Modell parametrisiert — `cut_at_byte = CUT`.
+`FlashCmd` und `FlashStatus` stehen im Prelude, ebenso das Modell als Maschinenvorlage `flash_model(cmd, data, status, rx, seed, seed_addr, sectors, t_erase, t_program, cut_at_byte)`: Das Programm bindet seine Channels beim Instanziieren — `cmd` und `data` sind seine `hw`-Outputs, `status` und `rx` seine `sim`-Outputs an den Adressen von `flash_status` und `flash_rx` (8.3); über `seed` und `seed_addr` füllt ein Szenario den Flash vor dem Test, ohne Busy und ohne Zählung für `cut_at_byte`. Sektoren haben 4096 Byte, programmiert wird byteweise, gelöscht liest `0xFF`; `PROGRAM` nimmt die Bytes aus `data.sent` (8.8), `READ` liefert den Bereich als ein Element von `rx`; `cut_at_byte > 0` lässt den Strom nach so vielen programmierten Bytes des Laufs — über alle `PROGRAM`-Kommandos gezählt — einmal wegbleiben: der Vorgang endet mit `ERROR(code = 1)`, geschrieben ist, was davor kam, der Rest bleibt gelöscht; ein Bereich außerhalb der `sectors` meldet `ERROR(code = 2)`. Ein Instanzargument darf ein `param` sein (kein `tunable`: die Instanz wird einmal gebildet), damit ein Sweep das Modell parametrisiert — `cut_at_byte = CUT`.
 
 ---
 
@@ -1877,7 +1877,7 @@ block pid_i[O, E](kp, ki, kd, lo, hi) step(err: int[E]) -> int[O]             # 
 block qp_box[const N in 1..16](h: mat<N, N>, g, lb, ub, iters, tol)   solve() / result() -> mat<N, 1> / converged() -> bool   # beschränktes QP `min 1/2 x'Hx + g'x` unter `lb <= x <= ub`, projizierter Gradient mit Schrittweite 1/||H||_inf; `iters` bricht vor der statischen Schranke MAX_QP_ITERS ab, Kosten iters*(N^2+3N) Flops; ohne Konvergenz ist `x` der letzte Iterierte, nie ein Fehler (v1.2)
 native fn sha256_init / sha256_update(ctx, chunk) / sha256_final      Chunk-Natives mit opakem Sha256Ctx (4.5)
 native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration (4.5)
-machine flash_model(cmd, data, status, rx, sectors, t_erase, t_program, cut_at_byte)   Simulationsmodell mit Stromausfall-Injektion (8.11); die Channels bindet die Instanz
+machine flash_model(cmd, data, status, rx, seed, seed_addr, sectors, t_erase, t_program, cut_at_byte)   Simulationsmodell mit Stromausfall-Injektion (8.11); die Channels bindet die Instanz
 fn solve(A, b) / inv / det / cholesky / transpose   (3.11; Einheitsmatrizen als Literale)
 fn fma[U, V](a: float[U], b: float[V], c: float[U*V]) -> float[U*V]      korrekt gerundet, bitidentisch (4.2)
 fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke (4.2)

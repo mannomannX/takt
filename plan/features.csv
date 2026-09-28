@@ -32,7 +32,7 @@ SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit
 SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),fertig,
 SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),fertig,
 SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),fertig,
-SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M10 (aus M1),teilweise,
+SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M10 (aus M1),teilweise,Float-Intervalle in der Analyse (FB-327); `default` ausserhalb der Range ist seit FB-319 ein Fehler
 SEM-3.5,Semantik/Abschnitt,3.5,Qualität von Input-Channels,,M1 (Kernsemantik),fertig,
 SEM-3.6,Semantik/Abschnitt,3.6,Typinferenz,,M1 (Kernsemantik),fertig,
 SEM-3.7,Semantik/Abschnitt,3.7,Records und Summentypen,,M1 (Kernsemantik),fertig,
@@ -42,7 +42,7 @@ SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernseman
 SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M6 (v1.1),fertig,"Sema `lower/matrix.rs`, Interpreter `takt-interp/src/matrix.rs`, Codegen `takt-llvm/src/matrix.rs`, Numerik `libtaktm::mat`; Korpus `46_matrices.takt` differentiell (Schritt 18)"
 SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),fertig,"Typvariablen (M8 Schritt 3): `GenericVar::Type` mit Faehigkeit, Unifikation in `solve_call`, Memo mit Typnamen; Korpus `62_type_generics.takt`"
 SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),fertig,
-SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M10 (aus M1),teilweise,
+SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M10 (aus M1),teilweise,korrekt gerundete transzendente Funktionen in `libtaktm` (M10 Schritt 19)
 SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),fertig,
 SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),fertig,
 SEM-4.5,Semantik/Abschnitt,4.5,Native Funktionen mit Kostenvertrag,,M1 (Kernsemantik),fertig,
@@ -66,8 +66,8 @@ SEM-7.2,Semantik/Abschnitt,7.2,Multirate-Scheduling,,M1 (Kernsemantik),fertig,
 SEM-7.3,Semantik/Abschnitt,7.3,Überlauf zur Laufzeit,,M1 (Kernsemantik),fertig,"`system: overrun = fault | alert` seit plan/nvm.md Schritt 1; ein Journal-Vorgang ueber die Frist zaehlt als Ueberlauf (Schritt 3); vier Kennzahlen aus `drift` und `took` je Tick, `time`-Metazeile und `takt timing` (plan/esp32c6.md Schritt 8)"
 SEM-7.4,Semantik/Abschnitt,7.4,Wall-Clock,,M6 (v1.1),fertig,`sys/clock` am eingebauten Geraet `sys` (Pruefung 60); `takt-rt-linux::wall_clock_ns` fuer den Treiberrand
 SEM-7.5,Semantik/Abschnitt,7.5,Zeit unterhalb des Ticks,,M1 (Kernsemantik),fertig,
-SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M10 (aus M2),teilweise,
-SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M10 (aus M6),offen,
+SEM-8.1,Semantik/Abschnitt,8.1,Deklaration,,M10 (aus M2),teilweise,"`o.jitter`, Kalibrierung und Enum-Abbildung der Kanaele (FB-336, M10 Schritt 12)"
+SEM-8.2,Semantik/Abschnitt,8.2,Große Systeme,,M10 (aus M6),teilweise,"`import channels` und Aufzeichnung ungebundener Kanaele (FB-336, M10 Schritt 12)"
 SEM-8.3,Semantik/Abschnitt,8.3,Simulation und HIL,,M2 (Ströme),fertig,
 SEM-8.4,Semantik/Abschnitt,8.4,Parameter und Profile,,M2 (Ströme),fertig,
 SEM-8.5,Semantik/Abschnitt,8.5,Commands und Operator-Interaktion,,M2 (Ströme),fertig,
@@ -76,19 +76,19 @@ SEM-8.7,Semantik/Abschnitt,8.7,"Muster, Captures, Handler",,M2 (Ströme),fertig,
 SEM-8.8,Semantik/Abschnitt,8.8,Ausgabeströme,,M2 (Ströme),fertig,
 SEM-8.9,Semantik/Abschnitt,8.9,"Oversampelte Kanäle, Register, Capture-Fenster",,M2 (Ströme),fertig,"`capture<T,N>` (M8 Schritte 12 und 13): Accessoren, Byteform mit 24-Byte-Kopf, Stimulusform `t;pre;post;rate;[…]`, `CaptureCmd` im Prelude, Codegen als Struct; Korpus `66_capture.takt`, Differential gruen. TTL-Adapter (PA9) fuer die Messung offen"
 SEM-8.10,Semantik/Abschnitt,8.10,Hardware-Konfiguration und Geräteprofile (v1.1),v1.1,M10 (aus M6),teilweise,
-SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M10 (aus M6),offen,
+SEM-8.11,Semantik/Abschnitt,8.11,Geräte mit Kommando und Status,,M10 (aus M6),fertig,
 SEM-9.0,Semantik/Abschnitt,9.0,Notation,,M1/M2 (Interpreter),fertig,
 SEM-9.1,Semantik/Abschnitt,9.1,Objekte,,M1/M2 (Interpreter),fertig,
 SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),fertig,
 SEM-9.3,Semantik/Abschnitt,9.3,Schritt einer Maschine,,M1/M2 (Interpreter),fertig,
 SEM-9.4,Semantik/Abschnitt,9.4,System-Tick und Sätze,,M1/M2 (Interpreter),fertig,
-SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M10 (aus M1/M2),teilweise,
+SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M10 (aus M1/M2),rationale,"Manifest im Kopf des Laufs, defensiver Treiberrand, Watchdog; der Test gegen den Workspace folgt mit M10 Schritt 24"
 SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),fertig,
 SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),fertig,
 SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig,
 SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M5 (Embedded),fertig,
 SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M5 (Embedded),fertig,
-SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M10 (Audit),offen,
+SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M10 (Audit),teilweise,"Referenz nachziehen und Layout-Test (FB-333, M10 Schritt 24)"
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),fertig,
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),fertig,
 SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M10 (aus M6),offen,
@@ -632,11 +632,11 @@ OBL-T8,Beweisverpflichtung,9.4.2,T8,,M1/M2 (Interpreter),fertig,
 OBL-T9,Beweisverpflichtung,9.4.2,T9,,M1/M2 (Interpreter),fertig,
 OBL-T10,Beweisverpflichtung,9.4.2,T10,,M1/M2 (Interpreter),fertig,
 OBL-T11,Beweisverpflichtung,9.4.2,T11,,M1/M2 (Interpreter),fertig,
-OBL-T12,Beweisverpflichtung,9.4.2,T12,,M10 (aus M6),offen,
+OBL-T12,Beweisverpflichtung,9.4.2,T12,,M10 (aus M6),teilweise,Stromverwurf im `idle` im erzeugten Code (FB-334)
 OBL-T13,Beweisverpflichtung,9.4.2,T13,,M1/M2 (Interpreter),fertig,
 OBL-T14,Beweisverpflichtung,9.4.2,T14,,M1/M2 (Interpreter),fertig,
 OBL-T15,Beweisverpflichtung,9.4.2,T15,,M1/M2 (Interpreter),fertig,
-OBL-T16,Beweisverpflichtung,9.4.2,T16,,M10 (aus M6),offen,
+OBL-T16,Beweisverpflichtung,9.4.2,T16,,M10 (aus M6),fertig,
 PAR-1.4-Inputs,Absatz/Regel,1.4,Inputs,,M0 (Parser/MIR-Entwurf),fertig,
 PAR-1.4-Outputs,Absatz/Regel,1.4,Outputs,,M0 (Parser/MIR-Entwurf),fertig,
 PAR-1.4-Veröffentlichte_Variablen,Absatz/Regel,1.4,Veröffentlichte Variablen,,M0 (Parser/MIR-Entwurf),fertig,
@@ -654,23 +654,23 @@ PAR-2.5-Reservierte_Membernamen,Absatz/Regel,2.5,Reservierte Membernamen,,M0 (Pa
 PAR-2.5-Offene_Enums,Absatz/Regel,2.5,Offene Enums,,M0 (Parser/MIR-Entwurf),fertig,
 PAR-2.5-Verdeckung_und_Additivität,Absatz/Regel,2.5,Verdeckung und Additivität,,M0 (Parser/MIR-Entwurf),fertig,
 PAR-2.5-Operator_Metadaten_v1.1,Absatz/Regel,2.5,Operator-Metadaten (v1.1),v1.1,M6,fertig,"Parser, MIR (`Meta`) und Hash-Trennung standen seit M0/M5; Schritt 25 prueft alle sechs Traeger und die Hashes (`takt-sema/tests/operator_metadata.rs`)"
-PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M10 (aus M1),teilweise,
-PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M10 (aus M1),teilweise,
-PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M10 (aus M1),teilweise,
+PAR-3.2-Modell,Absatz/Regel,3.2,Modell,,M10 (aus M1),fertig,
+PAR-3.2-Nominale_Semantik_Entscheidung,Absatz/Regel,3.2,Nominale Semantik (Entscheidung),,M10 (aus M1),fertig,
+PAR-3.2-Vordefinierte_Einheiten,Absatz/Regel,3.2,Vordefinierte Einheiten,,M10 (aus M1),fertig,
 PAR-3.2-Entdimensionieren,Absatz/Regel,3.2,Entdimensionieren,,M1 (Kernsemantik),fertig,
 PAR-3.2-Einheiten_auf_Integern_v1.1,Absatz/Regel,3.2,Einheiten auf Integern (v1.1),v1.1,M6,fertig,
-PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymorphie in Funktionen und Blöcken,,M10 (aus M1),teilweise,
-PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M10 (aus M1),teilweise,
+PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymorphie in Funktionen und Blöcken,,M10 (aus M1),fertig,
+PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M10 (aus M1),fertig,
 PAR-3.3-Lexikalische_Regel,Absatz/Regel,3.3,Lexikalische Regel,,M1 (Kernsemantik),fertig,
-PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M10 (aus M1),teilweise,
-PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M10 (aus M1),teilweise,
-PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M10 (aus M6),zurueckgestellt,"Kennzahl aus M6 Schritt 27 (`takt check --report`, `davon relational`): 8 von 116 verbliebenen impliziten Pruefungen sind Oktagon-Kandidaten (7 %, in 45, 14.7, 14.8); die Domaene wird nicht gebaut, bis die Zahl es traegt (FB-175)"
+PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M10 (aus M1),teilweise,"Eskalation der Kennzahl in der Zertifizierung und Tests der Differenzschranken (FB-328, M10 Schritt 24)"
+PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M10 (aus M1),teilweise,Idiom fuer Gleitkomma braucht Float-Intervalle (FB-327); ganzzahlig und Aktionsbloecke getestet
+PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M10 (aus M6),rationale,"M6 Schritt 27, FB-175: nicht bauen, solange die Kennzahl (`davon relational`) es nicht traegt"
 PAR-3.4-Darstellungsverengung,Absatz/Regel,3.4,Darstellungsverengung,,M1 (Kernsemantik),fertig,
-PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Absatz/Regel,3.5,Implizite Validitätsprüfung (Entscheidung),,M10 (aus M1),teilweise,
+PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Absatz/Regel,3.5,Implizite Validitätsprüfung (Entscheidung),,M10 (aus M1),fertig,
 PAR-3.5-Rand_Durchsetzung,Absatz/Regel,3.5,Rand-Durchsetzung,,M1 (Kernsemantik),fertig,
 PAR-3.5-Entprellte_Qualität,Absatz/Regel,3.5,Entprellte Qualität,,M1 (Kernsemantik),fertig,
 PAR-3.7-Drahtformat_Details,Absatz/Regel,3.7,Drahtformat-Details,,M1 (Kernsemantik),fertig,
-PAR-3.7-default,Absatz/Regel,3.7,`default`,,M10 (aus M1),teilweise,
+PAR-3.7-default,Absatz/Regel,3.7,`default`,,M10 (aus M1),fertig,
 PAR-3.7-Records_als_Konstanten_Arrays_von_Records_als_Gerätetabellen,Absatz/Regel,3.7,"Records als Konstanten, Arrays von Records als Gerätetabellen",,M1 (Kernsemantik),fertig,
 PAR-3.8-Ergebnis_mit_Fehlercode_T_E,Absatz/Regel,3.8,Ergebnis mit Fehlercode `T!E`,,M1 (Kernsemantik),fertig,
 PAR-3.9-inout_Parameter,Absatz/Regel,3.9,`inout`-Parameter,,M1 (Kernsemantik),fertig,
@@ -678,21 +678,21 @@ PAR-3.9-Backpatching_einen_Rahmen_zusammensetzen,Absatz/Regel,3.9,Backpatching: 
 PAR-3.11-Uniforme_Form_v1,Absatz/Regel,3.11,Uniforme Form (v1),,M6 (v1.1),fertig,"`lower/matrix.rs`, `takt-interp/src/matrix.rs`, Numerik in `libtaktm::mat`"
 PAR-3.11-Dimensionierte_Form_v1.1,Absatz/Regel,3.11,Dimensionierte Form (v1.1),v1.1,M6,fertig,"`unitvec` als `Entity::Unitvec`, Tupel in `lower/matrix.rs` (kanonische Form `c_1 = 1`), zur Laufzeit ein `mat<m, n>`"
 PAR-4.2-Breite_von_float,Absatz/Regel,4.2,Breite von `float`,,M1 (Kernsemantik),fertig,
-PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M10 (aus M1),teilweise,
+PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M10 (aus M1),teilweise,MXCSR im Wirtsrahmen und Urteil ueber den Subnormal-Vektor (FB-329)
 PAR-4.2-fma,Absatz/Regel,4.2,`fma`,,M1 (Kernsemantik),fertig,
 PAR-4.2-Reduktionen,Absatz/Regel,4.2,Reduktionen,,M1 (Kernsemantik),fertig,
-PAR-4.2-Subnormale_in_Zuständen,Absatz/Regel,4.2,Subnormale in Zuständen,,M10 (aus M1),teilweise,
+PAR-4.2-Subnormale_in_Zuständen,Absatz/Regel,4.2,Subnormale in Zuständen,,M10 (aus M1),fertig,
 PAR-4.4-Das_Ergebnisziel_ist_optional,Absatz/Regel,4.4,Das Ergebnisziel ist optional,,M1 (Kernsemantik),fertig,
 PAR-4.5-Chunk_Natives,Absatz/Regel,4.5,Chunk-Natives,,M1 (Kernsemantik),fertig,
 PAR-4.5-Jobs,Absatz/Regel,4.5,Jobs,,M6 (v1.1),fertig,
-PAR-5.1-Richtlinie_für_Regelkreise,Absatz/Regel,5.1,Richtlinie für Regelkreise,,M10 (aus M6),offen,
+PAR-5.1-Richtlinie_für_Regelkreise,Absatz/Regel,5.1,Richtlinie für Regelkreise,,M10 (aus M6),rationale,Richtlinie; Vorbild `11_foc_drive.takt` uebersetzt erst mit `sin`/`cos` (M10 Schritt 19)
 PAR-5.3-Statische_Regel,Absatz/Regel,5.3,Statische Regel:,,M1 (Kernsemantik),fertig,
 PAR-5.6-Interlock,Absatz/Regel,5.6,Interlock,,M1 (Kernsemantik),fertig,
-PAR-5.6-Permissive,Absatz/Regel,5.6,Permissive,,M10 (aus M6),offen,
+PAR-5.6-Permissive,Absatz/Regel,5.6,Permissive,,M10 (aus M6),fertig,
 PAR-5.6-Alert,Absatz/Regel,5.6,Alert,,M1 (Kernsemantik),fertig,
 PAR-5.6-Alerts_in_Schleifen,Absatz/Regel,5.6,Alerts in Schleifen,,M1 (Kernsemantik),fertig,
 PAR-5.6-Bestätigungszeit,Absatz/Regel,5.6,Bestätigungszeit,,M1 (Kernsemantik),fertig,
-PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M10 (aus M6),offen,
+PAR-5.6-Geforderte_Latenz,Absatz/Regel,5.6,Geforderte Latenz,,M10 (aus M6),fertig,
 PAR-5.6-Beobachtung_und_Steuerung,Absatz/Regel,5.6,Beobachtung und Steuerung,,M1 (Kernsemantik),fertig,
 PAR-5.9-Journal_Anforderungen,Absatz/Regel,5.9,Journal-Anforderungen,,M5 (Embedded),fertig,"in der Simulation geprueft: `corpus-try/45_journal_cut.takt`, Kampagne `power_cut` ueber jede Stelle (M6 Schritt 14); im Flash des ESP32-C6 (nvm.rs, FB-197); Log je Slot seit Version 2 (plan/nvm.md Schritt 4)"
 PAR-5.10-Statische_Regeln,Absatz/Regel,5.10,Statische Regeln,,M5 (Embedded),fertig,
@@ -708,7 +708,7 @@ PAR-7.5-Präzision,Absatz/Regel,7.5,Präzision,,M10 (aus M5),offen,"FB-285: Rand
 PAR-7.5-Trigger_v1.2_Regeln_auf_dem_I_O_Knoten,Absatz/Regel,7.5,Trigger (v1.2): Regeln auf dem I/O-Knoten,v1.2,M8,fertig,"Sema, Interpreter und Codegen (M8 Schritte 9 bis 11): Trigger-Phase vor den Schritten, eigener Cursor je Trigger, `event` als Bindungsrecord, Ausgabe fuer `event.t + d` geplant; `<besitzer>_triggers` im erzeugten Code, Differential gruen. MCU-Rahmen noch ohne Phase"
 PAR-8.3-Sim_Build,Absatz/Regel,8.3,Sim-Build:,,M2 (Ströme),fertig,
 PAR-8.3-Plant_Modelle,Absatz/Regel,8.3,Plant-Modelle,,M2 (Ströme),fertig,
-PAR-8.3-HIL_Umschaltung,Absatz/Regel,8.3,HIL-Umschaltung:,,M10 (aus M2),teilweise,
+PAR-8.3-HIL_Umschaltung,Absatz/Regel,8.3,HIL-Umschaltung:,,M10 (aus M2),fertig,
 PAR-8.3-Sim_Ausführung,Absatz/Regel,8.3,Sim-Ausführung,,M2 (Ströme),fertig,
 PAR-8.4-Tunables_v1.1,Absatz/Regel,8.4,Tunables (v1.1),v1.1,M6,fertig,
 PAR-8.6-Motivation,Absatz/Regel,8.6,Motivation,,M2 (Ströme),fertig,
@@ -775,8 +775,8 @@ FN-9-dispatch,Semantikfunktion,9,dispatch,,M1/M2 (Interpreter),fertig,
 FN-9-exec,Semantikfunktion,9,exec,,M1/M2 (Interpreter),fertig,
 FN-9-exec_chain,Semantikfunktion,9,exec_chain,,M1/M2 (Interpreter),fertig,
 FN-9-resolve_m,Semantikfunktion,9,resolve_m,,M1/M2 (Interpreter),fertig,
-FN-9-sleep,Semantikfunktion,9,sleep,,M10 (aus M6),offen,
-FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M10 (aus M6),offen,
+FN-9-sleep,Semantikfunktion,9,sleep,,M10 (aus M6),teilweise,Wecken durch Wake-Strom und Abort ungetestet; nativ ohne Eingaenge im Wirtsrahmen (FB-334)
+FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M10 (aus M6),teilweise,"Konjunkt 3 (Wake-Stream-Fenster) im erzeugten Code, Einzeltests der Konjunkte (FB-334)"
 FN-9-step_m,Semantikfunktion,9,step_m,,M1/M2 (Interpreter),fertig,
 FN-9-tick,Semantikfunktion,9,tick,,M1/M2 (Interpreter),fertig,
 FN-9-windows,Semantikfunktion,9,windows,,M1/M2 (Interpreter),fertig,
@@ -811,7 +811,7 @@ DESUGAR-step_name,Desugaring-Regel,6.2,"`step ""name"":`",,M1 (Kernsemantik),fer
 DESUGAR-Statement_mit_auch_in_if_elif_else,Desugaring-Regel,6.2,Statement mit `->` (auch in `if`/`elif`/`else`),,M1 (Kernsemantik),fertig,
 DESUGAR-Ende_ohne,Desugaring-Regel,6.2,Ende ohne `->`,,M1 (Kernsemantik),fertig,
 DESUGAR-var_x_e_in_der_Sequenz,Desugaring-Regel,6.2,`var x = e` in der Sequenz,,M1 (Kernsemantik),fertig,
-DESUGAR-until_g_as_m,Desugaring-Regel,6.2,`until g as m`,,M10 (aus M1),teilweise,
+DESUGAR-until_g_as_m,Desugaring-Regel,6.2,`until g as m`,,M10 (aus M1),fertig,
 DESUGAR-until_c_timeout_d_X,Desugaring-Regel,6.2,`until c timeout d -> X`,,M1 (Kernsemantik),fertig,
 DESUGAR-until_c_timeout_d_else,Desugaring-Regel,6.2,`until c timeout d else:`,,M1 (Kernsemantik),fertig,
 DESUGAR-measure_verify_verdict_send_at_job,Desugaring-Regel,6.2,"`measure`, `verify`, `verdict`, `send`, `at`, `job`",,M1 (Kernsemantik),fertig,
@@ -840,13 +840,13 @@ FAULT-Expect,Fault-Art,5.3,Expect,,M1 (Kernsemantik),fertig,
 FAULT-Timeout,Fault-Art,5.3,Timeout,,M1 (Kernsemantik),fertig,
 FAULT-SensorFault,Fault-Art,5.3,SensorFault,,M1 (Kernsemantik),fertig,
 FAULT-MissingValue,Fault-Art,5.3,MissingValue,,M1 (Kernsemantik),fertig,
-FAULT-ArithmeticFault_Overflow_DivZero_NonFinite_Domain_Singular,Fault-Art,5.3,ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular),,M10 (aus M1),teilweise,
+FAULT-ArithmeticFault_Overflow_DivZero_NonFinite_Domain_Singular,Fault-Art,5.3,ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular),,M10 (aus M1),teilweise,Art des Faults im erzeugten Code und im Differential (FB-330); `Domain` fuer `log`/`asin` nativ mit M10 Schritt 19
 FAULT-RangeFault,Fault-Art,5.3,RangeFault,,M1 (Kernsemantik),fertig,
 FAULT-StreamOverflow,Fault-Art,5.3,StreamOverflow,,M1 (Kernsemantik),fertig,
-FAULT-TimingFault,Fault-Art,5.3,TimingFault,,M10 (aus M1),teilweise,
-FAULT-ScheduleOverflow,Fault-Art,5.3,ScheduleOverflow,,M10 (aus M1),teilweise,
+FAULT-TimingFault,Fault-Art,5.3,TimingFault,,M10 (aus M1),teilweise,`guard(o)` aus der Konfiguration auf dem Ziel (FB-331)
+FAULT-ScheduleOverflow,Fault-Art,5.3,ScheduleOverflow,,M10 (aus M1),fertig,
 FAULT-Abort,Fault-Art,5.3,Abort,,M1 (Kernsemantik),fertig,
-FAULT-Runtime_Overrun_Driver_Watchdog_Hardware_Node,Fault-Art,5.3,Runtime(Overrun | Driver | Watchdog | Hardware | Node),,M10 (aus M1),teilweise,
+FAULT-Runtime_Overrun_Driver_Watchdog_Hardware_Node,Fault-Art,5.3,Runtime(Overrun | Driver | Watchdog | Hardware | Node),,M10 (aus M1),teilweise,"Zustellung von Overrun, Driver und Hardware an die Maschinen (FB-332); `Watchdog` entfaellt (FB-324), `Node` ist v2"
 FAULT-Node,Fault-Art,5.3,Node,,M9 (v2),offen,
 QUAL-Good,Qualität,3.5,Good,,M1 (Kernsemantik),fertig,
 QUAL-Suspect,Qualität,3.5,Suspect,,M1 (Kernsemantik),fertig,

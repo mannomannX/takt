@@ -538,7 +538,7 @@ impl Lowerer<'_> {
         let mut diags = Vec::new();
         for site in &lat.sites {
             let Some(want_ns) = site.within else { continue };
-            // Aufrunden: Eine Forderung von 2,5 Ticks ist mit zwei Ticks
+            // Abrunden: Eine Forderung von 2,5 Ticks ist mit zwei Ticks
             // erfuellt — der dritte laeuft erst nach der Frist an.
             let want_ticks = want_ns / tick;
             let have = site.ticks() + lat.commit;
