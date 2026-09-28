@@ -9,7 +9,7 @@
 //! `_restore` prueft erst und schreibt dann: Ein Eintrag mit falscher
 //! Laenge, fremder Diskriminante oder Wert ausserhalb der Range wird als
 //! Ganzes uebergangen, nie halb uebernommen (5.9: Default plus
-//! `PersistReset`; den Alert meldet der Rahmen aus dem Rueckgabewert).
+//! `PersistReset`, den `_restore` als Alert der Variablen meldet).
 
 use takt_mir::TypeId;
 use takt_mir::bytes::max_size;
@@ -230,9 +230,10 @@ impl Writer<'_> {
 /// gueltigen Eintraege einer Journal-Nutzlast und liefert ihre Zahl.
 ///
 /// Eintraege unter fremdem Typ-Hash werden uebersprungen; ein
-/// verstuemmelter Rest beendet das Lesen. Beides ist kein Fehler — der
-/// Rahmen vergleicht die Zahl mit der erwarteten und meldet den Rest als
-/// `PersistReset`.
+/// verstuemmelter Rest beendet das Lesen. Beides ist kein Fehler. Ein
+/// Eintrag unter bekanntem Hash, der nicht passt, ist `PersistReset`
+/// (5.9): Die Funktion meldet ihn als Alert der Variablen, wie
+/// `load_persist` im Interpreter.
 pub fn restore_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     if m.persist.is_empty() {
         return Ok(());
@@ -277,12 +278,17 @@ pub fn restore_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
 
     let ctx = Ctx::new(m, st, p);
     for (k, (_, i, ty)) in list.into_iter().enumerate() {
+        let Some((slot, _)) = st.counters.alert(m.vars[i].span) else {
+            module.abort(mark);
+            return Err(NotYet { what: "`PersistReset` ohne Platz" });
+        };
         module.label(&format!("pr_v{k}"));
         let Some(dst) = ctx.field(Role::Var, i, module) else {
             module.abort(mark);
             return Err(NotYet { what: "persist-Variable im Zustand" });
         };
-        let mut r = Reader { p, input, end, labels: 0, prefix: format!("pr_v{k}"), module };
+        let reject = format!("pr_v{k}_reset");
+        let mut r = Reader { p, input, end, labels: 0, prefix: format!("pr_v{k}"), reject: reject.clone(), module };
         let after = match r.decode(ty, dst, body, false) {
             Ok(a) => a,
             Err(e) => {
@@ -291,7 +297,7 @@ pub fn restore_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
             }
         };
         let exact = r.module.inst(&format!("icmp eq i64 {after}, {end}"));
-        r.module.void_inst(&format!("br i1 {exact}, label %pr_v{k}_store, label %pr_head"));
+        r.module.void_inst(&format!("br i1 {exact}, label %pr_v{k}_store, label %{reject}"));
         r.module.label(&format!("pr_v{k}_store"));
         if let Err(e) = r.decode(ty, dst, body, true) {
             module.abort(mark);
@@ -300,6 +306,13 @@ pub fn restore_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
         let n = module.inst(&format!("load i32, ptr {applied}"));
         let n1 = module.inst(&format!("add i32 {n}, 1"));
         module.void_inst(&format!("store i32 {n1}, ptr {applied}"));
+        module.void_inst("br label %pr_head");
+        module.label(&reject);
+        module.void_inst(&format!(
+            "call void @{}(i32 {}, i32 {slot}, i1 1, i1 0)",
+            crate::abi::Abi::ALERT,
+            ctx.machine_index
+        ));
         module.void_inst("br label %pr_head");
     }
 
@@ -315,6 +328,8 @@ struct Reader<'a> {
     end: Reg,
     labels: u32,
     prefix: String,
+    /// Wohin ein Eintrag springt, der nicht passt (`PersistReset`).
+    reject: String,
     module: &'a mut Module,
 }
 
@@ -336,7 +351,7 @@ impl Reader<'_> {
     fn require(&mut self, ok: Reg) {
         self.labels += 1;
         let go = format!("{}_c{}", self.prefix, self.labels);
-        self.module.void_inst(&format!("br i1 {ok}, label %{go}, label %pr_head"));
+        self.module.void_inst(&format!("br i1 {ok}, label %{go}, label %{}", self.reject));
         self.module.label(&go);
     }
 
@@ -587,7 +602,8 @@ pub(crate) fn decode_canonical(
     module: &mut Module,
 ) -> Result<(), NotYet> {
     let zero = module.inst("add i64 0, 0");
-    let mut r = Reader { p, input, end: zero, labels: 0, prefix: "native".into(), module };
+    // Mit `store` prueft `decode` nichts; es gibt kein Sprungziel.
+    let mut r = Reader { p, input, end: zero, labels: 0, prefix: "native".into(), reject: String::new(), module };
     r.decode(ty, dst, zero, true).map(|_| ())
 }
 

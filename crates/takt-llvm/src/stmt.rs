@@ -58,6 +58,9 @@ pub struct Ctx<'a> {
     sites: u32,
     /// Sprungziele der laufenden Schleifen; `break` nimmt das oberste.
     breaks: Vec<String>,
+    /// Die laufenden `for`-Schleifen von aussen nach innen: Zeiger auf den
+    /// Durchlaufzaehler, sein Typ und die statische Schranke (5.6).
+    loops: Vec<(String, LlvmType, Option<u32>)>,
     /// Das Ende der Schrittfunktion; `->` als Anweisung springt dorthin
     /// (11.2). `None` heisst: Der Block laeuft im Entry-Modus oder in
     /// einer Funktion, wo ein `->` nicht wirkt (5.2 Regel 4).
@@ -90,6 +93,7 @@ impl<'a> Ctx<'a> {
             tag: String::new(),
             sites: 0,
             breaks: Vec::new(),
+            loops: Vec::new(),
             end: None,
             entry_reg: None,
             fault_paths: Vec::new(),
@@ -103,6 +107,49 @@ impl<'a> Ctx<'a> {
         let n = self.sites;
         self.sites += 1;
         n
+    }
+
+    /// Der laufende Durchlauf als Platz in den Zaehlern einer Stelle (5.6):
+    /// die Indizes der umgebenden `for`-Schleifen, gemischt nach ihren
+    /// Schranken, als `i64`-Operand.
+    pub fn pass_index(&self, m: &mut Module) -> Result<String, NotYet> {
+        let mut acc: Option<String> = None;
+        for (ptr, ty, bound) in &self.loops {
+            let bound = bound.ok_or(NotYet { what: "Zaehler in einer Schleife ohne statische Schranke" })?;
+            let i = m.inst(&format!("load {ty}, ptr {ptr}"));
+            // Ein Durchlaufzaehler ist nie negativ; `zext` gilt fuer jede
+            // Breite, auch fuer eine verengte (3.4).
+            let wide = match ty {
+                LlvmType::Int(64) => i.to_string(),
+                _ => m.inst(&format!("zext {ty} {i} to i64")).to_string(),
+            };
+            acc = Some(match acc {
+                None => wide,
+                Some(a) => {
+                    let scaled = m.inst(&format!("mul i64 {a}, {bound}"));
+                    m.inst(&format!("add i64 {scaled}, {wide}")).to_string()
+                }
+            });
+        }
+        Ok(acc.unwrap_or_else(|| "0".into()))
+    }
+
+    /// Der Zeiger auf den Zaehler einer Stelle im laufenden Durchlauf
+    /// (5.6, 5.8).
+    pub fn counter(&self, role: Role, nth: usize, pass: &str, m: &mut Module) -> Result<Reg, NotYet> {
+        let i = self.state.index_of(role, nth).ok_or(NotYet { what: "Zaehler im Zustand" })?;
+        let n = match &self.state.fields[i as usize].ty {
+            LlvmType::Array(_, n) => *n,
+            _ => return Err(NotYet { what: "Zaehler ohne Platz je Durchlauf" }),
+        };
+        let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
+        let field = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}"));
+        Ok(m.inst(&format!("getelementptr inbounds [{n} x i64], ptr {field}, i64 0, i64 {pass}")))
+    }
+
+    /// Die Periode der Maschine in Nanosekunden (`P_m`, 7.2).
+    fn period_ns(&self) -> i64 {
+        i64::from(self.machine.period.max(1)).saturating_mul(self.program.config.tick)
     }
 
     /// Eine frische Nummer fuer eine Marke.
@@ -444,9 +491,9 @@ pub fn mark(at: u32, ctx: &mut Ctx<'_>, m: &mut Module) {
 pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     match &s.kind {
         StmtKind::Assign { target, value } => assign(target, value, ctx, m),
-        StmtKind::Check { cond, kind, .. } => check(cond, *kind, ctx, m),
+        StmtKind::Check { cond, kind, confirm, .. } => check(cond, *kind, confirm.as_ref(), ctx, m),
         StmtKind::If { cond, then, otherwise } => branch(cond, then, otherwise, ctx, m),
-        StmtKind::Observe(o) => observe(o, ctx, m),
+        StmtKind::Observe(o) => observe(o, s.span, ctx, m),
         StmtKind::Match { subject, arms } => match_stmt(subject, arms, ctx, m),
         StmtKind::MethodCall { target, receiver, method, args } => {
             method_call(target.as_ref(), receiver, *method, args, ctx, m)
@@ -480,7 +527,7 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
             Ok(())
         }
         StmtKind::Pass => Ok(()),
-        StmtKind::Send { stream, value, len_max } => send(*stream, value, *len_max, ctx, m),
+        StmtKind::Send { stream, value, len_max } => send(*stream, value, *len_max, s.span, ctx, m),
         StmtKind::Every { period, counter, body } => every(period, *counter, body, ctx, m),
         StmtKind::At { time, body } => at(time, body, ctx, m),
         // 11.2: „`->` → Setzen der Goto-Vormerkung + Sprung ans
@@ -572,6 +619,7 @@ fn send(
     stream: takt_mir::expr::StreamRef,
     value: &Expr,
     len_max: u32,
+    span: takt_diag::Span,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
@@ -659,10 +707,20 @@ fn send(
     };
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
     let ok = m.inst(&format!("call i1 @{}(i32 {sid}, ptr {bytes}, i32 {len})", crate::stream::Streams::SEND));
-    // 8.8: `len > tx.free` ist ein `StreamOverflow`.
     let go_on = format!("gesendet{}_{}", m.next_label(), ctx.machine.name);
-    let fault = ctx.trampoline_for(takt_mir::machine::FaultKind::StreamOverflow, m);
-    m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{fault}"));
+    // 8.6, 8.8: Passt das Element nicht, faultet der Schreiber — ausser
+    // mit `overflow = drop`: Dann verwirft er es und meldet einen Alert.
+    if crate::machine::drops_when_full(stream, ctx.program) {
+        let (slot, _) = ctx.state.counters.alert(span).ok_or(NotYet { what: "verwerfendes `send` ohne Platz" })?;
+        let dropped = format!("verworfen{}_{}", m.next_label(), ctx.machine.name);
+        m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{dropped}"));
+        m.label(&dropped);
+        m.void_inst(&format!("call void @{}(i32 {}, i32 {slot}, i1 1, i1 0)", Abi::ALERT, ctx.machine_index));
+        m.void_inst(&format!("br label %{go_on}"));
+    } else {
+        let fault = ctx.trampoline_for(takt_mir::machine::FaultKind::StreamOverflow, m);
+        m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{fault}"));
+    }
     m.label(&go_on);
     Ok(())
 }
@@ -678,11 +736,9 @@ fn send(
 /// Zustandswechsel und Fault-Pfade — die gewollte Phasenstarrheit fuer
 /// Takterzeuger.
 ///
-/// **Der Zaehler steht im Zustand**, ein `i64` je Aufrufstelle
-/// (`Role::EveryNext`, 11.2). Der Interpreter haelt ihn zusaetzlich je
-/// Schleifenindex (5.6); der Codegen senkt `every` in einer `for`-
-/// Schleife darum noch nicht — mit einem Feld je Stelle zaehlten alle
-/// Durchlaeufe gemeinsam, und das waere still falsch.
+/// **Der Zaehler steht im Zustand**, ein `i64` je Aufrufstelle und
+/// Durchlauf der umgebenden Schleifen (`Role::EveryNext`, 11.2, 5.8):
+/// Mit einem Zaehler je Stelle zoegen alle Durchlaeufe gemeinsam.
 fn every(
     period: &Expr,
     counter: takt_mir::CounterId,
@@ -697,7 +753,8 @@ fn every(
         .get(counter.index())
         .copied()
         .ok_or(NotYet { what: "`every` ohne Zaehlerstelle" })?;
-    let idx = ctx.state.index_of(Role::EveryNext, counter.index()).ok_or(NotYet { what: "`every` im Zustand" })?;
+    let pass = ctx.pass_index(m)?;
+    let slot = ctx.counter(Role::EveryNext, counter.index(), &pass, m)?;
     let vars = ctx.vars();
     let d = lower_expr(period, ctx.program, m, &vars)?;
     if d.ty != LlvmType::Int(64) {
@@ -711,8 +768,6 @@ fn every(
             m.inst(&format!("call i64 @{}()", crate::abi::Abi::NOW)).to_string()
         }
     };
-    let state_ty = format!("%{}_state", crate::fns::sanitized(&ctx.machine.name));
-    let slot = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {idx}"));
     let next = m.inst(&format!("load i64, ptr {slot}"));
     // `-1` heisst „seit dem Eintritt noch nicht gesetzt": Dann gilt `d`
     // als naechster Zeitpunkt (5.8, Startwert `d`).
@@ -836,7 +891,9 @@ fn for_range(
     m.void_inst(&format!("br i1 {go_on}, label %{loop_body}, label %{end_at}"));
     m.label(&loop_body);
     ctx.breaks.push(end_at.clone());
+    ctx.loops.push((ptr.to_string(), ty.clone(), crate::machine::range_bound(count)));
     let result = block(body, ctx, m);
+    ctx.loops.pop();
     ctx.breaks.pop();
     result?;
     // Der Zaehler waechst am Ende des Rumpfs; ein `break` springt daran
@@ -910,7 +967,9 @@ fn for_window(
     };
     crate::stream::note_examined(ex_ptr, seq, m);
     ctx.breaks.push(end_at.clone());
+    ctx.loops.push((i_ptr.to_string(), LlvmType::Int(32), crate::machine::window_bound(stream, ctx.program)));
     let result = block(body, ctx, m);
+    ctx.loops.pop();
     ctx.breaks.pop();
     result?;
     let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
@@ -930,23 +989,27 @@ fn for_items(var: takt_mir::VarId, iter: &Expr, body: &Block, ctx: &mut Ctx<'_>,
     let slot = crate::expr::place_of(iter, &want, ctx.program, m, &vars)?;
     let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
     let k = ctx.next_label(m);
-    items_loop(&want, &slot, (&ptr.to_string(), &ty), k, m, &mut |m, end_at| {
+    let bound = crate::machine::each_bound(iter, ctx.program);
+    items_loop(&want, &slot, (&ptr.to_string(), &ty), k, m, &mut |m, end_at, pass| {
         ctx.breaks.push(end_at.to_string());
+        ctx.loops.push((pass.to_string(), LlvmType::Int(32), bound));
         let result = block(body, ctx, m);
+        ctx.loops.pop();
         ctx.breaks.pop();
         result
     })
 }
 
 /// Die Schleife ueber die Elemente einer Sammlung an ihrer Adresse; den
-/// Rumpf senkt der Rufer und bekommt dafuer das Ende als Sprungziel.
+/// Rumpf senkt der Rufer und bekommt dafuer das Ende als Sprungziel und
+/// den Zeiger auf den Durchlaufzaehler.
 fn items_loop(
     want: &LlvmType,
     slot: &str,
     (ptr, ty): (&str, &LlvmType),
     k: u32,
     m: &mut Module,
-    body: &mut dyn FnMut(&mut Module, &str) -> Result<(), NotYet>,
+    body: &mut dyn FnMut(&mut Module, &str, &str) -> Result<(), NotYet>,
 ) -> Result<(), NotYet> {
     let (elem_ty, len, data_index) = match want {
         LlvmType::Array(elem, n) => ((**elem).clone(), n.to_string(), None),
@@ -978,7 +1041,7 @@ fn items_loop(
     };
     let v = m.inst(&format!("load {elem_ty}, ptr {at}"));
     m.void_inst(&format!("store {ty} {v}, ptr {ptr}"));
-    body(m, &end_at)?;
+    body(m, &end_at, &i_ptr.to_string())?;
     let cur_i = m.inst(&format!("load i32, ptr {i_ptr}"));
     let next = m.inst(&format!("add i32 {cur_i}, 1"));
     m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
@@ -1002,7 +1065,7 @@ fn fn_for_each<V: Slots>(
     let slot = crate::expr::place_of(iter, &want, ctx.program, m, &ctx.vars)?;
     let (ptr, ty) = ctx.vars.slot(*var, m).ok_or(NotYet { what: "Schleifenvariable" })?;
     let k = ctx.next_label(m);
-    items_loop(&want, &slot, (&ptr.to_string(), &ty), k, m, &mut |m, end_at| {
+    items_loop(&want, &slot, (&ptr.to_string(), &ty), k, m, &mut |m, end_at, _| {
         ctx.breaks.push(end_at.to_string());
         let result = fn_block(body, ctx, m);
         ctx.breaks.pop();
@@ -1116,12 +1179,38 @@ fn roots_in_port(p: &Place) -> bool {
 /// `p < LIMIT` gilt. Der Sprung geht also bei `false` in den Trampolin —
 /// und der `weiter`-Block ist der heisse Pfad, was 11.2 mit „die
 /// Fault-Pfade sind `cold`" meint.
-fn check(cond: &Expr, kind: takt_mir::stmt::CheckKind, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+fn check(
+    cond: &Expr,
+    kind: takt_mir::stmt::CheckKind,
+    confirm: Option<&takt_mir::stmt::Confirm>,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
     let vars = ctx.vars();
     let c = lower_expr(cond, ctx.program, m, &vars)?;
     if c.ty != LlvmType::Int(1) {
         return Err(NotYet { what: "Bedingung ist kein `bool`" });
     }
+    // 5.6: Mit `for d` scheitert der Check erst, wenn die Bedingung `d`
+    // lang ununterbrochen verletzt ist. Der Zaehler waechst je verletzter
+    // Auswertung um die Periode; eine erfuellte setzt ihn zurueck, und
+    // der Fault auch — wie `exec` im Interpreter.
+    let holds = match confirm {
+        None => c.value,
+        Some(k) => {
+            let d = duration_of(&k.duration, ctx, m)?;
+            let pass = ctx.pass_index(m)?;
+            let viol = ctx.counter(Role::Viol, k.site.index(), &pass, m)?;
+            let old = m.inst(&format!("load i64, ptr {viol}"));
+            let up = m.inst(&format!("add i64 {old}, {}", ctx.period_ns()));
+            let due = m.inst(&format!("icmp sge i64 {up}, {d}"));
+            let kept = m.inst(&format!("select i1 {due}, i64 0, i64 {up}"));
+            let new = m.inst(&format!("select i1 {}, i64 0, i64 {kept}", c.value));
+            m.void_inst(&format!("store i64 {new}, ptr {viol}"));
+            let calm = m.inst(&format!("xor i1 {due}, true"));
+            m.inst(&format!("or i1 {}, {calm}", c.value)).to_string()
+        }
+    };
     let go_on = format!("weiter{}_{}", m.next_label(), ctx.machine.name);
     let fault = ctx.trampoline_for(
         match kind {
@@ -1130,9 +1219,19 @@ fn check(cond: &Expr, kind: takt_mir::stmt::CheckKind, ctx: &mut Ctx<'_>, m: &mu
         },
         m,
     );
-    m.void_inst(&format!("br i1 {}, label %{go_on}, label %{fault}", c.value));
+    m.void_inst(&format!("br i1 {holds}, label %{go_on}, label %{fault}"));
     m.label(&go_on);
     Ok(())
+}
+
+/// Eine Bestaetigungszeit in Nanosekunden (5.6).
+fn duration_of(d: &Expr, ctx: &Ctx<'_>, m: &mut Module) -> Result<String, NotYet> {
+    let vars = ctx.vars();
+    let d = lower_expr(d, ctx.program, m, &vars)?;
+    if d.ty != LlvmType::Int(64) {
+        return Err(NotYet { what: "Bestaetigungszeit, die keine Dauer ist" });
+    }
+    Ok(d.value)
 }
 
 /// `if c: … else: …`
@@ -1159,7 +1258,7 @@ fn branch(cond: &Expr, then: &Block, otherwise: &Block, ctx: &mut Ctx<'_>, m: &m
 /// draussen. Der erzeugte Code ruft dafuer die Runtime (`crate::abi`);
 /// der Text steht als Index in einer Tabelle, nicht als Zeichenkette im
 /// Aufruf.
-fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+fn observe(o: &Observe, span: takt_diag::Span, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let machine = ctx.machine_index;
     // Ohne Diagnose entfallen die Aufrufe und mit ihnen die Ausdruecke:
     // Eine Beobachtung faultet nicht, ihre Ausdruecke wirken also nicht.
@@ -1170,13 +1269,33 @@ fn observe(o: &Observe, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet>
         return Ok(());
     }
     match o {
-        Observe::Alert { cond, .. } => {
+        Observe::Alert { cond, confirm, .. } => {
             // 3.5: Ein ungueltiger Wert laesst den Alert feuern, mit Zusatz.
             let (c, invalid) = observed(cond, "true", ctx, m, |v, _| Ok(v))?;
-            let site = ctx.next_site();
-            // Die Flanke bildet die Runtime: Sie kennt den vorigen Wert,
-            // der erzeugte Code muesste ihn sonst im Zustand fuehren.
-            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {}, i1 {invalid})", Abi::ALERT, c.value));
+            let pass = ctx.pass_index(m)?;
+            // 5.6: Mit `for d` wird der Alert erst aktiv, wenn die
+            // Bedingung `d` lang zutrifft; der Zaehler steht bei `d` still.
+            let active = match confirm {
+                None => c.value,
+                Some(k) => {
+                    let d = duration_of(&k.duration, ctx, m)?;
+                    let viol = ctx.counter(Role::Viol, k.site.index(), &pass, m)?;
+                    let old = m.inst(&format!("load i64, ptr {viol}"));
+                    let up = m.inst(&format!("add i64 {old}, {}", ctx.period_ns()));
+                    let below = m.inst(&format!("icmp slt i64 {up}, {d}"));
+                    let capped = m.inst(&format!("select i1 {below}, i64 {up}, i64 {d}"));
+                    let new = m.inst(&format!("select i1 {}, i64 {capped}, i64 0", c.value));
+                    m.void_inst(&format!("store i64 {new}, ptr {viol}"));
+                    let reached = m.inst(&format!("icmp sge i64 {new}, {d}"));
+                    m.inst(&format!("and i1 {}, {reached}", c.value)).to_string()
+                }
+            };
+            // Die Flanke bildet die Runtime (5.6), je Stelle und Durchlauf:
+            // Der Platz ist der erste der Stelle plus der Durchlauf.
+            let (base, _) = ctx.state.counters.alert(span).ok_or(NotYet { what: "Alert-Stelle ohne Platz" })?;
+            let at = m.inst(&format!("add i64 {pass}, {base}"));
+            let slot = m.inst(&format!("trunc i64 {at} to i32"));
+            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {slot}, i1 {active}, i1 {invalid})", Abi::ALERT));
             Ok(())
         }
         Observe::Log(_) => {

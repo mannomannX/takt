@@ -43,6 +43,8 @@ pub struct StateStruct {
     pub depth: u32,
     /// Je Variable ihr Versatz im Overlay (11.2) — `None` fuer ein eigenes Feld.
     pub overlay: Vec<Option<u64>>,
+    /// Wie viele Zaehler und Flanken jede Stelle hat (5.6, 5.8).
+    pub counters: Counters,
 }
 
 /// Ein Feld des Zustands-Structs.
@@ -70,7 +72,9 @@ pub enum Role {
     Var,
     /// `every_next[c]`: naechster Tick, an dem `every` feuert.
     EveryNext,
-    /// `viol[site]`: Bestaetigungszaehler eines `check … for d` (5.6).
+    /// `viol[site]`: Bestaetigungszaehler eines `check … for d` oder
+    /// `alert … for d` in Nanosekunden, je Durchlauf der umgebenden
+    /// Schleifen (5.6).
     Viol,
     /// `cur[s]`: Cursor eines gelesenen Stroms (9.6).
     Cursor,
@@ -78,6 +82,9 @@ pub enum Role {
     Examined,
     /// `dropped[s, m]`: was die Maschine im `idle` verworfen hat (5.10, 9.6).
     Dropped,
+    /// Stand die Maschine am Ende des vorigen Ticks im `idle`? Fuer den
+    /// Alert `StreamPaused` beim Verlassen (5.10).
+    WasIdle,
     /// `last_fault`.
     LastFault,
     /// Der Abort-Latch (5.4, 9.3): gesetzt mit einem Abort-Pfad, geloest
@@ -121,6 +128,7 @@ pub fn depth(m: &Machine) -> u32 {
 /// fehlt — der Versatz aller folgenden waere falsch, und niemand saehe es.
 pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     let d = depth(m);
+    let counters = counters(m, p);
     let field = |name: String, ty: LlvmType, role: Role, nth: usize| Field { name, ty, role, nth };
     let mut fields = Vec::new();
     // 11.2: `conf: [u8; DEPTH]`. Ein `u8` je Ebene reicht, solange eine
@@ -156,11 +164,13 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
         let words = u32::try_from(region.div_ceil(8)).ok()?;
         fields.push(field("overlay".into(), LlvmType::Array(Box::new(LlvmType::Int(64)), words), Role::Overlay, 0));
     }
-    for (i, _) in m.layout.every_counters.iter().enumerate() {
-        fields.push(field(format!("every_next{i}"), LlvmType::Int(64), Role::EveryNext, i));
+    // 5.6, 5.8: je Stelle ein Zaehler je Durchlauf der umgebenden Schleifen.
+    let per_pass = |n: Option<u32>| LlvmType::Array(Box::new(LlvmType::Int(64)), n.unwrap_or(1));
+    for (i, n) in counters.every.iter().enumerate() {
+        fields.push(field(format!("every_next{i}"), per_pass(*n), Role::EveryNext, i));
     }
-    for (i, _) in m.layout.viol_sites.iter().enumerate() {
-        fields.push(field(format!("viol{i}"), LlvmType::Int(32), Role::Viol, i));
+    for (i, n) in counters.viol.iter().enumerate() {
+        fields.push(field(format!("viol{i}"), per_pass(*n), Role::Viol, i));
     }
     for (i, _) in m.layout.cursors.iter().enumerate() {
         fields.push(field(format!("cur{i}"), LlvmType::Int(64), Role::Cursor, i));
@@ -170,6 +180,9 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     }
     for (i, _) in m.layout.cursors.iter().enumerate() {
         fields.push(field(format!("dropped{i}"), LlvmType::Int(32), Role::Dropped, i));
+    }
+    if crate::step::drops(m, p) {
+        fields.push(field("was_idle".into(), LlvmType::Int(1), Role::WasIdle, 0));
     }
     for (i, _) in m.layout.trigger_flags.iter().enumerate() {
         fields.push(field(format!("armed{i}"), LlvmType::Int(1), Role::Armed, i));
@@ -190,7 +203,166 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     // Puffern, damit ihre Versaetze klein bleiben (RISC-V: 12 Bit),
     // darin absteigend nach Ausrichtung ohne Fuellbytes.
     fields[2..].sort_by_key(|f| (f.ty.aligned_size() >= 256, std::cmp::Reverse(f.ty.align())));
-    Some(StateStruct { fields, depth: d, overlay })
+    Some(StateStruct { fields, depth: d, overlay, counters })
+}
+
+/// Die Zaehler einer Maschine je Stelle (5.6, 5.8).
+///
+/// Steht eine Stelle in `for`-Schleifen, hat sie einen Zaehler je
+/// Durchlauf — Schluessel ist die Stelle samt den Indizes der umgebenden
+/// Schleifen —, und ihre Zahl ist das Produkt der Schleifenschranken, die
+/// statisch sind (4.3). `None` heisst: Eine Schranke kennt der Codegen
+/// nicht, und die Stelle wird nicht gesenkt.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Counters {
+    /// Je Bestaetigungsstelle (`check … for`, `alert … for`).
+    pub viol: Vec<Option<u32>>,
+    /// Je `every`.
+    pub every: Vec<Option<u32>>,
+    /// Je Alert-Stelle ihre Position, ihr erster Platz in der
+    /// Flankentabelle der Runtime und die Zahl ihrer Plaetze. Dazu kommen
+    /// die Alerts der Runtime: ein `send`, das bei vollem Puffer verwirft
+    /// (8.6, 8.8), `StreamPaused` (5.10) und `PersistReset` je
+    /// `persist`-Variable (5.9) — je einer, ohne Schleifenindex, wie im
+    /// Interpreter.
+    pub alerts: Vec<(takt_diag::Span, u32, Option<u32>)>,
+}
+
+impl Counters {
+    /// Wie viele Plaetze die Flankentabelle der Runtime fuer die Maschine
+    /// braucht (5.6: „die Runtime protokolliert Flanken").
+    pub fn alert_slots(&self) -> u32 {
+        self.alerts.iter().map(|(_, base, n)| base + n.unwrap_or(0)).max().unwrap_or(0)
+    }
+
+    /// Haengt eine Alert-Stelle an, wenn es sie noch nicht gibt.
+    fn push_alert(&mut self, span: takt_diag::Span, n: Option<u32>) {
+        if self.alert(span).is_none() {
+            let base = self.alert_slots();
+            self.alerts.push((span, base, n));
+        }
+    }
+
+    /// Erster Platz und Zahl der Plaetze einer Alert-Stelle.
+    pub fn alert(&self, span: takt_diag::Span) -> Option<(u32, Option<u32>)> {
+        self.alerts.iter().find(|(s, ..)| *s == span).map(|(_, base, n)| (*base, *n))
+    }
+}
+
+/// Zaehlt die Zaehler einer Maschine je Stelle, in der Reihenfolge ihrer
+/// Bloecke (`Machine::blocks`).
+pub fn counters(m: &Machine, p: &Program) -> Counters {
+    let mut c = Counters {
+        viol: vec![Some(1); m.layout.viol_sites.len()],
+        every: vec![Some(1); m.layout.every_counters.len()],
+        alerts: Vec::new(),
+    };
+    for b in m.blocks() {
+        count_in(b, Some(1), p, &mut c);
+    }
+    if crate::step::drops(m, p) {
+        c.push_alert(paused_span(m), Some(1));
+    }
+    // 5.9: `PersistReset` je Variable, unter ihrer Position.
+    for pv in &m.persist {
+        if let Some(v) = m.vars.get(pv.var.index()) {
+            c.push_alert(v.span, Some(1));
+        }
+    }
+    c
+}
+
+/// Die Position, unter der der Interpreter `StreamPaused` meldet: die des
+/// ersten Zustands.
+pub fn paused_span(m: &Machine) -> takt_diag::Span {
+    m.states.first().map(|s| s.span).unwrap_or_default()
+}
+
+/// Verwirft ein `send` bei vollem Puffer, statt zu faulten (8.6, 8.8)?
+pub fn drops_when_full(stream: takt_mir::expr::StreamRef, p: &Program) -> bool {
+    use takt_mir::program::Overflow;
+    match stream {
+        takt_mir::expr::StreamRef::Internal(s) => {
+            p.streams.get(s.index()).is_some_and(|d| matches!(d.overflow, Overflow::Drop))
+        }
+        takt_mir::expr::StreamRef::Channel(c) => {
+            p.channels.get(c.index()).is_some_and(|c| matches!(c.attrs.overflow, Some(Overflow::Drop)))
+        }
+        _ => false,
+    }
+}
+
+fn count_in(b: &takt_mir::stmt::Block, n: Option<u32>, p: &Program, c: &mut Counters) {
+    use takt_mir::stmt::{Observe, StmtKind};
+    let set = |v: &mut Vec<Option<u32>>, i: usize| {
+        if let Some(x) = v.get_mut(i) {
+            *x = n;
+        }
+    };
+    let times = |bound: Option<u32>| n.zip(bound).and_then(|(a, b)| a.checked_mul(b));
+    for s in &b.stmts {
+        match &s.kind {
+            StmtKind::Check { confirm: Some(k), .. } => set(&mut c.viol, k.site.index()),
+            StmtKind::Observe(Observe::Alert { confirm, .. }) => {
+                if let Some(k) = confirm {
+                    set(&mut c.viol, k.site.index());
+                }
+                c.push_alert(s.span, n);
+            }
+            StmtKind::Send { stream, .. } if drops_when_full(*stream, p) => c.push_alert(s.span, Some(1)),
+            StmtKind::Every { counter, body, .. } => {
+                set(&mut c.every, counter.index());
+                count_in(body, n, p, c);
+            }
+            StmtKind::ForRange { count, body, .. } => count_in(body, times(range_bound(count)), p, c),
+            StmtKind::ForEach { iter, body, .. } => count_in(body, times(each_bound(iter, p)), p, c),
+            StmtKind::If { then, otherwise, .. } => {
+                count_in(then, n, p, c);
+                count_in(otherwise, n, p, c);
+            }
+            StmtKind::Match { arms, .. } => arms.iter().for_each(|a| count_in(&a.body, n, p, c)),
+            StmtKind::At { body, .. } => count_in(body, n, p, c),
+            _ => {}
+        }
+    }
+}
+
+/// Die Schranke von `for i in range(n)`: `n` ist nach dem Lowering eine
+/// Konstante (4.3).
+pub fn range_bound(count: &takt_mir::expr::Expr) -> Option<u32> {
+    match count.kind {
+        takt_mir::expr::ExprKind::Int(n) => u32::try_from(n.max(0)).ok(),
+        _ => None,
+    }
+}
+
+/// Die Schranke von `for x in s` ueber ein Fenster: die Kapazitaet des
+/// Stroms (Lemma 9.6.1).
+pub fn window_bound(stream: takt_mir::expr::StreamRef, p: &Program) -> Option<u32> {
+    match stream {
+        takt_mir::expr::StreamRef::Channel(c) => p.channels.get(c.index())?.attrs.capacity,
+        takt_mir::expr::StreamRef::Internal(s) => Some(p.streams.get(s.index())?.capacity),
+        _ => None,
+    }
+}
+
+/// Die Schranke von `for x in a`: die Kapazitaet eines Fensters, die
+/// Laenge eines Arrays oder die einer Sammlung, wie sie
+/// `stmt::for_each` durchlaeuft.
+pub fn each_bound(iter: &takt_mir::expr::Expr, p: &Program) -> Option<u32> {
+    use takt_mir::expr::{ExprKind, StreamRef};
+    match &iter.kind {
+        ExprKind::Input { channel, .. } => window_bound(StreamRef::Channel(*channel), p),
+        ExprKind::Stream(s) => window_bound(StreamRef::Internal(*s), p),
+        _ => match ty::lower(iter.ty, p)? {
+            LlvmType::Array(_, n) => Some(n),
+            LlvmType::Struct(f) if f.len() == 2 && f[0] == LlvmType::Int(32) => match &f[1] {
+                LlvmType::Array(_, n) => Some(*n),
+                _ => None,
+            },
+            _ => None,
+        },
+    }
 }
 
 /// Der Zustand, dessen Overlay eine Variable gehoert (11.2): zustandslokal

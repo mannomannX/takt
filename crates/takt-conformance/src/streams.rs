@@ -267,8 +267,6 @@ struct Dynamic {
     /// `capacity_bytes` (8.6); die Sema setzt den Default.
     capacity_bytes: u32,
     readers: Vec<u32>,
-    /// `overflow = drop` eines internen Stroms: ein volles `send` verwirft.
-    drop: bool,
 }
 
 /// Die Ringe des Laufs: erst die internen Stroeme, dann die gekoppelten
@@ -286,7 +284,6 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
             capacity: st.capacity,
             capacity_bytes: st.capacity_bytes.unwrap_or(st.capacity.saturating_mul(payload_cap(p, st.elem))),
             readers: st.readers.iter().map(|m| m.0).collect(),
-            drop: matches!(st.overflow, takt_mir::program::Overflow::Drop),
         })
         .collect();
     let ports = crate::ports::write_streams(p).into_iter().map(|(_, c, elem)| (c, elem));
@@ -308,7 +305,6 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
             capacity,
             capacity_bytes: c.attrs.capacity_bytes.unwrap_or(capacity.saturating_mul(payload_cap(p, elem))),
             readers,
-            drop: false,
         });
     }
     out
@@ -384,11 +380,6 @@ fn emit_internal(s: &mut String, p: &Program) {
         s,
         "static const int g_int_capb[{rows}] = {{ {} }};",
         list(dyns.iter().map(|d| d.capacity_bytes.max(1) as usize).collect())
-    );
-    let _ = writeln!(
-        s,
-        "static const _Bool g_int_drop[{rows}] = {{ {} }};",
-        list(dyns.iter().map(|d| usize::from(d.drop)).collect())
     );
     let _ = writeln!(s, "static int g_int_head[{rows}], g_int_n[{rows}], g_int_new[{rows}];");
     let _ = writeln!(s, "static int g_int_bhead[{rows}], g_int_bused[{rows}];");
@@ -472,10 +463,11 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    takt_int_read(k, e->off, p + 4, len);");
     let _ = writeln!(s, "    return takt_int_seq_at(k, first + i);");
     let _ = writeln!(s, "}}");
-    // 8.6: Zwei Schranken, Elemente und Bytes — wie `Buffer::push`.
+    // 8.6: Zwei Schranken, Elemente und Bytes — wie `Buffer::push`. Ob
+    // ein volles `send` faultet oder verwirft, entscheidet der erzeugte
+    // Code an der Politik des Stroms.
     let _ = writeln!(s, "static _Bool takt_int_send(int k, const char *b, int n) {{");
-    let _ =
-        writeln!(s, "    if (g_int_n[k] >= g_int_cap[k] || g_int_bused[k] + n > g_int_capb[k]) return g_int_drop[k];");
+    let _ = writeln!(s, "    if (g_int_n[k] >= g_int_cap[k] || g_int_bused[k] + n > g_int_capb[k]) return 0;");
     let _ = writeln!(s, "    struct takt_idesc *e = takt_int_desc(k, g_int_n[k]);");
     let _ = writeln!(s, "    e->tick_lo = (unsigned)g_tick;");
     let _ = writeln!(s, "    e->tick_hi = (unsigned)(g_tick >> 32);");

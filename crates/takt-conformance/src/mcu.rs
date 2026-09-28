@@ -121,9 +121,20 @@ fn runtime_abi(s: &mut String, p: &Program) {
 
     // Jede Beobachtungszeile traegt ihren Tick, wie beim Interpreter
     // (`grammar/trace.md`): Ohne ihn laesst sie sich keinem Tick zuordnen.
+    // 5.6: nur die Flanken, mit dem Namen der Maschine wie im Interpreter.
+    crate::harness::alert_table(s, p);
+    let _ = writeln!(s, "void takt_alert(int m, int slot, unsigned char on, unsigned char invalid) {{");
+    let _ = writeln!(s, "    if (!takt_alert_edge(m, slot, on)) return;");
+    let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "    takt_board_trace_i64(g_tick);");
+    let _ = writeln!(s, "    takt_board_trace(\"alert \");");
+    let _ = writeln!(s, "    takt_board_trace(takt_machine_name(m));");
+    let _ = writeln!(s, "    takt_board_trace(on ? \" on\" : \" off\");");
+    let _ = writeln!(s, "    if (invalid) takt_board_trace(\" invalid\");");
+    let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+    let _ = writeln!(s, "}}");
     for (name, args, kind, flags) in [
-        ("takt_alert", "int m, int site, unsigned char on, unsigned char invalid", "alert", &["on", "invalid"][..]),
-        ("takt_log", "int m, int site", "log", &[]),
+        ("takt_log", "int m, int site", "log", &[][..]),
         ("takt_verify", "int m, int site, unsigned char ok", "verify", &["ok"]),
         ("takt_verdict", "int m, int site, unsigned char pass", "verdict", &["pass"]),
     ] {

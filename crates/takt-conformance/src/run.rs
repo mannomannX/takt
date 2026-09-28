@@ -125,6 +125,39 @@ pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
             out.push(Difference { tick, output: "fault".into(), interpreter: render(x), native: render(y) });
         }
     }
+    let (aa, ab) = (alerts(interpreter), alerts(native));
+    let alert_ticks: std::collections::BTreeSet<u64> =
+        aa.keys().chain(ab.keys()).copied().filter(|t| Some(*t) <= horizon).collect();
+    for tick in alert_ticks {
+        let (x, y) = (aa.get(&tick), ab.get(&tick));
+        if x != y {
+            let render = |v: Option<&Vec<String>>| v.map_or(String::new(), |v| v.join(", "));
+            out.push(Difference { tick, output: "alert".into(), interpreter: render(x), native: render(y) });
+        }
+    }
+    out
+}
+
+/// Die Alert-Flanken eines Traces (`t=<tick> alert <maschine> on|off …`,
+/// 5.6): je Tick Maschine, Flanke und ob ein ungueltiger Wert sie
+/// ausloeste, sortiert. Den Text rendert nur der Interpreter; der
+/// erzeugte Code kennt die Stelle, nicht die Meldung.
+fn alerts(trace: &str) -> BTreeMap<u64, Vec<String>> {
+    let mut out: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+    for line in trace.lines() {
+        let Some(rest) = line.strip_prefix("t=") else { continue };
+        let Some((tick, rest)) = rest.split_once(' ') else { continue };
+        let Some(rest) = rest.strip_prefix("alert ") else { continue };
+        let Ok(tick) = tick.parse::<u64>() else { continue };
+        let mut words = rest.split(' ');
+        let (Some(machine), Some(edge)) = (words.next(), words.next()) else { continue };
+        let invalid = rest.ends_with(" invalid") || rest.ends_with("(sensor invalid)\"");
+        let key = if invalid { format!("{machine} {edge} invalid") } else { format!("{machine} {edge}") };
+        out.entry(tick).or_default().push(key);
+    }
+    for v in out.values_mut() {
+        v.sort();
+    }
     out
 }
 
@@ -250,6 +283,18 @@ mod tests {
         assert!(compare("t=5 out led false\n", "t=5 out led 0\nt=5 out led 0\n").is_empty());
         let interpreted = "t=0 out led true\nt=2 out led false\n";
         assert!(compare(interpreted, "t=0 out led 1\nt=1 out led 1\nt=2 out led 1\nt=2 out led 0\n").is_empty());
+    }
+
+    /// Alerts vergleichen sich an ihren Flanken (5.6): Maschine, Flanke und
+    /// ob ein ungueltiger Wert sie ausloeste. Den Text kennt nur der
+    /// Interpreter.
+    #[test]
+    fn alerts_compare_by_edge_not_by_text() {
+        let interpreted =
+            "t=3 alert m on \"warm 31.5\"\nt=5 alert m off \"warm 29.0\"\nt=6 alert m on \"warm (sensor invalid)\"\n";
+        assert!(compare(interpreted, "t=3 alert m on\nt=5 alert m off\nt=6 alert m on invalid\n").is_empty());
+        assert_eq!(compare(interpreted, "t=3 alert m on\nt=6 alert m on invalid\n").len(), 1);
+        assert_eq!(compare(interpreted, "t=3 alert m on\nt=5 alert m off\nt=6 alert m on\n").len(), 1);
     }
 
     /// Eine Dauer traegt ihre Einheit auf beiden Seiten; eine Groesse nur

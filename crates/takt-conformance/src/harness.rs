@@ -139,10 +139,12 @@ fn build_inner(
     // die Art des Faults, den der Aufrufer liest und loescht.
     let _ = writeln!(s, "unsigned int takt_fn_fault = 0;");
     fault_names(&mut s, p);
-    let _ = writeln!(s, "void takt_alert(int m, int site, unsigned char on, unsigned char invalid) {{");
+    alert_table(&mut s, p);
+    let _ = writeln!(s, "void takt_alert(int m, int slot, unsigned char on, unsigned char invalid) {{");
+    let _ = writeln!(s, "    if (!takt_alert_edge(m, slot, on)) return;");
     let _ = writeln!(
         s,
-        "    printf(\"t=%lld alert %d %d %d%s\\n\", g_tick, m, site, on ? 1 : 0, invalid ? \" invalid\" : \"\");"
+        "    printf(\"t=%lld alert %s %s%s\\n\", g_tick, takt_machine_name(m), on ? \"on\" : \"off\", invalid ? \" invalid\" : \"\");"
     );
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "void takt_log(int m, int site) {{ printf(\"t=%lld log %d %d\\n\", g_tick, m, site); }}");
@@ -882,6 +884,29 @@ pub(crate) fn idle_drops(s: &mut String, p: &Program, driven: &[&takt_mir::machi
         };
         let _ = writeln!(s, "{indent}{scope}{0}_drop(state_{0});", m.name);
     }
+}
+
+/// Die Flankentabelle der Alerts (5.6: „die Runtime protokolliert
+/// Flanken"): ein Platz je Maschine, Alert-Stelle und Durchlauf der
+/// umgebenden Schleifen, wie `alert_edge` im Interpreter; geschrieben
+/// wird nur, was sich aendert.
+pub(crate) fn alert_table(s: &mut String, p: &Program) {
+    let mut bases = Vec::with_capacity(p.machines.len());
+    let mut total = 0u32;
+    for m in &p.machines {
+        bases.push(total.to_string());
+        if m.kind != takt_mir::machine::MachineKind::Template {
+            total = total.saturating_add(takt_llvm::machine::counters(m, p).alert_slots());
+        }
+    }
+    let _ = writeln!(s, "static _Bool g_alert[{}];", total.max(1));
+    let _ = writeln!(s, "static const int g_alert_base[{}] = {{ {} }};", bases.len().max(1), bases.join(", "));
+    let _ = writeln!(s, "static _Bool takt_alert_edge(int m, int slot, unsigned char on) {{");
+    let _ = writeln!(s, "    _Bool *was = &g_alert[g_alert_base[m] + slot];");
+    let _ = writeln!(s, "    if (*was == (on != 0)) return 0;");
+    let _ = writeln!(s, "    *was = on != 0;");
+    let _ = writeln!(s, "    return 1;");
+    let _ = writeln!(s, "}}");
 }
 
 /// Merkt Operator-Aborts und Runtime-Faults des Stimulus in ihrem Tick vor:

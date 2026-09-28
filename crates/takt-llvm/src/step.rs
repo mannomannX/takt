@@ -975,8 +975,10 @@ fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
         let p = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {idx}"));
         // `-1` heisst „noch nicht gesetzt": Der erste Durchlauf traegt
         // `d` ein (5.8). Eine Null waere ein gueltiger Zeitpunkt und
-        // liesse den Block im Eintritts-Tick laufen.
-        m.void_inst(&format!("store i64 -1, ptr {p}"));
+        // liesse den Block im Eintritts-Tick laufen. Alle Bytes `0xFF`
+        // sind in jedem Durchlauf `-1`.
+        let bytes = ctx.state.fields[idx as usize].ty.size();
+        m.void_inst(&format!("call void @llvm.memset.p0.i64(ptr {p}, i8 -1, i64 {bytes}, i1 false)"));
     }
     for (i, c) in ctx.machine.layout.viol_sites.iter().enumerate() {
         if c.state != s {
@@ -984,7 +986,8 @@ fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
         }
         let Some(idx) = ctx.state.index_of(Role::Viol, i) else { continue };
         let p = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {idx}"));
-        m.void_inst(&format!("store i32 0, ptr {p}"));
+        let bytes = ctx.state.fields[idx as usize].ty.size();
+        m.void_inst(&format!("call void @llvm.memset.p0.i64(ptr {p}, i8 0, i64 {bytes}, i1 false)"));
     }
 }
 
@@ -1139,8 +1142,9 @@ pub fn drops(m: &Machine, p: &Program) -> bool {
 /// `<maschine>_drop(st)`: der Verwurf im `idle` (5.10, 9.6
 /// `advance_cursors`). Steht die Maschine in einem `idle`-Zustand, rueckt
 /// der Cursor jedes Nicht-Wake-Stroms ans Ende, und `dropped` zaehlt, was
-/// sie verpasst hat. Der Rahmen ruft es nach der Abort-Phase fuer jede
-/// Maschine, aktiv oder nicht.
+/// sie verpasst hat. Hat sie den Zustand seit dem vorigen Tick verlassen
+/// und je etwas verpasst, meldet sie `StreamPaused`. Der Rahmen ruft es
+/// nach der Abort-Phase fuer jede Maschine, aktiv oder nicht.
 pub fn drop_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     let leaves = machine::leaves(m);
     let sleeping: Vec<usize> = leaves
@@ -1172,8 +1176,34 @@ pub fn drop_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
         module.abort(mark);
         return Err(NotYet { what: "`idle` ohne Blatt" });
     };
+    let (Some(was_i), Some((paused, _))) = (st.index_of(Role::WasIdle, 0), st.counters.alert(machine::paused_span(m)))
+    else {
+        module.abort(mark);
+        return Err(NotYet { what: "`was_idle` im Zustand" });
+    };
+    let was_at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {was_i}"));
     let (go, done) = (format!("verwerfen_{}", m.name), format!("verworfen_{}", m.name));
-    module.void_inst(&format!("br i1 {idle}, label %{go}, label %{done}"));
+    let (awake, woke, alert) =
+        (format!("wach_{}", m.name), format!("geweckt_{}", m.name), format!("pausiert_{}", m.name));
+    module.void_inst(&format!("br i1 {idle}, label %{go}, label %{awake}"));
+    // 5.10: `StreamPaused` beim Verlassen, wenn die Maschine je etwas
+    // verpasst hat — `dropped` waechst nur, eine Summe ist ein `or`.
+    module.label(&awake);
+    let was = module.inst(&format!("load i1, ptr {was_at}"));
+    module.void_inst(&format!("br i1 {was}, label %{woke}, label %{done}"));
+    module.label(&woke);
+    let mut any = "0".to_string();
+    for (i, _) in m.layout.cursors.iter().enumerate() {
+        let Some(d) = st.index_of(Role::Dropped, i) else { continue };
+        let at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {d}"));
+        let n = module.inst(&format!("load i32, ptr {at}"));
+        any = module.inst(&format!("or i32 {any}, {n}")).to_string();
+    }
+    let missed = module.inst(&format!("icmp ne i32 {any}, 0"));
+    module.void_inst(&format!("br i1 {missed}, label %{alert}, label %{done}"));
+    module.label(&alert);
+    module.void_inst(&format!("call void @{}(i32 {index}, i32 {paused}, i1 1, i1 0)", crate::abi::Abi::ALERT));
+    module.void_inst(&format!("br label %{done}"));
     module.label(&go);
     for (i, stream) in m.layout.cursors.iter().enumerate() {
         if wakes(*stream, p) {
@@ -1204,6 +1234,7 @@ pub fn drop_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     }
     module.void_inst(&format!("br label %{done}"));
     module.label(&done);
+    module.void_inst(&format!("store i1 {idle}, ptr {was_at}"));
     module.end(None);
     Ok(())
 }

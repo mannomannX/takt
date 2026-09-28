@@ -1,0 +1,39 @@
+(system
+  (language 1)
+  (tick 1ms))
+(output k_out :int in 0..999 @hw("o/k") safe=0)
+(output tripped :bool @hw("o/tripped") safe=false)
+(output hits :int in 0..999 @hw("o/hits") safe=0)
+(output down :bool @hw("o/down") safe=false)
+(machine short
+  (var k :int in 0..999 0)
+  (fault -> TRIPPED)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (call min (+ k 1) 999))
+      (= k_out k)
+      (check (or (< k 3) (> k 5)) "kurz verletzt" for=4ms)
+      (check (< k 10) "lange verletzt" for=4ms)
+      (alert (and (>= k 3) (<= k 5)) "kurz" for=2ms)
+      (alert (>= k 7) "lang")))
+  (state TRIPPED
+    (enter
+      (= tripped true))))
+(machine rows
+  (var n :int in 0..999 0)
+  (var h :int in 0..999 0)
+  (fault -> DOWN)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= n (call min (+ n 1) 999))
+      (for i in (range 3)
+        (every 2ms
+          (= h (call min (+ h 1) 999)))
+        (alert (== (% (+ n i) 3) 0) "reihum {i}")
+        (check (or (> i 0) (< n 20)) "erste Zeile" for=3ms))
+      (= hits h)))
+  (state DOWN
+    (enter
+      (= down true))))
