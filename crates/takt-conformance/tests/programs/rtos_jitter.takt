@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# 12.8: Ein Zaehler bei 1 ms Tick. Unter `rtos` sagt `drift` jedes Ticks,
+# wie spaet die Takt-Aufgabe nach der Grenze beginnt — hinter der Funk-ISR
+# und den kritischen Abschnitten der Treiber-Aufgabe.
+
+output count : int in 0..1000 @ hw("o/count") with safe = 0
+
+machine m:
+    var n : int in 0..1000 = 0
+    initial RUN
+    state RUN:
+        loop:
+            n = (n + 1) % 1000
+            count = n

@@ -53,18 +53,37 @@ pub fn long_job_keeps_the_tick(board: &mut dyn Board) -> Vec<String> {
     if !diffs.is_empty() {
         failed.push(format!("{} Abweichungen: {diffs:?}\n{text}", diffs.len()));
     }
-    let mut drifts: Vec<i64> = text
-        .lines()
-        .filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok())
-        .skip(2)
-        .collect();
-    drifts.sort_unstable();
-    let median = drifts.get(drifts.len() / 2).copied().unwrap_or(0);
-    let late = drifts.last().map_or(0, |d| d - median);
-    if drifts.len() < 50 || late > 100_000 {
-        failed.push(format!("{} Zeitzeilen, ein Tick {late} ns spaeter als im Mittel:\n{text}", drifts.len()));
+    let drift = Drift::of(&text);
+    if drift.ticks < 50 || drift.late > 100_000 {
+        failed.push(format!("{} Zeitzeilen, ein Tick {} ns spaeter als im Mittel:\n{text}", drift.ticks, drift.late));
     }
     failed
+}
+
+/// Wie spaet die Ticks eines Laufs nach ihrer Grenze begannen (`drift`
+/// der Zeitzeilen, 7.3); die ersten beiden laufen noch an.
+#[derive(Clone, Copy, Debug)]
+pub struct Drift {
+    /// Zeitzeilen.
+    pub ticks: usize,
+    /// Median in ns.
+    pub median: i64,
+    /// Der spaeteste Tick, in ns ueber dem Median.
+    pub late: i64,
+}
+
+impl Drift {
+    /// Aus dem Trace eines Laufs in Echtzeit.
+    pub fn of(text: &str) -> Drift {
+        let mut drifts: Vec<i64> = text
+            .lines()
+            .filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok())
+            .skip(2)
+            .collect();
+        drifts.sort_unstable();
+        let median = drifts.get(drifts.len() / 2).copied().unwrap_or(0);
+        Drift { ticks: drifts.len(), median, late: drifts.last().map_or(0, |d| d - median) }
+    }
 }
 
 /// **Ein Tick ueber seiner Periode faultet im naechsten jede Maschine**
@@ -148,11 +167,16 @@ pub fn last_output(text: &str, name: &str) -> Option<String> {
 ///
 /// `only` beschraenkt den Lauf auf ein Programm (`TAKT_…_ONLY`).
 pub fn agreement(board: &mut dyn Board, names: &[&str], only: Option<&str>) -> Vec<String> {
+    agreement_with(board, names, only, &Options::fresh(TICKS))
+}
+
+/// Wie [`agreement`], mit anderen Optionen des Baus — etwa im Profil
+/// `rtos` (12.8).
+pub fn agreement_with(board: &mut dyn Board, names: &[&str], only: Option<&str>, options: &Options) -> Vec<String> {
     let mut failed = Vec::new();
     for name in names.iter().filter(|n| only.is_none_or(|o| o == **n)) {
         let p = corpus(name);
-        let options = Options::fresh(TICKS);
-        let text = match board.build(&board::corpus_path(name), &options).and_then(|elf| board.run(&elf, &options)) {
+        let text = match board.build(&board::corpus_path(name), options).and_then(|elf| board.run(&elf, options)) {
             Ok(t) => t,
             Err(e) => {
                 failed.push(format!("{name}: kein Lauf auf dem Board:\n{e}"));

@@ -286,3 +286,54 @@ fn a_tick_without_sleep_carries_nothing_over() {
     rt.step();
     assert_eq!(rt.program().advanced, 0);
 }
+
+/// Meldet die Tickgrenzen bis `ticks` von aussen (12.8 `rtos`): Die Uhr
+/// steht auf der Grenze, die Schleife arbeitet ab, was faellig ist.
+fn boundaries<P: Program, W: Watchdog, S: Sink>(
+    rt: &mut Runtime<P, Shared<'_>, W, S>,
+    clock: &RefCell<Fake>,
+    ticks: i64,
+) -> Vec<Tick> {
+    let mut out = Vec::new();
+    for b in 0..ticks {
+        {
+            let mut f = clock.borrow_mut();
+            f.now = f.now.max(b * T0);
+        }
+        while rt.due() {
+            out.extend(rt.at_boundary());
+        }
+    }
+    out
+}
+
+/// **Gemeldete Grenzen rechnen dieselben Ticks** wie die Schleife, die
+/// selbst wartet (12.8): gleiche Tickzahlen, gleiche logische Zeit, auch
+/// nach einem Overrun, und die Schleife wartet dabei nie.
+#[test]
+fn reported_boundaries_run_the_same_ticks_as_waiting() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![0, 700_000, 3 * T0 / 2, 0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    let ticks = boundaries(&mut rt, &clock, 6);
+    let want: Vec<(u64, i64)> = (0..6).map(|k| (k, (k as i64 + 1) * T0)).collect();
+    assert_eq!(rt.program.ticks, want);
+    assert!(ticks[2].overrun, "der lange Schritt ueberzieht");
+    assert_eq!(rt.program.overruns, 1, "und faultet im naechsten Tick");
+    assert!(clock.borrow().waits.is_empty(), "keine Grenze wurde abgewartet");
+}
+
+/// Nach virtuellen Ticks (9.9) bestaetigt jede gemeldete Grenze bis zur
+/// Frist nur den Watchdog; der Tick an der Frist laeuft.
+#[test]
+fn a_boundary_before_the_deadline_only_kicks_the_watchdog() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    let ticks = boundaries(&mut rt, &clock, 10);
+    assert_eq!(ticks.len(), 2, "Tick 0 und der an der Frist: {ticks:?}");
+    assert_eq!((ticks[0].slept, ticks[1].k), (8, 9));
+    assert_eq!(rt.watchdog.0, 2 + 8, "je Tick einmal, dazu jede geschlafene Grenze");
+}

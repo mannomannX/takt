@@ -12,7 +12,8 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    TICKS, agreement, last_output, long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine,
+    Drift, TICKS, agreement, agreement_with, last_output, long_job_keeps_the_tick, natives_agree,
+    overrun_reaches_every_machine,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
 use takt_conformance::board::{self, Bin, Board, CORPUS, Options};
@@ -47,7 +48,7 @@ fn board() -> Option<(Stm32f401, std::sync::MutexGuard<'static, ()>)> {
 #[test]
 fn a_deep_sleep_ends_after_its_duration() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
     let program = board::root().join("crates/takt-conformance/tests/programs/deep_sleep.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
@@ -70,7 +71,7 @@ fn a_deep_sleep_ends_after_its_duration() {
 #[test]
 fn a_restart_begins_again_with_software_as_the_reason() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
     let program = board::root().join("crates/takt-conformance/tests/programs/restart.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
@@ -112,7 +113,7 @@ fn an_overrun_faults_every_machine_in_the_next_tick() {
 #[test]
 fn a_missed_kick_resets_and_counts() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None };
+    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
     let program = board::root().join("crates/takt-conformance/tests/programs/watchdog.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let text = board.run_for(&elf, Duration::from_secs(14)).unwrap_or_else(|e| panic!("{e}"));
@@ -156,6 +157,42 @@ fn the_board_agrees_with_the_interpreter() {
     let names: Vec<&str> = CORPUS.iter().copied().filter(|n| !TOO_BIG.contains(n)).collect();
     let failed = agreement(&mut board, &names, only.as_deref());
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// **Unter RTIC rechnet der Korpus wie der Interpreter** (12.8, M10
+/// Schritt 16): Takt als hoechstpriore Aufgabe, darueber eine Funk-ISR,
+/// darunter eine Treiber-Aufgabe mit kritischen Abschnitten und die Jobs.
+/// Die Semantik bleibt die des Programms; nur die Zeit wird gemessen statt
+/// bewiesen.
+#[test]
+fn the_board_agrees_with_the_interpreter_under_rtos() {
+    let Some((mut board, _guard)) = board() else { return };
+    let only = std::env::var("TAKT_F401_ONLY").ok();
+    let names: Vec<&str> = CORPUS.iter().copied().filter(|n| !TOO_BIG.contains(n)).collect();
+    let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).under_rtos());
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// **Die Takt-Aufgabe beginnt zweistellige Mikrosekunden nach der Grenze**
+/// (12.8): `drift` ueber 3000 Ticks bei 1 ms, unter der Funk-ISR (alle
+/// 577 us, je 20 us) und der Treiber-Aufgabe (jeder dritte Aufruf, je 30 us
+/// kritischer Abschnitt). Die Last ist nicht an den Tick gebunden; ohne
+/// Spanne haette der Test sie verfehlt.
+/// Die Spanne vom Median zum spaetesten Tick ist der Jitter, den 12.8 zu
+/// messen verlangt.
+#[test]
+fn the_rtos_task_starts_within_tens_of_microseconds() {
+    let Some((mut board, _guard)) = board() else { return };
+    let program = board::root().join("crates/takt-conformance/tests/programs/rtos_jitter.takt");
+    let options = Options::timed(3000).under_rtos();
+    let text =
+        board.build(&program, &options).and_then(|elf| board.run(&elf, &options)).unwrap_or_else(|e| panic!("{e}"));
+    let drift = Drift::of(&text);
+    eprintln!("rtos: {} Ticks, Median {} ns, spaetester {} ns darueber", drift.ticks, drift.median, drift.late);
+    assert!(drift.ticks >= 2000, "{} Zeitzeilen", drift.ticks);
+    assert!(drift.late > 0, "die Last traf keine Tickgrenze");
+    assert!(drift.late < 100_000, "ein Tick {} ns spaeter als im Mittel", drift.late);
+    assert!(text.contains(" out count "), "keine Ausgaben");
 }
 
 #[test]

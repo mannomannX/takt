@@ -49,7 +49,7 @@ Workspace ohne Zeile, keine Zeile ohne Crate.
 | takt-board-stm32f401 | Register des STM32F401 (TIM2, USART1, IWDG, GPIO, Flash), DWT, `wfi` |
 | takt-mcu-program | die C-ABI des erzeugten Programms und seines Rahmens (12.1) |
 | takt-bringup-esp32c6 | Treiberfunktionen `takt_out_*`/`takt_in_*` hinter der C-ABI, statische Peripherie |
-| takt-bringup-stm32f401 | dasselbe für die Black Pill |
+| takt-bringup-stm32f401 | dasselbe für die Black Pill; im Profil `rtos` dazu RTIC 2 und `rtic-sync` — das RTOS gehört dort zur TCB (12.8) |
 
 **Rechnen außerhalb der TCB.** Was in einem Board-Crate keine
 Registerarbeit ist — Perioden in Timer-Schritte, Zyklen in Nanosekunden,

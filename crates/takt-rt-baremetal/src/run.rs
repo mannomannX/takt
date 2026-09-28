@@ -3,7 +3,7 @@
 //! was daraus ein Lauf macht — Ausgaenge im Takt der Leitung, ein Paket
 //! je Tick, am Ende die Bilanz.
 
-use takt_rt_core::{Clock, Nvm, Overrun, Persist, PlatformCommand, Program, Runtime, Sink, Watchdog};
+use takt_rt_core::{Clock, Nvm, Overrun, Persist, PlatformCommand, Program, Runtime, Sink, Tick, Watchdog};
 
 use crate::telemetry::{DRAIN_ROUNDS, Port, Telemetry};
 
@@ -80,13 +80,124 @@ pub struct JournalStats {
     pub program_ns: i64,
 }
 
+/// Was ein Lauf ueber die Ticks mitfuehrt (12.1): Ausgabe im Takt der
+/// Leitung, Kommando, Grenze, Bilanz. Die Bare-Metal-Schleife ([`run`])
+/// treibt ihn je Tick, und ebenso die Aufgabe unter einem RTOS (12.8,
+/// `takt-rt-rtos`), die nicht selbst wartet.
+#[derive(Debug)]
+pub struct Runner {
+    cadence: Cadence,
+    /// Ab dieser Tickzahl gehen die Ausgaenge das naechste Mal.
+    next: u64,
+    /// Alle wie viele Ticks die Zeitzeile geht.
+    time_every: u64,
+    /// Ob der Stand des letzten Ticks schon ausgegeben ist; im
+    /// Konformitaetslauf ist es jeder, auch der Anfangszustand.
+    shown: bool,
+    /// Die Grenze `cadence.limit` ist erreicht.
+    ended: bool,
+    /// Die Bilanz bis hierher.
+    pub stats: Stats,
+}
+
+impl Runner {
+    /// Beginnt einen Lauf; der Konformitaetslauf zeigt den Anfangszustand.
+    pub fn start<G: Traced>(program: &G, cadence: Cadence, tick_ns: i64) -> Runner {
+        if cadence.conformance() {
+            program.dump(true);
+        }
+        // Unter einer Millisekunde Tick traegt die Leitung keine Zeile je
+        // Tick (FB-271); die Zeitzeile ist Statistik und darf duenner werden.
+        let time_every = (1_000_000 / tick_ns.max(1)).max(1) as u64;
+        Runner {
+            cadence,
+            next: cadence.every.max(1),
+            time_every,
+            shown: cadence.conformance(),
+            ended: false,
+            stats: Stats { command: program.command(), ..Stats::default() },
+        }
+    }
+
+    /// Laeuft der Lauf weiter? Nicht nach einem Kommando an die Plattform
+    /// (12.7) und nicht nach der Grenze.
+    pub fn running(&self) -> bool {
+        self.stats.command.is_none() && !self.ended
+    }
+
+    /// Nach einem Tick: der Latch an die Treiber, die Ausgabe, das
+    /// Kommando, die Grenze.
+    ///
+    /// `telemetry` holt die Leitung je Aufruf, wie der erzeugte Rahmen sie
+    /// ueber `takt_board_trace` holt — so gibt es nie zwei Griffe zugleich.
+    pub fn after<G, C, W, S, P, const R: usize>(
+        &mut self,
+        rt: &mut Runtime<G, C, W, S>,
+        tick: &Tick,
+        telemetry: &mut impl FnMut() -> Option<&'static mut Telemetry<P, R>>,
+    ) where
+        G: Traced,
+        C: Clock,
+        W: Watchdog,
+        S: Sink,
+        P: Port + 'static,
+    {
+        self.stats.slept += tick.slept;
+        self.stats.overruns += u64::from(tick.overrun);
+        rt.program.commit();
+        let conformance = self.cadence.conformance();
+        if conformance
+            && tick.k % self.time_every == 0
+            && let Some(t) = telemetry()
+        {
+            t.write_time(tick);
+        }
+        let k = rt.tick_number();
+        self.shown = k >= self.next;
+        if self.shown {
+            self.next = k + self.cadence.every.max(1);
+            rt.program.dump(!conformance);
+            if self.cadence.pc {
+                rt.program.pc();
+            }
+        }
+        if let Some(t) = telemetry() {
+            t.flush();
+        }
+        self.stats.command = rt.program.command();
+        self.ended = self.cadence.limit > 0 && k >= self.cadence.limit;
+    }
+
+    /// Beendet den Lauf. Das Journal schreibt synchron, und erst danach
+    /// gehen bei einem Kommando alle Ausgaenge auf `safe` — auch wenn schon
+    /// der Anfangszustand das Kommando setzt.
+    pub fn finish<G, C, W, S, N>(mut self, rt: &mut Runtime<G, C, W, S>, persist: Option<&mut Persist<'_, N>>) -> Stats
+    where
+        G: Traced,
+        C: Clock,
+        W: Watchdog,
+        S: Sink,
+        N: Nvm,
+    {
+        self.stats.flushed = persist.is_some_and(|p| p.flush(&mut rt.program));
+        if self.stats.command.is_some() {
+            let conformance = self.cadence.conformance();
+            // Den Tick, der das Kommando traegt, zeigt auch ein freier Lauf,
+            // der sonst nur jeden `every`-ten ausgibt: Er erklaert das Ende.
+            if !self.shown {
+                rt.program.dump(!conformance);
+            }
+            rt.program.end();
+            rt.program.commit();
+            rt.program.dump(!conformance);
+        }
+        self.stats
+    }
+}
+
 /// Laeuft, bis `cadence.limit` erreicht ist oder das Programm der
-/// Plattform ein Kommando gibt (12.7). Dann schreibt das Journal synchron,
-/// und erst danach gehen alle Ausgaenge auf `safe` — auch wenn schon der
-/// Anfangszustand das Kommando setzt.
-///
-/// `telemetry` holt die Leitung je Aufruf, wie der erzeugte Rahmen sie
-/// ueber `takt_board_trace` holt — so gibt es nie zwei Griffe zugleich.
+/// Plattform ein Kommando gibt (12.7); die Schleife wartet selbst auf
+/// jeden Tick ([`Runtime::step`]).
 pub fn run<G, C, W, S, N, P, const R: usize>(
     rt: &mut Runtime<G, C, W, S>,
     mut persist: Option<&mut Persist<'_, N>>,
@@ -101,62 +212,15 @@ where
     N: Nvm,
     P: Port + 'static,
 {
-    let mut stats = Stats::default();
-    if cadence.conformance() {
-        rt.program.dump(true);
-    }
-    let every = cadence.every.max(1);
-    let mut next = every;
-    // Unter einer Millisekunde Tick traegt die Leitung keine Zeile je
-    // Tick (FB-271); die Zeitzeile ist Statistik und darf duenner werden.
-    let time_every = (1_000_000 / rt.tick_ns()).max(1) as u64;
-    stats.command = rt.program.command();
-    // Ob der Stand des letzten Ticks schon ausgegeben ist; im
-    // Konformitaetslauf ist es jeder, auch der Anfangszustand.
-    let mut shown = cadence.conformance();
-    while stats.command.is_none() {
+    let mut runner = Runner::start(&rt.program, cadence, rt.tick_ns());
+    while runner.running() {
         let tick = match persist.as_deref_mut() {
             Some(p) => rt.step_persisting(p),
             None => rt.step(),
         };
-        stats.slept += tick.slept;
-        stats.overruns += u64::from(tick.overrun);
-        rt.program.commit();
-        if cadence.conformance()
-            && tick.k % time_every == 0
-            && let Some(t) = telemetry()
-        {
-            t.write_time(&tick);
-        }
-        let k = rt.tick_number();
-        shown = k >= next;
-        if shown {
-            next = k + every;
-            rt.program.dump(!cadence.conformance());
-            if cadence.pc {
-                rt.program.pc();
-            }
-        }
-        if let Some(t) = telemetry() {
-            t.flush();
-        }
-        stats.command = rt.program.command();
-        if cadence.limit > 0 && k >= cadence.limit {
-            break;
-        }
+        runner.after(rt, &tick, &mut telemetry);
     }
-    stats.flushed = persist.is_some_and(|p| p.flush(&mut rt.program));
-    if stats.command.is_some() {
-        // Den Tick, der das Kommando traegt, zeigt auch ein freier Lauf,
-        // der sonst nur jeden `every`-ten ausgibt: Er erklaert das Ende.
-        if !shown {
-            rt.program.dump(!cadence.conformance());
-        }
-        rt.program.end();
-        rt.program.commit();
-        rt.program.dump(!cadence.conformance());
-    }
-    stats
+    runner.finish(rt, persist)
 }
 
 /// Die Bilanz als letzte Zeile, dann `takt end`; leert den Ring.

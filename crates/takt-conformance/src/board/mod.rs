@@ -189,12 +189,21 @@ pub struct Options {
     /// Outputs ihr `guard` (7.5). Ohne sie rechnet das Board wie die
     /// Simulation.
     pub hardware: Option<PathBuf>,
+    /// Im Profil `rtos` (12.8): Takt als hoechstpriore Aufgabe unter dem
+    /// RTOS des Boards, mit Treiber-Aufgabe und Funk-ISR als Last. Ein
+    /// Board ohne Bindung baut dann nicht.
+    pub rtos: bool,
 }
 
 impl Options {
     /// Ein Konformitaetslauf ueber `ticks` Ticks mit leerem Journal.
     pub fn fresh(ticks: u64) -> Options {
-        Options { ticks, fresh: true, bin: Bin::Takt, timed: false, hardware: None }
+        Options { ticks, fresh: true, bin: Bin::Takt, timed: false, hardware: None, rtos: false }
+    }
+
+    /// Derselbe Lauf im Profil `rtos` (12.8).
+    pub fn under_rtos(self) -> Options {
+        Options { rtos: true, ..self }
     }
 
     /// Derselbe Lauf mit der Hardware-Konfiguration `path`.
@@ -205,17 +214,17 @@ impl Options {
     /// Ein Lauf ueber `ticks` Ticks in Echtzeit, fuer das, was nur die
     /// Uhr zeigt: Tick-Jitter und Stack unter Last (13.8).
     pub fn timed(ticks: u64) -> Options {
-        Options { ticks, fresh: true, bin: Bin::Takt, timed: true, hardware: None }
+        Options { ticks, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false }
     }
 
     /// Ein Messkern mit `runs` Messungen und seiner C-Referenz.
     pub fn bench(runs: u64, reference: Option<PathBuf>) -> Options {
-        Options { ticks: runs, fresh: true, bin: Bin::Bench { reference }, timed: false, hardware: None }
+        Options { ticks: runs, fresh: true, bin: Bin::Bench { reference }, timed: false, hardware: None, rtos: false }
     }
 
     /// Die Vektoren der kuratierten Natives.
     pub fn natives() -> Options {
-        Options { ticks: 0, fresh: false, bin: Bin::Natives, timed: false, hardware: None }
+        Options { ticks: 0, fresh: false, bin: Bin::Natives, timed: false, hardware: None, rtos: false }
     }
 }
 
@@ -284,7 +293,7 @@ impl Bringup {
     fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
         let mut h = DefaultHasher::new();
         std::fs::read(program).map_err(|e| format!("{}: {e}", program.display()))?.hash(&mut h);
-        (options.ticks, options.fresh, options.timed, self.triple).hash(&mut h);
+        (options.ticks, options.fresh, options.timed, options.rtos, self.triple).hash(&mut h);
         if let Some(hw) = &options.hardware {
             std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
         }
@@ -346,6 +355,9 @@ impl Bringup {
             cargo.env("TAKT_TIMED", "1");
         } else {
             cargo.env_remove("TAKT_TIMED");
+        }
+        if options.rtos {
+            cargo.args(["--features", "rtos"]);
         }
         match &options.bin {
             Bin::Bench { reference: Some(c) } => cargo.env("TAKT_BENCH_C", c),

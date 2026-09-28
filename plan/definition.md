@@ -1814,7 +1814,7 @@ libtaktm            Mathematik für alle Targets aus derselben Quelle
 takt-rt-core        Tick-Schleife, Prozessabbild, Fault-Wald, Abort-Phase, Zähler, Jobs, Watchdog, `persist`-Journal — `no_std`, ohne Allokation
 takt-rt-linux       Profilaufsatz `linux_rt` (12.2): Echtzeituhr mit absoluten Deadlines, gemessene Zeitgarantie, Jobs in Threads, NVM als Datei, Tunables
 takt-rt-baremetal   Profilaufsatz `baremetal` (12.3): Tick per Timer, Telemetrie-Ring, logische Zeit für Konformitätsläufe, Schlaf
-takt-rt-rtos        (geplant, M10 Schritt 16) Profilaufsatz `rtos` (12.8): Takt als höchstpriore Aufgabe unter einem RTOS
+takt-rt-rtos        Profilaufsatz `rtos` (12.8): Takt als höchstpriore Aufgabe unter einem RTOS; die Aufgabe wartet auf die Benachrichtigung je Tickgrenze und arbeitet ab, was fällig ist
 takt-rt-boot        (geplant, M10 Schritt 17) Profilaufsatz `boot` (12.8): minimale Runtime für Startprogramme, RAM-Log statt Recorder
 takt-hal            Treiber-Traits (Skalar, Stream, geplante Ausgabe), Rand-Selbstprüfungen (12.6), Simulationstreiber — die Sim/HW-Umschaltung (8.3) ist ein Treiberwechsel
 takt-board-support  die rechnende Hälfte der Board-Unterstützung ohne Registerzugriff: Perioden, Zyklen, FIFO, Messschleife (13.8)

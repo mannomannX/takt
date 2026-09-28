@@ -346,6 +346,41 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
             self.beat_from = self.beat_from.saturating_add(self.tick_ns);
         }
         self.clock.wait_until(self.deadline);
+        self.tick_now()
+    }
+
+    /// Ist die naechste Tickgrenze erreicht, an der die Schleife etwas zu
+    /// tun hat — den Watchdog bestaetigen oder den Tick rechnen?
+    ///
+    /// Die Frage einer Schleife, die nicht selbst wartet (12.8 `rtos`): Dort
+    /// wartet die Aufgabe auf eine Benachrichtigung des Timers, und waehrend
+    /// sie wartet, rechnen die Aufgaben darunter.
+    pub fn due(&self) -> bool {
+        self.clock.now() >= self.beat_from
+    }
+
+    /// Eine erreichte Tickgrenze (12.8 `rtos`, [`Runtime::due`]): vor der
+    /// Frist, nach virtuellen Ticks (9.9), bestaetigt sie nur den Watchdog;
+    /// an der Frist laeuft der Tick wie in [`Runtime::step`].
+    pub fn at_boundary(&mut self) -> Option<Tick> {
+        if self.beat_from < self.deadline {
+            self.watchdog.kick();
+            self.beat_from = self.beat_from.saturating_add(self.tick_ns);
+            return None;
+        }
+        Some(self.tick_now())
+    }
+
+    /// Wie [`Runtime::at_boundary`], mit Journal wie in
+    /// [`Runtime::step_persisting`].
+    pub fn at_boundary_persisting<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) -> Option<Tick> {
+        let tick = self.at_boundary()?;
+        self.journal(&tick, persist);
+        Some(tick)
+    }
+
+    /// Der Tick an der Frist: ab `sample_inputs()` wie in 12.1.
+    fn tick_now(&mut self) -> Tick {
         let began = self.clock.now();
         let drift = began - self.deadline;
         self.overrun.observe_drift(drift, self.tick_ns);
@@ -430,6 +465,12 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// Programm Ueberlaeufe annimmt (`overrun = alert`, 7.3).
     pub fn step_persisting<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) -> Tick {
         let tick = self.step();
+        self.journal(&tick, persist);
+        tick
+    }
+
+    /// Das Journal nach dem Schritt (5.9, [`Runtime::step_persisting`]).
+    fn journal<N: Nvm>(&mut self, tick: &Tick, persist: &mut crate::journal::Persist<'_, N>) {
         if self.journal_may_run(persist.blocking_ns()) {
             persist.poll(tick.now, &mut self.program);
             // Ein Vorgang ueber die Frist hinaus ist ein Ueberlauf (7.3),
@@ -439,7 +480,6 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
                 self.pending_overrun |= self.overrun.observe(self.tick_ns.saturating_add(late), self.tick_ns).fault;
             }
         }
-        tick
     }
 
     fn journal_may_run(&self, blocking_ns: Option<i64>) -> bool {
