@@ -678,7 +678,7 @@ PAR-3.9-Backpatching_einen_Rahmen_zusammensetzen,Absatz/Regel,3.9,Backpatching: 
 PAR-3.11-Uniforme_Form_v1,Absatz/Regel,3.11,Uniforme Form (v1),,M6 (v1.1),fertig,"`lower/matrix.rs`, `takt-interp/src/matrix.rs`, Numerik in `libtaktm::mat`"
 PAR-3.11-Dimensionierte_Form_v1.1,Absatz/Regel,3.11,Dimensionierte Form (v1.1),v1.1,M6,fertig,"`unitvec` als `Entity::Unitvec`, Tupel in `lower/matrix.rs` (kanonische Form `c_1 = 1`), zur Laufzeit ein `mat<m, n>`"
 PAR-4.2-Breite_von_float,Absatz/Regel,4.2,Breite von `float`,,M1 (Kernsemantik),fertig,
-PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M10 (aus M1),teilweise,MXCSR im Wirtsrahmen und Urteil ueber den Subnormal-Vektor (FB-329)
+PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M10 (aus M1),fertig,
 PAR-4.2-fma,Absatz/Regel,4.2,`fma`,,M1 (Kernsemantik),fertig,
 PAR-4.2-Reduktionen,Absatz/Regel,4.2,Reduktionen,,M1 (Kernsemantik),fertig,
 PAR-4.2-Subnormale_in_Zuständen,Absatz/Regel,4.2,Subnormale in Zuständen,,M10 (aus M1),fertig,

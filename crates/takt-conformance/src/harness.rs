@@ -118,7 +118,15 @@ fn build_inner(
     let mut s = String::new();
     let _ = writeln!(s, "/* Testrahmen (13.8); erzeugt von takt-conformance. */");
     let _ = writeln!(s, "#include <stdio.h>");
-    let _ = writeln!(s, "#include <string.h>\n");
+    let _ = writeln!(s, "#include <string.h>");
+    // 4.2: FTZ und DAZ aus, ausdruecklich und nicht als Annahme ueber den
+    // Zustand, den der Prozess erbt.
+    let _ = writeln!(s, "#if defined(__x86_64__) || defined(_M_X64)");
+    let _ = writeln!(s, "#include <xmmintrin.h>");
+    let _ = writeln!(s, "#define TAKT_IEEE_MODE() _mm_setcsr(_mm_getcsr() & ~0x8040u)");
+    let _ = writeln!(s, "#else");
+    let _ = writeln!(s, "#define TAKT_IEEE_MODE() ((void)0)");
+    let _ = writeln!(s, "#endif\n");
     let _ = writeln!(s, "static void takt_tx_commit(long long);");
     let _ = writeln!(s, "static void takt_int_commit(void);");
 
@@ -230,6 +238,7 @@ fn build_inner(
     crate::ports::emit(&mut s, p);
 
     let _ = writeln!(s, "int main(void) {{");
+    let _ = writeln!(s, "    TAKT_IEEE_MODE();");
     for m in &driven {
         let _ = writeln!(s, "    memset(state_{0}, 0, sizeof state_{0});", m.name);
     }

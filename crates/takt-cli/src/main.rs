@@ -229,7 +229,12 @@ fn bench(args: &Args) -> bool {
             }
         }
     }
-    outcome.calibration.checks.iter().all(|c| c.measured_ps <= c.bound_ps)
+    // 4.2: Rechnet eine Subnormal-Probe falsch, hat das Ziel FTZ oder DAZ
+    // an; der Bericht steht, aber keine Zahl dieses Laufs gilt fuer Takt.
+    if outcome.frame.subnormal > 0 {
+        eprintln!("takt bench: {} Subnormal-Proben falsch, FTZ/DAZ ist an (4.2)", outcome.frame.subnormal);
+    }
+    outcome.frame.subnormal == 0 && outcome.calibration.checks.iter().all(|c| c.measured_ps <= c.bound_ps)
 }
 
 /// Eine fehlende Umgebungsvariable fuer ein Board.
