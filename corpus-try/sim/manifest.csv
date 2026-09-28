@@ -20,3 +20,8 @@ beispiel,szenario,ticks,profil,verdikt,beschreibung
 14_8,slot0,600,,INCONCLUSIVE,"Slot 0 traegt ein gueltiges Image: Kopf, Chunk-Hash, Signatur als Job, Sprung; boot_jump beendet den Lauf vor dem Verdikt (12.7)"
 14_8,fallback,600,,INCONCLUSIVE,"Slot 0 mit falschem Digest, Slot 1 gueltig: SLOT_FAILED, dann Sprung in Slot 1"
 14_8,no_image,600,,PASS,"Kein Image in beiden Slots: SLOT_FAILED je Versuch, dann HALT"
+12_7,confirmed,60,,INCONCLUSIVE,"Plattform ohne Startstufe: bestaetigtes Image, Betrieb, Neustart aus sicherem Zustand (12.7)"
+12_7,trial,60,,INCONCLUSIVE,"Neues Image auf Probe: Selbsttest bestanden, image_confirm, dann Betrieb und Neustart"
+12_7,broken,60,BROKEN,FAIL,"Neues Image auf Probe, Selbsttest verfehlt: Fault statt Bestaetigung, die Plattform faellt zurueck"
+12_7,reset_loop,60,,INCONCLUSIVE,"Drei Starts ohne geordnetes Ende: HOLD statt weiterer Neustarts"
+12_7,watchdog,60,,INCONCLUSIVE,"Start nach dem Watchdog: Alert mit dem Zaehler, dann Betrieb"

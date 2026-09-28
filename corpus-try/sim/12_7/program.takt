@@ -1,0 +1,75 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# 12.7 — Startmuster als Programm, nicht als Sprache: ein neues Image auf
+# Probe (TRIAL -> SELFTEST -> CONFIRM), eine Reset-Schleife, die ein
+# Programm an `reset_count` erkennt, und der Neustart aus sicherem Zustand.
+#
+# Ohne Angabe der Plattform liest das Programm, was eine Plattform ohne
+# Startstufe meldet: `POWER_ON`, ein bestaetigtes Image und keinen Start
+# ohne geordnetes Ende (12.7). So laufen Interpreter, Wirt und Boards
+# dasselbe Programm und sehen dieselben Ausgaenge; die Szenarien des
+# Golden-Traces speisen die Plattformwerte ueber den Stimulus.
+
+input  boot_reason   : BootReason @ hw("sys/boot_reason")
+input  image_state   : ImageState @ hw("sys/image_state")
+input  reset_count   : int        @ hw("sys/reset_count")
+output image_confirm : bool       @ hw("sys/image_confirm") with safe = false
+output reboot        : RebootCmd  @ hw("sys/reboot")        with safe = NONE
+output led           : bool       @ hw("ui/led")            with safe = false
+
+param RESET_LIMIT   : int in 1..10 = 3
+param SELFTEST_SUM  : int in 0..100000 = 2106
+param RESTART_AFTER : Duration in 100 ms..10 s = 300 ms
+
+profile BROKEN:
+    SELFTEST_SUM = 2107
+
+# Der Selbsttest rechnet eine feste Tabelle nach; ein Image, das sie
+# anders rechnet, bestaetigt sich nicht.
+const TABLE : [8] int = [3, 1, 4, 1, 5, 9, 2, 6]
+
+fn weighted(t: [8] int) -> int in 0..100000:
+    var sum : int in 0..100000 = 0
+    for i in range(8):
+        sum += (i + 1) * t[i] * 13
+    return sum
+
+machine boot:
+    pub var restarts : int in 0..1000 = 0
+
+    initial DECIDE
+
+    state DECIDE:
+        loop:
+            alert boot_reason.or(POWER_ON) == WATCHDOG, "Start nach dem Watchdog, {reset_count.or(0)} in Folge"
+        # Zu viele Starts ohne geordnetes Ende: nicht weiter neu starten,
+        # sondern sicher stehen bleiben, bis jemand nachsieht.
+        when reset_count.or(0) >= RESET_LIMIT: -> HOLD
+        when image_state.or(CONFIRMED) == TRIAL: -> SELFTEST
+        when true: -> RUN
+
+    state SELFTEST:
+        sequence:
+            led = true
+            wait 50 ms
+            check weighted(TABLE) == SELFTEST_SUM, "selftest: table sum {weighted(TABLE)}"
+            image_confirm = true
+            -> RUN
+
+    state RUN:
+        loop:
+            led = not led
+        after RESTART_AFTER: -> RESTART
+
+    # Neustart aus sicherem Zustand: nach dem Commit des Ticks, wenn alle
+    # Outputs auf `safe` stehen (12.7).
+    state RESTART:
+        enter:
+            restarts += 1
+            reboot = RESTART
+
+    state HOLD:
+        enter:
+            led = false
