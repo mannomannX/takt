@@ -120,6 +120,9 @@ pub fn init(systimer: SYSTIMER<'static>, tick_ns: i64) -> Result<SystimerTick, I
     let alarm = SystemTimer::new(systimer).alarm0;
     alarm.set_interrupt_handler(on_alarm);
     alarm.enable_auto_reload(true);
+    // FB-352: Der Ursprung vor dem Alarm, damit keine Rastergrenze nach
+    // ihrem Alarm liegt.
+    tick::set_origin(SystemTimer::unit_value(Unit::Unit0));
     alarm
         .load_value(Duration::from_micros((tick_ns / 1_000).unsigned_abs()))
         .map_err(|_| InitError::Period(takt_board_support::PeriodError::TooLong))?;

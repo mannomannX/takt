@@ -6,18 +6,40 @@
 //! im Flash sperrt Interrupts fuer zweistellige Millisekunden —, faellt
 //! nur *ein* Alarm an, und ein ISR-Zaehler verloere die Ticks dazwischen
 //! still. Der Timer verliert sie nicht.
+//!
+//! **Das Raster beginnt, wo der Alarm beginnt** (FB-352). Gezaehlt wird ab
+//! dem Stand, den `init` vor dem Laden des Alarms liest, nicht ab null.
+//! Mit null als Ursprung lag der Alarm in beliebiger Phase zum Raster; fiel
+//! er knapp vor eine Grenze, weckte er den Kern bei noch altem Zaehler, der
+//! Kern schlief eine Periode weiter, und die Ticks kamen paarweise alle
+//! zwei Perioden. So liegt jede Grenze am oder vor ihrem Alarm.
 
+use core::cell::Cell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use critical_section::Mutex;
 use esp_hal::timer::systimer::{SystemTimer, Unit};
 use takt_rt_baremetal::TickSource;
 
 static COUNTS_PER_TICK: AtomicU32 = AtomicU32::new(0);
 static LAST_COUNTS: AtomicU32 = AtomicU32::new(0);
+static ORIGIN: Mutex<Cell<u64>> = Mutex::new(Cell::new(0));
 
 /// Von `init` gesetzt: so viele SYSTIMER-Schritte ist ein Tick lang.
 pub(crate) fn set_counts_per_tick(counts: u32) {
     COUNTS_PER_TICK.store(counts, Ordering::Relaxed);
+}
+
+/// Von `init` gesetzt, bevor der Alarm laeuft: der Ursprung des Rasters.
+pub(crate) fn set_origin(stamp: u64) {
+    critical_section::with(|cs| ORIGIN.borrow(cs).set(stamp));
+}
+
+/// SYSTIMER-Schritte seit dem Ursprung; im RAM wie seine Aufrufer.
+#[esp_hal::ram]
+fn since_origin() -> u64 {
+    let origin = critical_section::with(|cs| ORIGIN.borrow(cs).get());
+    SystemTimer::unit_value(Unit::Unit0).wrapping_sub(origin)
 }
 
 /// Von der Alarm-ISR gerufen: merkt sich die gemessene Periode in
@@ -29,7 +51,7 @@ pub fn on_timer_interrupt(elapsed_counts: u32) {
     crate::jobs::preempt();
 }
 
-/// Tick-Ereignisse seit dem Start des SYSTIMER.
+/// Tick-Ereignisse seit dem Ursprung des Rasters.
 ///
 /// Im RAM (12.3): Ein Flash-Schreibvorgang schaltet den Cache ab, und der
 /// Zaehler wird waehrenddessen gelesen.
@@ -37,7 +59,7 @@ pub fn on_timer_interrupt(elapsed_counts: u32) {
 pub fn count() -> u64 {
     match u64::from(COUNTS_PER_TICK.load(Ordering::Relaxed)) {
         0 => 0,
-        counts => SystemTimer::unit_value(Unit::Unit0) / counts,
+        counts => since_origin() / counts,
     }
 }
 
@@ -70,7 +92,9 @@ impl TickSource for SystimerTick {
 
     #[esp_hal::ram]
     fn now_ns(&self) -> i64 {
-        takt_board_support::clock::elapsed_ns(self.timer_hz, SystemTimer::unit_value(Unit::Unit0))
+        // Dasselbe Raster wie `ticks`: Die Uhr rechnet ihr Ziel als
+        // `Frist / Periode`.
+        takt_board_support::clock::elapsed_ns(self.timer_hz, since_origin())
     }
 
     #[esp_hal::ram]
