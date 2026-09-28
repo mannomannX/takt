@@ -184,7 +184,7 @@ fn build_inner(
     crate::streams::emit(&mut s, p, inputs, crate::streams::Trace::Stdio);
 
     natives(&mut s, p);
-    machine_declarations(&mut s, &driven);
+    machine_declarations(&mut s, p, &driven);
     // 13.3: Laufzeitmonitore laufen nur, wenn der Rahmen alle Maschinen
     // fuehrt — eine Eigenschaft liest jede.
     let monitors: Vec<(usize, &takt_mir::program::Property)> = match machine {
@@ -331,6 +331,7 @@ fn build_inner(
     }
     steps(&mut s, p, &layout, &driven, "        ", "g_tick");
     abort_phase(&mut s, p, &driven, "        ", "g_tick");
+    idle_drops(&mut s, p, &driven, "        ");
     commit_sequence(&mut s, p, &driven, "        ", "g_tick");
     crate::ports::sample(&mut s, p, "        ");
     let _ = writeln!(s, "        dump(g_tick);");
@@ -868,6 +869,21 @@ pub(crate) fn abort_phase(
     let _ = writeln!(s, "{indent}memset(g_raised, 0, sizeof g_raised);");
 }
 
+/// Der Verwurf im `idle` (5.10, 9.6 `advance_cursors`) nach der
+/// Abort-Phase, fuer jede Maschine, die etwas zu verwerfen hat. Eine
+/// inaktive gescopte Instanz hoert ohnehin nicht, und ihr Zustand teilt
+/// sich den Speicher mit ihren Geschwistern (11.2).
+pub(crate) fn idle_drops(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], indent: &str) {
+    let scoped = scoped_of(p);
+    for m in driven.iter().filter(|m| takt_llvm::step::drops(m, p)) {
+        let scope = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
+            Some((owner, _, n)) => format!("if (g_scope_{owner}_{n}) "),
+            None => String::new(),
+        };
+        let _ = writeln!(s, "{indent}{scope}{0}_drop(state_{0});", m.name);
+    }
+}
+
 /// Merkt Operator-Aborts und Runtime-Faults des Stimulus in ihrem Tick vor:
 /// einen `Driver`-Fault beim Besitzer seines Outputs, alles andere bei
 /// jeder Maschine.
@@ -1022,7 +1038,7 @@ pub(crate) fn sim_fed_inputs(p: &Program) -> Vec<usize> {
 
 /// Die Signaturen des erzeugten Codes je Maschine (11.2), fuer beide
 /// Rahmen.
-pub(crate) fn machine_declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
+pub(crate) fn machine_declarations(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine]) {
     for m in driven {
         let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
@@ -1030,6 +1046,9 @@ pub(crate) fn machine_declarations(s: &mut String, driven: &[&takt_mir::machine:
         let _ =
             writeln!(s, "void {}_deliver(void *st, void *in, void *par, void *out, int code, _Bool active);", m.name);
         let _ = writeln!(s, "void {}_pend(void *st, int code);", m.name);
+        if takt_llvm::step::drops(m, p) {
+            let _ = writeln!(s, "void {}_drop(void *st);", m.name);
+        }
         let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
         let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);
@@ -1211,7 +1230,8 @@ pub(crate) fn commit_sequence(
 /// `Runtime::sleep` — `n = d / T0 - 1`, und der Tick an der Frist laeuft.
 /// Die Zeitzeile traegt `slept`, wie auf dem Board; der Vergleich liest
 /// sie nicht. Wake-Kommandos und Jobs gibt es in diesem Rahmen nicht
-/// (keine Eingaben); ausstehende geplante Ausgaben verbieten den Schlaf.
+/// (keine Eingaben); ausstehende geplante Ausgaben und ein Fault, der
+/// hinter einem Abort wartet (`g_pending`), verbieten den Schlaf.
 fn virtual_sleep(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], ticks: u64) {
     let _ = writeln!(s, "        {{");
     let _ = writeln!(s, "            _Bool idle = 1;");
@@ -1220,7 +1240,8 @@ fn virtual_sleep(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mach
     }
     let _ = writeln!(s, "            long long best = -1;");
     for m in driven {
-        let _ = writeln!(s, "            idle = idle && {0}_idle(state_{0});", m.name);
+        let i = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
+        let _ = writeln!(s, "            idle = idle && !g_pending[{i}] && {0}_idle(state_{0});", m.name);
     }
     for m in driven {
         let _ = writeln!(s, "            if (idle) {{");

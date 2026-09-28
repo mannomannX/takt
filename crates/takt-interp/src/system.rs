@@ -1032,7 +1032,9 @@ impl<'p> Sim<'p> {
             for (i, _) in m.layout.cursors.iter().enumerate() {
                 let examined = state.examined.get(i).copied().unwrap_or(-1);
                 if let Some(end) = ends[i] {
-                    let before = state.cursors.get(i).copied().unwrap_or(0);
+                    // Was die Maschine in diesem Tick untersucht hat, ist
+                    // konsumiert, nicht verworfen (9.6).
+                    let before = state.cursors.get(i).copied().unwrap_or(0).max(examined + 1);
                     if let Some(d) = state.dropped.get_mut(i) {
                         *d = d.saturating_add(u32::try_from(end - before).unwrap_or(u32::MAX));
                     }

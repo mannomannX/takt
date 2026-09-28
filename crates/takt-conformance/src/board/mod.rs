@@ -100,6 +100,7 @@ pub const CORPUS: &[&str] = &[
     "89_fault_paths.takt",
     "90_abort.takt",
     "91_subnormals.takt",
+    "92_idle_streams.takt",
 ];
 
 /// Die Zeile, mit der jedes Bring-up seinen Lauf beendet.

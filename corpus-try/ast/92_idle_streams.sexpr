@@ -1,0 +1,36 @@
+(system
+  (language 1)
+  (tick 1ms))
+(input data :stream<u8> @hw("bus/data") capacity=8 max_rate=2000[Hz])
+(input bell :stream<u8> @hw("bus/bell") capacity=8 max_rate=2000[Hz] wake=true)
+(output data_sim :stream<u8> @sim("bus/data"))
+(output bell_sim :stream<u8> @sim("bus/bell"))
+(output missed :int in 0..999 @hw("o/missed") safe=0)
+(output heard :int in 0..999 @hw("o/heard") safe=0)
+(output rung :int in 0..999 @hw("o/rung") safe=0)
+(machine feeder
+  (var k :int in 0..24 0)
+  (initial GO)
+  (state GO
+    (loop
+      (send data_sim 1)
+      (if (== k 24)
+        (send bell_sim 2))
+      (= k (if (== k 24) 0 (+ k 1))))))
+(machine sleeper
+  (var n :int in 0..999 0)
+  (var r :int in 0..999 0)
+  (initial STANDBY)
+  (state STANDBY idle
+    (when (> (.count bell) 0) -> AWAKE)
+    (after 40ms -> AWAKE))
+  (state AWAKE
+    (loop
+      (= missed (call min (.dropped data) 999)))
+    (on data as e
+      (= n (call min (+ n 1) 999))
+      (= heard n))
+    (on bell as e
+      (= r (call min (+ r 1) 999))
+      (= rung r))
+    (after 5ms -> STANDBY)))

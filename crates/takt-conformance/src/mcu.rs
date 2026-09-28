@@ -64,7 +64,7 @@ pub fn build_with(p: &Program, diagnostics: takt_llvm::Diagnostics) -> McuHarnes
     // `apply_scheduled` ihn schreibt.
     crate::harness::scheduled(&mut s, p, &layout);
     jobs(&mut s, p);
-    declarations(&mut s, &driven);
+    declarations(&mut s, p, &driven);
     init(&mut s, p, &layout, &driven);
     tick(&mut s, p, &layout, &driven);
     telemetry(&mut s, p, &layout, &driven, diagnostics);
@@ -241,9 +241,9 @@ fn storage(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::ma
 }
 
 /// Die Signaturen des erzeugten Codes (11.2).
-fn declarations(s: &mut String, driven: &[&takt_mir::machine::Machine]) {
+fn declarations(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Der erzeugte Code (11.2). */");
-    crate::harness::machine_declarations(s, driven);
+    crate::harness::machine_declarations(s, p, driven);
     let _ = writeln!(s);
 }
 
@@ -510,6 +510,7 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "    takt_mcu_sample();");
     crate::harness::steps(s, p, layout, driven, "    ", "k");
     crate::harness::abort_phase(s, p, driven, "    ", "k");
+    crate::harness::idle_drops(s, p, driven, "    ");
     crate::harness::commit_sequence(s, p, driven, "    ", "k");
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, k);");
@@ -572,10 +573,11 @@ fn platform(s: &mut String, p: &Program, layout: &Layout) {
 /// `takt_mcu_idle` und `takt_mcu_deadline`: darf geschlafen werden (9.9)?
 ///
 /// 9.9 nennt sechs Konjunkte. Je Maschine beantwortet der erzeugte Code
-/// zwei (`idle`-Zustand, kein `pending`); ein anliegendes Wake-Kommando
-/// und ausstehende geplante Ausgaben prueft der Rahmen, weil ihm
-/// Prozessabbild und Warteschlangen gehoeren — und laufende Jobs (4.5):
-/// Mit ihnen schlaeft das System nicht.
+/// drei (`idle`-Zustand, keine Zustellung, leere Wake-Stroeme); ein
+/// anliegendes Wake-Kommando, ausstehende geplante Ausgaben und ein
+/// Fault, der hinter einem Abort wartet, prueft der Rahmen, weil ihm
+/// Prozessabbild, Warteschlangen und `g_pending` gehoeren — und laufende
+/// Jobs (4.5): Mit ihnen schlaeft das System nicht.
 fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Systemschlaf (9.9). */");
     let _ = writeln!(s, "_Bool takt_mcu_idle(void) {{");
@@ -594,6 +596,8 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
         }
         let _ = writeln!(s, "    if (takt_mcu_jobs_busy()) return 0;");
         for m in driven {
+            let i = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
+            let _ = writeln!(s, "    if (g_pending[{i}]) return 0;");
             let _ = writeln!(s, "    if (!{0}_idle(state_{0})) return 0;", m.name);
         }
         let _ = writeln!(s, "    return 1;");

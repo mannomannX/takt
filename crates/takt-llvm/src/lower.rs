@@ -143,7 +143,12 @@ pub fn program_with_diagnostics(
                 without_persist.push(machine.name.clone());
             }
         }
-        let _ = crate::step::idle_function(machine, &st, &mut m);
+        let _ = crate::step::idle_function(machine, &st, p, &mut m);
+        if crate::step::drops(machine, p)
+            && let Err(e) = crate::step::drop_function(machine, &st, p, &mut m)
+        {
+            skipped.push(Skipped { machine: machine.name.clone(), reason: format!("Verwurf im `idle`: {}", e.what) });
+        }
         // 5.11: je gescopter Instanz ein Praedikat auf der Konfiguration.
         for (i, si) in machine.states.iter().flat_map(|s| s.instances.iter()).enumerate() {
             let _ = crate::step::scope_function(machine, &st, i, si.scope, &mut m);

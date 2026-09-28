@@ -332,9 +332,9 @@ fn every_observation_line_carries_its_tick() {
 
 /// **Der Rahmen beantwortet die Schlafbedingung** (9.9).
 ///
-/// 9.9 nennt sechs Konjunkte. Vier liefert der erzeugte Code je Maschine,
-/// die anderen beiden — geplante Ausgaben und Jobs — kennt der MCU-Rahmen
-/// nicht; sie sind dort trivial wahr.
+/// 9.9 nennt sechs Konjunkte. Drei liefert der erzeugte Code je Maschine
+/// (`idle`-Blatt, keine Zustellung, leere Wake-Stroeme), die uebrigen —
+/// ein wartender Fault, geplante Ausgaben, Jobs — der Rahmen.
 #[test]
 fn the_harness_answers_the_sleep_condition() {
     let p = corpus("29_heartbeat.takt");
@@ -371,7 +371,7 @@ fn an_idle_state_reports_its_deadline() {
     let at = ir.find("define i1 @m_idle").expect("Schlafabfrage");
     let idle = &ir[at..ir[at..].find("\n}").map_or(ir.len(), |e| at + e)];
     assert!(idle.contains("icmp eq i8"), "das aktive Blatt wird geprueft:\n{idle}");
-    assert!(idle.contains("xor i1"), "und `pending` negiert");
+    assert!(idle.contains("icmp eq i32"), "und keine Zustellung wartet (`deliver`):\n{idle}");
 
     // Die Fristen stehen als Tabelle je Blatt, in Ticks: `after 500 ms`
     // bei 10 ms Tick sind 50, `after 200 ms` 20.

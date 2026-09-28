@@ -8,6 +8,27 @@ use takt_llvm::machine::{self, Role, depth, state_struct};
 use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
+/// **Im `idle` wacht der Wake-Strom, der andere wird verworfen** (5.10,
+/// 9.9): `_idle` fragt das Fenster von `bell`, `_drop` rueckt nur den
+/// Cursor von `data` vor.
+#[test]
+fn idle_watches_the_wake_stream_and_drops_the_other() {
+    let p = corpus("92_idle_streams.takt");
+    let ir = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", "t").ir;
+    let body = |name: &str| {
+        let start = ir.find(&format!("@{name}(")).unwrap_or_else(|| panic!("kein `{name}` in der IR"));
+        ir[start..].split("\n}").next().unwrap_or_default().to_string()
+    };
+    let count = |channel: &str| {
+        let id = p.channels.iter().position(|c| c.name == channel).expect("Channel");
+        format!("@takt_stream_count(i32 {id},")
+    };
+    let (idle, dropped) = (body("sleeper_idle"), body("sleeper_drop"));
+    assert!(idle.contains(&count("bell")) && !idle.contains(&count("data")), "{idle}");
+    assert!(dropped.contains(&count("data")) && !dropped.contains(&count("bell")), "{dropped}");
+    assert!(!ir.contains("@feeder_drop("), "ohne `idle` kein Verwurf");
+}
+
 /// Uebersetzt ein Korpusprogramm zur MIR.
 fn corpus(name: &str) -> Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
@@ -111,7 +132,7 @@ fn every_machine_has_the_fields_the_reference_names() {
     let p = corpus("03_sequences_and_faults.takt");
     for m in &p.machines {
         let st = state_struct(m, &p).expect("Struct baubar");
-        for role in [Role::Conf, Role::TimeInState, Role::Pending, Role::LastFault, Role::Pc] {
+        for role in [Role::Conf, Role::TimeInState, Role::Deliver, Role::LastFault, Role::Pc] {
             assert!(st.index_of(role, 0).is_some(), "{}: {role:?} fehlt", m.name);
         }
     }
@@ -224,10 +245,10 @@ fn a_check_branches_into_the_fault_trampoline() {
         "der Sprung in den Trampolin fehlt:
 {ir}"
     );
-    // Der Trampolin merkt den Fault vor (5.4) und verlaesst den Schritt.
+    // Der Fault-Pfad meldet den Fault der Runtime (5.3).
     assert!(
-        ir.contains("store i1 true"),
-        "`pending` wird nicht gesetzt:
+        ir.contains("call void @takt_fault("),
+        "der Fault wird nicht gemeldet:
 {ir}"
     );
 }

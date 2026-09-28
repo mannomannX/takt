@@ -632,7 +632,7 @@ OBL-T8,Beweisverpflichtung,9.4.2,T8,,M1/M2 (Interpreter),fertig,
 OBL-T9,Beweisverpflichtung,9.4.2,T9,,M1/M2 (Interpreter),fertig,
 OBL-T10,Beweisverpflichtung,9.4.2,T10,,M1/M2 (Interpreter),fertig,
 OBL-T11,Beweisverpflichtung,9.4.2,T11,,M1/M2 (Interpreter),fertig,
-OBL-T12,Beweisverpflichtung,9.4.2,T12,,M10 (aus M6),teilweise,Stromverwurf im `idle` im erzeugten Code (FB-334)
+OBL-T12,Beweisverpflichtung,9.4.2,T12,,M10 (aus M6),fertig,
 OBL-T13,Beweisverpflichtung,9.4.2,T13,,M1/M2 (Interpreter),fertig,
 OBL-T14,Beweisverpflichtung,9.4.2,T14,,M1/M2 (Interpreter),fertig,
 OBL-T15,Beweisverpflichtung,9.4.2,T15,,M1/M2 (Interpreter),fertig,
@@ -775,8 +775,8 @@ FN-9-dispatch,Semantikfunktion,9,dispatch,,M1/M2 (Interpreter),fertig,
 FN-9-exec,Semantikfunktion,9,exec,,M1/M2 (Interpreter),fertig,
 FN-9-exec_chain,Semantikfunktion,9,exec_chain,,M1/M2 (Interpreter),fertig,
 FN-9-resolve_m,Semantikfunktion,9,resolve_m,,M1/M2 (Interpreter),fertig,
-FN-9-sleep,Semantikfunktion,9,sleep,,M10 (aus M6),teilweise,Wecken durch Wake-Strom und Abort ungetestet; nativ ohne Eingaenge im Wirtsrahmen (FB-334)
-FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M10 (aus M6),teilweise,"Konjunkt 3 (Wake-Stream-Fenster) im erzeugten Code, Einzeltests der Konjunkte (FB-334)"
+FN-9-sleep,Semantikfunktion,9,sleep,,M10 (aus M6),teilweise,"Nativ schlaeft der Wirtsrahmen nur ohne Eingaenge; Wecken durch Wake-Strom und Abort ist im Interpreter geprueft (`tests/sleep.rs`, FB-334)"
+FN-9-sleep_allowed,Semantikfunktion,9,sleep_allowed,,M10 (aus M6),teilweise,"Konjunkt 3 nativ nur in der IR geprueft (schlafender Wirtsrahmen ohne Eingaenge), Konjunkt 5 ohne Einzeltest (FB-334)"
 FN-9-step_m,Semantikfunktion,9,step_m,,M1/M2 (Interpreter),fertig,
 FN-9-tick,Semantikfunktion,9,tick,,M1/M2 (Interpreter),fertig,
 FN-9-windows,Semantikfunktion,9,windows,,M1/M2 (Interpreter),fertig,

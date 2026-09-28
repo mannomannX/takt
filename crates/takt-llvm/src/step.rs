@@ -1052,10 +1052,11 @@ ende:
 
 /// `<maschine>_idle(st) -> i1`: Ist die Maschine bereit zu schlafen (9.9)?
 ///
-/// Zwei der sechs Konjunkte stehen im Zustandsblock: Das aktive Blatt ist
-/// `idle` (oder liegt unter einem `idle`-Zustand), und `pending` ist leer.
-/// Die uebrigen vier kennt nur der Rahmen.
-pub fn idle_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
+/// Was davon im Zustandsblock steht: Das aktive Blatt ist `idle` (oder
+/// liegt unter einem `idle`-Zustand), keine Zustellung wartet
+/// (`deliver`), und das Fenster jedes Wake-Stroms ist leer. Geplante
+/// Ausgaben, Jobs und die Vormerkungen des Rahmens prueft der Rahmen.
+pub fn idle_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     let leaves = machine::leaves(m);
     let sleeping: Vec<usize> = leaves
         .iter()
@@ -1092,18 +1093,118 @@ pub fn idle_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Resu
     }
     let in_idle = acc.expect("mindestens ein Blatt");
 
-    // `pending`: Feld 0 des Fault-Records ist das Flag.
-    let Some(pending_i) = st.index_of(Role::Pending, 0) else {
+    let Some(deliver_i) = st.index_of(Role::Deliver, 0) else {
         module.abort(mark);
-        return Err(NotYet { what: "pending im Zustand" });
+        return Err(NotYet { what: "`deliver` im Zustand" });
     };
-    let pending = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {pending_i}"));
-    let flag = module.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {pending}, i32 0, i32 0"));
-    let raised = module.inst(&format!("load i1, ptr {flag}"));
-    let quiet = module.inst(&format!("xor i1 {raised}, true"));
-    let out = module.inst(&format!("and i1 {in_idle}, {quiet}"));
+    let deliver = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {deliver_i}"));
+    let waiting = module.inst(&format!("load i32, ptr {deliver}"));
+    let quiet = module.inst(&format!("icmp eq i32 {waiting}, 0"));
+    let mut out = module.inst(&format!("and i1 {in_idle}, {quiet}"));
+    for (i, stream) in m.layout.cursors.iter().enumerate() {
+        if !wakes(*stream, p) {
+            continue;
+        }
+        let (Some(sid), Some(c)) = (crate::stream::number(*stream), st.index_of(Role::Cursor, i)) else {
+            module.abort(mark);
+            return Err(NotYet { what: "Wake-Strom im Zustand" });
+        };
+        let at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {c}"));
+        let cur = module.inst(&format!("load i64, ptr {at}"));
+        let n = module.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+        let empty = module.inst(&format!("icmp eq i32 {n}, 0"));
+        out = module.inst(&format!("and i1 {out}, {empty}"));
+    }
 
     module.end(Some((&crate::ty::LlvmType::Int(1), out.to_string())));
+    Ok(())
+}
+
+/// Weckt dieser Strom eine Maschine im `idle` (5.10)? Nur ein Eingang mit
+/// `wake = true`; interne Stroeme entstehen aus `send` und wecken nie.
+fn wakes(stream: takt_mir::expr::StreamRef, p: &Program) -> bool {
+    match stream {
+        takt_mir::expr::StreamRef::Channel(c) => p.channels.get(c.index()).is_some_and(|c| c.attrs.wake),
+        _ => false,
+    }
+}
+
+/// Verwirft die Maschine im `idle` etwas (5.10)? Nur mit einem
+/// `idle`-Zustand und einem gelesenen Strom, der nicht weckt; sonst gibt
+/// es kein `<maschine>_drop`.
+pub fn drops(m: &Machine, p: &Program) -> bool {
+    m.states.iter().any(|s| s.idle) && m.layout.cursors.iter().any(|s| !wakes(*s, p))
+}
+
+/// `<maschine>_drop(st)`: der Verwurf im `idle` (5.10, 9.6
+/// `advance_cursors`). Steht die Maschine in einem `idle`-Zustand, rueckt
+/// der Cursor jedes Nicht-Wake-Stroms ans Ende, und `dropped` zaehlt, was
+/// sie verpasst hat. Der Rahmen ruft es nach der Abort-Phase fuer jede
+/// Maschine, aktiv oder nicht.
+pub fn drop_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    let leaves = machine::leaves(m);
+    let sleeping: Vec<usize> = leaves
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| machine::path_to(m, **l).iter().any(|id| m.states[id.index()].idle))
+        .map(|(i, _)| i)
+        .collect();
+    let index = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
+    let mark = module.mark();
+    module.begin(&format!("{}_drop", m.name), &crate::ty::LlvmType::Void, &[crate::ty::LlvmType::Ptr]);
+    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let Some(conf_i) = st.index_of(Role::Conf, 0) else {
+        module.abort(mark);
+        return Err(NotYet { what: "conf im Zustand" });
+    };
+    let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+    let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
+    let cur_leaf = module.inst(&format!("load i8, ptr {slot}"));
+    let mut idle = None;
+    for i in &sleeping {
+        let eq = module.inst(&format!("icmp eq i8 {cur_leaf}, {i}"));
+        idle = Some(match idle {
+            None => eq,
+            Some(a) => module.inst(&format!("or i1 {a}, {eq}")),
+        });
+    }
+    let Some(idle) = idle else {
+        module.abort(mark);
+        return Err(NotYet { what: "`idle` ohne Blatt" });
+    };
+    let (go, done) = (format!("verwerfen_{}", m.name), format!("verworfen_{}", m.name));
+    module.void_inst(&format!("br i1 {idle}, label %{go}, label %{done}"));
+    module.label(&go);
+    for (i, stream) in m.layout.cursors.iter().enumerate() {
+        if wakes(*stream, p) {
+            continue;
+        }
+        let (Some(sid), Some(c), Some(d)) =
+            (crate::stream::number(*stream), st.index_of(Role::Cursor, i), st.index_of(Role::Dropped, i))
+        else {
+            module.abort(mark);
+            return Err(NotYet { what: "Strom im Zustand" });
+        };
+        let cur_at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {c}"));
+        let cur = module.inst(&format!("load i64, ptr {cur_at}"));
+        let n = module.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+        let wide = module.inst(&format!("zext i32 {n} to i64"));
+        let end = module.inst(&format!("add i64 {cur}, {wide}"));
+        module.void_inst(&format!("store i64 {end}, ptr {cur_at}"));
+        let dropped_at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {d}"));
+        let before = module.inst(&format!("load i32, ptr {dropped_at}"));
+        module.needs_intrinsic("i32 @llvm.uadd.sat.i32(i32, i32)");
+        let after = module.inst(&format!("call i32 @llvm.uadd.sat.i32(i32 {before}, i32 {n})"));
+        module.void_inst(&format!("store i32 {after}, ptr {dropped_at}"));
+        // Wie am Ende des Schritts: Die Runtime gibt frei, was alle Leser
+        // hinter sich haben (8.6).
+        let last = module.inst(&format!("sub i64 {end}, 1"));
+        module
+            .void_inst(&format!("call void @{}(i32 {sid}, i32 {index}, i64 {last})", crate::stream::Streams::EXAMINED));
+    }
+    module.void_inst(&format!("br label %{done}"));
+    module.label(&done);
+    module.end(None);
     Ok(())
 }
 
@@ -2191,16 +2292,6 @@ fn fault_body(
         crate::abi::Abi::FAULT,
         ctx.machine_index
     ));
-    // Der Fault wird vorgemerkt; `pending` traegt ihn mit seiner Art fuer
-    // die Abort-Phase (5.4), die die Runtime fuehrt.
-    if let Some(pending) = ctx.state.index_of(Role::Pending, 0) {
-        let state_ty = format!("%{}_state", crate::fns::sanitized(&md.name));
-        let field = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {pending}"));
-        let flag = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 0"));
-        m.void_inst(&format!("store i1 true, ptr {flag}"));
-        let art = m.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 1"));
-        m.void_inst(&format!("store i32 {code}, ptr {art}"));
-    }
     // 9.3: Ein Abort-Pfad setzt den Latch; bis zum naechsten normalen
     // Uebergang uebergeht die Maschine weitere Aborts (5.4).
     if let Some(latch) = ctx.field(Role::AbortLatch, 0, m) {

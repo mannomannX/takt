@@ -288,6 +288,16 @@ impl Vars for StateVars<'_> {
         Some((at(Role::Armed)?, at(Role::TriggerCursor)?))
     }
 
+    fn stream_dropped(&self, stream: takt_mir::expr::StreamRef, m: &mut Module) -> Option<String> {
+        let Some(nth) = self.machine.layout.cursors.iter().position(|c| *c == stream) else {
+            return Some("0".into());
+        };
+        let i = self.state.index_of(Role::Dropped, nth)?;
+        let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));
+        let at = m.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {i}"));
+        Some(m.inst(&format!("load i32, ptr {at}")).to_string())
+    }
+
     fn stream_slots(&self, stream: takt_mir::expr::StreamRef, m: &mut Module) -> Option<(Reg, Reg)> {
         let nth = self.machine.layout.cursors.iter().position(|c| *c == stream)?;
         let state_ty = format!("%{}_state", crate::fns::sanitized(&self.machine.name));

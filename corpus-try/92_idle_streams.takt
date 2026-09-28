@@ -1,0 +1,51 @@
+# 92 — Stroeme im Schlaf (5.10, 9.6, FB-334): Eine Maschine im `idle`
+# hoert ihre Nicht-Wake-Stroeme nicht. Ihr Cursor rueckt jeden Tick ans
+# Ende, `dropped` zaehlt, was sie verpasst hat, und kein Puffer laeuft
+# ueber. Ein Wake-Strom bleibt stehen: Die Klingel weckt, und was sie
+# brachte, liest die Maschine danach. Was sie im Tick vor dem Einschlafen
+# untersucht hat, ist konsumiert, nicht verworfen.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+input  data     : stream<u8>    @ hw("bus/data") with capacity = 8, max_rate = 2000 Hz
+input  bell     : stream<u8>    @ hw("bus/bell") with capacity = 8, max_rate = 2000 Hz, wake = true
+output data_sim : stream<u8>    @ sim("bus/data")
+output bell_sim : stream<u8>    @ sim("bus/bell")
+output missed   : int in 0..999 @ hw("o/missed") with safe = 0
+output heard    : int in 0..999 @ hw("o/heard")  with safe = 0
+output rung     : int in 0..999 @ hw("o/rung")   with safe = 0
+
+machine feeder:
+    var k : int in 0..24 = 0
+
+    initial GO
+
+    state GO:
+        loop:
+            send data_sim, 1
+            if k == 24:
+                send bell_sim, 2
+            k = 0 if k == 24 else k + 1
+
+machine sleeper:
+    var n : int in 0..999 = 0
+    var r : int in 0..999 = 0
+
+    initial STANDBY
+
+    state STANDBY idle:
+        when bell.count > 0: -> AWAKE
+        after 40 ms: -> AWAKE
+
+    state AWAKE:
+        loop:
+            missed = min(data.dropped, 999)
+        on data as e:
+            n = min(n + 1, 999)
+            heard = n
+        on bell as e:
+            r = min(r + 1, 999)
+            rung = r
+        after 5 ms: -> STANDBY

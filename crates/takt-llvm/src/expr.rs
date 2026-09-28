@@ -110,6 +110,12 @@ pub trait Vars {
         None
     }
 
+    /// `dropped[s, m]` (5.10) als `i32`-Operand: null, wenn die Maschine
+    /// den Strom nicht liest; `None` ausserhalb einer Maschine.
+    fn stream_dropped(&self, _stream: takt_mir::expr::StreamRef, _m: &mut Module) -> Option<String> {
+        None
+    }
+
     /// Eine eingebaute Groesse (3.3, 5.3).
     ///
     /// Sie haengt an der Quelle: `now` kommt von der Runtime, die die
@@ -443,6 +449,15 @@ fn access(
     }
     if which == Accessor::Count && stream_of(base, p).is_some() {
         return stream_count(base, want, m, vars);
+    }
+    // 9.6: `dropped[s]` am Puffer plus `dropped[s, m]`. Der Ring meldet
+    // seinen Teil nicht (`limits.rs`); hier steht der Verwurf im `idle`.
+    if which == Accessor::Dropped
+        && let Some(stream) = stream_of(base, p)
+    {
+        let n = vars.stream_dropped(stream, m).ok_or(NotYet { what: "`dropped` ausserhalb einer Maschine" })?;
+        let wide = m.inst(&format!("zext i32 {n} to {want}"));
+        return Ok(Lowered { value: wide.to_string(), ty: want.clone() });
     }
     // `.len` braucht vier Byte; ein Vollload kostet bei `bytes<1024>` das
     // Tausendfache (FB-214).

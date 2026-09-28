@@ -54,7 +54,9 @@ pub const LIMITS: &[Limit] = &[
                 gekoppelte Stroeme als Ringe mit Freigabe unter dem kleinsten Cursor. Laeuft \
                 ein interner Ring voll, faultet auf beiden Wegen der Sender im selben Tick \
                 (8.6, FB-326, Korpus 88); `drop` verwirft auf beiden. `drop_oldest` kennt der \
-                Ring nicht, und `s.overflowed` liest kein Korpusprogramm.",
+                Ring nicht, und `s.overflowed` liest kein Korpusprogramm. `s.dropped` zaehlt \
+                im erzeugten Code nur den Verwurf im `idle` (5.10, Korpus 92), nicht den des \
+                Rings.",
         wann: "Mit der Runtime: `takt-rt-core::stream` haelt den Ring samt Verdraengung und \
                Eviction; wo der Rahmen rechnet, wuerde sie messen.",
     },

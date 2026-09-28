@@ -76,8 +76,8 @@ pub enum Role {
     Cursor,
     /// `examined[s] + 1`: hinter dem hoechsten untersuchten Element (9.6).
     Examined,
-    /// `pending`: vorgemerkter Fault (5.4).
-    Pending,
+    /// `dropped[s, m]`: was die Maschine im `idle` verworfen hat (5.10, 9.6).
+    Dropped,
     /// `last_fault`.
     LastFault,
     /// Der Abort-Latch (5.4, 9.3): gesetzt mit einem Abort-Pfad, geloest
@@ -168,15 +168,17 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
     for (i, _) in m.layout.cursors.iter().enumerate() {
         fields.push(field(format!("examined{i}"), LlvmType::Int(64), Role::Examined, i));
     }
+    for (i, _) in m.layout.cursors.iter().enumerate() {
+        fields.push(field(format!("dropped{i}"), LlvmType::Int(32), Role::Dropped, i));
+    }
     for (i, _) in m.layout.trigger_flags.iter().enumerate() {
         fields.push(field(format!("armed{i}"), LlvmType::Int(1), Role::Armed, i));
         fields.push(field(format!("trig_cur{i}"), LlvmType::Int(64), Role::TriggerCursor, i));
     }
-    // `pending` ist ein Fault mit Gueltigkeitsflag; der Fault selbst ist
-    // seine Art und sein Ursprung (5.3). Als Struct, damit 5.4 ihn im
-    // selben Tick weiterreichen kann.
+    // `last_fault` ist ein Fault mit Gueltigkeitsflag; der Fault selbst ist
+    // seine Art und sein Ursprung (5.3). Das `pending` aus 11.2 ist
+    // `deliver`: die Art samt Phase, null ohne.
     let fault = LlvmType::Struct(vec![LlvmType::Int(1), LlvmType::Int(32), LlvmType::Int(32)]);
-    fields.push(field("pending".into(), fault.clone(), Role::Pending, 0));
     fields.push(field("last_fault".into(), fault, Role::LastFault, 0));
     fields.push(field("abort_latched".into(), LlvmType::Int(1), Role::AbortLatch, 0));
     fields.push(field("deliver".into(), LlvmType::Int(32), Role::Deliver, 0));
@@ -316,36 +318,6 @@ pub fn begin_step(m: &Machine, module: &mut Module) -> Vec<crate::emit::Reg> {
 
 /// Die Parameterattribute der Maschinenfunktionen `(st, in, par, out)`.
 pub const MACHINE_ATTRS: &[&str] = &["noalias", "", "noalias", "noalias"];
-
-/// Schreibt den Fault-Trampolin einer Maschine (5.3, 11.2).
-///
-/// Jeder `Checked`-Knoten springt hierher (4.1). Der Trampolin *merkt den
-/// Fault vor*, er fuehrt ihn nicht aus: 5.4 laesst ihn in der Abort-Phase
-/// wirken, damit die Reihenfolge der Maschinen keine Rolle spielt
-/// (Satz 9.4.1). Danach verlaesst er die Schrittfunktion — der Rest des
-/// Ticks dieser Maschine faellt aus, wie 5.3 es verlangt.
-///
-/// 11.2 verlangt ausserdem, dass die Fault-Pfade `cold` sind. Das steht
-/// als Attribut an der Funktion, nicht am Block; hier sorgt die
-/// Anordnung ans Ende dafuer, dass der heisse Pfad zusammenhaengt.
-pub fn fault_trampoline(m: &Machine, st: &StateStruct, module: &mut Module) {
-    module.label(&format!("fault_{}", m.name));
-    let Some(pending) = st.index_of(Role::Pending, 0) else {
-        // Ohne `pending`-Feld gibt es nichts vorzumerken; das kann nur
-        // passieren, wenn der Struct nicht gebaut werden konnte.
-        module.void_inst("ret void");
-        return;
-    };
-    let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
-    // `pending` ist `{ i1 gueltig, i32 art, i32 ursprung }` (5.3). Die
-    // beiden Zahlen kommen von der Sprungstelle; hier wird das Flag
-    // gesetzt, damit die Abort-Phase den Fault findet.
-    let field = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {pending}"));
-    let flag = module.inst(&format!("getelementptr inbounds {{ i1, i32, i32 }}, ptr {field}, i32 0, i32 0"));
-    module.void_inst(&format!("store i1 true, ptr {flag}"));
-    // 5.3: Der Schritt endet hier. Die Abort-Phase (5.4) uebernimmt.
-    module.void_inst("ret void");
-}
 
 /// Der Name eines Zustands, wie er als Marke in der IR erscheint.
 pub fn label_of(m: &Machine, id: StateId) -> String {
