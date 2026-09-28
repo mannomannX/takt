@@ -25,6 +25,11 @@ pub const UNROLL_LIMIT: u64 = 256;
 /// Kopf beginnt an der deklarierten Range und wird enger, bis er stabil ist.
 const NARROW_ROUNDS: u32 = 3;
 
+/// Wie tief ein Aufruf in Aufrufen noch am Aufrufort durchlaufen wird;
+/// darunter liefert er `Top`. Rekursion gibt es nicht (4.4), die Schranke
+/// begrenzt nur die Arbeit.
+const CALL_DEPTH: u32 = 4;
+
 /// Warum eine implizite Pruefung noetig war (3.4, Kennzahl nach Ursache).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CheckCause {
@@ -93,6 +98,10 @@ pub struct Walk<'p> {
     declared: Vec<Option<Range>>,
     /// Die Stelle, deren Index gerade geprueft wird (Zuweisungsstelle).
     index_base: Option<Term>,
+    /// In einem Aufruf (`call`): die Vereinigung der Rueckgabewerte.
+    returns: Option<Interval>,
+    /// Wie tief der Durchlauf in Aufrufen steckt.
+    depth: u32,
 }
 
 impl<'p> Walk<'p> {
@@ -108,6 +117,8 @@ impl<'p> Walk<'p> {
             in_action: false,
             declared,
             index_base: None,
+            returns: None,
+            depth: 0,
         }
     }
 
@@ -228,7 +239,10 @@ impl<'p> Walk<'p> {
                 self.expr(value, f);
             }
             StmtKind::Return(e) => {
-                self.expr(e, f);
+                let i = self.expr(e, f);
+                if let Some(r) = self.returns.as_mut() {
+                    *r = Intervals::join(r, &i);
+                }
                 f.cut();
             }
             StmtKind::Abort { .. } | StmtKind::Goto(_) | StmtKind::Break => f.cut(),
@@ -370,11 +384,11 @@ impl<'p> Walk<'p> {
             f.relate(*a, *b);
         }
         let (l, r) = (self.eval_only(lhs, f), self.eval_only(rhs, f));
-        if let (ExprKind::Var(v), Interval::Int { lo, hi }) = (&lhs.kind, r) {
-            f.refine(*v, bound(op, lo, hi));
+        if let ExprKind::Var(v) = &lhs.kind {
+            f.refine(*v, bound(op, r));
         }
-        if let (Interval::Int { lo, hi }, ExprKind::Var(v)) = (l, &rhs.kind) {
-            f.refine(*v, bound(flip(op), lo, hi));
+        if let ExprKind::Var(v) = &rhs.kind {
+            f.refine(*v, bound(flip(op), l));
         }
         if op == BinaryOp::Ne {
             for (side, other) in [(lhs, r), (rhs, l)] {
@@ -439,6 +453,10 @@ impl<'p> Walk<'p> {
         // zulaesst (3.2, 3.4): Ein `u16` liegt in `0..65535`, auch wenn die
         // Herleitung nichts Engeres findet.
         let i = self.expr_inner(e, f).meet(self.bounds_of(e.ty));
+        let i = match self.program.types.list.get(e.ty.index()) {
+            Some(Type::Float { width: crate::types::FloatWidth::F32, .. }) => i.on_f32_grid(),
+            _ => i,
+        };
         if let Some(r) = i.to_range() {
             self.ranges.push((e.span, r));
         }
@@ -449,7 +467,8 @@ impl<'p> Walk<'p> {
         match &e.kind {
             ExprKind::Int(v) => Interval::point(i128::from(*v)),
             ExprKind::Duration(v) => Interval::point(i128::from(*v)),
-            ExprKind::Bool(_) | ExprKind::Float(_) => Interval::Top,
+            ExprKind::Bool(_) => Interval::Top,
+            ExprKind::Float(v) => Interval::floats(*v, *v),
             ExprKind::Builtin(crate::expr::Builtin::Tick) => Interval::point(i128::from(self.program.config.tick)),
             ExprKind::Var(v) => f.interval(*v),
             ExprKind::Unary { op, expr } => {
@@ -506,6 +525,15 @@ impl<'p> Walk<'p> {
                 // Eine Verengung, die nachweislich passt, aendert nichts;
                 // sonst gilt danach, was der Zieltyp zulaesst (3.10).
                 let b = self.bounds_of(*to);
+                // `int` nach Gleitkomma rundet zum Naechsten und ist monoton
+                // (4.2, `domain::corners`); die Gegenrichtung beschraenkt nur
+                // der Zieltyp.
+                let to_float = matches!(self.program.types.list.get(to.index()), Some(Type::Float { .. }));
+                let i = match i {
+                    Interval::Int { lo, hi } if to_float => Interval::floats(lo as f64, hi as f64),
+                    Interval::Float { .. } if !to_float => Interval::Top,
+                    other => other,
+                };
                 // Der Schnitt: eine Erweiterung behaelt das engere Wissen der
                 // Quelle, eine Verengung klemmt auf den Zieltyp.
                 i.meet(b)
@@ -514,10 +542,15 @@ impl<'p> Walk<'p> {
                 let vals: Vec<Interval> = args.iter().map(|a| self.expr(a, f)).collect();
                 match (op, vals.as_slice()) {
                     (crate::expr::Intrinsic::Abs, [x]) => x.abs(),
+                    (crate::expr::Intrinsic::Sqrt, [x]) => x.sqrt(),
                     (crate::expr::Intrinsic::Min, [x, y]) => min_of(*x, *y),
                     (crate::expr::Intrinsic::Max, [x, y]) => max_of(*x, *y),
                     _ => Interval::Top,
                 }
+            }
+            ExprKind::Call { callee, args } => {
+                let vals: Vec<Interval> = args.iter().map(|a| self.expr(a, f)).collect();
+                self.call(*callee, &vals)
             }
             other => {
                 walk_children(other, &mut |c| {
@@ -526,6 +559,29 @@ impl<'p> Walk<'p> {
                 Interval::Top
             }
         }
+    }
+
+    /// Das Intervall eines Aufrufs (3.4): der Rumpf, durchlaufen mit den
+    /// Intervallen der Argumente. Der Durchlauf zaehlt nichts und beweist
+    /// nichts — was die Funktion selbst prueft, entscheidet `analyze_fn`
+    /// ohne Aufrufort, und ein Beweis, der nur fuer diese Argumente gilt,
+    /// darf ihren Rumpf nicht aendern. Zurueck kommt nur, was sie liefern
+    /// kann; so beschraenkt `clamp` sein Ergebnis, wie 3.4 es vorschlaegt.
+    fn call(&self, callee: crate::FnId, args: &[Interval]) -> Interval {
+        let Some(func) = self.program.fns.get(callee.index()) else { return Interval::Top };
+        if func.ret.is_none() || self.depth >= CALL_DEPTH {
+            return Interval::Top;
+        }
+        let declared = func.locals.iter().map(|v| super::range_of(self.program, v.ty)).collect();
+        let mut w = Walk::new(self.program, declared);
+        w.depth = self.depth + 1;
+        w.returns = Some(Interval::Bottom);
+        let mut facts = Facts::entry();
+        for (i, a) in args.iter().enumerate() {
+            facts.declare(VarId(i as u32), *a);
+        }
+        w.block(&func.body, &mut facts);
+        w.returns.unwrap_or(Interval::Top)
     }
 
     /// Eine implizite Pruefung: entfaellt sie, oder bleibt sie stehen?
@@ -538,7 +594,18 @@ impl<'p> Walk<'p> {
             CheckedKind::Valid | CheckedKind::Missing => return self.expr(inner, f),
             CheckedKind::Range(r) => {
                 let i = self.expr(inner, f);
-                (CheckCause::Declared, i.fits(r), Interval::from_range(r))
+                // `f32` prueft gegen die zum Naechsten gerundeten Grenzen
+                // (4.2, `in_range` im Interpreter, `float_literal` im Codegen).
+                let f32_bounds = match (self.program.types.list.get(node.ty.index()), r.lo, r.hi) {
+                    (
+                        Some(Type::Float { width: crate::types::FloatWidth::F32, .. }),
+                        crate::types::Const::Float(lo),
+                        crate::types::Const::Float(hi),
+                    ) => Some(Interval::floats(f64::from(lo as f32), f64::from(hi as f32))),
+                    _ => None,
+                };
+                let proven = f32_bounds.map_or_else(|| i.fits(r), |b| contained(i, b));
+                (CheckCause::Declared, proven, Interval::from_range(r))
             }
             // Der Knoten umschliesst den Zugriff oder (an einer Stelle) den Index.
             CheckedKind::Index { len } => {
@@ -600,15 +667,26 @@ impl<'p> Walk<'p> {
                 let i = self.expr(inner, f);
                 (CheckCause::Arith, !i.contains_zero(), i)
             }
-            CheckedKind::NonFinite | CheckedKind::Domain => (CheckCause::NonFinite, false, self.expr(inner, f)),
+            // 4.2: Ein beschraenktes Ergebnis ist endlich.
+            CheckedKind::NonFinite => {
+                let i = self.expr(inner, f);
+                (CheckCause::NonFinite, matches!(i, Interval::Float { .. } | Interval::Bottom), i)
+            }
+            // `sqrt` unter null (4.2); die Pruefung umschliesst das Argument.
+            CheckedKind::Domain => {
+                let i = self.expr(inner, f);
+                let ok = Interval::floats(0.0, f64::MAX);
+                (CheckCause::NonFinite, contained(i, ok), i.meet(ok))
+            }
         };
         if proven {
             // 3.4: „Ist das Intervall des Ausdrucks enthalten → keine
             // Pruefung."
             self.proven.push((node.span, tag(kind)));
         } else {
-            // Ein Ueberlauf in 64 Bit warnt nicht (Pruefung 4), Gleitkomma
-            // hat keinen Beweisweg.
+            // Ein Ueberlauf in 64 Bit warnt nicht (Pruefung 4), eine
+            // Gleitkommapruefung auch nicht: Sie steht an fast jeder
+            // Rechnung und ist ohne Ranges nicht zu beweisen.
             let wide = matches!(kind, CheckedKind::NonFinite | CheckedKind::Domain)
                 || matches!(kind, CheckedKind::Overflow) && self.width_of(node.ty).is_none_or(|w| w.bits() == 64);
             let warns = !wide && (self.loop_depth > 0 || self.in_action);
@@ -633,7 +711,11 @@ impl<'p> Walk<'p> {
     /// eines schmalen Registerwerts in eine passende Range.
     fn bounds_of(&self, ty: crate::TypeId) -> Interval {
         match self.program.types.list.get(ty.index()) {
-            Some(Type::Int { range: Some(r), .. } | Type::Duration { range: Some(r) }) => Interval::from_range(r),
+            Some(
+                Type::Int { range: Some(r), .. }
+                | Type::Float { range: Some(r), .. }
+                | Type::Duration { range: Some(r) },
+            ) => Interval::from_range(r),
             // `int` ist i64: die Schranke ist wahr, aber nutzlos eng zu
             // nennen — sie verhindert nur die Verengung auf i32.
             Some(Type::Int { width, .. }) if width.bits() < 64 => width_bounds(*width),
@@ -700,13 +782,25 @@ fn f_reachable(f: &mut Facts) {
 }
 
 /// Die Grenze, die ein Vergleich einer Variablen auferlegt.
-fn bound(op: BinaryOp, lo: i128, hi: i128) -> Interval {
-    match op {
-        BinaryOp::Lt => Interval::below(hi),
-        BinaryOp::Le => Interval::at_most(hi),
-        BinaryOp::Gt => Interval::above(lo),
-        BinaryOp::Ge => Interval::at_least(lo),
-        BinaryOp::Eq => Interval::Int { lo, hi },
+fn bound(op: BinaryOp, other: Interval) -> Interval {
+    match other {
+        Interval::Int { lo, hi } => match op {
+            BinaryOp::Lt => Interval::below(hi),
+            BinaryOp::Le => Interval::at_most(hi),
+            BinaryOp::Gt => Interval::above(lo),
+            BinaryOp::Ge => Interval::at_least(lo),
+            BinaryOp::Eq => other,
+            _ => Interval::Top,
+        },
+        // `x < y` mit `y <= hi` heisst `x` hoechstens eine Zahl unter `hi`.
+        Interval::Float { lo, hi } => match op {
+            BinaryOp::Lt => Interval::floats(-f64::MAX, hi.next_down()),
+            BinaryOp::Le => Interval::floats(-f64::MAX, hi),
+            BinaryOp::Gt => Interval::floats(lo.next_up(), f64::MAX),
+            BinaryOp::Ge => Interval::floats(lo, f64::MAX),
+            BinaryOp::Eq => other,
+            _ => Interval::Top,
+        },
         _ => Interval::Top,
     }
 }
@@ -775,6 +869,9 @@ fn min_of(a: Interval, b: Interval) -> Interval {
         (Interval::Int { lo: al, hi: ah }, Interval::Int { lo: bl, hi: bh }) => {
             Interval::Int { lo: al.min(bl), hi: ah.min(bh) }
         }
+        (Interval::Float { lo: al, hi: ah }, Interval::Float { lo: bl, hi: bh }) => {
+            Interval::Float { lo: al.min(bl), hi: ah.min(bh) }
+        }
         _ => Interval::Top,
     }
 }
@@ -783,6 +880,9 @@ fn max_of(a: Interval, b: Interval) -> Interval {
     match (a, b) {
         (Interval::Int { lo: al, hi: ah }, Interval::Int { lo: bl, hi: bh }) => {
             Interval::Int { lo: al.max(bl), hi: ah.max(bh) }
+        }
+        (Interval::Float { lo: al, hi: ah }, Interval::Float { lo: bl, hi: bh }) => {
+            Interval::Float { lo: al.max(bl), hi: ah.max(bh) }
         }
         _ => Interval::Top,
     }

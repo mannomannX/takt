@@ -1,0 +1,22 @@
+(system
+  (language 1)
+  (tick 1ms))
+(output level :float @hw("o/level") safe=0.0)
+(output twice :float @hw("o/twice") safe=0.0)
+(output root :float @hw("o/root") safe=0.0)
+(output tripped :bool @hw("o/tripped") safe=false)
+(machine ramp
+  (var x :float 0.0)
+  (fault -> STOP)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= x (+ x 0.75))
+      (var y :float in 0.0..10.0 x)
+      (var z :float in 0.0..20.0 (* y 2.0))
+      (= level y)
+      (= twice z)
+      (= root (call sqrt y))))
+  (state STOP
+    (enter
+      (= tripped true))))

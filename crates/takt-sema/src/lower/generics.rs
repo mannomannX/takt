@@ -182,7 +182,9 @@ impl Lowerer<'_> {
         let params: Vec<(String, TypeId, Option<Expr>)> =
             f.params.iter().map(|p| (p.name.clone(), p.ty, p.default.clone())).collect();
         let ret = f.ret.unwrap_or(self.tys.bool);
+        let inout: Vec<bool> = f.params.iter().map(|p| p.inout).collect();
         let args = self.args(&params, args, span)?;
+        self.inout_in_range(&inout, &args)?;
         Some(Expr::new(ExprKind::Call { callee: id, args }, ret, span))
     }
 

@@ -1,0 +1,64 @@
+# 95 — Ranges an den Bindestellen (3.4, FB-343): Ein Feld, ein Parameter
+# und eine Rueckgabe mit Range pruefen, was an sie geht, wie eine
+# Zuweisung. Jede Maschine zaehlt hoch und faultet an ihrer Stelle in einem
+# eigenen Tick: das Feld bei 21, der Parameter bei 16, die Rueckgabe bei 22.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+record Level:
+    v : int in 0..20
+
+fn twice(v: int in 0..15) -> int:
+    return v * 2
+
+fn half(v: int) -> int in 0..10:
+    return v / 2
+
+output field_out : int @ hw("o/field") with safe = 0
+output param_out : int @ hw("o/param") with safe = 0
+output ret_out   : int @ hw("o/ret")   with safe = 0
+
+machine member:
+    var k : int in 0..100 = 0
+    fault -> STOP
+    initial RUN
+
+    state RUN:
+        loop:
+            k = min(k + 1, 100)
+            var l : Level = Level(v = k)
+            field_out = l.v
+
+    state STOP:
+        enter:
+            field_out = -1
+
+machine argument:
+    var k : int in 0..100 = 0
+    fault -> STOP
+    initial RUN
+
+    state RUN:
+        loop:
+            k = min(k + 1, 100)
+            param_out = twice(k)
+
+    state STOP:
+        enter:
+            param_out = -1
+
+machine result:
+    var k : int in 0..100 = 0
+    fault -> STOP
+    initial RUN
+
+    state RUN:
+        loop:
+            k = min(k + 1, 100)
+            ret_out = half(k)
+
+    state STOP:
+        enter:
+            ret_out = -1

@@ -1,0 +1,46 @@
+(system
+  (language 1)
+  (tick 1ms))
+(record Level
+  (v: int in 0..20))
+(fn twice (v:int in 0..15) -> int
+  (return (* v 2)))
+(fn half (v:int) -> int in 0..10
+  (return (/ v 2)))
+(output field_out :int @hw("o/field") safe=0)
+(output param_out :int @hw("o/param") safe=0)
+(output ret_out :int @hw("o/ret") safe=0)
+(machine member
+  (var k :int in 0..100 0)
+  (fault -> STOP)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (call min (+ k 1) 100))
+      (var l :Level (Level v=k))
+      (= field_out (.v l))))
+  (state STOP
+    (enter
+      (= field_out (- 1)))))
+(machine argument
+  (var k :int in 0..100 0)
+  (fault -> STOP)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (call min (+ k 1) 100))
+      (= param_out (call twice k))))
+  (state STOP
+    (enter
+      (= param_out (- 1)))))
+(machine result
+  (var k :int in 0..100 0)
+  (fault -> STOP)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (call min (+ k 1) 100))
+      (= ret_out (call half k))))
+  (state STOP
+    (enter
+      (= ret_out (- 1)))))

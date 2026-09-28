@@ -260,9 +260,11 @@ fn machine_entry(program: &Program, m: &Machine) -> Facts {
         // deklarierter Range traegt sie an jedem Tick-Anfang, weil der
         // Compiler jede Zuweisung dagegen prueft.
         let start = match program.types.list.get(v.ty.index()) {
-            Some(Type::Int { range: Some(r), .. } | Type::Duration { range: Some(r) }) => {
-                domain::Interval::from_range(r)
-            }
+            Some(
+                Type::Int { range: Some(r), .. }
+                | Type::Float { range: Some(r), .. }
+                | Type::Duration { range: Some(r) },
+            ) => domain::Interval::from_range(r),
             _ => domain::Interval::Top,
         };
         f.declare(crate::VarId(i as u32), start);

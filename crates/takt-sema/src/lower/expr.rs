@@ -678,8 +678,10 @@ impl Lowerer<'_> {
                 ok = false;
                 continue;
             }
+            // 3.4: Ein Parameter oder Feld mit Range traegt sie; die Analyse
+            // des Rumpfs und jeder Leser verlassen sich darauf.
             match self.check(&a.value, params[idx].1) {
-                Some(e) => slots[idx] = Some(e),
+                Some(e) => slots[idx] = Some(self.range_checked(e, params[idx].1, a.span)),
                 None => ok = false,
             }
         }
@@ -731,6 +733,7 @@ impl Lowerer<'_> {
                 let inout: Vec<bool> = f.params.iter().map(|p| p.inout).collect();
                 let args = self.args(&params, args, span)?;
                 self.check_no_aliasing(&inout, &args);
+                self.inout_in_range(&inout, &args)?;
                 Some(Expr::new(ExprKind::Call { callee: id, args }, ret, span))
             }
             Entity::FnTemplate(idx) => self.call_fn_template(idx, generics, args, span),
@@ -1704,6 +1707,25 @@ impl Lowerer<'_> {
             ty,
             span,
         ))
+    }
+
+    /// Pruefung 47 (3.9): Ein `inout`-Argument ist eine Stelle, in die der
+    /// Aufruf zurueckschreibt. Braucht es eine Range-Pruefung, um den
+    /// Parameter zu treffen, waere es danach keine Stelle mehr — die Stelle
+    /// muss die Range des Parameters darum schon im Typ tragen.
+    pub(crate) fn inout_in_range(&mut self, inout: &[bool], args: &[Expr]) -> Option<()> {
+        for (a, marked) in args.iter().zip(inout) {
+            if *marked && matches!(a.kind, ExprKind::Checked { kind: CheckedKind::Range(_), .. }) {
+                self.error_hint(
+                    SC47,
+                    a.span,
+                    "das `inout`-Argument traegt die Range des Parameters nicht",
+                    "die Stelle mit derselben Range deklarieren oder den Wert als Argument uebergeben (3.4, 3.9)",
+                );
+                return None;
+            }
+        }
+        Some(())
     }
 
     /// Pruefung 47 (3.9): ein Argument darf pro Aufruf nur einmal als `inout`

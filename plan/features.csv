@@ -32,7 +32,7 @@ SEM-2.5,Semantik/Abschnitt,2.5,"Editionen, reservierte Namen und Erweiterbarkeit
 SEM-3.1,Semantik/Abschnitt,3.1,Grundtypen,,M1 (Kernsemantik),fertig,
 SEM-3.2,Semantik/Abschnitt,3.2,Physikalische Einheiten,,M1 (Kernsemantik),fertig,
 SEM-3.3,Semantik/Abschnitt,3.3,Duration und Zeitrechnung,,M1 (Kernsemantik),fertig,
-SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M10 (aus M1),teilweise,Float-Intervalle in der Analyse (FB-327); `default` ausserhalb der Range ist seit FB-319 ein Fehler
+SEM-3.4,Semantik/Abschnitt,3.4,Range-Typen und Intervallanalyse,,M10 (aus M1),teilweise,Zertifizierung eskaliert die Kennzahl nicht (FB-328)
 SEM-3.5,Semantik/Abschnitt,3.5,Qualität von Input-Channels,,M1 (Kernsemantik),fertig,
 SEM-3.6,Semantik/Abschnitt,3.6,Typinferenz,,M1 (Kernsemantik),fertig,
 SEM-3.7,Semantik/Abschnitt,3.7,Records und Summentypen,,M1 (Kernsemantik),fertig,
@@ -603,7 +603,7 @@ SC-43,Statische Prüfung,10,Interne Streams: genau ein Schreiber; `send` nur aus
 SC-44,Statische Prüfung,10,"Jobs: höchstens K_j je Maschine, Argumente fester Größe, Handle zustandslokal oder Maschinenvariable; `duration` deklariert (4.5)",F,M3 (Gate),fertig,
 SC-45,Statische Prüfung,10,"`T!E`: Dominanz durch `.ok` oder `check r.ok`; `match` über `OK`/`ERR` erschöpfend (3.8); ein früher Ausstieg unter `not x.valid` (`return`, `break`, `abort`) dominiert den Rest des Blocks (3.5)",F,M3 (Gate),fertig,FB-185
 SC-46,Statische Prüfung,10,"`layout`: Offsets überlappen nicht, Bitfelder innerhalb ihres Trägerfelds, Konstantenfelder passen zur Breite, Diskriminanten eindeutig (3.7)",F,M3 (Gate),fertig,
-SC-47,Statische Prüfung,10,"`inout`: kein Aliasing (ein Argument höchstens einmal, nicht zugleich als weiteres Argument) (3.9)",F,M3 (Gate),fertig,
+SC-47,Statische Prüfung,10,"`inout`: kein Aliasing (ein Argument höchstens einmal, nicht zugleich als weiteres Argument); die Stelle trägt die Range des Parameters (3.4, 3.9)",F,M3 (Gate),fertig,
 SC-48,Statische Prüfung,10,`irreversible`-Outputs: Zuweisung nur in Sequenzen unmittelbar nach `expect`; Szenario-Abdeckung Pflicht (12.7),F,M3 (Gate),fertig,
 SC-49,Statische Prüfung,10,Edition fehlt (2.5),W (Zertifizierungsmodus: F),M3 (Gate),fertig,
 SC-50,Statische Prüfung,10,Reservierte Wörter als Bezeichner; reservierte Membernamen als Feld- oder Variantennamen (2.5),F,M3 (Gate),fertig,
@@ -663,7 +663,7 @@ PAR-3.2-Unit_Polymorphie_in_Funktionen_und_Blöcken,Absatz/Regel,3.2,Unit-Polymo
 PAR-3.2-Affine_Einheiten,Absatz/Regel,3.2,Affine Einheiten,,M10 (aus M1),fertig,
 PAR-3.3-Lexikalische_Regel,Absatz/Regel,3.3,Lexikalische Regel,,M1 (Kernsemantik),fertig,
 PAR-3.4-Ranges_sind_Tick_Rand_Invarianten,Absatz/Regel,3.4,Ranges sind Tick-Rand-Invarianten,,M10 (aus M1),teilweise,"Eskalation der Kennzahl in der Zertifizierung und Tests der Differenzschranken (FB-328, M10 Schritt 24)"
-PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M10 (aus M1),teilweise,Idiom fuer Gleitkomma braucht Float-Intervalle (FB-327); ganzzahlig und Aktionsbloecke getestet
+PAR-3.4-Warnpolitik_und_Idiom,Absatz/Regel,3.4,Warnpolitik und Idiom,,M10 (aus M1),fertig,
 PAR-3.4-Oktagone_v1.1,Absatz/Regel,3.4,Oktagone (v1.1),v1.1,M10 (aus M6),rationale,"M6 Schritt 27, FB-175: nicht bauen, solange die Kennzahl (`davon relational`) es nicht traegt"
 PAR-3.4-Darstellungsverengung,Absatz/Regel,3.4,Darstellungsverengung,,M1 (Kernsemantik),fertig,
 PAR-3.5-Implizite_Validitätsprüfung_Entscheidung,Absatz/Regel,3.5,Implizite Validitätsprüfung (Entscheidung),,M10 (aus M1),fertig,

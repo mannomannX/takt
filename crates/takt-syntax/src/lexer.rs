@@ -241,8 +241,7 @@ impl Lexer<'_> {
     /// Nimmt ein gerade erzeugtes `NEWLINE` zurueck, wenn die naechste Zeile
     /// die logische Zeile fortsetzt.
     fn drop_trailing_newline(&mut self) {
-        if self.tokens.last().is_some_and(|t| t.kind == TokenKind::Newline) {
-            let dropped = self.tokens.pop().expect("gerade geprueft");
+        if let Some(dropped) = self.tokens.pop_if(|t| t.kind == TokenKind::Newline) {
             // Die Trivia des zurueckgenommenen Tokens gehoeren an das
             // naechste, damit kein Kommentar verlorengeht.
             self.pending = dropped.trivia.0;

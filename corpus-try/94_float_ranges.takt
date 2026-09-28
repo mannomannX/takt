@@ -1,0 +1,33 @@
+# 94 — Gleitkomma-Ranges (3.4, 4.2, FB-327): Die Analyse fuehrt
+# Intervalle auch fuer `float`. Die Zuweisung an `y` ist nicht zu beweisen
+# und bleibt eine Pruefung, die faultet, sobald `x` ueber 10 steigt. Was
+# danach aus `y` folgt, ist bewiesen: `2 * y` passt in `0..20`, `sqrt(y)`
+# liegt nie unter null, und keine der Rechnungen wird unendlich. Beide
+# Seiten muessen im selben Tick faulten und bis dahin dasselbe liefern.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+output level   : float @ hw("o/level")   with safe = 0.0
+output twice   : float @ hw("o/twice")   with safe = 0.0
+output root    : float @ hw("o/root")    with safe = 0.0
+output tripped : bool  @ hw("o/tripped") with safe = false
+
+machine ramp:
+    var x : float = 0.0
+    fault -> STOP
+    initial RUN
+
+    state RUN:
+        loop:
+            x = x + 0.75
+            var y : float in 0.0..10.0 = x
+            var z : float in 0.0..20.0 = y * 2.0
+            level = y
+            twice = z
+            root = sqrt(y)
+
+    state STOP:
+        enter:
+            tripped = true

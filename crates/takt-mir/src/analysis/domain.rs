@@ -13,14 +13,21 @@ use crate::types::{Const, Range, RangeOrigin};
 pub enum Interval {
     /// Unerreichbar.
     Bottom,
-    /// Ganzzahlig, beide Grenzen einschliesslich.
+    /// Ganzzahlig, beide Grenzen einschliesslich; auch Dauern.
     Int {
         /// Untergrenze.
         lo: i128,
         /// Obergrenze.
         hi: i128,
     },
-    /// Alles andere: Fliesskomma, Dauer, Bool, Aggregate.
+    /// Gleitkomma, beide Grenzen einschliesslich und endlich (4.2).
+    Float {
+        /// Untergrenze.
+        lo: f64,
+        /// Obergrenze.
+        hi: f64,
+    },
+    /// Alles andere: Bool, Aggregate und jeder Wert ohne Schranke.
     Top,
 }
 
@@ -30,10 +37,17 @@ impl Interval {
         Interval::Int { lo: v, hi: v }
     }
 
+    /// `lo..hi` in Gleitkomma; `Top`, wo eine Grenze nicht endlich ist —
+    /// ein unbeschraenkter Wert beweist nichts.
+    pub fn floats(lo: f64, hi: f64) -> Interval {
+        if lo.is_finite() && hi.is_finite() && lo <= hi { Interval::Float { lo, hi } } else { Interval::Top }
+    }
+
     /// Aus einer deklarierten Range (3.4: Startintervall).
     pub fn from_range(r: &Range) -> Interval {
         match (r.lo, r.hi) {
             (Const::Int(lo), Const::Int(hi)) => Interval::Int { lo: i128::from(lo), hi: i128::from(hi) },
+            (Const::Float(lo), Const::Float(hi)) => Interval::floats(lo, hi),
             // Dauern sind ganzzahlige Nanosekunden und rechnen wie `int`.
             (Const::Duration(lo), Const::Duration(hi)) => Interval::Int { lo: i128::from(lo), hi: i128::from(hi) },
             _ => Interval::Top,
@@ -47,6 +61,7 @@ impl Interval {
             // Unerreichbarer Code verletzt nichts.
             (Interval::Bottom, _) => true,
             (Interval::Int { lo, hi }, Interval::Int { lo: rlo, hi: rhi }) => *lo >= rlo && *hi <= rhi,
+            (Interval::Float { lo, hi }, Interval::Float { lo: rlo, hi: rhi }) => *lo >= rlo && *hi <= rhi,
             _ => false,
         }
     }
@@ -78,6 +93,7 @@ impl Interval {
         match self {
             Interval::Bottom => false,
             Interval::Int { lo, hi } => *lo <= 0 && 0 <= *hi,
+            Interval::Float { lo, hi } => *lo <= 0.0 && 0.0 <= *hi,
             Interval::Top => true,
         }
     }
@@ -88,12 +104,14 @@ impl Interval {
         match self {
             Interval::Bottom => true,
             Interval::Int { lo, hi } => *lo >= i128::from(i32::MIN) && *hi <= i128::from(i32::MAX),
-            Interval::Top => false,
+            Interval::Float { .. } | Interval::Top => false,
         }
     }
 
     /// Als bewiesene Range fuer die MIR-Annotation; `None` bei `Top` und
-    /// `Bottom`, weil dort nichts zu annotieren ist.
+    /// `Bottom`, weil dort nichts zu annotieren ist, und bei Gleitkomma:
+    /// Die Annotation dient der Darstellungsverengung, und die kennt nur
+    /// Ganzzahlen.
     pub fn to_range(self) -> Option<Range> {
         match self {
             Interval::Int { lo, hi } => {
@@ -144,6 +162,9 @@ impl Domain for Intervals {
             (Interval::Int { lo: al, hi: ah }, Interval::Int { lo: bl, hi: bh }) => {
                 Interval::Int { lo: (*al).min(*bl), hi: (*ah).max(*bh) }
             }
+            (Interval::Float { lo: al, hi: ah }, Interval::Float { lo: bl, hi: bh }) => {
+                Interval::Float { lo: al.min(*bl), hi: ah.max(*bh) }
+            }
             _ => Interval::Top,
         }
     }
@@ -174,6 +195,38 @@ impl Interval {
                 let low = if lo <= 0 && 0 <= hi { 0 } else { a.min(b) };
                 Interval::Int { lo: low, hi: a.max(b) }
             }
+            Interval::Float { lo, hi } => {
+                let low = if lo <= 0.0 && 0.0 <= hi { 0.0 } else { lo.abs().min(hi.abs()) };
+                Interval::Float { lo: low, hi: lo.abs().max(hi.abs()) }
+            }
+            other => other,
+        }
+    }
+
+    /// Quadratwurzel (4.2), korrekt gerundet und monoton wie die Ecken in
+    /// `corners`; was unter null liegt, faultet (`Domain`) und liefert
+    /// keinen Wert.
+    pub fn sqrt(self) -> Interval {
+        match self {
+            Interval::Float { hi, .. } if hi < 0.0 => Interval::Bottom,
+            Interval::Float { lo, hi } => Interval::floats(lo.max(0.0).sqrt(), hi.sqrt()),
+            Interval::Bottom => Interval::Bottom,
+            _ => Interval::Top,
+        }
+    }
+
+    /// Nach aussen auf das `f32`-Raster gerundet (4.2): Ein `f32`-Ergebnis
+    /// liegt dort, und die Laufzeit prueft eine `f32`-Range gegen die
+    /// gerundeten Grenzen. Was ueber `f32` hinaus reicht, ist nicht endlich
+    /// und beweist nichts.
+    pub fn on_f32_grid(self) -> Interval {
+        match self {
+            Interval::Float { lo, hi } => {
+                let (l, h) = (lo as f32, hi as f32);
+                let l = if f64::from(l) > lo { l.next_down() } else { l };
+                let h = if f64::from(h) < hi { h.next_up() } else { h };
+                Interval::floats(f64::from(l), f64::from(h))
+            }
             other => other,
         }
     }
@@ -200,6 +253,12 @@ impl Interval {
                 let (lo, hi) = (al.max(bl), ah.min(bh));
                 if lo > hi { Interval::Bottom } else { Interval::Int { lo, hi } }
             }
+            (Interval::Float { lo: al, hi: ah }, Interval::Float { lo: bl, hi: bh }) => {
+                let (lo, hi) = (al.max(bl), ah.min(bh));
+                if lo > hi { Interval::Bottom } else { Interval::Float { lo, hi } }
+            }
+            // Ganzzahl und Gleitkomma beschreiben nichts Gemeinsames.
+            _ => Interval::Top,
         }
     }
 
@@ -230,12 +289,30 @@ impl Interval {
     }
 }
 
+/// Eine Gleitkommaoperation an den Ecken zweier Intervalle (4.2).
+///
+/// Das Programm rundet jede Operation korrekt zum Naechsten, und Runden ist
+/// monoton: Das `f64`-Ergebnis liegt zwischen den gerundeten Ecken, die
+/// hier auf dem Wirt genauso entstehen. Ein `f32`-Ergebnis rundet `Walk`
+/// danach nach aussen auf das `f32`-Raster; weil zwischen zwei
+/// `f32`-Zahlen viele `f64`-Schritte liegen, ueberspringt die Rundung der
+/// Ecke in `f64` keine `f32`-Zahl. `None`, wenn nicht beide Seiten
+/// Gleitkomma sind.
+fn corners(a: Interval, b: Interval, f: impl Fn(f64, f64) -> f64) -> Option<Interval> {
+    let (Interval::Float { lo: al, hi: ah }, Interval::Float { lo: bl, hi: bh }) = (a, b) else { return None };
+    let e = [f(al, bl), f(al, bh), f(ah, bl), f(ah, bh)];
+    let lo = e.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = e.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    Some(Interval::floats(lo, hi))
+}
+
 /// Summe.
 impl std::ops::Add for Interval {
     type Output = Interval;
 
     fn add(self, o: Interval) -> Interval {
-        Self::lift(self, o, |a, b, c, d| Some((a.checked_add(c)?, b.checked_add(d)?)))
+        corners(self, o, |x, y| x + y)
+            .unwrap_or_else(|| Self::lift(self, o, |a, b, c, d| Some((a.checked_add(c)?, b.checked_add(d)?))))
     }
 }
 
@@ -244,7 +321,8 @@ impl std::ops::Sub for Interval {
     type Output = Interval;
 
     fn sub(self, o: Interval) -> Interval {
-        Self::lift(self, o, |a, b, c, d| Some((a.checked_sub(d)?, b.checked_sub(c)?)))
+        corners(self, o, |x, y| x - y)
+            .unwrap_or_else(|| Self::lift(self, o, |a, b, c, d| Some((a.checked_sub(d)?, b.checked_sub(c)?))))
     }
 }
 
@@ -253,19 +331,30 @@ impl std::ops::Mul for Interval {
     type Output = Interval;
 
     fn mul(self, o: Interval) -> Interval {
-        Self::lift(self, o, |a, b, c, d| {
-            let e = [a.checked_mul(c)?, a.checked_mul(d)?, b.checked_mul(c)?, b.checked_mul(d)?];
-            Some((*e.iter().min()?, *e.iter().max()?))
+        corners(self, o, |x, y| x * y).unwrap_or_else(|| {
+            Self::lift(self, o, |a, b, c, d| {
+                let e = [a.checked_mul(c)?, a.checked_mul(d)?, b.checked_mul(c)?, b.checked_mul(d)?];
+                Some((*e.iter().min()?, *e.iter().max()?))
+            })
         })
     }
 }
 
 /// Quotient. Die Null im Divisor faultet (4.1) und liefert keinen Wert;
-/// das Ergebnis deckt die beiden Seiten daneben.
+/// das Ergebnis deckt die beiden Seiten daneben. In Gleitkomma liefert ein
+/// Divisor nahe null beliebig grosse Werte: Enthaelt er die Null, ist
+/// nichts bekannt.
 impl std::ops::Div for Interval {
     type Output = Interval;
 
     fn div(self, o: Interval) -> Interval {
+        if let Interval::Float { lo, hi } = o {
+            return match self {
+                Interval::Bottom => Interval::Bottom,
+                _ if lo <= 0.0 && 0.0 <= hi => Interval::Top,
+                _ => corners(self, o, |x, y| x / y).unwrap_or(Interval::Top),
+            };
+        }
         let (neg, pos) = o.without_zero();
         let part = |o: Interval| {
             Self::lift(self, o, |a, b, c, d| {
@@ -283,7 +372,9 @@ impl std::ops::Rem for Interval {
     type Output = Interval;
 
     fn rem(self, o: Interval) -> Interval {
-        let Interval::Int { lo: c, hi: d } = o else { return o };
+        let Interval::Int { lo: c, hi: d } = o else {
+            return if o == Interval::Bottom { o } else { Interval::Top };
+        };
         if c == 0 && d == 0 {
             return Interval::Bottom;
         }
@@ -306,6 +397,7 @@ impl std::ops::Neg for Interval {
                 (Some(a), Some(b)) => Interval::Int { lo: b, hi: a },
                 _ => Interval::Top,
             },
+            Interval::Float { lo, hi } => Interval::Float { lo: -hi, hi: -lo },
             other => other,
         }
     }

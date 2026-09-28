@@ -95,6 +95,148 @@ machine m:
 }
 
 #[test]
+fn float_arithmetic_inside_a_range_needs_no_check() {
+    // 3.4 gilt auch fuer `float`: `0..10` mal 2 plus 1 liegt in `0..30`,
+    // und ein beschraenktes Ergebnis ist endlich (4.2).
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var a : float in 0.0..10.0 = 5.0
+    initial RUN
+    state RUN:
+        loop:
+            var b : float in 0.0..30.0 = a * 2.0 + 1.0
+            n = 1 if b > 15.0 else 0
+",
+    );
+    assert_eq!(count(&r, "Declared"), 0, "{:?}", r.checks);
+    assert_eq!(count(&r, "NonFinite"), 0, "{:?}", r.checks);
+}
+
+#[test]
+fn the_float_idiom_bounds_what_follows() {
+    // 3.4, Warnpolitik und Idiom: eine sichtbare Pruefung an der
+    // Zwischengroesse, danach bekannte Range — auch fuer `sqrt` (4.2).
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var p_out : float = 3.0
+    var p_in : float = 1.0
+    var q : float in 0.0..100.0 = 0.0
+    initial RUN
+    state RUN:
+        loop:
+            var dp : float in 0.0..50.0 = p_out - p_in
+            q = dp * 2.0
+            var root : float in 0.0..8.0 = sqrt(dp)
+            n = 1 if root > q else 0
+",
+    );
+    assert_eq!(count(&r, "Declared"), 1, "nur `dp`: {:?}", r.checks);
+    assert_eq!(count(&r, "NonFinite"), 1, "nur `p_out - p_in`: {:?}", r.checks);
+}
+
+#[test]
+fn a_float_comparison_refines_the_branch() {
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var x : float in 0.0..100.0 = 5.0
+    var y : float in 0.0..10.0 = 0.0
+    initial RUN
+    state RUN:
+        loop:
+            if x < 10.0:
+                y = x
+            n = 1 if y > 5.0 else 0
+",
+    );
+    assert_eq!(count(&r, "Declared"), 0, "im Zweig ist `x` unter 10: {:?}", r.checks);
+}
+
+#[test]
+fn a_float_quotient_needs_a_divisor_without_zero() {
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var a : float in 0.0..10.0 = 1.0
+    var b : float in 1.0..2.0 = 1.0
+    var c : float in 0.0..2.0 = 1.0
+    initial RUN
+    state RUN:
+        loop:
+            var q : float in 0.0..10.0 = a / b
+            var s : float = a / c
+            n = 1 if q > s else 0
+",
+    );
+    assert_eq!(count(&r, "Declared"), 0, "{:?}", r.checks);
+    assert_eq!(count(&r, "NonFinite"), 1, "nur `a / c`, dessen Divisor die Null enthaelt: {:?}", r.checks);
+}
+
+#[test]
+fn clamp_bounds_its_result() {
+    // 3.4 schlaegt `clamp` gegen eine unbewiesene Zuweisung vor; dann muss
+    // die Analyse wissen, was `clamp` liefert. Sie durchlaeuft den Rumpf
+    // mit den Intervallen der Argumente.
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var raw : float = 70.0
+    initial RUN
+    state RUN:
+        loop:
+            var level : float in 0.0..50.0 = clamp(raw, 0.0, 50.0)
+            n = 1 if level > 25.0 else 0
+",
+    );
+    assert_eq!(count(&r, "Declared"), 0, "{:?}", r.checks);
+}
+
+#[test]
+fn a_call_site_proves_nothing_inside_the_callee() {
+    // Der Aufruf mit `5.0` passt in die Range der Rueckgabe; die Pruefung
+    // im Rumpf bleibt trotzdem, weil sie fuer jeden Aufrufer gilt. Was der
+    // Aufruf liefert, kennt der Aufrufer: hoechstens die Range.
+    let (_, r, _) = compile(
+        "\
+fn relay(x: float) -> float in 0.0..10.0:
+    return x
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var y : float in 0.0..10.0 = relay(5.0)
+            n = 1 if y > 5.0 else 0
+",
+    );
+    assert_eq!(count(&r, "Declared"), 1, "nur die Rueckgabe im Rumpf: {:?}", r.checks);
+}
+
+#[test]
+fn an_f32_program_checks_against_its_rounded_bounds() {
+    // 4.2: In `f32` ist `0.1 + 0.1` genau die auf `f32` gerundete `0.2`;
+    // die Laufzeit prueft gegen dieselbe Rundung, die Analyse muss es auch.
+    let src = format!(
+        "system:\n    language = 1\n    tick = 1 ms\n    float = f32\n\n{OUT}\
+machine m:
+    var a : float in 0.0..0.1 = 0.05
+    initial RUN
+    state RUN:
+        loop:
+            var b : float in 0.0..0.2 = a + a
+            var c : float in 0.0..0.19 = a + a
+            n = 1 if b > c else 0
+"
+    );
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None };
+    let out = takt_sema::compile(&src, &options);
+    assert!(out.diagnostics.iter().all(|d| !d.is_error()), "{:?}", out.diagnostics);
+    assert_eq!(count(&out.report, "Declared"), 1, "nur `c`: {:?}", out.report.checks);
+}
+
+#[test]
 fn only_a_check_in_a_loop_warns() {
     // 3.4, Warnpolitik: „Warnungen im engeren Sinn entstehen nur bei
     // impliziten Pruefungen in `for`-Schleifen und in Aktionsbloecken."

@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-47: Das `inout`-Argument traegt die Range des Parameters nicht. Eine
+# Pruefung davor liesse keine Stelle uebrig, in die der Aufruf
+# zurueckschreibt (3.4, 3.9).
+
+fn bump(inout v: int in 0..10):
+    v = min(v + 1, 10)
+
+output n : int @ hw("o/n") with safe = 0
+
+machine m:
+    var wide : int = 5
+    initial RUN
+
+    state RUN:
+        loop:
+            bump(wide)  # ~ SC-47
+            n = wide

@@ -194,7 +194,9 @@ impl Lowerer<'_> {
                     self.error(SC8, span, "Funktion ohne Rueckgabetyp");
                     return None;
                 };
-                StmtKind::Return(self.check(value, ret)?)
+                // 3.4: Die Range des Rueckgabetyps gilt fuer jeden Aufrufer.
+                let v = self.check(value, ret)?;
+                StmtKind::Return(self.range_checked(v, ret, span))
             }
             ast::StmtKind::Send { stream, value } => self.send(stream, value)?,
             ast::StmtKind::At(at) => self.at_stmt(at)?,
@@ -1193,7 +1195,13 @@ impl Lowerer<'_> {
             self.error(SC3, span, format!("{} positionale Argumente erwartet", tys.len()));
             return None;
         }
-        args.iter().zip(tys).map(|(a, t)| self.check(&a.value, *t)).collect()
+        args.iter()
+            .zip(tys)
+            .map(|(a, t)| {
+                let e = self.check(&a.value, *t)?;
+                Some(self.range_checked(e, *t, a.span))
+            })
+            .collect()
     }
 
     /// Ist `base.name(...)` ein veraendernder Methodenaufruf?
