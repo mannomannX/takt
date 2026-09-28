@@ -105,6 +105,7 @@ pub const CORPUS: &[&str] = &[
     "94_float_ranges.takt",
     "95_boundary_ranges.takt",
     "96_record_outputs.takt",
+    "97_fast_math.takt",
 ];
 
 /// Die Zeile, mit der jedes Bring-up seinen Lauf beendet.

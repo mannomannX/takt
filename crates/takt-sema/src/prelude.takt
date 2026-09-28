@@ -104,6 +104,112 @@ fn map_range[U, V](x: float[U], x0: float[U], x1: float[U], y0: float[V], y1: fl
 fn deadband[U](x: float[U], w: float[U]) -> float[U]:
     return 0 if abs(x) < w else x
 
+# --- Standardbibliothek: schnelle Naeherungen (4.2, 11.4) ---------------
+# Polynome fester Ordnung in Horner-Form als `fma`-Kette nach einer
+# Bereichsreduktion (Cody-Waite): Jede Operation ist korrekt gerundet,
+# also sind die Ergebnisse auf allen Zielen bitgleich (4.2) — ohne
+# Native, die je Ziel eine zweite Rundungsquelle waere. Koeffizienten aus
+# Cephes (S. L. Moshier). Die Schranken gelten gegen die korrekt
+# gerundeten Funktionen aus `libtaktm` ueber den ganzen Parameterbereich
+# und sind gemessen (takt-sema/tests/fast_math.rs).
+
+const FAST_2_OVER_PI : float = 0.636619772367581343076
+# pi/2 in drei Teilen, die ersten beiden mit wenigen Bits: `k * teil`
+# ist in `f32` wie in `f64` exakt, die Reduktion verliert nichts.
+const FAST_PIO2_1 : float = 1.5703125
+const FAST_PIO2_2 : float = 4.837512969970703125e-4
+const FAST_PIO2_3 : float = 7.54978995489188216e-8
+
+# `sin` oder `cos` auf der reduzierten Stelle, um `shift` Viertel versetzt.
+fn fast_quarter(x: float in -1.0e4..1.0e4, shift: int in 0..1) -> float:
+    var k : int in -6400..6400 = round(x * FAST_2_OVER_PI)
+    var kf : float = k as float
+    var r : float = fma(0.0 - kf, FAST_PIO2_1, x)
+    r = fma(0.0 - kf, FAST_PIO2_2, r)
+    r = fma(0.0 - kf, FAST_PIO2_3, r)
+    var z : float = r * r
+    var ps : float = fma(fma(-1.9515295891e-4, z, 8.3321608736e-3), z, -1.6666654611e-1)
+    var s : float = fma(ps * z, r, r)
+    var pc : float = fma(fma(2.443315711809948e-5, z, -1.388731625493765e-3), z, 4.166664568298827e-2)
+    var c : float = fma(pc * z, z, fma(-0.5, z, 1.0))
+    var q : int in 0..3 = ((k + shift) % 4 + 4) % 4
+    return s if q == 0 else (c if q == 1 else (0.0 - s if q == 2 else 0.0 - c))
+
+# `sin(x)` fuer |x| <= 1e4. Absoluter Fehler hoechstens 5e-9 bei
+# `float = f64`, 2e-7 bei `float = f32`.
+fn sin_fast(x: float in -1.0e4..1.0e4) -> float:
+    return fast_quarter(x, 0)
+
+# `cos(x)` fuer |x| <= 1e4. Absoluter Fehler hoechstens 5e-9 bei
+# `float = f64`, 2e-7 bei `float = f32`.
+fn cos_fast(x: float in -1.0e4..1.0e4) -> float:
+    return fast_quarter(x, 1)
+
+const FAST_LOG2E : float = 1.44269504088896341
+# ln 2 in zwei Teilen, der erste mit wenigen Bits (Cody-Waite).
+const FAST_LN2_1 : float = 0.693359375
+const FAST_LN2_2 : float = -2.12194440e-4
+
+# `exp(x)` fuer |x| <= 80. `exp` ist nicht beschraenkt, die Schranke darum
+# relativ: hoechstens 5e-9 bei `float = f64`, 3e-7 bei `float = f32`.
+fn exp_fast(x: float in -80.0..80.0) -> float:
+    var k : int in -116..116 = round(x * FAST_LOG2E)
+    var kf : float = k as float
+    var r : float = fma(0.0 - kf, FAST_LN2_1, x)
+    r = fma(0.0 - kf, FAST_LN2_2, r)
+    var p : float = 1.9875691500e-4
+    p = fma(p, r, 1.3981999507e-3)
+    p = fma(p, r, 8.3334519073e-3)
+    p = fma(p, r, 4.1665795894e-2)
+    p = fma(p, r, 1.6666665459e-1)
+    p = fma(p, r, 5.0000001201e-1)
+    var y : float = fma(p * r, r, r + 1.0)
+    # 2^k exakt: Faktoren 2^(2^j) ueber die Bits von |k|, ohne Rundung.
+    var base : float = 2.0 if k >= 0 else 0.5
+    var n : int in 0..116 = abs(k)
+    for j in range(7):
+        if ((n >> j) & 1) == 1:
+            y = y * base
+        if j < 6:
+            base = base * base
+    return y
+
+const FAST_TAN_3PI8 : float = 2.414213562373095
+const FAST_TAN_PI8  : float = 0.4142135623730950
+const FAST_PIO2     : float = 1.5707963267948966
+const FAST_PIO4     : float = 0.7853981633974483
+const FAST_PI       : float = 3.141592653589793
+
+# `atan(a)` fuer a >= 0, reduziert auf |t| <= tan(pi/8).
+fn fast_atan(a: float) -> float:
+    var base : float = 0.0
+    var t : float = a
+    if a > FAST_TAN_3PI8:
+        base = FAST_PIO2
+        t = -1.0 / a
+    elif a > FAST_TAN_PI8:
+        base = FAST_PIO4
+        t = (a - 1.0) / (a + 1.0)
+    var z : float = t * t
+    var p : float = 8.05374449538e-2
+    p = fma(p, z, -1.38776856032e-1)
+    p = fma(p, z, 1.99777106478e-1)
+    p = fma(p, z, -3.33329491539e-1)
+    return base + fma(p * z, t, t)
+
+# `atan2(y, x)`. Absoluter Fehler hoechstens 2e-8 bei `float = f64`, 5e-7
+# bei `float = f32`. `atan2_fast(0, 0)` ist 0; das Vorzeichen einer Null
+# zaehlt nicht: `atan2_fast(-0, x)` mit `x < 0` ist `pi`, nicht `-pi`.
+fn atan2_fast[U](y: float[U], x: float[U]) -> float:
+    var ax : float[U] = abs(x)
+    var ay : float[U] = abs(y)
+    if ax == 0 and ay == 0:
+        return 0.0
+    var r : float = fast_atan(ay / ax) if ax >= ay else FAST_PIO2 - fast_atan(ax / ay)
+    if x < 0:
+        r = FAST_PI - r
+    return 0.0 - r if y < 0 else r
+
 # --- Standardbibliothek: Bloecke (5.7, 11.4) ----------------------------
 block rising():
     var last : bool = false

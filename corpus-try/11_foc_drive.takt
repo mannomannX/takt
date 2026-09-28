@@ -108,15 +108,15 @@ fn clarke(iu: float[A], iv: float[A]) -> AlphaBetaCurrent:
     return AlphaBetaCurrent(alpha = ialpha, beta = ibeta)
 
 fn park(ab: AlphaBetaCurrent, theta: float) -> DqCurrent:
-    var s  = sin(theta)
-    var c  = cos(theta)
+    var s  = sin_fast(theta)
+    var c  = cos_fast(theta)
     var id = ab.alpha * c + ab.beta * s
     var iq = -ab.alpha * s + ab.beta * c
     return DqCurrent(d = id, q = iq)
 
 fn inv_park(v_d: float[V], v_q: float[V], theta: float) -> AlphaBetaVoltage:
-    var s      = sin(theta)
-    var c      = cos(theta)
+    var s      = sin_fast(theta)
+    var c      = cos_fast(theta)
     var valpha = v_d * c - v_q * s
     var vbeta  = v_d * s + v_q * c
     return AlphaBetaVoltage(alpha = valpha, beta = vbeta)

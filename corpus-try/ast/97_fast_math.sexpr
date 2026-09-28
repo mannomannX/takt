@@ -1,0 +1,20 @@
+(system
+  (language 1)
+  (tick 1ms))
+(output sine :float @sim("o/sine"))
+(output cosine :float @sim("o/cosine"))
+(output growth :float @sim("o/growth"))
+(output angle :float @sim("o/angle"))
+(output bearing :float @sim("o/bearing"))
+(machine m
+  (var k :int in 0..1000 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (call min (+ k 1) 1000))
+      (var x :float in (- 1.0e4)..1.0e4 (- (* (as k float) 7.3) 3650.0))
+      (= sine (call sin_fast x))
+      (= cosine (call cos_fast (* x 0.001)))
+      (= growth (call exp_fast (- (* (as k float) 0.2) 40.0)))
+      (= angle (call atan2_fast sine cosine))
+      (= bearing (call atan2_fast (- 0.0 cosine) (- sine 0.5))))))

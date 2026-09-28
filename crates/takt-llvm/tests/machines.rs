@@ -60,10 +60,12 @@ fn ir_of(p: &Program) -> String {
             let _ = takt_llvm::fns::block_method(b, f, p, &mut m);
         }
     }
-    // Reine Funktionen: Die Maschinen rufen sie (4.4).
-    for (i, f) in p.fns.iter().enumerate() {
-        if !methoden.contains(&takt_mir::FnId(i as u32)) {
-            let _ = takt_llvm::fns::function(f, p, &mut m);
+    // Reine Funktionen, die die Maschinen erreichen (4.4) — wie der
+    // Codegen: Bibliothekscode, den niemand ruft, gehoert nicht zum
+    // Programm (Lemma 3.4).
+    for id in takt_mir::analysis::reachable_fns(p) {
+        if !methoden.contains(&id) {
+            let _ = takt_llvm::fns::function(&p.fns[id.index()], p, &mut m);
         }
     }
     for machine in &p.machines {

@@ -1,0 +1,30 @@
+# 97 — Schnelle Naeherungen (4.2, 11.4; M10 Schritt 19): `sin_fast`,
+# `cos_fast`, `exp_fast` und `atan2_fast` sind Polynome in Takt, als
+# `fma`-Kette nach einer Bereichsreduktion. Jede Operation ist korrekt
+# gerundet, also liefern Interpreter und erzeugter Code dieselben Bits —
+# auch fuer Stellen weit draussen, wo die Reduktion arbeitet, und in
+# allen vier Quadranten von `atan2_fast`.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+output sine    : float @ sim("o/sine")
+output cosine  : float @ sim("o/cosine")
+output growth  : float @ sim("o/growth")
+output angle   : float @ sim("o/angle")
+output bearing : float @ sim("o/bearing")
+
+machine m:
+    var k : int in 0..1000 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            k = min(k + 1, 1000)
+            var x : float in -1.0e4..1.0e4 = (k as float) * 7.3 - 3650.0
+            sine = sin_fast(x)
+            cosine = cos_fast(x * 0.001)
+            growth = exp_fast((k as float) * 0.2 - 40.0)
+            angle = atan2_fast(sine, cosine)
+            bearing = atan2_fast(0.0 - cosine, sine - 0.5)

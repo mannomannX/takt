@@ -64,14 +64,14 @@
   (var ibeta (* (+ iu (* 2.0 iv)) 0.577350269))
   (return (AlphaBetaCurrent alpha=ialpha beta=ibeta)))
 (fn park (ab:AlphaBetaCurrent theta:float) -> DqCurrent
-  (var s (call sin theta))
-  (var c (call cos theta))
+  (var s (call sin_fast theta))
+  (var c (call cos_fast theta))
   (var id (+ (* (.alpha ab) c) (* (.beta ab) s)))
   (var iq (+ (* (- (.alpha ab)) s) (* (.beta ab) c)))
   (return (DqCurrent d=id q=iq)))
 (fn inv_park (v_d:float[V] v_q:float[V] theta:float) -> AlphaBetaVoltage
-  (var s (call sin theta))
-  (var c (call cos theta))
+  (var s (call sin_fast theta))
+  (var c (call cos_fast theta))
   (var valpha (- (* v_d c) (* v_q s)))
   (var vbeta (+ (* v_d s) (* v_q c)))
   (return (AlphaBetaVoltage alpha=valpha beta=vbeta)))

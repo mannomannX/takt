@@ -42,7 +42,7 @@ SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernseman
 SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M6 (v1.1),fertig,"Sema `lower/matrix.rs`, Interpreter `takt-interp/src/matrix.rs`, Codegen `takt-llvm/src/matrix.rs`, Numerik `libtaktm::mat`; Korpus `46_matrices.takt` differentiell (Schritt 18)"
 SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),fertig,"Typvariablen (M8 Schritt 3): `GenericVar::Type` mit Faehigkeit, Unifikation in `solve_call`, Memo mit Typnamen; Korpus `62_type_generics.takt`"
 SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),fertig,
-SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M10 (aus M1),teilweise,korrekt gerundete transzendente Funktionen in `libtaktm` (M10 Schritt 19)
+SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M10 (aus M1),teilweise,korrekt gerundete transzendente Funktionen in `libtaktm` (FB-344)
 SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),fertig,
 SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),fertig,
 SEM-4.5,Semantik/Abschnitt,4.5,Native Funktionen mit Kostenvertrag,,M1 (Kernsemantik),fertig,
@@ -685,7 +685,7 @@ PAR-4.2-Subnormale_in_Zuständen,Absatz/Regel,4.2,Subnormale in Zuständen,,M10 
 PAR-4.4-Das_Ergebnisziel_ist_optional,Absatz/Regel,4.4,Das Ergebnisziel ist optional,,M1 (Kernsemantik),fertig,
 PAR-4.5-Chunk_Natives,Absatz/Regel,4.5,Chunk-Natives,,M1 (Kernsemantik),fertig,
 PAR-4.5-Jobs,Absatz/Regel,4.5,Jobs,,M6 (v1.1),fertig,
-PAR-5.1-Richtlinie_für_Regelkreise,Absatz/Regel,5.1,Richtlinie für Regelkreise,,M10 (aus M6),rationale,Richtlinie; Vorbild `11_foc_drive.takt` uebersetzt erst mit `sin`/`cos` (M10 Schritt 19)
+PAR-5.1-Richtlinie_für_Regelkreise,Absatz/Regel,5.1,Richtlinie für Regelkreise,,M10 (aus M6),rationale,Richtlinie; Vorbild `11_foc_drive.takt` mit `sin_fast`/`cos_fast` im Differential
 PAR-5.3-Statische_Regel,Absatz/Regel,5.3,Statische Regel:,,M1 (Kernsemantik),fertig,
 PAR-5.6-Interlock,Absatz/Regel,5.6,Interlock,,M1 (Kernsemantik),fertig,
 PAR-5.6-Permissive,Absatz/Regel,5.6,Permissive,,M10 (aus M6),fertig,
@@ -878,7 +878,7 @@ LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa
 LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M6 (stdlib),fertig,
 LIB-solve,Standardbibliothek,11.4,fn solve,,M6 (stdlib),fertig,"`solve(A, b)` als eingebauter Aufruf (`lower/matrix.rs`), Methoden in `mat_member`"
 LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M4 (libtaktm),fertig,
-LIB-sin_fast,Standardbibliothek,11.4,fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke,,M10 (aus M6),offen,
+LIB-sin_fast,Standardbibliothek,11.4,"fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter Fehlerschranke ueber ihren Parameterbereich, absolut, bei exp_fast relativ",,M10 (aus M6),fertig,
 CLI-tcb,Werkzeug,11.1,takt tcb review,v1.2,M8 (Review),fertig,"M8 Schritt 22: schreibt eine Zeile in `natives.review`. Das Datum steht im Aufruf und kommt nicht aus der Systemuhr — ein Werkzeug, das dieselbe Eingabe zweimal verschieden beantwortet, passt nicht zu reproduzierbaren Builds (11.3)"
 CLI-check,Werkzeug,11.1,takt check,,M0-M3,fertig,
 CLI-sim,Werkzeug,11.1,takt sim,,M1/M2 (Interpreter),fertig,

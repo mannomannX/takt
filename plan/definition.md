@@ -1880,7 +1880,7 @@ native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit 
 machine flash_model(cmd, data, status, rx, seed, seed_addr, sectors, t_erase, t_program, cut_at_byte)   Simulationsmodell mit Stromausfall-Injektion (8.11); die Channels bindet die Instanz
 fn solve(A, b) / inv / det / cholesky / transpose   (3.11; Einheitsmatrizen als Literale)
 fn fma[U, V](a: float[U], b: float[V], c: float[U*V]) -> float[U*V]      korrekt gerundet, bitidentisch (4.2)
-fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter absoluter Fehlerschranke (4.2)
+fn sin_fast / cos_fast / exp_fast / atan2_fast      deterministische Naeherungen mit dokumentierter Fehlerschranke ueber ihren Parameterbereich, absolut, bei exp_fast relativ (4.2)
 # Filter- und Reglerbloecke halten abklingende Zustaende mit einem deterministischen Totband (4.2)
 native fn fft256 / crc32c / sha256 / hmac_sha256 ...  with cost = ..., stack = ..., total (4.5)
 ```
