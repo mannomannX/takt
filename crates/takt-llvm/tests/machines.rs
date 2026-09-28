@@ -132,14 +132,20 @@ fn nested_states_increase_the_depth() {
 }
 
 /// 11.2 nennt die Felder in einer Reihenfolge; sie ist die einzige
-/// Quelle fuer die Indizes im erzeugten Code.
+/// Quelle fuer die Indizes im erzeugten Code. `last_fault` fuehrt nur, wer
+/// es liest (5.3).
 #[test]
 fn every_machine_has_the_fields_the_reference_names() {
-    let p = corpus("03_sequences_and_faults.takt");
-    for m in &p.machines {
-        let st = state_struct(m, &p).expect("Struct baubar");
-        for role in [Role::Conf, Role::TimeInState, Role::Deliver, Role::LastFault, Role::Pc] {
-            assert!(st.index_of(role, 0).is_some(), "{}: {role:?} fehlt", m.name);
+    for name in ["03_sequences_and_faults.takt", "98_last_fault.takt"] {
+        let p = corpus(name);
+        for m in &p.machines {
+            let st = state_struct(m, &p).expect("Struct baubar");
+            for role in [Role::Conf, Role::TimeInState, Role::Deliver, Role::Pc] {
+                assert!(st.index_of(role, 0).is_some(), "{}: {role:?} fehlt", m.name);
+            }
+            let reads = takt_mir::visit::reads_last_fault(m);
+            assert_eq!(st.index_of(Role::LastFault, 0).is_some(), reads, "{name}: {}", m.name);
+            assert_eq!(reads, name.starts_with("98"), "{name}: {}", m.name);
         }
     }
 }

@@ -30,6 +30,18 @@ use crate::lower::Lowerer;
 /// Takt selbst (plan/m1.md 1.9).
 pub const PRELUDE: &str = include_str!("prelude.takt");
 
+/// Die Datei des Prelude in den Positionen; das Programm ist Datei 0.
+pub const PRELUDE_FILE: takt_diag::FileId = takt_diag::FileId(1);
+
+/// Die Quellen einer Uebersetzung fuer Diagnosen: das Programm als Datei 0,
+/// das Prelude als Datei 1 — eine Notiz, die ins Prelude zeigt, zeigt dort
+/// hin und nicht an dieselbe Stelle im Programm.
+pub fn source_map(name: &str, src: &str) -> takt_diag::SourceMap {
+    let mut map = takt_diag::SourceMap::single(name, src);
+    map.add("prelude.takt", PRELUDE);
+    map
+}
+
 /// Art des Builds (8.3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Build {
@@ -166,7 +178,14 @@ pub fn compile_with(src: &str, options: &Options, proof: Option<&takt_mir::analy
         }
         None => Report::default(),
     };
-    let program = program.filter(|_| !sink.has_errors());
+    let mut program = program.filter(|_| !sink.has_errors());
+    // 5.3: `last_fault.line` zaehlt die Zeilen der Datei seiner Stelle.
+    if let Some(p) = &mut program {
+        p.sources = vec![
+            takt_mir::SourceLines::of(takt_diag::FileId(0), src),
+            takt_mir::SourceLines::of(PRELUDE_FILE, PRELUDE),
+        ];
+    }
     Compiled { program, edition, diagnostics: sink.sorted(), report }
 }
 

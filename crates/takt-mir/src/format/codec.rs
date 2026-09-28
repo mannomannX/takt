@@ -256,6 +256,11 @@ macro_rules! write_field {
             write_opt(&$e, $w, $tag)
         }
     };
+    ($w:ident, $tag:literal, metarep, $e:expr) => {
+        if !$w.logic_only {
+            write_rep(&$e, $w, $tag)
+        }
+    };
 }
 pub(crate) use write_field;
 
@@ -278,6 +283,9 @@ macro_rules! read_field {
     };
     ($n:ident, $r:ident, $tag:literal, metaopt) => {
         read_opt(&$n, $r, $tag)?
+    };
+    ($n:ident, $r:ident, $tag:literal, metarep) => {
+        read_rep(&$n, $r, $tag)?
     };
 }
 pub(crate) use read_field;

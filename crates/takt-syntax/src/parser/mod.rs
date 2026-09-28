@@ -285,11 +285,15 @@ impl<'t, 's> Parser<'t, 's> {
 
     fn error_here(&self, expected: &str) -> Diagnostic {
         let t = self.tok();
-        Diagnostic::error(CODE, token_span(t), format!("erwartet {expected}, gefunden {}", self.describe(t)))
+        Diagnostic::error(
+            CODE,
+            self.span(t.start, t.end),
+            format!("erwartet {expected}, gefunden {}", self.describe(t)),
+        )
     }
 
     fn error_at(&self, t: &Token, message: impl Into<String>, suggestion: Option<&str>) -> Diagnostic {
-        let d = Diagnostic::error(CODE, token_span(t), message);
+        let d = Diagnostic::error(CODE, self.span(t.start, t.end), message);
         match suggestion {
             Some(s) => d.with_suggestion(s),
             None => d,
@@ -375,17 +379,22 @@ impl<'t, 's> Parser<'t, 's> {
 
     // ------------------------------------------------------------ Spannen und Namen
 
+    /// Ein Bereich in der Datei der Tokens.
+    fn span(&self, start: u32, end: u32) -> Span {
+        Span { file: self.toks.file, start, end }
+    }
+
     fn span_from(&self, start: usize) -> Span {
         let first = &self.toks.tokens[start.min(self.toks.tokens.len() - 1)];
         if self.pos > start {
-            Span::new(first.start, self.toks.tokens[self.pos - 1].end)
+            self.span(first.start, self.toks.tokens[self.pos - 1].end)
         } else {
-            Span::new(first.start, first.start)
+            self.span(first.start, first.start)
         }
     }
 
     fn ident_of(&self, t: &Token) -> Ident {
-        Ident { name: self.text_of(t).to_string(), span: Span::new(t.start, t.end) }
+        Ident { name: self.text_of(t).to_string(), span: self.span(t.start, t.end) }
     }
 
     fn ident(&mut self) -> PResult<Ident> {
@@ -405,19 +414,19 @@ impl<'t, 's> Parser<'t, 's> {
 
     fn string(&mut self) -> PResult<StrLit> {
         let t = self.expect(TokenKind::Str, "ein Stringliteral")?;
-        Ok(StrLit { value: self.toks.unescape(t), span: Span::new(t.start, t.end) })
+        Ok(StrLit { value: self.toks.unescape(t), span: self.span(t.start, t.end) })
     }
 
     fn int_token(&mut self) -> PResult<IntLit> {
         let t = self.expect(TokenKind::Int, "eine ganze Zahl")?;
-        Ok(IntLit { text: self.text_of(t).to_string(), span: Span::new(t.start, t.end) })
+        Ok(IntLit { text: self.text_of(t).to_string(), span: self.span(t.start, t.end) })
     }
 
     /// `int_lit := INT | HEX | BIN | OCT`
     fn parse_int_lit(&mut self) -> PResult<IntLit> {
         if matches!(self.kind(), TokenKind::Int | TokenKind::Hex | TokenKind::Bin | TokenKind::Oct) {
             let t = self.bump();
-            Ok(IntLit { text: self.text_of(t).to_string(), span: Span::new(t.start, t.end) })
+            Ok(IntLit { text: self.text_of(t).to_string(), span: self.span(t.start, t.end) })
         } else {
             Err(self.error_here("eine ganze Zahl"))
         }
@@ -427,7 +436,7 @@ impl<'t, 's> Parser<'t, 's> {
     fn parse_number(&mut self) -> PResult<Number> {
         if self.at(TokenKind::Float) {
             let t = self.bump();
-            Ok(Number::Float(FloatLit { text: self.text_of(t).to_string(), span: Span::new(t.start, t.end) }))
+            Ok(Number::Float(FloatLit { text: self.text_of(t).to_string(), span: self.span(t.start, t.end) }))
         } else {
             self.parse_int_lit().map(Number::Int)
         }
@@ -436,7 +445,7 @@ impl<'t, 's> Parser<'t, 's> {
     /// `duration_lit := DURATION`
     fn parse_duration_lit(&mut self) -> PResult<DurationLit> {
         let t = self.expect(TokenKind::Duration, "eine Dauer wie `200 ms`")?;
-        Ok(DurationLit { ns: t.value, span: Span::new(t.start, t.end) })
+        Ok(DurationLit { ns: t.value, span: self.span(t.start, t.end) })
     }
 
     // ------------------------------------------------------------ Gemeinsame Produktionen
@@ -787,7 +796,7 @@ impl<'t, 's> Parser<'t, 's> {
         let start = self.pos;
         let (first, mut rest) = if self.at(TokenKind::Int) && self.text() == "1" {
             let one = self.bump();
-            let one_term = UnitTerm { name: None, exponent: None, span: Span::new(one.start, one.end) };
+            let one_term = UnitTerm { name: None, exponent: None, span: self.span(one.start, one.end) };
             if !self.at_op("/") || (compact && !(one.joint && self.tok().joint)) {
                 return Err(self.error_here("`/` nach der `1` eines Einheitenausdrucks (dimensionslos ist `1/s`)"));
             }

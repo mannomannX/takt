@@ -38,6 +38,7 @@ pub mod collection;
 pub mod dfa;
 pub mod emit;
 pub mod expr;
+pub mod fault;
 pub mod fns;
 pub mod format;
 pub mod image;

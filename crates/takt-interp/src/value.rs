@@ -326,12 +326,21 @@ pub struct Fault {
     pub tick: u64,
     /// Eigenes Ziel eines `check … -> X` (5.3); sonst das Fault-Ziel des Zustands.
     pub target: Option<Target>,
+    /// Die Nachricht einer Anweisung (`check`, `expect`, `abort`): Das
+    /// Programm liest sie in `last_fault.message` (5.3). Die Nachrichten
+    /// anderer Faults sind Diagnose; dort liest es den Namen der Art.
+    pub stated: bool,
 }
 
 impl Fault {
     /// Neuer Fault ohne eigenes Ziel.
     pub fn new(kind: FaultKind, message: impl Into<String>, span: Span, tick: u64) -> Self {
-        Fault { kind, message: message.into(), span, tick, target: None }
+        Fault { kind, message: message.into(), span, tick, target: None, stated: false }
+    }
+
+    /// Ein Fault mit der Nachricht einer Anweisung (5.3).
+    pub fn stated(kind: FaultKind, message: impl Into<String>, span: Span, tick: u64) -> Self {
+        Fault { stated: true, ..Fault::new(kind, message, span, tick) }
     }
 }
 

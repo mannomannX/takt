@@ -189,8 +189,16 @@ pub trait Vars {
     }
 }
 
-/// Senkt einen Ausdruck und liefert seinen Operanden.
+/// Senkt einen Ausdruck und liefert seinen Operanden. Eine Fault-Stelle
+/// darin nennt seine Zeile (5.3).
 pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
+    let outer = std::mem::replace(&mut m.at, e.span);
+    let r = lower_here(e, p, m, vars);
+    m.at = outer;
+    r
+}
+
+fn lower_here(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
     // `interp` steht vor der Typbestimmung: Sein erstes Argument ist eine
     // Tabelle, und `table<A, B>` hat keine Darstellung als Wert — die
     // Stuetzstellen gehen unmittelbar in die Rechnung (3.9). Den Typ zu

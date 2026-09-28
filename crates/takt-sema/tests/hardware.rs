@@ -244,12 +244,12 @@ fn the_stack_reserve_of_the_calibration_enters_the_size() {
 
 #[test]
 fn the_memory_budget_is_judged_against_the_target() {
-    // Pruefung 39: 64 KiB passen; 64 Byte nicht.
+    // Pruefung 39: 64 KiB passen; 16 Byte nicht.
     let p = compile(PROGRAM);
     let cfg = hw(CONFIG);
     let ok = check(&p, cfg.target("thumbv7em").expect("Ziel"), Span::default());
     assert!(!codes(&ok).iter().any(|c| c.contains("SC-39")), "{ok:?}");
-    let cfg = hw(&CONFIG.replace("ram = 65536", "ram = 64"));
+    let cfg = hw(&CONFIG.replace("ram = 65536", "ram = 16"));
     let bad = check(&p, cfg.target("thumbv7em").expect("Ziel"), Span::default());
     assert!(codes(&bad).iter().any(|c| c.contains("SC-39") && c.contains("RAM")), "{bad:?}");
 }

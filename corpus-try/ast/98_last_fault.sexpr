@@ -1,0 +1,58 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output kind :int in 0..99 @sim("o/kind"))
+(output line :int in 0..999 @sim("o/line"))
+(output stamp :int in 0..999 @sim("o/stamp"))
+(output size :int in 0..200 @sim("o/size"))
+(fn share (total:int parts:int) -> int
+  (return (/ total parts)))
+(machine m
+  (var turn :int in 0..9 0)
+  (var n :int in 0..9 0)
+  (var small :int in 0..5 0)
+  (fault -> REPORT)
+  (initial RUN)
+  (state RUN
+    (enter
+      (= n 0))
+    (loop
+      (= n (+ n 1))
+      (if (== n 2)
+        (match turn
+          (case 0
+            (check (< n 2) "Runde {turn} bei {n}"))
+          (case 1
+            (check (< n 2)))
+          (case 2
+            (= small (/ 10 (- turn 2))))
+          (case 3
+            (= small (* n 3)))
+          (case 4
+            (= small (call share 10 (- turn 4))))
+          (case 5
+            (check (< n 2) "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxäz"))
+          (case _
+            (abort "Halt {turn}"))))))
+  (state REPORT
+    (enter
+      (= turn (+ turn 1))
+      (match (.kind last_fault)
+        (case CHECK_FAILED
+          (= kind 1))
+        (case (ARITHMETIC k)
+          (match k
+            (case DIV_ZERO
+              (= kind 21))
+            (case _
+              (= kind 29))))
+        (case RANGE
+          (= kind 7))
+        (case ABORT
+          (= kind 11))
+        (case _
+          (= kind 99)))
+      (= line (.line last_fault))
+      (= stamp (.tick last_fault))
+      (= size (.len (.message last_fault))))
+    (when (< turn 7) -> RUN)))

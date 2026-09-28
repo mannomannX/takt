@@ -122,7 +122,7 @@ impl Ctx<'_, '_> {
                     Some(m) => render(m, self),
                     None => String::from("check verletzt"),
                 };
-                let mut fault = Fault::new(fault_kind, text, span, self.tick);
+                let mut fault = Fault::stated(fault_kind, text, span, self.tick);
                 fault.target = *target;
                 Err(Trap::Fault(fault))
             }
@@ -133,7 +133,7 @@ impl Ctx<'_, '_> {
                     None => String::from("abort"),
                 };
                 self.outer.abort()?;
-                Err(Trap::Fault(Fault::new(FaultKind::Abort, text, span, self.tick)))
+                Err(Trap::Fault(Fault::stated(FaultKind::Abort, text, span, self.tick)))
             }
             StmtKind::If { cond, then, otherwise } => {
                 if self.eval_bool(cond)? {

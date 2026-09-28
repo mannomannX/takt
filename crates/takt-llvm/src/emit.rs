@@ -118,8 +118,15 @@ pub struct Module {
     /// nimmt (5.3); angelegt beim ersten Bedarf.
     fault_slot: Option<Reg>,
     /// Die Bloecke, die eine Art ablegen und in einen Fault-Pfad springen
-    /// ([`Module::fault_to`]): Ziel und Art, geschrieben am Ende der Funktion.
-    fault_stubs: Vec<(String, u32)>,
+    /// ([`Module::fault_to`]): Ziel, Art und Zeile, geschrieben am Ende der
+    /// Funktion.
+    fault_stubs: Vec<(String, u32, u32)>,
+    /// Die Zeilen der Quellen, wenn eine Maschine `last_fault` liest (5.3):
+    /// Dann legt jeder Fault-Block die Zeile seiner Stelle ab.
+    fault_lines: Option<Vec<takt_mir::SourceLines>>,
+    /// Die Position, deren Code gerade entsteht; eine Fault-Stelle nimmt
+    /// ihre Zeile.
+    pub at: takt_diag::Span,
 }
 
 impl Module {
@@ -165,6 +172,28 @@ impl Module {
             bare_metal: crate::target::Target::by_triple(triple).is_some_and(crate::target::Target::is_bare_metal),
             fault_slot: None,
             fault_stubs: Vec::new(),
+            fault_lines: None,
+            at: takt_diag::Span::default(),
+        }
+    }
+
+    /// Fuehrt die Zeilen der Faults (5.3): Das Programm hat eine Maschine,
+    /// die `last_fault` liest.
+    pub fn track_faults(&mut self, sources: &[takt_mir::SourceLines]) {
+        self.fault_lines = Some(sources.to_vec());
+        crate::fault::declare(self);
+    }
+
+    /// Die Zeile einer Position, wenn die Zeilen gefuehrt werden.
+    fn line_of(&self, span: takt_diag::Span) -> Option<u32> {
+        self.fault_lines.as_deref().map(|s| takt_mir::program::line_of(s, span))
+    }
+
+    /// Legt die Zeile von `span` fuer einen Fault ab, dessen Art erst zur
+    /// Laufzeit feststeht ([`Module::fault_code_at`]).
+    pub fn fault_line_at(&mut self, span: takt_diag::Span) {
+        if let Some(line) = self.line_of(span) {
+            self.void_inst(&format!("store i32 {line}, ptr @{}", crate::fault::LINE));
         }
     }
 
@@ -275,10 +304,14 @@ impl Module {
     /// (5.3): ein Block, der die Art in [`Module::fault_slot`] legt. Je Ziel
     /// und Art entsteht einer, am Ende der Funktion.
     pub fn fault_to(&mut self, target: &str, code: u32) -> String {
-        if !self.fault_stubs.iter().any(|(t, c)| t == target && *c == code) {
-            self.fault_stubs.push((target.to_string(), code));
+        let line = self.line_of(self.at).unwrap_or(0);
+        if !self.fault_stubs.iter().any(|(t, c, l)| t == target && *c == code && *l == line) {
+            self.fault_stubs.push((target.to_string(), code, line));
         }
-        format!("{target}_k{code}")
+        match line {
+            0 => format!("{target}_k{code}"),
+            _ => format!("{target}_k{code}_z{line}"),
+        }
     }
 
     /// Legt eine erst zur Laufzeit bekannte Art in den Platz — das Flag
@@ -294,9 +327,20 @@ impl Module {
             return;
         }
         let slot = self.fault_slot();
-        for (target, code) in std::mem::take(&mut self.fault_stubs) {
-            let _ = writeln!(self.body, "{target}_k{code}:");
+        let tracked = self.fault_lines.is_some();
+        for (target, code, line) in std::mem::take(&mut self.fault_stubs) {
+            match line {
+                0 => {
+                    let _ = writeln!(self.body, "{target}_k{code}:");
+                }
+                _ => {
+                    let _ = writeln!(self.body, "{target}_k{code}_z{line}:");
+                }
+            }
             let _ = writeln!(self.body, "  store i32 {code}, ptr {slot}");
+            if tracked {
+                let _ = writeln!(self.body, "  store i32 {line}, ptr @{}", crate::fault::LINE);
+            }
             let _ = writeln!(self.body, "  br label %{target}");
         }
     }

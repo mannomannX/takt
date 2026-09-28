@@ -35,9 +35,10 @@ pub mod sample;
 pub mod stmt;
 pub mod sys;
 pub mod types;
+pub mod visit;
 
 pub use desugar::desugar;
 pub use format::{FormatError, decode_body, encode_body, read_program, write_program};
 pub use hash::{Hash256, logic_hash, program_hash};
 pub use ids::*;
-pub use program::{Config, Program};
+pub use program::{Config, Program, SourceLines};

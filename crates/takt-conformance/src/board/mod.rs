@@ -106,6 +106,7 @@ pub const CORPUS: &[&str] = &[
     "95_boundary_ranges.takt",
     "96_record_outputs.takt",
     "97_fast_math.takt",
+    "98_last_fault.takt",
     // 12.7: die Startmuster; ohne Plattformwerte die Plattform ohne Startstufe.
     "sim/12_7/program.takt",
     "sim/14_7/program.takt",

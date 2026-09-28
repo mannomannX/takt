@@ -407,6 +407,36 @@ pub struct Trigger {
     pub span: Span,
 }
 
+/// Die Zeilenanfaenge einer Quelldatei als Byte-Versaetze, der erste 0.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceLines {
+    /// Die Datei, auf die `Span::file` zeigt.
+    pub file: u32,
+    /// Versatz jedes Zeilenanfangs.
+    pub starts: Vec<u32>,
+}
+
+impl SourceLines {
+    /// Die Zeilenanfaenge von `text`.
+    pub fn of(file: takt_diag::FileId, text: &str) -> SourceLines {
+        let mut starts = vec![0];
+        starts.extend(text.match_indices('\n').map(|(i, _)| i as u32 + 1));
+        SourceLines { file: file.0, starts }
+    }
+}
+
+/// Die Zeile einer Position ab 1 (5.3); 0 ohne Position oder ohne die
+/// Zeilen ihrer Datei.
+pub fn line_of(sources: &[SourceLines], span: Span) -> u32 {
+    if span == Span::default() {
+        return 0;
+    }
+    sources
+        .iter()
+        .find(|s| s.file == span.file.0)
+        .map_or(0, |s| s.starts.partition_point(|&start| start <= span.start) as u32)
+}
+
 /// Das Programm: Konfiguration und alle Tabellen. Namen sind Indizes in
 /// diese Tabellen; die MIR ist editionsfrei bis auf `config.edition`.
 #[derive(Clone, Debug, PartialEq)]
@@ -449,6 +479,9 @@ pub struct Program {
     pub triggers: Vec<Trigger>,
     /// Registerports (12.10, v1.2).
     pub ports: Vec<Port>,
+    /// Die Zeilen der Quelldateien, fuer `last_fault.line` (5.3); ein
+    /// Metadatum wie die Positionen, nicht im Logik-Hash.
+    pub sources: Vec<SourceLines>,
 }
 
 /// Ein Registerport (12.10, v1.2): ein Record an einer festen Adresse.
@@ -495,7 +528,14 @@ impl Program {
             campaigns: Vec::new(),
             triggers: Vec::new(),
             ports: Vec::new(),
+            sources: Vec::new(),
         }
+    }
+
+    /// Die Zeile einer Position ab 1 (5.3); 0 ohne Position oder ohne die
+    /// Zeilen ihrer Datei.
+    pub fn line_of(&self, span: Span) -> u32 {
+        line_of(&self.sources, span)
     }
 
     /// Fuegt eine Maschine ein.

@@ -329,8 +329,9 @@ codec_unit_enum!(StopOn { 0 Fail, 1 Never });
 codec_struct!(Campaign { 1 one name, 2 opt program, 3 opt profile, 4 rep sweeps, 5 one repeat, 6 one stop_on, 7 meta span });
 codec_struct!(Port { 1 one name, 2 one record, 3 one address, 4 opt owner, 5 meta span, 6 one ty });
 codec_struct!(Trigger { 1 one name, 2 opt node, 3 one guard, 4 one time, 5 one then, 6 one bound, 7 meta span, 8 opt owner, 9 one fired });
+codec_struct!(SourceLines { 1 one file, 2 rep starts });
 codec_struct!(Program {
     1 one config, 2 one types, 3 rep units, 4 rep enums, 5 rep records, 6 rep fns, 7 rep natives, 8 rep blocks,
     9 rep machines, 10 rep channels, 11 rep streams, 12 rep params, 13 rep profiles, 14 rep commands, 15 rep nodes,
-    16 rep properties, 17 rep campaigns, 18 rep triggers, 19 rep ports,
+    16 rep properties, 17 rep campaigns, 18 rep triggers, 19 rep ports, 20 metarep sources,
 });

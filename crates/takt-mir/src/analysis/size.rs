@@ -444,7 +444,8 @@ fn machine_bytes_at(p: &Program, m: &Machine, with_instances: bool) -> u64 {
         + m.layout.every_counters.len() as u64 * 8
         + m.layout.viol_sites.len() as u64 * 8
         + m.layout.cursors.len() as u64 * 8
-        + 24 /* pending, last_fault, pc */;
+        + 12 /* Abort-Latch, pending, pc */
+        + if crate::visit::reads_last_fault(m) { 152 /* last_fault, 5.3 */ } else { 0 };
 
     machine_vars + state_vars + fixed
 }

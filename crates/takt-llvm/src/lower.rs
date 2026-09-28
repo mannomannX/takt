@@ -91,6 +91,9 @@ pub fn program_with_diagnostics(
 
     crate::abi::Abi::declare(&mut m);
     crate::stream::Streams::declare(&mut m);
+    if p.machines.iter().any(takt_mir::visit::reads_last_fault) {
+        m.track_faults(&p.sources);
+    }
 
     // Blockmethoden zuerst: Die Funktionen darunter rufen sie.
     let methods: Vec<_> = p.blocks.iter().flat_map(|b| b.step.iter().chain(&b.methods).copied()).collect();

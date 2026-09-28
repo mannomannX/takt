@@ -382,7 +382,7 @@ fn check(args: &Args) -> bool {
             ok = false;
             continue;
         };
-        let map = SourceMap::single(path.as_str(), src.as_str());
+        let map = takt_sema::source_map(path.as_str(), src.as_str());
         let options = sema_options(path, &src, policy, args);
         let Some(proof) = proof_of(args) else {
             ok = false;
@@ -536,7 +536,7 @@ fn latency(args: &Args) -> bool {
             ok = false;
             continue;
         };
-        let map = SourceMap::single(path.as_str(), src.as_str());
+        let map = takt_sema::source_map(path.as_str(), src.as_str());
         let options = sema_options(path, &src, policy, args);
         let checked = takt_sema::compile(&src, &options);
         for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
@@ -568,7 +568,7 @@ fn graph(args: &Args) -> bool {
             ok = false;
             continue;
         };
-        let map = SourceMap::single(path.as_str(), src.as_str());
+        let map = takt_sema::source_map(path.as_str(), src.as_str());
         let options = sema_options(path, &src, policy, args);
         let checked = takt_sema::compile(&src, &options);
         for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
@@ -908,7 +908,7 @@ fn cost(args: &Args) -> bool {
             ok = false;
             continue;
         };
-        let map = SourceMap::single(path.as_str(), src.as_str());
+        let map = takt_sema::source_map(path.as_str(), src.as_str());
         let options = sema_options(path, &src, policy, args);
         let checked = takt_sema::compile(&src, &options);
         for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
@@ -936,7 +936,7 @@ fn size(args: &Args) -> bool {
             ok = false;
             continue;
         };
-        let map = SourceMap::single(path.as_str(), src.as_str());
+        let map = takt_sema::source_map(path.as_str(), src.as_str());
         let options = sema_options(path, &src, policy, args);
         let checked = takt_sema::compile(&src, &options);
         for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
@@ -1271,7 +1271,7 @@ fn sema_options(path: &str, src: &str, policy: Policy, args: &Args) -> takt_sema
 
 fn compile_file(path: &str, args: &Args) -> Option<takt_mir::Program> {
     let src = read(path)?;
-    let map = SourceMap::single(path, src.as_str());
+    let map = takt_sema::source_map(path, src.as_str());
     let options = sema_options(path, &src, Policy::default(), args);
     let proof = proof_of(args)?;
     let out = takt_sema::compile_with(&src, &options, proof.as_ref());
@@ -1490,7 +1490,7 @@ fn driver_test(args: &Args) -> bool {
     let Some(stimulus) = stimulus_of(args) else { return false };
     let Some((mut ok, coverage)) = scenarios(path, &program, args, &stimulus) else { return false };
     let Some(src) = read(path) else { return false };
-    let map = SourceMap::single(path.as_str(), src.as_str());
+    let map = takt_sema::source_map(path.as_str(), src.as_str());
     let items: Vec<_> =
         takt_interp::coverage::items(&program).into_iter().filter(|i| drivers.contains(&i.machine.as_str())).collect();
     println!("Treiber {}: {}", drivers.join(", "), coverage.summary(&items));
@@ -1575,7 +1575,7 @@ fn scenarios(
         coverage.merge(&result.coverage);
     }
     let src = read(path)?;
-    let map = SourceMap::single(path, src.as_str());
+    let map = takt_sema::source_map(path, src.as_str());
     let items = takt_interp::coverage::items(program);
     println!("Coverage: {}", coverage.summary(&items));
     let gaps = coverage.missing(&items);
@@ -1710,7 +1710,7 @@ fn prove(args: &Args) -> bool {
                     return false;
                 }
             };
-            let map = read(path).map(|src| SourceMap::single(path.as_str(), src.as_str()));
+            let map = read(path).map(|src| takt_sema::source_map(path.as_str(), src.as_str()));
             println!("  Vertraege: {}", contracts.len());
             for c in &contracts {
                 let (line, col) = map.as_ref().map_or((0, 0), |m| m.line_col(c.span));
@@ -1740,7 +1740,7 @@ fn prove(args: &Args) -> bool {
             count(|v| matches!(v, takt_prove::CheckVerdict::Reachable { .. })),
             count(|v| matches!(v, takt_prove::CheckVerdict::Undecided { .. }))
         );
-        let map = read(path).map(|src| SourceMap::single(path.as_str(), src.as_str()));
+        let map = read(path).map(|src| takt_sema::source_map(path.as_str(), src.as_str()));
         for c in &checks {
             let (line, col) = map.as_ref().map_or((0, 0), |m| m.line_col(c.span));
             println!("    {} {}:{line}:{col}: {}", c.kind, c.machine, c.text());
@@ -2308,7 +2308,7 @@ fn fmt(args: &Args) -> bool {
         let out = match result {
             Ok(out) => out,
             Err(errors) => {
-                let map = SourceMap::single(path.as_str(), src.as_str());
+                let map = takt_sema::source_map(path.as_str(), src.as_str());
                 for e in errors {
                     eprintln!("{}", map.render_line(&e));
                 }
@@ -2346,7 +2346,7 @@ fn parse(args: &Args) -> bool {
             ok = false;
             continue;
         };
-        let map = SourceMap::single(path.as_str(), src.as_str());
+        let map = takt_sema::source_map(path.as_str(), src.as_str());
         let toks = tokenize(&src);
         for e in &toks.errors {
             println!("{}", map.render_line(e));
@@ -2390,7 +2390,7 @@ fn tokens(args: &Args) -> bool {
             ok = false;
             continue;
         };
-        let map = SourceMap::single(path.as_str(), src.as_str());
+        let map = takt_sema::source_map(path.as_str(), src.as_str());
         let toks = tokenize(&src);
         for t in &toks.tokens {
             let text = match t.kind {

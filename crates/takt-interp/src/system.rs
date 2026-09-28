@@ -254,8 +254,12 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
             Some(f) => fault_kind_value(loaded, f.kind),
             None => Value::Enum { variant: 0, fields: Vec::new() },
         };
-        let message = f.as_ref().map(|f| f.message.clone()).unwrap_or_default();
-        let line = f.as_ref().map_or(0, |f| i64::from(f.span.start));
+        let message = match &f {
+            Some(f) if f.stated => clip(&f.message, LAST_FAULT_MESSAGE),
+            Some(f) => fault_kind_name(f.kind).to_string(),
+            None => String::new(),
+        };
+        let line = f.as_ref().map_or(0, |f| i64::from(loaded.program.line_of(f.span)));
         let tick = f.as_ref().map_or(0, |f| i64::try_from(f.tick).unwrap_or(0));
         let mut fields = vec![kind, Value::Str(message), Value::Int(line), Value::Int(tick)];
         fields.truncate(def.fields.len());
@@ -281,11 +285,21 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
     }
 }
 
-fn fault_kind_value(loaded: &Loaded<'_>, kind: FaultKind) -> Value {
-    let Some(e) = loaded.program.enums.iter().find(|e| e.name == "FaultKind") else {
-        return Value::Enum { variant: 0, fields: Vec::new() };
-    };
-    let name = match kind {
+/// So viele Byte fasst `LastFault.message` (Prelude, `str<128>`).
+const LAST_FAULT_MESSAGE: usize = 128;
+
+/// Die ersten `max` Byte von `s`, an einer Zeichengrenze gekuerzt (5.3).
+fn clip(s: &str, max: usize) -> String {
+    let mut n = s.len().min(max);
+    while !s.is_char_boundary(n) {
+        n -= 1;
+    }
+    s[..n].to_string()
+}
+
+/// Der Name der Variante von `FaultKind` im Prelude.
+fn fault_kind_name(kind: FaultKind) -> &'static str {
+    match kind {
         FaultKind::CheckFailed => "CHECK_FAILED",
         FaultKind::Expect => "EXPECT",
         FaultKind::Timeout => "TIMEOUT",
@@ -298,7 +312,14 @@ fn fault_kind_value(loaded: &Loaded<'_>, kind: FaultKind) -> Value {
         FaultKind::ScheduleOverflow => "SCHEDULE_OVERFLOW",
         FaultKind::Abort => "ABORT",
         FaultKind::Runtime(_) => "RUNTIME",
+    }
+}
+
+fn fault_kind_value(loaded: &Loaded<'_>, kind: FaultKind) -> Value {
+    let Some(e) = loaded.program.enums.iter().find(|e| e.name == "FaultKind") else {
+        return Value::Enum { variant: 0, fields: Vec::new() };
     };
+    let name = fault_kind_name(kind);
     let variant = e.variants.iter().position(|v| v.name == name).unwrap_or(0);
     let fields = match kind {
         FaultKind::Arithmetic(k) => vec![Value::Enum { variant: k as u32, fields: Vec::new() }],

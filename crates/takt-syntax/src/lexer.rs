@@ -4,7 +4,7 @@
 //! offener Klammern entfallen NEWLINE, INDENT und DEDENT. Jeder Fehler wird
 //! gemeldet und die Analyse fortgesetzt (L9).
 
-use takt_diag::{Diagnostic, Span};
+use takt_diag::{Diagnostic, FileId, Span};
 
 use crate::edition::Edition;
 use crate::token::{ErrorCode, Token, TokenKind, Tokens, Trivia, TriviaKind, lex_diagnostic};
@@ -53,7 +53,16 @@ pub fn tokenize_in(src: &str, edition: Edition) -> Tokens<'_> {
         line_start: 0,
     };
     lexer.run();
-    Tokens { src, tokens: lexer.tokens, trivia: lexer.trivia, errors: lexer.errors }
+    Tokens { src, tokens: lexer.tokens, trivia: lexer.trivia, errors: lexer.errors, file: FileId(0) }
+}
+
+/// Wie [`tokenize_in`], fuer eine weitere Datei: Fehler und die Positionen,
+/// die der Parser daraus bildet, zeigen in `file`.
+pub fn tokenize_file(src: &str, edition: Edition, file: FileId) -> Tokens<'_> {
+    let mut toks = tokenize_in(src, edition);
+    toks.errors = toks.errors.into_iter().map(|d| d.in_file(file)).collect();
+    toks.file = file;
+    toks
 }
 
 struct Lexer<'s> {

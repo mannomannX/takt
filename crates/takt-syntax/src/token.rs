@@ -1,6 +1,6 @@
 //! Tokens, Beiwerk und Fehler des Tokenizers (grammar/lexer.md).
 
-use takt_diag::{Diagnostic, Span};
+use takt_diag::{Diagnostic, FileId, Span};
 
 /// Tokenart. Die Namen entsprechen den Tokenarten in lexer.md; `Op` deckt alle
 /// Operatoren und Interpunktion aus L6 ab, der Text unterscheidet sie.
@@ -215,6 +215,9 @@ pub struct Tokens<'src> {
     pub trivia: Vec<Trivia>,
     /// Fehler in Reihenfolge des Auftretens.
     pub errors: Vec<Diagnostic>,
+    /// Die Datei, in die die Positionen des Parsers zeigen (0 fuer das
+    /// Programm, 1 fuer das Prelude).
+    pub file: FileId,
 }
 
 impl<'src> Tokens<'src> {

@@ -188,11 +188,11 @@ pub fn state_struct(m: &Machine, p: &Program) -> Option<StateStruct> {
         fields.push(field(format!("armed{i}"), LlvmType::Int(1), Role::Armed, i));
         fields.push(field(format!("trig_cur{i}"), LlvmType::Int(64), Role::TriggerCursor, i));
     }
-    // `last_fault` ist ein Fault mit Gueltigkeitsflag; der Fault selbst ist
-    // seine Art und sein Ursprung (5.3). Das `pending` aus 11.2 ist
-    // `deliver`: die Art samt Phase, null ohne.
-    let fault = LlvmType::Struct(vec![LlvmType::Int(1), LlvmType::Int(32), LlvmType::Int(32)]);
-    fields.push(field("last_fault".into(), fault, Role::LastFault, 0));
+    // 5.3: `last_fault` fuehrt nur, wer es liest (`crate::fault`). Das
+    // `pending` aus 11.2 ist `deliver`: die Art samt Phase, null ohne.
+    if takt_mir::visit::reads_last_fault(m) {
+        fields.push(field("last_fault".into(), crate::fault::field_type(), Role::LastFault, 0));
+    }
     fields.push(field("abort_latched".into(), LlvmType::Int(1), Role::AbortLatch, 0));
     fields.push(field("deliver".into(), LlvmType::Int(32), Role::Deliver, 0));
     fields.push(field("pc".into(), LlvmType::Int(32), Role::Pc, 0));

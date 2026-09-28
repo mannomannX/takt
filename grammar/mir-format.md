@@ -71,7 +71,7 @@ der Leser verlangt keine Reihenfolge. Multiplizität je Feld laut Schema: `one` 
 (fehlt es, Fehler `Missing`; doppelt, `Duplicate`), `dflt` wie `one`, aber fehlt es, gilt beim
 Lesen der Default — für Zahlen, die eine spätere Version einem Knoten hinzufügt und deren
 Default sagt, was ältere Dateien meinten —, `opt` höchstens einmal, `rep` beliebig oft
-(jedes Element ein eigenes Feld derselben Nummer), `meta` wie `opt` mit Default beim Lesen —
+(jedes Element ein eigenes Feld derselben Nummer), `metarep` wie `rep`, aber nur in der Vollform, `meta` wie `opt` mit Default beim Lesen —
 Positionen, Bindungen und Metadaten, die in der Logikform fehlen (Abschnitt H).
 
 - **Strings** sind Varint-Nummern in die Stringtabelle des Kopfes (W5); gleiche Strings stehen
@@ -104,7 +104,7 @@ einem Versionssprung eingetragen.
 
 ```
 magic             8 Bytes  "TAKT-MIR"
-format_version    u16 LE   (9)
+format_version    u16 LE   (10)
 edition           u32 LE   (2.5; auch in Config.edition)
 compiler_version  Varint-Länge + UTF-8
 strings           Varint-Anzahl, je String Varint-Länge + UTF-8
@@ -119,7 +119,8 @@ ob ein fehlendes `wcet` bedeutet „nicht deklariert“ oder „aus einer Datei,
 kannte“), 8 (`Config.overrun`, Feld 10 — Metadatum ohne Logikanteil, 7.3; fehlt es, gilt
 `fault`), 9 (`CostVec` Felder 8 bis 15, `dflt`: je Zahlklasse die Divisionen, `fma` und
 Wurzeln unter ihren Operationen, 7.2; fehlen sie, gilt null — so rechneten die Dateien, die sie
-nicht kannten). Ein Leser mit kleinerer
+nicht kannten), 10 (`Program.sources`, Feld 20, `metarep`: je Quelldatei ihre Nummer und die
+Byte-Versätze ihrer Zeilenanfänge, für `last_fault.line`, 5.3; fehlt es, ist die Zeile 0). Ein Leser mit kleinerer
 `format_version` als die Datei lehnt sie ab (`UnsupportedVersion`);
 alles andere liest er, Unbekanntes überspringend. Je Version liegt die Datei, die ihr Compiler schrieb, in `crates/takt-sema/tests/mir-golden/` (ab Version 2; Version 1 hatte keinen Übersetzer), und `mir_versions.rs` verlangt, dass der heutige Leser sie annimmt und der Interpreter sie wie das frisch übersetzte Programm ausführt; ein Versionssprung legt seine Datei dazu. Der Kopf ist ohne Stringtabelle lesbar
 (`read_header`), damit Werkzeuge Edition und Compiler-Version ohne Vollparse zeigen.

@@ -216,6 +216,8 @@ fn deliver_prologue(
     module.void_inst("ret void");
     module.label(&take);
     module.fault_code_at(&code.to_string());
+    // Ein zugestellter Fault hat keine Stelle im Programm (5.3).
+    module.fault_line_at(takt_diag::Span::default());
     module.void_inst(&format!("br label %fault_{name}_any"));
     module.label(&body);
     Ok(counting)
@@ -439,7 +441,11 @@ fn transitions(
         // vorgemerkt und nimmt dann den Fault-Pfad des Blatts — denselben,
         // den ein gescheiterter `check` nimmt.
         if let Target::Fault(kind) = t.target {
-            let fault = ctx.vars().fault_to(kind, m).ok_or(NotYet { what: "Fault-Marke" })?;
+            // Wie im Interpreter ohne Stelle (5.3): Der Uebergang nennt keine.
+            let outer = std::mem::take(&mut m.at);
+            let fault = ctx.vars().fault_to(kind, m).ok_or(NotYet { what: "Fault-Marke" });
+            m.at = outer;
+            let fault = fault?;
             m.void_inst(&format!("br label %{fault}"));
             m.label(&skip);
             continue;
@@ -2321,6 +2327,10 @@ fn fault_body(
         crate::abi::Abi::FAULT,
         ctx.machine_index
     ));
+    // 5.3: `last_fault`, wenn die Maschine es liest.
+    if let Some(at) = ctx.field(Role::LastFault, 0, m) {
+        crate::fault::record(&at, &code.to_string(), ctx.program.config.tick, m);
+    }
     // 9.3: Ein Abort-Pfad setzt den Latch; bis zum naechsten normalen
     // Uebergang uebergeht die Maschine weitere Aborts (5.4).
     if let Some(latch) = ctx.field(Role::AbortLatch, 0, m) {

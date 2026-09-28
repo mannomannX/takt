@@ -747,7 +747,7 @@ pub fn run(
 
 /// Parst das Prelude; ein Fehler dort ist ein Fehler des Compilers.
 fn prelude_file(edition: Edition) -> ast::File {
-    let toks = takt_syntax::tokenize_in(crate::PRELUDE, edition);
+    let toks = takt_syntax::tokenize_file(crate::PRELUDE, edition, crate::PRELUDE_FILE);
     assert!(toks.errors.is_empty(), "Prelude: Tokenizer {:?}", toks.errors);
     let (file, errors) = takt_syntax::parse_file(&toks);
     assert!(errors.is_empty(), "Prelude: Parser {errors:?}");

@@ -184,6 +184,11 @@ impl<'a> Ctx<'a> {
         self.state.field_ptr(&self.machine.name, role, nth, m)
     }
 
+    /// Liest die Maschine `last_fault` (5.3)? Dann fuehrt ihr Zustand es.
+    pub fn reads_last_fault(&self) -> bool {
+        self.state.index_of(Role::LastFault, 0).is_some()
+    }
+
     /// Der Name des Fault-Trampolins des laufenden Blatts (5.3).
     ///
     /// Je Blatt einer, weil das Fault-Ziel am innersten Zustand haengt,
@@ -406,7 +411,11 @@ impl Vars for StateVars<'_> {
                 let ns = m.inst(&format!("mul i64 {ticks}, {per}"));
                 Some(Lowered { value: ns.to_string(), ty: dur })
             }
-            B::LastFault | B::Event => None,
+            B::LastFault => {
+                let at = self.state.field_ptr(&self.machine.name, Role::LastFault, 0, m)?;
+                crate::fault::value(&at, p, m).ok()
+            }
+            B::Event => None,
         }
     }
 
@@ -487,18 +496,27 @@ pub fn mark(at: u32, ctx: &mut Ctx<'_>, m: &mut Module) {
     }
 }
 
-/// Senkt eine Anweisung.
+/// Senkt eine Anweisung. Eine Fault-Stelle darin nennt ihre Zeile (5.3).
 pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let outer = std::mem::replace(&mut m.at, s.span);
+    let r = stmt_here(s, ctx, m);
+    m.at = outer;
+    r
+}
+
+fn stmt_here(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     match &s.kind {
         StmtKind::Assign { target, value } => assign(target, value, ctx, m),
-        StmtKind::Check { cond, kind, confirm, .. } => check(cond, *kind, confirm.as_ref(), ctx, m),
+        StmtKind::Check { cond, kind, confirm, message, .. } => {
+            check(cond, *kind, confirm.as_ref(), message.as_ref(), ctx, m)
+        }
         StmtKind::If { cond, then, otherwise } => branch(cond, then, otherwise, ctx, m),
         StmtKind::Observe(o) => observe(o, s.span, ctx, m),
         StmtKind::Match { subject, arms } => match_stmt(subject, arms, ctx, m),
         StmtKind::MethodCall { target, receiver, method, args } => {
             method_call(target.as_ref(), receiver, *method, args, ctx, m)
         }
-        StmtKind::Abort { .. } => {
+        StmtKind::Abort { message } => {
             // 5.4: `abort` faultet *alle* Maschinen im selben Tick. Die
             // anderen kennt der erzeugte Code nicht — die Runtime merkt
             // sie vor und stellt in der Abort-Phase zu (`<m>_deliver`).
@@ -510,7 +528,7 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
             let held = m.inst(&format!("load i1, ptr {latch}"));
             let fault = ctx.trampoline_for(takt_mir::machine::FaultKind::Abort, m);
             let stop = format!("abgebrochen{}_{}", m.next_label(), ctx.machine.name);
-            m.void_inst(&format!("br i1 {held}, label %{stop}, label %{fault}"));
+            branch_or_fault(&held.to_string(), &stop, &fault, message.as_ref(), "abort", ctx, m)?;
             m.label(&stop);
             m.void_inst(if ctx.entry_reg.is_some() { "ret i8 3" } else { "ret void" });
             Ok(())
@@ -821,6 +839,7 @@ fn at(time: &Expr, body: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<()
         return Err(NotYet { what: "`at` mit einem Zeitpunkt, der keine Dauer ist" });
     }
     for stmt in &body.stmts {
+        m.at = stmt.span;
         let StmtKind::Assign { target: Place::Output(c), value } = &stmt.kind else {
             // 9.8 laesst nur Output-Zuweisungen zu; das Sema hat es
             // geprueft, und alles andere waere hier ein Fehler im Lowering.
@@ -846,6 +865,8 @@ fn at(time: &Expr, body: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<()
         let code = m.inst(&format!("call i32 @{}(i32 {}, i64 {}, i64 {word})", Abi::SCHEDULE, c.0, t.value));
         let ok = m.inst(&format!("icmp eq i32 {code}, 0"));
         m.fault_code_at(&code.to_string());
+        let here = m.at;
+        m.fault_line_at(here);
         let go_on = format!("geplant{}_{}", m.next_label(), ctx.machine.name);
         m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{}", ctx.trampoline()));
         m.label(&go_on);
@@ -1182,6 +1203,7 @@ fn check(
     cond: &Expr,
     kind: takt_mir::stmt::CheckKind,
     confirm: Option<&takt_mir::stmt::Confirm>,
+    message: Option<&takt_mir::pattern::Format>,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
@@ -1218,8 +1240,33 @@ fn check(
         },
         m,
     );
-    m.void_inst(&format!("br i1 {holds}, label %{go_on}, label %{fault}"));
+    branch_or_fault(&holds, &go_on, &fault, message, "check verletzt", ctx, m)?;
     m.label(&go_on);
+    Ok(())
+}
+
+/// Verzweigt bei `cond` nach `ok`, sonst in den Fault-Pfad `fault`. Liest
+/// die Maschine `last_fault`, legt der Fault-Zweig vorher die Nachricht der
+/// Anweisung ab — ihre Meldung, ohne sie `default` (5.3, `crate::fault`).
+fn branch_or_fault(
+    cond: &str,
+    ok: &str,
+    fault: &str,
+    message: Option<&takt_mir::pattern::Format>,
+    default: &str,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    if !ctx.reads_last_fault() {
+        m.void_inst(&format!("br i1 {cond}, label %{ok}, label %{fault}"));
+        return Ok(());
+    }
+    let say = format!("meldung{}_{}", m.next_label(), ctx.machine.name);
+    m.void_inst(&format!("br i1 {cond}, label %{ok}, label %{say}"));
+    m.label(&say);
+    let vars = ctx.vars();
+    crate::fault::state(message, default, ctx.program, m, &vars)?;
+    m.void_inst(&format!("br label %{fault}"));
     Ok(())
 }
 
