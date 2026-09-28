@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+input  p     : float[bar] in 0..100 bar @ hw("daq1/ai0") with max_age = 50 ms
+output valve : bool                     @ hw("plc1/do0") with safe = false
+
+machine m:
+    var n : int in 0..1000 = 0
+    initial CLOSED
+    state CLOSED:
+        loop:
+            n = (n + 1) % 1000
+        when p > 5 bar: -> OPEN
+    state OPEN:
+        enter:
+            valve = true
+        after 100 ms: -> CLOSED

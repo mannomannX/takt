@@ -121,7 +121,7 @@ kannte“), 8 (`Config.overrun`, Feld 10 — Metadatum ohne Logikanteil, 7.3; fe
 Wurzeln unter ihren Operationen, 7.2; fehlen sie, gilt null — so rechneten die Dateien, die sie
 nicht kannten). Ein Leser mit kleinerer
 `format_version` als die Datei lehnt sie ab (`UnsupportedVersion`);
-alles andere liest er, Unbekanntes überspringend. Der Kopf ist ohne Stringtabelle lesbar
+alles andere liest er, Unbekanntes überspringend. Je Version liegt die Datei, die ihr Compiler schrieb, in `crates/takt-sema/tests/mir-golden/` (ab Version 2; Version 1 hatte keinen Übersetzer), und `mir_versions.rs` verlangt, dass der heutige Leser sie annimmt und der Interpreter sie wie das frisch übersetzte Programm ausführt; ein Versionssprung legt seine Datei dazu. Der Kopf ist ohne Stringtabelle lesbar
 (`read_header`), damit Werkzeuge Edition und Compiler-Version ohne Vollparse zeigen.
 
 ## H Logik-Hash und Programm-Hash

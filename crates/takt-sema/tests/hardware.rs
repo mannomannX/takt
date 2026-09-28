@@ -231,6 +231,18 @@ fn the_gate_names_what_it_could_not_decide() {
 }
 
 #[test]
+fn the_stack_reserve_of_the_calibration_enters_the_size() {
+    // 11.5, 12.3: Die gemessene Reserve von Runtime, Treibern und ISRs
+    // (13.8) plus die Marge des Projekts ist ein Posten mit Herkunft
+    // `gemessen`, nicht `offen`.
+    let p = compile(PROGRAM);
+    let cfg = hw(&CONFIG.replace("flash = 262144", "flash = 262144\nstack_reserve = 600\nstack_margin = 200"));
+    let size = takt_mir::analysis::size::size(&p).with_hardware(cfg.target("thumbv7em").expect("Ziel"));
+    let item = size.items.iter().find(|i| i.name == "Runtime-Reserven je Profil").expect("Posten");
+    assert_eq!((item.bytes, item.origin), (800, takt_mir::analysis::size::Origin::Measured));
+}
+
+#[test]
 fn the_memory_budget_is_judged_against_the_target() {
     // Pruefung 39: 64 KiB passen; 64 Byte nicht.
     let p = compile(PROGRAM);

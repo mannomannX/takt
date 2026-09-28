@@ -92,7 +92,7 @@ SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M10 (Audit),teilw
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),fertig,
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),fertig,
 SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M10 (aus M6),teilweise,"`rsa3072_verify`, `aes_gcm_decrypt` (M10 Schritt 21) und `fft256` (FB-345); alles Uebrige belegt der Zaehltest `every_entry_of_11_4_exists`"
-SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M10 (aus M3),teilweise,
+SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M10 (aus M3),fertig,"Stack-Reserve aus der Kalibrierung als gemessener Posten in `takt size` (`the_stack_reserve_of_the_calibration_enters_the_size`, M10 Schritt 22)"
 SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),fertig,"Eingänge im MCU-Rahmen (2026-09-22): `takt_in_<pfad>(&value, &quality)` als Gegenstück zu `takt_out_*`, schwach gebunden und vom Linker geprüft; der Treiber liefert die Qualität mit (12.6), ohne Antwort bleibt der Eintrag `Bad` (3.5). Belegt am ESP32-C6 mit dem BOOT-Taster"
 SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4 (Codegen),fertig,
 RT-8.6-Strompuffer,Umsetzung,12.1,"Strompuffer der Runtime (`takt-rt-core::stream`): Ring ueber geliehenen Feldern statt Const-Generics, feste Slots und Byte-Ring in einer Struktur (FB-115)",,M4/M5 (Runtime),fertig,
@@ -1086,7 +1086,7 @@ CON-System-Channels_sys/…,Konstrukt (2.4),2.4,System-Channels `sys/…`,,M0 (P
 CON-native_fn,Konstrukt (2.4),2.4,`native fn`,,M0 (Parser/MIR-Entwurf),fertig,
 CON-tick_source,Konstrukt (2.4),2.4,`tick_source`,,M0 (Parser/MIR-Entwurf),fertig,
 "CON-jitter,_max_slew",Konstrukt (2.4),2.4,"`jitter`, `max_slew`",,M0 (Parser/MIR-Entwurf),fertig,
-FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M10 (aus M0),teilweise,Version 7; jede aeltere Version lesbar (`takt-mir/tests/roundtrip.rs`)
+FMT-MIR-Serialisierung,Versioniertes Format,11.3,MIR-Serialisierung,,M10 (aus M0),fertig,"Version 9; je Version 2 bis 9 die Datei ihres Compilers in `takt-sema/tests/mir-golden`, gelesen und im Interpreter ausgefuehrt (`mir_versions.rs`, M10 Schritt 22)"
 FMT-Aufzeichnung,Versioniertes Format,11.3,Aufzeichnung,,M4 (Codegen),fertig,"Version 2 (Parametervektor im Kopf); Version 1 lesbar (`takt-interp/tests/recording_versions.rs`, Schritt 26)"
 FMT-Hardware-Konfiguration,Versioniertes Format,11.3,Hardware-Konfiguration,,M6 (mit 8.10),fertig,"Version 4 (NVM-Zeiten, `nvm_blocking`); Version 1 lesbar (`takt-sema/tests/hardware.rs`)"
 FMT-Konformitätsbericht,Versioniertes Format,11.3,Konformitätsbericht,,M10 (aus M5),fertig,"`grammar/conformance-report.md`, `takt-conformance/src/report.rs`: Schreiber, strenger Leser, Roundtrip (2026-09-25)"
