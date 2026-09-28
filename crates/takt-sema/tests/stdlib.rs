@@ -23,6 +23,74 @@ fn trace(p: &Program, stimulus: &str, ticks: u64) -> String {
     run(p, &stimulus, &RunOptions { ticks, ..Default::default() }).expect("Lauf").trace.render()
 }
 
+/// Eingebaute Operationen aus 11.4: keine Deklaration im Prelude, sondern
+/// Intrinsics (4.2, 3.9) und Matrixfunktionen (3.11) der Sema.
+const BUILTIN: [&str; 7] = ["fma", "interp", "solve", "inv", "det", "cholesky", "transpose"];
+
+/// Was 11.4 nennt und noch fehlt, mit dem Schritt, der es nachzieht.
+const MISSING: [(&str, &str); 3] =
+    [("rsa3072_verify", "M10 Schritt 21"), ("aes_gcm_decrypt", "M10 Schritt 21"), ("fft256", "FB-345, M10 Schritt 21")];
+
+/// Die Eintraege des Codeblocks in 11.4 als (Art, Name). Eine Zeile traegt
+/// Segmente, getrennt durch zwei Leerzeichen; ein Segment, das mit einer
+/// Art beginnt, nennt Namen, getrennt durch ` / ` — die Methoden eines
+/// Blocks stehen in einem spaeteren Segment ohne Art.
+fn entries_of_11_4() -> Vec<(String, String)> {
+    let reference = include_str!("../../../plan/definition.md");
+    let start = reference.find("### 11.4 ").expect("11.4");
+    let block = &reference[start..];
+    let block = &block[block.find("```\n").expect("Codeblock") + 4..];
+    let block = &block[..block.find("```").expect("Ende des Codeblocks")];
+    let mut out = Vec::new();
+    for line in block.lines().filter(|l| !l.starts_with('#')) {
+        for segment in line.split("  ").map(str::trim).filter(|s| !s.is_empty()) {
+            let Some((kind, rest)) = ["native fn ", "native job ", "fn ", "block ", "machine "]
+                .iter()
+                .find_map(|k| segment.strip_prefix(k).map(|r| (k.trim(), r)))
+            else {
+                continue;
+            };
+            for part in rest.split(" / ") {
+                let name: String = part.trim().chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+                if !name.is_empty() {
+                    out.push((kind.to_string(), name));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// **Jeder Eintrag aus 11.4 hat eine Umsetzung** (M10 Schritt 20): eine
+/// Deklaration im Prelude, eine Native der kuratierten Menge (4.5, 13.8)
+/// oder eine eingebaute Operation. Was fehlt, steht in `MISSING` mit dem
+/// Schritt, der es nachzieht — und verschwindet dort, sobald es kommt.
+#[test]
+fn every_entry_of_11_4_exists() {
+    let prelude = include_str!("../src/prelude.takt");
+    let declared = |kind: &str, name: &str| {
+        let kind = if kind.starts_with("native") { "fn" } else { kind };
+        prelude.lines().any(|l| {
+            l.strip_prefix(kind)
+                .and_then(|r| r.strip_prefix(' '))
+                .and_then(|r| r.strip_prefix(name))
+                .is_some_and(|r| r.starts_with('[') || r.starts_with('('))
+        })
+    };
+    let entries = entries_of_11_4();
+    assert!(entries.len() > 40, "der Codeblock wird nicht gelesen: {entries:?}");
+    for (kind, name) in &entries {
+        let found =
+            declared(kind, name) || takt_native::Native::by_name(name).is_some() || BUILTIN.contains(&name.as_str());
+        let missing = MISSING.iter().find(|(m, _)| m == name);
+        match (found, missing) {
+            (true, None) | (false, Some(_)) => {}
+            (true, Some((_, step))) => panic!("`{name}` gibt es jetzt; aus MISSING nehmen ({step})"),
+            (false, None) => panic!("11.4 nennt `{kind} {name}`, die Bibliothek hat es nicht"),
+        }
+    }
+}
+
 #[test]
 fn a_user_name_does_not_collide_with_library_parameters() {
     // `hysteresis.step(x: …)` nennt seinen Parameter `x`; der Input `x`

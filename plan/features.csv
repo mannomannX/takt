@@ -91,7 +91,7 @@ SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M5 (Embedded),fertig,
 SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M10 (Audit),teilweise,"Referenz nachziehen und Layout-Test (FB-333, M10 Schritt 24)"
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),fertig,
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),fertig,
-SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M10 (aus M6),offen,
+SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M10 (aus M6),teilweise,"`rsa3072_verify`, `aes_gcm_decrypt` (M10 Schritt 21) und `fft256` (FB-345); alles Uebrige belegt der Zaehltest `every_entry_of_11_4_exists`"
 SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M10 (aus M3),teilweise,
 SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),fertig,"Eingänge im MCU-Rahmen (2026-09-22): `takt_in_<pfad>(&value, &quality)` als Gegenstück zu `takt_out_*`, schwach gebunden und vom Linker geprüft; der Treiber liefert die Qualität mit (12.6), ohne Antwort bleibt der Eintrag `Bad` (3.5). Belegt am ESP32-C6 mit dem BOOT-Taster"
 SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4 (Codegen),fertig,
