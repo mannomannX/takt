@@ -218,6 +218,11 @@ pub trait Program {
     /// ist bereits zu Ende, wenn die Ueberschreitung feststeht.
     fn raise_overrun(&mut self) {}
 
+    /// Meldet allen Maschinen `Runtime(Hardware)` (12.3): Der Speicherschutz
+    /// hat einen Zugriff der TCB auf den Programmzustand abgewiesen. Wie
+    /// beim Ueberlauf wirkt der Fault im naechsten Tick.
+    fn raise_hardware(&mut self) {}
+
     /// Darf geschlafen werden (9.9)?
     ///
     /// Der Default ist `false`: Ein Programm, das die Bedingung nicht

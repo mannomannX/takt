@@ -37,16 +37,16 @@
 #![allow(unsafe_code, reason = "Interrupt-Handler und C-ABI; 9.5 fuehrt Treiber in der TCB")]
 
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU32, Ordering};
 
 use cortex_m_rt::entry;
 use panic_halt as _;
-use stm32f4::stm32f401::{Peripherals, interrupt};
+use stm32f4::stm32f401::{Interrupt, NVIC, Peripherals, interrupt};
 use takt_board_stm32f401::{
-    BAUD, Board, CORE_HZ, Generated, Iwdg, JobContext, Led, Telemetry, WfiSleep, Wire, cycles, platform, tick,
+    BAUD, Board, CORE_HZ, Generated, Iwdg, JobContext, Led, Mpu, Telemetry, WfiSleep, Wire, cycles, mpu, platform, tick,
 };
 use takt_board_support::platform::image_state;
-use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock};
+use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, Guarded, JournalStats, LogicalClock, Sleep, TimerClock};
 use takt_rt_core::{Clock, FakeNvm, Persist, PlatformCommand, Policy, Profile, Runtime};
 
 mod takt {
@@ -224,6 +224,107 @@ pub extern "C" fn takt_out_ui_led(value: u8) {
     }
 }
 
+/// Ein Pruefzugriff der TCB auf geschuetzten Speicher (12.3): zwischen zwei
+/// Ticks auf den Programmzustand (1), den Waechter unter dem Hauptstack (2)
+/// oder den unter dem Job-Stack (3), oder aus einer ISR, die den Commit
+/// unterbricht, auf den Programmzustand (4).
+///
+/// **Ein Pruefgeraet, kein Treiber.** Die Outputs `test/...` tun, was ein
+/// fehlerhafter Treiber taete; nur ein Programm, das sie bindet, loest sie
+/// aus, und der Board-Test tut es, um zu zeigen, dass die MPU den Zugriff
+/// abweist und meldet.
+static PROBE: AtomicU8 = AtomicU8::new(0);
+
+/// `test/tcb_write` (12.3): der naechste Leerlauf schreibt in den Programmzustand.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_test_tcb_write(value: u8) {
+    if value != 0 {
+        PROBE.store(1, Ordering::Relaxed);
+    }
+}
+
+/// `test/guard_write` (12.3): der naechste Leerlauf schreibt in den Waechter.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_test_guard_write(value: u8) {
+    if value != 0 {
+        PROBE.store(2, Ordering::Relaxed);
+    }
+}
+
+/// `test/job_guard_write` (12.3): der naechste Leerlauf schreibt in den
+/// Waechter unter dem Job-Stack.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_test_job_guard_write(value: u8) {
+    if value != 0 {
+        PROBE.store(3, Ordering::Relaxed);
+    }
+}
+
+/// `test/isr_write` (12.3): Im naechsten Programmschritt schreibt die
+/// Pruef-ISR in den Programmzustand (`test/in_step`).
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_test_isr_write(value: u8) {
+    if value != 0 {
+        PROBE.store(4, Ordering::Relaxed);
+    }
+}
+
+/// `test/in_step` (12.3): Gelesen wird im Programmschritt, bei offenem
+/// Programmzustand. Ist die Pruef-ISR angefordert, loest der Treiber sie
+/// hier aus, und sie unterbricht den Schritt.
+///
+/// # Safety
+///
+/// Der Rahmen uebergibt zwei gueltige Zeiger.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_test_in_step(value: *mut u8, quality: *mut u8) -> bool {
+    if PROBE.load(Ordering::Relaxed) == 4 {
+        NVIC::pend(Interrupt::EXTI0);
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+    }
+    unsafe {
+        *value = 0;
+        *quality = 0;
+    }
+    true
+}
+
+/// Fuehrt einen angeforderten Pruefzugriff aus; ausserhalb des Ticks, wo
+/// kein Code der TCB den Programmzustand beschreiben darf.
+fn probe() {
+    let target = match PROBE.load(Ordering::Relaxed) {
+        1 => Some(mpu::state_address()),
+        2 => Some(mpu::guard_address()),
+        3 => mpu::job_guard_address(),
+        _ => return,
+    };
+    PROBE.store(0, Ordering::Relaxed);
+    if let Some(target) = target {
+        forbidden_write(target);
+    }
+}
+
+/// Ein Byte an `target`, das die MPU abweisen muss.
+fn forbidden_write(target: u32) {
+    // SAFETY: Genau dieser Zugriff ist verboten und soll es sein: Die MPU
+    // weist ihn ab, der Handler uebergeht ihn, und die Runtime meldet
+    // `Runtime(Hardware)`. Ohne Schutz schriebe er ein Byte, das der
+    // Board-Test als Abweichung saehe.
+    unsafe { (target as *mut u8).write_volatile(0xA5) };
+}
+
+/// Die Pruef-ISR (`test/isr_write`): eine Leitung, die kein Treiber
+/// benutzt, nur von `test/in_step` ausgeloest.
+#[interrupt]
+fn EXTI0() {
+    mpu::isr(|| {
+        if PROBE.compare_exchange(4, 0, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            forbidden_write(mpu::state_address());
+        }
+    });
+}
+
 /// Der Output `gpio/loop_out` auf PA0, ueber die Bruecke an PA1 (13.8).
 #[unsafe(no_mangle)]
 pub extern "C" fn takt_out_gpio_loop_out(value: u8) {
@@ -250,29 +351,33 @@ pub unsafe extern "C" fn takt_in_gpio_loop_in(value: *mut u8, quality: *mut u8) 
 
 #[interrupt]
 fn TIM2() {
-    let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
-    let now = cycles::now();
-    let elapsed = now.wrapping_sub(LAST_STAMP.swap(now, Ordering::Relaxed));
-    // `rc_w0`: Nullen loeschen, Einsen lassen stehen.
-    tim2.sr().write(|w| unsafe { w.bits(!1) });
-    tick::on_timer_interrupt(elapsed);
+    mpu::isr(|| {
+        let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
+        let now = cycles::now();
+        let elapsed = now.wrapping_sub(LAST_STAMP.swap(now, Ordering::Relaxed));
+        // `rc_w0`: Nullen loeschen, Einsen lassen stehen.
+        tim2.sr().write(|w| unsafe { w.bits(!1) });
+        tick::on_timer_interrupt(elapsed);
+    });
 }
 
 /// Die Leitung: senden ohne zu warten, und der Host kann das Board
 /// zurueckverlangen.
 #[interrupt]
 fn USART1() {
-    takt_board_stm32f401::uart::on_interrupt();
+    mpu::isr(takt_board_stm32f401::uart::on_interrupt);
 }
 
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
-fn conduct(clock: impl Clock) {
+fn conduct(clock: impl Clock, protection: Mpu) {
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
     let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
     // Der Watchdog wacht im Betrieb (12.3); ein Konformitaetslauf wartet
     // auf die Leitung und ist kein Betrieb.
     let watchdog = (limit == 0).then(|| Iwdg::arm(WATCHDOG_NS));
-    let mut rt = Runtime::new(Generated::init(false), clock, watchdog, (), Profile::BAREMETAL, TICK_NS, policy);
+    // 12.3: Nach `init` ist der Programmzustand nur noch im Tick beschreibbar.
+    let program = Guarded::new(Generated::init(false), protection);
+    let mut rt = Runtime::new(program, clock, watchdog, (), Profile::BAREMETAL, TICK_NS, policy);
     // Kein Journal: Das Board hat noch keinen `Nvm`-Treiber (5.9).
     let no_journal = None::<&mut Persist<'_, FakeNvm<0>>>;
     let stats = takt_rt_baremetal::run(&mut rt, no_journal, Cadence::of(limit, TRACE_EVERY, TRACE_PC), uart);
@@ -284,6 +389,16 @@ fn conduct(clock: impl Clock) {
         if let Some(w) = wire() {
             u.drain(DRAIN_ROUNDS);
             let _ = w.stats.report(CORE_HZ, u);
+            u.newline();
+        }
+        // 12.3: was der Speicherschutz abgewiesen hat.
+        if let Some(v) = rt.program.last {
+            u.drain(DRAIN_ROUNDS);
+            let _ = write!(
+                u,
+                "takt schutz verletzungen {} region {} adresse {:#010x}",
+                rt.program.violations, v.region, v.address
+            );
             u.newline();
         }
         let stack = Some(takt_board_stm32f401::stack::high_water());
@@ -332,6 +447,9 @@ fn main() -> ! {
     takt_board_stm32f401::stack::paint();
     let dp = Peripherals::take().expect("Peripherie");
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
+    // 12.3: Der Programmzustand liegt ausserhalb von `.bss`; genullt wird er,
+    // bevor der Rahmen ihn zum ersten Mal beschreibt.
+    mpu::clear_state();
     let board = Board::WEACT_BLACKPILL;
     let led = Led::new(dp.GPIOC, &dp.RCC, board);
 
@@ -356,42 +474,65 @@ fn main() -> ! {
         unsafe { WIRE = Some(Wire::new(dp.GPIOA, &dp.RCC)) };
     }
 
-    let (mut dcb, mut dwt) = (cp.DCB, cp.DWT);
+    // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
+    // der Tick holt den Kern zurueck.
+    let mut jobs = JobContext::start();
+
+    let (mut dcb, mut dwt, mut core_mpu, mut scb, mut nvic) = (cp.DCB, cp.DWT, cp.MPU, cp.SCB, cp.NVIC);
     cycles::enable(&mut dcb, &mut dwt);
+    let Some(protection) = Mpu::arm(&mut core_mpu, &mut scb, jobs.as_ref().map(JobContext::bottom)) else {
+        if let Some(u) = uart() {
+            u.write("takt: Speicherschutz nicht einrichtbar");
+            u.newline();
+            u.drain(DRAIN_ROUNDS);
+        }
+        loop {
+            cortex_m::asm::wfi();
+        }
+    };
+    // SAFETY: Prioritaeten und Freigabe vor dem ersten Tick; die Handler
+    // oben sind bereit.
     unsafe {
-        cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::TIM2);
-        cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::USART1);
+        for line in [Interrupt::TIM2, Interrupt::USART1, Interrupt::EXTI0] {
+            nvic.set_priority(line, mpu::ISR_PRIORITY);
+            NVIC::unmask(line);
+        }
     }
 
     banner(timer.nominal_ns());
     unsafe { LED = Some(led) };
 
-    // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
-    // der Tick holt den Kern zurueck.
-    let mut jobs = JobContext::start();
     if LOGICAL {
         // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet
         // jeden Job zu Ende; dann steht die Uhr auf der Frist. In logischer
         // Zeit haelt so jeder Job seine Dauer (4.5).
-        conduct(LogicalClock::new(|| {
-            if let Some(u) = uart() {
-                u.drain(DRAIN_ROUNDS);
-            }
-            if let Some(context) = jobs.as_mut() {
-                context.finish();
-            }
-        }));
+        conduct(
+            LogicalClock::new(|| {
+                probe();
+                if let Some(u) = uart() {
+                    u.drain(DRAIN_ROUNDS);
+                }
+                if let Some(context) = jobs.as_mut() {
+                    context.finish();
+                }
+            }),
+            protection,
+        );
     } else {
         // Zwischen den Ticks fuellt die Schleife die Leitung nach, sooft ein
         // Interrupt den Kern weckt: Sie nimmt nur ab, was in ihren FIFO passt.
-        conduct(TimerClock::new(timer, TICK_NS).with_idle(|| {
-            if let Some(u) = uart() {
-                u.flush();
-            }
-            if let Some(context) = jobs.as_mut() {
-                context.run();
-            }
-        }));
+        conduct(
+            TimerClock::new(timer, TICK_NS).with_idle(|| {
+                probe();
+                if let Some(u) = uart() {
+                    u.flush();
+                }
+                if let Some(context) = jobs.as_mut() {
+                    context.run();
+                }
+            }),
+            protection,
+        );
     }
     // Nach dem Lauf bleibt die Leitung offen: Der Host holt das Board mit
     // `TAKT` zurueck, um das naechste Programm zu schreiben (FB-275).

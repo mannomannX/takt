@@ -74,7 +74,15 @@ fn build_takt_program(out: &Path) {
     // `takt-conformance` haengt; `takt build` uebersetzt das Programm.
     let Some(p) = compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let rahmen = out.join("takt_rahmen.c");
-    let frame = takt_conformance::mcu::build_with(&p, takt_llvm::Diagnostics::Ids, hardware().as_ref());
+    let frame = takt_conformance::mcu::build_with(
+        &p,
+        takt_conformance::mcu::Frame {
+            diagnostics: takt_llvm::Diagnostics::Ids,
+            hardware: hardware().as_ref(),
+            protected: true,
+        },
+    );
+    state_section(out, frame.state_bytes);
     if let Err(e) = fs::write(&rahmen, frame.source) {
         panic!("Rahmen nicht schreibbar: {e}");
     }
@@ -91,6 +99,19 @@ fn build_takt_program(out: &Path) {
 
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=taktprogramm");
+}
+
+/// Der Programmzustand als eigener Abschnitt am Anfang des RAM (12.3,
+/// `takt_state.x`): so gross wie die geschuetzten Achtel seiner MPU-Region.
+fn state_section(out: &Path, bytes: u64) {
+    const RAM_ORIGIN: u32 = 0x2000_0000;
+    println!("cargo:rerun-if-changed=takt_state.x");
+    let bytes = u32::try_from(bytes).unwrap_or_else(|_| panic!("Programmzustand {bytes} Byte"));
+    let region = takt_board_support::mpu::Region::covering(RAM_ORIGIN, bytes)
+        .expect("ORIGIN(RAM) ist fuer jede Region ausgerichtet");
+    fs::write(out.join("takt_state.x"), include_bytes!("takt_state.x")).expect("takt_state.x schreiben");
+    println!("cargo:rustc-link-arg=--defsym=__takt_state_size={}", region.protected());
+    println!("cargo:rustc-link-arg=-Ttakt_state.x");
 }
 
 /// Welches Programm gebaut wird.

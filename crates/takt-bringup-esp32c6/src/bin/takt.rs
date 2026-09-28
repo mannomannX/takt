@@ -11,7 +11,7 @@
 #![allow(unsafe_code, reason = "C-ABI des Rahmens; 9.5 fuehrt Treiber in der TCB")]
 
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU32, Ordering};
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
@@ -140,6 +140,61 @@ pub extern "C" fn takt_out_ui_led(value: u8) {
     } else {
         led.off();
     }
+}
+
+/// Ein Pruefzugriff der TCB auf einen Waechter, zwischen zwei Ticks
+/// (12.3): 1 unter dem Hauptstack, 2 unter dem Job-Stack.
+///
+/// **Die Waechter des C6 sind Daten-Watchpoints:** der von `esp-hal` auf
+/// einem Wort (`__stack_chk_guard`) knapp ueber dem unteren Ende des
+/// Hauptstacks, der des Boards auf den 32 Byte unter dem Job-Stack
+/// (`takt_board_esp32c6::JobContext`). Ein Schreibzugriff haelt den Kern
+/// mit einer Meldung an (`takt panic`), bevor ein Ueberlauf weiterschreibt.
+/// Eine Region, die den Programmzustand je Tick schuetzt, gibt es hier
+/// nicht: Im Maschinenmodus greifen PMP-Eintraege nur gesperrt, und
+/// gesperrte lassen sich nicht je Tick umschalten.
+///
+/// **Ein Pruefgeraet, kein Treiber.** Nur ein Programm, das `test/...`
+/// bindet, loest es aus; der Board-Test tut es.
+static PROBE: AtomicU8 = AtomicU8::new(0);
+
+/// Das untere Ende des Job-Stacks, 0 ohne Job-Kontext.
+static JOB_STACK: AtomicU32 = AtomicU32::new(0);
+
+/// `test/guard_write` (12.3): der naechste Leerlauf schreibt in den Waechter
+/// unter dem Hauptstack.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_test_guard_write(value: u8) {
+    if value != 0 {
+        PROBE.store(1, Ordering::Relaxed);
+    }
+}
+
+/// `test/job_guard_write` (12.3): der naechste Leerlauf schreibt in den
+/// Waechter unter dem Job-Stack.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_test_job_guard_write(value: u8) {
+    if value != 0 {
+        PROBE.store(2, Ordering::Relaxed);
+    }
+}
+
+/// Fuehrt einen angeforderten Pruefzugriff aus.
+fn probe() {
+    unsafe extern "C" {
+        static mut __stack_chk_guard: u32;
+    }
+    let target = match PROBE.swap(0, Ordering::Relaxed) {
+        1 => &raw mut __stack_chk_guard,
+        2 => match JOB_STACK.load(Ordering::Relaxed) {
+            0 => return,
+            bottom => bottom as *mut u32,
+        },
+        _ => return,
+    };
+    // SAFETY: Genau dieser Zugriff ist verboten und soll es sein: Der
+    // Watchpoint faengt ihn, und das Board haelt mit Meldung an.
+    unsafe { target.write_volatile(0) };
 }
 
 /// Der Output `gpio/loop_out` auf GPIO7, ueber die Bruecke an GPIO17 (13.8).
@@ -354,11 +409,13 @@ fn main() -> ! {
     // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
     // der Tick holt den Kern zurueck.
     let mut jobs = JobContext::start();
+    JOB_STACK.store(jobs.as_ref().map_or(0, JobContext::bottom), Ordering::Relaxed);
     if LOGICAL {
         // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet
         // jeden Job zu Ende; dann steht die Uhr auf der Frist. In logischer
         // Zeit haelt so jeder Job seine Dauer (4.5).
         let clock = LogicalClock::new(|| {
+            probe();
             if let Some(u) = uart() {
                 u.drain(DRAIN_ROUNDS);
             }
@@ -369,6 +426,7 @@ fn main() -> ! {
         conduct(program, clock, &mut persist);
     } else {
         let clock = TimerClock::new(timer, TICK_NS).with_idle(|| {
+            probe();
             if let Some(u) = uart() {
                 u.flush();
             }

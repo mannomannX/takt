@@ -69,7 +69,10 @@ fn build_takt_program(out: &Path) {
     }
     let Some(p) = compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let rahmen = out.join("takt_rahmen.c");
-    let frame = takt_conformance::mcu::build_with(&p, diagnostics(), hardware().as_ref());
+    let frame = takt_conformance::mcu::build_with(
+        &p,
+        takt_conformance::mcu::Frame { diagnostics: diagnostics(), hardware: hardware().as_ref(), protected: false },
+    );
     if let Err(e) = fs::write(&rahmen, frame.source) {
         panic!("Rahmen nicht schreibbar: {e}");
     }

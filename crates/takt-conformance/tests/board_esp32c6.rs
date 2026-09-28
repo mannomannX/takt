@@ -367,6 +367,30 @@ fn the_battery_manager_of_14_7_runs_on_board_2() {
     assert!(diffs.is_empty(), "{} Abweichungen, etwa {:?}", diffs.len(), &diffs[..diffs.len().min(6)]);
 }
 
+/// **Die Waechter unter beiden Stacks greifen** (12.3, M10 Schritt 18). Auf
+/// dem C6 sind es Daten-Watchpoints: der von `esp-hal` auf einem Wort knapp
+/// ueber dem unteren Ende des Hauptstacks, der des Boards auf den 32 Byte
+/// unter dem Job-Stack. Nach Tick 2 schreibt ein Pruefgeraet zwischen zwei
+/// Ticks hinein; der Kern haelt mit der Meldung des Watchpoints an, statt
+/// weiterzurechnen. Eine Region, die den Programmzustand je Tick schuetzt,
+/// hat der C6 nicht (m10.md 2.12).
+#[test]
+fn the_stack_guard_of_board_2_stops_a_write_of_the_tcb() {
+    let Some((mut board, _guard)) = board() else { return };
+    for (which, message) in [("guard", "stack's guard"), ("job_guard", "Breakpoint exception")] {
+        let program = board::root().join(format!("crates/takt-conformance/tests/programs/protect_{which}.takt"));
+        let options = Options::fresh(20);
+        let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
+        let text = board.run_for(&elf, Duration::from_secs(6)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            text.contains("takt panic") && text.contains(message),
+            "{which}: der Waechter griff nicht:\n{}",
+            tail(&text)
+        );
+        assert!(!text.contains("t=5 out alive"), "{which}: das Board rechnete weiter:\n{}", tail(&text));
+    }
+}
+
 /// Die letzten Zeilen eines Traces, fuer Meldungen.
 fn tail(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();

@@ -63,22 +63,6 @@ pub trait TickSource {
     }
 }
 
-/// Der Schutzbereich unter dem Stack (12.3).
-///
-/// Zwei Bauformen, je nach Target dieselbe Aufgabe: eine MPU-Region ohne
-/// Zugriff, wo es eine MPU gibt, sonst ein Kanarienwort, das am Tickende
-/// geprueft wird. Beide beweisen im Fehlerfall dasselbe — einen Fehler in
-/// der TCB, nicht im Programm, denn „das Programm kann per Konstruktion
-/// nicht ausserhalb seiner Objekte schreiben" (12.3).
-pub trait StackGuard {
-    /// Ist der Schutzbereich unversehrt?
-    ///
-    /// `false` ist ein `Runtime(Hardware)`-Fault. Die MPU-Variante meldet
-    /// ihn schon beim Zugriff; die Kanarienwort-Variante erst hier, und
-    /// darum wird am Ende jedes Ticks gefragt.
-    fn intact(&self) -> bool;
-}
-
 /// Der Schlafmodus (9.9, 12.3).
 ///
 /// `idle`-Zustaende werden auf der MCU zu WFI/STOP mit Wake-Quellen als

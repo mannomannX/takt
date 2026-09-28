@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# 12.3: Nach Tick 2 schreibt ein Pruefgeraet der TCB zwischen zwei Ticks
+# in den Programmzustand. Die MPU weist den Zugriff ab, und
+# im naechsten Tick bekommen alle Maschinen `Runtime(Hardware)`.
+
+output probe : bool           @ hw("test/tcb_write") with safe = false
+output alive : int in 0..1000 @ hw("o/alive")        with safe = 0
+
+machine m:
+    var n : int in 0..1000 = 0
+    initial RUN
+    state RUN:
+        loop:
+            n = (n + 1) % 1000
+            alive = n
+            probe = n == 3

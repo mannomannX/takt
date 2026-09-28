@@ -123,7 +123,11 @@ fn a_scheduled_output_carries_its_guard() {
     };
     let p = takt_sema::compile(&src, &options).program.expect("Programm");
     let hw = takt_mir::hardware::parse("# takt-hw 9\n[channel gpio/loop_out]\nguard_ns = 4338\n").expect("lesbar");
-    let with = takt_conformance::mcu::build_with(&p, takt_llvm::Diagnostics::Ids, Some(&hw)).source;
+    let with = takt_conformance::mcu::build_with(
+        &p,
+        takt_conformance::mcu::Frame { hardware: Some(&hw), ..Default::default() },
+    )
+    .source;
     assert!(with.contains("static const long long g_guard[1] = { 4338LL };"), "{with}");
     assert!(with.contains("if (t <= g_tick * 1000000LL + g_guard[q]) return"), "{with}");
     let without = takt_conformance::mcu::build(&p).source;
@@ -144,7 +148,11 @@ fn the_jitter_of_an_output_comes_from_the_configuration() {
     let hw =
         takt_mir::hardware::parse("# takt-hw 9\n[channel gpio/loop_out]\njitter_ns = 36563\ntick_granular = true\n")
             .expect("lesbar");
-    let with = takt_conformance::mcu::build_with(&p, takt_llvm::Diagnostics::Ids, Some(&hw)).source;
+    let with = takt_conformance::mcu::build_with(
+        &p,
+        takt_conformance::mcu::Frame { hardware: Some(&hw), ..Default::default() },
+    )
+    .source;
     assert!(with.contains("case 0: return 1036563LL; /* probe */"), "{with}");
     let without = takt_conformance::mcu::build(&p).source;
     assert!(without.contains("long long takt_jitter(int o) {\n    switch (o) {\n    default: return 0;"), "{without}");

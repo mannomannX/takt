@@ -95,7 +95,9 @@ core::arch::global_asm!(
 
 /// Der Job-Faden des Boards.
 #[derive(Debug)]
-pub struct JobContext(());
+pub struct JobContext {
+    bottom: u32,
+}
 
 impl JobContext {
     /// Legt den Faden des Jobs auf `stack` an; er beginnt in [`worker`],
@@ -128,13 +130,19 @@ impl JobContext {
             (*SCB::PTR).shpr[10].write(0xFF);
         }
         STARTED.store(true, Ordering::Release);
-        JobContext(())
+        JobContext { bottom: stack.as_ptr() as u32 }
     }
 
     /// Der Job-Faden des Programms, auf dem Stack, den der Rahmen fuer ihn
     /// bemisst; `None`, wenn das Programm keine Jobs startet.
     pub fn start() -> Option<JobContext> {
         takt_mcu_program::jobs::stack().map(JobContext::on)
+    }
+
+    /// Das untere Ende des Job-Stacks; ein geschuetzter Rahmen legt dort
+    /// den Waechter ab (12.3).
+    pub fn bottom(&self) -> u32 {
+        self.bottom
     }
 
     /// Rechnet, was ansteht, bis der Job abgibt oder der naechste Tick ihn

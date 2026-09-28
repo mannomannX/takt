@@ -31,6 +31,9 @@ pub struct McuHarness {
     pub source: String,
     /// Die Speicherform, die er erwartet.
     pub layout: Layout,
+    /// Wie viele Byte der Programmzustand in `.bss.takt_state` belegt (12.3):
+    /// Abbild, Latch, Parameter, Monitore und die Zustaende der Maschinen.
+    pub state_bytes: u64,
 }
 
 /// Baut den Rahmen fuer alle Maschinen eines Programms.
@@ -38,18 +41,33 @@ pub struct McuHarness {
 /// Anders als der Linux-Rahmen kennt dieser keine Tickzahl: Die Schleife
 /// laeuft, bis das Board ausgeht.
 pub fn build(p: &Program) -> McuHarness {
-    build_with(p, takt_llvm::Diagnostics::Ids, None)
+    build_with(p, Frame::default())
 }
 
-/// Wie [`build`], mit Diagnosestufe und Hardware-Konfiguration: ohne
-/// Diagnosen gibt `takt_mcu_dump` nichts aus und der Rahmen traegt kein
-/// Schattenlatch; die Konfiguration gibt jedem geplanten Output sein
-/// `guard` (7.5), ohne sie ist es null wie in der Simulation.
-pub fn build_with(
-    p: &Program,
-    diagnostics: takt_llvm::Diagnostics,
-    hw: Option<&takt_mir::hardware::Hardware>,
-) -> McuHarness {
+/// Wie der Rahmen fuer ein Board entsteht.
+#[derive(Clone, Copy, Debug)]
+pub struct Frame<'a> {
+    /// Ohne Diagnosen gibt `takt_mcu_dump` nichts aus, und der Rahmen
+    /// traegt kein Schattenlatch.
+    pub diagnostics: takt_llvm::Diagnostics,
+    /// Die Hardware-Konfiguration gibt jedem Output sein `guard` und
+    /// `jitter` (7.5); ohne sie sind beide null wie in der Simulation.
+    pub hardware: Option<&'a takt_mir::hardware::Hardware>,
+    /// Der Programmzustand in einem eigenen Abschnitt `.takt_state`, den ein
+    /// Board mit MPU ausserhalb des Ticks schreibschuetzt (12.3); sonst liegt
+    /// er in `.bss`.
+    pub protected: bool,
+}
+
+impl Default for Frame<'_> {
+    fn default() -> Self {
+        Frame { diagnostics: takt_llvm::Diagnostics::Ids, hardware: None, protected: false }
+    }
+}
+
+/// Wie [`build`], fuer ein Board mit seinen Angaben ([`Frame`]).
+pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
+    let (diagnostics, hw) = (frame.diagnostics, frame.hardware);
     let layout = crate::layout::of(p);
     // 7.2: in Schrittordnung, wie der Interpreter und der Testrahmen.
     let driven: Vec<&takt_mir::machine::Machine> = takt_mir::analysis::schedule::order(p)
@@ -65,7 +83,7 @@ pub fn build_with(
     // Die Stroeme wie im Linux-Rahmen, ohne Stimulus; ihre Trace-Zeilen
     // gehen an das Board.
     crate::streams::emit(&mut s, p, &[], crate::streams::Trace::Board);
-    storage(&mut s, p, &layout, &driven);
+    let state_bytes = storage(&mut s, p, &layout, &driven, frame.protected);
     // 9.8: die geplanten Schreibvorgaenge, hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.
     crate::harness::scheduled(&mut s, p, &layout, hw);
@@ -76,7 +94,7 @@ pub fn build_with(
     tick(&mut s, p, &layout, &driven);
     telemetry(&mut s, p, &layout, &driven, diagnostics);
 
-    McuHarness { source: s, layout }
+    McuHarness { source: s, layout, state_bytes }
 }
 
 /// Kopf und Vorwaertsdeklarationen.
@@ -235,15 +253,33 @@ fn runtime_abi(s: &mut String, p: &Program) {
 /// 12.3: „Gesamter Zustand statisch in `.bss`; kein Heap." Die Groessen
 /// kommen aus `takt size` (11.5), also aus derselben Rechnung, die der
 /// Compiler gegen das Speicherbudget haelt.
-fn storage(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine]) {
+///
+/// **Der Programmzustand steht auf Wunsch in einem eigenen Abschnitt**
+/// (12.3): Ein Board mit MPU legt `.takt_state` in eine Region, die nur
+/// waehrend des Ticks beschreibbar ist; ohne ihn liegt er in `.bss`.
+/// Liefert, wie viele Byte er belegt.
+fn storage(
+    s: &mut String,
+    p: &Program,
+    layout: &Layout,
+    driven: &[&takt_mir::machine::Machine],
+    protected: bool,
+) -> u64 {
     let _ = writeln!(s, "/* Statischer Zustand (12.3), ausgerichtet fuer die ABI. */");
-    let _ = writeln!(s, "{}", crate::layout::c_buffer("image", layout.image));
+    let section = if protected { " __attribute__((section(\".takt_state\")))" } else { "" };
+    let mut total = 0u64;
+    let mut buffer = |s: &mut String, name: &str, bytes: u64| {
+        let bytes = bytes.max(1);
+        total += bytes.div_ceil(8) * 8;
+        let _ = writeln!(s, "static _Alignas(8) unsigned char {name}[{bytes}]{section};");
+    };
+    buffer(s, "image", layout.image);
     for (i, prop) in monitors(p) {
         let size = takt_llvm::monitor::state_size(prop, p).unwrap_or(1);
-        let _ = writeln!(s, "{}", crate::layout::c_buffer(&format!("monitor_{i}"), size));
+        buffer(s, &format!("monitor_{i}"), size);
     }
-    let _ = writeln!(s, "{}", crate::layout::c_buffer("latch", layout.latch));
-    let _ = writeln!(s, "{}", crate::layout::c_buffer("params", layout.params));
+    buffer(s, "latch", layout.latch);
+    buffer(s, "params", layout.params);
     for m in driven {
         // Die Zustandsgroesse kennt der Rahmen nicht genau; er nimmt die
         // Obergrenze aus dem Overlay (11.2). Zu gross ist verschwendeter
@@ -253,9 +289,10 @@ fn storage(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::ma
         // uebersah Bloecke und Puffer, und der erzeugte Code schrieb ueber
         // den Puffer hinaus — auf dem Board bis in die Stack-Wache.
         let bytes = takt_llvm::machine::state_struct(m, p).map_or(4096, |st| st.aligned_size());
-        let _ = writeln!(s, "{}", crate::layout::c_buffer(&format!("state_{}", m.name), bytes.max(64)));
+        buffer(s, &format!("state_{}", m.name), bytes.max(64));
     }
     let _ = writeln!(s);
+    total
 }
 
 /// Die Signaturen des erzeugten Codes (11.2).
@@ -289,6 +326,10 @@ const JOB_STACK_RESERVE: u32 = 1024;
 ///
 /// Ohne Jobs bleiben die Einstiege, damit das Board sie ohne Unterschied
 /// rufen kann.
+///
+/// **Unter dem Stack liegt der Waechter** (12.3): 32 Byte am unteren Ende,
+/// zusaetzlich zu Vertrag und Reserve und an 32 Byte ausgerichtet, damit
+/// eine MPU-Region oder ein NAPOT-Watchpoint ihn genau abdeckt.
 fn jobs(s: &mut String, p: &Program) {
     let _ = writeln!(s, "/* Jobs (4.5): Slots der Hauptschleife, ein Auftrag fuer den Job-Kontext. */");
     let Some((slots, out_max)) = crate::harness::job_tables(s, p) else {
@@ -335,7 +376,7 @@ fn jobs(s: &mut String, p: &Program) {
     let _ = writeln!(s, "#endif");
     let _ = writeln!(
         s,
-        "static unsigned char takt_job_stack_mem[{stack} + TAKT_JOB_STACK_RESERVE] __attribute__((aligned(16)));"
+        "static unsigned char takt_job_stack_mem[32 + {stack} + TAKT_JOB_STACK_RESERVE] __attribute__((aligned(32)));"
     );
     let _ = writeln!(s, "unsigned char *takt_mcu_job_stack(unsigned int *size) {{");
     let _ = writeln!(s, "    *size = sizeof takt_job_stack_mem; return takt_job_stack_mem;");
@@ -506,6 +547,9 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     // nachspielen laesst (12.5).
     let _ = writeln!(s, "static _Bool g_overrun;");
     let _ = writeln!(s, "void takt_mcu_overrun(void) {{ g_overrun = 1; }}");
+    // 12.3: Der Speicherschutz hat einen Zugriff der TCB abgewiesen.
+    let _ = writeln!(s, "static _Bool g_hardware;");
+    let _ = writeln!(s, "void takt_mcu_hardware(void) {{ g_hardware = 1; }}");
     let _ = writeln!(s, "void takt_mcu_tick(long long k) {{");
     let _ = writeln!(s, "    g_tick = k;");
     let _ = writeln!(s, "    g_done = k;");
@@ -519,6 +563,18 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         "        for (int m = 0; m < {}; m++) takt_pend(m, {});",
         p.machines.len(),
         takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Runtime(takt_mir::machine::RuntimeKind::Overrun))
+    );
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    if (g_hardware) {{");
+    let _ = writeln!(s, "        g_hardware = 0;");
+    let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "        takt_board_trace_i64(k);");
+    let _ = writeln!(s, "        takt_board_trace(\"runtime Hardware\\n\");");
+    let _ = writeln!(
+        s,
+        "        for (int m = 0; m < {}; m++) takt_pend(m, {});",
+        p.machines.len(),
+        takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Runtime(takt_mir::machine::RuntimeKind::Hardware))
     );
     let _ = writeln!(s, "    }}");
     crate::harness::aging(s, p, layout, "    ");

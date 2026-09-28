@@ -16,6 +16,8 @@ rust-version = "1.85"
 # *Wirt*, nicht auf dem Ziel — darum `build-dependencies` und nicht
 # `dependencies`.
 [build-dependencies]
+# Die Groesse der MPU-Region fuer den Programmzustand (12.3).
+takt-board-support = { path = "../takt-board-support" }
 takt-conformance = { path = "../takt-conformance", default-features = false }
 takt-diag = { path = "../takt-diag" }
 takt-llvm = { path = "../takt-llvm" }

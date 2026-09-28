@@ -25,7 +25,7 @@ use super::{Board, Bringup, Options, capture, run_bounded};
 const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-stm32f401",
     triple: "thumbv7em-none-eabihf",
-    inputs: &["build.rs", "Cargo.toml", "Cargo.lock", "memory.x"],
+    inputs: &["build.rs", "Cargo.toml", "Cargo.lock", "memory.x", "takt_state.x"],
     env: &[],
 };
 

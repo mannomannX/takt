@@ -30,6 +30,7 @@ unsafe extern "C" {
     fn takt_mcu_init_with(persist: *const c_void, len: i32) -> i32;
     fn takt_mcu_tick(k: i64);
     fn takt_mcu_overrun();
+    fn takt_mcu_hardware();
     fn takt_mcu_dump(all: i32);
     fn takt_mcu_pc();
     fn takt_mcu_output(index: i32) -> i64;
@@ -145,6 +146,12 @@ impl Program for Generated {
         // SAFETY: setzt ein Flag des Rahmens; der naechste Tick stellt den
         // Fault zu (7.3).
         unsafe { takt_mcu_overrun() };
+    }
+
+    fn raise_hardware(&mut self) {
+        // SAFETY: setzt ein Flag des Rahmens; der naechste Tick stellt den
+        // Fault zu (12.3).
+        unsafe { takt_mcu_hardware() };
     }
 
     fn sleep_allowed(&self) -> bool {

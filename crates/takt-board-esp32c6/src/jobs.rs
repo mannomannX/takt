@@ -146,13 +146,45 @@ unsafe extern "C" {
 
 /// Der Job-Faden des Boards.
 #[derive(Debug)]
-pub struct JobContext(());
+pub struct JobContext {
+    bottom: u32,
+}
+
+/// Der Waechter unter dem Job-Stack (12.3): die 32 Byte, die der Rahmen am
+/// unteren Ende reserviert, als Daten-Watchpoint fuer Schreibzugriffe auf
+/// Trigger 2 — `esp-hal` belegt 0 (Waechter des Hauptstacks) und 1. Ein
+/// Treffer haelt den Kern mit `Breakpoint exception` und der Adresse in
+/// `mtval` an; die Felder setzt er wie `esp_hal::debugger`.
+fn watch(bottom: u32) {
+    // NAPOT: Die unteren Bits der Adresse tragen die Laenge, 0b01111 fuer 32 Byte.
+    let tdata2 = bottom | 0b0_1111;
+    // `tdata1`: NAPOT (Bit 7), Maschinenmodus (Bit 6), Schreiben (Bit 1).
+    let tdata1: u32 = 1 << 7 | 1 << 6 | 1 << 1;
+    // `tcontrol`: Trigger im Maschinenmodus an (`mte`, Bit 3).
+    let tcontrol: u32 = 1 << 3;
+    // SAFETY: Trigger 2 benutzt sonst niemand; `tselect` waehlt jeder Leser
+    // selbst, bevor er `tdata1` liest.
+    unsafe {
+        core::arch::asm!(
+            "csrw 0x7a0, {id}",
+            "csrw 0x7a5, {tcontrol}",
+            "csrw 0x7a1, {tdata1}",
+            "csrw 0x7a2, {tdata2}",
+            id = in(reg) 2u32,
+            tcontrol = in(reg) tcontrol,
+            tdata1 = in(reg) tdata1,
+            tdata2 = in(reg) tdata2,
+        );
+    }
+}
 
 impl JobContext {
     /// Legt den Faden des Jobs auf `stack` an und bindet die Umschaltung;
     /// der Faden beginnt in [`worker`], sobald die Hauptschleife ihn zum
     /// ersten Mal rechnen laesst.
     fn on(stack: &'static mut [u8]) -> JobContext {
+        let bottom = stack.as_ptr() as u32;
+        watch(bottom);
         let top = (stack.as_mut_ptr() as usize + stack.len()) & !15;
         let mut mstatus: u32;
         // SAFETY: liest nur das Statusregister des Kerns.
@@ -178,13 +210,18 @@ impl JobContext {
             takt_job_switch,
         );
         STARTED.store(true, Ordering::Release);
-        JobContext(())
+        JobContext { bottom }
     }
 
     /// Der Job-Faden des Programms, auf dem Stack, den der Rahmen fuer ihn
     /// bemisst; `None`, wenn das Programm keine Jobs startet.
     pub fn start() -> Option<JobContext> {
         takt_mcu_program::jobs::stack().map(JobContext::on)
+    }
+
+    /// Das untere Ende des Job-Stacks, wo der Waechter liegt (12.3).
+    pub fn bottom(&self) -> u32 {
+        self.bottom
     }
 
     /// Rechnet, was ansteht, bis der Job abgibt oder der naechste Tick ihn

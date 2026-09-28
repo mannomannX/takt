@@ -1,11 +1,12 @@
-//! Watchdog, Schutzbereich und Schlaf (12.3, 12.4, 9.9).
+//! Watchdog und Schlaf (12.3, 12.4, 9.9); den Schutzbereich unter dem
+//! Stack traegt die MPU (`mpu`).
 //!
-//! Die drei kleineren Board-Traits an einem Ort. Was sie verbindet: Jeder
+//! Die kleineren Board-Traits an einem Ort. Was sie verbindet: Jeder
 //! ist eine *Verteidigung*, keine Funktion — sie tun im Normalbetrieb
 //! nichts und werden nur sichtbar, wenn etwas schiefgeht.
 
 use stm32f4::stm32f401::{IWDG, iwdg};
-use takt_rt_baremetal::{Sleep, StackGuard};
+use takt_rt_baremetal::Sleep;
 use takt_rt_core::Watchdog;
 
 use crate::tick;
@@ -74,53 +75,6 @@ fn settle(iwdg: &iwdg::RegisterBlock) {
         if iwdg.sr().read().bits() == 0 {
             break;
         }
-    }
-}
-
-/// Der Schutzbereich unter dem Stack als Kanarienwort (12.3).
-///
-/// **Warum nicht die MPU.** Der F401 hat eine, und 12.3 nennt sie zuerst.
-/// Eine MPU-Region ohne Zugriff meldet den Fehler frueher — beim Zugriff
-/// statt am Tickende — und ist damit die bessere Bauform. Sie setzt aber
-/// ein Linker-Skript voraus, das die Region ausrichtet (MPU-Regionen
-/// muessen an ihrer Groesse ausgerichtet sein), und das Skript entsteht
-/// erst mit dem Bring-up. Bis dahin traegt das Kanarienwort dieselbe
-/// Aussage mit einer Tickperiode Verzoegerung.
-///
-/// Beide beweisen im Fehlerfall einen Fehler in der TCB, nicht im
-/// Programm: „Das Programm kann per Konstruktion nicht ausserhalb seiner
-/// Objekte schreiben" (12.3).
-pub struct Canary {
-    /// Adresse des Wortes unter dem Stack.
-    cell: &'static core::sync::atomic::AtomicU32,
-    /// Das Muster, das dort stehen muss.
-    pattern: u32,
-}
-
-impl Canary {
-    /// Ein Muster, das kein plausibler Nutzwert ist.
-    ///
-    /// Weder null noch `0xFFFF_FFFF`: Beide entstehen bei geloeschtem
-    /// Speicher oder einem fehlgeschlagenen Lesevorgang, und ein
-    /// Kanarienwort, das wie ein Unfall aussieht, kann seinen eigenen
-    /// nicht anzeigen.
-    pub const PATTERN: u32 = 0xC0DE_FACE;
-
-    /// Legt das Muster ab.
-    ///
-    /// `cell` zeigt auf ein Wort, das das Linker-Skript unter den Stack
-    /// legt. Es als `&'static` zu nehmen statt als rohe Adresse haelt das
-    /// Crate frei von `unsafe` — wer es aufruft, muss die Zelle ohnehin
-    /// irgendwo deklarieren, und dort steht sie typisiert.
-    pub fn arm(cell: &'static core::sync::atomic::AtomicU32) -> Canary {
-        cell.store(Canary::PATTERN, core::sync::atomic::Ordering::Relaxed);
-        Canary { cell, pattern: Canary::PATTERN }
-    }
-}
-
-impl StackGuard for Canary {
-    fn intact(&self) -> bool {
-        self.cell.load(core::sync::atomic::Ordering::Relaxed) == self.pattern
     }
 }
 

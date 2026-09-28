@@ -1,0 +1,31 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# 12.3: Nach Tick 2 schreibt ein Pruefgeraet der TCB zwischen zwei Ticks
+# in den Waechter unter dem Stack des Job-Kontexts. Die MPU weist den
+# Zugriff ab, und im naechsten Tick bekommen alle Maschinen
+# `Runtime(Hardware)`. Der Job gibt dem Rahmen seinen Stack; gerechnet
+# wird er in diesem Lauf nicht.
+
+native job sha256(b: bytes<4096>) -> bytes<32> with cost = 60000, stack = 512, duration = 20 ms, total
+
+output probe : bool           @ hw("test/job_guard_write") with safe = false
+output alive : int in 0..1000 @ hw("o/alive")              with safe = 0
+
+machine m:
+    var n   : int in 0..1000 = 0
+    var msg : bytes<4096> = default
+    initial RUN
+    state RUN:
+        loop:
+            n = (n + 1) % 1000
+            alive = n
+            probe = n == 3
+        when n == 999: -> HASH
+
+    state HASH:
+        sequence:
+            job v = sha256(msg)
+            until v.done timeout 100 ms -> RUN
+            -> RUN

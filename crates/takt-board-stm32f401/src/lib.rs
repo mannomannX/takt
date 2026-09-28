@@ -53,15 +53,17 @@ pub mod cycles;
 pub mod guard;
 pub mod jobs;
 pub mod led;
+pub mod mpu;
 pub mod platform;
 pub mod stack;
 pub mod tick;
 pub mod uart;
 pub mod wire;
 
-pub use guard::{Canary, Iwdg, WfiSleep};
+pub use guard::{Iwdg, WfiSleep};
 pub use jobs::JobContext;
 pub use led::Led;
+pub use mpu::Mpu;
 pub use takt_mcu_program::Generated;
 pub use tick::{Tim2Tick, on_timer_interrupt};
 pub use uart::{BAUD, Telemetry, Usart1, telemetry};

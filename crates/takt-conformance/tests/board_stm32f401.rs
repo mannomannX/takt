@@ -164,3 +164,40 @@ fn the_natives_agree_with_the_host() {
     let failed = natives_agree(&mut board);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
+
+/// **Die MPU weist einen Zugriff der TCB ab und meldet ihn** (12.3, M10
+/// Schritt 18). Nach Tick 2 schreibt ein Pruefgeraet zwischen zwei Ticks in
+/// den Programmzustand, in den Waechter unter dem Hauptstack oder in den
+/// unter dem Job-Stack; oder eine ISR schreibt im naechsten Schritt, bei
+/// offenem Programmzustand, hinein. Die MPU weist jeden Zugriff ab, der
+/// Handler uebergeht ihn, und im Tick danach bekommen alle Maschinen
+/// `Runtime(Hardware)`; die Bilanz nennt die Region. Ohne Schutz haette
+/// ein Zugriff auf den Programmzustand das Abbild ueberschrieben.
+#[test]
+fn the_mpu_turns_a_write_of_the_tcb_into_runtime_hardware() {
+    let Some((mut board, _guard)) = board() else { return };
+    for (which, region, tick) in [
+        ("tcb", "Programmzustand", 3),
+        ("guard", "Waechter", 3),
+        ("job_guard", "Waechter", 3),
+        ("isr", "Programmzustand", 4),
+    ] {
+        let program = board::root().join(format!("crates/takt-conformance/tests/programs/protect_{which}.takt"));
+        let options = Options::fresh(20);
+        let text =
+            board.build(&program, &options).and_then(|elf| board.run(&elf, &options)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            text.contains(&format!("t={tick} runtime Hardware")),
+            "{which}: kein Runtime(Hardware) im Tick nach dem Zugriff:\n{text}"
+        );
+        assert!(
+            text.lines().any(|l| l.starts_with(&format!("t={tick} fault m"))),
+            "{which}: die Maschine faultet nicht:\n{text}"
+        );
+        let line = text
+            .lines()
+            .find(|l| l.starts_with("takt schutz "))
+            .unwrap_or_else(|| panic!("{which}: keine Bilanz:\n{text}"));
+        assert!(line.contains(&format!("verletzungen 1 region {region}")), "{which}: {line}");
+    }
+}

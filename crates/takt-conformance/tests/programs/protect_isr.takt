@@ -1,0 +1,22 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# 12.3: Nach Tick 2 fordert das Programm die Pruef-ISR an. Im naechsten
+# Schritt loest der Treiber von `poke` sie aus, waehrend der
+# Programmzustand offen ist; die ISR laeuft dennoch schreibgeschuetzt, die
+# MPU weist ihren Zugriff ab, und im Tick danach bekommen alle Maschinen
+# `Runtime(Hardware)`.
+
+input  poke  : bool           @ hw("test/in_step")
+output probe : bool           @ hw("test/isr_write") with safe = false
+output alive : int in 0..1000 @ hw("o/alive")        with safe = 0
+
+machine m:
+    var n : int in 0..1000 = 0
+    initial RUN
+    state RUN:
+        loop:
+            n = (n + 1) % 1000
+            alive = n
+            probe = n == 3 and not poke
