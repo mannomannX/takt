@@ -1,0 +1,70 @@
+(system
+  (language 1)
+  (tick 1ms))
+(record Pulse
+  (rising: bool)
+  (pin: u8))
+(stream pulses :Pulse capacity=64)
+(stream tight :u8 capacity=4)
+(stream lossy :u8 capacity=2 overflow=drop)
+(output first :int in 0..255 @sim("f"))
+(output second :int in 0..255 @sim("s"))
+(output edge :bool @sim("e"))
+(output ticks :int in 0..100 @sim("t"))
+(output flooded :int in 0..100 @hw("o/flooded") safe=0)
+(output kept :int in 0..100 @hw("o/kept") safe=0)
+(output seen :int in 0..100 @hw("o/seen") safe=0)
+(machine writer
+  (var k :u8 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (send pulses (Pulse rising=true pin=k))
+      (send pulses (Pulse rising=false pin=(+ (.wrap_u8 k) 1)))
+      (= k (+ (.wrap_u8 k) 2)))))
+(machine waiter
+  (var n :int in 0..100 0)
+  (initial WAIT)
+  (state WAIT
+    (sequence
+      (until (as pulses a) timeout=5ms)
+      (until (as pulses b) timeout=5ms)
+      (wait 3ms)
+      (until (as pulses c) timeout=5ms)
+      (wait 2ms)
+      (= first (as (.pin (.data a)) int))
+      (= second (as (.pin (.data b)) int))
+      (= edge (and (and (.rising (.data a)) (not (.rising (.data b)))) (.rising (.data c))))
+      (-> DONE)))
+  (state DONE
+    (loop
+      (= n (call min (+ n 1) 100))
+      (= ticks n))))
+(machine flooder
+  (var n :int in 0..100 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= n (call min (+ n 1) 100))
+      (send tight 1)
+      (= flooded n))))
+(machine dropper
+  (var n :int in 0..100 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= n (call min (+ n 1) 100))
+      (send lossy 2)
+      (= kept n))))
+(machine sleeper
+  (var got :int in 0..100 0)
+  (initial WAIT)
+  (state WAIT
+    (after 30ms -> READ))
+  (state READ
+    (loop
+      (for e in tight
+        (= got (call min (+ got 1) 100)))
+      (for e in lossy
+        (= got (call min (+ got 10) 100)))
+      (= seen got))))

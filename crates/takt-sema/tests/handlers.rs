@@ -353,12 +353,12 @@ machine reader every 3 ms:
 }
 
 #[test]
-fn a_full_buffer_faults_every_consumer() {
-    // 9.6: bei `overflow = fault` bekommt jeder Konsument einen
-    // `StreamOverflow` bei seiner naechsten Aktivierung.
-    // Pruefung 17 laesst nur Kapazitaeten zu, die ein mithaltender Konsument
-    // schafft; der Ueberlauf entsteht hier, weil der Leser in `IDLE` nichts
-    // untersucht und der Puffer volllaeuft.
+fn a_full_internal_stream_faults_its_writer() {
+    // 8.6: Der Ueberlauf eines internen Stroms trifft den Schreiber beim
+    // `send`, nicht die Leser (FB-326). Pruefung 17 laesst nur Kapazitaeten
+    // zu, die ein mithaltender Konsument schafft; der Ueberlauf entsteht
+    // hier, weil der Leser in `IDLE` nichts untersucht und der Puffer
+    // volllaeuft — ein Element je Tick, vier Plaetze.
     let trace = simulate(
         "\
 stream<u8> q with capacity = 4
@@ -382,7 +382,8 @@ machine reader:
 ",
         10,
     );
-    assert!(trace.contains("fault reader StreamOverflow"), "{trace}");
+    assert!(trace.contains("t=4 fault writer StreamOverflow"), "{trace}");
+    assert!(!trace.contains("fault reader"), "{trace}");
 }
 
 #[test]

@@ -50,12 +50,10 @@ pub const LIMITS: &[Limit] = &[
     Limit {
         was: "Ueberlaufende Stroeme (8.6)",
         warum: "Der Rahmen liefert Stromelemente (`streams.rs`) und fuehrt interne wie \
-                gekoppelte Stroeme als Ringe mit Freigabe unter dem kleinsten Cursor; \
-                `capacity` prueft er beim Eingang je Tick, am Ring als Elementzahl, \
-                `capacity_bytes` gar nicht. Laeuft ein Ring voll, faultet nativ der Sender \
-                (`takt_stream_send` liefert `false`), im Interpreter die Leser (8.6); \
-                `drop_oldest`, `s.overflowed` und der Zeitpunkt des `StreamOverflow` bleiben \
-                darum ungeprueft.",
+                gekoppelte Stroeme als Ringe mit Freigabe unter dem kleinsten Cursor. Laeuft \
+                ein interner Ring voll, faultet auf beiden Wegen der Sender im selben Tick \
+                (8.6, FB-326, Korpus 88); `drop` verwirft auf beiden. `drop_oldest` kennt der \
+                Ring nicht, und `s.overflowed` liest kein Korpusprogramm.",
         wann: "Mit der Runtime: `takt-rt-core::stream` haelt den Ring samt Verdraengung und \
                Eviction; wo der Rahmen rechnet, wuerde sie messen.",
     },

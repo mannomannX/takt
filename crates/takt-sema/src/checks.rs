@@ -1186,11 +1186,13 @@ impl Lowerer<'_> {
     fn elem_bytes(&self, ty: TypeId) -> Option<u32> {
         match self.program.types.list.get(ty.index())? {
             Type::Bytes { cap } | Type::Line { cap } | Type::Str { cap } => Some(*cap),
-            Type::Int { width, .. } => Some(width.bits() / 8),
-            Type::Record(r) => self.program.records[r.index()].wire_size.or(Some(1)),
-            // 8.9: Kopf plus `N` Abtastwerte.
-            Type::Capture { .. } => takt_mir::bytes::max_size(&self.program, ty).ok().or(Some(1)),
-            _ => Some(1),
+            Type::Record(r) if self.program.records[r.index()].wire_size.is_some() => {
+                self.program.records[r.index()].wire_size
+            }
+            // Die kanonische Byteform, in der ein Element im Ring liegt und
+            // die `send` belegt (9.6: CAPB = CAP * N bei fester Groesse);
+            // bei einer Aufnahme Kopf plus `N` Abtastwerte (8.9).
+            _ => takt_mir::bytes::max_size(&self.program, ty).ok().or(Some(1)),
         }
     }
 

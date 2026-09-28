@@ -531,15 +531,49 @@ impl Outer for MachineEnv<'_, '_> {
                 Ok(())
             }
             // Interner Stream: das Element wird im naechsten Tick sichtbar
-            // (8.6, Unit-Delay).
+            // (8.6, Unit-Delay). Der Ueberlauf trifft den Schreiber beim
+            // `send` (8.6, 9.2): Frei ist, was Puffer und die Sendungen
+            // dieses Ticks nicht belegen.
             StreamRef::Internal(sid) => {
                 let v = as_element(self.loaded, sid, v);
                 let t = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(self.tick_ns);
                 let bytes = crate::stream::byte_len(&v).max(len_max.min(crate::stream::byte_len(&v)));
-                let Some(slot) = self.image.stream_next.get_mut(sid.index()) else {
+                let (Some(buf), Some(queued)) =
+                    (self.image.stream_bufs.get(sid.index()), self.image.stream_next.get(sid.index()))
+                else {
                     return bug(format!("interner Stream {} fehlt", sid.0));
                 };
-                slot.push((t, v, bytes));
+                let count = buf.items.len() + queued.len() + 1;
+                let used = buf.bytes + queued.iter().map(|(_, _, b)| *b).sum::<u32>() + bytes;
+                let full = count as u32 > buf.cap || used > buf.cap_bytes;
+                let def = &self.loaded.program.streams[sid.index()];
+                // `drop_oldest` verdraengt beim Zustellen (9.6); ein Element,
+                // das allein die Byteschranke sprengt, passt nie.
+                let rejected = match def.overflow {
+                    Overflow::DropOldest => bytes > buf.cap_bytes || buf.cap == 0,
+                    Overflow::Fault | Overflow::Drop => full,
+                };
+                if rejected {
+                    let name = def.name.clone();
+                    if matches!(def.overflow, Overflow::Drop) {
+                        self.out.push(Observation::Alert {
+                            span,
+                            index: Vec::new(),
+                            active: true,
+                            message: format!("Stream `{name}` voll, Element verworfen"),
+                            invalid: false,
+                        });
+                        return Ok(());
+                    }
+                    self.image.stream_bufs[sid.index()].overflowed += 1;
+                    return Err(Trap::Fault(Fault::new(
+                        FaultKind::StreamOverflow,
+                        format!("Stream `{name}` voll, `send` abgelehnt"),
+                        span,
+                        self.tick,
+                    )));
+                }
+                self.image.stream_next[sid.index()].push((t, v, bytes));
                 Ok(())
             }
             _ => bug("`send` auf einem Nicht-Stream"),
@@ -887,8 +921,9 @@ impl<'p> Sim<'p> {
     }
 
     /// `deliver(D_k)` (9.6): die im vorigen Tick gesendeten Elemente eines
-    /// internen Stroms werden sichtbar. Ein Ueberlauf merkt den Fault fuer
-    /// jeden Konsumenten vor; bei `drop_oldest` faellt ein Alert an.
+    /// internen Stroms werden sichtbar; bei `drop_oldest` verdraengen sie die
+    /// aeltesten, und ein Alert faellt an. Einen Ueberlauf gibt es hier
+    /// nicht mehr — `send` hat ihn schon beim Schreiber abgelehnt (8.6).
     /// Ein uebergelaufener Eingabestrom faultet jede Maschine, die ihn liest
     /// (8.6): der Ueberlauf ist ein Fehler des Systems, kein stiller Verlust.
     pub fn overflow_channel(&mut self, c: ChannelId) {
@@ -918,12 +953,11 @@ impl<'p> Sim<'p> {
                 continue;
             }
             let drop_oldest = matches!(def.overflow, Overflow::DropOldest);
-            let mut overflowed = false;
             let mut dropped = 0;
             for (t, value, bytes) in pending {
                 match self.image.stream_bufs[i].push(t, value, bytes, drop_oldest) {
                     Delivery::Ok => {}
-                    Delivery::Overflow => overflowed = true,
+                    Delivery::Overflow => return bug(format!("Stream `{}` laeuft beim Zustellen ueber", def.name)),
                     Delivery::Dropped(n) => dropped += n,
                 }
             }
@@ -941,24 +975,6 @@ impl<'p> Sim<'p> {
                                 invalid: false,
                             },
                         ));
-                    }
-                }
-            }
-            if overflowed {
-                let f = Fault::new(
-                    FaultKind::StreamOverflow,
-                    format!("Stream `{}` uebergelaufen", def.name),
-                    def.span,
-                    self.tick,
-                );
-                for id in self.order.clone() {
-                    // 9.6: Einer schlafenden Maschine wird der Ueberlauf
-                    // nicht zugestellt — sie hoert nicht hin (5.10).
-                    if self.is_idle(id) {
-                        continue;
-                    }
-                    if def.readers.contains(&id) && self.states[id.index()].pending.is_none() {
-                        self.states[id.index()].pending = Some(f.clone());
                     }
                 }
             }
