@@ -59,13 +59,10 @@ fn object(p: &Program, dir: &std::path::Path, clang: &std::path::Path) -> Option
 
 /// Die gerechneten DFA-Tabellen stehen wirklich im Objekt (11.5).
 ///
-/// **Der Posten war zu gross.** `dfa_bytes` zaehlte je *Muster*, der
-/// Codegen emittiert aber je *Zustand* einen Produkt-DFA (11.2: „alle
-/// Muster der Handler eines Zustands werden zu einem Produkt-DFA
-/// vereinigt"). Dazu zaehlte die Rechnung die akzeptierenden Zustaende
-/// als Tabelle, obwohl der Codegen sie als Vergleichskette emittiert
-/// (`dfa::run`). Beides zusammen ergab bei `23_patterns` 1696 Byte
-/// gegen 424 gemessene (FB-121).
+/// **Der Posten war einmal zu gross** (FB-121): `dfa_bytes` zaehlte, was
+/// die MIR trug, nicht was der Codegen emittiert. Heute fragen beide
+/// `takt_mir::dfa::of_handlers` — je Ebene und Strom ein Produkt-DFA
+/// (11.2, FB-282), gleiche Automaten einmal.
 ///
 /// Der Test haelt die Rechnung an der Messung fest: Die Tabellen sind
 /// der Loewenanteil von `.rodata`, also darf der Posten nicht groesser

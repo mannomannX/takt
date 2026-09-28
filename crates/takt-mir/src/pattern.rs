@@ -34,28 +34,14 @@ pub enum PatternPiece {
     Any,
 }
 
-/// Vorkompilierter Automat eines Musters (11.2); Annotation aus M2.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Dfa {
-    /// Alphabetklasse je Byte.
-    pub classes: Vec<u8>,
-    /// Zahl der Klassen.
-    pub class_count: u32,
-    /// Uebergangstabelle `states × class_count`.
-    pub table: Vec<u32>,
-    /// Akzeptierende Zustaende.
-    pub accept: Vec<u32>,
-}
-
 /// Muster (8.7).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     /// Musterliteral aus `subtext::pattern_text`.
     Text {
-        /// Bausteine.
+        /// Bausteine; den Automaten baut der Codegen je Handler-Block
+        /// (`dfa::build`, 11.2).
         pieces: Vec<PatternPiece>,
-        /// Automat, sobald M2 ihn erzeugt.
-        dfa: Option<Dfa>,
     },
     /// Record-Muster `CanFrame(id = 0x7E8)`: Konjunktion von Feldgleichheiten.
     Record {

@@ -7,9 +7,9 @@
 //! `float` und `word` folgt ein Literal, dessen erstes Zeichen nicht zur
 //! Klasse gehoert; `str` und `_` enden leftmost-shortest) macht jede
 //! Capture-Grenze eindeutig. Der Abgleich ist deshalb ein einziger
-//! Vorwaertsdurchlauf ohne Ruecksetzen, in derselben Komplexitaet wie der
-//! Automat aus 8.7; die `Dfa`-Tabelle der MIR bleibt Codegen-Annotation
-//! (plan/m2.md 1.1).
+//! Vorwaertsdurchlauf ohne Ruecksetzen; er ist die Definition (FB-350), und
+//! der Produkt-DFA des Codegens (`takt_mir::dfa`) erkennt genau die Zeilen,
+//! auf denen er gelingt.
 
 use takt_mir::pattern::{CaptureKind, Pattern, PatternPiece};
 
@@ -27,9 +27,9 @@ pub fn match_text(pieces: &[PatternPiece], text: &str) -> Option<Captures> {
     if rest.is_empty() { Some(caps) } else { None }
 }
 
-/// `has P` ist die Kurzform fuer `matches "{_}" + P + "{_}"` (8.7): das
-/// Muster darf an jeder Position beginnen und muss nicht bis zum Ende
-/// reichen. Gesucht wird das linkeste Vorkommen.
+/// `has P` (8.7, FB-350): Das Muster darf an jeder Position beginnen und
+/// muss nicht bis zum Ende reichen; es gilt die frueheste Position, an der
+/// der Durchlauf gelingt.
 pub fn match_has(pieces: &[PatternPiece], text: &str) -> Option<Captures> {
     for start in char_starts(text) {
         let mut caps = Vec::new();

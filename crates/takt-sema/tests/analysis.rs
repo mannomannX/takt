@@ -693,11 +693,18 @@ machine m:
     assert!(long.mem >= short.mem + 8, "{short:?} {long:?}");
 }
 
-/// **`has` sucht an jeder Stelle** (8.7, `step::text_has`): teurer als
-/// `matches`, das den Text einmal liest.
+/// **Im Handler liest der Produkt-DFA jedes Element einmal** (11.2,
+/// FB-282): `has` kostet dort so viel wie `matches`. Als Guard eines
+/// Uebergangs sucht `has` an jeder Stelle (`step::text_has`) und kostet
+/// mehr.
 #[test]
-fn has_costs_more_than_matches() {
-    let with = |kind: &str| {
+fn has_costs_like_matches_only_in_a_handler() {
+    let with = |kind: &str, handler: bool| {
+        let react = if handler {
+            format!("        on rx {kind} \"OK\":\n            k = (k + 1) % 1000\n")
+        } else {
+            format!("        when rx {kind} \"OK\": -> RUN\n")
+        };
         let (p, _, _) = compile(&format!(
             "\
 input rx : stream<line<32>> @ hw(\"rx\") with max_rate = 1000 Hz, capacity = 4
@@ -708,13 +715,13 @@ machine m:
     state RUN:
         loop:
             n = 0
-        on rx {kind} \"OK\":
-            k = (k + 1) % 1000
-"
+{react}"
         ));
         p.machines[0].budget.expect("Budget").activation
     };
-    let (matches, has) = (with("matches"), with("has"));
+    let (matches, has) = (with("matches", true), with("has", true));
+    assert_eq!(has.mem, matches.mem, "{matches:?} {has:?}");
+    let (matches, has) = (with("matches", false), with("has", false));
     assert!(has.mem > matches.mem, "{matches:?} {has:?}");
 }
 

@@ -564,7 +564,6 @@ pub fn full_program() -> Program {
                     PatternPiece::Text("Erasing sector ".into()),
                     PatternPiece::Capture { name: "n".into(), kind: CaptureKind::Int },
                 ],
-                dfa: Some(Dfa { classes: vec![0; 256], class_count: 1, table: vec![1, 1], accept: vec![1] }),
             },
             binding: None,
         },
@@ -1110,7 +1109,6 @@ pub fn full_program() -> Program {
                     PatternPiece::Text("CRC".into()),
                     PatternPiece::Capture { name: "rest".into(), kind: CaptureKind::Str(32) },
                 ],
-                dfa: None,
             },
         )),
         binding: Some(v_m),
@@ -1213,7 +1211,6 @@ pub fn full_program() -> Program {
                         PatternPiece::Capture { name: "f".into(), kind: CaptureKind::Float },
                         PatternPiece::Capture { name: "w".into(), kind: CaptureKind::Word },
                     ],
-                    dfa: None,
                 },
                 binding: Some(v_m),
             },
@@ -1369,7 +1366,7 @@ pub fn full_program() -> Program {
                 guard: Guard::Match {
                     kind: MatchKind::Matches,
                     subject: e(ExprKind::Input { channel: ch_log, dominated: true }, t_stream_line),
-                    pattern: Pattern::Text { pieces: vec![PatternPiece::Text("Boot".into())], dfa: None },
+                    pattern: Pattern::Text { pieces: vec![PatternPiece::Text("Boot".into())] },
                     binding: Some(v_m),
                 },
                 timeout: Some(Timeout {

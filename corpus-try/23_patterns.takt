@@ -1,11 +1,12 @@
 # 23 — Musterpruefung im erzeugten Code (8.7, 11.2).
 #
-# Ein Handler mit `matches` laeuft ueber den Produkt-DFA: Der Automat
-# entsteht zur Uebersetzungszeit (Teilmengenkonstruktion, 8.7), seine
-# Tabellen stehen als Konstanten in der IR, und `takt size` weist sie aus.
+# Die Handler des Stroms laufen ueber einen Produkt-DFA: Der Automat
+# entsteht zur Uebersetzungszeit (Teilmengenkonstruktion, 8.7, 11.2),
+# seine Tabellen stehen als Konstanten in der IR, und `takt size` weist
+# sie aus. Ein Durchlauf je Element sagt, welches Muster trifft.
 #
-# Mit Platzhaltern laeuft statt des Automaten der Durchlauf aus 8.7: Er
-# misst die Spannen und traegt die Werte in die Bindung ein. Beides
+# Fuer den Treffer mit Platzhalter laeuft danach der Durchlauf aus 8.7:
+# Er misst die Spannen und traegt die Werte in die Bindung ein. Beides
 # erzeugt der Codegen selbst; `takt-match` ist das Orakel, gegen das er
 # gemessen wird.
 

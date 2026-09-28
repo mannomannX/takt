@@ -123,7 +123,6 @@ fn sample_covers_every_node_kind() {
         "Command",
         "PersistVar",
         "ScopedInstance",
-        "Dfa",
         "Fired",
         "Internal",
         "Wrap",

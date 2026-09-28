@@ -16,7 +16,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 85] = [
+const KORPUS: [&str; 86] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -99,6 +99,7 @@ const KORPUS: [&str; 85] = [
     "97_fast_math.takt",
     "98_last_fault.takt",
     "99_exit_fault.takt",
+    "100_dispatch.takt",
     "11_foc_drive.takt",
     "sim/12_7/program.takt",
     "sim/14_7/program.takt",
@@ -367,10 +368,9 @@ t=11 in rx_log Erasing sector 7
 /// **`has` und `send` mit Daten** (8.7, 8.8): Das Muster darf an jeder
 /// Stelle beginnen, und der Rumpf sendet.
 ///
-/// `has` ist der Fall, den der Automat *nicht* entscheidet: Er prueft
-/// den ganzen Text, `has` sucht ein Vorkommen. Der Codegen laeuft darum
-/// den Durchlauf aus 8.7 ueber jede Startposition — und dieser Test
-/// misst, dass er dieselben Stellen findet wie der Interpreter.
+/// Der Produkt-DFA beginnt fuer `has` an jeder Stelle einen neuen Faden
+/// (8.7, 11.2); dieser Test misst, dass er dieselben Zeilen findet wie
+/// der Interpreter.
 #[test]
 fn the_two_implementations_agree_on_has_and_send() {
     let Clang::At(path) = find() else {
@@ -428,6 +428,74 @@ t=8 in rx all good
         "{} Abweichungen bei `has`/`send`:\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
         diffs.len(),
         diffs.iter().take(6).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n"),
+        interpreted,
+        native
+    );
+}
+
+/// **Dispatch ueber den Produkt-DFA** (8.7, 11.2, FB-282): Ein Durchlauf
+/// je Element entscheidet, welche der vier Textmuster treffen; der Guard,
+/// der Wertebereich und die Reihenfolge entscheiden, welcher Handler
+/// laeuft. Jede Zeile des Stimulus trifft einen anderen Fall.
+#[test]
+fn the_product_automaton_dispatches_like_the_interpreter() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = corpus("100_dispatch.takt");
+    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
+    // 1: Guard haelt. 5: Guard faellt. 5: zwanzig Ziffern sind kein `int`.
+    // 5: neunzehn Ziffern ueber `i64::MAX` — der Automat trifft, die
+    // Extraktion nicht. 2: `has` an der fruehesten Stelle, und an einer
+    // spaeteren, wenn die erste nicht traegt. 3: `has` vor `matches`.
+    // 5: `{_}` endet am ersten `:`. 4: `{_}:{k:word}` trifft. 5: `has` mit
+    // Ueberlauf an jeder Stelle.
+    let stimulus = takt_interp::Trace::parse(
+        "t=2 in rx code 42
+t=4 in rx code 700
+t=6 in rx code 99999999999999999999
+t=8 in rx code 9999999999999999999
+t=10 in rx x ERR 12 ERR 7
+t=12 in rx ERR x ERR 5
+t=14 in rx WARN: disk
+t=16 in rx a:b:c
+t=18 in rx id:abc
+t=20 in rx ERR 9999999999999999999
+",
+    )
+    .expect("Stimulus");
+    let inputs: Vec<Stimulus> = stimulus
+        .lines
+        .iter()
+        .filter_map(|l| match &l.kind {
+            takt_interp::trace::LineKind::Input { channel, sample } => {
+                Some(Stimulus::element(l.tick, channel, sample.value.as_deref().unwrap_or_default()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inputs.len(), 10, "der Stimulus traegt zehn Zeilen");
+
+    let native =
+        common::run_native_with(&clang, &p, "dispatch", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+
+    // Jeder Handler lief mindestens einmal; sonst pruefte der Vergleich
+    // einen Fall weniger, als der Stimulus verspricht.
+    for which in 1..=5 {
+        assert!(interpreted.contains(&format!("out which {which}")), "Handler {which} lief nie:\n{interpreted}");
+    }
+    assert!(interpreted.contains("out value 5"), "`has` fand die spaetere Stelle nicht:\n{interpreted}");
+
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen im Dispatch:\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
+        diffs.len(),
+        diffs.iter().take(8).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n"),
         interpreted,
         native
     );

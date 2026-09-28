@@ -738,40 +738,48 @@ impl Ctx<'_> {
     }
 }
 
-/// Der Dispatch einer Ebene (9.7): je Strom das Fenster, je Element die
-/// Handler des Stroms bis zum treffenden und der teuerste Rumpf.
-///
-/// 9.4.3 rechnet `CAP · (max_len + max_h N(body h))` und setzt dabei einen
-/// Durchlauf je Element voraus, den Produkt-DFA aus 11.2. Der Codegen
-/// prueft die Handler nacheinander (`takt_llvm::step::handler_chain`); die
-/// Schranke zaehlt darum je Handler seinen Abgleich — das, was laeuft.
+/// Der Dispatch einer Ebene (9.7): je Strom das Fenster, je Element ein
+/// Durchlauf des Produkt-DFA (11.2), die Handler des Stroms bis zum
+/// treffenden und der teuerste Rumpf — 9.4.3
+/// `CAP · (max_len + max_h N(body h))`, dazu, was je Handler noch laeuft:
+/// Guard, Bindung und die Extraktion eines Treffers mit Werten
+/// (`takt_llvm::step::handler_chain`).
 fn dispatch(handlers: &[Handler], ctx: &Ctx<'_>) -> CostVec {
-    let mut streams: Vec<StreamRef> = Vec::new();
-    for h in handlers {
-        if !streams.contains(&h.stream) {
-            streams.push(h.stream);
-        }
-    }
-    streams.into_iter().fold(CostVec::ZERO, |acc, s| {
+    crate::dfa::by_stream(handlers).into_iter().fold(CostVec::ZERO, |acc, hs| {
+        let s = hs[0].stream;
         let element = ctx.element(s);
-        let hs = handlers.iter().filter(|h| h.stream == s);
-        let tries = hs.clone().fold(CostVec::ZERO, |acc, h| acc + handler_try(h, element, ctx));
-        let body = hs.fold(CostVec::ZERO, |acc, h| acc.max(block_cost(&h.body, ctx)));
+        let product = crate::dfa::of_handlers(&hs).map(|(_, bits)| bits);
+        let pass = if product.is_some() { MATCH_BYTE.times(ctx.text_len(element)) } else { CostVec::ZERO };
+        let decided = |i: usize| product.as_ref().is_some_and(|bits| bits[i].is_some());
+        let tries =
+            hs.iter().enumerate().fold(CostVec::ZERO, |acc, (i, h)| acc + handler_try(h, element, decided(i), ctx));
+        let body = hs.iter().fold(CostVec::ZERO, |acc, h| acc.max(block_cost(&h.body, ctx)));
         // Die Zahl der Elemente im Fenster (`takt_stream_count`), dann je
         // Element holen, pruefen, einen Rumpf.
         let count = CostVec { call: 1, ..CostVec::ZERO };
-        acc + count + (ctx.fetch(element) + tries + body).times(ctx.window(s))
+        acc + count + (ctx.fetch(element) + pass + tries + body).times(ctx.window(s))
     })
 }
 
 /// Was ein Handler an einem Element prueft, bevor sein Rumpf laeuft oder
-/// der naechste dran ist: Bindung, Muster, Guard (8.7, FB-14).
-fn handler_try(h: &Handler, element: Option<TypeId>, ctx: &Ctx<'_>) -> CostVec {
+/// der naechste dran ist: Bindung, Muster, Guard (8.7, FB-14). Hat der
+/// Automat entschieden (`decided`), laeuft der Durchlauf nur fuer Werte.
+fn handler_try(h: &Handler, element: Option<TypeId>, decided: bool, ctx: &Ctx<'_>) -> CostVec {
     let bind = match (h.binding, element) {
         (Some(_), Some(e)) => ctx.copy_always(e),
         _ => CostVec::ZERO,
     };
-    let pattern = h.pattern.as_ref().map_or(CostVec::ZERO, |(kind, p)| pattern_cost(*kind, p, element, ctx));
+    let pattern = match &h.pattern {
+        Some((kind, p @ Pattern::Text { pieces })) if decided => {
+            if crate::dfa::extracts(pieces) {
+                pattern_cost(*kind, p, element, ctx)
+            } else {
+                STEP
+            }
+        }
+        Some((kind, p)) => pattern_cost(*kind, p, element, ctx),
+        None => CostVec::ZERO,
+    };
     let guard = h.guard.as_ref().map_or(CostVec::ZERO, |g| expr_cost(g, ctx) + STEP);
     STEP + bind + pattern + guard
 }

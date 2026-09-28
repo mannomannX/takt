@@ -1941,13 +1941,21 @@ fn handler_chain(
     m: &mut Module,
 ) -> Result<(), NotYet> {
     let k = ctx.next_label(m);
-    let name = &ctx.machine.name;
+    let name = ctx.machine.name.clone();
     let end_at = format!("handler{k}_{name}_ende");
+    let text = || format!("getelementptr inbounds i8, ptr {buf}, i64 {}", crate::stream::Streams::LEN_AT);
+    // 11.2: Die Textmuster des Stroms als ein Automat — ein Durchlauf je
+    // Element sagt, welche treffen. Ohne Automaten prueft jeder Handler
+    // mit seinem Durchlauf; das Urteil ist dasselbe.
+    let product = takt_mir::dfa::of_handlers(hs).map(|(dfa, bits)| {
+        let t = m.inst(&text());
+        (crate::dfa::run(&dfa, t, m), bits)
+    });
     for (n, h) in hs.iter().enumerate() {
-        if let Some(v) = h.binding {
-            bind_element(v, buf, seq, elem, ctx, m)?;
-        }
         let Some((kind, pattern)) = &h.pattern else {
+            if let Some(v) = h.binding {
+                bind_element(v, buf, seq, elem, ctx, m)?;
+            }
             // Catch-all: Er laeuft immer, und die Kette endet hier — es
             // sei denn, ein Guard (FB-14) laesst das Element weiter.
             if let Some(g) = &h.guard {
@@ -1965,43 +1973,40 @@ fn handler_chain(
             m.label(&end_at);
             return Ok(());
         };
+        let (then_l, else_l) = (format!("handler{k}_{n}_{name}"), format!("handler{k}_{n}_{name}_sonst"));
         let hit = match pattern {
             takt_mir::pattern::Pattern::Record { record, fields } => record_hit(*record, fields, buf, elem, ctx, m)?,
-            takt_mir::pattern::Pattern::Text { pieces, dfa } => {
+            takt_mir::pattern::Pattern::Text { pieces } => {
                 // Der Text steht im Scratch als `{ i32 len, [N x i8] }`;
-                // der Vergleich laeuft darauf, die Captures gehen in die
-                // Bindung (8.7).
-                let text =
-                    m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {}", crate::stream::Streams::LEN_AT));
-                let hat_capture = pieces.iter().any(|p| matches!(p, takt_mir::pattern::PatternPiece::Capture { .. }));
-                // 8.7: `matches` verlangt den ganzen Text, `has` ein Vorkommen.
-                //
-                // Ohne Platzhalter genuegt der Automat: Er liest jedes Byte
-                // einmal und sagt, ob das Muster traegt (11.2). Mit Platzhaltern
-                // braucht es den Durchlauf, denn ein Automat ueber Zeichenklassen
-                // kennt die Grenzen, aber nicht die Werte — und ihn zusaetzlich
-                // laufen zu lassen hiesse, denselben Text zweimal zu lesen.
-                let ist_matches = *kind == takt_mir::expr::MatchKind::Matches;
-                match (hat_capture, ist_matches, dfa) {
-                    (false, true, Some(dfa)) => {
-                        let id = m.next_label();
-                        crate::dfa::declare(id, dfa, m);
-                        crate::dfa::run(id, dfa, text, m)?
+                // die Captures gehen in die Bindung (8.7).
+                let bit = product.as_ref().and_then(|(mask, bits)| Some((*mask, bits[n]?)));
+                let b = Binding::of(h, ctx);
+                let has = *kind == takt_mir::expr::MatchKind::Has;
+                match bit {
+                    // Der Automat hat entschieden; mit Platzhaltern
+                    // bestaetigt der Durchlauf den Treffer und holt die
+                    // Werte (`dfa::extracts`).
+                    Some((mask, bit)) if takt_mir::dfa::extracts(pieces) => {
+                        let found = crate::dfa::hit(mask, bit, m);
+                        let walk_l = format!("handler{k}_{n}_{name}_werte");
+                        m.void_inst(&format!("br i1 {found}, label %{walk_l}, label %{else_l}"));
+                        m.label(&walk_l);
+                        let t = m.inst(&text());
+                        if has { pattern_has(pieces, t, &b, ctx, m)? } else { pattern_matches(pieces, t, &b, ctx, m)? }
                     }
-                    (_, true, _) => {
-                        let b = Binding::of(h, ctx);
-                        pattern_matches(pieces, text, &b, ctx, m)?
-                    }
-                    (_, false, _) => {
-                        let b = Binding::of(h, ctx);
-                        pattern_has(pieces, text, &b, ctx, m)?
+                    Some((mask, bit)) => crate::dfa::hit(mask, bit, m),
+                    None => {
+                        let t = m.inst(&text());
+                        if has { pattern_has(pieces, t, &b, ctx, m)? } else { pattern_matches(pieces, t, &b, ctx, m)? }
                     }
                 }
             }
         };
-        let (then_l, else_l) = (format!("handler{k}_{n}_{name}"), format!("handler{k}_{n}_{name}_sonst"));
         m.void_inst(&format!("br i1 {hit}, label %{then_l}, label %{else_l}"));
         m.label(&then_l);
+        if let Some(v) = h.binding {
+            bind_element(v, buf, seq, elem, ctx, m)?;
+        }
         // FB-14: Der Guard sieht die Bindung; `false` reicht das Element
         // an den naechsten Handler weiter.
         if let Some(g) = &h.guard {

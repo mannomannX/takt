@@ -10,9 +10,9 @@
 //! **Was hier steht und was nicht.** Der Vorwaertsdurchlauf mit
 //! Extraktion — 8.7: „Matching plus Extraktion ist ein einziger
 //! Vorwaertsdurchlauf". Der Produkt-DFA steht daneben
-//! (`takt-mir::dfa`): Er beantwortet schneller, *welches* Muster trifft,
-//! wenn ein Zustand mehrere Handler hat, und ist eine Kostenfrage
-//! (11.2). Wer nur ein Muster hat, braucht ihn nicht.
+//! (`takt-mir::dfa`): Er beantwortet in einem Durchlauf, *welche* Muster
+//! eines Handler-Blocks treffen (11.2), und erkennt dieselbe Sprache wie
+//! dieser Durchlauf (FB-350).
 //!
 //! **Warum Bytes und nicht `&str`.** Ein `line<N>` im erzeugten Code ist
 //! `{ i32 len, [N x i8], i1 truncated }` (11.2) — ein Puffer, kein

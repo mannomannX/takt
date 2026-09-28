@@ -1,0 +1,32 @@
+(system
+  (language 1)
+  (tick 10ms))
+(input rx :stream<line<64>> @hw("u/rx") max_rate=100[Hz] capacity=4)
+(output which :int in 0..9 @sim("o/which"))
+(output value :int in (- 999)..999 @sim("o/value"))
+(output count :int in 0..99 @sim("o/count"))
+(machine m
+  (var seen :int in 0..99 0)
+  (initial A)
+  (state A
+    (loop
+      (= count seen))
+    (on rx matches "code {c:int}" as e when (and (>= (.c e) 0) (< (.c e) 500))
+      (= which 1)
+      (= value (.c e))
+      (= seen (% (+ seen 1) 100)))
+    (on rx has "ERR {n:int}" as e
+      (= which 2)
+      (= value (% (.n e) 1000))
+      (= seen (% (+ seen 1) 100)))
+    (on rx has "WARN"
+      (= which 3)
+      (= seen (% (+ seen 1) 100)))
+    (on rx matches "{_}:{k:word}" as e
+      (= which 4)
+      (= value (.len (.k e)))
+      (= seen (% (+ seen 1) 100)))
+    (on rx as e
+      (= which 5)
+      (= seen (% (+ seen 1) 100)))
+    (after 1s -> A)))

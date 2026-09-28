@@ -1,0 +1,45 @@
+# 100 — Dispatch ueber den Produkt-DFA (8.7, 11.2, FB-282).
+#
+# Vier Textmuster auf einem Strom, zwei davon `has`, eines mit Guard: Ein
+# Durchlauf je Element sagt, welche treffen, und der erste, dessen Guard
+# haelt, gewinnt. Die Werte holt der Durchlauf nur fuer einen Treffer.
+# `code {c:int}` trifft auch eine Zahl ausserhalb von `int` — die kennt der
+# Automat nicht, die Extraktion schon, und das Element geht weiter.
+# `{_}:{k:word}` endet am ersten `:` (FB-350), `has` gilt ab der
+# fruehesten Stelle, an der das Muster traegt.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  rx    : stream<line<64>> @ hw("u/rx") with max_rate = 100 Hz, capacity = 4
+output which : int in 0..9      @ sim("o/which")
+output value : int in -999..999 @ sim("o/value")
+output count : int in 0..99     @ sim("o/count")
+
+machine m:
+    var seen : int in 0..99 = 0
+    initial A
+
+    state A:
+        loop:
+            count = seen
+        on rx matches "code {c:int}" as e when e.c >= 0 and e.c < 500:
+            which = 1
+            value = e.c
+            seen = (seen + 1) % 100
+        on rx has "ERR {n:int}" as e:
+            which = 2
+            value = e.n % 1000
+            seen = (seen + 1) % 100
+        on rx has "WARN":
+            which = 3
+            seen = (seen + 1) % 100
+        on rx matches "{_}:{k:word}" as e:
+            which = 4
+            value = e.k.len
+            seen = (seen + 1) % 100
+        on rx as e:
+            which = 5
+            seen = (seen + 1) % 100
+        after 1 s: -> A

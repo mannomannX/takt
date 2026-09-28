@@ -6,8 +6,7 @@
 //! Geschaetztes einrechnet, ist schlechter als keine, weil ihr niemand
 //! ansieht, welchem Teil er trauen kann (11.5).
 
-use crate::machine::{Guard, Machine, MachineKind, TransTrigger};
-use crate::pattern::Pattern;
+use crate::machine::{Machine, MachineKind};
 use crate::types::{FloatWidth, Type};
 use crate::{Program, TypeId};
 
@@ -511,55 +510,25 @@ pub fn type_bytes(p: &Program, ty: TypeId) -> u32 {
     }
 }
 
-/// Byte der vorkompilierten Musterautomaten (8.7, 11.5): Klassentabelle
-/// (256 Byte) und Uebergangstabelle (`states × class_count`, je 4 Byte).
+/// Byte der Produkt-DFAs der Handler-Bloecke (8.7, 11.2, 11.5):
+/// Klassenabbildung, Uebergaenge und Trefferliste (`Dfa::bytes`).
 ///
-/// **Gezaehlt wird, was der Codegen emittiert** — nicht, was die MIR
-/// traegt. Drei Unterschiede, jeder davon gemessen (FB-121):
-///
-/// - Die akzeptierenden Zustaende stehen *nicht* als Tabelle im Objekt.
-///   `dfa::run` macht daraus eine Vergleichskette, weil die Menge zur
-///   Uebersetzungszeit feststeht und typisch ein- bis dreielementig ist.
-/// - Ein Muster mit Platzhaltern bekommt keinen Automaten: Der Vergleich
-///   laeuft dort ueber `captures::walk`, weil der Automat zwar sagt, *ob*
-///   ein Muster trifft, nicht aber was in `{n:int}` steht (8.7).
-/// - Ein Record-Muster hat ohnehin keinen — es ist eine Konjunktion von
-///   Feldgleichheiten.
-///
-/// Ohne diese drei rechnete der Posten bei `23_patterns` 1696 Byte gegen
-/// 424 gemessene. Eine Zahl, die `takt size` `exakt` nennt und auf die
-/// sich fuer `baremetal` ein Compile-Fehler stuetzt (11.5), darf nicht
-/// vierfach danebenliegen.
+/// **Gezaehlt wird, was der Codegen emittiert** (FB-121): je Ebene und
+/// Strom der Automat aus `dfa::of_handlers`, gleiche Automaten einmal —
+/// ihre Tabellen heissen nach ihrem Inhalt. Record-Muster und Guards von
+/// Uebergaengen haben keinen. Eine Zahl, die `takt size` `exakt` nennt und
+/// auf die sich fuer `baremetal` ein Compile-Fehler stuetzt (11.5), muss
+/// genau das treffen.
 fn dfa_bytes(p: &Program) -> u64 {
-    fn one(pat: &Pattern) -> u64 {
-        match pat {
-            Pattern::Text { pieces, dfa: Some(d) } => {
-                // Mit Platzhaltern laeuft der Durchlauf, nicht der
-                // Automat (`step::handler_chain`).
-                if pieces.iter().any(|x| matches!(x, crate::pattern::PatternPiece::Capture { .. })) {
-                    return 0;
-                }
-                d.classes.len() as u64 + d.table.len() as u64 * 4
-            }
-            _ => 0,
-        }
-    }
+    let mut seen = std::collections::BTreeSet::new();
     let mut total = 0;
     for m in &p.machines {
-        for h in &m.handlers {
-            if let Some((_, pat)) = &h.pattern {
-                total += one(pat);
-            }
-        }
-        for st in &m.states {
-            for h in &st.handlers {
-                if let Some((_, pat)) = &h.pattern {
-                    total += one(pat);
-                }
-            }
-            for t in &st.transitions {
-                if let TransTrigger::When(Guard::Match { pattern, .. }) = &t.trigger {
-                    total += one(pattern);
+        for handlers in std::iter::once(&m.handlers).chain(m.states.iter().map(|s| &s.handlers)) {
+            for group in crate::dfa::by_stream(handlers) {
+                if let Some((dfa, _)) = crate::dfa::of_handlers(&group)
+                    && seen.insert(dfa.key())
+                {
+                    total += dfa.bytes();
                 }
             }
         }

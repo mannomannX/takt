@@ -1,10 +1,11 @@
 //! Die Werte hinter den Platzhaltern eines Musters (8.7).
 //!
-//! **Was der Automat nicht kann.** Der DFA (`dfa.rs`) entscheidet, *ob*
-//! ein Muster trifft — er laeuft ueber Zeichenklassen und kennt darum
-//! die Grenzen eines Platzhalters, nicht seinen Wert. Fuer `{n:int}`
-//! braucht es einen zweiten Durchlauf, der die Spannen misst und die
-//! Ziffern in eine Zahl verwandelt.
+//! **Was der Automat nicht kann.** Der Produkt-DFA (`dfa.rs`) entscheidet,
+//! *welche* Muster eines Handler-Blocks treffen — er laeuft ueber
+//! Zeichenklassen und kennt darum die Grenzen eines Platzhalters, nicht
+//! seinen Wert und nicht, ob der Wert in `i64` passt. Fuer `{n:int}`
+//! braucht es den Durchlauf hier, der die Spannen misst und die Ziffern in
+//! eine Zahl verwandelt; er laeuft nur fuer einen Treffer.
 //!
 //! **Warum als IR und nicht als Aufruf in die Runtime.** Die Regeln
 //! stehen in `takt-match`, und der naheliegende Weg waere, sie von dort

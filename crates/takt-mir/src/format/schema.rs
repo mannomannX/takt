@@ -66,8 +66,7 @@ codec_struct!(TypeTable { 1 rep list });
 
 codec_enum!(CaptureKind { 0 Int, 1 Hex, 2 Float, 3 Word, 4 Str(1 one n) });
 codec_enum!(PatternPiece { 0 Text(1 one s), 1 Capture { 1 one name, 2 one kind }, 2 Any });
-codec_struct!(Dfa { 1 rep classes, 2 one class_count, 3 rep table, 4 rep accept });
-codec_enum!(Pattern { 0 Text { 1 rep pieces, 2 opt dfa }, 1 Record { 1 one record, 2 rep fields } });
+codec_enum!(Pattern { 0 Text { 1 rep pieces }, 1 Record { 1 one record, 2 rep fields } });
 codec_enum!(FormatPiece { 0 Text(1 one s), 1 Expr { 1 one expr, 2 opt spec } });
 codec_struct!(Format { 1 rep pieces, 2 one len_max });
 codec_struct!(AddressSegment { 1 one name, 2 opt range });
