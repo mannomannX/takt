@@ -82,13 +82,13 @@ SEM-9.1,Semantik/Abschnitt,9.1,Objekte,,M1/M2 (Interpreter),fertig,
 SEM-9.2,Semantik/Abschnitt,9.2,Ausdrücke und Statements,,M1/M2 (Interpreter),fertig,
 SEM-9.3,Semantik/Abschnitt,9.3,Schritt einer Maschine,,M1/M2 (Interpreter),fertig,
 SEM-9.4,Semantik/Abschnitt,9.4,System-Tick und Sätze,,M1/M2 (Interpreter),fertig,
-SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M10 (aus M1/M2),rationale,"Manifest im Kopf des Laufs, defensiver Treiberrand, Watchdog; der Test gegen den Workspace folgt mit M10 Schritt 24"
+SEM-9.5,Semantik/Abschnitt,9.5,Was die Sätze nicht abdecken (Trusted Computing Base),,M10 (aus M1/M2),fertig,"Manifest im Kopf des Laufs; TCB-Manifest in plan/cert.md, gegen den Workspace gehalten (`tcb_manifest.rs`, M10 Schritt 24)"
 SEM-9.6,Semantik/Abschnitt,9.6,Ereignisströme,,M1/M2 (Interpreter),fertig,
 SEM-9.7,Semantik/Abschnitt,9.7,Handler-Dispatch,,M1/M2 (Interpreter),fertig,
 SEM-9.8,Semantik/Abschnitt,9.8,Geplante Ausgaben,,M1/M2 (Interpreter),fertig,
 SEM-9.9,Semantik/Abschnitt,9.9,Schlaf,,M5 (Embedded),fertig,
 SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M5 (Embedded),fertig,
-SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M10 (Audit),teilweise,"Referenz nachziehen und Layout-Test (FB-333, M10 Schritt 24)"
+SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M10 (Audit),fertig,"11.1 nennt jedes Crate, geplante markiert; `the_components_of_11_1_are_the_workspace` haelt Liste und Kommandos gegen crates/ und `takt-cli` (M10 Schritt 24)"
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),fertig,
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),fertig,
 SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M10 (aus M6),teilweise,"`rsa3072_verify`, `aes_gcm_decrypt` (M10 Schritt 21) und `fft256` (FB-345); alles Uebrige belegt der Zaehltest `every_entry_of_11_4_exists`"
@@ -126,7 +126,7 @@ SEM-12.10,Semantik/Abschnitt,12.10,"Treiberstufe (v1.2): Register, Ports und Ger
 SEM-13.1,Semantik/Abschnitt,13.1,Referenzinterpreter und differentielles Testen,,M4 (Codegen),fertig,
 SEM-13.2,Semantik/Abschnitt,13.2,Coverage aus der Simulation,,M6 (v1.1),fertig,
 SEM-13.3,Semantik/Abschnitt,13.3,Eigenschaftsprüfung (v1.1),v1.1,M6,fertig,"Monitore im Interpreter und nativ (Schritt 19), Kodierung, Export, Solver und Pruefstellen-Klassifikation (Schritte 20-22); Reichweite: Invarianten ohne Zeitoperatoren, kein Strom/Handler/Job in der Kodierung"
-SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M10 (aus M5),offen,
+SEM-13.4,Semantik/Abschnitt,13.4,Zertifizierungspfad,,M10 (aus M5),fertig,"plan/cert.md: Teilmenge mit erzwingender Pruefung, TCB-Manifest, Rueckverfolgung (`req`, Anforderungen, Gate), Messungen, Zielnormen; qualifizierbarer Codegen bleibt spaetere Investition (13.4)"
 SEM-13.4-Anforderungen,Semantik/Abschnitt,13.4,"Anforderungsreferenzen im Report: `takt check --report` listet je `req`-ID ihre Stellen, `takt test` die Szenarien dazu (v1.2)",v1.2,M8,fertig,"`takt-mir::requirements`; `verify` zaehlt fuer die Coverage wie ein `check`; Korpus `61_requirements.takt`, `takt-cli/tests/report.rs`"
 SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4 (Codegen),fertig,
 SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,fertig,

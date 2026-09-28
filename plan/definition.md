@@ -1802,26 +1802,38 @@ Die Kombination aus 4, 8, 9, 11, 17–22 und 30–32 ist die konstruktive Form d
 
 ### 11.1 Komponenten (Rust-Workspace)
 ```
-takt-syntax       Grammatik als Datei (Quelle für Parser, Formatter, Fuzzer, 2.3), Tokenizer (INDENT/DEDENT), Parser, AST, Formatter
-takt-sema         Namen, Typen, Einheiten, Intervalle, Flussanalysen, Maschinen-Wohlgeformtheit, Muster → DFA, Prüfungen 1–58 (10)
-takt-mir          Mittlere IR: Maschinen als Structs + step-Funktionen, Desugaring von Sequenzen, Kostenmodell, Schedule-Zähler, Speicherbudget (11.5)
-takt-interp       Referenzinterpreter über MIR = ausführbare Semantik (9.x); Compile-Zeit-Auswertung (11.3); Orakel-Rahmen (13.9)
-takt-llvm         MIR → LLVM IR (inkwell), Targets x86-64, aarch64, thumbv7em, riscv32imac
-libtaktm          korrekt gerundete Mathematik, für alle Targets aus derselben Quelle
-takt-rt-core      Tick-Schleife, Prozessabbild, Streams, Fault-Wald, Abort-Phase, Zähler, `sched`, Jobs, Recording-Schnittstelle — `no_std`, ohne Allokation
-takt-rt-linux     Profilaufsatz `linux_rt` (12.2): Tick-Thread, Treiber-Threads, Telemetrie, Recording, Web-API
-takt-rt-baremetal Profilaufsatz `baremetal` (12.3): Tick per Timer-ISR, Watchdog, NVM-Journal, Schlaf
-takt-rt-rtos      Profilaufsatz `rtos` (12.8): Takt als höchstpriore Aufgabe unter einem RTOS
-takt-rt-boot      Profilaufsatz `boot` (12.8): minimale Runtime für Startprogramme, RAM-Log statt Recorder
-takt-hal          Treiber-Traits (Skalar, Stream, geplante Ausgabe, Flash-Gerät), Rand-Selbstprüfungen (12.6), Simulationstreiber — die Sim/HW-Umschaltung (8.3) ist ein Treiberwechsel
-takt-native       kuratierte native Funktionen (4.5): DSP-Kerne, Prüfsummen, Hashes, MACs; Konformitätstests
-takt-crypto       Kryptographie mit geprüfter Abhängigkeit (4.5): ECDSA P-256 über `p256`, hinter einem Feature, im TCB-Manifest
-takt-stdlib       Standardbibliothek in Takt selbst (11.4): Blöcke, Funktionen, Protokollpakete, Simulationsmodelle
-takt-conformance  Testkorpus, Golden-Traces, Kalibrierung (`c_target`, `guard`, `jitter`), Subnormal-Vektoren, `takt bench` (13.8)
-takt-import-c     C-Frontend mit Klassifikation, Abbildungsregeln und Orakel-Modus (13.9; v1.1)
-takt-cli          check | build | sim | run | replay | verify-trace | timing | test | campaign | driver-test | prove | fmt | size | cost | latency | graph | bench | tune | migrate | import-c | mir | parse | tokens
-takt-lsp          Editor-Integration, Live-Zustandsanzeige über Telemetrie
+takt-diag           Diagnosen mit Position, Vorschlag und Politik (Warnungen als Fehler, Zertifizierungsmodus) für alle Schichten (10)
+takt-syntax         Grammatik als Datei (Quelle für Parser, Formatter, Fuzzer, 2.3), Tokenizer (INDENT/DEDENT), Parser, AST, Formatter
+takt-sema           Namen, Typen, Einheiten, Intervalle, Flussanalysen, Maschinen-Wohlgeformtheit, Prüfungen 1–65 (10); die Standardbibliothek in Takt (11.4) als Prelude
+takt-match          Mustervergleich und Werteextraktion, Muster → DFA (8.7)
+takt-mir            Mittlere IR: Maschinen als Structs + step-Funktionen, Desugaring von Sequenzen, Kostenmodell, Schedule-Zähler, Speicherbudget (11.5)
+takt-interp         Referenzinterpreter über MIR = ausführbare Semantik (9.x); Compile-Zeit-Auswertung (11.3); Recording und Replay (12.5)
+takt-llvm           MIR → LLVM IR als Text, clang als Assembler; Targets x86-64, aarch64, thumbv7em, riscv32imac
+takt-prove          Schrittfunktion als Transitionssystem, SMT-LIB2-Export, BMC und k-Induktion (13.3)
+libtaktm            Mathematik für alle Targets aus derselben Quelle
+takt-rt-core        Tick-Schleife, Prozessabbild, Fault-Wald, Abort-Phase, Zähler, Jobs, Watchdog, `persist`-Journal — `no_std`, ohne Allokation
+takt-rt-linux       Profilaufsatz `linux_rt` (12.2): Echtzeituhr mit absoluten Deadlines, gemessene Zeitgarantie, Jobs in Threads, NVM als Datei, Tunables
+takt-rt-baremetal   Profilaufsatz `baremetal` (12.3): Tick per Timer, Telemetrie-Ring, logische Zeit für Konformitätsläufe, Schlaf
+takt-rt-rtos        (geplant, M10 Schritt 16) Profilaufsatz `rtos` (12.8): Takt als höchstpriore Aufgabe unter einem RTOS
+takt-rt-boot        (geplant, M10 Schritt 17) Profilaufsatz `boot` (12.8): minimale Runtime für Startprogramme, RAM-Log statt Recorder
+takt-hal            Treiber-Traits (Skalar, Stream, geplante Ausgabe), Rand-Selbstprüfungen (12.6), Simulationstreiber — die Sim/HW-Umschaltung (8.3) ist ein Treiberwechsel
+takt-board-support  die rechnende Hälfte der Board-Unterstützung ohne Registerzugriff: Perioden, Zyklen, FIFO, Messschleife (13.8)
+takt-board-esp32c6  Board-Unterstützung ESP32-C6: Alarm, Zyklenzähler, USB-Serial-JTAG, Treiber — TCB, eigener Workspace (9.5)
+takt-board-stm32f401  Board-Unterstützung STM32F401 (Black Pill): TIM2, DWT, USART1, IWDG, Treiber — TCB, eigener Workspace (9.5)
+takt-mcu-program    das erzeugte Programm hinter seiner C-ABI (12.1) — TCB, eigener Workspace
+takt-bringup-esp32c6  Bring-up-Programme des ESP32-C6: Takt-Programm, Messkerne, Natives — TCB, eigener Workspace
+takt-bringup-stm32f401  Bring-up-Programme der Black Pill — TCB, eigener Workspace
+takt-native         kuratierte native Funktionen (4.5): Prüfsummen, Hashes, MACs; Konformitätstests
+takt-crypto         Kryptographie mit geprüfter Abhängigkeit (4.5): ECDSA P-256 über `p256`, hinter einem Feature, im TCB-Manifest
+takt-conformance    Testkorpus, Golden-Traces, C-Rahmen, Boards am Host, Kalibrierung (`c_target`, `guard`, `jitter`), `takt bench` (13.8)
+takt-trace-serial   Trace von einer seriellen Schnittstelle lesen und gegen den Interpreter halten
+takt-flash-weact    Flash-Werkzeug für den WeAct-HID-Bootloader (STM32)
+takt-import-c       (geplant, M7) C-Frontend mit Klassifikation, Abbildungsregeln und Orakel-Modus (13.9; v1.1)
+takt-cli            check | build | sim | run | replay | verify-trace | timing | test | campaign | driver-test | prove | fmt | size | cost | latency | graph | bench | tune | tcb | mir | parse | tokens; geplant: migrate | import-c (M7)
+takt-lsp            (geplant, M7) Editor-Integration, Live-Zustandsanzeige über Telemetrie
 ```
+
+Die Standardbibliothek (11.4) ist kein eigenes Crate: Sie ist Takt-Quelle und wird mit jedem Programm übersetzt, als Prelude der Sema (`takt-sema/src/prelude.takt`); nur die Natives, Intrinsics und Matrixfunktionen, die sie nicht in Takt schreiben kann, stehen in Rust. Was Register anfasst oder die C-ABI bedient, liegt in eigenen Workspaces, denn `unsafe_code = "forbid"` (13.4) lässt sich nicht lokal aufheben; die Grenze der TCB ist so am Verzeichnis ablesbar, und `plan/cert.md` führt sie als Manifest.
 
 `mir`, `parse` und `tokens` sind die Entwicklerstufen: Sie geben das Zwischenergebnis einer einzelnen Schicht aus (Tokenstrom, Syntaxbaum als S-Expression, MIR als Text oder Datei). Sie gehören nicht zum Arbeitsablauf eines Anwenders, sind aber die Schnittstelle, an der die differenziellen Tests gegen die Referenzwerkzeuge in `grammar/` ansetzen (13.1).
 
