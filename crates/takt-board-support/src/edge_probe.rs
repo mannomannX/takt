@@ -113,6 +113,44 @@ pub fn alive(tick: u64) -> bool {
 /// einer nach dem gescheiterten Commit.
 pub const DRIVER_FAULTS: [u64; 2] = [4, 9];
 
+/// `edge_r/level` (`i32`) in Tick `tick`, ein Kanal, den `recorded.takt`
+/// nicht liest (8.2): Wert und Qualitaet (3 ist `Bad`); in Tick 3 liefert
+/// der Treiber nichts.
+pub fn level(tick: u64) -> Option<(i32, u8)> {
+    Some(match tick {
+        0 | 1 => (5, 0),
+        3 => return None,
+        4 => (0, 3),
+        _ => (7, 0),
+    })
+}
+
+/// `edge_r/temp` (`float[degC]`, `f64`): Wert und Zeitstempel, ohne
+/// Angabe die Tickgrenze.
+pub fn temp(tick: u64) -> (f64, Option<i64>) {
+    match tick {
+        0 | 1 => (21.5, None),
+        2 => (22.0, Some(15_000_000)),
+        _ => (22.0, None),
+    }
+}
+
+/// `edge_r/on` (`bool`).
+pub fn on(tick: u64) -> bool {
+    tick < 3
+}
+
+/// `edge_r/mode`: die Diskriminante von `Mode` (`IDLE`, `RUN`, `ERROR`);
+/// 7 kennt das Enum nicht.
+pub fn mode(tick: u64) -> u32 {
+    match tick {
+        0 | 1 => 0,
+        2..=4 => 1,
+        6 => 7,
+        _ => 2,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -692,3 +692,47 @@ machine m:
 
         after 1 s: -> RUN
 ";
+
+/// **Was das Programm nicht liest, liest der Rahmen fuer die Aufzeichnung**
+/// (8.2, 12.5, M10 Schritt 29d): je importiertem Input, den die Quelle nicht
+/// nennt, ein Treiber mit schwacher Voreinstellung in seinem C-Typ und eine
+/// Zeile `rec`; ein Output hat nichts aufzuzeichnen. Rahmen und erzeugter
+/// Code binden fuer beide Ziele.
+#[test]
+fn an_unread_input_is_read_for_the_recording() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/programs");
+    let src = std::fs::read_to_string(format!("{dir}/recorded.takt")).expect("Quelle");
+    let mut options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let hw = std::fs::read_to_string(format!("{dir}/recorded.hw")).expect("Konfiguration");
+    options.channel_imports.insert("recorded.hw".to_string(), hw);
+    let p = takt_sema::compile(&src, &options).program.expect("Programm");
+    let frame = takt_conformance::mcu::build(&p).source;
+    for decl in [
+        "_Bool takt_in_edge_r_level(int *value, unsigned char *quality, long long *t); /* rec edge_r_level */",
+        "_Bool takt_in_edge_r_mode(unsigned int *value, unsigned char *quality, long long *t);",
+        "_Bool takt_in_edge_r_on(unsigned char *value, unsigned char *quality, long long *t);",
+        "_Bool takt_in_edge_r_quiet(unsigned char *value, unsigned char *quality, long long *t);",
+        "_Bool takt_in_edge_r_temp(double *value, unsigned char *quality, long long *t);",
+    ] {
+        assert!(frame.contains(decl), "{decl}:\n{frame}");
+    }
+    assert!(!frame.contains("edge_r_lamp"), "ein Output hat nichts aufzuzeichnen:\n{frame}");
+    assert!(frame.contains("takt_board_trace_f64((double)v); takt_board_trace(\"degC \");"), "{frame}");
+    assert!(
+        frame.contains(
+            "case 2: takt_board_trace(\"ERROR \"); break; default: takt_board_trace(\"bad reason=OutOfRange \");"
+        ),
+        "{frame}"
+    );
+    assert!(frame.contains("    takt_mcu_record(now);"), "{frame}");
+    let clang = takt_llvm::toolchain::find();
+    if matches!(clang, Clang::Missing) {
+        eprintln!("clang fehlt; Bindung uebersprungen");
+        return;
+    }
+    for target in [Target::THUMBV7EM, Target::RISCV32IMAC] {
+        if let Err(e) = link_for(&clang, target, &p, "recorded.takt") {
+            panic!("{}: {e}", target.name);
+        }
+    }
+}

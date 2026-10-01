@@ -523,3 +523,12 @@ fn a_stretched_tick_is_runtime_hardware() {
     let failed = common::board::a_stretched_tick_is_runtime_hardware(&mut board);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
+
+/// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,
+/// M10 Schritt 29d): das Pruefgeraet liefert Kanaele ohne Bindung.
+#[test]
+fn the_unread_channels_are_recorded() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::unread_channels_are_recorded(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}

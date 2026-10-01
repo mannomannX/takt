@@ -48,6 +48,7 @@ Leerzeichen, außer im Rest einer Meldung.
 | `stream` | Golden | `stream <name> dropped=<n> overflowed=<n> malformed=<n>` — bei Änderung (8.6) |
 | `driver` | Golden | `driver <gerät> degraded <was>`, `driver <gerät> recovered`, `driver <gerät> warped <channel>` — der Treiberrand (12.6): Der Treiber eines Kanals ist das Gerät, das erste Segment seiner Adresse. `degraded` (Flanke) nennt die erste Verletzung des Vertrags: `window` (Zeitstempel jenseits der Toleranz), `timestamp` (fallend), `seq` (Lücke oder nicht steigend), `maxpt` (mehr Elemente als `MAXPT`), `flags` (`Bad` mit Wert oder fallender Messzeitpunkt `t - age`); `recovered` die Erholung mit der nächsten vertragsgemäßen Lieferung; `warped` einen in der Toleranz geklemmten Zeitstempel. Die Zeilen stehen bei den Eingaben, vor den Ereignissen der Maschinen: erst `degraded` und `recovered` in der Reihenfolge der Geräte, dann `warped` in der Reihenfolge der Lieferungen |
 | `time` | Metazeile | `time took=<ns> drift=<ns> slept=<n>` — was der Tick physisch gekostet hat (7.3, 12.3); nur native Runtimes schreiben sie, der Interpreter nie — je Tick, aber hoechstens eine je Millisekunde logischer Zeit (FB-271). Sie steht ausserhalb der kanonischen Ordnung (T5), der Hashkette (T6) und jedes Trace-Vergleichs: 12.5 haelt Zeitstempel ausserhalb der Semantik |
+| `rec` | Metazeile | `rec <channel> <wert>` — ein importierter Input, den das Programm nicht liest (8.2): Die native Runtime liest ihn über seinen Treiber und zeichnet ihn auf, ohne dass er im Prozessabbild liegt. Die Form ist die einer `in`-Zeile — Wert oder Qualität, dahinter wahlweise `t=<ns>` —, der Name die Adresse als Bezeichner (`daq1/ai3` wird `daq1_ai3`); eine Zeile steht in Tick 0 und bei jeder Änderung (T4). Wer `rec` durch `in` ersetzt, hat den Stimulus eines Programms, das den Kanal liest. Wie `time` steht sie ausserhalb der kanonischen Ordnung, der Hashkette und jedes Vergleichs; der Interpreter hat keine Treiber und schreibt sie nie |
 | `verdict-final` | Golden | `verdict-final PASS\|FAIL\|INCONCLUSIVE` — letzte Zeile (13.5) |
 | `end` | Golden | `end restart\|deep_sleep\|boot_jump` — der Lauf endet hier (12.7); `deep_sleep` startet den naechsten mit `boot_reason = DEEP_SLEEP_WAKE` |
 
@@ -148,7 +149,7 @@ Innerhalb eines Ticks:
 6. `property`/`assumption` in Deklarationsreihenfolge — nach dem Commit,
    weil die Monitore den Tick-Rand-Snapshot lesen (13.3).
 
-Metazeilen (`time`) stehen am Ende ihres Ticks und zählen nicht mit.
+Metazeilen (`time`, `rec`) stehen am Ende ihres Ticks und zählen nicht mit.
 
 Die Ordnung hängt nicht davon ab, in welcher Reihenfolge die Maschinen
 geschritten sind; damit prüft ein Trace-Vergleich die Ordnungsunabhängigkeit

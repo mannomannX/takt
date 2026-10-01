@@ -81,12 +81,17 @@ pub enum LineKind {
     /// Ordnung, der Hashkette und jedes Vergleichs, weil 12.5 Zeitstempel
     /// ausserhalb der Semantik haelt.
     Time { took: i64, drift: i64, slept: u64 },
+    /// `rec <channel> <wert>`: ein importierter Input, den das Programm
+    /// nicht liest (8.2), in der Form einer `in`-Zeile. Metazeile wie
+    /// `time` — Aufzeichnung, nicht Semantik; nur eine Runtime mit Treibern
+    /// schreibt sie.
+    Record { channel: String, sample: SampleText },
 }
 
 impl LineKind {
     /// Traegt die Zeile Semantik, oder ist sie ein Datum daneben?
     pub fn is_meta(&self) -> bool {
-        matches!(self, LineKind::Time { .. })
+        matches!(self, LineKind::Time { .. } | LineKind::Record { .. })
     }
 }
 
@@ -168,6 +173,13 @@ fn parse_line(line: &str) -> Result<TraceLine, String> {
                 return Err("`in <channel> <wert>` erwartet".into());
             }
             LineKind::Input { channel: channel.to_string(), sample: parse_sample(value)? }
+        }
+        "rec" => {
+            let (channel, value) = split_first(args);
+            if channel.is_empty() {
+                return Err("`rec <channel> <wert>` erwartet".into());
+            }
+            LineKind::Record { channel: channel.to_string(), sample: parse_sample(value)? }
         }
         "cmd" => LineKind::Command { name: nonempty(args, "`cmd <command>`")?.to_string() },
         "tune" => {
@@ -418,31 +430,35 @@ fn quoted_word(s: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// Wert oder Qualitaet einer Lieferung, wie `in` und `rec` sie schreiben.
+fn sample_text(sample: &SampleText) -> String {
+    let mut out = String::new();
+    if let Some(v) = &sample.value {
+        let _ = write!(out, " {v}");
+    }
+    if let Some(q) = &sample.quality {
+        let _ = write!(out, " {q}");
+    }
+    if let Some(r) = &sample.reason {
+        let _ = write!(out, " reason={r}");
+    }
+    if let Some(a) = &sample.age {
+        let _ = write!(out, " age={a}");
+    }
+    if let Some(n) = sample.t {
+        let _ = write!(out, " t={n}");
+    }
+    if let Some(n) = sample.seq {
+        let _ = write!(out, " seq={n}");
+    }
+    out
+}
+
 pub(crate) fn render_line(line: &TraceLine) -> String {
     let t = line.tick;
     match &line.kind {
-        LineKind::Input { channel, sample } => {
-            let mut out = format!("t={t} in {channel}");
-            if let Some(v) = &sample.value {
-                let _ = write!(out, " {v}");
-            }
-            if let Some(q) = &sample.quality {
-                let _ = write!(out, " {q}");
-            }
-            if let Some(r) = &sample.reason {
-                let _ = write!(out, " reason={r}");
-            }
-            if let Some(a) = &sample.age {
-                let _ = write!(out, " age={a}");
-            }
-            if let Some(n) = sample.t {
-                let _ = write!(out, " t={n}");
-            }
-            if let Some(n) = sample.seq {
-                let _ = write!(out, " seq={n}");
-            }
-            out
-        }
+        LineKind::Input { channel, sample } => format!("t={t} in {channel}{}", sample_text(sample)),
+        LineKind::Record { channel, sample } => format!("t={t} rec {channel}{}", sample_text(sample)),
         LineKind::Command { name } => format!("t={t} cmd {name}"),
         LineKind::Abort => format!("t={t} abort"),
         LineKind::Runtime { kind, output: None } => format!("t={t} runtime {kind}"),

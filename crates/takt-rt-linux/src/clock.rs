@@ -35,6 +35,8 @@ pub struct RealtimeClock {
     woke: Option<i64>,
     /// Der Abstand der letzten beiden Wecker: die gemessene Periode (7.1).
     period: Option<i64>,
+    /// Meldet die Uhr ihre Periode an die Schleife (12.6 Zeile 7)?
+    measures: bool,
 }
 
 impl Default for RealtimeClock {
@@ -44,9 +46,20 @@ impl Default for RealtimeClock {
 }
 
 impl RealtimeClock {
-    /// Eine Uhr, deren Nullpunkt jetzt ist.
+    /// Eine Uhr, deren Nullpunkt jetzt ist; sie meldet keine Periode.
     pub fn new() -> RealtimeClock {
-        RealtimeClock { start: Instant::now(), late: 0, woke: None, period: None }
+        RealtimeClock { start: Instant::now(), late: 0, woke: None, period: None, measures: false }
+    }
+
+    /// Eine Uhr fuer einen Lauf mit dem Befund `guarantee` (12.2).
+    ///
+    /// Ihre Periode prueft die Schleife gegen `tick_tolerance` (7.1, 12.6
+    /// Zeile 7) nur, wenn der Lauf die Zusage aus 12.2 vollstaendig traegt.
+    /// Ohne sie misst der Abstand zweier Wecker den Scheduler mit, und ein
+    /// `Runtime(Hardware)` daraus braeche den Lauf an einer Zahl ab, die
+    /// keine Zusage ist; was fehlt, sagt der Befund im Lauf-Header.
+    pub fn under(guarantee: &crate::Guarantee) -> RealtimeClock {
+        RealtimeClock { measures: guarantee.is_complete(), ..RealtimeClock::new() }
     }
 
     /// Haelt den Wecker fest: Der Abstand zum vorigen ist die Periode, mit
@@ -69,7 +82,7 @@ impl Clock for RealtimeClock {
     }
 
     fn tick_period(&self) -> Option<i64> {
-        self.period
+        self.period.filter(|_| self.measures)
     }
 }
 

@@ -119,6 +119,26 @@ fn an_overdue_deadline_is_counted_not_awaited() {
     assert_eq!(c.late, 1, "sie wird gezaehlt");
 }
 
+/// 7.1, 12.6 Zeile 7: Die gemessene Periode zaehlt nur unter der Zusage
+/// aus 12.2. Ohne sie misst der Abstand zweier Wecker den Scheduler mit;
+/// statt eines `Runtime(Hardware)` sagt das der Befund im Lauf-Header.
+#[test]
+fn the_period_counts_only_under_the_guarantee() {
+    use takt_rt_core::Clock;
+    let normal = Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1 };
+    let full = Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1 };
+    for (guarantee, measured) in [(&normal, false), (&full, true)] {
+        let mut c = RealtimeClock::under(guarantee);
+        c.wait_until(1_000_000);
+        c.wait_until(2_000_000);
+        assert_eq!(c.tick_period().is_some_and(|p| p > 0), measured, "{guarantee:?}");
+    }
+    let mut c = RealtimeClock::new();
+    c.wait_until(1_000_000);
+    c.wait_until(2_000_000);
+    assert_eq!(c.tick_period(), None, "ohne Befund keine Periode");
+}
+
 // --- Die Schleife mit echter Uhr ----------------------------------------
 
 #[derive(Default)]

@@ -1305,19 +1305,9 @@ impl Lowerer<'_> {
                 ))
             }
             (m, Type::Int { .. }) if m.starts_with("wrap_") => {
-                let width = match &m[5..] {
-                    "i8" => IntWidth::I8,
-                    "i16" => IntWidth::I16,
-                    "i32" => IntWidth::I32,
-                    "i64" | "int" => IntWidth::I64,
-                    "u8" => IntWidth::U8,
-                    "u16" => IntWidth::U16,
-                    "u32" => IntWidth::U32,
-                    "u64" => IntWidth::U64,
-                    other => {
-                        self.error(SC3, span, format!("unbekannte Breite `{other}` in `{m}`"));
-                        return None;
-                    }
+                let Some(width) = super::decl::int_width_named(&m[5..]) else {
+                    self.error(SC3, span, format!("unbekannte Breite `{}` in `{m}`", &m[5..]));
+                    return None;
                 };
                 if !no_args(self) {
                     return None;

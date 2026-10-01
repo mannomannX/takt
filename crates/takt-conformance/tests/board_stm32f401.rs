@@ -220,6 +220,15 @@ fn a_stretched_tick_is_runtime_hardware() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
+/// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,
+/// M10 Schritt 29d): das Pruefgeraet liefert Kanaele ohne Bindung.
+#[test]
+fn the_unread_channels_are_recorded() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::unread_channels_are_recorded(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
 /// **Die MPU weist einen Zugriff der TCB ab und meldet ihn** (12.3, M10
 /// Schritt 18). Nach Tick 2 schreibt ein Pruefgeraet zwischen zwei Ticks in
 /// den Programmzustand, in den Waechter unter dem Hauptstack oder in den

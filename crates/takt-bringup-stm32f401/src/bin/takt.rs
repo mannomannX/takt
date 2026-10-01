@@ -491,6 +491,61 @@ pub extern "C" fn takt_alive_edge_o() -> bool {
     edge_probe::alive(edge_tick())
 }
 
+/// Der Treiber fuer `edge_r/level`, einen Kanal, den `recorded.takt` nicht
+/// liest (8.2).
+///
+/// # Safety
+///
+/// Drei gueltige Zeiger des Rahmens.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_edge_r_level(value: *mut i32, quality: *mut u8, _t: *mut i64) -> bool {
+    let Some((v, q)) = edge_probe::level(edge_tick()) else { return false };
+    unsafe {
+        *value = v;
+        *quality = q;
+    }
+    true
+}
+
+/// Der Treiber fuer `edge_r/temp`.
+///
+/// # Safety
+///
+/// Drei gueltige Zeiger des Rahmens.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_edge_r_temp(value: *mut f64, _quality: *mut u8, t: *mut i64) -> bool {
+    let (v, at) = edge_probe::temp(edge_tick());
+    unsafe {
+        *value = v;
+        if let Some(at) = at {
+            *t = at;
+        }
+    }
+    true
+}
+
+/// Der Treiber fuer `edge_r/on`.
+///
+/// # Safety
+///
+/// Drei gueltige Zeiger des Rahmens.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_edge_r_on(value: *mut u8, _quality: *mut u8, _t: *mut i64) -> bool {
+    unsafe { *value = u8::from(edge_probe::on(edge_tick())) };
+    true
+}
+
+/// Der Treiber fuer `edge_r/mode`.
+///
+/// # Safety
+///
+/// Drei gueltige Zeiger des Rahmens.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_edge_r_mode(value: *mut u32, _quality: *mut u8, _t: *mut i64) -> bool {
+    unsafe { *value = edge_probe::mode(edge_tick()) };
+    true
+}
+
 /// Das Pruefgeraet fuer 12.6 Zeile 7: streckt die Periode von TIM2 um den
 /// geschriebenen Prozentsatz.
 #[unsafe(no_mangle)]

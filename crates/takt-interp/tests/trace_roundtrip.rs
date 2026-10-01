@@ -61,6 +61,25 @@ fn a_time_line_reads_back() {
     roundtrip(LineKind::Time { took: 0, drift: 40_000_000, slept: 49 });
 }
 
+/// 8.2, 12.5: ein Input, den das Programm nicht liest, in der Form einer
+/// `in`-Zeile — wie ein Board ihn schreibt, mit Leerzeichen am Ende.
+#[test]
+fn a_record_line_reads_back() {
+    let text =
+        "t=0 rec daq1_ai3 21.5 degC \nt=2 rec daq1_ai3 22.0 degC t=15000000 \nt=4 rec daq1_di0 bad reason=Driver\n";
+    let trace = Trace::parse(text).expect("liest sich");
+    assert_eq!(
+        trace.render(),
+        "t=0 rec daq1_ai3 21.5 degC\nt=2 rec daq1_ai3 22.0 degC t=15000000\nt=4 rec daq1_di0 bad reason=Driver\n"
+    );
+    let LineKind::Record { channel, sample } = &trace.lines[1].kind else { panic!("`rec`") };
+    assert_eq!(
+        (channel.as_str(), sample.value.as_deref(), sample.t),
+        ("daq1_ai3", Some("22.0 degC"), Some(15_000_000))
+    );
+    assert!(trace.lines.iter().all(|l| l.kind.is_meta()), "Aufzeichnung, nicht Semantik");
+}
+
 /// Die Zeitzeile traegt keine Semantik: Sie steht ausserhalb der
 /// Hashkette (T6) und laesst einen Trace unveraendert (12.5).
 #[test]
@@ -71,6 +90,8 @@ fn a_time_line_does_not_change_the_chain() {
     let mut mit = ohne.clone();
     mit.lines.push(TraceLine { tick: 1, kind: LineKind::Time { took: 5, drift: 7, slept: 0 } });
     mit.lines.push(TraceLine { tick: 2, kind: LineKind::Time { took: 5, drift: 7, slept: 0 } });
+    let rec = Trace::parse("t=1 rec daq1_di0 true\n").expect("`rec`");
+    mit.lines.extend(rec.lines);
     let hash = "abc";
     assert_eq!(takt_interp::record::chain(&mit, hash), takt_interp::record::chain(&ohne, hash));
 }

@@ -490,6 +490,37 @@ pub struct Program {
     /// Die Zeilen der Quelldateien, fuer `last_fault.line` (5.3); ein
     /// Metadatum wie die Positionen, nicht im Logik-Hash.
     pub sources: Vec<SourceLines>,
+    /// Importierte Inputs, die das Programm nicht liest (8.2); ein
+    /// Metadatum wie die Bindungen, nicht im Logik-Hash.
+    pub recorded: Vec<Recorded>,
+}
+
+/// Ein importierter Input, den das Programm nicht liest (8.2): Die Runtime
+/// zeichnet ihn auf, ohne dass er im Prozessabbild liegt (12.5, Zeile
+/// `rec`). Er hat keinen Eintrag in der Typtabelle — ein Kanal mehr in der
+/// Konfiguration aendert die Logik nicht.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Recorded {
+    /// Die Adresse als Bezeichner (`daq1/ai3` wird `daq1_ai3`), der Name,
+    /// unter dem ihn ein Programm importieren wuerde.
+    pub name: String,
+    /// Die Adresse; aus ihr entsteht der Name des Treibers.
+    pub address: Address,
+    /// Wie der Treiber den Wert liefert.
+    pub value: RecordedValue,
+    /// Die Einheit eines Fliesskommawerts, wie die Konfiguration sie nennt.
+    pub unit: Option<String>,
+}
+
+/// Die Art eines aufgezeichneten Werts: die Skalare, die der Import bildet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum RecordedValue {
+    Bool,
+    Int(IntWidth),
+    Float(FloatWidth),
+    /// Ein Enum ohne Felder, das das Programm deklariert (8.1).
+    Enum(EnumId),
 }
 
 /// Ein Registerport (12.10, v1.2): ein Record an einer festen Adresse.
@@ -537,6 +568,7 @@ impl Program {
             triggers: Vec::new(),
             ports: Vec::new(),
             sources: Vec::new(),
+            recorded: Vec::new(),
         }
     }
 

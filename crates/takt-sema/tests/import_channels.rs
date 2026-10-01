@@ -79,3 +79,59 @@ fn a_channel_the_program_cannot_declare_is_named_with_its_address() {
     let (_, errors) = compile(MACHINE, Some(&SITE.replace("unit = bar", "unit = furlong")));
     assert!(errors.iter().any(|e| e.contains("Kanal `daq1/ai0`") && e.contains("furlong")), "{errors:?}");
 }
+
+/// Was die Quelle nicht nennt, zeichnet die Runtime auf (8.2): jeden Input
+/// mit der Art seines Werts, keinen Output und keinen, aus dem sich kein Typ
+/// bilden laesst. Die Logik bleibt dieselbe — ein Kanal mehr in der
+/// Konfiguration aendert den Logik-Hash nicht, wohl aber den Programm-Hash.
+#[test]
+fn an_unread_input_is_recorded_without_changing_the_logic() {
+    use takt_mir::program::RecordedValue;
+    use takt_mir::types::{FloatWidth, IntWidth};
+    let extra = "
+[channel daq1/ai3]
+direction = input
+raw = i16
+unit = bar
+range = 0..250
+
+[channel daq1/di0]
+direction = input
+raw = bool
+
+[channel daq1/mode]
+direction = input
+raw = Mode
+
+[channel daq1/count]
+direction = input
+raw = u32
+
+[channel daq1/odd]
+direction = input
+raw = Nothing
+";
+    let body = format!("enum Mode: IDLE, RUN\n\n{MACHINE}");
+    let (base, errors) = compile(&body, Some(SITE));
+    assert!(errors.is_empty(), "{errors:?}");
+    let (more, errors) = compile(&body, Some(&format!("{SITE}{extra}")));
+    assert!(errors.is_empty(), "{errors:?}");
+    let (base, more) = (base.expect("Programm"), more.expect("Programm"));
+    assert!(base.recorded.is_empty(), "`pwm/ch0` ist ein Output: {:?}", base.recorded);
+    let mode = takt_mir::EnumId(more.enums.iter().position(|e| e.name == "Mode").expect("Mode") as u32);
+    let recorded: Vec<(&str, RecordedValue, Option<&str>)> =
+        more.recorded.iter().map(|r| (r.name.as_str(), r.value, r.unit.as_deref())).collect();
+    assert_eq!(
+        recorded,
+        [
+            ("daq1_ai3", RecordedValue::Float(FloatWidth::F64), Some("bar")),
+            ("daq1_count", RecordedValue::Int(IntWidth::U32), None),
+            ("daq1_di0", RecordedValue::Bool, None),
+            ("daq1_mode", RecordedValue::Enum(mode), None),
+        ]
+    );
+    assert_eq!(takt_mir::hash::logic_hash(&base), takt_mir::hash::logic_hash(&more));
+    assert_ne!(takt_mir::hash::program_hash(&base), takt_mir::hash::program_hash(&more));
+    let (_, back) = takt_mir::format::read_program(&takt_mir::format::write_program(&more, "test")).expect("lesbar");
+    assert_eq!(back.recorded, more.recorded, "die MIR traegt sie (Feld 21)");
+}

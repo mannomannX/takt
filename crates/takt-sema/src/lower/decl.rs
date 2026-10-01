@@ -1574,6 +1574,21 @@ pub fn int_width(t: ast::IntType) -> IntWidth {
     }
 }
 
+/// Breite eines Ganzzahltyps nach seinem Namen (`int` ist `i64`).
+pub fn int_width_named(name: &str) -> Option<IntWidth> {
+    Some(match name {
+        "int" | "i64" => IntWidth::I64,
+        "i8" => IntWidth::I8,
+        "i16" => IntWidth::I16,
+        "i32" => IntWidth::I32,
+        "u8" => IntWidth::U8,
+        "u16" => IntWidth::U16,
+        "u32" => IntWidth::U32,
+        "u64" => IntWidth::U64,
+        _ => return None,
+    })
+}
+
 /// Eine Rate in Hz: der Faktor ihrer Einheit zur Basis (`kHz`: 1000,
 /// `1/min`: 1/60) geht in das Literal; ganzzahlig, wenn es aufgeht.
 fn in_hertz(mut v: takt_mir::expr::Expr, f: takt_mir::types::Rational) -> takt_mir::expr::Expr {

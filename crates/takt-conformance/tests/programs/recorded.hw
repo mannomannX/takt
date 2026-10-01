@@ -1,0 +1,31 @@
+# takt-hw 12
+# Die Kanaele des Pruefgeraets, die `recorded.takt` nicht nennt (8.2).
+
+[channel edge_r/level]
+direction = input
+raw = i32
+range = 0..100
+
+[channel edge_r/temp]
+direction = input
+raw = i16
+unit = degC
+range = -40..125
+
+[channel edge_r/on]
+direction = input
+raw = bool
+
+[channel edge_r/mode]
+direction = input
+raw = Mode
+
+# Ohne Treiber im Bring-up: Die schwache Voreinstellung liefert nichts.
+[channel edge_r/quiet]
+direction = input
+raw = u8
+
+[channel edge_r/lamp]
+direction = output
+raw = bool
+safe = false

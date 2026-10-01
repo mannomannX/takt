@@ -14,14 +14,23 @@ pub fn corpus(name: &str) -> Program {
     program(&board::corpus_path(name))
 }
 
-/// Ein Programm, fuer die Simulation uebersetzt.
+/// Ein Programm, fuer die Simulation uebersetzt; die Konfigurationen aus
+/// `import channels` liegen neben ihm (8.2).
 pub fn program(path: &std::path::Path) -> Program {
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    let channel_imports = takt_sema::channel_imports(&src)
+        .into_iter()
+        .map(|file| {
+            let text = std::fs::read_to_string(dir.join(&file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+            (file, text)
+        })
+        .collect();
     let options = takt_sema::Options {
         policy: takt_diag::Policy::default(),
         build: takt_sema::Build::Sim,
         profile: None,
-        ..Default::default()
+        channel_imports,
     };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
@@ -140,6 +149,67 @@ pub fn a_stretched_tick_is_runtime_hardware(board: &mut dyn Board) -> Vec<String
         failed.push(format!("{} Abweichungen: {diffs:?}\n{text}", diffs.len()));
     }
     eprintln!("{} Tick-Periode: Runtime(Hardware) in {raised:?}", board.name());
+    failed
+}
+
+/// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,
+/// M10 Schritt 29d). `recorded.takt` importiert `recorded.hw` und nennt
+/// keinen der Kanaele `edge_r/*`; das Pruefgeraet liefert vier davon. Der
+/// Rahmen schreibt sie als Metazeile `rec` in Tick 0 und bei jeder
+/// Aenderung — ein eigener Zeitstempel ist eine —, `Bad` mit Grund
+/// `Driver`, eine Diskriminante, die das Enum nicht kennt, mit Grund
+/// `OutOfRange`; der Kanal ohne Treiber und der Output erscheinen nie. Die
+/// Ausgaben stimmen mit dem Interpreter ueberein, der keine `rec`-Zeile
+/// schreibt.
+pub fn unread_channels_are_recorded(board: &mut dyn Board) -> Vec<String> {
+    const RECORD_TICKS: u64 = 10;
+    const RECORDED: [&str; 13] = [
+        "t=0 rec edge_r_level 5",
+        "t=0 rec edge_r_mode IDLE",
+        "t=0 rec edge_r_on true",
+        "t=0 rec edge_r_temp 21.5 degC",
+        "t=2 rec edge_r_level 7",
+        "t=2 rec edge_r_mode RUN",
+        "t=2 rec edge_r_temp 22.0 degC t=15000000",
+        "t=3 rec edge_r_on false",
+        "t=4 rec edge_r_level bad reason=Driver",
+        "t=5 rec edge_r_level 7",
+        "t=5 rec edge_r_mode ERROR",
+        "t=6 rec edge_r_mode bad reason=OutOfRange",
+        "t=7 rec edge_r_mode ERROR",
+    ];
+    let path = board::root().join("crates/takt-conformance/tests/programs/recorded.takt");
+    let options = Options::fresh(RECORD_TICKS);
+    let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("kein Lauf: {e}")],
+    };
+    let mut failed = Vec::new();
+    let run = takt_interp::RunOptions { ticks: RECORD_TICKS, ..Default::default() };
+    let none = takt_interp::Trace::parse("").expect("leerer Stimulus");
+    let interpreted = takt_interp::run(&program(&path), &none, &run).expect("Lauf").trace.render();
+    let diffs = compare(&interpreted, &text);
+    if !diffs.is_empty() {
+        failed.push(format!("{} Abweichungen: {diffs:?}\n{text}", diffs.len()));
+    }
+    if interpreted.contains(" rec ") {
+        failed.push(format!("der Interpreter schreibt `rec`:\n{interpreted}"));
+    }
+    let lines: String =
+        text.lines().filter(|l| l.starts_with("t=") && l.contains(" rec ")).map(|l| format!("{l}\n")).collect();
+    match takt_interp::Trace::parse(&lines) {
+        Ok(trace) => {
+            let mut got: Vec<String> = trace.render().lines().map(str::to_string).collect();
+            let mut want: Vec<String> = RECORDED.iter().map(|l| l.to_string()).collect();
+            got.sort();
+            want.sort();
+            if got != want {
+                failed.push(format!("aufgezeichnet:\n{}\nerwartet:\n{}", got.join("\n"), want.join("\n")));
+            }
+        }
+        Err(e) => failed.push(format!("`rec`-Zeilen nicht lesbar: {e:?}\n{lines}")),
+    }
+    eprintln!("{} Aufzeichnung: {} Abweichungen", board.name(), failed.len());
     failed
 }
 

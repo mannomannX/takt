@@ -6,14 +6,17 @@
 //! Adresse, wie der Treiber sie auch nennt (`daq1/ai0` wird `daq1_ai0`,
 //! 8.10), der Typ kommt aus `unit` und `range` oder aus `raw`, der
 //! `safe`-Wert eines Outputs aus `safe`. Gebunden wird nur, was die Quelle
-//! nennt; eine geschriebene Deklaration derselben Adresse gewinnt.
+//! nennt; eine geschriebene Deklaration derselben Adresse gewinnt. Die
+//! uebrigen Inputs zeichnet die Runtime auf (`Program::recorded`).
 
 use takt_diag::{Diagnostic, Span};
 use takt_mir::hardware::HwChannel;
-use takt_mir::program::{Binding, Direction};
+use takt_mir::pattern::Address;
+use takt_mir::program::{Binding, Direction, Recorded, RecordedValue};
 use takt_syntax::ast;
 
 use crate::lower::{Lowerer, SC2};
+use crate::symbols::Entity;
 
 /// Rohtypen, die als Typ des Kanals taugen.
 const SCALARS: [&str; 11] = ["bool", "float", "int", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"];
@@ -34,8 +37,14 @@ impl Lowerer<'_> {
             }
         };
         for c in hw.channels.values() {
-            let name = takt_mir::pattern::Address::simple(&c.address).ident();
-            if self.imports_used.as_ref().is_some_and(|used| !used.contains(&name)) || self.bound(c) {
+            let name = Address::simple(&c.address).ident();
+            if self.bound(c) {
+                continue;
+            }
+            if self.imports_used.as_ref().is_some_and(|used| !used.contains(&name)) {
+                if let Some(r) = self.recorded(c, name) {
+                    self.program.recorded.push(r);
+                }
                 continue;
             }
             let declared = declaration(c, &name).and_then(|text| {
@@ -69,6 +78,32 @@ impl Lowerer<'_> {
                 channel.span = span;
             }
         }
+    }
+
+    /// Ein Input, den die Quelle nicht nennt, mit der Art, in der sein
+    /// Treiber den Wert liefert — derselben, die eine Deklaration aus ihm
+    /// haette. Ein Output hat nichts aufzuzeichnen; einen Kanal, aus dem
+    /// sich kein Typ bilden laesst, liest kein Treiber, und ein Fehler ist er
+    /// erst, wenn die Quelle ihn nennt (8.2).
+    fn recorded(&self, c: &HwChannel, name: String) -> Option<Recorded> {
+        if c.direction != Some(Direction::Input) {
+            return None;
+        }
+        let value = match (&c.unit, c.raw.as_deref()) {
+            (Some(_), _) | (None, Some("float")) => RecordedValue::Float(self.program.config.float_width),
+            (None, Some("bool")) => RecordedValue::Bool,
+            (None, Some(raw)) => match (super::decl::int_width_named(raw), self.peek(raw)) {
+                (Some(width), _) => RecordedValue::Int(width),
+                (None, Some(Entity::Enum(id)))
+                    if self.program.enums[id.index()].variants.iter().all(|v| v.fields.is_empty()) =>
+                {
+                    RecordedValue::Enum(*id)
+                }
+                _ => return None,
+            },
+            (None, None) => return None,
+        };
+        Some(Recorded { name, address: Address::simple(&c.address), value, unit: c.unit.clone() })
     }
 
     /// Bindet schon eine geschriebene Deklaration diese Adresse?
