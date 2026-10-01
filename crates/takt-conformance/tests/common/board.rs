@@ -37,10 +37,9 @@ pub fn program(path: &std::path::Path) -> Program {
 /// begaenne der Tick danach um die Dauer seiner Rechnung zu spaet.
 ///
 /// Gemessen wird die Verspaetung gegen den Median, nicht der Sprung zum
-/// vorigen Tick: Kehrt der Kern aus dem Job zurueck statt aus `wfi`,
-/// beginnt der Tick frueher (auf dem C6 um die Aufwachzeit), und der
-/// naechste saehe sonst wie verspaetet aus. Die ersten beiden Ticks laufen
-/// noch an.
+/// vorigen Tick; die ersten beiden Ticks laufen noch an. Ein Tick, der eine
+/// Periode zu spaet kommt, faellt hier auf (FB-352); dass er nach dem Job
+/// frueher begann als nach `wfi` (FB-317), war dieselbe Ursache.
 pub fn long_job_keeps_the_tick(board: &mut dyn Board) -> Vec<String> {
     let path = board::root().join("crates/takt-conformance/tests/programs/long_job.takt");
     let options = Options::timed(TICKS);

@@ -68,10 +68,12 @@ fn slept(text: &str) -> Option<u64> {
 /// ein Konformitaetslauf endet mit dem Trace.
 ///
 /// Im Tiefschlaf ist der USB-Serial-JTAG aus: Dass der Port verschwindet
-/// und erst nach der Weckzeit zurueckkommt, belegt den Schlaf selbst. Die
-/// Konsole bleibt nach dem Wecken stumm (FB-311), also liest der Test
-/// Weckursache, Zaehler und Tick ueber JTAG — der Zaehler belegt dabei,
-/// dass der RTC-RAM den Tiefschlaf ueberlebt.
+/// und erst nach der Weckzeit zurueckkommt, belegt den Schlaf selbst.
+/// Weckursache und Zaehler liest der Test ueber JTAG, denn die ersten
+/// Zeilen des zweiten Laufs entstehen, bevor der Host den Port wieder
+/// oeffnet; der Zaehler belegt dabei, dass der RTC-RAM den Tiefschlaf
+/// ueberlebt. Danach traegt die Konsole den zweiten Lauf von seiner ersten
+/// Zeile an; nach dem Bus-Reset der Neuanmeldung blieb sie stumm (FB-311).
 #[test]
 fn a_deep_sleep_ends_after_its_duration() {
     let Some((mut board, _guard)) = board() else { return };
@@ -89,8 +91,8 @@ fn a_deep_sleep_ends_after_its_duration() {
     assert_eq!(reason, 3, "der zweite Lauf beginnt mit `DEEP_SLEEP_WAKE` (12.7)");
     let count = board.word_over_jtag(&elf, |n| n.contains("RESET_COUNT")).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(count, 0, "ein Tiefschlaf ist ein geordnetes Ende (12.7)");
-    let (a, b) = (board.tick_over_jtag(&elf), board.tick_over_jtag(&elf));
-    assert!(matches!((&a, &b), (Ok(x), Ok(y)) if y > x), "der zweite Lauf tickt: {a:?} {b:?}");
+    let heard = board.listen(Duration::from_secs(3)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(heard.contains("out woke 1"),"die Konsole schweigt nach dem Wecken (FB-311):\n{heard}");
 }
 
 /// **`reboot = RESTART` startet den Chip neu, und der neue Lauf weiss es**

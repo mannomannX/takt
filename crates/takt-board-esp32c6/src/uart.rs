@@ -46,6 +46,8 @@ pub struct UsbJtag {
     filled: u8,
     /// Abgeschickt und vom Host noch nicht abgeholt.
     in_flight: bool,
+    /// Seit einem Bus-Reset, bis der Host wieder abfragt (FB-311).
+    stalled: bool,
     /// Der Wunsch nach einem Chip-Reset, byteweise aus der Gegenrichtung.
     magic: Magic,
 }
@@ -58,13 +60,38 @@ impl UsbJtag {
         // Handler nicht quittiert, waere ein Sturm.
         USB_DEVICE::regs().int_ena().reset();
         port.set_interrupt_handler(on_packet_taken);
-        UsbJtag { port, filled: 0, in_flight: false, magic: Magic::default() }
+        UsbJtag { port, filled: 0, in_flight: false, stalled: false, magic: Magic::default() }
     }
 
     /// Nimmt das Abholen zur Kenntnis: Das FIFO ist wieder frei.
+    ///
+    /// **Nach einem Bus-Reset** (die Neuanmeldung nach dem Wecken, FB-311)
+    /// ist der Endpunkt leer, meldet sich aber nicht frei; er nimmt kein
+    /// Byte, und die Konsole bliebe stumm. Frei wird er durch ein
+    /// `wr_done`, das aber erst wirkt, wenn der Host den Endpunkt abfragt —
+    /// also beim ersten IN-Token danach, nicht beim Reset selbst. Was im
+    /// FIFO stand, hat der Host nie gesehen.
     fn settle(&mut self) {
         let regs = USB_DEVICE::regs();
-        if self.in_flight && regs.int_raw().read().serial_in_empty().bit_is_set() {
+        let raw = regs.int_raw().read();
+        if raw.usb_bus_reset().bit_is_set() {
+            regs.int_clr().write(|w| w.usb_bus_reset().clear_bit_by_one().in_token_rec_in_ep1().clear_bit_by_one());
+            self.filled = 0;
+            self.in_flight = false;
+            self.stalled = true;
+            return;
+        }
+        if self.stalled && raw.in_token_rec_in_ep1().bit_is_set() {
+            self.stalled = false;
+            if !regs.ep1_conf().read().serial_in_ep_data_free().bit_is_set() {
+                regs.int_clr().write(|w| w.serial_in_empty().clear_bit_by_one());
+                regs.ep1_conf().write(|w| w.wr_done().set_bit());
+                self.in_flight = true;
+                regs.int_ena().modify(|_, w| w.serial_in_empty().set_bit());
+            }
+            return;
+        }
+        if self.in_flight && raw.serial_in_empty().bit_is_set() {
             regs.int_clr().write(|w| w.serial_in_empty().clear_bit_by_one());
             self.in_flight = false;
         }
