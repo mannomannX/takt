@@ -80,7 +80,7 @@ pub fn check(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
     }
 
     let Some(verdict) = load.judge(&target.c_target, target.t_io_ps) else {
-        let fehlend: Vec<&str> = target.c_target.missing_for(load.total()).iter().map(|c| c.name()).collect();
+        let fehlend = target.c_target.missing_for(load.total());
         out.push(
             Diagnostic::new(
                 Severity::Warning,

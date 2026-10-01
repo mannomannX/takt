@@ -44,5 +44,10 @@ panic = "abort"
 codegen-units = 1
 debug = true
 lto = true
-# Gemessen: 20 % weniger Flash als `3`, `z` ist groesser als `s`.
+# Gemessen: 20 % weniger Flash als `3`, `z` ist groesser als `s`. Auch die
+# korrekt gerundete Mathematik bleibt bei `s`: Der C6 fuehrt aus dem Flash
+# ueber einen Cache aus, und mit `3` wurde ihr teuerster Aufruf mit kaltem
+# Cache nicht schneller (`f64` 155 631 statt 158 188 Zyklen), in `f32`
+# langsamer (125 902 statt 82 126) — anders als auf dem F401 ohne Cache
+# (FB-344).
 opt-level = "s"

@@ -26,15 +26,21 @@
 //! | `round`, `floor`, `ceil`, `trunc` | exakt, nur Rundungsmodus |
 //! | `abs`, `copysign` | exakt, Vorzeichenbits |
 //!
-//! Die transzendenten Funktionen (`sin`, `cos`, `tan`, `asin`, `acos`,
-//! `atan`, `atan2`, `exp`, `log`, `pow`) folgen nach dem Muster von
-//! CORE-MATH; bis dahin melden sie [`Unsupported`].
+//! Stufe 2 sind die transzendenten Funktionen `exp`, `log`, `sin`, `cos`,
+//! `tan`, `asin`, `acos`, `atan`, `atan2` und `pow`, korrekt gerundet nach
+//! dem Ansatz von CORE-MATH: eine Naeherung, deren Fehler beweisbar unter
+//! dem Abstand jedes Ergebnisses zur naechsten Rundungsgrenze liegt. Sie
+//! rechnen nur mit Ganzzahlen (`big.rs`, `elem.rs`) und brauchen darum
+//! weder `std` noch eine FPU. Die Sonderwerte folgen IEEE 754-2019 9.2;
+//! NaN ist immer dasselbe ruhige NaN.
 //!
 //! # Keine Panics
 //!
 //! 13.8 verlangt Panic-Freiheit unter Fuzzing. Keine Funktion dieses
-//! Crates indiziert, allokiert oder rechnet mit `unwrap`; jede nimmt
-//! jedes Bitmuster entgegen, einschliesslich NaN und Unendlich. Die
+//! Crates allokiert oder rechnet mit `unwrap`; indiziert wird nur in Felder
+//! fester Laenge mit Grenzen aus der Konstruktion, und Tabellenindizes sind
+//! auf ihren Bereich geklemmt. Jede Funktion nimmt jedes Bitmuster entgegen,
+//! einschliesslich NaN und Unendlich. Die
 //! Frage, ob ein Ergebnis endlich sein *muss*, beantwortet der Aufrufer
 //! (4.1: `ArithmeticFault(NonFinite)`), nicht die Bibliothek.
 
@@ -44,12 +50,14 @@
 // Hardwarebefehle, die 4.2 verlangt.
 #![cfg_attr(not(feature = "std"), no_std)]
 
-mod cost;
+mod big;
+mod elem;
 mod exact;
 #[cfg(feature = "std")]
 pub mod mat;
+mod table;
 
-pub use cost::{Cost, cost_of};
+use big::{F32, F64};
 #[cfg(feature = "std")]
 pub use exact::{
     ceil_f32, ceil_f64, floor_f32, floor_f64, fma_f32, fma_f64, round_f32, round_f64, sqrt_f32, sqrt_f64, trunc_f32,
@@ -157,15 +165,9 @@ pub enum Curated {
 /// eine Funktion als verfuegbar, die beim Aufruf fehlt.
 pub fn curated(f: Fun) -> Curated {
     match f {
-        Fun::Abs | Fun::CopySign => Curated::Yes,
-        Fun::Sqrt | Fun::Fma | Fun::Round | Fun::Floor | Fun::Ceil | Fun::Trunc => {
-            if cfg!(feature = "std") {
-                Curated::Yes
-            } else {
-                Curated::NotYet
-            }
-        }
-        Fun::Sin
+        Fun::Abs
+        | Fun::CopySign
+        | Fun::Sin
         | Fun::Cos
         | Fun::Tan
         | Fun::Asin
@@ -174,7 +176,14 @@ pub fn curated(f: Fun) -> Curated {
         | Fun::Atan2
         | Fun::Exp
         | Fun::Log
-        | Fun::Pow => Curated::NotYet,
+        | Fun::Pow => Curated::Yes,
+        Fun::Sqrt | Fun::Fma | Fun::Round | Fun::Floor | Fun::Ceil | Fun::Trunc => {
+            if cfg!(feature = "std") {
+                Curated::Yes
+            } else {
+                Curated::NotYet
+            }
+        }
     }
 }
 
@@ -183,4 +192,81 @@ pub fn curated(f: Fun) -> Curated {
 pub struct Unsupported {
     /// Die nicht kuratierte Funktion.
     pub fun: Fun,
+}
+
+// ------------------------------------------------- Stufe 2: transzendent
+//
+// Je Funktion ein Einstieg je Breite; `f32` rechnet mit zwei Woertern
+// Mantisse, `f64` mit vier (`elem.rs`). Das Bitmuster geht hinein und
+// heraus — kein Schritt dazwischen benutzt Gleitkommaarithmetik.
+
+macro_rules! unary {
+    ($(#[$doc:meta])* $f64:ident, $f32:ident, $imp:ident) => {
+        $(#[$doc])*
+        pub fn $f64(x: f64) -> f64 {
+            f64::from_bits(elem::$imp::<4>(x.to_bits(), F64))
+        }
+
+        $(#[$doc])*
+        pub fn $f32(x: f32) -> f32 {
+            f32::from_bits(elem::$imp::<2>(u64::from(x.to_bits()), F32) as u32)
+        }
+    };
+}
+
+unary!(
+    /// e^x, korrekt gerundet.
+    exp_f64, exp_f32, exp
+);
+unary!(
+    /// Natuerlicher Logarithmus, korrekt gerundet; ln(±0) = −∞, NaN unter null.
+    log_f64, log_f32, log
+);
+unary!(
+    /// Sinus, korrekt gerundet fuer jedes endliche Argument.
+    sin_f64, sin_f32, sin
+);
+unary!(
+    /// Kosinus, korrekt gerundet fuer jedes endliche Argument.
+    cos_f64, cos_f32, cos
+);
+unary!(
+    /// Tangens, korrekt gerundet fuer jedes endliche Argument.
+    tan_f64, tan_f32, tan
+);
+unary!(
+    /// Arkussinus, korrekt gerundet; NaN ausserhalb [−1, 1].
+    asin_f64, asin_f32, asin
+);
+unary!(
+    /// Arkuskosinus, korrekt gerundet; NaN ausserhalb [−1, 1].
+    acos_f64, acos_f32, acos
+);
+unary!(
+    /// Arkustangens, korrekt gerundet.
+    atan_f64, atan_f32, atan
+);
+
+/// Der Winkel von (x, y), korrekt gerundet; Nullen und Unendlichkeiten nach
+/// IEEE 754-2019 9.2.1.
+pub fn atan2_f64(y: f64, x: f64) -> f64 {
+    f64::from_bits(elem::atan2::<4>(y.to_bits(), x.to_bits(), F64))
+}
+
+/// Der Winkel von (x, y), korrekt gerundet; Nullen und Unendlichkeiten nach
+/// IEEE 754-2019 9.2.1.
+pub fn atan2_f32(y: f32, x: f32) -> f32 {
+    f32::from_bits(elem::atan2::<2>(u64::from(y.to_bits()), u64::from(x.to_bits()), F32) as u32)
+}
+
+/// x^y, korrekt gerundet, auch dort, wo das Ergebnis genau zwischen zwei
+/// Gleitkommazahlen liegt; Sonderfaelle nach IEEE 754-2019 9.2.1.
+pub fn pow_f64(x: f64, y: f64) -> f64 {
+    f64::from_bits(elem::pow::<4>(x.to_bits(), y.to_bits(), F64))
+}
+
+/// x^y, korrekt gerundet, auch dort, wo das Ergebnis genau zwischen zwei
+/// Gleitkommazahlen liegt; Sonderfaelle nach IEEE 754-2019 9.2.1.
+pub fn pow_f32(x: f32, y: f32) -> f32 {
+    f32::from_bits(elem::pow::<2>(u64::from(x.to_bits()), u64::from(y.to_bits()), F32) as u32)
 }

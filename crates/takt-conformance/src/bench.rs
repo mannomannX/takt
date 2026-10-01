@@ -40,15 +40,16 @@ use crate::board::{Board, Options};
 pub enum Probe {
     /// Gewoehnliche Operationen einer Klasse.
     Ops(CostClass),
-    /// Operationen eigenen Gewichts (7.2): Division, `fma`, `sqrt` in
-    /// einer Zahlklasse, der Hook der Runtime unter den Aufrufen.
+    /// Operationen eigenen Gewichts (7.2): Division, `fma`, `sqrt` und die
+    /// korrekt gerundete Mathematik in einer Zahlklasse, der Hook der
+    /// Runtime unter den Aufrufen.
     Heavy(Heavy, CostClass),
 }
 
 impl Probe {
     /// Die Reihenfolge der Kalibrierung: Jede Probe braucht nur Klassen, die
     /// vor ihr stehen.
-    pub const ORDER: [Probe; 15] = [
+    pub const ORDER: [Probe; 17] = [
         Probe::Ops(CostClass::I32),
         Probe::Ops(CostClass::I64),
         Probe::Ops(CostClass::F32),
@@ -64,6 +65,8 @@ impl Probe {
         Probe::Heavy(Heavy::Fma, CostClass::F64),
         Probe::Heavy(Heavy::Sqrt, CostClass::F32),
         Probe::Heavy(Heavy::Sqrt, CostClass::F64),
+        Probe::Heavy(Heavy::Math, CostClass::F32),
+        Probe::Heavy(Heavy::Math, CostClass::F64),
     ];
 
     /// Der Name wie in der Hardware-Konfiguration (`i32`, `i32_div`, `f32_fma`).
@@ -115,6 +118,43 @@ pub fn probe_kernels(probe: Probe) -> [String; 2] {
     }
 }
 
+/// Die Funktion, die die Probe `math` misst, solange das Board keine
+/// teurere gemeldet hat.
+pub const MATH_DEFAULT: &str = "pow";
+
+/// Die beiden Kerne der Probe `math` mit der Funktion `fun` (FB-344).
+///
+/// **Die teuerste Funktion, nicht eine feste.** Ein Gewicht gilt fuer alle
+/// zehn, also muss es an der teuersten gemessen sein — und welche das ist,
+/// haengt am Kern: In der ersten Messung (2026-10-01) war es auf dem F401
+/// `acos` in beiden Breiten, auf dem C6 `asin` in `f64` und `pow` in `f32`.
+/// `run` laesst darum zuerst das Messprogramm `natives` die Zyklen jedes
+/// Einstiegs zaehlen und misst dann die teuerste Funktion im erzeugten Code,
+/// mit ihrer Pruefung des Definitionsbereichs.
+pub fn math_kernels(fun: &str, class: CostClass) -> [String; 2] {
+    let probe = Probe::Heavy(Heavy::Math, class);
+    [kernel(probe, PAIRS.0, fun), kernel(probe, PAIRS.1, fun)]
+}
+
+/// Ein Paar der Probe `math`: jede Zeile ein Aufruf auf dem langsamen Weg
+/// der Funktion — `sin`, `cos` und `tan` mit Reduktion nach Payne und Hanek,
+/// `atan` ueber den Kehrwert und mit Tabelle, `pow` mit gebrochenem
+/// Exponenten — und ein Fixpunkt im Definitionsbereich.
+fn math_pair(fun: &str) -> &'static str {
+    match fun {
+        "exp" => "            a = exp(b * 0.5 - 1.0)\n            b = exp(a * 0.5 - 1.0)\n",
+        "log" => "            a = ln(b + 2.0)\n            b = ln(a + 2.0)\n",
+        "sin" => "            a = sin(b + 1.0e10)\n            b = sin(a + 1.0e10)\n",
+        "cos" => "            a = cos(b + 1.0e10)\n            b = cos(a + 1.0e10)\n",
+        "tan" => "            a = tan(b + 1.0e10) * 0.001\n            b = tan(a + 1.0e10) * 0.001\n",
+        "asin" => "            a = asin(b * 0.2 + 0.2)\n            b = asin(a * 0.2 + 0.2)\n",
+        "acos" => "            a = acos(b * 0.25)\n            b = acos(a * 0.25)\n",
+        "atan" => "            a = atan(b * 0.25 + 1.5)\n            b = atan(a * 0.25 + 1.5)\n",
+        "atan2" => "            a = atan2(b + 0.5, b - 2.0)\n            b = atan2(a + 0.5, a - 2.0)\n",
+        _ => "            a = pow(b + 0.5, 0.75)\n            b = pow(a + 0.25, 0.75)\n",
+    }
+}
+
 /// Der Quelltext eines Klassenkerns mit `pairs` Paaren von Anweisungen.
 ///
 /// Jeder Kern haelt zwei Variablen, deren jede aus der anderen entsteht:
@@ -137,6 +177,11 @@ pub fn probe_kernels(probe: Probe) -> [String; 2] {
 /// liest die oberen Bits, also bleibt die Maske stehen — fuenf
 /// Operationen, fuenf Befehle.
 pub fn class_kernel(probe: Probe, pairs: u32) -> String {
+    kernel(probe, pairs, MATH_DEFAULT)
+}
+
+/// [`class_kernel`] mit der Funktion `math` fuer die Probe `math`.
+fn kernel(probe: Probe, pairs: u32, math: &str) -> String {
     let float = match probe {
         Probe::Ops(CostClass::F32) | Probe::Heavy(_, CostClass::F32) => "    float    = f32\n",
         _ => "",
@@ -189,6 +234,8 @@ pub fn class_kernel(probe: Probe, pairs: u32) -> String {
         Probe::Heavy(Heavy::Sqrt, _) => {
             ("float", "            a = sqrt(b + 1.25)\n            b = sqrt(a + 2.5)\n", "", ("1.0", "3.0"))
         }
+        // Die Mathematik misst ihre teuerste Funktion (`math_kernels`).
+        Probe::Heavy(Heavy::Math, _) => ("float", math_pair(math), "", ("1.0", "3.0")),
         // Jeder Alert kippt in jedem Tick: Die Runtime sieht eine Flanke und
         // meldet sie, der teuerste Weg des Hooks (5.6).
         Probe::Heavy(Heavy::Hook, _) => (
@@ -419,7 +466,8 @@ pub struct ProbeRow {
     pub small: Series,
     /// Siehe `small`.
     pub large: Series,
-    /// Das Gewicht in Pikosekunden, vor einer Streckung.
+    /// Das Gewicht in Pikosekunden, vor einer Streckung; bei der Mathematik
+    /// mindestens ihr teuerster Einstieg ([`Calibration::cover_math`]).
     pub ps: u64,
 }
 
@@ -606,6 +654,9 @@ pub struct Outcome {
     /// Die kuratierten Natives: Ergebnisse gegen den Wirt, Stack gegen die
     /// Zusage (13.8).
     pub natives: Vec<crate::natives::Row>,
+    /// Die korrekt gerundete Mathematik: Ergebnisse gegen die Norm, Stack
+    /// und Zyklen je Funktion (4.2).
+    pub math: Vec<crate::math::Row>,
     /// Der leere Kern im Messprogramm: Subnormal-Vektor und Kerntakt.
     pub frame: Measured,
     /// Messungen je Kern.
@@ -633,11 +684,28 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
     let looped = board.run(&elf, &options)?;
     let (stack_reserve, tick_jitter_ns) = (summary_value(&looped, "stack"), tick_jitter(&looped));
     log(&format!("Tickschleife: Stack {stack_reserve:?} Byte, Jitter {tick_jitter_ns:?} ns"));
+    // Die Natives und die Mathematik zuerst: Ihre Zyklen sagen, welche
+    // Funktion die Probe `math` messen muss.
+    let (natives, math) = natives_on(board, &frame_path)?;
+    log(&format!("Natives: {} Funktionen, Mathematik: {} Funktionen", natives.len(), math.len()));
+    let slowest = |class: CostClass| {
+        math.iter()
+            .filter(|r| r.wide == (class == CostClass::F64))
+            .max_by_key(|r| r.cycles)
+            .map_or(MATH_DEFAULT, |r| r.fun)
+    };
     let mut probes = Vec::new();
     for probe in Probe::ORDER {
         let mut costs = [CostVec::default(); 2];
         let mut series = [Series::default(); 2];
-        for (i, source) in probe_kernels(probe).into_iter().enumerate() {
+        let kernels = match probe {
+            Probe::Heavy(Heavy::Math, class) => {
+                log(&format!("{}: misst `{}`", probe.name(), slowest(class)));
+                math_kernels(slowest(class), class)
+            }
+            _ => probe_kernels(probe),
+        };
+        for (i, source) in kernels.into_iter().enumerate() {
             let size = ["klein", "gross"][i];
             costs[i] = cost_of(&source).map_err(|e| format!("Kern {} {size}: {e}", probe.name()))?;
             let m = measure(board, &write_kernel(&format!("{}_{size}", probe.name()), &source)?, None, runs)?;
@@ -658,23 +726,31 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
         references.push((name.to_string(), cost, m.takt));
         kernels.push(KernelRow { name: name.to_string(), takt: m.takt, c, implicit_checks });
     }
-    let calibration = calibrate(frame.core_hz, &frame.takt, &probes, &references)?;
-    let natives = natives_on(board, &frame_path)?;
-    log(&format!("Natives: {} Funktionen", natives.len()));
-    Ok(Outcome { calibration, kernels, natives, frame, runs, stack_reserve, tick_jitter_ns })
+    let mut calibration = calibrate(frame.core_hz, &frame.takt, &probes, &references)?;
+    calibration.cover_math(&math);
+    Ok(Outcome { calibration, kernels, natives, math, frame, runs, stack_reserve, tick_jitter_ns })
 }
 
-/// Die Vektoren der kuratierten Natives auf dem Board (13.8): Das
-/// Messprogramm `natives` rechnet sie mit dem Stack-Bedarf je Aufruf,
-/// verglichen wird mit dem Wirt. `program` bindet das Bring-up nur, weil
-/// sein Bau eines verlangt.
-pub fn natives_on(board: &mut dyn Board, program: &Path) -> Result<Vec<crate::natives::Row>, String> {
-    let spec = crate::natives::spec_path();
-    let text = std::fs::read_to_string(&spec).map_err(|e| format!("{}: {e}", spec.display()))?;
-    let vectors = crate::natives::vectors(&text)?;
+/// Die Vektoren der kuratierten Natives und der korrekt gerundeten
+/// Mathematik auf dem Board (13.8): Das Messprogramm `natives` rechnet sie
+/// mit dem Stack-Bedarf je Aufruf, die Mathematik dazu mit den Zyklen;
+/// verglichen wird mit dem Wirt und mit der Norm. `program` bindet das
+/// Bring-up nur, weil sein Bau eines verlangt.
+pub fn natives_on(
+    board: &mut dyn Board,
+    program: &Path,
+) -> Result<(Vec<crate::natives::Row>, Vec<crate::math::Row>), String> {
+    let read =
+        |spec: std::path::PathBuf| std::fs::read_to_string(&spec).map_err(|e| format!("{}: {e}", spec.display()));
+    let natives = crate::natives::vectors(&read(crate::natives::spec_path())?)?;
+    let math = crate::math::vectors(&read(crate::math::spec_path())?)?;
     let options = Options::natives();
     let elf = board.build(program, &options)?;
-    crate::natives::judge(&vectors, &crate::natives::parse(&board.run(&elf, &options)?)?)
+    let text = board.run(&elf, &options)?;
+    Ok((
+        crate::natives::judge(&natives, &crate::natives::parse(&text)?)?,
+        crate::math::judge(&math, &crate::math::parse(&text)?)?,
+    ))
 }
 
 /// Die Zahl hinter einem Wort der Abschlusszeile (`takt schlief …`).
@@ -799,6 +875,18 @@ impl Outcome {
                 if n.within_contract() { "" } else { "  UEBER DER ZUSAGE" }
             )
         });
+        let math = self.math.iter().map(|m| {
+            format!(
+                "  {:<14} {} Vektoren {}, Stack {} von {} Byte, {} Zyklen{}",
+                m.name(),
+                m.vectors,
+                if m.same_result() { "bitgleich" } else { "WEICHEN AB" },
+                m.stack,
+                takt_mir::analysis::stack::MATH_STACK,
+                m.cycles,
+                if m.within_contract() { "" } else { "  UEBER DEM VERTRAG" }
+            )
+        });
         self.kernels
             .iter()
             .map(|k| {
@@ -817,11 +905,39 @@ impl Outcome {
                 )
             })
             .chain(natives)
+            .chain(math)
             .collect()
     }
 }
 
 impl Calibration {
+    /// Hebt das Gewicht der Mathematik je Breite auf den teuersten Aufruf,
+    /// den das Messprogramm `natives` am Einstieg gezaehlt hat (FB-344).
+    ///
+    /// Die Probe misst eine Funktion an einem Fixpunkt; die Laufzeit haengt
+    /// aber auch am Argument — auf dem F401 lag `acos` in `f64` an einem
+    /// Vektor 13 % ueber dem Fixpunkt der Probe. Das Gewicht gilt fuer jeden
+    /// Aufruf, also traegt es das Maximum aus beidem, gestreckt wie die
+    /// Tabelle.
+    pub fn cover_math(&mut self, math: &[crate::math::Row]) {
+        for class in [CostClass::F32, CostClass::F64] {
+            let wide = class == CostClass::F64;
+            let Some(cycles) = math.iter().filter(|r| r.wide == wide).map(|r| u64::from(r.cycles)).max() else {
+                continue;
+            };
+            let floor = ps(cycles, self.core_hz);
+            let Some(row) = self.probes.iter_mut().find(|r| r.probe == Probe::Heavy(Heavy::Math, class)) else {
+                continue;
+            };
+            if floor > row.ps {
+                row.ps = floor;
+                let (num, den) = self.stretch;
+                let scaled = (u128::from(floor) * u128::from(num)).div_ceil(u128::from(den.max(1)));
+                self.c_target.set_heavy(Heavy::Math, class, u64::try_from(scaled).unwrap_or(u64::MAX));
+            }
+        }
+    }
+
     /// Die Tabelle als Zeilen fuer Meldungen.
     pub fn lines(&self) -> Vec<String> {
         let mut out = vec![format!("  Kerntakt {} Hz, T_IO {} ps", self.core_hz, self.t_io_ps)];
@@ -898,6 +1014,50 @@ mod tests {
     /// Jede Probe ergibt ein reines Kernpaar: `calibrate` nimmt die
     /// Kostenvektoren aller Kerne an. Die Zeiten sind erfunden; geprueft
     /// wird nur, dass kein Kern fremde Klassen traegt.
+    /// Ein teurerer Einstieg hebt das Gewicht der Mathematik, gestreckt wie die
+    /// Tabelle; ein billigerer laesst es stehen.
+    #[test]
+    fn the_costliest_entry_covers_the_math_weight() {
+        let row = |wide: bool, cycles: u32| crate::math::Row {
+            fun: "acos",
+            wide,
+            vectors: 1,
+            deviations: Vec::new(),
+            stack: 0,
+            cycles,
+        };
+        let probe = |class| ProbeRow {
+            probe: Probe::Heavy(Heavy::Math, class),
+            delta: CostVec::default(),
+            small: series(1),
+            large: series(2),
+            ps: 1_000_000,
+        };
+        let mut c = calibrate(84_000_000, &series(1), &[], &[]).expect("leer");
+        c.stretch = (2, 1);
+        c.probes = vec![probe(CostClass::F32), probe(CostClass::F64)];
+        c.cover_math(&[row(true, 84_000), row(false, 42)]);
+        assert_eq!(c.probes[1].ps, 1_000_000_000, "84 000 Zyklen bei 84 MHz");
+        assert_eq!(c.c_target.measured(Heavy::Math, CostClass::F64), Some(2_000_000_000));
+        assert_eq!(c.probes[0].ps, 1_000_000);
+        assert_eq!(c.c_target.measured(Heavy::Math, CostClass::F32), None);
+    }
+
+    /// Jede Funktion taugt als Kern der Probe `math`: Er uebersetzt, und der
+    /// Unterschied seiner Kerne zaehlt genau die zusaetzlichen Aufrufe.
+    #[test]
+    fn every_math_kernel_counts_its_calls() {
+        for fun in crate::math::FUNCTIONS {
+            for class in [CostClass::F32, CostClass::F64] {
+                let [small, large] = math_kernels(fun, class);
+                let cost = |s: &str| cost_of(s).unwrap_or_else(|e| panic!("{fun}: {e}"));
+                let d = difference(cost(&large), cost(&small)).unwrap_or_else(|e| panic!("{fun}: {e}"));
+                let calls = Probe::Heavy(Heavy::Math, class).count(d);
+                assert_eq!(calls, u64::from(2 * (PAIRS.1 - PAIRS.0)), "{fun} in {}", class.name());
+            }
+        }
+    }
+
     #[test]
     fn every_probe_is_pure() {
         let probes: Vec<(Probe, [CostVec; 2], [Series; 2])> = Probe::ORDER
@@ -968,6 +1128,7 @@ mod tests {
             calibration: calibrate(84_000_000, &series(1), &[], &[]).expect("leer"),
             kernels: vec![row],
             natives: Vec::new(),
+            math: Vec::new(),
             frame: Measured::default(),
             runs: 10,
             stack_reserve: None,

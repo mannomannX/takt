@@ -84,6 +84,14 @@ debug = true
 lto = true
 opt-level = "s"
 
+# Die korrekt gerundete Mathematik (4.2) rechnet mit Ganzzahlen ueber 128 und
+# 256 Bit. Mit `3` statt `s` braucht ihr teuerster Aufruf auf diesem Board
+# 25 bis 29 % weniger Zyklen (`acos` in `f64` 84 701 statt 113 605), und ihre
+# Laufzeit steht in jedem Budget, das sie ruft (FB-344). Der C6 bleibt bei
+# `s`, siehe dort.
+[profile.release.package.libtaktm]
+opt-level = 3
+
 [lints.rust]
 missing_docs = "warn"
 

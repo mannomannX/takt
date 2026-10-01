@@ -921,6 +921,7 @@ version = "0.1.0"
 name = "takt-native-abi"
 version = "0.1.0"
 dependencies = [
+ "libtaktm",
  "takt-crypto",
  "takt-native",
 ]

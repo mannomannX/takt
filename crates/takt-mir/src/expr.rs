@@ -617,7 +617,8 @@ pub enum ExprKind {
 
 /// Eingebaute Primitive: total oder mit definiertem Fault (`Domain`, `RangeFault`,
 /// `NonFinite`); anders als Natives ohne Kostenvertrag, ihre Kosten zaehlt das
-/// Kostenmodell nach Klasse. Polymorph ueber Breiten und Einheiten
+/// Kostenmodell nach Klasse, die korrekt gerundete Mathematik mit eigenem
+/// Gewicht ([`Intrinsic::is_math`]). Polymorph ueber Breiten und Einheiten
 /// (`sqrt`: `U^2 → U`; `min`, `max`, `abs`: Einheit bleibt).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(missing_docs)]
@@ -634,6 +635,8 @@ pub enum Intrinsic {
     Atan,
     Atan2,
     Exp,
+    /// Der natuerliche Logarithmus, im Quelltext `ln`: `log` leitet die
+    /// Anweisung ein (2.2).
     Log,
     Pow,
     /// Korrekt gerundetes `a * b + c` (4.2).
@@ -669,7 +672,7 @@ impl Intrinsic {
             Intrinsic::Atan => "atan",
             Intrinsic::Atan2 => "atan2",
             Intrinsic::Exp => "exp",
-            Intrinsic::Log => "log",
+            Intrinsic::Log => "ln",
             Intrinsic::Pow => "pow",
             Intrinsic::Fma => "fma",
             Intrinsic::Round => "round",
@@ -684,6 +687,25 @@ impl Intrinsic {
             Intrinsic::SaturatingSub => "saturating_sub",
             Intrinsic::Interp => "interp",
         }
+    }
+
+    /// Eine Funktion der korrekt gerundeten Mathematik (4.2): immer ein
+    /// Aufruf der Bibliothek `libtaktm`, mit eigenem Gewicht im Kostenmodell
+    /// und eigenem Stack.
+    pub fn is_math(self) -> bool {
+        matches!(
+            self,
+            Intrinsic::Sin
+                | Intrinsic::Cos
+                | Intrinsic::Tan
+                | Intrinsic::Asin
+                | Intrinsic::Acos
+                | Intrinsic::Atan
+                | Intrinsic::Atan2
+                | Intrinsic::Exp
+                | Intrinsic::Log
+                | Intrinsic::Pow
+        )
     }
 
     /// Alle Primitive.

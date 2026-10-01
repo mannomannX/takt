@@ -141,6 +141,32 @@ pub fn write_native<P: Port, const N: usize>(
     t.flush();
 }
 
+/// Eine Zeile `math <i> <ergebnis> stack <byte> cycles <zyklen>` (4.2,
+/// 13.8): das Ergebnis eines Vektors der Mathematik als Bitmuster in Hex,
+/// der Stack-Bedarf des Einstiegs `takt_m_*` und die Zyklen eines Aufrufs.
+/// `takt_conformance::math` liest sie und vergleicht mit der Norm.
+pub fn write_math<P: Port, const N: usize>(
+    t: &mut Telemetry<P, N>,
+    index: usize,
+    result: u64,
+    stack: u32,
+    cycles: u32,
+) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    t.write("math ");
+    t.write_u64(index as u64);
+    t.write(" ");
+    for shift in (0..16).rev() {
+        t.write_byte(HEX[((result >> (4 * shift)) & 15) as usize]);
+    }
+    t.write(" stack ");
+    t.write_u64(u64::from(stack));
+    t.write(" cycles ");
+    t.write_u64(u64::from(cycles));
+    t.newline();
+    t.flush();
+}
+
 /// Ein Fall des Subnormal-Vektors: zwei Operanden und das erwartete
 /// Ergebnis als Bitmuster, dazu die Operation.
 type Case<B, F> = (B, B, B, fn(F, F) -> F);

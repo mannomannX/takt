@@ -125,7 +125,9 @@ Szenarios, 13.5; fehlt es, gilt der aus `system:`), 12 (`Pattern.Text` ohne Feld
 den Automaten baut der Codegen je Handler-Block aus den Bausteinen, 11.2, FB-282; ein Leser
 überspringt das Feld in älteren Dateien), 13 (`CostVec.call_hook`, Feld 16, `dflt`: die Aufrufe
 eines Hooks der Runtime unter `call`, FB-295; fehlt es, gilt null — so rechneten die Dateien, die
-es nicht kannten). Ein Leser mit kleinerer
+es nicht kannten), 14 (`CostVec.f32_math` und `f64_math`, Felder 17 und 18, `dflt`: die Aufrufe
+der korrekt gerundeten Mathematik unter `f32` und `f64`, 4.2, FB-344; fehlen sie, gilt null — die
+Dateien davor konnten die Mathematik nicht rufen). Ein Leser mit kleinerer
 `format_version` als die Datei lehnt sie ab (`UnsupportedVersion`);
 alles andere liest er, Unbekanntes überspringend. Je Version liegt die Datei, die ihr Compiler schrieb, in `crates/takt-sema/tests/mir-golden/` (ab Version 2; Version 1 hatte keinen Übersetzer), und `mir_versions.rs` verlangt, dass der heutige Leser sie annimmt und der Interpreter sie wie das frisch übersetzte Programm ausführt; ein Versionssprung legt seine Datei dazu. Der Kopf ist ohne Stringtabelle lesbar
 (`read_header`), damit Werkzeuge Edition und Compiler-Version ohne Vollparse zeigen.

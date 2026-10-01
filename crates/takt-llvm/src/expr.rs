@@ -1008,9 +1008,66 @@ fn intrinsic(
             m.needs_intrinsic(&format!("{t} @llvm.fma.{s}({t}, {t}, {t})"));
             m.inst(&format!("call {t} @llvm.fma.{s}({t} {}, {t} {}, {t} {})", x.value, y.value, z.value))
         }
+        // 4.2: die korrekt gerundete Mathematik aus `libtaktm` ueber
+        // `takt_m_<name>_<breite>` (takt-native-abi). Den Definitionsbereich
+        // prueft der Codegen wie der Interpreter vor dem Aufruf (4.1); ein
+        // nicht endliches Ergebnis faengt der `Checked`-Knoten der MIR.
+        op if op.is_math() => {
+            let x = a(0)?;
+            let (t, s) = (&x.ty, crate::matrix::suffix(&x.ty));
+            let lit = |v: f64| float_literal(v, t);
+            let defined = match op {
+                Intrinsic::Log => Some(m.inst(&format!("fcmp ogt {t} {}, {}", x.value, lit(0.0))).to_string()),
+                Intrinsic::Asin | Intrinsic::Acos => {
+                    let lo = m.inst(&format!("fcmp oge {t} {}, {}", x.value, lit(-1.0))).to_string();
+                    let hi = m.inst(&format!("fcmp ole {t} {}, {}", x.value, lit(1.0))).to_string();
+                    Some(m.inst(&format!("and i1 {lo}, {hi}")).to_string())
+                }
+                Intrinsic::Pow => Some(pow_defined(&x.value, &a(1)?.value, t, m)),
+                _ => None,
+            };
+            if let Some(ok) = defined {
+                let target = vars
+                    .fault_to(FaultKind::Arithmetic(ArithKind::Domain), m)
+                    .ok_or(NotYet { what: "Definitionsbereich ohne Fault-Pfad" })?;
+                let go_on = format!("im_bereich_{}", m.next_label());
+                m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{target}"));
+                m.label(&go_on);
+            }
+            // Die Einstiege tragen die Namen der C-Bibliothek; `ln` heisst dort `log`.
+            let name = format!("takt_m_{}_{s}", if op == Intrinsic::Log { "log" } else { op.name() });
+            if matches!(op, Intrinsic::Atan2 | Intrinsic::Pow) {
+                let y = a(1)?;
+                m.needs_intrinsic(&format!("{t} @{name}({t}, {t})"));
+                m.inst(&format!("call {t} @{name}({t} {}, {t} {})", x.value, y.value))
+            } else {
+                m.needs_intrinsic(&format!("{t} @{name}({t})"));
+                m.inst(&format!("call {t} @{name}({t} {})", x.value))
+            }
+        }
         _ => return Err(NotYet { what: op.name() }),
     };
     Ok(Lowered { value: value.to_string(), ty: want.clone() })
+}
+
+/// Liegt `pow(x, y)` im Definitionsbereich (4.1)? `y = 0`, `x > 0`, `x = 0`
+/// mit `y > 0` oder `x < 0` mit ganzem `y` — wie im Interpreter.
+fn pow_defined(x: &str, y: &str, t: &LlvmType, m: &mut Module) -> String {
+    let zero = float_literal(0.0, t);
+    let s = crate::matrix::suffix(t);
+    let y_zero = m.inst(&format!("fcmp oeq {t} {y}, {zero}")).to_string();
+    let x_pos = m.inst(&format!("fcmp ogt {t} {x}, {zero}")).to_string();
+    let x_zero = m.inst(&format!("fcmp oeq {t} {x}, {zero}")).to_string();
+    let y_pos = m.inst(&format!("fcmp ogt {t} {y}, {zero}")).to_string();
+    let pole_free = m.inst(&format!("and i1 {x_zero}, {y_pos}")).to_string();
+    let x_neg = m.inst(&format!("fcmp olt {t} {x}, {zero}")).to_string();
+    m.needs_intrinsic(&format!("{t} @llvm.trunc.{s}({t})"));
+    let whole = m.inst(&format!("call {t} @llvm.trunc.{s}({t} {y})")).to_string();
+    let y_int = m.inst(&format!("fcmp oeq {t} {whole}, {y}")).to_string();
+    let real = m.inst(&format!("and i1 {x_neg}, {y_int}")).to_string();
+    let any = m.inst(&format!("or i1 {y_zero}, {x_pos}")).to_string();
+    let any = m.inst(&format!("or i1 {any}, {pole_free}")).to_string();
+    m.inst(&format!("or i1 {any}, {real}")).to_string()
 }
 
 /// `R.decode(b)` (3.7).

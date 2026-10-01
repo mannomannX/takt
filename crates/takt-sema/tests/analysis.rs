@@ -1074,45 +1074,39 @@ fn the_protocol_case_keeps_its_implicit_checks_low() {
 }
 
 #[test]
-fn an_uncurated_math_function_is_rejected_before_the_run() {
+fn every_math_function_is_curated_and_compiles() {
     // 13.8: Eine Funktion kommt in die kuratierte Menge, *nachdem* ihre
-    // Bit-Gleichheit belegt ist. `sin` ist es noch nicht — und eine Zahl
-    // aus der Plattformbibliothek waere auf einem anderen Target eine
-    // andere, also behauptete sie eine Zusage, die sie nicht haelt
-    // (Satz 9.4.4). Der Compiler sagt es vor dem Lauf.
-    let src = format!(
-        "{HEAD}{OUT}{}",
-        "\
-machine m:
-    var x : float = 0.0
-    initial RUN
-    state RUN:
-        loop:
-            x = sin(1.0)
-            n = 0
-"
-    );
+    // Bit-Gleichheit belegt ist. Seit M10 Schritt 28 sind es alle zehn
+    // transzendenten (4.2), neben `sqrt` und `fma` aus Stufe 1.
     let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
-    let out = takt_sema::compile(&src, &options);
-    let text: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
-    assert!(text.iter().any(|t| t.contains("korrekt gerundet")), "`sin` wird abgelehnt: {text:?}");
-
-    // `sqrt` und `fma` sind kuratiert (Stufe 1) und laufen.
-    let src = format!(
-        "{HEAD}{OUT}{}",
-        "\
+    for call in [
+        "sin(1.0)",
+        "cos(1.0)",
+        "tan(1.0)",
+        "asin(0.5)",
+        "acos(0.5)",
+        "atan(1.0)",
+        "atan2(1.0, 2.0)",
+        "exp(1.0)",
+        "ln(2.0)",
+        "pow(2.0, 0.5)",
+        "sqrt(2.0) + fma(1.0, 2.0, 3.0)",
+    ] {
+        let src = format!(
+            "{HEAD}{OUT}\
 machine m:
     var x : float = 0.0
     initial RUN
     state RUN:
         loop:
-            x = sqrt(2.0) + fma(1.0, 2.0, 3.0)
+            x = {call}
             n = 0
 "
-    );
-    let out = takt_sema::compile(&src, &options);
-    let errors: Vec<&str> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code).collect();
-    assert!(errors.is_empty(), "`sqrt` und `fma` sind kuratiert: {errors:?}");
+        );
+        let out = takt_sema::compile(&src, &options);
+        let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+        assert!(errors.is_empty(), "`{call}` ist kuratiert: {errors:?}");
+    }
 }
 
 /// 12.3: Die Stacktiefe ist der laengste Pfad im Aufrufgraphen.

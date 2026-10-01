@@ -27,6 +27,7 @@ pub mod board;
 pub mod harness;
 pub mod layout;
 pub mod limits;
+pub mod math;
 pub mod mcu;
 pub mod natives;
 mod ports;

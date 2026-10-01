@@ -184,7 +184,9 @@ pub fn agreement_with(board: &mut dyn Board, names: &[&str], only: Option<&str>,
         };
         let interpreted = run_interpreted(&p);
         let missing: Vec<String> = output_names(&interpreted).difference(&output_names(&text)).cloned().collect();
-        let diffs = compare(&interpreted, &text);
+        // Ein `f32` schreibt das Board als seinen Wert in `f64` (4.2, FB-356).
+        let widened = takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(&p));
+        let diffs = compare(&widened, &text);
         if !missing.is_empty() || !diffs.is_empty() {
             let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
             failed.push(format!(
@@ -205,21 +207,41 @@ pub fn agreement_with(board: &mut dyn Board, names: &[&str], only: Option<&str>,
 /// wenn nicht.
 pub fn natives_agree(board: &mut dyn Board) -> Vec<String> {
     let program = board::corpus_path("01_minimal.takt");
+    let name = board.name().to_string();
     match takt_conformance::bench::natives_on(board, &program) {
-        Ok(rows) => rows
-            .iter()
-            .inspect(|r| eprintln!("{} {}: Stack {} von {} Byte", board.name(), r.native.name(), r.stack, r.contract))
-            .filter(|r| !r.same_result() || !r.within_contract())
-            .map(|r| {
-                format!(
-                    "{}: abweichende Zeilen {:?}, Stack {} von {} Byte",
-                    r.native.name(),
-                    r.deviations,
-                    r.stack,
-                    r.contract
-                )
-            })
-            .collect(),
+        Ok((natives, math)) => {
+            let natives = natives
+                .iter()
+                .inspect(|r| eprintln!("{name} {}: Stack {} von {} Byte", r.native.name(), r.stack, r.contract))
+                .filter(|r| !r.same_result() || !r.within_contract())
+                .map(|r| {
+                    format!(
+                        "{}: abweichende Zeilen {:?}, Stack {} von {} Byte",
+                        r.native.name(),
+                        r.deviations,
+                        r.stack,
+                        r.contract
+                    )
+                })
+                .collect::<Vec<_>>();
+            let contract = takt_mir::analysis::stack::MATH_STACK;
+            let math = math
+                .iter()
+                .inspect(|r| {
+                    eprintln!("{name} {}: Stack {} von {contract} Byte, {} Zyklen", r.name(), r.stack, r.cycles)
+                })
+                .filter(|r| !r.same_result() || !r.within_contract())
+                .map(|r| {
+                    format!(
+                        "{}: abweichende Zeilen {:?}, Stack {} von {contract} Byte",
+                        r.name(),
+                        r.deviations,
+                        r.stack
+                    )
+                })
+                .collect::<Vec<_>>();
+            natives.into_iter().chain(math).collect()
+        }
         Err(e) => vec![format!("kein Lauf der Natives: {e}")],
     }
 }

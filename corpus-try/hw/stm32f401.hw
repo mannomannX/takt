@@ -1,4 +1,4 @@
-# takt-hw 11
+# takt-hw 12
 # WeAct Black Pill (STM32F401CCU6, Cortex-M4F): Kalibrierung, Speicher,
 # Geraete und Kanaele fuer 29_heartbeat.takt (8.10).
 #
@@ -10,7 +10,11 @@
 # kleinen Kern der Probe `call`: Ohne Cache verschiebt jede Aenderung am
 # Image die Ausrichtung im Flash um einige Prozent, und die Streckung
 # traegt das. `guard` und `jitter` je Kanal misst erst `takt driver-test`
-# (FB-285).
+# (FB-285). Die korrekt gerundete Mathematik hat ein Gewicht je Breite
+# (`f32_math`, `f64_math`; Konfiguration 12, FB-344): gemessen an der
+# teuersten Funktion des Boards, `acos` in beiden Breiten, und mindestens ihr
+# teuerster Vektor am Einstieg (`acos` in `f64` 84 701 Zyklen); `libtaktm`
+# rechnet hier mit `opt-level = 3`.
 #
 # `ram` und `flash` stehen im Datenblatt; die ersten 16 KiB Flash gehoeren
 # dem HID-Bootloader, das Journal liegt in zwei 16-KiB-Sektoren dahinter.
@@ -35,12 +39,14 @@ i64_div = 2164130
 f32_div = 446163
 f64_div = 3611212
 tick_jitter_ns = 0
-stack_reserve = 764
+stack_reserve = 788
 f32_fma = 263537
 f64_fma = 6905318
 f32_sqrt = 473362
 f64_sqrt = 4167134
 call_hook = 2564897
+f32_math = 505766065
+f64_math = 1116963247
 
 [device.gpio]
 driver = "stm32f4-gpio"

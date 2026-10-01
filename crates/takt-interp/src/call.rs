@@ -6,10 +6,10 @@
 //! Systems, und glibc, musl und die ARM-Bibliotheken unterscheiden sich im
 //! letzten Bit — Satz 9.4.4 waere damit unbelegbar (plan/m4.md 1).
 //!
-//! Was `libtaktm` noch nicht kuratiert hat (13.8), rechnet hier auch nicht.
-//! Die Ablehnung steht in `takt-sema` als Stufenmeldung, damit sie den
-//! Programmierer vor dem Lauf erreicht; der Trap hier ist der Rueckhalt
-//! fuer eine MIR, die an der Pruefung vorbeikam.
+//! Seit M10 Schritt 28 sind alle Funktionen der Mathematik kuratiert (13.8):
+//! die von IEEE-754 festgelegten und die korrekt gerundeten transzendenten.
+//! Den Definitionsbereich prueft der Interpreter vor dem Aufruf (4.1), wie
+//! der erzeugte Code.
 
 use takt_diag::Span;
 use takt_mir::expr::{BinaryOp, Intrinsic};
@@ -308,22 +308,34 @@ impl Ctx<'_, '_> {
                     Intrinsic::Asin | Intrinsic::Acos if !(-1.0..=1.0).contains(&f) => {
                         return Err(domain("Argument ausserhalb [-1, 1]"));
                     }
-                    Intrinsic::Log if f <= 0.0 => return Err(domain("log eines nicht positiven Werts")),
+                    Intrinsic::Log if f <= 0.0 => return Err(domain("ln eines nicht positiven Werts")),
                     _ => {}
                 }
-                // Noch nicht kuratiert (13.8): keine korrekt gerundete
-                // Implementierung, also auch kein Ergebnis. Die Plattform-libm
-                // zu nehmen hiesse, eine Zusage zu behaupten, die sie nicht
-                // haelt.
-                let _ = f;
-                uncurated(op)
+                // 4.2: korrekt gerundet aus `libtaktm`; ein Ueberlauf von `exp`
+                // ist nicht endlich (4.1).
+                match x {
+                    Value::F32(v) => arith::finite(FloatWidth::F32, f64::from(math_f32(op, v, 0.0)?), span, tick),
+                    _ => arith::finite(FloatWidth::F64, math_f64(op, f, 0.0)?, span, tick),
+                }
             }
             Intrinsic::Atan2 | Intrinsic::Pow => {
-                // Wie oben: noch nicht kuratiert. Die Argumente werden
-                // trotzdem ausgewertet, damit ihre Faults (4.1) an derselben
-                // Stelle entstehen wie mit Implementierung.
-                let (_, _) = (a(0)?, a(1)?);
-                uncurated(op)
+                let (x, y) = (a(0)?, a(1)?);
+                let (Some(fx), Some(fy)) = (x.as_f64(), y.as_f64()) else {
+                    return bug(format!("{} auf Nicht-Fliesskomma", op.name()));
+                };
+                // 4.1: `pow` ist definiert fuer y = 0, x > 0, x = 0 mit y > 0
+                // und x < 0 mit ganzem y.
+                let defined = fy == 0.0 || fx > 0.0 || (fx == 0.0 && fy > 0.0) || (fx < 0.0 && fy.trunc() == fy);
+                if op == Intrinsic::Pow && !defined {
+                    return Err(domain("pow ausserhalb des Definitionsbereichs"));
+                }
+                match (x, y) {
+                    (Value::F32(a), Value::F32(b)) => {
+                        arith::finite(FloatWidth::F32, f64::from(math_f32(op, a, b)?), span, tick)
+                    }
+                    (Value::F64(a), Value::F64(b)) => arith::finite(FloatWidth::F64, math_f64(op, a, b)?, span, tick),
+                    _ => bug(format!("{} auf gemischten Breiten", op.name())),
+                }
             }
             Intrinsic::Fma => match (a(0)?, a(1)?, a(2)?) {
                 (Value::F32(x), Value::F32(y), Value::F32(z)) => {
@@ -427,16 +439,37 @@ impl Ctx<'_, '_> {
     }
 }
 
-/// Eine Funktion, die `libtaktm` noch nicht kuratiert hat (13.8).
-///
-/// Der Weg dahin ist eine Stufenmeldung in `takt-sema`, nicht dieser
-/// Trap — ein Programmierer soll es vor dem Lauf erfahren. Die Meldung
-/// hier faengt eine MIR ab, die an der Pruefung vorbeikam, etwa weil sie
-/// aus einer Datei gelesen wurde.
-fn uncurated(op: Intrinsic) -> EvalResult<Value> {
-    bug(format!(
-        "`{}` ist noch nicht korrekt gerundet implementiert (libtaktm, 4.2); \
-         ohne sie waere Satz 9.4.4 nicht belegbar",
-        op.name()
-    ))
+/// Die korrekt gerundete Funktion einer Primitive in `f64` (4.2); `y` nur fuer
+/// `atan2` und `pow`.
+fn math_f64(op: Intrinsic, x: f64, y: f64) -> EvalResult<f64> {
+    Ok(match op {
+        Intrinsic::Sin => libtaktm::sin_f64(x),
+        Intrinsic::Cos => libtaktm::cos_f64(x),
+        Intrinsic::Tan => libtaktm::tan_f64(x),
+        Intrinsic::Asin => libtaktm::asin_f64(x),
+        Intrinsic::Acos => libtaktm::acos_f64(x),
+        Intrinsic::Atan => libtaktm::atan_f64(x),
+        Intrinsic::Exp => libtaktm::exp_f64(x),
+        Intrinsic::Log => libtaktm::log_f64(x),
+        Intrinsic::Atan2 => libtaktm::atan2_f64(x, y),
+        Intrinsic::Pow => libtaktm::pow_f64(x, y),
+        other => return bug(format!("`{}` ist keine Funktion von libtaktm", other.name())),
+    })
+}
+
+/// Dieselbe in `f32`.
+fn math_f32(op: Intrinsic, x: f32, y: f32) -> EvalResult<f32> {
+    Ok(match op {
+        Intrinsic::Sin => libtaktm::sin_f32(x),
+        Intrinsic::Cos => libtaktm::cos_f32(x),
+        Intrinsic::Tan => libtaktm::tan_f32(x),
+        Intrinsic::Asin => libtaktm::asin_f32(x),
+        Intrinsic::Acos => libtaktm::acos_f32(x),
+        Intrinsic::Atan => libtaktm::atan_f32(x),
+        Intrinsic::Exp => libtaktm::exp_f32(x),
+        Intrinsic::Log => libtaktm::log_f32(x),
+        Intrinsic::Atan2 => libtaktm::atan2_f32(x, y),
+        Intrinsic::Pow => libtaktm::pow_f32(x, y),
+        other => return bug(format!("`{}` ist keine Funktion von libtaktm", other.name())),
+    })
 }

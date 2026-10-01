@@ -141,11 +141,15 @@ impl MachineCost {
             format!("  {} ({})", self.name, period),
             format!("    {:<22}{}", "B_m je Aktivierung", row(self.activation)),
         ];
-        // 7.2: Division, `fma` und `sqrt` haben eigene Gewichte; je Art eine
-        // Zeile, wie viele der Operationen darueber es sind.
-        for (h, label) in
-            [(Heavy::Div, "  davon Divisionen"), (Heavy::Fma, "  davon fma"), (Heavy::Sqrt, "  davon Wurzeln")]
-        {
+        // 7.2: Division, `fma`, `sqrt` und die Mathematik haben eigene
+        // Gewichte; je Art eine Zeile, wie viele der Operationen darueber es
+        // sind.
+        for (h, label) in [
+            (Heavy::Div, "  davon Divisionen"),
+            (Heavy::Fma, "  davon fma"),
+            (Heavy::Sqrt, "  davon Wurzeln"),
+            (Heavy::Math, "  davon Mathematik"),
+        ] {
             if CostClass::ALL.iter().any(|c| self.activation.heavy(h, *c) > 0) {
                 out.push(format!("    {label:<22}{}", heavy_row(self.activation, h)));
             }

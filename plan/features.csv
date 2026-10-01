@@ -42,7 +42,7 @@ SEM-3.10,Semantik/Abschnitt,3.10,Bit-Operationen und Konversionen,,M1 (Kernseman
 SEM-3.11,Semantik/Abschnitt,3.11,Matrizen fester Größe,,M6 (v1.1),fertig,"Sema `lower/matrix.rs`, Interpreter `takt-interp/src/matrix.rs`, Codegen `takt-llvm/src/matrix.rs`, Numerik `libtaktm::mat`; Korpus `46_matrices.takt` differentiell (Schritt 18)"
 SEM-3.12,Semantik/Abschnitt,3.12,Generics: Klammerklassen und Monomorphisierung,,M1 ([U]) / M6 (const) / M8 (type),fertig,"Typvariablen (M8 Schritt 3): `GenericVar::Type` mit Faehigkeit, Unifikation in `solve_call`, Memo mit Typnamen; Korpus `62_type_generics.takt`"
 SEM-4.1,Semantik/Abschnitt,4.1,Totalität als Grundsatz,,M1 (Kernsemantik),fertig,
-SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M10 (aus M1),teilweise,korrekt gerundete transzendente Funktionen in `libtaktm` (FB-344)
+SEM-4.2,Semantik/Abschnitt,4.2,Reproduzierbare Fließkomma-Arithmetik,,M10 (aus M1),fertig,"korrekt gerundete transzendente Funktionen in `libtaktm` (FB-344, M10 Schritt 28): `exp ln sin cos tan asin acos atan atan2 pow` in `f32` und `f64`, erschoepfend fuer `f32`, bitgleich auf Wirt, F401 und C6"
 SEM-4.3,Semantik/Abschnitt,4.3,"Bedingte Ausdrücke, Bool-Logik",,M1 (Kernsemantik),fertig,
 SEM-4.4,Semantik/Abschnitt,4.4,Ausdrücke sind seiteneffektfrei,,M1 (Kernsemantik),fertig,
 SEM-4.5,Semantik/Abschnitt,4.5,Native Funktionen mit Kostenvertrag,,M1 (Kernsemantik),fertig,

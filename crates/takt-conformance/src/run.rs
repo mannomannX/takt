@@ -60,6 +60,76 @@ fn outputs(text: &str) -> BTreeMap<(u64, String), Vec<String>> {
     out
 }
 
+/// Die Outputs eines Programms, deren Werte `f32` tragen (4.2): ein `f32`,
+/// ein Feld, Vektor oder Record mit `f32`-Elementen, eine Matrix in einem
+/// Programm mit `float = f32`.
+pub fn f32_outputs(p: &takt_mir::Program) -> std::collections::BTreeSet<String> {
+    use takt_mir::types::{FloatWidth, Type};
+    fn holds(p: &takt_mir::Program, ty: takt_mir::TypeId, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        match p.types.get(ty) {
+            Type::Float { width, .. } => *width == FloatWidth::F32,
+            Type::Mat { .. } => p.config.float_width == FloatWidth::F32,
+            Type::Array { elem, .. } | Type::Vec { elem, .. } | Type::Samples { elem, .. } => {
+                holds(p, *elem, depth + 1)
+            }
+            Type::Record(r) => p.records[r.index()].fields.iter().any(|f| holds(p, f.ty, depth + 1)),
+            _ => false,
+        }
+    }
+    p.channels
+        .iter()
+        .filter(|c| c.dir == takt_mir::program::Direction::Output && holds(p, c.ty, 0))
+        .map(|c| c.name.clone())
+        .collect()
+}
+
+/// Schreibt die `f32`-Werte eines Interpreter-Traces so, wie der erzeugte
+/// Code sie schreibt: als ihren Wert in `f64`.
+///
+/// Der Interpreter schreibt ein `f32` in seiner kuerzesten Form, der
+/// Wirtsrahmen nach `(double)` mit 17 Stellen und die Boards in der
+/// kuerzesten Form des `f64`; [`compare`] liest alle als `f64` und
+/// vergliche sonst Schreibweisen statt Bits. Nur die genannten Outputs: Fuer
+/// einen `f64`-Output waere dieselbe Lesart eine Lockerung.
+pub fn widen_f32(trace: &str, outputs: &std::collections::BTreeSet<String>) -> String {
+    let widen = |value: &str| -> String {
+        let mut out = String::with_capacity(value.len());
+        let mut token = String::new();
+        let flush = |token: &mut String, out: &mut String| {
+            match token.parse::<f32>() {
+                Ok(x) if token.chars().any(|c| c.is_ascii_digit()) => out.push_str(&format!("{}", f64::from(x))),
+                _ => out.push_str(token),
+            }
+            token.clear();
+        };
+        for c in value.chars() {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+') {
+                token.push(c);
+            } else {
+                flush(&mut token, &mut out);
+                out.push(c);
+            }
+        }
+        flush(&mut token, &mut out);
+        out
+    };
+    let mut out = String::with_capacity(trace.len());
+    for line in trace.lines() {
+        let mut parts = line.splitn(4, ' ');
+        match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some(t), Some("out"), Some(name), Some(value)) if t.starts_with("t=") && outputs.contains(name) => {
+                out.push_str(&format!("{t} out {name} {}", widen(value)));
+            }
+            _ => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// Vergleicht zwei Traces.
 ///
 /// Beide Seiten duerfen eine Zeile nur bei Aenderung schreiben (9.3); der
@@ -265,6 +335,19 @@ fn same_number(interpreter: &str, native: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ein `f32` des Interpreters gleicht dem Wert, den der Rahmen nach
+    /// `(double)` schreibt; ein `f64`-Output bleibt streng.
+    #[test]
+    fn f32_outputs_compare_by_value() {
+        let names: std::collections::BTreeSet<String> = ["s".to_string(), "v".to_string()].into();
+        let interp = "t=0 out s 0.9997293\nt=0 out v [0.1, 2.5 V]\nt=0 out d 0.1\n";
+        let native =
+            "t=0 out s 0.99972927570343018\nt=0 out v [0.10000000149011612, 2.5]\nt=0 out d 0.10000000149011612\n";
+        let d = compare(&widen_f32(interp, &names), native);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].output, "d");
+    }
 
     /// Der Wert vor dem Ende eines Laufs zaehlt, auch wenn im selben Tick
     /// noch der `safe`-Wert folgt (12.7).

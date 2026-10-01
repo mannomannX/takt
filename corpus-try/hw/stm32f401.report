@@ -14,7 +14,7 @@ runs = 200
 [calibration]
 t_io_ps = 3250000
 stretch = 42226191/38119946
-stack_reserve = 764
+stack_reserve = 788
 subnormal_failures = 0
 
 [probe i32]
@@ -106,6 +106,18 @@ ps = 3761905
 ops = 64
 small = 8012 8012 8012
 large = 38444 38444 38444
+
+[probe f32_math]
+ps = 456583334
+ops = 64
+small = 583723 583723 583723
+large = 2944114 2944114 2944114
+
+[probe f64_math]
+ps = 1008345239
+ops = 64
+small = 1321708 1321708 1321708
+large = 6617486 6617486 6617486
 
 [check i32 klein]
 measured_ps = 4642858
@@ -227,6 +239,22 @@ bound_ps = 108885895
 measured_ps = 457666667
 bound_ps = 510196807
 
+[check f32_math klein]
+measured_ps = 6949083334
+bound_ps = 7788125258
+
+[check f32_math gross]
+measured_ps = 35048976191
+bound_ps = 38914912522
+
+[check f64_math klein]
+measured_ps = 15734619048
+bound_ps = 17465459034
+
+[check f64_math gross]
+measured_ps = 78779595239
+bound_ps = 87301581402
+
 [check pid]
 measured_ps = 4928572
 bound_ps = 8797772
@@ -340,3 +368,27 @@ vectors = 6
 same_result = true
 stack = 488
 contract = 640
+
+[native ecdsa_p256_verify]
+vectors = 7
+same_result = true
+stack = 4480
+contract = 5600
+
+[native fft256]
+vectors = 6
+same_result = true
+stack = 4344
+contract = 5440
+
+[native rsa3072_verify]
+vectors = 8
+same_result = true
+stack = 8348
+contract = 10464
+
+[native aes_gcm_decrypt]
+vectors = 9
+same_result = true
+stack = 2188
+contract = 2752

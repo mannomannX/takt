@@ -86,8 +86,10 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// nur zu Tickbeginn geschrieben wird (7.5, 13.8). 10: die uebrigen Felder
 /// aus 8.10 — `calibration`, `max_rate_hz` und `framing` am Kanal,
 /// `profile` (Herkunft) am Geraet. 11: `call_hook`, das Gewicht eines
-/// Aufrufs in die Runtime, die ihn beobachtet (FB-295).
-pub const FORMAT_VERSION: u32 = 11;
+/// Aufrufs in die Runtime, die ihn beobachtet (FB-295). 12: `f32_math` und
+/// `f64_math`, das Gewicht eines Aufrufs der korrekt gerundeten Mathematik
+/// (4.2, FB-344).
+pub const FORMAT_VERSION: u32 = 12;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -131,9 +133,13 @@ impl CTarget {
     }
 
     /// Das Gewicht einer Operation der Art `h` in Pikosekunden: das
-    /// gemessene, aber nie weniger als das der Klasse.
+    /// gemessene, aber nie weniger als das der Klasse. Fehlt die Messung
+    /// einer Art ohne Rueckfall ([`Heavy::falls_back_to_class`]), ist es
+    /// unbeschraenkt: Die Dauer saettigt, und eine Pruefung, die sie
+    /// verwendet, scheitert laut statt still zu bestehen.
     pub fn heavy(&self, h: Heavy, c: CostClass) -> u64 {
-        self.measured(h, c).unwrap_or(0).max(self.of(c))
+        let unmeasured = if h.falls_back_to_class() { 0 } else { u64::MAX };
+        self.measured(h, c).unwrap_or(unmeasured).max(self.of(c))
     }
 
     /// Setzt das Gewicht einer Operation der Art `h`; wo es die Art in der
@@ -162,15 +168,20 @@ impl CTarget {
         CostClass::ALL.iter().copied().filter(|c| *c != CostClass::Native && self.of(*c) == 0).collect()
     }
 
-    /// Die Klassen ohne Messwert, die ein Operationsvektor braucht: jede
-    /// ausser `native` immer, `native`, sobald `n` Operationen darin hat —
-    /// eine Deklaration `cost = {native: …}` (4.5) waere sonst zeitlos.
-    pub fn missing_for(&self, n: CostVec) -> Vec<CostClass> {
-        CostClass::ALL
+    /// Die Schluessel ohne Messwert, die ein Operationsvektor braucht: jede
+    /// Klasse ausser `native` immer, `native`, sobald `n` Operationen darin
+    /// hat — eine Deklaration `cost = {native: …}` (4.5) waere sonst
+    /// zeitlos —, und das Gewicht einer Art ohne Rueckfall auf ihre Klasse
+    /// (`f64_math`), sobald `n` eine solche Operation traegt.
+    pub fn missing_for(&self, n: CostVec) -> Vec<String> {
+        let classes = CostClass::ALL
             .iter()
-            .copied()
-            .filter(|c| self.of(*c) == 0 && (*c != CostClass::Native || n.of(*c) > 0))
-            .collect()
+            .filter(|c| self.of(**c) == 0 && (**c != CostClass::Native || n.of(**c) > 0))
+            .map(|c| c.name().to_string());
+        let heavy = heavy_pairs()
+            .filter(|(h, c)| !h.falls_back_to_class() && n.heavy(*h, *c) > 0 && self.measured(*h, *c).is_none())
+            .filter_map(|(h, c)| heavy_key(h, c));
+        classes.chain(heavy).collect()
     }
 
     /// Die Dauer eines Operationsvektors in Pikosekunden (9.4.3, 7.2).
@@ -983,6 +994,21 @@ t_io = 120000
         assert_eq!(c.duration_ns(n), 2_499);
     }
 
+    /// Ein Aufruf der Mathematik hat ohne Messung keine Schranke (FB-344):
+    /// Er fehlt, und seine Dauer saettigt, statt auf das Gewicht seiner
+    /// Klasse zurueckzufallen.
+    #[test]
+    fn an_unmeasured_math_call_has_no_bound() {
+        let hw = parse(BEISPIEL).expect("lesbar");
+        let mut c = hw.target("thumbv7em").expect("Ziel").c_target;
+        let n = CostVec::heavy_op(Heavy::Math, CostClass::F64);
+        assert_eq!(c.missing_for(n), vec!["f64_math"]);
+        assert_eq!(c.duration_ps(n), u64::MAX);
+        c.set_heavy(Heavy::Math, CostClass::F64, 90_000_000);
+        assert!(c.missing_for(n).is_empty());
+        assert_eq!(c.duration_ps(n), 90_000_000);
+    }
+
     /// Eine fehlende Klasse macht die Tabelle unvollstaendig.
     ///
     /// Sonst rechnete die Schedulability mit einer zu kleinen Zahl und
@@ -997,7 +1023,7 @@ t_io = 120000
         // `native` fehlt erst, wenn die Last sie braucht.
         c.set(CostClass::Mem, 1);
         assert!(c.missing_for(CostVec { i32: 5, ..CostVec::default() }).is_empty());
-        assert_eq!(c.missing_for(CostVec { native: 1, ..CostVec::default() }), vec![CostClass::Native]);
+        assert_eq!(c.missing_for(CostVec { native: 1, ..CostVec::default() }), vec!["native"]);
     }
 
     /// `native` darf fehlen: Ein Programm ohne native Funktionen braucht

@@ -109,6 +109,9 @@ pub const CORPUS: &[&str] = &[
     "98_last_fault.takt",
     "99_exit_fault.takt",
     "100_dispatch.takt",
+    "101_correct_math.takt",
+    "102_correct_math_f32.takt",
+    "103_math_domains.takt",
     // 12.7: die Startmuster; ohne Plattformwerte die Plattform ohne Startstufe.
     "sim/12_7/program.takt",
     "sim/14_7/program.takt",

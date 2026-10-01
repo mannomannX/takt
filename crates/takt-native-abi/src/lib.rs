@@ -1,5 +1,6 @@
 //! Die kuratierten Natives (4.5) hinter der C-ABI, die der erzeugte Code
-//! ruft: `takt_native_<name>` und `takt_native_map_*` (3.9).
+//! ruft: `takt_native_<name>` und `takt_native_map_*` (3.9); dazu die
+//! korrekt gerundete Mathematik `takt_m_*` (4.2, [`math`]).
 //!
 //! **Eine Implementierung** (FB-293). 4.5 legt die Natives in die Runtime;
 //! die Rechnung steht in `takt-native` und `takt-crypto`, und Interpreter,
@@ -19,6 +20,8 @@
 #![allow(unsafe_code, reason = "C-ABI der Natives fuer den erzeugten Code; 9.5 fuehrt sie in der TCB")]
 
 use core::slice;
+
+pub mod math;
 
 use takt_native::map::ByteMap;
 use takt_native::sha256::{CTX_MAX_BYTES, Ctx};
@@ -493,7 +496,8 @@ pub mod measure {
             #[cfg(feature = "ecdsa")]
             Native::EcdsaP256Verify => {
                 let [key, digest, sig] = inputs else { return None };
-                let entry = black_box(super::takt_native_ecdsa_p256_verify as unsafe extern "C" fn(_, _, _, _, _, _) -> _);
+                let entry =
+                    black_box(super::takt_native_ecdsa_p256_verify as unsafe extern "C" fn(_, _, _, _, _, _) -> _);
                 let mut ok = false;
                 // SAFETY: drei Slices ihrer Laenge.
                 let stack = measure(&mut || {

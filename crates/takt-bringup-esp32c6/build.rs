@@ -42,6 +42,7 @@ fn main() {
     ram_resident(&out);
     build_takt_program(&out);
     native_vectors(&out);
+    math_vectors(&out);
 }
 
 /// Legt Takt-Code und tick-gelesene Konstanten ins RAM (12.3).
@@ -193,6 +194,17 @@ fn native_vectors(out: &Path) {
     let vectors = takt_conformance::natives::vectors(&text).unwrap_or_else(|e| panic!("{}: {e}", spec.display()));
     fs::write(out.join("native_vectors.rs"), takt_conformance::natives::table_source(&vectors))
         .expect("native_vectors.rs schreiben");
+}
+
+/// Die Vektoren der korrekt gerundeten Mathematik fuer dasselbe
+/// Messprogramm (4.2, 13.8).
+fn math_vectors(out: &Path) {
+    let spec = takt_conformance::math::spec_path();
+    println!("cargo:rerun-if-changed={}", spec.display());
+    let text = fs::read_to_string(&spec).unwrap_or_else(|e| panic!("{}: {e}", spec.display()));
+    let vectors = takt_conformance::math::vectors(&text).unwrap_or_else(|e| panic!("{}: {e}", spec.display()));
+    fs::write(out.join("math_vectors.rs"), takt_conformance::math::table_source(&vectors))
+        .expect("math_vectors.rs schreiben");
 }
 
 /// Uebersetzt eine Quelle (IR oder C) mit den Groessenflags des Ziels.

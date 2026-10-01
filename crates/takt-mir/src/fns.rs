@@ -17,7 +17,9 @@ use crate::stmt::Block;
 /// Felder `*_div`, `*_fma` und `*_sqrt` halten fest, wie viele der
 /// Operationen einer Klasse von welcher Art ([`Heavy`]) sind. Die
 /// Zeitschranke gewichtet sie mit dem eigenen Gewicht aus der Kalibrierung
-/// (13.8).
+/// (13.8). Ebenso ein Aufruf der korrekt gerundeten Mathematik (`*_math`,
+/// 4.2): Er ist immer ein Bibliotheksaufruf und kostet ein Vielfaches
+/// einer Division.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub struct CostVec {
@@ -47,6 +49,10 @@ pub struct CostVec {
     /// Davon Aufrufe eines Hooks der Runtime: Beobachtungen, Fault,
     /// Abbruch eines Jobs (5.3, 5.6).
     pub call_hook: u64,
+    /// Davon Aufrufe der korrekt gerundeten Mathematik in `f32`.
+    pub f32_math: u64,
+    /// Davon Aufrufe der korrekt gerundeten Mathematik in `f64`.
+    pub f64_math: u64,
 }
 
 impl std::ops::Add for CostVec {
@@ -78,6 +84,8 @@ impl CostVec {
         f32_sqrt: 0,
         f64_sqrt: 0,
         call_hook: 0,
+        f32_math: 0,
+        f64_math: 0,
     };
 
     /// `f` komponentenweise ueber beide Vektoren.
@@ -99,6 +107,8 @@ impl CostVec {
             f32_sqrt: f(self.f32_sqrt, o.f32_sqrt),
             f64_sqrt: f(self.f64_sqrt, o.f64_sqrt),
             call_hook: f(self.call_hook, o.call_hook),
+            f32_math: f(self.f32_math, o.f32_math),
+            f64_math: f(self.f64_math, o.f64_math),
         }
     }
 
@@ -128,6 +138,8 @@ impl CostVec {
             (Heavy::Sqrt, CostClass::F32) => Some(&mut self.f32_sqrt),
             (Heavy::Sqrt, CostClass::F64) => Some(&mut self.f64_sqrt),
             (Heavy::Hook, CostClass::Call) => Some(&mut self.call_hook),
+            (Heavy::Math, CostClass::F32) => Some(&mut self.f32_math),
+            (Heavy::Math, CostClass::F64) => Some(&mut self.f64_math),
             _ => None,
         }
     }
@@ -214,31 +226,46 @@ pub enum Heavy {
     /// Messung, `log`, Fault, Abbruch eines Jobs. Was sie dort tut, haengt
     /// an der Runtime, nicht am Programm (FB-295).
     Hook,
+    /// Ein Aufruf der korrekt gerundeten Mathematik: `exp`, `log`, `sin`,
+    /// `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `pow` (4.2). Ein
+    /// Gewicht fuer alle, gemessen an der teuersten (FB-344).
+    Math,
 }
 
 impl Heavy {
     /// Alle Arten.
-    pub const ALL: [Heavy; 4] = [Heavy::Div, Heavy::Fma, Heavy::Sqrt, Heavy::Hook];
+    pub const ALL: [Heavy; 5] = [Heavy::Div, Heavy::Fma, Heavy::Sqrt, Heavy::Hook, Heavy::Math];
 
     /// Gibt es die Art in der Klasse? Division in allen vier Zahlklassen,
-    /// `fma` und `sqrt` nur im Fliesskomma, der Hook nur unter den Aufrufen.
+    /// `fma`, `sqrt` und die Mathematik nur im Fliesskomma, der Hook nur
+    /// unter den Aufrufen.
     pub fn exists_in(self, c: CostClass) -> bool {
         match self {
             Heavy::Div => matches!(c, CostClass::I32 | CostClass::I64 | CostClass::F32 | CostClass::F64),
-            Heavy::Fma | Heavy::Sqrt => matches!(c, CostClass::F32 | CostClass::F64),
+            Heavy::Fma | Heavy::Sqrt | Heavy::Math => matches!(c, CostClass::F32 | CostClass::F64),
             Heavy::Hook => c == CostClass::Call,
         }
     }
 
     /// Die Endung ihres Schluessels in der Hardware-Konfiguration
-    /// (`i32_div`, `f32_fma`, `f64_sqrt`, `call_hook`).
+    /// (`i32_div`, `f32_fma`, `f64_sqrt`, `call_hook`, `f64_math`).
     pub fn suffix(self) -> &'static str {
         match self {
             Heavy::Div => "div",
             Heavy::Fma => "fma",
             Heavy::Sqrt => "sqrt",
             Heavy::Hook => "hook",
+            Heavy::Math => "math",
         }
+    }
+
+    /// Darf ein fehlendes Gewicht der Art durch das der Klasse ersetzt
+    /// werden? Fuer Division, `fma`, `sqrt` und den Hook ja — so rechneten
+    /// die Tabellen, die sie noch nicht kannten. Ein Aufruf der Mathematik
+    /// kostet dagegen hunderte Operationen seiner Klasse; ohne Messung gibt
+    /// es fuer ihn keine Schranke.
+    pub fn falls_back_to_class(self) -> bool {
+        self != Heavy::Math
     }
 }
 

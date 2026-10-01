@@ -1,0 +1,53 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output logged :float @hw("o/logged") safe=0.0)
+(output arc :float @hw("o/arc") safe=0.0)
+(output power :float @hw("o/power") safe=0.0)
+(output grown :float @hw("o/grown") safe=0.0)
+(machine logarithm
+  (fault -> SAFE)
+  (var v :float 3.0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= logged (call ln v))
+      (= v (- v 1.0))))
+  (state SAFE
+    (enter
+      (= logged 7.0))))
+(machine arcsine
+  (fault -> SAFE)
+  (var v :float 0.4)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= arc (call asin v))
+      (= v (+ v 0.4))))
+  (state SAFE
+    (enter
+      (= arc 7.0))))
+(machine negative_base
+  (fault -> SAFE)
+  (var y :float 3.0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= power (call pow (- 2.0) y))
+      (= y (- y 1.0))
+      (if (< y 0.0)
+        (= y (- 0.5)))))
+  (state SAFE
+    (enter
+      (= power 7.0))))
+(machine overflow
+  (fault -> SAFE)
+  (var x :float 700.0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= grown (* (call exp x) 1.0e-300))
+      (= x (+ x 5.0))))
+  (state SAFE
+    (enter
+      (= grown 7.0))))

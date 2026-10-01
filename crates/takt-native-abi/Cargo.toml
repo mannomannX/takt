@@ -11,7 +11,7 @@ rust-version = "1.86"
 # lokal aufheben. 9.5 fuehrt die Natives in der TCB.
 [workspace]
 
-# Die Rechnung steht in `takt-native` und `takt-crypto`; hier nur die
+# Die Rechnung steht in `takt-native`, `takt-crypto` und `libtaktm`; hier nur die
 # Grenze. Boards binden das Crate als rlib (ueber `takt-mcu-program`), der
 # Wirtsrahmen der Konformitaet als statische Bibliothek:
 # `cargo rustc --lib --crate-type staticlib --features host`.
@@ -25,6 +25,8 @@ rsa = ["dep:takt-crypto", "takt-crypto/rsa"]
 aes-gcm = ["dep:takt-crypto", "takt-crypto/aes-gcm"]
 
 [dependencies]
+# Ohne `std`: Die korrekt gerundeten Funktionen rechnen nur mit Ganzzahlen.
+libtaktm = { path = "../libtaktm", default-features = false }
 takt-native = { path = "../takt-native" }
 takt-crypto = { path = "../takt-crypto", optional = true }
 

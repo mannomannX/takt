@@ -1,0 +1,81 @@
+# 103 — Definitionsbereiche der Mathematik (4.1; M10 Schritt 28): `ln` bei
+# null, `asin` ueber eins und `pow` mit negativer Basis und gebrochenem
+# Exponenten faulten mit `Arithmetic(Domain)`, `exp` ueber seinem Bereich
+# mit `Arithmetic(NonFinite)` — im erzeugten Code wie im Interpreter, am
+# selben Tick, und das Sichere danach ist dasselbe.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output logged : float @ hw("o/logged") with safe = 0.0
+output arc    : float @ hw("o/arc")    with safe = 0.0
+output power  : float @ hw("o/power")  with safe = 0.0
+output grown  : float @ hw("o/grown")  with safe = 0.0
+
+machine logarithm:
+    fault -> SAFE
+    var v : float = 3.0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # ln 3, ln 2, ln 1, dann ln 0.
+            logged = ln(v)
+            v = v - 1.0
+
+    state SAFE:
+        enter:
+            logged = 7.0
+
+machine arcsine:
+    fault -> SAFE
+    var v : float = 0.4
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # asin(0.4), asin(0.8), dann asin(1.2).
+            arc = asin(v)
+            v = v + 0.4
+
+    state SAFE:
+        enter:
+            arc = 7.0
+
+machine negative_base:
+    fault -> SAFE
+    var y : float = 3.0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # (-2)^3, (-2)^2, (-2)^1, (-2)^0, dann (-2)^-0.5.
+            power = pow(-2.0, y)
+            y = y - 1.0
+            if y < 0.0:
+                y = -0.5
+
+    state SAFE:
+        enter:
+            power = 7.0
+
+machine overflow:
+    fault -> SAFE
+    var x : float = 700.0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            # e^700, e^705, e^710: nicht mehr endlich. Die Pruefung sitzt am
+            # Aufruf, die Skalierung danach haelt nur die Ausgabe lesbar.
+            grown = exp(x) * 1.0e-300
+            x = x + 5.0
+
+    state SAFE:
+        enter:
+            grown = 7.0

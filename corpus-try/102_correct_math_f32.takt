@@ -1,0 +1,49 @@
+# 102 — Dieselbe Mathematik in `f32` (4.2; M10 Schritt 28): `libtaktm`
+# rechnet sie mit zwei Woertern Mantisse statt vier, aus demselben Code.
+# Auf dem F401 laeuft `f32` sonst in Hardware, auf dem C6 in Software —
+# die korrekt gerundete Mathematik ist auf beiden Ganzzahlarithmetik.
+
+system:
+    language = 1
+    tick     = 1 ms
+    float    = f32
+
+output sine      : float @ sim("o/sine")
+output far_sine  : float @ sim("o/far_sine")
+output cosine    : float @ sim("o/cosine")
+output far_cos   : float @ sim("o/far_cos")
+output tangent   : float @ sim("o/tangent")
+output arcsine   : float @ sim("o/arcsine")
+output arccosine : float @ sim("o/arccosine")
+output arctan    : float @ sim("o/arctan")
+output angle     : float @ sim("o/angle")
+output bearing   : float @ sim("o/bearing")
+output growth    : float @ sim("o/growth")
+output logarithm : float @ sim("o/logarithm")
+output power     : float @ sim("o/power")
+output signed    : float @ sim("o/signed")
+
+machine m:
+    var k : int in 0..1000 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            k = min(k + 1, 1000)
+            var x   : float in -1.0e4..1.0e4 = (k as float) * 7.3 - 3650.0
+            var far : float = (k as float) * 1.0e30 + 0.5
+            var u   : float in -1.0..1.0 = (k as float) / 1000.0 - 0.03
+            sine = sin(x)
+            far_sine = sin(far)
+            cosine = cos(x * 0.001)
+            far_cos = cos(far)
+            tangent = tan(x * 0.0003)
+            arcsine = asin(u)
+            arccosine = acos(u)
+            arctan = atan(x)
+            angle = atan2(sine, cosine)
+            bearing = atan2(0.0 - cosine, sine - 0.5)
+            growth = exp((k as float) * 0.2 - 40.0)
+            logarithm = ln((k as float) * 1.7 + 0.5)
+            power = pow((k as float) * 0.37 + 0.1, 1.37)
+            signed = pow(-2.5, (k % 7) as float)

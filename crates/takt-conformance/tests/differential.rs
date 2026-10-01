@@ -16,7 +16,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 86] = [
+const KORPUS: [&str; 89] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -100,6 +100,9 @@ const KORPUS: [&str; 86] = [
     "98_last_fault.takt",
     "99_exit_fault.takt",
     "100_dispatch.takt",
+    "101_correct_math.takt",
+    "102_correct_math_f32.takt",
+    "103_math_domains.takt",
     "11_foc_drive.takt",
     "sim/12_7/program.takt",
     "sim/14_7/program.takt",
@@ -165,7 +168,8 @@ fn virtual_sleep_is_invisible() {
             }
         };
         slept += native.lines().filter(|l| l.contains(" slept=")).count();
-        let diffs = compare(&run_interpreted(&p), &native);
+        let widened = takt_conformance::run::widen_f32(&run_interpreted(&p), &takt_conformance::run::f32_outputs(&p));
+        let diffs = compare(&widened, &native);
         if !diffs.is_empty() {
             failed.push(format!(
                 "{name}: {} Abweichungen mit Schlaf, etwa {:?}",
@@ -206,7 +210,9 @@ fn the_interpreter_and_the_generated_code_agree() {
             .difference(&common::board::output_names(&native))
             .cloned()
             .collect();
-        let diffs = compare(&interpreted, &native);
+        // Ein `f32` schreibt der Rahmen als seinen Wert in `f64` (4.2).
+        let widened = takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(&p));
+        let diffs = compare(&widened, &native);
         if !missing.is_empty() || !diffs.is_empty() {
             let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
             failed.push(format!(

@@ -31,6 +31,14 @@ use crate::machine::{Machine, SeqItem};
 use crate::stmt::{Block, Place, Stmt, StmtKind};
 use crate::{FnId, Program};
 
+/// Der Stackvertrag der korrekt gerundeten Mathematik (4.2), in Byte: die
+/// tiefste ihrer Funktionen in beiden Breiten, auf beiden Boards am Einstieg
+/// gemessen, plus ein Viertel — wie die Vertraege der Natives (FB-293).
+/// Gemessen 2026-10-01: `asin` und `acos` in `f64`, 1840 Byte auf dem F401,
+/// 1728 auf dem C6. `the_natives_agree_with_the_host` prueft ihn auf beiden
+/// Boards.
+pub const MATH_STACK: u32 = 2300;
+
 /// Der Programmanteil des Stacks (12.3), in Byte.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Depth {
@@ -98,7 +106,7 @@ pub fn depth(p: &Program, frames: &Frames, machines: &[MachineFrames]) -> Option
     for (m, mf) in p.machines.iter().zip(machines) {
         let mut calls = Calls::default();
         calls.machine(m);
-        let leaf = calls.natives.iter().map(|id| p.natives.get(*id).map_or(0, |n| u64::from(n.stack))).max();
+        let leaf = calls.leaf(p);
         let (below, path) = calls
             .fns
             .iter()
@@ -147,7 +155,7 @@ fn resolve(
     calls.block(&p.fns[f.index()].body);
 
     let mut deepest: (u64, Vec<FnId>) = (0, Vec::new());
-    for callee in calls.fns {
+    for &callee in &calls.fns {
         resolve(p, frames, callee, best, guard + 1)?;
         if let Some((b, path)) = &best[callee.index()]
             && *b > deepest.0
@@ -155,14 +163,13 @@ fn resolve(
             deepest = (*b, path.clone());
         }
     }
-    // Native Funktionen sind Blaetter mit deklariertem Vertrag (4.5): Sie
-    // rufen nichts Sichtbares, und ihr Bedarf steht in der Deklaration
-    // statt im Objekt.
-    for id in calls.natives {
-        let b = p.natives.get(id).map_or(0, |n| u64::from(n.stack));
-        if b > deepest.0 {
-            deepest = (b, Vec::new());
-        }
+    // Native Funktionen und die Mathematik sind Blaetter mit Vertrag (4.2,
+    // 4.5): Sie rufen nichts Sichtbares, und ihr Bedarf steht in der
+    // Deklaration oder im Vertrag statt im Objekt.
+    if let Some(b) = calls.leaf(p)
+        && b > deepest.0
+    {
+        deepest = (b, Vec::new());
     }
 
     let mut path = deepest.1;
@@ -189,9 +196,18 @@ fn entry_points(p: &Program) -> Vec<FnId> {
 struct Calls {
     fns: Vec<FnId>,
     natives: Vec<usize>,
+    /// Ruft der Code die korrekt gerundete Mathematik?
+    math: bool,
 }
 
 impl Calls {
+    /// Das tiefste Blatt: eine native Funktion mit ihrem `stack` oder die
+    /// Mathematik mit [`MATH_STACK`].
+    fn leaf(&self, p: &Program) -> Option<u64> {
+        let natives = self.natives.iter().map(|id| p.natives.get(*id).map_or(0, |n| u64::from(n.stack)));
+        natives.chain(self.math.then_some(u64::from(MATH_STACK))).max()
+    }
+
     fn machine(&mut self, m: &Machine) {
         self.block(&m.loop_block);
         for h in &m.handlers {
@@ -310,6 +326,7 @@ impl Calls {
         match &e.kind {
             ExprKind::Call { callee, .. } => self.fns.push(*callee),
             ExprKind::NativeCall { native, .. } => self.natives.push(native.index()),
+            ExprKind::Intrinsic { op, .. } if op.is_math() => self.math = true,
             _ => {}
         }
         for child in e.children() {

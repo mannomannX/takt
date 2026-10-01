@@ -1,4 +1,4 @@
-# takt-hw 11
+# takt-hw 12
 # ESP32-C6-DevKitM-1-N4 (ESP32-C6-MINI-1, RV32IMAC, 160 MHz, ohne FPU):
 # Speicher und Journal fuer die Profilfamilie `xip_flash` (12.3,
 # plan/esp32c6.md).
@@ -13,8 +13,12 @@
 # Tick-Pfad und die Mathematik aus `compiler_builtins` (`fma`, `sqrt`)
 # liegen im RAM (`rwtext_hook.x`, FB-301), die Soft-Float-Grundrechenarten
 # im ROM des Chips. Aus dem Flash ueber den Cache kommen nur noch die
-# Trace-Hooks der Runtime (FB-295). Ohne FPU sind Division, `fma` und
-# `sqrt` Bibliotheksaufrufe mit eigenem Gewicht (7.2).
+# Trace-Hooks der Runtime (FB-295) und die korrekt gerundete Mathematik
+# (FB-357). Ohne FPU sind Division, `fma` und `sqrt` Bibliotheksaufrufe mit
+# eigenem Gewicht (7.2); die Mathematik hat eines je Breite (`f32_math`,
+# `f64_math`; Konfiguration 12, FB-344), gemessen an der teuersten Funktion
+# des Boards — `pow` in `f32`, `asin` in `f64` — und mindestens ihr
+# teuerster Vektor am Einstieg, mit kaltem Cache.
 #
 # `ram` und `iram` nennen denselben Bereich, und das ist kein Fehler: Der
 # C6 hat einen einheitlichen HP-SRAM (`esp-hal` richtet 0x6E610 Byte ein,
@@ -38,24 +42,26 @@ nvm_erase_ns = 60000000
 nvm_program_ns = 200000
 nvm_blocking = true
 i32 = 7598
-i64 = 23755
-f32 = 334942
+i64 = 23731
+f32 = 334844
 f64 = 531784
-mem = 26211
-call = 52657
+mem = 27383
+call = 52813
 native = 0
-i32_div = 58690
-i64_div = 1028730
-f32_div = 1206170
-f64_div = 2338755
-f32_fma = 4282656
-f64_fma = 2796621
-f32_sqrt = 473357
-f64_sqrt = 1286966
-t_io = 3025000
+i32_div = 58495
+i64_div = 1028826
+f32_div = 1206561
+f64_div = 2340318
+f32_fma = 4287148
+f64_fma = 2796328
+f32_sqrt = 473651
+f64_sqrt = 1286674
+t_io = 3031250
 tick_jitter_ns = 0
 stack_reserve = 4916
-call_hook = 587227
+call_hook = 594942
+f32_math = 513287500
+f64_math = 988675000
 
 [device.led]
 driver = "esp32c6-rmt-ws2812"

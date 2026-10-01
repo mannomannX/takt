@@ -1118,6 +1118,9 @@ fn expr_cost(e: &Expr, ctx: &Ctx<'_>) -> CostVec {
         // gemessenen Gewicht.
         ExprKind::Intrinsic { op: Intrinsic::Fma, .. } => CostVec::heavy_op(Heavy::Fma, class(e, types)),
         ExprKind::Intrinsic { op: Intrinsic::Sqrt, .. } => CostVec::heavy_op(Heavy::Sqrt, class(e, types)),
+        // 4.2: Die korrekt gerundete Mathematik ist immer ein Aufruf der
+        // Bibliothek; ihr Gewicht ist das der teuersten Funktion (FB-344).
+        ExprKind::Intrinsic { op, .. } if op.is_math() => CostVec::heavy_op(Heavy::Math, class(e, types)),
         ExprKind::Intrinsic { .. } => class_of(e, types) + CostVec { call: 1, ..CostVec::ZERO },
         ExprKind::Checked { kind: CheckedKind::Range(r), .. } if r.origin == RangeOrigin::Proven => CostVec::ZERO,
         // Die Endlichkeit prueft der Codegen auf den Bits: je Element eine
