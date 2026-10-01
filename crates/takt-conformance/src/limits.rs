@@ -25,12 +25,13 @@ pub struct Limit {
 /// wird, ist schlechter als keine, weil ihr jemand glaubt.
 pub const LIMITS: &[Limit] = &[
     Limit {
-        was: "Skalare Inputs ueber die Zeit",
-        warum: "Commands prueft die Abnahme seit Schritt 10 (ein Puls, ein Byte, 8.5); \
-                skalare Lieferungen mit Wert, Qualitaet und Alter brauchen die Umrechnung \
-                von Trace-Text in Abbild-Bytes, und die gehoert zum Treiber.",
-        wann: "Schritt 5 (`takt-rt-linux`): Der Simulationstreiber aus `takt-hal` liefert \
-               sie beiden Seiten; er ist bereits die erste HAL-Implementierung (Prinzip 4).",
+        was: "Skalare Inputs zusammengesetzter Typen",
+        warum: "Skalare Lieferungen gehen mit Wert, Qualitaet, Alter und Zeitstempel durch den \
+                Treiberrand beider Seiten (12.6, M10 Schritt 29b). Der Rahmen schreibt den \
+                Wert in der C-Form seines Typs; einen Input vom Typ Record, Array oder \
+                `samples` liefert er nicht, und kein Korpusprogramm treibt einen solchen.",
+        wann: "Mit dem ersten Programm, das einen braucht: die kanonische Form (5.9) aus dem \
+               Trace-Text, wie fuer Stromelemente.",
     },
     Limit {
         was: "Erzeuger von Runtime-Faults auf dem Wirt (5.3)",
@@ -50,15 +51,26 @@ pub const LIMITS: &[Limit] = &[
     },
     Limit {
         was: "Ueberlaufende Stroeme (8.6)",
-        warum: "Der Rahmen liefert Stromelemente (`streams.rs`) und fuehrt interne wie \
-                gekoppelte Stroeme als Ringe mit Freigabe unter dem kleinsten Cursor. Laeuft \
-                ein interner Ring voll, faultet auf beiden Wegen der Sender im selben Tick \
-                (8.6, FB-326, Korpus 88); `drop` verwirft auf beiden. `drop_oldest` kennt der \
-                Ring nicht, und `s.overflowed` liest kein Korpusprogramm. `s.dropped` zaehlt \
-                im erzeugten Code nur den Verwurf im `idle` (5.10, Korpus 92), nicht den des \
-                Rings.",
+        warum: "Jeder Strom hat im Rahmen einen Ring mit Freigabe unter dem kleinsten Cursor. \
+                Laeuft ein Eingabering voll, verdraengt `drop_oldest` die aeltesten, sonst \
+                faultet der Leser (`streams.rs`, Test `a_reader_that_falls_behind_overflows_the_ring`); \
+                laeuft ein interner Ring voll, faultet der Sender im selben Tick (8.6, FB-326, \
+                Korpus 88), und `drop` verwirft auf beiden Wegen. `drop_oldest` kennt der \
+                interne Ring nicht, und `s.overflowed` liest kein Korpusprogramm. `s.dropped` \
+                zaehlt im erzeugten Code nur den Verwurf im `idle` (5.10, Korpus 92), nicht \
+                den des Rings.",
         wann: "Mit der Runtime: `takt-rt-core::stream` haelt den Ring samt Verdraengung und \
                Eviction; wo der Rahmen rechnet, wuerde sie messen.",
+    },
+    Limit {
+        was: "`decode` in der Sim-Kopplung (12.6, Zeile 5)",
+        warum: "Ein Record-Strom, den ein `sim`-Ausgabestrom speist, bekommt die gesendeten \
+                Bytes je Element; der Interpreter verwirft ein Element, dessen `decode` \
+                misslingt, und zaehlt `malformed`, der Rahmen reicht es weiter. Ein Modell \
+                sendet Records, und deren kanonische Form decodiert immer; nur ein Modell, \
+                das rohe Bytes in einen Record-Strom schickt, saehe den Unterschied.",
+        wann: "Mit der Gueltigkeitspruefung im erzeugten Code fuer die Elemente der Treiber \
+               (M10 Schritt 29c); die Kopplung nimmt dann denselben Weg.",
     },
     Limit {
         was: "Faults im Fuzzer",

@@ -27,6 +27,8 @@ aes-gcm = ["dep:takt-crypto", "takt-crypto/aes-gcm"]
 [dependencies]
 # Ohne `std`: Die korrekt gerundeten Funktionen rechnen nur mit Ganzzahlen.
 libtaktm = { path = "../libtaktm", default-features = false }
+# Der Kern des Treiberrands ohne `std` und ohne die MIR (12.6, FB-285).
+takt-hal = { path = "../takt-hal", default-features = false }
 takt-native = { path = "../takt-native" }
 takt-crypto = { path = "../takt-crypto", optional = true }
 

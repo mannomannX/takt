@@ -13,7 +13,7 @@
 //! nicht einen Teil unterwegs verliert.
 
 /// Eine Eingabe an einem Tick (12.5).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Stimulus {
     /// `cmd <name>`: gilt genau einen Tick (8.5).
     Command {
@@ -22,17 +22,20 @@ pub enum Stimulus {
         /// Name des Commands.
         name: String,
     },
-    /// `in <channel> <text>`: ein Element eines Eingabestroms (8.6).
+    /// `in <channel> …`: eine Lieferung an den Rand (12.6) — eine
+    /// Abtastung eines Skalars oder ein Element eines Eingabestroms (8.6),
+    /// je nach Kanal, mit Qualitaet, Alter, Zeitstempel und Folgenummer, wie
+    /// der Trace sie schreibt.
     ///
-    /// Es kommt vom Rand und ist sofort sichtbar; der Unit-Delay gilt
-    /// nur fuer interne Stroeme (9.6).
-    Element {
+    /// Ein Element ist sofort sichtbar; der Unit-Delay gilt nur fuer
+    /// interne Stroeme (9.6).
+    Input {
         /// Tick, an dem der Treiber liefert.
         tick: u64,
         /// Name des Eingabekanals.
         channel: String,
-        /// Der Inhalt als Text, wie ihn der Trace schreibt.
-        text: String,
+        /// Wert, Qualitaet, `age`, `t`, `seq`.
+        sample: takt_interp::trace::SampleText,
     },
     /// `tune <name> <wert>` (8.4): der Parameter gilt ab diesem Tick.
     Tune {
@@ -65,7 +68,7 @@ impl Stimulus {
     pub fn tick(&self) -> u64 {
         match self {
             Stimulus::Command { tick, .. }
-            | Stimulus::Element { tick, .. }
+            | Stimulus::Input { tick, .. }
             | Stimulus::Tune { tick, .. }
             | Stimulus::Abort { tick }
             | Stimulus::Runtime { tick, .. } => *tick,
@@ -77,13 +80,21 @@ impl Stimulus {
         Stimulus::Command { tick, name: name.to_string() }
     }
 
-    /// Ein Stromelement, kurz geschrieben.
+    /// Ein Stromelement ohne eigenen Zeitstempel und ohne Folgenummer, kurz
+    /// geschrieben.
     pub fn element(tick: u64, channel: &str, text: &str) -> Stimulus {
-        Stimulus::Element { tick, channel: channel.to_string(), text: text.to_string() }
+        let sample = takt_interp::trace::SampleText {
+            value: Some(text.to_string()),
+            quality: None,
+            reason: None,
+            age: None,
+            t: None,
+            seq: None,
+        };
+        Stimulus::Input { tick, channel: channel.to_string(), sample }
     }
 
-    /// Commands, Aborts und Runtime-Faults aus einem Trace — die Eingaben,
-    /// die beide Seiten ohne Treiber annehmen.
+    /// Lieferungen, Commands, Aborts und Runtime-Faults aus einem Trace.
     pub fn from_trace(trace: &takt_interp::Trace) -> Vec<Stimulus> {
         use takt_interp::trace::LineKind;
         use takt_mir::machine::RuntimeKind;
@@ -91,6 +102,9 @@ impl Stimulus {
             .lines
             .iter()
             .filter_map(|l| match &l.kind {
+                LineKind::Input { channel, sample } => {
+                    Some(Stimulus::Input { tick: l.tick, channel: channel.clone(), sample: sample.clone() })
+                }
                 LineKind::Command { name } => Some(Stimulus::cmd(l.tick, name)),
                 LineKind::Abort => Some(Stimulus::Abort { tick: l.tick }),
                 LineKind::Runtime { kind, output } => {

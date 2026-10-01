@@ -82,7 +82,7 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     crate::harness::natives(&mut s, p);
     // Die Stroeme wie im Linux-Rahmen, ohne Stimulus; ihre Trace-Zeilen
     // gehen an das Board.
-    crate::streams::emit(&mut s, p, &[], crate::streams::Trace::Board);
+    crate::streams::emit(&mut s, p, crate::streams::Trace::Board);
     let state_bytes = storage(&mut s, p, &layout, &driven, frame.protected);
     // 9.8: die geplanten Schreibvorgaenge, hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.

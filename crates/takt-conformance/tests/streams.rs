@@ -1,12 +1,16 @@
-//! Die Stromtabelle des Rahmens gegen die Regeln aus 8.6.
+//! Die Eingabestroeme des Rahmens gegen die Regeln aus 8.6 und 12.6.
 //!
-//! Der differentielle Test (`differential.rs`) misst das Ganze: Ein
-//! Programm mit Handlern laeuft auf beiden Seiten und muss dasselbe
-//! sagen. Er braucht aber clang und ueberspringt sich ohne. Was hier
-//! steht, gilt immer — es prueft den erzeugten C-Text selbst.
+//! Jeder Eingabestrom hat einen Ring; seine Elemente bringt der
+//! Treiberrand, auf dem Wirt aus dem Stimulus. Die Textpruefungen gelten
+//! immer — sie lesen den erzeugten C-Text. Der Lauf gegen den Interpreter
+//! braucht clang und ueberspringt sich ohne.
+
+mod common;
 
 use takt_conformance::harness;
+use takt_conformance::run::compare;
 use takt_conformance::stimulus::Stimulus;
+use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
 fn program_of(src: &str) -> Program {
@@ -39,26 +43,31 @@ fn harness_of(p: &Program, stimulus: &[Stimulus]) -> String {
     harness::build_with(p, "m", 10, stimulus).source
 }
 
-/// Ohne Elemente bleibt es beim leeren Fenster — der Fall, den jedes
-/// Programm aushalten muss.
+/// Der Teil des Rahmens, der den Stimulus an den Rand gibt.
+fn feed(c: &str) -> &str {
+    let start = c.find("static void takt_edge_stimulus").expect("Lieferfunktion");
+    let end = c[start..].find("takt_edge_commit(tick);").map_or(c.len(), |e| start + e);
+    &c[start..end]
+}
+
+/// Ohne Stimulus gibt es keine Lieferung; das Fenster fragt nur den Ring.
 #[test]
 fn without_elements_the_window_stays_empty() {
     let p = with_bounds("");
     let c = harness_of(&p, &[]);
-    // Ohne Stimulus fragt der Zaehler nur den Ring; ein Kanal ohne Ring
-    // hat ein leeres Fenster.
     assert!(c.contains("return k >= 0 ? takt_int_count(k, cur) : 0;"), "{c}");
-    assert!(!c.contains("g_elems"), "ohne Stimulus braucht es keine Tabelle");
+    assert!(!feed(&c).contains("takt_edge_element("), "keine Lieferung:\n{}", feed(&c));
 }
 
-/// Die Elemente stehen in der Tabelle, mit Tick, Nummer und Inhalt.
+/// Ein Element geht mit Zeitstempel und Folgenummer an den Rand: ohne
+/// Angabe die Tickgrenze und die lueckenlose Folge ab null (12.6).
 #[test]
-fn elements_reach_the_table_with_their_numbering() {
+fn elements_reach_the_edge_with_their_numbering() {
     let p = with_bounds("");
     let c = harness_of(&p, &[Stimulus::element(2, "rx", "AB"), Stimulus::element(5, "rx", "C")]);
-    // 9.6: `seq` ist streng steigend und beginnt bei null.
-    assert!(c.contains("{ 0, 2, 0, 2, \"\\x41\\x42\" }"), "erstes Element fehlt:\n{c}");
-    assert!(c.contains("{ 0, 5, 1, 1, \"\\x43\" }"), "zweites Element fehlt:\n{c}");
+    let f = feed(&c);
+    assert!(f.contains("\"\\x41\\x42\", 2, 0, 20000000LL, 0LL)"), "erstes Element fehlt:\n{f}");
+    assert!(f.contains("\"\\x43\", 1, 0, 50000000LL, 1LL)"), "zweites Element fehlt:\n{f}");
 }
 
 /// 3.9: Der Rand begrenzt die Laenge; was darueber steht, ist
@@ -66,56 +75,20 @@ fn elements_reach_the_table_with_their_numbering() {
 #[test]
 fn an_overlong_element_is_truncated_not_dropped() {
     let p = with_bounds("");
-    let c = harness_of(&p, &[Stimulus::element(1, "rx", "0123456789ABCDEFXXXX")]);
-    assert!(c.contains(", 16, \""), "auf `line<16>` gekuerzt:\n{c}");
-    assert!(!c.contains("\\x58"), "das abgeschnittene `X` steht nicht in der Tabelle");
+    let f = harness_of(&p, &[Stimulus::element(1, "rx", "0123456789ABCDEFXXXX")]);
+    let f = feed(&f);
+    assert!(f.contains(", 16, 0, "), "auf `line<16>` gekuerzt:\n{f}");
+    assert!(!f.contains("\\x58"), "das abgeschnittene `X` geht nicht an den Rand");
 }
 
-/// 8.6: `capacity` begrenzt die Zahl der Elemente. Was nicht
-/// hineinpasst, ist ein Ueberlauf und kein Element.
+/// 8.6: Beide Schranken stehen am Ring, `capacity` und `capacity_bytes`;
+/// was nicht hineinpasst, entscheidet sich im Lauf.
 #[test]
-fn the_element_bound_holds() {
-    let p = with_bounds(", capacity = 2");
-    let c = harness_of(
-        &p,
-        &[Stimulus::element(1, "rx", "A"), Stimulus::element(1, "rx", "B"), Stimulus::element(1, "rx", "C")],
-    );
-    assert!(c.contains("\\x41") && c.contains("\\x42"), "die ersten zwei stehen drin:\n{c}");
-    assert!(!c.contains("\\x43"), "das dritte reisst `capacity = 2`");
-    // Ein spaeterer Tick faengt wieder bei null an: Der Konsument hat
-    // sein Fenster geleert.
-    let c = harness_of(
-        &p,
-        &[Stimulus::element(1, "rx", "A"), Stimulus::element(1, "rx", "B"), Stimulus::element(2, "rx", "C")],
-    );
-    assert!(c.contains("\\x43"), "im naechsten Tick ist wieder Platz:\n{c}");
-}
-
-/// 8.6: `capacity_bytes` ist die zweite Schranke, unabhaengig von der
-/// ersten.
-///
-/// Die Zahlen muessen SC-17 genuegen: Die Pruefung rechnet `capacity`
-/// mal Elementgroesse und verlangt so viel `capacity_bytes` (Lemma
-/// 9.6.1). Darum vier Elemente zu `line<16>` — und die Schranke greift
-/// ueber die Summe, nicht ueber ein einzelnes Element.
-#[test]
-fn the_byte_bound_holds_independently() {
+fn the_bounds_reach_the_ring() {
     let p = with_bounds(", capacity = 4, capacity_bytes = 64");
-    let lang = "0123456789ABCDEF";
-    let c = harness_of(
-        &p,
-        &[
-            Stimulus::element(1, "rx", lang),
-            Stimulus::element(1, "rx", lang),
-            Stimulus::element(1, "rx", lang),
-            Stimulus::element(1, "rx", lang),
-            Stimulus::element(1, "rx", "X"),
-        ],
-    );
-    // Vier volle Elemente sind 64 Byte; das fuenfte passt nicht mehr,
-    // obwohl `capacity = 4` erst danach greifen wuerde.
-    assert_eq!(c.matches("\\x30").count(), 4, "vier Elemente stehen in der Tabelle:\n{c}");
-    assert!(!c.contains("\\x58"), "das fuenfte reisst `capacity_bytes = 64`");
+    let c = harness_of(&p, &[]);
+    assert!(c.contains("static const int g_int_cap[1] = { 4 };"), "{c}");
+    assert!(c.contains("static const int g_int_capb[1] = { 64 };"), "{c}");
 }
 
 /// Ein Stimulus fuer einen anderen Kanal beruehrt den Strom nicht.
@@ -123,5 +96,45 @@ fn the_byte_bound_holds_independently() {
 fn a_stimulus_for_another_channel_is_ignored() {
     let p = with_bounds("");
     let c = harness_of(&p, &[Stimulus::element(1, "andere", "A"), Stimulus::cmd(1, "go")]);
-    assert!(!c.contains("g_elems"), "kein Element fuer `rx`:\n{c}");
+    assert!(!feed(&c).contains("takt_edge_element("), "kein Element fuer `rx`:\n{}", feed(&c));
+}
+
+/// 8.6, 9.6: Ein Leser, der zurueckfaellt, laesst den Ring volllaufen —
+/// mit `drop_oldest` verdraengt das neue Element das aelteste, sonst
+/// faultet der Ueberlauf den Leser. Der Treiber haelt dabei `MAXPT` ein;
+/// den Ueberlauf macht allein der Leser, der in `WAIT` nichts abholt.
+#[test]
+fn a_reader_that_falls_behind_overflows_the_ring() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    for policy in ["drop_oldest", "fault"] {
+        let p = program_of(&format!(
+            "system:\n    language = 1\n    tick     = 10 ms\n\n\
+             input  rx      : stream<line<8>> @ hw(\"u/rx\") with max_rate = 200 Hz, capacity = 2, overflow = {policy}\n\
+             output pending : int in 0..9     @ sim(\"o/pending\")\n\n\
+             machine m:\n    initial WAIT\n\n    state WAIT:\n        loop:\n            pending = rx.count\n\n\
+             \x20   state READ:\n        on rx as l:\n            pending = 0\n"
+        ));
+        let stimulus =
+            takt_interp::Trace::parse("t=1 in rx \"a\"\nt=1 in rx \"b\"\nt=2 in rx \"c\"\nt=3 in rx \"d\"\n")
+                .expect("Stimulus");
+        let inputs = Stimulus::from_trace(&stimulus);
+        let native = common::run_native_all_with(&clang, &p, &format!("ueberlauf-{policy}"), 5, &inputs)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let options = takt_interp::RunOptions { ticks: 5, ..Default::default() };
+        let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+        assert!(interpreted.contains("out pending 2"), "der Ring laeuft voll ({policy}):\n{interpreted}");
+        let diffs = compare(&interpreted, &native);
+        assert!(
+            diffs.is_empty(),
+            "{policy}: {} Abweichungen\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}",
+            diffs.len()
+        );
+        if policy == "fault" {
+            assert!(native.contains("StreamOverflow"), "der Ueberlauf faultet den Leser:\n{native}");
+        }
+    }
 }

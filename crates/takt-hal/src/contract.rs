@@ -1,10 +1,11 @@
 //! Der Treibervertrag (12.6, Zeilen 1 und 2) ohne `std` und ohne
 //! Allokation.
 //!
-//! Der Zustand je Kanal ([`Track`]) liegt im Speicher des Aufrufers: im
-//! Interpreter in einem `Vec`, im erzeugten C-Rahmen in einem Feld mit so
-//! vielen Eintraegen, wie das Programm Kanaele hat. Darum ist er `repr(C)`
-//! und kommt ohne `Option` aus.
+//! Der Zustand je Kanal ([`Track`]) und je Treiber ([`Device`]) liegt im
+//! Speicher des Aufrufers: im Interpreter in einem `Vec`, im erzeugten
+//! C-Rahmen in einem Feld mit so vielen Eintraegen, wie das Programm Kanaele
+//! und Geraete hat. Darum ist er `repr(C)` und kommt ohne `Option` aus, und
+//! [`settle`] fuehrt einen Tick fuer beide gleich.
 //!
 //! **Der Stand folgt jeder Lieferung, auch einer verletzenden.** Sonst
 //! bliebe ein Treiber nach einer einzigen Luecke fuer immer degradiert —
@@ -16,22 +17,38 @@
 pub const NONE: i64 = i64::MIN;
 
 /// Welcher Teil des Treibervertrags verletzt wurde (12.6, Zeile 2).
+///
+/// Die Zahl ist die Form in den C-Einstiegen; null heisst keine Verletzung.
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Contract {
     /// Zeitstempel fallend.
-    Timestamp,
+    Timestamp = 1,
     /// `seq` nicht streng steigend oder mit Luecke.
-    Sequence,
+    Sequence = 2,
     /// Mehr Elemente als `MAXPT` in einem Tick (8.6).
-    TooMany,
+    TooMany = 3,
     /// Qualitaetsflags widerspruechlich: `Bad` mit Wert, oder der
     /// Messzeitpunkt `t - age` faellt (Alter nicht monoton).
-    Flags,
+    Flags = 4,
     /// Zeitstempel jenseits der Klemmtoleranz (Zeile 1, zweiter Fall).
-    TimeWindow,
+    TimeWindow = 5,
 }
 
+const CONTRACTS: [Contract; 5] =
+    [Contract::Timestamp, Contract::Sequence, Contract::TooMany, Contract::Flags, Contract::TimeWindow];
+
 impl Contract {
+    /// Die Verletzung als Zahl.
+    pub fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// Die Verletzung zu ihrer Zahl; `None` fuer null und Unbekanntes.
+    pub fn of_code(code: u8) -> Option<Contract> {
+        CONTRACTS.into_iter().find(|c| c.code() == code)
+    }
+
     /// Die Verletzung als Wort fuer Meldung und Trace.
     pub fn name(self) -> &'static str {
         match self {
@@ -45,9 +62,7 @@ impl Contract {
 
     /// Die Verletzung zu ihrem Wort.
     pub fn by_name(name: &str) -> Option<Contract> {
-        [Contract::Timestamp, Contract::Sequence, Contract::TooMany, Contract::Flags, Contract::TimeWindow]
-            .into_iter()
-            .find(|c| c.name() == name)
+        CONTRACTS.into_iter().find(|c| c.name() == name)
     }
 }
 
@@ -200,6 +215,11 @@ pub enum Turn {
 pub struct Device {
     /// Laeuft er gerade degradiert?
     pub degraded: bool,
+    /// Hat er in diesem Tick geliefert? Arbeitsstand von [`settle`].
+    pub delivered: bool,
+    /// Die erste Verletzung dieses Ticks ([`Contract::code`], null keine).
+    /// Arbeitsstand von [`settle`].
+    pub broken: u8,
 }
 
 impl Device {
@@ -217,6 +237,115 @@ impl Device {
                 Turn::Recovered
             }
             _ => Turn::Steady,
+        }
+    }
+}
+
+/// Eine Lieferung eines Ticks, wie der Rand sie prueft und beantwortet
+/// (Zeilen 1, 2).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Delivery {
+    /// Index des Kanals.
+    pub channel: u32,
+    /// Ein Stromelement; sonst ein Skalar.
+    pub element: bool,
+    /// Ein Skalar, der `Bad` meldet und doch einen Wert traegt.
+    pub bad_with_value: bool,
+    /// Zeitstempel in Nanosekunden.
+    pub t: i64,
+    /// Alter des Werts eines Skalars.
+    pub age: i64,
+    /// Folgenummer eines Elements.
+    pub seq: i64,
+    /// Antwort: der Zeitpunkt, mit dem die Lieferung weitergeht; [`NONE`],
+    /// wenn ihr Treiber den Vertrag verletzt hat.
+    pub at: i64,
+}
+
+/// Ein Treiber haelt seinen Vertrag nicht mehr ([`Event::what`] nennt die
+/// Verletzung).
+pub const DEGRADED: u8 = 1;
+/// Ein Treiber liefert wieder vertragsgemaess.
+pub const RECOVERED: u8 = 2;
+/// Ein Zeitstempel wurde in der Toleranz geklemmt (Zeile 1).
+pub const WARPED: u8 = 3;
+
+/// Was der Rand ueber einen Tick meldet.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Event {
+    /// [`DEGRADED`], [`RECOVERED`] oder [`WARPED`].
+    pub kind: u8,
+    /// Bei [`DEGRADED`] die Verletzung ([`Contract::code`]).
+    pub what: u8,
+    /// Der Treiber bei [`DEGRADED`] und [`RECOVERED`], die Lieferung bei
+    /// [`WARPED`].
+    pub index: u32,
+}
+
+/// Die Zeilen 1 und 2 fuer alle Lieferungen eines Ticks (12.1:
+/// `validate_and_bound()`); `device_of[c]` ist der Treiber des Kanals `c`.
+///
+/// Erst entscheidet der Vertrag je Treiber ueber alle seine Kanaele, dann
+/// gehen die Lieferungen der vertragstreuen Treiber weiter — mit dem
+/// geklemmten Zeitpunkt, wo Zeile 1 klemmt; die der uebrigen bekommen
+/// [`NONE`]. Die Meldungen kommen in fester Reihenfolge, erst die Treiber
+/// in ihrer, dann die geklemmten Lieferungen in ihrer: Jeder Rahmen, der
+/// diese Funktion ruft, schreibt denselben Trace.
+pub fn settle(
+    tracks: &mut [Track],
+    devices: &mut [Device],
+    device_of: &[u32],
+    deliveries: &mut [Delivery],
+    w: &Window,
+    mut event: impl FnMut(Event),
+) {
+    for d in devices.iter_mut() {
+        (d.delivered, d.broken) = (false, 0);
+    }
+    let note = |device: &mut Device, broken: Contract| {
+        if device.broken == 0 {
+            device.broken = broken.code();
+        }
+    };
+    for x in deliveries.iter_mut() {
+        x.at = NONE;
+        let c = x.channel as usize;
+        let (Some(track), Some(d)) = (tracks.get_mut(c), device_of.get(c)) else { continue };
+        let Some(device) = devices.get_mut(*d as usize) else { continue };
+        device.delivered = true;
+        let checked =
+            if x.element { track.element(x.t, x.seq, w) } else { track.reading(x.t, x.age, x.bad_with_value, w) };
+        match checked {
+            Ok(placed) => x.at = placed.time(x.t),
+            Err(broken) => note(device, broken),
+        }
+    }
+    for x in deliveries.iter().filter(|x| x.element) {
+        let c = x.channel as usize;
+        let (Some(track), Some(d)) = (tracks.get_mut(c), device_of.get(c)) else { continue };
+        if track.count > 0
+            && let Err(broken) = track.finish()
+            && let Some(device) = devices.get_mut(*d as usize)
+        {
+            note(device, broken);
+        }
+    }
+    for (i, d) in devices.iter_mut().enumerate() {
+        match d.settle(d.delivered, Contract::of_code(d.broken)) {
+            Turn::Degraded(c) => event(Event { kind: DEGRADED, what: c.code(), index: i as u32 }),
+            Turn::Recovered => event(Event { kind: RECOVERED, what: 0, index: i as u32 }),
+            Turn::Steady => {}
+        }
+    }
+    for (i, x) in deliveries.iter_mut().enumerate() {
+        let down = device_of.get(x.channel as usize).and_then(|d| devices.get(*d as usize)).is_none_or(|d| d.degraded);
+        if down {
+            x.at = NONE;
+        } else if x.at != x.t {
+            // Nur Zeile 1 aendert den Zeitpunkt, und nur auf einen anderen.
+            event(Event { kind: WARPED, what: 0, index: i as u32 });
         }
     }
 }

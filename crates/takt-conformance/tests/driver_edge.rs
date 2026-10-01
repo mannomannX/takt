@@ -1,8 +1,14 @@
 //! Der defensive Treiberrand (12.6) im Lauf: Jeder Verstoss gegen den
 //! Treibervertrag kommt einmal aus dem Stimulus, und der Golden-Trace zeigt
-//! die Reaktion aus der Tabelle (M10 Schritt 29, FB-285).
+//! die Reaktion aus der Tabelle (M10 Schritt 29, FB-285). Der erzeugte
+//! Rahmen urteilt mit demselben Kern und kommt zu denselben Ausgaben.
 
+mod common;
+
+use takt_conformance::run::compare;
+use takt_conformance::stimulus::Stimulus;
 use takt_interp::{RunOptions, Trace};
+use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
 const SRC: &str = "\
@@ -146,4 +152,30 @@ fn a_stimulus_without_timestamps_keeps_the_contract() {
     let options = RunOptions { ticks: 5, ..Default::default() };
     let trace = takt_interp::run(&program(), &stimulus, &options).expect("Lauf").trace.render();
     assert!(driver_lines(&trace).is_empty(), "{trace}");
+}
+
+/// Satz 9.4.4 fuer die Randfaelle: Der erzeugte Rahmen ruft den Kern ueber
+/// `takt_edge_*` und schreibt dieselben Ausgaben und dieselben Zeilen
+/// `driver`; die Zeile `stream` mit den Zaehlern schreibt nur der
+/// Interpreter.
+#[test]
+fn the_native_frame_judges_like_the_interpreter() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = program();
+    let inputs = Stimulus::from_trace(&Trace::parse(STIMULUS).expect("Stimulus"));
+    let native = common::run_native_all_with(&clang, &p, "treiberrand", 14, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let interpreted = interpreted();
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen:\n{}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}",
+        diffs.len(),
+        diffs.iter().take(8).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n")
+    );
+    let driver = |trace: &str| trace.lines().filter(|l| l.contains(" driver ")).map(str::to_string).collect::<Vec<_>>();
+    assert_eq!(driver(&native), driver(&interpreted), "--- nativ ---\n{native}");
 }

@@ -343,6 +343,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "takt-hal"
+version = "0.1.0"
+
+[[package]]
 name = "takt-native"
 version = "0.1.0"
 
@@ -352,6 +356,7 @@ version = "0.1.0"
 dependencies = [
  "libtaktm",
  "takt-crypto",
+ "takt-hal",
  "takt-native",
 ]
 

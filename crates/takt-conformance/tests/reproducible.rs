@@ -167,6 +167,8 @@ fn the_same_source_yields_the_same_binary() {
     // Abhaengigkeit von einem Nebeneffekt.
     let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-repro-bin");
     let _ = std::fs::remove_dir_all(&root);
+    // Die Runtime-Einstiege, die jeder Rahmen ruft (Natives, Treiberrand).
+    let natives = takt_conformance::harness::native_library().unwrap_or_else(|e| panic!("{e}"));
     let mut binaries = Vec::new();
     for lauf in 0..2 {
         if lauf == 1 {
@@ -184,6 +186,7 @@ fn the_same_source_yields_the_same_binary() {
             .args(["-Wno-override-module", "-O1"])
             .arg(&ll)
             .arg(&c)
+            .arg(&natives)
             .arg("-o")
             .arg(&exe)
             .output()

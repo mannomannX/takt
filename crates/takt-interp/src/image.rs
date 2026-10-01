@@ -604,7 +604,7 @@ fn reason_of(r: takt_hal::Reason) -> Reason {
 /// sinnvoll, wie bei `max_rate` (8.6). Die Einheit ist „je Sekunde" —
 /// `50 bar/s` steht als 50 da, weil der Wert in der Basiseinheit des
 /// Channels gerechnet wird (3.2).
-fn limits_of(c: &takt_mir::program::Channel, p: &Program) -> takt_hal::quality::Limits {
+pub fn limits_of(c: &takt_mir::program::Channel, p: &Program) -> takt_hal::quality::Limits {
     let ty = &p.types.list[c.ty.index()];
     let ty = match ty {
         Type::Samples { elem, .. } => &p.types.list[elem.index()],

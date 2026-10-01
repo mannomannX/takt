@@ -181,9 +181,9 @@ fn build_inner(
     let _ = writeln!(s, "    printf(\"t=%lld property %d %lld\\n\", g_tick, i, at);");
     let _ = writeln!(s, "}}\n");
 
-    // Die Stroeme (`takt-llvm/src/stream.rs`): die drei Aufrufe ueber
-    // dem Stimulus, der vor dem Lauf feststeht (`streams`).
-    crate::streams::emit(&mut s, p, inputs, crate::streams::Trace::Stdio);
+    // Die Stroeme (`takt-llvm/src/stream.rs`): jeder ueber seinen Ring;
+    // die Eingabestroeme speist der Treiberrand.
+    crate::streams::emit(&mut s, p, crate::streams::Trace::Stdio);
 
     natives(&mut s, p);
     machine_declarations(&mut s, p, &driven);
@@ -240,6 +240,12 @@ fn build_inner(
     // 12.10: Registerports lesen den Latch des Modells und schreiben in
     // die Ringe der Stroeme, also hinter beidem.
     crate::ports::emit(&mut s, p);
+    // 12.6: Der Treiberrand schreibt ins Abbild und in die Ringe; der
+    // Stimulus liefert, was auf einem Board die Treiber liefern.
+    let mut feed = String::new();
+    let most = crate::edge::stimulus(&mut feed, p, &layout, inputs);
+    crate::edge::emit(&mut s, p, &layout, &driven, most, crate::streams::Trace::Stdio);
+    s.push_str(&feed);
 
     let _ = writeln!(s, "int main(void) {{");
     let _ = writeln!(s, "    TAKT_IEEE_MODE();");
@@ -275,6 +281,9 @@ fn build_inner(
     safe_outputs(&mut s, p, &layout);
     sim_bindings(&mut s, p, "    ");
     crate::ports::sample(&mut s, p, "    ");
+    // Die Lieferungen des Ticks 0 gehen vor jedem Init durch den Rand, wie
+    // `Run::new` den Stimulus vor `Sim::init` einspeist.
+    let _ = writeln!(s, "    takt_edge_stimulus(0);");
     // Wie `Sim::init`: erst die Variablen aller Maschinen, dann die
     // geladenen Werte (5.9), dann die Eintritte in Schrittordnung — und
     // nach jedem `fresh[m] = publish_m(v_m)`, damit ein Follower schon im
@@ -297,6 +306,9 @@ fn build_inner(
     platform_end(&mut s, p, &layout, "    ");
     let _ = writeln!(s, "    for (g_tick = 1; g_tick <= {ticks}; g_tick++) {{");
     aging(&mut s, p, &layout, "        ");
+    // 12.1: `sample_inputs()` und `validate_and_bound()` nach dem Altern,
+    // wie `Run::tick`.
+    let _ = writeln!(s, "        takt_edge_stimulus(g_tick);");
     // 4.5: Faellige Jobs werden zu Tick-Beginn sichtbar, wie `poll_jobs` im Interpreter.
     if p.machines.iter().any(|m| !m.layout.job_slots.is_empty()) {
         let _ = writeln!(s, "        takt_jobs_poll();");
@@ -1464,6 +1476,11 @@ fn entry_field(p: &Program, name: &str, field: takt_llvm::image::Slot) -> Option
 /// Der Versatz des Qualitaetsbytes eines Inputs im Abbild (3.5).
 pub(crate) fn quality_offset(p: &Program, name: &str) -> Option<u64> {
     entry_field(p, name, takt_llvm::image::Slot::Quality)
+}
+
+/// Der Versatz des Grundes (`reason`) im Eintrag eines Channels (3.5).
+pub(crate) fn reason_offset(p: &Program, name: &str) -> Option<u64> {
+    entry_field(p, name, takt_llvm::image::Slot::Reason)
 }
 
 /// Der Versatz von `age` im Eintrag eines Channels (3.5).

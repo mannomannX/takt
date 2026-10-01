@@ -5,131 +5,22 @@
 //! gebaut, aber nie mit Daten ausgefuehrt — er lief ueber ein Fenster,
 //! das immer leer war (FB-115).
 //!
-//! **Warum eine Tabelle und kein Ring.** Der Ring der Runtime steht in
-//! `takt-rt-core::stream` und ist die eine Implementierung fuer echte
-//! Ziele. Ihn hier zu nutzen hiesse, ihn ueber `extern "C"` mit einem
-//! rohen `void *out` zu rufen — das erste `unsafe` in einem Workspace,
-//! der es verbietet (13.4 nennt das Verbot einen Zertifizierungsgrund).
-//! Ihn in C nachzubauen waere eine zweite Implementierung derselben
-//! Regeln, also genau die Gefahr, gegen die `takt-match` gebaut wurde.
-//!
-//! Der dritte Weg nutzt aus, was den Testrahmen vom echten Ziel
-//! unterscheidet: **Der Stimulus steht vor dem Lauf fest.** Ein Treiber
-//! liefert, wann er will; der Rahmen weiss es vorher. Damit braucht die
-//! C-Seite keinen Ring, sondern eine Tabelle und je Konsument einen
-//! Cursor — die Verdraengung entfaellt, weil nichts nachrueckt.
-//!
-//! **Die Schranken bleiben, so weit der Rahmen sie sieht.** `capacity`
-//! und `capacity_bytes` sind in 8.6 nicht nur Speicher, sondern
-//! beobachtbar: Was nicht hineinpasst, erhoeht `s.overflowed` und
-//! faultet die Konsumenten. Der Rahmen laesst aus, was die Schranke
-//! reisst — gerechnet je Tick, unter der Annahme eines Konsumenten, der
-//! sein Fenster leert. Das ist der Fall, den der erzeugte Code
-//! herstellt. Ein Stimulus, der einen Puffer ueber mehrere Ticks
-//! *fuellen* soll, ohne dass jemand liest, braeuchte den Cursor des
-//! Konsumenten — und den kennt erst der Lauf. `limits.rs` fuehrt das
-//! als Grenze der Abnahme.
+//! **Ein Ring je Strom, gespeist vom Treiberrand.** Jeder Eingabestrom
+//! hat im Lauf einen Ring wie ein interner Strom: Byte-Ring mit
+//! Deskriptoren, Cursor je Leser. Seine Elemente bringt der Treiberrand
+//! (`edge.rs`, 12.6), auf dem Wirt aus dem Stimulus, auf dem Board von den
+//! Treibern — erst nachdem der Vertrag des Treibers gehalten hat, und dann
+//! sofort sichtbar (8.6). Fruehere Fassungen legten den Stimulus vorab in
+//! eine Tabelle; das ging, solange jedes Element ankam. Seit der Rand im
+//! Lauf urteilt, entscheidet sich erst im Lauf, was ankommt, und die
+//! Schranken greifen wie im Interpreter — auch fuer einen Leser, der
+//! zurueckfaellt.
 
 use std::fmt::Write as _;
 
 use takt_mir::TypeId;
 use takt_mir::program::{Channel, Direction, Program};
 use takt_mir::types::Type;
-
-use crate::stimulus::Stimulus;
-
-/// Ein Element, wie es der Rahmen ablegt.
-struct Element {
-    /// Tick, an dem der Treiber liefert.
-    tick: u64,
-    /// Der Inhalt als Bytes.
-    bytes: Vec<u8>,
-}
-
-/// Ein Strom mit seinen Elementen und Schranken.
-struct Stream {
-    /// Nummer, wie der erzeugte Code sie uebergibt (`stream_id`).
-    id: i64,
-    /// Name des Kanals, fuer den Kommentar im C.
-    name: String,
-    /// Die Elemente in Reihenfolge, nach der Schrankenpruefung.
-    elements: Vec<Element>,
-}
-
-/// Sammelt die Stroeme mit ihren Elementen (8.6).
-///
-/// Ein Element, das die Schranken reisst, steht nicht in der Liste: Der
-/// Interpreter verwirft es ebenso (`Buffer::push`), und der Vergleich
-/// soll dieselbe Folge sehen.
-///
-/// **Was der Rahmen dabei annimmt.** Er rechnet mit einem Konsumenten,
-/// der in jedem Tick alles untersucht — dann steht im Puffer nie mehr
-/// als das, was ein Tick liefert, und die Schranke greift genau dort.
-/// Das ist der Fall, den der erzeugte Code herstellt (der Dispatch
-/// laeuft ueber das ganze Fenster), und `grenzen()` in `limits.rs` nennt
-/// den Rest.
-fn collect_streams(p: &Program, stimulus: &[Stimulus]) -> Vec<Stream> {
-    let mut streams: Vec<Stream> = Vec::new();
-    for (i, c) in p.channels.iter().enumerate() {
-        if c.dir != Direction::Input {
-            continue;
-        }
-        let Some((elem, cap)) = element_cap(c, p) else { continue };
-        // Die Schranken wie im Interpreter (`Image::new`): ohne Angabe
-        // 16 Elemente, und die Bytegrenze das 256-fache davon.
-        let bound = c.attrs.capacity.unwrap_or(16);
-        let bound_bytes = c.attrs.capacity_bytes.unwrap_or(bound.saturating_mul(256));
-        let mut elements: Vec<Element> = Vec::new();
-        let mut per_tick: (u64, u32, u32) = (u64::MAX, 0, 0);
-        for s in stimulus {
-            let Stimulus::Element { tick, channel, text } = s else { continue };
-            if *channel != c.name {
-                continue;
-            }
-            // 3.9: Der Rand begrenzt die Laenge; was darueber steht, ist
-            // abgeschnitten und nicht verworfen. Ein Record steht im
-            // Stimulus wie im Trace und geht als kanonische Byteform in
-            // den Ring (plan/m6.md 2.2).
-            let mut bytes = if textual(p, elem) {
-                text.as_bytes().to_vec()
-            } else {
-                let value = takt_interp::trace::parse_value(text, elem, p);
-                match value.map(|v| takt_interp::bytes::encode(p, &v, elem)) {
-                    Ok(Ok(b)) => b,
-                    _ => continue,
-                }
-            };
-            bytes.truncate(cap as usize);
-            if per_tick.0 != *tick {
-                per_tick = (*tick, 0, 0);
-            }
-            let n = bytes.len() as u32;
-            // 8.6: Zwei Schranken, Elemente und Byte. Was nicht
-            // hineinpasst, ist ein Ueberlauf und kein Element.
-            if per_tick.1 + 1 > bound || per_tick.2 + n > bound_bytes {
-                continue;
-            }
-            per_tick = (*tick, per_tick.1 + 1, per_tick.2 + n);
-            elements.push(Element { tick: *tick, bytes });
-        }
-        if elements.is_empty() {
-            continue;
-        }
-        streams.push(Stream { id: i64::from(i as u32), name: c.name.clone(), elements });
-    }
-    streams
-}
-
-/// Elementtyp und Kapazitaet seiner Bytes, falls der Kanal ein Strom ist.
-fn element_cap(c: &Channel, p: &Program) -> Option<(TypeId, u32)> {
-    let Some(Type::Stream(elem)) = p.types.list.get(c.ty.index()) else { return None };
-    Some((*elem, payload_cap(p, *elem)))
-}
-
-/// Text kommt als Bytes, wie er im Stimulus steht.
-fn textual(p: &Program, elem: TypeId) -> bool {
-    matches!(p.types.list.get(elem.index()), Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }))
-}
 
 /// Wohin der Rahmen seine Trace-Zeilen schreibt: `printf` auf dem Wirt,
 /// die `takt_board_trace*`-Aufrufe des Boards auf der MCU.
@@ -141,98 +32,25 @@ pub enum Trace {
     Board,
 }
 
-/// Schreibt die drei Aufrufe aus `takt-llvm/src/stream.rs` als C.
-///
-/// Ohne Elemente bleibt es beim leeren Fenster — der Fall, den jedes
-/// Programm aushalten muss, und der bis hierher der einzige war.
-pub fn emit(s: &mut String, p: &Program, stimulus: &[Stimulus], trace: Trace) {
-    let streams = collect_streams(p, stimulus);
+/// Schreibt die Aufrufe aus `takt-llvm/src/stream.rs` als C: jeder Strom,
+/// interner wie Eingabestrom, ueber seinen Ring.
+pub fn emit(s: &mut String, p: &Program, trace: Trace) {
     emit_internal(s, p);
-    let _ = writeln!(s, "/* Stroeme (8.6, 9.6); der Stimulus steht vor dem Lauf fest. */");
-    if streams.is_empty() {
-        let _ = writeln!(s, "int takt_stream_count(int s, long long cur) {{");
-        let _ = writeln!(s, "    int k = takt_int_slot(s);");
-        let _ = writeln!(s, "    return k >= 0 ? takt_int_count(k, cur) : 0;");
-        let _ = writeln!(s, "}}");
-        let _ = writeln!(s, "long long takt_stream_bind(int s, long long cur, int i, void *data, long long *t) {{");
-        let _ = writeln!(s, "    int k = takt_int_slot(s);");
-        let _ = writeln!(s, "    return k >= 0 ? takt_int_bind(k, cur, i, data, t) : 0;");
-        let _ = writeln!(s, "}}");
-        let _ = writeln!(s, "long long takt_stream_at(int s, long long cur, int i, void *out) {{");
-        let _ = writeln!(s, "    return takt_stream_bind(s, cur, i, (unsigned char *)out + 8, (long long *)out);");
-        let _ = writeln!(s, "}}");
-        let _ = writeln!(s, "void takt_stream_examined(int s, int m, long long seq) {{");
-        let _ = writeln!(s, "    int k = takt_int_slot(s);");
-        let _ = writeln!(s, "    if (k >= 0) takt_int_examined(k, m, seq);");
-        let _ = writeln!(s, "}}\n");
-        emit_send(s, p, trace);
-        return;
-    }
-
-    // Die Elemente aller Stroeme in einer Tabelle; `seq` ist der Index
-    // je Strom, wie die laufende Nummer in 9.6.
-    let _ =
-        writeln!(s, "struct takt_elem {{ int stream; long long tick; long long seq; int len; const char *bytes; }};");
-    let _ = writeln!(s, "static const struct takt_elem g_elems[] = {{");
-    for st in &streams {
-        for (seq, e) in st.elements.iter().enumerate() {
-            let text: String = e.bytes.iter().map(|b| format!("\\x{b:02x}")).collect();
-            let _ = writeln!(
-                s,
-                "    {{ {}, {}, {}, {}, \"{}\" }}, /* {} */",
-                st.id,
-                e.tick,
-                seq,
-                e.bytes.len(),
-                text,
-                st.name
-            );
-        }
-    }
-    let _ = writeln!(s, "}};");
-    let _ = writeln!(s, "static const int g_elem_count = (int)(sizeof g_elems / sizeof g_elems[0]);\n");
-
-    // 9.6: Sichtbar ist, was geliefert *und* noch nicht untersucht ist.
-    // `g_tick` ist der laufende Tick des Rahmens; ein Element wird im
-    // Tick seiner Lieferung sichtbar (8.6: der Rand liefert sofort).
+    let _ = writeln!(s, "/* Stroeme (8.6, 9.6): jeder ueber seinen Ring. */");
     let _ = writeln!(s, "int takt_stream_count(int s, long long cur) {{");
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
-    let _ = writeln!(s, "    if (k >= 0) return takt_int_count(k, cur);");
-    let _ = writeln!(s, "    int n = 0;");
-    let _ = writeln!(s, "    for (int i = 0; i < g_elem_count; i++)");
-    let _ = writeln!(s, "        if (g_elems[i].stream == s && g_elems[i].tick <= g_tick && g_elems[i].seq >= cur)");
-    let _ = writeln!(s, "            n++;");
-    let _ = writeln!(s, "    return n;");
-    let _ = writeln!(s, "}}\n");
-
-    // Das `i`-te Element des Fensters an den uebergebenen Platz, im
-    // Aufbau von `takt_llvm::stream::Streams::AT`: `t` in Nanosekunden
-    // (i64), die Laenge (i32 bei 8), die Bytes ab 12.
+    let _ = writeln!(s, "    return k >= 0 ? takt_int_count(k, cur) : 0;");
+    let _ = writeln!(s, "}}");
     let _ = writeln!(s, "long long takt_stream_bind(int s, long long cur, int i, void *data, long long *t) {{");
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
-    let _ = writeln!(s, "    if (k >= 0) return takt_int_bind(k, cur, i, data, t);");
-    let _ = writeln!(s, "    int seen = 0;");
-    let _ = writeln!(s, "    for (int j = 0; j < g_elem_count; j++) {{");
-    let _ = writeln!(s, "        const struct takt_elem *e = &g_elems[j];");
-    let _ = writeln!(s, "        if (e->stream != s || e->tick > g_tick || e->seq < cur) continue;");
-    let _ = writeln!(s, "        if (seen++ != i) continue;");
-    let _ = writeln!(s, "        unsigned char *p = (unsigned char *)data;");
-    let _ = writeln!(s, "        long long when = e->tick * {}LL;", p.config.tick);
-    let _ = writeln!(s, "        memcpy(t, &when, sizeof when);");
-    let _ = writeln!(s, "        memcpy(p, &e->len, sizeof e->len);");
-    let _ = writeln!(s, "        memcpy(p + 4, e->bytes, (size_t)e->len);");
-    let _ = writeln!(s, "        return e->seq;");
-    let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    return 0;");
+    let _ = writeln!(s, "    return k >= 0 ? takt_int_bind(k, cur, i, data, t) : 0;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "long long takt_stream_at(int s, long long cur, int i, void *out) {{");
     let _ = writeln!(s, "    return takt_stream_bind(s, cur, i, (unsigned char *)out + 8, (long long *)out);");
-    let _ = writeln!(s, "}}\n");
-
+    let _ = writeln!(s, "}}");
     // 9.6: `cur[s, m] = examined + 1`. Der Cursor gehoert der Maschine,
-    // und der erzeugte Code fuehrt ihn in seinem Zustand; fuer einen
-    // Eingabestrom muss der Rahmen darum nichts halten. Ein interner
-    // Strom gibt frei, was jeder Leser untersucht hat.
+    // und der erzeugte Code fuehrt ihn in seinem Zustand; der Ring gibt
+    // frei, was jeder Leser untersucht hat.
     let _ = writeln!(s, "void takt_stream_examined(int s, int m, long long seq) {{");
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
     let _ = writeln!(s, "    if (k >= 0) takt_int_examined(k, m, seq);");
@@ -257,8 +75,7 @@ fn payload_cap(p: &Program, elem: TypeId) -> u32 {
 /// Sema (`Stream::readers`). Ein voller Ring weist das Element ab, und der
 /// Sender faultet (8.6); mit `overflow = drop` verwirft er es still.
 /// `drop_oldest` fuehrt `limits.rs` als ungeprueft.
-/// Ein Ring im Lauf: ein interner Strom oder ein `hw`-Eingabestrom, den
-/// ein `sim`-Ausgabestrom derselben Adresse speist (8.3).
+/// Ein Ring im Lauf: ein interner Strom oder ein Eingabestrom.
 struct Dynamic {
     /// Nummer, wie der erzeugte Code sie uebergibt.
     id: i64,
@@ -269,10 +86,11 @@ struct Dynamic {
     readers: Vec<u32>,
 }
 
-/// Die Ringe des Laufs: erst die internen Stroeme, dann die gekoppelten
-/// Eingaenge, dann die Schreibstroeme der Registerports (12.10). Diese
-/// speist auf dem Wirt der Rahmen (`ports.rs`); auf dem Board schreibt der
-/// Port ins Register, und ihr Ring bleibt leer wie ein Strom ohne Quelle.
+/// Die Ringe des Laufs: erst die internen Stroeme, dann die
+/// Eingabestroeme in Kanalreihenfolge. Einen Eingabestrom speist der
+/// Treiberrand (`edge.rs`), einen gekoppelten der `sim`-Ausgabestrom
+/// derselben Adresse (8.3), den Schreibstrom eines Registerports auf dem
+/// Wirt der Rahmen (`ports.rs`, 12.10).
 fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
     let mut out: Vec<Dynamic> = p
         .streams
@@ -286,8 +104,11 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
             readers: st.readers.iter().map(|m| m.0).collect(),
         })
         .collect();
-    let ports = crate::ports::write_streams(p).into_iter().map(|(_, c, elem)| (c, elem));
-    for (in_id, elem) in coupled(p).into_iter().map(|(i, _, elem)| (i, elem)).chain(ports) {
+    let inputs = p.channels.iter().enumerate().filter_map(|(i, c)| match p.types.list.get(c.ty.index()) {
+        Some(Type::Stream(elem)) if c.dir == Direction::Input => Some((i, *elem)),
+        _ => None,
+    });
+    for (in_id, elem) in inputs {
         let c = &p.channels[in_id];
         let readers = p
             .machines
@@ -361,12 +182,13 @@ fn emit_internal(s: &mut String, p: &Program) {
     };
     let _ = writeln!(s, "/* Ringe im Lauf (8.6, 8.3): Byte-Ring mit Deskriptoren, Unit-Delay, Cursor je Leser. */");
     let _ = writeln!(s, "#define TAKT_INT_STREAMS {n}");
-    // 12 statt 16 Byte je Element: der Tick in zwei Haelften (kein
+    // 12 statt 16 Byte je Element: der Zeitstempel in zwei Haelften (kein
     // 8-Byte-Feld, also Ausrichtung 4), Versatz und Laenge als u16, wo
-    // die Bytekapazitaet es zulaesst.
+    // die Bytekapazitaet es zulaesst. Ein interner Strom stempelt mit der
+    // Tickgrenze, der Rand mit dem Zeitstempel der Lieferung (12.6).
     let narrow = dyns.iter().all(|d| d.capacity_bytes <= 65_535);
     let field = if narrow { "unsigned short" } else { "unsigned" };
-    let _ = writeln!(s, "struct takt_idesc {{ unsigned tick_lo, tick_hi; {field} off, len; }};");
+    let _ = writeln!(s, "struct takt_idesc {{ unsigned t_lo, t_hi; {field} off, len; }};");
     let _ = writeln!(s, "static struct takt_idesc g_int_desc[{}];", descs.max(1));
     let _ = writeln!(s, "static _Alignas(8) unsigned char g_int_pool[{}];", bytes.max(8));
     let _ = writeln!(s, "static const int g_int_doff[{rows}] = {{ {} }};", list(doff));
@@ -456,7 +278,7 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    if (i < 0 || i >= g_int_n[k] - g_int_new[k] - first) return 0;");
     let _ = writeln!(s, "    const struct takt_idesc *e = takt_int_desc(k, first + i);");
     let _ = writeln!(s, "    unsigned char *p = (unsigned char *)data;");
-    let _ = writeln!(s, "    long long when = (((long long)e->tick_hi << 32) | e->tick_lo) * {}LL;", p.config.tick);
+    let _ = writeln!(s, "    long long when = (long long)(((unsigned long long)e->t_hi << 32) | e->t_lo);");
     let _ = writeln!(s, "    int len = e->len;");
     let _ = writeln!(s, "    memcpy(t, &when, sizeof when);");
     let _ = writeln!(s, "    memcpy(p, &len, sizeof len);");
@@ -466,11 +288,11 @@ fn emit_internal(s: &mut String, p: &Program) {
     // 8.6: Zwei Schranken, Elemente und Bytes — wie `Buffer::push`. Ob
     // ein volles `send` faultet oder verwirft, entscheidet der erzeugte
     // Code an der Politik des Stroms.
-    let _ = writeln!(s, "static _Bool takt_int_send(int k, const char *b, int n) {{");
+    let _ = writeln!(s, "static _Bool takt_int_push(int k, const char *b, int n, long long at) {{");
     let _ = writeln!(s, "    if (g_int_n[k] >= g_int_cap[k] || g_int_bused[k] + n > g_int_capb[k]) return 0;");
     let _ = writeln!(s, "    struct takt_idesc *e = takt_int_desc(k, g_int_n[k]);");
-    let _ = writeln!(s, "    e->tick_lo = (unsigned)g_tick;");
-    let _ = writeln!(s, "    e->tick_hi = (unsigned)(g_tick >> 32);");
+    let _ = writeln!(s, "    e->t_lo = (unsigned)(unsigned long long)at;");
+    let _ = writeln!(s, "    e->t_hi = (unsigned)((unsigned long long)at >> 32);");
     let _ = writeln!(s, "    int off = g_int_bhead[k] + g_int_bused[k];");
     let _ = writeln!(s, "    if (off >= g_int_capb[k]) off -= g_int_capb[k];");
     let _ = writeln!(s, "    e->off = off;");
@@ -481,6 +303,34 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    g_int_new[k]++;");
     let _ = writeln!(s, "    g_int_seq[k]++;");
     let _ = writeln!(s, "    return 1;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "static _Bool takt_int_send(int k, const char *b, int n) {{");
+    let _ = writeln!(s, "    return takt_int_push(k, b, n, (long long)g_tick * {}LL);", p.config.tick);
+    let _ = writeln!(s, "}}");
+    // 8.6, `Buffer::push`: Ein Element vom Rand ist sofort sichtbar. Passt
+    // es nicht, verdraengt es mit `drop_oldest` die aeltesten (1), sonst
+    // ist es ein Ueberlauf (2) — ebenso, wenn es allein die Byteschranke
+    // sprengt.
+    let _ = writeln!(
+        s,
+        "static int takt_int_deliver(int k, const unsigned char *b, int n, long long at, _Bool drop_oldest) {{"
+    );
+    let _ = writeln!(s, "    int dropped = 0;");
+    let _ = writeln!(
+        s,
+        "    while (drop_oldest && g_int_n[k] > 0 && (g_int_n[k] >= g_int_cap[k] || g_int_bused[k] + n > g_int_capb[k])) {{"
+    );
+    let _ = writeln!(s, "        int len = takt_int_desc(k, 0)->len;");
+    let _ = writeln!(s, "        g_int_bhead[k] += len;");
+    let _ = writeln!(s, "        if (g_int_bhead[k] >= g_int_capb[k]) g_int_bhead[k] -= g_int_capb[k];");
+    let _ = writeln!(s, "        g_int_bused[k] -= len;");
+    let _ = writeln!(s, "        if (++g_int_head[k] == g_int_cap[k]) g_int_head[k] = 0;");
+    let _ = writeln!(s, "        g_int_n[k]--;");
+    let _ = writeln!(s, "        dropped = 1;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    if (!takt_int_push(k, (const char *)b, n, at)) return 2;");
+    let _ = writeln!(s, "    g_int_new[k]--;");
+    let _ = writeln!(s, "    return dropped;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static void takt_int_examined(int k, int m, long long seq) {{");
     let _ = writeln!(s, "    if (m < 0 || m >= {machines}) return;");

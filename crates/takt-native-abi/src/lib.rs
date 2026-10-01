@@ -1,6 +1,7 @@
 //! Die kuratierten Natives (4.5) hinter der C-ABI, die der erzeugte Code
 //! ruft: `takt_native_<name>` und `takt_native_map_*` (3.9); dazu die
-//! korrekt gerundete Mathematik `takt_m_*` (4.2, [`math`]).
+//! korrekt gerundete Mathematik `takt_m_*` (4.2, [`math`]) und der
+//! Treiberrand der Rahmen `takt_edge_*` (12.6, [`edge`]).
 //!
 //! **Eine Implementierung** (FB-293). 4.5 legt die Natives in die Runtime;
 //! die Rechnung steht in `takt-native` und `takt-crypto`, und Interpreter,
@@ -21,6 +22,7 @@
 
 use core::slice;
 
+pub mod edge;
 pub mod math;
 
 use takt_native::map::ByteMap;

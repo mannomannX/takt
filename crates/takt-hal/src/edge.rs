@@ -28,7 +28,7 @@ use std::vec::Vec;
 use takt_mir::ChannelId;
 use takt_mir::program::{Binding, Channel, Direction, Program};
 
-use crate::contract::{Contract, Device, Period, Placement, Track, Turn, Window};
+use crate::contract::{self, Contract, Device, Period, Track, Window};
 use crate::driver::{Delivery, Element, Reading, Writing};
 use crate::quality::{Gate, Limits, Quality, Scalar, Verdict};
 
@@ -90,9 +90,11 @@ pub struct Edge {
     /// Vertragsstand je Channel (Zeilen 1, 2).
     tracks: Vec<Track>,
     /// Je Channel der Index seines Treibers in `devices`.
-    device: Vec<usize>,
-    /// Die Treiber mit Namen und Zustand.
-    devices: Vec<(String, Device)>,
+    device: Vec<u32>,
+    /// Die Treiber.
+    devices: Vec<Device>,
+    /// Ihre Namen.
+    names: Vec<String>,
     /// Toleranz fuer Pruefung 1 in Nanosekunden.
     tolerance: i64,
     /// Zeile 7: Verletzungen der Periode in Folge.
@@ -116,19 +118,17 @@ impl Edge {
     pub fn new(p: &Program, limits: Vec<Limits>, tolerance: i64) -> Edge {
         let n = p.channels.len();
         debug_assert_eq!(limits.len(), n, "je Channel eine Grenze");
-        let mut devices: Vec<(String, Device)> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
         let device = p
             .channels
             .iter()
             .map(|c| {
                 let name = driver_of(c);
-                match devices.iter().position(|(d, _)| *d == name) {
-                    Some(i) => i,
-                    None => {
-                        devices.push((name, Device::default()));
-                        devices.len() - 1
-                    }
-                }
+                let i = names.iter().position(|d| *d == name).unwrap_or_else(|| {
+                    names.push(name);
+                    names.len() - 1
+                });
+                i as u32
             })
             .collect();
         Edge {
@@ -136,7 +136,8 @@ impl Edge {
             limits,
             tracks: p.channels.iter().map(|c| Track::new(maxpt_of(c, p.config.tick).unwrap_or(0))).collect(),
             device,
-            devices,
+            devices: vec![Device::default(); names.len()],
+            names,
             tolerance,
             period: Period::default(),
             time_warped: 0,
@@ -159,79 +160,55 @@ impl Edge {
         p: &Program,
     ) -> Settled {
         let w = Window { lo: window.0, hi: window.1, tolerance: self.tolerance };
-        let mut broken: Vec<Option<Contract>> = vec![None; self.devices.len()];
-        let mut delivered = vec![false; self.devices.len()];
-        let mut first = |d: usize, r: Result<Placement, Contract>| match r {
-            Ok(placed) => placed,
-            Err(c) => {
-                broken[d].get_or_insert(c);
-                Placement::Outside
-            }
+        let reading = |r: &Reading<V>| contract::Delivery {
+            channel: r.channel.0,
+            element: false,
+            bad_with_value: r.quality == Quality::Bad && r.value.is_some(),
+            t: r.t,
+            age: r.age,
+            seq: 0,
+            at: contract::NONE,
         };
-        let mut placed_readings = Vec::with_capacity(readings.len());
-        for r in readings {
-            let (i, d) = (r.channel.index(), self.device[r.channel.index()]);
-            delivered[d] = true;
-            let bad_with_value = r.quality == Quality::Bad && r.value.is_some();
-            placed_readings.push(first(d, self.tracks[i].reading(r.t, r.age, bad_with_value, &w)));
-        }
-        let mut placed_elements = Vec::with_capacity(elements.len());
-        for e in elements {
-            let (i, d) = (e.channel.index(), self.device[e.channel.index()]);
-            delivered[d] = true;
-            placed_elements.push(first(d, self.tracks[i].element(e.t, e.seq, &w)));
-        }
-        for (i, track) in self.tracks.iter_mut().enumerate() {
-            if track.count > 0
-                && let Err(c) = track.finish()
-            {
-                broken[self.device[i]].get_or_insert(c);
-            }
-        }
+        let element = |e: &Element<V>| contract::Delivery {
+            channel: e.channel.0,
+            element: true,
+            bad_with_value: false,
+            t: e.t,
+            age: 0,
+            seq: e.seq,
+            at: contract::NONE,
+        };
+        let mut ds: Vec<contract::Delivery> =
+            readings.iter().map(reading).chain(elements.iter().map(element)).collect();
+        let mut events = Vec::new();
+        contract::settle(&mut self.tracks, &mut self.devices, &self.device, &mut ds, &w, |e| events.push(e));
 
         let mut out = Settled::default();
-        for (d, (name, device)) in self.devices.iter_mut().enumerate() {
-            match device.settle(delivered[d], broken[d]) {
-                Turn::Degraded(what) => out.alerts.push(Alert::DriverDegraded { driver: name.clone(), what }),
-                Turn::Recovered => out.alerts.push(Alert::DriverRecovered { driver: name.clone() }),
-                Turn::Steady => {}
-            }
+        for e in events {
+            let alert = match e.kind {
+                contract::DEGRADED => Contract::of_code(e.what)
+                    .map(|what| Alert::DriverDegraded { driver: self.names[e.index as usize].clone(), what }),
+                contract::RECOVERED => Some(Alert::DriverRecovered { driver: self.names[e.index as usize].clone() }),
+                contract::WARPED => {
+                    self.time_warped = self.time_warped.saturating_add(1);
+                    let d = ds[e.index as usize];
+                    Some(Alert::TimeWarped { channel: ChannelId(d.channel), got: d.t, clamped: d.at })
+                }
+                _ => None,
+            };
+            out.alerts.extend(alert);
         }
-        let down: Vec<bool> = self.device.iter().map(|d| self.devices[*d].1.degraded).collect();
-        for (r, placed) in readings.iter().zip(placed_readings) {
-            out.readings.push(self.pass(r.channel, r.t, placed, down[r.channel.index()], &mut out.alerts));
-        }
-        for (e, placed) in elements.iter().zip(placed_elements) {
-            out.elements.push(self.pass(e.channel, e.t, placed, down[e.channel.index()], &mut out.alerts));
-        }
+        let at = |d: &contract::Delivery| (d.at != contract::NONE).then_some(d.at);
+        out.readings = ds[..readings.len()].iter().map(at).collect();
+        out.elements = ds[readings.len()..].iter().map(at).collect();
         out.degraded = p
             .channels
             .iter()
             .enumerate()
-            .filter(|(i, c)| c.dir == Direction::Input && down[*i])
+            .filter(|(i, c)| c.dir == Direction::Input && self.devices[self.device[*i] as usize].degraded)
             .map(|(i, _)| ChannelId(i as u32))
             .collect();
         out
-    }
-
-    /// Eine Lieferung eines vertragstreuen Treibers geht weiter; Zeile 1
-    /// zaehlt und meldet, was sie geklemmt hat.
-    fn pass(
-        &mut self,
-        c: ChannelId,
-        t: i64,
-        placed: Placement,
-        degraded: bool,
-        alerts: &mut Vec<Alert>,
-    ) -> Option<i64> {
-        if degraded {
-            return None;
-        }
-        if let Placement::Warped(clamped) = placed {
-            self.time_warped = self.time_warped.saturating_add(1);
-            alerts.push(Alert::TimeWarped { channel: c, got: t, clamped });
-        }
-        Some(placed.time(t))
     }
 
     /// Die naechste Folgenummer der lueckenlosen Folge eines Stroms: die
