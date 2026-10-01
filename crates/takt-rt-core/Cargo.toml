@@ -12,6 +12,9 @@ rust-version.workspace = true
 # Journal braucht seinen CRC32 (5.9).
 [dependencies]
 takt-native = { path = "../takt-native" }
+# Die Zaehlregel der Tick-Periode aus dem Treiberrand (12.6 Zeile 7), ohne
+# `std` und ohne die MIR.
+takt-hal = { path = "../takt-hal", default-features = false }
 
 [lints]
 workspace = true

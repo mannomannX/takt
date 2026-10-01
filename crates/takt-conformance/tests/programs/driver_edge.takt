@@ -1,0 +1,52 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Der Treiberrand auf dem Board (12.6, M10 Schritt 29c): Das Pruefgeraet
+# des Bring-ups (`takt_board_support::edge_probe`) liefert jeden Verstoss
+# gegen den Treibervertrag einmal, bestaetigt einen Schreibvorgang nicht
+# und laesst einmal den Heartbeat aus. Der Wirt rechnet denselben Lauf im
+# Interpreter mit der Folge des Pruefgeraets als Stimulus.
+
+record Pair layout little:
+    a : u8
+    b : u8
+
+input  p     : int in 0..100    @ hw("edge_a/p")
+input  q     : int in 0..100    @ hw("edge_a/q")
+input  k     : int in 0..100    @ hw("edge_b/k")
+input  rx    : stream<line<16>> @ hw("edge_u/rx") with max_rate = 200 Hz, capacity = 8
+input  pairs : stream<Pair>     @ hw("edge_c/rx") with max_rate = 400 Hz, capacity = 8
+output o     : bool             @ hw("edge_o/o")   with safe = false
+output p_ok  : bool             @ hw("o/p_ok")     with safe = false
+output q_ok  : bool             @ hw("o/q_ok")     with safe = false
+output k_ok  : bool             @ hw("o/k_ok")     with safe = false
+output lines : int in 0..100    @ hw("o/lines")    with safe = 0
+output sum   : int in 0..1000   @ hw("o/sum")      with safe = 0
+output up    : bool             @ hw("o/up")       with safe = false
+
+machine watch:
+    initial RUN
+    state RUN:
+        loop:
+            p_ok = p.valid
+            q_ok = q.valid
+            k_ok = k.valid
+        on rx as e:
+            lines = min(lines + 1, 100)
+        on pairs as f:
+            sum = min(sum + (f.data.a as int) + (f.data.b as int), 1000)
+
+# Zeile 6: Der Besitzer von `o` bekommt `Runtime(Driver)` und erholt sich.
+machine actor:
+    fault -> DOWN
+    initial UP
+    state UP:
+        enter:
+            up = true
+        loop:
+            o = true
+    state DOWN:
+        enter:
+            up = false
+        after 20 ms: -> UP

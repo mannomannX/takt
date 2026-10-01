@@ -157,6 +157,16 @@ pub unsafe extern "C" fn takt_edge_driver_bad(gate: *mut Gate) {
     }
 }
 
+/// Die Ausgabeseite (Zeile 6): `true`, wenn der Besitzer `Runtime(Driver)`
+/// bekommt — der Schreibvorgang unbestaetigt, der Heartbeat still oder
+/// der Sendepuffer ueberfahren. Ein negativer freier Platz oder eine
+/// negative Kapazitaet heisst unbekannt.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_edge_output(confirmed: bool, alive: bool, free: i32, capacity: i32) -> bool {
+    let known = |n: i32| u32::try_from(n).ok();
+    contract::output_fails(confirmed, alive, known(free), known(capacity))
+}
+
 /// Ob `bytes` ein Wert der Gestalt `shape` in kanonischer Form ist (Zeile 5,
 /// `takt_native::bytes::decodes`); `exact` fuer ein Element, das genau so
 /// lang ist, sonst fuer einen Slot mit Fuellung.

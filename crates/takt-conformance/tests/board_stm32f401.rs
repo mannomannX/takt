@@ -12,7 +12,7 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, TICKS, agreement, agreement_with, last_output, long_job_keeps_the_tick, natives_agree,
+    Drift, TICKS, agreement, agreement_with, driver_edge_agrees, last_output, long_job_keeps_the_tick, natives_agree,
     overrun_reaches_every_machine,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
@@ -199,6 +199,15 @@ fn the_rtos_task_starts_within_tens_of_microseconds() {
 fn the_natives_agree_with_the_host() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = natives_agree(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Der Treiberrand urteilt auf dem Board wie im Interpreter** (12.6, M10
+/// Schritt 29c): das Pruefgeraet des Bring-ups mit jedem Verstoss einmal.
+#[test]
+fn the_driver_edge_judges_like_the_interpreter() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = driver_edge_agrees(&mut board);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 

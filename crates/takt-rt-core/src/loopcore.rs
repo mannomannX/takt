@@ -17,6 +17,22 @@ pub trait Clock {
     /// Kehrt sofort zurueck, wenn er schon vergangen ist — der Tick ist
     /// dann ueberfaellig, und [`Overrun`] entscheidet, was daraus folgt.
     fn wait_until(&mut self, deadline: i64);
+
+    /// Die zuletzt gemessene Periode der Tickquelle in Nanosekunden (7.1);
+    /// `None`, wenn die Uhr sie nicht misst oder noch nicht kennt. Die
+    /// logische Uhr eines Konformitaetslaufs misst nichts.
+    fn tick_period(&self) -> Option<i64> {
+        None
+    }
+}
+
+/// `tick_tolerance = p pct for n ticks` (7.1) in der Form der Schleife.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tolerance {
+    /// Die erlaubte Abweichung der Periode in Nanosekunden.
+    pub ns: i64,
+    /// So viele Verletzungen in Folge sind `Runtime(Hardware)`.
+    pub runs: u32,
 }
 
 /// Der Watchdog (12.3, 12.4).
@@ -219,9 +235,15 @@ pub trait Program {
     fn raise_overrun(&mut self) {}
 
     /// Meldet allen Maschinen `Runtime(Hardware)` (12.3): Der Speicherschutz
-    /// hat einen Zugriff der TCB auf den Programmzustand abgewiesen. Wie
-    /// beim Ueberlauf wirkt der Fault im naechsten Tick.
+    /// hat einen Zugriff der TCB auf den Programmzustand abgewiesen, oder
+    /// die Tickquelle haelt ihre Periode nicht (12.6 Zeile 7). Der Fault
+    /// wirkt im naechsten Schritt.
     fn raise_hardware(&mut self) {}
+
+    /// `tick_tolerance` des Programms (7.1); `None` prueft die Periode nicht.
+    fn tick_tolerance(&self) -> Option<Tolerance> {
+        None
+    }
 
     /// Darf geschlafen werden (9.9)?
     ///
@@ -305,6 +327,8 @@ pub struct Runtime<P, C, W, S> {
     /// Im vorigen Tick ist die Periode uebergelaufen (7.3: der Fault wirkt
     /// im naechsten Tick).
     pending_overrun: bool,
+    /// Verletzungen der Periode in Folge (12.6 Zeile 7).
+    period: takt_hal::contract::Period,
 }
 
 impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
@@ -326,6 +350,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
             deadline: start,
             beat_from: start,
             pending_overrun: false,
+            period: takt_hal::contract::Period::default(),
         }
     }
 
@@ -389,6 +414,13 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         // Schritt, damit die Maschinen ihn in diesem Tick sehen.
         if core::mem::take(&mut self.pending_overrun) {
             self.program.raise_overrun();
+        }
+        // 12.6 Zeile 7: die Periode, mit der die Tickquelle diesen Tick
+        // gebracht hat, gegen `tick_tolerance`; die Regel ist die des Rands.
+        if let (Some(measured), Some(t)) = (self.clock.tick_period(), self.program.tick_tolerance())
+            && self.period.observe(measured, self.tick_ns, t.ns, t.runs)
+        {
+            self.program.raise_hardware();
         }
 
         // sample_inputs() bis commit_outputs(): die Semantik.

@@ -27,7 +27,7 @@ use core::ffi::c_void;
 
 use takt_native_abi as _;
 use takt_rt_baremetal::Traced;
-use takt_rt_core::{PlatformCommand, Program};
+use takt_rt_core::{PlatformCommand, Program, Tolerance};
 
 unsafe extern "C" {
     fn takt_mcu_init();
@@ -35,6 +35,7 @@ unsafe extern "C" {
     fn takt_mcu_tick(k: i64);
     fn takt_mcu_overrun();
     fn takt_mcu_hardware();
+    fn takt_mcu_tolerance(ns: *mut i64, runs: *mut u32);
     fn takt_mcu_dump(all: i32);
     fn takt_mcu_pc();
     fn takt_mcu_output(index: i32) -> i64;
@@ -156,6 +157,13 @@ impl Program for Generated {
         // SAFETY: setzt ein Flag des Rahmens; der naechste Tick stellt den
         // Fault zu (12.3).
         unsafe { takt_mcu_hardware() };
+    }
+
+    fn tick_tolerance(&self) -> Option<Tolerance> {
+        let (mut ns, mut runs) = (0i64, 0u32);
+        // SAFETY: der Rahmen schreibt zwei Zahlen an die uebergebenen Stellen.
+        unsafe { takt_mcu_tolerance(&mut ns, &mut runs) };
+        Some(Tolerance { ns, runs })
     }
 
     fn sleep_allowed(&self) -> bool {

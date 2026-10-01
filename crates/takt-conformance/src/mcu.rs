@@ -90,6 +90,8 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     crate::harness::jitter(&mut s, p, hw);
     jobs(&mut s, p);
     declarations(&mut s, p, &driven);
+    // 12.6: der Treiberrand vor dem Abtasten, das ihn speist.
+    crate::edge::emit(&mut s, p, &layout, &driven, deliveries(p, &layout), crate::streams::Trace::Board);
     init(&mut s, p, &layout, &driven);
     tick(&mut s, p, &layout, &driven);
     telemetry(&mut s, p, &layout, &driven, diagnostics);
@@ -558,6 +560,16 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     // 12.3: Der Speicherschutz hat einen Zugriff der TCB abgewiesen.
     let _ = writeln!(s, "static _Bool g_hardware;");
     let _ = writeln!(s, "void takt_mcu_hardware(void) {{ g_hardware = 1; }}");
+    // 7.1, 12.6 Zeile 7: die Toleranz der Tickquelle fuer die Schleife.
+    let (ns, runs) = p.config.tolerance();
+    let _ = writeln!(s, "void takt_mcu_tolerance(long long *ns, unsigned *runs) {{ *ns = {ns}LL; *runs = {runs}u; }}");
+    // Der Tick, den der Rahmen gerade rechnet: fuer ein Pruefgeraet, das
+    // nach Tick liefert (`takt_board_support::edge_probe`).
+    let _ = writeln!(s, "long long takt_mcu_current_tick(void) {{ return g_tick; }}");
+    // 12.6 Zeile 6: Was der Commit an Treiberfehlern gesehen hat, wirkt im
+    // naechsten Tick, wie ein Ueberlauf.
+    let driven_out = driver_outputs(p, layout);
+    let _ = writeln!(s, "static _Bool g_driver_fault[{}];", driven_out.len().max(1));
     let _ = writeln!(s, "void takt_mcu_tick(long long k) {{");
     let _ = writeln!(s, "    g_tick = k;");
     let _ = writeln!(s, "    g_done = k;");
@@ -585,6 +597,21 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Runtime(takt_mir::machine::RuntimeKind::Hardware))
     );
     let _ = writeln!(s, "    }}");
+    let driver =
+        takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Runtime(takt_mir::machine::RuntimeKind::Driver));
+    for (i, out) in driven_out.iter().enumerate() {
+        let pend = match out.owner {
+            Some(m) => format!("takt_pend({m}, {driver});"),
+            None => format!("for (int m = 0; m < {}; m++) takt_pend(m, {driver});", p.machines.len()),
+        };
+        let _ = writeln!(s, "    if (g_driver_fault[{i}]) {{");
+        let _ = writeln!(s, "        g_driver_fault[{i}] = 0;");
+        let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+        let _ = writeln!(s, "        takt_board_trace_i64(k);");
+        let _ = writeln!(s, "        takt_board_trace(\"runtime Driver {}\\n\");", out.name);
+        let _ = writeln!(s, "        {pend}");
+        let _ = writeln!(s, "    }}");
+    }
     crate::harness::aging(s, p, layout, "    ");
     // 4.5: Was fertig und faellig ist, wird zu Tickbeginn sichtbar, wie
     // `poll_jobs` im Interpreter und im Wirtsrahmen.
@@ -762,7 +789,7 @@ fn telemetry(
         let _ = writeln!(s, "void takt_mcu_dump(int all) {{ (void)all; }}\n");
         program_counters(s, p, driven);
         sample(s, p, layout);
-        commit(s, layout);
+        commit(s, p, layout);
         outputs(s, layout);
         return;
     }
@@ -964,7 +991,7 @@ fn telemetry(
     let _ = writeln!(s, "}}\n");
     program_counters(s, p, driven);
     sample(s, p, layout);
-    commit(s, layout);
+    commit(s, p, layout);
     outputs(s, layout);
 }
 
@@ -1166,48 +1193,204 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 /// Sim-Build ist das Modell seine Quelle, und ein Treiber, der zu
 /// Tickbeginn laese, ueberschriebe es (8.3).
 fn sample(s: &mut String, p: &Program, layout: &Layout) {
-    let fed = crate::harness::sim_fed_inputs(p);
-    let bound: Vec<(&crate::layout::Slot, String, u64)> = layout
-        .inputs
-        .iter()
-        .filter(|slot| !p.channels.iter().position(|c| c.name == slot.name).is_some_and(|i| fed.contains(&i)))
-        .filter_map(|slot| {
-            let name = slot.address.as_ref().map(|a| format!("takt_in_{}", a.ident()))?;
-            Some((slot, name, crate::harness::quality_offset(p, &slot.name)?))
-        })
-        .collect();
-
-    let _ = writeln!(s, "/* Die Treiber, die das Board liest (8.10, 12.1). */");
-    for (slot, fname, _) in &bound {
-        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let _ = writeln!(s, "_Bool {fname}({ct} *value, unsigned char *quality); /* {} */", slot.name);
+    let tick = p.config.tick;
+    let scalars = bound_scalars(p, layout);
+    let streams = bound_streams(p);
+    let _ =
+        writeln!(s, "/* Die Treiber, die das Board liest (8.10, 12.1); Zeitstempel in ns seit dem Start (12.6). */");
+    if !streams.is_empty() {
+        let _ =
+            writeln!(s, "/* Ein Strom liefert je Aufruf ein Element; ein laengeres als `cap` kuerzt der Treiber. */");
     }
-    if bound.is_empty() {
+    for b in &scalars {
+        let _ = writeln!(
+            s,
+            "_Bool {}({} *value, unsigned char *quality, long long *t); /* {} */",
+            b.function, b.ct, b.name
+        );
+    }
+    for b in &streams {
+        let _ = writeln!(
+            s,
+            "_Bool {}(unsigned char *buf, int cap, int *len, long long *t, long long *seq); /* {} */",
+            b.function, b.name
+        );
+    }
+    if scalars.is_empty() && streams.is_empty() {
         let _ = writeln!(s, "/*   keine — kein Eingang ist an Hardware gebunden */");
     }
-    for (slot, fname, _) in &bound {
-        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let _ = writeln!(s, "__attribute__((weak)) _Bool {fname}({ct} *value, unsigned char *quality)");
-        let _ = writeln!(s, "{{ (void)value; (void)quality; return 0; }}");
+    for b in &scalars {
+        let _ = writeln!(
+            s,
+            "__attribute__((weak)) _Bool {}({} *value, unsigned char *quality, long long *t)",
+            b.function, b.ct
+        );
+        let _ = writeln!(s, "{{ (void)value; (void)quality; (void)t; return 0; }}");
     }
+    for b in &streams {
+        let _ = writeln!(
+            s,
+            "__attribute__((weak)) _Bool {}(unsigned char *buf, int cap, int *len, long long *t, long long *seq)",
+            b.function
+        );
+        let _ = writeln!(s, "{{ (void)buf; (void)cap; (void)len; (void)t; (void)seq; return 0; }}");
+    }
+    // Ein Platz je Element, das ein Strom in einem Tick liefern darf, und
+    // eines mehr, damit der Rand `MAXPT` pruefen kann (12.6 Zeile 2).
+    let pool: u64 = streams.iter().map(|b| u64::from(b.polls) * u64::from(b.cap)).sum();
+    let _ = writeln!(s, "static _Alignas(8) unsigned char g_edge_pool[{}];", pool.max(1));
 
-    let _ = writeln!(s, "\n/* Schritt 2: die Geraete gehen in das Abbild (12.1). */");
+    let _ = writeln!(s, "\n/* Schritt 2: die Lieferungen an den Rand, der Rand ins Abbild (12.1, 12.6). */");
     let _ = writeln!(s, "void takt_mcu_sample(void) {{");
-    for (slot, fname, quality) in &bound {
-        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let _ = writeln!(s, "    {{");
-        let _ = writeln!(s, "        {ct} v = *({ct} *)(image + {});", slot.offset);
+    let _ = writeln!(s, "    long long now = g_tick * {tick}LL;");
+    for b in &scalars {
+        let _ = writeln!(s, "    {{ /* {} */", b.name);
+        let _ = writeln!(s, "        {} v = 0;", b.ct);
         let _ = writeln!(s, "        unsigned char q = 0;");
-        let _ = writeln!(s, "        if ({fname}(&v, &q)) {{");
-        let _ = writeln!(s, "            *({ct} *)(image + {}) = v;", slot.offset);
-        let _ = writeln!(s, "            image[{quality}] = q;");
-        if let Some(age) = crate::harness::age_offset(p, &slot.name) {
-            let _ = writeln!(s, "            *(long long *)(image + {age}) = 0;");
-        }
-        let _ = writeln!(s, "        }}");
+        let _ = writeln!(s, "        long long t = now;");
+        let _ = writeln!(s, "        if ({}(&v, &q, &t))", b.function);
+        // `Bad` kommt ohne Wert (12.6 Zeile 2); sein Grund ist der Treiber.
+        let _ = writeln!(
+            s,
+            "            takt_edge_reading({}, &v, (int)sizeof v, {}, q, q == 3 ? 3 : 0, q != 3, t, 0LL);",
+            b.channel, b.number
+        );
         let _ = writeln!(s, "    }}");
     }
+    let mut off = 0u64;
+    for b in &streams {
+        let _ = writeln!(s, "    {{ /* {} */", b.name);
+        let _ = writeln!(s, "        long long last = g_edge_tracks[{}].last_seq;", b.channel);
+        let _ = writeln!(s, "        long long next = last == (-9223372036854775807LL - 1) ? 0 : last + 1;");
+        let _ = writeln!(s, "        for (int i = 0; i < {}; i++) {{", b.polls);
+        let _ = writeln!(s, "            unsigned char *buf = g_edge_pool + {off} + i * {};", b.cap);
+        let _ = writeln!(s, "            int len = 0;");
+        let _ = writeln!(s, "            long long t = now, seq = next;");
+        let _ = writeln!(s, "            if (!{}(buf, {}, &len, &t, &seq)) break;", b.function, b.cap);
+        let _ = writeln!(s, "            if (len < 0) len = 0;");
+        let _ = writeln!(s, "            if (len > {0}) len = {0};", b.cap);
+        let _ = writeln!(s, "            next = seq + 1;");
+        let _ = writeln!(s, "            takt_edge_element({}, buf, len, t, seq);", b.channel);
+        let _ = writeln!(s, "        }}");
+        let _ = writeln!(s, "    }}");
+        off += u64::from(b.polls) * u64::from(b.cap);
+    }
+    let _ = writeln!(s, "    takt_edge_commit(g_tick);");
     let _ = writeln!(s, "}}\n");
+}
+
+/// Ein Skalar, den ein Treiber des Boards liefert.
+struct BoundScalar {
+    name: String,
+    channel: usize,
+    function: String,
+    ct: &'static str,
+    /// Art, `as_i64` und `as_f64` des Werts `v` fuer den Rand.
+    number: String,
+}
+
+/// Die an Hardware gebundenen Skalare, ohne die, die ein `sim`-Output
+/// derselben Adresse speist (8.3).
+fn bound_scalars(p: &Program, layout: &Layout) -> Vec<BoundScalar> {
+    use takt_mir::types::Type;
+    let fed = crate::harness::sim_fed_inputs(p);
+    layout
+        .inputs
+        .iter()
+        .filter_map(|slot| {
+            let channel = p.channels.iter().position(|c| c.name == slot.name)?;
+            if fed.contains(&channel) {
+                return None;
+            }
+            let function = format!("takt_in_{}", slot.address.as_ref()?.ident());
+            let ct = c_type(&slot.ty, slot.signed)?;
+            let number = match p.types.list.get(p.channels[channel].ty.index())? {
+                Type::Int { width, .. } if !width.signed() && width.bits() == 64 => {
+                    "v <= 9223372036854775807ULL ? 1 : 2, (long long)v, (double)v".to_string()
+                }
+                Type::Int { .. } | Type::Duration { .. } => "1, (long long)v, (double)v".to_string(),
+                Type::Float { .. } => "2, 0LL, (double)v".to_string(),
+                _ => "0, 0LL, 0.0".to_string(),
+            };
+            Some(BoundScalar { name: slot.name.clone(), channel, function, ct, number })
+        })
+        .collect()
+}
+
+/// Ein Eingabestrom, dessen Elemente ein Treiber des Boards liefert.
+struct BoundStream {
+    name: String,
+    channel: usize,
+    function: String,
+    /// Die Bytes eines Platzes: eines mehr als jedes gueltige Element, damit
+    /// ein ueberlanges, das der Treiber auf `cap` kuerzt, als `malformed`
+    /// zaehlt (12.6 Zeile 5) und nicht als gueltiges gekuerztes.
+    cap: u32,
+    /// `MAXPT + 1`: so oft fragt der Rahmen je Tick.
+    polls: u32,
+}
+
+/// Die an Hardware gebundenen Eingabestroeme, ohne die gekoppelten (8.3).
+fn bound_streams(p: &Program) -> Vec<BoundStream> {
+    use takt_mir::program::{Binding, Direction};
+    use takt_mir::types::Type;
+    p.channels
+        .iter()
+        .enumerate()
+        .filter_map(|(channel, c)| {
+            let Some(Type::Stream(elem)) = p.types.list.get(c.ty.index()) else { return None };
+            let Binding::Hw(addr) = &c.binding else { return None };
+            if c.dir != Direction::Input || crate::streams::coupled_input(p, channel) {
+                return None;
+            }
+            Some(BoundStream {
+                name: c.name.clone(),
+                channel,
+                function: format!("takt_poll_{}", addr.ident()),
+                cap: crate::streams::payload_cap(p, *elem).saturating_add(1),
+                polls: takt_hal::edge::maxpt_of(c, p.config.tick).unwrap_or(1).saturating_add(1),
+            })
+        })
+        .collect()
+}
+
+/// Wie viele Lieferungen ein Tick hoechstens bringt: je Skalar eine, je
+/// Strom `MAXPT + 1`.
+fn deliveries(p: &Program, layout: &Layout) -> usize {
+    bound_scalars(p, layout).len() + bound_streams(p).iter().map(|b| b.polls as usize).sum::<usize>()
+}
+
+/// Ein Ausgang an einem Treiber des Boards (12.6 Zeile 6).
+struct DriverOutput {
+    name: String,
+    /// Der Besitzer; ohne ihn trifft der Fault jede Maschine.
+    owner: Option<usize>,
+    /// Das Geraet, dessen Heartbeat zaehlt.
+    device: String,
+}
+
+/// Die an Hardware gebundenen Ausgaenge, Skalare in der Reihenfolge des
+/// Latch, dann die Ausgabestroeme.
+fn driver_outputs(p: &Program, layout: &Layout) -> Vec<DriverOutput> {
+    use takt_mir::program::{Binding, Direction};
+    use takt_mir::types::Type;
+    let of = |c: &takt_mir::program::Channel| DriverOutput {
+        name: c.name.clone(),
+        owner: c.owner.map(|m| m.index()),
+        device: takt_hal::edge::driver_of(c),
+    };
+    let scalars =
+        layout.outputs.iter().filter(|slot| slot.address.is_some() && c_type(&slot.ty, slot.signed).is_some());
+    let mut out: Vec<DriverOutput> =
+        scalars.filter_map(|slot| p.channels.iter().find(|c| c.name == slot.name)).map(of).collect();
+    out.extend(
+        p.channels
+            .iter()
+            .filter(|c| c.dir == Direction::Output && matches!(c.binding, Binding::Hw(_)))
+            .filter(|c| matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))))
+            .map(of),
+    );
+    out
 }
 
 /// `takt_mcu_commit`: den Latch an die Treiber geben (12.1).
@@ -1230,34 +1413,83 @@ fn sample(s: &mut String, p: &Program, layout: &Layout) {
 /// Ausgaenge mit `sim(...)` oder ohne Bindung bekommen keinen Aufruf: Zu
 /// ihnen gehoert kein Geraet. Der Latch bleibt trotzdem lesbar, dafuer ist
 /// [`outputs`] da.
-fn commit(s: &mut String, layout: &Layout) {
+fn commit(s: &mut String, p: &Program, layout: &Layout) {
+    use takt_mir::program::{Binding, Direction};
+    use takt_mir::types::Type;
     let bound: Vec<(&crate::layout::Slot, String)> = layout
         .outputs
         .iter()
+        .filter(|slot| c_type(&slot.ty, slot.signed).is_some())
         .filter_map(|slot| slot.address.as_ref().map(|a| (slot, format!("takt_out_{}", a.ident()))))
         .collect();
+    let streams: Vec<(&takt_mir::program::Channel, String)> = p
+        .channels
+        .iter()
+        .filter(|c| c.dir == Direction::Output && matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))))
+        .filter_map(|c| match &c.binding {
+            Binding::Hw(a) => Some((c, format!("takt_free_{}", a.ident()))),
+            _ => None,
+        })
+        .collect();
+    let outputs = driver_outputs(p, layout);
+    let mut devices: Vec<&str> = outputs.iter().map(|o| o.device.as_str()).collect();
+    devices.sort_unstable();
+    devices.dedup();
+    let alive = |d: &str| format!("takt_alive_{}", takt_mir::pattern::Address::simple(d).ident());
 
-    let _ = writeln!(s, "/* Die Treiber, die das Board stellt (8.10, 12.1). */");
+    let _ = writeln!(s, "/* Die Treiber, die das Board stellt (8.10, 12.1); sie bestaetigen (12.6 Zeile 6). */");
     for (slot, fname) in &bound {
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let _ = writeln!(s, "void {fname}({ct} value); /* {} */", slot.name);
+        let _ = writeln!(s, "_Bool {fname}({ct} value); /* {} */", slot.name);
     }
-    if bound.is_empty() {
+    for (c, fname) in &streams {
+        let _ = writeln!(s, "int {fname}(void); /* freier Platz von {} (8.8) */", c.name);
+    }
+    for d in &devices {
+        let _ = writeln!(s, "_Bool {}(void); /* Heartbeat (12.4) */", alive(d));
+    }
+    if bound.is_empty() && streams.is_empty() {
         let _ = writeln!(s, "/*   keine — kein Ausgang ist an Hardware gebunden */");
     }
-    // Schwach gebunden: Ein Ausgang ohne Treiber am Board geht ins Leere,
-    // der Trace zeigt ihn trotzdem — so laeuft jedes Programm des Korpus,
-    // und ein Board ueberschreibt nur, was es verdrahtet hat.
+    // Schwach gebunden: Ein Ausgang ohne Treiber am Board geht ins Leere und
+    // gilt als bestaetigt, ein Geraet ohne Heartbeat als lebendig, ein
+    // Sendepuffer ohne Auskunft als unbekannt — so laeuft jedes Programm des
+    // Korpus, und ein Board ueberschreibt nur, was es verdrahtet hat.
     for (slot, fname) in &bound {
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let _ = writeln!(s, "__attribute__((weak)) void {fname}({ct} value) {{ (void)value; }}");
+        let _ = writeln!(s, "__attribute__((weak)) _Bool {fname}({ct} value) {{ (void)value; return 1; }}");
     }
+    for (_, fname) in &streams {
+        let _ = writeln!(s, "__attribute__((weak)) int {fname}(void) {{ return -1; }}");
+    }
+    for d in &devices {
+        let _ = writeln!(s, "__attribute__((weak)) _Bool {}(void) {{ return 1; }}", alive(d));
+    }
+    let _ = writeln!(s, "_Bool takt_edge_output(_Bool confirmed, _Bool alive, int free, int capacity);");
 
-    let _ = writeln!(s, "\n/* Schritt 10: der Latch geht an die Geraete (12.1). */");
+    let _ = writeln!(
+        s,
+        "\n/* Schritt 10: der Latch geht an die Geraete (12.1); was scheitert, faultet im naechsten Tick. */"
+    );
     let _ = writeln!(s, "void takt_mcu_commit(void) {{");
+    for d in &devices {
+        let _ = writeln!(s, "    _Bool alive_{} = {}();", takt_mir::pattern::Address::simple(d).ident(), alive(d));
+    }
+    let index = |name: &str| outputs.iter().position(|o| o.name == name);
     for (slot, fname) in &bound {
-        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let _ = writeln!(s, "    {fname}(*({ct} *)(latch + {}));", slot.offset);
+        let (Some(ct), Some(i)) = (c_type(&slot.ty, slot.signed), index(&slot.name)) else { continue };
+        let device = takt_mir::pattern::Address::simple(&outputs[i].device).ident();
+        let _ = writeln!(
+            s,
+            "    if (takt_edge_output({fname}(*({ct} *)(latch + {})), alive_{device}, -1, -1)) g_driver_fault[{i}] = 1;",
+            slot.offset
+        );
+    }
+    for (c, fname) in &streams {
+        let Some(i) = index(&c.name) else { continue };
+        let device = takt_mir::pattern::Address::simple(&outputs[i].device).ident();
+        let cap = c.attrs.capacity_bytes.map_or(-1, i64::from);
+        let _ = writeln!(s, "    if (takt_edge_output(1, alive_{device}, {fname}(), {cap})) g_driver_fault[{i}] = 1;");
     }
     let _ = writeln!(s, "}}\n");
 }

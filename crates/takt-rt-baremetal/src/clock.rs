@@ -87,6 +87,13 @@ impl<T: TickSource, F: FnMut()> Clock for TimerClock<T, F> {
             self.timer.wait_event(target);
         }
     }
+
+    /// Die Periode, die der Timer zwischen den letzten beiden Ereignissen
+    /// gemessen hat (7.1); vor dem zweiten kennt er keine.
+    fn tick_period(&self) -> Option<i64> {
+        let ns = self.timer.last_period_ns();
+        (ns > 0).then_some(ns)
+    }
 }
 
 /// Die logische Zeit als Uhr, fuer Konformitaetslaeufe (13.8).

@@ -29,6 +29,81 @@ pub fn program(path: &std::path::Path) -> Program {
     out.program.unwrap_or_else(|| panic!("{}: kein Programm", path.display()))
 }
 
+/// **Der Treiberrand urteilt auf dem Board wie im Interpreter** (12.6, M10
+/// Schritt 29c). Das Pruefgeraet des Bring-ups (`edge_probe`) liefert jeden
+/// Verstoss gegen den Treibervertrag einmal, bestaetigt einen
+/// Schreibvorgang nicht und laesst einmal den Heartbeat aus; der
+/// Interpreter rechnet denselben Lauf mit der Folge des Pruefgeraets als
+/// Stimulus. Verglichen werden die Ausgaben, die Zeilen `driver` und die
+/// `Runtime(Driver)`, die das Board erhebt.
+pub fn driver_edge_agrees(board: &mut dyn Board) -> Vec<String> {
+    const EDGE_TICKS: u64 = 16;
+    let path = board::root().join("crates/takt-conformance/tests/programs/driver_edge.takt");
+    let options = Options::fresh(EDGE_TICKS);
+    let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("kein Lauf: {e}")],
+    };
+    let stimulus = takt_interp::Trace::parse(&probe_stimulus(EDGE_TICKS)).expect("Stimulus");
+    let run = takt_interp::RunOptions { ticks: EDGE_TICKS, ..Default::default() };
+    let interpreted = takt_interp::run(&program(&path), &stimulus, &run).expect("Lauf").trace.render();
+    let mut failed = Vec::new();
+    let diffs = compare(&interpreted, &text);
+    if !diffs.is_empty() {
+        let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
+        failed.push(format!("{} Abweichungen:\n{}\n--- Board ---\n{text}", diffs.len(), list.join("\n")));
+    }
+    let lines = |t: &str, what: &str| -> Vec<String> {
+        t.lines().filter(|l| l.starts_with("t=") && l.contains(what)).map(str::to_string).collect()
+    };
+    if lines(&interpreted, " driver ") != lines(&text, " driver ") {
+        failed.push(format!(
+            "andere `driver`-Zeilen:\n{:?}\n{:?}",
+            lines(&interpreted, " driver "),
+            lines(&text, " driver ")
+        ));
+    }
+    let raised: Vec<String> =
+        takt_board_support::edge_probe::DRIVER_FAULTS.iter().map(|k| format!("t={k} runtime Driver o")).collect();
+    if lines(&text, " runtime Driver ") != raised {
+        failed.push(format!("das Board erhob {:?}, erwartet {raised:?}", lines(&text, " runtime Driver ")));
+    }
+    eprintln!("{} Treiberrand: {} Abweichungen", board.name(), failed.len());
+    failed
+}
+
+/// Die Folge des Pruefgeraets als Stimulus des Interpreters: Lieferungen mit
+/// Zeitstempel und Folgenummer, die Faults der Ausgabeseite als `runtime`.
+fn probe_stimulus(ticks: u64) -> String {
+    use std::fmt::Write as _;
+    use takt_board_support::edge_probe::{self, Scalar, Stream};
+    let mut s = String::new();
+    for tick in 0..ticks {
+        for ch in Scalar::ALL {
+            let Some((v, at)) = edge_probe::reading(ch, tick) else { continue };
+            let _ = write!(s, "t={tick} in {} {v}", ch.name());
+            if let Some(at) = at {
+                let _ = write!(s, " t={at}");
+            }
+            s.push('\n');
+        }
+        for st in Stream::ALL {
+            for i in 0.. {
+                let Some((bytes, seq)) = edge_probe::element(st, tick, i) else { break };
+                let text = match st {
+                    Stream::Lines => format!("{:?}", String::from_utf8_lossy(bytes)),
+                    Stream::Pairs => format!("0x{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()),
+                };
+                let _ = writeln!(s, "t={tick} in {} {text} seq={seq}", st.name());
+            }
+        }
+        if edge_probe::DRIVER_FAULTS.contains(&tick) {
+            let _ = writeln!(s, "t={tick} runtime Driver o");
+        }
+    }
+    s
+}
+
 /// **Ein Job, der laenger rechnet als ein Tick, verspaetet keinen** (4.5,
 /// 12.3). `long_job.takt` rechnet SHA-256 ueber 4096 Byte bei 1 ms Tick in
 /// Echtzeit: Das Ergebnis stimmt mit dem Interpreter ueberein und erscheint

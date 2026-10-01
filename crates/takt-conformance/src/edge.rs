@@ -208,7 +208,7 @@ fn report(s: &mut String, trace: Trace) {
         Trace::Board => {
             let _ = writeln!(s, "    takt_board_trace(\"t=\");");
             let _ = writeln!(s, "    takt_board_trace_i64(tick);");
-            let _ = writeln!(s, "    takt_board_trace(\" driver \");");
+            let _ = writeln!(s, "    takt_board_trace(\"driver \");");
             let _ = writeln!(s, "    takt_board_trace(device);");
             let _ = writeln!(s, "    takt_board_trace(\" \");");
             let _ = writeln!(s, "    takt_board_trace(word);");

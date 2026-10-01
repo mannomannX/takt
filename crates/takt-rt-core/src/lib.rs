@@ -34,7 +34,8 @@ pub mod stream;
 
 pub use journal::{FakeNvm, Journal, Loaded, Persist};
 pub use loopcore::{
-    Clock, JobState, Jobs, Nvm, NvmState, PlatformCommand, Program, Runtime, Sink, Tick, Tunables, Watchdog, tick_end,
+    Clock, JobState, Jobs, Nvm, NvmState, PlatformCommand, Program, Runtime, Sink, Tick, Tolerance, Tunables, Watchdog,
+    tick_end,
 };
 pub use overrun::{Overrun, Policy, Seen};
 pub use profile::Profile;

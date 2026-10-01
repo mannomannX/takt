@@ -557,6 +557,7 @@ name = "takt-conformance"
 version = "0.1.0"
 dependencies = [
  "serialport",
+ "takt-board-support",
  "takt-crypto",
  "takt-diag",
  "takt-hal",
@@ -657,6 +658,7 @@ dependencies = [
 name = "takt-rt-core"
 version = "0.1.0"
 dependencies = [
+ "takt-hal",
  "takt-native",
 ]
 

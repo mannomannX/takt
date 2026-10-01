@@ -1537,6 +1537,7 @@ version = "0.1.0"
 dependencies = [
  "takt-crypto",
  "takt-diag",
+ "takt-hal",
  "takt-interp",
  "takt-llvm",
  "takt-mir",
@@ -1562,7 +1563,6 @@ version = "0.1.0"
 name = "takt-hal"
 version = "0.1.0"
 dependencies = [
- "takt-diag",
  "takt-mir",
 ]
 
@@ -1606,6 +1606,7 @@ name = "takt-mir"
 version = "0.1.0"
 dependencies = [
  "takt-diag",
+ "takt-native",
 ]
 
 [[package]]
@@ -1618,6 +1619,7 @@ version = "0.1.0"
 dependencies = [
  "libtaktm",
  "takt-crypto",
+ "takt-hal",
  "takt-native",
 ]
 
@@ -1632,6 +1634,7 @@ dependencies = [
 name = "takt-rt-core"
 version = "0.1.0"
 dependencies = [
+ "takt-hal",
  "takt-native",
 ]
 

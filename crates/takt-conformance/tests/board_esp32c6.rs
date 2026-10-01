@@ -12,8 +12,8 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use common::board::{
-    TICKS, agreement, corpus, last_output, long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine,
-    run_interpreted,
+    TICKS, agreement, corpus, driver_edge_agrees, last_output, long_job_keeps_the_tick, natives_agree,
+    overrun_reaches_every_machine, run_interpreted,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
 use takt_conformance::board::{self, Bin, Board, CORPUS, Options};
@@ -503,5 +503,14 @@ fn the_board_agrees_with_the_interpreter() {
 fn the_natives_agree_with_the_host() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = natives_agree(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Der Treiberrand urteilt auf dem Board wie im Interpreter** (12.6, M10
+/// Schritt 29c): das Pruefgeraet des Bring-ups mit jedem Verstoss einmal.
+#[test]
+fn the_driver_edge_judges_like_the_interpreter() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = driver_edge_agrees(&mut board);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }

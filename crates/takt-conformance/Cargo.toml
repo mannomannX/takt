@@ -20,6 +20,10 @@ takt-sema = { path = "../takt-sema" }
 # (ESP32-C6) oder einen Adapter an USART1 (STM32F401).
 serialport = { version = "4", default-features = false, optional = true }
 
+[dev-dependencies]
+# Die Folge des Pruefgeraets, das der Bring-up fuer den Treiberrand stellt.
+takt-board-support = { path = "../takt-board-support" }
+
 [features]
 # Die Bring-ups binden nur den C-Rahmen (`mcu`) in ihr Bauskript und
 # lassen die Boards am Host mitsamt der seriellen Schnittstelle weg.

@@ -247,8 +247,11 @@ fn a_hardware_path_becomes_a_driver_call() {
     let p = corpus("29_heartbeat.takt");
     let src = takt_conformance::mcu::build(&p).source;
 
-    assert!(src.contains("void takt_out_ui_led(unsigned char value);"), "der Treiber ist deklariert:\n{src}");
-    assert!(src.contains("takt_out_ui_led(*(unsigned char *)(latch + 0));"), "und wird gerufen:\n{src}");
+    assert!(src.contains("_Bool takt_out_ui_led(unsigned char value);"), "der Treiber ist deklariert:\n{src}");
+    assert!(
+        src.contains("takt_edge_output(takt_out_ui_led(*(unsigned char *)(latch + 0)), alive_ui, -1, -1)"),
+        "und wird gerufen, seine Bestaetigung geprueft (12.6 Zeile 6):\n{src}"
+    );
     assert!(src.contains("void takt_mcu_commit(void)"), "Schritt 10 hat einen Namen (12.1)");
 }
 
@@ -528,8 +531,11 @@ fn a_multirate_deadline_counts_activations() {
 fn a_bound_input_becomes_a_driver_symbol() {
     let src = takt_conformance::mcu::build(&program(INPUTS)).source;
 
-    assert!(src.contains("_Bool takt_in_ui_button(unsigned char *value, unsigned char *quality);"), "{src}");
-    assert!(src.contains("_Bool takt_in_adc_temp(long long *value, unsigned char *quality);"), "{src}");
+    assert!(
+        src.contains("_Bool takt_in_ui_button(unsigned char *value, unsigned char *quality, long long *t);"),
+        "{src}"
+    );
+    assert!(src.contains("_Bool takt_in_adc_temp(long long *value, unsigned char *quality, long long *t);"), "{src}");
     assert!(
         src.contains("__attribute__((weak)) _Bool takt_in_ui_button"),
         "schwach gebunden:

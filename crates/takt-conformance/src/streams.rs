@@ -90,7 +90,7 @@ fn shapes(s: &mut String, p: &Program) {
 /// Die Kapazitaet der Bytes eines Elements (8.6, 3.9): `N` bei Text,
 /// sonst die kanonische Byteform — dieselbe Rechnung wie
 /// `takt_llvm::stream::scratch`.
-fn payload_cap(p: &Program, elem: TypeId) -> u32 {
+pub(crate) fn payload_cap(p: &Program, elem: TypeId) -> u32 {
     match p.types.list.get(elem.index()) {
         Some(Type::Line { cap } | Type::Str { cap } | Type::Bytes { cap }) => *cap,
         _ => takt_mir::bytes::max_size(p, elem).unwrap_or(1),
@@ -158,6 +158,12 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
         });
     }
     out
+}
+
+/// Speist ein `sim`-Ausgabestrom den Eingabestrom `channel` (8.3)? Dann
+/// liefert ihn das Modell, kein Treiber.
+pub(crate) fn coupled_input(p: &Program, channel: usize) -> bool {
+    coupled(p).iter().any(|(i, _, _)| *i == channel)
 }
 
 /// `(Eingang, Ausgang, Elementtyp)` je Kopplung: ein `hw`-Eingabestrom und

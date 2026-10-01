@@ -135,4 +135,17 @@ impl takt_rt_core::Program for Run<'_> {
     fn advance(&mut self, ticks: u64) {
         self.skip(ticks);
     }
+
+    fn raise_overrun(&mut self) {
+        self.raised.push(takt_mir::machine::RuntimeKind::Overrun);
+    }
+
+    fn raise_hardware(&mut self) {
+        self.raised.push(takt_mir::machine::RuntimeKind::Hardware);
+    }
+
+    fn tick_tolerance(&self) -> Option<takt_rt_core::Tolerance> {
+        let (ns, runs) = self.sim.loaded.program.config.tolerance();
+        Some(takt_rt_core::Tolerance { ns, runs })
+    }
 }

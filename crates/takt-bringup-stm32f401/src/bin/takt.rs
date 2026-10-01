@@ -46,6 +46,7 @@ use stm32f4::stm32f401::{Interrupt, NVIC, Peripherals, interrupt};
 use takt_board_stm32f401::{
     BAUD, Board, CORE_HZ, Generated, Iwdg, JobContext, Led, Mpu, Telemetry, Tim2Tick, Wire, cycles, mpu, platform, tick,
 };
+use takt_board_support::edge_probe;
 use takt_board_support::platform::image_state;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, Guarded, JournalStats, Stats, TimerClock};
 #[cfg(not(feature = "rtos"))]
@@ -167,9 +168,10 @@ static BOOT_REASON: AtomicI32 = AtomicI32::new(0);
 ///
 /// # Safety
 ///
-/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild.
+/// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
+/// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_sys_boot_reason(value: *mut i32, quality: *mut u8) -> bool {
+pub unsafe extern "C" fn takt_in_sys_boot_reason(value: *mut i32, quality: *mut u8, _t: *mut i64) -> bool {
     unsafe {
         *value = BOOT_REASON.load(Ordering::Relaxed);
         *quality = 0;
@@ -187,7 +189,7 @@ static RESET_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild; `int`
 /// liegt dort als `long long`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_sys_reset_count(value: *mut i64, quality: *mut u8) -> bool {
+pub unsafe extern "C" fn takt_in_sys_reset_count(value: *mut i64, quality: *mut u8, _t: *mut i64) -> bool {
     unsafe {
         *value = i64::from(RESET_COUNT.load(Ordering::Relaxed));
         *quality = 0;
@@ -200,9 +202,10 @@ pub unsafe extern "C" fn takt_in_sys_reset_count(value: *mut i64, quality: *mut 
 ///
 /// # Safety
 ///
-/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild.
+/// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
+/// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_sys_image_state(value: *mut i32, quality: *mut u8) -> bool {
+pub unsafe extern "C" fn takt_in_sys_image_state(value: *mut i32, quality: *mut u8, _t: *mut i64) -> bool {
     unsafe {
         *value = image_state::CONFIRMED;
         *quality = 0;
@@ -218,13 +221,14 @@ pub unsafe extern "C" fn takt_in_sys_image_state(value: *mut i32, quality: *mut 
 /// Black Pill liegt an PC13 gegen 3V3 — was `true` elektrisch heisst,
 /// weiss nur diese Zeile.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_ui_led(value: u8) {
-    let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return };
+pub extern "C" fn takt_out_ui_led(value: u8) -> bool {
+    let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return false };
     if value != 0 {
         led.on();
     } else {
         led.off();
     }
+    true
 }
 
 /// Ein Pruefzugriff der TCB auf geschuetzten Speicher (12.3): zwischen zwei
@@ -240,36 +244,40 @@ static PROBE: AtomicU8 = AtomicU8::new(0);
 
 /// `test/tcb_write` (12.3): der naechste Leerlauf schreibt in den Programmzustand.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_tcb_write(value: u8) {
+pub extern "C" fn takt_out_test_tcb_write(value: u8) -> bool {
     if value != 0 {
         PROBE.store(1, Ordering::Relaxed);
     }
+    true
 }
 
 /// `test/guard_write` (12.3): der naechste Leerlauf schreibt in den Waechter.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_guard_write(value: u8) {
+pub extern "C" fn takt_out_test_guard_write(value: u8) -> bool {
     if value != 0 {
         PROBE.store(2, Ordering::Relaxed);
     }
+    true
 }
 
 /// `test/job_guard_write` (12.3): der naechste Leerlauf schreibt in den
 /// Waechter unter dem Job-Stack.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_job_guard_write(value: u8) {
+pub extern "C" fn takt_out_test_job_guard_write(value: u8) -> bool {
     if value != 0 {
         PROBE.store(3, Ordering::Relaxed);
     }
+    true
 }
 
 /// `test/isr_write` (12.3): Im naechsten Programmschritt schreibt die
 /// Pruef-ISR in den Programmzustand (`test/in_step`).
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_isr_write(value: u8) {
+pub extern "C" fn takt_out_test_isr_write(value: u8) -> bool {
     if value != 0 {
         PROBE.store(4, Ordering::Relaxed);
     }
+    true
 }
 
 /// `test/in_step` (12.3): Gelesen wird im Programmschritt, bei offenem
@@ -278,9 +286,10 @@ pub extern "C" fn takt_out_test_isr_write(value: u8) {
 ///
 /// # Safety
 ///
-/// Der Rahmen uebergibt zwei gueltige Zeiger.
+/// Der Rahmen uebergibt gueltige Zeiger; den Zeitstempel belegt er mit
+/// der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_test_in_step(value: *mut u8, quality: *mut u8) -> bool {
+pub unsafe extern "C" fn takt_in_test_in_step(value: *mut u8, quality: *mut u8, _t: *mut i64) -> bool {
     if PROBE.load(Ordering::Relaxed) == 4 {
         NVIC::pend(Interrupt::EXTI0);
         cortex_m::asm::dsb();
@@ -331,19 +340,20 @@ fn EXTI0() {
 
 /// Der Output `gpio/loop_out` auf PA0, ueber die Bruecke an PA1 (13.8).
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_gpio_loop_out(value: u8) {
-    if let Some(w) = wire() {
-        w.write(value != 0);
-    }
+pub extern "C" fn takt_out_gpio_loop_out(value: u8) -> bool {
+    let Some(w) = wire() else { return false };
+    w.write(value != 0);
+    true
 }
 
 /// Der Input `gpio/loop_in` an PA1, das Ende der Bruecke (13.8).
 ///
 /// # Safety
 ///
-/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild.
+/// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
+/// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_gpio_loop_in(value: *mut u8, quality: *mut u8) -> bool {
+pub unsafe extern "C" fn takt_in_gpio_loop_in(value: *mut u8, quality: *mut u8, _t: *mut i64) -> bool {
     let Some(w) = wire() else { return false };
     let level = w.read();
     unsafe {
@@ -351,6 +361,134 @@ pub unsafe extern "C" fn takt_in_gpio_loop_in(value: *mut u8, quality: *mut u8) 
         *quality = 0;
     }
     true
+}
+
+// --- Das Pruefgeraet des Treiberrands (12.6, M10 Schritt 29c) ---------------
+//
+// Die Folge steht in `takt_board_support::edge_probe`; hier nur die Grenze
+// zum Rahmen. Das Programm dazu: `takt-conformance/tests/programs/
+// driver_edge.takt`. Ein Programm, das diese Adressen nicht bindet, ruft
+// keinen dieser Treiber.
+
+unsafe extern "C" {
+    fn takt_mcu_current_tick() -> i64;
+}
+
+/// Der Tick, den der Rahmen gerade rechnet.
+fn edge_tick() -> u64 {
+    // SAFETY: liest nur eine Zahl des Rahmens.
+    u64::try_from(unsafe { takt_mcu_current_tick() }).unwrap_or(0)
+}
+
+/// Eine Abtastung des Pruefgeraets.
+///
+/// # Safety
+///
+/// Drei gueltige Zeiger des Rahmens.
+unsafe fn edge_reading(ch: edge_probe::Scalar, value: *mut i64, quality: *mut u8, t: *mut i64) -> bool {
+    let Some((v, at)) = edge_probe::reading(ch, edge_tick()) else { return false };
+    unsafe {
+        *value = v;
+        *quality = 0;
+        if let Some(at) = at {
+            *t = at;
+        }
+    }
+    true
+}
+
+/// Der Treiber fuer `edge_a/p`.
+///
+/// # Safety
+///
+/// Drei gueltige Zeiger des Rahmens.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_edge_a_p(value: *mut i64, quality: *mut u8, t: *mut i64) -> bool {
+    unsafe { edge_reading(edge_probe::Scalar::P, value, quality, t) }
+}
+
+/// Der Treiber fuer `edge_a/q`.
+///
+/// # Safety
+///
+/// Drei gueltige Zeiger des Rahmens.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_edge_a_q(value: *mut i64, quality: *mut u8, t: *mut i64) -> bool {
+    unsafe { edge_reading(edge_probe::Scalar::Q, value, quality, t) }
+}
+
+/// Der Treiber fuer `edge_b/k`.
+///
+/// # Safety
+///
+/// Drei gueltige Zeiger des Rahmens.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_in_edge_b_k(value: *mut i64, quality: *mut u8, t: *mut i64) -> bool {
+    unsafe { edge_reading(edge_probe::Scalar::K, value, quality, t) }
+}
+
+/// Je Strom der Tick und die Zahl der Elemente, die er darin schon geliefert hat.
+static EDGE_POLLS: [(AtomicU32, AtomicU32); 2] =
+    [(AtomicU32::new(u32::MAX), AtomicU32::new(0)), (AtomicU32::new(u32::MAX), AtomicU32::new(0))];
+
+/// Das naechste Element eines Stroms des Pruefgeraets.
+///
+/// # Safety
+///
+/// `buf` zeigt auf `cap` schreibbare Bytes, die uebrigen auf je einen Platz.
+unsafe fn edge_poll(
+    stream: edge_probe::Stream,
+    buf: *mut u8,
+    cap: i32,
+    len: *mut i32,
+    seq: *mut i64,
+) -> bool {
+    let (tick_at, polled) = &EDGE_POLLS[stream as usize];
+    let tick = edge_tick() as u32;
+    if tick_at.swap(tick, Ordering::Relaxed) != tick {
+        polled.store(0, Ordering::Relaxed);
+    }
+    let i = polled.fetch_add(1, Ordering::Relaxed) as usize;
+    let Some((bytes, s)) = edge_probe::element(stream, u64::from(tick), i) else { return false };
+    let n = bytes.len().min(usize::try_from(cap).unwrap_or(0));
+    unsafe {
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n);
+        *len = n as i32;
+        *seq = s;
+    }
+    true
+}
+
+/// Der Treiber fuer `edge_u/rx`.
+///
+/// # Safety
+///
+/// `buf` zeigt auf `cap` schreibbare Bytes, die uebrigen auf je einen Platz.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_poll_edge_u_rx(buf: *mut u8, cap: i32, len: *mut i32, _t: *mut i64, seq: *mut i64) -> bool {
+    unsafe { edge_poll(edge_probe::Stream::Lines, buf, cap, len, seq) }
+}
+
+/// Der Treiber fuer `edge_c/rx`.
+///
+/// # Safety
+///
+/// `buf` zeigt auf `cap` schreibbare Bytes, die uebrigen auf je einen Platz.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_poll_edge_c_rx(buf: *mut u8, cap: i32, len: *mut i32, _t: *mut i64, seq: *mut i64) -> bool {
+    unsafe { edge_poll(edge_probe::Stream::Pairs, buf, cap, len, seq) }
+}
+
+/// Der Ausgang `edge_o/o`: bestaetigt, ausser wenn das Pruefgeraet es nicht tut.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_edge_o_o(_value: u8) -> bool {
+    edge_probe::confirms(edge_tick())
+}
+
+/// Der Heartbeat des Geraets `edge_o`.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_alive_edge_o() -> bool {
+    edge_probe::alive(edge_tick())
 }
 
 /// Die Tickgrenze (12.3): Zeitstempel fuer die Periode, Tickzaehler.

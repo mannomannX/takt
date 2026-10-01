@@ -103,6 +103,14 @@ impl RuntimeProfile {
 }
 
 impl Config {
+    /// `tick_tolerance` als erlaubte Abweichung der Periode in Nanosekunden
+    /// und Zahl aufeinanderfolgender Ticks (7.1); ohne Angabe `2 pct for 10
+    /// ticks`.
+    pub fn tolerance(&self) -> (i64, u32) {
+        let t = self.tick_tolerance.unwrap_or(TickTolerance { pct: 2.0, ticks: 10 });
+        ((self.tick as f64 * t.pct / 100.0) as i64, t.ticks)
+    }
+
     /// Das Laufzeitprofil (12.8), wenn `target` gesetzt ist.
     pub fn runtime_profile(&self) -> Option<RuntimeProfile> {
         self.target.as_deref().and_then(RuntimeProfile::parse)

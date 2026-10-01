@@ -142,6 +142,9 @@ pub struct Run<'p> {
     /// Ein Abbruch aus der Schleife; `finish` liefert ihn.
     pub(crate) trap: Option<Trap>,
     steps: String,
+    /// Runtime-Faults, die die Schleife erhoben hat (7.3, 12.3, 12.6 Zeile
+    /// 7); der naechste Tick stellt sie zu und schreibt ihre Zeile.
+    pub(crate) raised: Vec<takt_mir::machine::RuntimeKind>,
 }
 
 impl<'p> Run<'p> {
@@ -238,6 +241,7 @@ impl<'p> Run<'p> {
             deadline: None,
             trap: None,
             steps: String::new(),
+            raised: Vec::new(),
         };
         run.deadline = run.earliest_deadline();
         Ok(run)
@@ -269,6 +273,13 @@ impl<'p> Run<'p> {
         self.sim.age();
         if let Some(m) = self.only {
             self.sim.image.carry_foreign(m);
+        }
+        // Was die Schleife erhoben hat, steht im Trace wie ein Stimulus,
+        // damit der Lauf sich nachspielen laesst (12.5).
+        for kind in std::mem::take(&mut self.raised) {
+            let name = format!("{kind:?}");
+            self.writer.lines.push(TraceLine { tick, kind: LineKind::Runtime { kind: name, output: None } });
+            pend_runtime(&mut self.sim, kind, None, tick);
         }
         apply_stimulus(&mut self.sim, &self.stimulus, tick, &mut self.echo, self.only)?;
         self.writer.lines.append(&mut self.echo);
@@ -571,7 +582,7 @@ fn apply_stimulus(
             // 5.3, 5.4: Ein Runtime-Fault wird vorgemerkt wie ein
             // Operator-Abort; einen vorgemerkten Abort verdraengt er nicht.
             LineKind::Runtime { kind, output } => {
-                use takt_mir::machine::{FaultKind, RuntimeKind};
+                use takt_mir::machine::RuntimeKind;
                 let kind = match kind.as_str() {
                     "Overrun" => RuntimeKind::Overrun,
                     "Driver" => RuntimeKind::Driver,
@@ -589,23 +600,31 @@ fn apply_stimulus(
                     }
                     _ => None,
                 };
-                for (i, state) in sim.states.iter_mut().enumerate() {
-                    let meant = owner.is_none_or(|o| o.index() == i);
-                    let abort_waits = state.pending.as_ref().is_some_and(|f| f.kind == FaultKind::Abort);
-                    if meant && !state.faulted && !abort_waits {
-                        state.pending = Some(crate::value::Fault::new(
-                            FaultKind::Runtime(kind),
-                            format!("Runtime-Fault {kind:?}"),
-                            takt_diag::Span::default(),
-                            tick,
-                        ));
-                    }
-                }
+                pend_runtime(sim, kind, owner, tick);
             }
             _ => {}
         }
     }
     deliver(sim, &deliveries, tick, echo)
+}
+
+/// Merkt einen Runtime-Fault vor (5.3, 5.4): fuer den Besitzer eines
+/// Outputs oder, ohne ihn, fuer jede Maschine; einen vorgemerkten Abort
+/// verdraengt er nicht, eine Maschine in `FAULTED` bekommt ihn nicht.
+fn pend_runtime(sim: &mut Sim<'_>, kind: takt_mir::machine::RuntimeKind, owner: Option<MachineId>, tick: u64) {
+    use takt_mir::machine::FaultKind;
+    for (i, state) in sim.states.iter_mut().enumerate() {
+        let meant = owner.is_none_or(|o| o.index() == i);
+        let abort_waits = state.pending.as_ref().is_some_and(|f| f.kind == FaultKind::Abort);
+        if meant && !state.faulted && !abort_waits {
+            state.pending = Some(crate::value::Fault::new(
+                FaultKind::Runtime(kind),
+                format!("Runtime-Fault {kind:?}"),
+                takt_diag::Span::default(),
+                tick,
+            ));
+        }
+    }
 }
 
 /// Die Lieferungen eines Ticks durch den Treiberrand (12.1

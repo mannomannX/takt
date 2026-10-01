@@ -21,6 +21,7 @@ pub mod clock;
 pub mod console;
 pub mod counter;
 pub mod cycles;
+pub mod edge_probe;
 pub mod fifo;
 pub mod mpu;
 pub mod platform;

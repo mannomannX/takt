@@ -31,6 +31,10 @@ pub struct RealtimeClock {
     /// die *Uhr*, nicht das Programm. Ein Wert ueber null heisst, dass
     /// das Betriebssystem nicht geliefert hat, was 12.2 verlangt.
     pub late: u64,
+    /// Wann die Uhr zuletzt aufgewacht ist.
+    woke: Option<i64>,
+    /// Der Abstand der letzten beiden Wecker: die gemessene Periode (7.1).
+    period: Option<i64>,
 }
 
 impl Default for RealtimeClock {
@@ -42,7 +46,15 @@ impl Default for RealtimeClock {
 impl RealtimeClock {
     /// Eine Uhr, deren Nullpunkt jetzt ist.
     pub fn new() -> RealtimeClock {
-        RealtimeClock { start: Instant::now(), late: 0 }
+        RealtimeClock { start: Instant::now(), late: 0, woke: None, period: None }
+    }
+
+    /// Haelt den Wecker fest: Der Abstand zum vorigen ist die Periode, mit
+    /// der die Tickquelle diesen Tick gebracht hat (7.1, 12.6 Zeile 7).
+    fn note_wake(&mut self) {
+        let now = self.now();
+        self.period = self.woke.map(|w| now - w);
+        self.woke = Some(now);
     }
 }
 
@@ -51,8 +63,19 @@ impl Clock for RealtimeClock {
         i64::try_from(self.start.elapsed().as_nanos()).unwrap_or(i64::MAX)
     }
 
-    #[cfg(target_os = "linux")]
     fn wait_until(&mut self, deadline: i64) {
+        self.sleep_until(deadline);
+        self.note_wake();
+    }
+
+    fn tick_period(&self) -> Option<i64> {
+        self.period
+    }
+}
+
+impl RealtimeClock {
+    #[cfg(target_os = "linux")]
+    fn sleep_until(&mut self, deadline: i64) {
         let verbleibend = deadline - self.now();
         if verbleibend <= 0 {
             // Schon vorbei: Der Tick ist ueberfaellig (7.3). Nicht
@@ -84,7 +107,7 @@ impl Clock for RealtimeClock {
     /// die Runtime auf jedem Rechner bauen und testen laesst, nicht damit
     /// sie dort Echtzeit behauptet.
     #[cfg(not(target_os = "linux"))]
-    fn wait_until(&mut self, deadline: i64) {
+    fn sleep_until(&mut self, deadline: i64) {
         let jetzt = self.now();
         if jetzt >= deadline {
             self.late = self.late.saturating_add(1);
