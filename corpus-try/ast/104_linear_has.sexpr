@@ -1,0 +1,50 @@
+(system
+  (language 1)
+  (tick 10ms))
+(stream lines :line<64> capacity=8)
+(output number :int in (- 999)..999 @sim("o/number"))
+(output key_len :int in 0..64 @sim("o/key_len"))
+(output inner :int in 0..64 @sim("o/inner"))
+(output word :int in (- 999)..999 @sim("o/word"))
+(output tail :int in 0..64 @sim("o/tail"))
+(output started :bool @sim("o/started"))
+(machine feeder
+  (var k :int in 0..20 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (if (== k 0)
+        (send lines "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:12"))
+      (elif (== k 1)
+        (send lines "xx:9223372036854775808:7"))
+      (elif (== k 2)
+        (send lines "id=ab_9;"))
+      (elif (== k 3)
+        (send lines "<äöü><äb>"))
+      (elif (== k 4)
+        (send lines "go now=5"))
+      (elif (== k 5)
+        (send lines "w=-12;w=34;"))
+      (elif (== k 6)
+        (send lines "äb!"))
+      (= k (call min (+ k 1) 20)))))
+(machine consumer
+  (initial READ)
+  (state READ
+    (on lines has "{_}:{n:int}" as e
+      (= number (% (.n e) 1000)))
+    (on lines has "id={k:word};" as e
+      (= key_len (.len (.k e))))
+    (on lines has "<{s:str<3>}>" as e
+      (= inner (.len (.s e))))
+    (on lines has "w={v:int};" as e
+      (= word (% (.v e) 1000)))
+    (on lines has "{h:str<2>}!" as e
+      (= tail (.len (.h e))))))
+(machine starter
+  (initial WAIT)
+  (state WAIT
+    (when (has lines "go{_}={n:int}" as g) -> GO))
+  (state GO
+    (enter
+      (= started true))))

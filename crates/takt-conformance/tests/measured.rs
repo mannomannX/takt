@@ -106,6 +106,34 @@ fn the_dfa_tables_fit_into_rodata() {
     );
 }
 
+/// Der Posten der Mustertabellen ist genau, was die IR emittiert (11.5):
+/// Produkt-DFA des Dispatch (FB-282), Durchlaufautomaten fuer `has` und die
+/// Ziffern ihrer Ueberlaufpruefung (FB-351), gleiche Automaten einmal.
+#[test]
+fn the_pattern_tables_are_exactly_the_emitted_ones() {
+    for name in [NAME, "100_dispatch.takt", "104_linear_has.takt"] {
+        let p = corpus(name);
+        let emitted: u64 = common::ir_of(&p).lines().filter_map(table_bytes).sum();
+        let counted = size::size(&p)
+            .items
+            .iter()
+            .find(|i| i.name.starts_with("DFA-Tabellen"))
+            .map(|i| i.bytes)
+            .expect("der Posten steht im Bericht");
+        assert!(emitted > 0, "{name}: keine Tabellen in der IR");
+        assert_eq!(counted, emitted, "{name}: `takt size` zaehlt {counted} Byte, die IR traegt {emitted}");
+    }
+}
+
+/// Bytes einer Mustertabelle in der IR: `@takt_dfa_…` oder `@takt_scan_…`
+/// als `private constant [n x iW]`.
+fn table_bytes(line: &str) -> Option<u64> {
+    let rest = line.strip_prefix("@takt_dfa_").or_else(|| line.strip_prefix("@takt_scan_"))?;
+    let (n, elem) = rest.split_once("= private constant [")?.1.split_once(" x i")?;
+    let width: u64 = elem.split(']').next()?.parse().ok()?;
+    Some(n.parse::<u64>().ok()? * width / 8)
+}
+
 /// Der Posten „Flash (Code, Konstanten)" laesst sich messen (11.5).
 ///
 /// Er steht im Bericht auf `offen`, weil die Rechnung ihn aus der MIR

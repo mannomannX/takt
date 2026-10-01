@@ -1992,12 +1992,20 @@ fn handler_chain(
                         m.void_inst(&format!("br i1 {found}, label %{walk_l}, label %{else_l}"));
                         m.label(&walk_l);
                         let t = m.inst(&text());
-                        if has { pattern_has(pieces, t, &b, ctx, m)? } else { pattern_matches(pieces, t, &b, ctx, m)? }
+                        if has {
+                            pattern_has(pieces, t, text_capacity(elem, ctx), &b, ctx, m)?
+                        } else {
+                            pattern_matches(pieces, t, &b, ctx, m)?
+                        }
                     }
                     Some((mask, bit)) => crate::dfa::hit(mask, bit, m),
                     None => {
                         let t = m.inst(&text());
-                        if has { pattern_has(pieces, t, &b, ctx, m)? } else { pattern_matches(pieces, t, &b, ctx, m)? }
+                        if has {
+                            pattern_has(pieces, t, text_capacity(elem, ctx), &b, ctx, m)?
+                        } else {
+                            pattern_matches(pieces, t, &b, ctx, m)?
+                        }
                     }
                 }
             }
@@ -2148,7 +2156,7 @@ fn match_guard(
             pattern_matches(pieces, text, &b, ctx, m)?
         }
         (takt_mir::pattern::Pattern::Text { pieces, .. }, takt_mir::expr::MatchKind::Has) => {
-            pattern_has(pieces, text, &b, ctx, m)?
+            pattern_has(pieces, text, text_capacity(elem, ctx), &b, ctx, m)?
         }
     };
     // 8.7: Nur das *passende* Element gilt als untersucht — der Guard
@@ -2201,24 +2209,62 @@ fn text_matches(
     Ok(m.inst(&format!("and i1 {ok}, {whole}")))
 }
 
-/// `has P`: Das Muster darf an jeder Stelle beginnen (8.7).
-///
-/// Gesucht wird das linkeste Vorkommen. Die Schleife ist durch die
-/// Textlaenge beschraenkt, die ihrerseits durch `N` beschraenkt ist
-/// (3.9) — 4.1 verlangt genau das.
+/// `has P`: Das Muster darf an jeder Stelle beginnen (8.7); es gilt die
+/// frueheste Stelle, an der der Durchlauf gelingt. `cap` ist die Kapazitaet
+/// der Zeile (`text_capacity`).
 fn pattern_has(
     pieces: &[takt_mir::pattern::PatternPiece],
     text: crate::emit::Reg,
+    cap: u32,
     b: &Option<Binding>,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<crate::emit::Reg, NotYet> {
     let into = target(b, ctx, m)?;
-    text_has(pieces, text, &into, ctx, m)
+    text_has(pieces, text, cap, &into, ctx, m)
 }
 
 /// Wie [`pattern_has`], mit fertigem Ziel fuer die Captures.
+///
+/// **Linear (FB-351).** Kann ein Ansatz bis zum Zeilenende lesen, sucht
+/// der Durchlaufautomat des Musters die Fundstelle in einem Lauf ueber die
+/// Zeile (`scan`); die Werte holt danach ein einziger Durchlauf ab dort,
+/// und nur, wenn es Werte gibt. Jedes andere Muster setzt den Durchlauf an
+/// jeder Stelle neu an und liest je Ansatz hoechstens seine Reichweite
+/// (`Scan::for_has`).
 fn text_has(
+    pieces: &[takt_mir::pattern::PatternPiece],
+    text: crate::emit::Reg,
+    cap: u32,
+    into: &Option<crate::captures::Target<'_>>,
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+) -> Result<crate::emit::Reg, NotYet> {
+    let Some(scan) = takt_mir::scan::Scan::for_has(pieces, cap) else {
+        return has_from_every_start(pieces, text, into, ctx, m);
+    };
+    let start = crate::scan::first(&scan, text, m);
+    let found = m.inst(&format!("icmp sge i32 {start}, 0"));
+    if into.is_none() || !takt_mir::dfa::extracts(pieces) {
+        return Ok(found);
+    }
+    let k = m.next_label();
+    let (values, done) = (format!("has{k}_werte"), format!("has{k}_fertig"));
+    let from = m.block().to_string();
+    m.void_inst(&format!("br i1 {found}, label %{values}, label %{done}"));
+    m.label(&values);
+    let (ok, _) = crate::captures::walk(pieces, text, into.as_ref(), start, m)?;
+    let walked = m.block().to_string();
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
+    Ok(m.inst(&format!("phi i1 [ false, %{from} ], [ {ok}, %{walked} ]")))
+}
+
+/// `has` mit dem Durchlauf ab jeder Stelle, fuer ein Muster ohne Automaten.
+/// Ein Ansatz beginnt an einem Zeichenanfang, wie im Interpreter: Ein
+/// `str<N>` vorn faende im Zeichen sonst einen frueheren Start, dessen
+/// Spanne um die Bytes davor kuerzer ist.
+fn has_from_every_start(
     pieces: &[takt_mir::pattern::PatternPiece],
     text: crate::emit::Reg,
     into: &Option<crate::captures::Target<'_>>,
@@ -2247,14 +2293,37 @@ fn text_has(
     m.void_inst(&format!("br i1 {searching}, label %{body}, label %{done}"));
 
     m.label(&body);
+    let (probe, attempt, next) = (format!("has{k}_zeichen"), format!("has{k}_ansatz"), format!("has{k}_weiter"));
+    let at_end = m.inst(&format!("icmp eq i32 {start}, {len}"));
+    m.void_inst(&format!("br i1 {at_end}, label %{attempt}, label %{probe}"));
+    m.label(&probe);
+    let bytes = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 4"));
+    let byte_p = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {start}"));
+    let byte = m.inst(&format!("load i8, ptr {byte_p}"));
+    let high = m.inst(&format!("and i8 {byte}, -64"));
+    let inside = m.inst(&format!("icmp eq i8 {high}, -128"));
+    m.void_inst(&format!("br i1 {inside}, label %{next}, label %{attempt}"));
+    m.label(&attempt);
     let (ok, _) = crate::captures::walk(pieces, text, into.as_ref(), start, m)?;
     m.void_inst(&format!("store i1 {ok}, ptr {hit_ptr}"));
+    m.void_inst(&format!("br label %{next}"));
+    m.label(&next);
     let next_i = m.inst(&format!("add i32 {start}, 1"));
     m.void_inst(&format!("store i32 {next_i}, ptr {start_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 
     m.label(&done);
     Ok(m.inst(&format!("load i1, ptr {hit_ptr}")))
+}
+
+/// Die Kapazitaet eines Texts im Strom: `N` von `line<N>` und `str<N>`.
+/// Ein `str<N>`-Platzhalter mit groesserer Grenze begrenzt die Zeile nicht
+/// (`Scan::for_has`).
+fn text_capacity(elem: takt_mir::TypeId, ctx: &Ctx<'_>) -> u32 {
+    match ctx.program.types.list.get(elem.index()) {
+        Some(takt_mir::types::Type::Line { cap } | takt_mir::types::Type::Str { cap }) => *cap,
+        _ => u32::MAX,
+    }
 }
 
 /// Die Fault-Pfade einer Funktion, bis keiner mehr fehlt (5.2 Regel 5,
@@ -2569,7 +2638,7 @@ fn trigger_hit(
             if kind == takt_mir::expr::MatchKind::Matches {
                 text_matches(pieces, text, &into, ctx, m)
             } else {
-                text_has(pieces, text, &into, ctx, m)
+                text_has(pieces, text, text_capacity(elem, ctx), &into, ctx, m)
             }
         }
     }

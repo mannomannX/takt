@@ -31,13 +31,16 @@ pub fn match_text(pieces: &[PatternPiece], text: &str) -> Option<Captures> {
 /// muss nicht bis zum Ende reichen; es gilt die frueheste Position, an der
 /// der Durchlauf gelingt.
 pub fn match_has(pieces: &[PatternPiece], text: &str) -> Option<Captures> {
-    for start in char_starts(text) {
-        let mut caps = Vec::new();
-        if walk(pieces, &text[start..], &mut caps).is_some() {
-            return Some(caps);
-        }
-    }
-    None
+    let start = has_start(pieces, text)?;
+    let mut caps = Vec::new();
+    walk(pieces, &text[start..], &mut caps)?;
+    Some(caps)
+}
+
+/// Die frueheste Byteposition, ab der der Durchlauf gelingt (`has`, 8.7);
+/// der Durchlaufautomat des Codegens (`takt_mir::scan`) muss genau sie finden.
+pub fn has_start(pieces: &[PatternPiece], text: &str) -> Option<usize> {
+    char_starts(text).find(|start| walk(pieces, &text[*start..], &mut Vec::new()).is_some())
 }
 
 /// Positionen, an denen ein Zeichen beginnt, samt der Position hinter dem
@@ -78,7 +81,7 @@ fn take<'a>(kind: &CaptureKind, after: &[PatternPiece], rest: &'a str) -> Option
         CaptureKind::Float => float(rest),
         CaptureKind::Word => bounded(rest, is_word_char, 64),
         // `str<N>` endet beim ersten Vorkommen des Folgeliterals
-        // (leftmost-shortest), hoechstens nach N Zeichen.
+        // (leftmost-shortest), hoechstens nach N Bytes (FB-358).
         CaptureKind::Str(n) => open_end(after, rest, Some(*n as usize)),
     }
 }
@@ -139,9 +142,10 @@ fn float(rest: &str) -> Option<(&str, &str)> {
 
 /// Offenes Ende (`str<N>`, `{_}`): endet beim ersten Vorkommen des naechsten
 /// Literals, sonst am Textende (leftmost-shortest, 8.7). `max` begrenzt die
-/// Zahl der Zeichen; `None` heisst unbegrenzt.
+/// Spanne in Bytes, wie `str<N>` sie fasst (3.9, FB-358); `None` heisst
+/// unbegrenzt.
 fn open_end<'a>(after: &[PatternPiece], rest: &'a str, max: Option<usize>) -> Option<(&'a str, &'a str)> {
-    let limit = |end: usize| max.is_none_or(|n| rest[..end].chars().count() <= n);
+    let limit = |end: usize| max.is_none_or(|n| end <= n);
     match after.iter().find_map(literal) {
         Some(lit) => {
             // Das kuerzeste Praefix, nach dem das Literal folgt.

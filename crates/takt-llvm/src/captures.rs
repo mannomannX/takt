@@ -341,7 +341,7 @@ fn open_end(
         let at = m.inst(&format!("load i32, ptr {at_ptr}"));
         let rest = m.inst(&format!("sub i32 {len}, {at}"));
         let target = match max {
-            // `str<N>` nimmt hoechstens `N` Zeichen (3.9).
+            // `str<N>` nimmt hoechstens `N` Bytes (3.9).
             Some(n) => {
                 let too_long = m.inst(&format!("icmp sgt i32 {rest}, {n}"));
                 let old = m.inst(&format!("load i1, ptr {ok_ptr}"));
@@ -396,7 +396,7 @@ fn open_end(
     let has_any = m.inst(&format!("icmp sge i32 {found}, 0"));
     let old = m.inst(&format!("load i1, ptr {ok_ptr}"));
     let mut new_val = m.inst(&format!("and i1 {old}, {has_any}"));
-    // `str<N>`: Die Spanne darf `N` nicht ueberschreiten (3.9).
+    // `str<N>`: Die Spanne darf `N` Bytes nicht ueberschreiten (3.9).
     if let Some(n) = max {
         let end_at = m.inst(&format!("select i1 {has_any}, i32 {found}, i32 {start}"));
         let width = m.inst(&format!("sub i32 {end_at}, {start}"));

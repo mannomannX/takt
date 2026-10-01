@@ -6,7 +6,10 @@
 //! Geschaetztes einrechnet, ist schlechter als keine, weil ihr niemand
 //! ansieht, welchem Teil er trauen kann (11.5).
 
-use crate::machine::{Machine, MachineKind};
+use crate::expr::{ExprKind, MatchKind, StreamRef};
+use crate::machine::{Guard, Machine, MachineKind, TransTrigger};
+use crate::pattern::{Pattern, PatternPiece};
+use crate::scan::Scan;
 use crate::types::{FloatWidth, Type};
 use crate::{Program, TypeId};
 
@@ -278,12 +281,13 @@ pub fn size(p: &Program) -> Size {
     let scratch: u64 = allocated.map(|m| u64::from(m.layout.scratch_bytes.unwrap_or(0))).sum();
     items.push(Item { name: "Scratch je Maschine".into(), bytes: scratch, origin: Origin::Exact });
 
-    // 11.5: die vorkompilierten Automaten der Muster (8.7). Die Rechnung
-    // steht; gefuellt sind die Tabellen erst, wenn der Codegen sie erzeugt
-    // — der Interpreter gleicht direkt ab und braucht sie nicht
-    // (plan/m2.md 1.1). Bis dahin ist der Posten `offen`, nicht `exakt`:
-    // eine Null, die noch niemand gerechnet hat, ist kein Messwert.
-    let dfa = dfa_bytes(p);
+    // 11.5: die vorkompilierten Automaten der Muster (8.7), dazu die
+    // Durchlaufautomaten fuer `has` (FB-351). Die Rechnung steht; gefuellt
+    // sind die Tabellen erst, wenn der Codegen sie erzeugt — der
+    // Interpreter gleicht direkt ab und braucht sie nicht (plan/m2.md 1.1).
+    // Bis dahin ist der Posten `offen`, nicht `exakt`: eine Null, die noch
+    // niemand gerechnet hat, ist kein Messwert.
+    let dfa = dfa_bytes(p) + scan_bytes(p);
     let origin = if dfa > 0 { Origin::Exact } else { Origin::Open };
     items.push(Item { name: "DFA-Tabellen der Muster".into(), bytes: dfa, origin });
 
@@ -534,4 +538,89 @@ fn dfa_bytes(p: &Program) -> u64 {
         }
     }
     total
+}
+
+/// Die Tabellen der Durchlaufautomaten fuer `has` (FB-351), gezaehlt wie
+/// [`dfa_bytes`]: je Stelle, an der `takt_llvm::step::text_has` einen
+/// emittiert — Stream-Guard, Trigger, ein Handler, den der Produkt-DFA
+/// nicht entscheidet oder dessen Treffer Werte holt —, gleiche Automaten
+/// einmal. Dazu einmal die Ziffern von `i64::MAX`, gegen die der Lauf eine
+/// 19-stellige Zahl prueft (`takt_scan_fits`).
+fn scan_bytes(p: &Program) -> u64 {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut total = 0;
+    for (pieces, elem) in has_sites(p) {
+        if let Some(scan) = Scan::for_has(pieces, text_capacity(p, elem))
+            && seen.insert(scan.key())
+        {
+            total += scan.bytes();
+        }
+    }
+    if total > 0 { total + 19 } else { 0 }
+}
+
+/// Die Textmuster mit `has`, die der Codegen ueber `text_has` sucht, je mit
+/// dem Elementtyp ihres Stroms.
+fn has_sites(p: &Program) -> Vec<(&[PatternPiece], Option<TypeId>)> {
+    let mut sites = Vec::new();
+    for m in &p.machines {
+        for handlers in std::iter::once(&m.handlers).chain(m.states.iter().map(|s| &s.handlers)) {
+            for group in crate::dfa::by_stream(handlers) {
+                let bits = crate::dfa::of_handlers(&group).map(|(_, bits)| bits);
+                for (i, h) in group.iter().enumerate() {
+                    let Some((MatchKind::Has, Pattern::Text { pieces })) = &h.pattern else { continue };
+                    let decided = bits.as_ref().is_some_and(|b| b[i].is_some());
+                    if !decided || crate::dfa::extracts(pieces) {
+                        sites.push((pieces.as_slice(), stream_element(p, h.stream)));
+                    }
+                }
+            }
+        }
+        let transitions = m.states.iter().flat_map(|s| &s.transitions).chain(&m.faulted.transitions);
+        for t in transitions {
+            if let TransTrigger::When(g) = &t.trigger {
+                sites.extend(has_guard(p, g));
+            }
+        }
+        for id in &m.layout.trigger_flags {
+            sites.extend(p.triggers.get(id.index()).and_then(|t| has_guard(p, &t.guard)));
+        }
+    }
+    sites
+}
+
+/// Ein Guard mit `has` auf einem Textmuster, mit dem Elementtyp seines
+/// Stroms, wie der Codegen ihn liest (`takt_llvm::step::match_guard`).
+fn has_guard<'a>(p: &Program, g: &'a Guard) -> Option<(&'a [PatternPiece], Option<TypeId>)> {
+    let Guard::Match { subject, kind: MatchKind::Has, pattern: Pattern::Text { pieces }, .. } = g else {
+        return None;
+    };
+    let stream = match &subject.kind {
+        ExprKind::Input { channel, .. } => Some(StreamRef::Channel(*channel)),
+        ExprKind::Stream(s) => Some(StreamRef::Internal(*s)),
+        _ => None,
+    };
+    Some((pieces.as_slice(), stream.and_then(|s| stream_element(p, s))))
+}
+
+/// Der Elementtyp eines Stroms.
+fn stream_element(p: &Program, s: StreamRef) -> Option<TypeId> {
+    match s {
+        StreamRef::Channel(c) => match p.types.list.get(p.channels.get(c.index())?.ty.index())? {
+            Type::Stream(e) => Some(*e),
+            _ => None,
+        },
+        StreamRef::Internal(i) => Some(p.streams.get(i.index())?.elem),
+        StreamRef::Fired(t) => Some(p.streams.get(p.triggers.get(t.index())?.fired.index())?.elem),
+        StreamRef::Var(_) => None,
+    }
+}
+
+/// Die Kapazitaet eines Texts, wie der Codegen sie dem Automaten gibt
+/// (`takt_llvm::step::text_capacity`).
+fn text_capacity(p: &Program, elem: Option<TypeId>) -> u32 {
+    match elem.and_then(|e| p.types.list.get(e.index())) {
+        Some(Type::Line { cap } | Type::Str { cap }) => *cap,
+        _ => u32::MAX,
+    }
 }

@@ -1,0 +1,70 @@
+# 104 — `has` in linearer Zeit (8.7, 11.2; FB-351): Kann ein Ansatz bis
+# zum Zeilenende lesen, suchen Handler und Guards die frueheste Stelle ueber
+# den Durchlaufautomaten des Musters, alle Startstellen zugleich, und holen
+# die Werte mit einem Durchlauf ab dort; die uebrigen Muster setzen an jedem
+# Zeichenanfang neu an. Die Zeilen sind so gewaehlt, dass der Neustart an
+# jeder Stelle teuer waere (`{_}` vor einem spaeten `:`), dass die erste
+# Zahl `i64` ueberlaeuft und die Fundstelle darum spaeter liegt, dass ein
+# `str<3>` drei Bytes fasst, nicht drei Zeichen (FB-358), und dass ein
+# Ansatz nicht mitten in einem Zeichen beginnt.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+stream<line<64>> lines with capacity = 8
+
+output number  : int in -999..999 @ sim("o/number")
+output key_len : int in 0..64     @ sim("o/key_len")
+output inner   : int in 0..64     @ sim("o/inner")
+output word    : int in -999..999 @ sim("o/word")
+output tail    : int in 0..64     @ sim("o/tail")
+output started : bool             @ sim("o/started")
+
+machine feeder:
+    var k : int in 0..20 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            if k == 0:
+                send lines, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:12"
+            elif k == 1:
+                send lines, "xx:9223372036854775808:7"
+            elif k == 2:
+                send lines, "id=ab_9;"
+            elif k == 3:
+                send lines, "<äöü><äb>"
+            elif k == 4:
+                send lines, "go now=5"
+            elif k == 5:
+                send lines, "w=-12;w=34;"
+            elif k == 6:
+                send lines, "äb!"
+            k = min(k + 1, 20)
+
+machine consumer:
+    initial READ
+
+    state READ:
+        on lines has "{_}:{n:int}" as e:
+            number = e.n % 1000
+        on lines has "id={k:word};" as e:
+            key_len = e.k.len
+        on lines has "<{s:str<3>}>" as e:
+            inner = e.s.len
+        on lines has "w={v:int};" as e:
+            word = e.v % 1000
+        on lines has "{h:str<2>}!" as e:
+            tail = e.h.len
+
+machine starter:
+    initial WAIT
+
+    state WAIT:
+        when lines has "go{_}={n:int}" as g: -> GO
+
+    state GO:
+        enter:
+            started = true

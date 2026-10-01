@@ -51,6 +51,7 @@ pub mod monitor;
 pub mod persist;
 pub mod psi;
 pub mod reduce;
+pub mod scan;
 pub mod scope;
 pub mod step;
 pub mod stmt;

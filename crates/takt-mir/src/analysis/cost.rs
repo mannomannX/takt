@@ -39,6 +39,7 @@ use crate::fns::{BlockDef, CostClass, CostVec, Heavy};
 use crate::ids::{FnId, StateId};
 use crate::machine::{Budget, FaultTarget, Guard, Handler, Machine, Target, TransTrigger, VarDef};
 use crate::pattern::{CaptureKind, Format, FormatPiece, Pattern, PatternPiece};
+use crate::scan::Scan;
 use crate::stmt::{Block, Method, Observe, Place, Stmt, StmtKind};
 use crate::types::{Const, FloatWidth, HandleKind, RangeOrigin, Type};
 
@@ -92,6 +93,19 @@ const BYTE: CostVec = CostVec { mem: 1, ..CostVec::ZERO };
 /// (`takt_llvm::dfa::run`); der Vorwaertsdurchlauf laedt und vergleicht
 /// (`takt_llvm::captures::walk`). Der Vektor deckt beide.
 const MATCH_BYTE: CostVec = CostVec { i32: 3, mem: 3, ..CostVec::ZERO };
+
+/// Ein Byte im Durchlaufautomaten fuer `has` (FB-351): Zeichen und Klasse
+/// laden, einen Faden beginnen, die Haelften tauschen
+/// (`takt_llvm::scan::first`).
+const SCAN_BYTE: CostVec = CostVec { i32: 8, mem: 5, ..CostVec::ZERO };
+
+/// Ein lebender Faden fuer ein Byte: Liste und Start lesen, den Eintrag
+/// laden und zerlegen, den Start ins Ziel schreiben.
+const THREAD: CostVec = CostVec { i32: 10, mem: 6, ..CostVec::ZERO };
+
+/// Ob eine Zahl mit 19 Ziffern in `i64` passt (`takt_scan_fits`): je Ziffer
+/// laden und zweimal vergleichen.
+const FITS: CostVec = CostVec { i32: 57, mem: 38, call: 1, ..CostVec::ZERO };
 
 /// Ein Zeichen eines Platzhalters beim Einlesen: noch einmal lesen und in
 /// `i64` zusammenrechnen (`captures::parse_int`).
@@ -790,11 +804,11 @@ fn handler_try(h: &Handler, element: Option<TypeId>, decided: bool, ctx: &Ctx<'_
 /// Ein Musterabgleich ueber einem Text (8.7; 9.4.3 `N(x matches P) =
 /// max_len(x)`).
 ///
-/// `matches` laeuft einmal ueber den Text. `has` sucht ein Vorkommen: Der
-/// Codegen setzt den Durchlauf an jeder Stelle neu an
-/// (`takt_llvm::step::text_has`), und jeder Ansatz liest hoechstens so weit,
-/// wie das Muster reicht — ohne offenes Ende also die Laenge des Musters,
-/// mit `{_}` den Rest des Texts.
+/// `matches` laeuft einmal ueber den Text. `has` sucht die frueheste
+/// Stelle (`takt_llvm::step::text_has`): Kann ein Ansatz bis zum
+/// Zeilenende lesen, laufen alle Starts zugleich durch den
+/// Durchlaufautomaten (FB-351); sonst setzt der Durchlauf an jeder Stelle
+/// neu an, und jeder Ansatz liest hoechstens so weit, wie das Muster reicht.
 fn pattern_cost(kind: MatchKind, p: &Pattern, subject: Option<TypeId>, ctx: &Ctx<'_>) -> CostVec {
     match p {
         Pattern::Text { pieces, .. } => {
@@ -803,7 +817,32 @@ fn pattern_cost(kind: MatchKind, p: &Pattern, subject: Option<TypeId>, ctx: &Ctx
                 MatchKind::Matches => MATCH_BYTE.times(n) + captures(pieces, n),
                 MatchKind::Has => {
                     let reach = span(pieces, n);
-                    (MATCH_BYTE.times(reach) + captures(pieces, reach) + STEP).times(n + 1)
+                    let Some(scan) = Scan::for_has(pieces, u32::try_from(n).unwrap_or(u32::MAX)) else {
+                        // Ohne Automaten setzt der Durchlauf an jeder Stelle neu an.
+                        return (MATCH_BYTE.times(reach) + captures(pieces, reach) + STEP).times(n + 1);
+                    };
+                    // FB-351: je Byte die meisten Faeden und Pruefungen, die
+                    // eine Zeile erreichen kann. Ohne diese Rechnung lebt
+                    // hoechstens ein Faden je Zustand und einer je Start in
+                    // Reichweite, und eine Zahl endet je Byte hoechstens
+                    // einmal je Platzhalter und Vorzeichen. Die Werte holt
+                    // danach ein Durchlauf ab der Fundstelle.
+                    let (threads, checks) = match scan.worst_step() {
+                        Some(w) => (w.threads as u64, w.checks as u64),
+                        None => {
+                            let numbers = pieces
+                                .iter()
+                                .filter(|p| {
+                                    matches!(p, PatternPiece::Capture { kind: CaptureKind::Int | CaptureKind::Hex, .. })
+                                })
+                                .count() as u64;
+                            ((scan.states() as u64).min(reach + 1), 2 * numbers)
+                        }
+                    };
+                    (SCAN_BYTE + THREAD.times(threads) + FITS.times(checks)).times(n + 1)
+                        + MATCH_BYTE.times(reach)
+                        + captures(pieces, reach)
+                        + STEP
                 }
             }
         }
@@ -816,7 +855,8 @@ fn pattern_cost(kind: MatchKind, p: &Pattern, subject: Option<TypeId>, ctx: &Ctx
     }
 }
 
-/// Wie weit ein Ansatz des Musters hoechstens liest, gekappt bei `n`.
+/// Wie weit ein Ansatz des Musters hoechstens liest, in Bytes und gekappt
+/// bei `n`.
 fn span(pieces: &[PatternPiece], n: u64) -> u64 {
     let reach: u64 = pieces
         .iter()

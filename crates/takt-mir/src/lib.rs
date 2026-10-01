@@ -32,6 +32,7 @@ pub mod program;
 pub mod requirements;
 pub mod review;
 pub mod sample;
+pub mod scan;
 pub mod stmt;
 pub mod sys;
 pub mod types;

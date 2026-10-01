@@ -112,6 +112,7 @@ pub const CORPUS: &[&str] = &[
     "101_correct_math.takt",
     "102_correct_math_f32.takt",
     "103_math_domains.takt",
+    "104_linear_has.takt",
     // 12.7: die Startmuster; ohne Plattformwerte die Plattform ohne Startstufe.
     "sim/12_7/program.takt",
     "sim/14_7/program.takt",
