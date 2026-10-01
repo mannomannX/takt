@@ -491,6 +491,14 @@ pub extern "C" fn takt_alive_edge_o() -> bool {
     edge_probe::alive(edge_tick())
 }
 
+/// Das Pruefgeraet fuer 12.6 Zeile 7: streckt die Periode von TIM2 um den
+/// geschriebenen Prozentsatz.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_test_tick_stretch(percent: u8) -> bool {
+    takt_board_stm32f401::tick::stretch(u32::from(percent));
+    true
+}
+
 /// Die Tickgrenze (12.3): Zeitstempel fuer die Periode, Tickzaehler.
 fn on_tim2() {
     mpu::isr(|| {

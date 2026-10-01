@@ -104,6 +104,45 @@ fn probe_stimulus(ticks: u64) -> String {
     s
 }
 
+/// **Ein Zeitgeber, der seine Periode verfehlt, ist `Runtime(Hardware)`**
+/// (12.6 Zeile 7, 7.1). `tick_stretch.takt` laesst das Pruefgeraet des
+/// Bring-ups ab Tick 5 jede Periode um 5 Prozent strecken, ueber der
+/// Toleranz von 2 Prozent. Die Schleife erhebt den Fault erst mit der
+/// zehnten Verletzung in Folge, also fruehestens neun Ticks nach der
+/// ersten gestreckten Periode, und hoert auf, sobald der `safe`-Wert des
+/// gefaulteten Besitzers den Zeitgeber zurueckstellt — die Periode, die
+/// dann schon laeuft, ist noch gestreckt. Welcher Tick es genau ist, weiss
+/// nur der Zeitgeber: Der Interpreter bekommt die `runtime`-Zeilen des
+/// Boards als Stimulus und muss dieselben Ausgaben rechnen (12.5).
+pub fn a_stretched_tick_is_runtime_hardware(board: &mut dyn Board) -> Vec<String> {
+    const STRETCH_TICKS: u64 = 30;
+    let path = board::root().join("crates/takt-conformance/tests/programs/tick_stretch.takt");
+    let options = Options::timed(STRETCH_TICKS);
+    let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("kein Lauf: {e}")],
+    };
+    let raised: Vec<u64> =
+        text.lines().filter_map(|l| l.strip_prefix("t=")?.strip_suffix(" runtime Hardware")?.parse().ok()).collect();
+    let mut failed = Vec::new();
+    // Gestreckt ab der Periode nach dem Commit von Tick 5: die zehnte
+    // Verletzung in Tick 16, zwei Ticks Spiel fuer die Phase des Zeitgebers.
+    match (raised.first(), raised.last()) {
+        (Some(&first), Some(&last)) if (14..=18).contains(&first) && last <= first + 2 => {}
+        _ => failed.push(format!("`runtime Hardware` in {raised:?}, erwartet ab Tick 14 bis 18:\n{text}")),
+    }
+    let stimulus: String = raised.iter().map(|k| format!("t={k} runtime Hardware\n")).collect();
+    let stimulus = takt_interp::Trace::parse(&stimulus).expect("Stimulus");
+    let run = takt_interp::RunOptions { ticks: STRETCH_TICKS, ..Default::default() };
+    let interpreted = takt_interp::run(&program(&path), &stimulus, &run).expect("Lauf").trace.render();
+    let diffs = compare(&interpreted, &text);
+    if !diffs.is_empty() {
+        failed.push(format!("{} Abweichungen: {diffs:?}\n{text}", diffs.len()));
+    }
+    eprintln!("{} Tick-Periode: Runtime(Hardware) in {raised:?}", board.name());
+    failed
+}
+
 /// **Ein Job, der laenger rechnet als ein Tick, verspaetet keinen** (4.5,
 /// 12.3). `long_job.takt` rechnet SHA-256 ueber 4096 Byte bei 1 ms Tick in
 /// Echtzeit: Das Ergebnis stimmt mit dem Interpreter ueberein und erscheint

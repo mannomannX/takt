@@ -9,7 +9,7 @@
 //! Maschinen zu. Die Verletzung selbst hat der Zugriff nicht angerichtet:
 //! Das Board uebergeht ihn, statt ihn nachzuholen.
 
-use takt_rt_core::{PlatformCommand, Program};
+use takt_rt_core::{PlatformCommand, Program, Tolerance};
 
 use crate::run::Traced;
 
@@ -91,6 +91,10 @@ impl<P: Program, M: Protection> Program for Guarded<P, M> {
 
     fn raise_hardware(&mut self) {
         self.program.raise_hardware();
+    }
+
+    fn tick_tolerance(&self) -> Option<Tolerance> {
+        self.program.tick_tolerance()
     }
 
     fn sleep_allowed(&self) -> bool {
@@ -183,6 +187,9 @@ mod tests {
         fn raise_hardware(&mut self) {
             self.note(b'H');
         }
+        fn tick_tolerance(&self) -> Option<Tolerance> {
+            Some(Tolerance { ns: 7, runs: 3 })
+        }
     }
 
     impl Traced for Recorder<'_> {
@@ -233,5 +240,15 @@ mod tests {
         g.tick(1, 0);
         assert_eq!(&log.borrow()[..len.get()], b"HTT", "einmal zugestellt, vor dem Tick");
         assert_eq!((g.violations, g.last), (1, Some(v)));
+    }
+
+    /// Ohne die Weitergabe prueft die Schleife die Periode hinter dem
+    /// Schutz nie (12.6 Zeile 7): Die Voreinstellung des Traits ist `None`.
+    #[test]
+    fn the_tick_tolerance_passes_through() {
+        let (log, len, open) = (RefCell::new([0; 16]), Cell::new(0), Cell::new(false));
+        let board = Board { open: &open, pending: Cell::new(None) };
+        let g = Guarded::new(Recorder { log: &log, len: &len, open: &open }, board);
+        assert_eq!(g.tick_tolerance(), Some(Tolerance { ns: 7, runs: 3 }));
     }
 }

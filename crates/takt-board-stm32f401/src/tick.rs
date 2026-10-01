@@ -34,6 +34,31 @@ static TICKS: Counter64 = Counter64::new();
 /// nicht sehen.
 static LAST_CYCLES: AtomicU32 = AtomicU32::new(0);
 
+/// Timer-Schritte je Tick, von `init` gesetzt; [`stretch`] rechnet damit.
+static COUNTS_PER_TICK: AtomicU32 = AtomicU32::new(0);
+
+/// Von `init` gesetzt, bevor TIM2 laeuft.
+pub(crate) fn set_counts_per_tick(counts: u32) {
+    COUNTS_PER_TICK.store(counts, Ordering::Relaxed);
+}
+
+/// Streckt die Periode von TIM2 um `percent` Prozent, mit null wieder auf
+/// die nominale — das Pruefgeraet fuer 12.6 Zeile 7.
+///
+/// Einen Zeitgeber, der seine Periode verfehlt, sieht nur die Messung der
+/// Tick-ISR; ein Boardtest braucht einen, der es auf Verlangen tut. `ARR`
+/// ist vorgeladen geschrieben (`ARPE`) und gilt ab dem naechsten
+/// Ueberlauf: Ein kuerzerer Wert unter dem laufenden Zaehler liesse ihn
+/// sonst bis 2^32 weiterzaehlen.
+pub fn stretch(percent: u32) {
+    let counts = u64::from(COUNTS_PER_TICK.load(Ordering::Relaxed));
+    let stretched = counts + counts * u64::from(percent) / 100;
+    // SAFETY: TIM2 gehoert der Tickquelle; nur `ARPE` und `ARR` werden geschrieben.
+    let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
+    tim2.cr1().modify(|_, w| w.arpe().set_bit());
+    tim2.arr().write(|w| unsafe { w.bits(u32::try_from(stretched).unwrap_or(u32::MAX).saturating_sub(1)) });
+}
+
 /// Vom Interrupt-Handler des Boards zu rufen.
 ///
 /// `elapsed_cycles` ist der Abstand zum vorigen Interrupt in Kernzyklen,

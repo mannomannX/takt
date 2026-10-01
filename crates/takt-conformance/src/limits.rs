@@ -34,18 +34,6 @@ pub const LIMITS: &[Limit] = &[
                Trace-Text, wie fuer Stromelemente.",
     },
     Limit {
-        was: "Zeile 7 des Treiberrands auf dem Board (12.6, 7.1)",
-        warum: "Runtime-Faults stehen in beiden Rahmen (FB-332). Auf dem Wirt kommen sie als \
-                Stimulus (`runtime`), weil der Rahmen in logischer Zeit ohne Treiber laeuft; \
-                auf dem Board erhebt die Schleife `Overrun`, der Rand `Driver` (Zeile 6, \
-                `the_driver_edge_judges_like_the_interpreter`) und die MPU `Hardware` \
-                (Schritt 18). Die Zaehlregel der Zeile 7 prueft `takt-rt-core` gegen einen \
-                nachgestellten Zeitgeber (`tests/period.rs`); auf dem Board misst die Tick-ISR \
-                die Periode, aber kein Test verstellt sie.",
-        wann: "M10 Schritt 29c, Teil 3: ein Pruefausgang `test/tick_stretch`, der den \
-               Zeitgeber beider Boards fuer einige Ticks streckt.",
-    },
-    Limit {
         was: "Mehrere Maschinen und ihre Perioden (7.2)",
         warum: "Der Rahmen ruft den Schritt *einer* Maschine je Tick. Multirate, Ψ mit \
                 Unit-Delay und die Reihenfolge der Schritte (Satz 9.4.1) bleiben ungeprueft.",

@@ -30,6 +30,25 @@ pub(crate) fn set_counts_per_tick(counts: u32) {
     COUNTS_PER_TICK.store(counts, Ordering::Relaxed);
 }
 
+/// Streckt die Periode des Alarms um `percent` Prozent, mit null wieder auf
+/// die nominale — das Pruefgeraet fuer 12.6 Zeile 7.
+///
+/// Einen Zeitgeber, der seine Periode verfehlt, sieht nur die Messung der
+/// Alarm-ISR; ein Boardtest braucht einen, der es auf Verlangen tut. Nur
+/// das Periodenfeld wird nachgeladen, der Vergleicher bleibt im
+/// Periodenbetrieb: Der Alarm laeuft von seinem letzten Ziel weiter, statt
+/// wie beim Umschalten des Betriebs mit neuer Phase anzufangen (FB-352).
+/// Die Zahl der Ticks bleibt am Raster.
+pub fn stretch(percent: u32) {
+    let counts = u64::from(COUNTS_PER_TICK.load(Ordering::Relaxed));
+    // Das Periodenfeld ist 26 Bit breit; darueber bleibt die laengste Periode.
+    let period = (counts + counts * u64::from(percent) / 100).min((1 << 26) - 1) as u32;
+    let systimer = esp_hal::peripherals::SYSTIMER::regs();
+    // SAFETY: `period` passt ins Feld; der Alarm 0 gehoert der Tickquelle.
+    systimer.target_conf(0).modify(|_, w| unsafe { w.period().bits(period) });
+    systimer.comp_load(0).write(|w| w.load().set_bit());
+}
+
 /// Von `init` gesetzt, bevor der Alarm laeuft: der Ursprung des Rasters.
 pub(crate) fn set_origin(stamp: u64) {
     critical_section::with(|cs| ORIGIN.borrow(cs).set(stamp));

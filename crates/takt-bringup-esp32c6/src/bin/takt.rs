@@ -427,6 +427,14 @@ pub extern "C" fn takt_alive_edge_o() -> bool {
     edge_probe::alive(edge_tick())
 }
 
+/// Das Pruefgeraet fuer 12.6 Zeile 7: streckt die Periode des Alarms um
+/// den geschriebenen Prozentsatz.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_out_test_tick_stretch(percent: u8) -> bool {
+    takt_board_esp32c6::tick::stretch(u32::from(percent));
+    true
+}
+
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
 fn conduct(program: Generated, clock: impl Clock, persist: &mut Option<Persist<'_, FlashNvm>>) {
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };

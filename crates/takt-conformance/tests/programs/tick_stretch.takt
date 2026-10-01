@@ -1,0 +1,30 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# 12.6 Zeile 7: Ab Tick 5 streckt ein Pruefgeraet die Periode des
+# Zeitgebers um 5 Prozent. Erst die zehnte Periode in Folge ausserhalb von
+# `tick_tolerance` (Default 2 pct fuer 10 Ticks) ist `Runtime(Hardware)`
+# fuer alle Maschinen: `clock` faultet ohne Ziel, und sein `safe`-Wert
+# stellt den Zeitgeber zurueck; `watch` geht nach `DOWN`.
+
+output stretch : u8 in 0..20 @ hw("test/tick_stretch") with safe = 0
+output up      : bool        @ hw("o/up")              with safe = false
+
+machine clock:
+    initial NOMINAL
+    state NOMINAL:
+        after 50 ms: -> LONG
+    state LONG:
+        enter:
+            stretch = 5
+
+machine watch:
+    fault -> DOWN
+    initial UP
+    state UP:
+        enter:
+            up = true
+    state DOWN:
+        enter:
+            up = false

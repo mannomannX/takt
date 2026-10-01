@@ -167,6 +167,7 @@ pub fn init(
     let pllm = takt_board_support::pll::divider_m(board.hse_hz).ok_or(InitError::UnsupportedCrystal)?;
     ieee_mode();
     clocks(rcc, flash, pwr, pllm)?;
+    tick::set_counts_per_tick(counts);
     start_tim2(rcc, tim2, psc, counts);
     Ok(Tim2Tick::new(TIMER_HZ, counts, CORE_HZ))
 }

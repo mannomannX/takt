@@ -211,6 +211,15 @@ fn the_driver_edge_judges_like_the_interpreter() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
+/// **Ein Zeitgeber, der seine Periode verfehlt, ist `Runtime(Hardware)`**
+/// (12.6 Zeile 7, M10 Schritt 29c): das Pruefgeraet streckt die Periode.
+#[test]
+fn a_stretched_tick_is_runtime_hardware() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::a_stretched_tick_is_runtime_hardware(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
 /// **Die MPU weist einen Zugriff der TCB ab und meldet ihn** (12.3, M10
 /// Schritt 18). Nach Tick 2 schreibt ein Pruefgeraet zwischen zwei Ticks in
 /// den Programmzustand, in den Waechter unter dem Hauptstack oder in den
