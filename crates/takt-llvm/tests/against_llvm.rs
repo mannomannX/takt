@@ -33,7 +33,7 @@ struct Temp(std::path::PathBuf);
 
 impl Temp {
     fn new(name: &str) -> Temp {
-        let dir = std::env::temp_dir().join(format!("takt-llvm-{name}"));
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-llvm-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("Testverzeichnis anlegbar");
         Temp(dir)

@@ -559,10 +559,10 @@ fn difference(a: CostVec, b: CostVec) -> Result<CostVec, String> {
     Ok(a.zip(b, u64::saturating_sub))
 }
 
-/// Wo die erzeugten Kerne liegen: ein fester Ort, damit der
-/// Zwischenspeicher der Abbilder sie wiedererkennt.
+/// Wo die erzeugten Kerne liegen: ein fester Ort im Zielverzeichnis,
+/// damit der Zwischenspeicher der Abbilder sie wiedererkennt.
 fn kernel_dir() -> PathBuf {
-    std::env::temp_dir().join("takt-bench-kernels")
+    crate::target_dir().join("tmp").join("takt-bench-kernels")
 }
 
 /// Schreibt einen Kern und liefert seinen Pfad.

@@ -38,7 +38,11 @@ fn link_for(clang: &Clang, target: Target, p: &takt_mir::Program, name: &str) ->
     let Clang::At(path) = clang else {
         return Err("clang fehlt".into());
     };
-    let dir = std::env::temp_dir().join(format!("takt-mcuh-{}-{}", target.name, name.replace('.', "_")));
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "takt-mcuh-{}-{}",
+        target.name,
+        name.replace('.', "_")
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 

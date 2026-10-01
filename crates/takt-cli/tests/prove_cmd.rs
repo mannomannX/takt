@@ -14,7 +14,7 @@ fn takt(args: &[&str]) -> Output {
 
 #[test]
 fn the_export_writes_both_queries_and_names_the_reach() {
-    let out_dir = std::env::temp_dir().join(format!("takt-prove-{}", std::process::id()));
+    let out_dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-prove-{}", std::process::id()));
     std::fs::create_dir_all(&out_dir).expect("Verzeichnis");
     let file = out_dir.join("modell.smt2");
     let out =

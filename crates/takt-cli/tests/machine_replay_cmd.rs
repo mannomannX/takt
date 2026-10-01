@@ -16,7 +16,8 @@ fn takt(args: &[&str]) -> Output {
 
 #[test]
 fn the_slice_of_a_machine_replays_alone_against_the_golden() {
-    let dir = std::env::temp_dir().join(format!("takt-machine-replay-{}", std::process::id()));
+    let dir =
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-machine-replay-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
     let (record, trace, slice) = (dir.join("run.trace"), dir.join("golden.trace"), dir.join("ctrl.trace"));
     let (record, trace, slice) =

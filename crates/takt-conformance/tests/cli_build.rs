@@ -46,7 +46,7 @@ fn every_target_builds_from_the_command_line() {
         eprintln!("takt-CLI nicht gebaut; uebersprungen");
         return;
     };
-    let dir = std::env::temp_dir().join("takt-cli-build");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-build");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
 
@@ -77,7 +77,7 @@ fn emitting_ir_carries_the_target_triple() {
         eprintln!("takt-CLI nicht gebaut; uebersprungen");
         return;
     };
-    let out = std::env::temp_dir().join("takt-cli-build.ll");
+    let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-build.ll");
     let result = Command::new(&takt)
         .args(["build", &program(), "--target", "thumbv7em", "--emit", "ir", "--out"])
         .arg(&out)
@@ -117,7 +117,7 @@ fn a_broken_program_fails_the_build() {
         eprintln!("takt-CLI nicht gebaut; uebersprungen");
         return;
     };
-    let src = std::env::temp_dir().join("takt-cli-kaputt.takt");
+    let src = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-kaputt.takt");
     std::fs::write(&src, "system:\n    language = 1\n\nmachine m:\n    initial FEHLT\n").expect("schreiben");
     let result = Command::new(&takt).arg("build").arg(&src).output().expect("takt build");
     assert!(!result.status.success(), "ein Programm mit Fehlern baut nicht");

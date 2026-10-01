@@ -48,7 +48,11 @@ fn corpus(name: &str) -> takt_mir::Program {
 
 /// Uebersetzt ein Programm fuer ein Ziel und assembliert es.
 fn compile_for(clang: &Clang, target: Target, p: &takt_mir::Program, name: &str) -> Result<u64, String> {
-    let dir = std::env::temp_dir().join(format!("takt-mcu-{}-{}", target.name, name.replace('.', "_")));
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "takt-mcu-{}-{}",
+        target.name,
+        name.replace('.', "_")
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let ll = dir.join("programm.ll");

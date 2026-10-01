@@ -70,7 +70,8 @@ fn size_lists_its_items_with_origin() {
 /// Messlatte; waechst RAM oder Flash, faellt der Aufruf.
 #[test]
 fn size_compares_with_a_baseline() {
-    let file = std::env::temp_dir().join(format!("takt-size-{}.baseline", std::process::id()));
+    let file =
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-size-{}.baseline", std::process::id()));
     let path = file.to_string_lossy().into_owned();
     let saved = takt(&["size", "corpus-try/01_minimal.takt", "--save-baseline", &path]);
     assert!(saved.status.success(), "{}", String::from_utf8_lossy(&saved.stderr));

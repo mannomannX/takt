@@ -85,6 +85,8 @@ impl Solver {
         }
         let out = cmd.arg(&file).output().map_err(|e| format!("{}: {e}", path.display()))?;
         let _ = std::fs::remove_file(&file);
+        // Leer erst nach dem letzten nebenlaeufigen Aufruf; bis dahin scheitert es still.
+        let _ = std::fs::remove_dir(&dir);
         let text = String::from_utf8_lossy(&out.stdout).to_string();
         if text.trim().is_empty() {
             return Err(format!("{}: keine Ausgabe\n{}", path.display(), String::from_utf8_lossy(&out.stderr)));

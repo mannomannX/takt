@@ -173,7 +173,7 @@ fn the_generated_matcher_agrees_with_takt_match() {
     let pattern_of = all_of();
     let ir = module_of(&pattern_of);
 
-    let dir = std::env::temp_dir().join("takt-llvm-captures");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-llvm-captures");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
     let ll = dir.join("captures.ll");

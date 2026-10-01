@@ -84,7 +84,7 @@ fn the_objects_of_the_corpus_stay_within_the_baseline() {
         eprintln!("clang fehlt; die Groessen-Baseline bleibt ungeprueft");
         return;
     };
-    let dir = std::env::temp_dir().join("takt-size-baseline");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-size-baseline");
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
     let measured: Vec<(String, u64)> = PROGRAMS
         .iter()

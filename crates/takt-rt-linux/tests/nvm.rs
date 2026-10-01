@@ -8,7 +8,7 @@ const SLOT: u32 = 512;
 const HASH: u64 = 0xF00D;
 
 fn temp_path(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join("takt-nvm-tests");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-nvm-tests");
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("{name}-{}.nvm", std::process::id()));
     let _ = std::fs::remove_file(&path);

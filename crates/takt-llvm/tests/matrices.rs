@@ -45,7 +45,7 @@ fn the_matrix_ir_assembles() {
         }
     };
     let lowered = takt_llvm::lower::program(&corpus(), "x86_64-pc-windows-msvc", "matrizen");
-    let dir = std::env::temp_dir().join("takt-llvm-matrizen");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-llvm-matrizen");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Testverzeichnis anlegbar");
     let result = clang.assembles(&lowered.ir, &dir);

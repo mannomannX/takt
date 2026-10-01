@@ -105,7 +105,7 @@ fn the_same_ir_yields_the_same_object() {
     let p = corpus(NAME);
     let ir = common::ir_of(&p);
 
-    let root = std::env::temp_dir().join("takt-repro");
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-repro");
     let _ = std::fs::remove_dir_all(&root);
     let flach = root.join("a");
     let tief = root.join("b/tiefer/noch_tiefer");
@@ -165,7 +165,7 @@ fn the_same_source_yields_the_same_binary() {
     // dann, wo die Dateien liegen und was mit ihnen geschieht — ein
     // Helfer, der sein Verzeichnis aufraeumt, waere hier eine
     // Abhaengigkeit von einem Nebeneffekt.
-    let root = std::env::temp_dir().join("takt-repro-bin");
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-repro-bin");
     let _ = std::fs::remove_dir_all(&root);
     let mut binaries = Vec::new();
     for lauf in 0..2 {
@@ -240,7 +240,7 @@ fn every_target_builds_reproducibly() {
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     let harness = takt_conformance::harness::build(&p, &machine, 4).source;
 
-    let root = std::env::temp_dir().join("takt-repro-ziel");
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-repro-ziel");
     let _ = std::fs::remove_dir_all(&root);
     let mut geprueft = 0;
     for target in [Target::X86_64_LINUX, Target::AARCH64_LINUX] {

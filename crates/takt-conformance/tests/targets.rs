@@ -79,7 +79,11 @@ fn cross_available() -> bool {
 /// alle — noetig fuer Programme mit Plant-Modell (8.3), deren Eingaenge
 /// sonst `Bad` bleiben.
 fn run_for(target: Target, p: &takt_mir::Program, name: &str, machine: Option<&str>) -> Result<String, String> {
-    let dir = std::env::temp_dir().join(format!("takt-ziel-{}-{}", target.name, name.replace('.', "_")));
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "takt-ziel-{}-{}",
+        target.name,
+        name.replace('.', "_")
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let ll = dir.join("programm.ll");

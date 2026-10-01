@@ -226,7 +226,8 @@ fn the_machines_of_the_corpus_compile_to_object_code() {
         assert!(ir.contains("_state = type"), "{name}: kein Zustands-Struct");
         assert!(ir.contains("_step("), "{name}: keine Schrittfunktion");
         assert!(ir.contains("switch i8"), "{name}: kein `switch` ueber die Blaetter (11.2)");
-        let dir = std::env::temp_dir().join(format!("takt-llvm-m-{}", name.replace('.', "_")));
+        let dir =
+            std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-llvm-m-{}", name.replace('.', "_")));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("Verzeichnis");
         if let Err(e) = clang.assembles(&ir, &dir) {
@@ -614,7 +615,8 @@ fn everything_the_codegen_emits_assembles() {
     for name in UEBERSETZBAR {
         let p = corpus(name);
         let ir = ir_of(&p);
-        let dir = std::env::temp_dir().join(format!("takt-llvm-all-{}", name.replace('.', "_")));
+        let dir =
+            std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-llvm-all-{}", name.replace('.', "_")));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("Verzeichnis");
         if let Err(e) = clang.assembles(&ir, &dir) {

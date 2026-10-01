@@ -106,7 +106,7 @@ pub fn parse(text: &str) -> Result<Loop, String> {
 /// liest die Schleife.
 #[cfg(feature = "board")]
 pub fn measure(board: &mut dyn crate::board::Board) -> Result<Loop, String> {
-    let dir = std::env::temp_dir().join("takt-wire");
+    let dir = crate::target_dir().join("tmp").join("takt-wire");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join("probe.takt");
     std::fs::write(&path, PROBE).map_err(|e| format!("{}: {e}", path.display()))?;

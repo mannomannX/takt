@@ -16,7 +16,8 @@ fn takt(args: &[&str]) -> Output {
 
 #[test]
 fn the_recorded_chain_matches_the_trace_and_catches_a_change() {
-    let dir = std::env::temp_dir().join(format!("takt-verify-trace-{}", std::process::id()));
+    let dir =
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-verify-trace-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
     let (record, trace) = (dir.join("run.trace"), dir.join("golden.trace"));
     let (record, trace) = (record.to_str().expect("Pfad"), trace.to_str().expect("Pfad"));

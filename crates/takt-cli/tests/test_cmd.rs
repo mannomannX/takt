@@ -14,7 +14,7 @@ fn takt(args: &[&str]) -> Output {
 
 #[test]
 fn every_scenario_runs_and_the_coverage_lands_in_a_file() {
-    let out_dir = std::env::temp_dir().join(format!("takt-test-{}", std::process::id()));
+    let out_dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-test-{}", std::process::id()));
     std::fs::create_dir_all(&out_dir).expect("Verzeichnis");
     let coverage = out_dir.join("coverage.csv");
     let out = takt(&["test", "corpus-try/38_scenarios.takt", "--coverage", coverage.to_str().expect("Pfad")]);

@@ -119,7 +119,8 @@ fn run_native_inner(
 /// Uebersetzt Programm und Rahmen, laeuft und liefert den Trace.
 fn run_native_build(clang: &Clang, p: &Program, name: &str, ticks: u64, h: harness::Harness) -> Result<String, String> {
     let _ = ticks;
-    let dir = std::env::temp_dir().join(format!("takt-abnahme-{}", name.replace('.', "_")));
+    let dir =
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-abnahme-{}", name.replace('.', "_")));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let ll = dir.join("programm.ll");

@@ -16,7 +16,8 @@ fn takt(args: &[&str]) -> Output {
 
 #[test]
 fn every_run_lands_in_the_table_and_replays_from_its_recording() {
-    let out_dir = std::env::temp_dir().join(format!("takt-campaign-{}", std::process::id()));
+    let out_dir =
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-campaign-{}", std::process::id()));
     let dir = out_dir.to_str().expect("Pfad");
     let out = takt(&["campaign", PROGRAM, "gain_sweep", "--ticks", "12", "--out", dir]);
     let text = String::from_utf8_lossy(&out.stdout);

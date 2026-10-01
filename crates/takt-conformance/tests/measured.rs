@@ -79,7 +79,7 @@ fn the_dfa_tables_fit_into_rodata() {
         return;
     }
     let p = corpus(NAME);
-    let dir = std::env::temp_dir().join("takt-measured-dfa");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-measured-dfa");
     let _ = std::fs::remove_dir_all(&dir);
     let Some(obj) = object(&p, &dir, &clang) else {
         panic!("das Objekt liess sich nicht bauen");
@@ -124,7 +124,7 @@ fn the_flash_share_can_be_measured() {
         return;
     }
     let p = corpus(NAME);
-    let dir = std::env::temp_dir().join("takt-measured-flash");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-measured-flash");
     let _ = std::fs::remove_dir_all(&dir);
     let Some(obj) = object(&p, &dir, &clang) else {
         panic!("das Objekt liess sich nicht bauen");
@@ -164,7 +164,7 @@ fn the_step_function_has_a_measurable_frame() {
         return;
     }
     let p = corpus(NAME);
-    let dir = std::env::temp_dir().join("takt-measured-stack");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-measured-stack");
     let _ = std::fs::remove_dir_all(&dir);
     let Some(obj) = object(&p, &dir, &clang) else {
         panic!("das Objekt liess sich nicht bauen");
@@ -224,7 +224,7 @@ fn the_report_takes_the_measurement() {
         assert_eq!(item.origin, size::Origin::Open, "`{name}` ohne Objekt");
     }
 
-    let dir = std::env::temp_dir().join("takt-measured-report");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-measured-report");
     let _ = std::fs::remove_dir_all(&dir);
     let Some(obj) = object(&p, &dir, &clang) else {
         panic!("das Objekt liess sich nicht bauen");
@@ -270,7 +270,7 @@ fn reading_all_frames_at_once_agrees_with_reading_them_singly() {
         return;
     }
     let p = corpus("02_units_and_data.takt");
-    let dir = std::env::temp_dir().join("takt-measured-frames");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-measured-frames");
     let _ = std::fs::remove_dir_all(&dir);
     let Some(obj) = object(&p, &dir, &clang) else {
         panic!("das Objekt liess sich nicht bauen");

@@ -15,7 +15,7 @@ fn takt(args: &[&str]) -> Output {
 
 #[test]
 fn the_safe_values_land_in_the_configuration() {
-    let dir = std::env::temp_dir().join(format!("takt-hw-export-{}", std::process::id()));
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-hw-export-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
     let config = dir.join("site.hw");
     // Die Datei gehoert einem Menschen: Ihr Kommentar bleibt stehen.

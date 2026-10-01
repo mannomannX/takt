@@ -31,7 +31,7 @@ machine m:
 /// Ein eigenes Verzeichnis je Test: `natives.review` liegt neben dem
 /// Programm, und zwei Tests duerfen sich nicht dieselbe Datei teilen.
 fn project(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("takt-tcb-{name}"));
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-tcb-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
     std::fs::write(dir.join("p.takt"), PROGRAM).expect("Programm");
