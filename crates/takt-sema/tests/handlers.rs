@@ -668,7 +668,9 @@ machine talker:
 #[test]
 fn the_counters_of_a_stream_reach_the_trace() {
     // `grammar/trace.md` T1: die Zaehler eines Stroms sind beobachtbar und
-    // erscheinen, wenn sie sich aendern (8.6).
+    // erscheinen, wenn sie sich aendern (8.6). Der Ueberlauf kommt von
+    // einem Leser, der zurueckfaellt: Der Treiber haelt `MAXPT` ein (12.6),
+    // der Puffer laeuft trotzdem voll, weil `IDLE` nichts abholt.
     let trace = driven(
         "\
 input dut_log : stream<line<64>> @ hw(\"uart0/rx\") with capacity = 2, max_rate = 2000 Hz
@@ -677,14 +679,15 @@ output n : int in 0..99 @ hw(\"o/n\") with safe = 0
 
 machine watch:
     var seen : int in 0..99 = 0
-    initial RUN
-    state RUN:
+    initial IDLE
+    state IDLE:
         loop:
             n = seen
+    state READ:
         on dut_log as e:
             seen = seen + 1
 ",
-        "t=1 in dut_log \"a\"\nt=1 in dut_log \"b\"\nt=1 in dut_log \"c\"\n",
+        "t=1 in dut_log \"a\"\nt=1 in dut_log \"b\"\nt=2 in dut_log \"c\"\n",
         3,
     );
     assert!(trace.contains("stream dut_log dropped=0 overflowed=1 malformed=0"), "der Ueberlauf zaehlt: {trace}");

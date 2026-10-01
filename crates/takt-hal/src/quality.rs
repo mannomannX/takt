@@ -6,8 +6,6 @@
 //! folgende Lieferungen zunaechst `Suspect`, wobei **der letzte gute Wert
 //! gehalten wird**.
 
-use takt_mir::program::Channel;
-
 /// Qualitaet einer Abtastung (3.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(missing_docs)]
@@ -53,7 +51,7 @@ pub trait Scalar {
 /// von 2^53 nicht an der Umrechnung nach `f64` scheitert; nur wenn die
 /// Grenzen selbst ganzzahlig sind, ist dieser Vergleich der genauere.
 pub fn within<S: Scalar>(v: &S, lo: f64, hi: f64) -> bool {
-    if let (Some(x), true) = (v.as_i64(), lo.fract() == 0.0 && hi.fract() == 0.0) {
+    if let (Some(x), true) = (v.as_i64(), integral(lo) && integral(hi)) {
         return (x as f64) >= lo && (x as f64) <= hi;
     }
     match v.as_f64() {
@@ -62,16 +60,30 @@ pub fn within<S: Scalar>(v: &S, lo: f64, hi: f64) -> bool {
     }
 }
 
+/// Ist `x` eine ganze Zahl? Wie `x.fract() == 0.0`, das `core` nicht hat;
+/// NaN und die Unendlichen sind es nicht.
+fn integral(x: f64) -> bool {
+    x == (x as i64) as f64
+}
+
 /// Zustand der Qualitaetsmaschine eines Inputs zwischen den Lieferungen.
 ///
-/// `last_good` traegt den Wert, den `debounce` haelt, und zugleich den
+/// Der letzte gute Wert traegt den Wert, den `debounce` haelt, und zugleich den
 /// Bezugspunkt fuer `max_slew` — 3.5 nennt beide denselben: „gegenueber dem
 /// letzten guten Wert", und „der erste Wert nach Start oder nach `Bad` gilt
 /// als gut".
-#[derive(Clone, Debug, Default)]
+///
+/// `repr(C)` und ohne `Option`, weil der erzeugte C-Rahmen den Zustand je
+/// Kanal in seinem eigenen Speicher haelt; lauter Nullen ist der Anfang.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Gate {
-    /// Letzter guter Wert und sein Zeitpunkt in Nanosekunden.
-    last_good: Option<(f64, i64)>,
+    /// Letzter guter Wert.
+    good: f64,
+    /// Sein Zeitpunkt in Nanosekunden.
+    good_t: i64,
+    /// Gibt es einen letzten guten Wert?
+    has_good: bool,
     /// Wie viele Lieferungen in Folge bereits verletzt haben.
     strikes: u32,
 }
@@ -108,27 +120,26 @@ impl Gate {
     /// demselben Zeitstempel koennen keine Steigung verletzen — ohne
     /// Zeitdifferenz ist die Rate nicht definiert, und 3.5 laesst den Wert
     /// dann durch, statt ihn auf Verdacht zu verwerfen.
-    pub fn check<S: Scalar>(&mut self, v: &S, c: &Channel, now: i64, limits: &Limits) -> Verdict {
+    pub fn check<S: Scalar>(&mut self, v: &S, now: i64, limits: &Limits) -> Verdict {
         let violated = self.violation(v, now, limits);
         let Some(reason) = violated else {
             self.strikes = 0;
             if let Some(x) = v.as_f64() {
-                self.last_good = Some((x, now));
+                (self.good, self.good_t, self.has_good) = (x, now, true);
             }
             return Verdict::good();
         };
         self.strikes = self.strikes.saturating_add(1);
-        let debounce = c.attrs.debounce.unwrap_or(0);
-        if self.strikes <= debounce {
+        if self.strikes <= limits.debounce {
             // 3.5: bis zu `debounce` Lieferungen als `Suspect`, der letzte
             // gute Wert wird gehalten, `.valid` bleibt wahr.
-            return Verdict { quality: Quality::Suspect, reason: Some(reason), held: self.last_good.is_some() };
+            return Verdict { quality: Quality::Suspect, reason: Some(reason), held: self.has_good };
         }
         // Danach `Bad`. Der Bezugspunkt faellt weg: 3.5 sagt, der erste
         // Wert nach `Bad` gilt wieder als gut — sonst bliebe ein Kanal nach
         // einem Sprung dauerhaft implausibel, weil er sich am alten Wert
         // maesse.
-        self.last_good = None;
+        self.has_good = false;
         Verdict { quality: Quality::Bad, reason: Some(reason), held: false }
     }
 
@@ -138,7 +149,7 @@ impl Gate {
     /// des Treibers kommt, ist gegen den Wert davor nicht sinnvoll zu
     /// vergleichen.
     pub fn driver_bad(&mut self) -> Verdict {
-        self.last_good = None;
+        self.has_good = false;
         self.strikes = 0;
         Verdict { quality: Quality::Bad, reason: Some(Reason::Driver), held: false }
     }
@@ -156,12 +167,16 @@ impl Gate {
         }
         let slew = limits.max_slew?;
         let x = v.as_f64()?;
-        let (prev, t) = self.last_good?;
+        if !self.has_good {
+            return None;
+        }
+        let (prev, t) = (self.good, self.good_t);
         let dt = now.checked_sub(t)?;
         if dt <= 0 {
             return None;
         }
-        let per_second = (x - prev).abs() / (dt as f64 / 1e9);
+        let step = if x < prev { prev - x } else { x - prev };
+        let per_second = step / (dt as f64 / 1e9);
         (per_second > slew).then_some(Reason::Implausible)
     }
 }
@@ -178,4 +193,6 @@ pub struct Limits {
     pub range: Option<(f64, f64)>,
     /// `max_slew` in Einheiten je Sekunde (3.5).
     pub max_slew: Option<f64>,
+    /// `debounce`: so viele Verletzungen in Folge bleiben `Suspect` (3.5).
+    pub debounce: u32,
 }

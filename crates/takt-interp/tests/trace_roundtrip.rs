@@ -25,6 +25,21 @@ fn an_end_line_reads_back() {
     roundtrip(LineKind::Property { assumption: true, name: "slew".into(), at: 0 });
 }
 
+/// 12.6: was der Treiberrand meldet, und eine Lieferung mit Zeitstempel
+/// und Folgenummer.
+#[test]
+fn driver_lines_and_timestamped_deliveries_read_back() {
+    roundtrip(LineKind::Driver { name: "adc".into(), event: "degraded seq".into() });
+    roundtrip(LineKind::Driver { name: "adc".into(), event: "recovered".into() });
+    roundtrip(LineKind::Driver { name: "adc".into(), event: "warped p".into() });
+    let text = "t=3 in rx \"go t=5 seq=9\" t=25000000 seq=12\nt=3 in p 5 t=-1\n";
+    let trace = Trace::parse(text).expect("liest sich");
+    assert_eq!(trace.render(), text);
+    let LineKind::Input { sample, .. } = &trace.lines[0].kind else { panic!("`in`") };
+    assert_eq!(sample.value.as_deref(), Some("\"go t=5 seq=9\""), "im Text ist `t=` kein Schluessel");
+    assert_eq!((sample.t, sample.seq), (Some(25_000_000), Some(12)));
+}
+
 #[test]
 fn an_output_line_reads_back() {
     roundtrip(LineKind::Output { channel: "led".into(), value: "true".into() });

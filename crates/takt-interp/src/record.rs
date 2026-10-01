@@ -30,8 +30,11 @@ use crate::trace::{LineKind, Trace};
 /// Leser akzeptieren aeltere Versionen ihres Formats, Schreiber schreiben
 /// die neueste. Version 2: Die `param`-Zeilen tragen den Anfangsvektor
 /// des Laufs — Defaults, Profil, Ueberlagerung (13.7) —, und `replay`
-/// wendet ihn an; Version 1 nannte die Defaults.
-pub const RECORDING_VERSION: u16 = 2;
+/// wendet ihn an; Version 1 nannte die Defaults. Version 3: Eine
+/// `in`-Zeile traegt den Zeitstempel der Lieferung (`t=`) und ein
+/// Stromelement seine Folgenummer (`seq=`), der Golden-Trace die Zeile
+/// `driver` (12.6); ohne die Angaben gilt, was Version 2 meinte.
+pub const RECORDING_VERSION: u16 = 3;
 
 /// Der Kopf einer Aufzeichnung (12.5, 11.3).
 #[derive(Clone, Debug, PartialEq, Eq)]

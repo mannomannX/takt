@@ -15,8 +15,8 @@ use crate::nvm::Nvm;
 use crate::property::{Monitor, PropertyResult};
 use crate::stream::Delivery;
 use crate::system::Sim;
-use crate::trace::{LineKind, Trace, TraceLine, parse_value, sample_from_text, value_text};
-use crate::value::{Trap, Value};
+use crate::trace::{LineKind, SampleText, Trace, TraceLine, parse_value, sample_from_text, value_text};
+use crate::value::{Quality, Trap, Value};
 
 /// Lauf-Verdikt (13.5): FAIL absorbiert.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -466,6 +466,7 @@ fn apply_stimulus(
     only: Option<MachineId>,
 ) -> Result<(), Trap> {
     let program = sim.loaded.program;
+    let mut deliveries: Vec<(&str, &SampleText)> = Vec::new();
     for line in stimulus.at(tick) {
         match &line.kind {
             // Maschinen-Replay (12.5): fremde Werte aus der Scheibe. Ohne
@@ -546,32 +547,7 @@ fn apply_stimulus(
                 let kind = LineKind::Tune { name: name.clone(), value: value.clone(), accepted: false };
                 echo.push(TraceLine { tick, kind });
             }
-            LineKind::Input { channel, sample } => {
-                let Some(id) = channel_by_name(program, channel) else {
-                    return Err(Trap::Bug(format!("Stimulus: Channel `{channel}` gibt es nicht")));
-                };
-                if program.channels[id.index()].dir != Direction::Input {
-                    return Err(Trap::Bug(format!("Stimulus: `{channel}` ist kein Input")));
-                }
-                let ty = program.channels[id.index()].ty;
-                // 8.6: ein Stream-Input traegt kein Latch, sondern ein Element
-                // je Zeile; mehrere Zeilen eines Ticks liefern mehrere
-                // Elemente in ihrer Reihenfolge.
-                if let Some(Type::Stream(elem)) = program.types.list.get(ty.index()).cloned() {
-                    let text = sample.value.clone().unwrap_or_default();
-                    let value = parse_value(&text, elem, program).map_err(Trap::Bug)?;
-                    let attrs = &program.channels[id.index()].attrs;
-                    let drop_oldest = matches!(attrs.overflow, Some(Overflow::DropOldest));
-                    let t = i64::try_from(tick).unwrap_or(i64::MAX).saturating_mul(program.config.tick);
-                    if sim.image.push_element(id, t, value, drop_oldest) == Delivery::Overflow {
-                        sim.overflow_channel(id);
-                    }
-                    continue;
-                }
-                let s = sample_from_text(sample, ty, program).map_err(Trap::Bug)?;
-                let now = i64::try_from(tick).unwrap_or(i64::MAX).saturating_mul(program.config.tick);
-                sim.image.set_input(id, s, now, program);
-            }
+            LineKind::Input { channel, sample } => deliveries.push((channel, sample)),
             LineKind::Command { name } => {
                 let Some(i) = program.commands.iter().position(|c| c.name == *name) else {
                     return Err(Trap::Bug(format!("Stimulus: Command `{name}` gibt es nicht")));
@@ -629,7 +605,110 @@ fn apply_stimulus(
             _ => {}
         }
     }
+    deliver(sim, &deliveries, tick, echo)
+}
+
+/// Die Lieferungen eines Ticks durch den Treiberrand (12.1
+/// `validate_and_bound`, 12.6): erst der Vertrag je Treiber ueber alle
+/// seine Kanaele (Zeilen 1, 2), dann Wert fuer Wert (3, 4) und Element fuer
+/// Element (5). Ein Stromelement traegt kein Latch; mehrere Zeilen eines
+/// Ticks liefern mehrere Elemente in ihrer Reihenfolge (8.6).
+fn deliver(
+    sim: &mut Sim<'_>,
+    deliveries: &[(&str, &SampleText)],
+    tick: u64,
+    echo: &mut Vec<TraceLine>,
+) -> Result<(), Trap> {
+    use takt_hal::{Element, Reading};
+    let program = sim.loaded.program;
+    let boundary = i64::try_from(tick).unwrap_or(i64::MAX).saturating_mul(program.config.tick);
+    let (mut readings, mut samples) = (Vec::new(), Vec::new());
+    let (mut elements, mut values) = (Vec::new(), Vec::new());
+    let mut next_seq: HashMap<ChannelId, i64> = HashMap::new();
+    for (channel, sample) in deliveries {
+        let Some(id) = channel_by_name(program, channel) else {
+            return Err(Trap::Bug(format!("Stimulus: Channel `{channel}` gibt es nicht")));
+        };
+        if program.channels[id.index()].dir != Direction::Input {
+            return Err(Trap::Bug(format!("Stimulus: `{channel}` ist kein Input")));
+        }
+        let t = sample.t.unwrap_or(boundary);
+        let ty = program.channels[id.index()].ty;
+        if let Some(Type::Stream(elem)) = program.types.list.get(ty.index()).cloned() {
+            let seq = sample.seq.unwrap_or_else(|| *next_seq.get(&id).unwrap_or(&sim.image.edge.next_seq(id)));
+            next_seq.insert(id, seq.saturating_add(1));
+            elements.push(Element { channel: id, t, seq, value: () });
+            values.push(element_value(sample.value.as_deref().unwrap_or_default(), elem, program).map_err(Trap::Bug)?);
+            continue;
+        }
+        let s = sample_from_text(sample, ty, program).map_err(Trap::Bug)?;
+        let quality = match s.quality {
+            Quality::Good => takt_hal::Quality::Good,
+            Quality::Suspect => takt_hal::Quality::Suspect,
+            Quality::Stale => takt_hal::Quality::Stale,
+            Quality::Bad => takt_hal::Quality::Bad,
+        };
+        readings.push(Reading { channel: id, value: s.value.as_ref().map(|_| ()), quality, t, age: s.age });
+        samples.push(s);
+    }
+    let window = (boundary.saturating_sub(program.config.tick), boundary);
+    let settled = sim.image.edge.contract(&readings, &elements, window, program);
+    echo.extend(settled.alerts.iter().filter_map(|a| driver_line(a, program)).map(|kind| TraceLine { tick, kind }));
+    for c in &settled.degraded {
+        sim.image.degrade(*c);
+    }
+    for ((r, s), placed) in readings.iter().zip(samples).zip(&settled.readings) {
+        if let Some(at) = placed {
+            sim.image.set_input(r.channel, s, *at);
+        }
+    }
+    for ((e, value), placed) in elements.iter().zip(values).zip(&settled.elements) {
+        let Some(at) = placed else { continue };
+        let Some(value) = value else {
+            sim.image.malformed(e.channel);
+            continue;
+        };
+        let drop_oldest = matches!(program.channels[e.channel.index()].attrs.overflow, Some(Overflow::DropOldest));
+        if sim.image.push_element(e.channel, *at, value, drop_oldest) == Delivery::Overflow {
+            sim.overflow_channel(e.channel);
+        }
+    }
     Ok(())
+}
+
+/// Ein Stromelement aus dem Stimulus. Ein Record-Strom nimmt es auch als
+/// Bytes in kanonischer Form (`0x…`, 8.6); misslingt `decode`, ist es
+/// `None` — verworfen und gezaehlt (12.6, Zeile 5).
+fn element_value(text: &str, elem: takt_mir::TypeId, p: &Program) -> Result<Option<Value>, String> {
+    let hex = text.trim().strip_prefix("0x");
+    if let (Some(Type::Record(_)), Some(hex)) = (p.types.list.get(elem.index()), hex) {
+        if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(format!("Bytes `0x…` mit gerade vielen Hexziffern erwartet, `{text}` gefunden"));
+        }
+        let bytes: Vec<u8> =
+            (0..hex.len()).step_by(2).filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok()).collect();
+        return Ok(crate::bytes::decode(p, &bytes, elem).ok());
+    }
+    parse_value(text, elem, p).map(Some)
+}
+
+/// Die Zeile, mit der der Golden-Trace einen Alert des Treiberrands zeigt.
+/// Ein verworfenes Element zeigt schon die Zeile `stream` mit `malformed`
+/// (8.6).
+fn driver_line(alert: &takt_hal::Alert, p: &Program) -> Option<LineKind> {
+    Some(match alert {
+        takt_hal::Alert::DriverDegraded { driver, what } => {
+            LineKind::Driver { name: driver.clone(), event: format!("degraded {}", what.name()) }
+        }
+        takt_hal::Alert::DriverRecovered { driver } => {
+            LineKind::Driver { name: driver.clone(), event: "recovered".into() }
+        }
+        takt_hal::Alert::TimeWarped { channel, .. } => {
+            let c = &p.channels[channel.index()];
+            LineKind::Driver { name: takt_hal::edge::driver_of(c), event: format!("warped {}", c.name) }
+        }
+        takt_hal::Alert::Malformed { .. } => return None,
+    })
 }
 
 fn channel_by_name(p: &Program, name: &str) -> Option<ChannelId> {

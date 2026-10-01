@@ -1,26 +1,34 @@
-//! Der defensive Treiberrand (12.6): die sieben Pruefungen.
+//! Der defensive Treiberrand ueber einem Programm (12.6): die sieben
+//! Pruefungen fuer die Lieferungen eines Ticks.
 //!
 //! | # | Pruefung | Bei Verletzung |
 //! |---|---|---|
 //! | 1 | Zeitstempel im Tickfenster | in Toleranz geklemmt, `time_warped`, Alert; darueber wie 2 |
-//! | 2 | Zeitstempel/`seq` steigend, `seq` lueckenlos, Menge <= `MAXPT`, Flags konsistent | alle Inputs des Treibers `Bad`/`Driver` |
+//! | 2 | Zeitstempel monoton, `seq` streng steigend und lueckenlos, Menge <= `MAXPT`, Flags konsistent | alle Inputs des Treibers `Bad`/`Driver` |
 //! | 3 | Werte in deklarierten Ranges | `Bad`/`OutOfRange` (mit `debounce` erst `Suspect`) |
 //! | 4 | `max_slew` | `Bad`/`Implausible` (mit `debounce` erst `Suspect`) |
 //! | 5 | Record-Stroeme: `decode` erfolgreich | Element verworfen, `malformed`, Alert |
 //! | 6 | Schreiben bestaetigt, Heartbeat, Sendepuffer nicht ueberfahren | `Runtime(Driver)` fuer die Besitzer |
 //! | 7 | Tick-Periode in `tick_tolerance` | `Runtime(Hardware)` fuer alle Maschinen |
 //!
-//! Die Pruefungen 3 und 4 stehen in `quality`, weil sie einen Zustand je
-//! Input haben: den letzten guten Wert. Die uebrigen stehen hier.
+//! Die Regeln stehen im Kern (`contract`, `quality`), den auch die
+//! erzeugten Rahmen ueber ihre C-Einstiege rufen; hier steht, was ein
+//! Programm dazu beitraegt: welcher Kanal zu welchem Treiber gehoert, seine
+//! Grenzen und `MAXPT`.
 //!
-//! **Warum ein Vertragsbruch alle Kanaele des Treibers trifft.** 12.6
-//! Zeile 2 sagt es so, und der Grund ist, dass die Pruefung nicht den Wert
-//! misst, sondern den Treiber: Wer Folgenummern durcheinanderbringt, bei
-//! dem ist auch der unauffaellige Kanal nur zufaellig unauffaellig.
+//! **Warum ein Vertragsbruch alle Kanaele des Treibers trifft.** 12.6 Zeile
+//! 2 sagt es so, und der Grund ist, dass die Pruefung nicht den Wert misst,
+//! sondern den Treiber: Wer Folgenummern durcheinanderbringt, bei dem ist
+//! auch der unauffaellige Kanal nur zufaellig unauffaellig.
+
+use std::string::{String, ToString};
+use std::vec;
+use std::vec::Vec;
 
 use takt_mir::ChannelId;
-use takt_mir::program::{Channel, Direction, Program};
+use takt_mir::program::{Binding, Channel, Direction, Program};
 
+use crate::contract::{Contract, Device, Period, Placement, Track, Turn, Window};
 use crate::driver::{Delivery, Element, Reading, Writing};
 use crate::quality::{Gate, Limits, Quality, Scalar, Verdict};
 
@@ -58,70 +66,41 @@ pub enum Alert {
     },
 }
 
-/// Welcher Teil des Treibervertrags verletzt wurde (12.6, Zeile 2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Contract {
-    /// Zeitstempel nicht streng steigend.
-    Timestamp,
-    /// `seq` nicht streng steigend oder mit Luecke.
-    Sequence,
-    /// Mehr Elemente als `MAXPT` in einem Tick (8.6).
-    TooMany,
-    /// Qualitaetsflags widerspruechlich: `Bad` mit Wert.
-    Flags,
-    /// Zeitstempel jenseits der Klemmtoleranz (Zeile 1, zweiter Fall).
-    TimeWindow,
-}
-
-impl Contract {
-    /// Die Verletzung als Text fuer Meldung und Trace.
-    pub fn name(self) -> &'static str {
-        match self {
-            Contract::Timestamp => "Zeitstempel",
-            Contract::Sequence => "Folgenummer",
-            Contract::TooMany => "zu viele Elemente",
-            Contract::Flags => "Qualitaetsflags",
-            Contract::TimeWindow => "Zeitfenster",
-        }
-    }
-}
-
-/// Was eine Randpruefung fuer die Runtime ergibt.
+/// Was die Zeilen 1 und 2 fuer die Lieferungen eines Ticks ergeben.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Outcome {
-    /// Abtastungen, die ins Prozessabbild gehen.
-    pub readings: Vec<(ChannelId, Verdict)>,
-    /// Indizes der Elemente, die zugestellt werden duerfen.
-    pub accepted: Vec<usize>,
+pub struct Settled {
+    /// Je Skalar-Lieferung der Zeitpunkt, mit dem sie weitergeht; `None`,
+    /// wenn ihr Treiber den Vertrag verletzt hat.
+    pub readings: Vec<Option<i64>>,
+    /// Je Stromelement dasselbe; ein `None`-Element wird nicht zugestellt.
+    pub elements: Vec<Option<i64>>,
+    /// Die Inputs der degradierten Treiber: `Bad` mit Grund `Driver`.
+    pub degraded: Vec<ChannelId>,
     /// Beobachtungen fuer Telemetrie und Trace.
     pub alerts: Vec<Alert>,
-    /// Outputs, deren Besitzer `Runtime(Driver)` bekommen (Zeile 6).
-    pub driver_faults: Vec<ChannelId>,
 }
 
-/// Der Rand eines Treibers: sein Zustand zwischen den Ticks.
+/// Der Rand eines Programms: sein Zustand zwischen den Ticks.
 #[derive(Debug)]
 pub struct Edge {
     /// Qualitaetsmaschine je Channel (3.5).
     gates: Vec<Gate>,
     /// Ausgewertete Grenzen je Channel.
     limits: Vec<Limits>,
-    /// Letzter akzeptierter Zeitstempel je Channel (Zeile 2).
-    last_t: Vec<Option<i64>>,
-    /// Letzte akzeptierte Folgenummer je Stream-Channel (Zeile 2).
-    last_seq: Vec<Option<i64>>,
-    /// `MAXPT` je Stream-Channel (8.6).
-    maxpt: Vec<Option<usize>>,
-    /// Laeuft der Treiber gerade degradiert (Zeile 2)?
-    degraded: bool,
+    /// Vertragsstand je Channel (Zeilen 1, 2).
+    tracks: Vec<Track>,
+    /// Je Channel der Index seines Treibers in `devices`.
+    device: Vec<usize>,
+    /// Die Treiber mit Namen und Zustand.
+    devices: Vec<(String, Device)>,
     /// Toleranz fuer Pruefung 1 in Nanosekunden.
-    warp_tolerance: i64,
+    tolerance: i64,
+    /// Zeile 7: Verletzungen der Periode in Folge.
+    period: Period,
     /// Wie oft ein Zeitstempel geklemmt wurde (`s.time_warped`).
     pub time_warped: u64,
     /// Wie viele Elemente verworfen wurden (`s.malformed`).
     pub malformed: u64,
-    /// Wie viele Ticks in Folge die Periode verletzt haben (7.1).
-    off_period: u32,
 }
 
 impl Edge {
@@ -132,197 +111,186 @@ impl Edge {
     /// gehoert in den Start, nicht in den Tick (12.1 verlangt im
     /// Tick-Thread keine Arbeit, die sich vorziehen laesst).
     ///
-    /// `warp_tolerance` ist die Konfiguration aus 12.6 Zeile 1; der
-    /// Default ist ein Tick.
-    pub fn new(p: &Program, limits: Vec<Limits>, warp_tolerance: i64) -> Edge {
+    /// `tolerance` ist die Konfiguration aus 12.6 Zeile 1; der Default ist
+    /// ein Tick.
+    pub fn new(p: &Program, limits: Vec<Limits>, tolerance: i64) -> Edge {
         let n = p.channels.len();
         debug_assert_eq!(limits.len(), n, "je Channel eine Grenze");
+        let mut devices: Vec<(String, Device)> = Vec::new();
+        let device = p
+            .channels
+            .iter()
+            .map(|c| {
+                let name = driver_of(c);
+                match devices.iter().position(|(d, _)| *d == name) {
+                    Some(i) => i,
+                    None => {
+                        devices.push((name, Device::default()));
+                        devices.len() - 1
+                    }
+                }
+            })
+            .collect();
         Edge {
             gates: vec![Gate::default(); n],
             limits,
-            last_t: vec![None; n],
-            last_seq: vec![None; n],
-            maxpt: p.channels.iter().map(|c| maxpt_of(c, p.config.tick)).collect(),
-            degraded: false,
-            warp_tolerance,
+            tracks: p.channels.iter().map(|c| Track::new(maxpt_of(c, p.config.tick).unwrap_or(0))).collect(),
+            device,
+            devices,
+            tolerance,
+            period: Period::default(),
             time_warped: 0,
             malformed: 0,
-            off_period: 0,
         }
     }
 
-    /// Prueft die Lieferungen eines Ticks (12.1: `validate_and_bound()`).
+    /// Die Zeilen 1 und 2 fuer alle Lieferungen eines Ticks
+    /// (12.1: `validate_and_bound()`).
     ///
-    /// `window` ist das halboffene Tickfenster in Nanosekunden: `lo`
-    /// ausschliesslich, `hi` einschliesslich. Die Reihenfolge folgt der
-    /// Tabelle — erst der Treibervertrag (1, 2), der ueber *alle* Kanaele
-    /// entscheidet, dann Wert fuer Wert (3, 4).
-    pub fn validate<V: Scalar>(
+    /// Erst entscheidet der Vertrag je Treiber ueber *alle* seine Kanaele,
+    /// dann gehen die Lieferungen der vertragstreuen Treiber weiter — mit
+    /// dem geklemmten Zeitpunkt, wo Zeile 1 klemmt. Die Werte selbst prueft
+    /// danach [`Edge::gate`] (Zeilen 3, 4).
+    pub fn contract<V>(
         &mut self,
-        name: &str,
         readings: &[Reading<V>],
         elements: &[Element<V>],
         window: (i64, i64),
         p: &Program,
-    ) -> Outcome {
-        let mut out = Outcome::default();
-        if let Some(what) = self.contract(readings, elements, window) {
-            if !self.degraded {
-                out.alerts.push(Alert::DriverDegraded { driver: name.to_string(), what });
+    ) -> Settled {
+        let w = Window { lo: window.0, hi: window.1, tolerance: self.tolerance };
+        let mut broken: Vec<Option<Contract>> = vec![None; self.devices.len()];
+        let mut delivered = vec![false; self.devices.len()];
+        let mut first = |d: usize, r: Result<Placement, Contract>| match r {
+            Ok(placed) => placed,
+            Err(c) => {
+                broken[d].get_or_insert(c);
+                Placement::Outside
             }
-            self.degraded = true;
-            for r in readings {
-                out.readings.push((r.channel, self.gates[r.channel.index()].driver_bad()));
-            }
-            return out;
-        }
-        if self.degraded {
-            // 12.6: "Erholung, sobald der Treiber wieder vertragsgemaess
-            // liefert."
-            out.alerts.push(Alert::DriverRecovered { driver: name.to_string() });
-            self.degraded = false;
-        }
-
+        };
+        let mut placed_readings = Vec::with_capacity(readings.len());
         for r in readings {
-            let c = &p.channels[r.channel.index()];
-            if c.dir != Direction::Input {
-                continue;
+            let (i, d) = (r.channel.index(), self.device[r.channel.index()]);
+            delivered[d] = true;
+            let bad_with_value = r.quality == Quality::Bad && r.value.is_some();
+            placed_readings.push(first(d, self.tracks[i].reading(r.t, r.age, bad_with_value, &w)));
+        }
+        let mut placed_elements = Vec::with_capacity(elements.len());
+        for e in elements {
+            let (i, d) = (e.channel.index(), self.device[e.channel.index()]);
+            delivered[d] = true;
+            placed_elements.push(first(d, self.tracks[i].element(e.t, e.seq, &w)));
+        }
+        for (i, track) in self.tracks.iter_mut().enumerate() {
+            if track.count > 0
+                && let Err(c) = track.finish()
+            {
+                broken[self.device[i]].get_or_insert(c);
             }
-            let t = self.clamp(r, window, &mut out);
-            let verdict = match (&r.value, r.quality) {
-                // Ein Treiber darf abwerten; der Rand wertet nicht auf.
-                (_, Quality::Bad) | (None, _) => self.gates[r.channel.index()].driver_bad(),
-                (Some(v), _) => {
-                    let limits = self.limits[r.channel.index()];
-                    self.gates[r.channel.index()].check(v, c, t, &limits)
-                }
-            };
-            self.last_t[r.channel.index()] = Some(t);
-            out.readings.push((r.channel, verdict));
         }
 
-        // Zeile 5 entscheidet der Aufrufer: Ob ein `decode` gelingt, weiss
-        // nur, wer den Record kennt (8.6). Hier wird durchgereicht; was
-        // scheitert, meldet er mit `malformed`.
-        for (i, e) in elements.iter().enumerate() {
-            self.last_seq[e.channel.index()] = Some(e.seq);
-            out.accepted.push(i);
+        let mut out = Settled::default();
+        for (d, (name, device)) in self.devices.iter_mut().enumerate() {
+            match device.settle(delivered[d], broken[d]) {
+                Turn::Degraded(what) => out.alerts.push(Alert::DriverDegraded { driver: name.clone(), what }),
+                Turn::Recovered => out.alerts.push(Alert::DriverRecovered { driver: name.clone() }),
+                Turn::Steady => {}
+            }
         }
+        let down: Vec<bool> = self.device.iter().map(|d| self.devices[*d].1.degraded).collect();
+        for (r, placed) in readings.iter().zip(placed_readings) {
+            out.readings.push(self.pass(r.channel, r.t, placed, down[r.channel.index()], &mut out.alerts));
+        }
+        for (e, placed) in elements.iter().zip(placed_elements) {
+            out.elements.push(self.pass(e.channel, e.t, placed, down[e.channel.index()], &mut out.alerts));
+        }
+        out.degraded = p
+            .channels
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| c.dir == Direction::Input && down[*i])
+            .map(|(i, _)| ChannelId(i as u32))
+            .collect();
         out
     }
 
-    /// Meldet ein Element als nicht decodierbar (12.6, Zeile 5): Es faellt
-    /// aus `accepted`, `s.malformed` zaehlt, ein Alert geht heraus.
-    ///
-    /// `index` ist der Platz des Elements in der Liste, die `validate`
-    /// bekommen hat.
-    pub fn malformed(&mut self, channel: ChannelId, index: usize, out: &mut Outcome) {
-        self.malformed = self.malformed.saturating_add(1);
-        out.accepted.retain(|i| *i != index);
-        out.alerts.push(Alert::Malformed { channel });
+    /// Eine Lieferung eines vertragstreuen Treibers geht weiter; Zeile 1
+    /// zaehlt und meldet, was sie geklemmt hat.
+    fn pass(
+        &mut self,
+        c: ChannelId,
+        t: i64,
+        placed: Placement,
+        degraded: bool,
+        alerts: &mut Vec<Alert>,
+    ) -> Option<i64> {
+        if degraded {
+            return None;
+        }
+        if let Placement::Warped(clamped) = placed {
+            self.time_warped = self.time_warped.saturating_add(1);
+            alerts.push(Alert::TimeWarped { channel: c, got: t, clamped });
+        }
+        Some(placed.time(t))
     }
 
-    /// Prueft die Output-Seite (12.6, Zeile 6).
+    /// Die naechste Folgenummer der lueckenlosen Folge eines Stroms: die
+    /// Voreinstellung fuer ein Element ohne eigene.
+    pub fn next_seq(&self, c: ChannelId) -> i64 {
+        match self.tracks[c.index()].last_seq {
+            crate::contract::NONE => 0,
+            seq => seq.saturating_add(1),
+        }
+    }
+
+    /// Prueft einen Wert gegen Range und `max_slew` (Zeilen 3, 4); `t` ist
+    /// der Zeitpunkt, den [`Edge::contract`] geliefert hat.
+    pub fn gate<V: Scalar>(&mut self, c: ChannelId, v: &V, t: i64) -> Verdict {
+        let limits = self.limits[c.index()];
+        self.gates[c.index()].check(v, t, &limits)
+    }
+
+    /// Ein Kanal ist vom Treiber degradiert oder meldet selbst `Bad`
+    /// (Zeile 2): Der Bezugspunkt faellt weg.
+    pub fn driver_bad(&mut self, c: ChannelId) -> Verdict {
+        self.gates[c.index()].driver_bad()
+    }
+
+    /// Ein Element liess sich nicht decodieren (Zeile 5): `s.malformed`
+    /// zaehlt, ein Alert geht heraus. Verworfen hat es der Aufrufer — ob
+    /// ein `decode` gelingt, weiss nur, wer den Record kennt (8.6).
+    pub fn malformed(&mut self, channel: ChannelId) -> Alert {
+        self.malformed = self.malformed.saturating_add(1);
+        Alert::Malformed { channel }
+    }
+
+    /// Prueft die Output-Seite (12.6, Zeile 6) und nennt die Outputs,
+    /// deren Besitzer `Runtime(Driver)` bekommen.
     ///
     /// Ein nicht bestaetigter Schreibvorgang, ein stiller Heartbeat oder
-    /// ein ueberfahrener Sendepuffer geben den Besitzern der betroffenen
-    /// Outputs `Runtime(Driver)`. Die Geraete stehen dann bereits auf
-    /// `safe` (12.4) — deshalb ist es ein Fault und keine Degradierung:
-    /// Das Stellen selbst ist gescheitert, und darueber kann kein
-    /// `.or()` im Programm entscheiden.
-    pub fn confirm<V, D>(&mut self, driver: &D, writes: &[(Writing<V>, Delivery)], p: &Program) -> Outcome
+    /// ein ueberfahrener Sendepuffer sind ein Fault und keine Degradierung:
+    /// Die Geraete stehen dann bereits auf `safe` (12.4), das Stellen selbst
+    /// ist gescheitert, und darueber kann kein `.or()` im Programm
+    /// entscheiden.
+    pub fn confirm<V, D>(&self, driver: &D, writes: &[(Writing<V>, Delivery)], p: &Program) -> Vec<ChannelId>
     where
         D: Heartbeat + Capacity + ?Sized,
     {
-        let mut out = Outcome::default();
         let alive = driver.alive();
-        for (w, d) in writes {
-            let overrun = p.channels[w.channel.index()]
-                .attrs
-                .capacity_bytes
-                .zip(driver.free(w.channel))
-                .is_some_and(|(cap, free)| free > cap);
-            if *d == Delivery::Unconfirmed || !alive || overrun {
-                out.driver_faults.push(w.channel);
-            }
-        }
-        out
+        writes
+            .iter()
+            .filter(|(w, d)| {
+                let capacity = p.channels[w.channel.index()].attrs.capacity_bytes;
+                crate::contract::output_fails(*d == Delivery::Acked, alive, driver.free(w.channel), capacity)
+            })
+            .map(|(w, _)| w.channel)
+            .collect()
     }
 
-    /// Prueft die Tick-Periode (12.6 Zeile 7, 7.1).
-    ///
-    /// `tick_tolerance ... for N`: Erst nach `runs` aufeinanderfolgenden
-    /// Verletzungen ist es `Runtime(Hardware)` — ein einzelner Ausreisser
-    /// ist Jitter, kein Hardwarefehler. Liefert `true`, wenn der Fault
-    /// faellig ist.
+    /// Prueft die Tick-Periode (12.6 Zeile 7, 7.1); `true`, wenn
+    /// `Runtime(Hardware)` faellig ist.
     pub fn period(&mut self, measured: i64, nominal: i64, tolerance: i64, runs: u32) -> bool {
-        if measured.abs_diff(nominal) <= tolerance.unsigned_abs() {
-            self.off_period = 0;
-            return false;
-        }
-        self.off_period = self.off_period.saturating_add(1);
-        self.off_period >= runs.max(1)
-    }
-
-    /// Zeile 1: Zeitstempel ins Tickfenster klemmen.
-    fn clamp<V>(&mut self, r: &Reading<V>, window: (i64, i64), out: &mut Outcome) -> i64 {
-        let (lo, hi) = window;
-        if r.t > lo && r.t <= hi {
-            return r.t;
-        }
-        let clamped = r.t.clamp(lo.saturating_add(1), hi);
-        self.time_warped = self.time_warped.saturating_add(1);
-        out.alerts.push(Alert::TimeWarped { channel: r.channel, got: r.t, clamped });
-        clamped
-    }
-
-    /// Zeile 2: der Treibervertrag. `None` heisst eingehalten.
-    fn contract<V>(&self, readings: &[Reading<V>], elements: &[Element<V>], window: (i64, i64)) -> Option<Contract> {
-        for r in readings {
-            if self.out_of_tolerance(r.t, window) {
-                return Some(Contract::TimeWindow);
-            }
-            // Flags konsistent: `Bad` traegt keinen Wert (12.6, Zeile 2).
-            if r.quality == Quality::Bad && r.value.is_some() {
-                return Some(Contract::Flags);
-            }
-            if let Some(prev) = self.last_t[r.channel.index()]
-                && r.t < prev
-            {
-                return Some(Contract::Timestamp);
-            }
-        }
-        // Je Stream: `seq` streng steigend und lueckenlos, Menge <= MAXPT.
-        let mut seen: Vec<(ChannelId, i64, usize)> = Vec::new();
-        for e in elements {
-            if self.out_of_tolerance(e.t, window) {
-                return Some(Contract::TimeWindow);
-            }
-            match seen.iter_mut().find(|(c, _, _)| *c == e.channel) {
-                Some(slot) => {
-                    if e.seq != slot.1 + 1 {
-                        return Some(Contract::Sequence);
-                    }
-                    slot.1 = e.seq;
-                    slot.2 += 1;
-                }
-                None => {
-                    if let Some(prev) = self.last_seq[e.channel.index()]
-                        && e.seq != prev + 1
-                    {
-                        return Some(Contract::Sequence);
-                    }
-                    seen.push((e.channel, e.seq, 1));
-                }
-            }
-        }
-        seen.iter().any(|(c, _, n)| self.maxpt[c.index()].is_some_and(|m| *n > m)).then_some(Contract::TooMany)
-    }
-
-    /// Liegt der Zeitstempel so weit neben dem Fenster, dass Klemmen nicht
-    /// mehr vertretbar ist (Zeile 1, zweiter Fall)?
-    fn out_of_tolerance(&self, t: i64, window: (i64, i64)) -> bool {
-        t <= window.0.saturating_sub(self.warp_tolerance) || t > window.1.saturating_add(self.warp_tolerance)
+        self.period.observe(measured, nominal, tolerance, runs)
     }
 }
 
@@ -341,13 +309,23 @@ pub trait Capacity {
     fn free(&self, channel: ChannelId) -> Option<u32>;
 }
 
+/// Der Treiber eines Kanals: das Geraet, also das erste Segment seiner
+/// Adresse (`hw("adc1/ch0")` gehoert zu `adc1`). Ein ungebundener Kanal
+/// ist sein eigener Treiber und heisst wie er.
+pub fn driver_of(c: &Channel) -> String {
+    match &c.binding {
+        Binding::Hw(a) | Binding::Sim(a) => a.segments.first().map_or_else(|| c.name.clone(), |s| s.name.to_string()),
+        Binding::None => c.name.clone(),
+    }
+}
+
 /// `MAXPT = ceil(max_rate * T0)`: wie viele Elemente ein Stream in einem
 /// Tick hoechstens liefern darf (8.6).
 ///
 /// Ohne `max_rate` gibt es keine Schranke — dann ist die Menge durch die
 /// Kapazitaet begrenzt, und Ueberlauf ist ein anderes, definiertes
 /// Ereignis (8.6), keine Vertragsverletzung.
-fn maxpt_of(c: &Channel, tick_ns: i64) -> Option<usize> {
+pub fn maxpt_of(c: &Channel, tick_ns: i64) -> Option<u32> {
     let hz = match &c.attrs.max_rate.as_ref()?.kind {
         takt_mir::expr::ExprKind::Int(n) => u64::try_from(*n).ok()?,
         takt_mir::expr::ExprKind::Float(f) if *f >= 0.0 => *f as u64,
@@ -356,5 +334,5 @@ fn maxpt_of(c: &Channel, tick_ns: i64) -> Option<usize> {
     let tick = u64::try_from(tick_ns).ok()?;
     // ceil(hz * tick_ns / 1e9), ganzzahlig gerechnet.
     let per_tick = hz.checked_mul(tick)?.div_ceil(1_000_000_000);
-    usize::try_from(per_tick.max(1)).ok()
+    u32::try_from(per_tick.max(1)).ok()
 }

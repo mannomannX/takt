@@ -65,6 +65,9 @@ pub enum LineKind {
     /// `stream <name> dropped=<n> overflowed=<n> malformed=<n>` — die
     /// Zaehler eines Stroms, wenn sie sich aendern (8.6).
     Stream { name: String, dropped: u32, overflowed: u32, malformed: u32 },
+    /// `driver <geraet> degraded <was>|recovered|warped <channel>`: was der
+    /// Treiberrand ueber einen Treiber meldet (12.6, Zeilen 1 und 2).
+    Driver { name: String, event: String },
     /// `verdict-final PASS|FAIL|INCONCLUSIVE`
     Final { verdict: String },
     /// `end restart|deep_sleep|boot_jump`: der Lauf endet hier (12.7).
@@ -98,6 +101,12 @@ pub struct SampleText {
     pub reason: Option<String>,
     /// `age=…`
     pub age: Option<String>,
+    /// `t=<ns>`: der Zeitstempel der Lieferung (12.6, Zeile 1); ohne
+    /// Angabe die Tickgrenze.
+    pub t: Option<i64>,
+    /// `seq=<n>`: die Folgenummer eines Stromelements (12.6, Zeile 2);
+    /// ohne Angabe die naechste der lueckenlosen Folge.
+    pub seq: Option<i64>,
 }
 
 /// Ein Trace: Zeilen in Reihenfolge.
@@ -283,6 +292,13 @@ fn parse_line(line: &str) -> Result<TraceLine, String> {
                 malformed: counters[2],
             }
         }
+        "driver" => {
+            let (name, event) = split_first(args);
+            if name.is_empty() || event.trim().is_empty() {
+                return Err("`driver <geraet> <ereignis>` erwartet".into());
+            }
+            LineKind::Driver { name: name.to_string(), event: event.trim().to_string() }
+        }
         "end" => LineKind::End { reason: nonempty(args, "`end restart|deep_sleep|boot_jump`")?.to_string() },
         "persist" => {
             let hex = args.trim();
@@ -332,11 +348,27 @@ fn parse_sample(s: &str) -> Result<SampleText, String> {
     let mut quality = None;
     let mut reason = None;
     let mut age = None;
+    let (mut t, mut seq) = (None, None);
     let mut words: Vec<&str> = Vec::new();
+    // Ein Text in Anfuehrungszeichen ist ein Wort, auch mit Leerzeichen und
+    // `=` darin.
+    let rest = match quoted_word(s) {
+        Some((quoted, rest)) => {
+            words.push(quoted);
+            rest
+        }
+        None => s,
+    };
     // `age=<dauer>` traegt eine Einheit als eigenes Wort (`age=120 ms`).
     let mut in_age = false;
-    for word in s.split_whitespace() {
-        if let Some(r) = word.strip_prefix("reason=") {
+    for word in rest.split_whitespace() {
+        if let Some(n) = word.strip_prefix("t=") {
+            t = Some(n.parse().map_err(|_| format!("`t=` erwartet Nanosekunden, `{n}` gefunden"))?);
+            in_age = false;
+        } else if let Some(n) = word.strip_prefix("seq=") {
+            seq = Some(n.parse().map_err(|_| format!("`seq=` erwartet eine Zahl, `{n}` gefunden"))?);
+            in_age = false;
+        } else if let Some(r) = word.strip_prefix("reason=") {
             reason = Some(r.to_string());
             in_age = false;
         } else if let Some(a) = word.strip_prefix("age=") {
@@ -366,7 +398,24 @@ fn parse_sample(s: &str) -> Result<SampleText, String> {
     if value.is_none() && quality.is_none() {
         return Err("Wert oder Qualitaet erwartet".into());
     }
-    Ok(SampleText { value, quality, reason, age })
+    Ok(SampleText { value, quality, reason, age, t, seq })
+}
+
+/// Ein Wort in Anfuehrungszeichen am Anfang und der Rest dahinter; `\"`
+/// und `\\` sind Escapes (`{:?}`, T2).
+fn quoted_word(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim_start();
+    let body = s.strip_prefix('"')?;
+    let mut escaped = false;
+    for (i, c) in body.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => return Some((&s[..i + 2], &body[i + 1..])),
+            _ => {}
+        }
+    }
+    None
 }
 
 pub(crate) fn render_line(line: &TraceLine) -> String {
@@ -385,6 +434,12 @@ pub(crate) fn render_line(line: &TraceLine) -> String {
             }
             if let Some(a) = &sample.age {
                 let _ = write!(out, " age={a}");
+            }
+            if let Some(n) = sample.t {
+                let _ = write!(out, " t={n}");
+            }
+            if let Some(n) = sample.seq {
+                let _ = write!(out, " seq={n}");
             }
             out
         }
@@ -407,6 +462,7 @@ pub(crate) fn render_line(line: &TraceLine) -> String {
         LineKind::Stream { name, dropped, overflowed, malformed } => {
             format!("t={t} stream {name} dropped={dropped} overflowed={overflowed} malformed={malformed}")
         }
+        LineKind::Driver { name, event } => format!("t={t} driver {name} {event}"),
         LineKind::Alert { machine, on, text } => {
             format!("t={t} alert {machine} {} \"{text}\"", if *on { "on" } else { "off" })
         }

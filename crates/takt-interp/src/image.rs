@@ -74,14 +74,12 @@ pub struct Image {
     /// `sched[o]`: geplante Schreibvorgaenge, nach `T` sortiert (9.8). Nur
     /// fuer Outputs, die in einem `at` oder `pulse` vorkommen.
     pub sched: HashMap<ChannelId, Vec<(i64, Value)>>,
-    /// Der defensive Treiberrand je Input (12.6): Range, `max_slew`,
-    /// `debounce`. Er steht in `takt-hal`, damit Interpreter und erzeugter
-    /// Code denselben Rand benutzen — sonst gaelte Satz 9.4.4 fuer die
-    /// Randfaelle nicht.
-    gates: Vec<takt_hal::quality::Gate>,
-    /// Die ausgewerteten Grenzen je Channel; einmal beim Start gerechnet,
-    /// nicht in jedem Tick (12.1).
-    limits: Vec<takt_hal::quality::Limits>,
+    /// Der defensive Treiberrand (12.6): Vertrag je Treiber, Range,
+    /// `max_slew`, `debounce`. Er steht in `takt-hal`, damit Interpreter
+    /// und erzeugter Code denselben Rand benutzen — sonst gaelte Satz
+    /// 9.4.4 fuer die Randfaelle nicht. Die Grenzen sind einmal beim Start
+    /// gerechnet, nicht in jedem Tick (12.1).
+    pub(crate) edge: takt_hal::Edge,
     /// Der zuletzt gut gelieferte Wert je Channel; ihn haelt `debounce`
     /// (3.5). Er steht hier und nicht im Rand, weil nur der Interpreter
     /// den Typ des Kanals kennt.
@@ -217,8 +215,9 @@ impl Image {
             stream_next,
             tx,
             sched: HashMap::new(),
-            gates: vec![takt_hal::quality::Gate::default(); p.channels.len()],
-            limits: p.channels.iter().map(|c| limits_of(c, p)).collect(),
+            // 12.6 Zeile 1: Die Klemmtoleranz ist ein Tick, solange die
+            // Konfiguration keine andere nennt.
+            edge: takt_hal::Edge::new(p, p.channels.iter().map(|c| limits_of(c, p)).collect(), p.config.tick),
             last_good: vec![None; p.channels.len()],
             job_records: Vec::new(),
         }
@@ -235,9 +234,27 @@ impl Image {
     ///
     /// `now` ist der Zeitstempel der Lieferung in Nanosekunden; `max_slew`
     /// ist eine Rate und braucht ihn.
-    pub fn set_input(&mut self, c: ChannelId, sample: Sample, now: i64, p: &Program) {
-        self.inputs[c.index()] = self.through_edge(sample, c, now, p);
+    pub fn set_input(&mut self, c: ChannelId, sample: Sample, now: i64) {
+        self.inputs[c.index()] = self.through_edge(sample, c, now);
         self.driven[c.index()] = true;
+    }
+
+    /// Der Treiber eines Inputs haelt seinen Vertrag nicht (12.6, Zeile 2):
+    /// `Bad` mit Grund `Driver`, der Bezugspunkt faellt weg.
+    pub fn degrade(&mut self, c: ChannelId) {
+        self.edge.driver_bad(c);
+        self.last_good[c.index()] = None;
+        self.inputs[c.index()] = Sample::bad(Reason::Driver);
+        self.driven[c.index()] = true;
+    }
+
+    /// Ein Element liess sich nicht decodieren (12.6, Zeile 5): verworfen,
+    /// `s.malformed` zaehlt.
+    pub fn malformed(&mut self, c: ChannelId) {
+        self.edge.malformed(c);
+        if let Some(buf) = self.channel_bufs.get_mut(&c) {
+            buf.malformed = buf.malformed.saturating_add(1);
+        }
     }
 
     /// Fuehrt eine Lieferung durch den Rand (12.6, Zeilen 3 und 4).
@@ -246,30 +263,28 @@ impl Image {
     /// jenseits `max_slew` `Bad`/`Implausible` — mit `debounce` zunaechst
     /// `Suspect`, wobei der letzte gute Wert gehalten wird (3.5). Geklemmt
     /// wird nie: Das verbirgt den Fehler, statt ihn sichtbar zu machen.
-    fn through_edge(&mut self, sample: Sample, c: ChannelId, now: i64, p: &Program) -> Sample {
+    fn through_edge(&mut self, sample: Sample, c: ChannelId, now: i64) -> Sample {
         let Some(value) = &sample.value else { return sample };
         if sample.quality == Quality::Bad {
-            self.gates[c.index()].driver_bad();
+            self.edge.driver_bad(c);
             self.last_good[c.index()] = None;
             return sample;
         }
         // 8.9: Bei einem oversampelten Kanal traegt das Element die Range;
         // ein einziges Sample ausserhalb macht das ganze Tick-Array `Bad`
         // (konservativ). Die Steigung misst der Rand am ersten Element.
-        let channel = &p.channels[c.index()];
-        let limits = self.limits[c.index()];
         let worst = match value {
             Value::Samples(items) => {
                 let mut worst = takt_hal::quality::Verdict::good();
                 for item in items {
-                    let v = self.gates[c.index()].check(item, channel, now, &limits);
+                    let v = self.edge.gate(c, item, now);
                     if severity(v.quality) > severity(worst.quality) {
                         worst = v;
                     }
                 }
                 worst
             }
-            v => self.gates[c.index()].check(v, channel, now, &limits),
+            v => self.edge.gate(c, v, now),
         };
         if worst.quality == takt_hal::Quality::Good {
             self.last_good[c.index()] = sample.value.clone();
@@ -471,7 +486,12 @@ impl Image {
                     let drop_oldest =
                         matches!(p.channels[inp.index()].attrs.overflow, Some(takt_mir::program::Overflow::DropOldest));
                     for value in elements_of(&sent, p.channels[inp.index()].ty, p) {
-                        self.push_element(inp, now, value, drop_oldest);
+                        match value {
+                            Some(v) => {
+                                self.push_element(inp, now, v, drop_oldest);
+                            }
+                            None => self.malformed(inp),
+                        }
                     }
                 }
                 continue;
@@ -483,7 +503,7 @@ impl Image {
                 Value::Samples(items) if items.is_empty() => Sample::bad(Reason::Stale),
                 _ => Sample::good(value),
             };
-            self.inputs[inp.index()] = self.through_edge(sample, inp, now, p);
+            self.inputs[inp.index()] = self.through_edge(sample, inp, now);
         }
         // 12.10: Ein Strom an `mmio/ADR/r` liefert je Lesen ein Element.
         let ports: Vec<(String, ChannelId)> = self
@@ -499,7 +519,7 @@ impl Image {
             }
             let sent = self.tx.get_mut(&out).map(|t| std::mem::take(&mut t.sent)).unwrap_or_default();
             if !sent.is_empty() {
-                self.port_queues.entry(addr).or_default().extend(elements_of(&sent, ty, p));
+                self.port_queues.entry(addr).or_default().extend(elements_of(&sent, ty, p).into_iter().flatten());
             }
         }
         self.driven.iter_mut().for_each(|d| *d = false);
@@ -596,7 +616,7 @@ fn limits_of(c: &takt_mir::program::Channel, p: &Program) -> takt_hal::quality::
         Some(takt_mir::expr::ExprKind::Int(n)) => Some(*n as f64),
         _ => None,
     };
-    takt_hal::quality::Limits { range, max_slew }
+    takt_hal::quality::Limits { range, max_slew, debounce: c.attrs.debounce.unwrap_or(0) }
 }
 
 /// Eine Grenze als `f64`.
@@ -629,25 +649,25 @@ pub fn element_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Value {
 
 /// Die Elemente, die ein Byteblock in einem Strom ergibt: je Byte eines in
 /// einem `stream<u8>` — `send` eines `bytes<N>` schickt N Elemente (8.8) —,
-/// sonst ein Element.
-pub fn elements_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Vec<Value> {
+/// sonst ein Element. `None` steht fuer ein Element, dessen `decode`
+/// misslingt (12.6, Zeile 5).
+pub fn elements_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Vec<Option<Value>> {
     let elem = match p.types.list.get(ty.index()) {
         Some(Type::Stream(e)) => *e,
-        _ => return vec![Value::Bytes(bytes.to_vec())],
+        _ => return vec![Some(Value::Bytes(bytes.to_vec()))],
     };
     match p.types.list.get(elem.index()) {
         Some(Type::Int { width: takt_mir::types::IntWidth::U8, .. }) => {
-            bytes.iter().map(|b| Value::UInt(u64::from(*b))).collect()
+            bytes.iter().map(|b| Some(Value::UInt(u64::from(*b)))).collect()
         }
-        Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }) => vec![element_of(bytes, ty, p)],
+        Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }) => vec![Some(element_of(bytes, ty, p))],
         // Feste Elementform (plan/m6.md 2.2): der Block traegt so viele
         // Elemente in kanonischer Byteform, wie hineinpassen.
         _ => match takt_mir::bytes::max_size(p, elem) {
-            Ok(size) if size > 0 => bytes
-                .chunks_exact(size as usize)
-                .filter_map(|chunk| crate::bytes::decode_slot(p, chunk, elem).ok())
-                .collect(),
-            _ => vec![element_of(bytes, ty, p)],
+            Ok(size) if size > 0 => {
+                bytes.chunks_exact(size as usize).map(|chunk| crate::bytes::decode_slot(p, chunk, elem).ok()).collect()
+            }
+            _ => vec![Some(element_of(bytes, ty, p))],
         },
     }
 }

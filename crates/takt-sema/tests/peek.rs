@@ -49,9 +49,10 @@ machine m:
 
 #[test]
 fn peek_alone_consumes_at_the_end_of_the_tick() {
-    // Lemma 9.6.1: Wer nur peekt, laesst das Fenster nicht wachsen.
+    // Lemma 9.6.1: Wer nur peekt, laesst das Fenster nicht wachsen. Zwei
+    // Elemente in einem Tick verlangen `MAXPT >= 2` (12.6, Zeile 2).
     let p = compile(
-        "input rx : stream<line<16>> @ hw(\"u/rx\") with max_rate = 100 Hz, framing = lines, overflow = fault
+        "input rx : stream<line<16>> @ hw(\"u/rx\") with max_rate = 200 Hz, framing = lines, overflow = fault
 output pending : int in 0..100 @ hw(\"o/pending\") with safe = 0
 machine m:
     var next : line<16>? = none

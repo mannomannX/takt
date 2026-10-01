@@ -10,6 +10,8 @@
 //! verlangt, macht `edge` mit dem, was hier herauskommt — ein Treiber, der
 //! selbst pruefte, koennte die Pruefung auch weglassen.
 
+use std::vec::Vec;
+
 use takt_mir::ChannelId;
 
 use crate::quality::Quality;
@@ -29,6 +31,9 @@ pub struct Reading<V> {
     pub quality: Quality,
     /// Hardware-Zeitstempel in Nanosekunden.
     pub t: i64,
+    /// Alter des Werts in Nanosekunden: wie lange vor `t` er gemessen
+    /// wurde; null fuer einen frischen Wert.
+    pub age: i64,
 }
 
 /// Ein Stromelement (8.6): Zeitstempel, Folgenummer, Nutzlast.

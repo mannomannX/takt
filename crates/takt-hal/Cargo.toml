@@ -6,9 +6,18 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["mir"]
+# Was ein Programm braucht: der Rand ueber der MIR, das Treiber-Trait und
+# der Simulationstreiber. Ohne das Feature bleibt der Kern ohne `std` und
+# ohne Allokation, fuer die C-Einstiege der Rahmen (FB-285).
+mir = ["dep:takt-mir"]
+
 [dependencies]
+takt-mir = { path = "../takt-mir", optional = true }
+
+[dev-dependencies]
 takt-diag = { path = "../takt-diag" }
-takt-mir = { path = "../takt-mir" }
 
 [lints]
 workspace = true

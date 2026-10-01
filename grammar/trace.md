@@ -28,7 +28,7 @@ Leerzeichen, außer im Rest einer Meldung.
 
 | Art | Rolle | Form |
 |---|---|---|
-| `in` | Stimulus | `in <channel> <wert>` oder `in <channel> <qualität> [reason=<grund>] [age=<dauer>]` |
+| `in` | Stimulus | `in <channel> <wert>` oder `in <channel> <qualität> [reason=<grund>] [age=<dauer>]`, dahinter wahlweise `t=<ns>` — der Zeitstempel der Lieferung, ohne Angabe die Tickgrenze `k·T0` — und für ein Stromelement `seq=<n>`, ohne Angabe die nächste Nummer der lückenlosen Folge. Ein Text in Anführungszeichen ist ein Wort, auch mit `=` darin. Ein Element eines Record-Stroms darf als Bytes stehen (`0x…`, kanonische Form, 8.6); misslingt `decode`, wird es verworfen und zählt `malformed` (12.6) |
 | `cmd` | Stimulus | `cmd <command>` — ein Tick lang wahr (8.5) |
 | `abort` | Stimulus | `abort` — Operator-Abort für alle Maschinen (5.4) |
 | `runtime` | Stimulus | `runtime <art> [<output>]` — ein Runtime-Fault (5.3, 7.3, 12.6), zugestellt wie ein Operator-Abort (5.4): `Overrun` und `Hardware` für alle Maschinen, `Driver <output>` für den Besitzer des Outputs. Die native Runtime schreibt die Zeile, wenn sie den Fault erhebt; als Stimulus spielt der Interpreter ihn nach (12.5) |
@@ -46,6 +46,7 @@ Leerzeichen, außer im Rest einer Meldung.
 | `verdict` | Golden | `verdict <maschine> pass\|fail ["<text>"]` |
 | `property` | Golden | `property <name> violated <tick>` bzw. `assumption <name> violated <tick>` — die Eigenschaft ist an Position `<tick>` verletzt; die Zeile steht im Tick, in dem die Fenster der Position geschlossen sind (Position plus Zukunftstiefe der Formel, 13.3) |
 | `stream` | Golden | `stream <name> dropped=<n> overflowed=<n> malformed=<n>` — bei Änderung (8.6) |
+| `driver` | Golden | `driver <gerät> degraded <was>`, `driver <gerät> recovered`, `driver <gerät> warped <channel>` — der Treiberrand (12.6): Der Treiber eines Kanals ist das Gerät, das erste Segment seiner Adresse. `degraded` (Flanke) nennt die erste Verletzung des Vertrags: `window` (Zeitstempel jenseits der Toleranz), `timestamp` (fallend), `seq` (Lücke oder nicht steigend), `maxpt` (mehr Elemente als `MAXPT`), `flags` (`Bad` mit Wert oder fallender Messzeitpunkt `t - age`); `recovered` die Erholung mit der nächsten vertragsgemäßen Lieferung; `warped` einen in der Toleranz geklemmten Zeitstempel. Die Zeilen stehen bei den Eingaben, vor den Ereignissen der Maschinen: erst `degraded` und `recovered` in der Reihenfolge der Geräte, dann `warped` in der Reihenfolge der Lieferungen |
 | `time` | Metazeile | `time took=<ns> drift=<ns> slept=<n>` — was der Tick physisch gekostet hat (7.3, 12.3); nur native Runtimes schreiben sie, der Interpreter nie — je Tick, aber hoechstens eine je Millisekunde logischer Zeit (FB-271). Sie steht ausserhalb der kanonischen Ordnung (T5), der Hashkette (T6) und jedes Trace-Vergleichs: 12.5 haelt Zeitstempel ausserhalb der Semantik |
 | `verdict-final` | Golden | `verdict-final PASS\|FAIL\|INCONCLUSIVE` — letzte Zeile (13.5) |
 | `end` | Golden | `end restart\|deep_sleep\|boot_jump` — der Lauf endet hier (12.7); `deep_sleep` startet den naechsten mit `boot_reason = DEEP_SLEEP_WAKE` |

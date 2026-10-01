@@ -11,6 +11,8 @@
 //! nicht setzt, liefert der Treiber nicht — das Fortschreiben des letzten
 //! Werts ist Sache des Prozessabbilds (8.3), nicht des Treibers.
 
+use std::vec::Vec;
+
 use takt_mir::ChannelId;
 
 use crate::driver::{Delivery, Driver, Element, Reading, Writing};
@@ -40,13 +42,13 @@ impl<V> Sim<V> {
 
     /// Legt eine Abtastung fuer den naechsten Tick vor (Stimulus).
     pub fn feed(&mut self, channel: ChannelId, value: V, t: i64) {
-        self.pending.push(Reading { channel, value: Some(value), quality: Quality::Good, t });
+        self.pending.push(Reading { channel, value: Some(value), quality: Quality::Good, t, age: 0 });
     }
 
     /// Legt eine Abtastung mit eigener Qualitaet vor — so meldet ein
     /// Treiber einen Sensorfehler (12.6: abwerten darf er, aufwerten nicht).
     pub fn feed_as(&mut self, channel: ChannelId, value: Option<V>, quality: Quality, t: i64) {
-        self.pending.push(Reading { channel, value, quality, t });
+        self.pending.push(Reading { channel, value, quality, t, age: 0 });
     }
 
     /// Legt ein Stromelement vor (8.6).
