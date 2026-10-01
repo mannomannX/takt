@@ -63,16 +63,6 @@ pub const LIMITS: &[Limit] = &[
                Eviction; wo der Rahmen rechnet, wuerde sie messen.",
     },
     Limit {
-        was: "`decode` in der Sim-Kopplung (12.6, Zeile 5)",
-        warum: "Ein Record-Strom, den ein `sim`-Ausgabestrom speist, bekommt die gesendeten \
-                Bytes je Element; der Interpreter verwirft ein Element, dessen `decode` \
-                misslingt, und zaehlt `malformed`, der Rahmen reicht es weiter. Ein Modell \
-                sendet Records, und deren kanonische Form decodiert immer; nur ein Modell, \
-                das rohe Bytes in einen Record-Strom schickt, saehe den Unterschied.",
-        wann: "Mit der Gueltigkeitspruefung im erzeugten Code fuer die Elemente der Treiber \
-               (M10 Schritt 29c); die Kopplung nimmt dann denselben Weg.",
-    },
-    Limit {
         was: "Faults im Fuzzer",
         warum: "Der Fuzzer meidet sie per Konstruktion: Ein gefaultetes Programm hat nichts \
                 mehr zu vergleichen. Die Pruefungen aus 4.1 deckt darum `19_faults.takt` ab, \

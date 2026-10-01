@@ -127,7 +127,7 @@ pub(crate) fn emit(s: &mut String, p: &Program, layout: &Layout, driven: &[&Mach
     let _ = writeln!(
         s,
         "struct takt_edge_value {{ unsigned char value[8]; unsigned char kind, quality, reason; _Bool has_value; \
-         long long i; double f; long long age; const unsigned char *bytes; int len; _Bool malformed; }};"
+         long long i; double f; long long age; const unsigned char *bytes; int len; }};"
     );
     let _ = writeln!(s, "static struct takt_delivery g_edge_d[{max}];");
     let _ = writeln!(s, "static struct takt_edge_value g_edge_v[{max}];");
@@ -149,7 +149,7 @@ pub(crate) fn emit(s: &mut String, p: &Program, layout: &Layout, driven: &[&Mach
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
-        "static void takt_edge_element(unsigned c, const unsigned char *bytes, int len, _Bool malformed, long long t, long long seq) {{"
+        "static void takt_edge_element(unsigned c, const unsigned char *bytes, int len, long long t, long long seq) {{"
     );
     let _ = writeln!(s, "    if (g_edge_n >= {max}) return;");
     let _ = writeln!(s, "    struct takt_delivery *d = &g_edge_d[g_edge_n];");
@@ -157,7 +157,7 @@ pub(crate) fn emit(s: &mut String, p: &Program, layout: &Layout, driven: &[&Mach
     let _ = writeln!(s, "    memset(d, 0, sizeof *d);");
     let _ = writeln!(s, "    memset(v, 0, sizeof *v);");
     let _ = writeln!(s, "    d->channel = c; d->element = 1; d->t = t; d->seq = seq;");
-    let _ = writeln!(s, "    v->bytes = bytes; v->len = len; v->malformed = malformed;");
+    let _ = writeln!(s, "    v->bytes = bytes; v->len = len;");
     let _ = writeln!(s, "}}");
 
     report(s, trace);
@@ -277,7 +277,15 @@ fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine]) {
         }
         let drop_oldest = u8::from(matches!(ch.attrs.overflow, Some(Overflow::DropOldest)));
         let _ = writeln!(s, "    case {c}: {{ /* {} */", ch.name);
-        let _ = writeln!(s, "        if (v->malformed) break;");
+        // Zeile 5: Ein Element, dessen `decode` misslingt, wird verworfen.
+        if let Some(Type::Stream(elem)) = p.types.list.get(ch.ty.index())
+            && crate::streams::element_shape(p, *elem).is_some()
+        {
+            let _ = writeln!(
+                s,
+                "        if (!takt_edge_decodes(g_shape_{c}, (unsigned)sizeof g_shape_{c}, v->bytes, (unsigned)v->len, 1)) break;"
+            );
+        }
         let _ = writeln!(
             s,
             "        int r = takt_int_deliver(takt_int_slot({c}), v->bytes, v->len, d->at, {drop_oldest});"
@@ -343,8 +351,8 @@ pub(crate) fn double(f: f64) -> String {
 /// `deliver` im Interpreter. Ohne `t=` gilt die Tickgrenze, ohne `seq=`
 /// die naechste Nummer der lueckenlosen Folge; beides steht schon vor dem
 /// Lauf fest, denn der Rand gleicht nach jeder Lieferung ab. Ein
-/// Record-Element darf als Bytes stehen; misslingt `decode`, ist es
-/// `malformed` (Zeile 5).
+/// Record-Element darf als Bytes stehen; ob es einer ist, prueft der
+/// Rand (Zeile 5).
 ///
 /// Das Ergebnis ist die Zahl der Lieferungen im vollsten Tick.
 pub(crate) fn stimulus(s: &mut String, p: &Program, layout: &Layout, inputs: &[Stimulus]) -> usize {
@@ -363,14 +371,13 @@ pub(crate) fn stimulus(s: &mut String, p: &Program, layout: &Layout, inputs: &[S
         if let Some(Type::Stream(elem)) = p.types.list.get(ty.index()) {
             let seq = sample.seq.unwrap_or_else(|| last_seq.get(&c).map_or(0, |s| s.saturating_add(1)));
             last_seq.insert(c, seq);
-            let Some((bytes, malformed)) = element_bytes(p, *elem, sample.value.as_deref().unwrap_or_default()) else {
+            let Some(bytes) = element_bytes(p, *elem, sample.value.as_deref().unwrap_or_default()) else {
                 continue;
             };
             let text: String = bytes.iter().map(|b| format!("\\x{b:02x}")).collect();
             entry.1.push(format!(
-                "takt_edge_element({c}, (const unsigned char *)\"{text}\", {}, {}, {t}LL, {seq}LL); /* {channel} */",
-                bytes.len(),
-                u8::from(malformed)
+                "takt_edge_element({c}, (const unsigned char *)\"{text}\", {}, {t}LL, {seq}LL); /* {channel} */",
+                bytes.len()
             ));
             continue;
         }
@@ -419,8 +426,9 @@ pub(crate) fn stimulus(s: &mut String, p: &Program, layout: &Layout, inputs: &[S
     ticks.values().map(|(r, e)| r.len() + e.len()).max().unwrap_or(0)
 }
 
-/// Die Bytes eines Stromelements im Ring und ob sein `decode` misslingt.
-fn element_bytes(p: &Program, elem: takt_mir::TypeId, text: &str) -> Option<(Vec<u8>, bool)> {
+/// Die Bytes eines Stromelements, wie der Treiber sie liefert; ob sie ein
+/// Wert sind, prueft der Rand (Zeile 5).
+fn element_bytes(p: &Program, elem: takt_mir::TypeId, text: &str) -> Option<Vec<u8>> {
     let cap = match p.types.list.get(elem.index()) {
         Some(Type::Line { cap } | Type::Str { cap } | Type::Bytes { cap }) => Some(*cap as usize),
         _ => None,
@@ -430,16 +438,15 @@ fn element_bytes(p: &Program, elem: takt_mir::TypeId, text: &str) -> Option<(Vec
         // abgeschnitten und nicht verworfen.
         let mut bytes = text.as_bytes().to_vec();
         bytes.truncate(cap);
-        return Some((bytes, false));
+        return Some(bytes);
     }
     if let (Some(Type::Record(_)), Some(hex)) = (p.types.list.get(elem.index()), text.trim().strip_prefix("0x")) {
-        let bytes: Vec<u8> =
-            (0..hex.len() / 2).filter_map(|i| u8::from_str_radix(hex.get(2 * i..2 * i + 2)?, 16).ok()).collect();
-        let malformed = takt_interp::bytes::decode(p, &bytes, elem).is_err();
-        return Some((bytes, malformed));
+        return Some(
+            (0..hex.len() / 2).filter_map(|i| u8::from_str_radix(hex.get(2 * i..2 * i + 2)?, 16).ok()).collect(),
+        );
     }
     let value = takt_interp::trace::parse_value(text, elem, p).ok()?;
-    Some((takt_interp::bytes::encode(p, &value, elem).ok()?, false))
+    takt_interp::bytes::encode(p, &value, elem).ok()
 }
 
 /// Ein Wert als C-Literal, dazu seine Form fuer das Tor (`Scalar`):

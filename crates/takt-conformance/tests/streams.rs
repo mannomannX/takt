@@ -66,8 +66,8 @@ fn elements_reach_the_edge_with_their_numbering() {
     let p = with_bounds("");
     let c = harness_of(&p, &[Stimulus::element(2, "rx", "AB"), Stimulus::element(5, "rx", "C")]);
     let f = feed(&c);
-    assert!(f.contains("\"\\x41\\x42\", 2, 0, 20000000LL, 0LL)"), "erstes Element fehlt:\n{f}");
-    assert!(f.contains("\"\\x43\", 1, 0, 50000000LL, 1LL)"), "zweites Element fehlt:\n{f}");
+    assert!(f.contains("\"\\x41\\x42\", 2, 20000000LL, 0LL)"), "erstes Element fehlt:\n{f}");
+    assert!(f.contains("\"\\x43\", 1, 50000000LL, 1LL)"), "zweites Element fehlt:\n{f}");
 }
 
 /// 3.9: Der Rand begrenzt die Laenge; was darueber steht, ist
@@ -77,7 +77,7 @@ fn an_overlong_element_is_truncated_not_dropped() {
     let p = with_bounds("");
     let f = harness_of(&p, &[Stimulus::element(1, "rx", "0123456789ABCDEFXXXX")]);
     let f = feed(&f);
-    assert!(f.contains(", 16, 0, "), "auf `line<16>` gekuerzt:\n{f}");
+    assert!(f.contains(", 16, 10000000LL, "), "auf `line<16>` gekuerzt:\n{f}");
     assert!(!f.contains("\\x58"), "das abgeschnittene `X` geht nicht an den Rand");
 }
 

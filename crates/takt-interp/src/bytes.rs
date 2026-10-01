@@ -98,9 +98,10 @@ fn write(p: &Program, v: &Value, ty: TypeId, out: &mut Encoder, depth: u32) -> R
             out.len(b.len() as u32);
             out.raw(b);
         }
+        // `str<N>` fasst N Bytes (3.9, FB-358).
         (Type::Str { cap }, Value::Str(s)) => {
             let b = s.as_bytes();
-            if s.chars().count() > *cap as usize {
+            if b.len() > *cap as usize {
                 return Err(Error::Malformed);
             }
             out.len(b.len() as u32);
@@ -203,15 +204,11 @@ fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32) -> Result<Valu
             let n = d.len(*cap)?;
             Value::Bytes(d.raw(n as usize)?.to_vec())
         }
+        // `str<N>` fasst N Bytes (3.9, FB-358), wie im erzeugten Code.
         Type::Str { cap } => {
-            // Die Laenge zaehlt Bytes, `cap` zaehlt Zeichen (3.9): Ein
-            // mehrbyteiges Zeichen darf die Byte-Schranke ueberschreiten.
-            let n = d.len(cap.saturating_mul(4))?;
+            let n = d.len(*cap)?;
             let raw = d.raw(n as usize)?;
             let s = core::str::from_utf8(raw).map_err(|_| Error::Malformed)?;
-            if s.chars().count() > *cap as usize {
-                return Err(Error::Malformed);
-            }
             Value::Str(s.to_string())
         }
         Type::Vec { elem, cap } => {

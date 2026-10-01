@@ -58,6 +58,35 @@ pub fn emit(s: &mut String, p: &Program, trace: Trace) {
     emit_send(s, p, trace);
 }
 
+/// Die Gestalt eines Elementtyps, dessen Elemente in kanonischer Form
+/// kommen und ein `decode` brauchen (12.6, Zeile 5): alles ausser Text,
+/// Bytes und `u8` — dieselbe Wahl wie `elements_of` im Interpreter.
+pub(crate) fn element_shape(p: &Program, elem: TypeId) -> Option<Vec<u8>> {
+    match p.types.list.get(elem.index())? {
+        Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. } => None,
+        Type::Int { width: takt_mir::types::IntWidth::U8, .. } => None,
+        _ => takt_mir::bytes::shape(p, elem).ok(),
+    }
+}
+
+/// Die Gestalten der Elementtypen aller Eingabestroeme, die ein `decode`
+/// brauchen, als `g_shape_<kanal>`, und der Leser der TCB dazu.
+fn shapes(s: &mut String, p: &Program) {
+    let _ = writeln!(
+        s,
+        "_Bool takt_edge_decodes(const unsigned char *, unsigned, const unsigned char *, unsigned, _Bool);"
+    );
+    for (c, ch) in p.channels.iter().enumerate() {
+        let Some(Type::Stream(elem)) = p.types.list.get(ch.ty.index()) else { continue };
+        if ch.dir != Direction::Input {
+            continue;
+        }
+        let Some(shape) = element_shape(p, *elem) else { continue };
+        let bytes: Vec<String> = shape.iter().map(u8::to_string).collect();
+        let _ = writeln!(s, "static const unsigned char g_shape_{c}[] = {{ {} }}; /* {} */", bytes.join(", "), ch.name);
+    }
+}
+
 /// Die Kapazitaet der Bytes eines Elements (8.6, 3.9): `N` bei Text,
 /// sonst die kanonische Byteform — dieselbe Rechnung wie
 /// `takt_llvm::stream::scratch`.
@@ -415,10 +444,20 @@ fn emit_send(s: &mut String, p: &Program, trace: Trace) {
     let _ = writeln!(s, "    default: return 0;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static void takt_couple(int k, const unsigned char *b, int n, int w) {{");
+    shapes(s, p);
+    // 12.6 Zeile 5: Ein Slot, dessen `decode` misslingt, wird verworfen,
+    // wie `elements_of` im Interpreter.
+    let _ = writeln!(
+        s,
+        "static void takt_couple(int k, const unsigned char *b, int n, int w, const unsigned char *shape, unsigned shape_len) {{"
+    );
     let _ = writeln!(s, "    if (k < 0) return;");
     let _ = writeln!(s, "    if (w == 0) {{ takt_int_send(k, (const char *)b, n); return; }}");
-    let _ = writeln!(s, "    for (int off = 0; off + w <= n; off += w) takt_int_send(k, (const char *)b + off, w);");
+    let _ = writeln!(s, "    for (int off = 0; off + w <= n; off += w)");
+    let _ = writeln!(
+        s,
+        "        if (!shape || takt_edge_decodes(shape, shape_len, b + off, (unsigned)w, 0)) takt_int_send(k, (const char *)b + off, w);"
+    );
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "_Bool takt_stream_send(int s, const char *b, int n) {{");
     let _ = writeln!(s, "    if (takt_int_slot(s) >= 0) return takt_int_send(takt_int_slot(s), b, n);");
@@ -467,7 +506,12 @@ fn emit_send(s: &mut String, p: &Program, trace: Trace) {
                 Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }) => 0,
                 _ => takt_mir::bytes::max_size(p, elem).unwrap_or(0),
             };
-            let _ = writeln!(s, "        takt_couple(takt_int_slot({in_id}), g_tx_sent[{slot}], n, {width});");
+            let shape = if element_shape(p, elem).is_some() {
+                format!("g_shape_{in_id}, (unsigned)sizeof g_shape_{in_id}")
+            } else {
+                "0, 0".to_string()
+            };
+            let _ = writeln!(s, "        takt_couple(takt_int_slot({in_id}), g_tx_sent[{slot}], n, {width}, {shape});");
         }
         let _ = writeln!(s, "        memmove(g_tx[{slot}], g_tx[{slot}] + n, (size_t)(g_tx_n[{slot}] - n));");
         let _ = writeln!(s, "        g_tx_n[{slot}] -= n;");

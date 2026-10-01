@@ -156,3 +156,24 @@ pub unsafe extern "C" fn takt_edge_driver_bad(gate: *mut Gate) {
         g.driver_bad();
     }
 }
+
+/// Ob `bytes` ein Wert der Gestalt `shape` in kanonischer Form ist (Zeile 5,
+/// `takt_native::bytes::decodes`); `exact` fuer ein Element, das genau so
+/// lang ist, sonst fuer einen Slot mit Fuellung.
+///
+/// # Safety
+///
+/// `shape` zeigt auf `shape_len` Bytes, `bytes` auf `len` Bytes, oder sie
+/// sind null bei null Bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_edge_decodes(
+    shape: *const u8,
+    shape_len: u32,
+    bytes: *const u8,
+    len: u32,
+    exact: bool,
+) -> bool {
+    // SAFETY: vom Aufrufer zugesagt; beide werden nur gelesen.
+    let (shape, bytes) = unsafe { (items(shape.cast_mut(), shape_len), items(bytes.cast_mut(), len)) };
+    takt_native::bytes::decodes(shape, bytes, exact)
+}

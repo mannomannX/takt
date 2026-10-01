@@ -8,6 +8,8 @@ rust-version.workspace = true
 
 [dependencies]
 takt-diag = { path = "../takt-diag" }
+# Die Gestalt eines Typs fuer den Leser der TCB (`bytes::shape`).
+takt-native = { path = "../takt-native" }
 
 [lints]
 workspace = true

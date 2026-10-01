@@ -99,6 +99,81 @@ pub enum Error {
 /// Kopf eines `capture`-Elements: `t: i64, pre: u32, post: u32, rate: f64` (8.9).
 pub const CAPTURE_HEAD: u32 = 24;
 
+/// Die Gestalt eines Typs fuer `takt_native::bytes::decodes`: was die TCB
+/// ohne den Typ wissen muss, um zu entscheiden, ob Bytes ein Wert sind
+/// (12.6, Zeile 5). Dieselben Faelle wie der Leser im Interpreter; was er
+/// nicht liest, ist kein POD.
+pub fn shape(p: &Program, ty: TypeId) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::new();
+    shape_at(p, ty, 0, &mut out)?;
+    Ok(out)
+}
+
+fn shape_at(p: &Program, ty: TypeId, depth: u32, out: &mut Vec<u8>) -> Result<(), Error> {
+    use takt_native::bytes::shape as op;
+    if depth > 32 {
+        return Err(Error::NotPod);
+    }
+    let count = |n: usize| u16::try_from(n).map(u16::to_le_bytes).map_err(|_| Error::NotPod);
+    match p.types.list.get(ty.index()).ok_or(Error::NotPod)? {
+        Type::Bool => out.push(op::BOOL),
+        Type::Int { width, .. } => out.extend([op::INT, (width.bits() / 8) as u8]),
+        Type::Float { width: FloatWidth::F32, .. } => out.push(op::F32),
+        Type::Float { width: FloatWidth::F64, .. } => out.push(op::F64),
+        Type::Duration { .. } => out.push(op::DURATION),
+        Type::Enum(e) => {
+            let def = p.enums.get(e.index()).ok_or(Error::NotPod)?;
+            out.push(op::ENUM);
+            out.extend(count(def.variants.len())?);
+            for v in &def.variants {
+                out.extend(v.discriminant.to_le_bytes());
+                out.extend(count(v.fields.len())?);
+                for f in &v.fields {
+                    shape_at(p, f.ty, depth + 1, out)?;
+                }
+            }
+        }
+        Type::Record(r) => {
+            let def = p.records.get(r.index()).ok_or(Error::NotPod)?;
+            out.push(op::RECORD);
+            out.extend(count(def.fields.len())?);
+            for f in &def.fields {
+                shape_at(p, f.ty, depth + 1, out)?;
+            }
+        }
+        Type::Array { elem, len } | Type::Capture { elem, len } => {
+            let code =
+                if matches!(p.types.list.get(ty.index()), Some(Type::Array { .. })) { op::ARRAY } else { op::CAPTURE };
+            out.push(code);
+            out.extend(len.to_le_bytes());
+            shape_at(p, *elem, depth + 1, out)?;
+        }
+        Type::Bytes { cap } => {
+            out.push(op::BYTES);
+            out.extend(cap.to_le_bytes());
+        }
+        Type::Str { cap } => {
+            out.push(op::STR);
+            out.extend(cap.to_le_bytes());
+        }
+        Type::Vec { elem, cap } => {
+            out.push(op::VEC);
+            out.extend(cap.to_le_bytes());
+            shape_at(p, *elem, depth + 1, out)?;
+        }
+        Type::Map { key, value, cap } => {
+            out.push(op::MAP);
+            out.extend(cap.to_le_bytes());
+            out.extend(max_size(p, *key)?.to_le_bytes());
+            out.extend(max_size(p, *value)?.to_le_bytes());
+            shape_at(p, *key, depth + 1, out)?;
+            shape_at(p, *value, depth + 1, out)?;
+        }
+        _ => return Err(Error::NotPod),
+    }
+    Ok(())
+}
+
 /// Obere Schranke der kodierten Laenge in Byte.
 ///
 /// Fuer `bytes`, `str`, `vec` und `map` ist es die Kapazitaet, nicht die
