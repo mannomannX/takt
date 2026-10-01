@@ -510,6 +510,18 @@ pub struct Recorded {
     pub value: RecordedValue,
     /// Die Einheit eines Fliesskommawerts, wie die Konfiguration sie nennt.
     pub unit: Option<String>,
+    /// Ist er ein Strom, so steht `value` fuer seine Elemente.
+    pub stream: Option<RecordedStream>,
+}
+
+/// Ein aufgezeichneter Strom (8.2, 8.6): je Element hoechstens `bytes`
+/// Bytes, je Tick hoechstens `MAXPT` aus `max_rate_hz`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordedStream {
+    /// Die Hoechstrate aus der Konfiguration.
+    pub max_rate_hz: u64,
+    /// Die Bytes eines Elements hoechstens, in seiner Drahtform.
+    pub bytes: u32,
 }
 
 /// Die Art eines aufgezeichneten Werts: die Skalare, die der Import bildet.
@@ -521,6 +533,9 @@ pub enum RecordedValue {
     Float(FloatWidth),
     /// Ein Enum ohne Felder, das das Programm deklariert (8.1).
     Enum(EnumId),
+    /// Ein Stromelement, dessen Literal nicht verlustfrei waere (Record,
+    /// `Edge`, `bytes`, `line`): aufgezeichnet in seiner Drahtform `0x…`.
+    Wire,
 }
 
 /// Ein Registerport (12.10, v1.2): ein Record an einer festen Adresse.

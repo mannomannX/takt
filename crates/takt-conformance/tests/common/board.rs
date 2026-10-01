@@ -153,17 +153,30 @@ pub fn a_stretched_tick_is_runtime_hardware(board: &mut dyn Board) -> Vec<String
 }
 
 /// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,
-/// M10 Schritt 29d). `recorded.takt` importiert `recorded.hw` und nennt
-/// keinen der Kanaele `edge_r/*`; das Pruefgeraet liefert vier davon. Der
-/// Rahmen schreibt sie als Metazeile `rec` in Tick 0 und bei jeder
-/// Aenderung — ein eigener Zeitstempel ist eine —, `Bad` mit Grund
-/// `Driver`, eine Diskriminante, die das Enum nicht kennt, mit Grund
-/// `OutOfRange`; der Kanal ohne Treiber und der Output erscheinen nie. Die
-/// Ausgaben stimmen mit dem Interpreter ueberein, der keine `rec`-Zeile
-/// schreibt.
+/// M10 Schritte 29d und 29e). `recorded.takt` importiert `recorded.hw` und
+/// nennt keinen der Kanaele `edge_r/*`; das Pruefgeraet liefert vier der
+/// Skalare und drei Stroeme. Der Rahmen schreibt sie als Metazeile `rec`:
+/// einen Skalar in Tick 0 und bei jeder Aenderung — ein eigener
+/// Zeitstempel ist eine —, `Bad` mit Grund `Driver`, eine Diskriminante,
+/// die das Enum nicht kennt, mit Grund `OutOfRange`; einen Strom je
+/// Element mit abweichendem `t=` und `seq=`. Der Kanal ohne Treiber und der
+/// Output erscheinen nie. Die Ausgaben stimmen mit dem Interpreter
+/// ueberein, der keine `rec`-Zeile schreibt.
 pub fn unread_channels_are_recorded(board: &mut dyn Board) -> Vec<String> {
     const RECORD_TICKS: u64 = 10;
-    const RECORDED: [&str; 13] = [
+    const RECORDED: [&str; 23] = [
+        // Stroeme (29e): je Element eine Zeile, ein `u8` als Zahl, sonst
+        // die Drahtform; ein `u8` aus zwei Bytes ist keines und fehlt.
+        "t=0 rec edge_r_frames 0x0102",
+        "t=0 rec edge_r_raw 65",
+        "t=1 rec edge_r_text 0x6869",
+        "t=2 rec edge_r_frames 0x0304",
+        "t=2 rec edge_r_frames 0x0506 t=25000000",
+        "t=3 rec edge_r_frames 0x070809",
+        "t=3 rec edge_r_raw 66 seq=7",
+        "t=4 rec edge_r_text 0x610962",
+        "t=5 rec edge_r_text 0x313233343536373839",
+        "t=6 rec edge_r_text 0xff",
         "t=0 rec edge_r_level 5",
         "t=0 rec edge_r_mode IDLE",
         "t=0 rec edge_r_on true",

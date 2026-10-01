@@ -135,3 +135,49 @@ raw = Nothing
     let (_, back) = takt_mir::format::read_program(&takt_mir::format::write_program(&more, "test")).expect("lesbar");
     assert_eq!(back.recorded, more.recorded, "die MIR traegt sie (Feld 21)");
 }
+
+/// Ein Kanal mit `max_rate_hz` ist ein Strom (8.2, 8.6): genannt wird er
+/// `stream<raw>`, ungenannt je Element aufgezeichnet — ein `u8` als Zahl,
+/// alles andere in der Drahtform mit der Groesse seines Elements.
+#[test]
+fn a_channel_with_a_maximum_rate_is_a_stream() {
+    use takt_mir::program::{RecordedStream, RecordedValue};
+    use takt_mir::types::{IntWidth, Type};
+    let streams = "
+[channel uart1/rx]
+direction = input
+raw = line<80>
+max_rate_hz = 200
+framing = lines
+
+[channel can0/rx]
+direction = input
+raw = Frame
+max_rate_hz = 1000
+
+[channel uart2/rx]
+direction = input
+raw = u8
+max_rate_hz = 1000
+";
+    let body = format!(
+        "record Frame:\n    id   : u16\n    data : bytes<8>\n\n{MACHINE}\nmachine reader:\n    var n : int in 0..100 = 0\n    \
+         initial RUN\n    state RUN:\n        on uart1_rx as e:\n            n = min(n + 1, 100)\n"
+    );
+    let (p, errors) = compile(&body, Some(&format!("{SITE}{streams}")));
+    assert!(errors.is_empty(), "{errors:?}");
+    let p = p.expect("Programm");
+    let rx = p.channels.iter().find(|c| c.name == "uart1_rx").expect("`uart1_rx` gebunden");
+    let Type::Stream(elem) = p.types.list[rx.ty.index()] else { panic!("kein Strom") };
+    assert_eq!(p.types.list[elem.index()], Type::Line { cap: 80 });
+    let recorded: Vec<(&str, RecordedValue, Option<RecordedStream>)> =
+        p.recorded.iter().map(|r| (r.name.as_str(), r.value, r.stream)).collect();
+    assert_eq!(
+        recorded,
+        [
+            // `u16` und `bytes<8>`: 2 + 4 + 8 Byte in kanonischer Form (5.9).
+            ("can0_rx", RecordedValue::Wire, Some(RecordedStream { max_rate_hz: 1000, bytes: 14 })),
+            ("uart2_rx", RecordedValue::Int(IntWidth::U8), Some(RecordedStream { max_rate_hz: 1000, bytes: 1 })),
+        ]
+    );
+}

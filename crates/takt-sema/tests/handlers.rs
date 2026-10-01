@@ -692,3 +692,31 @@ machine watch:
     );
     assert!(trace.contains("stream dut_log dropped=0 overflowed=1 malformed=0"), "der Ueberlauf zaehlt: {trace}");
 }
+
+#[test]
+fn a_text_element_may_stand_in_its_wire_form() {
+    // `grammar/trace.md`: Ein Element von Text, Bytes oder einem Record darf
+    // in seiner Drahtform stehen, wie die Zeile `rec` es aufzeichnet (8.2);
+    // ein `u8` steht als Zahl.
+    let trace = driven(
+        "\
+input dut_log : stream<line<64>> @ hw(\"uart0/rx\") with max_rate = 2000 Hz
+input raw_rx  : stream<bytes<4>> @ hw(\"uart1/rx\") with max_rate = 2000 Hz
+
+output hi  : bool        @ hw(\"o/hi\")  with safe = false
+output got : int in 0..4 @ hw(\"o/got\") with safe = 0
+
+machine watch:
+    initial RUN
+    state RUN:
+        on dut_log matches \"hi\" as e:
+            hi = true
+        on raw_rx as r:
+            got = r.data.len as int
+",
+        "t=1 in dut_log 0x6869\nt=1 in raw_rx 0x0102\n",
+        3,
+    );
+    assert!(trace.contains("t=1 out hi true\n"), "`0x6869` ist der Text `hi`: {trace}");
+    assert!(trace.contains("t=1 out got 2\n"), "`0x0102` sind zwei Bytes: {trace}");
+}

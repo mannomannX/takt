@@ -367,32 +367,57 @@ pub unsafe extern "C" fn takt_in_edge_b_k(value: *mut i64, quality: *mut u8, t: 
 static EDGE_POLLS: [(AtomicU32, AtomicU32); 2] =
     [(AtomicU32::new(u32::MAX), AtomicU32::new(0)), (AtomicU32::new(u32::MAX), AtomicU32::new(0))];
 
-/// Das naechste Element eines Stroms des Pruefgeraets.
+/// Wie oft die Stroeme des Pruefgeraets, die `recorded.takt` nicht liest,
+/// im laufenden Tick gefragt wurden.
+static UNREAD_POLLS: [(AtomicU32, AtomicU32); 3] = [
+    (AtomicU32::new(u32::MAX), AtomicU32::new(0)),
+    (AtomicU32::new(u32::MAX), AtomicU32::new(0)),
+    (AtomicU32::new(u32::MAX), AtomicU32::new(0)),
+];
+
+/// Ein Element des Pruefgeraets: Bytes, Zeitstempel und Folgenummer, wenn eigene.
+type ProbeElement = (&'static [u8], Option<i64>, Option<i64>);
+
+/// Das naechste Element einer Folge des Pruefgeraets: `element(tick, i)`
+/// liefert Bytes, Zeitstempel und Folgenummer, ohne Angabe die des Rahmens.
 ///
 /// # Safety
 ///
 /// `buf` zeigt auf `cap` schreibbare Bytes, die uebrigen auf je einen Platz.
-unsafe fn edge_poll(
-    stream: edge_probe::Stream,
+unsafe fn probe_poll(
+    polls: &(AtomicU32, AtomicU32),
+    element: impl Fn(u64, usize) -> Option<ProbeElement>,
     buf: *mut u8,
     cap: i32,
     len: *mut i32,
+    t: *mut i64,
     seq: *mut i64,
 ) -> bool {
-    let (tick_at, polled) = &EDGE_POLLS[stream as usize];
+    let (tick_at, polled) = polls;
     let tick = edge_tick() as u32;
     if tick_at.swap(tick, Ordering::Relaxed) != tick {
         polled.store(0, Ordering::Relaxed);
     }
     let i = polled.fetch_add(1, Ordering::Relaxed) as usize;
-    let Some((bytes, s)) = edge_probe::element(stream, u64::from(tick), i) else { return false };
+    let Some((bytes, at, s)) = element(u64::from(tick), i) else { return false };
     let n = bytes.len().min(usize::try_from(cap).unwrap_or(0));
     unsafe {
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n);
         *len = n as i32;
-        *seq = s;
+        if let Some(at) = at {
+            *t = at;
+        }
+        if let Some(s) = s {
+            *seq = s;
+        }
     }
     true
+}
+
+/// Ein Strom des Treiberrands: Bytes und Folgenummer, der Zeitstempel ist
+/// die Tickgrenze.
+fn edge_element(stream: edge_probe::Stream) -> impl Fn(u64, usize) -> Option<ProbeElement> {
+    move |tick, i| edge_probe::element(stream, tick, i).map(|(bytes, s)| (bytes, None, Some(s)))
 }
 
 /// Der Treiber fuer `edge_u/rx`.
@@ -401,8 +426,9 @@ unsafe fn edge_poll(
 ///
 /// `buf` zeigt auf `cap` schreibbare Bytes, die uebrigen auf je einen Platz.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_poll_edge_u_rx(buf: *mut u8, cap: i32, len: *mut i32, _t: *mut i64, seq: *mut i64) -> bool {
-    unsafe { edge_poll(edge_probe::Stream::Lines, buf, cap, len, seq) }
+pub unsafe extern "C" fn takt_poll_edge_u_rx(buf: *mut u8, cap: i32, len: *mut i32, t: *mut i64, seq: *mut i64) -> bool {
+    let stream = edge_probe::Stream::Lines;
+    unsafe { probe_poll(&EDGE_POLLS[stream as usize], edge_element(stream), buf, cap, len, t, seq) }
 }
 
 /// Der Treiber fuer `edge_c/rx`.
@@ -411,8 +437,56 @@ pub unsafe extern "C" fn takt_poll_edge_u_rx(buf: *mut u8, cap: i32, len: *mut i
 ///
 /// `buf` zeigt auf `cap` schreibbare Bytes, die uebrigen auf je einen Platz.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_poll_edge_c_rx(buf: *mut u8, cap: i32, len: *mut i32, _t: *mut i64, seq: *mut i64) -> bool {
-    unsafe { edge_poll(edge_probe::Stream::Pairs, buf, cap, len, seq) }
+pub unsafe extern "C" fn takt_poll_edge_c_rx(buf: *mut u8, cap: i32, len: *mut i32, t: *mut i64, seq: *mut i64) -> bool {
+    let stream = edge_probe::Stream::Pairs;
+    unsafe { probe_poll(&EDGE_POLLS[stream as usize], edge_element(stream), buf, cap, len, t, seq) }
+}
+
+/// Ein Strom, den `recorded.takt` nicht liest (8.2).
+///
+/// # Safety
+///
+/// `buf` zeigt auf `cap` schreibbare Bytes, die uebrigen auf je einen Platz.
+unsafe fn unread_poll(
+    stream: edge_probe::Unread,
+    buf: *mut u8,
+    cap: i32,
+    len: *mut i32,
+    t: *mut i64,
+    seq: *mut i64,
+) -> bool {
+    let element = move |tick, i| edge_probe::unread(stream, tick, i);
+    unsafe { probe_poll(&UNREAD_POLLS[stream as usize], element, buf, cap, len, t, seq) }
+}
+
+/// Der Treiber fuer `edge_r/frames`.
+///
+/// # Safety
+///
+/// `buf` zeigt auf `cap` schreibbare Bytes, die uebrigen auf je einen Platz.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_poll_edge_r_frames(buf: *mut u8, cap: i32, len: *mut i32, t: *mut i64, seq: *mut i64) -> bool {
+    unsafe { unread_poll(edge_probe::Unread::Frames, buf, cap, len, t, seq) }
+}
+
+/// Der Treiber fuer `edge_r/text`.
+///
+/// # Safety
+///
+/// `buf` zeigt auf `cap` schreibbare Bytes, die uebrigen auf je einen Platz.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_poll_edge_r_text(buf: *mut u8, cap: i32, len: *mut i32, t: *mut i64, seq: *mut i64) -> bool {
+    unsafe { unread_poll(edge_probe::Unread::Text, buf, cap, len, t, seq) }
+}
+
+/// Der Treiber fuer `edge_r/raw`.
+///
+/// # Safety
+///
+/// `buf` zeigt auf `cap` schreibbare Bytes, die uebrigen auf je einen Platz.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_poll_edge_r_raw(buf: *mut u8, cap: i32, len: *mut i32, t: *mut i64, seq: *mut i64) -> bool {
+    unsafe { unread_poll(edge_probe::Unread::Raw, buf, cap, len, t, seq) }
 }
 
 /// Der Ausgang `edge_o/o`: bestaetigt, ausser wenn das Pruefgeraet es nicht tut.

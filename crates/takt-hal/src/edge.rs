@@ -308,6 +308,11 @@ pub fn maxpt_of(c: &Channel, tick_ns: i64) -> Option<u32> {
         takt_mir::expr::ExprKind::Float(f) if *f >= 0.0 => *f as u64,
         _ => return None,
     };
+    maxpt(hz, tick_ns)
+}
+
+/// `MAXPT` aus einer Hoechstrate in Hertz, mindestens eins.
+pub fn maxpt(hz: u64, tick_ns: i64) -> Option<u32> {
     let tick = u64::try_from(tick_ns).ok()?;
     // ceil(hz * tick_ns / 1e9), ganzzahlig gerechnet.
     let per_tick = hz.checked_mul(tick)?.div_ceil(1_000_000_000);

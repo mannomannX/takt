@@ -2,15 +2,20 @@ system:
     language = 1
     tick     = 10 ms
 
-# Aufzeichnung ungebundener Kanaele (8.2, 12.5, M10 Schritt 29d): Die
-# Konfiguration nennt fuenf Inputs, die das Programm nicht liest, und einen
-# Output, den es nicht schreibt. Das Pruefgeraet des Bring-ups
-# (`takt_board_support::edge_probe`) liefert vier der Inputs; der Rahmen
-# zeichnet sie als `rec` auf, in Tick 0 und bei jeder Aenderung.
+# Aufzeichnung ungebundener Kanaele (8.2, 12.5, M10 Schritte 29d und 29e):
+# Die Konfiguration nennt fuenf skalare Inputs und drei Eingabestroeme, die
+# das Programm nicht liest, und einen Output, den es nicht schreibt. Das
+# Pruefgeraet des Bring-ups (`takt_board_support::edge_probe`) liefert
+# vier der Skalare und alle Stroeme; der Rahmen zeichnet sie als `rec` auf,
+# einen Skalar in Tick 0 und bei jeder Aenderung, einen Strom je Element.
 
 import channels from "recorded.hw"
 
 enum Mode: IDLE, RUN, ERROR
+
+record Pair:
+    a : u8
+    b : u8
 
 output beat : bool @ hw("o/beat") with safe = false
 

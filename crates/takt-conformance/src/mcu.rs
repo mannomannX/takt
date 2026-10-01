@@ -1286,23 +1286,44 @@ fn sample(s: &mut String, p: &Program, layout: &Layout) {
 
 /// Die importierten Inputs, die das Programm nicht liest (8.2): je Tick
 /// ueber ihren Treiber gelesen und als Metazeile `rec` aufgezeichnet, in der
-/// Form einer `in`-Zeile, in Tick 0 und bei jeder Aenderung (T4). Die
-/// Qualitaet steht wie am Rand: `Bad` mit Grund `Driver`; eine
-/// Diskriminante, die das Enum nicht kennt, ist `Bad` mit Grund
-/// `OutOfRange` (12.6 Zeile 3).
+/// Form einer `in`-Zeile — ein Skalar in Tick 0 und bei jeder Aenderung
+/// (T4), ein Strom je Element. Die Qualitaet steht wie am Rand: `Bad` mit
+/// Grund `Driver`; eine Diskriminante, die das Enum nicht kennt, ist `Bad`
+/// mit Grund `OutOfRange` (12.6 Zeile 3).
 fn record(s: &mut String, p: &Program) {
     if p.recorded.is_empty() {
         return;
     }
     let _ = writeln!(s, "\n/* Aufgezeichnete Inputs, die das Programm nicht liest (8.2, 12.5). */");
-    for r in &p.recorded {
-        let (f, ct) = (format!("takt_in_{}", r.address.ident()), recorded_c_type(r.value));
+    for (i, r) in p.recorded.iter().enumerate() {
+        let ident = r.address.ident();
+        if let Some(st) = r.stream {
+            let f = format!("takt_poll_{ident}");
+            let _ = writeln!(
+                s,
+                "_Bool {f}(unsigned char *buf, int cap, int *len, long long *t, long long *seq); /* rec {} */",
+                r.name
+            );
+            let _ = writeln!(
+                s,
+                "__attribute__((weak)) _Bool {f}(unsigned char *buf, int cap, int *len, long long *t, long long *seq)"
+            );
+            let _ = writeln!(s, "{{ (void)buf; (void)cap; (void)len; (void)t; (void)seq; return 0; }}");
+            // Ein Byte mehr als jedes gueltige Element, wie bei einem gebundenen Strom.
+            let _ = writeln!(s, "static _Alignas(8) unsigned char g_rec_{i}[{}];", st.bytes + 1);
+            continue;
+        }
+        let (f, ct) = (format!("takt_in_{ident}"), recorded_c_type(r.value));
         let _ = writeln!(s, "_Bool {f}({ct} *value, unsigned char *quality, long long *t); /* rec {} */", r.name);
         let _ = writeln!(s, "__attribute__((weak)) _Bool {f}({ct} *value, unsigned char *quality, long long *t)");
         let _ = writeln!(s, "{{ (void)value; (void)quality; (void)t; return 0; }}");
     }
     let _ = writeln!(s, "static void takt_mcu_record(long long now) {{");
-    for r in &p.recorded {
+    for (i, r) in p.recorded.iter().enumerate() {
+        if let Some(st) = r.stream {
+            record_stream(s, p, i, r, st);
+            continue;
+        }
         let (f, ct) = (format!("takt_in_{}", r.address.ident()), recorded_c_type(r.value));
         let _ = writeln!(s, "    {{ /* {} */", r.name);
         let _ = writeln!(s, "        static {ct} last;");
@@ -1330,6 +1351,60 @@ fn record(s: &mut String, p: &Program) {
     let _ = writeln!(s, "}}");
 }
 
+/// Ein aufgezeichneter Strom: je Tick bis zu `MAXPT + 1` Elemente, jedes
+/// eine Zeile `rec` — ein `u8` als Zahl, jedes andere Element in seiner
+/// Drahtform `0x…`; `t=` und `seq=` nur, wo sie von der Tickgrenze und der
+/// lueckenlosen Folge abweichen (`grammar/trace.md`). Ein `u8`-Element
+/// anderer Laenge kann keine `in`-Zeile tragen und wird nicht aufgezeichnet.
+fn record_stream(
+    s: &mut String,
+    p: &Program,
+    i: usize,
+    r: &takt_mir::program::Recorded,
+    st: takt_mir::program::RecordedStream,
+) {
+    let polls = takt_hal::edge::maxpt(st.max_rate_hz, p.config.tick).unwrap_or(1).saturating_add(1);
+    let cap = st.bytes + 1;
+    let f = format!("takt_poll_{}", r.address.ident());
+    let _ = writeln!(s, "    {{ /* {} */", r.name);
+    let _ = writeln!(s, "        static long long next;");
+    let _ = writeln!(s, "        for (int i = 0; i < {polls}; i++) {{");
+    let _ = writeln!(s, "            int len = 0;");
+    let _ = writeln!(s, "            long long t = now, seq = next, expected = next;");
+    let _ = writeln!(s, "            if (!{f}(g_rec_{i}, {cap}, &len, &t, &seq)) break;");
+    let _ = writeln!(s, "            if (len < 0) len = 0;");
+    let _ = writeln!(s, "            if (len > {cap}) len = {cap};");
+    let _ = writeln!(s, "            next = seq + 1;");
+    let wire = r.value == takt_mir::program::RecordedValue::Wire;
+    if !wire {
+        let _ = writeln!(s, "            if (len != 1) continue;");
+    }
+    let _ = writeln!(s, "            takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "            takt_board_trace_i64(g_tick);");
+    let _ = writeln!(s, "            takt_board_trace(\"rec {} \");", r.name);
+    if wire {
+        // Zwei Ziffern je Byte und Aufruf: `takt_board_trace_hex8` schreibt
+        // je Byte ein `0x`, und eine Zeile am Stueck kann laenger sein, als
+        // `takt_board_trace` liest.
+        let _ = writeln!(s, "            static const char digits[] = \"0123456789abcdef\";");
+        let _ = writeln!(s, "            takt_board_trace(\"0x\");");
+        let _ = writeln!(s, "            for (int b = 0; b < len; b++) {{");
+        let _ =
+            writeln!(s, "                char d[3] = {{ digits[g_rec_{i}[b] >> 4], digits[g_rec_{i}[b] & 15], 0 }};");
+        let _ = writeln!(s, "                takt_board_trace(d);");
+        let _ = writeln!(s, "            }}");
+        let _ = writeln!(s, "            takt_board_trace(\" \");");
+    } else {
+        let _ = writeln!(s, "            takt_board_trace_i64((long long)g_rec_{i}[0]);");
+    }
+    let _ = writeln!(s, "            if (t != now) {{ takt_board_trace(\"t=\"); takt_board_trace_i64(t); }}");
+    let _ =
+        writeln!(s, "            if (seq != expected) {{ takt_board_trace(\"seq=\"); takt_board_trace_i64(seq); }}");
+    let _ = writeln!(s, "            takt_board_trace(\"\\n\");");
+    let _ = writeln!(s, "        }}");
+    let _ = writeln!(s, "    }}");
+}
+
 /// Der C-Typ, in dem der Treiber eines aufgezeichneten Inputs liefert —
 /// derselbe wie fuer einen gebundenen dieses Typs.
 fn recorded_c_type(value: takt_mir::program::RecordedValue) -> &'static str {
@@ -1341,6 +1416,7 @@ fn recorded_c_type(value: takt_mir::program::RecordedValue) -> &'static str {
         RecordedValue::Float(FloatWidth::F32) => "float",
         RecordedValue::Float(FloatWidth::F64) => "double",
         RecordedValue::Enum(_) => "unsigned int",
+        RecordedValue::Wire => "unsigned char",
     }
 }
 
@@ -1366,6 +1442,7 @@ fn recorded_value(p: &Program, r: &takt_mir::program::Recorded) -> String {
                 .collect();
             format!("switch (v) {{{cases} default: takt_board_trace(\"bad reason=OutOfRange \"); }}")
         }
+        RecordedValue::Wire => String::new(),
     }
 }
 

@@ -5,14 +5,15 @@
 //! durch dieselbe Pruefung laeuft wie eine geschriebene: Der Name ist die
 //! Adresse, wie der Treiber sie auch nennt (`daq1/ai0` wird `daq1_ai0`,
 //! 8.10), der Typ kommt aus `unit` und `range` oder aus `raw`, der
-//! `safe`-Wert eines Outputs aus `safe`. Gebunden wird nur, was die Quelle
-//! nennt; eine geschriebene Deklaration derselben Adresse gewinnt. Die
-//! uebrigen Inputs zeichnet die Runtime auf (`Program::recorded`).
+//! `safe`-Wert eines Outputs aus `safe`. Ein Kanal mit `max_rate_hz` ist
+//! ein Strom, und `raw` nennt seinen Elementtyp. Gebunden wird nur, was die
+//! Quelle nennt; eine geschriebene Deklaration derselben Adresse gewinnt.
+//! Die uebrigen Inputs zeichnet die Runtime auf (`Program::recorded`).
 
 use takt_diag::{Diagnostic, Span};
 use takt_mir::hardware::HwChannel;
 use takt_mir::pattern::Address;
-use takt_mir::program::{Binding, Direction, Recorded, RecordedValue};
+use takt_mir::program::{Binding, Direction, Recorded, RecordedStream, RecordedValue};
 use takt_syntax::ast;
 
 use crate::lower::{Lowerer, SC2};
@@ -89,10 +90,28 @@ impl Lowerer<'_> {
         if c.direction != Some(Direction::Input) {
             return None;
         }
-        let value = match (&c.unit, c.raw.as_deref()) {
-            (Some(_), _) | (None, Some("float")) => RecordedValue::Float(self.program.config.float_width),
-            (None, Some("bool")) => RecordedValue::Bool,
-            (None, Some(raw)) => match (super::decl::int_width_named(raw), self.peek(raw)) {
+        let address = Address::simple(&c.address);
+        let Some(max_rate_hz) = c.max_rate_hz else {
+            let value = self.scalar(c.unit.is_some(), c.raw.as_deref())?;
+            return Some(Recorded { name, address, value, unit: c.unit.clone(), stream: None });
+        };
+        // Ein Strom (8.2, 8.6): ein `u8` je Element als Zahl, jedes andere
+        // Element in seiner Drahtform.
+        let raw = c.raw.as_deref()?;
+        let (value, bytes) = match raw {
+            "u8" => (RecordedValue::Int(takt_mir::types::IntWidth::U8), 1),
+            _ => (RecordedValue::Wire, self.wire_bytes(raw)?),
+        };
+        Some(Recorded { name, address, value, unit: None, stream: Some(RecordedStream { max_rate_hz, bytes }) })
+    }
+
+    /// Die Art eines Skalars aus `unit` und `raw`, wie eine Deklaration aus
+    /// ihnen sie haette (8.2).
+    fn scalar(&self, unit: bool, raw: Option<&str>) -> Option<RecordedValue> {
+        Some(match (unit, raw) {
+            (true, _) | (false, Some("float")) => RecordedValue::Float(self.program.config.float_width),
+            (false, Some("bool")) => RecordedValue::Bool,
+            (false, Some(raw)) => match (super::decl::int_width_named(raw), self.peek(raw)) {
                 (Some(width), _) => RecordedValue::Int(width),
                 (None, Some(Entity::Enum(id)))
                     if self.program.enums[id.index()].variants.iter().all(|v| v.fields.is_empty()) =>
@@ -101,9 +120,23 @@ impl Lowerer<'_> {
                 }
                 _ => return None,
             },
-            (None, None) => return None,
-        };
-        Some(Recorded { name, address: Address::simple(&c.address), value, unit: c.unit.clone() })
+            (false, None) => return None,
+        })
+    }
+
+    /// Die Bytes eines Stromelements in seiner Drahtform hoechstens:
+    /// `bytes<N>` und `line<N>` tragen bis zu N, ein Record (auch `Edge`)
+    /// seine kanonische Form (5.9).
+    fn wire_bytes(&self, raw: &str) -> Option<u32> {
+        for kind in ["bytes<", "line<"] {
+            if let Some(n) = raw.strip_prefix(kind).and_then(|rest| rest.strip_suffix('>')) {
+                return n.trim().parse().ok();
+            }
+        }
+        match self.peek(raw) {
+            Some(Entity::Record(id)) => takt_mir::bytes::record_size(&self.program, *id).ok(),
+            _ => None,
+        }
     }
 
     /// Bindet schon eine geschriebene Deklaration diese Adresse?
@@ -123,6 +156,13 @@ fn declaration(c: &HwChannel, name: &str) -> Result<String, String> {
         Some(Direction::Output) => "output",
         None => return Err("ohne `direction`".to_string()),
     };
+    // Nur Stroeme haben eine Hoechstrate (8.6); `capacity` bleibt beim
+    // Default, denn sie haengt an den Lesern, nicht an der Hardware.
+    if let Some(hz) = c.max_rate_hz {
+        let elem = c.raw.as_deref().ok_or("Strom ohne `raw` (Elementtyp)")?;
+        let framing = c.framing.as_deref().map(|f| format!(", framing = {f}")).unwrap_or_default();
+        return Ok(format!("{dir} {name} : stream<{elem}> @ hw(\"{}\") with max_rate = {hz} Hz{framing}\n", c.address));
+    }
     let range = |unit: &str| c.range.map(|(lo, hi)| format!(" in {lo:?}..{hi:?}{unit}")).unwrap_or_default();
     let ty = match (&c.unit, c.raw.as_deref()) {
         (Some(unit), _) => format!("float[{unit}]{}", range(&format!(" {unit}"))),
@@ -168,6 +208,17 @@ mod tests {
         assert_eq!(declaration(&c, "x").as_deref(), Ok("output x : u8 in 0..100 @ hw(\"daq1/ai0\") with safe = 0\n"));
         let c = channel("direction = output\nraw = bool\n");
         assert!(declaration(&c, "x").is_err_and(|e| e.contains("safe")));
+    }
+
+    #[test]
+    fn a_channel_with_a_maximum_rate_is_a_stream() {
+        let c = channel("direction = input\nraw = line<80>\nmax_rate_hz = 200\nframing = lines\n");
+        assert_eq!(
+            declaration(&c, "log").as_deref(),
+            Ok("input log : stream<line<80>> @ hw(\"daq1/ai0\") with max_rate = 200 Hz, framing = lines\n")
+        );
+        let c = channel("direction = input\nmax_rate_hz = 200\n");
+        assert!(declaration(&c, "log").is_err_and(|e| e.contains("Elementtyp")));
     }
 
     #[test]

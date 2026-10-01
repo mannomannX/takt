@@ -23,9 +23,9 @@
 //! Alles little-endian, ohne Padding. Beide Ziele (Cortex-M4F, RV32IMAC)
 //! sind little-endian; eine Wahl waere eine Fehlerquelle ohne Nutzen.
 
-use crate::TypeId;
 use crate::program::Program;
 use crate::types::{FloatWidth, IntWidth, Type};
+use crate::{RecordId, TypeId};
 
 /// Schreibt die kanonische Form in einen Puffer.
 ///
@@ -182,6 +182,21 @@ pub fn max_size(p: &Program, ty: TypeId) -> Result<u32, Error> {
     size_at(p, ty, 0)
 }
 
+/// Die Groesse der kanonischen Form eines Records (5.9), ohne dass sein
+/// Typ in der Typtabelle stehen muss.
+pub fn record_size(p: &Program, r: RecordId) -> Result<u32, Error> {
+    record_size_at(p, r, 0)
+}
+
+fn record_size_at(p: &Program, r: RecordId, depth: u32) -> Result<u32, Error> {
+    let def = p.records.get(r.index()).ok_or(Error::NotPod)?;
+    let mut n = 0;
+    for f in &def.fields {
+        n += size_at(p, f.ty, depth + 1)?;
+    }
+    Ok(n)
+}
+
 fn size_at(p: &Program, ty: TypeId, depth: u32) -> Result<u32, Error> {
     if depth > 32 {
         return Err(Error::NotPod);
@@ -204,14 +219,7 @@ fn size_at(p: &Program, ty: TypeId, depth: u32) -> Result<u32, Error> {
             }
             Ok(8 + worst)
         }
-        Type::Record(r) => {
-            let def = p.records.get(r.index()).ok_or(Error::NotPod)?;
-            let mut n = 0;
-            for f in &def.fields {
-                n += size_at(p, f.ty, depth + 1)?;
-            }
-            Ok(n)
-        }
+        Type::Record(r) => record_size_at(p, *r, depth),
         Type::Array { elem, len } => Ok(size_at(p, *elem, depth + 1)? * len),
         // 8.9: Kopf `t, pre, post, rate`, dann `N` Abtastwerte.
         Type::Capture { elem, len } => Ok(CAPTURE_HEAD + size_at(p, *elem, depth + 1)? * len),

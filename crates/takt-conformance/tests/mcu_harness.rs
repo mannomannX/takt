@@ -725,6 +725,19 @@ fn an_unread_input_is_read_for_the_recording() {
         "{frame}"
     );
     assert!(frame.contains("    takt_mcu_record(now);"), "{frame}");
+    // Stroeme (29e): je Element ein Aufruf, ein Byte mehr als jedes gueltige
+    // Element, `MAXPT + 1` Aufrufe je Tick (400 Hz bei 10 ms: 5).
+    assert!(
+        frame.contains(
+            "_Bool takt_poll_edge_r_frames(unsigned char *buf, int cap, int *len, long long *t, long long *seq); \
+             /* rec edge_r_frames */"
+        ),
+        "{frame}"
+    );
+    assert!(frame.contains("if (!takt_poll_edge_r_frames(g_rec_0, 3, &len, &t, &seq)) break;"), "{frame}");
+    assert!(frame.contains("if (!takt_poll_edge_r_text(g_rec_7, 9, &len, &t, &seq)) break;"), "{frame}");
+    assert!(frame.contains("if (!takt_poll_edge_r_raw(g_rec_5, 2, &len, &t, &seq)) break;"), "{frame}");
+    assert!(frame.contains("for (int i = 0; i < 5; i++) {"), "{frame}");
     let clang = takt_llvm::toolchain::find();
     if matches!(clang, Clang::Missing) {
         eprintln!("clang fehlt; Bindung uebersprungen");

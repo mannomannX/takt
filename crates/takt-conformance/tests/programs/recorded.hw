@@ -20,6 +20,23 @@ raw = bool
 direction = input
 raw = Mode
 
+# Stroeme: `max_rate_hz` macht den Strom, `raw` nennt den Elementtyp.
+[channel edge_r/frames]
+direction = input
+raw = Pair
+max_rate_hz = 400
+
+[channel edge_r/text]
+direction = input
+raw = line<8>
+max_rate_hz = 200
+framing = lines
+
+[channel edge_r/raw]
+direction = input
+raw = u8
+max_rate_hz = 200
+
 # Ohne Treiber im Bring-up: Die schwache Voreinstellung liefert nichts.
 [channel edge_r/quiet]
 direction = input

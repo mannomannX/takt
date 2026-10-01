@@ -632,10 +632,15 @@ fn const_f64(c: &takt_mir::types::Const) -> Option<f64> {
 /// Deutet die gesendeten Bytes als Element des Zieltyps (8.3). Ein
 /// `line`-Strom traegt Text, jeder andere die Bytes selbst.
 pub fn element_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Value {
-    let elem = match p.types.list.get(ty.index()) {
-        Some(Type::Stream(e)) => *e,
-        _ => return Value::Bytes(bytes.to_vec()),
-    };
+    match p.types.list.get(ty.index()) {
+        Some(Type::Stream(elem)) => wire_element(bytes, *elem, p),
+        _ => Value::Bytes(bytes.to_vec()),
+    }
+}
+
+/// Die Drahtform eines Elements vom Typ `elem` als Wert: Text fuer `line`
+/// und `str`, die kanonische Form fuer ein Capture-Fenster, sonst die Bytes.
+pub fn wire_element(bytes: &[u8], elem: takt_mir::TypeId, p: &Program) -> Value {
     match p.types.list.get(elem.index()) {
         Some(Type::Line { .. }) => {
             Value::Line { text: String::from_utf8_lossy(bytes).trim_end().to_string(), truncated: false }

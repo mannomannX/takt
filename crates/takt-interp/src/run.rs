@@ -699,14 +699,20 @@ fn deliver(
 /// Bytes in kanonischer Form (`0x…`, 8.6); misslingt `decode`, ist es
 /// `None` — verworfen und gezaehlt (12.6, Zeile 5).
 fn element_value(text: &str, elem: takt_mir::TypeId, p: &Program) -> Result<Option<Value>, String> {
-    let hex = text.trim().strip_prefix("0x");
-    if let (Some(Type::Record(_)), Some(hex)) = (p.types.list.get(elem.index()), hex) {
+    // Records, Bytes und Text duerfen in ihrer Drahtform stehen, ein `u8`
+    // steht als Zahl (`grammar/trace.md`).
+    let ty = p.types.list.get(elem.index());
+    let wire = matches!(ty, Some(Type::Record(_) | Type::Line { .. } | Type::Bytes { .. }));
+    if let (true, Some(hex)) = (wire, text.trim().strip_prefix("0x")) {
         if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(format!("Bytes `0x…` mit gerade vielen Hexziffern erwartet, `{text}` gefunden"));
         }
         let bytes: Vec<u8> =
             (0..hex.len()).step_by(2).filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok()).collect();
-        return Ok(crate::bytes::decode(p, &bytes, elem).ok());
+        return Ok(match ty {
+            Some(Type::Record(_)) => crate::bytes::decode(p, &bytes, elem).ok(),
+            _ => Some(crate::image::wire_element(&bytes, elem, p)),
+        });
     }
     parse_value(text, elem, p).map(Some)
 }

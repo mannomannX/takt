@@ -151,6 +151,41 @@ pub fn mode(tick: u64) -> u32 {
     }
 }
 
+/// Ein Strom des Pruefgeraets, den `recorded.takt` nicht liest (8.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unread {
+    /// `edge_r/frames`, Records `Pair` in kanonischer Form.
+    Frames,
+    /// `edge_r/text`, `line<8>`.
+    Text,
+    /// `edge_r/raw`, `u8`.
+    Raw,
+}
+
+/// Das `i`-te Element eines solchen Stroms in Tick `tick`: Bytes, eigener
+/// Zeitstempel und eigene Folgenummer, ohne Angabe die des Rahmens.
+pub fn unread(stream: Unread, tick: u64, i: usize) -> Option<(&'static [u8], Option<i64>, Option<i64>)> {
+    use Unread::{Frames, Raw, Text};
+    let all: &[(&[u8], Option<i64>, Option<i64>)] = match (stream, tick) {
+        (Frames, 0) => &[(&[1, 2], None, None)],
+        (Frames, 2) => &[(&[3, 4], None, None), (&[5, 6], Some(25_000_000), None)],
+        // Ein Byte zu viel fuer `Pair`: aufgezeichnet, wie geliefert.
+        (Frames, 3) => &[(&[7, 8, 9], None, None)],
+        (Text, 1) => &[(b"hi", None, None)],
+        (Text, 4) => &[(b"a\tb", None, None)],
+        // Zu lang fuer `line<8>`, dann kein UTF-8: Die Drahtform traegt beides.
+        (Text, 5) => &[(b"123456789", None, None)],
+        (Text, 6) => &[(&[0xff], None, None)],
+        (Raw, 0) => &[(&[65], None, None)],
+        // Eine Luecke in `seq`.
+        (Raw, 3) => &[(&[66], None, Some(7))],
+        // Zwei Bytes sind kein `u8`.
+        (Raw, 4) => &[(&[1, 2], None, None)],
+        _ => &[],
+    };
+    all.get(i).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
