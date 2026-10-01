@@ -92,7 +92,7 @@ fn a_deep_sleep_ends_after_its_duration() {
     let count = board.word_over_jtag(&elf, |n| n.contains("RESET_COUNT")).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(count, 0, "ein Tiefschlaf ist ein geordnetes Ende (12.7)");
     let heard = board.listen(Duration::from_secs(3)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(heard.contains("out woke 1"),"die Konsole schweigt nach dem Wecken (FB-311):\n{heard}");
+    assert!(heard.contains("out woke 1"), "die Konsole schweigt nach dem Wecken (FB-311):\n{heard}");
 }
 
 /// **`reboot = RESTART` startet den Chip neu, und der neue Lauf weiss es**

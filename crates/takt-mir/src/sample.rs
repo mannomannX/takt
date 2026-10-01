@@ -483,6 +483,7 @@ pub fn full_program() -> Program {
             f64_fma: 1,
             f32_sqrt: 1,
             f64_sqrt: 2,
+            call_hook: 3,
         }),
         stack: Some(16),
         origin: Some(GenericOrigin {

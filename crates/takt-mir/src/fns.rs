@@ -44,6 +44,9 @@ pub struct CostVec {
     pub f32_sqrt: u64,
     /// Davon Wurzeln in `f64`.
     pub f64_sqrt: u64,
+    /// Davon Aufrufe eines Hooks der Runtime: Beobachtungen, Fault,
+    /// Abbruch eines Jobs (5.3, 5.6).
+    pub call_hook: u64,
 }
 
 impl std::ops::Add for CostVec {
@@ -74,6 +77,7 @@ impl CostVec {
         f64_fma: 0,
         f32_sqrt: 0,
         f64_sqrt: 0,
+        call_hook: 0,
     };
 
     /// `f` komponentenweise ueber beide Vektoren.
@@ -94,6 +98,7 @@ impl CostVec {
             f64_fma: f(self.f64_fma, o.f64_fma),
             f32_sqrt: f(self.f32_sqrt, o.f32_sqrt),
             f64_sqrt: f(self.f64_sqrt, o.f64_sqrt),
+            call_hook: f(self.call_hook, o.call_hook),
         }
     }
 
@@ -122,6 +127,7 @@ impl CostVec {
             (Heavy::Fma, CostClass::F64) => Some(&mut self.f64_fma),
             (Heavy::Sqrt, CostClass::F32) => Some(&mut self.f32_sqrt),
             (Heavy::Sqrt, CostClass::F64) => Some(&mut self.f64_sqrt),
+            (Heavy::Hook, CostClass::Call) => Some(&mut self.call_hook),
             _ => None,
         }
     }
@@ -204,28 +210,34 @@ pub enum Heavy {
     Fma,
     /// Die Quadratwurzel, korrekt gerundet (4.2).
     Sqrt,
+    /// Ein Aufruf in die Runtime, die ihn beobachtet: Alert, `verify`,
+    /// Messung, `log`, Fault, Abbruch eines Jobs. Was sie dort tut, haengt
+    /// an der Runtime, nicht am Programm (FB-295).
+    Hook,
 }
 
 impl Heavy {
     /// Alle Arten.
-    pub const ALL: [Heavy; 3] = [Heavy::Div, Heavy::Fma, Heavy::Sqrt];
+    pub const ALL: [Heavy; 4] = [Heavy::Div, Heavy::Fma, Heavy::Sqrt, Heavy::Hook];
 
     /// Gibt es die Art in der Klasse? Division in allen vier Zahlklassen,
-    /// `fma` und `sqrt` nur im Fliesskomma.
+    /// `fma` und `sqrt` nur im Fliesskomma, der Hook nur unter den Aufrufen.
     pub fn exists_in(self, c: CostClass) -> bool {
         match self {
             Heavy::Div => matches!(c, CostClass::I32 | CostClass::I64 | CostClass::F32 | CostClass::F64),
             Heavy::Fma | Heavy::Sqrt => matches!(c, CostClass::F32 | CostClass::F64),
+            Heavy::Hook => c == CostClass::Call,
         }
     }
 
     /// Die Endung ihres Schluessels in der Hardware-Konfiguration
-    /// (`i32_div`, `f32_fma`, `f64_sqrt`).
+    /// (`i32_div`, `f32_fma`, `f64_sqrt`, `call_hook`).
     pub fn suffix(self) -> &'static str {
         match self {
             Heavy::Div => "div",
             Heavy::Fma => "fma",
             Heavy::Sqrt => "sqrt",
+            Heavy::Hook => "hook",
         }
     }
 }

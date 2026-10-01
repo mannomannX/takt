@@ -104,7 +104,7 @@ einem Versionssprung eingetragen.
 
 ```
 magic             8 Bytes  "TAKT-MIR"
-format_version    u16 LE   (12)
+format_version    u16 LE   (13)
 edition           u32 LE   (2.5; auch in Config.edition)
 compiler_version  Varint-Länge + UTF-8
 strings           Varint-Anzahl, je String Varint-Länge + UTF-8
@@ -123,7 +123,9 @@ nicht kannten), 10 (`Program.sources`, Feld 20, `metarep`: je Quelldatei ihre Nu
 Byte-Versätze ihrer Zeilenanfänge, für `last_fault.line`, 5.3; fehlt es, ist die Zeile 0), 11 (`Machine.fault_is_fail`, Feld 25, `opt`: der Wert eines
 Szenarios, 13.5; fehlt es, gilt der aus `system:`), 12 (`Pattern.Text` ohne Feld 2 `dfa`:
 den Automaten baut der Codegen je Handler-Block aus den Bausteinen, 11.2, FB-282; ein Leser
-überspringt das Feld in älteren Dateien). Ein Leser mit kleinerer
+überspringt das Feld in älteren Dateien), 13 (`CostVec.call_hook`, Feld 16, `dflt`: die Aufrufe
+eines Hooks der Runtime unter `call`, FB-295; fehlt es, gilt null — so rechneten die Dateien, die
+es nicht kannten). Ein Leser mit kleinerer
 `format_version` als die Datei lehnt sie ab (`UnsupportedVersion`);
 alles andere liest er, Unbekanntes überspringend. Je Version liegt die Datei, die ihr Compiler schrieb, in `crates/takt-sema/tests/mir-golden/` (ab Version 2; Version 1 hatte keinen Übersetzer), und `mir_versions.rs` verlangt, dass der heutige Leser sie annimmt und der Interpreter sie wie das frisch übersetzte Programm ausführt; ein Versionssprung legt seine Datei dazu. Der Kopf ist ohne Stringtabelle lesbar
 (`read_header`), damit Werkzeuge Edition und Compiler-Version ohne Vollparse zeigen.

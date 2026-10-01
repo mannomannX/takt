@@ -3,14 +3,14 @@
 //! `takt bench` misst die Reserve fuer Runtime, Treiber und ISRs so, wie
 //! 13.8 es vorschreibt: den freien Stack mit einem Muster fuellen, das
 //! Programm laufen lassen, danach von unten suchen, bis wohin das Muster
-//! ueberschrieben ist. Die Grenzen setzt `cortex-m-rt`: `_stack_start` ist
-//! das obere Ende, `_stack_end` das untere.
+//! ueberschrieben ist. Das obere Ende setzt `cortex-m-rt` (`_stack_start`),
+//! das untere liegt ueber dem Waechter der MPU (`mpu::stack_floor`): Dort
+//! schreibt und liest niemand, auch das Painting nicht (FB-353).
 
 use core::ptr::{read_volatile, write_volatile};
 
 unsafe extern "C" {
     static _stack_start: u32;
-    static _stack_end: u32;
 }
 
 /// Das Muster: kein plausibler Nutzwert, weder null noch `0xFFFF_FFFF`.
@@ -21,7 +21,7 @@ const PATTERN: u32 = 0xC5C5_C5C5;
 const MARGIN: usize = 256;
 
 fn bounds() -> (usize, usize) {
-    (&raw const _stack_end as usize, &raw const _stack_start as usize)
+    (crate::mpu::stack_floor() as usize, &raw const _stack_start as usize)
 }
 
 /// Fuellt den Stack vom unteren Ende bis kurz unter den Stackzeiger.

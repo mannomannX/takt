@@ -27,7 +27,7 @@
 //! ```text
 //! # takt-hw 9
 //! [target.thumbv7em]
-//! cost_model = 1     # die Version des Kostenmodells der Gewichte
+//! cost_model = 2     # die Version des Kostenmodells der Gewichte
 //! core_hz = 84000000
 //! i32 = 11900        # Pikosekunden je Operation
 //! f64 = 1190000
@@ -85,8 +85,9 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// Chip aus dem Tiefschlaf weckt (12.7). 9: `tick_granular`, ob ein Output
 /// nur zu Tickbeginn geschrieben wird (7.5, 13.8). 10: die uebrigen Felder
 /// aus 8.10 — `calibration`, `max_rate_hz` und `framing` am Kanal,
-/// `profile` (Herkunft) am Geraet.
-pub const FORMAT_VERSION: u32 = 10;
+/// `profile` (Herkunft) am Geraet. 11: `call_hook`, das Gewicht eines
+/// Aufrufs in die Runtime, die ihn beobachtet (FB-295).
+pub const FORMAT_VERSION: u32 = 11;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -109,7 +110,7 @@ pub struct CTarget {
     ps: [u64; 7],
     /// Pikosekunden je Operation eigenen Gewichts, nach [`Heavy::ALL`] und
     /// [`CostClass::ALL`]; null heisst nicht gemessen.
-    heavy_ps: [[u64; 7]; 3],
+    heavy_ps: [[u64; 7]; Heavy::ALL.len()],
 }
 
 impl CTarget {

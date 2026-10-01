@@ -51,8 +51,9 @@ use crate::types::{Const, FloatWidth, HandleKind, RangeOrigin, Type};
 /// ([`crate::hardware::Target::fits_cost_model`]).
 ///
 /// 1: Division, `fma` und `sqrt` mit eigenem Gewicht (FB-298), die
-/// Endlichkeitspruefung als zwei `i32`-Operationen (FB-299).
-pub const MODEL_VERSION: u32 = 1;
+/// Endlichkeitspruefung als zwei `i32`-Operationen (FB-299). 2: Aufrufe der
+/// Runtime als Hook mit eigenem Gewicht (FB-295).
+pub const MODEL_VERSION: u32 = 2;
 
 /// Die Eins aus 9.4.3 (`check`, `->`, `for`, `at`, `every`, ein Waechter,
 /// ein Wechsel): ein Vergleich und ein Sprung.
@@ -71,8 +72,10 @@ const TIMER: CostVec = CostVec { i64: 1, mem: 1, ..CostVec::ZERO };
 /// Funktion (FB-224): der Aufruf und die Auswertung seines Ergebnisses.
 const BLOCK_CALL: CostVec = CostVec { call: 1, i32: 1, ..CostVec::ZERO };
 
-/// Ein Aufruf der Runtime: der Fault-Hook, der Abbruch eines Jobs (5.3).
-const RUNTIME_CALL: CostVec = CostVec { call: 1, ..CostVec::ZERO };
+/// Ein Aufruf der Runtime: der Fault-Hook, der Abbruch eines Jobs (5.3),
+/// eine Beobachtung (5.6). Er zaehlt unter den Aufrufen und mit dem
+/// eigenen Gewicht des Hooks, das die Runtime bestimmt (FB-295).
+const RUNTIME_CALL: CostVec = CostVec { call: 1, call_hook: 1, ..CostVec::ZERO };
 
 /// Je Durchlauf einer Schleife: weiterzaehlen und vergleichen. 9.4.3
 /// schreibt `1 + n·N(s)`; ohne diesen Anteil laege eine enge Schleife um
@@ -1044,11 +1047,10 @@ fn stmt_cost(s: &Stmt, ctx: &Ctx<'_>) -> CostVec {
 /// Eine Beobachtung ist ein Aufruf der Runtime mit dem Index ihres Texts
 /// (`takt_llvm::stmt::observe`); formatiert wird am Host.
 fn observe_cost(o: &Observe, ctx: &Ctx<'_>) -> CostVec {
-    let call = CostVec { call: 1, ..CostVec::ZERO };
     match o {
-        Observe::Alert { cond, .. } | Observe::Verify { cond, .. } => expr_cost(cond, ctx) + call,
-        Observe::Measure { value, .. } => expr_cost(value, ctx) + CostVec::op(CostClass::F64) + call,
-        Observe::Log(_) | Observe::Verdict { .. } => call,
+        Observe::Alert { cond, .. } | Observe::Verify { cond, .. } => expr_cost(cond, ctx) + RUNTIME_CALL,
+        Observe::Measure { value, .. } => expr_cost(value, ctx) + CostVec::op(CostClass::F64) + RUNTIME_CALL,
+        Observe::Log(_) | Observe::Verdict { .. } => RUNTIME_CALL,
     }
 }
 

@@ -40,21 +40,22 @@ use crate::board::{Board, Options};
 pub enum Probe {
     /// Gewoehnliche Operationen einer Klasse.
     Ops(CostClass),
-    /// Operationen eigenen Gewichts einer Zahlklasse (7.2): Division,
-    /// `fma`, `sqrt`.
+    /// Operationen eigenen Gewichts (7.2): Division, `fma`, `sqrt` in
+    /// einer Zahlklasse, der Hook der Runtime unter den Aufrufen.
     Heavy(Heavy, CostClass),
 }
 
 impl Probe {
     /// Die Reihenfolge der Kalibrierung: Jede Probe braucht nur Klassen, die
     /// vor ihr stehen.
-    pub const ORDER: [Probe; 14] = [
+    pub const ORDER: [Probe; 15] = [
         Probe::Ops(CostClass::I32),
         Probe::Ops(CostClass::I64),
         Probe::Ops(CostClass::F32),
         Probe::Ops(CostClass::F64),
         Probe::Ops(CostClass::Mem),
         Probe::Ops(CostClass::Call),
+        Probe::Heavy(Heavy::Hook, CostClass::Call),
         Probe::Heavy(Heavy::Div, CostClass::I32),
         Probe::Heavy(Heavy::Div, CostClass::I64),
         Probe::Heavy(Heavy::Div, CostClass::F32),
@@ -188,8 +189,19 @@ pub fn class_kernel(probe: Probe, pairs: u32) -> String {
         Probe::Heavy(Heavy::Sqrt, _) => {
             ("float", "            a = sqrt(b + 1.25)\n            b = sqrt(a + 2.5)\n", "", ("1.0", "3.0"))
         }
+        // Jeder Alert kippt in jedem Tick: Die Runtime sieht eine Flanke und
+        // meldet sie, der teuerste Weg des Hooks (5.6).
+        Probe::Heavy(Heavy::Hook, _) => (
+            "int in 0..65535",
+            "            alert n == 1, \"bench\"\n            alert n == 0, \"bench\"\n",
+            "    var n : int in 0..1 = 0\n",
+            ("1", "7"),
+        ),
     };
     let mut s = kernel_head(&format!("{} ({pairs} Paare)", probe.name()), float, decl, "", prelude, init);
+    if probe == Probe::Heavy(Heavy::Hook, CostClass::Call) {
+        s.push_str("            n = 1 - n\n");
+    }
     for _ in 0..pairs {
         s.push_str(pair);
     }

@@ -5,7 +5,7 @@
 # die Kalibrierung eines echten C6 ist ein M7-Punkt.
 
 [target.probe]
-cost_model = 1
+cost_model = 2
 core_hz = 84000000
 i32 = 11905
 i64 = 35715

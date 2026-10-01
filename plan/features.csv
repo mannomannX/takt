@@ -131,7 +131,7 @@ SEM-13.4-Anforderungen,Semantik/Abschnitt,13.4,"Anforderungsreferenzen im Report
 SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4 (Codegen),fertig,
 SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,fertig,
 SEM-13.7,Semantik/Abschnitt,13.7,Kampagnen (v1.1),v1.1,M6,fertig,
-SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M10 (aus M5),teilweise,"Kalibrierung und Referenzkerne auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 zum selben Modell neu gemessen (Lauf 6, Streckung 1,44 durch den Fault-Hook); offen: Hooks der Runtime (FB-295), Natives am Einstieg (FB-293); FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
+SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M10 (aus M5),teilweise,"Kalibrierung und Referenzkerne auf beiden Boards zum Kostenmodell 2 (2026-10-01, `takt bench` fertig, M10 Schritt 10); Natives am Einstieg gemessen (FB-293); offen: FB-285 (Randkern ohne `std`, native Treiberschnittstelle, danach `driver-test`) und die Rest-Natives (Schritt 21)"
 SEM-13.9,Semantik/Abschnitt,13.9,Migration aus C: `takt import-c` und Orakel-Modus (v1.1),v1.1,M7 (Werkzeuge),offen,
 SEM-14.1,Semantik/Abschnitt,14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),fertig,
 SEM-14.2,Semantik/Abschnitt,14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,M4 (Codegen),fertig,
@@ -760,7 +760,7 @@ PAR-13.3-Umgebungsannahmen_assumption,Absatz/Regel,13.3,Umgebungsannahmen (`assu
 PAR-13.3-Kanal_Attribute_gelten_automatisch_als_Annahmen,Absatz/Regel,13.3,Kanal-Attribute gelten automatisch als Annahmen,,M6 (v1.1),fertig,"Kanal-Ranges und `max_slew` als Annahmen (FB-259); `debounce`/`max_age` betreffen die Qualitaet, Inputs gelten als gueltig"
 PAR-13.3-Kompositionalität,Absatz/Regel,13.3,Kompositionalität,,M6 (v1.1),fertig,"`takt prove` je Maschine (`encode_machine`, `classify_compositional`; FB-259), Tests in `with_solver.rs`"
 PAR-13.5-Lauf_Verdikt,Absatz/Regel,13.5,Lauf-Verdikt,,M4 (Codegen),fertig,
-PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M10 (aus M5),teilweise,"auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 zum selben Modell neu gemessen (Lauf 6, Streckung 1,44 durch den Fault-Hook); offen: Hooks der Runtime (FB-295), Natives am Einstieg (FB-293)"
+PAR-13.8-takt_bench,Absatz/Regel,13.8,`takt bench`,,M10 (aus M5),fertig,"kalibriert 2026-10-01 zum Kostenmodell 2 auf beiden Boards (`corpus-try/hw/*.hw` und Berichte): der Hook der Runtime mit eigenem Gewicht (`call_hook`, FB-295; F401 2,32 us, C6 0,59 us), Natives am Einstieg (FB-293); Streckung C6 1/1, F401 1,108 (Ausrichtung im Flash ohne Cache)"
 PAR-13.9-Klassifikation,Absatz/Regel,13.9,Klassifikation,,M7 (Werkzeuge),offen,
 PAR-13.9-Abbildungsregeln,Absatz/Regel,13.9,Abbildungsregeln,,M7 (Werkzeuge),offen,
 PAR-13.9-Grundregel_des_Importers,Absatz/Regel,13.9,Grundregel des Importers,,M7 (Werkzeuge),offen,
@@ -896,7 +896,7 @@ CLI-size,Werkzeug,11.1,takt size,,M3 (Gate),fertig,"`--baseline DATEI` vergleich
 CLI-cost,Werkzeug,11.1,takt cost,,M3 (Gate),fertig,Operationsvektoren je Maschine und Zustand (9.4.3)
 CLI-latency,Werkzeug,11.1,takt latency,,M3 (Gate),fertig,
 CLI-graph,Werkzeug,11.1,takt graph,,M4 (Codegen),fertig,
-CLI-bench,Werkzeug,11.1,takt bench,,M10 (aus M5),teilweise,"auf dem C6 kalibriert (2026-09-26): `corpus-try/hw/esp32c6.hw` und Bericht, Streckung 1,009, Kostenmodell 1; der F401 zum selben Modell neu gemessen (Lauf 6, Streckung 1,44 durch den Fault-Hook); offen: Hooks der Runtime (FB-295), Natives am Einstieg (FB-293)"
+CLI-bench,Werkzeug,11.1,takt bench,,M10 (aus M5),fertig,"kalibriert 2026-10-01 zum Kostenmodell 2 auf beiden Boards (`corpus-try/hw/*.hw` und Berichte): der Hook der Runtime mit eigenem Gewicht (`call_hook`, FB-295; F401 2,32 us, C6 0,59 us), Natives am Einstieg (FB-293); Streckung C6 1/1, F401 1,108 (Ausrichtung im Flash ohne Cache)"
 CLI-tune,Werkzeug,11.1,takt tune,,M6 (v1.1),fertig,
 CLI-migrate,Werkzeug,11.1,takt migrate,,M7 (Werkzeuge),offen,
 CLI-import-c,Werkzeug,11.1,takt import-c,,M7 (Werkzeuge),offen,
@@ -1108,4 +1108,4 @@ system-Eintrag-overrun,system-Eintrag,2.3,"system_item: ""overrun""",,M0 (Parser
 DEC-Blockierendes_NVM,Entscheidung,16,"Blockierendes NVM → deklarierte Kosten (8.10), Prüfung 32, Schreiben im Schlaffenster, `overrun = alert`; asynchroner Treiber als Option mit Residenznachweis",,Doku/Rationale,rationale,
 FMT-Trace-Zeitzeile,Versioniertes Format,11.3,"Trace-Metazeile `time` (7.3, grammar/trace.md T1)",,M5 (Embedded),fertig,"ausserhalb von T5, T6 und jedem Vergleich; nur native Runtimes schreiben sie"
 RT-Job_Kontext,Umsetzung,4.5,"Job-Kontext auf der MCU: eigener Stack mit Wächter, vom Tick unterbrochen (`baremetal`), als Task (`rtos`); Warteschlange K_j",,M10,fertig,"M10 Schritt 7: `JobContext` auf beiden Boards (F401 PendSV, C6 direkt gebundener Software-Interrupt), Slots und Auftrag im MCU-Rahmen, Fertigstellung nach logischer Ausfuehrungszeit; Korpus 40 auf beiden Boards, `a_long_job_runs_between_the_ticks`. Waechter des Job-Stacks (Schritt 18), Job-Aufgabe unter `rtos` (Schritt 16, Korpus 40 unter RTIC)"
-FMT-HW-Konfiguration_v5,Versioniertes Format,11.3,"Hardware-Konfiguration Version 5: Kalibrierung (`c_target`, `t_io`, `tick_jitter`), Messwerte, Stack-Reserven, alle Felder aus 8.10; Leser für Version 4",,M10,teilweise,"Version 5 mit Divisionsgewichten, `tick_jitter_ns`, `guard_ns`; Messwerte ueber `with_values`, Kommentare bleiben (2026-09-25). Offen: jedes Feld aus 8.10 (M10 Schritt 12)"
+FMT-HW-Konfiguration_v5,Versioniertes Format,11.3,"Hardware-Konfiguration Version 5: Kalibrierung (`c_target`, `t_io`, `tick_jitter`), Messwerte, Stack-Reserven, alle Felder aus 8.10; Leser für Version 4",,M10,fertig,"Version 11: jedes Feld aus 8.10 bis auf die Topologie (v2, M10 Schritt 12), dazu `call_hook` (FB-295); Messwerte ueber `with_values`, Kommentare bleiben"

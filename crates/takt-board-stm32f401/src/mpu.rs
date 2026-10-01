@@ -73,6 +73,13 @@ pub fn guard_address() -> u32 {
     guard().base
 }
 
+/// Das untere Ende des nutzbaren Hauptstacks: ueber dem Waechter. Darunter
+/// darf auch das Stack-Painting nicht schreiben und nicht lesen (FB-353).
+pub fn stack_floor() -> u32 {
+    let g = guard();
+    g.base + g.size
+}
+
 /// Wo der Waechter unter dem Job-Stack liegt, falls es einen gibt.
 pub fn job_guard_address() -> Option<u32> {
     job_guard().map(|g| g.base)

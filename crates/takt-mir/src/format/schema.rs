@@ -216,7 +216,7 @@ codec_enum!(StmtKind {
 codec_struct!(CostVec {
     1 one i32, 2 one i64, 3 one f32, 4 one f64, 5 one mem, 6 one call, 7 one native,
     8 dflt i32_div, 9 dflt i64_div, 10 dflt f32_div, 11 dflt f64_div,
-    12 dflt f32_fma, 13 dflt f64_fma, 14 dflt f32_sqrt, 15 dflt f64_sqrt,
+    12 dflt f32_fma, 13 dflt f64_fma, 14 dflt f32_sqrt, 15 dflt f64_sqrt, 16 dflt call_hook,
 });
 codec_enum!(GenericArgVal { 0 Unit(1 one u), 1 Type(1 one t), 2 Const(1 one c) });
 codec_struct!(GenericOrigin { 1 one template, 2 rep args });
