@@ -25,11 +25,13 @@ pub struct JobRun {
     pub done: bool,
     /// Tick der Fertigstellung, solange der Job laeuft.
     pub due: Option<u64>,
-    /// `Ok(wert)` nach der Fertigstellung, `Err(PENDING)` davor,
-    /// `Err(CANCELLED)` nach einem Fault-Uebergang (5.3).
+    /// `Ok(wert)` nach der Fertigstellung, `Err(FAILED)`, wenn die Native
+    /// kein Ergebnis hat, `Err(PENDING)` davor, `Err(CANCELLED)` nach einem
+    /// Fault-Uebergang (5.3).
     pub result: Value,
-    /// Das schon berechnete Ergebnis, bis der Job endet.
-    pub pending: Option<Value>,
+    /// Das schon berechnete Ergebnis, bis der Job endet; `Some(None)` fuer
+    /// einen Lauf, der mit `Err(FAILED)` endet.
+    pub pending: Option<Option<Value>>,
 }
 
 impl JobRun {
@@ -43,8 +45,9 @@ impl JobRun {
         JobRun { done: false, due: None, result: JobRun::err(2), pending: None }
     }
 
-    /// `job v = f(args)`: ein neuer Lauf ersetzt einen laufenden.
-    pub fn start(&mut self, value: Value, due: u64) {
+    /// `job v = f(args)`: ein neuer Lauf ersetzt einen laufenden. `None`
+    /// endet mit `Err(FAILED)`.
+    pub fn start(&mut self, value: Option<Value>, due: u64) {
         self.done = false;
         self.due = Some(due);
         self.result = JobRun::err(2);
@@ -57,7 +60,11 @@ impl JobRun {
             Some(due) if tick >= due => {
                 self.due = None;
                 self.done = true;
-                self.result = Value::Result(Ok(Box::new(self.pending.take().unwrap_or(Value::Handle))));
+                self.result = match self.pending.take() {
+                    Some(Some(v)) => Value::Result(Ok(Box::new(v))),
+                    Some(None) => JobRun::err(1),
+                    None => Value::Result(Ok(Box::new(Value::Handle))),
+                };
                 true
             }
             _ => false,

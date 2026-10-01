@@ -881,3 +881,108 @@ t=31 runtime Hardware
         diffs.iter().take(8).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n")
     );
 }
+
+/// Ein Byteblock als Takt-Funktion aus einer Hexfolge.
+fn bytes_fn(name: &str, cap: usize, hex: &str) -> String {
+    let items: Vec<String> =
+        hex.as_bytes().chunks(2).map(|p| format!("0x{}", std::str::from_utf8(p).expect("ascii"))).collect();
+    format!(
+        "fn {name}() -> bytes<{cap}>:\n    var b : bytes<{cap}> = default\n    for x in [{}]:\n        b.push(x as u8)\n    return b\n\n",
+        items.join(", ")
+    )
+}
+
+/// Die Eingaben der ersten Zeile einer Funktion aus den Krypto-Bloecken.
+fn crypto_line(fun: &str, nth: usize) -> Vec<String> {
+    let spec = include_str!("../../../grammar/takt-native.md");
+    let line = spec.lines().filter_map(|l| l.trim().strip_prefix(fun)?.split_once(':')).nth(nth).expect("Zeile");
+    line.0.split_whitespace().map(str::to_string).collect()
+}
+
+/// **Die Natives aus M10 Schritt 21 im erzeugten Code** (4.5, Satz
+/// 9.4.4): `fft256` als Funktion ueber `[256] float` (Feld als kanonischer
+/// Puffer), `rsa3072_verify` als Job, `aes_gcm_decrypt` mit passendem und
+/// mit gekipptem Tag (`Err(FAILED)`). Interpreter und Wirtsrahmen rufen
+/// dieselbe Implementierung (FB-293); verglichen wird, was dazwischen liegt.
+#[test]
+fn the_new_natives_agree_with_the_interpreter() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let (rsa, good, bad) =
+        (crypto_line("rsa3072_verify", 0), crypto_line("aes_gcm_decrypt", 1), crypto_line("aes_gcm_decrypt", 4));
+    let src = format!(
+        "system:\n    language = 1\n    tick = 1 ms\n
+native fn fft256(x: [256] float) -> [256] float with cost = 8400, stack = 9000, total
+native job rsa3072_verify(key: bytes<384>, digest: bytes<32>, sig: bytes<384>) -> bool with cost = 900, stack = 10464, duration = 5 ms, total
+native job aes_gcm_decrypt(key: bytes<32>, nonce: bytes<12>, aad: bytes<16>, data: bytes<64>, tag: bytes<16>) -> bytes<64> with cost = 300, stack = 2752, duration = 3 ms, total
+
+output spectrum : float      @ sim(\"o/spectrum\")
+output verified : bool       @ sim(\"o/verified\")
+output plain    : int in 0..64 @ sim(\"o/plain\")
+output first    : u8         @ sim(\"o/first\")
+output failed   : bool       @ sim(\"o/failed\")
+
+{}{}{}{}{}{}{}{}{}
+machine m:
+    var x : [256] float = default
+    var y : [256] float = default
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(256):
+                x[i] = ((i * 37) % 101) as float / 50.0 - 1.0
+            y = fft256(x)
+            spectrum = y[2] + y[7] * 0.5 - y[255]
+        sequence:
+            job r = rsa3072_verify(key = key(), digest = digest(), sig = sig())
+            until r.done timeout 1 s -> STUCK
+            verified = r.result.or(false)
+            job a = aes_gcm_decrypt(key = k(), nonce = nonce(), aad = aad(), data = data(), tag = good_tag())
+            until a.done timeout 1 s -> STUCK
+            plain = a.result.or(default).len
+            first = a.result.or(default)[0]
+            job a = aes_gcm_decrypt(key = k(), nonce = nonce(), aad = aad(), data = data(), tag = bad_tag())
+            until a.done timeout 1 s -> STUCK
+            failed = a.result.err.or(PENDING) == FAILED
+            -> DONE
+    state DONE:
+        when false: -> RUN
+    state STUCK:
+        when false: -> RUN
+",
+        bytes_fn("key", 384, &rsa[0]),
+        bytes_fn("digest", 32, &rsa[1]),
+        bytes_fn("sig", 384, &rsa[2]),
+        bytes_fn("k", 32, &good[0]),
+        bytes_fn("nonce", 12, &good[1]),
+        bytes_fn("aad", 16, &good[2]),
+        bytes_fn("data", 64, &good[3]),
+        bytes_fn("good_tag", 16, &good[4]),
+        bytes_fn("bad_tag", 16, &bad[4]),
+    );
+    let options = takt_sema::Options {
+        policy: takt_diag::Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
+    let out = takt_sema::compile(&src, &options);
+    let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+    let p = out.program.expect("Programm");
+    let interpreted = run_interpreted(&p);
+    for want in ["out verified true", "out plain 57", "out failed true"] {
+        assert!(interpreted.contains(want), "`{want}` fehlt im Interpreter:\n{interpreted}");
+    }
+    let native = common::run_native_all(&clang, &p, "natives_21", TICKS).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen:\n{}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}",
+        diffs.len(),
+        diffs.iter().take(8).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n")
+    );
+}

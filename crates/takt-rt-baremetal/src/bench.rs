@@ -121,6 +121,10 @@ pub fn write_native<P: Port, const N: usize>(
     t.write("native ");
     t.write_u64(index as u64);
     t.write(" ");
+    // Ein Lauf ohne Ergebnis (`aes_gcm_decrypt` mit falschem Tag).
+    if result.is_empty() {
+        t.write("-");
+    }
     for b in result {
         t.write_byte(HEX[usize::from(b >> 4)]);
         t.write_byte(HEX[usize::from(b & 15)]);

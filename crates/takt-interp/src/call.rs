@@ -176,6 +176,16 @@ impl Ctx<'_, '_> {
                 Err(_) => bug("`ecdsa_p256_verify`: takt-crypto ohne Feature `ecdsa` gebaut (plan/m6.md 2.4)"),
             };
         }
+        let block = |i: usize| inputs.get(i).copied().unwrap_or(&[]);
+        if f == Native::Rsa3072Verify {
+            return match takt_crypto::rsa3072_verify(block(0), block(1), block(2)) {
+                Ok(b) => Ok(Value::Bool(b)),
+                Err(_) => bug("`rsa3072_verify`: takt-crypto ohne Feature `rsa` gebaut"),
+            };
+        }
+        if f == Native::AesGcmDecrypt {
+            return bug("`aes_gcm_decrypt` ist ein Job (4.5); Pruefung 31 laesst ihn nicht als Ausdruck zu");
+        }
         let ctx_value = |ctx: &takt_native::sha256::Ctx| {
             let mut buf = [0u8; takt_native::sha256::CTX_MAX_BYTES];
             let len = ctx.to_bytes(&mut buf).map_err(|_| Trap::Bug("Sha256Ctx: Puffer zu klein".into()))?;
@@ -203,8 +213,40 @@ impl Ctx<'_, '_> {
                     _ => Value::UInt(raw),
                 }),
                 Some(Output::Digest(d)) => Ok(Value::Bytes(d.to_vec())),
+                // `fft256`: die 256 Werte in kanonischer Form (5.9).
+                Some(Output::Floats { bytes, len }) => crate::bytes::decode(p, &bytes[..len], n.ret)
+                    .map_err(|e| Trap::Bug(format!("`{}`: Ergebnis ohne Byteform ({e:?})", n.name))),
                 None => bug(format!("`{}`: {} Argumente passen nicht zur Signatur", n.name, inputs.len())),
             },
+        }
+    }
+
+    /// Das Ergebnis eines Jobs (4.5): wie [`Self::call_native`], dazu der
+    /// Lauf ohne Ergebnis. `aes_gcm_decrypt` mit einem Tag, der nicht
+    /// passt, liefert `None`, und der Job endet mit `Err(FAILED)`.
+    pub fn call_job_native(&mut self, id: NativeId, args: Vec<Value>, span: Span) -> EvalResult<Option<Value>> {
+        let p = self.loaded.program;
+        if p.natives[id.index()].name != takt_native::Native::AesGcmDecrypt.name() {
+            return self.call_native(id, args, span).map(Some);
+        }
+        fn bytes(v: &Value) -> EvalResult<&[u8]> {
+            match v {
+                Value::Bytes(b) => Ok(b.as_slice()),
+                other => bug(format!("`aes_gcm_decrypt`: Argument {} statt `bytes<N>`", other.kind_name())),
+            }
+        }
+        let [key, nonce, aad, data, tag] = args.as_slice() else {
+            return bug(format!("`aes_gcm_decrypt`: {} statt fuenf Argumente", args.len()));
+        };
+        let data = bytes(data)?;
+        let mut out = vec![0u8; data.len()];
+        match takt_crypto::aes_gcm_decrypt(bytes(key)?, bytes(nonce)?, bytes(aad)?, data, bytes(tag)?, &mut out) {
+            Ok(Some(len)) => {
+                out.truncate(len);
+                Ok(Some(Value::Bytes(out)))
+            }
+            Ok(None) => Ok(None),
+            Err(_) => bug("`aes_gcm_decrypt`: takt-crypto ohne Feature `aes-gcm` gebaut"),
         }
     }
 

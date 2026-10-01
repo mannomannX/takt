@@ -178,7 +178,7 @@ pub trait Outer {
     }
 
     /// `job v = f(args)`: der Lauf beginnt, `value` gilt ab Tick `due`.
-    fn job_start(&mut self, _handle: VarId, _value: Value, _due: u64) -> EvalResult<()> {
+    fn job_start(&mut self, _handle: VarId, _value: Option<Value>, _due: u64) -> EvalResult<()> {
         bug("Job ausserhalb einer Maschine")
     }
 

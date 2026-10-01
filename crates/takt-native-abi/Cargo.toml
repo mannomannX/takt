@@ -19,8 +19,10 @@ rust-version = "1.86"
 # Der Panic-Handler fuer die statische Bibliothek des Wirts; ein Board
 # bringt seinen eigenen mit.
 host = []
-# `ecdsa_p256_verify` (4.5) mit seiner Abhaengigkeit `p256`.
+# Die Jobs aus `takt-crypto` (4.5), jeder mit seiner Abhaengigkeit.
 ecdsa = ["dep:takt-crypto", "takt-crypto/ecdsa"]
+rsa = ["dep:takt-crypto", "takt-crypto/rsa"]
+aes-gcm = ["dep:takt-crypto", "takt-crypto/aes-gcm"]
 
 [dependencies]
 takt-native = { path = "../takt-native" }

@@ -295,7 +295,7 @@ impl Ctx<'_, '_> {
                 // 4.5: Die Argumente werden kopiert, das Ergebnis der reinen
                 // Funktion steht fest; das Modell liefert es nach `duration`.
                 let args = args.iter().map(|a| self.eval(a)).collect::<EvalResult<Vec<_>>>()?;
-                let value = self.call_native(*native, args, span)?;
+                let value = self.call_job_native(*native, args, span)?;
                 let t0 = self.loaded.program.config.tick.max(1);
                 let d = self.loaded.program.natives[native.index()].duration.unwrap_or(0).max(0);
                 let ticks = d.saturating_add(t0 - 1) / t0;

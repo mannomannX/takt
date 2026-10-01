@@ -11,6 +11,7 @@ takt-diag = { path = "../takt-diag" }
 takt-interp = { path = "../takt-interp" }
 takt-llvm = { path = "../takt-llvm" }
 takt-native = { path = "../takt-native" }
+takt-crypto = { path = "../takt-crypto", features = ["ecdsa", "rsa", "aes-gcm"] }
 takt-mir = { path = "../takt-mir" }
 takt-sema = { path = "../takt-sema" }
 # Die Boards am Host (`board`): der Trace kommt ueber USB-Serial-JTAG

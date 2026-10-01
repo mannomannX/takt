@@ -98,7 +98,7 @@ const SIG: &str = "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3
 fn the_signature_job_verifies_through_takt_crypto() {
     for (sig, want) in [(SIG.to_string(), "true"), (SIG.replacen("a8", "a9", 1), "false")] {
         let body = format!(
-            "native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 2048, duration = 30 ms, total
+            "native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 5600, duration = 30 ms, total
 output ok : bool @ hw(\"o/ok\") with safe = false
 output done : bool @ hw(\"o/done\") with safe = false
 {}{}{}
@@ -134,7 +134,7 @@ machine m:
 
 #[test]
 fn the_signature_job_must_match_its_curated_signature() {
-    let e = errors("native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<16>, sig: bytes<64>) -> bool with cost = 300, stack = 2048, duration = 30 ms, total
+    let e = errors("native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<16>, sig: bytes<64>) -> bool with cost = 300, stack = 5600, duration = 30 ms, total
 ");
     assert!(e.contains("(bytes<N>, bytes<32>, bytes<N>) -> bool"), "{e}");
 }
@@ -186,10 +186,153 @@ fn the_manifest_names_takt_native_and_takt_crypto() {
         .expect("uebersetzt");
     let header = takt_interp::record::Header::of(&p, None, &[], 1).render();
     assert!(header.contains("#! tcb takt-native\n"), "{header}");
-    let p = compile("native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 2048, duration = 30 ms, total\n").expect("uebersetzt");
+    let p = compile("native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 5600, duration = 30 ms, total\n").expect("uebersetzt");
     let text = takt_interp::record::Header::of(&p, None, &[], 1).render();
     assert!(text.contains("#! tcb takt-crypto ecdsa_p256_verify: p256"), "{text}");
     let read = takt_interp::record::Header::parse(&text).expect("lesbar");
     assert_eq!(read.tcb.len(), 1);
     assert!(read.tcb[0].contains("p256 0.13 (RustCrypto)"), "{:?}", read.tcb);
+}
+
+/// Die Zeilen einer Funktion aus den Krypto-Bloecken von
+/// `grammar/takt-native.md`: Eingaben als Hex, Ergebnis.
+fn crypto_lines(fun: &str) -> Vec<(Vec<String>, String)> {
+    let spec = include_str!("../../../grammar/takt-native.md");
+    spec.lines()
+        .filter_map(|l| l.trim().strip_prefix(fun)?.split_once(':'))
+        .map(|(args, want)| (args.split_whitespace().map(str::to_string).collect(), want.trim().to_string()))
+        .collect()
+}
+
+/// `rsa3072_verify` als Job (4.5): RSASSA-PSS ueber `takt-crypto`, eine
+/// gueltige Signatur und eine mit gekipptem Bit.
+#[test]
+fn the_rsa_job_verifies_through_takt_crypto() {
+    let lines = crypto_lines("rsa3072_verify");
+    for (args, want) in [&lines[0], &lines[3]] {
+        let body = format!(
+            "native job rsa3072_verify(key: bytes<384>, digest: bytes<32>, sig: bytes<384>) -> bool with cost = 900, stack = 10464, duration = 50 ms, total
+output ok : bool @ hw(\"o/ok\") with safe = false
+output done : bool @ hw(\"o/done\") with safe = false
+{}{}{}
+machine m:
+    initial RUN
+    state RUN:
+        sequence:
+            job v = rsa3072_verify(key = key(), digest = digest(), sig = sig())
+            until v.done timeout 1 s -> STUCK
+            ok = v.result.or(false)
+            done = true
+            -> DONE
+    state DONE:
+        when false: -> RUN
+    state STUCK:
+        when false: -> RUN
+",
+            bytes_fn("key", 384, &args[0]),
+            bytes_fn("digest", 32, &args[1]),
+            bytes_fn("sig", 384, &args[2])
+        );
+        let p = compile(&body).expect("uebersetzt");
+        let t =
+            run(&p, &Trace::default(), &RunOptions { ticks: 60, ..Default::default() }).expect("Lauf").trace.render();
+        let ok = if want == "1" { "true" } else { "false" };
+        assert!(t.contains("out done true") && t.contains(&format!("out ok {ok}")), "{want}:\n{t}");
+    }
+}
+
+/// `aes_gcm_decrypt` als Job (4.5): der Klartext bei passendem Tag,
+/// `Err(FAILED)` bei gekipptem.
+#[test]
+fn the_aes_job_decrypts_or_fails() {
+    let lines = crypto_lines("aes_gcm_decrypt");
+    for (args, want) in [&lines[1], &lines[4]] {
+        let body = format!(
+            "native job aes_gcm_decrypt(key: bytes<32>, nonce: bytes<12>, aad: bytes<16>, data: bytes<64>, tag: bytes<16>) -> bytes<64> with cost = 300, stack = 2752, duration = 20 ms, total
+output n : int in 0..64 @ hw(\"o/n\") with safe = 0
+output failed : bool @ hw(\"o/failed\") with safe = false
+{}{}{}{}{}
+machine m:
+    initial RUN
+    state RUN:
+        sequence:
+            job v = aes_gcm_decrypt(key = key(), nonce = nonce(), aad = aad(), data = data(), tag = tag())
+            until v.done timeout 1 s -> STUCK
+            n = v.result.or(default).len
+            failed = v.result.err.or(PENDING) == FAILED
+            -> DONE
+    state DONE:
+        when false: -> RUN
+    state STUCK:
+        when false: -> RUN
+",
+            bytes_fn("key", 32, &args[0]),
+            bytes_fn("nonce", 12, &args[1]),
+            bytes_fn("aad", 16, &args[2]),
+            bytes_fn("data", 64, &args[3]),
+            bytes_fn("tag", 16, &args[4])
+        );
+        let p = compile(&body).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        let t =
+            run(&p, &Trace::default(), &RunOptions { ticks: 60, ..Default::default() }).expect("Lauf").trace.render();
+        if want == "none" {
+            assert!(t.contains("out failed true"), "Err(FAILED) erwartet:\n{t}");
+        } else {
+            assert!(t.contains(&format!("out n {}", want.len() / 2)), "Klartext erwartet:\n{t}");
+        }
+    }
+}
+
+/// Die Kryptographie ist ein Job (4.5), und das Ergebnis von
+/// `aes_gcm_decrypt` fasst den Klartext.
+#[test]
+fn crypto_natives_are_jobs_and_their_plaintext_fits() {
+    let e = errors(
+        "native fn rsa3072_verify(key: bytes<384>, digest: bytes<32>, sig: bytes<384>) -> bool with cost = 900, stack = 10464, total\n",
+    );
+    assert!(e.contains("`rsa3072_verify` ist ein Job"), "{e}");
+    let e = errors(
+        "native job aes_gcm_decrypt(key: bytes<32>, nonce: bytes<12>, aad: bytes<16>, data: bytes<64>, tag: bytes<16>) -> bytes<32> with cost = 300, stack = 2752, duration = 20 ms, total\n",
+    );
+    assert!(e.contains("fasst 32 Byte, `data` traegt bis zu 64"), "{e}");
+    let e = errors(
+        "native job aes_gcm_decrypt(key: bytes<32>, nonce: bytes<16>, aad: bytes<16>, data: bytes<64>, tag: bytes<16>) -> bytes<64> with cost = 300, stack = 2752, duration = 20 ms, total\n",
+    );
+    assert!(e.contains("bytes<12>"), "{e}");
+}
+
+/// `fft256` nimmt 256 Werte in der Breite des Programms (4.2, 4.5): Der
+/// Impuls hat das flache Spektrum, gepackt wie CMSIS-DSP.
+#[test]
+fn fft256_transforms_an_impulse() {
+    let e = errors("native fn fft256(x: [128] float) -> [128] float with cost = 8400, stack = 9000, total\n");
+    assert!(e.contains("([256] float) -> [256] float"), "{e}");
+    for system in ["", "    float = f32\n"] {
+        let src = format!(
+            "system:\n    language = 1\n    tick = 1 ms\n{system}
+native fn fft256(x: [256] float) -> [256] float with cost = 8400, stack = 9000, total
+output re1 : float @ hw(\"o/re1\") with safe = 0.0
+output nyq : float @ hw(\"o/nyq\") with safe = 0.0
+machine m:
+    var x : [256] float = default
+    var y : [256] float = default
+    initial RUN
+    state RUN:
+        loop:
+            x[0] = 1.0
+            y = fft256(x)
+            re1 = y[2]
+            nyq = y[1]
+"
+        );
+        let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+        let out = takt_sema::compile(&src, &options);
+        let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+        let t = run(&out.program.expect("Programm"), &Trace::default(), &RunOptions { ticks: 1, ..Default::default() })
+            .expect("Lauf")
+            .trace
+            .render();
+        assert!(t.contains("out re1 1") && t.contains("out nyq 1"), "{system}:\n{t}");
+    }
 }

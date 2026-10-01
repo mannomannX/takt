@@ -91,7 +91,7 @@ SEM-9.10,Semantik/Abschnitt,9.10,Persistenz,,M5 (Embedded),fertig,
 SEM-11.1,Semantik/Abschnitt,11.1,Komponenten (Rust-Workspace),,M10 (Audit),fertig,"11.1 nennt jedes Crate, geplante markiert; `the_components_of_11_1_are_the_workspace` haelt Liste und Kommandos gegen crates/ und `takt-cli` (M10 Schritt 24)"
 SEM-11.2,Semantik/Abschnitt,11.2,Lowering einer Maschine (Skizze),,M1-M4 (Lowering),fertig,
 SEM-11.3,Semantik/Abschnitt,11.3,Sim-Build vs. HW-Build,,M4 (Codegen),fertig,
-SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M10 (aus M6),teilweise,"`rsa3072_verify`, `aes_gcm_decrypt` (M10 Schritt 21) und `fft256` (FB-345); alles Uebrige belegt der Zaehltest `every_entry_of_11_4_exists`"
+SEM-11.4,Semantik/Abschnitt,11.4,"Standardbibliothek (Auszug, mit Einheitenvariablen)",,M10 (aus M6),fertig,"jeder Eintrag aus 11.4 belegt (`every_entry_of_11_4_exists`, `MISSING` leer); `fft256`, `rsa3072_verify`, `aes_gcm_decrypt` mit M10 Schritt 21"
 SEM-11.5,Semantik/Abschnitt,11.5,`takt size`: Speicherbudget,,M10 (aus M3),fertig,"Stack-Reserve aus der Kalibrierung als gemessener Posten in `takt size` (`the_stack_reserve_of_the_calibration_enters_the_size`, M10 Schritt 22)"
 SEM-12.1,Semantik/Abschnitt,12.1,Gemeinsame Struktur,,M4/M5 (Runtime),fertig,"Eingänge im MCU-Rahmen (2026-09-22): `takt_in_<pfad>(&value, &quality)` als Gegenstück zu `takt_out_*`, schwach gebunden und vom Linker geprüft; der Treiber liefert die Qualität mit (12.6), ohne Antwort bleibt der Eintrag `Bad` (3.5). Belegt am ESP32-C6 mit dem BOOT-Taster"
 SEM-12.2,Semantik/Abschnitt,12.2,Linux-Box (Cortex-A / x86-64),,M4 (Codegen),fertig,
@@ -874,7 +874,7 @@ LIB-writer,Standardbibliothek,11.4,block writer[const N],,M6 (stdlib),fertig,
 LIB-pid_i,Standardbibliothek,11.4,"block pid_i[O, E] / lowpass_i[U]",,M6 (stdlib),fertig,
 LIB-qp_box,Standardbibliothek,11.4,block qp_box[const N in 1..16],v1.2,M8 (QP),fertig,"M8 Schritt 21: projizierter Gradient in Takt im Prelude, nicht als Native — damit sind Interpreter und Codegen per Konstruktion einig (Satz 9.4.4) und die TCB wächst nicht. Schrittweite 1/||H||_inf (Gerschgorin), `iters` vor der statischen Schranke MAX_QP_ITERS. Korpus `69_qp_box.takt`, Differential grün, `qp_box_solves_a_two_by_two_problem`"
 LIB-sha256_init,Standardbibliothek,11.4,native fn sha256 / hmac_sha256 / sha256_init / sha256_update / sha256_final,,M6 (stdlib),fertig,
-LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M10 (aus M6),teilweise,"ecdsa_p256_verify in takt-crypto (p256 0.13, Feature ecdsa, Vektoren RFC 6979); rsa3072_verify und aes_gcm_decrypt offen, bis ein Programm sie braucht (plan/m6.md 2.4)"
+LIB-ecdsa_p256_verify,Standardbibliothek,11.4,native job ecdsa_p256_verify / rsa3072_verify / aes_gcm_decrypt        Jobs mit duration,,M10 (aus M6),fertig,"alle drei in `takt-crypto` hinter je einem Feature (`ecdsa` p256 0.13, `rsa` crypto-bigint 0.5 mit RSASSA-PSS, `aes-gcm` aes-gcm 0.10), nur als `native job`; Vektoren in `grammar/takt-native.md`, bitgleich auf Wirt, F401 und C6, Stack am Einstieg gemessen (M10 Schritt 21)"
 LIB-flash_model,Standardbibliothek,11.4,machine flash_model,,M6 (stdlib),fertig,
 LIB-solve,Standardbibliothek,11.4,fn solve,,M6 (stdlib),fertig,"`solve(A, b)` als eingebauter Aufruf (`lower/matrix.rs`), Methoden in `mat_member`"
 LIB-fma,Standardbibliothek,11.4,"fn fma[U, V]",,M4 (libtaktm),fertig,

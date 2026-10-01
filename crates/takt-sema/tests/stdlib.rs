@@ -27,9 +27,9 @@ fn trace(p: &Program, stimulus: &str, ticks: u64) -> String {
 /// Intrinsics (4.2, 3.9) und Matrixfunktionen (3.11) der Sema.
 const BUILTIN: [&str; 7] = ["fma", "interp", "solve", "inv", "det", "cholesky", "transpose"];
 
-/// Was 11.4 nennt und noch fehlt, mit dem Schritt, der es nachzieht.
-const MISSING: [(&str, &str); 3] =
-    [("rsa3072_verify", "M10 Schritt 21"), ("aes_gcm_decrypt", "M10 Schritt 21"), ("fft256", "FB-345, M10 Schritt 21")];
+/// Was 11.4 nennt und noch fehlt, mit dem Schritt, der es nachzieht; seit
+/// M10 Schritt 21 nichts.
+const MISSING: [(&str, &str); 0] = [];
 
 /// Die Eintraege des Codeblocks in 11.4 als (Art, Name). Eine Zeile traegt
 /// Segmente, getrennt durch zwei Leerzeichen; ein Segment, das mit einer

@@ -659,12 +659,18 @@ fn access(
             let r = m.inst(&format!("extractvalue {} {}, {}", x.ty, x.value, fields.len() - 1));
             Ok(Lowered { value: r.to_string(), ty: LlvmType::Int(1) })
         }
+        // `.err` ist ein `E?` (3.8): die Diskriminante und, ob es sie gibt —
+        // das Gegenteil von `.ok` (FB-354).
         Accessor::Err => {
             let LlvmType::Struct(fields) = &x.ty else { return Err(NotYet { what: "`.err` ohne Wrapper" }) };
             if fields.len() != 3 {
                 return Err(NotYet { what: "`.err` auf einem `T?`" });
             }
-            let r = m.inst(&format!("extractvalue {} {}, 1", x.ty, x.value));
+            let disc = m.inst(&format!("extractvalue {} {}, 1", x.ty, x.value));
+            let ok = m.inst(&format!("extractvalue {} {}, 2", x.ty, x.value));
+            let present = m.inst(&format!("xor i1 {ok}, true"));
+            let with_disc = m.inst(&format!("insertvalue {want} undef, i32 {disc}, 0"));
+            let r = m.inst(&format!("insertvalue {want} {with_disc}, i1 {present}, 1"));
             Ok(Lowered { value: r.to_string(), ty: want.clone() })
         }
         // `.len` einer Sammlung (3.9): das Laengenfeld des Structs.
@@ -1973,9 +1979,10 @@ fn native_call(
                 sig.push("ptr".to_string());
                 sig.push("i32".to_string());
             }
-            // Ein Record geht in kanonischer Byteform (5.9): die TCB kennt
-            // kein Ziel-Layout.
-            Some(Type::Record(_)) => {
+            // Ein Record oder ein Feld geht in kanonischer Byteform (5.9):
+            // die TCB kennt kein Ziel-Layout, und ein Feld als Wert waere
+            // keine Form der C-ABI.
+            Some(Type::Record(_) | Type::Array { .. }) => {
                 let v = lower(a, p, m, vars)?;
                 let tmp = m.alloca(&v.ty);
                 m.write(&v.ty, &v.value, &tmp.to_string());
@@ -1995,11 +2002,11 @@ fn native_call(
         }
     }
     let symbol = format!("takt_native_{}", crate::fns::sanitized(&n.name));
-    // Ein Skalar kommt als Wert zurueck; einen Byteblock oder ein Record
-    // schreibt die Funktion in kanonischer Form in einen Puffer des
-    // Aufrufers.
+    // Ein Skalar kommt als Wert zurueck; einen Byteblock, ein Record oder
+    // ein Feld schreibt die Funktion in kanonischer Form in einen Puffer
+    // des Aufrufers.
     match p.types.list.get(n.ret.index()) {
-        Some(Type::Bytes { .. } | Type::Record(_)) => {
+        Some(Type::Bytes { .. } | Type::Record(_) | Type::Array { .. }) => {
             let buf = canonical_buffer(p, n.ret, m)?;
             ops.push(format!("ptr {buf}"));
             sig.push("ptr".to_string());

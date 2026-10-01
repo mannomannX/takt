@@ -97,11 +97,12 @@ fn blocks(args: &[u8]) -> Vec<&[u8]> {
     out
 }
 
-/// Ein `bytes<N>`, auch ein Digest, steht im Block als Laenge und Daten;
-/// ein Record als seine kanonische Form.
+/// Ein `bytes<N>`, auch ein Digest oder einer fester Laenge, steht im
+/// Block als Laenge und Daten; ein Record oder ein Feld als seine
+/// kanonische Form.
 fn payload(kind: Kind, block: &[u8]) -> &[u8] {
     match kind {
-        Kind::Bytes | Kind::Digest => {
+        Kind::Bytes | Kind::Digest | Kind::Fixed(_) => {
             let n = block.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).unwrap_or(0);
             block.get(4..4 + n).unwrap_or(&[])
         }
@@ -138,8 +139,20 @@ fn run(native: Native, args: &[u8]) -> Option<Vec<u8>> {
             let sig = <[u8; 64]>::try_from(*inputs.get(2)?).ok()?;
             takt_crypto::ecdsa_p256_verify(&key, &digest, &sig).ok().map(|b| vec![u8::from(b)])
         }
+        Native::Rsa3072Verify => {
+            let [key, digest, sig] = inputs.as_slice() else { return None };
+            takt_crypto::rsa3072_verify(key, digest, sig).ok().map(|b| vec![u8::from(b)])
+        }
+        // Ein Tag, der nicht passt, endet als `Err(FAILED)`: `None`.
+        Native::AesGcmDecrypt => {
+            let [key, nonce, aad, data, tag] = inputs.as_slice() else { return None };
+            let mut out = vec![0u8; data.len()];
+            let len = takt_crypto::aes_gcm_decrypt(key, nonce, aad, data, tag, &mut out).ok()??;
+            Some(digest(&out[..len]))
+        }
         _ => match takt_native::call(native, &inputs)? {
             Output::Digest(d) => Some(digest(&d)),
+            Output::Floats { bytes, len } => Some(bytes[..len].to_vec()),
             Output::Scalar(v) => Some(match sig.ret {
                 Kind::U8 => vec![v as u8],
                 Kind::U16 => (v as u16).to_le_bytes().to_vec(),
@@ -149,9 +162,9 @@ fn run(native: Native, args: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// `bytes<32>` in kanonischer Form: Laenge, dann die Bytes.
-fn digest(d: &[u8; 32]) -> Vec<u8> {
-    let mut out = 32u32.to_le_bytes().to_vec();
+/// `bytes<N>` in kanonischer Form: Laenge, dann die Bytes.
+fn digest(d: &[u8]) -> Vec<u8> {
+    let mut out = (d.len() as u32).to_le_bytes().to_vec();
     out.extend_from_slice(d);
     out
 }

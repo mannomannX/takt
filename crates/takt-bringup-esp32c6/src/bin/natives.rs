@@ -23,10 +23,10 @@ mod vectors {
 }
 
 /// Wie tief unter dem Stackzeiger der Bedarf gemessen wird: weit ueber
-/// jeder Zusage der Natives, die hier laufen (die groesste,
-/// `hmac_sha256`, sagt 768 Byte zu, 4.5). Wer mehr braucht, meldet das
-/// Fenster und bricht damit seine Zusage sichtbar.
-const WINDOW: usize = 4096;
+/// jeder Zusage der Natives, die hier laufen (die groessten sind die Jobs
+/// aus `takt-crypto`, 4.5). Wer mehr braucht, meldet das Fenster und
+/// bricht damit seine Zusage sichtbar.
+const WINDOW: usize = 12_288;
 
 #[main]
 fn main() -> ! {

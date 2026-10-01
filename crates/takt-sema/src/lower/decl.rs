@@ -1128,17 +1128,21 @@ impl Lowerer<'_> {
         use takt_native::Kind;
         let sig = f.signature();
         let describe = |k: Kind| match k {
-            Kind::Bytes => "bytes<N>",
-            Kind::U8 => "u8",
-            Kind::U16 => "u16",
-            Kind::U32 => "u32",
-            Kind::Digest => "bytes<32>",
-            Kind::Sha256Ctx => "Sha256Ctx",
-            Kind::Bool => "bool",
+            Kind::Bytes => "bytes<N>".to_string(),
+            Kind::U8 => "u8".to_string(),
+            Kind::U16 => "u16".to_string(),
+            Kind::U32 => "u32".to_string(),
+            Kind::Digest => "bytes<32>".to_string(),
+            Kind::Sha256Ctx => "Sha256Ctx".to_string(),
+            Kind::Bool => "bool".to_string(),
+            Kind::Fixed(n) => format!("bytes<{n}>"),
+            Kind::Floats256 => "[256] float".to_string(),
         };
         let fits = |this: &Self, k: Kind, ty: TypeId| match (k, this.ty(ty)) {
             (Kind::Bytes, Type::Bytes { .. }) => true,
             (Kind::Digest, Type::Bytes { cap }) => *cap == 32,
+            (Kind::Fixed(n), Type::Bytes { cap }) => *cap == n,
+            (Kind::Floats256, Type::Array { elem, len: 256 }) => matches!(this.ty(*elem), Type::Float { .. }),
             (Kind::U8, Type::Int { width: IntWidth::U8, .. })
             | (Kind::U16, Type::Int { width: IntWidth::U16, .. })
             | (Kind::U32, Type::Int { width: IntWidth::U32, .. }) => true,
@@ -1150,15 +1154,39 @@ impl Lowerer<'_> {
             && params.iter().zip(sig.params).all(|(p, k)| fits(self, *k, p.ty))
             && fits(self, sig.ret, ret);
         if !ok {
-            let want: Vec<&str> = sig.params.iter().map(|k| describe(*k)).collect();
+            let want: Vec<String> = sig.params.iter().map(|k| describe(*k)).collect();
             self.error_hint(
                 SC31,
                 span,
                 format!("`{}` hat die Signatur ({}) -> {} (4.5)", f.name(), want.join(", "), describe(sig.ret)),
                 "die Deklaration muss der kuratierten Funktion entsprechen (grammar/takt-native.md)",
             );
+            return false;
         }
-        ok
+        // Das Ergebnis fasst den Inhalt eines Parameters (der Klartext von
+        // `aes_gcm_decrypt` ist so lang wie das Chiffrat): Seine Kapazitaet
+        // ist hoechstens die des Ergebnisses.
+        if let Some(i) = sig.holds {
+            let cap = |ty: TypeId| match self.ty(ty) {
+                Type::Bytes { cap } => *cap,
+                _ => 0,
+            };
+            let (needed, room) = (cap(params[i].ty), cap(ret));
+            if needed > room {
+                self.error_hint(
+                    SC31,
+                    span,
+                    format!(
+                        "das Ergebnis von `{}` fasst {room} Byte, `{}` traegt bis zu {needed} (4.5)",
+                        f.name(),
+                        params[i].name
+                    ),
+                    format!("Ergebnis `bytes<{needed}>` oder groesser"),
+                );
+                return false;
+            }
+        }
+        true
     }
 
     /// `native fn`/`native job` mit Kostenvertrag (4.5).
@@ -1191,6 +1219,19 @@ impl Lowerer<'_> {
         let Some(ret) = self.resolve_type(&decl.ret) else { return };
         if let Some(f) = takt_native::Native::by_name(&decl.name.name) {
             if !self.native_signature(f, &params, ret, decl.span) {
+                return;
+            }
+        }
+        // 4.5: Die Kryptographie passt in keinen Tick; als `fn` liefe sie im
+        // Schritt, und ihr Kostenvertrag zaehlte nur den Start.
+        if let Some(f) = takt_native::Native::by_name(&decl.name.name).filter(|f| f.job_only()) {
+            if decl.kind == ast::NativeKind::Fn {
+                self.error_hint(
+                    SC31,
+                    decl.span,
+                    format!("`{}` ist ein Job (4.5)", f.name()),
+                    "`native job` mit `duration`",
+                );
                 return;
             }
         }

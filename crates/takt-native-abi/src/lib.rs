@@ -22,7 +22,7 @@ use core::slice;
 
 use takt_native::map::ByteMap;
 use takt_native::sha256::{CTX_MAX_BYTES, Ctx};
-use takt_native::{crc, sha256};
+use takt_native::{crc, fft, sha256};
 
 /// Ein `bytes<32>`-Ergebnis in kanonischer Form: Laenge, dann der Digest.
 pub const DIGEST_BYTES: usize = 4 + 32;
@@ -215,6 +215,87 @@ pub unsafe extern "C" fn takt_native_ecdsa_p256_verify(
     }
 }
 
+/// `fft256(x)` (4.5): 256 Werte in kanonischer Form, 1024 Byte fuer `f32`,
+/// 2048 fuer `f64`; das Ergebnis in derselben Form nach `out`. Eine andere
+/// Laenge schreibt nichts.
+///
+/// # Safety
+///
+/// `x` zeigt auf `n` lesbare Bytes, `out` auf `n` schreibbare.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_native_fft256(x: *const u8, n: i32, out: *mut u8) {
+    let mut buf = [0u8; fft::BYTES_F64];
+    // SAFETY: vom Aufrufer zugesagt.
+    let Some(len) = fft::fft256(unsafe { input(x, n) }, &mut buf) else { return };
+    if !out.is_null() {
+        // SAFETY: `out` fasst `n` Byte, und `len` ist `n`.
+        unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), out, len) };
+    }
+}
+
+/// `rsa3072_verify(key, digest, sig)` (4.5, ein Job): RSASSA-PSS mit
+/// SHA-256; falsche Laengen pruefen nicht.
+///
+/// # Safety
+///
+/// `key`, `digest` und `sig` zeigen auf `kn`, `dn` und `sn` lesbare Bytes.
+#[cfg(feature = "rsa")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_native_rsa3072_verify(
+    key: *const u8,
+    kn: i32,
+    digest: *const u8,
+    dn: i32,
+    sig: *const u8,
+    sn: i32,
+) -> bool {
+    // SAFETY: vom Aufrufer zugesagt.
+    let (key, digest, sig) = unsafe { (input(key, kn), input(digest, dn), input(sig, sn)) };
+    takt_crypto::rsa3072_verify(key, digest, sig).unwrap_or(false)
+}
+
+/// `aes_gcm_decrypt(key, nonce, aad, data, tag)` (4.5, ein Job): der
+/// Klartext nach `out`, seine Laenge; `-1`, wenn der Tag nicht stimmt oder
+/// eine Laenge nicht passt — der Job endet dann mit `Err(FAILED)`.
+///
+/// # Safety
+///
+/// Jeder Zeiger zeigt auf die Zahl lesbarer Bytes, die neben ihm steht,
+/// `out` auf `dn` schreibbare.
+#[cfg(feature = "aes-gcm")]
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn takt_native_aes_gcm_decrypt(
+    key: *const u8,
+    kn: i32,
+    nonce: *const u8,
+    nn: i32,
+    aad: *const u8,
+    an: i32,
+    data: *const u8,
+    dn: i32,
+    tag: *const u8,
+    tn: i32,
+    out: *mut u8,
+) -> i32 {
+    if out.is_null() && dn > 0 {
+        return -1;
+    }
+    // SAFETY: vom Aufrufer zugesagt.
+    let (key, nonce, aad, data, tag) =
+        unsafe { (input(key, kn), input(nonce, nn), input(aad, an), input(data, dn), input(tag, tn)) };
+    let out: &mut [u8] = if data.is_empty() {
+        &mut []
+    } else {
+        // SAFETY: `out` fasst `dn` Byte, vom Aufrufer zugesagt.
+        unsafe { slice::from_raw_parts_mut(out, data.len()) }
+    };
+    match takt_crypto::aes_gcm_decrypt(key, nonce, aad, data, tag, out) {
+        Ok(Some(len)) => i32::try_from(len).unwrap_or(-1),
+        _ => -1,
+    }
+}
+
 /// Die Slots einer Map (3.9): `cap` Slots zu `1 + klen + vlen` Byte.
 ///
 /// # Safety
@@ -342,6 +423,18 @@ pub mod measure {
             bytes.copy_from_slice(&out[4..]);
             Run { bytes, len: 32, stack, others: [("", 0); 2], count: 0 }
         }
+
+        /// Ein Ergebnis aus Bytes ohne eigene Form (die Werte von `fft256`,
+        /// ein Klartext): sein SHA-256, wie die Vektoren es schreiben.
+        fn block(out: &[u8], stack: u32) -> Run {
+            Run { bytes: takt_native::sha256::sha256(out), len: 32, stack, others: [("", 0); 2], count: 0 }
+        }
+
+        /// Kein Ergebnis: Das Messprogramm schreibt `-`.
+        #[cfg(feature = "aes-gcm")]
+        fn none(stack: u32) -> Run {
+            Run { bytes: [0; 32], len: 0, stack, others: [("", 0); 2], count: 0 }
+        }
     }
 
     /// Eine Laenge an der Grenze.
@@ -389,9 +482,80 @@ pub mod measure {
                 Run::digest(&out, stack)
             }
             Native::Sha256Init | Native::Sha256Update | Native::Sha256Final => chain(inputs, measure),
-            Native::EcdsaP256Verify => return None,
+            Native::Fft256 => {
+                let (x, entry) = (one()?, black_box(super::takt_native_fft256 as unsafe extern "C" fn(_, _, _)));
+                let mut out = [0u8; takt_native::fft::BYTES_F64];
+                // SAFETY: `x` ist ein Slice seiner Laenge, `out` fasst die
+                // groesste kanonische Form.
+                let stack = measure(&mut || unsafe { entry(x.as_ptr(), len(x), out.as_mut_ptr()) });
+                Run::block(&out[..x.len().min(out.len())], stack)
+            }
+            #[cfg(feature = "ecdsa")]
+            Native::EcdsaP256Verify => {
+                let [key, digest, sig] = inputs else { return None };
+                let entry = black_box(super::takt_native_ecdsa_p256_verify as unsafe extern "C" fn(_, _, _, _, _, _) -> _);
+                let mut ok = false;
+                // SAFETY: drei Slices ihrer Laenge.
+                let stack = measure(&mut || {
+                    ok = unsafe { entry(key.as_ptr(), len(key), digest.as_ptr(), len(digest), sig.as_ptr(), len(sig)) }
+                });
+                Run::scalar(u64::from(ok), stack)
+            }
+            #[cfg(feature = "rsa")]
+            Native::Rsa3072Verify => {
+                let [key, digest, sig] = inputs else { return None };
+                let entry = black_box(super::takt_native_rsa3072_verify as unsafe extern "C" fn(_, _, _, _, _, _) -> _);
+                let mut ok = false;
+                // SAFETY: drei Slices ihrer Laenge.
+                let stack = measure(&mut || {
+                    ok = unsafe { entry(key.as_ptr(), len(key), digest.as_ptr(), len(digest), sig.as_ptr(), len(sig)) }
+                });
+                Run::scalar(u64::from(ok), stack)
+            }
+            #[cfg(feature = "aes-gcm")]
+            Native::AesGcmDecrypt => {
+                let [key, nonce, aad, data, tag] = inputs else { return None };
+                let entry = black_box(
+                    super::takt_native_aes_gcm_decrypt as unsafe extern "C" fn(_, _, _, _, _, _, _, _, _, _, _) -> _,
+                );
+                let mut out = [0u8; PLAIN_MAX];
+                if data.len() > PLAIN_MAX {
+                    return None;
+                }
+                let mut got = -1;
+                // SAFETY: fuenf Slices ihrer Laenge, `out` fasst `data`.
+                let stack = measure(&mut || {
+                    got = unsafe {
+                        entry(
+                            key.as_ptr(),
+                            len(key),
+                            nonce.as_ptr(),
+                            len(nonce),
+                            aad.as_ptr(),
+                            len(aad),
+                            data.as_ptr(),
+                            len(data),
+                            tag.as_ptr(),
+                            len(tag),
+                            out.as_mut_ptr(),
+                        )
+                    }
+                });
+                match usize::try_from(got) {
+                    Ok(n) => Run::block(&out[..n], stack),
+                    Err(_) => Run::none(stack),
+                }
+            }
+            // Ohne ihr Feature kommt eine Funktion aus `takt-crypto` nicht
+            // vor: Das Messprogramm hat dann keine Zeile fuer sie.
+            #[allow(unreachable_patterns)]
+            _ => return None,
         })
     }
+
+    /// Der laengste Klartext, den die Messung von `aes_gcm_decrypt` fasst.
+    #[cfg(feature = "aes-gcm")]
+    const PLAIN_MAX: usize = 512;
 
     /// `sha256_init`, ein `sha256_update` je Chunk und `sha256_final`, jeder
     /// Aufruf einzeln gemessen.

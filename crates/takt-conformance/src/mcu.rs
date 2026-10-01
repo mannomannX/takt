@@ -404,7 +404,11 @@ fn jobs(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
     let _ = writeln!(s, "    j = &g_jobs[g_work_slot];");
     let _ = writeln!(s, "    if (j->state == TAKT_JOB_RUNNING && j->gen == g_work_gen) {{");
-    let _ = writeln!(s, "        memcpy(j->out, g_work_out, (size_t)g_work_out_len); j->out_len = g_work_out_len;");
+    // `-1` ist `Err(FAILED)` ohne Bytes; ein `size_t` daraus kopierte alles.
+    let _ = writeln!(
+        s,
+        "        if (g_work_out_len > 0) memcpy(j->out, g_work_out, (size_t)g_work_out_len); j->out_len = g_work_out_len;"
+    );
     let _ = writeln!(s, "        j->state = TAKT_JOB_DONE;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    g_work_finished = 0; g_work_slot = -1;");
@@ -448,7 +452,11 @@ fn jobs(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    takt_jobs_collect();");
     let _ = writeln!(s, "    for (i = 0; i < {slots}; i++) {{");
     let _ = writeln!(s, "        if (g_jobs[i].state != TAKT_JOB_DONE || g_jobs[i].due > g_tick) continue;");
-    let _ = writeln!(s, "        g_jobs[i].state = TAKT_JOB_FREE; takt_job_image(i, 1, 1, 0);");
+    let _ = writeln!(s, "        g_jobs[i].state = TAKT_JOB_FREE;");
+    let _ = writeln!(
+        s,
+        "        if (g_jobs[i].out_len < 0) takt_job_image(i, 1, 0, 1); /* Err(FAILED) */ else takt_job_image(i, 1, 1, 0);"
+    );
     let _ = writeln!(
         s,
         "        for (b = 0; b < g_jobs[i].out_len; b++) image[takt_job_at[i] + 8 + b] = g_jobs[i].out[b];"

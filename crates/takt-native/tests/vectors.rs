@@ -40,10 +40,17 @@ fn load() -> Vec<Vector> {
 }
 
 /// Eine Hexfolge; ein Bindestrich ist die leere Eingabe — auch sie hat
-/// ein definiertes Ergebnis, und gerade dort sitzen Fehler.
+/// ein definiertes Ergebnis, und gerade dort sitzen Fehler. `@f32/SEED`
+/// und `@f64/SEED` sind die erzeugten Eingaben von `fft256`.
 fn hex_bytes(line: usize, hex: &str) -> Vec<u8> {
     if hex == "-" {
         return Vec::new();
+    }
+    if hex.starts_with('@') {
+        let mut out = [0u8; takt_native::fft::BYTES_F64];
+        let len = takt_native::fft::generated(hex, &mut out)
+            .unwrap_or_else(|| panic!("Zeile {line}: `{hex}` ist keine erzeugte Eingabe"));
+        return out[..len].to_vec();
     }
     hex.as_bytes()
         .chunks(2)
@@ -66,9 +73,9 @@ fn parse(line: usize, text: &str) -> Vector {
 /// Das Ergebnis in der Schreibweise der Spezifikation: eine Pruefsumme in
 /// der Breite ihres Vektors, ein Digest Byte fuer Byte.
 fn render(out: Output, width: usize) -> String {
-    match out {
-        Output::Scalar(v) => format!("{v:0width$x}"),
-        Output::Digest(d) => d.iter().map(|b| format!("{b:02x}")).collect(),
+    match out.digest_or_scalar() {
+        Ok(v) => format!("{v:0width$x}"),
+        Err(d) => d.iter().map(|b| format!("{b:02x}")).collect(),
     }
 }
 

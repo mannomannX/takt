@@ -76,6 +76,9 @@ geprüft; Projekt-Natives außerhalb dieser Menge verlangen
 | sha256_update | takt-native | keine |
 | sha256_final | takt-native | keine |
 | ecdsa_p256_verify | takt-crypto | p256 0.13 (RustCrypto), Feature `ecdsa` |
+| fft256 | takt-native | keine |
+| rsa3072_verify | takt-crypto | crypto-bigint 0.5 (RustCrypto), Feature `rsa`; SHA-256 aus takt-native |
+| aes_gcm_decrypt | takt-crypto | aes-gcm 0.10 (RustCrypto), Feature `aes-gcm` |
 
 Der Lauf-Header nennt, was ein Lauf davon benutzt hat (12.5,
 `takt-interp/src/record.rs`).
@@ -85,8 +88,13 @@ Eine Implementierung je Native: Interpreter und Linux-Runtime rufen
 Einstiege aus `takt-native-abi` — der Rahmen bringt keine eigenen mit.
 Gemessen wird der Stack am Einstieg (FB-293).
 
-**Offen.** `rsa3072_verify`, `aes_gcm_decrypt` und `fft256` (11.4) fehlen
-der Menge noch (M10 Schritt 21, FB-345).
+Die Jobs aus `takt-crypto` laufen auch auf den Boards: Die Bring-ups
+binden `takt-native-abi` mit allen drei Features, und das Messprogramm
+`natives` misst ihren Stack wie den der uebrigen (M10 Schritt 21). Panikfrei
+unter Fuzzing heisst hier: Eingaben gueltiger und falscher Laengen mit
+festem Startwert in `takt-native/tests/no_panic.rs` und
+`takt-crypto/tests/vectors.rs`, bei RSA mit einem Modulus, der die Potenz
+und die PSS-Pruefung erreicht.
 
 ## 3. Rückverfolgung (13.4)
 

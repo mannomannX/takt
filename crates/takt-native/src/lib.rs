@@ -16,17 +16,19 @@
 //! Funktion ohne gruene Vektoren ist hier nicht sichtbar, und der
 //! Compiler lehnt sie ab — wie er heute ein v1.1-Konstrukt ablehnt.
 //!
-//! **Warum Pruefsummen zuerst.** Sie sind exakt spezifiziert (ihre
-//! Vektoren stehen in den Normen), sie kommen in jedem Protokoll vor, und
-//! ihre Kosten sind linear in der Laenge — also als Vertrag angebbar. Die
-//! Transformationen (`fft256`) und die Hashes brauchen dieselbe Huerde,
-//! aber mehr Code; sie folgen.
+//! **Was hier steht und was nicht.** Pruefsummen, Hashes und `fft256`
+//! rechnet dieses Crate selbst. Die Kryptographie, die eine gepruefte
+//! Abhaengigkeit braucht (`ecdsa_p256_verify`, `rsa3072_verify`,
+//! `aes_gcm_decrypt`), steht in `takt-crypto`; hier stehen nur Namen und
+//! Signaturen ([`Native::external`]).
 
 #![no_std]
 
 pub mod bytes;
 pub mod cost;
 pub mod crc;
+pub mod fft;
+pub mod fft_table;
 pub mod map;
 pub mod sha256;
 
@@ -57,6 +59,16 @@ pub enum Native {
     /// Implementierung liegt in `takt-crypto`, dieses Crate kennt nur
     /// Namen und Signatur.
     EcdsaP256Verify,
+    /// `fft256(x: [256] float) -> [256] float`: das Spektrum einer reellen
+    /// Folge ([`fft`]).
+    Fft256,
+    /// `rsa3072_verify(key, digest, sig) -> bool`: RSASSA-PSS mit SHA-256
+    /// und dem Exponenten 65537, ein Job in `takt-crypto`.
+    Rsa3072Verify,
+    /// `aes_gcm_decrypt(key, nonce, aad, data, tag) -> bytes<N>`: AES-GCM,
+    /// ein Job in `takt-crypto`; ein falscher Tag beendet ihn mit
+    /// `Err(FAILED)`.
+    AesGcmDecrypt,
 }
 
 /// Die Art eines Arguments oder Ergebnisses an der Grenze (4.5).
@@ -76,6 +88,11 @@ pub enum Kind {
     Sha256Ctx,
     /// `bool`, ein Byte.
     Bool,
+    /// `bytes<N>` mit genau dieser Kapazitaet (Nonce und Tag von AES-GCM).
+    Fixed(u32),
+    /// `[256] float` in der Breite des Programms (4.2), in kanonischer Form
+    /// ohne Laenge: 1024 Byte fuer `f32`, 2048 fuer `f64`.
+    Floats256,
 }
 
 /// Parameter und Ergebnis, wie das Programm sie deklarieren muss
@@ -86,15 +103,40 @@ pub struct Signature {
     pub params: &'static [Kind],
     /// Das Ergebnis.
     pub ret: Kind,
+    /// Der Parameter, dessen Inhalt das Ergebnis fassen muss: Seine
+    /// Kapazitaet ist hoechstens die des Ergebnisses (Pruefung 31).
+    pub holds: Option<usize>,
 }
 
 /// Das Ergebnis eines Aufrufs ueber Byteblocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant, reason = "ohne Allokation (no_std, TCB) gibt es keine Box; der Wert lebt kurz")]
 pub enum Output {
     /// Eine Pruefsumme; die Breite steht in der Signatur.
     Scalar(u64),
     /// Ein Digest.
     Digest([u8; 32]),
+    /// Die 256 Werte von `fft256` in kanonischer Form: `len` Byte von
+    /// `bytes` (1024 fuer `f32`, 2048 fuer `f64`).
+    Floats {
+        /// Der Puffer.
+        bytes: [u8; fft::BYTES_F64],
+        /// Wie viele Byte gelten.
+        len: usize,
+    },
+}
+
+impl Output {
+    /// Das Ergebnis, wie die Vektoren es schreiben: eine Pruefsumme in
+    /// `width` Hexziffern, ein Digest Byte fuer Byte, die Werte von
+    /// `fft256` als SHA-256 ihrer kanonischen Form (grammar/takt-native.md).
+    pub fn digest_or_scalar(&self) -> Result<u64, [u8; 32]> {
+        match self {
+            Output::Scalar(v) => Ok(*v),
+            Output::Digest(d) => Err(*d),
+            Output::Floats { bytes, len } => Err(sha256::sha256(&bytes[..*len])),
+        }
+    }
 }
 
 impl Native {
@@ -111,17 +153,27 @@ impl Native {
             Native::Sha256Update => "sha256_update",
             Native::Sha256Final => "sha256_final",
             Native::EcdsaP256Verify => "ecdsa_p256_verify",
+            Native::Fft256 => "fft256",
+            Native::Rsa3072Verify => "rsa3072_verify",
+            Native::AesGcmDecrypt => "aes_gcm_decrypt",
         }
     }
 
     /// Die Implementierung liegt ausserhalb dieses Crates (`takt-crypto`):
     /// `call` liefert `None`, die Vektoren stehen im Block `takt-crypto`.
     pub fn external(self) -> bool {
-        matches!(self, Native::EcdsaP256Verify)
+        matches!(self, Native::EcdsaP256Verify | Native::Rsa3072Verify | Native::AesGcmDecrypt)
+    }
+
+    /// Nur als `native job` (4.5): Die Rechnung passt in keinen Tick, und
+    /// ein `fn` fuehrte sie im Schritt aus — mit einem Kostenvertrag, der
+    /// nur den Start zaehlt.
+    pub fn job_only(self) -> bool {
+        self.external()
     }
 
     /// Alle Funktionen der Menge.
-    pub const ALL: [Native; 10] = [
+    pub const ALL: [Native; 13] = [
         Native::Crc32,
         Native::Crc32c,
         Native::Crc16,
@@ -132,6 +184,9 @@ impl Native {
         Native::Sha256Update,
         Native::Sha256Final,
         Native::EcdsaP256Verify,
+        Native::Fft256,
+        Native::Rsa3072Verify,
+        Native::AesGcmDecrypt,
     ];
 
     /// Die Funktion zu einem Namen.
@@ -141,16 +196,25 @@ impl Native {
 
     /// Die Signatur, gegen die Pruefung 31 die Deklaration haelt.
     pub fn signature(self) -> Signature {
+        let plain = |params, ret| Signature { params, ret, holds: None };
         match self {
-            Native::Crc32 | Native::Crc32c => Signature { params: &[Kind::Bytes], ret: Kind::U32 },
-            Native::Crc16 => Signature { params: &[Kind::Bytes], ret: Kind::U16 },
-            Native::Sum8 => Signature { params: &[Kind::Bytes], ret: Kind::U8 },
-            Native::Sha256 => Signature { params: &[Kind::Bytes], ret: Kind::Digest },
-            Native::HmacSha256 => Signature { params: &[Kind::Bytes, Kind::Bytes], ret: Kind::Digest },
-            Native::Sha256Init => Signature { params: &[], ret: Kind::Sha256Ctx },
-            Native::Sha256Update => Signature { params: &[Kind::Sha256Ctx, Kind::Bytes], ret: Kind::Sha256Ctx },
-            Native::Sha256Final => Signature { params: &[Kind::Sha256Ctx], ret: Kind::Digest },
-            Native::EcdsaP256Verify => Signature { params: &[Kind::Bytes, Kind::Digest, Kind::Bytes], ret: Kind::Bool },
+            Native::Crc32 | Native::Crc32c => plain(&[Kind::Bytes], Kind::U32),
+            Native::Crc16 => plain(&[Kind::Bytes], Kind::U16),
+            Native::Sum8 => plain(&[Kind::Bytes], Kind::U8),
+            Native::Sha256 => plain(&[Kind::Bytes], Kind::Digest),
+            Native::HmacSha256 => plain(&[Kind::Bytes, Kind::Bytes], Kind::Digest),
+            Native::Sha256Init => plain(&[], Kind::Sha256Ctx),
+            Native::Sha256Update => plain(&[Kind::Sha256Ctx, Kind::Bytes], Kind::Sha256Ctx),
+            Native::Sha256Final => plain(&[Kind::Sha256Ctx], Kind::Digest),
+            Native::EcdsaP256Verify | Native::Rsa3072Verify => {
+                plain(&[Kind::Bytes, Kind::Digest, Kind::Bytes], Kind::Bool)
+            }
+            Native::Fft256 => plain(&[Kind::Floats256], Kind::Floats256),
+            Native::AesGcmDecrypt => Signature {
+                params: &[Kind::Bytes, Kind::Fixed(12), Kind::Bytes, Kind::Bytes, Kind::Fixed(16)],
+                ret: Kind::Bytes,
+                holds: Some(3),
+            },
         }
     }
 
@@ -166,13 +230,19 @@ impl Native {
 }
 
 /// Rechnet eine Funktion der Menge ueber Byteblocks: ein Block fuer die
-/// Pruefsummen und `sha256`, Schluessel und Nachricht fuer `hmac_sha256`,
-/// die Chunks in ihrer Reihenfolge fuer `sha256_init/update/final`.
-/// `None`, wenn die Zahl der Bloecke nicht zur Funktion passt.
+/// Pruefsummen, `sha256` und `fft256`, Schluessel und Nachricht fuer
+/// `hmac_sha256`, die Chunks in ihrer Reihenfolge fuer
+/// `sha256_init/update/final`. `None`, wenn die Bloecke nicht zur Funktion
+/// passen, und fuer die Funktionen aus `takt-crypto`.
 pub fn call(f: Native, inputs: &[&[u8]]) -> Option<Output> {
     let one = || inputs.first().copied().filter(|_| inputs.len() == 1);
     Some(match f {
-        Native::EcdsaP256Verify => return None,
+        Native::EcdsaP256Verify | Native::Rsa3072Verify | Native::AesGcmDecrypt => return None,
+        Native::Fft256 => {
+            let mut bytes = [0u8; fft::BYTES_F64];
+            let len = fft::fft256(one()?, &mut bytes)?;
+            Output::Floats { bytes, len }
+        }
         Native::Crc32 => Output::Scalar(u64::from(crc::crc32(one()?))),
         Native::Crc32c => Output::Scalar(u64::from(crc::crc32c(one()?))),
         Native::Crc16 => Output::Scalar(u64::from(crc::crc16(one()?))),

@@ -614,8 +614,10 @@ pub(crate) fn natives(s: &mut String, p: &Program) {
     }
 }
 
-/// Die C-Deklaration eines Einstiegs: ein `bytes<N>` oder Record als
-/// Zeiger und Laenge, ein Ergebnis aus Bytes nach `out`.
+/// Die C-Deklaration eines Einstiegs: ein `bytes<N>`, Record oder Feld
+/// als Zeiger und Laenge, ein Ergebnis aus Bytes nach `out`. Ein `bytes<N>`
+/// als Ergebnis gibt seine Laenge zurueck, `-1`, wenn es keines gibt
+/// (`aes_gcm_decrypt` mit falschem Tag: `Err(FAILED)`, 4.5).
 fn prototype(f: takt_native::Native) -> String {
     use takt_native::Kind;
     let sig = f.signature();
@@ -625,9 +627,13 @@ fn prototype(f: takt_native::Native) -> String {
         Kind::U16 => "unsigned short",
         Kind::U8 => "unsigned char",
         Kind::Bool => "_Bool",
-        Kind::Bytes | Kind::Digest | Kind::Sha256Ctx => {
+        Kind::Digest | Kind::Sha256Ctx | Kind::Fixed(_) | Kind::Floats256 => {
             params.push("unsigned char *");
             "void"
+        }
+        Kind::Bytes => {
+            params.push("unsigned char *");
+            "int"
         }
     };
     let params = if params.is_empty() { "void".to_string() } else { params.join(", ") };
@@ -636,14 +642,14 @@ fn prototype(f: takt_native::Native) -> String {
 
 /// Die statische Bibliothek mit den C-Einstiegen der Natives fuer den Wirt
 /// (FB-293), einmal je Prozess gebaut: `takt-native-abi` mit Panic-Handler
-/// und `ecdsa`, im eigenen Zielverzeichnis, damit der Bau nicht auf die
-/// Sperre eines laufenden `cargo` wartet.
+/// und den Jobs aus `takt-crypto`, im eigenen Zielverzeichnis, damit der
+/// Bau nicht auf die Sperre eines laufenden `cargo` wartet.
 pub fn native_library() -> Result<std::path::PathBuf, String> {
     static LIB: std::sync::OnceLock<Result<std::path::PathBuf, String>> = std::sync::OnceLock::new();
     LIB.get_or_init(|| {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let out = std::process::Command::new("cargo")
-            .args(["rustc", "--release", "--lib", "--crate-type", "staticlib", "--features", "host,ecdsa"])
+            .args(["rustc", "--release", "--lib", "--crate-type", "staticlib", "--features", "host,ecdsa,rsa,aes-gcm"])
             .arg("--message-format=json-render-diagnostics")
             .arg("--manifest-path")
             .arg(root.join("crates/takt-native-abi/Cargo.toml"))
@@ -1679,7 +1685,10 @@ fn jobs(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    int i, b;");
     let _ = writeln!(s, "    for (i = 0; i < {slots}; i++) {{");
     let _ = writeln!(s, "        if (!g_jobs[i].active || g_jobs[i].due > g_tick) continue;");
-    let _ = writeln!(s, "        g_jobs[i].active = 0; takt_job_image(i, 1, 1, 0);");
+    let _ = writeln!(s, "        g_jobs[i].active = 0;");
+    let _ =
+        writeln!(s, "        if (g_jobs[i].out_len < 0) {{ takt_job_image(i, 1, 0, 1); continue; }} /* Err(FAILED) */");
+    let _ = writeln!(s, "        takt_job_image(i, 1, 1, 0);");
     let _ = writeln!(
         s,
         "        for (b = 0; b < g_jobs[i].out_len; b++) image[takt_job_at[i] + 8 + b] = g_jobs[i].out[b];"
@@ -1694,7 +1703,8 @@ fn jobs(s: &mut String, p: &Program) {
 }
 
 /// Der Aufruf einer `native job` im Rahmen: Argumente nach Art, das
-/// Ergebnis in kanonischer Form nach `out`, seine Laenge nach `out_len`.
+/// Ergebnis in kanonischer Form nach `out`, seine Laenge nach `out_len`;
+/// `-1` dort heisst `Err(FAILED)`.
 fn job_case(n: &takt_mir::fns::Native, out: &str, out_len: &str) -> Option<String> {
     use takt_native::Kind;
     let sig = takt_native::Native::by_name(&n.name)?.signature();
@@ -1703,7 +1713,7 @@ fn job_case(n: &takt_mir::fns::Native, out: &str, out_len: &str) -> Option<Strin
         .iter()
         .enumerate()
         .map(|(k, kind)| match kind {
-            Kind::Bytes | Kind::Digest => format!("a[{k}] + 4, (int)takt_job_le32(a[{k}])"),
+            Kind::Bytes | Kind::Digest | Kind::Fixed(_) => format!("a[{k}] + 4, (int)takt_job_le32(a[{k}])"),
             _ => format!("a[{k}], n[{k}]"),
         })
         .collect();
@@ -1720,7 +1730,14 @@ fn job_case(n: &takt_mir::fns::Native, out: &str, out_len: &str) -> Option<Strin
             n.name,
             args.join(", ")
         ),
-        Kind::Bytes => return None,
+        // Ein Feld traegt keine Laenge; es ist so lang wie die Eingabe.
+        Kind::Floats256 => format!("takt_native_{}({}, {out}); {out_len} = n[0];", n.name, args.join(", ")),
+        Kind::Fixed(_) => return None,
+        Kind::Bytes => format!(
+            "int r = takt_native_{}({}, {out} + 4); if (r < 0) {{ {out_len} = -1; }} else {{ takt_job_put32({out}, (unsigned int)r); {out_len} = 4 + r; }}",
+            n.name,
+            args.join(", ")
+        ),
     })
 }
 

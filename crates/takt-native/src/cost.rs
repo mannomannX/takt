@@ -55,7 +55,18 @@ pub fn cost_of(f: Native) -> Cost {
         // Stack 488.
         Native::Sha256Final => Cost { per_byte: 0, call: 3600, stack: 640 },
         // Der Start eines Jobs (4.5): Argumente kopieren; die Pruefung
-        // selbst laeuft ausserhalb der Schrittphase in `takt-crypto`.
-        Native::EcdsaP256Verify => Cost { per_byte: 0, call: 300, stack: 2048 },
+        // selbst laeuft ausserhalb der Schrittphase in `takt-crypto`. Der
+        // Stack ist der des Job-Kontexts. Stack 4480 (`p256`).
+        Native::EcdsaP256Verify => Cost { per_byte: 0, call: 300, stack: 5600 },
+        // Stack 8348: Montgomery-Reduktion ueber 3072 Bit mit doppelt
+        // breiten Produkten (`crypto-bigint`), dazu MGF1 und SHA-256.
+        Native::Rsa3072Verify => Cost { per_byte: 0, call: 900, stack: 10_464 },
+        // Stack 2188.
+        Native::AesGcmDecrypt => Cost { per_byte: 1, call: 300, stack: 2752 },
+        // 128-Punkt-FFT: 7 Stufen zu 64 Schmetterlingen mit 4 Produkten und
+        // 6 Summen, die Trennung je Bin 14 Operationen, dazu Laden und
+        // Speichern. Stack 4344: Real- und Imaginaerteil in `f64` (2 KiB)
+        // und der Puffer der kanonischen Form am Einstieg.
+        Native::Fft256 => Cost { per_byte: 0, call: 8_400, stack: 5440 },
     }
 }

@@ -22,7 +22,7 @@ takt-sema = { path = "../takt-sema" }
 # Fuer das Messprogramm `natives` (13.8): die kuratierten Natives und ihre
 # Einstiege, wie der erzeugte Code sie ruft.
 takt-native = { path = "../takt-native" }
-takt-native-abi = { path = "../takt-native-abi" }
+takt-native-abi = { path = "../takt-native-abi", features = ["ecdsa", "rsa", "aes-gcm"] }
 takt-board-esp32c6 = { path = "../takt-board-esp32c6" }
 takt-board-support = { path = "../takt-board-support" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }

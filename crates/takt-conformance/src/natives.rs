@@ -31,15 +31,16 @@ pub fn spec_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../grammar/takt-native.md")
 }
 
-/// Die Vektoren aus dem Block ```` ```takt-native ````, ohne die Natives,
-/// deren Implementierung ausserhalb liegt (`takt-crypto`).
+/// Die Vektoren aus den Bloecken ```` ```takt-native ```` und
+/// ```` ```takt-crypto ````: die Natives aus `takt-native` und die Jobs aus
+/// `takt-crypto` (4.5), die jedes Ziel ebenso rechnen muss.
 pub fn vectors(spec: &str) -> Result<Vec<Vector>, String> {
     let mut out = Vec::new();
     let mut inside = false;
     for (i, raw) in spec.lines().enumerate() {
         let (line, at) = (raw.trim(), i + 1);
         if line.starts_with("```") {
-            inside = line == "```takt-native";
+            inside = line == "```takt-native" || line == "```takt-crypto";
             continue;
         }
         if !inside || line.is_empty() || line.starts_with('#') {
@@ -49,9 +50,6 @@ pub fn vectors(spec: &str) -> Result<Vec<Vector>, String> {
         let mut words = head.split_whitespace();
         let name = words.next().ok_or_else(|| format!("Zeile {at}: keine Funktion"))?;
         let native = Native::by_name(name).ok_or_else(|| format!("Zeile {at}: `{name}` ist keine native Funktion"))?;
-        if native.external() {
-            continue;
-        }
         let inputs = words
             .map(|w| hex(w).ok_or_else(|| format!("Zeile {at}: `{w}` ist kein Hex")))
             .collect::<Result<Vec<_>, _>>()?;
@@ -60,10 +58,16 @@ pub fn vectors(spec: &str) -> Result<Vec<Vector>, String> {
     Ok(out)
 }
 
-/// Eine Hexfolge; ein Bindestrich ist die leere Eingabe.
+/// Eine Hexfolge; ein Bindestrich ist die leere Eingabe, `@f32/SEED` und
+/// `@f64/SEED` die erzeugten Eingaben von `fft256`.
 fn hex(word: &str) -> Option<Vec<u8>> {
     if word == "-" {
         return Some(Vec::new());
+    }
+    if word.starts_with('@') {
+        let mut out = [0u8; takt_native::fft::BYTES_F64];
+        let len = takt_native::fft::generated(word, &mut out)?;
+        return Some(out[..len].to_vec());
     }
     if word.len() % 2 != 0 {
         return None;
@@ -92,11 +96,41 @@ pub fn table_source(vectors: &[Vector]) -> String {
 
 /// Ein Ergebnis in der Schreibweise des Messprogramms
 /// (`takt_rt_baremetal::bench::write_native`): eine Pruefsumme als acht
-/// Byte, hoechstwertiges zuerst, ein Digest Byte fuer Byte.
+/// Byte, hoechstwertiges zuerst, ein Digest Byte fuer Byte, die Werte von
+/// `fft256` als SHA-256 ihrer kanonischen Form.
 pub fn render(out: &Output) -> String {
-    match out {
-        Output::Scalar(v) => format!("{v:016x}"),
-        Output::Digest(d) => d.iter().map(|b| format!("{b:02x}")).collect(),
+    match out.digest_or_scalar() {
+        Ok(v) => format!("{v:016x}"),
+        Err(d) => hex_of(&d),
+    }
+}
+
+fn hex_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Was der Wirt zu einem Vektor rechnet, in der Schreibweise des
+/// Messprogramms. Die Jobs aus `takt-crypto` rechnet `takt-crypto`: ein
+/// `bool` als Pruefsumme, ein Klartext als SHA-256, `-` ohne Ergebnis.
+pub fn expected(v: &Vector) -> Option<String> {
+    let inputs: Vec<&[u8]> = v.inputs.iter().map(Vec::as_slice).collect();
+    let bit = |ok: bool| render(&Output::Scalar(u64::from(ok)));
+    match (v.native, inputs.as_slice()) {
+        (Native::EcdsaP256Verify, [key, digest, sig]) => {
+            match (<&[u8; 64]>::try_from(*key), <&[u8; 32]>::try_from(*digest), <&[u8; 64]>::try_from(*sig)) {
+                (Ok(key), Ok(digest), Ok(sig)) => takt_crypto::ecdsa_p256_verify(key, digest, sig).ok().map(bit),
+                _ => Some(bit(false)),
+            }
+        }
+        (Native::Rsa3072Verify, [key, digest, sig]) => takt_crypto::rsa3072_verify(key, digest, sig).ok().map(bit),
+        (Native::AesGcmDecrypt, [key, nonce, aad, data, tag]) => {
+            let mut out = vec![0u8; data.len()];
+            Some(match takt_crypto::aes_gcm_decrypt(key, nonce, aad, data, tag, &mut out).ok()? {
+                Some(n) => hex_of(&takt_native::sha256::sha256(&out[..n])),
+                None => "-".to_string(),
+            })
+        }
+        _ => takt_native::call(v.native, &inputs).map(|o| render(&o)),
     }
 }
 
@@ -181,10 +215,9 @@ pub fn judge(vectors: &[Vector], measured: &[Measured]) -> Result<Vec<Row>, Stri
     let mut rows: Vec<Row> = Vec::new();
     for (i, v) in vectors.iter().enumerate() {
         let m = measured.iter().find(|m| m.index == i).ok_or_else(|| format!("Vektor {i} fehlt"))?;
-        let inputs: Vec<&[u8]> = v.inputs.iter().map(Vec::as_slice).collect();
-        let want = takt_native::call(v.native, &inputs)
-            .map(|o| render(&o))
-            .ok_or_else(|| format!("Zeile {}: `{}` nimmt nicht {} Eingaben", v.line, v.native.name(), inputs.len()))?;
+        let want = expected(v).ok_or_else(|| {
+            format!("Zeile {}: `{}` nimmt nicht {} Eingaben", v.line, v.native.name(), v.inputs.len())
+        })?;
         let row = row_of(&mut rows, v.native);
         row.vectors += 1;
         row.stack = row.stack.max(m.stack);
@@ -223,13 +256,17 @@ mod tests {
         std::fs::read_to_string(spec_path()).expect("grammar/takt-native.md lesbar")
     }
 
-    /// Die Spezifikation traegt Vektoren fuer jede Funktion, die hier
-    /// laeuft; die aus `takt-crypto` bleiben draussen.
+    /// Die Spezifikation traegt Vektoren fuer jede Funktion der Menge, auch
+    /// fuer die Jobs aus `takt-crypto`, und der Wirt rechnet zu jedem einen
+    /// Erwartungswert.
     #[test]
     fn the_spec_yields_the_vectors() {
         let v = vectors(&spec()).expect("lesbar");
         assert!(v.len() >= 32, "{}", v.len());
-        assert!(v.iter().all(|v| !v.native.external()));
+        for f in Native::ALL {
+            assert!(v.iter().any(|v| v.native.vector_name() == f.vector_name()), "{} ohne Vektor", f.name());
+        }
+        assert!(v.iter().all(|v| expected(v).is_some()), "ein Vektor ohne Erwartungswert");
         assert!(v.iter().any(|v| v.native == Native::Crc32 && v.inputs == vec![Vec::<u8>::new()]), "leere Eingabe");
     }
 

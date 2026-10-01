@@ -379,7 +379,7 @@ impl Outer for MachineEnv<'_, '_> {
         })
     }
 
-    fn job_start(&mut self, handle: VarId, value: Value, due: u64) -> EvalResult<()> {
+    fn job_start(&mut self, handle: VarId, value: Option<Value>, due: u64) -> EvalResult<()> {
         let slot = self.job_slot(handle)?;
         // 4.5: Eine Aufzeichnung ersetzt den Tick des Modells.
         let (id, tick) = (self.id, self.tick);

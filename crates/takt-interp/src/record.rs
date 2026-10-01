@@ -213,8 +213,8 @@ impl Header {
 }
 
 /// Das TCB-Manifest eines Programms (9.5): kuratierte Natives aus
-/// `takt-native`, `takt-crypto` mit seiner Abhaengigkeit, Projekt-Natives
-/// mit ihrer Datei.
+/// `takt-native`, je Funktion aus `takt-crypto` ihre Abhaengigkeit,
+/// Projekt-Natives mit ihrer Datei.
 fn manifest(p: &Program) -> Vec<String> {
     let mut out = Vec::new();
     let curated = |n: &takt_mir::fns::Native| {
@@ -223,8 +223,14 @@ fn manifest(p: &Program) -> Vec<String> {
     if p.natives.iter().any(curated) {
         out.push("takt-native".to_string());
     }
-    if p.natives.iter().any(|n| n.name == takt_native::Native::EcdsaP256Verify.name()) {
-        out.push(takt_crypto::MANIFEST.to_string());
+    for n in &p.natives {
+        if takt_native::Native::by_name(&n.name).is_some_and(takt_native::Native::external) && n.from.is_none() {
+            let entry = takt_crypto::manifest(&n.name)
+                .map_or_else(|| format!("takt-crypto {} ohne sein Feature", n.name), str::to_string);
+            if !out.contains(&entry) {
+                out.push(entry);
+            }
+        }
     }
     for n in &p.natives {
         if let Some(file) = &n.from {

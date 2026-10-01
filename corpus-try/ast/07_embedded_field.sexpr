@@ -13,7 +13,7 @@
 (native-fn sha256_init () -> Sha256Ctx cost=200 stack=320)
 (native-fn sha256_update (ctx:Sha256Ctx chunk:bytes<256>) -> Sha256Ctx cost={i32:90000} stack=544)
 (native-fn sha256_final (ctx:Sha256Ctx) -> bytes<32> cost=3000 stack=640)
-(native-job ecdsa_p256_verify (key:bytes<64> digest:bytes<32> sig:bytes<64>) -> bool cost=300 stack=2048 duration=120ms)
+(native-job ecdsa_p256_verify (key:bytes<64> digest:bytes<32> sig:bytes<64>) -> bool cost=300 stack=5600 duration=120ms)
 (input cell_mv :u16[mV] in 2000[mV]..4500[mV] @hw("afe/cell0") max_age=100ms max_slew=200[mV/s])
 (input charger :bool @hw("gpio/vbus") wake=true)
 (input button :stream<Edge> @hw("gpio/btn") max_rate=50[Hz] wake=true)
