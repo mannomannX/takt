@@ -441,6 +441,7 @@ fn build_inner(
             slot.name, slot.offset
         );
     }
+    let _ = writeln!(dump, "    takt_stream_report(t);");
     let _ = writeln!(dump, "}}");
     // Die Vorwaertsdeklaration muss vor `main` stehen.
     let at = s.find("int main(void)").unwrap_or(0);

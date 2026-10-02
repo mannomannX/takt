@@ -5,7 +5,8 @@
 //! gemacht: Der Trace ist die Zusage, der Zustand ein Diagnosewerkzeug.
 //! Dazu die Faults je Tick nach Maschine und Art (FB-330): Zwei Wege, die
 //! im selben Tick aus verschiedenen Gruenden faulten, fielen an den
-//! Outputs nicht auf — beide stehen danach auf `safe`.
+//! Outputs nicht auf — beide stehen danach auf `safe`. Ebenso die Alerts
+//! und die Zaehler der Stroeme (8.6, FB-361).
 //!
 //! **Was nicht verglichen wird, und warum das dasteht.** Der Testrahmen
 //! ist keine Runtime (siehe `harness`): Er hat keine Treiber, also keine
@@ -204,6 +205,34 @@ pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
             let render = |v: Option<&Vec<String>>| v.map_or(String::new(), |v| v.join(", "));
             out.push(Difference { tick, output: "alert".into(), interpreter: render(x), native: render(y) });
         }
+    }
+    let (sa, sb) = (stream_counters(interpreter), stream_counters(native));
+    let stream_ticks: std::collections::BTreeSet<u64> =
+        sa.keys().chain(sb.keys()).copied().filter(|t| Some(*t) <= horizon).collect();
+    for tick in stream_ticks {
+        let (x, y) = (sa.get(&tick), sb.get(&tick));
+        if x != y {
+            let render = |v: Option<&Vec<String>>| v.map_or(String::new(), |v| v.join(", "));
+            out.push(Difference { tick, output: "stream".into(), interpreter: render(x), native: render(y) });
+        }
+    }
+    out
+}
+
+/// Die Zaehler der Stroeme (`t=<tick> stream <name> dropped=… overflowed=…
+/// malformed=…`, 8.6): je Tick die Zeilen, sortiert. Beide Seiten schreiben
+/// sie nur, wenn sich ein Zaehler nach Tick 0 aendert; eine Zeile, die nur
+/// eine Seite schreibt, ist eine Abweichung.
+fn stream_counters(trace: &str) -> BTreeMap<u64, Vec<String>> {
+    let mut out: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+    for line in trace.lines() {
+        let Some(rest) = line.strip_prefix("t=") else { continue };
+        let Some((tick, rest)) = rest.split_once(' ') else { continue };
+        let (Ok(tick), Some(rest)) = (tick.parse::<u64>(), rest.strip_prefix("stream ")) else { continue };
+        out.entry(tick).or_default().push(rest.split_whitespace().collect::<Vec<_>>().join(" "));
+    }
+    for v in out.values_mut() {
+        v.sort();
     }
     out
 }

@@ -138,3 +138,59 @@ fn a_reader_that_falls_behind_overflows_the_ring() {
         }
     }
 }
+
+/// **Die Zaehler eines Stroms sind die des Interpreters** (8.6, 12.6 Zeile
+/// 5, FB-361): `drop_oldest` verdraengt (`dropped`), ein Record ohne
+/// `decode` wird verworfen (`malformed`), ein voller Ring mit `fault`
+/// laeuft ueber (`overflowed`) und faultet den Leser, der zurueckfaellt.
+/// Eine zweite Maschine liest die Zaehler; beide Seiten schreiben dazu die
+/// Zeilen `stream`, und der Vergleich haelt sie gegeneinander.
+#[test]
+fn the_counters_of_a_stream_are_the_interpreters() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let p = program_of(
+        "system:\n    language = 1\n    tick     = 10 ms\n\n\
+         record Pair:\n    a : u8\n    b : u8\n\n\
+         input  pairs : stream<Pair>    @ hw(\"c/rx\") with max_rate = 200 Hz, capacity = 2, overflow = drop_oldest\n\
+         input  rx    : stream<line<8>> @ hw(\"u/rx\") with max_rate = 200 Hz, capacity = 2, overflow = fault\n\
+         output lost  : int in 0..9     @ sim(\"o/lost\")\n\
+         output over  : int in 0..9     @ sim(\"o/over\")\n\
+         output bad   : int in 0..9     @ sim(\"o/bad\")\n\n\
+         machine m:\n    initial RUN\n\n    state RUN:\n        loop:\n\
+         \x20           lost = min(pairs.dropped, 9)\n\
+         \x20           over = min(rx.overflowed, 9)\n\
+         \x20           bad = min(pairs.malformed, 9)\n\n\
+         machine lag:\n    initial WAIT\n\n    state WAIT:\n        loop:\n            pass\n\n\
+         \x20   state READ:\n        on rx as l:\n            pass\n        on pairs as q:\n            pass\n",
+    );
+    let stimulus = takt_interp::Trace::parse(
+        "t=1 in pairs 0x0102\nt=1 in pairs 0x0304\nt=1 in rx \"a\"\nt=1 in rx \"b\"\n\
+         t=2 in pairs 0x0506\nt=2 in rx \"c\"\nt=3 in pairs 0x010203\n",
+    )
+    .expect("Stimulus");
+    let inputs = Stimulus::from_trace(&stimulus);
+    let native = common::run_native_all_with(&clang, &p, "zaehler", 5, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: 5, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+    for line in [
+        "t=2 out lost 1",
+        "t=2 out over 1",
+        "t=3 out bad 1",
+        "t=2 stream pairs dropped=1 overflowed=0 malformed=0",
+        "t=2 stream rx dropped=0 overflowed=1 malformed=0",
+        "t=3 stream pairs dropped=1 overflowed=0 malformed=1",
+    ] {
+        assert!(interpreted.contains(line), "Interpreter ohne `{line}`:\n{interpreted}");
+        assert!(native.contains(line), "nativ ohne `{line}`:\n{native}");
+    }
+    let diffs = compare(&interpreted, &native);
+    assert!(
+        diffs.is_empty(),
+        "{} Abweichungen: {diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}",
+        diffs.len()
+    );
+}

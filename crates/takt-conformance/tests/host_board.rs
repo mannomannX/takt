@@ -8,8 +8,8 @@
 
 mod common;
 
-use common::board::{driver_edge_agrees, unread_channels_are_recorded};
-use takt_conformance::board::{self, host::Host};
+use common::board::{agreement, driver_edge_agrees, unread_channels_are_recorded};
+use takt_conformance::board::{self, CORPUS, host::Host};
 
 /// Der Wirt mit dem Pruefgeraet; ohne clang keiner.
 fn probe() -> Option<Host> {
@@ -36,4 +36,18 @@ fn the_unread_channels_are_recorded_on_the_host() {
     let Some(mut host) = probe() else { return };
     let failed = unread_channels_are_recorded(&mut host);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Der MCU-Rahmen rechnet den Korpus der Boards wie der Interpreter, auch
+/// ohne Board** (9.4.4): derselbe Vergleich wie auf F401 und C6, ohne
+/// Treiber-Crate. Der Bau kostet einige Sekunden je Programm, darum nur mit
+/// `TAKT_HOST_CORPUS`; `TAKT_HOST_ONLY=42_map.takt` fuer einen einzelnen Fall.
+#[test]
+fn the_host_board_agrees_with_the_interpreter() {
+    if std::env::var_os("TAKT_HOST_CORPUS").is_none() || probe().is_none() {
+        return;
+    }
+    let only = std::env::var("TAKT_HOST_ONLY").ok();
+    let failed = agreement(&mut Host::new(), CORPUS, only.as_deref());
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }

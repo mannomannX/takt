@@ -283,7 +283,7 @@ fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine]) {
         {
             let _ = writeln!(
                 s,
-                "        if (!takt_edge_decodes(g_shape_{c}, (unsigned)sizeof g_shape_{c}, v->bytes, (unsigned)v->len, 1)) break;"
+                "        if (!takt_edge_decodes(g_shape_{c}, (unsigned)sizeof g_shape_{c}, v->bytes, (unsigned)v->len, 1)) {{ g_int_malformed[takt_int_slot({c})]++; break; }}"
             );
         }
         let _ = writeln!(

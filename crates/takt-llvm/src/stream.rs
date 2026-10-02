@@ -76,6 +76,11 @@ impl Streams {
     /// Treiber, der den Puffer leert.
     pub const SENT: &'static str = "takt_stream_sent";
 
+    /// Ein Zaehler am Ring (8.6): `s.dropped` (0), `s.overflowed` (1),
+    /// `s.malformed` (2). Den Verwurf im `idle` zaehlt die Maschine selbst
+    /// (5.10); `s.dropped` ist die Summe beider.
+    pub const COUNTER: &'static str = "takt_stream_counter";
+
     /// Schreibt die Deklarationen in den Modulkopf.
     pub fn declare(m: &mut Module) {
         m.declare("\n; Stroeme (8.6, 8.8, 9.6); die Puffer gehoeren der Runtime");
@@ -104,6 +109,10 @@ impl Streams {
         m.declare(&format!(
             "declare i32 @{}(i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
             Streams::SENT
+        ));
+        m.declare(&format!(
+            "declare i32 @{}(i32, i32) nounwind willreturn memory(inaccessiblemem: read)",
+            Streams::COUNTER
         ));
     }
 }

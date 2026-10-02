@@ -64,6 +64,7 @@ fn a_driver_crate_is_judged_by_the_edge_on_the_host() {
         "Zeile 6  t=4 runtime Driver o",
         "Zeile 2  t=5 driver edge_u degraded seq",
         "Zeile 2  t=7 driver edge_u degraded maxpt",
+        "Zeile 5  t=9 stream pairs dropped=0 overflowed=0 malformed=1",
         "Zeile 2  t=11 driver edge_b degraded timestamp",
     ] {
         assert!(stdout.contains(line), "{line}:\n{stdout}");

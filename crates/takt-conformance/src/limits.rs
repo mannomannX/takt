@@ -46,10 +46,12 @@ pub const LIMITS: &[Limit] = &[
                 Laeuft ein Eingabering voll, verdraengt `drop_oldest` die aeltesten, sonst \
                 faultet der Leser (`streams.rs`, Test `a_reader_that_falls_behind_overflows_the_ring`); \
                 laeuft ein interner Ring voll, faultet der Sender im selben Tick (8.6, FB-326, \
-                Korpus 88), und `drop` verwirft auf beiden Wegen. `drop_oldest` kennt der \
-                interne Ring nicht, und `s.overflowed` liest kein Korpusprogramm. `s.dropped` \
-                zaehlt im erzeugten Code nur den Verwurf im `idle` (5.10, Korpus 92), nicht \
-                den des Rings.",
+                Korpus 88), und `drop` verwirft auf beiden Wegen. Die Zaehler `dropped`, \
+                `overflowed` und `malformed` fuehrt jeder Ring wie der Interpreter, beide \
+                Rahmen schreiben die Zeile `stream`, und der Vergleich haelt sie gegeneinander \
+                (FB-361, Test `the_counters_of_a_stream_are_the_interpreters`). `drop_oldest` \
+                kennen der interne Ring und die Kopplung eines `sim`-Ausgabestroms nicht: \
+                Dort weist der volle Ring das neue Element ab.",
         wann: "Mit der Runtime: `takt-rt-core::stream` haelt den Ring samt Verdraengung und \
                Eviction; wo der Rahmen rechnet, wuerde sie messen.",
     },

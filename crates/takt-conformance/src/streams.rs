@@ -54,8 +54,76 @@ pub fn emit(s: &mut String, p: &Program, trace: Trace) {
     let _ = writeln!(s, "void takt_stream_examined(int s, int m, long long seq) {{");
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
     let _ = writeln!(s, "    if (k >= 0) takt_int_examined(k, m, seq);");
+    let _ = writeln!(s, "}}");
+    // 8.6: `s.dropped` (0), `s.overflowed` (1), `s.malformed` (2) am Ring.
+    let _ = writeln!(s, "int takt_stream_counter(int s, int which) {{");
+    let _ = writeln!(s, "    int k = takt_int_slot(s);");
+    let _ = writeln!(s, "    if (k < 0) return 0;");
+    let _ = writeln!(
+        s,
+        "    return (int)(which == 0 ? g_int_dropped[k] : which == 1 ? g_int_overflowed[k] : g_int_malformed[k]);"
+    );
     let _ = writeln!(s, "}}\n");
+    report(s, p, trace);
     emit_send(s, p, trace);
+}
+
+/// `takt_stream_report(t)`: die Zeile `stream <name> dropped=… overflowed=…
+/// malformed=…` je Strom, dessen Zaehler sich geaendert haben (8.6,
+/// `grammar/trace.md`) — erst die Eingabestroeme, dann die internen, wie
+/// der Interpreter. Der erste Aufruf nach Tick 0 merkt den Stand nur: In
+/// Tick 0 sind die Zaehler keine Beobachtung (`Recorder::stream_counters`).
+fn report(s: &mut String, p: &Program, trace: Trace) {
+    let dyns = dynamic_streams(p);
+    let order: Vec<usize> =
+        (0..dyns.len()).filter(|&k| dyns[k].input).chain((0..dyns.len()).filter(|&k| !dyns[k].input)).collect();
+    let rows = dyns.len().max(1);
+    let names: Vec<String> = dyns.iter().map(|d| format!("\"{}\"", d.name)).collect();
+    let _ = writeln!(
+        s,
+        "static const char *const g_int_name[{rows}] = {{ {} }};",
+        if names.is_empty() { "0".to_string() } else { names.join(", ") }
+    );
+    let _ = writeln!(s, "static unsigned g_int_shown[{rows}][3];");
+    let _ = writeln!(s, "static _Bool g_int_based;");
+    let _ = writeln!(s, "static void takt_stream_report(long long t) {{");
+    if !order.is_empty() {
+        let list: Vec<String> = order.iter().map(usize::to_string).collect();
+        let _ = writeln!(s, "    static const int order[] = {{ {} }};", list.join(", "));
+        let _ = writeln!(s, "    for (unsigned j = 0; j < sizeof order / sizeof order[0]; j++) {{");
+        let _ = writeln!(s, "        int k = order[j];");
+        let _ =
+            writeln!(s, "        unsigned now[3] = {{ g_int_dropped[k], g_int_overflowed[k], g_int_malformed[k] }};");
+        let _ = writeln!(s, "        if (g_int_based && memcmp(now, g_int_shown[k], sizeof now) == 0) continue;");
+        let _ = writeln!(s, "        memcpy(g_int_shown[k], now, sizeof now);");
+        let _ = writeln!(s, "        if (!g_int_based) continue;");
+        match trace {
+            Trace::Stdio => {
+                let _ = writeln!(
+                    s,
+                    "        printf(\"t=%lld stream %s dropped=%u overflowed=%u malformed=%u\\n\", t, g_int_name[k], now[0], now[1], now[2]);"
+                );
+            }
+            Trace::Board => {
+                let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+                let _ = writeln!(s, "        takt_board_trace_i64(t);");
+                let _ = writeln!(s, "        takt_board_trace(\"stream \");");
+                let _ = writeln!(s, "        takt_board_trace(g_int_name[k]);");
+                let _ = writeln!(s, "        takt_board_trace(\" dropped=\");");
+                let _ = writeln!(s, "        takt_board_trace_u64(now[0]);");
+                let _ = writeln!(s, "        takt_board_trace(\"overflowed=\");");
+                let _ = writeln!(s, "        takt_board_trace_u64(now[1]);");
+                let _ = writeln!(s, "        takt_board_trace(\"malformed=\");");
+                let _ = writeln!(s, "        takt_board_trace_u64(now[2]);");
+                let _ = writeln!(s, "        takt_board_trace(\"\\n\");");
+            }
+        }
+        let _ = writeln!(s, "    }}");
+    } else {
+        let _ = writeln!(s, "    (void)t;");
+    }
+    let _ = writeln!(s, "    g_int_based = 1;");
+    let _ = writeln!(s, "}}\n");
 }
 
 /// Die Gestalt eines Elementtyps, dessen Elemente in kanonischer Form
@@ -113,6 +181,11 @@ struct Dynamic {
     /// `capacity_bytes` (8.6); die Sema setzt den Default.
     capacity_bytes: u32,
     readers: Vec<u32>,
+    /// Ein Eingabestrom: `stream`-Zeilen kommen vor denen der internen.
+    input: bool,
+    /// Zaehlt ein abgewiesenes `send` als `overflowed`? Mit `overflow =
+    /// drop` nicht, wie `System::send` im Interpreter.
+    counts_overflow: bool,
 }
 
 /// Die Ringe des Laufs: erst die internen Stroeme, dann die
@@ -131,6 +204,8 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
             capacity: st.capacity,
             capacity_bytes: st.capacity_bytes.unwrap_or(st.capacity.saturating_mul(payload_cap(p, st.elem))),
             readers: st.readers.iter().map(|m| m.0).collect(),
+            input: false,
+            counts_overflow: !matches!(st.overflow, takt_mir::program::Overflow::Drop),
         })
         .collect();
     let inputs = p.channels.iter().enumerate().filter_map(|(i, c)| match p.types.list.get(c.ty.index()) {
@@ -155,6 +230,8 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
             capacity,
             capacity_bytes: c.attrs.capacity_bytes.unwrap_or(capacity.saturating_mul(payload_cap(p, elem))),
             readers,
+            input: true,
+            counts_overflow: true,
         });
     }
     out
@@ -241,6 +318,14 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "static int g_int_head[{rows}], g_int_n[{rows}], g_int_new[{rows}];");
     let _ = writeln!(s, "static int g_int_bhead[{rows}], g_int_bused[{rows}];");
     let _ = writeln!(s, "static long long g_int_seq[{rows}];");
+    // 8.6: `s.dropped`, `s.overflowed` und `s.malformed` am Ring, wie
+    // `Buffer` im Interpreter.
+    let _ = writeln!(s, "static unsigned g_int_dropped[{rows}], g_int_overflowed[{rows}], g_int_malformed[{rows}];");
+    let _ = writeln!(
+        s,
+        "static const _Bool g_int_counts_overflow[{rows}] = {{ {} }};",
+        list(dyns.iter().map(|d| usize::from(d.counts_overflow)).collect())
+    );
     let _ = writeln!(s, "static long long g_int_ex[{rows}][{machines}]; /* examined + 1 je Leser */");
     let _ = writeln!(s, "static const int g_int_readers[{rows}][{readers}] = {{");
     for d in &dyns {
@@ -361,9 +446,10 @@ fn emit_internal(s: &mut String, p: &Program) {
     let _ = writeln!(s, "        g_int_bused[k] -= len;");
     let _ = writeln!(s, "        if (++g_int_head[k] == g_int_cap[k]) g_int_head[k] = 0;");
     let _ = writeln!(s, "        g_int_n[k]--;");
+    let _ = writeln!(s, "        g_int_dropped[k]++;");
     let _ = writeln!(s, "        dropped = 1;");
     let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    if (!takt_int_push(k, (const char *)b, n, at)) return 2;");
+    let _ = writeln!(s, "    if (!takt_int_push(k, (const char *)b, n, at)) {{ g_int_overflowed[k]++; return 2; }}");
     let _ = writeln!(s, "    g_int_new[k]--;");
     let _ = writeln!(s, "    return dropped;");
     let _ = writeln!(s, "}}");
@@ -458,15 +544,25 @@ fn emit_send(s: &mut String, p: &Program, trace: Trace) {
         "static void takt_couple(int k, const unsigned char *b, int n, int w, const unsigned char *shape, unsigned shape_len) {{"
     );
     let _ = writeln!(s, "    if (k < 0) return;");
-    let _ = writeln!(s, "    if (w == 0) {{ takt_int_send(k, (const char *)b, n); return; }}");
-    let _ = writeln!(s, "    for (int off = 0; off + w <= n; off += w)");
+    let _ =
+        writeln!(s, "    if (w == 0) {{ if (!takt_int_send(k, (const char *)b, n)) g_int_overflowed[k]++; return; }}");
+    let _ = writeln!(s, "    for (int off = 0; off + w <= n; off += w) {{");
     let _ = writeln!(
         s,
-        "        if (!shape || takt_edge_decodes(shape, shape_len, b + off, (unsigned)w, 0)) takt_int_send(k, (const char *)b + off, w);"
+        "        if (shape && !takt_edge_decodes(shape, shape_len, b + off, (unsigned)w, 0)) g_int_malformed[k]++;"
     );
+    let _ = writeln!(s, "        else if (!takt_int_send(k, (const char *)b + off, w)) g_int_overflowed[k]++;");
+    let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
+    // Ein abgewiesenes `send` auf einen internen Strom zaehlt, ausser mit
+    // `overflow = drop` (8.6, `System::send`).
     let _ = writeln!(s, "_Bool takt_stream_send(int s, const char *b, int n) {{");
-    let _ = writeln!(s, "    if (takt_int_slot(s) >= 0) return takt_int_send(takt_int_slot(s), b, n);");
+    let _ = writeln!(s, "    int r = takt_int_slot(s);");
+    let _ = writeln!(s, "    if (r >= 0) {{");
+    let _ = writeln!(s, "        _Bool ok = takt_int_send(r, b, n);");
+    let _ = writeln!(s, "        if (!ok && g_int_counts_overflow[r]) g_int_overflowed[r]++;");
+    let _ = writeln!(s, "        return ok;");
+    let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    int k = takt_tx_slot(s);");
     let _ = writeln!(s, "    if (k < 0) return 0;");
     // 8.8: `len > tx.free` ist ein `StreamOverflow`.

@@ -985,6 +985,7 @@ fn telemetry(
     let _ = writeln!(s, "            takt_board_trace(\"\\n\");");
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    takt_stream_report(g_done);");
     let _ = writeln!(s, "}}\n");
     program_counters(s, p, driven);
     sample(s, p, layout);

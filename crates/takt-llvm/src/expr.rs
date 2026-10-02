@@ -464,12 +464,23 @@ fn access(
     if which == Accessor::Count && stream_of(base, p).is_some() {
         return stream_count(base, want, m, vars);
     }
-    // 9.6: `dropped[s]` am Puffer plus `dropped[s, m]`. Der Ring meldet
-    // seinen Teil nicht (`limits.rs`); hier steht der Verwurf im `idle`.
-    if which == Accessor::Dropped
+    // 8.6: Die Zaehler stehen am Ring (`takt_stream_counter`). `dropped[s]`
+    // am Ring plus `dropped[s, m]`, dem Verwurf im `idle` dieser Maschine
+    // (9.6, 5.10), wie `System::accessor` im Interpreter.
+    if matches!(which, Accessor::Dropped | Accessor::Overflowed | Accessor::Malformed)
         && let Some(stream) = stream_of(base, p)
     {
-        let n = vars.stream_dropped(stream, m).ok_or(NotYet { what: "`dropped` ausserhalb einer Maschine" })?;
+        let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+        let counter = match which {
+            Accessor::Dropped => 0,
+            Accessor::Overflowed => 1,
+            _ => 2,
+        };
+        let mut n = m.inst(&format!("call i32 @{}(i32 {sid}, i32 {counter})", crate::stream::Streams::COUNTER));
+        if which == Accessor::Dropped {
+            let own = vars.stream_dropped(stream, m).ok_or(NotYet { what: "`dropped` ausserhalb einer Maschine" })?;
+            n = m.inst(&format!("add i32 {n}, {own}"));
+        }
         let wide = m.inst(&format!("zext i32 {n} to {want}"));
         return Ok(Lowered { value: wide.to_string(), ty: want.clone() });
     }
