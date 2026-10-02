@@ -7,3 +7,9 @@ out/
 /scratch*.takt
 # Erzeugte Flash-Abbilder des Bring-up-Programms.
 *.bin
+
+# Ein Cargo-Zielverzeichnis im Baum, etwa eines Arbeitsbaums mit eigenem
+# CARGO_TARGET_DIR; der Hauptbaum baut nach G:/rust/target.
+/target/
+# Objekte von `takt build`, das ohne `--out` ins aktuelle Verzeichnis schreibt.
+*.o
