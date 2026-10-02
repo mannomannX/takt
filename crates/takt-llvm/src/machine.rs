@@ -479,7 +479,7 @@ pub fn begin_step(m: &Machine, module: &mut Module) -> Vec<crate::emit::Reg> {
     // entwertet jeder Latch-Store alle Ladungen aus dem Zustand. Das
     // Abbild nicht — `takt_job_begin` schreibt es ueber die Runtime.
     module.begin_with(
-        "",
+        "internal ",
         &step_name(m),
         &LlvmType::Void,
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],

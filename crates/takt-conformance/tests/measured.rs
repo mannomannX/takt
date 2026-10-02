@@ -203,7 +203,7 @@ fn the_step_function_has_a_measurable_frame() {
     };
 
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
-    let step = format!("{machine}_step");
+    let step = takt_llvm::arena::entry_symbol(&machine, "step");
     assert!(
         symbols.iter().any(|s| s.name == step && s.kind == 'T'),
         "`{step}` steht nicht als globales Symbol im Objekt; gefunden: {:?}",

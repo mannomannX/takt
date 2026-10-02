@@ -1131,11 +1131,10 @@ fn measure(
     // Alle Rahmen in einem Durchlauf: die Funktionen und je Maschine ihr
     // Schritt mit den Schleifen- und Eintrittsfunktionen darunter.
     let syms = tools.symbols(&path).unwrap_or_default();
-    let prefixes: Vec<String> = p.machines.iter().map(|m| format!("{}_", takt_llvm::fns::sanitized(&m.name))).collect();
     let mut names: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
     names.extend(
         syms.iter()
-            .filter(|s| matches!(s.kind, 'T' | 't') && prefixes.iter().any(|pre| s.name.starts_with(pre)))
+            .filter(|s| matches!(s.kind, 'T' | 't') && p.machines.iter().any(|m| machine_symbol(m, &s.name)))
             .map(|s| s.name.clone()),
     );
     let measured: Vec<Option<u32>> =
@@ -1147,21 +1146,29 @@ fn measure(
         .zip(&measured)
         .map(|(name, f)| f.or_else(|| (!syms.iter().any(|s| s.name == *name)).then_some(0)))
         .collect();
-    let machines: Vec<takt_mir::analysis::stack::MachineFrames> = prefixes
+    // Der Schritt ist der Einstieg `takt_<m>_step` (12.11); hat LLVM den
+    // Rumpf `<m>_step` nicht eingebettet, liegt dessen Rahmen darunter.
+    let machines: Vec<takt_mir::analysis::stack::MachineFrames> = p
+        .machines
         .iter()
-        .map(|pre| {
+        .map(|m| {
+            let (entry, body) = (takt_llvm::arena::entry_symbol(&m.name, "step"), takt_llvm::machine::step_name(m));
             let mut mf = takt_mir::analysis::stack::MachineFrames::default();
+            let mut below = 0;
             for (name, f) in names.iter().zip(&measured).skip(p.fns.len()) {
                 let Some(f) = *f else { continue };
-                if !name.starts_with(pre) {
+                if !machine_symbol(m, name) {
                     continue;
                 }
-                if name == &format!("{pre}step") {
+                if *name == entry {
                     mf.step = Some(f);
+                } else if *name == body {
+                    below = f;
                 } else if mf.inner.as_ref().is_none_or(|(_, n)| f > *n) {
                     mf.inner = Some((name.clone(), f));
                 }
             }
+            mf.step = mf.step.map(|f| f + below);
             mf
         })
         .collect();
@@ -1199,7 +1206,14 @@ fn object_for_size(p: &takt_mir::Program, target: takt_llvm::Target, source: &st
 /// erzeugen: Maschinen, Funktionen, Natives, `takt_mcu_*`.
 fn is_program_symbol(p: &takt_mir::Program, name: &str) -> bool {
     ["takt_mcu_", "takt_fn_", "takt_native_"].iter().any(|pre| name.starts_with(pre))
-        || p.machines.iter().any(|m| name.starts_with(&format!("{}_", takt_llvm::fns::sanitized(&m.name))))
+        || p.machines.iter().any(|m| machine_symbol(m, name))
+}
+
+/// Gehoert das Symbol zur Maschine `m`: ein Einstieg `takt_<m>_*` (12.11)
+/// oder ein Rumpf `<m>_*`, den LLVM nicht eingebettet hat?
+fn machine_symbol(m: &takt_mir::machine::Machine, name: &str) -> bool {
+    let own = takt_llvm::fns::sanitized(&m.name);
+    name.strip_prefix("takt_").unwrap_or(name).strip_prefix(own.as_str()).is_some_and(|rest| rest.starts_with('_'))
 }
 
 /// Die Hardware-Konfiguration aus `--hardware DATEI` (8.10), gelesen und

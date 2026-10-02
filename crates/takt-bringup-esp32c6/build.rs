@@ -77,12 +77,15 @@ fn build_takt_program(out: &Path) {
         takt_frame::mcu::Frame {
             diagnostics: diagnostics(),
             hardware: bringup::hardware().as_ref(),
-            protected: false,
+            protect: None,
         },
     );
     if let Err(e) = fs::write(&rahmen, frame.source) {
         panic!("Rahmen nicht schreibbar: {e}");
     }
+    // Wo der Tick in der Arena steht, als absolutes Symbol: Die Probe liest
+    // ihn ueber JTAG, wenn die Konsole schweigt (`Esp32c6::tick_over_jtag`).
+    println!("cargo:rustc-link-arg=--defsym=__takt_tick_at={}", frame.tick_at);
     let ir = out.join("takt_programm.ll");
     run_takt_build(&program, &["--emit", "ir"], &ir);
     run_takt_build(&program, &["--emit", "consts-rs"], &out.join("takt_consts.rs"));

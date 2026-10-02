@@ -120,11 +120,16 @@ fn module_of(pattern_of: &[Pattern]) -> String {
     let triple = if cfg!(windows) { "x86_64-pc-windows-msvc" } else { "x86_64-unknown-linux-gnu" };
     let mut m = Module::new("captures", triple);
     for (i, mu) in pattern_of.iter().enumerate() {
-        // `pruef(text, out) -> i1`; `out` nimmt den Aufnahmerecord.
-        let regs = m.begin(
+        // `pruef(text, out, arena) -> i1`; `out` nimmt den Aufnahmerecord.
+        // Von aussen gerufen, also mit aeusserer Bindung; die Arena haengt
+        // an jeder erzeugten Funktion (12.11).
+        let regs = m.begin_with(
+            "",
             &format!("pruef{i}"),
             &takt_llvm::ty::LlvmType::Int(1),
             &[takt_llvm::ty::LlvmType::Ptr, takt_llvm::ty::LlvmType::Ptr],
+            &[],
+            "",
         );
         let (text, out) = (regs[0], regs[1]);
         let count_of = mu.pieces.iter().filter(|p| matches!(p, PatternPiece::Capture { .. })).count();
@@ -291,8 +296,11 @@ fn driver(pattern_of: &[Pattern]) -> String {
     }
     let _ = writeln!(s);
     for (i, _) in pattern_of.iter().enumerate() {
-        let _ = writeln!(s, "_Bool pruef{i}(struct text *, void *);");
+        let _ = writeln!(s, "_Bool pruef{i}(struct text *, void *, void *);");
     }
+    // Die Fault-Ablagen am Anfang der Arena genuegen: Mehr beruehrt der
+    // Mustervergleich nicht.
+    let _ = writeln!(s, "static _Alignas(8) unsigned char arena[{}];", takt_llvm::arena::fault::BYTES);
     let _ = writeln!(s, "\nint main(void) {{");
     let _ = writeln!(s, "    struct text t;");
     for (i, _) in pattern_of.iter().enumerate() {
@@ -307,7 +315,7 @@ fn driver(pattern_of: &[Pattern]) -> String {
                 let _ = writeln!(s, "    memcpy(t.bytes, \"{bytes}\", {});", text.len());
             }
             let _ = writeln!(s, "    memset(&r{i}, 0, sizeof r{i});");
-            let _ = writeln!(s, "    if (!pruef{i}(&t, &r{i})) {{ printf(\"0\\n\"); }} else {{");
+            let _ = writeln!(s, "    if (!pruef{i}(&t, &r{i}, arena)) {{ printf(\"0\\n\"); }} else {{");
             let _ = writeln!(s, "        printf(\"1\");");
             // Die Felder in der Reihenfolge des Musters auslesen.
             let mut j = 0usize;

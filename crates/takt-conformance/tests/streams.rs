@@ -46,7 +46,7 @@ fn harness_of(p: &Program, stimulus: &[Stimulus]) -> String {
 /// Der Teil des Rahmens, der den Stimulus an den Rand gibt.
 fn feed(c: &str) -> &str {
     let start = c.find("static void takt_edge_stimulus").expect("Lieferfunktion");
-    let end = c[start..].find("takt_edge_commit(tick);").map_or(c.len(), |e| start + e);
+    let end = c[start..].find("takt_edge_commit(a, tick);").map_or(c.len(), |e| start + e);
     &c[start..end]
 }
 
@@ -55,7 +55,7 @@ fn feed(c: &str) -> &str {
 fn without_elements_the_window_stays_empty() {
     let p = with_bounds("");
     let c = harness_of(&p, &[]);
-    assert!(c.contains("return k >= 0 ? takt_int_count(k, cur) : 0;"), "{c}");
+    assert!(c.contains("return k >= 0 ? takt_int_count(a, k, cur) : 0;"), "{c}");
     assert!(!feed(&c).contains("takt_edge_element("), "keine Lieferung:\n{}", feed(&c));
 }
 

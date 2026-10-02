@@ -91,6 +91,7 @@ pub fn program_with_diagnostics(
 
     crate::abi::Abi::declare(&mut m);
     crate::stream::Streams::declare(&mut m);
+    let arena = crate::arena::of(p);
     if p.machines.iter().any(takt_mir::visit::reads_last_fault) {
         m.track_faults(&p.sources);
     }
@@ -138,7 +139,6 @@ pub fn program_with_diagnostics(
         if let Err(e) = &enter {
             skipped.push(Skipped { machine: machine.name.clone(), reason: format!("enter: {}", e.what) });
         }
-        let _ = crate::step::init_function(machine, &st, p, &mut m, vars.is_err() || enter.is_err());
         if !machine.persist.is_empty() {
             let snapshot = crate::persist::snapshot_function(machine, &st, p, &mut m);
             let restore = crate::persist::restore_function(machine, &st, p, &mut m);
@@ -179,14 +179,31 @@ pub fn program_with_diagnostics(
         if let Err(e) = crate::step::entry_functions(machine, &st, p, &mut m) {
             skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.into() });
         }
+        entries(machine, p, &arena, &mut m);
     }
 
     // 13.3: Laufzeitmonitore hinter den Maschinen; sie lesen nur das Abbild.
     for (i, prop) in p.properties.iter().enumerate().filter(|(_, prop)| prop.monitor) {
         if let Err(e) = crate::monitor::monitor_function(i, prop, p, &mut m) {
             skipped.push(Skipped { machine: format!("monitor {}", prop.name), reason: e.what.to_string() });
+        } else if let Some(state) = arena.monitor(i) {
+            let (symbol, body) = (crate::arena::monitor_symbol(i), format!("monitor_{i}"));
+            crate::arena::entry(&symbol, &body, crate::arena::MONITOR, state.offset, &arena, &mut m);
         }
     }
 
     Lowered { ir: m.finish(), skipped, without_persist }
+}
+
+/// Die Einstiege einer Maschine (12.11): je Rumpf, den der Codegen
+/// vollstaendig geschrieben hat, `takt_<maschine>_<endung>(ptr %arena, …)`.
+fn entries(machine: &takt_mir::machine::Machine, p: &Program, arena: &crate::arena::Arena, m: &mut Module) {
+    let Some(state) = arena.state(&machine.name) else { return };
+    for (suffix, shape) in crate::arena::entries(machine, p) {
+        let body = format!("{}_{suffix}", machine.name);
+        if m.defines(&body) {
+            let symbol = crate::arena::entry_symbol(&machine.name, &suffix);
+            crate::arena::entry(&symbol, &body, shape, state.offset, arena, m);
+        }
+    }
 }

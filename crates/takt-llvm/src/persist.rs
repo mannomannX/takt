@@ -309,7 +309,7 @@ pub fn restore_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
         module.void_inst("br label %pr_head");
         module.label(&reject);
         module.void_inst(&format!(
-            "call void @{}(i32 {}, i32 {slot}, i1 1, i1 0)",
+            "call void @{}(ptr %arena, i32 {}, i32 {slot}, i1 1, i1 0)",
             crate::abi::Abi::ALERT,
             ctx.machine_index
         ));

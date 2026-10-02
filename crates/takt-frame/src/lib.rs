@@ -13,10 +13,12 @@
 //! **Was hier steht.** `mcu` setzt den Rahmen zusammen, den die Boards und
 //! `takt-bringup-host` binden; `parts` sind seine Bausteine, die auch der
 //! Wirtsrahmen des Differentials in `takt-conformance` nutzt; `layout`,
-//! `streams` und `edge` beschreiben Abbild, Stroeme und Rand.
+//! `streams` und `edge` beschreiben Abbild, Stroeme und Rand; `text` fuegt
+//! den Rahmen um die Arena zusammen (12.11).
 
 pub mod edge;
 pub mod layout;
 pub mod mcu;
 pub mod parts;
 pub mod streams;
+pub mod text;

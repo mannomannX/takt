@@ -15,13 +15,19 @@ use takt_mir::program::Program;
 fn idle_watches_the_wake_stream_and_drops_the_other() {
     let p = corpus("92_idle_streams.takt");
     let ir = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", "t").ir;
+    // Der Rumpf an seiner `define`-Zeile, nicht der Aufruf in seinem
+    // Einstieg `takt_<maschine>_idle` (12.11).
     let body = |name: &str| {
-        let start = ir.find(&format!("@{name}(")).unwrap_or_else(|| panic!("kein `{name}` in der IR"));
+        let head = ir
+            .lines()
+            .find(|l| l.starts_with("define") && l.contains(&format!("@{name}(")))
+            .unwrap_or_else(|| panic!("kein `{name}` in der IR"));
+        let start = ir.find(head).unwrap_or_default();
         ir[start..].split("\n}").next().unwrap_or_default().to_string()
     };
     let count = |channel: &str| {
         let id = p.channels.iter().position(|c| c.name == channel).expect("Channel");
-        format!("@takt_stream_count(i32 {id},")
+        format!("@takt_stream_count(ptr %arena, i32 {id},")
     };
     let (idle, dropped) = (body("sleeper_idle"), body("sleeper_drop"));
     assert!(idle.contains(&count("bell")) && !idle.contains(&count("data")), "{idle}");

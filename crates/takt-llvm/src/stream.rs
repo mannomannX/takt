@@ -87,31 +87,31 @@ impl Streams {
         // Die Ringe sind Statics der Runtime; `at`/`sent` schreiben nur
         // den uebergebenen Platz, `send` liest nur den uebergebenen.
         m.declare(&format!(
-            "declare i32 @{}(i32, i64) nounwind willreturn memory(inaccessiblemem: read)",
+            "declare i32 @{}(ptr readnone, i32, i64) nounwind willreturn memory(inaccessiblemem: read)",
             Streams::COUNT
         ));
         m.declare(&format!(
-            "declare i64 @{}(i32, i64, i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
+            "declare i64 @{}(ptr readnone, i32, i64, i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
             Streams::AT
         ));
         m.declare(&format!(
-            "declare i64 @{}(i32, i64, i32, ptr, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
+            "declare i64 @{}(ptr readnone, i32, i64, i32, ptr, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
             Streams::BIND
         ));
         m.declare(&format!(
-            "declare void @{}(i32, i32, i64) nounwind willreturn memory(inaccessiblemem: readwrite)",
+            "declare void @{}(ptr readnone, i32, i32, i64) nounwind willreturn memory(inaccessiblemem: readwrite)",
             Streams::EXAMINED
         ));
         m.declare(&format!(
-            "declare i1 @{}(i32, ptr, i32) nounwind willreturn memory(argmem: read, inaccessiblemem: readwrite)",
+            "declare i1 @{}(ptr readnone, i32, ptr, i32) nounwind willreturn memory(argmem: read, inaccessiblemem: readwrite)",
             Streams::SEND
         ));
         m.declare(&format!(
-            "declare i32 @{}(i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
+            "declare i32 @{}(ptr readnone, i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
             Streams::SENT
         ));
         m.declare(&format!(
-            "declare i32 @{}(i32, i32) nounwind willreturn memory(inaccessiblemem: read)",
+            "declare i32 @{}(ptr readnone, i32, i32) nounwind willreturn memory(inaccessiblemem: read)",
             Streams::COUNTER
         ));
     }

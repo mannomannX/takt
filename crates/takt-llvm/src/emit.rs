@@ -193,7 +193,7 @@ impl Module {
     /// Laufzeit feststeht ([`Module::fault_code_at`]).
     pub fn fault_line_at(&mut self, span: takt_diag::Span) {
         if let Some(line) = self.line_of(span) {
-            self.void_inst(&format!("store i32 {line}, ptr @{}", crate::fault::LINE));
+            self.void_inst(&format!("store i32 {line}, ptr {}", crate::arena::PARAM));
         }
     }
 
@@ -212,14 +212,16 @@ impl Module {
     /// Beginnt eine Funktion.
     ///
     /// Die Parameter bekommen die Register 0 bis n-1; der Zaehler steht
-    /// danach auf n, wie LLVM es verlangt.
+    /// danach auf n, wie LLVM es verlangt. Jede erzeugte Funktion ist
+    /// `internal`: Von aussen ruft der Rahmen nur die Einstiege
+    /// ([`crate::arena::entry`]), und so faellt Ungenutztes weg.
     pub fn begin(&mut self, name: &str, ret: &LlvmType, params: &[LlvmType]) -> Vec<Reg> {
-        self.begin_with("", name, ret, params, &[], "")
+        self.begin_with("internal ", name, ret, params, &[], "")
     }
 
     /// Eine kalte Funktion: `minsize`, weil sie nicht im Tick liegt.
     pub fn begin_cold(&mut self, name: &str, ret: &LlvmType, params: &[LlvmType]) -> Vec<Reg> {
-        self.begin_with("", name, ret, params, &[], "minsize")
+        self.begin_with("internal ", name, ret, params, &[], "minsize")
     }
 
     /// Wie [`Module::begin`], mit Bindung (`internal`) und Attributen je
@@ -247,6 +249,8 @@ impl Module {
             })
             .collect();
         let extra = if fn_attrs.is_empty() { String::new() } else { format!(" {fn_attrs}") };
+        let mut sig = sig;
+        sig.push(format!("ptr {}", crate::arena::PARAM));
         let _ = writeln!(self.body, "\ndefine {linkage}{ret} @{name}({}) nounwind{extra} {{", sig.join(", "));
         self.entry_at = self.body.len();
         self.slots = 0;
@@ -339,7 +343,7 @@ impl Module {
             }
             let _ = writeln!(self.body, "  store i32 {code}, ptr {slot}");
             if tracked {
-                let _ = writeln!(self.body, "  store i32 {line}, ptr @{}", crate::fault::LINE);
+                let _ = writeln!(self.body, "  store i32 {line}, ptr {}", crate::arena::PARAM);
             }
             let _ = writeln!(self.body, "  br label %{target}");
         }
@@ -350,7 +354,8 @@ impl Module {
         debug_assert!(!self.open, "Funktion `{name}` beginnt in einer offenen Funktion");
         let params = sig.params();
         let regs: Vec<Reg> = (0..params.len() as u32).map(Reg::Num).collect();
-        let sig_text: Vec<String> = params.iter().zip(&regs).map(|(t, r)| format!("{t} {r}")).collect();
+        let mut sig_text: Vec<String> = params.iter().zip(&regs).map(|(t, r)| format!("{t} {r}")).collect();
+        sig_text.push(format!("ptr {}", crate::arena::PARAM));
         // Reine Funktionen ruft nur dieses Modul: `internal` laesst LLVM
         // einbetten und Ungenutztes fallen.
         let _ =
@@ -364,6 +369,12 @@ impl Module {
         self.terminated = false;
         self.block = format!("{}", params.len());
         regs
+    }
+
+    /// Steht die Funktion `name` im Modul? Die Einstiege entstehen nur fuer
+    /// Rumpfe, die der Codegen vollstaendig geschrieben hat.
+    pub fn defines(&self, name: &str) -> bool {
+        self.body.contains(&format!(" @{name}("))
     }
 
     /// Ein frisches Register.
@@ -441,13 +452,13 @@ impl Module {
     /// Liest einen Registerport an `at` (12.10) ueber seinen Helfer.
     pub fn mmio_read(&mut self, ty: &LlvmType, at: &Reg) -> Reg {
         let f = self.mmio_helper(crate::mmio::Access::Read, ty);
-        self.inst(&format!("call {ty} @{f}(ptr {at})"))
+        self.inst(&format!("call {ty} @{f}(ptr {at}, ptr {})", crate::arena::PARAM))
     }
 
     /// Schreibt einen Registerport an `at` (12.10) ueber seinen Helfer.
     pub fn mmio_write(&mut self, ty: &LlvmType, at: &Reg, value: &str) {
         let f = self.mmio_helper(crate::mmio::Access::Write, ty);
-        self.void_inst(&format!("call void @{f}(ptr {at}, {ty} {value})"));
+        self.void_inst(&format!("call void @{f}(ptr {at}, {ty} {value}, ptr {})", crate::arena::PARAM));
     }
 
     fn mmio_helper(&mut self, access: crate::mmio::Access, ty: &LlvmType) -> String {

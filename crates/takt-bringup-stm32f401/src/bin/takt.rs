@@ -473,9 +473,6 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     PREVIOUS_RUN.store(platform::previous_run(), Ordering::Relaxed);
     // Dann: Die Abschlusszeile meldet, wie tief der Stack unter Last reichte.
     takt_board_stm32f401::stack::paint();
-    // 12.3: Der Programmzustand liegt ausserhalb von `.bss`; genullt wird er,
-    // bevor der Rahmen ihn zum ersten Mal beschreibt.
-    mpu::clear_state();
     let board = Board::WEACT_BLACKPILL;
     let led = Led::new(dp.GPIOC, &dp.RCC, board);
 

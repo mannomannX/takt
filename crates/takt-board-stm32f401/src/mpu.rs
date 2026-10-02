@@ -1,7 +1,8 @@
 //! Speicherschutz mit der MPU des Cortex-M4 (12.3).
 //!
-//! Drei Regionen. Der Programmzustand (`.takt_state`, am Anfang des RAM,
-//! siehe `build.rs` des Bring-ups) ist nur waehrend des Programmschritts
+//! Drei Regionen. Der Programmzustand — der Programmbereich der Arena in
+//! `.takt_state` am Anfang des RAM, siehe `build.rs` des Bring-ups (12.11)
+//! — ist nur waehrend des Programmschritts
 //! beschreibbar; ausserhalb — und in jeder ISR, auch einer, die den Schritt
 //! unterbricht ([`isr`]) — darf ihn die TCB nur lesen. Unter dem Hauptstack
 //! und unter dem Stack des Job-Kontexts liegt je ein Waechter ohne Zugriff.
@@ -88,16 +89,6 @@ pub fn job_guard_address() -> Option<u32> {
 /// Wo der Programmzustand beginnt: die Adresse, auf die ein Pruefzugriff zielt.
 pub fn state_address() -> u32 {
     state_range().0
-}
-
-/// Loescht den Programmzustand. `.takt_state` ist `NOLOAD` und liegt vor
-/// `.bss`, also nullt ihn der Startcode nicht; das geschieht hier, bevor
-/// der Rahmen ihn zum ersten Mal beschreibt.
-pub fn clear_state() {
-    let (start, end) = state_range();
-    // SAFETY: Der Bereich gehoert allein dem Programmzustand (Linker-
-    // Skript), und noch liest oder schreibt ihn niemand.
-    unsafe { core::ptr::write_bytes(start as *mut u8, 0, (end - start) as usize) };
 }
 
 /// Fuehrt den Rumpf einer ISR bei schreibgeschuetztem Programmzustand aus;

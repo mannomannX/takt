@@ -62,7 +62,7 @@ pub type Frames = [Option<u32>];
 /// Schleifen- oder Eintrittsfunktion, die er ruft.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MachineFrames {
-    /// `<m>_step`.
+    /// Der Einstieg `takt_<m>_step` (12.11) mit dem Rumpf darunter.
     pub step: Option<u32>,
     /// Name und Rahmen der tiefsten gerufenen Funktion der Maschine.
     pub inner: Option<(String, u32)>,

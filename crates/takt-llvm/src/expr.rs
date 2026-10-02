@@ -455,7 +455,7 @@ fn access(
     if which == Accessor::Jitter
         && let ExprKind::Output(c) = base.kind
     {
-        let ns = m.inst(&format!("call i64 @{}(i32 {})", crate::abi::Abi::JITTER, c.0));
+        let ns = m.inst(&format!("call i64 @{}(ptr %arena, i32 {})", crate::abi::Abi::JITTER, c.0));
         return Ok(Lowered { value: ns.to_string(), ty: LlvmType::Int(64) });
     }
     if which == Accessor::Peek {
@@ -476,7 +476,8 @@ fn access(
             Accessor::Overflowed => 1,
             _ => 2,
         };
-        let mut n = m.inst(&format!("call i32 @{}(i32 {sid}, i32 {counter})", crate::stream::Streams::COUNTER));
+        let mut n =
+            m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i32 {counter})", crate::stream::Streams::COUNTER));
         if which == Accessor::Dropped {
             let own = vars.stream_dropped(stream, m).ok_or(NotYet { what: "`dropped` ausserhalb einer Maschine" })?;
             n = m.inst(&format!("add i32 {n}, {own}"));
@@ -1124,13 +1125,14 @@ fn propagate_fault(m: &mut Module, vars: &dyn Vars) -> Result<(), NotYet> {
     let Some(target) = vars.fault_label() else {
         return Err(NotYet { what: "Aufruf ohne Fault-Pfad" });
     };
-    let flag = m.inst(&format!("load i32, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    let flag_at = crate::arena::at(crate::arena::fault::FLAG, m);
+    let flag = m.inst(&format!("load i32, ptr {flag_at}"));
     let ok = m.inst(&format!("icmp eq i32 {flag}, 0"));
     let n = m.next_label();
     let (go_on, taken) = (format!("nach_aufruf{n}"), format!("fault_aus_aufruf{n}"));
     m.void_inst(&format!("br i1 {ok}, label %{go_on}, label %{taken}"));
     m.label(&taken);
-    m.void_inst(&format!("store i32 0, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    m.void_inst(&format!("store i32 0, ptr {flag_at}"));
     m.fault_code_at(&flag.to_string());
     m.void_inst(&format!("br label %{target}"));
     m.label(&go_on);
@@ -2108,7 +2110,7 @@ fn stream_sent(base: &Expr, want: &LlvmType, m: &mut Module) -> Result<Lowered, 
     let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
     let buf = m.alloca(&inner);
     m.write(&inner, "zeroinitializer", &buf.to_string());
-    let n = m.inst(&format!("call i32 @{}(i32 {}, ptr {buf})", crate::stream::Streams::SENT, c.0));
+    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {}, ptr {buf})", crate::stream::Streams::SENT, c.0));
     let v = m.inst(&format!("load {inner}, ptr {buf}"));
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
     let with_value = m.inst(&format!("insertvalue {want} undef, {inner} {v}, 0"));
@@ -2140,7 +2142,7 @@ fn stream_count(base: &Expr, want: &LlvmType, m: &mut Module, vars: &dyn Vars) -
     let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
     let (cur_ptr, _) = vars.stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
     let wide = m.inst(&format!("sext i32 {n} to {want}"));
     Ok(Lowered { value: wide.to_string(), ty: want.clone() })
 }
@@ -2162,13 +2164,14 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
     m.write(&inner, "zeroinitializer", &out.to_string());
     let buf = crate::stream::scratch(p, elem, m)?;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
     let k = m.next_label();
     let (read, done) = (format!("peek{k}_lesen"), format!("peek{k}_fertig"));
     m.void_inst(&format!("br i1 {some}, label %{read}, label %{done}"));
     m.label(&read);
-    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 0, ptr {buf})", crate::stream::Streams::AT));
+    let seq = m
+        .inst(&format!("call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 0, ptr {buf})", crate::stream::Streams::AT));
     crate::stream::note_examined(ex_ptr, seq, m);
     crate::stream::copy_payload(buf, out, elem, p, m)?;
     m.void_inst(&format!("br label %{done}"));
@@ -2387,6 +2390,7 @@ fn call_with(
     }
     let name = crate::fns::symbol(f);
     let ret = sig.llvm_ret();
+    operands.push(format!("ptr {}", crate::arena::PARAM));
     let value = if ret == LlvmType::Void {
         m.void_inst(&format!("call void @{name}({})", operands.join(", ")));
         None
@@ -2395,7 +2399,7 @@ fn call_with(
     };
     // 4.1: Eine reine Funktion faultet den Aufrufer. Sie setzt dafuer das
     // Flag; hier wird es geprueft, und der Aufrufer nimmt seinen eigenen
-    // Fault-Pfad (`abi::Abi::FAULT_FLAG`).
+    // Fault-Pfad (`arena::fault::FLAG`).
     propagate_fault(m, vars)?;
     Ok(value)
 }

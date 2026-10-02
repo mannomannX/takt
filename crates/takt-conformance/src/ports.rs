@@ -12,6 +12,7 @@
 
 use std::fmt::Write;
 
+use takt_frame::text::Text;
 use takt_llvm::ty::LlvmType;
 use takt_mir::pattern::Address;
 use takt_mir::program::{Binding, Direction, Port, Program};
@@ -90,7 +91,7 @@ pub(crate) fn sample(s: &mut String, p: &Program, indent: &str) {
     for (i, port) in p.ports.iter().enumerate() {
         let Some(ty) = takt_llvm::ty::lower(port.ty, p) else { continue };
         if let Some(Ok(offset)) = model(p, port, &ty) {
-            let _ = writeln!(s, "{indent}memcpy(g_port_model_{i}, latch + {offset}, {});", ty.aligned_size());
+            let _ = writeln!(s, "{indent}memcpy(a->port_model_{i}, a->latch + {offset}, {});", ty.aligned_size());
         }
     }
 }
@@ -101,10 +102,11 @@ pub(crate) fn sample(s: &mut String, p: &Program, indent: &str) {
 /// `#error` ab, statt still einen Default zu lesen: ein Modell, das den
 /// Lesekanal als Strom stellt (ein Register, das beim Lesen weiterschaltet),
 /// und ein Modellrecord, der anders im Speicher liegt als der Port.
-pub(crate) fn emit(s: &mut String, p: &Program) {
+pub(crate) fn emit(t: &mut Text, p: &Program) {
     if p.ports.is_empty() {
         return;
     }
+    let Text { fields, code: s, .. } = t;
     let writes = write_streams(p);
     let mut sizes = Vec::new();
     let mut current = String::new();
@@ -120,8 +122,8 @@ pub(crate) fn emit(s: &mut String, p: &Program) {
         sizes.push(size);
         match model(p, port, &ty) {
             Some(Ok(_)) => {
-                let _ = writeln!(s, "static _Alignas(8) unsigned char g_port_model_{i}[{size}]; /* {} */", port.name);
-                let _ = writeln!(current, "    case {i}: memcpy(whole, g_port_model_{i}, {size}); return;");
+                let _ = writeln!(fields, "    _Alignas(8) unsigned char port_model_{i}[{size}]; /* {} */", port.name);
+                let _ = writeln!(current, "    case {i}: memcpy(whole, a->port_model_{i}, {size}); return;");
             }
             Some(Err(e)) => {
                 let _ = writeln!(s, "#error \"{e}\"");
@@ -140,7 +142,7 @@ pub(crate) fn emit(s: &mut String, p: &Program) {
                 let _ = writeln!(send, "        memcpy(out + {len}, whole + {at}, {n});");
                 len += n;
             }
-            let _ = writeln!(send, "        (void)takt_int_send(takt_int_slot({c}), (const char *)out, {len});");
+            let _ = writeln!(send, "        (void)takt_int_send(a, takt_int_slot({c}), (const char *)out, {len});");
             let _ = writeln!(send, "        return;");
             widest = widest.max(len);
         }
@@ -160,26 +162,26 @@ pub(crate) fn emit(s: &mut String, p: &Program) {
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "    return -1;");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static void takt_port_current(int i, unsigned char *whole) {{");
+    let _ = writeln!(s, "static void takt_port_current(struct takt_arena *a, int i, unsigned char *whole) {{");
     let _ = writeln!(s, "    switch (i) {{");
     let _ = write!(s, "{current}");
     let _ = writeln!(s, "    default: memset(whole, 0, (size_t)g_port_size[i]); return;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_mmio_read(long long addr, void *dst, int n) {{");
+    let _ = writeln!(s, "void takt_mmio_read(struct takt_arena *a, long long addr, void *dst, int n) {{");
     let _ = writeln!(s, "    unsigned char whole[{most}];");
     let _ = writeln!(s, "    int off = 0, i = takt_port_of(addr, n, &off);");
     let _ = writeln!(s, "    if (i < 0) {{ memset(dst, 0, (size_t)n); return; }}");
-    let _ = writeln!(s, "    takt_port_current(i, whole);");
+    let _ = writeln!(s, "    takt_port_current(a, i, whole);");
     let _ = writeln!(s, "    memcpy(dst, whole + off, (size_t)n);");
     let _ = writeln!(s, "}}");
     // Ein Feld unter dem Port hat keinen eigenen Speicher: Der ganze Record
     // wird gelesen, veraendert und als ein Element geschrieben.
-    let _ = writeln!(s, "void takt_mmio_write(long long addr, const void *src, int n) {{");
+    let _ = writeln!(s, "void takt_mmio_write(struct takt_arena *a, long long addr, const void *src, int n) {{");
     let _ = writeln!(s, "    unsigned char whole[{most}], out[{widest}];");
     let _ = writeln!(s, "    int off = 0, i = takt_port_of(addr, n, &off);");
     let _ = writeln!(s, "    if (i < 0) return;");
-    let _ = writeln!(s, "    if (off != 0 || n != g_port_size[i]) takt_port_current(i, whole);");
+    let _ = writeln!(s, "    if (off != 0 || n != g_port_size[i]) takt_port_current(a, i, whole);");
     let _ = writeln!(s, "    memcpy(whole + off, src, (size_t)n);");
     let _ = writeln!(s, "    switch (i) {{");
     let _ = write!(s, "{send}");

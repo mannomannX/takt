@@ -147,18 +147,27 @@ impl Esp32c6 {
         port_listed(&self.port, true, within)
     }
 
-    /// Der Tickzaehler des Bring-ups (`g_tick`), ueber JTAG gelesen.
+    /// Der Tickzaehler des Rahmens, ueber JTAG gelesen: in der Arena
+    /// `g_arena` an der Stelle, die das Bring-up als `__takt_tick_at` ablegt.
     pub fn tick_over_jtag(&self, elf: &Path) -> Result<u32, String> {
-        self.word_over_jtag(elf, |name| name == "g_tick")
+        let symbols = symbols(elf)?;
+        let at = |name: &str| {
+            symbols.iter().find(|s| s.name == name).map(|s| s.address).ok_or(format!("`{name}` fehlt im Abbild"))
+        };
+        self.word_at(at("g_arena")? + at("__takt_tick_at")?)
     }
 
     /// Ein Wort des laufenden Programms ueber JTAG, am ersten Symbol, auf
     /// dessen Namen `wanted` passt — auch wenn die Konsole schweigt.
     pub fn word_over_jtag(&self, elf: &Path, wanted: impl Fn(&str) -> bool) -> Result<u32, String> {
-        let symbols =
-            Binutils::best_for(Target::RISCV32IMAC).symbols(elf).ok_or("`nm` fehlt: kein Blick ins Abbild")?;
+        let symbols = symbols(elf)?;
         let symbol = symbols.iter().find(|s| wanted(&s.name)).ok_or("das Symbol fehlt im Abbild")?;
-        let address = format!("{:#x}", symbol.address);
+        self.word_at(symbol.address)
+    }
+
+    /// Das Wort an `address` ueber JTAG.
+    fn word_at(&self, address: u64) -> Result<u32, String> {
+        let address = format!("{address:#x}");
         let out = self
             .probe_rs(&["read", "--chip", "esp32c6", "b32", &address, "1"])
             .map_err(|e| format!("JTAG antwortet nicht (Kabel neu stecken):\n{e}"))?;
@@ -272,6 +281,11 @@ impl Board for Esp32c6 {
         self.download(elf)?;
         self.capture(elf, options.ticks).and_then(super::complete)
     }
+}
+
+/// Die Symbole des Abbilds.
+fn symbols(elf: &Path) -> Result<Vec<takt_llvm::inspect::Symbol>, String> {
+    Binutils::best_for(Target::RISCV32IMAC).symbols(elf).ok_or_else(|| "`nm` fehlt: kein Blick ins Abbild".to_string())
 }
 
 /// Ein Schritt an der Leitung.

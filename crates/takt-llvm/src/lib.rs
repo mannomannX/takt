@@ -32,6 +32,7 @@
 //! - `toolchain`: `clang` finden, um die IR zu pruefen und auszufuehren.
 
 pub mod abi;
+pub mod arena;
 pub mod block;
 pub mod captures;
 pub mod collection;

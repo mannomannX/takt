@@ -77,15 +77,15 @@ fn build_takt_program(out: &Path) {
     // `takt-conformance` haengt; `takt build` uebersetzt das Programm.
     let Some(p) = bringup::compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let rahmen = out.join("takt_rahmen.c");
+    let protect = state_section(out, takt_llvm::arena::of(&p).bytes);
     let frame = takt_frame::mcu::build_with(
         &p,
         takt_frame::mcu::Frame {
             diagnostics: takt_llvm::Diagnostics::Ids,
             hardware: bringup::hardware().as_ref(),
-            protected: true,
+            protect: Some(protect),
         },
     );
-    state_section(out, frame.state_bytes);
     if let Err(e) = fs::write(&rahmen, frame.source) {
         panic!("Rahmen nicht schreibbar: {e}");
     }
@@ -101,17 +101,21 @@ fn build_takt_program(out: &Path) {
     println!("cargo:rustc-link-arg=--icf=all");
 }
 
-/// Der Programmzustand als eigener Abschnitt am Anfang des RAM (12.3,
-/// `takt_state.x`): so gross wie die geschuetzten Achtel seiner MPU-Region.
-fn state_section(out: &Path, bytes: u64) {
+/// Die Arena als eigener Abschnitt am Anfang des RAM (12.3, 12.11,
+/// `takt_state.x`). `program` ist die Groesse ihres Programmbereichs; die
+/// MPU-Region deckt ihn in ganzen Achteln. Liefert, wie weit der Rahmen
+/// ihn auffuellt: bis ans Ende dieser Achtel, damit die Runtime dahinter
+/// ungeschuetzt bleibt.
+fn state_section(out: &Path, program: u64) -> u64 {
     const RAM_ORIGIN: u32 = 0x2000_0000;
     println!("cargo:rerun-if-changed=takt_state.x");
-    let bytes = u32::try_from(bytes).unwrap_or_else(|_| panic!("Programmzustand {bytes} Byte"));
+    let bytes = u32::try_from(program).unwrap_or_else(|_| panic!("Programmbereich {program} Byte"));
     let region = takt_board_support::mpu::Region::covering(RAM_ORIGIN, bytes)
         .expect("ORIGIN(RAM) ist fuer jede Region ausgerichtet");
     fs::write(out.join("takt_state.x"), include_bytes!("takt_state.x")).expect("takt_state.x schreiben");
     println!("cargo:rustc-link-arg=--defsym=__takt_state_size={}", region.protected());
     println!("cargo:rustc-link-arg=-Ttakt_state.x");
+    u64::from(region.protected())
 }
 
 /// Welches Programm gebaut wird.

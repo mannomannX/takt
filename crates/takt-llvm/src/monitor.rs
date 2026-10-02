@@ -110,7 +110,7 @@ pub fn monitor_function(index: usize, prop: &Property, p: &Program, m: &mut Modu
     let mark = m.mark();
     let ptr = LlvmType::Ptr;
     m.begin(
-        &format!("takt_monitor_{index}"),
+        &format!("monitor_{index}"),
         &LlvmType::Void,
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr, LlvmType::Int(64)],
     );
@@ -154,7 +154,7 @@ pub fn monitor_function(index: usize, prop: &Property, p: &Program, m: &mut Modu
     m.void_inst(&format!("br i1 {holds}, label %{end}, label %{report}"));
     m.label(&report);
     m.void_inst(&format!("store i8 1, ptr {flag}"));
-    m.void_inst(&format!("call void @{}(i32 {index}, i64 {pos})", Abi::PROPERTY));
+    m.void_inst(&format!("call void @{}(ptr %arena, i32 {index}, i64 {pos})", Abi::PROPERTY));
     m.label(&end);
     m.end(None);
     Ok(())

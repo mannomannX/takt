@@ -422,7 +422,7 @@ impl Vars for StateVars<'_> {
         match b {
             B::Tick => Some(Lowered { value: p.config.tick.to_string(), ty: dur }),
             B::Now => {
-                let v = m.inst(&format!("call i64 @{}()", crate::abi::Abi::NOW));
+                let v = m.inst(&format!("call i64 @{}(ptr %arena)", crate::abi::Abi::NOW));
                 Some(Lowered { value: v.to_string(), ty: dur })
             }
             B::TimeInState => {
@@ -546,7 +546,7 @@ fn stmt_here(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> 
             // Die eigene Maschine nimmt ihren Fault-Pfad sofort, es sei
             // denn, ihr Latch steht (9.3): Dann endet nur der Schritt.
             let site = ctx.next_site();
-            m.void_inst(&format!("call void @{}(i32 {}, i32 {site})", Abi::ABORT, ctx.machine_index));
+            m.void_inst(&format!("call void @{}(ptr %arena, i32 {}, i32 {site})", Abi::ABORT, ctx.machine_index));
             let latch = ctx.field(Role::AbortLatch, 0, m).ok_or(NotYet { what: "Abort-Latch im Zustand" })?;
             let held = m.inst(&format!("load i1, ptr {latch}"));
             let fault = ctx.trampoline_for(takt_mir::machine::FaultKind::Abort, m);
@@ -590,7 +590,7 @@ fn stmt_here(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> 
             (None, _) => Ok(()),
         },
         StmtKind::Cancel(c) => {
-            m.void_inst(&format!("call void @{}(i32 {})", Abi::CANCEL, c.0));
+            m.void_inst(&format!("call void @{}(ptr %arena, i32 {})", Abi::CANCEL, c.0));
             Ok(())
         }
         StmtKind::Raise(s) => crate::psi::raise(takt_mir::MachineId(ctx.machine_index), *s, ctx.program, m)
@@ -641,7 +641,7 @@ fn job_begin(
     }
     let total = m.inst(&format!("trunc i64 {off} to i32"));
     m.void_inst(&format!(
-        "call void @{}(i32 {}, i32 {slot}, i32 {}, ptr {buf}, i32 {total})",
+        "call void @{}(ptr %arena, i32 {}, i32 {slot}, i32 {}, ptr {buf}, i32 {total})",
         Abi::JOB_BEGIN,
         ctx.machine_index,
         native.index()
@@ -747,7 +747,8 @@ fn send(
         ),
     };
     let len = m.inst(&format!("load i32, ptr {len_ptr}"));
-    let ok = m.inst(&format!("call i1 @{}(i32 {sid}, ptr {bytes}, i32 {len})", crate::stream::Streams::SEND));
+    let ok =
+        m.inst(&format!("call i1 @{}(ptr %arena, i32 {sid}, ptr {bytes}, i32 {len})", crate::stream::Streams::SEND));
     let go_on = format!("gesendet{}_{}", m.next_label(), ctx.machine.name);
     // 8.6, 8.8: Passt das Element nicht, faultet der Schreiber — ausser
     // mit `overflow = drop`: Dann verwirft er es und meldet einen Alert.
@@ -755,7 +756,11 @@ fn send(
         // 5.6: Die Stelle ist ein Alert der Runtime, aktiv, wenn verworfen.
         let (slot, _) = ctx.state.counters.alert(span).ok_or(NotYet { what: "verwerfendes `send` ohne Platz" })?;
         let dropped = m.inst(&format!("xor i1 {ok}, true"));
-        m.void_inst(&format!("call void @{}(i32 {}, i32 {slot}, i1 {dropped}, i1 0)", Abi::ALERT, ctx.machine_index));
+        m.void_inst(&format!(
+            "call void @{}(ptr %arena, i32 {}, i32 {slot}, i1 {dropped}, i1 0)",
+            Abi::ALERT,
+            ctx.machine_index
+        ));
         m.void_inst(&format!("br label %{go_on}"));
     } else {
         let fault = ctx.trampoline_for(takt_mir::machine::FaultKind::StreamOverflow, m);
@@ -805,7 +810,7 @@ fn every(
         Some(_) => time_in_state_ns(ctx, m)?,
         None => {
             // `takt_now` steht im Modulkopf (`Abi::declare`).
-            m.inst(&format!("call i64 @{}()", crate::abi::Abi::NOW)).to_string()
+            m.inst(&format!("call i64 @{}(ptr %arena)", crate::abi::Abi::NOW)).to_string()
         }
     };
     let next = m.inst(&format!("load i64, ptr {slot}"));
@@ -885,7 +890,8 @@ fn at(time: &Expr, body: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<()
             LlvmType::Int(n) => m.inst(&format!("sext i{n} {} to i64", v.value)).to_string(),
             _ => return Err(NotYet { what: "`at` mit einem zusammengesetzten Wert" }),
         };
-        let code = m.inst(&format!("call i32 @{}(i32 {}, i64 {}, i64 {word})", Abi::SCHEDULE, c.0, t.value));
+        let code =
+            m.inst(&format!("call i32 @{}(ptr %arena, i32 {}, i64 {}, i64 {word})", Abi::SCHEDULE, c.0, t.value));
         let ok = m.inst(&format!("icmp eq i32 {code}, 0"));
         m.fault_code_at(&code.to_string());
         let here = m.at;
@@ -986,7 +992,7 @@ fn for_window(
     let k = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     let direct = crate::stream::direct(ctx.program, elem);
@@ -1001,8 +1007,10 @@ fn for_window(
     m.label(&loop_body);
     let seq = match buf {
         Some(buf) => {
-            let seq =
-                m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT));
+            let seq = m.inst(&format!(
+                "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
+                crate::stream::Streams::AT
+            ));
             crate::step::bind_element(var, buf, seq, elem, ctx, m)?;
             seq
         }
@@ -1364,12 +1372,15 @@ fn observe(o: &Observe, span: takt_diag::Span, ctx: &mut Ctx<'_>, m: &mut Module
             let (base, _) = ctx.state.counters.alert(span).ok_or(NotYet { what: "Alert-Stelle ohne Platz" })?;
             let at = m.inst(&format!("add i64 {pass}, {base}"));
             let slot = m.inst(&format!("trunc i64 {at} to i32"));
-            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {slot}, i1 {active}, i1 {invalid})", Abi::ALERT));
+            m.void_inst(&format!(
+                "call void @{}(ptr %arena, i32 {machine}, i32 {slot}, i1 {active}, i1 {invalid})",
+                Abi::ALERT
+            ));
             Ok(())
         }
         Observe::Log(_) => {
             let site = ctx.next_site();
-            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site})", Abi::LOG));
+            m.void_inst(&format!("call void @{}(ptr %arena, i32 {machine}, i32 {site})", Abi::LOG));
             Ok(())
         }
         Observe::Measure { value, .. } => {
@@ -1387,7 +1398,7 @@ fn observe(o: &Observe, span: takt_diag::Span, ctx: &mut Ctx<'_>, m: &mut Module
             })?;
             let site = ctx.next_site();
             m.void_inst(&format!(
-                "call void @{}(i32 {machine}, i32 {site}, double {}, i1 {invalid})",
+                "call void @{}(ptr %arena, i32 {machine}, i32 {site}, double {}, i1 {invalid})",
                 Abi::MEASURE,
                 v.value
             ));
@@ -1397,7 +1408,7 @@ fn observe(o: &Observe, span: takt_diag::Span, ctx: &mut Ctx<'_>, m: &mut Module
             // 3.5: Ein ungueltiger Wert zaehlt als Verletzung.
             let (c, _) = observed(cond, "false", ctx, m, |v, _| Ok(v))?;
             let site = ctx.next_site();
-            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {})", Abi::VERIFY, c.value));
+            m.void_inst(&format!("call void @{}(ptr %arena, i32 {machine}, i32 {site}, i1 {})", Abi::VERIFY, c.value));
             Ok(())
         }
         // `verdict pass | fail` (13.2): das Urteil eines Tests. Wie
@@ -1406,7 +1417,7 @@ fn observe(o: &Observe, span: takt_diag::Span, ctx: &mut Ctx<'_>, m: &mut Module
         Observe::Verdict { pass, .. } => {
             let site = ctx.next_site();
             let v = u8::from(*pass);
-            m.void_inst(&format!("call void @{}(i32 {machine}, i32 {site}, i1 {v})", Abi::VERDICT));
+            m.void_inst(&format!("call void @{}(ptr %arena, i32 {machine}, i32 {site}, i1 {v})", Abi::VERDICT));
             Ok(())
         }
     }
@@ -1902,6 +1913,7 @@ fn block_method_call(
         m.void_inst(&format!("store i1 true, ptr {flag}"));
     }
     let symbol = crate::block::method_symbol(def, &f.name);
+    ops.push(format!("ptr {}", crate::arena::PARAM));
     let call = if ret == LlvmType::Void {
         m.void_inst(&format!("call void @{symbol}({})", ops.join(", ")));
         None

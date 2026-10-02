@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 use takt_mir::program::Program;
 
 use crate::layout::{Layout, c_type};
+use crate::text::Text;
 
 /// Eine Dauer in der groessten ganzzahligen Einheit, wie `takt_mir::dump::duration`
 /// sie schreibt (T2); beide Rahmen nehmen dieselben Funktionen.
@@ -96,7 +97,7 @@ pub fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout)
                 let Some(text) = literal(p, item) else { continue };
                 let _ = writeln!(
                     s,
-                    "    (({ct} *)(latch + {}))[{k}] = {text}; /* {}[{k}] auf safe */",
+                    "    (({ct} *)(a->latch + {}))[{k}] = {text}; /* {}[{k}] auf safe */",
                     slot.offset, slot.name
                 );
             }
@@ -104,7 +105,7 @@ pub fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout)
         }
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
         let Some(text) = literal(p, safe) else { continue };
-        let _ = writeln!(s, "    *({ct} *)(latch + {}) = {text}; /* {} auf safe (5.3) */", slot.offset, slot.name);
+        let _ = writeln!(s, "    *({ct} *)(a->latch + {}) = {text}; /* {} auf safe (5.3) */", slot.offset, slot.name);
     }
 }
 
@@ -118,9 +119,12 @@ fn safe_payload(p: &Program, slot: &crate::layout::Slot, safe: &takt_mir::expr::
     let ExprKind::Variant { enum_id, variant, fields } = &safe.kind else { return None };
     let def = p.enums.get(enum_id.index())?;
     let v = def.variants.get(*variant as usize)?;
-    let mut s = format!("    memset(latch + {}, 0, {});\n", slot.offset, slot.size);
-    let _ =
-        writeln!(s, "    *(int *)(latch + {}) = {}; /* {} auf safe (5.3) */", slot.offset, v.discriminant, slot.name);
+    let mut s = format!("    memset(a->latch + {}, 0, {});\n", slot.offset, slot.size);
+    let _ = writeln!(
+        s,
+        "    *(int *)(a->latch + {}) = {}; /* {} auf safe (5.3) */",
+        slot.offset, v.discriminant, slot.name
+    );
     for (k, field) in fields.iter().enumerate() {
         let at = slot.offset + 8 + 8 * k as u64;
         let ct = match takt_llvm::ty::lower(v.fields.get(k)?.ty, p)? {
@@ -128,7 +132,7 @@ fn safe_payload(p: &Program, slot: &crate::layout::Slot, safe: &takt_mir::expr::
             LlvmType::F64 => "double",
             _ => "long long",
         };
-        let _ = writeln!(s, "    *({ct} *)(latch + {at}) = {};", literal(p, field)?);
+        let _ = writeln!(s, "    *({ct} *)(a->latch + {at}) = {};", literal(p, field)?);
     }
     Some(s)
 }
@@ -139,7 +143,7 @@ fn safe_payload(p: &Program, slot: &crate::layout::Slot, safe: &takt_mir::expr::
 /// der nur zu Tickbeginn geschrieben wird, um den Tick mehr (`tick_granular`);
 /// ohne Konfiguration null wie in der Simulation.
 pub fn jitter(s: &mut String, p: &Program, hw: Option<&takt_mir::hardware::Hardware>) {
-    let _ = writeln!(s, "long long takt_jitter(int o) {{");
+    let _ = writeln!(s, "long long takt_jitter(struct takt_arena *a, int o) {{");
     let _ = writeln!(s, "    switch (o) {{");
     for (i, c) in p.channels.iter().enumerate() {
         let (takt_mir::program::Binding::Hw(a), Some(hw)) = (&c.binding, hw) else { continue };
@@ -169,17 +173,18 @@ pub fn jitter(s: &mut String, p: &Program, hw: Option<&takt_mir::hardware::Hardw
 /// Treiberlatenz des Outputs aus `hw` (7.5, 8.10), ohne Konfiguration
 /// null wie in der Simulation. `takt_apply_scheduled` ruft
 /// [`commit_sequence`].
-pub fn scheduled(s: &mut String, p: &Program, layout: &Layout, hw: Option<&takt_mir::hardware::Hardware>) {
+pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mir::hardware::Hardware>) {
     let queues = queued_outputs(p);
     if queues.is_empty() {
         return;
     }
     let n = queues.len();
     // K_o aus 7.5; `takt size` rechnet mit derselben Zahl.
-    let _ = writeln!(s, "#define TAKT_K_O 4");
-    let _ = writeln!(s, "struct takt_sched {{ long long t; long long v; }};");
-    let _ = writeln!(s, "static struct takt_sched g_sched[{n}][TAKT_K_O];");
-    let _ = writeln!(s, "static int g_sched_n[{n}];");
+    let _ = writeln!(t.types, "#define TAKT_K_O 4");
+    let _ = writeln!(t.types, "struct takt_sched {{ long long t; long long v; }};");
+    let _ = writeln!(t.fields, "    struct takt_sched sched[{n}][TAKT_K_O];");
+    let _ = writeln!(t.fields, "    int sched_n[{n}];");
+    let s = &mut t.code;
     let guards: Vec<String> = queues
         .iter()
         .map(|c| {
@@ -202,43 +207,46 @@ pub fn scheduled(s: &mut String, p: &Program, layout: &Layout, hw: Option<&takt_
     // Das Ergebnis ist null oder die Art des Faults (`abi::fault_code`).
     let timing = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Timing);
     let overflow = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::ScheduleOverflow);
-    let _ = writeln!(s, "int takt_schedule(int o, long long t, long long v) {{");
+    let _ = writeln!(s, "int takt_schedule(struct takt_arena *a, int o, long long t, long long v) {{");
     let _ = writeln!(s, "    int q = takt_sched_slot(o);");
     let _ = writeln!(s, "    if (q < 0) return {overflow};");
     // 7.5, 9.8: `T <= now + guard(o)` ist ein `TimingFault`.
-    let _ = writeln!(s, "    if (t <= g_tick * {}LL + g_guard[q]) return {timing};", p.config.tick);
+    let _ = writeln!(s, "    if (t <= a->tick * {}LL + g_guard[q]) return {timing};", p.config.tick);
     // Gleiche `T`: die spaetere Anweisung gewinnt (9.8).
-    let _ = writeln!(s, "    for (int i = 0; i < g_sched_n[q]; i++)");
-    let _ = writeln!(s, "        if (g_sched[q][i].t == t) {{ g_sched[q][i].v = v; return 0; }}");
-    let _ = writeln!(s, "    if (g_sched_n[q] >= TAKT_K_O) return {overflow};");
-    let _ = writeln!(s, "    g_sched[q][g_sched_n[q]].t = t;");
-    let _ = writeln!(s, "    g_sched[q][g_sched_n[q]].v = v;");
-    let _ = writeln!(s, "    g_sched_n[q]++;");
+    let _ = writeln!(s, "    for (int i = 0; i < a->sched_n[q]; i++)");
+    let _ = writeln!(s, "        if (a->sched[q][i].t == t) {{ a->sched[q][i].v = v; return 0; }}");
+    let _ = writeln!(s, "    if (a->sched_n[q] >= TAKT_K_O) return {overflow};");
+    let _ = writeln!(s, "    a->sched[q][a->sched_n[q]].t = t;");
+    let _ = writeln!(s, "    a->sched[q][a->sched_n[q]].v = v;");
+    let _ = writeln!(s, "    a->sched_n[q]++;");
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_cancel(int o) {{ int q = takt_sched_slot(o); if (q >= 0) g_sched_n[q] = 0; }}");
+    let _ = writeln!(
+        s,
+        "void takt_cancel(struct takt_arena *a, int o) {{ int q = takt_sched_slot(o); if (q >= 0) a->sched_n[q] = 0; }}"
+    );
     // 9.9: Schlaf nur, wenn alle `sched[o]` leer sind.
-    let _ = writeln!(s, "static _Bool takt_sched_pending(void) {{");
-    let _ = writeln!(s, "    for (int q = 0; q < {n}; q++) if (g_sched_n[q]) return 1;");
+    let _ = writeln!(s, "static _Bool takt_sched_pending(struct takt_arena *a) {{");
+    let _ = writeln!(s, "    for (int q = 0; q < {n}; q++) if (a->sched_n[q]) return 1;");
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
 
     // `apply_scheduled(k)`: Was faellig ist, geht in den Latch. Sind
     // mehrere faellig, gewinnt der spaeteste Zeitpunkt (9.8).
-    let _ = writeln!(s, "static void takt_apply_scheduled(long long now) {{");
+    let _ = writeln!(s, "static void takt_apply_scheduled(struct takt_arena *a, long long now) {{");
     let _ = writeln!(s, "    for (int q = 0; q < {n}; q++) {{");
     let _ = writeln!(s, "        long long best_t = -1; long long best_v = 0; int hit = 0;");
     let _ = writeln!(s, "        int k = 0;");
-    let _ = writeln!(s, "        for (int i = 0; i < g_sched_n[q]; i++) {{");
-    let _ = writeln!(s, "            if (g_sched[q][i].t <= now) {{");
-    let _ = writeln!(s, "                if (!hit || g_sched[q][i].t > best_t) {{");
-    let _ = writeln!(s, "                    best_t = g_sched[q][i].t; best_v = g_sched[q][i].v; hit = 1;");
+    let _ = writeln!(s, "        for (int i = 0; i < a->sched_n[q]; i++) {{");
+    let _ = writeln!(s, "            if (a->sched[q][i].t <= now) {{");
+    let _ = writeln!(s, "                if (!hit || a->sched[q][i].t > best_t) {{");
+    let _ = writeln!(s, "                    best_t = a->sched[q][i].t; best_v = a->sched[q][i].v; hit = 1;");
     let _ = writeln!(s, "                }}");
     let _ = writeln!(s, "            }} else {{");
-    let _ = writeln!(s, "                g_sched[q][k++] = g_sched[q][i];");
+    let _ = writeln!(s, "                a->sched[q][k++] = a->sched[q][i];");
     let _ = writeln!(s, "            }}");
     let _ = writeln!(s, "        }}");
-    let _ = writeln!(s, "        g_sched_n[q] = k;");
+    let _ = writeln!(s, "        a->sched_n[q] = k;");
     let _ = writeln!(s, "        if (!hit) continue;");
     let _ = writeln!(s, "        switch (q) {{");
     for (q, c) in queues.iter().enumerate() {
@@ -249,9 +257,9 @@ pub fn scheduled(s: &mut String, p: &Program, layout: &Layout, hw: Option<&takt_
         // Ein `double` traegt dieselben Bits, eine Ganzzahl wird
         // verengt — beides genau die Umkehrung von `at` im Codegen.
         let back = if slot.ty.is_float() {
-            format!("*({ct} *)(latch + {}) = ({ct})(*(double *)&best_v);", slot.offset)
+            format!("*({ct} *)(a->latch + {}) = ({ct})(*(double *)&best_v);", slot.offset)
         } else {
-            format!("*({ct} *)(latch + {}) = ({ct})best_v;", slot.offset)
+            format!("*({ct} *)(a->latch + {}) = ({ct})best_v;", slot.offset)
         };
         let _ = writeln!(s, "        case {q}: {back} break; /* {name} */");
     }
@@ -277,13 +285,14 @@ pub fn queued_outputs(p: &Program) -> Vec<takt_mir::ChannelId> {
 /// Runtime-Fault —, zugestellt zu Beginn des naechsten Schritts oder, wenn
 /// die Maschine nicht aktiv ist, in der Abort-Phase. Ein Abort verdraengt
 /// einen Runtime-Fault, nicht umgekehrt.
-pub fn raised(s: &mut String, p: &Program) {
+pub fn raised(t: &mut Text, p: &Program) {
     let n = p.machines.len().max(1);
     let abort = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Abort);
-    let _ = writeln!(s, "static _Bool g_raised[{n}];");
-    let _ = writeln!(s, "static int g_pending[{n}];");
-    let _ = writeln!(s, "static void takt_pend(int m, int code) {{");
-    let _ = writeln!(s, "    if (g_pending[m] != {abort}) g_pending[m] = code;");
+    let _ = writeln!(t.fields, "    _Bool raised[{n}];");
+    let _ = writeln!(t.fields, "    int pending[{n}];");
+    let s = &mut t.code;
+    let _ = writeln!(s, "static void takt_pend(struct takt_arena *a, int m, int code) {{");
+    let _ = writeln!(s, "    if (a->pending[m] != {abort}) a->pending[m] = code;");
     let _ = writeln!(s, "}}");
 }
 
@@ -296,28 +305,28 @@ pub fn abort_phase(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Ma
     for m in driven {
         let Some(i) = p.machines.iter().position(|x| x.name == m.name) else { continue };
         let scope = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
-            Some((owner, _, n)) => format!(" && g_scope_{owner}_{n}"),
+            Some((owner, _, n)) => format!(" && a->scope_{owner}_{n}"),
             None => String::new(),
         };
-        let (condition, pending) = (format!("g_raised[{i}]{scope}"), format!("g_pending[{i}]{scope}"));
+        let (condition, pending) = (format!("a->raised[{i}]{scope}"), format!("a->pending[{i}]{scope}"));
         let active = match (m.period.max(1), m.phase) {
             (1, _) => "1".to_string(),
             (per, ph) => format!("{tick} % {per} == {ph}"),
         };
         let _ = writeln!(
             s,
-            "{indent}if ({condition}) {{ {0}_deliver(state_{0}, image, params, latch, {abort}, {active}); {0}_publish(state_{0}, image); }}",
+            "{indent}if ({condition}) {{ takt_{0}_deliver(a, {abort}, {active}); takt_{0}_publish(a); }}",
             m.name
         );
         // Ein vorgemerkter Fault einer Maschine, die in diesem Tick nicht
         // schritt; ein Abort aus `raised` geht vor, der Fault wartet.
         let _ = writeln!(
             s,
-            "{indent}else if ({pending}) {{ {0}_deliver(state_{0}, image, params, latch, g_pending[{i}], {active}); g_pending[{i}] = 0; {0}_publish(state_{0}, image); }}",
+            "{indent}else if ({pending}) {{ takt_{0}_deliver(a, a->pending[{i}], {active}); a->pending[{i}] = 0; takt_{0}_publish(a); }}",
             m.name
         );
     }
-    let _ = writeln!(s, "{indent}memset(g_raised, 0, sizeof g_raised);");
+    let _ = writeln!(s, "{indent}memset(a->raised, 0, sizeof a->raised);");
 }
 
 /// Der Verwurf im `idle` (5.10, 9.6 `advance_cursors`) nach der
@@ -328,10 +337,10 @@ pub fn idle_drops(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mac
     let scoped = scoped_of(p);
     for m in driven.iter().filter(|m| takt_llvm::step::drops(m, p)) {
         let scope = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
-            Some((owner, _, n)) => format!("if (g_scope_{owner}_{n}) "),
+            Some((owner, _, n)) => format!("if (a->scope_{owner}_{n}) "),
             None => String::new(),
         };
-        let _ = writeln!(s, "{indent}{scope}{0}_drop(state_{0});", m.name);
+        let _ = writeln!(s, "{indent}{scope}takt_{0}_drop(a);", m.name);
     }
 }
 
@@ -339,7 +348,7 @@ pub fn idle_drops(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mac
 /// Flanken"): ein Platz je Maschine, Alert-Stelle und Durchlauf der
 /// umgebenden Schleifen, wie `alert_edge` im Interpreter; geschrieben
 /// wird nur, was sich aendert.
-pub fn alert_table(s: &mut String, p: &Program) {
+pub fn alert_table(t: &mut Text, p: &Program) {
     let mut bases = Vec::with_capacity(p.machines.len());
     let mut total = 0u32;
     for m in &p.machines {
@@ -348,10 +357,11 @@ pub fn alert_table(s: &mut String, p: &Program) {
             total = total.saturating_add(takt_llvm::machine::counters(m, p).alert_slots());
         }
     }
-    let _ = writeln!(s, "static _Bool g_alert[{}];", total.max(1));
+    let _ = writeln!(t.fields, "    _Bool alert[{}];", total.max(1));
+    let s = &mut t.code;
     let _ = writeln!(s, "static const int g_alert_base[{}] = {{ {} }};", bases.len().max(1), bases.join(", "));
-    let _ = writeln!(s, "static _Bool takt_alert_edge(int m, int slot, unsigned char on) {{");
-    let _ = writeln!(s, "    _Bool *was = &g_alert[g_alert_base[m] + slot];");
+    let _ = writeln!(s, "static _Bool takt_alert_edge(struct takt_arena *a, int m, int slot, unsigned char on) {{");
+    let _ = writeln!(s, "    _Bool *was = &a->alert[g_alert_base[m] + slot];");
     let _ = writeln!(s, "    if (*was == (on != 0)) return 0;");
     let _ = writeln!(s, "    *was = on != 0;");
     let _ = writeln!(s, "    return 1;");
@@ -422,24 +432,28 @@ pub fn sim_bindings(s: &mut String, p: &Program, indent: &str) {
             continue;
         };
         let Some(size) = takt_llvm::ty::lower(inp.ty, p).map(|t| t.size()) else { continue };
-        let _ = writeln!(s, "{indent}memcpy(image + {dst}, latch + {src}, {size}); /* {} -> {} */", out.name, inp.name);
+        let _ = writeln!(
+            s,
+            "{indent}memcpy(a->image + {dst}, a->latch + {src}, {size}); /* {} -> {} */",
+            out.name, inp.name
+        );
         // Qualitaet `Good` (3.5): Der Eingang hat jetzt eine Quelle — sofern
         // der Wert in der deklarierten Range liegt; sonst `Bad` (12.6). Der
         // Interpreter prueft am Rand auch `max_slew` und `debounce`; das
         // bleibt hier aussen vor (LIMITS).
         let Some(q) = quality_offset(p, &inp.name) else { continue };
         if let Some(age) = age_offset(p, &inp.name) {
-            let _ = writeln!(s, "{indent}*(long long *)(image + {age}) = 0;");
+            let _ = writeln!(s, "{indent}*(long long *)(a->image + {age}) = 0;");
         }
         match range_check(p, inp.ty) {
             Some((ct, lo, hi)) => {
                 let _ = writeln!(
                     s,
-                    "{indent}{{ {ct} v = *({ct} *)(image + {dst}); image[{q}] = (v < {lo} || v > {hi}) ? 3 : 0; }}"
+                    "{indent}{{ {ct} v = *({ct} *)(a->image + {dst}); a->image[{q}] = (v < {lo} || v > {hi}) ? 3 : 0; }}"
                 );
             }
             None => {
-                let _ = writeln!(s, "{indent}image[{q}] = 0;");
+                let _ = writeln!(s, "{indent}a->image[{q}] = 0;");
             }
         }
     }
@@ -483,45 +497,36 @@ pub fn sim_fed_inputs(p: &Program) -> Vec<usize> {
         .collect()
 }
 
-/// Die Signaturen des erzeugten Codes je Maschine (11.2), fuer beide
-/// Rahmen.
+/// Die Einstiege des erzeugten Codes je Maschine (12.11), fuer beide
+/// Rahmen: aus derselben Liste, aus der der Codegen sie schreibt
+/// ([`takt_llvm::arena::entries`]).
 pub fn machine_declarations(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine]) {
     for m in driven {
-        let _ = writeln!(s, "void {}_init(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "void {}_step(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "void {}_publish(void *st, void *in);", m.name);
-        let _ =
-            writeln!(s, "void {}_deliver(void *st, void *in, void *par, void *out, int code, _Bool active);", m.name);
-        let _ = writeln!(s, "void {}_pend(void *st, int code);", m.name);
-        if takt_llvm::step::drops(m, p) {
-            let _ = writeln!(s, "void {}_drop(void *st);", m.name);
+        for (suffix, shape) in takt_llvm::arena::entries(m, p) {
+            let params: Vec<&str> =
+                std::iter::once("struct takt_arena *a").chain(shape.extra.iter().map(|t| c_of(t))).collect();
+            let symbol = takt_llvm::arena::entry_symbol(&m.name, &suffix);
+            let _ = writeln!(s, "{} {symbol}({});", c_of(shape.ret), params.join(", "));
         }
-        let _ = writeln!(s, "void {}_init_vars(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "void {}_enter(void *st, void *in, void *par, void *out);", m.name);
-        let _ = writeln!(s, "_Bool {}_idle(void *st);", m.name);
-        let _ = writeln!(s, "long long {}_deadline(void *st);", m.name);
-        let _ = writeln!(s, "void {}_advance(void *st, long long n);", m.name);
-        if !m.persist.is_empty() {
-            let _ = writeln!(s, "int {}_persist_snapshot(void *st, void *out, int cap);", m.name);
-            let _ = writeln!(s, "int {}_persist_restore(void *st, const void *in, int len);", m.name);
-        }
-        // 5.11: das Aktivitaetspraedikat je gescopter Instanz und die
-        // `exit:`-Bloecke fuer ihren Austritt.
-        for (i, _) in m.states.iter().flat_map(|st| st.instances.iter()).enumerate() {
-            let _ = writeln!(s, "_Bool {}_scope_{i}(void *st);", m.name);
-        }
-        let _ = writeln!(s, "void {}_exit_all(void *st, void *in, void *par, void *out);", m.name);
-        if !m.layout.trigger_flags.is_empty() {
-            let _ = writeln!(s, "void {}_triggers(void *st, void *in, void *par, void *out);", m.name);
-        }
+    }
+}
+
+/// Der C-Typ zu einem LLVM-Typ der Einstiege.
+fn c_of(llvm: &str) -> &'static str {
+    match llvm {
+        "i1" => "_Bool",
+        "i32" => "int",
+        "i64" => "long long",
+        "ptr" => "void *",
+        _ => "void",
     }
 }
 
 /// 5.11: je gescopter Instanz, ob sie zu Beginn des vorigen Ticks aktiv
 /// war — der Vergleich liefert Ein- und Austritt.
-pub fn scope_flags(s: &mut String, p: &Program) {
+pub fn scope_flags(t: &mut Text, p: &Program) {
     for (owner, _, i) in scoped_of(p) {
-        let _ = writeln!(s, "static _Bool g_scope_{owner}_{i} = 0;");
+        let _ = writeln!(t.fields, "    _Bool scope_{owner}_{i};");
     }
 }
 
@@ -539,8 +544,8 @@ pub fn enter_machines(
 ) {
     let scoped: Vec<String> = scoped_of(p).into_iter().map(|(_, inst, _)| inst).collect();
     for m in driven.iter().filter(|m| !scoped.contains(&m.name)) {
-        let _ = writeln!(s, "{indent}{0}_enter(state_{0}, image, params, latch);", m.name);
-        let _ = writeln!(s, "{indent}{0}_publish(state_{0}, image);", m.name);
+        let _ = writeln!(s, "{indent}takt_{0}_enter(a);", m.name);
+        let _ = writeln!(s, "{indent}takt_{0}_publish(a);", m.name);
     }
     scoped_lifecycle(s, p, layout, indent);
 }
@@ -561,7 +566,7 @@ pub fn steps(
 ) {
     for m in driven {
         if !m.layout.trigger_flags.is_empty() {
-            let _ = writeln!(s, "{indent}{0}_triggers(state_{0}, image, params, latch);", m.name);
+            let _ = writeln!(s, "{indent}takt_{0}_triggers(a);", m.name);
         }
     }
     let scoped = scoped_of(p);
@@ -572,8 +577,8 @@ pub fn steps(
             (per, ph) => format!("if ({tick} % {per} == {ph}) "),
         };
         let condition = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
-            Some((owner, _, i)) if condition.is_empty() => format!("if (g_scope_{owner}_{i}) "),
-            Some((owner, _, i)) => format!("{} if (g_scope_{owner}_{i}) ", condition.trim_end()),
+            Some((owner, _, i)) if condition.is_empty() => format!("if (a->scope_{owner}_{i}) "),
+            Some((owner, _, i)) => format!("{} if (a->scope_{owner}_{i}) ", condition.trim_end()),
             None => condition,
         };
         // 9.6: Ein vorgemerkter Fault geht zu Beginn des Schritts in den
@@ -581,7 +586,7 @@ pub fn steps(
         let i = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
         let _ = writeln!(
             s,
-            "{indent}{condition}{{ if (g_pending[{i}]) {{ {0}_pend(state_{0}, g_pending[{i}]); g_pending[{i}] = 0; }} {0}_step(state_{0}, image, params, latch); {0}_publish(state_{0}, image); }}",
+            "{indent}{condition}{{ if (a->pending[{i}]) {{ takt_{0}_pend(a, a->pending[{i}]); a->pending[{i}] = 0; }} takt_{0}_step(a); takt_{0}_publish(a); }}",
             m.name
         );
     }
@@ -609,22 +614,23 @@ pub fn scoped_of(p: &Program) -> Vec<(String, String, usize)> {
 /// vor jedem Schritt ab (`<besitzer>_scope_<n>`).
 pub fn scoped_lifecycle(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
     for (owner, inst, i) in scoped_of(p) {
-        let _ = writeln!(s, "{indent}{{ _Bool now = {owner}_scope_{i}(state_{owner});");
-        let _ = writeln!(s, "{indent}  if (now && !g_scope_{owner}_{i}) {{");
-        let _ = writeln!(s, "{indent}    memset(state_{inst}, 0, sizeof state_{inst});");
-        let _ = writeln!(s, "{indent}    {inst}_init_vars(state_{inst}, image, params, latch);");
-        let _ = writeln!(s, "{indent}    {inst}_enter(state_{inst}, image, params, latch);");
-        let _ = writeln!(s, "{indent}    {inst}_publish(state_{inst}, image);");
-        let _ = writeln!(s, "{indent}  }} else if (!now && g_scope_{owner}_{i}) {{");
+        let state = takt_llvm::arena::state_name(&inst);
+        let _ = writeln!(s, "{indent}{{ _Bool now = takt_{owner}_scope_{i}(a);");
+        let _ = writeln!(s, "{indent}  if (now && !a->scope_{owner}_{i}) {{");
+        let _ = writeln!(s, "{indent}    memset(a->{state}, 0, sizeof a->{state});");
+        let _ = writeln!(s, "{indent}    takt_{inst}_init_vars(a);");
+        let _ = writeln!(s, "{indent}    takt_{inst}_enter(a);");
+        let _ = writeln!(s, "{indent}    takt_{inst}_publish(a);");
+        let _ = writeln!(s, "{indent}  }} else if (!now && a->scope_{owner}_{i}) {{");
         // 5.11: erst die `exit:`-Bloecke von innen nach aussen, dann
         // gehen die Outputs auf `safe` — sie ueberschreiben, was ein
         // `exit` an ihnen tat, genau wie im Interpreter.
-        let _ = writeln!(s, "{indent}    {inst}_exit_all(state_{inst}, image, params, latch);");
+        let _ = writeln!(s, "{indent}    takt_{inst}_exit_all(a);");
         safe_outputs_of(s, p, layout, &inst, &format!("{indent}    "));
-        let _ = writeln!(s, "{indent}    memset(state_{inst}, 0, sizeof state_{inst});");
-        let _ = writeln!(s, "{indent}    {inst}_publish(state_{inst}, image);");
+        let _ = writeln!(s, "{indent}    memset(a->{state}, 0, sizeof a->{state});");
+        let _ = writeln!(s, "{indent}    takt_{inst}_publish(a);");
         let _ = writeln!(s, "{indent}  }}");
-        let _ = writeln!(s, "{indent}  g_scope_{owner}_{i} = now; }}");
+        let _ = writeln!(s, "{indent}  a->scope_{owner}_{i} = now; }}");
     }
 }
 
@@ -640,7 +646,8 @@ fn safe_outputs_of(s: &mut String, p: &Program, layout: &Layout, machine: &str, 
         }
         let Some(safe) = c.attrs.safe.as_ref().and_then(|e| literal(p, e)) else { continue };
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let _ = writeln!(s, "{indent}*({ct} *)(latch + {}) = {safe}; /* {} auf safe (5.11) */", slot.offset, slot.name);
+        let _ =
+            writeln!(s, "{indent}*({ct} *)(a->latch + {}) = {safe}; /* {} auf safe (5.11) */", slot.offset, slot.name);
     }
 }
 
@@ -659,11 +666,11 @@ pub fn commit_sequence(s: &mut String, p: &Program, driven: &[&takt_mir::machine
     // in den Latch, vor dem Commit — ein geplanter Wert gewinnt gegen eine
     // Zuweisung desselben Ticks, und die `sim`-Bindung sieht ihn.
     if !queued_outputs(p).is_empty() {
-        let _ = writeln!(s, "{indent}takt_apply_scheduled({tick} * {}LL);", p.config.tick);
+        let _ = writeln!(s, "{indent}takt_apply_scheduled(a, {tick} * {}LL);", p.config.tick);
     }
     sim_bindings(s, p, indent);
-    let _ = writeln!(s, "{indent}takt_tx_commit({tick});");
-    let _ = writeln!(s, "{indent}takt_int_commit();");
+    let _ = writeln!(s, "{indent}takt_tx_commit(a, {tick});");
+    let _ = writeln!(s, "{indent}takt_int_commit(a);");
 }
 
 /// Der Ψ-Tausch nach dem Commit (8.3, 11.2): Was eine Maschine ausgab,
@@ -687,25 +694,32 @@ pub fn psi_commit(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mac
         // Ein Skalar als Zuweisung: `memcpy` unbekannter Ausrichtung wird auf RV32 ein Aufruf je Byte.
         let _ = match c_type(&ty, false) {
             Some(ct) => {
-                writeln!(s, "{indent}*({ct} *)(image + {dst}) = *(const {ct} *)(latch + {src}); /* Psi {} */", c.name)
+                writeln!(
+                    s,
+                    "{indent}*({ct} *)(a->image + {dst}) = *(const {ct} *)(a->latch + {src}); /* Psi {} */",
+                    c.name
+                )
             }
-            None => writeln!(s, "{indent}memcpy(image + {dst}, latch + {src}, {}); /* Psi {} */", ty.size(), c.name),
+            None => {
+                writeln!(s, "{indent}memcpy(a->image + {dst}, a->latch + {src}, {}); /* Psi {} */", ty.size(), c.name)
+            }
         };
     }
     // Bank und Regionen sind 8-ausgerichtet (psi.rs); die Byte-Schleife kostete auf RV32 rund 10 us je Tick.
     let _ = writeln!(
         s,
-        "{indent}for (unsigned i = 0; i < {}; i++) ((unsigned long long *)(image + {first}))[i] = ((const unsigned long long *)(image + {next}))[i]; /* Psi */",
+        "{indent}for (unsigned i = 0; i < {}; i++) ((unsigned long long *)(a->image + {first}))[i] = ((const unsigned long long *)(a->image + {next}))[i]; /* Psi */",
         bank_size(p) / 8
     );
     for m in driven {
         let Some(id) = p.machines.iter().position(|x| x.name == m.name) else { continue };
         let id = takt_mir::MachineId(id as u32);
         let Some(base) = region_offset(id, true, p) else { continue };
-        let _ = writeln!(s, "{indent}image[{base}] = 0; /* fresh {} */", m.name);
+        let _ = writeln!(s, "{indent}a->image[{base}] = 0; /* fresh {} */", m.name);
         for i in 0..m.signals.len() {
             if let Some(off) = field_offset(id, Field::Signal(takt_mir::SignalId(i as u32)), p) {
-                let _ = writeln!(s, "{indent}image[{}] = 0; /* Signal {}.{} */", base + off, m.name, m.signals[i].name);
+                let _ =
+                    writeln!(s, "{indent}a->image[{}] = 0; /* Signal {}.{} */", base + off, m.name, m.signals[i].name);
             }
         }
     }
@@ -770,12 +784,14 @@ pub fn aging(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
             continue;
         };
         let stale = match p.channels.iter().find(|c| c.name == slot.name).and_then(|c| c.attrs.max_age) {
-            Some(max) => format!(" if (*a > {max}LL && image[{q}] != 3) {{ image[{q}] = 2; image[{reason}] = 0; }}"),
+            Some(max) => {
+                format!(" if (*at > {max}LL && a->image[{q}] != 3) {{ a->image[{q}] = 2; a->image[{reason}] = 0; }}")
+            }
             None => String::new(),
         };
         let _ = writeln!(
             s,
-            "{indent}{{ long long *a = (long long *)(image + {age}); *a = *a > {}LL ? {}LL : *a + {tick}LL;{stale} }}",
+            "{indent}{{ long long *at = (long long *)(a->image + {age}); *at = *at > {}LL ? {}LL : *at + {tick}LL;{stale} }}",
             i64::MAX - tick,
             i64::MAX
         );
@@ -864,11 +880,11 @@ pub fn job_tables(s: &mut String, p: &Program) -> Option<(usize, u64)> {
 /// `bytes<N>` darin als Laenge und Daten (5.9); das Ergebnis geht in
 /// kanonischer Form nach `out`, seine Laenge nach `out_len`.
 pub fn job_call(s: &mut String, p: &Program, args: &str, len: &str, out: &str, out_len: &str, indent: &str) {
-    let _ = writeln!(s, "{indent}const unsigned char *a[8]; int n[8]; int k = 0, p = 0;");
-    let _ = writeln!(s, "{indent}for (k = 0; k < 8; k++) {{ a[k] = {args}; n[k] = 0; }}");
+    let _ = writeln!(s, "{indent}const unsigned char *arg[8]; int n[8]; int k = 0, p = 0;");
+    let _ = writeln!(s, "{indent}for (k = 0; k < 8; k++) {{ arg[k] = {args}; n[k] = 0; }}");
     let _ = writeln!(
         s,
-        "{indent}for (k = 0; k < 8 && p + 4 <= {len}; k++) {{ n[k] = (int)takt_job_le32({args} + p); a[k] = {args} + p + 4; p += 4 + n[k]; }}"
+        "{indent}for (k = 0; k < 8 && p + 4 <= {len}; k++) {{ n[k] = (int)takt_job_le32({args} + p); arg[k] = {args} + p + 4; p += 4 + n[k]; }}"
     );
     let _ = writeln!(s, "{indent}{out_len} = 0;");
     let _ = writeln!(s, "{indent}switch (native) {{");
@@ -895,8 +911,8 @@ fn job_case(n: &takt_mir::fns::Native, out: &str, out_len: &str) -> Option<Strin
         .iter()
         .enumerate()
         .map(|(k, kind)| match kind {
-            Kind::Bytes | Kind::Digest | Kind::Fixed(_) => format!("a[{k}] + 4, (int)takt_job_le32(a[{k}])"),
-            _ => format!("a[{k}], n[{k}]"),
+            Kind::Bytes | Kind::Digest | Kind::Fixed(_) => format!("arg[{k}] + 4, (int)takt_job_le32(arg[{k}])"),
+            _ => format!("arg[{k}], n[{k}]"),
         })
         .collect();
     let call = format!("takt_native_{}({})", n.name, args.join(", "));
@@ -931,8 +947,8 @@ static void takt_job_put32(unsigned char *b, unsigned int v) {
     b[0] = (unsigned char)v; b[1] = (unsigned char)(v >> 8); b[2] = (unsigned char)(v >> 16); b[3] = (unsigned char)(v >> 24);
 }
 /* done, ok, err (Diskriminante von JobErr: CANCELLED 0, FAILED 1, PENDING 2) */
-static void takt_job_image(int i, int done, int ok, int err) {
-    unsigned char *e = image + takt_job_at[i];
+static void takt_job_image(struct takt_arena *a, int i, int done, int ok, int err) {
+    unsigned char *e = a->image + takt_job_at[i];
     e[0] = (unsigned char)done; e[1] = (unsigned char)ok; takt_job_put32(e + 4, (unsigned int)err);
 }
 "#;

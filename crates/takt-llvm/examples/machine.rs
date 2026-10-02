@@ -4,7 +4,7 @@
 
 use takt_llvm::emit::Module;
 use takt_llvm::machine::{declare_state, state_struct};
-use takt_llvm::step::{init_function, step_function};
+use takt_llvm::step::{enter_function, init_vars_function, step_function};
 
 fn main() {
     let path = std::env::args().nth(1).unwrap_or_else(|| "corpus-try/01_minimal.takt".into());
@@ -51,8 +51,11 @@ fn main() {
             continue;
         };
         declare_state(machine, &st, &mut m);
-        if let Err(e) = init_function(machine, &st, &p, &mut m, true) {
-            eprintln!("; {}: init: {e:?}", machine.name);
+        if let Err(e) = init_vars_function(machine, &st, &p, &mut m) {
+            eprintln!("; {}: init_vars: {e:?}", machine.name);
+        }
+        if let Err(e) = enter_function(machine, &st, &p, &mut m) {
+            eprintln!("; {}: enter: {e:?}", machine.name);
         }
         if let Err(e) = step_function(machine, &st, &p, &mut m) {
             eprintln!("; {}: {e:?}", machine.name);

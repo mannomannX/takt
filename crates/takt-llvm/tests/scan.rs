@@ -113,7 +113,9 @@ fn the_generated_automaton_finds_what_the_rust_one_finds() {
     let triple = if cfg!(windows) { "x86_64-pc-windows-msvc" } else { "x86_64-unknown-linux-gnu" };
     let mut m = Module::new("scan", triple);
     for (i, (_, scan)) in scans.iter().enumerate() {
-        let regs = m.begin(&format!("such{i}"), &takt_llvm::ty::LlvmType::Int(32), &[takt_llvm::ty::LlvmType::Ptr]);
+        // Von aussen gerufen, mit der Arena wie jede erzeugte Funktion (12.11).
+        let ptr = takt_llvm::ty::LlvmType::Ptr;
+        let regs = m.begin_with("", &format!("such{i}"), &takt_llvm::ty::LlvmType::Int(32), &[ptr], &[], "");
         let start = takt_llvm::scan::first(scan, regs[0], &mut m);
         m.end(Some((&takt_llvm::ty::LlvmType::Int(32), start.to_string())));
     }
@@ -122,8 +124,9 @@ fn the_generated_automaton_finds_what_the_rust_one_finds() {
     let mut c = String::from("#include <stdio.h>\n#include <string.h>\n\n");
     let _ = writeln!(c, "struct text {{ int len; unsigned char bytes[{MAX}]; }};");
     for i in 0..PATTERNS {
-        let _ = writeln!(c, "int such{i}(struct text *);");
+        let _ = writeln!(c, "int such{i}(struct text *, void *);");
     }
+    let _ = writeln!(c, "static _Alignas(8) unsigned char arena[{}];", takt_llvm::arena::fault::BYTES);
     let _ = writeln!(c, "\nint main(void) {{\n    struct text t;");
     for l in &lines {
         let bytes: Vec<String> = l.iter().map(|b| format!("0x{b:02x}")).collect();
@@ -135,7 +138,7 @@ fn the_generated_automaton_finds_what_the_rust_one_finds() {
         let _ =
             writeln!(c, "      memset(&t, 0, sizeof t); t.len = {}; memcpy(t.bytes, z + 1, {}); }}", l.len(), l.len());
         for i in 0..PATTERNS {
-            let _ = writeln!(c, "    printf(\"%d\\n\", such{i}(&t));");
+            let _ = writeln!(c, "    printf(\"%d\\n\", such{i}(&t, arena));");
         }
     }
     let _ = writeln!(c, "    return 0;\n}}");

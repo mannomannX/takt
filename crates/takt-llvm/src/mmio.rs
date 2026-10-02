@@ -51,22 +51,22 @@ pub fn definitions(helpers: &[(Access, LlvmType)], bare_metal: bool) -> String {
         let _ = match (access, bare_metal) {
             (Access::Read, true) => writeln!(
                 s,
-                "define internal {ty} @{f}(ptr %at) alwaysinline nounwind {{\n  %v = load volatile {ty}, ptr %at\n  ret {ty} %v\n}}"
+                "define internal {ty} @{f}(ptr %at, ptr %arena) alwaysinline nounwind {{\n  %v = load volatile {ty}, ptr %at\n  ret {ty} %v\n}}"
             ),
             (Access::Write, true) => writeln!(
                 s,
-                "define internal void @{f}(ptr %at, {ty} %v) alwaysinline nounwind {{\n  store volatile {ty} %v, ptr %at\n  ret void\n}}"
+                "define internal void @{f}(ptr %at, {ty} %v, ptr %arena) alwaysinline nounwind {{\n  store volatile {ty} %v, ptr %at\n  ret void\n}}"
             ),
             (Access::Read, false) => writeln!(
                 s,
-                "define internal {ty} @{f}(ptr %at) nounwind {{\n  %buf = alloca {ty}\n  %addr = ptrtoint ptr %at to i64\n  \
-                 call void @{}(i64 %addr, ptr %buf, i32 {size})\n  %v = load {ty}, ptr %buf\n  ret {ty} %v\n}}",
+                "define internal {ty} @{f}(ptr %at, ptr %arena) nounwind {{\n  %buf = alloca {ty}\n  %addr = ptrtoint ptr %at to i64\n  \
+                 call void @{}(ptr %arena, i64 %addr, ptr %buf, i32 {size})\n  %v = load {ty}, ptr %buf\n  ret {ty} %v\n}}",
                 Abi::MMIO_READ
             ),
             (Access::Write, false) => writeln!(
                 s,
-                "define internal void @{f}(ptr %at, {ty} %v) nounwind {{\n  %buf = alloca {ty}\n  store {ty} %v, ptr %buf\n  \
-                 %addr = ptrtoint ptr %at to i64\n  call void @{}(i64 %addr, ptr %buf, i32 {size})\n  ret void\n}}",
+                "define internal void @{f}(ptr %at, {ty} %v, ptr %arena) nounwind {{\n  %buf = alloca {ty}\n  store {ty} %v, ptr %buf\n  \
+                 %addr = ptrtoint ptr %at to i64\n  call void @{}(ptr %arena, i64 %addr, ptr %buf, i32 {size})\n  ret void\n}}",
                 Abi::MMIO_WRITE
             ),
         };

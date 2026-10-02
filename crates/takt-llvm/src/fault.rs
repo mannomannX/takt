@@ -3,16 +3,19 @@
 //! Eine Maschine, die `last_fault` liest, fuehrt ein Feld aus Art (die Zahl
 //! aus [`crate::abi::fault_code`]), Zeile, Tick und Nachricht; eine, die es
 //! nicht liest, fuehrt nichts davon. Die Zeile kennt jede Fault-Stelle beim
-//! Uebersetzen: Der Block, der die Art ablegt, legt sie in [`LINE`] dazu
-//! ([`crate::emit::Module::fault_to`]). `check`, `expect` und `abort`
-//! schreiben ihre Nachricht in [`TEXT`] ([`state`]); jeder andere Fault
+//! Uebersetzen: Der Block, der die Art ablegt, legt sie in die Ablage der
+//! Zeile dazu ([`crate::emit::Module::fault_to`]). `check`, `expect` und
+//! `abort` schreiben ihre Nachricht in die Ablage der Nachricht ([`state`],
+//! beide in [`crate::arena::fault`]); jeder andere Fault
 //! nennt den Namen seiner Art. Der Fault-Pfad uebernimmt beides
 //! ([`record`]).
 //!
-//! **Warum globale Ablagen.** Zwischen der Stelle und dem Fault-Pfad liegen
-//! Funktionsgrenzen — eine reine Funktion faultet ihren Aufrufer, eine
-//! `loop:`-Funktion kehrt mit dem Fault-Flag zurueck (4.1). Zeile und
-//! Nachricht nehmen denselben Weg wie die Art im Flag, nur ohne Parameter.
+//! **Warum Ablagen in der Arena.** Zwischen der Stelle und dem Fault-Pfad
+//! liegen Funktionsgrenzen — eine reine Funktion faultet ihren Aufrufer,
+//! eine `loop:`-Funktion kehrt mit dem Fault-Flag zurueck (4.1). Zeile und
+//! Nachricht nehmen denselben Weg wie die Art im Flag: ueber die Arena, die
+//! jede erzeugte Funktion kennt, damit jede Instanz ihre eigenen hat
+//! (12.11).
 
 use takt_mir::Program;
 use takt_mir::pattern::Format;
@@ -21,12 +24,6 @@ use crate::emit::{Module, Reg};
 use crate::expr::{Lowered, NotYet, Vars};
 use crate::ty::LlvmType;
 
-/// Die Zeile der letzten Fault-Stelle.
-pub const LINE: &str = "takt_fault_line";
-/// Die Nachricht eines `check`, `expect` oder `abort`.
-pub const TEXT: &str = "takt_fault_text";
-/// Steht in [`TEXT`] die Nachricht des Faults, der gerade genommen wird?
-pub const STATED: &str = "takt_fault_stated";
 /// Die Namen der Arten.
 const NAMES: &str = "takt_fault_names";
 
@@ -55,7 +52,7 @@ const NAME_CAP: u32 = 17;
 
 /// `str<128>`: Laenge und Bytes.
 fn text_type() -> LlvmType {
-    LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), TEXT_CAP)])
+    crate::arena::text_type()
 }
 
 /// Ein Eintrag der Namenstabelle: das Praefix eines `str<128>`.
@@ -68,12 +65,9 @@ pub fn field_type() -> LlvmType {
     LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Int(32), LlvmType::Int(64), text_type()])
 }
 
-/// Die Ablagen und die Namenstabelle; nur in einem Modul, dessen
-/// Maschinen `last_fault` lesen.
+/// Die Namenstabelle; nur in einem Modul, dessen Maschinen `last_fault`
+/// lesen. Die Ablagen stehen in der Arena ([`crate::arena::fault`]).
 pub fn declare(m: &mut Module) {
-    m.declare(&format!("@{LINE} = internal global i32 0"));
-    m.declare(&format!("@{TEXT} = internal global {} zeroinitializer", text_type()));
-    m.declare(&format!("@{STATED} = internal global i1 false"));
     let entries: Vec<String> = KINDS
         .iter()
         .map(|k| {
@@ -123,12 +117,14 @@ pub fn state(
         }
     }
     let text = text_type();
-    m.void_inst(&format!("call void @llvm.memset.p0.i64(ptr @{TEXT}, i8 0, i64 {}, i1 false)", text.aligned_size()));
-    m.void_inst(&format!("store i32 {n}, ptr @{TEXT}"));
-    let dst = m.inst(&format!("getelementptr inbounds {text}, ptr @{TEXT}, i32 0, i32 1, i32 0"));
+    let text_at = crate::arena::at(crate::arena::fault::TEXT, m);
+    m.void_inst(&format!("call void @llvm.memset.p0.i64(ptr {text_at}, i8 0, i64 {}, i1 false)", text.aligned_size()));
+    m.void_inst(&format!("store i32 {n}, ptr {text_at}"));
+    let dst = m.inst(&format!("getelementptr inbounds {text}, ptr {text_at}, i32 0, i32 1, i32 0"));
     let wide = m.inst(&format!("zext i32 {n} to i64"));
     m.void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {bytes}, i64 {wide}, i1 false)"));
-    m.void_inst(&format!("store i1 true, ptr @{STATED}"));
+    let stated_at = crate::arena::at(crate::arena::fault::STATED, m);
+    m.void_inst(&format!("store i1 true, ptr {stated_at}"));
     Ok(())
 }
 
@@ -141,25 +137,27 @@ pub fn record(at: &Reg, code: &str, tick_ns: i64, m: &mut Module) {
     let field = |i: u32, m: &mut Module| m.inst(&format!("getelementptr inbounds {ty}, ptr {at}, i32 0, i32 {i}"));
     let code_ptr = field(0, m);
     m.void_inst(&format!("store i32 {code}, ptr {code_ptr}"));
-    let line = m.inst(&format!("load i32, ptr @{LINE}"));
+    let line = m.inst(&format!("load i32, ptr {}", crate::arena::PARAM));
     let line_ptr = field(1, m);
     m.void_inst(&format!("store i32 {line}, ptr {line_ptr}"));
-    let now = m.inst(&format!("call i64 @{}()", crate::abi::Abi::NOW));
+    let now = m.inst(&format!("call i64 @{}(ptr %arena)", crate::abi::Abi::NOW));
     let tick = m.inst(&format!("sdiv i64 {now}, {tick_ns}"));
     let tick_ptr = field(2, m);
     m.void_inst(&format!("store i64 {tick}, ptr {tick_ptr}"));
     let dst = field(3, m);
     m.void_inst(&format!("call void @llvm.memset.p0.i64(ptr {dst}, i8 0, i64 {}, i1 false)", text.aligned_size()));
-    let stated = m.inst(&format!("load i1, ptr @{STATED}"));
+    let stated_at = crate::arena::at(crate::arena::fault::STATED, m);
+    let stated = m.inst(&format!("load i1, ptr {stated_at}"));
     let k = m.next_label();
     let (said, named, done) = (format!("gesagt{k}"), format!("benannt{k}"), format!("vermerkt{k}"));
     m.void_inst(&format!("br i1 {stated}, label %{said}, label %{named}"));
     m.label(&said);
+    let text_at = crate::arena::at(crate::arena::fault::TEXT, m);
     m.void_inst(&format!(
-        "call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr @{TEXT}, i64 {}, i1 false)",
+        "call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {text_at}, i64 {}, i1 false)",
         text.aligned_size()
     ));
-    m.void_inst(&format!("store i1 false, ptr @{STATED}"));
+    m.void_inst(&format!("store i1 false, ptr {stated_at}"));
     m.void_inst(&format!("br label %{done}"));
     m.label(&named);
     // Art `code` ist eins plus die Variante, die Nutzlast acht Bit darueber.

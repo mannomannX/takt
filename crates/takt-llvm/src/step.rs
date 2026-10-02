@@ -117,14 +117,16 @@ pub const DELIVER_ACTIVE: u32 = 1 << 29;
 /// zu, nachdem alle Maschinen geschritten sind. Die Funktion legt ihn in
 /// den Zustand und ruft den Schritt, der dann nur seinen Fault-Pfad nimmt
 /// — dieselben Pfade wie bei einem Fault im Schritt, kein zweites Mal im
-/// Objekt.
+/// Objekt. Sie ruft ihn ueber seinen Einstieg (12.11): So hat der Rumpf des
+/// Schritts einen einzigen Aufrufer, und LLVM bettet ihn in den Einstieg ein
+/// — im Tick kostet der Schritt keinen zweiten Aufruf.
 pub fn deliver_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
     let field = st.index_of(Role::Deliver, 0).ok_or(NotYet { what: "`deliver` im Zustand" })?;
     let ptr = crate::ty::LlvmType::Ptr;
     let params =
         [ptr.clone(), ptr.clone(), ptr.clone(), ptr, crate::ty::LlvmType::Int(32), crate::ty::LlvmType::Int(1)];
     let args = module.begin_with(
-        "",
+        "internal ",
         &format!("{}_deliver", m.name),
         &crate::ty::LlvmType::Void,
         &params,
@@ -137,7 +139,8 @@ pub fn deliver_function(m: &Machine, st: &StateStruct, module: &mut Module) -> R
     let flags = module.inst(&format!("or i32 {active}, {DELIVER_PHASE}"));
     let value = module.inst(&format!("or i32 {}, {flags}", args[4]));
     module.void_inst(&format!("store i32 {value}, ptr {at}"));
-    module.void_inst(&format!("call void @{}(ptr %0, ptr %1, ptr %2, ptr %3)", machine::step_name(m)));
+    let step = crate::arena::entry_symbol(&m.name, "step");
+    module.void_inst(&format!("call void @{step}(ptr {})", crate::arena::PARAM));
     module.end(None);
     Ok(())
 }
@@ -148,7 +151,7 @@ pub fn deliver_function(m: &Machine, st: &StateStruct, module: &mut Module) -> R
 pub fn pend_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
     let field = st.index_of(Role::Deliver, 0).ok_or(NotYet { what: "`deliver` im Zustand" })?;
     let args = module.begin_with(
-        "",
+        "internal ",
         &format!("{}_pend", m.name),
         &crate::ty::LlvmType::Void,
         &[crate::ty::LlvmType::Ptr, crate::ty::LlvmType::Int(32)],
@@ -307,8 +310,10 @@ fn write_step(
         if let Some(sid) = crate::stream::number(*stream) {
             let seq = module.inst(&format!("sub i64 {next}, 1"));
             let mi = ctx.machine_index;
-            module
-                .void_inst(&format!("call void @{}(i32 {sid}, i32 {mi}, i64 {seq})", crate::stream::Streams::EXAMINED));
+            module.void_inst(&format!(
+                "call void @{}(ptr %arena, i32 {sid}, i32 {mi}, i64 {seq})",
+                crate::stream::Streams::EXAMINED
+            ));
         }
     }
     module.end(None);
@@ -757,7 +762,7 @@ fn entry_call(
     }
     let ids = entered.iter().map(|s| s.0).collect();
     let name = m.entry_function(&ctx.machine.name, leaf.0, ids, with_machine_loop);
-    m.void_inst(&format!("call void @{name}(ptr %0, ptr %1, ptr %2, ptr %3)"));
+    m.void_inst(&format!("call void @{name}(ptr %0, ptr %1, ptr %2, ptr %3, ptr %arena)"));
     Ok(())
 }
 
@@ -831,7 +836,7 @@ fn loop_call(
         return Ok(());
     }
     let name = m.loop_function(&ctx.machine.name, state.map(|s| s.0));
-    let r = m.inst(&format!("call i8 @{name}(ptr %0, ptr %1, ptr %2, ptr %3, i8 {leaf}, i1 {entry})"));
+    let r = m.inst(&format!("call i8 @{name}(ptr %0, ptr %1, ptr %2, ptr %3, i8 {leaf}, i1 {entry}, ptr %arena)"));
     let k = ctx.next_label(m);
     let (on, out) = (format!("weiter{k}_{}", ctx.machine.name), format!("abbruch{k}_{}", ctx.machine.name));
     let fault = format!("fault_aus_loop{k}_{}", ctx.machine.name);
@@ -841,8 +846,9 @@ fn loop_call(
     // Die Art bringt die `loop:`-Funktion im Flag mit; gelesen wird es
     // geloescht wie nach jedem Aufruf (FB-337).
     m.label(&fault);
-    let code = m.inst(&format!("load i32, ptr @{}", crate::abi::Abi::FAULT_FLAG));
-    m.void_inst(&format!("store i32 0, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+    let flag_at = crate::arena::at(crate::arena::fault::FLAG, m);
+    let code = m.inst(&format!("load i32, ptr {flag_at}"));
+    m.void_inst(&format!("store i32 0, ptr {flag_at}"));
     m.fault_code_at(&code.to_string());
     m.void_inst(&format!("br label %{}", ctx.trampoline()));
     m.label(&on);
@@ -896,7 +902,8 @@ fn loop_functions(m: &Machine, st: &StateStruct, p: &Program, module: &mut Modul
         module.label(&format!("fault_{}_raus{}", m.name, ctx.tag));
         let slot = module.fault_slot();
         let code = module.inst(&format!("load i32, ptr {slot}"));
-        module.void_inst(&format!("store i32 {code}, ptr @{}", crate::abi::Abi::FAULT_FLAG));
+        let flag_at = crate::arena::at(crate::arena::fault::FLAG, module);
+        module.void_inst(&format!("store i32 {code}, ptr {flag_at}"));
         module.void_inst("ret i8 2");
         // Die Fault-Pfade der Wechsel, die ein `->` hier ausloest: Sie
         // beenden den Schritt wie das `->` selbst.
@@ -1141,7 +1148,7 @@ pub fn idle_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
         };
         let at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {c}"));
         let cur = module.inst(&format!("load i64, ptr {at}"));
-        let n = module.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+        let n = module.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
         let empty = module.inst(&format!("icmp eq i32 {n}, 0"));
         out = module.inst(&format!("and i1 {out}, {empty}"));
     }
@@ -1225,8 +1232,10 @@ pub fn drop_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     }
     let missed = module.inst(&format!("icmp ne i32 {any}, 0"));
     let paused_now = module.inst(&format!("and i1 {woke}, {missed}"));
-    module
-        .void_inst(&format!("call void @{}(i32 {index}, i32 {paused}, i1 {paused_now}, i1 0)", crate::abi::Abi::ALERT));
+    module.void_inst(&format!(
+        "call void @{}(ptr %arena, i32 {index}, i32 {paused}, i1 {paused_now}, i1 0)",
+        crate::abi::Abi::ALERT
+    ));
     let (go, done) = (format!("verwerfen_{}", m.name), format!("verworfen_{}", m.name));
     module.void_inst(&format!("br i1 {idle}, label %{go}, label %{done}"));
     module.label(&go);
@@ -1242,7 +1251,7 @@ pub fn drop_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
         };
         let cur_at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {c}"));
         let cur = module.inst(&format!("load i64, ptr {cur_at}"));
-        let n = module.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+        let n = module.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
         let wide = module.inst(&format!("zext i32 {n} to i64"));
         let end = module.inst(&format!("add i64 {cur}, {wide}"));
         module.void_inst(&format!("store i64 {end}, ptr {cur_at}"));
@@ -1254,8 +1263,10 @@ pub fn drop_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
         // Wie am Ende des Schritts: Die Runtime gibt frei, was alle Leser
         // hinter sich haben (8.6).
         let last = module.inst(&format!("sub i64 {end}, 1"));
-        module
-            .void_inst(&format!("call void @{}(i32 {sid}, i32 {index}, i64 {last})", crate::stream::Streams::EXAMINED));
+        module.void_inst(&format!(
+            "call void @{}(ptr %arena, i32 {sid}, i32 {index}, i64 {last})",
+            crate::stream::Streams::EXAMINED
+        ));
     }
     module.void_inst(&format!("br label %{done}"));
     module.label(&done);
@@ -1431,49 +1442,11 @@ ende:
     ));
 }
 
-/// Schreibt die Eintrittsfunktion einer Maschine (9.4).
-///
-/// 9.4: Der Anfangszustand wird betreten, *bevor* der erste Tick laeuft —
-/// sein `enter:` gehoert darum nicht in den Tickschritt, sondern in eine
-/// eigene Funktion, die die Runtime einmal ruft. Stuende es im Schritt,
-/// liefe es in jedem Tick.
-///
-/// `_init` ist `_init_vars` und `_enter` nacheinander; ein eigener Rumpf
-/// stuende ein zweites Mal im Objekt. `whole` erzwingt ihn, wenn eine
-/// der beiden Funktionen fehlt.
-pub fn init_function(
-    m: &Machine,
-    st: &StateStruct,
-    p: &Program,
-    module: &mut Module,
-    whole: bool,
-) -> Result<(), NotYet> {
-    if whole {
-        emit_init(m, st, p, module, "_init", true, true)?;
-        return entry_functions(m, st, p, module);
-    }
-    let ptr = crate::ty::LlvmType::Ptr;
-    let args = module.begin_with(
-        "internal ",
-        &format!("{}_init", m.name),
-        &crate::ty::LlvmType::Void,
-        &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
-        machine::MACHINE_ATTRS,
-        "minsize",
-    );
-    let list = args.iter().map(|a| format!("ptr {a}")).collect::<Vec<_>>().join(", ");
-    module.void_inst(&format!("call void @{}_init_vars({list})", m.name));
-    module.void_inst(&format!("call void @{}_enter({list})", m.name));
-    module.void_inst("ret void");
-    module.end(None);
-    Ok(())
-}
-
 /// `<maschine>_init_vars`: nur Anfangszustand und s0-Defaults (5.9).
 ///
 /// Ein Rahmen mit Journal ruft danach `_persist_restore` und erst dann
 /// `_enter` — dieselbe Reihenfolge, in der der Interpreter zwischen
-/// `init_vars` und `machine::init` laedt. Ohne Journal genuegt `_init`.
+/// `init_vars` und `machine::init` laedt.
 pub fn init_vars_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     emit_init(m, st, p, module, "_init_vars", true, false)
 }
@@ -1561,9 +1534,8 @@ fn emit_init(
     };
     let mark = module.mark();
     let ptr = crate::ty::LlvmType::Ptr;
-    let linkage = if suffix == "_init" { "internal " } else { "" };
     module.begin_with(
-        linkage,
+        "internal ",
         &format!("{}{suffix}", m.name),
         &crate::ty::LlvmType::Void,
         &[ptr.clone(), ptr.clone(), ptr.clone(), ptr],
@@ -1727,7 +1699,7 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
         let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
         let k = ctx.next_label(m);
         let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-        let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+        let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
         // Der Zaehler laeuft ueber das Fenster; seine Schranke ist `n`.
         let i_ptr = m.alloca("i32");
         m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
@@ -1749,9 +1721,10 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
         m.label(&body);
         let seq = match (direct, buf) {
             (Some(var), _) => bind_direct(var, sid, &cur, &i, elem, ctx, m)?,
-            (None, Some(buf)) => {
-                m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT))
-            }
+            (None, Some(buf)) => m.inst(&format!(
+                "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
+                crate::stream::Streams::AT
+            )),
             (None, None) => return Err(NotYet { what: "Scratch" }),
         };
         // 9.6: Auch ein Element ohne passenden Handler gilt als
@@ -1787,15 +1760,17 @@ fn next_element(
     let k = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
     let (take, done) = (format!("naechstes{k}_{name}"), format!("naechstes{k}_{name}_fertig"));
     m.void_inst(&format!("br i1 {some}, label %{take}, label %{done}"));
     m.label(&take);
     let seq = match buf {
         Some(buf) => {
-            let seq =
-                m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 0, ptr {buf})", crate::stream::Streams::AT));
+            let seq = m.inst(&format!(
+                "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 0, ptr {buf})",
+                crate::stream::Streams::AT
+            ));
             bind_element(binding, buf, seq, elem, ctx, m)?;
             seq
         }
@@ -1837,7 +1812,7 @@ pub(crate) fn bind_direct(
     }
     let (Some(t_ptr), Some(data_ptr)) = (t_ptr, data_ptr) else { return Err(NotYet { what: "Bindung ohne Inhalt" }) };
     let seq = m.inst(&format!(
-        "call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {data_ptr}, ptr {t_ptr})",
+        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {data_ptr}, ptr {t_ptr})",
         crate::stream::Streams::BIND
     ));
     if let Some(seq_ptr) = seq_ptr {
@@ -2127,7 +2102,7 @@ fn match_guard(
     let k = ctx.next_label(m);
     let name = &ctx.machine.name;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     let hit_ptr = m.alloca("i1");
@@ -2145,7 +2120,10 @@ fn match_guard(
     m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{done}"));
 
     m.label(&body);
-    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT));
+    let seq = m.inst(&format!(
+        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
+        crate::stream::Streams::AT
+    ));
     if let Some(v) = binding {
         bind_element(v, buf, seq, elem, ctx, m)?;
     }
@@ -2433,7 +2411,7 @@ fn fault_body(from: FaultFrom, from_val: &str, ctx: &mut Ctx<'_>, m: &mut Module
     let slot = m.fault_slot();
     let code = m.inst(&format!("load i32, ptr {slot}"));
     m.void_inst(&format!(
-        "call void @{}(i32 {}, i32 {from_val}, i32 {code})",
+        "call void @{}(ptr %arena, i32 {}, i32 {from_val}, i32 {code})",
         crate::abi::Abi::FAULT,
         ctx.machine_index
     ));
@@ -2455,10 +2433,14 @@ fn fault_body(from: FaultFrom, from_val: &str, ctx: &mut Ctx<'_>, m: &mut Module
     // darf nie von einem Wert ueberschrieben werden, den ein verlassener
     // Zustand geplant hat.
     for slot in 0..md.layout.job_slots.len() {
-        m.void_inst(&format!("call void @{}(i32 {}, i32 {slot})", crate::abi::Abi::JOB_CANCEL, ctx.machine_index));
+        m.void_inst(&format!(
+            "call void @{}(ptr %arena, i32 {}, i32 {slot})",
+            crate::abi::Abi::JOB_CANCEL,
+            ctx.machine_index
+        ));
     }
     for o in &md.layout.output_queues {
-        m.void_inst(&format!("call void @{}(i32 {})", crate::abi::Abi::CANCEL, o.0));
+        m.void_inst(&format!("call void @{}(ptr %arena, i32 {})", crate::abi::Abi::CANCEL, o.0));
     }
     let source = match from {
         FaultFrom::State(s) => Source::Leaf(s, from_val),
@@ -2519,7 +2501,11 @@ pub fn trigger_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
     module.void_inst("ret void");
     module.label(&fault);
     let site = ctx.next_site();
-    module.void_inst(&format!("call void @{}(i32 {}, i32 {site})", crate::abi::Abi::ABORT, ctx.machine_index));
+    module.void_inst(&format!(
+        "call void @{}(ptr %arena, i32 {}, i32 {site})",
+        crate::abi::Abi::ABORT,
+        ctx.machine_index
+    ));
     module.end(None);
     Ok(())
 }
@@ -2551,7 +2537,7 @@ fn one_trigger(
     m.void_inst(&format!("br i1 {armed}, label %{head}, label %{skip}"));
     m.label(&head);
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     let buf = crate::stream::scratch(ctx.program, elem, m)?;
@@ -2562,7 +2548,10 @@ fn one_trigger(
     let go_on = m.inst(&format!("icmp slt i32 {i}, {n}"));
     m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{end_at}"));
     m.label(&body);
-    let seq = m.inst(&format!("call i64 @{}(i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})", crate::stream::Streams::AT));
+    let seq = m.inst(&format!(
+        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
+        crate::stream::Streams::AT
+    ));
     // 7.5: Der Trigger fuehrt seinen eigenen Cursor; was er gesehen hat,
     // sieht er nicht wieder.
     let next_seq = m.inst(&format!("add i64 {seq}, 1"));
@@ -2704,7 +2693,12 @@ fn plan_outputs(
             crate::ty::LlvmType::Int(n) => m.inst(&format!("sext i{n} {} to i64", v.value)).to_string(),
             _ => return Err(NotYet { what: "Trigger-Ausgabe mit zusammengesetztem Wert" }),
         };
-        let _ = m.inst(&format!("call i1 @{}(i32 {}, i64 {}, i64 {word})", crate::abi::Abi::SCHEDULE, c.0, at.value));
+        let _ = m.inst(&format!(
+            "call i1 @{}(ptr %arena, i32 {}, i64 {}, i64 {word})",
+            crate::abi::Abi::SCHEDULE,
+            c.0,
+            at.value
+        ));
     }
     Ok(())
 }
@@ -2716,7 +2710,11 @@ fn emit_fired(t: &takt_mir::program::Trigger, event: &Event, ctx: &mut Ctx<'_>, 
     let sid = crate::stream::number(takt_mir::expr::StreamRef::Internal(t.fired))
         .ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
     let bytes = crate::stream::payload_cap(ctx.program, event.ty)?;
-    let _ = m.inst(&format!("call i1 @{}(i32 {sid}, ptr {}, i32 {bytes})", crate::stream::Streams::SEND, event.slot));
+    let _ = m.inst(&format!(
+        "call i1 @{}(ptr %arena, i32 {sid}, ptr {}, i32 {bytes})",
+        crate::stream::Streams::SEND,
+        event.slot
+    ));
     Ok(())
 }
 

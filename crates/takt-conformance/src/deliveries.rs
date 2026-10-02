@@ -44,7 +44,7 @@ pub(crate) fn stimulus(s: &mut String, p: &Program, layout: &Layout, inputs: &[S
             };
             let text: String = bytes.iter().map(|b| format!("\\x{b:02x}")).collect();
             entry.1.push(format!(
-                "takt_edge_element({c}, (const unsigned char *)\"{text}\", {}, {t}LL, {seq}LL); /* {channel} */",
+                "takt_edge_element(a, {c}, (const unsigned char *)\"{text}\", {}, {t}LL, {seq}LL); /* {channel} */",
                 bytes.len()
             ));
             continue;
@@ -67,18 +67,21 @@ pub(crate) fn stimulus(s: &mut String, p: &Program, layout: &Layout, inputs: &[S
         };
         let call = match sample.value.as_ref().and_then(|v| number(p, ty, v)) {
             Some((literal, kind, i, f)) => format!(
-                "takt_edge_reading({c}, &({ct}){{ {literal} }}, (int)sizeof({ct}), {kind}, {i}LL, {}, {quality}, {reason}, 1, {t}LL, {}LL);",
+                "takt_edge_reading(a, {c}, &({ct}){{ {literal} }}, (int)sizeof({ct}), {kind}, {i}LL, {}, {quality}, {reason}, 1, {t}LL, {}LL);",
                 double(f),
                 sample.age
             ),
             None => {
-                format!("takt_edge_reading({c}, 0, 0, 0, 0LL, 0.0, {quality}, {reason}, 0, {t}LL, {}LL);", sample.age)
+                format!(
+                    "takt_edge_reading(a, {c}, 0, 0, 0, 0LL, 0.0, {quality}, {reason}, 0, {t}LL, {}LL);",
+                    sample.age
+                )
             }
         };
         entry.0.push(format!("{call} /* {channel} */"));
     }
     let _ = writeln!(s, "/* Die Lieferungen des Stimulus an den Treiberrand (12.6). */");
-    let _ = writeln!(s, "static void takt_edge_stimulus(long long tick) {{");
+    let _ = writeln!(s, "static void takt_edge_stimulus(struct takt_arena *a, long long tick) {{");
     let _ = writeln!(s, "    switch (tick) {{");
     for (tick, (readings, elements)) in &ticks {
         let _ = writeln!(s, "    case {tick}:");
@@ -89,7 +92,7 @@ pub(crate) fn stimulus(s: &mut String, p: &Program, layout: &Layout, inputs: &[S
     }
     let _ = writeln!(s, "    default: break;");
     let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    takt_edge_commit(tick);");
+    let _ = writeln!(s, "    takt_edge_commit(a, tick);");
     let _ = writeln!(s, "}}\n");
     ticks.values().map(|(r, e)| r.len() + e.len()).max().unwrap_or(0)
 }

@@ -118,19 +118,6 @@ impl Abi {
     /// in den Trace, wie der Interpreter.
     pub const PROPERTY: &'static str = "takt_property";
 
-    /// Das Fault-Flag einer reinen Funktion (4.1).
-    ///
-    /// Eine Funktion hat keinen eigenen Fault-Pfad — sie faultet den
-    /// Aufrufer. Sie legt darum die Art ([`fault_code`]) in dieses Flag,
-    /// und der Aufrufer liest es nach dem Aufruf; steht es nicht auf null,
-    /// loescht er es und nimmt seinen eigenen Fault-Pfad mit dieser Art.
-    /// Dasselbe Flag traegt die Art aus einer `loop:`-Funktion hinaus.
-    ///
-    /// Eine Stelle genuegt: 9.4 kennt keinen nebenlaeufigen Zugriff auf
-    /// den Zustand einer Maschine (Satz 9.4.1, die Schritte kommutieren),
-    /// und innerhalb eines Schritts laeuft immer nur ein Aufruf.
-    pub const FAULT_FLAG: &'static str = "takt_fn_fault";
-
     /// Ein Registerport liest (12.10): `(adresse, ziel, laenge)`, auf einem
     /// Ziel mit Betriebssystem. Die Runtime bildet die Adresse ab, der
     /// Testrahmen auf das Geraetemodell wie der Interpreter; auf einer MCU
@@ -142,37 +129,47 @@ impl Abi {
 
     /// Schreibt die Deklarationen in den Modulkopf.
     ///
-    /// Alle nehmen `(machine: i32, site: i32, ...)`: Die Stelle ist das,
-    /// was der Trace braucht, und sie ist beim Uebersetzen bekannt.
+    /// Alle nehmen vorn die Arena (12.11), dann `(machine: i32, site: i32,
+    /// ...)`: Die Stelle ist das, was der Trace braucht, und sie ist beim
+    /// Uebersetzen bekannt.
     pub fn declare(m: &mut Module) {
         m.declare("\n; Runtime-Schnittstelle (9.3, 5.4); `takt-rt-core` liefert sie");
-        // Die Runtime schreibt nur ihre eigenen Statics — Trace, Ringe,
-        // Plan: fuer LLVM „unzugaenglicher" Speicher. So bleiben Ladungen
-        // aus Zustand und Abbild ueber den Aufruf hinweg gueltig.
+        // Die Runtime schreibt nur ihren eigenen Bereich der Arena — Trace,
+        // Ringe, Plan —, den der erzeugte Code nie beruehrt: fuer LLVM
+        // „unzugaenglicher" Speicher. Der Arena-Zeiger vorn ist fuer das
+        // Modul nur ein Griff darauf, darum `readnone`: Ueber ihn erreicht
+        // die Runtime nichts, was das Modul liest oder schreibt. So bleiben
+        // Ladungen aus Zustand und Abbild ueber den Aufruf hinweg gueltig,
+        // auch bei Funktionen, die ueber ein weiteres Argument schreiben.
         const RT: &str = "nounwind willreturn memory(inaccessiblemem: readwrite)";
-        m.declare(&format!("declare void @{}(i32, i32, i1, i1) {RT}", Abi::ALERT));
-        m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::LOG));
-        m.declare(&format!("declare void @{}(i32, i32, double, i1) {RT}", Abi::MEASURE));
-        m.declare(&format!("declare void @{}(i32, i32, i1) {RT}", Abi::VERIFY));
-        m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::ABORT));
-        m.declare(&format!("declare void @{}(i32, i32, i32) {RT}", Abi::FAULT));
-        m.declare(&format!("declare i64 @{}() nounwind willreturn memory(inaccessiblemem: read)", Abi::NOW));
-        m.declare(&format!("declare void @{}(i32, i32, i1) {RT}", Abi::VERDICT));
-        m.declare(&format!("declare void @{}(i32, i64) {RT}", Abi::PROPERTY));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i1, i1) {RT}", Abi::ALERT));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32) {RT}", Abi::LOG));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, double, i1) {RT}", Abi::MEASURE));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i1) {RT}", Abi::VERIFY));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32) {RT}", Abi::ABORT));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i32) {RT}", Abi::FAULT));
+        m.declare(&format!(
+            "declare i64 @{}(ptr readnone) nounwind willreturn memory(inaccessiblemem: read)",
+            Abi::NOW
+        ));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i1) {RT}", Abi::VERDICT));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i64) {RT}", Abi::PROPERTY));
         // 9.8: `(channel, T, wert) -> 0 oder die Art des Faults`.
-        m.declare(&format!("declare i32 @{}(i32, i64, i64) {RT}", Abi::SCHEDULE));
-        m.declare(&format!("declare void @{}(i32) {RT}", Abi::CANCEL));
-        m.declare(&format!("declare i64 @{}(i32) nounwind willreturn memory(none)", Abi::JITTER));
+        m.declare(&format!("declare i32 @{}(ptr readnone, i32, i64, i64) {RT}", Abi::SCHEDULE));
+        m.declare(&format!("declare void @{}(ptr readnone, i32) {RT}", Abi::CANCEL));
+        m.declare(&format!("declare i64 @{}(ptr readnone, i32) nounwind willreturn memory(none)", Abi::JITTER));
         // `job_begin` liest die Argumente und schreibt spaeter das Abbild.
-        m.declare(&format!("declare void @{}(i32, i32, i32, ptr, i32) nounwind willreturn", Abi::JOB_BEGIN));
-        m.declare(&format!("declare void @{}(i32, i32) {RT}", Abi::JOB_CANCEL));
+        m.declare(&format!(
+            "declare void @{}(ptr readnone, i32, i32, i32, ptr, i32) nounwind willreturn",
+            Abi::JOB_BEGIN
+        ));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32) {RT}", Abi::JOB_CANCEL));
         // 12.10: Die Runtime liest das Modell und schreibt Ziel und Stroeme.
-        m.declare(&format!("declare void @{}(i64, ptr, i32) nounwind willreturn", Abi::MMIO_READ));
-        m.declare(&format!("declare void @{}(i64, ptr, i32) nounwind willreturn", Abi::MMIO_WRITE));
+        m.declare(&format!("declare void @{}(ptr readnone, i64, ptr, i32) nounwind willreturn", Abi::MMIO_READ));
+        m.declare(&format!("declare void @{}(ptr readnone, i64, ptr, i32) nounwind willreturn", Abi::MMIO_WRITE));
         // `append` kopiert eine ganze Folge in einem Zug (3.9); LLVM
         // kennt das als Intrinsic, und eine Schleife braeuchte eine
         // Schranke, die 4.1 ohnehin verlangt.
-        m.declare(&format!("@{} = external global i32", Abi::FAULT_FLAG));
         m.declare("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)");
         m.declare("declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)");
         m.declare("declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)");

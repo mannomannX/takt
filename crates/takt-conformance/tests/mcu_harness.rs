@@ -130,7 +130,7 @@ fn a_scheduled_output_carries_its_guard() {
     let with =
         takt_frame::mcu::build_with(&p, takt_frame::mcu::Frame { hardware: Some(&hw), ..Default::default() }).source;
     assert!(with.contains("static const long long g_guard[1] = { 4338LL };"), "{with}");
-    assert!(with.contains("if (t <= g_tick * 1000000LL + g_guard[q]) return"), "{with}");
+    assert!(with.contains("if (t <= a->tick * 1000000LL + g_guard[q]) return"), "{with}");
     let without = takt_frame::mcu::build(&p).source;
     assert!(without.contains("static const long long g_guard[1] = { 0LL };"), "{without}");
 }
@@ -153,7 +153,11 @@ fn the_jitter_of_an_output_comes_from_the_configuration() {
         takt_frame::mcu::build_with(&p, takt_frame::mcu::Frame { hardware: Some(&hw), ..Default::default() }).source;
     assert!(with.contains("case 0: return 1036563LL; /* probe */"), "{with}");
     let without = takt_frame::mcu::build(&p).source;
-    assert!(without.contains("long long takt_jitter(int o) {\n    switch (o) {\n    default: return 0;"), "{without}");
+    assert!(
+        without
+            .contains("long long takt_jitter(struct takt_arena *a, int o) {\n    switch (o) {\n    default: return 0;"),
+        "{without}"
+    );
 }
 
 /// **Ein `sim`-gespeister Eingang hat schon in Tick 0 seine Quelle**
@@ -209,7 +213,10 @@ fn the_harness_answers_the_whole_abi() {
     ] {
         assert!(src.contains(name), "`{name}` fehlt im Rahmen — der erzeugte Code ruft es (abi.rs)");
     }
-    assert!(src.contains("takt_fn_fault"), "das Fault-Flag reiner Funktionen fehlt (4.1)");
+    assert!(
+        src.contains("offsetof(struct takt_arena, fault) == 0"),
+        "die Ablagen eines Faults stehen nicht am Anfang der Arena (12.11)"
+    );
 }
 
 /// **Kein `stdio`, kein Heap.**
@@ -243,7 +250,7 @@ fn a_hardware_path_becomes_a_driver_call() {
 
     assert!(src.contains("_Bool takt_out_ui_led(unsigned char value);"), "der Treiber ist deklariert:\n{src}");
     assert!(
-        src.contains("takt_edge_output(takt_out_ui_led(*(unsigned char *)(latch + 0)), alive_ui, -1, -1)"),
+        src.contains("takt_edge_output(takt_out_ui_led(*(unsigned char *)(a->latch + 0)), alive_ui, -1, -1)"),
         "und wird gerufen, seine Bestaetigung geprueft (12.6 Zeile 6):\n{src}"
     );
     assert!(src.contains("void takt_mcu_commit(void)"), "Schritt 10 hat einen Namen (12.1)");
@@ -326,7 +333,7 @@ fn the_mcu_trace_can_be_compared_with_the_interpreter() {
     let src = takt_frame::mcu::build(&p).source;
 
     assert!(src.contains(r#"takt_board_trace("t=")"#), "die Zeile beginnt mit der Tickzahl:\n{src}");
-    assert!(src.contains("takt_board_trace_i64(g_tick)"), "und zwar mit dem laufenden Tick");
+    assert!(src.contains("takt_board_trace_i64(a->tick)"), "und zwar mit dem laufenden Tick");
 
     // Die Gegenprobe am Vergleich selbst: Eine Zeile in der erzeugten
     // Form muss ankommen, eine ohne `t=` nicht.
@@ -417,7 +424,7 @@ fn every_observation_line_carries_its_tick() {
         });
         // Die beiden Zeilen davor muessen den Tick schreiben.
         let davor = &src[at.saturating_sub(120)..at];
-        assert!(davor.contains("takt_board_trace_i64(g_tick)"), "`{kind}` ohne Tickzahl:\n{davor}");
+        assert!(davor.contains("takt_board_trace_i64(a->tick)"), "`{kind}` ohne Tickzahl:\n{davor}");
     }
 }
 
@@ -433,7 +440,7 @@ fn the_harness_answers_the_sleep_condition() {
     assert!(src.contains("_Bool takt_mcu_idle(void)"), "die Bedingung hat einen Namen:\n{src}");
     assert!(src.contains("long long takt_mcu_deadline(void)"), "und die Frist auch");
     // Alle Maschinen muessen zustimmen: ein `return 0` je Maschine.
-    assert!(src.contains("if (!heartbeat_idle(state_heartbeat)) return 0;"), "je Maschine eine Abfrage:\n{src}");
+    assert!(src.contains("if (!takt_heartbeat_idle(a)) return 0;"), "je Maschine eine Abfrage:\n{src}");
 }
 
 /// Ohne `idle`-Zustand schlaeft eine Maschine nie.
@@ -444,7 +451,7 @@ fn the_harness_answers_the_sleep_condition() {
 fn a_machine_without_idle_never_sleeps() {
     let p = corpus("29_heartbeat.takt");
     let ir = common::ir_for(&p, Target::THUMBV7EM.triple);
-    let at = ir.find("define i1 @heartbeat_idle").expect("die Funktion wird erzeugt");
+    let at = ir.find("define internal i1 @heartbeat_idle(").expect("die Funktion wird erzeugt");
     let body = &ir[at..at + 120];
     assert!(body.contains("ret i1 0"), "ohne `idle` konstant falsch:\n{body}");
 }
@@ -459,7 +466,7 @@ fn an_idle_state_reports_its_deadline() {
     let p = corpus("30_idle.takt");
     let ir = common::ir_for(&p, Target::THUMBV7EM.triple);
 
-    let at = ir.find("define i1 @m_idle").expect("Schlafabfrage");
+    let at = ir.find("define internal i1 @m_idle(").expect("Schlafabfrage");
     let idle = &ir[at..ir[at..].find("\n}").map_or(ir.len(), |e| at + e)];
     assert!(idle.contains("icmp eq i8"), "das aktive Blatt wird geprueft:\n{idle}");
     assert!(idle.contains("icmp eq i32"), "und keine Zustellung wartet (`deliver`):\n{idle}");
@@ -484,7 +491,7 @@ fn the_deadline_is_absolute_nanoseconds() {
     let p = corpus("30_idle.takt");
     let src = takt_frame::mcu::build(&p).source;
     assert!(
-        src.contains("return takt_now() + best * 10000000LL;"),
+        src.contains("return takt_now(a) + best * 10000000LL;"),
         "Ticks mal Periode, auf `takt_now` bezogen:\n{src}"
     );
     assert!(src.contains("if (best < 0) return -1;"), "keine Frist bleibt keine Frist");
@@ -505,7 +512,7 @@ fn a_multirate_deadline_counts_activations() {
     let table = ir.lines().find(|l| l.starts_with("@m_deadlines = ")).expect("Fristentabelle");
     assert!(table.contains("i64 10 }"), "500 ms sind zehn Aktivierungen:\n{table}");
     assert!(table.contains("i64 4 }"), "200 ms sind vier");
-    let at = ir.find("define i64 @m_deadline").expect("Fristabfrage");
+    let at = ir.find("define internal i64 @m_deadline(").expect("Fristabfrage");
     let dl = &ir[at..ir[at..].find("\n}").map_or(ir.len(), |e| at + e)];
     assert!(dl.contains(", i64 5)"), "die Periode geht mit:\n{dl}");
     assert!(ir.contains("%ticks = mul i64 %best, %period"), "und das Ergebnis geht in Basis-Ticks zurueck");
@@ -539,7 +546,7 @@ fn a_bound_input_becomes_a_driver_symbol() {
     // Innerhalb des Ticks: Schritt 2 steht vor Schritt 3 (12.1).
     let at = src.find("void takt_mcu_tick(").expect("Tickfunktion");
     let tick = &src[at..];
-    let sample = tick.find("takt_mcu_sample();").expect("Aufruf");
+    let sample = tick.find("takt_mcu_sample(a);").expect("Aufruf");
     let step = tick.find("m_step(").expect("Schrittfunktion");
     assert!(
         sample < step,
@@ -574,14 +581,14 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
         );
     }
     assert!(
-        src.contains("g_jobs[i].due > g_tick"),
+        src.contains("a->jobs[i].due > a->tick"),
         "sichtbar erst nach der Dauer:
 {src}"
     );
     let at = src.find("void takt_mcu_tick(").expect("Tickfunktion");
     let tick = &src[at..];
-    let poll = tick.find("takt_jobs_poll();").expect("Jobs zu Tickbeginn");
-    let sample = tick.find("takt_mcu_sample();").expect("Abtastung");
+    let poll = tick.find("takt_jobs_poll(a);").expect("Jobs zu Tickbeginn");
+    let sample = tick.find("takt_mcu_sample(a);").expect("Abtastung");
     assert!(poll < sample, "{tick}");
     let at = src.find("_Bool takt_mcu_idle(void)").expect("Schlafbedingung");
     assert!(src[at..].contains("if (takt_mcu_jobs_busy()) return 0;"), "{src}");
@@ -599,7 +606,7 @@ fn the_start_samples_before_it_enters() {
     let src = takt_frame::mcu::build(&program(INPUTS)).source;
     let at = src.find("int takt_mcu_init_with(").expect("Startfunktion");
     let init = &src[at..];
-    let sample = init.find("takt_mcu_sample();").expect("Abtastung im Start");
+    let sample = init.find("takt_mcu_sample(a);").expect("Abtastung im Start");
     let enter = init.find("m_enter(").expect("Eintritt");
     assert!(sample < enter, "`sample` muss vor `enter` stehen:\n{init}");
 }
@@ -718,7 +725,7 @@ fn an_unread_input_is_read_for_the_recording() {
         ),
         "{frame}"
     );
-    assert!(frame.contains("    takt_mcu_record(now);"), "{frame}");
+    assert!(frame.contains("    takt_mcu_record(a, now);"), "{frame}");
     // Stroeme (29e): je Element ein Aufruf, ein Byte mehr als jedes gueltige
     // Element, `MAXPT + 1` Aufrufe je Tick (400 Hz bei 10 ms: 5).
     assert!(
@@ -728,9 +735,9 @@ fn an_unread_input_is_read_for_the_recording() {
         ),
         "{frame}"
     );
-    assert!(frame.contains("if (!takt_poll_edge_r_frames(g_rec_0, 3, &len, &t, &seq)) break;"), "{frame}");
-    assert!(frame.contains("if (!takt_poll_edge_r_text(g_rec_7, 9, &len, &t, &seq)) break;"), "{frame}");
-    assert!(frame.contains("if (!takt_poll_edge_r_raw(g_rec_5, 2, &len, &t, &seq)) break;"), "{frame}");
+    assert!(frame.contains("if (!takt_poll_edge_r_frames(a->rec_0, 3, &len, &t, &seq)) break;"), "{frame}");
+    assert!(frame.contains("if (!takt_poll_edge_r_text(a->rec_7, 9, &len, &t, &seq)) break;"), "{frame}");
+    assert!(frame.contains("if (!takt_poll_edge_r_raw(a->rec_5, 2, &len, &t, &seq)) break;"), "{frame}");
     assert!(frame.contains("for (int i = 0; i < 5; i++) {"), "{frame}");
     let clang = takt_llvm::toolchain::find();
     if matches!(clang, Clang::Missing) {
