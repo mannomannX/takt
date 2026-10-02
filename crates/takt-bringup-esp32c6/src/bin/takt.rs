@@ -10,6 +10,7 @@
 #![no_main]
 #![allow(unsafe_code, reason = "C-ABI des Rahmens; 9.5 fuehrt Treiber in der TCB")]
 
+use core::ffi::c_void;
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU32, Ordering};
 
@@ -135,7 +136,7 @@ pub extern "C" fn takt_board_trace_hex8(value: u8) {
 
 /// Der Output `ui_led` des Programms auf der RGB-LED.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_ui_led(value: u8) -> bool {
+pub extern "C" fn app_out_ui_led(_user: *mut c_void, value: u8) -> bool {
     let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return false };
     if value != 0 {
         led.on();
@@ -167,7 +168,7 @@ static JOB_STACK: AtomicU32 = AtomicU32::new(0);
 /// `test/guard_write` (12.3): der naechste Leerlauf schreibt in den Waechter
 /// unter dem Hauptstack.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_guard_write(value: u8) -> bool {
+pub extern "C" fn app_out_test_guard_write(_user: *mut c_void, value: u8) -> bool {
     if value != 0 {
         PROBE.store(1, Ordering::Relaxed);
     }
@@ -177,7 +178,7 @@ pub extern "C" fn takt_out_test_guard_write(value: u8) -> bool {
 /// `test/job_guard_write` (12.3): der naechste Leerlauf schreibt in den
 /// Waechter unter dem Job-Stack.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_job_guard_write(value: u8) -> bool {
+pub extern "C" fn app_out_test_job_guard_write(_user: *mut c_void, value: u8) -> bool {
     if value != 0 {
         PROBE.store(2, Ordering::Relaxed);
     }
@@ -204,7 +205,7 @@ fn probe() {
 
 /// Der Output `gpio/loop_out` auf GPIO7, ueber die Bruecke an GPIO17 (13.8).
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_gpio_loop_out(value: u8) -> bool {
+pub extern "C" fn app_out_gpio_loop_out(_user: *mut c_void, value: u8) -> bool {
     let Some(w) = wire() else { return false };
     w.write(value != 0);
     true
@@ -217,7 +218,12 @@ pub extern "C" fn takt_out_gpio_loop_out(value: u8) -> bool {
 /// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
 /// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_gpio_loop_in(value: *mut u8, quality: *mut u8, _t: *mut i64) -> bool {
+pub unsafe extern "C" fn app_in_gpio_loop_in(
+    _user: *mut c_void,
+    value: *mut u8,
+    quality: *mut u8,
+    _t: *mut i64,
+) -> bool {
     let Some(w) = wire() else { return false };
     let level = w.read();
     unsafe {
@@ -237,7 +243,12 @@ static PREVIOUS_RUN: AtomicI32 = AtomicI32::new(0);
 /// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
 /// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_sys_previous_run(value: *mut i32, quality: *mut u8, _t: *mut i64) -> bool {
+pub unsafe extern "C" fn app_in_sys_previous_run(
+    _user: *mut c_void,
+    value: *mut i32,
+    quality: *mut u8,
+    _t: *mut i64,
+) -> bool {
     unsafe {
         *value = PREVIOUS_RUN.load(Ordering::Relaxed);
         *quality = 0;
@@ -256,7 +267,7 @@ pub unsafe extern "C" fn takt_in_sys_previous_run(value: *mut i32, quality: *mut
 /// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
 /// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_ui_button(value: *mut u8, quality: *mut u8, _t: *mut i64) -> bool {
+pub unsafe extern "C" fn app_in_ui_button(_user: *mut c_void, value: *mut u8, quality: *mut u8, _t: *mut i64) -> bool {
     let Some(btn) = (unsafe { (&raw mut BTN).as_mut().and_then(Option::as_mut) }) else { return false };
     let (level, stable) = btn.poll();
     unsafe {
@@ -269,7 +280,7 @@ pub unsafe extern "C" fn takt_in_ui_button(value: *mut u8, quality: *mut u8, _t:
 /// Das Pruefgeraet fuer 12.6 Zeile 7: streckt die Periode des Alarms um
 /// den geschriebenen Prozentsatz.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_tick_stretch(percent: u8) -> bool {
+pub extern "C" fn app_out_test_tick_stretch(_user: *mut c_void, percent: u8) -> bool {
     takt_board_esp32c6::tick::stretch(u32::from(percent));
     true
 }

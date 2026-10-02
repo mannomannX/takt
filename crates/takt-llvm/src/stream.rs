@@ -7,9 +7,9 @@
 //! sondern durch drei Aufrufe:
 //!
 //! ```text
-//! takt_stream_count(s, cur)     wie viele Elemente im Fenster stehen
-//! takt_stream_at(s, cur, i, e)  das i-te Element nach `e` schreiben
-//! takt_stream_examined(s, seq)  bis hierher untersucht (9.6)
+//! P_stream_count(s, cur)     wie viele Elemente im Fenster stehen
+//! P_stream_at(s, cur, i, e)  das i-te Element nach `e` schreiben
+//! P_stream_examined(s, seq)  bis hierher untersucht (9.6)
 //! ```
 //!
 //! Die Alternative waere gewesen, dem erzeugten Code den Ringpuffer
@@ -37,19 +37,19 @@ pub struct Streams;
 
 impl Streams {
     /// Wie viele Elemente ab `cur` im Fenster stehen (9.6).
-    pub const COUNT: &'static str = "takt_stream_count";
+    pub const COUNT: &'static str = "stream_count";
 
     /// Schreibt das `i`-te Element des Fensters an die uebergebene
     /// Stelle; liefert dessen `seq`. Die Stelle traegt `t` (i64,
     /// Nanosekunden), dann die Laenge (i32), dann die Bytes: Text in
     /// der Sammlungsform `{ i32 len, [N x i8] }`, ein Record in der
     /// kanonischen Byteform (plan/m6.md 2.2).
-    pub const AT: &'static str = "takt_stream_at";
+    pub const AT: &'static str = "stream_at";
 
     /// Schreibt das `i`-te Element ohne Umweg: `{ i32 len, [N x i8] }`
     /// an die erste Stelle, `t` an die zweite; liefert `seq`. Fuer Text
     /// und Bytes, deren Ringform die Sammlungsform ist (FB-214 C6).
-    pub const BIND: &'static str = "takt_stream_bind";
+    pub const BIND: &'static str = "stream_bind";
 
     /// Versatz der Laenge in dem, was `AT` schreibt.
     pub const LEN_AT: u32 = 8;
@@ -60,7 +60,7 @@ impl Streams {
     /// untersucht hat (9.6: `cur[s, m] = examined + 1`). Die Runtime
     /// bildet daraus das Minimum ueber alle Leser eines internen Stroms
     /// und gibt frei, was darunter liegt (8.6).
-    pub const EXAMINED: &'static str = "takt_stream_examined";
+    pub const EXAMINED: &'static str = "stream_examined";
 
     /// Legt Bytes in den Sendepuffer eines Ausgabestroms (8.8).
     ///
@@ -68,18 +68,18 @@ impl Streams {
     /// leert ihn mit `max_rate`, und `tx.free` wird zu Tick-Beginn
     /// gesampelt. Das Ergebnis sagt, ob die Bytes hineinpassten — ein
     /// `send` mit `len > tx.free` ist ein `StreamOverflow` (8.8).
-    pub const SEND: &'static str = "takt_stream_send";
+    pub const SEND: &'static str = "stream_send";
 
     /// `o.sent` (8.8, FB-132): schreibt den beim letzten Commit abgeholten
     /// Ausschnitt als `{ i32 len, [CAP x i8] }` an die uebergebene Stelle
-    /// und liefert die Laenge. Wie `takt_stream_send` gehoert er dem
+    /// und liefert die Laenge. Wie `P_stream_send` gehoert er dem
     /// Treiber, der den Puffer leert.
-    pub const SENT: &'static str = "takt_stream_sent";
+    pub const SENT: &'static str = "stream_sent";
 
     /// Ein Zaehler am Ring (8.6): `s.dropped` (0), `s.overflowed` (1),
     /// `s.malformed` (2). Den Verwurf im `idle` zaehlt die Maschine selbst
     /// (5.10); `s.dropped` ist die Summe beider.
-    pub const COUNTER: &'static str = "takt_stream_counter";
+    pub const COUNTER: &'static str = "stream_counter";
 
     /// Schreibt die Deklarationen in den Modulkopf.
     pub fn declare(m: &mut Module) {
@@ -88,31 +88,31 @@ impl Streams {
         // den uebergebenen Platz, `send` liest nur den uebergebenen.
         m.declare(&format!(
             "declare i32 @{}(ptr readnone, i32, i64) nounwind willreturn memory(inaccessiblemem: read)",
-            Streams::COUNT
+            m.runtime(Streams::COUNT)
         ));
         m.declare(&format!(
             "declare i64 @{}(ptr readnone, i32, i64, i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
-            Streams::AT
+            m.runtime(Streams::AT)
         ));
         m.declare(&format!(
             "declare i64 @{}(ptr readnone, i32, i64, i32, ptr, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
-            Streams::BIND
+            m.runtime(Streams::BIND)
         ));
         m.declare(&format!(
             "declare void @{}(ptr readnone, i32, i32, i64) nounwind willreturn memory(inaccessiblemem: readwrite)",
-            Streams::EXAMINED
+            m.runtime(Streams::EXAMINED)
         ));
         m.declare(&format!(
             "declare i1 @{}(ptr readnone, i32, ptr, i32) nounwind willreturn memory(argmem: read, inaccessiblemem: readwrite)",
-            Streams::SEND
+            m.runtime(Streams::SEND)
         ));
         m.declare(&format!(
             "declare i32 @{}(ptr readnone, i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
-            Streams::SENT
+            m.runtime(Streams::SENT)
         ));
         m.declare(&format!(
             "declare i32 @{}(ptr readnone, i32, i32) nounwind willreturn memory(inaccessiblemem: read)",
-            Streams::COUNTER
+            m.runtime(Streams::COUNTER)
         ));
     }
 }
@@ -151,7 +151,7 @@ pub fn element(p: &Program, stream: StreamRef) -> Option<TypeId> {
 
 /// Die Kapazitaet der Bytes eines Elements: `N` bei Text, sonst die
 /// Hoechstzahl Nutzbytes eines Elements (8.6).
-/// kanonische Byteform — dasselbe, was `takt_stream_cap` im Rahmen sagt.
+/// kanonische Byteform — dasselbe, was die Kapazitaet des Rings im Rahmen sagt.
 pub fn payload_cap(p: &Program, elem: TypeId) -> Result<u32, NotYet> {
     match p.types.list.get(elem.index()) {
         Some(Type::Line { cap } | Type::Str { cap } | Type::Bytes { cap }) => Ok(*cap),
@@ -159,7 +159,7 @@ pub fn payload_cap(p: &Program, elem: TypeId) -> Result<u32, NotYet> {
     }
 }
 
-/// Ein Platz fuer ein Element, wie `takt_stream_at` es schreibt.
+/// Ein Platz fuer ein Element, wie `P_stream_at` es schreibt.
 pub fn scratch(p: &Program, elem: TypeId, m: &mut Module) -> Result<Reg, NotYet> {
     let cap = payload_cap(p, elem)?;
     Ok(m.alloca(&format!("[{} x i8], align 8", cap + Streams::BYTES_AT)))

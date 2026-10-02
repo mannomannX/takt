@@ -36,6 +36,7 @@
 #![no_main]
 #![allow(unsafe_code, reason = "Interrupt-Handler und C-ABI; 9.5 fuehrt Treiber in der TCB")]
 
+use core::ffi::c_void;
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU32, Ordering};
 
@@ -98,7 +99,7 @@ static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
 /// was in `main` liegt.
 static mut UART: Option<Telemetry> = None;
 
-/// Die LED, die der Treiber `takt_out_ui_led` schaltet; aus demselben Grund.
+/// Die LED, die der Treiber `app_out_ui_led` schaltet; aus demselben Grund.
 static mut LED: Option<Led> = None;
 
 /// Die Messschleife an PA0 und PA1, wenn das Programm sie bindet (13.8).
@@ -172,7 +173,12 @@ static PREVIOUS_RUN: AtomicI32 = AtomicI32::new(0);
 /// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
 /// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_sys_previous_run(value: *mut i32, quality: *mut u8, _t: *mut i64) -> bool {
+pub unsafe extern "C" fn app_in_sys_previous_run(
+    _user: *mut c_void,
+    value: *mut i32,
+    quality: *mut u8,
+    _t: *mut i64,
+) -> bool {
     unsafe {
         *value = PREVIOUS_RUN.load(Ordering::Relaxed);
         *quality = 0;
@@ -183,12 +189,12 @@ pub unsafe extern "C" fn takt_in_sys_previous_run(value: *mut i32, quality: *mut
 /// Der Treiber fuer `output led : bool @ hw("ui/led")`.
 ///
 /// Der Name ist die Adresse: Der Rahmen bildet `hw("ui/led")` auf
-/// `takt_out_ui_led` ab und ruft es in Schritt 10 (12.1); wer es nicht
+/// `app_out_ui_led` ab und ruft es in Schritt 10 (12.1); wer es nicht
 /// stellt, bekommt einen Linkfehler mit diesem Namen (8.10). Die LED der
 /// Black Pill liegt an PC13 gegen 3V3 — was `true` elektrisch heisst,
 /// weiss nur diese Zeile.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_ui_led(value: u8) -> bool {
+pub extern "C" fn app_out_ui_led(_user: *mut c_void, value: u8) -> bool {
     let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return false };
     if value != 0 {
         led.on();
@@ -211,7 +217,7 @@ static PROBE: AtomicU8 = AtomicU8::new(0);
 
 /// `test/tcb_write` (12.3): der naechste Leerlauf schreibt in den Programmzustand.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_tcb_write(value: u8) -> bool {
+pub extern "C" fn app_out_test_tcb_write(_user: *mut c_void, value: u8) -> bool {
     if value != 0 {
         PROBE.store(1, Ordering::Relaxed);
     }
@@ -220,7 +226,7 @@ pub extern "C" fn takt_out_test_tcb_write(value: u8) -> bool {
 
 /// `test/guard_write` (12.3): der naechste Leerlauf schreibt in den Waechter.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_guard_write(value: u8) -> bool {
+pub extern "C" fn app_out_test_guard_write(_user: *mut c_void, value: u8) -> bool {
     if value != 0 {
         PROBE.store(2, Ordering::Relaxed);
     }
@@ -230,7 +236,7 @@ pub extern "C" fn takt_out_test_guard_write(value: u8) -> bool {
 /// `test/job_guard_write` (12.3): der naechste Leerlauf schreibt in den
 /// Waechter unter dem Job-Stack.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_job_guard_write(value: u8) -> bool {
+pub extern "C" fn app_out_test_job_guard_write(_user: *mut c_void, value: u8) -> bool {
     if value != 0 {
         PROBE.store(3, Ordering::Relaxed);
     }
@@ -240,7 +246,7 @@ pub extern "C" fn takt_out_test_job_guard_write(value: u8) -> bool {
 /// `test/isr_write` (12.3): Im naechsten Programmschritt schreibt die
 /// Pruef-ISR in den Programmzustand (`test/in_step`).
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_isr_write(value: u8) -> bool {
+pub extern "C" fn app_out_test_isr_write(_user: *mut c_void, value: u8) -> bool {
     if value != 0 {
         PROBE.store(4, Ordering::Relaxed);
     }
@@ -256,7 +262,12 @@ pub extern "C" fn takt_out_test_isr_write(value: u8) -> bool {
 /// Der Rahmen uebergibt gueltige Zeiger; den Zeitstempel belegt er mit
 /// der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_test_in_step(value: *mut u8, quality: *mut u8, _t: *mut i64) -> bool {
+pub unsafe extern "C" fn app_in_test_in_step(
+    _user: *mut c_void,
+    value: *mut u8,
+    quality: *mut u8,
+    _t: *mut i64,
+) -> bool {
     if PROBE.load(Ordering::Relaxed) == 4 {
         NVIC::pend(Interrupt::EXTI0);
         cortex_m::asm::dsb();
@@ -307,7 +318,7 @@ fn EXTI0() {
 
 /// Der Output `gpio/loop_out` auf PA0, ueber die Bruecke an PA1 (13.8).
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_gpio_loop_out(value: u8) -> bool {
+pub extern "C" fn app_out_gpio_loop_out(_user: *mut c_void, value: u8) -> bool {
     let Some(w) = wire() else { return false };
     w.write(value != 0);
     true
@@ -320,7 +331,12 @@ pub extern "C" fn takt_out_gpio_loop_out(value: u8) -> bool {
 /// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
 /// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_gpio_loop_in(value: *mut u8, quality: *mut u8, _t: *mut i64) -> bool {
+pub unsafe extern "C" fn app_in_gpio_loop_in(
+    _user: *mut c_void,
+    value: *mut u8,
+    quality: *mut u8,
+    _t: *mut i64,
+) -> bool {
     let Some(w) = wire() else { return false };
     let level = w.read();
     unsafe {
@@ -333,7 +349,7 @@ pub unsafe extern "C" fn takt_in_gpio_loop_in(value: *mut u8, quality: *mut u8, 
 /// Das Pruefgeraet fuer 12.6 Zeile 7: streckt die Periode von TIM2 um den
 /// geschriebenen Prozentsatz.
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_out_test_tick_stretch(percent: u8) -> bool {
+pub extern "C" fn app_out_test_tick_stretch(_user: *mut c_void, percent: u8) -> bool {
     takt_board_stm32f401::tick::stretch(u32::from(percent));
     true
 }

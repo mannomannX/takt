@@ -14,7 +14,7 @@ use takt_mir::program::Program;
 #[test]
 fn idle_watches_the_wake_stream_and_drops_the_other() {
     let p = corpus("92_idle_streams.takt");
-    let ir = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", "t").ir;
+    let ir = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", &takt_llvm::symbols::Prefix::default()).ir;
     // Der Rumpf an seiner `define`-Zeile, nicht der Aufruf in seinem
     // Einstieg `takt_<maschine>_idle` (12.11).
     let body = |name: &str| {
@@ -27,7 +27,7 @@ fn idle_watches_the_wake_stream_and_drops_the_other() {
     };
     let count = |channel: &str| {
         let id = p.channels.iter().position(|c| c.name == channel).expect("Channel");
-        format!("@takt_stream_count(ptr %arena, i32 {id},")
+        format!("@app_stream_count(ptr %arena, i32 {id},")
     };
     let (idle, dropped) = (body("sleeper_idle"), body("sleeper_drop"));
     assert!(idle.contains(&count("bell")) && !idle.contains(&count("data")), "{idle}");
@@ -266,7 +266,7 @@ fn a_check_branches_into_the_fault_trampoline() {
     );
     // Der Fault-Pfad meldet den Fault der Runtime (5.3).
     assert!(
-        ir.contains("call void @takt_fault("),
+        ir.contains("call void @app_fault("),
         "der Fault wird nicht gemeldet:
 {ir}"
     );
@@ -858,12 +858,12 @@ fn a_handler_walks_the_window_of_its_stream() {
     let p = corpus("12_bitfields.takt");
     let ir = ir_of(&p);
     assert!(
-        ir.contains("@takt_stream_count"),
+        ir.contains("@app_stream_count"),
         "die Fenstergroesse wird nicht erfragt:
 {ir}"
     );
     assert!(
-        ir.contains("@takt_stream_at"),
+        ir.contains("@app_stream_at"),
         "die Elemente werden nicht gelesen:
 {ir}"
     );
@@ -876,14 +876,14 @@ fn every_element_of_the_window_counts_as_examined() {
     let p = corpus("12_bitfields.takt");
     let ir = ir_of(&p);
     assert!(
-        ir.contains("@takt_stream_examined"),
+        ir.contains("@app_stream_examined"),
         "`examined` wird nicht gemeldet:
 {ir}"
     );
     // Der Aufruf steht *vor* dem Rumpf des Handlers: Er gilt fuer jedes
     // Element, nicht nur fuer die getroffenen.
-    let at = ir.find("@takt_stream_at").expect("at");
-    let examined = ir[at..].find("@takt_stream_examined").expect("examined");
+    let at = ir.find("@app_stream_at").expect("at");
+    let examined = ir[at..].find("@app_stream_examined").expect("examined");
     let body = ir[at..].find("store").unwrap_or(usize::MAX);
     assert!(
         examined < body,
@@ -1061,7 +1061,7 @@ fn interp_keeps_the_operation_order_of_the_interpreter() {
 fn virtual_sleep_advances_every_timer() {
     let p = corpus("59_persist_idle.takt");
     let m = &p.machines[0];
-    let ir = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", "t").ir;
+    let ir = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", &takt_llvm::symbols::Prefix::default()).ir;
     let head = format!("@{}_advance(", m.name);
     let start = ir.find(&head).unwrap_or_else(|| panic!("kein `{head}` in der IR"));
     let call = ir[start..].lines().find(|l| l.contains("@takt_advance_timers(")).unwrap_or_else(|| panic!("{ir}"));

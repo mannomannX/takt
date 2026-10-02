@@ -78,6 +78,7 @@ fn build_takt_program(out: &Path) {
             diagnostics: diagnostics(),
             hardware: bringup::hardware().as_ref(),
             protect: None,
+            prefix: takt_llvm::symbols::Prefix::default(),
         },
     );
     if let Err(e) = fs::write(&rahmen, frame.source) {

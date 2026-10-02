@@ -27,7 +27,7 @@ pub fn ir_for(p: &Program, triple: &str) -> String {
     // Programm bindet den erzeugten Code mit). Zwei Fassungen derselben
     // Folge waeren eine Quelle dafuer, dass der Test etwas anderes
     // prueft, als die Werkzeuge erzeugen.
-    let out = takt_llvm::lower::program(p, triple, "abnahme");
+    let out = takt_llvm::lower::program(p, triple, &takt_llvm::symbols::Prefix::default());
     for s in &out.skipped {
         eprintln!("{} fehlt: {}", takt_llvm::lower::Skipped::what(s), s.reason);
     }

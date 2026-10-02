@@ -140,7 +140,7 @@ pub fn record(at: &Reg, code: &str, tick_ns: i64, m: &mut Module) {
     let line = m.inst(&format!("load i32, ptr {}", crate::arena::PARAM));
     let line_ptr = field(1, m);
     m.void_inst(&format!("store i32 {line}, ptr {line_ptr}"));
-    let now = m.inst(&format!("call i64 @{}(ptr %arena)", crate::abi::Abi::NOW));
+    let now = m.inst(&format!("call i64 @{}(ptr %arena)", m.runtime(crate::abi::Abi::NOW)));
     let tick = m.inst(&format!("sdiv i64 {now}, {tick_ns}"));
     let tick_ptr = field(2, m);
     m.void_inst(&format!("store i64 {tick}, ptr {tick_ptr}"));

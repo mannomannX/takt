@@ -6,6 +6,7 @@
 //! Wirtsrahmen des Differentials in `takt-conformance`.
 
 use std::fmt::Write as _;
+use takt_llvm::symbols::Prefix;
 
 use takt_mir::program::Program;
 
@@ -142,8 +143,8 @@ fn safe_payload(p: &Program, slot: &crate::layout::Slot, safe: &takt_mir::expr::
 /// `takt_jitter` (7.5): der Jitter je Output aus `hw`, bei einem Output,
 /// der nur zu Tickbeginn geschrieben wird, um den Tick mehr (`tick_granular`);
 /// ohne Konfiguration null wie in der Simulation.
-pub fn jitter(s: &mut String, p: &Program, hw: Option<&takt_mir::hardware::Hardware>) {
-    let _ = writeln!(s, "long long takt_jitter(struct takt_arena *a, int o) {{");
+pub fn jitter(s: &mut String, p: &Program, hw: Option<&takt_mir::hardware::Hardware>, x: &Prefix) {
+    let _ = writeln!(s, "long long {x}_jitter(struct takt_arena *a, int o) {{");
     let _ = writeln!(s, "    switch (o) {{");
     for (i, c) in p.channels.iter().enumerate() {
         let (takt_mir::program::Binding::Hw(a), Some(hw)) = (&c.binding, hw) else { continue };
@@ -173,7 +174,7 @@ pub fn jitter(s: &mut String, p: &Program, hw: Option<&takt_mir::hardware::Hardw
 /// Treiberlatenz des Outputs aus `hw` (7.5, 8.10), ohne Konfiguration
 /// null wie in der Simulation. `takt_apply_scheduled` ruft
 /// [`commit_sequence`].
-pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mir::hardware::Hardware>) {
+pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mir::hardware::Hardware>, x: &Prefix) {
     let queues = queued_outputs(p);
     if queues.is_empty() {
         return;
@@ -207,7 +208,7 @@ pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mi
     // Das Ergebnis ist null oder die Art des Faults (`abi::fault_code`).
     let timing = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Timing);
     let overflow = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::ScheduleOverflow);
-    let _ = writeln!(s, "int takt_schedule(struct takt_arena *a, int o, long long t, long long v) {{");
+    let _ = writeln!(s, "int {x}_schedule(struct takt_arena *a, int o, long long t, long long v) {{");
     let _ = writeln!(s, "    int q = takt_sched_slot(o);");
     let _ = writeln!(s, "    if (q < 0) return {overflow};");
     // 7.5, 9.8: `T <= now + guard(o)` ist ein `TimingFault`.
@@ -223,7 +224,7 @@ pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mi
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
-        "void takt_cancel(struct takt_arena *a, int o) {{ int q = takt_sched_slot(o); if (q >= 0) a->sched_n[q] = 0; }}"
+        "void {x}_cancel(struct takt_arena *a, int o) {{ int q = takt_sched_slot(o); if (q >= 0) a->sched_n[q] = 0; }}"
     );
     // 9.9: Schlaf nur, wenn alle `sched[o]` leer sind.
     let _ = writeln!(s, "static _Bool takt_sched_pending(struct takt_arena *a) {{");
@@ -299,7 +300,14 @@ pub fn raised(t: &mut Text, p: &Program) {
 /// Die Abort-Phase (5.4, 9.4): Nach den Schritten nimmt jede Maschine mit
 /// vorgemerktem Abort ihren Fault-Pfad, in statischer Reihenfolge und
 /// unabhaengig davon, ob sie in diesem Tick aktiv war.
-pub fn abort_phase(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], indent: &str, tick: &str) {
+pub fn abort_phase(
+    s: &mut String,
+    p: &Program,
+    driven: &[&takt_mir::machine::Machine],
+    indent: &str,
+    tick: &str,
+    x: &Prefix,
+) {
     let abort = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Abort);
     let scoped = scoped_of(p);
     for m in driven {
@@ -315,14 +323,14 @@ pub fn abort_phase(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Ma
         };
         let _ = writeln!(
             s,
-            "{indent}if ({condition}) {{ takt_{0}_deliver(a, {abort}, {active}); takt_{0}_publish(a); }}",
+            "{indent}if ({condition}) {{ {x}_{0}_deliver(a, {abort}, {active}); {x}_{0}_publish(a); }}",
             m.name
         );
         // Ein vorgemerkter Fault einer Maschine, die in diesem Tick nicht
         // schritt; ein Abort aus `raised` geht vor, der Fault wartet.
         let _ = writeln!(
             s,
-            "{indent}else if ({pending}) {{ takt_{0}_deliver(a, a->pending[{i}], {active}); a->pending[{i}] = 0; takt_{0}_publish(a); }}",
+            "{indent}else if ({pending}) {{ {x}_{0}_deliver(a, a->pending[{i}], {active}); a->pending[{i}] = 0; {x}_{0}_publish(a); }}",
             m.name
         );
     }
@@ -333,14 +341,14 @@ pub fn abort_phase(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Ma
 /// Abort-Phase, fuer jede Maschine, die etwas zu verwerfen hat. Eine
 /// inaktive gescopte Instanz hoert ohnehin nicht, und ihr Zustand teilt
 /// sich den Speicher mit ihren Geschwistern (11.2).
-pub fn idle_drops(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], indent: &str) {
+pub fn idle_drops(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], indent: &str, x: &Prefix) {
     let scoped = scoped_of(p);
     for m in driven.iter().filter(|m| takt_llvm::step::drops(m, p)) {
         let scope = match scoped.iter().find(|(_, inst, _)| *inst == m.name) {
             Some((owner, _, n)) => format!("if (a->scope_{owner}_{n}) "),
             None => String::new(),
         };
-        let _ = writeln!(s, "{indent}{scope}takt_{0}_drop(a);", m.name);
+        let _ = writeln!(s, "{indent}{scope}{x}_{0}_drop(a);", m.name);
     }
 }
 
@@ -500,12 +508,12 @@ pub fn sim_fed_inputs(p: &Program) -> Vec<usize> {
 /// Die Einstiege des erzeugten Codes je Maschine (12.11), fuer beide
 /// Rahmen: aus derselben Liste, aus der der Codegen sie schreibt
 /// ([`takt_llvm::arena::entries`]).
-pub fn machine_declarations(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine]) {
+pub fn machine_declarations(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
     for m in driven {
         for (suffix, shape) in takt_llvm::arena::entries(m, p) {
             let params: Vec<&str> =
                 std::iter::once("struct takt_arena *a").chain(shape.extra.iter().map(|t| c_of(t))).collect();
-            let symbol = takt_llvm::arena::entry_symbol(&m.name, &suffix);
+            let symbol = takt_llvm::arena::entry_symbol(x, &m.name, &suffix);
             let _ = writeln!(s, "{} {symbol}({});", c_of(shape.ret), params.join(", "));
         }
     }
@@ -541,13 +549,14 @@ pub fn enter_machines(
     layout: &Layout,
     driven: &[&takt_mir::machine::Machine],
     indent: &str,
+    x: &Prefix,
 ) {
     let scoped: Vec<String> = scoped_of(p).into_iter().map(|(_, inst, _)| inst).collect();
     for m in driven.iter().filter(|m| !scoped.contains(&m.name)) {
-        let _ = writeln!(s, "{indent}takt_{0}_enter(a);", m.name);
-        let _ = writeln!(s, "{indent}takt_{0}_publish(a);", m.name);
+        let _ = writeln!(s, "{indent}{x}_{0}_enter(a);", m.name);
+        let _ = writeln!(s, "{indent}{x}_{0}_publish(a);", m.name);
     }
-    scoped_lifecycle(s, p, layout, indent);
+    scoped_lifecycle(s, p, layout, indent, x);
 }
 
 /// Die Schritte eines Ticks, fuer beide Rahmen: erst die Trigger-Phase
@@ -563,10 +572,11 @@ pub fn steps(
     driven: &[&takt_mir::machine::Machine],
     indent: &str,
     tick: &str,
+    x: &Prefix,
 ) {
     for m in driven {
         if !m.layout.trigger_flags.is_empty() {
-            let _ = writeln!(s, "{indent}takt_{0}_triggers(a);", m.name);
+            let _ = writeln!(s, "{indent}{x}_{0}_triggers(a);", m.name);
         }
     }
     let scoped = scoped_of(p);
@@ -586,11 +596,11 @@ pub fn steps(
         let i = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
         let _ = writeln!(
             s,
-            "{indent}{condition}{{ if (a->pending[{i}]) {{ takt_{0}_pend(a, a->pending[{i}]); a->pending[{i}] = 0; }} takt_{0}_step(a); takt_{0}_publish(a); }}",
+            "{indent}{condition}{{ if (a->pending[{i}]) {{ {x}_{0}_pend(a, a->pending[{i}]); a->pending[{i}] = 0; }} {x}_{0}_step(a); {x}_{0}_publish(a); }}",
             m.name
         );
     }
-    scoped_lifecycle(s, p, layout, indent);
+    scoped_lifecycle(s, p, layout, indent, x);
 }
 
 /// Die gescopten Instanzen mit ihrem Besitzer und der Nummer, unter der
@@ -612,23 +622,23 @@ pub fn scoped_of(p: &Program) -> Vec<(String, String, usize)> {
 /// Das Aktivitaetsbit steht im Rahmen, nicht im Zustands-Struct: Es ist
 /// eine Aussage ueber den *Besitzer*, und der Rahmen fragt sie ohnehin
 /// vor jedem Schritt ab (`<besitzer>_scope_<n>`).
-pub fn scoped_lifecycle(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
+pub fn scoped_lifecycle(s: &mut String, p: &Program, layout: &Layout, indent: &str, x: &Prefix) {
     for (owner, inst, i) in scoped_of(p) {
         let state = takt_llvm::arena::state_name(&inst);
-        let _ = writeln!(s, "{indent}{{ _Bool now = takt_{owner}_scope_{i}(a);");
+        let _ = writeln!(s, "{indent}{{ _Bool now = {x}_{owner}_scope_{i}(a);");
         let _ = writeln!(s, "{indent}  if (now && !a->scope_{owner}_{i}) {{");
         let _ = writeln!(s, "{indent}    memset(a->{state}, 0, sizeof a->{state});");
-        let _ = writeln!(s, "{indent}    takt_{inst}_init_vars(a);");
-        let _ = writeln!(s, "{indent}    takt_{inst}_enter(a);");
-        let _ = writeln!(s, "{indent}    takt_{inst}_publish(a);");
+        let _ = writeln!(s, "{indent}    {x}_{inst}_init_vars(a);");
+        let _ = writeln!(s, "{indent}    {x}_{inst}_enter(a);");
+        let _ = writeln!(s, "{indent}    {x}_{inst}_publish(a);");
         let _ = writeln!(s, "{indent}  }} else if (!now && a->scope_{owner}_{i}) {{");
         // 5.11: erst die `exit:`-Bloecke von innen nach aussen, dann
         // gehen die Outputs auf `safe` — sie ueberschreiben, was ein
         // `exit` an ihnen tat, genau wie im Interpreter.
-        let _ = writeln!(s, "{indent}    takt_{inst}_exit_all(a);");
+        let _ = writeln!(s, "{indent}    {x}_{inst}_exit_all(a);");
         safe_outputs_of(s, p, layout, &inst, &format!("{indent}    "));
         let _ = writeln!(s, "{indent}    memset(a->{state}, 0, sizeof a->{state});");
-        let _ = writeln!(s, "{indent}    takt_{inst}_publish(a);");
+        let _ = writeln!(s, "{indent}    {x}_{inst}_publish(a);");
         let _ = writeln!(s, "{indent}  }}");
         let _ = writeln!(s, "{indent}  a->scope_{owner}_{i} = now; }}");
     }

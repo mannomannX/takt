@@ -13,6 +13,7 @@
 use std::fmt::Write;
 
 use takt_frame::text::Text;
+use takt_llvm::symbols::Prefix;
 use takt_llvm::ty::LlvmType;
 use takt_mir::pattern::Address;
 use takt_mir::program::{Binding, Direction, Port, Program};
@@ -102,7 +103,7 @@ pub(crate) fn sample(s: &mut String, p: &Program, indent: &str) {
 /// `#error` ab, statt still einen Default zu lesen: ein Modell, das den
 /// Lesekanal als Strom stellt (ein Register, das beim Lesen weiterschaltet),
 /// und ein Modellrecord, der anders im Speicher liegt als der Port.
-pub(crate) fn emit(t: &mut Text, p: &Program) {
+pub(crate) fn emit(t: &mut Text, p: &Program, x: &Prefix) {
     if p.ports.is_empty() {
         return;
     }
@@ -168,7 +169,7 @@ pub(crate) fn emit(t: &mut Text, p: &Program) {
     let _ = writeln!(s, "    default: memset(whole, 0, (size_t)g_port_size[i]); return;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_mmio_read(struct takt_arena *a, long long addr, void *dst, int n) {{");
+    let _ = writeln!(s, "void {x}_mmio_read(struct takt_arena *a, long long addr, void *dst, int n) {{");
     let _ = writeln!(s, "    unsigned char whole[{most}];");
     let _ = writeln!(s, "    int off = 0, i = takt_port_of(addr, n, &off);");
     let _ = writeln!(s, "    if (i < 0) {{ memset(dst, 0, (size_t)n); return; }}");
@@ -177,7 +178,7 @@ pub(crate) fn emit(t: &mut Text, p: &Program) {
     let _ = writeln!(s, "}}");
     // Ein Feld unter dem Port hat keinen eigenen Speicher: Der ganze Record
     // wird gelesen, veraendert und als ein Element geschrieben.
-    let _ = writeln!(s, "void takt_mmio_write(struct takt_arena *a, long long addr, const void *src, int n) {{");
+    let _ = writeln!(s, "void {x}_mmio_write(struct takt_arena *a, long long addr, const void *src, int n) {{");
     let _ = writeln!(s, "    unsigned char whole[{most}], out[{widest}];");
     let _ = writeln!(s, "    int off = 0, i = takt_port_of(addr, n, &off);");
     let _ = writeln!(s, "    if (i < 0) return;");

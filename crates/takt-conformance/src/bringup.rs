@@ -55,7 +55,7 @@ pub fn compile(path: &str) -> Option<takt_mir::Program> {
     checked.program
 }
 
-/// Ruft `takt build PROGRAMM --target ZIEL --build hw` mit `extra`, etwa
+/// Ruft `takt build PROGRAMM --target ZIEL --build hw --prefix app` mit `extra`, etwa
 /// `--emit ir`, und schreibt nach `out`.
 ///
 /// **Der Umweg ueber die Kommandozeile ist Absicht.** Ein Build-Skript,
@@ -66,6 +66,8 @@ pub fn takt_build(program: &str, target: &str, extra: &[&str], out: &Path) {
     let takt = takt();
     let status = Command::new(&takt)
         .args(["build", program, "--target", target, "--build", "hw"])
+        // Das Praefix des Rahmens der Bring-ups (`takt_frame::mcu::Frame`, 12.11).
+        .args(["--prefix", takt_llvm::symbols::Prefix::default().as_str()])
         .args(extra)
         .arg("--out")
         .arg(out)

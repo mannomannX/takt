@@ -21,7 +21,7 @@
 //! takt timing TRACE.trace --tick NS
 //! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac|armv7]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
-//!                   [--instrument statements|states|off] [--diagnostics ids|none]
+//!                   [--instrument statements|states|off] [--diagnostics ids|none] [--prefix P]
 //! takt size  DATEI… [--build sim|hw] [--params-profile P] [--object DATEI.o | --target NAME]
 //!                   [--hardware DATEI.hw] [--baseline DATEI] [--save-baseline DATEI]
 //! takt cost  DATEI… [--build sim|hw] [--params-profile P]
@@ -87,6 +87,7 @@ impl Args {
             "--target",
             "--emit",
             "--out",
+            "--prefix",
             "--object",
             "--hardware",
             "--hw-export",
@@ -695,8 +696,16 @@ fn build(args: &Args) -> bool {
         },
         None => takt_llvm::Diagnostics::Ids,
     };
-    let lowered =
-        takt_llvm::lower::program_with_diagnostics(&program, target.triple, module_name(path), instrument, diagnostics);
+    // 12.11: Jedes externe Symbol traegt das Praefix; Vorgabe ist der
+    // Dateiname, wenn er ein C-Bezeichner ist.
+    let prefix = match takt_llvm::symbols::Prefix::new(args.value("--prefix").unwrap_or(module_name(path))) {
+        Ok(prefix) => prefix,
+        Err(e) => {
+            eprintln!("{e}; `--prefix P` nennt eines");
+            return false;
+        }
+    };
+    let lowered = takt_llvm::lower::program_with_diagnostics(&program, target.triple, &prefix, instrument, diagnostics);
     for s in &lowered.skipped {
         // Ein fehlender Schritt ist ein Loch, kein Schoenheitsfehler: Ohne
         // ihn meldet der Linker spaeter ein unbekanntes Symbol statt des
@@ -824,7 +833,7 @@ fn ports(p: &takt_mir::Program, hw: &takt_mir::hardware::Hardware) -> Vec<(Strin
 /// Hand zu schreiben war schon einmal falsch: Das Programm sagte 10 ms,
 /// das Bring-up 1 ms, und die logische Zeit lief zehnfach zu schnell.
 ///
-/// Dazu die Stellung der Ausgaenge im Latch. Wer `takt_mcu_output` ruft,
+/// Dazu die Stellung der Ausgaenge im Latch. Wer `P_output` ruft,
 /// braucht einen Index, und ein handgeschriebener Index ist dieselbe
 /// Fehlerquelle in kleiner: Er stimmt, bis jemand einen Ausgang davor
 /// einfuegt.
@@ -844,7 +853,7 @@ fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardwar
         p.config.overrun == takt_mir::program::OverrunPolicy::Alert
     ));
 
-    s.push_str("/// Die Ausgaenge in der Reihenfolge, die `takt_mcu_output` erwartet.\n");
+    s.push_str("/// Die Ausgaenge in der Reihenfolge, die `P_output` des Rahmens erwartet.\n");
     let mut index = 0;
     for (i, c) in p.channels.iter().enumerate() {
         let id = takt_mir::ChannelId(i as u32);
@@ -995,7 +1004,7 @@ fn size(args: &Args) -> bool {
             continue;
         };
         println!("{path}:");
-        let (measured, residency) = measure(args, program, path);
+        let (measured, residency) = measure(args, program);
         let mut report = takt_mir::analysis::size::size(program).with_object(&measured);
         let target = calibration(args);
         if let Some(target) = &target {
@@ -1101,7 +1110,6 @@ fn against_baseline(report: &takt_mir::analysis::size::Size, file: &str) -> bool
 fn measure(
     args: &Args,
     p: &takt_mir::Program,
-    source: &str,
 ) -> (takt_mir::analysis::size::Measured, Option<takt_llvm::inspect::Residency>) {
     let mut out = takt_mir::analysis::size::Measured::default();
     let host = if cfg!(windows) { takt_llvm::Target::X86_64_WINDOWS } else { takt_llvm::Target::X86_64_LINUX };
@@ -1110,7 +1118,7 @@ fn measure(
     let path = match (args.value("--object"), target) {
         (Some(file), _) => std::path::Path::new(file).to_path_buf(),
         (None, Some(target)) => {
-            let Some(file) = object_for_size(p, target, source) else { return (out, None) };
+            let Some(file) = object_for_size(p, target) else { return (out, None) };
             built = file;
             built.clone()
         }
@@ -1152,7 +1160,9 @@ fn measure(
         .machines
         .iter()
         .map(|m| {
-            let (entry, body) = (takt_llvm::arena::entry_symbol(&m.name, "step"), takt_llvm::machine::step_name(m));
+            let prefix = takt_llvm::symbols::Prefix::default();
+            let (entry, body) =
+                (takt_llvm::arena::entry_symbol(&prefix, &m.name, "step"), takt_llvm::machine::step_name(m));
             let mut mf = takt_mir::analysis::stack::MachineFrames::default();
             let mut below = 0;
             for (name, f) in names.iter().zip(&measured).skip(p.fns.len()) {
@@ -1185,12 +1195,14 @@ fn measure(
 
 /// Das Objekt fuer `takt size --target`: dieselbe Uebersetzung wie
 /// `takt build`, in einer Datei, die die Messung wieder loescht.
-fn object_for_size(p: &takt_mir::Program, target: takt_llvm::Target, source: &str) -> Option<std::path::PathBuf> {
+fn object_for_size(p: &takt_mir::Program, target: takt_llvm::Target) -> Option<std::path::PathBuf> {
     let instrument = takt_llvm::Instrument::default_for(p.config.runtime_profile(), target);
+    // Die Namen aendern die Groessen nicht; gemessen wird mit der Vorgabe,
+    // auch wenn der Dateiname kein Praefix waere.
     let lowered = takt_llvm::lower::program_with_diagnostics(
         p,
         target.triple,
-        module_name(source),
+        &takt_llvm::symbols::Prefix::default(),
         instrument,
         takt_llvm::Diagnostics::Ids,
     );
@@ -1203,17 +1215,22 @@ fn object_for_size(p: &takt_mir::Program, target: takt_llvm::Target, source: &st
 }
 
 /// Symbole, die der Codegen und der Rahmen (12.1) fuer das Programm
-/// erzeugen: Maschinen, Funktionen, Natives, `takt_mcu_*`.
+/// erzeugen: alles mit dem Praefix der eigenen Rahmen (`app_*`, 12.11),
+/// Funktionen, Natives und die Ruempfe der Maschinen.
 fn is_program_symbol(p: &takt_mir::Program, name: &str) -> bool {
-    ["takt_mcu_", "takt_fn_", "takt_native_"].iter().any(|pre| name.starts_with(pre))
+    let own = takt_llvm::symbols::Prefix::default().name("");
+    [own.as_str(), "takt_fn_", "takt_native_"].iter().any(|pre| name.starts_with(pre))
         || p.machines.iter().any(|m| machine_symbol(m, name))
 }
 
-/// Gehoert das Symbol zur Maschine `m`: ein Einstieg `takt_<m>_*` (12.11)
+/// Gehoert das Symbol zur Maschine `m`: ein Einstieg `app_<m>_*` (12.11)
 /// oder ein Rumpf `<m>_*`, den LLVM nicht eingebettet hat?
 fn machine_symbol(m: &takt_mir::machine::Machine, name: &str) -> bool {
-    let own = takt_llvm::fns::sanitized(&m.name);
-    name.strip_prefix("takt_").unwrap_or(name).strip_prefix(own.as_str()).is_some_and(|rest| rest.starts_with('_'))
+    let (own, entry) = (takt_llvm::fns::sanitized(&m.name), takt_llvm::symbols::Prefix::default().name(""));
+    name.strip_prefix(entry.as_str())
+        .unwrap_or(name)
+        .strip_prefix(own.as_str())
+        .is_some_and(|rest| rest.starts_with('_'))
 }
 
 /// Die Hardware-Konfiguration aus `--hardware DATEI` (8.10), gelesen und

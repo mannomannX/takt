@@ -66,7 +66,7 @@ fn the_whole_program_lowers_to_native_code() {
     let lowered = takt_llvm::lower::program_with(
         &p,
         target.triple,
-        "test_uart",
+        &takt_llvm::symbols::Prefix::default(),
         takt_llvm::Instrument::default_for(p.config.runtime_profile(), target),
     );
 
@@ -89,9 +89,10 @@ fn the_whole_program_lowers_to_native_code() {
         let want = format!("inttoptr i64 {address} to ptr");
         assert!(lowered.ir.contains(&want), "Portadresse {address:#x} fehlt im IR");
     }
-    assert!(lowered.ir.contains("call void @takt_mmio_read("), "kein Lesen ueber die Runtime im IR");
-    assert!(lowered.ir.contains("call void @takt_mmio_write("), "kein Schreiben ueber die Runtime im IR");
-    let mcu = takt_llvm::lower::program(&p, takt_llvm::Target::RISCV32IMAC.triple, "test_uart").ir;
+    assert!(lowered.ir.contains("call void @app_mmio_read("), "kein Lesen ueber die Runtime im IR");
+    assert!(lowered.ir.contains("call void @app_mmio_write("), "kein Schreiben ueber die Runtime im IR");
+    let mcu =
+        takt_llvm::lower::program(&p, takt_llvm::Target::RISCV32IMAC.triple, &takt_llvm::symbols::Prefix::default()).ir;
     assert!(mcu.contains("load volatile"), "kein `load volatile` im IR der MCU");
     assert!(mcu.contains("store volatile"), "kein `store volatile` im IR der MCU");
 }

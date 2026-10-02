@@ -17,6 +17,7 @@
 //! zurueckfaellt.
 
 use std::fmt::Write as _;
+use takt_llvm::symbols::Prefix;
 
 use takt_mir::TypeId;
 use takt_mir::program::{Channel, Direction, Program};
@@ -42,7 +43,7 @@ pub enum Trace {
 /// Commit und Bericht, die der Tick ruft, als leere Funktionen. Einzelne
 /// `static`-Puffer hatte der Compiler entfernt, wenn niemand sie las —
 /// Felder der Arena bleiben stehen (12.11).
-pub fn emit(t: &mut Text, p: &Program, trace: Trace) {
+pub fn emit(t: &mut Text, p: &Program, trace: Trace, x: &Prefix) {
     let dyns = dynamic_streams(p);
     if dyns.is_empty() {
         let _ = writeln!(t.code, "static void takt_int_commit(struct takt_arena *a) {{ (void)a; }}");
@@ -50,35 +51,35 @@ pub fn emit(t: &mut Text, p: &Program, trace: Trace) {
             t.code,
             "static void takt_stream_report(struct takt_arena *a, long long t) {{ (void)a; (void)t; }}\n"
         );
-        emit_send(t, p, false, trace);
+        emit_send(t, p, false, trace, x);
         return;
     }
     emit_internal(t, p, &dyns);
     let s = &mut t.code;
     let _ = writeln!(s, "/* Stroeme (8.6, 9.6): jeder ueber seinen Ring. */");
-    let _ = writeln!(s, "int takt_stream_count(struct takt_arena *a, int s, long long cur) {{");
+    let _ = writeln!(s, "int {x}_stream_count(struct takt_arena *a, int s, long long cur) {{");
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
     let _ = writeln!(s, "    return k >= 0 ? takt_int_count(a, k, cur) : 0;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
-        "long long takt_stream_bind(struct takt_arena *a, int s, long long cur, int i, void *data, long long *t) {{"
+        "long long {x}_stream_bind(struct takt_arena *a, int s, long long cur, int i, void *data, long long *t) {{"
     );
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
     let _ = writeln!(s, "    return k >= 0 ? takt_int_bind(a, k, cur, i, data, t) : 0;");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "long long takt_stream_at(struct takt_arena *a, int s, long long cur, int i, void *out) {{");
-    let _ = writeln!(s, "    return takt_stream_bind(a, s, cur, i, (unsigned char *)out + 8, (long long *)out);");
+    let _ = writeln!(s, "long long {x}_stream_at(struct takt_arena *a, int s, long long cur, int i, void *out) {{");
+    let _ = writeln!(s, "    return {x}_stream_bind(a, s, cur, i, (unsigned char *)out + 8, (long long *)out);");
     let _ = writeln!(s, "}}");
     // 9.6: `cur[s, m] = examined + 1`. Der Cursor gehoert der Maschine,
     // und der erzeugte Code fuehrt ihn in seinem Zustand; der Ring gibt
     // frei, was jeder Leser untersucht hat.
-    let _ = writeln!(s, "void takt_stream_examined(struct takt_arena *a, int s, int m, long long seq) {{");
+    let _ = writeln!(s, "void {x}_stream_examined(struct takt_arena *a, int s, int m, long long seq) {{");
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
     let _ = writeln!(s, "    if (k >= 0) takt_int_examined(a, k, m, seq);");
     let _ = writeln!(s, "}}");
     // 8.6: `s.dropped` (0), `s.overflowed` (1), `s.malformed` (2) am Ring.
-    let _ = writeln!(s, "int takt_stream_counter(struct takt_arena *a, int s, int which) {{");
+    let _ = writeln!(s, "int {x}_stream_counter(struct takt_arena *a, int s, int which) {{");
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
     let _ = writeln!(s, "    if (k < 0) return 0;");
     let _ = writeln!(
@@ -87,7 +88,7 @@ pub fn emit(t: &mut Text, p: &Program, trace: Trace) {
     );
     let _ = writeln!(s, "}}\n");
     report(t, &dyns, trace);
-    emit_send(t, p, true, trace);
+    emit_send(t, p, true, trace, x);
 }
 
 /// `takt_stream_report(t)`: die Zeile `stream <name> dropped=… overflowed=…
@@ -511,7 +512,7 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic]) {
 /// Ohne diese Rate stuende im nativen Trace der ganze Text in einem
 /// Tick, im interpretierten haeppchenweise — und der Vergleich saehe
 /// einen Unterschied, den es in der Sache nicht gibt.
-fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace) {
+fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
     let streams: Vec<(usize, &Channel)> = p
         .channels
         .iter()
@@ -534,7 +535,7 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace) {
         let _ =
             writeln!(t.code, "static void takt_tx_commit(struct takt_arena *a, long long t) {{ (void)a; (void)t; }}");
         if rings {
-            stream_send(&mut t.code, true, false);
+            stream_send(&mut t.code, true, false, x);
         }
         return;
     }
@@ -570,7 +571,7 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace) {
     if !coupled(p).is_empty() {
         couple(s);
     }
-    stream_send(s, rings, true);
+    stream_send(s, rings, true, x);
     // Der Commit: Der Treiber holt `per_tick` Bytes ab und meldet sie als
     // `out <stream> [0x.., ..]` — dieselbe Schreibweise wie im
     // Interpreter (`value_text` fuer `Value::Bytes`).
@@ -624,7 +625,7 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace) {
     }
     let _ = writeln!(s, "}}\n");
     // `o.sent` (8.8): `{ i32 len, [CAP x i8] }` an die uebergebene Stelle.
-    let _ = writeln!(s, "int takt_stream_sent(struct takt_arena *a, int s, void *out) {{");
+    let _ = writeln!(s, "int {x}_stream_sent(struct takt_arena *a, int s, void *out) {{");
     let _ = writeln!(s, "    int k = takt_tx_slot(s);");
     let _ = writeln!(s, "    unsigned char *o = (unsigned char *)out;");
     let _ = writeln!(s, "    int n = k < 0 ? 0 : a->tx_sent_n[k];");
@@ -662,10 +663,10 @@ fn couple(s: &mut String) {
 
 /// `takt_stream_send`: in den Ring eines internen Stroms (`rings`) oder in
 /// den Sendepuffer eines Ausgabestroms (`sends`).
-fn stream_send(s: &mut String, rings: bool, sends: bool) {
+fn stream_send(s: &mut String, rings: bool, sends: bool, x: &Prefix) {
     // Ein abgewiesenes `send` auf einen internen Strom zaehlt, ausser mit
     // `overflow = drop` (8.6, `System::send`).
-    let _ = writeln!(s, "_Bool takt_stream_send(struct takt_arena *a, int s, const char *b, int n) {{");
+    let _ = writeln!(s, "_Bool {x}_stream_send(struct takt_arena *a, int s, const char *b, int n) {{");
     if rings {
         let _ = writeln!(s, "    int r = takt_int_slot(s);");
         let _ = writeln!(s, "    if (r >= 0) {{");

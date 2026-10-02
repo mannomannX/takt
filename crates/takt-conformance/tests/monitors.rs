@@ -33,10 +33,10 @@ fn violations(trace: &str) -> Vec<String> {
 #[test]
 fn the_monitors_lower_and_the_interpreter_finds_the_violations() {
     let p = corpus();
-    let lowered = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", "monitore");
+    let lowered = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", &takt_llvm::symbols::Prefix::default());
     assert!(lowered.complete(), "{:?}", lowered.skipped);
     for i in 0..3 {
-        assert!(lowered.ir.contains(&format!("define void @takt_monitor_{i}(")), "Monitor {i}");
+        assert!(lowered.ir.contains(&format!("define void @app_monitor_{i}(")), "Monitor {i}");
     }
     let stimulus = takt_interp::Trace::parse(STIMULUS).expect("Stimulus");
     let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };

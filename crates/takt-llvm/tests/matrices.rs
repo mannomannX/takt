@@ -23,7 +23,7 @@ fn corpus() -> Program {
 #[test]
 fn the_matrix_corpus_lowers_completely() {
     let p = corpus();
-    let lowered = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", "matrizen");
+    let lowered = takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", &takt_llvm::symbols::Prefix::default());
     assert!(lowered.complete(), "{:?}", lowered.skipped);
     let ir = &lowered.ir;
     assert!(ir.contains("call double @llvm.fma.f64("), "Skalarprodukte als fma-Ketten");
@@ -44,7 +44,8 @@ fn the_matrix_ir_assembles() {
             return;
         }
     };
-    let lowered = takt_llvm::lower::program(&corpus(), "x86_64-pc-windows-msvc", "matrizen");
+    let lowered =
+        takt_llvm::lower::program(&corpus(), "x86_64-pc-windows-msvc", &takt_llvm::symbols::Prefix::default());
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-llvm-matrizen");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Testverzeichnis anlegbar");

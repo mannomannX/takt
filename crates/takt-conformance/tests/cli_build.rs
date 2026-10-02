@@ -53,7 +53,7 @@ fn every_target_builds_from_the_command_line() {
     for target in ["x86_64", "aarch64", "thumbv7em", "riscv32imac"] {
         let out = dir.join(format!("{target}.o"));
         let result = Command::new(&takt)
-            .args(["build", &program(), "--target", target, "--out"])
+            .args(["build", &program(), "--target", target, "--prefix", "timing", "--out"])
             .arg(&out)
             .output()
             .expect("takt build");
@@ -79,7 +79,7 @@ fn emitting_ir_carries_the_target_triple() {
     };
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-build.ll");
     let result = Command::new(&takt)
-        .args(["build", &program(), "--target", "thumbv7em", "--emit", "ir", "--out"])
+        .args(["build", &program(), "--target", "thumbv7em", "--prefix", "timing", "--emit", "ir", "--out"])
         .arg(&out)
         .output()
         .expect("takt build");
@@ -88,7 +88,42 @@ fn emitting_ir_carries_the_target_triple() {
     let ir = std::fs::read_to_string(&out).expect("IR lesbar");
     assert!(ir.contains("thumbv7em-none-eabihf"), "das Triple steht im Kopf (11.3)");
     assert!(ir.contains("_step"), "die Schrittfunktion ist da (11.2)");
+    assert!(ir.contains("define void @timing_"), "die Einstiege tragen das Praefix (12.11)");
     let _ = std::fs::remove_file(&out);
+}
+
+/// **Das Praefix kommt aus dem Dateinamen oder aus `--prefix`** (12.11).
+/// Ist der Name kein C-Bezeichner — wie bei den Korpusdateien mit Ziffer
+/// vorn —, baut `takt build` nicht und nennt die Option, statt still einen
+/// anderen Namen zu waehlen.
+#[test]
+fn the_prefix_comes_from_the_file_name_or_the_option() {
+    let Some(takt) = cli() else {
+        eprintln!("takt-CLI nicht gebaut; uebersprungen");
+        return;
+    };
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-prefix");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let named = dir.join("ventil.takt");
+    std::fs::copy(program(), &named).expect("kopieren");
+    let out = dir.join("ventil.ll");
+    let result = Command::new(&takt)
+        .arg("build")
+        .arg(&named)
+        .args(["--target", "thumbv7em", "--emit", "ir", "--out"])
+        .arg(&out)
+        .output()
+        .expect("takt build");
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let ir = std::fs::read_to_string(&out).expect("IR lesbar");
+    assert!(ir.contains("define void @ventil_"), "der Dateiname ist das Praefix");
+
+    let result = Command::new(&takt).args(["build", &program(), "--target", "thumbv7em"]).output().expect("takt build");
+    assert!(!result.status.success(), "`16_timing` ist kein Praefix");
+    let msg = String::from_utf8_lossy(&result.stderr);
+    assert!(msg.contains("16_timing") && msg.contains("--prefix"), "die Meldung nennt Namen und Ausweg: {msg}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Ein unbekanntes Ziel wird benannt, nicht geraten.

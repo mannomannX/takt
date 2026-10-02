@@ -7,6 +7,10 @@ name = "libtaktm"
 version = "0.1.0"
 
 [[package]]
+name = "takt-board-support"
+version = "0.1.0"
+
+[[package]]
 name = "takt-hal"
 version = "0.1.0"
 
@@ -14,6 +18,7 @@ version = "0.1.0"
 name = "takt-mcu-program"
 version = "0.1.0"
 dependencies = [
+ "takt-board-support",
  "takt-native-abi",
  "takt-rt-baremetal",
  "takt-rt-core",

@@ -155,7 +155,7 @@ fn the_jitter_of_an_output_comes_from_the_configuration() {
     let without = takt_frame::mcu::build(&p).source;
     assert!(
         without
-            .contains("long long takt_jitter(struct takt_arena *a, int o) {\n    switch (o) {\n    default: return 0;"),
+            .contains("long long app_jitter(struct takt_arena *a, int o) {\n    switch (o) {\n    default: return 0;"),
         "{without}"
     );
 }
@@ -173,7 +173,7 @@ fn a_simulated_input_is_fed_before_tick_0() {
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
     let p = takt_sema::compile(src, &options).program.expect("Programm");
     let frame = takt_frame::mcu::build(&p).source;
-    let init = &frame[frame.find("int takt_mcu_init_with(").expect("init")..];
+    let init = &frame[frame.find("int app_init_with(").expect("init")..];
     let fed = init.find("/* p_sim -> p */").expect("die Speisung in init");
     let entered = init.find("_enter(").expect("der Eintritt");
     assert!(fed < entered, "die Speisung steht nach dem Eintritt:\n{init}");
@@ -187,10 +187,10 @@ fn a_simulated_input_is_fed_before_tick_0() {
 fn the_harness_exports_what_the_loop_needs() {
     let p = corpus("01_minimal.takt");
     let src = takt_frame::mcu::build(&p).source;
-    for name in ["takt_mcu_init", "takt_mcu_tick", "takt_mcu_dump", "takt_mcu_pc", "takt_mcu_end"] {
+    for name in ["app_init", "app_tick", "app_dump", "app_pc", "app_end"] {
         assert!(src.contains(&format!("void {name}")), "`{name}` fehlt im Rahmen");
     }
-    assert!(src.contains("int takt_mcu_next_run(long long *delay)"), "`takt_mcu_next_run` fehlt im Rahmen (12.7)");
+    assert!(src.contains("int app_next_run(long long *delay)"), "`app_next_run` fehlt im Rahmen (12.7)");
 }
 
 /// Der Rahmen bedient jede Funktion, die der erzeugte Code ruft.
@@ -201,16 +201,9 @@ fn the_harness_exports_what_the_loop_needs() {
 fn the_harness_answers_the_whole_abi() {
     let p = corpus("19_faults.takt");
     let src = takt_frame::mcu::build(&p).source;
-    for name in [
-        "takt_now",
-        "takt_alert",
-        "takt_log",
-        "takt_fault",
-        "takt_measure",
-        "takt_verify",
-        "takt_abort",
-        "takt_verdict",
-    ] {
+    for name in
+        ["app_now", "app_alert", "app_log", "app_fault", "app_measure", "app_verify", "app_abort", "app_verdict"]
+    {
         assert!(src.contains(name), "`{name}` fehlt im Rahmen — der erzeugte Code ruft es (abi.rs)");
     }
     assert!(
@@ -248,12 +241,15 @@ fn a_hardware_path_becomes_a_driver_call() {
     let p = corpus("29_heartbeat.takt");
     let src = takt_frame::mcu::build(&p).source;
 
-    assert!(src.contains("_Bool takt_out_ui_led(unsigned char value);"), "der Treiber ist deklariert:\n{src}");
     assert!(
-        src.contains("takt_edge_output(takt_out_ui_led(*(unsigned char *)(a->latch + 0)), alive_ui, -1, -1)"),
+        src.contains("_Bool app_out_ui_led(void *user, unsigned char value);"),
+        "der Treiber ist deklariert:\n{src}"
+    );
+    assert!(
+        src.contains("takt_edge_output(app_out_ui_led(a->user, *(unsigned char *)(a->latch + 0)), alive_ui, -1, -1)"),
         "und wird gerufen, seine Bestaetigung geprueft (12.6 Zeile 6):\n{src}"
     );
-    assert!(src.contains("void takt_mcu_commit(void)"), "Schritt 10 hat einen Namen (12.1)");
+    assert!(src.contains("void app_commit(void)"), "Schritt 10 hat einen Namen (12.1)");
 }
 
 /// **Ein Ausgang ohne Hardware-Bindung bekommt keinen Treiberaufruf.**
@@ -265,7 +261,7 @@ fn a_hardware_path_becomes_a_driver_call() {
 fn an_unbound_output_needs_no_driver() {
     let p = corpus("01_minimal.takt");
     let src = takt_frame::mcu::build(&p).source;
-    let calls = src.lines().filter(|l| l.contains("takt_out_")).count();
+    let calls = src.lines().filter(|l| l.contains("app_out_")).count();
     let bound = p
         .channels
         .iter()
@@ -382,7 +378,7 @@ fn a_record_output_is_in_the_table() {
 
 /// **Der Rahmen rechnet nicht mit `double`** (12.3, 4.2; FB-143).
 ///
-/// `takt_measure` gab seinen Wert als `(long long)(v * 1000000.0)` aus.
+/// `app_measure` gab seinen Wert als `(long long)(v * 1000000.0)` aus.
 /// Auf einem Kern ohne f64-Hardware bindet das die Software-Emulation ein
 /// — `__muldf3`, `__aeabi_d2lz`, `__aeabi_dmul`, zusammen 784 Byte in
 /// einem Binary von 4866. Fuer eine Funktion, die das Programm nie rief:
@@ -437,10 +433,10 @@ fn every_observation_line_carries_its_tick() {
 fn the_harness_answers_the_sleep_condition() {
     let p = corpus("29_heartbeat.takt");
     let src = takt_frame::mcu::build(&p).source;
-    assert!(src.contains("_Bool takt_mcu_idle(void)"), "die Bedingung hat einen Namen:\n{src}");
-    assert!(src.contains("long long takt_mcu_deadline(void)"), "und die Frist auch");
+    assert!(src.contains("_Bool app_idle(void)"), "die Bedingung hat einen Namen:\n{src}");
+    assert!(src.contains("long long app_deadline(void)"), "und die Frist auch");
     // Alle Maschinen muessen zustimmen: ein `return 0` je Maschine.
-    assert!(src.contains("if (!takt_heartbeat_idle(a)) return 0;"), "je Maschine eine Abfrage:\n{src}");
+    assert!(src.contains("if (!app_heartbeat_idle(a)) return 0;"), "je Maschine eine Abfrage:\n{src}");
 }
 
 /// Ohne `idle`-Zustand schlaeft eine Maschine nie.
@@ -490,10 +486,7 @@ fn an_idle_state_reports_its_deadline() {
 fn the_deadline_is_absolute_nanoseconds() {
     let p = corpus("30_idle.takt");
     let src = takt_frame::mcu::build(&p).source;
-    assert!(
-        src.contains("return takt_now(a) + best * 10000000LL;"),
-        "Ticks mal Periode, auf `takt_now` bezogen:\n{src}"
-    );
+    assert!(src.contains("return app_now(a) + best * 10000000LL;"), "Ticks mal Periode, auf `app_now` bezogen:\n{src}");
     assert!(src.contains("if (best < 0) return -1;"), "keine Frist bleibt keine Frist");
 }
 
@@ -520,8 +513,8 @@ fn a_multirate_deadline_counts_activations() {
 
 /// **Eingaenge vom Board** (12.1 Schritt 2, 12.6).
 ///
-/// Das Gegenstueck zu `takt_out_*`: Aus `hw("ui/button")` wird
-/// `takt_in_ui_button(&value, &quality)`. Der Treiber liefert beides,
+/// Das Gegenstueck zu `app_out_*`: Aus `hw("ui/button")` wird
+/// `app_in_ui_button(&value, &quality)`. Der Treiber liefert beides,
 /// weil 12.6 Eingaenge degradieren laesst statt zu faulten — ohne den
 /// Rueckweg koennte er nur luegen oder schweigen.
 ///
@@ -533,20 +526,23 @@ fn a_bound_input_becomes_a_driver_symbol() {
     let src = takt_frame::mcu::build(&program(INPUTS)).source;
 
     assert!(
-        src.contains("_Bool takt_in_ui_button(unsigned char *value, unsigned char *quality, long long *t);"),
+        src.contains("_Bool app_in_ui_button(void *user, unsigned char *value, unsigned char *quality, long long *t);"),
         "{src}"
     );
-    assert!(src.contains("_Bool takt_in_adc_temp(long long *value, unsigned char *quality, long long *t);"), "{src}");
     assert!(
-        src.contains("__attribute__((weak)) _Bool takt_in_ui_button"),
+        src.contains("_Bool app_in_adc_temp(void *user, long long *value, unsigned char *quality, long long *t);"),
+        "{src}"
+    );
+    assert!(
+        src.contains("__attribute__((weak)) _Bool app_in_ui_button"),
         "schwach gebunden:
 {src}"
     );
 
     // Innerhalb des Ticks: Schritt 2 steht vor Schritt 3 (12.1).
-    let at = src.find("void takt_mcu_tick(").expect("Tickfunktion");
+    let at = src.find("void app_tick(").expect("Tickfunktion");
     let tick = &src[at..];
-    let sample = tick.find("takt_mcu_sample(a);").expect("Aufruf");
+    let sample = tick.find("takt_sample(a);").expect("Aufruf");
     let step = tick.find("m_step(").expect("Schrittfunktion");
     assert!(
         sample < step,
@@ -567,12 +563,12 @@ fn a_bound_input_becomes_a_driver_symbol() {
 fn a_job_runs_in_the_context_and_shows_after_its_duration() {
     let src = takt_frame::mcu::build(&corpus("40_jobs.takt")).source;
     for symbol in [
-        "void takt_job_begin(",
-        "void takt_job_cancel(",
-        "int takt_mcu_job_dispatch(void)",
-        "void takt_mcu_job_work(void)",
-        "int takt_mcu_jobs_busy(void)",
-        "unsigned char *takt_mcu_job_stack(unsigned int *size)",
+        "void app_job_begin(",
+        "void app_job_cancel(",
+        "int app_job_dispatch(void)",
+        "void app_job_work(void)",
+        "int app_jobs_busy(void)",
+        "unsigned char *app_job_stack(unsigned int *size)",
     ] {
         assert!(
             src.contains(symbol),
@@ -585,17 +581,17 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
         "sichtbar erst nach der Dauer:
 {src}"
     );
-    let at = src.find("void takt_mcu_tick(").expect("Tickfunktion");
+    let at = src.find("void app_tick(").expect("Tickfunktion");
     let tick = &src[at..];
     let poll = tick.find("takt_jobs_poll(a);").expect("Jobs zu Tickbeginn");
-    let sample = tick.find("takt_mcu_sample(a);").expect("Abtastung");
+    let sample = tick.find("takt_sample(a);").expect("Abtastung");
     assert!(poll < sample, "{tick}");
-    let at = src.find("_Bool takt_mcu_idle(void)").expect("Schlafbedingung");
-    assert!(src[at..].contains("if (takt_mcu_jobs_busy()) return 0;"), "{src}");
+    let at = src.find("_Bool app_idle(void)").expect("Schlafbedingung");
+    assert!(src[at..].contains("if (app_jobs_busy()) return 0;"), "{src}");
 
     // Ohne Jobs bleiben die Einstiege, und das Board ruft sie ohne Unterschied.
     let plain = takt_frame::mcu::build(&corpus("01_minimal.takt")).source;
-    assert!(plain.contains("int takt_mcu_job_dispatch(void) { return 0; }"), "{plain}");
+    assert!(plain.contains("int app_job_dispatch(void) { return 0; }"), "{plain}");
 }
 
 /// **Auch der Start tastet ab** (9.4, FB-316): Ein `enter:` des
@@ -604,9 +600,9 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
 #[test]
 fn the_start_samples_before_it_enters() {
     let src = takt_frame::mcu::build(&program(INPUTS)).source;
-    let at = src.find("int takt_mcu_init_with(").expect("Startfunktion");
+    let at = src.find("int app_init_with(").expect("Startfunktion");
     let init = &src[at..];
-    let sample = init.find("takt_mcu_sample(a);").expect("Abtastung im Start");
+    let sample = init.find("takt_sample(a);").expect("Abtastung im Start");
     let enter = init.find("m_enter(").expect("Eintritt");
     assert!(sample < enter, "`sample` muss vor `enter` stehen:\n{init}");
 }
@@ -617,7 +613,7 @@ fn the_start_samples_before_it_enters() {
 fn a_simulated_input_gets_no_driver_symbol() {
     let src = takt_frame::mcu::build(&program(SIM_INPUT)).source;
     assert!(
-        !src.contains("takt_in_"),
+        !src.contains("app_in_"),
         "ein `sim`-Eingang braucht keinen Treiber:
 {src}"
     );
@@ -709,11 +705,11 @@ fn an_unread_input_is_read_for_the_recording() {
     let p = takt_sema::compile(&src, &options).program.expect("Programm");
     let frame = takt_frame::mcu::build(&p).source;
     for decl in [
-        "_Bool takt_in_edge_r_level(int *value, unsigned char *quality, long long *t); /* rec edge_r_level */",
-        "_Bool takt_in_edge_r_mode(unsigned int *value, unsigned char *quality, long long *t);",
-        "_Bool takt_in_edge_r_on(unsigned char *value, unsigned char *quality, long long *t);",
-        "_Bool takt_in_edge_r_quiet(unsigned char *value, unsigned char *quality, long long *t);",
-        "_Bool takt_in_edge_r_temp(double *value, unsigned char *quality, long long *t);",
+        "_Bool app_in_edge_r_level(void *user, int *value, unsigned char *quality, long long *t); /* rec edge_r_level */",
+        "_Bool app_in_edge_r_mode(void *user, unsigned int *value, unsigned char *quality, long long *t);",
+        "_Bool app_in_edge_r_on(void *user, unsigned char *value, unsigned char *quality, long long *t);",
+        "_Bool app_in_edge_r_quiet(void *user, unsigned char *value, unsigned char *quality, long long *t);",
+        "_Bool app_in_edge_r_temp(void *user, double *value, unsigned char *quality, long long *t);",
     ] {
         assert!(frame.contains(decl), "{decl}:\n{frame}");
     }
@@ -725,19 +721,19 @@ fn an_unread_input_is_read_for_the_recording() {
         ),
         "{frame}"
     );
-    assert!(frame.contains("    takt_mcu_record(a, now);"), "{frame}");
+    assert!(frame.contains("    takt_record(a, now);"), "{frame}");
     // Stroeme (29e): je Element ein Aufruf, ein Byte mehr als jedes gueltige
     // Element, `MAXPT + 1` Aufrufe je Tick (400 Hz bei 10 ms: 5).
     assert!(
         frame.contains(
-            "_Bool takt_poll_edge_r_frames(unsigned char *buf, int cap, int *len, long long *t, long long *seq); \
+            "_Bool app_poll_edge_r_frames(void *user, unsigned char *buf, int cap, int *len, long long *t, long long *seq); \
              /* rec edge_r_frames */"
         ),
         "{frame}"
     );
-    assert!(frame.contains("if (!takt_poll_edge_r_frames(a->rec_0, 3, &len, &t, &seq)) break;"), "{frame}");
-    assert!(frame.contains("if (!takt_poll_edge_r_text(a->rec_7, 9, &len, &t, &seq)) break;"), "{frame}");
-    assert!(frame.contains("if (!takt_poll_edge_r_raw(a->rec_5, 2, &len, &t, &seq)) break;"), "{frame}");
+    assert!(frame.contains("if (!app_poll_edge_r_frames(a->user, a->rec_0, 3, &len, &t, &seq)) break;"), "{frame}");
+    assert!(frame.contains("if (!app_poll_edge_r_text(a->user, a->rec_7, 9, &len, &t, &seq)) break;"), "{frame}");
+    assert!(frame.contains("if (!app_poll_edge_r_raw(a->user, a->rec_5, 2, &len, &t, &seq)) break;"), "{frame}");
     assert!(frame.contains("for (int i = 0; i < 5; i++) {"), "{frame}");
     let clang = takt_llvm::toolchain::find();
     if matches!(clang, Clang::Missing) {

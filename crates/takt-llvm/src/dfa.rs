@@ -1,7 +1,7 @@
 //! Der Produkt-DFA eines Handler-Blocks im erzeugten Code (8.7, 11.2).
 //!
 //! **Warum hier und nicht in der Runtime.** Die Stromzugriffe laufen
-//! ueber `takt_stream_*`, weil die Puffer der Runtime gehoeren. Der
+//! ueber `P_stream_*`, weil die Puffer der Runtime gehoeren. Der
 //! Mustervergleich gehoert dagegen in den erzeugten Code: 11.2 sagt
 //! „Handler-Dispatch als Schleife ueber das Fenster mit vorkompilierten
 //! DFA-Tabellen" und verlangt, dass die Tabellen in `takt size`

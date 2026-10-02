@@ -14,6 +14,7 @@
 //! Interpreter —, dann `takt_edge_commit(tick)`.
 
 use std::fmt::Write as _;
+use takt_llvm::symbols::Prefix;
 
 use takt_mir::machine::Machine;
 use takt_mir::program::{Direction, Overflow, Program};
@@ -39,7 +40,7 @@ const WHAT: [&str; 6] = ["", "timestamp", "seq", "maxpt", "flags", "window"];
 /// Schreibt Zustand, Schnittstelle und Commit des Rands. `max` ist die
 /// Zahl der Lieferungen, die ein Tick hoechstens bringt. `takt_edge_init`
 /// setzt die Spuren auf ihren Anfang; `init` ruft es (12.11).
-pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max: usize, trace: Trace) {
+pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max: usize, trace: Trace, x: &Prefix) {
     let n = p.channels.len().max(1);
     let mut names: Vec<String> = Vec::new();
     let device_of: Vec<usize> = p
@@ -154,7 +155,7 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
     }
     report(s, trace);
     degrade(s, p, layout);
-    apply(s, p, layout, driven, delivers);
+    apply(s, p, layout, driven, delivers, x);
 
     let tick = p.config.tick;
     let _ = writeln!(s, "static void takt_edge_commit(struct takt_arena *a, long long tick) {{");
@@ -267,7 +268,7 @@ fn degrade(s: &mut String, p: &Program, layout: &Layout) {
 /// das Tor fuer den Wert (Zeilen 3, 4), wie `Image::through_edge`; ein
 /// Element, das sich nicht decodieren liess, verworfen (Zeile 5). Ohne
 /// Eingaenge gibt es keine Lieferung.
-fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine], delivers: bool) {
+fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine], delivers: bool, x: &Prefix) {
     if !delivers {
         let _ = writeln!(s, "static void takt_edge_apply(struct takt_arena *a, unsigned j) {{ (void)a; (void)j; }}");
         return;
@@ -330,7 +331,7 @@ fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine], deli
             .filter(|m| m.layout.cursors.contains(&takt_mir::expr::StreamRef::Channel(takt_mir::ChannelId(c as u32))))
             .filter_map(|m| {
                 let i = p.machines.iter().position(|x| x.name == m.name)?;
-                let awake = if ch.attrs.wake { "1".to_string() } else { format!("!takt_{0}_idle(a)", m.name) };
+                let awake = if ch.attrs.wake { "1".to_string() } else { format!("!{x}_{0}_idle(a)", m.name) };
                 Some(format!("if ({awake} && a->pending[{i}] == 0) a->pending[{i}] = {code};"))
             })
             .collect();

@@ -169,8 +169,8 @@ fn ports_differ_only_in_their_helpers() {
         assert_eq!(&helpers, if target.is_bare_metal() { &mcu } else { &host }, "{}", target.name);
     }
     assert!(mcu.contains("load volatile") && mcu.contains("store volatile") && mcu.contains("alwaysinline"), "{mcu}");
-    assert!(!mcu.contains("@takt_mmio_read("), "die MCU ruft keine Runtime:\n{mcu}");
-    assert!(host.contains("call void @takt_mmio_read(") && !host.contains("volatile"), "{host}");
+    assert!(!mcu.contains("@app_mmio_read("), "die MCU ruft keine Runtime:\n{mcu}");
+    assert!(host.contains("call void @app_mmio_read(") && !host.contains("volatile"), "{host}");
 
     let clang = takt_llvm::toolchain::find();
     if matches!(clang, Clang::Missing) {

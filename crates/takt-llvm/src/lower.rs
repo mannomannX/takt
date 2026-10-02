@@ -12,6 +12,7 @@
 //! was die vorige erklaert hat.
 
 use crate::emit::Module;
+use crate::symbols::Prefix;
 use takt_mir::Program;
 use takt_mir::machine::MachineKind;
 
@@ -67,25 +68,30 @@ impl Lowered {
 /// Port-Helfer (12.10, [`crate::mmio`]) — sonst ist die IR fuer jedes Ziel
 /// dieselbe. Genau darauf beruht Satz 9.4.4: Bit-Gleichheit ist damit eine
 /// Aussage ueber *eine* Uebersetzung, nicht ueber mehrere Programme.
-pub fn program(p: &Program, triple: &str, module_name: &str) -> Lowered {
-    program_with(p, triple, module_name, crate::target::Instrument::Off)
+///
+/// `prefix` steht vor jedem externen Namen (12.11) und benennt das Modul.
+pub fn program(p: &Program, triple: &str, prefix: &Prefix) -> Lowered {
+    program_with(p, triple, prefix, crate::target::Instrument::Off)
 }
 
 /// Wie [`program`], mit Instrumentierung (11.2): `pc` im Zustand traegt
 /// je Anweisung oder je Zustandswechsel, wo die Maschine steht.
-pub fn program_with(p: &Program, triple: &str, module_name: &str, instrument: crate::target::Instrument) -> Lowered {
-    program_with_diagnostics(p, triple, module_name, instrument, crate::target::Diagnostics::Ids)
+pub fn program_with(p: &Program, triple: &str, prefix: &Prefix, instrument: crate::target::Instrument) -> Lowered {
+    program_with_diagnostics(p, triple, prefix, instrument, crate::target::Diagnostics::Ids)
 }
 
 /// Wie [`program_with`], mit Diagnosestufe (plan/codegen-hebel.md C).
 pub fn program_with_diagnostics(
     p: &Program,
     triple: &str,
-    module_name: &str,
+    prefix: &Prefix,
     instrument: crate::target::Instrument,
     diagnostics: crate::target::Diagnostics,
 ) -> Lowered {
-    let mut m = Module::new(module_name, triple).with_instrument(instrument).with_diagnostics(diagnostics);
+    let mut m = Module::new(prefix.as_str(), triple)
+        .with_prefix(prefix)
+        .with_instrument(instrument)
+        .with_diagnostics(diagnostics);
     let mut skipped = Vec::new();
     let mut without_persist = Vec::new();
 
@@ -187,7 +193,7 @@ pub fn program_with_diagnostics(
         if let Err(e) = crate::monitor::monitor_function(i, prop, p, &mut m) {
             skipped.push(Skipped { machine: format!("monitor {}", prop.name), reason: e.what.to_string() });
         } else if let Some(state) = arena.monitor(i) {
-            let (symbol, body) = (crate::arena::monitor_symbol(i), format!("monitor_{i}"));
+            let (symbol, body) = (crate::arena::monitor_symbol(prefix, i), format!("monitor_{i}"));
             crate::arena::entry(&symbol, &body, crate::arena::MONITOR, state.offset, &arena, &mut m);
         }
     }
@@ -196,13 +202,13 @@ pub fn program_with_diagnostics(
 }
 
 /// Die Einstiege einer Maschine (12.11): je Rumpf, den der Codegen
-/// vollstaendig geschrieben hat, `takt_<maschine>_<endung>(ptr %arena, …)`.
+/// vollstaendig geschrieben hat, `P_<maschine>_<endung>(ptr %arena, …)`.
 fn entries(machine: &takt_mir::machine::Machine, p: &Program, arena: &crate::arena::Arena, m: &mut Module) {
     let Some(state) = arena.state(&machine.name) else { return };
     for (suffix, shape) in crate::arena::entries(machine, p) {
         let body = format!("{}_{suffix}", machine.name);
         if m.defines(&body) {
-            let symbol = crate::arena::entry_symbol(&machine.name, &suffix);
+            let symbol = crate::arena::entry_symbol(m.prefix(), &machine.name, &suffix);
             crate::arena::entry(&symbol, &body, shape, state.offset, arena, m);
         }
     }

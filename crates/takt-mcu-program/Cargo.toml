@@ -14,6 +14,8 @@ rust-version = "1.86"
 [dependencies]
 # Die C-Einstiege der Natives, die der erzeugte Code ruft (4.5, FB-293).
 takt-native-abi = { path = "../takt-native-abi" }
+# Der Wirtszeiger der eigenen Bring-ups (`host::Host`, 12.11).
+takt-board-support = { path = "../takt-board-support" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 takt-rt-core = { path = "../takt-rt-core" }
 

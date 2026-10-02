@@ -15,6 +15,7 @@
 
 use std::fmt::Write as _;
 
+use takt_llvm::symbols::Prefix;
 use takt_mir::MachineId;
 use takt_mir::program::Program;
 
@@ -116,6 +117,9 @@ fn build_inner(
     payload: &[u8],
     sleep: bool,
 ) -> Harness {
+    // Die Einstiege heissen wie im erzeugten Code ohne Angabe eines Praefixes
+    // (`Prefix::default`, 12.11): Der Testrahmen bindet ein Programm.
+    let x = &Prefix::default();
     let layout = takt_frame::layout::of(p);
     // Die Maschinen, die der Rahmen fuehrt, in Schrittordnung — dieselbe,
     // die der Interpreter nimmt (7.2: topologisch nach `follows`, sonst
@@ -158,7 +162,7 @@ fn build_inner(
     alert_table(&mut t, p);
     let _ = writeln!(
         t.code,
-        "void takt_alert(struct takt_arena *a, int m, int slot, unsigned char on, unsigned char invalid) {{"
+        "void {x}_alert(struct takt_arena *a, int m, int slot, unsigned char on, unsigned char invalid) {{"
     );
     let _ = writeln!(t.code, "    if (!takt_alert_edge(a, m, slot, on)) return;");
     let _ = writeln!(
@@ -168,11 +172,11 @@ fn build_inner(
     let _ = writeln!(t.code, "}}");
     let _ = writeln!(
         t.code,
-        "void takt_log(struct takt_arena *a, int m, int site) {{ printf(\"t=%lld log %d %d\\n\", a->tick, m, site); }}"
+        "void {x}_log(struct takt_arena *a, int m, int site) {{ printf(\"t=%lld log %d %d\\n\", a->tick, m, site); }}"
     );
     // 5.3: der Fault-Uebergang mit Maschine und Art, wie der Interpreter
     // ihn schreibt; der verlassene Zustand steht nicht in dessen Zeile.
-    let _ = writeln!(t.code, "void takt_fault(struct takt_arena *a, int m, int from, int code) {{");
+    let _ = writeln!(t.code, "void {x}_fault(struct takt_arena *a, int m, int from, int code) {{");
     let _ = writeln!(t.code, "    (void)from;");
     let _ = writeln!(
         t.code,
@@ -182,39 +186,37 @@ fn build_inner(
     // 3.3: `now` ist die Dauer seit dem Start des Laufs — die Tickzahl
     // mal T0, wie im Interpreter. Die Runtime fuehrt sie, weil alle
     // Maschinen dieselbe Uhr lesen (12.1).
-    let _ = writeln!(t.code, "long long takt_now(struct takt_arena *a) {{ return a->tick * {}LL; }}", p.config.tick);
-    let _ = writeln!(
-        t.code,
-        "void takt_measure(struct takt_arena *a, int m, int site, double v, unsigned char invalid) {{"
-    );
+    let _ = writeln!(t.code, "long long {x}_now(struct takt_arena *a) {{ return a->tick * {}LL; }}", p.config.tick);
+    let _ =
+        writeln!(t.code, "void {x}_measure(struct takt_arena *a, int m, int site, double v, unsigned char invalid) {{");
     let _ = writeln!(t.code, "    if (invalid) printf(\"t=%lld measure %d %d <invalid>\\n\", a->tick, m, site);");
     let _ = writeln!(t.code, "    else printf(\"t=%lld measure %d %d %.17g\\n\", a->tick, m, site, v);");
     let _ = writeln!(t.code, "}}");
-    let _ = writeln!(t.code, "void takt_verify(struct takt_arena *a, int m, int site, unsigned char ok) {{");
+    let _ = writeln!(t.code, "void {x}_verify(struct takt_arena *a, int m, int site, unsigned char ok) {{");
     let _ = writeln!(t.code, "    printf(\"t=%lld verify %d %d %d\\n\", a->tick, m, site, ok ? 1 : 0);");
     let _ = writeln!(t.code, "}}");
     // 5.4: `abort` merkt den Fault fuer alle Maschinen vor; die
     // Abort-Phase stellt ihn nach den Schritten zu (`abort_phase`).
     raised(&mut t, p);
-    let _ = writeln!(t.code, "void takt_abort(struct takt_arena *a, int m, int site) {{");
+    let _ = writeln!(t.code, "void {x}_abort(struct takt_arena *a, int m, int site) {{");
     let _ = writeln!(t.code, "    printf(\"t=%lld abort %d %d\\n\", a->tick, m, site);");
     let _ = writeln!(t.code, "    memset(a->raised, 1, sizeof a->raised);");
     let _ = writeln!(t.code, "}}");
-    let _ = writeln!(t.code, "void takt_verdict(struct takt_arena *a, int m, int site, unsigned char pass) {{");
+    let _ = writeln!(t.code, "void {x}_verdict(struct takt_arena *a, int m, int site, unsigned char pass) {{");
     let _ = writeln!(t.code, "    printf(\"t=%lld verdict %d %d %d\\n\", a->tick, m, site, pass ? 1 : 0);");
     let _ = writeln!(t.code, "}}");
     // 13.3: Ein Monitor meldet Index und Position; der Vergleich bildet
     // den Namen aus dem Programm.
-    let _ = writeln!(t.code, "void takt_property(struct takt_arena *a, int i, long long at) {{");
+    let _ = writeln!(t.code, "void {x}_property(struct takt_arena *a, int i, long long at) {{");
     let _ = writeln!(t.code, "    printf(\"t=%lld property %d %lld\\n\", a->tick, i, at);");
     let _ = writeln!(t.code, "}}\n");
 
     // Die Stroeme (`takt-llvm/src/stream.rs`): jeder ueber seinen Ring;
     // die Eingabestroeme speist der Treiberrand.
-    takt_frame::streams::emit(&mut t, p, takt_frame::streams::Trace::Stdio);
+    takt_frame::streams::emit(&mut t, p, takt_frame::streams::Trace::Stdio, x);
 
     natives(&mut t.code, p);
-    machine_declarations(&mut t.code, p, &driven);
+    machine_declarations(&mut t.code, p, &driven, x);
     // 13.3: Laufzeitmonitore laufen nur, wenn der Rahmen alle Maschinen
     // fuehrt — eine Eigenschaft liest jede.
     let monitors: Vec<(usize, &takt_mir::program::Property)> = match machine {
@@ -222,7 +224,7 @@ fn build_inner(
         Some(_) => Vec::new(),
     };
     for (i, _) in &monitors {
-        let _ = writeln!(t.code, "void takt_monitor_{i}(struct takt_arena *a, long long tick);");
+        let _ = writeln!(t.code, "void {x}_monitor_{i}(struct takt_arena *a, long long tick);");
     }
     let _ = writeln!(t.code);
     let persisting: Vec<&takt_mir::machine::Machine> =
@@ -242,23 +244,23 @@ fn build_inner(
     }
 
     // 4.5: Die Jobs des Rahmens; sie schreiben das Abbild.
-    jobs(&mut t, p);
+    jobs(&mut t, p, x);
 
     // 9.8: die geplanten Schreibvorgaenge. Sie gehoeren der Runtime —
     // 11.2 nennt sie „feste Arrays im Runtime-Anteil des Outputs" —,
     // und der Rahmen ist hier die Runtime. Hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.
     // 7.5: In der Simulation sind `guard` und `jitter` null.
-    scheduled(&mut t, p, &layout, None);
-    jitter(&mut t.code, p, None);
+    scheduled(&mut t, p, &layout, None, x);
+    jitter(&mut t.code, p, None, x);
     // 12.10: Registerports lesen den Latch des Modells und schreiben in
     // die Ringe der Stroeme, also hinter beidem.
-    crate::ports::emit(&mut t, p);
+    crate::ports::emit(&mut t, p, x);
     // 12.6: Der Treiberrand schreibt ins Abbild und in die Ringe; der
     // Stimulus liefert, was auf einem Board die Treiber liefern.
     let mut feed = String::new();
     let most = crate::deliveries::stimulus(&mut feed, p, &layout, inputs);
-    takt_frame::edge::emit(&mut t, p, &layout, &driven, most, takt_frame::streams::Trace::Stdio);
+    takt_frame::edge::emit(&mut t, p, &layout, &driven, most, takt_frame::streams::Trace::Stdio, x);
     t.code.push_str(&feed);
 
     let _ = writeln!(t.code, "int main(void) {{");
@@ -300,18 +302,18 @@ fn build_inner(
     // nach jedem `fresh[m] = publish_m(v_m)`, damit ein Follower schon im
     // Tick 0 frisch liest (7.2, 9.4).
     for m in &driven {
-        let _ = writeln!(t.code, "    takt_{0}_init_vars(a);", m.name);
+        let _ = writeln!(t.code, "    {x}_{0}_init_vars(a);", m.name);
     }
     for m in &persisting {
-        let _ = writeln!(t.code, "    takt_{0}_persist_restore(a, persist_in, persist_in_len);", m.name);
+        let _ = writeln!(t.code, "    {x}_{0}_persist_restore(a, persist_in, persist_in_len);", m.name);
     }
-    enter_machines(&mut t.code, p, &layout, &driven, "    ");
+    enter_machines(&mut t.code, p, &layout, &driven, "    ", x);
     // 8.8: Auch im Tick 0 holt der Treiber ab, was `enter` gesendet hat.
     commit_sequence(&mut t.code, p, &driven, "    ", "0");
     crate::ports::sample(&mut t.code, p, "    ");
     let _ = writeln!(t.code, "    dump(a, 0);");
     for (i, _) in &monitors {
-        let _ = writeln!(t.code, "    takt_monitor_{i}(a, 0);");
+        let _ = writeln!(t.code, "    {x}_monitor_{i}(a, 0);");
     }
     // 12.7: Auch der Anfangszustand kann das Kommando setzen.
     platform_end(&mut t.code, p, &layout, "    ");
@@ -356,19 +358,19 @@ fn build_inner(
             slot.offset
         );
     }
-    steps(&mut t.code, p, &layout, &driven, "        ", "a->tick");
-    abort_phase(&mut t.code, p, &driven, "        ", "a->tick");
-    idle_drops(&mut t.code, p, &driven, "        ");
+    steps(&mut t.code, p, &layout, &driven, "        ", "a->tick", x);
+    abort_phase(&mut t.code, p, &driven, "        ", "a->tick", x);
+    idle_drops(&mut t.code, p, &driven, "        ", x);
     commit_sequence(&mut t.code, p, &driven, "        ", "a->tick");
     crate::ports::sample(&mut t.code, p, "        ");
     let _ = writeln!(t.code, "        dump(a, a->tick);");
     // 13.3: nach dem Commit, wie `observe_properties` im Interpreter.
     for (i, _) in &monitors {
-        let _ = writeln!(t.code, "        takt_monitor_{i}(a, a->tick);");
+        let _ = writeln!(t.code, "        {x}_monitor_{i}(a, a->tick);");
     }
     platform_end(&mut t.code, p, &layout, "        ");
     if sleep {
-        virtual_sleep(&mut t.code, p, &driven, ticks, inputs);
+        virtual_sleep(&mut t.code, p, &driven, ticks, inputs, x);
     }
     let _ = writeln!(t.code, "    }}");
     if next_run_slot(p, &layout).is_some() {
@@ -382,7 +384,7 @@ fn build_inner(
             let _ = writeln!(t.code, "    {{");
             let _ = writeln!(
                 t.code,
-                "        int n = takt_{0}_persist_snapshot(a, persist_out, sizeof persist_out);",
+                "        int n = {x}_{0}_persist_snapshot(a, persist_out, sizeof persist_out);",
                 m.name
             );
             let _ = writeln!(t.code, "        for (int i = 0; i < n; i++) printf(\"%02x\", persist_out[i]);");
@@ -685,7 +687,14 @@ fn pended(s: &mut String, p: &Program, inputs: &[Stimulus], indent: &str) {
 /// etwas im Fenster hat, sagt `_idle`. Ein Tick, in dem der Stimulus
 /// liefert, laeuft immer: Auf dem Board weckt ein Wake-Ereignis den Kern,
 /// hier kennt der Rahmen die Lieferungen im Voraus.
-fn virtual_sleep(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], ticks: u64, inputs: &[Stimulus]) {
+fn virtual_sleep(
+    s: &mut String,
+    p: &Program,
+    driven: &[&takt_mir::machine::Machine],
+    ticks: u64,
+    inputs: &[Stimulus],
+    x: &Prefix,
+) {
     let _ = writeln!(s, "        {{");
     let _ = writeln!(s, "            _Bool idle = 1;");
     if !queued_outputs(p).is_empty() {
@@ -697,11 +706,11 @@ fn virtual_sleep(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mach
     let _ = writeln!(s, "            long long best = -1;");
     for m in driven {
         let i = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
-        let _ = writeln!(s, "            idle = idle && !a->pending[{i}] && takt_{0}_idle(a);", m.name);
+        let _ = writeln!(s, "            idle = idle && !a->pending[{i}] && {x}_{0}_idle(a);", m.name);
     }
     for m in driven {
         let _ = writeln!(s, "            if (idle) {{");
-        let _ = writeln!(s, "                long long d = takt_{0}_deadline(a);", m.name);
+        let _ = writeln!(s, "                long long d = {x}_{0}_deadline(a);", m.name);
         let _ = writeln!(s, "                if (d >= 0 && (best < 0 || d < best)) best = d;");
         let _ = writeln!(s, "            }}");
     }
@@ -721,7 +730,7 @@ fn virtual_sleep(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mach
     }
     let _ = writeln!(s, "            if (n > 0) {{");
     for m in driven {
-        let _ = writeln!(s, "                takt_{0}_advance(a, n);", m.name);
+        let _ = writeln!(s, "                {x}_{0}_advance(a, n);", m.name);
     }
     let _ = writeln!(s, "                printf(\"t=%lld time took=0 drift=0 slept=%lld\\n\", a->tick, n);");
     let _ = writeln!(s, "                a->tick += n;");
@@ -770,7 +779,7 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 /// 4.5: Jobs im Rahmen. Das Ergebnis der reinen Funktion steht beim Start
 /// fest; der Slot im Abbild wird `done`, sobald `duration` in Ticks
 /// vergangen ist — wie das Modell des Interpreters.
-fn jobs(t: &mut Text, p: &Program) {
+fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let Some((slots, out_max)) = job_tables(&mut t.code, p) else { return };
     let _ = writeln!(
         t.types,
@@ -780,14 +789,14 @@ fn jobs(t: &mut Text, p: &Program) {
     let s = &mut t.code;
     let _ = writeln!(
         s,
-        "void takt_job_begin(struct takt_arena *a, int m, int slot, int native, const unsigned char *args, int len) {{"
+        "void {x}_job_begin(struct takt_arena *a, int m, int slot, int native, const unsigned char *args, int len) {{"
     );
     let _ = writeln!(s, "    int i = takt_job_base[m] + slot; takt_job *j = &a->jobs[i];");
     job_call(s, p, "args", "len", "j->out", "j->out_len", "    ");
     let _ = writeln!(s, "    j->active = 1; j->due = a->tick + takt_job_ticks[i];");
     let _ = writeln!(s, "    takt_job_image(a, i, 0, 0, 2); /* Err(PENDING) */");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void takt_job_cancel(struct takt_arena *a, int m, int slot) {{");
+    let _ = writeln!(s, "void {x}_job_cancel(struct takt_arena *a, int m, int slot) {{");
     let _ = writeln!(s, "    int i = takt_job_base[m] + slot;");
     let _ = writeln!(
         s,

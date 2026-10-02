@@ -3,8 +3,8 @@
 //! Zeit, mit dem Trace auf der Standardausgabe.
 //!
 //! **Wozu.** Ein Treiber-Crate in Rust stellt die Einstiege der nativen
-//! Treiberschnittstelle (`takt_in_<adr>`, `takt_poll_<adr>`,
-//! `takt_out_<adr>`, `takt_alive_<geraet>`). `takt driver-test --crate`
+//! Treiberschnittstelle (`app_in_<adr>`, `app_poll_<adr>`,
+//! `app_out_<adr>`, `app_alive_<geraet>`). `takt driver-test --crate`
 //! bindet es mit diesem Crate zu einem Programm auf dem Wirt: Der Treiber
 //! laeuft gegen sein Hardwaremodell, und es urteilt derselbe Rand (12.6)
 //! wie auf dem Board — der Rahmen ist derselbe, nicht nachgebaut.
@@ -21,6 +21,7 @@
 
 #![allow(unsafe_code, reason = "C-ABI des Rahmens; 9.5 fuehrt ihn in der TCB")]
 
+use core::ffi::c_void;
 use std::io::{BufWriter, Stdout, Write as _};
 use std::process::ExitCode;
 
@@ -118,7 +119,12 @@ pub extern "C" fn takt_board_trace_hex8(value: u8) {
 ///
 /// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_sys_previous_run(value: *mut i32, quality: *mut u8, _t: *mut i64) -> bool {
+pub unsafe extern "C" fn app_in_sys_previous_run(
+    _user: *mut c_void,
+    value: *mut i32,
+    quality: *mut u8,
+    _t: *mut i64,
+) -> bool {
     unsafe {
         *value = 0;
         *quality = 0;

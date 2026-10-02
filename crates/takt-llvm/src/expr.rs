@@ -455,7 +455,7 @@ fn access(
     if which == Accessor::Jitter
         && let ExprKind::Output(c) = base.kind
     {
-        let ns = m.inst(&format!("call i64 @{}(ptr %arena, i32 {})", crate::abi::Abi::JITTER, c.0));
+        let ns = m.inst(&format!("call i64 @{}(ptr %arena, i32 {})", m.runtime(crate::abi::Abi::JITTER), c.0));
         return Ok(Lowered { value: ns.to_string(), ty: LlvmType::Int(64) });
     }
     if which == Accessor::Peek {
@@ -464,7 +464,7 @@ fn access(
     if which == Accessor::Count && stream_of(base, p).is_some() {
         return stream_count(base, want, m, vars);
     }
-    // 8.6: Die Zaehler stehen am Ring (`takt_stream_counter`). `dropped[s]`
+    // 8.6: Die Zaehler stehen am Ring (`P_stream_counter`). `dropped[s]`
     // am Ring plus `dropped[s, m]`, dem Verwurf im `idle` dieser Maschine
     // (9.6, 5.10), wie `System::accessor` im Interpreter.
     if matches!(which, Accessor::Dropped | Accessor::Overflowed | Accessor::Malformed)
@@ -476,8 +476,10 @@ fn access(
             Accessor::Overflowed => 1,
             _ => 2,
         };
-        let mut n =
-            m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i32 {counter})", crate::stream::Streams::COUNTER));
+        let mut n = m.inst(&format!(
+            "call i32 @{}(ptr %arena, i32 {sid}, i32 {counter})",
+            m.runtime(crate::stream::Streams::COUNTER)
+        ));
         if which == Accessor::Dropped {
             let own = vars.stream_dropped(stream, m).ok_or(NotYet { what: "`dropped` ausserhalb einer Maschine" })?;
             n = m.inst(&format!("add i32 {n}, {own}"));
@@ -2110,7 +2112,8 @@ fn stream_sent(base: &Expr, want: &LlvmType, m: &mut Module) -> Result<Lowered, 
     let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
     let buf = m.alloca(&inner);
     m.write(&inner, "zeroinitializer", &buf.to_string());
-    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {}, ptr {buf})", crate::stream::Streams::SENT, c.0));
+    let n =
+        m.inst(&format!("call i32 @{}(ptr %arena, i32 {}, ptr {buf})", m.runtime(crate::stream::Streams::SENT), c.0));
     let v = m.inst(&format!("load {inner}, ptr {buf}"));
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
     let with_value = m.inst(&format!("insertvalue {want} undef, {inner} {v}, 0"));
@@ -2142,7 +2145,8 @@ fn stream_count(base: &Expr, want: &LlvmType, m: &mut Module, vars: &dyn Vars) -
     let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
     let (cur_ptr, _) = vars.stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n =
+        m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
     let wide = m.inst(&format!("sext i32 {n} to {want}"));
     Ok(Lowered { value: wide.to_string(), ty: want.clone() })
 }
@@ -2164,14 +2168,17 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
     m.write(&inner, "zeroinitializer", &out.to_string());
     let buf = crate::stream::scratch(p, elem, m)?;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n =
+        m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
     let k = m.next_label();
     let (read, done) = (format!("peek{k}_lesen"), format!("peek{k}_fertig"));
     m.void_inst(&format!("br i1 {some}, label %{read}, label %{done}"));
     m.label(&read);
-    let seq = m
-        .inst(&format!("call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 0, ptr {buf})", crate::stream::Streams::AT));
+    let seq = m.inst(&format!(
+        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 0, ptr {buf})",
+        m.runtime(crate::stream::Streams::AT)
+    ));
     crate::stream::note_examined(ex_ptr, seq, m);
     crate::stream::copy_payload(buf, out, elem, p, m)?;
     m.void_inst(&format!("br label %{done}"));

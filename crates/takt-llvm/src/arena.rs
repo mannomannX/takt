@@ -20,6 +20,7 @@ use takt_mir::program::{Direction, Program};
 use takt_mir::{ChannelId, CommandId, ParamId};
 
 use crate::emit::Module;
+use crate::symbols::Prefix;
 use crate::ty::LlvmType;
 
 /// Der Name des Arena-Parameters in jeder erzeugten Funktion. Benannt, damit
@@ -226,17 +227,17 @@ pub enum Pointers {
     All,
 }
 
-/// Der Name eines Einstiegs, wie der Rahmen ihn ruft.
-pub fn entry_symbol(machine: &str, suffix: &str) -> String {
-    format!("takt_{}_{suffix}", crate::fns::sanitized(machine))
+/// Der Name eines Einstiegs, wie der Rahmen ihn ruft: `P_<maschine>_<suffix>`.
+pub fn entry_symbol(prefix: &Prefix, machine: &str, suffix: &str) -> String {
+    prefix.name(&format!("{}_{suffix}", crate::fns::sanitized(machine)))
 }
 
-/// Der Name des Einstiegs eines Laufzeitmonitors.
-pub fn monitor_symbol(index: usize) -> String {
-    format!("takt_monitor_{index}")
+/// Der Name des Einstiegs eines Laufzeitmonitors: `P_monitor_<i>`.
+pub fn monitor_symbol(prefix: &Prefix, index: usize) -> String {
+    prefix.name(&format!("monitor_{index}"))
 }
 
-/// Schreibt den Einstieg `takt_<maschine>_<suffix>(ptr %arena, …)` vor den
+/// Schreibt den Einstieg `P_<maschine>_<suffix>(ptr %arena, …)` vor den
 /// Rumpf `body`: Er bildet die Zeiger als feste Abstaende in der Arena und
 /// ruft den Rumpf, den LLVM als einzige Aufrufstelle einbettet.
 pub fn entry(symbol: &str, body: &str, e: Shape, state: u64, arena: &Arena, m: &mut Module) {

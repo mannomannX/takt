@@ -11,7 +11,7 @@
 //! 0x0800_0000 und ueberschriebe beim ersten Flashen den Bootloader.
 //!
 //! Dasselbe gilt fuer das Takt-Programm: Das Binary `takt` ruft
-//! `takt_mcu_init` und `takt_mcu_tick`, und die entstehen erst, wenn eine
+//! `app_init` und `app_tick`, und die entstehen erst, wenn eine
 //! `.takt`-Datei uebersetzt und der MCU-Rahmen erzeugt wurde. Beides
 //! passiert hier, damit `cargo build` genuegt.
 //!
@@ -84,6 +84,7 @@ fn build_takt_program(out: &Path) {
             diagnostics: takt_llvm::Diagnostics::Ids,
             hardware: bringup::hardware().as_ref(),
             protect: Some(protect),
+            prefix: takt_llvm::symbols::Prefix::default(),
         },
     );
     if let Err(e) = fs::write(&rahmen, frame.source) {

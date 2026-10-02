@@ -38,8 +38,9 @@ pub fn name(access: Access, i: usize) -> String {
     }
 }
 
-/// Die Rumpfe der Helfer, die ein Modul ruft; `bare_metal` waehlt die Form.
-pub fn definitions(helpers: &[(Access, LlvmType)], bare_metal: bool) -> String {
+/// Die Rumpfe der Helfer, die ein Modul ruft; `bare_metal` waehlt die Form,
+/// `prefix` die Namen der Aufrufe in den Rahmen.
+pub fn definitions(helpers: &[(Access, LlvmType)], bare_metal: bool, prefix: &crate::symbols::Prefix) -> String {
     let mut s = String::new();
     if helpers.is_empty() {
         return s;
@@ -61,13 +62,13 @@ pub fn definitions(helpers: &[(Access, LlvmType)], bare_metal: bool) -> String {
                 s,
                 "define internal {ty} @{f}(ptr %at, ptr %arena) nounwind {{\n  %buf = alloca {ty}\n  %addr = ptrtoint ptr %at to i64\n  \
                  call void @{}(ptr %arena, i64 %addr, ptr %buf, i32 {size})\n  %v = load {ty}, ptr %buf\n  ret {ty} %v\n}}",
-                Abi::MMIO_READ
+                prefix.name(Abi::MMIO_READ)
             ),
             (Access::Write, false) => writeln!(
                 s,
                 "define internal void @{f}(ptr %at, {ty} %v, ptr %arena) nounwind {{\n  %buf = alloca {ty}\n  store {ty} %v, ptr %buf\n  \
                  %addr = ptrtoint ptr %at to i64\n  call void @{}(ptr %arena, i64 %addr, ptr %buf, i32 {size})\n  ret void\n}}",
-                Abi::MMIO_WRITE
+                prefix.name(Abi::MMIO_WRITE)
             ),
         };
     }

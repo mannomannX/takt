@@ -91,7 +91,13 @@ fn the_objects_of_the_corpus_stay_within_the_baseline() {
         .map(|name| {
             let p = program(name);
             let instrument = Instrument::default_for(p.config.runtime_profile(), Target::RISCV32IMAC);
-            let ir = takt_llvm::lower::program_with(&p, Target::RISCV32IMAC.triple, "baseline", instrument).ir;
+            let ir = takt_llvm::lower::program_with(
+                &p,
+                Target::RISCV32IMAC.triple,
+                &takt_llvm::symbols::Prefix::default(),
+                instrument,
+            )
+            .ir;
             (name.to_string(), text_size(&clang, &ir, &dir, name.trim_end_matches(".takt")))
         })
         .collect();

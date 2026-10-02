@@ -211,7 +211,7 @@ machine m:
     let p = takt_sema::compile(src, &o).program.expect("uebersetzt");
     let target = takt_llvm::Target::RISCV32IMAC;
     let instrument = takt_llvm::Instrument::default_for(p.config.runtime_profile(), target);
-    let ir = takt_llvm::lower::program_with(&p, target.triple, "finite", instrument).ir;
+    let ir = takt_llvm::lower::program_with(&p, target.triple, &takt_llvm::symbols::Prefix::default(), instrument).ir;
     let (ll, asm) = (dir.0.join("finite.ll"), dir.0.join("finite.s"));
     std::fs::write(&ll, &ir).expect("IR schreibbar");
     let ok = std::process::Command::new(&clang)

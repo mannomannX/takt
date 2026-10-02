@@ -127,6 +127,8 @@ pub struct Module {
     /// Die Position, deren Code gerade entsteht; eine Fault-Stelle nimmt
     /// ihre Zeile.
     pub at: takt_diag::Span,
+    /// Das Praefix der externen Namen (12.11, [`crate::symbols`]).
+    prefix: crate::symbols::Prefix,
 }
 
 impl Module {
@@ -174,7 +176,25 @@ impl Module {
             fault_stubs: Vec::new(),
             fault_lines: None,
             at: takt_diag::Span::default(),
+            prefix: crate::symbols::Prefix::default(),
         }
+    }
+
+    /// Dasselbe Modul mit diesem Praefix.
+    pub fn with_prefix(mut self, prefix: &crate::symbols::Prefix) -> Module {
+        self.prefix = prefix.clone();
+        self
+    }
+
+    /// Das Praefix der externen Namen.
+    pub fn prefix(&self) -> &crate::symbols::Prefix {
+        &self.prefix
+    }
+
+    /// Der Name eines Aufrufs in den Rahmen (`P_now`, [`crate::abi::Abi`],
+    /// [`crate::stream::Streams`]).
+    pub fn runtime(&self, name: &str) -> String {
+        self.prefix.name(name)
     }
 
     /// Fuehrt die Zeilen der Faults (5.3): Das Programm hat eine Maschine,
@@ -319,7 +339,7 @@ impl Module {
     }
 
     /// Legt eine erst zur Laufzeit bekannte Art in den Platz — das Flag
-    /// einer gerufenen Funktion, das Ergebnis von `takt_schedule` —, bevor
+    /// einer gerufenen Funktion, das Ergebnis von `P_schedule` —, bevor
     /// der Aufrufer verzweigt.
     pub fn fault_code_at(&mut self, code: &str) {
         let slot = self.fault_slot();
@@ -631,7 +651,7 @@ impl Module {
         for sig in &self.intrinsics {
             let _ = writeln!(decls, "declare {sig}");
         }
-        let ports = crate::mmio::definitions(&self.mmio, self.bare_metal);
+        let ports = crate::mmio::definitions(&self.mmio, self.bare_metal, &self.prefix);
         format!("{}{decls}{}{ports}", self.head, self.body)
     }
 }

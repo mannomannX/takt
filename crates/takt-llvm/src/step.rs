@@ -139,7 +139,7 @@ pub fn deliver_function(m: &Machine, st: &StateStruct, module: &mut Module) -> R
     let flags = module.inst(&format!("or i32 {active}, {DELIVER_PHASE}"));
     let value = module.inst(&format!("or i32 {}, {flags}", args[4]));
     module.void_inst(&format!("store i32 {value}, ptr {at}"));
-    let step = crate::arena::entry_symbol(&m.name, "step");
+    let step = crate::arena::entry_symbol(module.prefix(), &m.name, "step");
     module.void_inst(&format!("call void @{step}(ptr {})", crate::arena::PARAM));
     module.end(None);
     Ok(())
@@ -294,7 +294,7 @@ fn write_step(
     module.label(&done);
     // 9.6, `advance_cursors()`: `cur[s, m] = examined + 1`. Der Cursor
     // steht im Zustand der Maschine, nicht im Strom — nur der erzeugte
-    // Code kann ihn schreiben; `takt_stream_examined` meldet dasselbe
+    // Code kann ihn schreiben; `P_stream_examined` meldet dasselbe
     // an die Runtime, die daraus das Minimum ueber alle Konsumenten
     // bildet. Ohne untersuchtes Element bleibt der Cursor, wo er stand.
     // Der Runtime gilt das Maximum einmal je Schritt, nicht je Element.
@@ -312,7 +312,7 @@ fn write_step(
             let mi = ctx.machine_index;
             module.void_inst(&format!(
                 "call void @{}(ptr %arena, i32 {sid}, i32 {mi}, i64 {seq})",
-                crate::stream::Streams::EXAMINED
+                module.runtime(crate::stream::Streams::EXAMINED)
             ));
         }
     }
@@ -1148,7 +1148,10 @@ pub fn idle_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
         };
         let at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {c}"));
         let cur = module.inst(&format!("load i64, ptr {at}"));
-        let n = module.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+        let n = module.inst(&format!(
+            "call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})",
+            module.runtime(crate::stream::Streams::COUNT)
+        ));
         let empty = module.inst(&format!("icmp eq i32 {n}, 0"));
         out = module.inst(&format!("and i1 {out}, {empty}"));
     }
@@ -1234,7 +1237,7 @@ pub fn drop_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     let paused_now = module.inst(&format!("and i1 {woke}, {missed}"));
     module.void_inst(&format!(
         "call void @{}(ptr %arena, i32 {index}, i32 {paused}, i1 {paused_now}, i1 0)",
-        crate::abi::Abi::ALERT
+        module.runtime(crate::abi::Abi::ALERT)
     ));
     let (go, done) = (format!("verwerfen_{}", m.name), format!("verworfen_{}", m.name));
     module.void_inst(&format!("br i1 {idle}, label %{go}, label %{done}"));
@@ -1251,7 +1254,10 @@ pub fn drop_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
         };
         let cur_at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {c}"));
         let cur = module.inst(&format!("load i64, ptr {cur_at}"));
-        let n = module.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+        let n = module.inst(&format!(
+            "call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})",
+            module.runtime(crate::stream::Streams::COUNT)
+        ));
         let wide = module.inst(&format!("zext i32 {n} to i64"));
         let end = module.inst(&format!("add i64 {cur}, {wide}"));
         module.void_inst(&format!("store i64 {end}, ptr {cur_at}"));
@@ -1265,7 +1271,7 @@ pub fn drop_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
         let last = module.inst(&format!("sub i64 {end}, 1"));
         module.void_inst(&format!(
             "call void @{}(ptr %arena, i32 {sid}, i32 {index}, i64 {last})",
-            crate::stream::Streams::EXAMINED
+            module.runtime(crate::stream::Streams::EXAMINED)
         ));
     }
     module.void_inst(&format!("br label %{done}"));
@@ -1699,7 +1705,8 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
         let elem = crate::stream::element(ctx.program, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
         let k = ctx.next_label(m);
         let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-        let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+        let n = m
+            .inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
         // Der Zaehler laeuft ueber das Fenster; seine Schranke ist `n`.
         let i_ptr = m.alloca("i32");
         m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
@@ -1723,7 +1730,7 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
             (Some(var), _) => bind_direct(var, sid, &cur, &i, elem, ctx, m)?,
             (None, Some(buf)) => m.inst(&format!(
                 "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
-                crate::stream::Streams::AT
+                m.runtime(crate::stream::Streams::AT)
             )),
             (None, None) => return Err(NotYet { what: "Scratch" }),
         };
@@ -1760,7 +1767,8 @@ fn next_element(
     let k = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n =
+        m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
     let (take, done) = (format!("naechstes{k}_{name}"), format!("naechstes{k}_{name}_fertig"));
     m.void_inst(&format!("br i1 {some}, label %{take}, label %{done}"));
@@ -1769,7 +1777,7 @@ fn next_element(
         Some(buf) => {
             let seq = m.inst(&format!(
                 "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 0, ptr {buf})",
-                crate::stream::Streams::AT
+                m.runtime(crate::stream::Streams::AT)
             ));
             bind_element(binding, buf, seq, elem, ctx, m)?;
             seq
@@ -1813,7 +1821,7 @@ pub(crate) fn bind_direct(
     let (Some(t_ptr), Some(data_ptr)) = (t_ptr, data_ptr) else { return Err(NotYet { what: "Bindung ohne Inhalt" }) };
     let seq = m.inst(&format!(
         "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {data_ptr}, ptr {t_ptr})",
-        crate::stream::Streams::BIND
+        m.runtime(crate::stream::Streams::BIND)
     ));
     if let Some(seq_ptr) = seq_ptr {
         m.void_inst(&format!("store i64 {seq}, ptr {seq_ptr}"));
@@ -2102,7 +2110,8 @@ fn match_guard(
     let k = ctx.next_label(m);
     let name = &ctx.machine.name;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n =
+        m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     let hit_ptr = m.alloca("i1");
@@ -2122,7 +2131,7 @@ fn match_guard(
     m.label(&body);
     let seq = m.inst(&format!(
         "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
-        crate::stream::Streams::AT
+        m.runtime(crate::stream::Streams::AT)
     ));
     if let Some(v) = binding {
         bind_element(v, buf, seq, elem, ctx, m)?;
@@ -2412,7 +2421,7 @@ fn fault_body(from: FaultFrom, from_val: &str, ctx: &mut Ctx<'_>, m: &mut Module
     let code = m.inst(&format!("load i32, ptr {slot}"));
     m.void_inst(&format!(
         "call void @{}(ptr %arena, i32 {}, i32 {from_val}, i32 {code})",
-        crate::abi::Abi::FAULT,
+        m.runtime(crate::abi::Abi::FAULT),
         ctx.machine_index
     ));
     // 5.3: `last_fault`, wenn die Maschine es liest.
@@ -2435,12 +2444,12 @@ fn fault_body(from: FaultFrom, from_val: &str, ctx: &mut Ctx<'_>, m: &mut Module
     for slot in 0..md.layout.job_slots.len() {
         m.void_inst(&format!(
             "call void @{}(ptr %arena, i32 {}, i32 {slot})",
-            crate::abi::Abi::JOB_CANCEL,
+            m.runtime(crate::abi::Abi::JOB_CANCEL),
             ctx.machine_index
         ));
     }
     for o in &md.layout.output_queues {
-        m.void_inst(&format!("call void @{}(ptr %arena, i32 {})", crate::abi::Abi::CANCEL, o.0));
+        m.void_inst(&format!("call void @{}(ptr %arena, i32 {})", m.runtime(crate::abi::Abi::CANCEL), o.0));
     }
     let source = match from {
         FaultFrom::State(s) => Source::Leaf(s, from_val),
@@ -2503,7 +2512,7 @@ pub fn trigger_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
     let site = ctx.next_site();
     module.void_inst(&format!(
         "call void @{}(ptr %arena, i32 {}, i32 {site})",
-        crate::abi::Abi::ABORT,
+        module.runtime(crate::abi::Abi::ABORT),
         ctx.machine_index
     ));
     module.end(None);
@@ -2537,7 +2546,8 @@ fn one_trigger(
     m.void_inst(&format!("br i1 {armed}, label %{head}, label %{skip}"));
     m.label(&head);
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
-    let n = m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", crate::stream::Streams::COUNT));
+    let n =
+        m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     let buf = crate::stream::scratch(ctx.program, elem, m)?;
@@ -2550,7 +2560,7 @@ fn one_trigger(
     m.label(&body);
     let seq = m.inst(&format!(
         "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
-        crate::stream::Streams::AT
+        m.runtime(crate::stream::Streams::AT)
     ));
     // 7.5: Der Trigger fuehrt seinen eigenen Cursor; was er gesehen hat,
     // sieht er nicht wieder.
@@ -2695,7 +2705,7 @@ fn plan_outputs(
         };
         let _ = m.inst(&format!(
             "call i1 @{}(ptr %arena, i32 {}, i64 {}, i64 {word})",
-            crate::abi::Abi::SCHEDULE,
+            m.runtime(crate::abi::Abi::SCHEDULE),
             c.0,
             at.value
         ));
@@ -2712,7 +2722,7 @@ fn emit_fired(t: &takt_mir::program::Trigger, event: &Event, ctx: &mut Ctx<'_>, 
     let bytes = crate::stream::payload_cap(ctx.program, event.ty)?;
     let _ = m.inst(&format!(
         "call i1 @{}(ptr %arena, i32 {sid}, ptr {}, i32 {bytes})",
-        crate::stream::Streams::SEND,
+        m.runtime(crate::stream::Streams::SEND),
         event.slot
     ));
     Ok(())

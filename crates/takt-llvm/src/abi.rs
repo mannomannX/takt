@@ -22,8 +22,10 @@ use crate::ty::LlvmType;
 
 /// Die Funktionen, die die Runtime bereitstellt.
 ///
-/// Sie werden deklariert, nicht definiert: Der erzeugte Code ruft sie,
-/// `takt-rt-core` liefert sie.
+/// Sie werden deklariert, nicht definiert: Der erzeugte Code ruft sie, der
+/// Rahmen des Programms (`takt-frame`) liefert sie. Die Konstanten sind die
+/// Namen ohne Praefix; im Modul steht davor das des Programms (`P_now`,
+/// [`crate::emit::Module::runtime`], 12.11).
 pub struct Abi;
 
 impl Abi {
@@ -35,27 +37,27 @@ impl Abi {
     /// Meldung traegt den Zusatz „sensor invalid“ (3.5). Die Runtime bildet
     /// daraus die Flanke — sie kennt den vorigen Wert, der erzeugte Code
     /// muesste ihn sonst im Zustand fuehren.
-    pub const ALERT: &'static str = "takt_alert";
+    pub const ALERT: &'static str = "alert";
 
     /// `log "text"` (9.3).
-    pub const LOG: &'static str = "takt_log";
+    pub const LOG: &'static str = "log";
 
     /// `measure name = e` (13.2): ein Messwert fuer den Report; mit
     /// `invalid` ist er `<invalid>` (3.5).
-    pub const MEASURE: &'static str = "takt_measure";
+    pub const MEASURE: &'static str = "measure";
 
     /// `verify cond, "text"` (13.2): eine Pruefung mit Verdikt; ein
     /// ungueltiger Wert kommt als Verletzung an (3.5).
-    pub const VERIFY: &'static str = "takt_verify";
+    pub const VERIFY: &'static str = "verify";
 
     /// `abort "text"` (5.4): Fault fuer *alle* Maschinen im selben Tick.
-    pub const ABORT: &'static str = "takt_abort";
+    pub const ABORT: &'static str = "abort";
 
     /// Ein Fault-Uebergang (5.3): Maschine, der verlassene Zustand und die
     /// Art ([`fault_code`]). Die Runtime schreibt ihn in den Trace, damit
     /// ein nativer Lauf sagt, *wo* und *warum* er vom Interpreter abwich —
     /// nicht nur, dass die Outputs anders sind.
-    pub const FAULT: &'static str = "takt_fault";
+    pub const FAULT: &'static str = "fault";
 
     /// `now` (3.3): die Dauer seit dem Start des Laufs.
     ///
@@ -63,24 +65,24 @@ impl Abi {
     /// Runtime: Alle Maschinen lesen dieselbe Uhr, und der Tickzaehler
     /// liegt in der Tickschleife (12.1). Eine Kopie je Maschine waere
     /// eine zweite Quelle fuer dieselbe Zahl.
-    pub const NOW: &'static str = "takt_now";
+    pub const NOW: &'static str = "now";
 
     /// `job v = f(args)` (4.5): `(machine, slot, native, args, len)` — die
     /// Argumente als Folge kanonischer Bloecke (je `u32` Laenge, dann die
     /// Bytes). Die Runtime fuehrt den Job und schreibt `done`/`result` in
     /// den Slot des Abbilds (`image::job_offset`).
-    pub const JOB_BEGIN: &'static str = "takt_job_begin";
+    pub const JOB_BEGIN: &'static str = "job_begin";
 
     /// Ein Fault-Uebergang bricht die Jobs der Maschine ab (5.3):
     /// `(machine, slot)`; der Slot wird `done` mit `Err(CANCELLED)`.
-    pub const JOB_CANCEL: &'static str = "takt_job_cancel";
+    pub const JOB_CANCEL: &'static str = "job_cancel";
 
     /// `verdict pass | fail` (13.2): das Urteil eines Tests.
     ///
     /// Wie `verify` eine reine Beobachtung — sie kann nie einen Fault
     /// ausloesen (Leitentscheidung 14). Der Report sammelt sie; die
     /// Runtime reicht sie weiter.
-    pub const VERDICT: &'static str = "takt_verdict";
+    pub const VERDICT: &'static str = "verdict";
 
     /// `at T: o = v` (9.8): ein geplanter Schreibvorgang.
     ///
@@ -100,32 +102,32 @@ impl Abi {
     /// fester Groesse, und `double` passt bitgleich hinein
     /// (`bitcast`). Eine zweite Signatur je Breite waere eine zweite
     /// Gelegenheit, sie verschieden zu waehlen.
-    pub const SCHEDULE: &'static str = "takt_schedule";
+    pub const SCHEDULE: &'static str = "schedule";
 
     /// `cancel o` (9.8): verwirft die geplanten Schreibvorgaenge eines
     /// Outputs.
-    pub const CANCEL: &'static str = "takt_cancel";
+    pub const CANCEL: &'static str = "cancel";
 
     /// `o.jitter` (7.5): der Jitter, zu dem die Runtime den Output schreibt,
     /// in Nanosekunden. Er gehoert der Bindung, nicht der Logik — in der
     /// Simulation null, auf dem Ziel aus der Hardware-Konfiguration.
-    pub const JITTER: &'static str = "takt_jitter";
+    pub const JITTER: &'static str = "jitter";
 
     /// Ein Laufzeitmonitor meldet eine Verletzung (13.3): `(index, position)`.
     ///
     /// Der Index zaehlt die Eigenschaften des Programms; die Position ist
     /// der Tick, an dem die Formel falsch ist — die Runtime traegt beides
     /// in den Trace, wie der Interpreter.
-    pub const PROPERTY: &'static str = "takt_property";
+    pub const PROPERTY: &'static str = "property";
 
     /// Ein Registerport liest (12.10): `(adresse, ziel, laenge)`, auf einem
     /// Ziel mit Betriebssystem. Die Runtime bildet die Adresse ab, der
     /// Testrahmen auf das Geraetemodell wie der Interpreter; auf einer MCU
     /// ist der Zugriff `volatile` an der Adresse ([`crate::mmio`]).
-    pub const MMIO_READ: &'static str = "takt_mmio_read";
+    pub const MMIO_READ: &'static str = "mmio_read";
 
     /// Ein Registerport schreibt (12.10): `(adresse, quelle, laenge)`.
-    pub const MMIO_WRITE: &'static str = "takt_mmio_write";
+    pub const MMIO_WRITE: &'static str = "mmio_write";
 
     /// Schreibt die Deklarationen in den Modulkopf.
     ///
@@ -133,7 +135,7 @@ impl Abi {
     /// ...)`: Die Stelle ist das, was der Trace braucht, und sie ist beim
     /// Uebersetzen bekannt.
     pub fn declare(m: &mut Module) {
-        m.declare("\n; Runtime-Schnittstelle (9.3, 5.4); `takt-rt-core` liefert sie");
+        m.declare("\n; Runtime-Schnittstelle (9.3, 5.4); der Rahmen liefert sie");
         // Die Runtime schreibt nur ihren eigenen Bereich der Arena — Trace,
         // Ringe, Plan —, den der erzeugte Code nie beruehrt: fuer LLVM
         // „unzugaenglicher" Speicher. Der Arena-Zeiger vorn ist fuer das
@@ -142,31 +144,40 @@ impl Abi {
         // Ladungen aus Zustand und Abbild ueber den Aufruf hinweg gueltig,
         // auch bei Funktionen, die ueber ein weiteres Argument schreiben.
         const RT: &str = "nounwind willreturn memory(inaccessiblemem: readwrite)";
-        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i1, i1) {RT}", Abi::ALERT));
-        m.declare(&format!("declare void @{}(ptr readnone, i32, i32) {RT}", Abi::LOG));
-        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, double, i1) {RT}", Abi::MEASURE));
-        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i1) {RT}", Abi::VERIFY));
-        m.declare(&format!("declare void @{}(ptr readnone, i32, i32) {RT}", Abi::ABORT));
-        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i32) {RT}", Abi::FAULT));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i1, i1) {RT}", m.runtime(Abi::ALERT)));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32) {RT}", m.runtime(Abi::LOG)));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, double, i1) {RT}", m.runtime(Abi::MEASURE)));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i1) {RT}", m.runtime(Abi::VERIFY)));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32) {RT}", m.runtime(Abi::ABORT)));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i32) {RT}", m.runtime(Abi::FAULT)));
         m.declare(&format!(
             "declare i64 @{}(ptr readnone) nounwind willreturn memory(inaccessiblemem: read)",
-            Abi::NOW
+            m.runtime(Abi::NOW)
         ));
-        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i1) {RT}", Abi::VERDICT));
-        m.declare(&format!("declare void @{}(ptr readnone, i32, i64) {RT}", Abi::PROPERTY));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i1) {RT}", m.runtime(Abi::VERDICT)));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i64) {RT}", m.runtime(Abi::PROPERTY)));
         // 9.8: `(channel, T, wert) -> 0 oder die Art des Faults`.
-        m.declare(&format!("declare i32 @{}(ptr readnone, i32, i64, i64) {RT}", Abi::SCHEDULE));
-        m.declare(&format!("declare void @{}(ptr readnone, i32) {RT}", Abi::CANCEL));
-        m.declare(&format!("declare i64 @{}(ptr readnone, i32) nounwind willreturn memory(none)", Abi::JITTER));
+        m.declare(&format!("declare i32 @{}(ptr readnone, i32, i64, i64) {RT}", m.runtime(Abi::SCHEDULE)));
+        m.declare(&format!("declare void @{}(ptr readnone, i32) {RT}", m.runtime(Abi::CANCEL)));
+        m.declare(&format!(
+            "declare i64 @{}(ptr readnone, i32) nounwind willreturn memory(none)",
+            m.runtime(Abi::JITTER)
+        ));
         // `job_begin` liest die Argumente und schreibt spaeter das Abbild.
         m.declare(&format!(
             "declare void @{}(ptr readnone, i32, i32, i32, ptr, i32) nounwind willreturn",
-            Abi::JOB_BEGIN
+            m.runtime(Abi::JOB_BEGIN)
         ));
-        m.declare(&format!("declare void @{}(ptr readnone, i32, i32) {RT}", Abi::JOB_CANCEL));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32) {RT}", m.runtime(Abi::JOB_CANCEL)));
         // 12.10: Die Runtime liest das Modell und schreibt Ziel und Stroeme.
-        m.declare(&format!("declare void @{}(ptr readnone, i64, ptr, i32) nounwind willreturn", Abi::MMIO_READ));
-        m.declare(&format!("declare void @{}(ptr readnone, i64, ptr, i32) nounwind willreturn", Abi::MMIO_WRITE));
+        m.declare(&format!(
+            "declare void @{}(ptr readnone, i64, ptr, i32) nounwind willreturn",
+            m.runtime(Abi::MMIO_READ)
+        ));
+        m.declare(&format!(
+            "declare void @{}(ptr readnone, i64, ptr, i32) nounwind willreturn",
+            m.runtime(Abi::MMIO_WRITE)
+        ));
         // `append` kopiert eine ganze Folge in einem Zug (3.9); LLVM
         // kennt das als Intrinsic, und eine Schleife braeuchte eine
         // Schranke, die 4.1 ohnehin verlangt.
@@ -184,7 +195,7 @@ pub const SITE: LlvmType = LlvmType::Int(32);
 /// Die Art eines Faults als Zahl der ABI (5.3): eins plus die Variante von
 /// `FaultKind` im Prelude, die Nutzlast (`ArithKind`, `RuntimeKind`) acht
 /// Bit darueber. Null heisst „kein Fault“ — so traegt dieselbe Zahl das
-/// Flag einer Funktion und das Ergebnis von `takt_schedule`.
+/// Flag einer Funktion und das Ergebnis von `P_schedule`.
 pub fn fault_code(kind: takt_mir::machine::FaultKind) -> u32 {
     use takt_mir::machine::FaultKind as F;
     let (variant, payload) = match kind {

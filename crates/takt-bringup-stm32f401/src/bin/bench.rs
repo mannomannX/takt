@@ -3,7 +3,7 @@
 //!
 //! Der Kern ist das Takt-Programm aus `TAKT_PROGRAM`, gebaut wie fuer das
 //! Binary `takt`; gemessen wird ein ganzer Tick des Rahmens
-//! (`takt_mcu_tick`), mit dem Zyklenzaehler und bei gesperrten
+//! (`app_tick`), mit dem Zyklenzaehler und bei gesperrten
 //! Interrupts — eine ISR mitten in der Messung ist Last, nicht Kosten des
 //! Programms. Die C-Referenz aus `TAKT_BENCH_C` rechnet dasselbe; ihr
 //! `digest` muss dem des Kerns gleichen, sonst vergliche das Verhaeltnis

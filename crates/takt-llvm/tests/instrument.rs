@@ -41,10 +41,16 @@ fn stores(ir: &str) -> usize {
 fn statements_store_more_than_states_and_off_stores_nothing_extra() {
     let p = program(SRC);
     let triple = Target::X86_64_WINDOWS.triple;
-    let off = takt_llvm::lower::program_with(&p, triple, "t", Instrument::Off).ir;
-    let states = takt_llvm::lower::program_with(&p, triple, "t", Instrument::States).ir;
-    let statements = takt_llvm::lower::program_with(&p, triple, "t", Instrument::Statements).ir;
-    assert_eq!(off, takt_llvm::lower::program(&p, triple, "t").ir, "ohne Angabe: keine Instrumentierung");
+    let off = takt_llvm::lower::program_with(&p, triple, &takt_llvm::symbols::Prefix::default(), Instrument::Off).ir;
+    let states =
+        takt_llvm::lower::program_with(&p, triple, &takt_llvm::symbols::Prefix::default(), Instrument::States).ir;
+    let statements =
+        takt_llvm::lower::program_with(&p, triple, &takt_llvm::symbols::Prefix::default(), Instrument::Statements).ir;
+    assert_eq!(
+        off,
+        takt_llvm::lower::program(&p, triple, &takt_llvm::symbols::Prefix::default()).ir,
+        "ohne Angabe: keine Instrumentierung"
+    );
     assert!(stores(&states) > stores(&off), "Zustandswechsel schreiben pc");
     assert!(stores(&statements) > stores(&states), "jede Anweisung schreibt pc");
 }

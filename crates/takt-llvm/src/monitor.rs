@@ -1,10 +1,11 @@
 //! Laufzeitmonitore (13.3, `with monitor = true`): je Eigenschaft eine
-//! Funktion `takt_monitor_<i>(state, image, params, latch, tick)`, die die
-//! Runtime nach dem Commit jedes Ticks ruft. Sie schreibt die Atome des
+//! Funktion `monitor_<i>(state, image, params, latch, tick)` hinter dem
+//! Einstieg `P_monitor_<i>(arena, tick)`, den die Runtime nach dem Commit
+//! jedes Ticks ruft. Sie schreibt die Atome des
 //! Tick-Rand-Snapshots in einen Ring und entscheidet die Position
 //! `tick - F` (F: Zukunftstiefe der Formel) — im selben Tick wie der
 //! Interpreter (`takt-interp/src/property.rs`). Eine Verletzung meldet
-//! `takt_property(i, position)`, danach schweigt der Monitor wie der
+//! `P_property(i, position)`, danach schweigt der Monitor wie der
 //! Interpreter. Die Formel hat aussen `always`/`never` und innen nur
 //! beschraenkte Operatoren (Pruefung 56); ihre Fenster sind Schleifen ueber
 //! den Ring. Die Kosten je Tick sind statisch: Atome plus Fenster (9.4.3).
@@ -103,7 +104,7 @@ pub fn state_size(prop: &Property, p: &Program) -> Option<u64> {
     Some(1 + s.rows * s.atoms.len().max(1) as u64)
 }
 
-/// Schreibt `takt_monitor_<index>`.
+/// Schreibt den Rumpf `monitor_<index>`.
 pub fn monitor_function(index: usize, prop: &Property, p: &Program, m: &mut Module) -> Result<(), NotYet> {
     let s = shape(prop, p)?;
     let st = format!("{{ i8, [{} x [{} x i8]] }}", s.rows, s.atoms.len().max(1));
@@ -154,7 +155,7 @@ pub fn monitor_function(index: usize, prop: &Property, p: &Program, m: &mut Modu
     m.void_inst(&format!("br i1 {holds}, label %{end}, label %{report}"));
     m.label(&report);
     m.void_inst(&format!("store i8 1, ptr {flag}"));
-    m.void_inst(&format!("call void @{}(ptr %arena, i32 {index}, i64 {pos})", Abi::PROPERTY));
+    m.void_inst(&format!("call void @{}(ptr %arena, i32 {index}, i64 {pos})", m.runtime(Abi::PROPERTY)));
     m.label(&end);
     m.end(None);
     Ok(())
