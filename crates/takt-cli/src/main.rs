@@ -19,7 +19,7 @@
 //!                   [--machine M [--extract SCHEIBE.trace]]
 //! takt verify-trace TRACE.trace --record R.trace
 //! takt timing TRACE.trace --tick NS
-//! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac]
+//! takt build DATEI [--target x86_64|aarch64|thumbv7em|riscv32imac|armv7]
 //!                   [--emit ir|obj|consts|consts-rs] [--out PFAD] [--hardware DATEI.hw]
 //!                   [--instrument statements|states|off] [--diagnostics ids|none]
 //! takt size  DATEI… [--build sim|hw] [--params-profile P] [--object DATEI.o | --target NAME]

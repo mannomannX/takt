@@ -73,10 +73,13 @@ pub const LIMITS: &[Limit] = &[
                gespeist aus dem Sendepuffer des Modells wie `Image::port_queues`.",
     },
     Limit {
-        was: "aarch64",
-        warum: "Verglichen wird x86-64 gegen den Interpreter. Satz 9.4.4 verlangt auch \
-                x86-64 gegen aarch64 — dieselbe Rechnung auf anderer Hardware.",
-        wann: "Schritt 11.",
+        was: "aarch64 und armv7 (12.8: 64-Bit Linux, 32-Bit mit f64-FPU)",
+        warum: "Verglichen wird x86-64 gegen den Interpreter, auf den Boards Cortex-M4F und \
+                RV32IMAC. Fuer aarch64 und armv7 belegt die Abnahme die gleiche IR und den Bau \
+                (`every_target_gets_the_same_ir`, `the_corpus_compiles_for_the_32_bit_class_with_f64`); \
+                Satz 9.4.4 verlangt dieselbe Rechnung auch dort, und 12.8 die Messung je Zielklasse.",
+        wann: "Mit einem Geraet der Klasse: ein aarch64-Linux und ein Cortex-A7 (etwa ein \
+               Raspberry Pi 3 oder 4 und ein Pi 2).",
     },
 ];
 

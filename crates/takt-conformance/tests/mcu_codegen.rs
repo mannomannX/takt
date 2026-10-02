@@ -106,11 +106,31 @@ fn the_corpus_compiles_for_both_mcu_targets() {
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
 }
 
-/// Die vier Ziele der Abnahme erzeugen *dieselbe* IR.
+/// **Der Korpus uebersetzt fuer die Zielklasse „32-Bit mit f64-FPU"**
+/// (12.8): Cortex-A7 unter Linux. Fuer diese Klasse gibt es kein Board; bis
+/// zur Messung belegt der Bau, dass der Codegen sie traegt.
+#[test]
+fn the_corpus_compiles_for_the_32_bit_class_with_f64() {
+    let clang = takt_llvm::toolchain::find();
+    if matches!(clang, Clang::Missing) {
+        eprintln!("clang fehlt; uebersprungen");
+        return;
+    }
+    let target = Target::ARMV7_LINUX;
+    assert_eq!(target.class, Class::Linux32F64);
+    assert!(!target.is_bare_metal() && target.class.has_f64_hardware());
+    let errors: Vec<String> = KORPUS
+        .iter()
+        .filter_map(|name| compile_for(&clang, target, &corpus(name), name).err().map(|e| format!("{name}: {e}")))
+        .collect();
+    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
+}
+
+/// Die Ziele der Abnahme erzeugen *dieselbe* IR.
 ///
 /// **Das ist die Grundlage von Satz 9.4.4.** Waere die IR je Ziel eine
-/// andere, waere Bit-Gleichheit eine Aussage ueber vier Programme statt
-/// ueber vier Uebersetzungen desselben. Der Unterschied darf allein im
+/// andere, waere Bit-Gleichheit eine Aussage ueber mehrere Programme statt
+/// ueber Uebersetzungen desselben. Der Unterschied darf allein im
 /// Triple stehen — und genau das prueft der Vergleich, indem er es
 /// herausrechnet.
 #[test]

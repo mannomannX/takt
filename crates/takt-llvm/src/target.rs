@@ -33,6 +33,9 @@ pub enum Class {
     Mcu32F32,
     /// 32-Bit ohne FPU: Cortex-M0+/M3, RV32IMAC. Fliesskomma in Software.
     Mcu32NoFpu,
+    /// 32-Bit mit f64-FPU: Cortex-A7/A9 unter Linux, Cortex-R. f32 und f64
+    /// in Hardware ueber VFP; NEON nur fuer Ganzzahlen (4.2).
+    Linux32F64,
 }
 
 impl Class {
@@ -42,6 +45,7 @@ impl Class {
             Class::Linux64 => "64-Bit Linux",
             Class::Mcu32F32 => "32-Bit mit f32-FPU",
             Class::Mcu32NoFpu => "32-Bit ohne FPU",
+            Class::Linux32F64 => "32-Bit mit f64-FPU",
         }
     }
 
@@ -51,12 +55,12 @@ impl Class {
     /// beides, weil korrekt gerundete Ergebnisse eindeutig sind (4.2) —
     /// der Unterschied liegt allein in den Kosten (9.4.3).
     pub fn has_f32_hardware(self) -> bool {
-        matches!(self, Class::Linux64 | Class::Mcu32F32)
+        matches!(self, Class::Linux64 | Class::Mcu32F32 | Class::Linux32F64)
     }
 
     /// Rechnet die Klasse `f64` in Hardware?
     pub fn has_f64_hardware(self) -> bool {
-        matches!(self, Class::Linux64)
+        matches!(self, Class::Linux64 | Class::Linux32F64)
     }
 }
 
@@ -219,15 +223,38 @@ impl Target {
         prefix: "riscv32-unknown-elf-",
     };
 
-    /// Die Ziele, fuer die die Abnahme laeuft (13.8).
+    /// Cortex-A7 unter Linux, 32 Bit mit Hard-Float-ABI (12.8: Zielklasse
+    /// „32-Bit mit f64-FPU").
+    ///
+    /// LLVM rechnet Fliesskomma hier ueber VFP und nimmt NEON dafuer nur
+    /// unter unsicherer Mathematik, die Takt nie setzt: NEON rechnet auf
+    /// ARMv7 ohne Subnormale (4.2).
+    pub const ARMV7_LINUX: Target = Target {
+        triple: "armv7-unknown-linux-gnueabihf",
+        name: "armv7",
+        march: "",
+        pointer: 4,
+        class: Class::Linux32F64,
+        prefix: "arm-linux-gnueabihf-",
+    };
+
+    /// Die Ziele, fuer die die Abnahme laeuft (13.8): je Zielklasse aus
+    /// 12.8 mindestens eines.
     ///
     /// 9.4.4 verlangt Bit-Gleichheit „ueber alle Targets"; diese Liste
     /// ist, was „alle" heute heisst.
-    pub const ALL: [Target; 4] = [Target::X86_64_LINUX, Target::AARCH64_LINUX, Target::THUMBV7EM, Target::RISCV32IMAC];
+    pub const ALL: [Target; 5] =
+        [Target::X86_64_LINUX, Target::AARCH64_LINUX, Target::THUMBV7EM, Target::RISCV32IMAC, Target::ARMV7_LINUX];
 
     /// Alle benannten Ziele, auch die, die nicht in der Abnahme stehen.
-    const KNOWN: [Target; 5] =
-        [Target::X86_64_LINUX, Target::AARCH64_LINUX, Target::X86_64_WINDOWS, Target::THUMBV7EM, Target::RISCV32IMAC];
+    const KNOWN: [Target; 6] = [
+        Target::X86_64_LINUX,
+        Target::AARCH64_LINUX,
+        Target::X86_64_WINDOWS,
+        Target::THUMBV7EM,
+        Target::RISCV32IMAC,
+        Target::ARMV7_LINUX,
+    ];
 
     /// Das Ziel zu einem Namen.
     pub fn by_name(name: &str) -> Option<Target> {

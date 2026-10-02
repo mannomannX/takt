@@ -1810,7 +1810,7 @@ takt-sema           Namen, Typen, Einheiten, Intervalle, Flussanalysen, Maschine
 takt-match          Mustervergleich und Werteextraktion, Muster → DFA (8.7)
 takt-mir            Mittlere IR: Maschinen als Structs + step-Funktionen, Desugaring von Sequenzen, Kostenmodell, Schedule-Zähler, Speicherbudget (11.5)
 takt-interp         Referenzinterpreter über MIR = ausführbare Semantik (9.x); Compile-Zeit-Auswertung (11.3); Recording und Replay (12.5)
-takt-llvm           MIR → LLVM IR als Text, clang als Assembler; Targets x86-64, aarch64, thumbv7em, riscv32imac
+takt-llvm           MIR → LLVM IR als Text, clang als Assembler; Targets x86-64, aarch64, thumbv7em, riscv32imac, armv7
 takt-prove          Schrittfunktion als Transitionssystem, SMT-LIB2-Export, BMC und k-Induktion (13.3)
 libtaktm            Mathematik für alle Targets aus derselben Quelle
 takt-rt-core        Tick-Schleife, Prozessabbild, Fault-Wald, Abort-Phase, Zähler, Jobs, Watchdog, `persist`-Journal — `no_std`, ohne Allokation
