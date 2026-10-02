@@ -18,7 +18,7 @@ fn the_probe_binds_to_every_board_configuration() {
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{}", errors.join("\n"));
     let program = out.program.expect("Programm");
-    for board in ["esp32c6"] {
+    for board in ["esp32c6", "stm32f401"] {
         let hw = config(board);
         let diags = takt_sema::calibrated::check_bindings(&program, &hw);
         let errors: Vec<String> = diags.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();

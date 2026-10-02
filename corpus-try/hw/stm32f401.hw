@@ -9,9 +9,10 @@
 # FB-295); die Tabelle ist um 42226191/38119946 gestreckt, getrieben vom
 # kleinen Kern der Probe `call`: Ohne Cache verschiebt jede Aenderung am
 # Image die Ausrichtung im Flash um einige Prozent, und die Streckung
-# traegt das. `guard` und `jitter` je Kanal misst erst `takt driver-test`
-# (FB-285). Die korrekt gerundete Mathematik hat ein Gewicht je Breite
-# (`f32_math`, `f64_math`; Konfiguration 12, FB-344): gemessen an der
+# traegt das. `guard` und `jitter` je Kanal misst `takt driver-test`
+# (FB-285; die Drahtbruecke am Ende, 2026-10-02). Die korrekt gerundete
+# Mathematik hat ein Gewicht je Breite (`f32_math`, `f64_math`;
+# Konfiguration 12, FB-344): gemessen an der
 # teuersten Funktion des Boards, `acos` in beiden Breiten, und mindestens ihr
 # teuerster Vektor am Einstieg (`acos` in `f64` 84 701 Zyklen); `libtaktm`
 # rechnet hier mit `opt-level = 3`.
@@ -57,3 +58,25 @@ raw = bool
 safe = false
 device = gpio
 port = "PC13 active_low"
+
+# Die Drahtbruecke PA0 an PA1 als Messschleife von
+# `takt driver-test --board stm32f401` (13.8). Die Messwerte traegt der Lauf ein.
+[device.wire]
+driver = "stm32f4-gpio"
+
+[channel gpio/loop_out]
+direction = output
+raw = bool
+safe = false
+device = wire
+port = "PA0"
+guard_ns = 227
+jitter_ns = 6739
+tick_granular = true
+
+[channel gpio/loop_in]
+direction = input
+raw = bool
+device = wire
+port = "PA1"
+latency_ns = 48

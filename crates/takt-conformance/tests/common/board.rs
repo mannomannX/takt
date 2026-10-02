@@ -152,6 +152,37 @@ pub fn a_stretched_tick_is_runtime_hardware(board: &mut dyn Board) -> Vec<String
     failed
 }
 
+/// **`guard` aus der Konfiguration wirkt auf dem Board** (7.5, FB-331):
+/// `at now + 100 ns` liegt unter der gemessenen Treiberlatenz der Bruecke
+/// in `corpus-try/hw/<board>.hw` und ist ein `TimingFault`, `at now + 1 ms`
+/// geht durch. Derselbe Bau ohne Konfiguration rechnet wie die Simulation
+/// und laesst beides durch.
+pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> Vec<String> {
+    let program = board::root().join("crates/takt-conformance/tests/programs/guard.takt");
+    let hardware = board::root().join(format!("corpus-try/hw/{}.hw", board.name()));
+    let mut run = |options: Options| board.build(&program, &options).and_then(|elf| board.run(&elf, &options));
+    let mut failed = Vec::new();
+    match run(Options::fresh(20).with_hardware(hardware)) {
+        Ok(with) => {
+            if !with.lines().any(|l| l.contains("out probe 1")) {
+                failed.push(format!("1 ms voraus geht nicht durch:\n{with}"));
+            }
+            if !with.lines().any(|l| l.contains("fault m") && l.contains("Timing")) {
+                failed.push(format!("100 ns voraus ist kein `TimingFault`:\n{with}"));
+            }
+        }
+        Err(e) => failed.push(format!("kein Lauf mit Konfiguration: {e}")),
+    }
+    match run(Options::fresh(20)) {
+        Ok(without) if without.contains("fault m") => {
+            failed.push(format!("ohne Konfiguration ist guard null:\n{without}"));
+        }
+        Ok(_) => {}
+        Err(e) => failed.push(format!("kein Lauf ohne Konfiguration: {e}")),
+    }
+    failed
+}
+
 /// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,
 /// M10 Schritte 29d und 29e). `recorded.takt` importiert `recorded.hw` und
 /// nennt keinen der Kanaele `edge_r/*`; das Pruefgeraet liefert vier der

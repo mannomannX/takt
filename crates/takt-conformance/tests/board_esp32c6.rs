@@ -161,21 +161,12 @@ fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
 }
 
 /// **`guard` aus der Konfiguration wirkt auf dem Board** (7.5, FB-331):
-/// `at now + 1 us` liegt unter der gemessenen Treiberlatenz der Bruecke
-/// und ist ein `TimingFault`, `at now + 1 ms` geht durch. Derselbe Bau
-/// ohne Konfiguration rechnet wie die Simulation und laesst beides durch.
+/// `a_schedule_inside_the_guard_is_a_timing_fault`.
 #[test]
 fn a_schedule_inside_the_guard_is_a_timing_fault() {
     let Some((mut board, _guard)) = board() else { return };
-    let program = board::root().join("crates/takt-conformance/tests/programs/guard.takt");
-    let mut run = |options: Options| {
-        board.build(&program, &options).and_then(|elf| board.run(&elf, &options)).unwrap_or_else(|e| panic!("{e}"))
-    };
-    let with = run(Options::fresh(20).with_hardware(board::root().join("corpus-try/hw/esp32c6.hw")));
-    assert!(with.lines().any(|l| l.contains("out probe 1")), "1 ms voraus geht durch:\n{with}");
-    assert!(with.lines().any(|l| l.contains("fault m") && l.contains("Timing")), "{with}");
-    let without = run(Options::fresh(20));
-    assert!(!without.contains("fault m"), "ohne Konfiguration ist guard null:\n{without}");
+    let failed = common::board::a_schedule_inside_the_guard_is_a_timing_fault(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
 /// **Eine `driver machine` schreibt UART0** (12.10, M8 Schritt 20).

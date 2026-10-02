@@ -209,6 +209,16 @@ fn a_stretched_tick_is_runtime_hardware() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
+/// **`guard` aus der Konfiguration wirkt auf dem Board** (7.5, FB-331):
+/// `a_schedule_inside_the_guard_is_a_timing_fault`, mit den Werten, die
+/// `takt driver-test --board stm32f401` an der Bruecke PA0-PA1 gemessen hat.
+#[test]
+fn a_schedule_inside_the_guard_is_a_timing_fault() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::a_schedule_inside_the_guard_is_a_timing_fault(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
 /// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,
 /// M10 Schritt 29d): das Pruefgeraet liefert Kanaele ohne Bindung.
 #[test]
