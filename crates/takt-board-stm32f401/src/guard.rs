@@ -16,8 +16,8 @@ use crate::tick;
 /// Er laeuft am internen RC-Oszillator (LSI) und damit unabhaengig vom
 /// Systemtakt — genau das will 12.3: Ein Watchdog, der an derselben Uhr
 /// haengt wie das Programm, faellt mit ihr zusammen aus. Nach seiner Frist
-/// setzt er den Chip zurueck, und der naechste Start meldet `WATCHDOG`
-/// (`platform::boot_reason`).
+/// setzt er den Chip zurueck, und der naechste Lauf meldet
+/// `previous_run = WATCHDOG` (`platform::previous_run`).
 ///
 /// **Einmal gestartet, haelt ihn nur ein Reset an** (RM0368 17.3). Er
 /// zaehlt im Standby weiter und im Bootloader, der ihn nicht bedient; darum

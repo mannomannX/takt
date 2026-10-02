@@ -1,9 +1,10 @@
-//! Die Plattformschnittstelle des Boards (12.7): Reset-Ursache, Zaehler der
-//! Starts, Neustart und Tiefschlaf.
+//! Anfang und Ende eines Laufs auf dem Board (12.7): `previous_run`, und
+//! was zwischen zwei Laeufen geschieht — Neustart und Tiefschlaf.
 //!
-//! **Der Zaehler steht im Backup-Register 3** der RTC: Es ueberlebt Reset,
-//! Watchdog und Standby, das Ausschalten nicht — genau die Lebensdauer, die
-//! 12.7 fuer `reset_count` verlangt.
+//! **Das Wort des geordneten Endes steht im Backup-Register 3** der RTC:
+//! Es ueberlebt Reset, Watchdog und Standby, das Ausschalten nicht. Ein
+//! Lauf, der ueber `next_run` endet, schreibt es; jeder Lauf loescht es zu
+//! Beginn. Kein Flash-Schreibvorgang je Start.
 //!
 //! **Tiefschlaf ist Standby** (RM0368 5.3.7): Kern und RAM sind aus, der
 //! Wakeup-Timer der RTC weckt, und das Wecken ist ein Reset mit `SBF` in
@@ -23,7 +24,7 @@
 
 use cortex_m::peripheral::SCB;
 use stm32f4::stm32f401::{PWR, RCC, RTC, pwr, rcc, rtc};
-use takt_board_support::platform::{ORDERLY_END, RtcWakeup, boot_reason as reason, rtc_wakeup};
+use takt_board_support::platform::{ENDED_MARK, RUNNING, RtcWakeup, rtc_wakeup};
 
 use crate::{CORE_HZ, cycles};
 
@@ -32,11 +33,11 @@ use crate::{CORE_HZ, cycles};
 /// den Registern 1 und 2.
 const PENDING: u32 = u32::from_le_bytes(*b"TIEF");
 
-/// Was zu schlafen bleibt, wenn kein Zeitgeber weckt (`DEEP_SLEEP`).
+/// Was zu schlafen bleibt, wenn kein Zeitgeber weckt (`ON_WAKE`, `ON_START`).
 const WITHOUT_TIMER: u64 = u64::MAX;
 
-/// Das Backup-Register mit `reset_count` (12.7).
-const COUNT: usize = 3;
+/// Das Backup-Register mit dem Wort des geordneten Endes (12.7).
+const ENDED: usize = 3;
 
 const LSE_HZ: u32 = 32_768;
 const LSI_HZ: u32 = 32_000;
@@ -53,40 +54,24 @@ fn registers() -> (&'static rcc::RegisterBlock, &'static pwr::RegisterBlock, &'s
     unsafe { (&*RCC::ptr(), &*PWR::ptr(), &*RTC::ptr()) }
 }
 
-/// `sys/boot_reason` aus `PWR_CSR` und `RCC_CSR` (12.7); loescht die
-/// Flaggen. Einmal beim Start zu rufen, nach [`continue_deep_sleep`].
-pub fn boot_reason() -> i32 {
-    let (rcc, pwr, _) = registers();
+/// `sys/previous_run` (12.7) aus der Reset-Ursache in `RCC_CSR` und dem
+/// Wort im Backup-Register; loescht beide, sodass jeder Lauf nur seinen
+/// Vorgaenger sieht. Einmal beim Start zu rufen, nach [`continue_deep_sleep`].
+pub fn previous_run() -> i32 {
+    let (rcc, pwr, rtc) = registers();
     rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
     let csr = rcc.csr().read();
-    // Ein Watchdog zieht auch NRST, also vor dem Pin pruefen.
-    let r = if pwr.csr().read().sbf().bit_is_set() {
-        reason::DEEP_SLEEP_WAKE
-    } else if csr.wdgrstf().bit_is_set() || csr.wwdgrstf().bit_is_set() {
-        reason::WATCHDOG
-    } else if csr.sftrstf().bit_is_set() {
-        reason::SOFTWARE
-    } else {
-        reason::POWER_ON
-    };
+    let watchdog = csr.wdgrstf().bit_is_set() || csr.wwdgrstf().bit_is_set();
+    let previous = takt_board_support::platform::previous_run(watchdog, rtc.bkpr(ENDED).read().bits());
     pwr.cr().modify(|_, w| w.csbf().set_bit());
     rcc.csr().modify(|_, w| w.rmvf().set_bit());
-    r
+    backup(ENDED, RUNNING);
+    previous
 }
 
-/// `sys/reset_count` zu `boot_reason` (12.7); zaehlt diesen Start. Einmal
-/// beim Start zu rufen, nach [`boot_reason`].
-pub fn reset_count(boot_reason: i32) -> u32 {
-    let (_, _, rtc) = registers();
-    let count = takt_board_support::platform::reset_count(boot_reason, rtc.bkpr(COUNT).read().bits());
-    backup(COUNT, count);
-    count
-}
-
-/// `reboot = RESTART`: der Systemreset; der naechste Start meldet
-/// `SOFTWARE` und zaehlt von vorn.
+/// `next_run = NOW`: der Systemreset; der naechste Lauf meldet `ENDED`.
 pub fn restart() -> ! {
-    backup(COUNT, ORDERLY_END);
+    backup(ENDED, ENDED_MARK);
     SCB::sys_reset()
 }
 
@@ -109,14 +94,15 @@ pub fn continue_deep_sleep() {
     standby(pwr)
 }
 
-/// `reboot = DEEP_SLEEP_FOR(duration)` oder `DEEP_SLEEP` (`None`): Standby,
-/// bis die Weckzeit vergangen ist; der naechste Start meldet
-/// `DEEP_SLEEP_WAKE` und zaehlt von vorn. Das Board hat keinen Input am
-/// WKUP-Pin, also weckt ohne Zeitgeber nur ein Reset. Geschlafen wird
-/// nach einem Reset, der den Watchdog anhaelt ([`continue_deep_sleep`]).
+/// `next_run = AFTER(delay)` (`Some`), `ON_WAKE` oder `ON_START` (`None`):
+/// Standby, bis die Weckzeit vergangen ist; der naechste Lauf meldet
+/// `ENDED`. Das Board hat keinen Input am WKUP-Pin, also weckt ohne
+/// Zeitgeber nur ein Reset — `ON_WAKE` und `ON_START` sind hier dasselbe.
+/// Geschlafen wird nach einem Reset, der den Watchdog anhaelt
+/// ([`continue_deep_sleep`]).
 pub fn deep_sleep(duration_ns: Option<i64>) -> ! {
     let rest = duration_ns.map_or(WITHOUT_TIMER, |d| u64::try_from(d).unwrap_or(0));
-    backup(COUNT, ORDERLY_END);
+    backup(ENDED, ENDED_MARK);
     backup(1, rest as u32);
     backup(2, (rest >> 32) as u32);
     backup(0, PENDING);

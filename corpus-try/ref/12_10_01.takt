@@ -1,0 +1,14 @@
+record UartStatus layout little:
+    flags : u32 with bits:
+        tx_full  : bool at 0 ro   # nur lesbar
+        oflow    : bool at 1 w1c  # Schreiben einer Eins löscht
+        rx_level : u8 at 8..12
+
+port uart_st : UartStatus @ mmio(0x4000_1000)
+
+driver machine uart0 every 10 ms:
+    initial RUN
+    state RUN:
+        loop:
+            busy = uart_st.flags.tx_full  # sofortiges Registerlesen
+            uart_st.flags.oflow = true    # sofortiges Registerschreiben

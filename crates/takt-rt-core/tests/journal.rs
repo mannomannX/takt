@@ -262,8 +262,8 @@ fn min_interval_limits_the_rate() {
 
 #[test]
 fn a_flush_ignores_the_interval() {
-    // 5.9: Vor `reboot`, `boot_jump` und Deep Sleep wird synchron
-    // geschrieben — dort begrenzt kein Intervall mehr den Verschleiss.
+    // 5.9: Vor dem geordneten Ende eines Laufs (`next_run`, 12.7) wird
+    // synchron geschrieben — dort begrenzt kein Intervall mehr den Verschleiss.
     let mut j = journal(10 * SECOND);
     let (mut stored, mut len) = ([0u8; SLOT], 0);
     write(&mut j, 0, b"a", &mut stored, &mut len);

@@ -202,19 +202,21 @@ pub fn tick_end(k: u64, tick_ns: i64) -> i64 {
     (k as i64).saturating_add(1).saturating_mul(tick_ns)
 }
 
-/// Was die Plattform nach dem Commit eines Ticks ausfuehrt (12.7); der Lauf
-/// endet damit.
+/// Wann der naechste Lauf beginnen soll (12.7, `next_run`); der laufende
+/// endet damit nach dem Commit. Was dazwischen geschieht — Neustart,
+/// Schlaf ohne RAM, ein Host, der spaeter wieder startet —, entscheidet
+/// die Plattform; der naechste Lauf meldet `previous_run = ENDED`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PlatformCommand {
-    /// `reboot = RESTART`: Neustart des Chips.
-    Restart,
-    /// `reboot = DEEP_SLEEP` oder `DEEP_SLEEP_FOR(duration)`: Tiefschlaf
-    /// ohne RAM-Erhalt, bis die Weckzeit in Nanosekunden vergangen ist
-    /// (`None`: ohne Zeitgeber) oder eine Wake-Quelle weckt; der naechste
-    /// Lauf beginnt mit `boot_reason = DEEP_SLEEP_WAKE`.
-    DeepSleep(Option<i64>),
-    /// `boot_jump = k + 1`: Sprung in Slot `k`.
-    Jump(u8),
+pub enum NextRun {
+    /// `NOW`: sofort.
+    Now,
+    /// `AFTER(delay)`: nach der Dauer in Nanosekunden, ab dem Ende
+    /// gezaehlt, oder frueher, wenn eine Wake-Quelle weckt.
+    After(i64),
+    /// `ON_WAKE`: wenn eine Wake-Quelle weckt.
+    OnWake,
+    /// `ON_START`: mit dem naechsten Start der Plattform.
+    OnStart,
 }
 
 /// Das Programm, das die Schleife ausfuehrt.
@@ -293,9 +295,10 @@ pub trait Program {
     /// in das Eingangsbild des naechsten Schritts.
     fn job_done(&mut self, _slot: u32, _result: Option<&[u8]>) {}
 
-    /// Steht nach dem Commit ein Kommando an die Plattform (12.7)? Der Lauf
-    /// endet dann: `persist` synchron, danach alle Ausgaenge auf `safe`.
-    fn command(&self) -> Option<PlatformCommand> {
+    /// Verlangt `next_run` nach dem Commit einen naechsten Lauf (12.7)? Der
+    /// laufende endet dann: `persist` synchron, danach alle Ausgaenge auf
+    /// `safe`.
+    fn next_run(&self) -> Option<NextRun> {
         None
     }
 }

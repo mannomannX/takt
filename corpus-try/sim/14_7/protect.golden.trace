@@ -1,6 +1,6 @@
 t=0 state bms ACTIVE.SELFTEST.S0
 t=0 state pack_model RUN
-t=0 out image_confirm false
+t=0 out confirm false
 t=0 out fet_chg false
 t=0 out fet_dis false
 t=0 out load_test false

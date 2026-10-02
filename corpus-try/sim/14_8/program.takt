@@ -1,17 +1,17 @@
 system:
     language      = 1
     tick          = 1 ms
-    target        = boot
+    target        = baremetal
     float         = f32
     fault_is_fail = false  # ein `expect`-Fault ist hier der Weg zum Fallback (SLOT_FAILED), kein Testversagen
 
 # 14.8 — Image-Auswahl und -Validierung beim Start: Chunk-Hash, Job,
-# Kommando und Status, Persistenz. Das Programm folgt der Referenz mit den
-# kuratierten Namen (`FlashCmd`, `FlashStatus`, `EfuseBlock` aus dem
-# Prelude); darunter das Flash-Modell (8.11) und drei Szenarien (13.6),
-# die den Flash ueber `flash/seed` fuellen. Das Image der Szenarien ist die
-# Nachricht `sample` aus RFC 6979 A.2.5 mit ihrem Digest und ihrer
-# Signatur zum Schluessel im eFuse-Block.
+# Kommando und Status, Persistenz. Das Programm folgt der Referenz: ein
+# Teil einer Startstufe, deren Kanaele `boot/…` es liest und schreibt
+# (`FlashCmd`, `FlashStatus` aus dem Prelude); darunter das Flash-Modell
+# (8.11) und drei Szenarien (13.6), die den Flash ueber `flash/seed`
+# fuellen. Das Image der Szenarien ist die Nachricht `sample` aus RFC 6979
+# A.2.5 mit ihrem Digest und ihrer Signatur zum Schluessel der Startstufe.
 
 native fn sha256_init() -> Sha256Ctx with cost = 8, stack = 320, total
 native fn sha256_update(ctx: Sha256Ctx, chunk: bytes<4096>) -> Sha256Ctx with cost = {i32: 130000}, stack = 544, total
@@ -28,14 +28,19 @@ record ImageHeader layout little:
     hash    : bytes<32>
     sig     : bytes<64>
 
-input  flash_status    : FlashStatus         @ hw("flash/status")        with max_age = 10 ms
-input  flash_rx        : stream<bytes<4096>> @ hw("flash/rx")            with max_rate = 200 Hz, capacity = 2
-output flash_cmd       : FlashCmd            @ hw("flash/cmd")           with safe = NONE
-output flash_data      : stream<u8>          @ hw("flash/tx")            with max_rate = 4000 Hz, capacity = 64
-input  efuse           : EfuseBlock          @ hw("sys/efuse")           with max_age = 1 s
-input  image_confirmed : [2] bool            @ hw("sys/image_confirmed") with max_age = 1 s
-output boot_jump       : u8                  @ hw("sys/jump")            with safe = 0
-# log geht im Startprofil an die UART der Runtime (12.8)
+record BootKeys:
+    pubkey      : bytes<64>
+    min_version : u32
+
+input  flash_status : FlashStatus         @ hw("flash/status")   with max_age = 10 ms
+input  flash_rx     : stream<bytes<4096>> @ hw("flash/rx")       with max_rate = 200 Hz, capacity = 2
+output flash_cmd    : FlashCmd            @ hw("flash/cmd")      with safe = NONE
+output flash_data   : stream<u8>          @ hw("flash/tx")       with max_rate = 4000 Hz, capacity = 64
+input  keys         : BootKeys            @ hw("boot/keys")      with max_age = 1 s
+input  confirmed    : [2] bool            @ hw("boot/confirmed") with max_age = 1 s
+output slot         : u8                  @ hw("boot/slot")      with safe = 0
+output next_run     : NextRun             @ hw("sys/next_run")   with safe = NONE
+# log geht an die UART der Runtime
 
 const SLOT_BASE  : [2] u32 = [0x10000, 0x110000]
 const HEADER_LEN : u32 = 109
@@ -66,12 +71,12 @@ machine bootloader:
         enter:
             idx = active
             for i in range(2):
-                if image_confirmed[i].or(false):  # bestaetigte Images setzen ihren Zaehler zurueck
+                if confirmed[i].or(false):  # bestaetigte Images setzen ihren Zaehler zurueck
                     trials[i] = 0
             if trials[idx] >= MAX_TRIALS and trials[1 - idx] < MAX_TRIALS:
                 idx = 1 - idx  # Fallback auf den anderen Slot
             if trials[idx] < 5:
-                trials[idx] += 1  # Versuch zaehlt vor dem Sprung; persist wird vor boot_jump geschrieben
+                trials[idx] += 1  # Versuch zaehlt vor dem Sprung; persist ist vor dem Ende des Laufs geschrieben
         when trials[idx] <= MAX_TRIALS: -> READ_HEADER
         when true: -> HALT
 
@@ -79,7 +84,7 @@ machine bootloader:
         enter:
             flash_cmd = READ(addr = SLOT_BASE[idx], size = 4096)
         when flash_rx as c:
-            hdr = parse_header(c.data, efuse.min_version)
+            hdr = parse_header(c.data, keys.min_version)
             flash_cmd = NONE
             -> CHECK_HEADER
         after 50 ms: -> SLOT_FAILED
@@ -110,7 +115,7 @@ machine bootloader:
         sequence:
             var digest : bytes<32> = sha256_final(ctx)
             expect digest == img.hash, "hash mismatch in slot {idx}"
-            job v = ecdsa_p256_verify(key = efuse.pubkey, digest = digest, sig = img.sig)
+            job v = ecdsa_p256_verify(key = keys.pubkey, digest = digest, sig = img.sig)
             until v.done timeout 500 ms -> SLOT_FAILED
             expect v.result.or(false), "signature invalid in slot {idx}"
             -> JUMP
@@ -119,7 +124,8 @@ machine bootloader:
         enter:
             active = idx
             log "booting slot {idx}, version {img.version}"
-            boot_jump = (idx + 1) as u8  # Slot + 1; 0 heisst kein Sprung. Beendet den Lauf nach dem Commit; persist zuvor synchron geschrieben
+            slot = (idx + 1) as u8  # Slot + 1, 0 heisst kein Sprung
+            next_run = ON_START     # Ende des Laufs: persist, dann safe; die Startstufe springt in den gesehenen Slot
 
     state SLOT_FAILED:
         enter:
@@ -134,7 +140,8 @@ machine bootloader:
 
     state HALT:
         enter:
-            log "no bootable image"  # Watchdog der Plattform loest den Neustart aus
+            log "no bootable image"
+            next_run = ON_START  # der naechste Versuch mit dem naechsten Start
 
 # --- Simulation (8.3, 8.11): Flash-Modell und Umgebung der Startstufe ---
 
@@ -144,8 +151,8 @@ input  flash_seed       : stream<u8>          @ hw("flash/seed")  with max_rate 
 input  flash_seed_addr  : int in 0..4194304   @ hw("flash/seed_addr")
 output seed_sim         : stream<u8>          @ sim("flash/seed") with capacity = 256
 output seed_addr_sim    : int in 0..4194304   @ sim("flash/seed_addr")
-output efuse_sim        : EfuseBlock          @ sim("sys/efuse")
-output confirmed_sim    : [2] bool            @ sim("sys/image_confirmed")
+output keys_sim         : BootKeys            @ sim("boot/keys")
+output confirmed_sim    : [2] bool            @ sim("boot/confirmed")
 
 instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, seed = flash_seed, seed_addr = flash_seed_addr, sectors = 512, t_erase = 20 ms, t_program = 2 ms, cut_at_byte = 0)
 
@@ -193,7 +200,7 @@ scenario "slot0" every 1 ms:
     initial RUN
     state RUN:
         sequence:
-            efuse_sim = EfuseBlock(pubkey = pubkey(), min_version = 1, secure_boot = true)
+            keys_sim = BootKeys(pubkey = pubkey(), min_version = 1)
             confirmed_sim = [false, false]
             seed_addr_sim = 0x10000
             send seed_sim, image(true)
@@ -209,7 +216,7 @@ scenario "fallback" every 1 ms:
     initial RUN
     state RUN:
         sequence:
-            efuse_sim = EfuseBlock(pubkey = pubkey(), min_version = 1, secure_boot = true)
+            keys_sim = BootKeys(pubkey = pubkey(), min_version = 1)
             confirmed_sim = [false, false]
             seed_addr_sim = 0x10000
             send seed_sim, image(false)
@@ -225,8 +232,8 @@ scenario "no_image" every 1 ms:
     initial RUN
     state RUN:
         sequence:
-            efuse_sim = EfuseBlock(pubkey = pubkey(), min_version = 1, secure_boot = true)
+            keys_sim = BootKeys(pubkey = pubkey(), min_version = 1)
             confirmed_sim = [false, false]
-            until bootloader.state == HALT timeout 500 ms
-            verify boot_jump == 0, "no jump without an image"
-            verdict pass "halted"
+            until bootloader.state == SLOT_FAILED timeout 200 ms
+            verify slot == 0, "no jump without an image"
+            until bootloader.state == HALT timeout 500 ms  # den Lauf beendet die Startstufe mit `ON_START`

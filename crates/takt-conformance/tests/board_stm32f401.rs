@@ -36,52 +36,44 @@ fn board() -> Option<(Stm32f401, std::sync::MutexGuard<'static, ()>)> {
     Some((board, BOARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
 }
 
-/// **`DEEP_SLEEP_FOR` schlaeft und weckt nach seiner Weckzeit** (12.7,
-/// FB-309). Der erste Lauf geht nach 300 ms fuer zwei Sekunden in den
-/// Tiefschlaf; der zweite beginnt mit `boot_reason = DEEP_SLEEP_WAKE` und
-/// zeigt es an `woke`. Ein freier Lauf in Echtzeit: Nur dort fuehrt das
-/// Board das Kommando aus, ein Konformitaetslauf endet mit dem Trace.
-///
-/// Die Leitung bleibt offen: In der ersten Sekunde darf kein neuer Start
-/// kommen, danach der zweite Lauf mit `woke` und `reset_count = 0`, denn
-/// der Tiefschlaf war ein geordnetes Ende.
+/// **`next_run = AFTER(delay)` setzt nach der Dauer fort, und der neue Lauf
+/// weiss es** (12.7, FB-309): Der erste Lauf endet nach 300 ms mit
+/// `AFTER(delay = 2 s)`, das Board schlaeft im Standby, der zweite Lauf
+/// beginnt mit `previous_run = ENDED` und zeigt es an `woke`. Ein freier Lauf
+/// in Echtzeit: Der Schlaf ist physisch und laesst sich nicht logisch zaehlen.
 #[test]
-fn a_deep_sleep_ends_after_its_duration() {
+fn a_run_ended_after_a_delay_begins_the_next_after_it() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
     let program = board::root().join("crates/takt-conformance/tests/programs/deep_sleep.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
-    assert!(first.contains("end deep_sleep"), "der erste Lauf endet mit dem Kommando:\n{first}");
+    assert!(first.contains("end after"), "der erste Lauf endet mit `next_run`:\n{first}");
     let quiet = board.listen(Duration::from_millis(1200)).unwrap_or_else(|e| panic!("{e}"));
     assert!(!quiet.contains("takt auf stm32f401"), "zu frueh geweckt:\n{quiet}");
     let second = board.listen(Duration::from_secs(6)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(second.contains("takt auf stm32f401"), "kein neuer Start nach dem Tiefschlaf:\n{second}");
-    assert!(second.contains("out woke 1"), "der zweite Lauf beginnt mit `DEEP_SLEEP_WAKE`:\n{second}");
-    assert!(second.contains("out count 0"), "ein Tiefschlaf ist ein geordnetes Ende (12.7):\n{second}");
+    assert!(second.contains("takt auf stm32f401"), "kein neuer Lauf nach der Dauer:\n{second}");
+    assert!(second.contains("out woke 1"), "der zweite Lauf beginnt mit `previous_run = ENDED`:\n{second}");
 }
 
-/// **`reboot = RESTART` startet den Chip neu, und der neue Lauf weiss es**
-/// (12.7): Der erste Lauf startet nach 300 ms neu; der zweite beginnt mit
-/// `boot_reason = SOFTWARE` und zeigt es eine Sekunde spaeter an `again`,
-/// wenn der Wirt die Leitung wieder offen hat. Beide Laeufe zeigen
-/// `reset_count = 0` — das Einschalten und ein befohlener Neustart zaehlen
-/// nicht — und `image_state = CONFIRMED`, denn ohne Startstufe gibt es ein
-/// Image. Ein freier Lauf in Echtzeit, wie beim Tiefschlaf.
+/// **`next_run = NOW` beginnt sofort den naechsten Lauf, und der weiss es**
+/// (12.7): Der erste Lauf endet nach 300 ms; das Board setzt sich zurueck,
+/// und der zweite beginnt mit `previous_run = ENDED` und zeigt es eine
+/// Sekunde spaeter an `again`, wenn der Wirt die Leitung wieder offen hat.
+/// Der erste kennt nach dem Flashen keinen vorigen Lauf. Ein freier Lauf in
+/// Echtzeit, wie beim Schlaf.
 #[test]
-fn a_restart_begins_again_with_software_as_the_reason() {
+fn a_run_ended_now_begins_the_next_at_once() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
     let program = board::root().join("crates/takt-conformance/tests/programs/restart.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
-    assert!(first.contains("end restart"), "der erste Lauf endet mit dem Kommando:\n{first}");
+    assert!(first.contains("end now"), "der erste Lauf endet mit `next_run`:\n{first}");
+    assert!(first.contains("out previous NONE"), "nach dem Flashen kein voriger Lauf:\n{first}");
     let second = board.listen(Duration::from_secs(4)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(second.contains("out again 1"), "der zweite Lauf beginnt mit `SOFTWARE`:\n{second}");
-    for (run, text) in [("erste", &first), ("zweite", &second)] {
-        assert!(text.contains("out count 0"), "der {run} Lauf zaehlt keinen Start (12.7):\n{text}");
-        assert!(text.contains("out image CONFIRMED"), "ohne Startstufe ist das Image bestaetigt:\n{text}");
-    }
+    assert!(second.contains("out again 1"), "der zweite Lauf beginnt mit `ENDED`:\n{second}");
+    assert!(second.contains("out previous ENDED"), "{second}");
 }
 
 /// **Ein Job, der laenger rechnet als ein Tick, verspaetet keinen** (4.5,
@@ -104,29 +96,26 @@ fn an_overrun_faults_every_machine_in_the_next_tick() {
 }
 
 /// **Ein ausgelassener Kick setzt zurueck, und der naechste Lauf weiss es**
-/// (12.3, 12.7). Jeder Lauf zeigt Reset-Ursache und `reset_count`, schlaeft
-/// eine Sekunde in `idle` und rechnet dann einen Tick lang weit ueber die
-/// Frist des Watchdogs. Der erste Lauf beginnt beim Einschalten mit 0, die
-/// beiden folgenden mit `WATCHDOG` und 1 und 2; der dritte bleibt stehen.
-/// Dass jeder Lauf vor dem Reset `rested` zeigt, belegt den Schlaf: Die
-/// Schleife bestaetigt den Watchdog je geschlafenem Tick.
+/// (12.3, 12.7). Der erste Lauf zeigt `previous_run`, schlaeft eine Sekunde
+/// in `idle` und rechnet dann einen Tick lang weit ueber die Frist des
+/// Watchdogs. Der zweite beginnt mit `previous_run = WATCHDOG` und bleibt
+/// stehen. Dass jeder Lauf vor dem Reset `rested` zeigt, belegt den Schlaf:
+/// Die Schleife bestaetigt den Watchdog je geschlafenem Tick.
 #[test]
-fn a_missed_kick_resets_and_counts() {
+fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
     let program = board::root().join("crates/takt-conformance/tests/programs/watchdog.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
-    let text = board.run_for(&elf, Duration::from_secs(14)).unwrap_or_else(|e| panic!("{e}"));
+    let text = board.run_for(&elf, Duration::from_secs(10)).unwrap_or_else(|e| panic!("{e}"));
     // Je Lauf ein Abschnitt ab der Marke; davor steht nur der Start.
     let runs: Vec<&str> = text.split(board::MARK).skip(1).collect();
     let first = |run: &str, name: &str| {
         let key = format!(" out {name} ");
         run.lines().find_map(|l| l.split_once(key.as_str()).map(|(_, v)| v.trim().to_string()))
     };
-    let counts: Vec<String> = runs.iter().filter_map(|r| first(r, "count")).collect();
-    assert_eq!(counts, ["0", "1", "2"], "ein Start mehr je Watchdog (12.7):\n{text}");
-    let reasons: Vec<String> = runs.iter().filter_map(|r| first(r, "reason")).collect();
-    assert_eq!(reasons.get(1..), Some(&["WATCHDOG".to_string(), "WATCHDOG".to_string()][..]), "{text}");
+    let previous: Vec<String> = runs.iter().filter_map(|r| first(r, "previous")).collect();
+    assert_eq!(previous, ["NONE", "WATCHDOG"], "der zweite Lauf weiss vom Watchdog (12.7):\n{text}");
     assert!(runs.iter().all(|r| r.contains("out rested 1")), "jeder Lauf schlief vor dem Reset:\n{text}");
 }
 

@@ -3,7 +3,7 @@
 //! was daraus ein Lauf macht — Ausgaenge im Takt der Leitung, ein Paket
 //! je Tick, am Ende die Bilanz.
 
-use takt_rt_core::{Clock, Nvm, Overrun, Persist, PlatformCommand, Program, Runtime, Sink, Tick, Watchdog};
+use takt_rt_core::{Clock, NextRun, Nvm, Overrun, Persist, Program, Runtime, Sink, Tick, Watchdog};
 
 use crate::telemetry::{DRAIN_ROUNDS, Port, Telemetry};
 
@@ -18,8 +18,8 @@ pub trait Traced: Program {
     /// Der Programmzaehler je Maschine (11.2).
     fn pc(&self);
 
-    /// Der Lauf endet mit einem Kommando an die Plattform (12.7): die
-    /// Zeile `end` in den Trace, dann alle Ausgaenge auf `safe`.
+    /// Das Programm beendet seinen Lauf (`next_run`, 12.7): die Zeile `end`
+    /// in den Trace, dann alle Ausgaenge auf `safe`.
     fn end(&self);
 }
 
@@ -63,8 +63,9 @@ pub struct Stats {
     pub overruns: u64,
     /// Das Journal hat am Ende geschrieben (5.9).
     pub flushed: bool,
-    /// Das Kommando, mit dem der Lauf endete (12.7); `None` an der Tickgrenze.
-    pub command: Option<PlatformCommand>,
+    /// Wann der naechste Lauf beginnen soll, wenn das Programm seinen
+    /// beendet hat (12.7); `None` an der Grenze des Laufs.
+    pub next_run: Option<NextRun>,
 }
 
 /// Das Journal in Zahlen, fuer die Bilanz.
@@ -81,7 +82,7 @@ pub struct JournalStats {
 }
 
 /// Was ein Lauf ueber die Ticks mitfuehrt (12.1): Ausgabe im Takt der
-/// Leitung, Kommando, Grenze, Bilanz. Die Bare-Metal-Schleife ([`run`])
+/// Leitung, Ende des Laufs, Grenze, Bilanz. Die Bare-Metal-Schleife ([`run`])
 /// treibt ihn je Tick, und ebenso die Aufgabe unter einem RTOS (12.8,
 /// `takt-rt-rtos`), die nicht selbst wartet.
 #[derive(Debug)]
@@ -115,18 +116,18 @@ impl Runner {
             time_every,
             shown: cadence.conformance(),
             ended: false,
-            stats: Stats { command: program.command(), ..Stats::default() },
+            stats: Stats { next_run: program.next_run(), ..Stats::default() },
         }
     }
 
-    /// Laeuft der Lauf weiter? Nicht nach einem Kommando an die Plattform
-    /// (12.7) und nicht nach der Grenze.
+    /// Laeuft der Lauf weiter? Nicht, wenn das Programm ihn beendet hat
+    /// (12.7), und nicht nach der Grenze.
     pub fn running(&self) -> bool {
-        self.stats.command.is_none() && !self.ended
+        self.stats.next_run.is_none() && !self.ended
     }
 
-    /// Nach einem Tick: der Latch an die Treiber, die Ausgabe, das
-    /// Kommando, die Grenze.
+    /// Nach einem Tick: der Latch an die Treiber, die Ausgabe, das Ende des
+    /// Laufs, die Grenze.
     ///
     /// `telemetry` holt die Leitung je Aufruf, wie der erzeugte Rahmen sie
     /// ueber `takt_board_trace` holt — so gibt es nie zwei Griffe zugleich.
@@ -164,13 +165,13 @@ impl Runner {
         if let Some(t) = telemetry() {
             t.flush();
         }
-        self.stats.command = rt.program.command();
+        self.stats.next_run = rt.program.next_run();
         self.ended = self.cadence.limit > 0 && k >= self.cadence.limit;
     }
 
     /// Beendet den Lauf. Das Journal schreibt synchron, und erst danach
-    /// gehen bei einem Kommando alle Ausgaenge auf `safe` — auch wenn schon
-    /// der Anfangszustand das Kommando setzt.
+    /// gehen bei einem geordneten Ende alle Ausgaenge auf `safe` — auch wenn
+    /// schon der Anfangszustand `next_run` setzt.
     pub fn finish<G, C, W, S, N>(mut self, rt: &mut Runtime<G, C, W, S>, persist: Option<&mut Persist<'_, N>>) -> Stats
     where
         G: Traced,
@@ -180,9 +181,9 @@ impl Runner {
         N: Nvm,
     {
         self.stats.flushed = persist.is_some_and(|p| p.flush(&mut rt.program));
-        if self.stats.command.is_some() {
+        if self.stats.next_run.is_some() {
             let conformance = self.cadence.conformance();
-            // Den Tick, der das Kommando traegt, zeigt auch ein freier Lauf,
+            // Den Tick, der das Ende verlangt, zeigt auch ein freier Lauf,
             // der sonst nur jeden `every`-ten ausgibt: Er erklaert das Ende.
             if !self.shown {
                 rt.program.dump(!conformance);
@@ -195,8 +196,8 @@ impl Runner {
     }
 }
 
-/// Laeuft, bis `cadence.limit` erreicht ist oder das Programm der
-/// Plattform ein Kommando gibt (12.7); die Schleife wartet selbst auf
+/// Laeuft, bis `cadence.limit` erreicht ist oder das Programm seinen Lauf
+/// beendet (`next_run`, 12.7); die Schleife wartet selbst auf
 /// jeden Tick ([`Runtime::step`]).
 pub fn run<G, C, W, S, N, P, const R: usize>(
     rt: &mut Runtime<G, C, W, S>,
@@ -284,7 +285,7 @@ mod tests {
 
     use crate::{LogicalClock, Telemetry};
 
-    /// Setzt ab Tick `at` ein Kommando und merkt sich, was die Schleife tat.
+    /// Beendet ab Tick `at` den Lauf und merkt sich, was die Schleife tat.
     struct Ending {
         at: u64,
         ticks: u64,
@@ -301,8 +302,8 @@ mod tests {
             self.ticks = k + 1;
         }
 
-        fn command(&self) -> Option<PlatformCommand> {
-            (self.ticks >= self.at).then_some(PlatformCommand::Jump(1))
+        fn next_run(&self) -> Option<NextRun> {
+            (self.ticks >= self.at).then_some(NextRun::OnStart)
         }
     }
 
@@ -353,32 +354,32 @@ mod tests {
         (stats, rt.program)
     }
 
-    /// Das Kommando beendet den Lauf nach seinem Tick; die `safe`-Werte
-    /// gehen danach noch an die Treiber (12.7).
+    /// `next_run` beendet den Lauf nach seinem Tick; die `safe`-Werte gehen
+    /// danach noch an die Treiber (12.7).
     #[test]
-    fn a_platform_command_ends_the_run_after_its_tick() {
+    fn next_run_ends_the_run_after_its_tick() {
         let (stats, program) = run_until(3);
-        assert_eq!(stats.command, Some(PlatformCommand::Jump(1)));
+        assert_eq!(stats.next_run, Some(NextRun::OnStart));
         assert_eq!(program.ticks, 3);
         assert!(program.ended.get() && program.committed_after_end.get());
     }
 
-    /// Ein freier Lauf gibt nur jeden hundertsten Tick aus; den Tick mit dem
-    /// Kommando zeigt er trotzdem, vor den `safe`-Werten — und ohne ihn
-    /// doppelt zu zeigen, wenn er ohnehin dran war.
+    /// Ein freier Lauf gibt nur jeden hundertsten Tick aus; den Tick, der
+    /// das Ende verlangt, zeigt er trotzdem, vor den `safe`-Werten — und ohne
+    /// ihn doppelt zu zeigen, wenn er ohnehin dran war.
     #[test]
-    fn a_free_run_shows_the_tick_of_its_command() {
+    fn a_free_run_shows_the_tick_that_ends_it() {
         for at in [30, 100, 0] {
             let (_, program) = run_with(at, Cadence::of(0, 100, false));
-            assert_eq!((program.shown.get(), program.full_dumps.get()), (Some(at), 1), "Kommando ab Tick {at}");
+            assert_eq!((program.shown.get(), program.full_dumps.get()), (Some(at), 1), "Ende ab Tick {at}");
         }
     }
 
-    /// Setzt schon der Anfangszustand das Kommando, laeuft kein Tick.
+    /// Setzt schon der Anfangszustand `next_run`, laeuft kein Tick.
     #[test]
-    fn a_command_from_the_start_ends_the_run_before_the_first_tick() {
+    fn an_end_from_the_start_ends_the_run_before_the_first_tick() {
         let (stats, program) = run_until(0);
-        assert_eq!(stats.command, Some(PlatformCommand::Jump(1)));
+        assert_eq!(stats.next_run, Some(NextRun::OnStart));
         assert_eq!(program.ticks, 0);
     }
 }

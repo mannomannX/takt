@@ -89,31 +89,25 @@ pub struct RunResult {
     pub steps: String,
 }
 
-/// Warum ein Lauf endete (12.7).
+/// Warum ein Lauf endete (12.7, 13.6).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Ended {
     /// Die gewuenschte Tickzahl ist erreicht.
     #[default]
     Ticks,
-    /// `reboot = RESTART`: Neustart nach dem Commit.
-    Restart,
-    /// `reboot = DEEP_SLEEP`: kein virtueller Tick; der naechste Lauf
-    /// beginnt mit `boot_reason = DEEP_SLEEP_WAKE`.
-    DeepSleep,
-    /// `boot_jump = <slot>`: Sprung in einen anderen Slot.
-    BootJump,
+    /// Das Programm hat seinen Lauf beendet (`next_run`); der Wert sagt,
+    /// wann der naechste beginnt.
+    NextRun(takt_mir::sys::NextRun),
     /// Das Szenario hat seinen letzten Zustand erreicht (13.6).
     Scenario,
 }
 
 impl Ended {
-    /// Der Name fuer den Trace.
+    /// Der Name fuer den Trace (`end <name>`).
     pub fn name(self) -> &'static str {
         match self {
             Ended::Ticks => "ticks",
-            Ended::Restart => "restart",
-            Ended::DeepSleep => "deep_sleep",
-            Ended::BootJump => "boot_jump",
+            Ended::NextRun(next) => next.word(),
             Ended::Scenario => "scenario",
         }
     }
@@ -216,7 +210,7 @@ impl<'p> Run<'p> {
         writer.initial(&sim);
         observe_properties(&mut monitors, &sim, 0, &mut writer, &mut fail);
 
-        // Auch der Anfangszustand kann das Kommando setzen (12.7).
+        // Auch der Anfangszustand kann den Lauf beenden (12.7).
         let ended = end_of(&sim).unwrap_or(Ended::Ticks);
         if ended != Ended::Ticks {
             writer.lines.push(TraceLine { tick: 0, kind: LineKind::End { reason: ended.name().to_string() } });
@@ -423,49 +417,13 @@ fn scenario_done(sim: &Sim<'_>, s: MachineId) -> bool {
     !state.conf.is_empty() && state.conf.iter().all(|st| m.states[st.index()].transitions.is_empty())
 }
 
-/// Beendet ein System-Channel den Lauf (12.7)?
-///
-/// `sys/reboot` traegt `RESTART`, `DEEP_SLEEP` und `DEEP_SLEEP_FOR`,
-/// `sys/jump` einen Slot ungleich null. Beide wirken nach dem Commit.
+/// Beendet das Programm seinen Lauf (12.7)? Ein Wert ausser `NONE` auf
+/// `sys/next_run` wirkt nach dem Commit; was er verlangt, sagt die Tabelle
+/// in `takt_mir::sys`, dieselbe, die die Rahmen fragen.
 fn end_of(sim: &Sim<'_>) -> Option<Ended> {
-    reboot_of(sim).or_else(|| boot_jump_of(sim))
-}
-
-/// `sys/jump`: ein Slot ungleich null beendet den Lauf (12.7).
-fn boot_jump_of(sim: &Sim<'_>) -> Option<Ended> {
-    let program = sim.loaded.program;
-    let (i, _) = program.channels.iter().enumerate().find(|(_, c)| {
-        c.dir == Direction::Output && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/jump")
-    })?;
-    match sim.image.outputs.get(i)? {
-        Value::Int(n) if *n != 0 => Some(Ended::BootJump),
-        Value::UInt(n) if *n != 0 => Some(Ended::BootJump),
-        _ => None,
-    }
-}
-
-/// Steht auf `sys/reboot` ein Kommando (12.7)?
-fn reboot_of(sim: &Sim<'_>) -> Option<Ended> {
-    let program = sim.loaded.program;
-    // Nur `hw`: Ein `sim`-Output speist den gleichnamigen `hw`-Input (8.3),
-    // und `sys/reboot` hat keinen — die Plattform fuehrt das Kommando aus.
-    let (i, c) = program.channels.iter().enumerate().find(|(_, c)| {
-        c.dir == Direction::Output
-            && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/reboot")
-    })?;
-    let takt_mir::types::Type::Enum(e) = program.types.list.get(c.ty.index())? else { return None };
-    let def = program.enums.get(e.index())?;
-    // 12.7: `RebootCmd` ist vordefiniert. Ein fremdes Enum mit einer
-    // zufaellig `RESTART` heissenden Variante ist kein Reboot-Kommando.
-    if def.name != "RebootCmd" {
-        return None;
-    }
-    let Value::Enum { variant, .. } = sim.image.outputs.get(i)? else { return None };
-    match def.variants.get(*variant as usize)?.name.as_str() {
-        "RESTART" => Some(Ended::Restart),
-        "DEEP_SLEEP" | "DEEP_SLEEP_FOR" => Some(Ended::DeepSleep),
-        _ => None,
-    }
+    let (output, variants) = takt_mir::sys::next_run(sim.loaded.program)?;
+    let Value::Enum { variant, .. } = sim.image.outputs.get(output)? else { return None };
+    variants.get(*variant as usize)?.1.map(Ended::NextRun)
 }
 
 /// Speist die Stimuluszeilen eines Ticks ein.

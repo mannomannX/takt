@@ -12,7 +12,8 @@ system:
 
 unit sector = 4096 B  # B, KiB, MiB sind vordefiniert (3.2)
 
-# FlashCmd, FlashStatus (8.11) und ImageState (12.7) sind vordefiniert.
+# FlashCmd und FlashStatus (8.11) sind vordefiniert; das Update ist ein Geraet
+# der Plattform wie jedes andere (`ota/…`, 12.7).
 
 record SelftestResult:
     passed : bool
@@ -24,17 +25,17 @@ native fn sha256_update(ctx: Sha256Ctx, chunk: bytes<256>) -> Sha256Ctx with cos
 native fn sha256_final(ctx: Sha256Ctx) -> bytes<32> with cost = 3000, stack = 640, total
 native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 5600, duration = 120 ms, total
 
-input  cell_mv       : u16[mV] in 2000 mV..4500 mV @ hw("afe/cell0")         with max_age = 100 ms, max_slew = 200 mV/s
-input  charger       : bool                        @ hw("gpio/vbus")         with wake = true
-input  button        : stream<Edge>                @ hw("gpio/btn")          with max_rate = 50 Hz, wake = true
-input  chg_status    : u8                          @ hw("i2c1/0x6B/0x0B")    with max_age = 500 ms
-input  flash_status  : FlashStatus                 @ hw("flash/status")      with max_age = 10 ms
-input  flash_rx      : stream<bytes<256>>          @ hw("flash/rx")          with max_rate = 200 Hz, capacity = 2
-input  image_state   : ImageState                  @ hw("sys/image_state")   with max_age = 1 s
-output flash_cmd     : FlashCmd                    @ hw("flash/cmd")         with safe = NONE
-output fet_chg       : bool                        @ hw("gpio/fet_chg")      with safe = false
-output led           : u8                          @ hw("pwm/led")           with safe = 0
-output image_confirm : bool                        @ hw("sys/image_confirm") with safe = false
+input  cell_mv      : u16[mV] in 2000 mV..4500 mV @ hw("afe/cell0")      with max_age = 100 ms, max_slew = 200 mV/s
+input  charger      : bool                        @ hw("gpio/vbus")      with wake = true
+input  button       : stream<Edge>                @ hw("gpio/btn")       with max_rate = 50 Hz, wake = true
+input  chg_status   : u8                          @ hw("i2c1/0x6B/0x0B") with max_age = 500 ms
+input  flash_status : FlashStatus                 @ hw("flash/status")   with max_age = 10 ms
+input  flash_rx     : stream<bytes<256>>          @ hw("flash/rx")       with max_rate = 200 Hz, capacity = 2
+input  on_trial     : bool                        @ hw("ota/trial")      with max_age = 1 s
+output flash_cmd    : FlashCmd                    @ hw("flash/cmd")      with safe = NONE
+output fet_chg      : bool                        @ hw("gpio/fet_chg")   with safe = false
+output led          : u8                          @ hw("pwm/led")        with safe = 0
+output confirm      : bool                        @ hw("ota/confirm")    with safe = false
 
 command wake_up with wake = true
 
@@ -75,8 +76,8 @@ machine bms every 100 ms:
             loop:
                 fet_chg = charger and cell_mv < V_MAX
                 led = 255
-                if image_state == TRIAL and last_test.passed:
-                    image_confirm = true
+                if on_trial.or(false) and last_test.passed:
+                    confirm = true
             when not charger: -> IDLE_WAIT
 
         state IDLE_WAIT:
@@ -114,7 +115,7 @@ machine updater every 100 ms:
     initial UPD_IDLE
 
     state UPD_IDLE:
-        when image_state == TRIAL: -> HASHING
+        when on_trial.or(false): -> HASHING
 
     state HASHING:
         enter:

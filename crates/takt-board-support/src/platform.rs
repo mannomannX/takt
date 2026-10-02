@@ -1,40 +1,37 @@
-//! Die Plattformschnittstelle ohne Register (12.7): was jedes Board zur
-//! Reset-Ursache, zum Zaehler der Starts und zum Tiefschlaf rechnet.
+//! Anfang und Ende eines Laufs ohne Register (12.7): wie jedes Board
+//! `previous_run` bildet und wie lange es zwischen zwei Laeufen schlaeft.
 
-/// `BootReason` aus dem Prelude als Diskriminante. Die Reihenfolge steht
+/// `PreviousRun` aus dem Prelude als Diskriminante. Die Reihenfolge steht
 /// in 12.7, und das Enum ist offen (2.5): Neue Varianten kommen hinten
 /// dazu, die vorhandenen behalten ihre Nummer.
-pub mod boot_reason {
-    /// Einschalten, Brown-out, externer Reset.
-    pub const POWER_ON: i32 = 0;
-    /// Ein Watchdog hat zurueckgesetzt.
-    pub const WATCHDOG: i32 = 1;
-    /// Das Programm hat neu gestartet (`reboot = RESTART`).
-    pub const SOFTWARE: i32 = 2;
-    /// Der Tiefschlaf ist zu Ende (`DEEP_SLEEP`, `DEEP_SLEEP_FOR`).
-    pub const DEEP_SLEEP_WAKE: i32 = 3;
+pub mod previous_run {
+    /// Kein voriger Lauf bekannt: erster Start, Einschalten, ein Reset,
+    /// den die Plattform keinem Lauf zuordnet.
+    pub const NONE: i32 = 0;
+    /// Der vorige Lauf endete geordnet ueber `next_run`.
+    pub const ENDED: i32 = 1;
+    /// Der Watchdog der Runtime brach den vorigen Lauf ab (12.3).
+    pub const WATCHDOG: i32 = 2;
 }
 
-/// `ImageState` aus dem Prelude als Diskriminante.
-pub mod image_state {
-    /// Das Image ist bestaetigt; ohne Startstufe ist es das einzige (12.7).
-    pub const CONFIRMED: i32 = 0;
-}
+/// Was ein geordnet endender Lauf im Plattformblock hinterlaesst: Das Board
+/// schreibt es, bevor es den Lauf beendet (12.7). Jeder Lauf ersetzt es zu
+/// Beginn durch [`RUNNING`].
+pub const ENDED_MARK: u32 = u32::from_le_bytes(*b"ENDE");
 
-/// Was ein Lauf fuer `reset_count` hinterlaesst, der geordnet endet: Das
-/// Board schreibt es vor einem Kommando an die Plattform (12.7).
-pub const ORDERLY_END: u32 = u32::MAX;
+/// Was ein laufender Lauf im Plattformblock stehen hat.
+pub const RUNNING: u32 = 0;
 
-/// `sys/reset_count` (12.7): die Starts in Folge ohne geordnetes Ende.
-///
-/// `stored` ist, was der vorige Lauf hinterliess — seine Zahl oder
-/// [`ORDERLY_END`]. Nach dem Einschalten zaehlt es nicht, was dort steht.
-/// Die Zahl bleibt unter [`ORDERLY_END`] stehen, statt ihn zu erreichen.
-pub fn reset_count(boot_reason: i32, stored: u32) -> u32 {
-    if boot_reason == boot_reason::POWER_ON || stored == ORDERLY_END {
-        0
+/// `sys/previous_run` (12.7) aus der Reset-Ursache und dem Wort, das der
+/// vorige Lauf im Plattformblock hinterliess. Der Watchdog geht vor: Er
+/// bricht einen Lauf ab, der vorher geordnet geendet haben kann.
+pub fn previous_run(watchdog_reset: bool, stored: u32) -> i32 {
+    if watchdog_reset {
+        previous_run::WATCHDOG
+    } else if stored == ENDED_MARK {
+        previous_run::ENDED
     } else {
-        stored.saturating_add(1).min(ORDERLY_END - 1)
+        previous_run::NONE
     }
 }
 
@@ -112,13 +109,12 @@ mod tests {
     }
 
     #[test]
-    fn only_starts_without_an_orderly_end_count() {
-        assert_eq!(reset_count(boot_reason::WATCHDOG, 0), 1);
-        assert_eq!(reset_count(boot_reason::WATCHDOG, 1), 2);
-        assert_eq!(reset_count(boot_reason::SOFTWARE, ORDERLY_END), 0);
-        assert_eq!(reset_count(boot_reason::DEEP_SLEEP_WAKE, ORDERLY_END), 0);
-        assert_eq!(reset_count(boot_reason::POWER_ON, 7), 0);
-        assert_eq!(reset_count(boot_reason::WATCHDOG, ORDERLY_END - 1), ORDERLY_END - 1);
+    fn the_previous_run_is_ended_only_after_an_orderly_end() {
+        assert_eq!(previous_run(false, ENDED_MARK), previous_run::ENDED);
+        assert_eq!(previous_run(false, RUNNING), previous_run::NONE, "ein Reset mitten im Lauf");
+        assert_eq!(previous_run(false, 0xDEAD_BEEF), previous_run::NONE, "nach dem Einschalten steht irgendetwas");
+        assert_eq!(previous_run(true, RUNNING), previous_run::WATCHDOG);
+        assert_eq!(previous_run(true, ENDED_MARK), previous_run::WATCHDOG, "der Watchdog geht vor");
     }
 
     #[test]

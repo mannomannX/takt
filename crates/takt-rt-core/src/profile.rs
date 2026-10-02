@@ -1,6 +1,6 @@
 //! Laufzeitprofile (12.8).
 //!
-//! Die Meilensteintabelle nennt fuer M4 `linux_rt`; die uebrigen drei sind
+//! Die Meilensteintabelle nennt fuer M4 `linux_rt`; die uebrigen zwei sind
 //! Aufsatzpunkte, nicht Platzhalter (plan/m4.md 2.6). Der Unterschied ist
 //! wichtig: Ein Platzhalter ist Code, der nichts tut, ein Aufsatzpunkt ist
 //! eine Stelle, an der die Struktur schon stimmt. Was hier steht, sind die
@@ -12,21 +12,18 @@
 pub struct Profile {
     /// Welches Profil.
     pub kind: Kind,
-    /// Darf die Schleife schlafen (9.9)?
-    ///
-    /// `boot` darf nicht: Ein Startprogramm, das schlaeft, verzoegert den
-    /// Start, und seine Laufzeit ist ohnehin kurz (12.8).
+    /// Darf die Schleife schlafen (9.9)? Jedes Profil darf; ein Lauf, der
+    /// mit einem Lauf ohne Schlaf verglichen wird (Satz 9.9.1), schaltet es ab.
     pub may_sleep: bool,
 }
 
-/// Die vier Profile aus 12.8.
+/// Die drei Profile aus 12.8.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub enum Kind {
     LinuxRt,
     Baremetal,
     Rtos,
-    Boot,
 }
 
 impl Profile {
@@ -39,16 +36,12 @@ impl Profile {
     /// `rtos` (12.8): Takt als hoechstpriore Aufgabe.
     pub const RTOS: Profile = Profile { kind: Kind::Rtos, may_sleep: true };
 
-    /// `boot` (12.8): Startprogramme, minimale Runtime, kein Schlaf.
-    pub const BOOT: Profile = Profile { kind: Kind::Boot, may_sleep: false };
-
     /// Das Profil zu seinem Namen im `system:`-Block.
     pub fn by_name(name: &str) -> Option<Profile> {
         match name {
             "linux_rt" => Some(Profile::LINUX_RT),
             "baremetal" => Some(Profile::BAREMETAL),
             "rtos" => Some(Profile::RTOS),
-            "boot" => Some(Profile::BOOT),
             _ => None,
         }
     }
@@ -59,7 +52,6 @@ impl Profile {
             Kind::LinuxRt => "linux_rt",
             Kind::Baremetal => "baremetal",
             Kind::Rtos => "rtos",
-            Kind::Boot => "boot",
         }
     }
 }

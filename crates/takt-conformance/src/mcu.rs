@@ -632,51 +632,48 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     platform(s, p, layout);
 }
 
-/// `takt_mcu_command` und `takt_mcu_end`: das Kommando an die Plattform
-/// (12.7) und das Ende des Laufs, wie im Wirtsrahmen — die Zeile `end`,
-/// dann alle Ausgaenge auf `safe`. Ausfuehren muss es das Board.
+/// Wie `takt_mcu_next_run` das Ende eines Laufs meldet: die Nummer ist die
+/// Stelle plus eins, 0 heisst weiter. `takt-mcu-program` liest dieselbe
+/// Folge.
+const NEXT_RUN_CODES: [takt_mir::sys::NextRun; 4] = [
+    takt_mir::sys::NextRun::Now,
+    takt_mir::sys::NextRun::After,
+    takt_mir::sys::NextRun::OnWake,
+    takt_mir::sys::NextRun::OnStart,
+];
+
+/// `takt_mcu_next_run` und `takt_mcu_end`: das Ende des Laufs (12.7), wie im
+/// Wirtsrahmen — die Zeile `end`, dann alle Ausgaenge auf `safe`. Was
+/// zwischen zwei Laeufen geschieht, fuehrt das Board aus.
 fn platform(s: &mut String, p: &Program, layout: &Layout) {
-    let reboot = crate::harness::reboot_slot(p, layout);
-    let jump = crate::harness::jump_slot(p, layout);
-    let _ = writeln!(
-        s,
-        "/* 12.7: 0 nichts, 1 Neustart, 2 Tiefschlaf ohne Zeitgeber, 3 Sprung in Slot `arg`, 4 Tiefschlaf `arg` ns. */"
-    );
-    let _ = writeln!(s, "int takt_mcu_command(long long *arg) {{");
-    let _ = writeln!(s, "    *arg = -1;");
-    if let Some(r) = &reboot {
-        let _ = writeln!(s, "    switch (*({} *)(latch + {})) {{", r.ct, r.slot.offset);
-        for (d, command) in &r.commands {
-            let body = match command {
-                crate::harness::Reboot::Restart => "return 1;".to_string(),
-                crate::harness::Reboot::DeepSleep => "return 2;".to_string(),
-                crate::harness::Reboot::DeepSleepFor => {
-                    format!("*arg = *(long long *)(latch + {}); return 4;", r.slot.offset + 8)
-                }
+    let next = crate::harness::next_run_slot(p, layout);
+    let _ = writeln!(s, "/* 12.7: 0 weiter, 1 NOW, 2 AFTER (`delay` in ns), 3 ON_WAKE, 4 ON_START. */");
+    let _ = writeln!(s, "int takt_mcu_next_run(long long *delay) {{");
+    let _ = writeln!(s, "    *delay = -1;");
+    if let Some(n) = &next {
+        let _ = writeln!(s, "    switch (*({} *)(latch + {})) {{", n.ct, n.slot.offset);
+        for (d, end) in &n.ends {
+            let code = NEXT_RUN_CODES.iter().position(|c| c == end).unwrap_or(0) + 1;
+            // `AFTER(delay)`: die Dauer im ersten Fach hinter der Diskriminante (11.2).
+            let delay = match end {
+                takt_mir::sys::NextRun::After => format!("*delay = *(long long *)(latch + {}); ", n.slot.offset + 8),
+                _ => String::new(),
             };
-            let _ = writeln!(s, "    case {d}: {body}");
+            let _ = writeln!(s, "    case {d}: {delay}return {code};");
         }
         let _ = writeln!(s, "    default: break;");
         let _ = writeln!(s, "    }}");
     }
-    if let Some((slot, ct)) = jump {
-        let at = slot.offset;
-        let _ = writeln!(
-            s,
-            "    if (*({ct} *)(latch + {at})) {{ *arg = (long long)*({ct} *)(latch + {at}) - 1; return 3; }}"
-        );
-    }
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
+    let words: Vec<String> = NEXT_RUN_CODES.iter().map(|c| format!("\"end {}\\n\"", c.word())).collect();
     let _ = writeln!(s, "void takt_mcu_end(void) {{");
-    let _ = writeln!(s, "    long long arg;");
-    let _ = writeln!(s, "    int c = takt_mcu_command(&arg);");
+    let _ = writeln!(s, "    static const char *const words[] = {{ {} }};", words.join(", "));
+    let _ = writeln!(s, "    long long delay;");
+    let _ = writeln!(s, "    int c = takt_mcu_next_run(&delay);");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(g_done);");
-    let _ = writeln!(
-        s,
-        "    takt_board_trace(c == 1 ? \"end restart\\n\" : c == 3 ? \"end boot_jump\\n\" : \"end deep_sleep\\n\");"
-    );
+    let _ = writeln!(s, "    if (c >= 1 && c <= {}) takt_board_trace(words[c - 1]);", NEXT_RUN_CODES.len());
     crate::harness::safe_outputs(s, p, layout);
     let _ = writeln!(s, "}}\n");
 }

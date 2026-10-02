@@ -1,21 +1,19 @@
-# Watchdog auf dem Board (12.3, 12.7): Jeder Lauf zeigt Reset-Ursache und
-# `reset_count`, schlaeft eine Sekunde in `idle` — der Watchdog darf dabei
+# Watchdog auf dem Board (12.3, 12.7): Der erste Lauf zeigt
+# `previous_run`, schlaeft eine Sekunde in `idle` — der Watchdog darf dabei
 # nicht zuschlagen, die Schleife bestaetigt ihn je geschlafenem Tick — und
 # rechnet dann einen Tick lang weit ueber seine Frist. Der Watchdog setzt
-# zurueck, und der naechste Lauf beginnt mit `WATCHDOG` und einem Start
-# mehr. Der dritte Lauf bleibt stehen. `AWAKE` haelt laenger als hundert
-# Ticks, damit auch ein Board, das im Betrieb nur jeden hundertsten Tick
-# ausgibt, `rested` zeigt.
+# zurueck, und der naechste Lauf beginnt mit `previous_run = WATCHDOG` und
+# bleibt stehen. `AWAKE` haelt laenger als hundert Ticks, damit auch ein
+# Board, das im Betrieb nur jeden hundertsten Tick ausgibt, `rested` zeigt.
+# `safe` von `previous` ist ein Wert, den dieser Test nie erwartet.
 
 system:
     language = 1
     tick     = 10 ms
 
-input  boot_reason : BootReason @ hw("sys/boot_reason")
-input  reset_count : int        @ hw("sys/reset_count")
-output reason      : BootReason @ hw("test/reason") with safe = TRIAL
-output count       : int        @ hw("test/count")  with safe = -1
-output rested      : bool       @ hw("ui/led")      with safe = false
+input  previous_run : PreviousRun @ hw("sys/previous_run")
+output previous     : PreviousRun @ hw("test/previous") with safe = ENDED
+output rested       : bool        @ hw("ui/led")        with safe = false
 
 machine m:
     var acc : int = 1
@@ -23,8 +21,7 @@ machine m:
 
     state SHOW:
         enter:
-            reason = boot_reason
-            count = reset_count
+            previous = previous_run
         after 200 ms: -> REST
 
     state REST idle:
@@ -36,7 +33,7 @@ machine m:
         after 1200 ms: -> DECIDE
 
     state DECIDE:
-        when reset_count >= 2: -> DONE
+        when previous_run == WATCHDOG: -> DONE
         when true: -> HEAVY
 
     state HEAVY:

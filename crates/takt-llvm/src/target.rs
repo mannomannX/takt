@@ -86,14 +86,13 @@ impl Instrument {
         [Instrument::Statements, Instrument::States, Instrument::Off].into_iter().find(|i| i.name() == name)
     }
 
-    /// Der Default (12.8): `statements` auf der Box, `states` auf MCUs,
-    /// nichts im Startprofil. Das Profil des Programms geht vor dem Ziel.
+    /// Der Default (12.8): `statements` auf der Box, `states` auf MCUs.
+    /// Das Profil des Programms geht vor dem Ziel.
     pub fn default_for(profile: Option<takt_mir::program::RuntimeProfile>, target: Target) -> Instrument {
         use takt_mir::program::RuntimeProfile;
         match profile {
             Some(RuntimeProfile::LinuxRt) => Instrument::Statements,
             Some(RuntimeProfile::Baremetal | RuntimeProfile::Rtos) => Instrument::States,
-            Some(RuntimeProfile::Boot) => Instrument::Off,
             None if target.is_bare_metal() => Instrument::States,
             None => Instrument::Statements,
         }

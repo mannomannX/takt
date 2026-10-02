@@ -1,7 +1,9 @@
+t=0 alert boot on "Start nach dem Watchdog, 1 in Folge"
 t=0 state boot DECIDE
-t=0 out image_confirm false
-t=0 out reboot NONE
+t=0 out confirm false
+t=0 out next_run NONE
 t=0 out led false
 t=0 pub boot restarts 0
 t=1 state boot HOLD
+t=60 persist 32dc2042ae357760080000000100000000000000
 t=60 verdict-final INCONCLUSIVE

@@ -360,7 +360,7 @@ fn build_inner(
         virtual_sleep(&mut s, p, &driven, ticks);
     }
     let _ = writeln!(s, "    }}");
-    if reboot_slot(p, &layout).is_some() || jump_slot(p, &layout).is_some() {
+    if next_run_slot(p, &layout).is_some() {
         let _ = writeln!(s, "ende:");
         safe_outputs(&mut s, p, &layout);
         let _ = writeln!(s, "    dump(g_tick);");
@@ -473,23 +473,17 @@ fn is_duration(p: &Program, name: &str) -> bool {
         .is_some_and(|c| matches!(p.types.get(c.ty), takt_mir::types::Type::Duration { .. }))
 }
 
-/// Das Ende eines Laufs durch ein Kommando an die Plattform (12.7):
-/// `sys/reboot` oder `sys/jump`, nach dem Commit des Ticks.
+/// Das Ende eines Laufs (12.7): ein Wert ausser `NONE` auf `sys/next_run`,
+/// nach dem Commit des Ticks.
 fn platform_end(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
-    if let Some(RebootSlot { slot, ct, commands }) = reboot_slot(p, layout) {
-        let _ = writeln!(s, "{indent}switch (*({ct} *)(latch + {})) {{", slot.offset);
-        for (d, command) in commands {
-            let name = command.name();
-            let _ = writeln!(s, "{indent}case {d}: printf(\"t=%lld end {name}\\n\", g_tick); goto ende;");
-        }
-        let _ = writeln!(s, "{indent}default: break;");
-        let _ = writeln!(s, "{indent}}}");
+    let Some(NextRunSlot { slot, ct, ends }) = next_run_slot(p, layout) else { return };
+    let _ = writeln!(s, "{indent}switch (*({ct} *)(latch + {})) {{", slot.offset);
+    for (d, next) in ends {
+        let word = next.word();
+        let _ = writeln!(s, "{indent}case {d}: printf(\"t=%lld end {word}\\n\", g_tick); goto ende;");
     }
-    if let Some((slot, ct)) = jump_slot(p, layout) {
-        let _ = writeln!(s, "{indent}if (*({ct} *)(latch + {})) {{", slot.offset);
-        let _ = writeln!(s, "{indent}    printf(\"t=%lld end boot_jump\\n\", g_tick); goto ende;");
-        let _ = writeln!(s, "{indent}}}");
-    }
+    let _ = writeln!(s, "{indent}default: break;");
+    let _ = writeln!(s, "{indent}}}");
 }
 
 /// Ein Enum mit Feldern: `NAME(f1, f2)` wie `value_text` (9.3), die Felder
@@ -1522,80 +1516,28 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
     Some(def.variants.iter().map(|v| (v.discriminant, v.name.clone())).collect())
 }
 
-/// Wo `sys/jump` im Latch steht (12.7).
-pub(crate) fn jump_slot<'a>(p: &Program, layout: &'a Layout) -> Option<(&'a crate::layout::Slot, &'static str)> {
-    let slot = layout.outputs.iter().find(|s| {
-        p.channels.iter().any(|c| {
-            c.name == s.name && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/jump")
-        })
-    })?;
-    Some((slot, c_type(&slot.ty, slot.signed)?))
-}
-
-/// Was ein Kommando an `sys/reboot` verlangt (12.7).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Reboot {
-    /// `RESTART`.
-    Restart,
-    /// `DEEP_SLEEP`: ohne Zeitgeber.
-    DeepSleep,
-    /// `DEEP_SLEEP_FOR(duration)`: die Weckzeit im ersten Fach.
-    DeepSleepFor,
-}
-
-impl Reboot {
-    /// Der Grund im Trace, wie der Interpreter ihn schreibt.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Reboot::Restart => "restart",
-            Reboot::DeepSleep | Reboot::DeepSleepFor => "deep_sleep",
-        }
-    }
-}
-
-/// Wo `sys/reboot` im Latch steht und welche Kommandos es kennt.
-pub(crate) struct RebootSlot<'a> {
+/// Wo `sys/next_run` im Latch steht und was jede Diskriminante verlangt
+/// (12.7). Die Bedeutungen kommen aus `takt_mir::sys`, derselben Tabelle,
+/// die der Interpreter fragt.
+pub(crate) struct NextRunSlot<'a> {
     pub(crate) slot: &'a crate::layout::Slot,
+    /// Der C-Typ der Diskriminante: `int` vorn im Struct, weil `NextRun`
+    /// mit `AFTER(delay)` Felder hat (11.2).
     pub(crate) ct: &'static str,
-    pub(crate) commands: Vec<(i64, Reboot)>,
+    /// Diskriminante und Bedeutung jeder Variante, die den Lauf beendet.
+    pub(crate) ends: Vec<(i64, takt_mir::sys::NextRun)>,
 }
 
-/// Der Latch-Platz von `sys/reboot` mit seinen Kommandos (12.7).
-///
-/// `RESTART`, `DEEP_SLEEP` und `DEEP_SLEEP_FOR` beenden den Lauf. Mit der
-/// Weckzeit hat `RebootCmd` Felder, und die Diskriminante steht als `int`
-/// vorn im Struct (11.2).
-pub(crate) fn reboot_slot<'a>(p: &Program, layout: &'a Layout) -> Option<RebootSlot<'a>> {
-    let slot = layout.outputs.iter().find(|s| {
-        p.channels.iter().any(|c| {
-            c.name == s.name && matches!(&c.binding, takt_mir::program::Binding::Hw(a) if a.text() == "sys/reboot")
-        })
-    })?;
+/// Der Latch-Platz von `sys/next_run`, wenn das Programm den Kanal bindet.
+pub(crate) fn next_run_slot<'a>(p: &Program, layout: &'a Layout) -> Option<NextRunSlot<'a>> {
+    let (output, variants) = takt_mir::sys::next_run(p)?;
+    let slot = layout.outputs.iter().find(|s| s.name == p.channels[output].name)?;
     let ct = match &slot.ty {
         takt_llvm::ty::LlvmType::Struct(_) => "int",
         t => c_type(t, slot.signed)?,
     };
-    // 12.7: `RebootCmd` ist vordefiniert; ein fremdes Enum an derselben
-    // Adresse ist kein Kommando. Derselbe Test wie im Interpreter.
-    let takt_mir::types::Type::Enum(e) =
-        p.types.list.get(p.channels.iter().find(|c| c.name == slot.name)?.ty.index())?
-    else {
-        return None;
-    };
-    if p.enums.get(e.index())?.name != "RebootCmd" {
-        return None;
-    }
-    let variants = enum_variants(p, &slot.name)?;
-    let commands: Vec<(i64, Reboot)> = variants
-        .iter()
-        .filter_map(|(d, name)| match name.as_str() {
-            "RESTART" => Some((*d, Reboot::Restart)),
-            "DEEP_SLEEP" => Some((*d, Reboot::DeepSleep)),
-            "DEEP_SLEEP_FOR" => Some((*d, Reboot::DeepSleepFor)),
-            _ => None,
-        })
-        .collect();
-    (!commands.is_empty()).then_some(RebootSlot { slot, ct, commands })
+    let ends = variants.into_iter().filter_map(|(d, next)| Some((d, next?))).collect();
+    Some(NextRunSlot { slot, ct, ends })
 }
 
 /// Die Job-Slots eines Programms, flach ueber die Maschinen wie im Abbild:

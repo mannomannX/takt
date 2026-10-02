@@ -54,7 +54,7 @@ fn the_default_follows_profile_and_target() {
     assert_eq!(Instrument::default_for(None, Target::X86_64_WINDOWS), Instrument::Statements);
     assert_eq!(Instrument::default_for(None, Target::THUMBV7EM), Instrument::States);
     assert_eq!(Instrument::default_for(Some(RuntimeProfile::Rtos), Target::X86_64_WINDOWS), Instrument::States);
-    assert_eq!(Instrument::default_for(Some(RuntimeProfile::Boot), Target::THUMBV7EM), Instrument::Off);
+    assert_eq!(Instrument::default_for(Some(RuntimeProfile::Baremetal), Target::X86_64_WINDOWS), Instrument::States);
     assert_eq!(Instrument::parse("states"), Some(Instrument::States));
     assert_eq!(Instrument::parse("alles"), None);
 }

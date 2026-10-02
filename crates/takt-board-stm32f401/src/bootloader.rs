@@ -49,7 +49,7 @@ pub fn request() -> ! {
 pub fn enter_if_requested() {
     if backup_read(WISH) == REQUESTED {
         backup(WISH, 0);
-        crate::platform::boot_reason();
+        crate::platform::previous_run();
         enter();
     }
 }

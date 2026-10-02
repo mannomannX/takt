@@ -20,11 +20,11 @@
 (input chg_status :u8 @hw("i2c1/0x6B/0x0B") max_age=500ms)
 (input flash_status :FlashStatus @hw("flash/status") max_age=10ms)
 (input flash_rx :stream<bytes<256>> @hw("flash/rx") max_rate=200[Hz] capacity=2)
-(input image_state :ImageState @hw("sys/image_state") max_age=1s)
+(input on_trial :bool @hw("ota/trial") max_age=1s)
 (output flash_cmd :FlashCmd @hw("flash/cmd") safe=NONE)
 (output fet_chg :bool @hw("gpio/fet_chg") safe=false)
 (output led :u8 @hw("pwm/led") safe=0)
-(output image_confirm :bool @hw("sys/image_confirm") safe=false)
+(output confirm :bool @hw("ota/confirm") safe=false)
 (command wake_up wake=true)
 (param V_MAX :u16[mV] in 4000[mV]..4300[mV] 4200[mV])
 (param IMAGE_SIZE :u32[B] in 1024[B]..1048576[B] 65536[B])
@@ -56,8 +56,8 @@
       (loop
         (= fet_chg (and charger (< cell_mv V_MAX)))
         (= led 255)
-        (if (and (== image_state TRIAL) (.passed last_test))
-          (= image_confirm true)))
+        (if (and (.or on_trial false) (.passed last_test))
+          (= confirm true)))
       (when (not charger) -> IDLE_WAIT))
     (state IDLE_WAIT
       (when charger -> RUN)
@@ -89,7 +89,7 @@
   (var digest :bytes<32> default)
   (initial UPD_IDLE)
   (state UPD_IDLE
-    (when (== image_state TRIAL) -> HASHING))
+    (when (.or on_trial false) -> HASHING))
   (state HASHING
     (enter
       (= ctx (call sha256_init))

@@ -183,8 +183,8 @@ fn under_alert_a_blocking_device_writes_at_once() {
     assert!(persist.journal().writes() > 0);
 }
 
-/// Ohne Fenster und unter `fault` schreibt nur der Flush (5.9: vor
-/// `reboot`, `boot_jump`, Deep Sleep).
+/// Ohne Fenster und unter `fault` schreibt nur der Flush (5.9: vor dem
+/// geordneten Ende eines Laufs, 12.7).
 #[test]
 fn without_a_window_only_the_flush_writes() {
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);

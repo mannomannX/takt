@@ -777,6 +777,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "libtaktm"
+version = "0.1.0"
+
+[[package]]
 name = "litrs"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1107,9 +1111,14 @@ name = "takt-board-support"
 version = "0.1.0"
 
 [[package]]
+name = "takt-hal"
+version = "0.1.0"
+
+[[package]]
 name = "takt-mcu-program"
 version = "0.1.0"
 dependencies = [
+ "takt-native-abi",
  "takt-rt-baremetal",
  "takt-rt-core",
 ]
@@ -1117,6 +1126,15 @@ dependencies = [
 [[package]]
 name = "takt-native"
 version = "0.1.0"
+
+[[package]]
+name = "takt-native-abi"
+version = "0.1.0"
+dependencies = [
+ "libtaktm",
+ "takt-hal",
+ "takt-native",
+]
 
 [[package]]
 name = "takt-rt-baremetal"
@@ -1129,6 +1147,7 @@ dependencies = [
 name = "takt-rt-core"
 version = "0.1.0"
 dependencies = [
+ "takt-hal",
  "takt-native",
 ]
 

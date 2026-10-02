@@ -27,7 +27,7 @@ use core::ffi::c_void;
 
 use takt_native_abi as _;
 use takt_rt_baremetal::Traced;
-use takt_rt_core::{PlatformCommand, Program, Tolerance};
+use takt_rt_core::{NextRun, Program, Tolerance};
 
 unsafe extern "C" {
     fn takt_mcu_init();
@@ -45,7 +45,7 @@ unsafe extern "C" {
     fn takt_mcu_advance(n: i64);
     fn takt_mcu_persist_snapshot(out: *mut c_void, cap: i32) -> i32;
     fn takt_mcu_persist_restore(bytes: *const c_void, len: i32) -> i32;
-    fn takt_mcu_command(arg: *mut i64) -> i32;
+    fn takt_mcu_next_run(delay: *mut i64) -> i32;
     fn takt_mcu_end();
     fn takt_mcu_job_dispatch() -> i32;
     fn takt_mcu_job_work();
@@ -204,14 +204,14 @@ impl Program for Generated {
         usize::try_from(n).unwrap_or(0)
     }
 
-    fn command(&self) -> Option<PlatformCommand> {
-        let mut arg = 0i64;
-        // SAFETY: liest nur den statischen Zustand des Rahmens und schreibt `arg`.
-        match unsafe { takt_mcu_command(&mut arg) } {
-            1 => Some(PlatformCommand::Restart),
-            2 => Some(PlatformCommand::DeepSleep(None)),
-            3 => u8::try_from(arg).ok().map(PlatformCommand::Jump),
-            4 => Some(PlatformCommand::DeepSleep(Some(arg))),
+    fn next_run(&self) -> Option<NextRun> {
+        let mut delay = 0i64;
+        // SAFETY: liest nur den statischen Zustand des Rahmens und schreibt `delay`.
+        match unsafe { takt_mcu_next_run(&mut delay) } {
+            1 => Some(NextRun::Now),
+            2 => Some(NextRun::After(delay)),
+            3 => Some(NextRun::OnWake),
+            4 => Some(NextRun::OnStart),
             _ => None,
         }
     }

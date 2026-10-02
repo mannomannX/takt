@@ -1,18 +1,18 @@
 system:
     tick = 10 ms
 
-input  cell_v        : [4] float[V] in 2.0..4.5 V @ hw("afe/cell[0:4]")     with max_age = 50 ms
-input  pack_i        : float[A] in -10..10 A      @ hw("afe/current")       with max_age = 50 ms
-input  temp          : [2] float[degC]            @ hw("afe/ntc[0:2]")      with max_age = 200 ms
-input  charger       : bool                       @ hw("gpio/vbus_det")     with wake = true
-input  button        : stream<Edge>               @ hw("gpio/btn")          with max_rate = 50 Hz, wake = true
-input  chg_status    : u8                         @ hw("i2c1/0x6B/0x0B")    with max_age = 500 ms
-input  image_state   : ImageState                 @ hw("sys/image_state")  # 12.7
-output image_confirm : bool                       @ hw("sys/image_confirm") with safe = false
-output fet_chg       : bool                       @ hw("gpio/fet_chg")      with safe = false
-output fet_dis       : bool                       @ hw("gpio/fet_dis")      with safe = false
-output load_test     : bool                       @ hw("gpio/test_load")    with safe = false
-output led           : u8                         @ hw("pwm/led")           with safe = 0
+input  cell_v     : [4] float[V] in 2.0..4.5 V @ hw("afe/cell[0:4]")  with max_age = 50 ms
+input  pack_i     : float[A] in -10..10 A      @ hw("afe/current")    with max_age = 50 ms
+input  temp       : [2] float[degC]            @ hw("afe/ntc[0:2]")   with max_age = 200 ms
+input  charger    : bool                       @ hw("gpio/vbus_det")  with wake = true
+input  button     : stream<Edge>               @ hw("gpio/btn")       with max_rate = 50 Hz, wake = true
+input  chg_status : u8                         @ hw("i2c1/0x6B/0x0B") with max_age = 500 ms
+input  on_trial   : bool                       @ hw("ota/trial")  # Update-Geraet der Plattform (12.7)
+output confirm    : bool                       @ hw("ota/confirm")    with safe = false
+output fet_chg    : bool                       @ hw("gpio/fet_chg")   with safe = false
+output fet_dis    : bool                       @ hw("gpio/fet_dis")   with safe = false
+output load_test  : bool                       @ hw("gpio/test_load") with safe = false
+output led        : u8                         @ hw("pwm/led")        with safe = 0
 
 param V_MAX     : float[V] in 4.0..4.3 V = 4.2 V
 param V_MIN     : float[V] in 2.5..3.2 V = 3.0 V
@@ -36,9 +36,10 @@ machine bms every 100 ms:
     pub var soc             : float[pct] = 0 pct
     pub var charge_as       : float[A*s] = 0 A*s
     var coulomb             = integrate[A](limit = 72000 A*s)
-    initial SELFTEST
+    initial ACTIVE
 
     state ACTIVE:  # Interlocks fuer alle Betriebszustaende
+        initial SELFTEST
         loop:
             for i in range(4):
                 check cell_v[i] < V_MAX + 0.05 V, "cell {i} overvoltage {cell_v[i]}"
@@ -67,8 +68,8 @@ machine bms every 100 ms:
                     last_test = SelftestResult(passed = false, code = 1, r_int = r_int)
                     -> DEGRADED
                 last_test = SelftestResult(passed = true, code = 0, r_int = r_int)
-                if image_state.or(CONFIRMED) == TRIAL:  # neues Image nur nach bestandenem Selbsttest bestaetigen; ohne Plattformangabe: bestaetigt
-                    image_confirm = true
+                if on_trial.or(false):  # ein neues Image erst nach bestandenem Selbsttest bestaetigen
+                    confirm = true
                 -> RUN
 
         state RUN:

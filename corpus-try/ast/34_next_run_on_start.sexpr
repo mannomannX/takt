@@ -1,14 +1,14 @@
 (system
   (language 1)
   (tick 10ms))
-(output boot_jump :u8 @hw("sys/jump") safe=0)
+(output next_run :NextRun @hw("sys/next_run") safe=NONE)
 (output led :bool @hw("ui/led") safe=false)
 (machine m
   (initial RUN)
   (state RUN
     (enter
       (= led true))
-    (after 20ms -> JUMP))
-  (state JUMP
+    (after 20ms -> DONE))
+  (state DONE
     (enter
-      (= boot_jump 1))))
+      (= next_run ON_START))))

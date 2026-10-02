@@ -21,7 +21,7 @@
 (input fix_rx :stream<bytes<8>> @hw("uart4/rx") max_rate=500[Hz] framing=fixed(8))
 (input vals :[4]float[V] in 0..5[V] @hw("daq1/ai[0:4]") max_age=10ms display=mV doc="vier Kanaele")
 (input age_src :float[K] in 0..500[K] @hw("daq1/tc0") max_age=100ms)
-(output burn :u8 @hw("sys/efuse_burn") safe=0 irreversible)
+(output burn :u8 @hw("otp/burn") safe=0 irreversible)
 (output tx_raw :stream<u8> @hw("uart1/tx") max_rate=1[kHz] capacity=64)
 (output pulse_o :bool @hw("gpio/pulse") safe=false jitter=1us)
 (command reset)

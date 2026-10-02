@@ -217,13 +217,14 @@ fn a_program_that_does_not_allow_sleep_never_sleeps() {
     assert_eq!(rt.step().slept, 0);
 }
 
-/// 12.8: Ein Startprogramm schlaeft nicht, auch wenn es duerfte.
+/// Ein Lauf, der mit einem ohne Schlaf verglichen wird (Satz 9.9.1),
+/// schlaeft nicht, auch wenn das Programm duerfte.
 #[test]
-fn the_boot_profile_never_sleeps() {
+fn a_run_without_sleep_never_sleeps() {
     let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
     let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
-    let mut rt =
-        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BOOT, T0, Policy::Fault);
+    let profile = Profile { may_sleep: false, ..Profile::BAREMETAL };
+    let mut rt = Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), profile, T0, Policy::Fault);
     assert_eq!(rt.step().slept, 0);
 }
 
@@ -241,11 +242,12 @@ fn a_deadline_in_the_next_tick_is_no_reason_to_sleep() {
 
 #[test]
 fn every_profile_of_the_reference_has_a_name() {
-    for name in ["linux_rt", "baremetal", "rtos", "boot"] {
+    for name in ["linux_rt", "baremetal", "rtos"] {
         let p = Profile::by_name(name).unwrap_or_else(|| panic!("Profil `{name}` fehlt"));
         assert_eq!(p.name(), name, "der Name geht in den Lauf-Header (11.3)");
     }
     assert!(Profile::by_name("sim").is_none(), "`sim` ist ein Build, kein Laufzeitprofil");
+    assert!(Profile::by_name("boot").is_none(), "kein Profil fuer Startprogramme (12.8)");
 }
 
 // --- Die Ueberlaufmessung selbst ----------------------------------------

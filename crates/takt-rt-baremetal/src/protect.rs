@@ -9,7 +9,7 @@
 //! Maschinen zu. Die Verletzung selbst hat der Zugriff nicht angerichtet:
 //! Das Board uebergeht ihn, statt ihn nachzuholen.
 
-use takt_rt_core::{PlatformCommand, Program, Tolerance};
+use takt_rt_core::{NextRun, Program, Tolerance};
 
 use crate::run::Traced;
 
@@ -134,8 +134,8 @@ impl<P: Program, M: Protection> Program for Guarded<P, M> {
         self.protection.close();
     }
 
-    fn command(&self) -> Option<PlatformCommand> {
-        self.program.command()
+    fn next_run(&self) -> Option<NextRun> {
+        self.program.next_run()
     }
 }
 

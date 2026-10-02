@@ -1,38 +1,42 @@
 system:
     tick   = 1 ms
-    target = boot
+    target = baremetal
     float  = f32
 
-unit sector = 4 KiB
-
-enum FlashCmd: NONE, ERASE(sector: u32), PROGRAM(addr: u32[B], len: u32[B] in 1 B..4096 B), READ(addr: u32[B], len: u32[B] in 1 B..4096 B)
-enum FlashStatus: IDLE, BUSY, DONE, ERROR(code: u8)
+# FlashCmd und FlashStatus (8.11) sind vordefiniert; die Kanaele `boot/…`
+# stellt die Startstufe bereit, deren Teil das Programm ist (8.10, 12.7).
+# Adressen und Laengen des Flash-Geraets zaehlen Bytes ohne Einheit.
 enum HeaderErr: MAGIC, SIZE, VERSION
 
 record ImageHeader layout little:
     magic   : u8 = 0xE9
     version : u32
-    size    : u32[B]
-    entry   : u32[B]
+    size    : u32
+    entry   : u32
     hash    : bytes<32>
     sig     : bytes<64>
 
-input  flash_status    : FlashStatus         @ hw("flash/status") with max_age = 10 ms
-input  flash_rx        : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
-output flash_cmd       : FlashCmd            @ hw("flash/cmd")    with safe = NONE
-input  efuse           : EfuseBlock          @ hw("sys/efuse")  # pubkey: bytes<64>, min_version: u32, ... (12.7)
-input  image_confirmed : [2] bool            @ hw("sys/image_confirmed")
-output boot_jump       : u8                  @ hw("sys/jump")     with safe = NONE
-# log geht im Startprofil an die UART der Runtime (12.8)
+record BootKeys:
+    pubkey      : bytes<64>
+    min_version : u32
 
-const SLOT_BASE  : [2] u32[B] = [0x10000 B, 0x110000 B]
-const HEADER_LEN : u32[B] = 109 B
+input  flash_status : FlashStatus         @ hw("flash/status") with max_age = 10 ms
+input  flash_rx     : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
+output flash_cmd    : FlashCmd            @ hw("flash/cmd")    with safe = NONE
+input  keys         : BootKeys            @ hw("boot/keys")
+input  confirmed    : [2] bool            @ hw("boot/confirmed")  # je Slot: vom Anwendungsimage bestaetigt
+output slot         : u8                  @ hw("boot/slot")    with safe = 0
+output next_run     : NextRun             @ hw("sys/next_run") with safe = NONE
+# log geht an die UART der Runtime
+
+const SLOT_BASE  : [2] u32 = [0x10000, 0x110000]
+const HEADER_LEN : u32 = 109
 param MAX_TRIALS : int in 1..5 = 3
 
 fn parse_header(b: bytes<4096>, min_version: u32) -> ImageHeader!HeaderErr:
     var h = ImageHeader.decode(b)
     if not h.valid: return ERR(MAGIC)
-    if h.size > 1 MiB: return ERR(SIZE)
+    if h.size > 1048576: return ERR(SIZE)
     if h.version < min_version: return ERR(VERSION)
     return OK(h)
 
@@ -44,27 +48,27 @@ machine bootloader:
     var hdr            : ImageHeader!HeaderErr = ERR(MAGIC)
     var img            : ImageHeader = default
     var ctx            : Sha256Ctx = sha256_init()
-    var done           : u32[B] = 0 B
+    var done           : u32 = 0
     initial SELECT
 
     state SELECT:
         enter:
             idx = active
             for i in range(2):
-                if image_confirmed[i].or(false):  # bestaetigte Images setzen ihren Zaehler zurueck
+                if confirmed[i].or(false):  # bestaetigte Images setzen ihren Zaehler zurueck
                     trials[i] = 0
             if trials[idx] >= MAX_TRIALS and trials[1 - idx] < MAX_TRIALS:
                 idx = 1 - idx  # Fallback auf den anderen Slot
             if trials[idx] < 5:
-                trials[idx] += 1  # Versuch zaehlt vor dem Sprung; persist wird vor boot_jump geschrieben
+                trials[idx] += 1  # Versuch zaehlt vor dem Sprung; persist ist vor dem Ende des Laufs geschrieben
         when trials[idx] <= MAX_TRIALS: -> READ_HEADER
         when true: -> HALT
 
     state READ_HEADER:
         enter:
-            flash_cmd = READ(addr = SLOT_BASE[idx], len = 4096 B)
+            flash_cmd = READ(addr = SLOT_BASE[idx], size = 4096)
         when flash_rx as c:
-            hdr = parse_header(c.data, efuse.min_version)
+            hdr = parse_header(c.data, keys.min_version)
             flash_cmd = NONE
             -> CHECK_HEADER
         after 50 ms: -> SLOT_FAILED
@@ -73,7 +77,7 @@ machine bootloader:
         when hdr.ok:
             img = hdr  # durch hdr.ok dominiert: implizites Auspacken
             ctx = sha256_init()
-            done = 0 B
+            done = 0
             -> HASHING
         when true:
             log "slot {idx}: bad header ({hdr.err})"
@@ -82,10 +86,10 @@ machine bootloader:
     state HASHING:  # ein Chunk je Tick; Budget statisch
         loop:
             if flash_status == IDLE and done < img.size:
-                flash_cmd = READ(addr = SLOT_BASE[idx] + HEADER_LEN + done, len = min(4096 B, img.size - done))
+                flash_cmd = READ(addr = SLOT_BASE[idx] + HEADER_LEN + done, size = min(4096, img.size - done))
         on flash_rx as c:
             ctx = sha256_update(ctx, c.data)
-            done += (c.data.len as u32) * (1 B)
+            done += c.data.len as u32
             flash_cmd = NONE
         when done >= img.size: -> VERIFY
         after 5 s: -> SLOT_FAILED
@@ -95,7 +99,7 @@ machine bootloader:
         sequence:
             var digest = sha256_final(ctx)
             expect digest == img.hash, "hash mismatch in slot {idx}"
-            job v = ecdsa_p256_verify(key = efuse.pubkey, digest = digest, sig = img.sig)
+            job v = ecdsa_p256_verify(key = keys.pubkey, digest = digest, sig = img.sig)
             until v.done timeout 500 ms -> SLOT_FAILED
             expect v.result.or(false), "signature invalid in slot {idx}"
             -> JUMP
@@ -104,7 +108,8 @@ machine bootloader:
         enter:
             active = idx
             log "booting slot {idx}, version {img.version}"
-            boot_jump = idx as u8  # beendet den Lauf nach dem Commit; persist zuvor synchron geschrieben
+            slot = (idx + 1) as u8  # Slot + 1, 0 heisst kein Sprung
+            next_run = ON_START     # Ende des Laufs: persist, dann safe; die Startstufe springt in den gesehenen Slot
 
     state SLOT_FAILED:
         enter:
@@ -119,4 +124,5 @@ machine bootloader:
 
     state HALT:
         enter:
-            log "no bootable image"  # Watchdog der Plattform loest den Neustart aus
+            log "no bootable image"
+            next_run = ON_START  # der naechste Versuch mit dem naechsten Start

@@ -392,7 +392,7 @@ vectors-address
 "daq1/ai0"                       => SEG(daq1) SEG(ai0)
 "daq1/tc[0:16]"                  => SEG(daq1) SEG(tc) RANGE(0:16)
 "i2c1/0x36/0x0C"                 => SEG(i2c1) SEG(0x36) SEG(0x0C)
-"sys/boot_reason"                => SEG(sys) SEG(boot_reason)
+"sys/previous_run"               => SEG(sys) SEG(previous_run)
 "can0/pdo/0x181/0"               => SEG(can0) SEG(pdo) SEG(0x181) SEG(0)
 !"daq1//ai0"                     => E_ADDRESS
 !"daq1/tc[0-16]"                 => E_ADDRESS

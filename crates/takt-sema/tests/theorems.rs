@@ -473,91 +473,72 @@ machine m:
     assert!(!text.contains("STREAM_OVERFLOW"), "im Schlaf gibt es keinen Ueberlauf-Fault (9.6):\n{text}");
 }
 
-/// **`reboot = DEEP_SLEEP` beendet den Lauf** (12.7).
+/// Ein Lauf ueber `ticks` Ticks ohne Stimulus.
+fn run_for(p: &Program, ticks: u64) -> takt_interp::RunResult {
+    run(p, &Trace::default(), &RunOptions { ticks, profile: None, order_seed: None, ..Default::default() })
+        .expect("Lauf")
+}
+
+/// Ein Programm, das nach 5 ms seinen Lauf mit `next` beendet.
+fn ending_with(next: &str) -> Program {
+    compile(&format!(
+        "\
+output next_run : NextRun @ hw(\"sys/next_run\") with safe = NONE
+output led      : bool    @ hw(\"ui/led\")       with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            led = true
+        after 5 ms: -> OFF
+    state OFF:
+        enter:
+            next_run = {next}
+"
+    ))
+}
+
+/// **`next_run` beendet den Lauf** (12.7).
 ///
-/// Anders als `idle` gibt es keinen virtuellen Tick: Satz 9.9.1 gilt nur
-/// fuer RAM-erhaltenden Schlaf.
+/// Anders als `idle` gibt es keinen virtuellen Tick: Zwischen zwei Laeufen
+/// ueberlebt nur `persist`, und Satz 9.9.1 gilt dort nicht.
 #[test]
-fn deep_sleep_ends_the_run() {
-    let p = compile(
-        "\
-output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
-output led    : bool      @ hw(\"ui/led\") with safe = false
-
-machine m:
-    initial RUN
-    state RUN:
-        enter:
-            led = true
-        after 5 ms: -> OFF
-    state OFF:
-        enter:
-            reboot = DEEP_SLEEP
-",
-    );
-    let out =
-        run(&p, &Trace::default(), &RunOptions { ticks: 50, profile: None, order_seed: None, ..Default::default() })
-            .expect("Lauf");
-    assert_eq!(out.ended, takt_interp::Ended::DeepSleep);
+fn next_run_ends_the_run() {
+    let out = run_for(&ending_with("ON_WAKE"), 50);
+    assert_eq!(out.ended, takt_interp::Ended::NextRun(takt_mir::sys::NextRun::OnWake));
     let text = out.trace.render();
-    assert!(text.contains("t=5 end deep_sleep"), "der Grund steht im Trace:\n{text}");
-    assert!(!text.contains("t=6 "), "nach dem Kommando laeuft nichts mehr:\n{text}");
+    assert!(text.contains("t=5 end on_wake"), "das Wort steht im Trace:\n{text}");
+    assert!(!text.contains("t=6 "), "nach dem Ende laeuft nichts mehr:\n{text}");
 }
 
-/// **`DEEP_SLEEP_FOR` beendet den Lauf wie `DEEP_SLEEP`** und traegt seine
-/// Weckzeit im Trace, als Wert des Outputs (12.7).
+/// **Jeder Wert ausser `NONE` beendet den Lauf und nennt, wann der naechste
+/// beginnt** (12.7); `AFTER` traegt seine Dauer als Wert des Outputs.
 #[test]
-fn deep_sleep_for_ends_the_run_and_shows_its_duration() {
-    let p = compile(
-        "\
-output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
-
-machine m:
-    initial RUN
-    state RUN:
-        after 5 ms: -> OFF
-    state OFF:
-        enter:
-            reboot = DEEP_SLEEP_FOR(duration = 10 min)
-",
-    );
-    let out =
-        run(&p, &Trace::default(), &RunOptions { ticks: 50, profile: None, order_seed: None, ..Default::default() })
-            .expect("Lauf");
-    assert_eq!(out.ended, takt_interp::Ended::DeepSleep);
-    let text = out.trace.render();
-    assert!(text.contains("t=5 out reboot DEEP_SLEEP_FOR(10 min)"), "die Weckzeit steht im Trace:\n{text}");
-    assert!(text.contains("t=5 end deep_sleep"), "{text}");
-    assert!(text.contains("t=5 out reboot NONE"), "danach `safe`:\n{text}");
+fn every_value_but_none_names_when_the_next_run_begins() {
+    use takt_mir::sys::NextRun;
+    for (value, next, word) in [
+        ("NOW", NextRun::Now, "now"),
+        ("AFTER(delay = 10 min)", NextRun::After, "after"),
+        ("ON_WAKE", NextRun::OnWake, "on_wake"),
+        ("ON_START", NextRun::OnStart, "on_start"),
+    ] {
+        let out = run_for(&ending_with(value), 50);
+        assert_eq!(out.ended, takt_interp::Ended::NextRun(next), "{value}");
+        assert!(out.trace.render().contains(&format!("t=5 end {word}")), "{value}:\n{}", out.trace.render());
+    }
+    let text = run_for(&ending_with("AFTER(delay = 10 min)"), 50).trace.render();
+    assert!(text.contains("t=5 out next_run AFTER(10 min)"), "die Dauer steht im Trace:\n{text}");
+    assert!(text.contains("t=5 out next_run NONE"), "danach `safe`:\n{text}");
 }
 
-/// `reboot = RESTART` endet ebenso, mit anderem Grund (12.7).
+/// Ohne `next_run` laeuft der Lauf bis zur Tickzahl.
 #[test]
-fn restart_ends_the_run_with_its_own_reason() {
+fn without_next_run_the_run_uses_all_ticks() {
     let p = compile(
         "\
-output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
-
-machine m:
-    initial RUN
-    state RUN:
-        enter:
-            reboot = RESTART
-",
-    );
-    let out =
-        run(&p, &Trace::default(), &RunOptions { ticks: 20, profile: None, order_seed: None, ..Default::default() })
-            .expect("Lauf");
-    assert_eq!(out.ended, takt_interp::Ended::Restart);
-}
-
-/// Ohne Kommando laeuft der Lauf bis zur Tickzahl.
-#[test]
-fn without_a_reboot_command_the_run_uses_all_ticks() {
-    let p = compile(
-        "\
-output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
-output led    : bool      @ hw(\"ui/led\") with safe = false
+output next_run : NextRun @ hw(\"sys/next_run\") with safe = NONE
+output led      : bool    @ hw(\"ui/led\")       with safe = false
 
 machine m:
     initial RUN
@@ -566,95 +547,70 @@ machine m:
             led = true
 ",
     );
-    let out =
-        run(&p, &Trace::default(), &RunOptions { ticks: 7, profile: None, order_seed: None, ..Default::default() })
-            .expect("Lauf");
+    let out = run_for(&p, 7);
     assert_eq!(out.ended, takt_interp::Ended::Ticks);
     assert!(out.trace.render().contains("t=7 verdict-final"), "{}", out.trace.render());
 }
 
-/// **`boot_reason` schliesst den Kreis** (12.7).
+/// **`previous_run` schliesst den Kreis** (12.7).
 ///
-/// Der naechste Lauf beginnt mit `DEEP_SLEEP_WAKE`; das Programm sieht
-/// es wie jeden anderen Input.
+/// Der naechste Lauf beginnt mit `ENDED`; das Programm sieht es wie jeden
+/// anderen Input, und ohne Angabe kennt es keinen vorigen Lauf.
 #[test]
-fn a_woken_run_sees_its_boot_reason() {
+fn a_run_sees_how_the_previous_one_ended() {
     let src = "\
-input  boot_reason : BootReason @ hw(\"sys/boot_reason\")
-output woke        : bool       @ hw(\"ui/woke\") with safe = false
+input  previous_run : PreviousRun @ hw(\"sys/previous_run\")
+output ended        : bool        @ hw(\"ui/ended\") with safe = false
 
 machine m:
     initial START
     state START:
         enter:
-            woke = boot_reason == DEEP_SLEEP_WAKE
+            ended = previous_run.or(NONE) == ENDED
 ";
     let p = compile(src);
-    let kalt =
-        run(&p, &Trace::default(), &RunOptions { ticks: 2, profile: None, order_seed: None, ..Default::default() })
-            .expect("Lauf");
-    assert!(kalt.trace.render().contains("out woke false"), "{}", kalt.trace.render());
+    let first = run_for(&p, 2);
+    assert!(first.trace.render().contains("out ended false"), "{}", first.trace.render());
 
-    let stim = Trace::parse("t=0 in boot_reason DEEP_SLEEP_WAKE\n").expect("Stimulus");
-    let warm =
+    let stim = Trace::parse("t=0 in previous_run ENDED\n").expect("Stimulus");
+    let next =
         run(&p, &stim, &RunOptions { ticks: 2, profile: None, order_seed: None, ..Default::default() }).expect("Lauf");
-    assert!(warm.trace.render().contains("out woke true"), "{}", warm.trace.render());
+    assert!(next.trace.render().contains("out ended true"), "{}", next.trace.render());
 }
 
-/// **Auch der Anfangszustand kann das Kommando setzen** (12.7).
+/// **Auch der Anfangszustand kann den Lauf beenden** (12.7).
 ///
 /// `init` laeuft vor der Tickschleife; wer das uebersieht, laesst einen
 /// Tick laufen, den es nicht geben duerfte.
 #[test]
-fn a_reboot_in_the_initial_state_ends_the_run_at_once() {
+fn an_end_in_the_initial_state_ends_the_run_at_once() {
     let p = compile(
         "\
-output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
-output led    : bool      @ hw(\"ui/led\") with safe = false
+output next_run : NextRun @ hw(\"sys/next_run\") with safe = NONE
+output led      : bool    @ hw(\"ui/led\")       with safe = false
 
 machine m:
     initial OFF
     state OFF:
         enter:
-            reboot = DEEP_SLEEP
+            next_run = ON_START
             led = true
 ",
     );
-    let out =
-        run(&p, &Trace::default(), &RunOptions { ticks: 8, profile: None, order_seed: None, ..Default::default() })
-            .expect("Lauf");
-    assert_eq!(out.ended, takt_interp::Ended::DeepSleep);
+    let out = run_for(&p, 8);
+    assert_eq!(out.ended, takt_interp::Ended::NextRun(takt_mir::sys::NextRun::OnStart));
     let text = out.trace.render();
-    assert!(text.contains("t=0 end deep_sleep"), "bei Tick 0, nicht spaeter:\n{text}");
-    assert!(!text.contains("t=1 "), "kein Tick nach dem Kommando:\n{text}");
+    assert!(text.contains("t=0 end on_start"), "bei Tick 0, nicht spaeter:\n{text}");
+    assert!(!text.contains("t=1 "), "kein Tick nach dem Ende:\n{text}");
 }
 
 /// **Danach stehen alle Outputs auf `safe`** (12.7).
 #[test]
-fn a_reboot_leaves_the_outputs_safe() {
-    let p = compile(
-        "\
-output reboot : RebootCmd @ hw(\"sys/reboot\") with safe = NONE
-output led    : bool      @ hw(\"ui/led\") with safe = false
-
-machine m:
-    initial RUN
-    state RUN:
-        enter:
-            led = true
-        after 5 ms: -> OFF
-    state OFF:
-        enter:
-            reboot = DEEP_SLEEP
-",
-    );
-    let out =
-        run(&p, &Trace::default(), &RunOptions { ticks: 20, profile: None, order_seed: None, ..Default::default() })
-            .expect("Lauf");
-    let text = out.trace.render();
-    let nach = text.split("end deep_sleep").nth(1).unwrap_or("");
-    assert!(nach.contains("out reboot NONE"), "der Befehl selbst faellt auf `safe` zurueck:\n{text}");
-    assert!(nach.contains("out led false"), "und jeder andere Ausgang auch:\n{text}");
+fn an_end_leaves_the_outputs_safe() {
+    let text = run_for(&ending_with("ON_WAKE"), 20).trace.render();
+    let after = text.split("end on_wake").nth(1).unwrap_or("");
+    assert!(after.contains("out next_run NONE"), "der Kanal selbst faellt auf `safe` zurueck:\n{text}");
+    assert!(after.contains("out led false"), "und jeder andere Ausgang auch:\n{text}");
 }
 
 /// Die Fehler einer Uebersetzung, fuer Programme, die nicht durchgehen sollen.
@@ -665,45 +621,44 @@ fn errors_of(body: &str) -> String {
     out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect::<Vec<_>>().join("\n")
 }
 
-/// **Nur `RebootCmd` gehoert an `sys/reboot`** (12.7).
+/// **Nur `NextRun` gehoert an `sys/next_run`** (12.7).
 ///
-/// 12.7 nennt die Enums `BootReason`, `ImageState` und `RebootCmd`
-/// vordefiniert, und Pruefung 60 kennt das Geraet `sys`: Ein eigenes Enum
-/// mit einer zufaellig `RESTART` heissenden Variante ist kein Kommando —
-/// es uebersetzt gar nicht erst. Der Interpreter prueft den Namen
-/// trotzdem (`reboot_of`), als Rueckhalt fuer eine MIR, die daran vorbeikam.
+/// Ein eigenes Enum mit einer zufaellig `NOW` heissenden Variante beendet
+/// keinen Lauf — es uebersetzt gar nicht erst. Die Tabelle in
+/// `takt_mir::sys` prueft den Namen trotzdem, als Rueckhalt fuer eine MIR,
+/// die daran vorbeikam.
 #[test]
-fn only_the_predefined_enum_belongs_on_the_reboot_channel() {
+fn only_the_predefined_enum_belongs_on_next_run() {
     let e = errors_of(
         "\
-enum MyCmd: NONE, RESTART
+enum MyNext: NONE, NOW
 
-output reboot : MyCmd @ hw(\"sys/reboot\") with safe = NONE
+output next_run : MyNext @ hw(\"sys/next_run\") with safe = NONE
 
 machine m:
     initial RUN
     state RUN:
         enter:
-            reboot = RESTART
+            next_run = NOW
 ",
     );
-    assert!(e.contains("SC-60") && e.contains("verlangt `RebootCmd`"), "{e}");
+    assert!(e.contains("SC-60") && e.contains("verlangt `NextRun`"), "{e}");
 }
 
-/// Ein `sim`-gebundener Ausgang speist einen `hw`-Input (8.3); `sys/reboot`
+/// Ein `sim`-gebundener Ausgang speist einen `hw`-Input (8.3); `sys/next_run`
 /// ist ein Output des Programms und hat keinen. Pruefung 60 lehnt die
-/// Bindung ab, statt dass ein Modell den Neustart spielt.
+/// Bindung ab, statt dass ein Modell das Ende spielt.
 #[test]
-fn a_simulated_reboot_channel_is_rejected() {
+fn a_simulated_next_run_channel_is_rejected() {
     let e = errors_of(
         "\
-output reboot : RebootCmd @ sim(\"sys/reboot\")
+output next_run : NextRun @ sim(\"sys/next_run\")
 
 machine m:
     initial RUN
     state RUN:
         enter:
-            reboot = DEEP_SLEEP
+            next_run = ON_WAKE
 ",
     );
     assert!(e.contains("SC-60") && e.contains("ist am Geraet `sys` ein Output"), "{e}");

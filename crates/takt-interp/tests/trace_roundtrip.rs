@@ -17,9 +17,9 @@ fn roundtrip(kind: LineKind) {
 
 #[test]
 fn an_end_line_reads_back() {
-    roundtrip(LineKind::End { reason: "deep_sleep".into() });
-    roundtrip(LineKind::End { reason: "boot_jump".into() });
-    roundtrip(LineKind::End { reason: "restart".into() });
+    for reason in ["now", "after", "on_wake", "on_start", "scenario"] {
+        roundtrip(LineKind::End { reason: reason.into() });
+    }
     roundtrip(LineKind::Persist { hex: "0a0bff".into() });
     roundtrip(LineKind::Property { assumption: false, name: "no_chatter".into(), at: 12 });
     roundtrip(LineKind::Property { assumption: true, name: "slew".into(), at: 0 });

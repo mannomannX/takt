@@ -306,11 +306,12 @@ pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
     out
 }
 
-/// Pruefung 60 (12.7): `DEEP_SLEEP` wacht nur ueber eine Wake-Quelle auf, die
-/// der Chip ohne RAM bedient. Ohne jede Wake-Quelle hat `checks.rs` schon
-/// gewarnt; hier zaehlt, ob die Konfiguration eine davon `deep_wake` nennt.
+/// Pruefung 60 (12.7): Nach `ON_WAKE` beginnt der naechste Lauf nur ueber
+/// eine Wake-Quelle, die die Plattform zwischen zwei Laeufen bedient. Ohne
+/// jede Wake-Quelle hat `checks.rs` schon gewarnt; hier zaehlt, ob die
+/// Konfiguration eine davon `deep_wake` nennt.
 fn deep_wake_check(p: &Program, hw: &Hardware) -> Option<Diagnostic> {
-    let span = crate::checks::deep_sleep_without_timer(p)?;
+    let span = crate::checks::ends_on_wake(p)?;
     let wakes: Vec<&takt_mir::program::Channel> =
         p.channels.iter().filter(|c| c.dir == takt_mir::program::Direction::Input && c.attrs.wake).collect();
     let deep = wakes.iter().any(
@@ -320,10 +321,10 @@ fn deep_wake_check(p: &Program, hw: &Hardware) -> Option<Diagnostic> {
         Diagnostic::warning(
             SC60,
             span,
-            "`DEEP_SLEEP`: keine Wake-Quelle weckt nach der Konfiguration aus dem Tiefschlaf (12.7)",
+            "`ON_WAKE`: keine Wake-Quelle weckt nach der Konfiguration zwischen zwei Laeufen (12.7)",
         )
         .with_suggestion(
-            "`deep_wake = true` am Kanal, wenn das Board es kann, oder `DEEP_SLEEP_FOR(duration = …)`".to_string(),
+            "`deep_wake = true` am Kanal, wenn das Board es kann; sonst `AFTER(delay = …)` oder `ON_START`".to_string(),
         )
     })
 }

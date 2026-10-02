@@ -470,10 +470,9 @@ impl Lowerer<'_> {
     /// mit der kalibrierten Tabelle (13.8); bis dahin nennt der Lint die
     /// Stelle und den Ausweg.
     fn performance_lints(&mut self) {
-        // 12.8: `baremetal` und `boot` laufen auf MCUs. `linux_rt` und
-        // `rtos` sagen ueber die Breite nichts, also schweigt der Lint dort.
-        let narrow_core =
-            matches!(self.program.config.runtime_profile(), Some(RuntimeProfile::Baremetal | RuntimeProfile::Boot));
+        // 12.8: `baremetal` laeuft auf MCUs. `linux_rt` und `rtos` sagen
+        // ueber die Breite nichts, also schweigt der Lint dort.
+        let narrow_core = matches!(self.program.config.runtime_profile(), Some(RuntimeProfile::Baremetal));
         if !narrow_core {
             return;
         }
@@ -1046,15 +1045,16 @@ impl Lowerer<'_> {
             }
         }
         self.diags.extend(diags);
-        self.check_deep_sleep_wake();
+        self.check_wake_after_the_run();
     }
 
-    /// Pruefung 60 (12.7): `DEEP_SLEEP` schlaeft ohne Zeitgeber, bis eine
-    /// Wake-Quelle weckt. Hat das Programm keinen Input mit `wake = true`,
-    /// wacht es nur durch einen Reset auf; mit Konfiguration prueft
-    /// `calibrated::check_bindings`, ob eine davon aus dem Tiefschlaf weckt.
-    fn check_deep_sleep_wake(&mut self) {
-        let Some(span) = deep_sleep_without_timer(&self.program) else { return };
+    /// Pruefung 60 (12.7): Nach `next_run = ON_WAKE` beginnt der naechste
+    /// Lauf, wenn eine Wake-Quelle weckt. Hat das Programm keinen Input mit
+    /// `wake = true`, beginnt er erst mit dem naechsten Start; mit
+    /// Konfiguration prueft `calibrated::check_bindings`, ob eine davon
+    /// zwischen zwei Laeufen weckt.
+    fn check_wake_after_the_run(&mut self) {
+        let Some(span) = ends_on_wake(&self.program) else { return };
         if self.program.channels.iter().any(|c| c.dir == Direction::Input && c.attrs.wake) {
             return;
         }
@@ -1062,10 +1062,11 @@ impl Lowerer<'_> {
             Diagnostic::warning(
                 SC60,
                 span,
-                "`DEEP_SLEEP` ohne Wake-Quelle: das Geraet wacht nur durch einen Reset auf (12.7)",
+                "`ON_WAKE` ohne Wake-Quelle: der naechste Lauf beginnt erst mit dem naechsten Start (12.7)",
             )
             .with_suggestion(
-                "`DEEP_SLEEP_FOR(duration = …)` mit Weckzeit, oder ein Input mit `wake = true`".to_string(),
+                "`ON_START`, wenn das gemeint ist; sonst `AFTER(delay = …)` oder ein Input mit `wake = true`"
+                    .to_string(),
             ),
         );
     }
@@ -1073,11 +1074,6 @@ impl Lowerer<'_> {
     fn fits_sys(&self, ty: TypeId, want: SysType) -> bool {
         match (want, self.ty(ty)) {
             (SysType::Enum(n), Type::Enum(e)) => self.program.enums[e.index()].name == n,
-            (SysType::Record(n), Type::Record(r)) => self.program.records[r.index()].name == n,
-            (SysType::Int, Type::Int { .. }) => true,
-            (SysType::U8, Type::Int { width: takt_mir::types::IntWidth::U8, .. }) => true,
-            (SysType::Bool, Type::Bool) => true,
-            (SysType::BoolArray(n), Type::Array { elem, len }) => *len == n && matches!(self.ty(*elem), Type::Bool),
             (SysType::Duration, Type::Duration { .. }) => true,
             _ => false,
         }
@@ -1858,28 +1854,22 @@ fn segment_sends(items: &[SeqItem], count: &dyn Fn(&[Stmt]) -> u64) -> u64 {
     best.max(cur)
 }
 
-/// Wo ein Programm `reboot = DEEP_SLEEP` schreibt, den Tiefschlaf ohne
-/// Zeitgeber (12.7); `None`, wenn nirgends.
-pub fn deep_sleep_without_timer(p: &Program) -> Option<takt_diag::Span> {
-    let reboot = p
-        .channels
-        .iter()
-        .position(|c| c.dir == Direction::Output && matches!(&c.binding, Binding::Hw(a) if a.text() == "sys/reboot"))?;
-    let Type::Enum(e) = p.types.get(p.channels[reboot].ty) else { return None };
-    let def = p.enums.get(e.index())?;
-    if def.name != "RebootCmd" {
-        return None;
-    }
-    let sleep = def.variants.iter().position(|v| v.name == "DEEP_SLEEP")? as u32;
+/// Wo ein Programm `next_run = ON_WAKE` schreibt (12.7); `None`, wenn
+/// nirgends.
+pub fn ends_on_wake(p: &Program) -> Option<takt_diag::Span> {
+    let (output, variants) = sys::next_run(p)?;
+    let Type::Enum(e) = p.types.get(p.channels[output].ty) else { return None };
+    let on_wake = variants.iter().position(|(_, v)| *v == Some(sys::NextRun::OnWake))? as u32;
     let mut found = None;
     for m in &p.machines {
         for_each_stmt(m, &mut |s| {
             let StmtKind::Assign { target: Place::Output(c), value } = &s.kind else { return };
-            if found.is_some() || c.index() != reboot {
+            if found.is_some() || c.index() != output {
                 return;
             }
             walk_expr(value, &mut |x| {
-                if matches!(&x.kind, ExprKind::Variant { enum_id, variant, .. } if enum_id == e && *variant == sleep) {
+                if matches!(&x.kind, ExprKind::Variant { enum_id, variant, .. } if enum_id == e && *variant == on_wake)
+                {
                     found = Some(s.span);
                 }
             });

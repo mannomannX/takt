@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# 12.7: Nach 20 ms beendet das Programm seinen Lauf und verlangt keinen
+# naechsten vor dem naechsten Start der Plattform.
+
+output next_run : NextRun @ hw("sys/next_run") with safe = NONE
+output led      : bool    @ hw("ui/led")       with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            led = true
+        after 20 ms: -> DONE
+    state DONE:
+        enter:
+            next_run = ON_START

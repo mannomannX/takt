@@ -3,21 +3,21 @@ system:
     tick     = 10 ms
 
 # 12.7 — Startmuster als Programm, nicht als Sprache: ein neues Image auf
-# Probe (TRIAL -> SELFTEST -> CONFIRM), eine Reset-Schleife, die ein
-# Programm an `reset_count` erkennt, und der Neustart aus sicherem Zustand.
+# Probe (TRIAL -> SELFTEST -> CONFIRM) an einem Update-Geraet der Plattform
+# (`ota/…`), eine Reset-Schleife, die das Programm selbst ueber `persist`
+# und `previous_run` zaehlt, und der Neustart aus sicherem Zustand ueber
+# `next_run`.
 #
-# Ohne Angabe der Plattform liest das Programm, was eine Plattform ohne
-# Startstufe meldet: `POWER_ON`, ein bestaetigtes Image und keinen Start
-# ohne geordnetes Ende (12.7). So laufen Interpreter, Wirt und Boards
-# dasselbe Programm und sehen dieselben Ausgaenge; die Szenarien des
-# Golden-Traces speisen die Plattformwerte ueber den Stimulus.
+# Ohne Angabe der Plattform kennt das Programm keinen vorigen Lauf und kein
+# Image auf Probe. So laufen Interpreter, Wirt und Boards dasselbe Programm
+# und sehen dieselben Ausgaenge; die Szenarien des Golden-Traces speisen die
+# Werte ueber den Stimulus.
 
-input  boot_reason   : BootReason @ hw("sys/boot_reason")
-input  image_state   : ImageState @ hw("sys/image_state")
-input  reset_count   : int        @ hw("sys/reset_count")
-output image_confirm : bool       @ hw("sys/image_confirm") with safe = false
-output reboot        : RebootCmd  @ hw("sys/reboot")        with safe = NONE
-output led           : bool       @ hw("ui/led")            with safe = false
+input  previous_run : PreviousRun @ hw("sys/previous_run")
+input  on_trial     : bool        @ hw("ota/trial")
+output confirm      : bool        @ hw("ota/confirm")  with safe = false
+output next_run     : NextRun     @ hw("sys/next_run") with safe = NONE
+output led          : bool        @ hw("ui/led")       with safe = false
 
 param RESET_LIMIT   : int in 1..10 = 3
 param SELFTEST_SUM  : int in 0..100000 = 2106
@@ -25,6 +25,11 @@ param RESTART_AFTER : Duration in 100 ms..10 s = 300 ms
 
 profile BROKEN:
     SELFTEST_SUM = 2107
+
+# Eine Simulation ist ein Lauf und kennt keine frueheren: Die Grenze 1
+# zeigt die Reset-Schleife schon am ersten Start nach dem Watchdog.
+profile LOOP:
+    RESET_LIMIT = 1
 
 # Der Selbsttest rechnet eine feste Tabelle nach; ein Image, das sie
 # anders rechnet, bestaetigt sich nicht.
@@ -38,16 +43,23 @@ fn weighted(t: [8] int) -> int in 0..100000:
 
 machine boot:
     pub var restarts : int in 0..1000 = 0
+    # Starts nach dem Watchdog in Folge; jedes andere Ende setzt zurueck.
+    persist var watchdog_starts : int in 0..1000 = 0
 
     initial DECIDE
 
     state DECIDE:
+        enter:
+            if previous_run.or(NONE) == WATCHDOG:
+                watchdog_starts = min(watchdog_starts + 1, 1000)
+            else:
+                watchdog_starts = 0
         loop:
-            alert boot_reason.or(POWER_ON) == WATCHDOG, "Start nach dem Watchdog, {reset_count.or(0)} in Folge"
-        # Zu viele Starts ohne geordnetes Ende: nicht weiter neu starten,
+            alert previous_run.or(NONE) == WATCHDOG, "Start nach dem Watchdog, {watchdog_starts} in Folge"
+        # Zu viele Starts nach dem Watchdog: nicht weiter neu starten,
         # sondern sicher stehen bleiben, bis jemand nachsieht.
-        when reset_count.or(0) >= RESET_LIMIT: -> HOLD
-        when image_state.or(CONFIRMED) == TRIAL: -> SELFTEST
+        when watchdog_starts >= RESET_LIMIT: -> HOLD
+        when on_trial.or(false): -> SELFTEST
         when true: -> RUN
 
     state SELFTEST:
@@ -55,7 +67,7 @@ machine boot:
             led = true
             wait 50 ms
             check weighted(TABLE) == SELFTEST_SUM, "selftest: table sum {weighted(TABLE)}"
-            image_confirm = true
+            confirm = true
             -> RUN
 
     state RUN:
@@ -63,12 +75,12 @@ machine boot:
             led = not led
         after RESTART_AFTER: -> RESTART
 
-    # Neustart aus sicherem Zustand: nach dem Commit des Ticks, wenn alle
-    # Outputs auf `safe` stehen (12.7).
+    # Neustart aus sicherem Zustand: Der Lauf endet nach dem Commit des
+    # Ticks, `persist` ist geschrieben, alle Outputs stehen auf `safe` (12.7).
     state RESTART:
         enter:
             restarts += 1
-            reboot = RESTART
+            next_run = NOW
 
     state HOLD:
         enter:

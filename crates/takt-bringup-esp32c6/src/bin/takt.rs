@@ -19,9 +19,8 @@ use takt_board_esp32c6::{
     Button, CORE_HZ, FlashNvm, Generated, JobContext, Mwdt, Telemetry, Wire, Ws2812, platform, route_uart0,
 };
 use takt_board_support::edge_probe;
-use takt_board_support::platform::image_state;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock};
-use takt_rt_core::{Clock, Journal, Loaded, Persist, PlatformCommand, Policy, Profile, Runtime};
+use takt_rt_core::{Clock, Journal, Loaded, Persist, NextRun, Policy, Profile, Runtime};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -226,53 +225,19 @@ pub unsafe extern "C" fn takt_in_gpio_loop_in(value: *mut u8, quality: *mut u8, 
     true
 }
 
-/// Womit dieser Lauf begann (12.7), beim Start aus der Reset-Ursache gelesen.
-static BOOT_REASON: AtomicI32 = AtomicI32::new(0);
+/// Wie der vorige Lauf endete (12.7), beim Start aus dem Plattformblock gelesen.
+static PREVIOUS_RUN: AtomicI32 = AtomicI32::new(0);
 
-/// Der Treiber fuer `input … @ hw("sys/boot_reason")` (12.7).
+/// Der Treiber fuer `input … @ hw("sys/previous_run")` (12.7).
 ///
 /// # Safety
 ///
 /// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
 /// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_sys_boot_reason(value: *mut i32, quality: *mut u8, _t: *mut i64) -> bool {
+pub unsafe extern "C" fn takt_in_sys_previous_run(value: *mut i32, quality: *mut u8, _t: *mut i64) -> bool {
     unsafe {
-        *value = BOOT_REASON.load(Ordering::Relaxed);
-        *quality = 0;
-    }
-    true
-}
-
-/// Die Starts in Folge ohne geordnetes Ende (12.7), beim Start gezaehlt.
-static RESET_COUNT: AtomicU32 = AtomicU32::new(0);
-
-/// Der Treiber fuer `input … @ hw("sys/reset_count")` (12.7).
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt zwei gueltige Zeiger in sein Prozessabbild; `int`
-/// liegt dort als `long long`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_sys_reset_count(value: *mut i64, quality: *mut u8, _t: *mut i64) -> bool {
-    unsafe {
-        *value = i64::from(RESET_COUNT.load(Ordering::Relaxed));
-        *quality = 0;
-    }
-    true
-}
-
-/// Der Treiber fuer `input … @ hw("sys/image_state")` (12.7): Ohne
-/// Startstufe gibt es ein Image, und es ist bestaetigt.
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
-/// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_in_sys_image_state(value: *mut i32, quality: *mut u8, _t: *mut i64) -> bool {
-    unsafe {
-        *value = image_state::CONFIRMED;
+        *value = PREVIOUS_RUN.load(Ordering::Relaxed);
         *quality = 0;
     }
     true
@@ -591,28 +556,25 @@ fn conduct(program: Generated, clock: impl Clock, persist: &mut Option<Persist<'
         takt_rt_baremetal::report(u, rt.overrun(), &stats, &journal, stack);
     }
     if limit == 0 {
-        platform(stats.command);
+        platform(stats.next_run);
     }
 }
 
-/// Fuehrt ein Kommando an die Plattform aus (12.7).
+/// Fuehrt aus, was zwischen zwei Laeufen geschieht (12.7, `next_run`).
 ///
 /// Ein Konformitaetslauf endet wie der Wirtsrahmen mit dem Trace, und das
 /// Board bleibt fuer das naechste Programm erreichbar; nur im Betrieb
-/// fuehrt es das Kommando aus. Vorher geht die Leitung ganz hinaus: Reset
+/// beginnt es den naechsten Lauf. Vorher geht die Leitung ganz hinaus: Reset
 /// und Tiefschlaf naehmen mit, was noch in ihrem Puffer steht (FB-314).
-fn platform(command: Option<PlatformCommand>) {
-    let Some(command) = command else { return };
+fn platform(next: Option<NextRun>) {
+    let Some(next) = next else { return };
     if let Some(u) = uart() {
         u.finish(DRAIN_ROUNDS);
     }
-    match command {
-        PlatformCommand::Restart => platform::restart(),
-        PlatformCommand::DeepSleep(duration) => platform::deep_sleep(duration),
-        // TODO(M10 Schritt 17): Der Sprung braucht Slots, die erst das
-        // Profil `boot` einrichtet; bis dahin haelt das Board mit
-        // `safe`-Ausgaengen an und sagt es.
-        PlatformCommand::Jump(_) => report("takt: der Sprung in einen Slot braucht das Profil `boot`"),
+    match next {
+        NextRun::Now => platform::restart(),
+        NextRun::After(delay) => platform::deep_sleep(Some(delay)),
+        NextRun::OnWake | NextRun::OnStart => platform::deep_sleep(None),
     }
 }
 
@@ -622,9 +584,7 @@ fn main() -> ! {
     takt_board_esp32c6::stack::paint();
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     takt_board_esp32c6::reenumerate_if_requested();
-    let boot_reason = platform::boot_reason();
-    BOOT_REASON.store(boot_reason, Ordering::Relaxed);
-    RESET_COUNT.store(platform::reset_count(boot_reason), Ordering::Relaxed);
+    PREVIOUS_RUN.store(platform::previous_run(), Ordering::Relaxed);
     let mut telemetry = takt_board_esp32c6::telemetry(peripherals.USB_DEVICE);
     let Ok(timer) = takt_board_esp32c6::init(peripherals.SYSTIMER, TICK_NS) else {
         telemetry.write("takt: Periode nicht einrichtbar");

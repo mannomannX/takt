@@ -40,7 +40,7 @@
 | **FPU-lose MCUs** | Typisiertes Kostenmodell (9.4.3) und Einheiten auf Integern (3.2). |
 | **C-Geschwindigkeit auf 32- und 64-Bit-Kernen** | Darstellungsverengung aus Ranges (3.4), programmweite Fließkommabreite `system: float` (4.2), explizites `fma`, Schnellvarianten mit Fehlerschranke (11.4); Nachweis je Zielklasse per `takt bench` (13.8, 12.8). |
 | **Speicher auf kleinen MCUs** | Byte-Ringe für Streams (8.6), Overlay exklusiver Zustandsspeicher, statischer Scratch statt Stack-Kopien, `sched` nur bei Verwendung (11.2); statisches Speicherbudget je Profil mit Aufschlüsselung (`takt size`, 11.5); Stack-Zusammensetzung mit Verträgen und Schutzbereich (12.3). |
-| **Ablauf- und Protokolllogik über Geräten mit langen Operationen** | Interne Streams (8.6), Jobs und Chunk-Natives für Berechnungen länger als ein Tick (4.5), `T!E` (3.8), Drahtformate mit Bitfeldern und Diskriminanten (3.7), Kommando+Status-Geräte mit Flash-Modell und Stromausfall-Injektion (8.11), Startprofil (12.8), System-Channels für Image-Wechsel und einmalig programmierbare Bits (12.7); Übernahme bestehenden C-Codes per `takt import-c` und Orakel-Modus (13.9). |
+| **Ablauf- und Protokolllogik über Geräten mit langen Operationen** | Interne Streams (8.6), Jobs und Chunk-Natives für Berechnungen länger als ein Tick (4.5), `T!E` (3.8), Drahtformate mit Bitfeldern und Diskriminanten (3.7), Kommando+Status-Geräte mit Flash-Modell und Stromausfall-Injektion (8.11), System-Channels für Image-Wechsel und einmalig programmierbare Bits (12.7); Übernahme bestehenden C-Codes per `takt import-c` und Orakel-Modus (13.9). |
 | **Weiterentwicklung ohne Bruch** | Editionen, reservierte Wörter und Membernamen, offene Enums, versionierte Formate (2.5, 11.3); die Konstrukte späterer Stufen — Generics (3.12), gescopte Instanzen (5.11), `resume` (5.12), Trigger (7.5), `capture` (8.9), `property` (13.3), Knoten (12.9) — sind heute schon in Grammatik und Semantik festgelegt. |
 
 ### 0.2 Die vierundzwanzig tragenden Entscheidungen
@@ -483,7 +483,7 @@ address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                            
 | `check … for d`, `alert … for d` | Bestätigungszeit: löst erst nach d ununterbrochener Verletzung aus (5.6). |
 | `reader`, `writer` | Cursor-Bausteine über `bytes<N>` mit `T?`/`bool`-Ergebnissen (3.9, 11.4). |
 | `len_field` | Längenpräfixierte Felder in `layout` mit statischer Obergrenze (3.7; v1.1). |
-| System-Channels `sys/…` | Plattformschnittstelle: Boot-Grund, Image-Bestätigung, Neustart (12.7; v1.1). |
+| System-Channels `sys/…` | Anfang und Ende eines Laufs, Wanduhr (12.7, 7.4; v1.1). |
 | `native fn` | Kuratierte native Funktion mit Kostenvertrag `cost`/`total` (4.5). |
 | `tick_source` | Bindung des Basis-Ticks an ein Hardware-Ereignis (7.1). |
 | `jitter`, `max_slew` | Präzision eines Outputs bzw. Plausibilitätsgrenze eines Inputs (3.5, 7.5). |
@@ -507,7 +507,7 @@ address_segment := ADDR_WORD [ "[" INT ":" INT "]" ]                            
 
 Neue eingebaute Zugriffe kommen nur mit einer Edition.
 
-**Offene Enums.** `FaultKind`, `BootReason`, `ImageState`, `RebootCmd`, `Quality`, der Wertebereich von `x.reason` und `JobErr` sind *offen*: `match` über sie verlangt `case _`, damit neue Varianten (z. B. `Runtime(Node)`, 12.9) keine erschöpfenden Matches brechen. Nutzer dürfen eigene Enums mit `enum Msg open: …` als offen deklarieren (Nachrichtentypen, die über Firmware-Versionen wachsen); geschlossene Enums bleiben erschöpfend prüfbar (3.7).
+**Offene Enums.** `FaultKind`, `PreviousRun`, `NextRun`, `Quality`, der Wertebereich von `x.reason` und `JobErr` sind *offen*: `match` über sie verlangt `case _`, damit neue Varianten (z. B. `Runtime(Node)`, 12.9) keine erschöpfenden Matches brechen. Nutzer dürfen eigene Enums mit `enum Msg open: …` als offen deklarieren (Nachrichtentypen, die über Firmware-Versionen wachsen); geschlossene Enums bleiben erschöpfend prüfbar (3.7).
 
 **Verdeckung und Additivität.** Nutzerdefinitionen dürfen Namen der Standardbibliothek verdecken (Warnung) — neue Bibliothekseinträge brechen nie ein Programm. Attribute in `with` und Einträge in `system:` sind additiv: unbekannte Namen sind heute ein Fehler, neue Namen morgen keine Änderung bestehender Programme.
 
@@ -946,7 +946,7 @@ Minimale Verweildauer eines Zustands: ein Tick (außer bei Fault). Das ist beabs
 - Ein Fault-Übergang bricht laufende Jobs der Maschine ab (4.5), disarmt ihre Trigger (7.5) und leert die Warteschlangen geplanter Ausgaben (`sched`, 7.5) aller Outputs der Maschine: Ein Safe-Wert darf nie von einem veralteten geplanten Schreibvorgang überschrieben werden.
 - Ein explizites `-> FAULTED` ist als Übergangsziel erlaubt (z. B. nach zu vielen Neustartversuchen, Beispiel 14.7).
 
-Fault-Arten: `CheckFailed`, `Expect`, `Timeout`, `SensorFault`, `MissingValue`, `ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular)`, `RangeFault`, `StreamOverflow`, `TimingFault`, `ScheduleOverflow`, `Abort`, `Runtime(Overrun | Driver | Hardware | Node)` (`Node` ab v2, 12.9). `Runtime(Driver)` entsteht aus Output-seitigen Vertragsverletzungen eines Treibers (12.6; Input-seitige degradieren stattdessen zu `Bad`), `Runtime(Hardware)` u. a. aus einer anhaltenden Abweichung der Tick-Quelle (7.1). Abort und Runtime-Faults werden in der Abort-Phase zugestellt (5.4). Keine Faults, sondern Alerts sind `PersistReset` (5.9) und `StreamPaused` (5.10). Kein Fault ist der Watchdog: Läuft seine Frist ab, steht die Schleife und kann nichts zustellen; die Plattform setzt zurück (12.3), und der nächste Lauf beginnt mit `boot_reason = WATCHDOG` (12.7).
+Fault-Arten: `CheckFailed`, `Expect`, `Timeout`, `SensorFault`, `MissingValue`, `ArithmeticFault(Overflow | DivZero | NonFinite | Domain | Singular)`, `RangeFault`, `StreamOverflow`, `TimingFault`, `ScheduleOverflow`, `Abort`, `Runtime(Overrun | Driver | Hardware | Node)` (`Node` ab v2, 12.9). `Runtime(Driver)` entsteht aus Output-seitigen Vertragsverletzungen eines Treibers (12.6; Input-seitige degradieren stattdessen zu `Bad`), `Runtime(Hardware)` u. a. aus einer anhaltenden Abweichung der Tick-Quelle (7.1). Abort und Runtime-Faults werden in der Abort-Phase zugestellt (5.4). Keine Faults, sondern Alerts sind `PersistReset` (5.9) und `StreamPaused` (5.10). Kein Fault ist der Watchdog: Läuft seine Frist ab, steht die Schleife und kann nichts zustellen; die Plattform setzt zurück (12.3), und der nächste Lauf beginnt mit `previous_run = WATCHDOG` (12.7).
 
 ### 5.4 `abort`
 `abort "text"` erzeugt einen Fault der Art `Abort` für die eigene Maschine sofort und merkt ihn für alle anderen Maschinen vor (`raised[m']`, 9.4). Vorgemerkte Abort- und Runtime-Faults werden in der **Abort-Phase** desselben Ticks zugestellt: Nach den planmäßigen Schritten führt jede betroffene Maschine — ob in diesem Tick aktiv oder nicht — ihren Fault-Pfad aus (Wechsel zum Fault-Ziel, Entry-Modus, Fault-Wald). Damit stehen alle Outputs am Commit des Ticks, in dem der Abort ausgelöst wurde, auf den Werten ihrer Fault-Ziele; die Latenz ist unabhängig von den Maschinenperioden. Die Ausführungsreihenfolge bleibt irrelevant, weil `raised` erst nach allen Schritten gelesen wird (Satz 9.4.1).
@@ -997,7 +997,7 @@ machine bms:
 - Semantik: Der Anfangszustand s0 enthält die aus dem nichtflüchtigen Speicher geladenen Werte (Schlüssel = Maschine.Variable plus Typ-Hash). Fehlende oder ungültige Werte (Typ-Hash, Range) ergeben den Default plus Alert `PersistReset`. Die Runtime schreibt geänderte Werte asynchron, atomar (Journal) und höchstens alle `min_interval`; das Schreiben ist Beobachtung und liegt außerhalb der Semantik.
 - Nur POD-Typen (Skalare, Records, Arrays, Enums); keine Streams, Blöcke oder Optionale. Nur auf Maschinenebene, nicht in Szenarien.
 - **Byteform**: Ein Eintrag trägt den Wert in der kanonischen Byteform — little-endian, ohne Padding, `bool` ein Byte, Längen vier Byte, Dauern und Diskriminanten acht Byte, ein Enum mit Feldern als Diskriminante und die Felder seiner Variante (so lang wie die Variante), nicht selbstbeschreibend (der Typ-Hash sagt, was die Bytes bedeuten). Dieselbe Form bilden `map`-Schlüssel (3.9), Job-Argumente (4.5), Record-Elemente auf Strömen (8.6) und Records an nativen Funktionen; Interpreter und erzeugter Code erzeugen sie bitgleich (9.4.4).
-- **Journal-Anforderungen** (Teil der Treiberkonformität 13.8, in der Simulation gegen das Flash-Modell mit Stromausfall-Injektion zu prüfen, 8.11): zwei Slots im Wechsel (ping-pong); jeder Eintrag trägt Sequenznummer und CRC32; ein Schreibvorgang ändert genau einen Slot; beim Start gewinnt der gültige Eintrag mit der höheren Sequenznummer; ein Slot ist ein Log — Einträge werden hintereinander angehängt, gelöscht wird nur sektorweise und erst der andere Slot, wenn der aktive voll ist; ein nicht gelöschter Rest hinter dem letzten Eintrag (abgebrochener Vorgang) sperrt den Slot für weiteres Anhängen; `min_interval` begrenzt den Verschleiß, nicht den Stillstand (12.3). Vor `reboot`, `boot_jump` und Deep Sleep (12.7) schreibt die Runtime ausstehende Änderungen synchron.
+- **Journal-Anforderungen** (Teil der Treiberkonformität 13.8, in der Simulation gegen das Flash-Modell mit Stromausfall-Injektion zu prüfen, 8.11): zwei Slots im Wechsel (ping-pong); jeder Eintrag trägt Sequenznummer und CRC32; ein Schreibvorgang ändert genau einen Slot; beim Start gewinnt der gültige Eintrag mit der höheren Sequenznummer; ein Slot ist ein Log — Einträge werden hintereinander angehängt, gelöscht wird nur sektorweise und erst der andere Slot, wenn der aktive voll ist; ein nicht gelöschter Rest hinter dem letzten Eintrag (abgebrochener Vorgang) sperrt den Slot für weiteres Anhängen; `min_interval` begrenzt den Verschleiß, nicht den Stillstand (12.3). Vor dem geordneten Ende eines Laufs (`next_run`, 12.7) schreibt die Runtime ausstehende Änderungen synchron.
 - Determinismus: Gegeben s0 (im Lauf-Header aufgezeichnet) ist die Trace unverändert eine Funktion der Inputs (9.10).
 
 ### 5.10 Schlafzustände (`idle`, v1.1)
@@ -1444,7 +1444,7 @@ Bus-Mappings — Modbus-Registertabellen, CANopen-PDO/SDO-Zuordnungen, EtherCAT-
 | Feld | Bedeutung |
 |---|---|
 | Gerät | Treibertyp, Adresse, Heartbeat, Zykluszeit; bei gepollten Geräten `fifo_depth` und `byte_rate` (Prüfung 59) |
-| Channel | Adresse (`"modbus1/40001"`, `"can0/pdo/0x181/0"`), Richtung, Rohtyp, Skalierung/Kalibrierung (linear oder Tabelle), Einheit, Range, `safe`-Wert (Outputs), Rate/`max_rate`, Rahmung; bei einem Input, ob er den Chip aus dem Tiefschlaf wecken kann (`deep_wake`, 12.7) |
+| Channel | Adresse (`"modbus1/40001"`, `"can0/pdo/0x181/0"`), Richtung, Rohtyp, Skalierung/Kalibrierung (linear oder Tabelle), Einheit, Range, `safe`-Wert (Outputs), Rate/`max_rate`, Rahmung; bei einem Input, ob er zwischen zwei Läufen wecken kann, wenn die Plattform den Chip dazwischen schlafen legt (`deep_wake`, 12.7) |
 | Anschluss | Was der Treibertyp braucht, um den Kanal zu erreichen — bei einem Bus steht es schon in der Adresse, bei direkt angeschlossener Peripherie nicht: Port und Pin, Polarität, Alternativfunktion, Timer-Kanal. Der Inhalt ist treiberspezifisch und für die Sprache undurchsichtig; der Compiler reicht ihn weiter, statt ihn zu deuten (9.5) |
 | Messwerte | `guard`, `jitter` je Output und ob die Runtime ihn nur zu Tickbeginn schreibt (`tick_granular`, 7.5), Abtastlatenz je Input — aus der Konformitätsmessung (13.8) |
 | Kalibrierung je Ziel | `c_target[c]` über den sieben Operationsklassen (9.4.3) mit den eigenen Gewichten von Division, `fma`, `sqrt` und dem Hook der Runtime (7.2), `T_IO` und der Tick-Jitter je Profil — aus `takt bench` (13.8), mit der Version des Kostenmodells, zu der sie gemessen ist. Eine Tabelle zu einer anderen Version gilt als nicht kalibriert: Ihre Gewichte gehören zu anderen Zählungen. Sie hängt am Kern und seiner Frequenz, nicht am Channel: Zwei Boards derselben Zielklasse mit verschiedenem Takt haben verschiedene Tabellen. Ohne sie prüft der Compiler die Schedulability nicht, er rechnet sie nur (7.2, Prüfung 32) |
@@ -1789,7 +1789,7 @@ sleep():          d = min(naechste after-Frist ueber alle Maschinen, Weckereigni
 | 57 | `map`: Schlüssel POD mit Gleichheit (3.9) | F |
 | 58 | Knoten (12.9): `follows` knotenlokal; `hops` aus der Topologie berechenbar; Knotentick Vielfaches von `system.tick` | F |
 | 59 | Treiberstufe (12.10, v1.2): Ein gepolltes Gerät läuft zwischen zwei Ticks nicht über — `fifo_depth[d] / byte_rate[d] >= P_m + jitter[tick_source] + wcet_poll[d]`, alle vier Größen aus der Hardware-Konfiguration (8.10) beziehungsweise der Konformitätsmessung (13.8). Fehlt eine, ist die Prüfung nicht entscheidbar: Sie verlangt die Messung oder die ausdrückliche Freigabe `with polling = unchecked`, die im Lauf-Header erscheint. Verletzung nennt drei Auswege: Periode senken, Gerät in die TCB geben (12.6), oder DMA statt Polling | F |
-| 60 | Channel-Bindung gegen die Hardware-Konfiguration (8.10): Einheit, Skalierung und Range eines `@ hw(…)`-Channels stimmen mit der Konfiguration überein. Ein Programm, das `float[bar]` bindet, während die Konfiguration `psi` führt, ist sonst unentdeckt — die Einheitenrechnung aus 3.2 endet am Channel-Rand. Fehlt die Konfiguration, entfällt die Prüfung (keine Eingabe, kein Urteil). Schreibt ein Programm `reboot = DEEP_SLEEP` und weckt keine seiner Wake-Quellen aus dem Tiefschlaf — ohne Konfiguration hat es keinen Input mit `wake = true`, mit Konfiguration keinen mit `deep_wake` —, warnt sie (12.7) | F |
+| 60 | Channel-Bindung gegen die Hardware-Konfiguration (8.10): Einheit, Skalierung und Range eines `@ hw(…)`-Channels stimmen mit der Konfiguration überein. Ein Programm, das `float[bar]` bindet, während die Konfiguration `psi` führt, ist sonst unentdeckt — die Einheitenrechnung aus 3.2 endet am Channel-Rand. Fehlt die Konfiguration, entfällt die Prüfung (keine Eingabe, kein Urteil). Schreibt ein Programm `next_run = ON_WAKE` und kann keine seiner Wake-Quellen zwischen zwei Läufen wecken — ohne Konfiguration hat es keinen Input mit `wake = true`, mit Konfiguration keinen mit `deep_wake` —, warnt sie und nennt `ON_START` (12.7) | F |
 | 61 | `check c, "…" within d`: Die gerechnete Safe-State-Latenz (Satz 9.4.5) hält die geforderte Frist ein. Verglichen wird in Ticks (`d / T₀`); die Meldung nennt die Aufschlüsselung nach Erkennung, Bestätigung, Fault-Pfad und Commit, weil die Zahl sonst nicht zu verbessern ist | F |
 | 62 | `machine … with budget = {ram = …}`: Der gerechnete Speicher der Maschine (11.5, mit Overlay) liegt im deklarierten Budget. `wcet` braucht die Kalibrierung (13.8) und meldet bis dahin seine Stufe | F |
 | 63 | Zwei Lints ohne eigene Syntax: (a) `alert` und `check` mit **derselben** Bedingung im selben Block — die Polaritaet ist entgegengesetzt gemeint (5.6), und weil beide Zeilen gleich aussehen, faellt die Verwechslung sonst niemandem auf; (b) ein `profile`, das einen `param` nicht nennt — er nimmt still seinen Default, und das ist beim Lesen nicht von der Absicht zu unterscheiden (4.6) | W |
@@ -1817,7 +1817,6 @@ takt-rt-core        Tick-Schleife, Prozessabbild, Fault-Wald, Abort-Phase, Zähl
 takt-rt-linux       Profilaufsatz `linux_rt` (12.2): Echtzeituhr mit absoluten Deadlines, gemessene Zeitgarantie, Jobs in Threads, NVM als Datei, Tunables
 takt-rt-baremetal   Profilaufsatz `baremetal` (12.3): Tick per Timer, Telemetrie-Ring, logische Zeit für Konformitätsläufe, Schlaf
 takt-rt-rtos        Profilaufsatz `rtos` (12.8): Takt als höchstpriore Aufgabe unter einem RTOS; die Aufgabe wartet auf die Benachrichtigung je Tickgrenze und arbeitet ab, was fällig ist
-takt-rt-boot        (geplant, M10 Schritt 17) Profilaufsatz `boot` (12.8): minimale Runtime für Startprogramme, RAM-Log statt Recorder
 takt-hal            Treiber-Traits (Skalar, Stream, geplante Ausgabe), Rand-Selbstprüfungen (12.6), Simulationstreiber — die Sim/HW-Umschaltung (8.3) ist ein Treiberwechsel
 takt-board-support  die rechnende Hälfte der Board-Unterstützung ohne Registerzugriff: Perioden, Zyklen, FIFO, Messschleife (13.8)
 takt-board-esp32c6  Board-Unterstützung ESP32-C6: Alarm, Zyklenzähler, USB-Serial-JTAG, Treiber — TCB, eigener Workspace (9.5)
@@ -1930,7 +1929,7 @@ loop:
     apply_scheduled()        # geplante Ausgaben dieses Ticks in den Latch; Treiber schreibt zum Hardware-Zeitpunkt
     commit_outputs()         # asap: sofort; boundary: am nächsten Tick-Anfang; Sendepuffer an Treiber (Adresse -> Treiber: 8.10)
     record_and_telemeter()   # außerhalb der Semantik, nie blockierend; persist-Journal
-    platform_command()       # 12.7: `reboot` oder `boot_jump` beenden den Lauf — persist synchron, dann safe
+    end_of_run()             # 12.7: `next_run` beendet den Lauf — persist synchron, dann safe
     kick_watchdog()
     maybe_sleep()            # 9.9
 ```
@@ -1949,13 +1948,13 @@ loop:
 - Gesamter Zustand statisch in `.bss`; kein Heap. **Stack-Zusammensetzung:** Programmanteil exakt aus LLVM-Stack-Usage und azyklischem Aufrufgraphen; native Funktionen mit ihrem `stack`-Vertrag (4.5) und die korrekt gerundete Mathematik mit dem ihren (4.2) als Blattkosten; Runtime und Treiber, ISRs (verschachtelt, auf Cortex-M auf dem Hauptstack) und im `rtos`-Profil der eigene Task-Stack als Reserven je Profil aus der Hardware-Konfiguration, gemessen in 13.8; Gesamt = Programm + Σ Reserven + Marge, vom Compiler geprüft (11.5) und im Linker-Skript reserviert; die **Marge steht wie die Reserven in der Hardware-Konfiguration** (8.10) und ist damit je Target und Projekt wählbar, nicht ein fester Anteil der Sprache — ein Prozentsatz, der für jede Zielklasse und jede Risikoklasse zugleich gälte, wäre entweder zu knapp oder Verschwendung, und er hätte keine Herkunft im Sinne von 11.5. Als Verteidigung in der Tiefe liegt unter jedem Stack — dem Hauptstack und dem des Job-Kontexts (4.5) — ein Schutzbereich (MPU-Region ohne Zugriff, Watchpoint oder Kanarienwort mit Prüfung am Tick-Ende); ein Zugriff darauf beweist einen TCB-Fehler, nicht einen Programmfehler. Weist das Ziel ihn ab und läuft weiter, oder findet es ihn am Tick-Ende, ist er `Runtime(Hardware)`; ist der Stack selbst hineingewachsen oder hält das Ziel beim Zugriff an, setzt es zurück — spätestens über den Watchdog —, denn auf einem zerstörten Stack lässt sich nichts mehr zustellen.
 - **Speicherschutz.** Das Programm braucht keinen Schutz (es kann per Konstruktion nicht außerhalb seiner Objekte schreiben); der Schutz wendet sich gegen die TCB und verwandelt stille Korruption des Programmzustands in einen definierten Fault `Runtime(Hardware)` mit Angabe der Region, im nächsten Tick für alle Maschinen. Auf Zielen mit MPU ist der Programmzustand eine eigene Region, beschreibbar nur, solange die Runtime den Rahmen rechnen lässt — im Schritt (12.1, vom Abtasten bis vor den Commit), beim Laden des Journals, beim Übernehmen eines `tunable param` oder eines Job-Ergebnisses. Sonst ist sie schreibgeschützt: im Commit und für die Output-Treiber, zwischen den Ticks, im Job-Kontext und in jeder ISR, auch einer, die den Schritt unterbricht. Der abgewiesene Zugriff findet nicht statt. Eine Trennung innerhalb der TCB (Runtime gegen Treiber, Treiber gegen Treiber) verlangt die Sprache nicht: Sie schützte die TCB vor sich selbst und kostete eigene Stacks für Handler und eine Umschaltung je ISR — Code in genau der TCB, gegen deren Fehler sie schützen soll. Ziele, deren Schutzeinheit sich zur Laufzeit nicht umschalten lässt (RISC-V-PMP im Maschinenmodus mit gesperrten Einträgen), haben nur den Schutzbereich unter dem Stack.
 - HAL-Treiber (SPI/I²C/UART/CAN/ADC/PWM) als Rust-Traits mit typsicheren Kanaladressen.
-- Hardware-Watchdog; Outputs auf `safe` bei Reset-Ursache Watchdog vor Neustart des Programms. Die Schleife bestätigt ihn nach dem Schritt (12.1) und im Schlaf an jeder Tickgrenze, die sie abwartet (9.9): Er soll sehen, dass die Tickquelle lebt, und schlägt in einem langen `idle` nicht zu. Seine Frist sind zwei Perioden und ein blockierender NVM-Vorgang (8.10); ein Tick, der darüber hinaus überzieht, ist kein Überlauf mehr (7.3), sondern ein Stillstand, und der nächste Lauf beginnt mit `boot_reason = WATCHDOG` (12.7). Er wacht im Betrieb; ein Konformitätslauf in logischer Zeit wartet auf die Leitung und ist kein Betrieb (13.8). Das geordnete Ende eines Laufs (12.7) darf auf die Leitung warten und hat dafür eine eigene Frist. Hält nur ein Reset den Watchdog an, geht die Plattform über einen Reset in Tiefschlaf und Bootloader, wo niemand ihn bedient.
+- Hardware-Watchdog; Outputs auf `safe` bei Reset-Ursache Watchdog vor Neustart des Programms. Die Schleife bestätigt ihn nach dem Schritt (12.1) und im Schlaf an jeder Tickgrenze, die sie abwartet (9.9): Er soll sehen, dass die Tickquelle lebt, und schlägt in einem langen `idle` nicht zu. Seine Frist sind zwei Perioden und ein blockierender NVM-Vorgang (8.10); ein Tick, der darüber hinaus überzieht, ist kein Überlauf mehr (7.3), sondern ein Stillstand, und der nächste Lauf beginnt mit `previous_run = WATCHDOG` (12.7). Er wacht im Betrieb; ein Konformitätslauf in logischer Zeit wartet auf die Leitung und ist kein Betrieb (13.8). Das geordnete Ende eines Laufs (12.7) darf auf die Leitung warten und hat dafür eine eigene Frist. Hält nur ein Reset den Watchdog an, geht die Plattform über einen Reset in Tiefschlaf und Bootloader, wo niemand ihn bedient.
 - WCET-Nachweis: statisches Budget (9.4.3) × kalibrierte Kosten, Verifikation per Zyklenzähler (DWT) in HIL-Läufen; optional externe WCET-Analyse auf dem Binärcode, die durch die schleifenbeschränkte, rekursionsfreie Struktur unproblematisch ist.
 - Telemetrie über UART/CAN/Ethernet mit reduziertem Umfang (Zustandspfad, Faults, `pub var`).
 - `persist`: journalisierte NVM-Schreibvorgänge (Log je Slot, Sektorwechsel bei vollem Slot, CRC, Typ-Hash), Rate durch `min_interval` begrenzt.
 - Tick-Quelle (7.1): Timer-Update oder PWM-Periode als Tick-Interrupt; `samples`-Kanäle per ADC-DMA in einem auf das Tick-Ereignis ausgerichteten Fenster (Strommessung in der PWM-Mitte); Abweichung der Periode → `Runtime(Hardware)`.
 - Schlaf: Systemschlaf nach 9.9 als Low-Power-Modus (WFI/STOP) mit Wake-Quellen als Interrupts; Timer-Capture liefert Zeitstempel für `Edge`-Streams; geplante Ausgaben über Compare-Kanäle.
-- **Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`).** Auf vielen Ein-Chip-Systemen läuft Code über einen Instruktions-Cache direkt aus dem Flash, und jeder Flash-Schreib- oder Löschzugriff deaktiviert diesen Cache. (1) *RAM-Residenz:* Code, der aus dem Flash läuft, steht während eines Schreibzugriffs still (Sektorlöschung: zweistellige Millisekunden). Tick-Interrupt, Runtime-Hauptschleife und der übersetzte Takt-Code samt den Bibliotheksroutinen, die er im Tick ruft (Soft-Float, `fma`, `sqrt`), liegen deshalb im Instruktions-RAM oder im ROM des Chips, alle im Tick berührten Daten im Daten-RAM — auch *Konstanten*, die der Tick liest: DFA-Tabellen, `const`-Tabellen (`table<A, B>`), Einheitentabellen, `safe`-Werte (Kopie beim Start; `takt size` weist sie aus); das Profil prüft `takt size` statisch gegen die RAM-Größen (10, Zeile 39). (2) *`persist` außerhalb des Ticks:* Hält der Flash-Zugriff den Kern nicht an (`nvm_blocking = false` in 8.10: eigener Treiber, der das Kommando anstößt und den Status pollt, oder ein getrennter Datenspeicher), schreibt das Journal während der Tick aus dem RAM weiterläuft; `takt size --object` verlangt dann die RAM-Residenz aller Symbole des Programms, denn ein Flash-Zugriff des Ticks wäre ein Stillstand. Hält er den Kern an (`nvm_blocking = true`, die Regel bei ROM-Routinen und einem Flash für Code und Daten), kostet ein Schreibvorgang `⌈(erase + 2·program) / T₀⌉` Perioden, und die Runtime schreibt nur, wenn die Wartezeit bis zur nächsten Frist ihn deckt — in Schlaffenstern eines `idle`-Zustands (9.9) und vor `reboot`/Deep Sleep — oder wenn das Programm `overrun = alert` wählt (7.3); Prüfung 32 urteilt darüber. Wer häufig schreibt, wählt Hardware ohne diesen Preis: FRAM, EEPROM, Dual-Bank-Flash oder einen Datenflash neben dem Codeflash. (3) *Schlaf:* Ein Schlafmodus, der den RAM erhält, entspricht `idle` (virtuelle Ticks, Satz 9.9.1); ein Tiefschlaf ohne RAM-Erhalt beendet den Lauf und startet ihn mit `boot_reason = DEEP_SLEEP_WAKE` neu (12.7). (4) *Numerik:* Kerne ohne FPU rechnen mit `int[U]` (3.2) oder mit `system: float = f32` (4.2); das typisierte Kostenmodell (9.4.3) macht jede f64-Operation mit ihrem Kostenanteil sichtbar. (5) *Zeitgeber:* Hardware-Timer als `tick_source`, Timer-Compare-Einheiten für geplante Ausgaben (`jitter` im Mikrosekundenbereich auf Timer-fähigen Pins), ADC-DMA für `samples`; Ereignis-Matrizen der Peripherie (Trigger ohne CPU) eignen sich für einfache Trigger (7.5, v1.2). (6) *Funk:* nur im RTOS-Profil (12.8).
+- **Targets mit XIP-Flash und Cache-Stall (Profilfamilie `xip_flash`).** Auf vielen Ein-Chip-Systemen läuft Code über einen Instruktions-Cache direkt aus dem Flash, und jeder Flash-Schreib- oder Löschzugriff deaktiviert diesen Cache. (1) *RAM-Residenz:* Code, der aus dem Flash läuft, steht während eines Schreibzugriffs still (Sektorlöschung: zweistellige Millisekunden). Tick-Interrupt, Runtime-Hauptschleife und der übersetzte Takt-Code samt den Bibliotheksroutinen, die er im Tick ruft (Soft-Float, `fma`, `sqrt`), liegen deshalb im Instruktions-RAM oder im ROM des Chips, alle im Tick berührten Daten im Daten-RAM — auch *Konstanten*, die der Tick liest: DFA-Tabellen, `const`-Tabellen (`table<A, B>`), Einheitentabellen, `safe`-Werte (Kopie beim Start; `takt size` weist sie aus); das Profil prüft `takt size` statisch gegen die RAM-Größen (10, Zeile 39). (2) *`persist` außerhalb des Ticks:* Hält der Flash-Zugriff den Kern nicht an (`nvm_blocking = false` in 8.10: eigener Treiber, der das Kommando anstößt und den Status pollt, oder ein getrennter Datenspeicher), schreibt das Journal während der Tick aus dem RAM weiterläuft; `takt size --object` verlangt dann die RAM-Residenz aller Symbole des Programms, denn ein Flash-Zugriff des Ticks wäre ein Stillstand. Hält er den Kern an (`nvm_blocking = true`, die Regel bei ROM-Routinen und einem Flash für Code und Daten), kostet ein Schreibvorgang `⌈(erase + 2·program) / T₀⌉` Perioden, und die Runtime schreibt nur, wenn die Wartezeit bis zur nächsten Frist ihn deckt — in Schlaffenstern eines `idle`-Zustands (9.9) und vor dem Ende eines Laufs (12.7) — oder wenn das Programm `overrun = alert` wählt (7.3); Prüfung 32 urteilt darüber. Wer häufig schreibt, wählt Hardware ohne diesen Preis: FRAM, EEPROM, Dual-Bank-Flash oder einen Datenflash neben dem Codeflash. (3) *Schlaf:* Ein Schlafmodus, der den RAM erhält, entspricht `idle` (virtuelle Ticks, Satz 9.9.1); ein Schlaf ohne RAM-Erhalt liegt zwischen zwei Läufen (`next_run = AFTER(delay)` oder `ON_WAKE`, 12.7). (4) *Numerik:* Kerne ohne FPU rechnen mit `int[U]` (3.2) oder mit `system: float = f32` (4.2); das typisierte Kostenmodell (9.4.3) macht jede f64-Operation mit ihrem Kostenanteil sichtbar. (5) *Zeitgeber:* Hardware-Timer als `tick_source`, Timer-Compare-Einheiten für geplante Ausgaben (`jitter` im Mikrosekundenbereich auf Timer-fähigen Pins), ADC-DMA für `samples`; Ereignis-Matrizen der Peripherie (Trigger ohne CPU) eignen sich für einfache Trigger (7.5, v1.2). (6) *Funk:* nur im RTOS-Profil (12.8).
 
 ### 12.4 Sicherheitsmechanismen außerhalb der Sprache
 Heartbeat vom Tick-Thread zu jedem I/O-Gerät; Geräte setzen Outputs bei Heartbeat-Verlust auf konfigurierte Safe-Werte (identisch zu den `safe`-Deklarationen; der Compiler exportiert sie in die Hardware-Konfiguration, `takt check --hw-export DATEI`, und Prüfung 60 hält beide gleich) und verwerfen dabei ausstehende geplante Ausgaben. Damit ist der Verlust des Steuerrechners selbst kein unsicherer Zustand — das schließt die Lücke, die kein Sprachbeweis schließen kann.
@@ -1982,39 +1981,25 @@ Der Treiber eines Kanals ist das Gerät seiner Adresse, ihr erstes Segment (`hw(
 
 `Runtime(Driver)` wird den Besitzern der betroffenen Outputs vorgemerkt, `Runtime(Hardware)` allen Maschinen; beide wirken im selben Tick — bei aktiven Maschinen zu Beginn ihres Schritts, bei den übrigen in der Abort-Phase (5.4, 9.4). Ein Treiber, der auf der Output-Seite in jedem Tick versagt, eskaliert seine Besitzer über den Fault-Wald nach `FAULTED`; ein Treiber, der nur liefert, stört ohne steuernde Nutzer nichts. Diese Prüfungen machen Treiber nicht korrekt, aber jede Verletzung ihrer Verträge sichtbar — der Übergang von „stille Korruption" zu „definierte Qualität oder definierter Fault" ist der Kern des defensiven Rands. Treiber-Crates enthalten kein `unsafe` außerhalb geprüfter HAL-Schichten und liefern Fuzzing-Ziele für Rahmung und Zeitstempelung; ihre Konformität misst 13.8.
 
-### 12.7 Plattformschnittstelle (System-Channels, v1.1)
-Firmware-Validierung, Golden-Image-Fallback und koordinierte Neustarts sind Aufgaben der Plattform (Startstufe, Runtime). Die Sprache braucht dafür nur Sichtbarkeit und Hebel — beides sind gewöhnliche Channels:
+### 12.7 Anfang und Ende eines Laufs (System-Channels, v1.1)
+Ein Programm besitzt seinen Lauf, nicht die Plattform. Ein Lauf beginnt mit s0 und den `persist`-Werten (5.9) und endet geordnet, wenn das Programm es verlangt, oder ungeordnet, wenn der Watchdog der Runtime ihn abbricht (12.3) oder die Plattform ihn verliert. Was zwischen zwei Läufen geschieht — ein Neustart des Chips, ein Schlaf ohne RAM, ein Host, der ein eingebettetes Programm später wieder startet —, ist Sache der Plattform; ebenso Bootloader, Image-Wechsel und Firmware-Validierung, deren Kanäle ein Gerät der Plattform über seine Hardware-Konfiguration anbietet (8.10, Beispiele 14.7 und 14.8). Vom Lauf sieht die Sprache zwei Kanäle des eingebauten Geräts `sys`:
 ```
-input  boot_reason   : BootReason @ hw("sys/boot_reason")  # POWER_ON, WATCHDOG, SOFTWARE, DEEP_SLEEP_WAKE, TRIAL
-input  image_state   : ImageState @ hw("sys/image_state")  # CONFIRMED, TRIAL
-input  reset_count   : int        @ hw("sys/reset_count")
-output image_confirm : bool       @ hw("sys/image_confirm") with safe = false
-output reboot        : RebootCmd  @ hw("sys/reboot")        with safe = NONE  # NONE, RESTART, DEEP_SLEEP, DEEP_SLEEP_FOR(duration)
+input  previous_run : PreviousRun @ hw("sys/previous_run")               # NONE, ENDED, WATCHDOG
+output next_run     : NextRun     @ hw("sys/next_run") with safe = NONE  # NONE, NOW, AFTER(delay), ON_WAKE, ON_START
 ```
-Die Enums `BootReason`, `ImageState` und `RebootCmd` sind vordefiniert, ebenso das Record `EfuseBlock` (`pubkey : bytes<64>`, `min_version : u32`, `secure_boot : bool`) und das Enum `EfuseCmd` (`NONE`, `BURN_MIN_VERSION(version)`, `BURN_SECURE_BOOT`). Das Gerät `sys` ist eingebaut: Prüfung 60 kennt seine Kanäle — die fünf oben, die vier Start-Channels und `sys/clock` (7.4) — mit Richtung und Typ ohne Hardware-Konfiguration, und eine Adresse `sys/…`, die es nicht gibt, ist ein Fehler; welche übrigen Channels eine Plattform anbietet, steht in ihrer Hardware-Konfiguration (8.10).
-- **Reset-Ursache und Zähler.** `boot_reason` nennt, womit dieser Lauf begann: `POWER_ON` mit dem Einschalten oder einem Reset, der die Plattform von vorn beginnen lässt (Reset-Pin, Debugger, Unterspannung); `WATCHDOG` mit dem Watchdog der Runtime (12.3); `SOFTWARE` mit `reboot = RESTART`; `DEEP_SLEEP_WAKE` mit dem Wecken aus dem Tiefschlaf; `TRIAL` mit dem ersten Start eines neuen Images auf Probe (Muster unten). `reset_count` zählt die Starts in Folge, denen kein geordnetes Ende vorausging: 0 nach `POWER_ON` und nach einem Lauf, den ein Kommando dieses Abschnitts beendete (`reboot`, `boot_jump`), sonst eins mehr als im vorigen Lauf. So sieht ein Programm eine Reset-Schleife, die `persist` nicht festhält — ein Lauf, der vor seinem ersten Journal-Eintrag endet, hinterlässt dort nichts; die Neustarts, die es selbst befiehlt, zählt es in `persist`, das vor dem Kommando synchron geschrieben wird. Beides hält die Plattform außerhalb des Programms (Plattformblock), denn im Profil `boot` lesen Startprogramm und Anwendung dieselben Werte, und ihre `persist`-Journale sind verschiedene: Die Zählung überlebt Neustart, Watchdog und Tiefschlaf, aber nicht das Ausschalten; der Zustand der Images überlebt auch das Ausschalten.
-- **Muster TRIAL → SELFTEST → CONFIRM.** Nach einem Update startet die Plattform das neue Image im Zustand TRIAL; das Programm läuft seinen Selbsttest; erreicht er PASS, setzt es `image_confirm = true`, und die Plattform markiert das Image als gut. Erreicht das Programm vorher `FAULTED` oder greift der Watchdog, bootet die Plattform das vorherige Image (Beispiel 14.7). Eine Plattform ohne Startstufe hat ein einziges Image, und es gilt als bestätigt: `image_state` ist dort `CONFIRMED`, und `image_confirm` bewirkt nichts.
-- **Neustart aus sicherem Zustand.** `reboot = RESTART` wird nach dem Commit des Ticks ausgeführt, nachdem alle Outputs auf `safe` stehen.
-- **Tiefschlaf.** `reboot = DEEP_SLEEP_FOR(duration = d)` beendet den Lauf wie `RESTART`, und die Plattform schläft ohne RAM-Erhalt, bis `d` vergangen ist oder eine Wake-Quelle weckt; `reboot = DEEP_SLEEP` schläft ohne Zeitgeber, bis eine Wake-Quelle weckt. Wake-Quellen sind dieselben wie für `idle` (5.10): Inputs mit `wake = true`, soweit die Plattform sie ohne RAM bedienen kann — welche das sind, nennt ihre Hardware-Konfiguration (`deep_wake`, 8.10). Ein Command weckt nicht; die Verbindung, über die es käme, schläft mit. Die Weckzeit ist eine Entscheidung des Programms und darum ein Feld des Kommandos, kein zweiter Kanal, der im selben Tick zu ihm passen müsste. `d` zählt ab dem Eintritt in den Tiefschlaf, so genau, wie der Zeitgeber der Plattform dort geht; eine Dauer unter der kürzesten, die die Plattform schlafen kann, schläft diese. Der nächste Lauf beginnt mit `boot_reason = DEEP_SLEEP_WAKE` und s0 aus `persist` (5.9) — kein virtueller Tick, Satz 9.9.1 gilt nur für RAM-erhaltenden Schlaf; Schemaänderungen über Firmware-Grenzen sind durch den Typ-Hash abgedeckt. Schreibt ein Programm `DEEP_SLEEP` und weckt keine seiner Wake-Quellen aus dem Tiefschlaf, wacht es nur durch einen Reset auf; Prüfung 60 warnt davor.
-- **Start-Channels.**
-  ```
-  input  efuse           : EfuseBlock @ hw("sys/efuse")                                             # Schluessel-Hashes/-Werte, min_version, Secure-Boot-Flags (vordefiniertes Record)
-  input  image_confirmed : [2] bool   @ hw("sys/image_confirmed")                                   # je Slot: vom Anwendungsimage bestaetigt
-  output boot_jump       : u8         @ hw("sys/jump")       with safe = 0                          # Sprung in Slot k als k + 1, 0 heisst kein Sprung; beendet den Lauf nach dem Commit
-  output efuse_burn      : EfuseCmd   @ hw("sys/efuse_burn") with safe = NONE, irreversible = true  # einmalig programmierbare Bits
-  ```
-  Vor `boot_jump`, `reboot` und Deep Sleep schreibt die Runtime ausstehende `persist`-Änderungen synchron (5.9), danach stehen alle Outputs auf `safe`.
+Die Enums `PreviousRun` und `NextRun` sind vordefiniert und offen (2.5). Das Gerät `sys` ist eingebaut: Prüfung 60 kennt seine Kanäle — die zwei oben und `sys/clock` (7.4) — mit Richtung und Typ ohne Hardware-Konfiguration, und eine Adresse `sys/…`, die es nicht gibt, ist ein Fehler. Läuft ein Programm eingebettet, stellt sein Host die Kanäle bereit.
+- **Das Ende eines Laufs.** Steht nach dem Commit eines Ticks auf `next_run` ein Wert außer `NONE`, endet der Lauf geordnet: Die Runtime schreibt ausstehende `persist`-Änderungen synchron (5.9), danach stehen alle Outputs auf `safe`, und der Golden-Trace schreibt die Zeile `end` (`grammar/trace.md`). Die Plattform hat den Commit dieses Ticks gesehen, bevor die Outputs auf `safe` gehen, und kann nach dem Ende darauf handeln (Beispiel 14.8). Der Wert sagt, wann der nächste Lauf beginnt: `NOW` sofort; `AFTER(delay = d)` nach `d`, ab dem Ende gezählt und so genau, wie der Zeitgeber der Plattform geht — eine Dauer unter der kürzesten, die die Plattform kann, gilt als diese —, oder früher, wenn eine Wake-Quelle weckt; `ON_WAKE`, wenn eine Wake-Quelle weckt; `ON_START` mit dem nächsten Start der Plattform, also beim Einschalten, nach einem Reset oder wenn der Host das Programm wieder startet. Wake-Quellen sind dieselben wie für `idle` (5.10): Inputs mit `wake = true`, soweit die Plattform sie zwischen zwei Läufen bedienen kann (`deep_wake`, 8.10); ein Command weckt nicht, die Verbindung, über die es käme, ruht mit. Ob die Plattform den Chip dazwischen schlafen legt oder neu startet, sagt die Sprache nicht. `idle` (9.9) ist Ruhe innerhalb eines Laufs, mit erhaltenem Zustand und virtuellen Ticks; zwischen zwei Läufen überlebt nur `persist`, und Satz 9.9.1 gilt dort nicht. Schreibt ein Programm `ON_WAKE` und hat keine Wake-Quelle, beginnt der nächste Lauf erst mit dem nächsten Start; Prüfung 60 warnt davor und nennt `ON_START`, wenn das gemeint ist.
+- **Der Anfang eines Laufs.** `previous_run` sagt, wie der vorige Lauf desselben Programms endete: `NONE`, wenn keiner bekannt ist — beim ersten Start, nach dem Einschalten, einem Stromausfall oder einem Reset, den die Plattform keinem Lauf zuordnet —; `ENDED` nach einem geordneten Ende über `next_run`; `WATCHDOG`, wenn der Watchdog der Runtime ihn abbrach (12.3). Mehr unterscheidet die Sprache nicht: Was ein Lauf vor seinem geordneten Ende vorhatte, hält er selbst in `persist` fest, das vor dem Ende geschrieben ist; der Kanal meldet nur, was ein Programm nicht selbst wissen kann. In der Simulation kommt `previous_run` aus dem Stimulus wie jeder Input.
 - **Irreversible Outputs** (`irreversible = true`): Der Compiler verlangt, dass jede Zuweisung in einer Sequenz unmittelbar auf ein `expect` folgt, das die Voraussetzung prüft, und dass mindestens ein Szenario die Zuweisung abdeckt (13.2); der Lauf-Header nennt alle irreversiblen Outputs.
 
 ### 12.8 Laufzeitprofile (v1.1)
-`system: target = <profil>` wählt Runtime, Kostentabelle und Plattformregeln; das Profil steht im Lauf-Header. Es gibt genau die vier Profile dieser Tabelle; ein anderes Wort ist ein Fehler.
+`system: target = <profil>` wählt Runtime, Kostentabelle und Plattformregeln; das Profil steht im Lauf-Header. Es gibt genau die drei Profile dieser Tabelle; ein anderes Wort ist ein Fehler.
 
 | Profil | Umgebung | Zeitgarantie |
 |---|---|---|
 | `linux_rt` | PREEMPT_RT-Box (12.2) | empirisch (Konformitätsmessung), Überschreitung ist Fault |
 | `baremetal` | `no_std` auf MCU (12.3) | statisch (Budget × kalibrierte Tabelle) plus Messung |
 | `rtos` | Takt als höchstpriore Aufgabe unter einem RTOS (z. B. wenn ein Funkstack ein bestimmtes Betriebssystem verlangt) | empirisch: Tick aus Hardware-Timer-ISR im RAM, Task-Benachrichtigung; Jitter durch Funk-ISRs und kritische Abschnitte (zweistelliger Mikrosekundenbereich, zu messen); bei T₀ ≥ 1 ms und WCET ≪ T₀ tragfähig; Überschreitung ist `Runtime(Overrun)` |
-| `boot` | Startprogramme, die vor jeder anderen Software laufen: minimale Runtime (Tick aus einem Timer, UART-Stream, Flash-Gerät nach 8.11, Watchdog, Zeitbasis), kein Recorder außer einem kompakten RAM-Log für Replay, `--trace = off`, Code und Konstanten im RAM, Flash-Budget gegen die Startpartition (11.5) | statisch wie `baremetal`; ein periodischer Tick von 1 ms genügt (30 Sequenzschritte kosten 30 ms, 1 MB Hashen bei 4 KB je Tick 250 ms); ein freilaufender Tick-Modus wurde erwogen und verworfen — zwei Zeitmodelle für Millisekunden Gewinn |
 
 Im `rtos`-Profil gehören das RTOS und die Funktreiber zur Trusted Computing Base; die Sprachgarantien (Sätze 9.4.x) gelten unverändert für das Programm, die Zeitgarantie wird gemessen statt bewiesen. Funkdaten treten als Streams (`stream<bytes<N>>`, Rahmung im Treiber) in das Prozessabbild ein. Bare-Metal-Funk (Funkstack in `no_std` mit eigenem Heap und Zeitgebern) wird nicht unterstützt, weil er nicht deterministisch ist. Für sicherheitsrelevante Produkte wird die Zwei-Chip-Architektur empfohlen: Takt auf einem dedizierten MCU, Funk auf einem Kommunikations-Koprozessor über UART/SPI-Streams — der Funkteil liegt dann vollständig außerhalb der TCB.
 
@@ -2056,9 +2041,9 @@ Warum diese Regeln schon heute gelten: v1-Programme laufen auf dem Hauptknoten m
 ```
 record UartStatus layout little:
     flags : u32 with bits:
-        tx_full : bool at 0 ro         # nur lesbar
-        oflow   : bool at 1 w1c        # Schreiben einer Eins löscht
-        rx_level: u8   at 8..12
+        tx_full  : bool at 0 ro   # nur lesbar
+        oflow    : bool at 1 w1c  # Schreiben einer Eins löscht
+        rx_level : u8 at 8..12
 
 port uart_st : UartStatus @ mmio(0x4000_1000)
 
@@ -2066,8 +2051,8 @@ driver machine uart0 every 10 ms:
     initial RUN
     state RUN:
         loop:
-            busy = uart_st.flags.tx_full      # sofortiges Registerlesen
-            uart_st.flags.oflow = true        # sofortiges Registerschreiben
+            busy = uart_st.flags.tx_full  # sofortiges Registerlesen
+            uart_st.flags.oflow = true    # sofortiges Registerschreiben
 ```
 
 **Was ein Port ist.** `port r : Rec @ mmio(ADR)` bindet einen Registerrecord an eine feste Adresse. Jeder Feldzugriff ist ein eigener Lade- oder Speichervorgang, **sofort und in Programmreihenfolge** — nicht zu Tick-Beginn abgetastet und nicht an das Tick-Ende verschoben, wie es ein Channel wäre (8.3). Das ist der ganze Unterschied zum übrigen I/O-Modell, und er ist beabsichtigt: Ein Statusregister, das man zweimal liest, soll zweimal gelesen werden, und ein Kommando, das vor dem nächsten stehen muss, darf nicht umsortiert werden. Im erzeugten Code ist das `load volatile` und `store volatile` an der Adresse. Auf einem Ziel mit Betriebssystem liegt an der Adresse kein Register; dort ruft der erzeugte Code für jeden Zugriff die Runtime, die die Adresse abbildet — der Testrahmen auf das Gerätemodell wie der Interpreter.
@@ -2577,18 +2562,18 @@ Der Überstrom-Interlock und der Panic-Handler gelten in allen Unterzuständen v
 system:
     tick = 10 ms
 
-input  cell_v        : [4] float[V] in 2.0..4.5 V @ hw("afe/cell[0:4]")     with max_age = 50 ms
-input  pack_i        : float[A] in -10..10 A      @ hw("afe/current")       with max_age = 50 ms
-input  temp          : [2] float[degC]            @ hw("afe/ntc[0:2]")      with max_age = 200 ms
-input  charger       : bool                       @ hw("gpio/vbus_det")     with wake = true
-input  button        : stream<Edge>               @ hw("gpio/btn")          with max_rate = 50 Hz, wake = true
-input  chg_status    : u8                         @ hw("i2c1/0x6B/0x0B")    with max_age = 500 ms
-input  image_state   : ImageState                 @ hw("sys/image_state")  # 12.7
-output image_confirm : bool                       @ hw("sys/image_confirm") with safe = false
-output fet_chg       : bool                       @ hw("gpio/fet_chg")      with safe = false
-output fet_dis       : bool                       @ hw("gpio/fet_dis")      with safe = false
-output load_test     : bool                       @ hw("gpio/test_load")    with safe = false
-output led           : u8                         @ hw("pwm/led")           with safe = 0
+input  cell_v     : [4] float[V] in 2.0..4.5 V @ hw("afe/cell[0:4]")  with max_age = 50 ms
+input  pack_i     : float[A] in -10..10 A      @ hw("afe/current")    with max_age = 50 ms
+input  temp       : [2] float[degC]            @ hw("afe/ntc[0:2]")   with max_age = 200 ms
+input  charger    : bool                       @ hw("gpio/vbus_det")  with wake = true
+input  button     : stream<Edge>               @ hw("gpio/btn")       with max_rate = 50 Hz, wake = true
+input  chg_status : u8                         @ hw("i2c1/0x6B/0x0B") with max_age = 500 ms
+input  on_trial   : bool                       @ hw("ota/trial")  # Update-Geraet der Plattform (12.7)
+output confirm    : bool                       @ hw("ota/confirm")    with safe = false
+output fet_chg    : bool                       @ hw("gpio/fet_chg")   with safe = false
+output fet_dis    : bool                       @ hw("gpio/fet_dis")   with safe = false
+output load_test  : bool                       @ hw("gpio/test_load") with safe = false
+output led        : u8                         @ hw("pwm/led")        with safe = 0
 
 param V_MAX     : float[V] in 4.0..4.3 V = 4.2 V
 param V_MIN     : float[V] in 2.5..3.2 V = 3.0 V
@@ -2644,8 +2629,8 @@ machine bms every 100 ms:
                     last_test = SelftestResult(passed = false, code = 1, r_int = r_int)
                     -> DEGRADED
                 last_test = SelftestResult(passed = true, code = 0, r_int = r_int)
-                if image_state.or(CONFIRMED) == TRIAL:  # neues Image nur nach bestandenem Selbsttest bestaetigen; ohne Plattformangabe: bestaetigt
-                    image_confirm = true
+                if on_trial.or(false):  # ein neues Image erst nach bestandenem Selbsttest bestaetigen
+                    confirm = true
                 -> RUN
 
         state RUN:
@@ -2686,17 +2671,18 @@ machine bms every 100 ms:
         when fault_count > 20: -> FAULTED
         after 10 s: -> SELFTEST
 ```
-`var` in einer Sequenz wird zur zustandslokalen Variablen gehoben (6.2), damit `v0` über die Zeitgrenze `wait 200 ms` hinweg lebt. `.to(mohm)` ist erlaubt, weil `V/A` und `mohm` dieselbe Dimension haben (3.2). Die Persistenz überlebt Neustarts; `fault_count` begrenzt Neustartschleifen über `-> FAULTED`. Nach einem Firmware-Update bestätigt das Programm das neue Image erst nach bestandenem Selbsttest (`image_confirm`, 12.7); scheitert der Selbsttest oder greift der Watchdog, bootet die Plattform das vorherige Image. Im Zustand `STANDBY` schläft die MCU; der Übergang auf die Tastenflanke ist ein Stream-Guard über eine Wake-Quelle (5.10), Interlocks gelten dort bewusst nicht — ein Übertemperatur-Weckereignis wäre als Wake-Quelle (Komparator) zu deklarieren.
+`var` in einer Sequenz wird zur zustandslokalen Variablen gehoben (6.2), damit `v0` über die Zeitgrenze `wait 200 ms` hinweg lebt. `.to(mohm)` ist erlaubt, weil `V/A` und `mohm` dieselbe Dimension haben (3.2). Die Persistenz überlebt Neustarts; `fault_count` begrenzt Neustartschleifen über `-> FAULTED`. Nach einem Firmware-Update bestätigt das Programm das neue Image erst nach bestandenem Selbsttest; scheitert der Selbsttest oder greift der Watchdog, bootet die Plattform das vorherige Image. Das Update ist ein Gerät der Plattform wie jedes andere (`ota/…`, 12.7). Im Zustand `STANDBY` schläft die MCU; der Übergang auf die Tastenflanke ist ein Stream-Guard über eine Wake-Quelle (5.10), Interlocks gelten dort bewusst nicht — ein Übertemperatur-Weckereignis wäre als Wake-Quelle (Komparator) zu deklarieren.
 
 
-### 14.8 Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)
+### 14.8 Image-Auswahl und -Validierung beim Start (Startprogramm; Chunk-Hash, Job, Kommando + Status, Persistenz)
 ```
 system:
     tick   = 1 ms
-    target = boot
+    target = baremetal
     float  = f32
 
-# FlashCmd, FlashStatus (8.11) und EfuseBlock (12.7) sind vordefiniert;
+# FlashCmd und FlashStatus (8.11) sind vordefiniert; die Kanaele `boot/…`
+# stellt die Startstufe bereit, deren Teil das Programm ist (8.10, 12.7).
 # Adressen und Laengen des Flash-Geraets zaehlen Bytes ohne Einheit.
 enum HeaderErr: MAGIC, SIZE, VERSION
 
@@ -2708,13 +2694,18 @@ record ImageHeader layout little:
     hash    : bytes<32>
     sig     : bytes<64>
 
-input  flash_status    : FlashStatus         @ hw("flash/status") with max_age = 10 ms
-input  flash_rx        : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
-output flash_cmd       : FlashCmd            @ hw("flash/cmd")    with safe = NONE
-input  efuse           : EfuseBlock          @ hw("sys/efuse")  # pubkey: bytes<64>, min_version: u32, ... (12.7)
-input  image_confirmed : [2] bool            @ hw("sys/image_confirmed")
-output boot_jump       : u8                  @ hw("sys/jump")     with safe = 0
-# log geht im Startprofil an die UART der Runtime (12.8)
+record BootKeys:
+    pubkey      : bytes<64>
+    min_version : u32
+
+input  flash_status : FlashStatus         @ hw("flash/status") with max_age = 10 ms
+input  flash_rx     : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
+output flash_cmd    : FlashCmd            @ hw("flash/cmd")    with safe = NONE
+input  keys         : BootKeys            @ hw("boot/keys")
+input  confirmed    : [2] bool            @ hw("boot/confirmed")  # je Slot: vom Anwendungsimage bestaetigt
+output slot         : u8                  @ hw("boot/slot")    with safe = 0
+output next_run     : NextRun             @ hw("sys/next_run") with safe = NONE
+# log geht an die UART der Runtime
 
 const SLOT_BASE  : [2] u32 = [0x10000, 0x110000]
 const HEADER_LEN : u32 = 109
@@ -2742,12 +2733,12 @@ machine bootloader:
         enter:
             idx = active
             for i in range(2):
-                if image_confirmed[i].or(false):  # bestaetigte Images setzen ihren Zaehler zurueck
+                if confirmed[i].or(false):  # bestaetigte Images setzen ihren Zaehler zurueck
                     trials[i] = 0
             if trials[idx] >= MAX_TRIALS and trials[1 - idx] < MAX_TRIALS:
                 idx = 1 - idx  # Fallback auf den anderen Slot
             if trials[idx] < 5:
-                trials[idx] += 1  # Versuch zaehlt vor dem Sprung; persist wird vor boot_jump geschrieben
+                trials[idx] += 1  # Versuch zaehlt vor dem Sprung; persist ist vor dem Ende des Laufs geschrieben
         when trials[idx] <= MAX_TRIALS: -> READ_HEADER
         when true: -> HALT
 
@@ -2755,7 +2746,7 @@ machine bootloader:
         enter:
             flash_cmd = READ(addr = SLOT_BASE[idx], size = 4096)
         when flash_rx as c:
-            hdr = parse_header(c.data, efuse.min_version)
+            hdr = parse_header(c.data, keys.min_version)
             flash_cmd = NONE
             -> CHECK_HEADER
         after 50 ms: -> SLOT_FAILED
@@ -2786,7 +2777,7 @@ machine bootloader:
         sequence:
             var digest = sha256_final(ctx)
             expect digest == img.hash, "hash mismatch in slot {idx}"
-            job v = ecdsa_p256_verify(key = efuse.pubkey, digest = digest, sig = img.sig)
+            job v = ecdsa_p256_verify(key = keys.pubkey, digest = digest, sig = img.sig)
             until v.done timeout 500 ms -> SLOT_FAILED
             expect v.result.or(false), "signature invalid in slot {idx}"
             -> JUMP
@@ -2795,7 +2786,8 @@ machine bootloader:
         enter:
             active = idx
             log "booting slot {idx}, version {img.version}"
-            boot_jump = (idx + 1) as u8  # Slot + 1, 0 heisst kein Sprung; beendet den Lauf nach dem Commit; persist zuvor synchron geschrieben
+            slot = (idx + 1) as u8  # Slot + 1, 0 heisst kein Sprung
+            next_run = ON_START     # Ende des Laufs: persist, dann safe; die Startstufe springt in den gesehenen Slot
 
     state SLOT_FAILED:
         enter:
@@ -2810,9 +2802,10 @@ machine bootloader:
 
     state HALT:
         enter:
-            log "no bootable image"  # Watchdog der Plattform loest den Neustart aus
+            log "no bootable image"
+            next_run = ON_START  # der naechste Versuch mit dem naechsten Start
 ```
-Was hier zusammenkommt: Der Header ist ein Drahtformat mit Konstantenfeld und Byte-Einheiten (3.7, 3.2); `parse_header` liefert `T!E` (3.8); Flash ist ein Gerät mit Kommando und Status (8.11); der Hash läuft als Chunk-Native mit einem Chunk je Tick, die Signaturprüfung als Job, dessen Fertigstellung ein Input ist (4.5); Versuchszähler und aktiver Slot überleben Neustarts (5.9) und werden vor dem Sprung synchron geschrieben (12.7); jeder Fehlerpfad endet in `SLOT_FAILED` oder `HALT`, nie in einem undefinierten Zustand. Die Stromausfallsicherheit des Schreibpfads (hier nicht gezeigt: Update über UART mit `PROGRAM`) prüft eine Kampagne über `CUT_AT_BYTE` des Flash-Modells (8.11).
+Was hier zusammenkommt: Der Header ist ein Drahtformat mit Konstantenfeld und Byte-Einheiten (3.7, 3.2); `parse_header` liefert `T!E` (3.8); Flash ist ein Gerät mit Kommando und Status (8.11); der Hash läuft als Chunk-Native mit einem Chunk je Tick, die Signaturprüfung als Job, dessen Fertigstellung ein Input ist (4.5); Versuchszähler und aktiver Slot überleben Neustarts (5.9) und sind geschrieben, bevor der Lauf endet und die Startstufe springt (12.7); jeder Fehlerpfad endet in `SLOT_FAILED` oder `HALT`, nie in einem undefinierten Zustand. Die Stromausfallsicherheit des Schreibpfads (hier nicht gezeigt: Update über UART mit `PROGRAM`) prüft eine Kampagne über `CUT_AT_BYTE` des Flash-Modells (8.11).
 
 ---
 
@@ -2823,7 +2816,7 @@ Die Stufen halten das Langfristbild an einem Ort. Alles in v1 ist der Kern, ohne
 | Stufe | Inhalt | Begründung / Bedingung |
 |---|---|---|
 | **v1 (Kern)** | Alles aus Abschnitt 1–9 ohne Stufenvermerk: Maschinen, Sequenzen, Einheiten, Ranges, Qualität, Fault-Wald, Multirate; Ereignisströme mit Cursor-Semantik, typisierte Muster, `on`-Handler, `until ... matches`, Ausgabeströme; Records, Summentypen, `match`, `T?`, `bytes`/`vec`/`line`/`table`, Bit-Operationen, Konversionen; `at`/`pulse`/`cancel`; `measure`/`verify`/`verdict`; zustandslokale `var`, `every`, `signal`, `break`, Instanz-Arrays, Parameter-Defaults; Korrekturen B6–B16; Abort-Phase (5.4), defensiver Treiberrand (12.6), Zähler-Scheduling (7.2), `tick_source` (7.1), `mat<R, C>` (3.11), kuratierte native Funktionen (4.5), `jitter`/`max_slew` (7.5, 3.5); degradierender Treiberrand mit `debounce`/`Suspect` (3.5, 12.6), Bestätigungszeit `check … for d` (5.6), `tick_tolerance … for N` (7.1), typisiertes Kostenmodell (9.4.3), `reader`/`writer` (3.9), XIP-Flash-Regeln (12.3); Darstellungsverengung (3.4), `system: float` (4.2), `fma` und Schnellvarianten (11.4), IEEE-Modus-Regel (4.2), Zielklassen (12.8), `takt bench` (13.8); Byte-Ringe (8.6), Zeigerübergabe/Scratch/Overlay (11.2), `takt size` mit Speicherbudget (11.5), Stack-Zusammensetzung und Schutzbereiche (12.3); interne Streams (8.6), Jobs und Chunk-Natives (4.5), `T!E` (3.8), `layout`-Details und `default` (3.7), Byte-Einheiten (3.2), Kommando+Status mit Flash-Modell (8.11), `inout`, Bereichsmuster, `w.fmt` (3.9), Journal-Anforderungen (5.9), Compile-Zeit-Auswertung und reproduzierbare Builds (11.3) | Ohne diese Stufe ist die digitale Hälfte der Anwendungen (Firmware, Protokolle) nicht schreibbar; die späteren Ergänzungen schließen Latenz-, Soundness- und Robustheitslücken. |
-| **v1.1** | `scenario`, `campaign`/`sweep` (13.6, 13.7); Konstantenvariablen in Generics (3.12); `persist var` (5.9); `idle`-Zustände mit Wake-Quellen und Systemschlaf (5.10, 9.9); Eigenschaftssprache `property` + BMC (13.3); Standardbibliothek vollständig (11.4); beschränktes `map<K, V, N>` (offene Adressierung über festes Array, worst case O(N), deterministische Iterationsreihenfolge) für Nachrichtentabellen; dimensionierte Matrizen `mat[R, C]`/`unitvec` (3.11); `tunable param` (8.4); `follows` (7.2); Oktagon-Analyse (3.4); Einheiten auf Integern (3.2); `len_field` (3.7); Geräteprofile (8.10); System-Channels (12.7); Laufzeitprofile inkl. `rtos` und `boot` (12.8); Start-Channels und irreversible Outputs (12.7); Projekt-Natives (4.5); `takt import-c` und Orakel-Modus (13.9) | Ergänzt Test-Workflow, Feldgeräte, Inbetriebnahme und Migration; jede Position ist unabhängig von den anderen. |
+| **v1.1** | `scenario`, `campaign`/`sweep` (13.6, 13.7); Konstantenvariablen in Generics (3.12); `persist var` (5.9); `idle`-Zustände mit Wake-Quellen und Systemschlaf (5.10, 9.9); Eigenschaftssprache `property` + BMC (13.3); Standardbibliothek vollständig (11.4); beschränktes `map<K, V, N>` (offene Adressierung über festes Array, worst case O(N), deterministische Iterationsreihenfolge) für Nachrichtentabellen; dimensionierte Matrizen `mat[R, C]`/`unitvec` (3.11); `tunable param` (8.4); `follows` (7.2); Oktagon-Analyse (3.4); Einheiten auf Integern (3.2); `len_field` (3.7); Geräteprofile (8.10); Anfang und Ende eines Laufs (12.7); Laufzeitprofile inkl. `rtos` (12.8); irreversible Outputs (12.7); Projekt-Natives (4.5); `takt import-c` und Orakel-Modus (13.9) | Ergänzt Test-Workflow, Feldgeräte, Inbetriebnahme und Migration; jede Position ist unabhängig von den anderen. |
 | **v1.2** | Gescopte Instanzen (5.11), `resume` (5.12), Trigger mit `arm`/`disarm`/`fired` (7.5), `capture<T, N>` (8.9), Generics über Typen (3.12); Treiberstufe: `port … @ mmio(…)` mit Registerrecords aus Bitfeldern, Zugriffe sofort und in Programmordnung (nicht am Commit), nur in `driver machine`, Budgetklasse `mem` mit gerätespezifischer Latenz, Gerätemodell in der Simulation Pflicht — Totalität bleibt, Hardware-Korrektheit ist Sache der Gerätemodell-Szenarien; damit können einfache Treiber (GPIO, UART-Polling, SPI-Flash-Kommandos) in Takt geschrieben werden; Startprogramme der ersten Generation behalten den Flash-Treiber in der Runtime. Beschränkte QP-Löser für modellprädiktive Regelung (feste Iterationszahl, deklarierte Kosten) als Bibliotheksbausteine; Trigger auf I/O-Knoten (7.5); `capture<T, N>` (8.9); Anforderungsreferenzen `req` (5.8, 13.4); History-Zustände (`resume`, gespeicherter Blattpfad); nutzerdefinierte native Funktionen mit Signatur- und Review-Prozess (4.5). Der frühere Punkt „instantane Kommunikation (`direct`) mit Kausalitätsanalyse" ist durch `follows` (v1.1) ersetzt. | Braucht Treiberarbeit; Natives erweitern die TCB und brauchen deshalb einen Prozess. |
 | **v2** | Verteilte Ausführung nach den Regeln in 12.9 (gelten schon heute; Box + MCU-Knoten): LET-Semantik über synchronisierte Uhren (PTP/EtherCAT-DC), Unit-Delay pro Netzhop, Trigger als Knotenprogramme; deterministische Bytecode-VM als zweites Backend nur für Logik-Updates ohne Reflash (gleiche MIR, gleiche Semantik) | Verteilte Runtime; Semantik bleibt die von 9.4 mit Netz-Delays als zusätzlichen Unit-Delays. |
 | **v3** | Qualifizierbarer Codegen (SCADE-Vorbild) und Tool-Qualifikation für IEC 61508 / DO-178C (13.4) | Zertifizierungskunde; Architektur (kleine MIR, Referenzinterpreter, differentielles Testen) ist darauf ausgelegt. |
@@ -2876,8 +2869,8 @@ Nicht-Ziele bleiben (0.3): Turing-Vollständigkeit im Tick, dynamische Datenstru
 | Szenarien | eigene Test-DSL · Maschinen im Sim-Build | **Maschinen** | eine Semantik, Coverage gratis |
 | Schlafen | tickless Runtime · `idle`-Zustände mit virtuellen Ticks | **`idle`-Zustände** | statisch prüfbar, Trace-Äquivalenz beweisbar (9.9) |
 | Nicht-Wake-Streams im Schlaf | Überlauf-Fault · verwerfen mit Alert | **verwerfen mit Alert** | sonst wäre der `idle`-Schritt keine Identität |
-| Weckzeit des Tiefschlafs | eigener Kanal `sys/wake_after` · Hardware-Konfiguration · Feld des Kommandos | **Feld des Kommandos: `DEEP_SLEEP_FOR(duration)`** | atomar mit dem Kommando und typgeprüft, additiv im offenen Enum (2.5); die Weckzeit entscheidet das Programm, welche Pins ohne RAM wecken, die Plattform |
-| `reset_count` | Starts seit dem Einschalten · alle Starts, im Flash gezählt · Starts in Folge ohne geordnetes Ende | **Starts in Folge ohne geordnetes Ende** | zeigt die Reset-Schleife, die `persist` nicht festhält; befohlene Neustarts zählt das Programm selbst; kein Flash-Schreibvorgang je Start |
+| Wann der nächste Lauf beginnt | eigener Kanal `sys/wake_after` · Hardware-Konfiguration · Feld des Kommandos | **Feld des Kommandos: `next_run = AFTER(delay)`** | atomar mit dem Ende und typgeprüft, additiv im offenen Enum (2.5); wann der nächste Lauf beginnt, entscheidet das Programm, was dazwischen geschieht, die Plattform |
+| Wie der vorige Lauf endete | Reset-Ursachen der Plattform · Zähler der Neustarts · drei Werte | **`NONE`, `ENDED`, `WATCHDOG`** | meldet nur, was das Programm nicht selbst wissen kann; was ein Lauf vorhatte, steht in `persist`, das vor dem geordneten Ende geschrieben ist; Reset-Ursachen und Zähler sind Auskünfte der Plattform |
 | Fertigstellung eines Jobs | sobald fertig · nach der deklarierten Dauer (logische Ausführungszeit) | **nach der deklarierten Dauer** | der Fertigstellungs-Tick wird eine Funktion der Inputs wie im Modell der Simulation; nur ein Job, der seine Dauer überschreitet, braucht die Aufzeichnung |
 | Watchdog im Schlaf | aussetzen · Frist über den längsten Schlaf · Bestätigung an jeder Tickgrenze | **an jeder Tickgrenze** | er prüft die Tickquelle, nicht die Rechnung; eine Frist über dem längsten `idle` machte ihn im Betrieb blind, und aussetzen lässt er sich nicht auf jedem Chip |
 | Persistenz | NVM-API · `persist var` | **`persist var`** | keine I/O im Nutzercode; Semantik = Wahl von s0 |
@@ -3046,3 +3039,7 @@ Die Änderung bricht Programme, die Felder direkt lasen (`f.id` wird `f.data.id`
 **`str<N>` im Muster zählt Bytes (3.9, 8.7; FB-358).** Die Tabelle in 8.7 sagte „höchstens N“ ohne Einheit; der Interpreter zählte Zeichen, der Codegen Bytes. `str<N>` fasst N Bytes, und `.len` zählt Bytes — eine Capture aus N Zeichen passte nicht in ihren eigenen Typ, sobald ein Zeichen mehr als ein Byte hat. Die Grenze zählt darum Bytes. Ein Ansatz von `has` beginnt an einem Zeichenanfang: Die Suche ab jeder Stelle im Codegen setzte auch mitten in einem Zeichen an und fand mit einem `str<N>` vorn einen früheren Start als der Interpreter. Gefunden mit Korpus 104.
 
 **Aufzeichnung ungebundener Kanäle (8.2, 12.5; FB-336, M10 Schritt 29d).** 8.2 sagt, die Runtime zeichne alle Kanäle auf, die das Programm nicht bindet; 12.5 nannte keine Zeile dafür, und kein Rahmen las einen solchen Kanal. Die Zeile heißt `rec <channel> <wert>` und hat die Form einer `in`-Zeile — Wert oder Qualität, wahlweise `t=` —, der Name ist die Adresse als Bezeichner wie beim Import: Wer `rec` durch `in` ersetzt, hat den Stimulus eines Programms, das den Kanal liest. Sie ist eine Metazeile wie `time`, denn für das Programm, das den Kanal nicht liest, ist sie keine Eingabe; Hashkette und Vergleich berührt sie nicht. Geschrieben wird in Tick 0 und bei jeder Änderung, so wie ein Stimulus hält (T4). Die MIR führt die Kanäle als Metadaten ohne Eintrag in der Typtabelle: Ein Kanal mehr in der Konfiguration ändert den Logik-Hash nicht. Ein Strom wird je Element aufgezeichnet (FB-359): ein `u8` als Zahl, jedes andere Element in seiner Drahtform `0x…`, die `in` für Records, `bytes` und `line` nimmt — die Textform eines `line`-Elements trüge weder Steuerzeichen außer Tab und Zeilenende noch ungültiges UTF-8, und eine Zahl in `0x…` kennt der Trace nicht, also gibt es keine Verwechslung. Ein `u8`-Element anderer Länge kann keine `in`-Zeile tragen und fehlt in der Aufzeichnung; ein lesendes Programm bekäme es nicht als `u8`. Welcher Kanal der Konfiguration ein Strom ist, sagt `max_rate_hz`, seinen Elementtyp `raw` (8.2); das Format der Konfiguration bleibt dabei, wie es war.
+
+**Kein Profil `boot` (12.8, 14.8; M10 Schritt 17, verworfen 2026-10-02).** 12.8 führte `boot` als viertes Profil für Startprogramme: minimale Runtime, RAM-Log statt Recorder, Code im RAM, Flash-Budget gegen die Startpartition. Ein Bootloader ist aber ein Produkt der Plattform mit eigener Startstufe — 12.7 legt Firmware-Validierung und Rückfall ausdrücklich dorthin —, und was die Sprache dazu beiträgt, sind Teile: die Zustandsmaschine der Slotwahl, TRIAL → SELFTEST → CONFIRM, der Hash in Stücken je Tick, die Prüfung als Job. Diese Teile sind gewöhnliche Programme unter `baremetal`, wie 14.8 zeigt, und brauchen weder eine eigene Runtime noch eigene Regeln; Code im RAM und das Budget der Startpartition sind Eigenschaften eines bestimmten Bootloaders, keine der Sprache. Was die Sprache von Anfang und Ende eines Laufs sieht, regelt 12.7 seit derselben Entscheidung neu (nächster Eintrag). `target = boot` ist jetzt ein Fehler; nur 14.8 hatte es benutzt.
+
+**Anfang und Ende eines Laufs statt Plattformschnittstelle (12.7, 5.9, 12.3, 14.7, 14.8; FB-360).** 12.7 sprach von Boot-Grund, Neustart, Tiefschlaf, Image-Bestätigung und eFuses — vom Chip aus gedacht, als besäße das Programm die Plattform. Takt soll aber auch eingebettet laufen, als Teil eines größeren Programms, gegen dessen Linker-Skript gebunden; dort gibt es für Takt keinen Chip zu starten. Was ein Programm besitzt, ist sein Lauf, und 12.7 sieht darum genau zwei Dinge: wie der vorige Lauf endete (`previous_run`: `NONE`, `ENDED`, `WATCHDOG`) und wann der nächste beginnen soll (`next_run`: `NOW`, `AFTER(delay)`, `ON_WAKE`, `ON_START`). Das geordnete Ende — `persist` synchron, dann `safe` — bleibt, wie es war, denn diese Reihenfolge kann nur die Runtime garantieren. `previous_run` unterscheidet weniger als `boot_reason`: Neustart und Wecken sind beide `ENDED`, weil ein Lauf seine Absicht vor dem Ende in `persist` schreiben kann; der Kanal meldet nur, was das Programm nicht selbst weiß. `ON_START` ist neu: Ein Programm, das an seine Startstufe übergibt oder ein Gerät ausschaltet, will nicht geweckt werden, und `ON_WAKE` ohne Wake-Quelle hätte dasselbe nur mit einer Warnung gesagt. Entfallen sind `reset_count` (eine Reset-Schleife zählt ein Programm über `persist` und `previous_run = WATCHDOG` selbst; einen Zähler, der auch einen Absturz vor dem ersten Journal-Eintrag sieht, bietet eine Plattform als Gerät an), `image_state` und `image_confirm` (das Update aus Sicht der Anwendung ist ein Gerät der Plattform, 14.7) sowie `efuse`, `efuse_burn`, `image_confirmed` und `sys/jump` — sie braucht nur ein Programm, das selbst Startstufe ist, und dessen Kanäle stellt die Startstufe bereit (14.8). Mit ihnen entfallen die Typen `BootReason`, `ImageState`, `RebootCmd`, `EfuseBlock` und `EfuseCmd`. Das Attribut `irreversible` bleibt; es gilt für jeden Output, der sich nicht zurücknehmen lässt.

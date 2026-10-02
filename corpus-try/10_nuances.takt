@@ -24,15 +24,15 @@ const PAYLOAD_MAX = 64
 param SCALE       : float in 0..10 = 1.5
 
 input  spare   : bool                   @ none
-input  raw_rx  : stream<u8>             @ hw("uart1/rx")       with max_rate = 1 kHz, framing = raw, overflow = drop_oldest, capacity_bytes = 512
-input  cobs_rx : stream<bytes<64>>      @ hw("uart2/rx")       with max_rate = 500 Hz, framing = cobs, overflow = drop
-input  lp_rx   : stream<bytes<64>>      @ hw("uart3/rx")       with max_rate = 500 Hz, framing = length_prefixed(u16_le)
-input  fix_rx  : stream<bytes<8>>       @ hw("uart4/rx")       with max_rate = 500 Hz, framing = fixed(8)
-input  vals    : [4] float[V] in 0..5 V @ hw("daq1/ai[0:4]")   with max_age = 10 ms, display = mV, doc = "vier Kanaele"
-input  age_src : float[K] in 0..500 K   @ hw("daq1/tc0")       with max_age = 100 ms
-output burn    : u8                     @ hw("sys/efuse_burn") with safe = 0, irreversible = true
-output tx_raw  : stream<u8>             @ hw("uart1/tx")       with max_rate = 1 kHz, capacity = 64
-output pulse_o : bool                   @ hw("gpio/pulse")     with safe = false, jitter = 1 us
+input  raw_rx  : stream<u8>             @ hw("uart1/rx")     with max_rate = 1 kHz, framing = raw, overflow = drop_oldest, capacity_bytes = 512
+input  cobs_rx : stream<bytes<64>>      @ hw("uart2/rx")     with max_rate = 500 Hz, framing = cobs, overflow = drop
+input  lp_rx   : stream<bytes<64>>      @ hw("uart3/rx")     with max_rate = 500 Hz, framing = length_prefixed(u16_le)
+input  fix_rx  : stream<bytes<8>>       @ hw("uart4/rx")     with max_rate = 500 Hz, framing = fixed(8)
+input  vals    : [4] float[V] in 0..5 V @ hw("daq1/ai[0:4]") with max_age = 10 ms, display = mV, doc = "vier Kanaele"
+input  age_src : float[K] in 0..500 K   @ hw("daq1/tc0")     with max_age = 100 ms
+output burn    : u8                     @ hw("otp/burn")     with safe = 0, irreversible = true
+output tx_raw  : stream<u8>             @ hw("uart1/tx")     with max_rate = 1 kHz, capacity = 64
+output pulse_o : bool                   @ hw("gpio/pulse")   with safe = false, jitter = 1 us
 
 command reset
 

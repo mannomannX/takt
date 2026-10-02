@@ -77,14 +77,11 @@ pub enum RuntimeProfile {
     Baremetal,
     /// Takt als hoechstpriore Aufgabe unter einem RTOS.
     Rtos,
-    /// Startprogramme mit minimaler Runtime.
-    Boot,
 }
 
 impl RuntimeProfile {
-    /// Alle vier, in der Reihenfolge von 12.8.
-    pub const ALL: [RuntimeProfile; 4] =
-        [RuntimeProfile::LinuxRt, RuntimeProfile::Baremetal, RuntimeProfile::Rtos, RuntimeProfile::Boot];
+    /// Alle drei, in der Reihenfolge von 12.8.
+    pub const ALL: [RuntimeProfile; 3] = [RuntimeProfile::LinuxRt, RuntimeProfile::Baremetal, RuntimeProfile::Rtos];
 
     /// Der Name in `system: target = …`.
     pub fn name(self) -> &'static str {
@@ -92,7 +89,6 @@ impl RuntimeProfile {
             RuntimeProfile::LinuxRt => "linux_rt",
             RuntimeProfile::Baremetal => "baremetal",
             RuntimeProfile::Rtos => "rtos",
-            RuntimeProfile::Boot => "boot",
         }
     }
 
