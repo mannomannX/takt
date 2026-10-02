@@ -165,7 +165,6 @@ pub fn init(
     let counts = takt_board_support::counts_for(TIMER_HZ, tick_ns).map_err(InitError::Period)?;
     let psc = takt_board_support::prescaler_for(CORE_HZ, TIMER_HZ).ok_or(InitError::ClockNotReady)?;
     let pllm = takt_board_support::pll::divider_m(board.hse_hz).ok_or(InitError::UnsupportedCrystal)?;
-    ieee_mode();
     clocks(rcc, flash, pwr, pllm)?;
     tick::set_counts_per_tick(counts);
     start_tim2(rcc, tim2, psc, counts);
@@ -275,29 +274,6 @@ fn clocks(
         return Err(InitError::ClockNotReady);
     }
     Ok(())
-}
-
-/// Die FPU im IEEE-Modus (4.2): kein Flush-to-Zero, keine Default-NaN, kein
-/// alternatives Halbformat, Runden zur naechsten.
-///
-/// 4.2 verlangt es von der Runtime, nicht vom Resetwert: Wer die Anwendung
-/// startete — HID-Bootloader, DFU-Bootloader, Probe —, ist unbekannt, und
-/// ein gesetztes `FZ` liesse jede Subnormale still zu null werden (Satz
-/// 9.4.4 waere verletzt, ohne dass ein Test auf dem Wirt es saehe).
-/// `FPDSCR` ist der Startwert von `FPSCR` in jedem Handler und bekommt
-/// dasselbe.
-fn ieee_mode() {
-    use cortex_m::register::fpscr::{self, RMode};
-    let mut f = fpscr::read();
-    f.set_fz(false);
-    f.set_dn(false);
-    f.set_ahp(false);
-    f.set_rmode(RMode::Nearest);
-    // SAFETY: nur die Modusbits; die Flags der Ausnahmen bleiben.
-    unsafe { fpscr::write(f) };
-    // AHP, DN, FZ und RMode stehen in FPDSCR auf den Bits 22 bis 26.
-    // SAFETY: ein Register des Kerns, das nur diese Funktion schreibt.
-    unsafe { (*cortex_m::peripheral::FPU::PTR).fpdscr.modify(|v| v & !(0x1F << 22)) };
 }
 
 /// Der Systemtakt auf HSI, die PLL aus: der Ausgangspunkt jeder

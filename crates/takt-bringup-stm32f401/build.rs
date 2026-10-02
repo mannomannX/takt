@@ -52,6 +52,13 @@ fn main() {
     println!("cargo:rustc-link-arg=-Tlink.x");
     println!("cargo:rustc-link-arg=--nmagic");
 
+    // 4.2, 12.11: die Fliesskomma-Umgebung vor dem Lauf verstellen, als
+    // Pruefung, dass jeder Einstieg seine eigene herstellt.
+    println!("cargo:rerun-if-env-changed=TAKT_HOSTILE_FPU");
+    if env::var("TAKT_HOSTILE_FPU").is_ok() {
+        println!("cargo:rustc-env=TAKT_HOSTILE_FPU=1");
+    }
+
     build_takt_program(&out);
     native_vectors(&out);
     math_vectors(&out);

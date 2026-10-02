@@ -1,0 +1,19 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output value :f32 @hw("o/value") safe=0.0)
+(output third :f32 @hw("o/third") safe=0.0)
+(output root :f32 @hw("o/root") safe=0.0)
+(output summed :f32 @hw("o/summed") safe=0.0)
+(output is_zero :bool @hw("o/is_zero") safe=false)
+(machine decay
+  (var x :f32 1e-36)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= x (* x 0.1))
+      (= value x)
+      (= third (/ x 3.0))
+      (= root (call sqrt x))
+      (= summed (+ x (* x 0.5)))
+      (= is_zero (== x 0.0)))))

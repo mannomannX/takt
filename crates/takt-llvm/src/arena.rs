@@ -292,7 +292,8 @@ pub fn entries(machine: &Machine, p: &Program) -> Vec<(String, Shape)> {
     }
     if !machine.persist.is_empty() {
         out.push(("persist_snapshot".into(), shape(Pointers::State, "i32", &["ptr", "i32"])));
-        out.push(("persist_restore".into(), shape(Pointers::State, "i32", &["ptr", "i32"])));
+        // Die Eingabe des Journals wird nur gelesen; der Rahmen reicht sie `const`.
+        out.push(("persist_restore".into(), shape(Pointers::State, "i32", &["ptr readonly", "i32"])));
     }
     if !machine.layout.trigger_flags.is_empty() {
         out.push(("triggers".into(), shape(ALL, "void", &[])));

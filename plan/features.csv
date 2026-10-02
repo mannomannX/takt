@@ -678,7 +678,7 @@ PAR-3.9-Backpatching_einen_Rahmen_zusammensetzen,Absatz/Regel,3.9,Backpatching: 
 PAR-3.11-Uniforme_Form_v1,Absatz/Regel,3.11,Uniforme Form (v1),,M6 (v1.1),fertig,"`lower/matrix.rs`, `takt-interp/src/matrix.rs`, Numerik in `libtaktm::mat`"
 PAR-3.11-Dimensionierte_Form_v1.1,Absatz/Regel,3.11,Dimensionierte Form (v1.1),v1.1,M6,fertig,"`unitvec` als `Entity::Unitvec`, Tupel in `lower/matrix.rs` (kanonische Form `c_1 = 1`), zur Laufzeit ein `mat<m, n>`"
 PAR-4.2-Breite_von_float,Absatz/Regel,4.2,Breite von `float`,,M1 (Kernsemantik),fertig,
-PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M10 (aus M1),fertig,
+PAR-4.2-FPU_im_IEEE_Modus,Absatz/Regel,4.2,FPU im IEEE-Modus,,M10 (aus M1),fertig,seit M11 Schritt 6 an jedem Einstieg statt einmal beim Start (12.11)
 PAR-4.2-fma,Absatz/Regel,4.2,`fma`,,M1 (Kernsemantik),fertig,
 PAR-4.2-Reduktionen,Absatz/Regel,4.2,Reduktionen,,M1 (Kernsemantik),fertig,
 PAR-4.2-Subnormale_in_Zuständen,Absatz/Regel,4.2,Subnormale in Zuständen,,M10 (aus M1),fertig,
@@ -1112,7 +1112,7 @@ PAR-12.11-Kern_ohne_Warten,Absatz/Regel,12.11,Kern ohne Warten,,M11 (Einbettung)
 PAR-12.11-Der_Portvertrag,Absatz/Regel,12.11,Der Portvertrag,,M11 (Einbettung),offen,"M11 Schritte 7, 15, 22: Pflicht und Dienste nach Bedarf, Portpruefung, Senken"
 PAR-12.11-Formen,Absatz/Regel,12.11,Formen,,M11 (Einbettung),offen,"M11 Schritte 8, 14, 17-21: Profil aus der Form; Interrupt, Poll (laengste Runde der Hauptschleife, 8.10), RTOS, Linux, logische Zeit"
 PAR-12.11-Wem_was_gehört,Absatz/Regel,12.11,Wem was gehört,,M11 (Einbettung),offen,"M11 Schritt 7: Schlaf, Watchdog, `next_run` beim Wirt"
-PAR-12.11-IEEE_Umgebung,Absatz/Regel,12.11,IEEE-Umgebung,,M11 (Einbettung),offen,"M11 Schritt 6: sichern, setzen, zurueckgeben an jedem Eintritt"
+PAR-12.11-IEEE_Umgebung,Absatz/Regel,12.11,IEEE-Umgebung,,M11 (Einbettung),teilweise,"M11 Schritt 6 (2026-10-03): Huelle um jeden rechnenden Einstieg des MCU-Rahmens, je FPU-Familie ihr Register; auf dem Wirt mit verstelltem MXCSR gleich dem Interpreter (`tests/embed.rs`); offen: F401 mit verstellter FPSCR/FPDSCR auf dem Board, Kosten mit `takt bench`"
 PAR-12.11-Speicherschutz,Absatz/Regel,12.11,Speicherschutz,,M11 (Einbettung),offen,"M11 Schritt 23: Fenster, Partition, keiner; Kopfzeile `Schutz`"
 PAR-12.11-Mehrere_Programme_auf_einem_Kern,Absatz/Regel,12.11,Mehrere Programme auf einem Kern,,M11 (Einbettung),teilweise,"M11 Schritt 4 (2026-10-02): zwei Programme in einem Wirtsprozess, je mit Praefix und Arena (`several_programs.rs`); offen: Prioritaeten, eigener Tick je Programm, Antwortzeiten in `check-image` (Schritt 16)"
 PAR-12.11-Fremde_Flash_Schreiber,Absatz/Regel,12.11,Fremde Flash-Schreiber,,M11 (Einbettung),offen,"M11 Schritt 21: ESP-IDF mit NVS-Last, Schritt in der IRAM-ISR"

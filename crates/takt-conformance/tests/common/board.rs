@@ -430,6 +430,41 @@ pub fn agreement_with(board: &mut dyn Board, names: &[&str], only: Option<&str>,
     failed
 }
 
+/// Programme, deren `f32` die FPU des Boards rechnet: Subnormale
+/// (Flush-to-Zero) und Produkte vor der korrekt gerundeten Mathematik
+/// (Rundungsmodus).
+const HOSTILE_FPU_PROGRAMS: [&str; 2] = ["105_subnormals_f32.takt", "102_correct_math_f32.takt"];
+
+/// **Eine verstellte FPU aendert nichts** (4.2, 12.11): FPSCR und FPDSCR
+/// stehen vor dem Lauf auf Flush-to-Zero, Default-NaN und Rundung gegen
+/// null. Jedes Programm rechnet wie der Interpreter, und nach dem Lauf steht
+/// FPSCR, wie das Board es setzte — jeder Einstieg hat die IEEE-Umgebung
+/// hergestellt und die des Aufrufers zurueckgegeben.
+pub fn a_hostile_fpu_changes_nothing(board: &mut dyn Board) -> Vec<String> {
+    let options = Options::fresh(TICKS).with_hostile_fpu();
+    let mut failed = agreement_with(board, &HOSTILE_FPU_PROGRAMS, None, &options);
+    let name = HOSTILE_FPU_PROGRAMS[0];
+    match board.build(&board::corpus_path(name), &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(text) if text.contains("takt fpscr 0x03c00000") => {}
+        Ok(text) => {
+            let lines: Vec<&str> = text.lines().filter(|l| l.starts_with("takt ")).collect();
+            failed.push(format!(
+                "{name}: FPSCR nach dem Lauf nicht, wie das Board es setzte:
+{}",
+                lines.join(
+                    "
+"
+                )
+            ));
+        }
+        Err(e) => failed.push(format!(
+            "{name}: kein Lauf auf dem Board:
+{e}"
+        )),
+    }
+    failed
+}
+
 /// **Die kuratierten Natives rechnen auf dem Board wie auf dem Wirt, und
 /// ihr Stack bleibt in der Zusage** (13.8, 4.5): je Funktion eine Meldung,
 /// wenn nicht.

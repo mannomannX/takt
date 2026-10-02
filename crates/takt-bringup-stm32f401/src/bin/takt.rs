@@ -85,6 +85,15 @@ const TICKS: Option<&str> = option_env!("TAKT_TICKS");
 /// Tick-Jitter von `takt bench`.
 const LOGICAL: bool = TICKS.is_some() && option_env!("TAKT_TIMED").is_none();
 
+/// `TAKT_HOSTILE_FPU` beim Bau: FPSCR und FPDSCR vor dem Lauf auf
+/// Flush-to-Zero, Default-NaN und Rundung gegen null, wie ein Wirt sie fuer
+/// seinen eigenen Code setzen darf (4.2, 12.11). Jeder Einstieg stellt die
+/// IEEE-Umgebung selbst her; die Abschlusszeile nennt FPSCR nach dem Lauf.
+const HOSTILE_FPU: bool = option_env!("TAKT_HOSTILE_FPU").is_some();
+
+/// DN (25), FZ (24) und RMode = gegen null (23:22) in FPSCR und FPDSCR.
+const HOSTILE_FPSCR: u32 = 0x03C0_0000;
+
 /// `TAKT_INSTRUMENT=statements`: den Programmzaehler je Tick mitgeben (11.2).
 const TRACE_PC: bool = matches!(option_env!("TAKT_INSTRUMENT"), Some(m) if matches!(m.as_bytes(), b"statements"));
 
@@ -462,6 +471,11 @@ fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats) {
             );
             u.newline();
         }
+        if HOSTILE_FPU {
+            u.drain(DRAIN_ROUNDS);
+            let _ = write!(u, "takt fpscr {:#010x}", cortex_m::register::fpscr::read().bits() & 0x07C0_0000);
+            u.newline();
+        }
         let stack = Some(takt_board_stm32f401::stack::high_water());
         takt_rt_baremetal::report(u, rt.overrun(), stats, &JournalStats::default(), stack);
     }
@@ -485,6 +499,16 @@ fn platform(next: Option<NextRun>) {
         NextRun::Now => platform::restart(),
         NextRun::After(delay) => platform::deep_sleep(Some(delay)),
         NextRun::OnWake | NextRun::OnStart => platform::deep_sleep(None),
+    }
+}
+
+/// Verstellt FPSCR und FPDSCR ([`HOSTILE_FPU`]).
+fn hostile_fpu() {
+    use cortex_m::register::fpscr::{self, Fpscr};
+    // SAFETY: nur die Modusbits; FPDSCR gibt sie jedem Handler mit.
+    unsafe {
+        fpscr::write(Fpscr::from_bits(fpscr::read().bits() | HOSTILE_FPSCR));
+        (*cortex_m::peripheral::FPU::PTR).fpdscr.modify(|v| v | HOSTILE_FPSCR);
     }
 }
 
@@ -552,6 +576,9 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
             cortex_m::asm::wfi();
         }
     };
+    if HOSTILE_FPU {
+        hostile_fpu();
+    }
     banner(timer.nominal_ns());
     unsafe { LED = Some(led) };
     Setup {

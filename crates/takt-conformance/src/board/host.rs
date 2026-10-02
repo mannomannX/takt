@@ -146,7 +146,7 @@ impl Board for Host {
     }
 
     fn build(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
-        if options.bin != Bin::Takt || options.timed || options.rtos {
+        if options.bin != Bin::Takt || options.timed || options.rtos || options.hostile_fpu {
             return Err("der Wirt kennt nur den Konformitaetslauf in logischer Zeit".into());
         }
         let images = crate::target_dir().join("takt-host-images");

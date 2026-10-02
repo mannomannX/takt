@@ -1,0 +1,28 @@
+# 105 — Subnormale Zahlen in `f32` (4.2, M11 Schritt 6): wie 91, in der
+# Breite, die der F401 in Hardware rechnet. Ein Wirt, der Flush-to-Zero
+# oder einen anderen Rundungsmodus setzt, saehe den Wert frueher auf null
+# fallen und rechnete Quotienten, Summen und Wurzeln anders; jeder Einstieg
+# stellt die IEEE-Umgebung her, und der Vergleich bleibt bitgenau (9.4.4).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output value   : f32  @ hw("o/value")   with safe = 0.0
+output third   : f32  @ hw("o/third")   with safe = 0.0
+output root    : f32  @ hw("o/root")    with safe = 0.0
+output summed  : f32  @ hw("o/summed")  with safe = 0.0
+output is_zero : bool @ hw("o/is_zero") with safe = false
+
+machine decay:
+    var x : f32 = 1e-36
+    initial RUN
+
+    state RUN:
+        loop:
+            x = x * 0.1
+            value = x
+            third = x / 3.0
+            root = sqrt(x)
+            summed = x + x * 0.5
+            is_zero = x == 0.0

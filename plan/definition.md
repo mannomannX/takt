@@ -2128,7 +2128,7 @@ In der Pollform liegt zwischen zwei Aufrufen eine Runde der Hauptschleife des Wi
 
 **Wem was gehört.** Ein Programm besitzt seinen Lauf (12.7), nicht den Chip. Unter `baremetal` legt die Runtime den Chip schlafen, bedient den Watchdog und führt das Ende eines Laufs aus (12.3). In jeder anderen Form gehört das dem Wirt, weil nur er weiß, was außer Takt noch läuft: Der Kern bietet den Schlaf über seine Frist an — ob der Wirt schläft, ändert den Trace nicht (Satz 9.9.1) —, meldet einem Watchdog des Wirts, dass er lebt, und übergibt nach dem geordneten Ende (`persist` synchron, dann `safe`) den Wert von `next_run` als Befehl an den Wirt; `previous_run` liefert der Wirt.
 
-**IEEE-Umgebung.** Jeder Eintritt in Takt-Code — `init`, `service`, `job_work`, die Haken des Journals — sichert das Fließkomma-Steuerregister des Aufrufers, stellt die Umgebung aus 4.2 her und gibt beim Austritt die des Aufrufers zurück. Der Wirt darf für seinen eigenen Code eine andere Umgebung wählen; Takt erbt sie nicht.
+**IEEE-Umgebung.** Jeder Eintritt in Takt-Code — `init`, `service`, `job_work`, die Haken des Journals — sichert das Fließkomma-Steuerregister des Aufrufers, stellt die Umgebung aus 4.2 her und gibt beim Austritt die des Aufrufers zurück. Der Wirt darf für seinen eigenen Code eine andere Umgebung wählen; Takt erbt sie nicht. Die Treiber, die ein Eintritt ruft, rechnen in der Umgebung aus 4.2.
 
 **Speicherschutz.** Was 12.3 schützt, hängt eingebettet davon ab, wem die Schutzeinheit gehört; der Fall steht im Lauf-Header und im Konformitätsbericht:
 

@@ -526,6 +526,7 @@ fn c_of(llvm: &str) -> &'static str {
         "i32" => "int",
         "i64" => "long long",
         "ptr" => "void *",
+        "ptr readonly" => "const void *",
         _ => "void",
     }
 }

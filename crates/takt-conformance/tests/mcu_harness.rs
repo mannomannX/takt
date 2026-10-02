@@ -173,7 +173,7 @@ fn a_simulated_input_is_fed_before_tick_0() {
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
     let p = takt_sema::compile(src, &options).program.expect("Programm");
     let frame = takt_frame::mcu::build(&p).source;
-    let init = &frame[frame.find("int32_t app_init_with(").expect("init")..];
+    let init = &frame[frame.find("static int32_t takt_init_with(").expect("init")..];
     let fed = init.find("/* p_sim -> p */").expect("die Speisung in init");
     let entered = init.find("_enter(").expect("der Eintritt");
     assert!(fed < entered, "die Speisung steht nach dem Eintritt:\n{init}");
@@ -538,7 +538,7 @@ fn a_bound_input_becomes_a_driver_symbol() {
     assert!(!src.contains("__attribute__((weak))"), "stark gebunden (12.6):\n{src}");
 
     // Innerhalb des Ticks: Schritt 2 steht vor Schritt 3 (12.1).
-    let at = src.find("void app_tick(").expect("Tickfunktion");
+    let at = src.find("static void takt_tick(").expect("Tickfunktion");
     let tick = &src[at..];
     let sample = tick.find("takt_sample(a);").expect("Aufruf");
     let step = tick.find("m_step(").expect("Schrittfunktion");
@@ -579,12 +579,12 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
         "sichtbar erst nach der Dauer:
 {src}"
     );
-    let at = src.find("void app_tick(").expect("Tickfunktion");
+    let at = src.find("static void takt_tick(").expect("Tickfunktion");
     let tick = &src[at..];
     let poll = tick.find("takt_jobs_poll(a);").expect("Jobs zu Tickbeginn");
     let sample = tick.find("takt_sample(a);").expect("Abtastung");
     assert!(poll < sample, "{tick}");
-    let at = src.find("uint8_t app_idle(void)").expect("Schlafbedingung");
+    let at = src.find("static uint8_t takt_idle(void)").expect("Schlafbedingung");
     assert!(src[at..].contains("if (app_jobs_busy()) return 0;"), "{src}");
 
     // Ohne Jobs bleiben die Einstiege, und das Board ruft sie ohne Unterschied.
@@ -598,7 +598,7 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
 #[test]
 fn the_start_samples_before_it_enters() {
     let src = takt_frame::mcu::build(&program(INPUTS)).source;
-    let at = src.find("int32_t app_init_with(").expect("Startfunktion");
+    let at = src.find("static int32_t takt_init_with(").expect("Startfunktion");
     let init = &src[at..];
     let sample = init.find("takt_sample(a);").expect("Abtastung im Start");
     let enter = init.find("m_enter(").expect("Eintritt");
@@ -688,6 +688,121 @@ fn a_missing_driver_fails_the_link_by_name() {
     assert!(linked, "mit Stummeln bindet es: {stderr}");
     let run = std::process::Command::new(&exe).status().expect("Lauf");
     assert!(run.success(), "der Lauf brach ab: {run}");
+}
+
+/// **Der Rahmen uebersetzt auch, wo `int64_t` ein `long` ist** (12.11).
+/// Die Schnittstelle hat feste Breiten; auf den Boards und unter Windows ist
+/// `int64_t` ein `long long`, unter Linux auf x86-64 und aarch64 ein
+/// `long`. Ein `long long *` an einem `int64_t *` uebersetzt dort nicht
+/// (FB-369). Geprueft wird jeder Teil des Rahmens: Stroeme, Jobs, Journal,
+/// Planung, Monitore, Schlaf.
+#[test]
+fn the_frame_compiles_where_int64_is_long() {
+    let Clang::At(clang) = takt_llvm::toolchain::find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-mcuh-lp64");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let mut errors = Vec::new();
+    for name in KORPUS.iter().chain(&[
+        "13_framing.takt",
+        "28_scheduled.takt",
+        "35_persist.takt",
+        "47_monitors.takt",
+        "49_record_streams.takt",
+        "56_idle_timer.takt",
+    ]) {
+        let c = dir.join(name.replace(".takt", ".c"));
+        std::fs::write(&c, takt_frame::mcu::build(&corpus(name)).source).expect("Rahmen");
+        for target in [Target::X86_64_LINUX, Target::AARCH64_LINUX] {
+            let mut cmd = std::process::Command::new(&clang);
+            let out = Clang::deterministic(&mut cmd)
+                .args(["-fsyntax-only", "-ffreestanding", "-Werror=incompatible-pointer-types"])
+                .arg(format!("--target={}", target.triple))
+                .arg(&c)
+                .output()
+                .expect("clang");
+            if !out.status.success() {
+                errors.push(format!("{name} fuer {}: {}", target.name, String::from_utf8_lossy(&out.stderr)));
+            }
+        }
+    }
+    assert!(
+        errors.is_empty(),
+        "{}",
+        errors.join(
+            "
+"
+        )
+    );
+}
+
+/// **Jeder Einstieg rechnet in der IEEE-Umgebung, auf jeder FPU-Familie**
+/// (4.2, 12.11). Die Einstiege, die das Programm rechnen lassen, sind
+/// Huellen um ihren Rumpf: sichern, die Vorgabe herstellen, zurueckgeben.
+/// Uebersetzt nach Assembler steht das Register der Familie darin — FPSCR
+/// auf Cortex-M und armv7, FPCR auf aarch64, MXCSR auf x86-64, `frm` auf
+/// RISC-V mit F —, und ohne FPU keines.
+#[test]
+fn every_entry_computes_in_the_ieee_environment() {
+    let Clang::At(clang) = takt_llvm::toolchain::find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let src = takt_frame::mcu::build(&corpus("91_subnormals.takt")).source;
+    for entry in [
+        "init_with(",
+        "tick(int64_t k)",
+        "commit(void)",
+        "idle(void)",
+        "deadline(void)",
+        "advance(int64_t n)",
+        "persist_snapshot(",
+        "persist_restore(",
+        "dump(int32_t all)",
+    ] {
+        let at = src.find(&format!(" app_{entry}")).unwrap_or_else(|| {
+            panic!(
+                "`app_{entry}` fehlt:
+{src}"
+            )
+        });
+        let line = src[at..].lines().next().unwrap_or_default();
+        assert!(line.contains("takt_fenv_enter()") && line.contains("takt_fenv_leave(f)"), "ohne Umgebung: {line}");
+    }
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-mcuh-ieee");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let c = dir.join("rahmen.c");
+    std::fs::write(&c, &src).expect("Rahmen");
+    for (triple, march, register) in [
+        (Target::THUMBV7EM.triple, "", &["fpscr"][..]),
+        (Target::ARMV7_LINUX.triple, "", &["fpscr"]),
+        (Target::AARCH64_LINUX.triple, "", &["fpcr"]),
+        (Target::X86_64_LINUX.triple, "", &["mxcsr"]),
+        // Der Assembler schreibt `csrr`/`csrw` auf `frm` als `frrm`/`fsrm`.
+        (Target::RISCV32IMAC.triple, "rv32imafc", &["frrm", "fsrm"]),
+        (Target::RISCV32IMAC.triple, "rv32imac", &[]),
+    ] {
+        let s = dir.join(format!("{triple}-{march}.s"));
+        let mut cmd = std::process::Command::new(&clang);
+        let cmd =
+            Clang::deterministic(&mut cmd).args(["-O1", "-S", "-ffreestanding"]).arg(format!("--target={triple}"));
+        if !march.is_empty() {
+            cmd.arg(format!("-march={march}"));
+        }
+        let out = cmd.arg(&c).arg("-o").arg(&s).output().expect("clang");
+        assert!(out.status.success(), "{triple} {march}: {}", String::from_utf8_lossy(&out.stderr));
+        let asm = std::fs::read_to_string(&s).expect("Assembler").to_lowercase();
+        for r in register {
+            assert!(asm.contains(r), "{triple} {march}: kein `{r}`");
+        }
+        if register.is_empty() {
+            assert!(!asm.contains("frrm") && !asm.contains("fsrm"), "{triple} {march}: FPU-Register ohne FPU");
+        }
+    }
 }
 
 /// Ein Programm aus Quelltext, fuer die Rahmenpruefungen oben.

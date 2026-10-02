@@ -16,7 +16,7 @@ use common::board::{
     overrun_reaches_every_machine, run_interpreted,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
-use takt_conformance::board::{self, Bin, Board, CORPUS, Options};
+use takt_conformance::board::{self, Board, CORPUS, Options};
 use takt_conformance::compare;
 
 /// Ein Board, mehrere Tests: cargo fuehrt Tests nebenlaeufig aus, das Board
@@ -40,7 +40,7 @@ fn bringup_program(name: &str) -> std::path::PathBuf {
 /// Baut ein Korpusprogramm, schreibt es und liest seinen Trace — in
 /// Echtzeit: Die Tests damit pruefen Schlaf und Journal an der Uhr.
 fn run_corpus(board: &mut Esp32c6, name: &str, fresh: bool) -> String {
-    let options = Options { ticks: TICKS, fresh, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
+    let options = Options { fresh, ..Options::timed(TICKS) };
     board
         .build(&board::corpus_path(name), &options)
         .and_then(|elf| board.run(&elf, &options))
@@ -75,7 +75,7 @@ fn slept(text: &str) -> Option<u64> {
 #[test]
 fn a_run_ended_after_a_delay_begins_the_next_after_it() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
+    let options = Options::timed(0);
     let program = board::root().join("crates/takt-conformance/tests/programs/deep_sleep.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
@@ -103,7 +103,7 @@ fn a_run_ended_after_a_delay_begins_the_next_after_it() {
 #[test]
 fn a_run_ended_now_begins_the_next_at_once() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
+    let options = Options::timed(0);
     let program = board::root().join("crates/takt-conformance/tests/programs/restart.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
@@ -145,7 +145,7 @@ fn an_overrun_faults_every_machine_in_the_next_tick() {
 #[test]
 fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
+    let options = Options::timed(0);
     let program = board::root().join("crates/takt-conformance/tests/programs/watchdog.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let text = board.run_for(&elf, Duration::from_secs(10)).unwrap_or_else(|e| panic!("{e}"));
@@ -196,14 +196,7 @@ fn a_driver_machine_writes_uart0_registers() {
     // Zehn Ticks je Zeile, plus Rand: Der Lauf muss ueber `WANT` Zeilen
     // hinaus reichen, sonst haelt das Programm mittendrin. In Echtzeit,
     // weil die UART die Bytes mit ihrer Rate abnimmt.
-    let options = Options {
-        ticks: (WANT as u64 + 4) * 10,
-        fresh: true,
-        bin: Bin::Takt,
-        timed: true,
-        hardware: None,
-        rtos: false,
-    };
+    let options = Options::timed((WANT as u64 + 4) * 10);
     let elf = board.build(&bringup_program("uart0_port.takt"), &options).unwrap_or_else(|e| panic!("{e}"));
     board.download(&elf).unwrap_or_else(|e| panic!("{e}"));
 
@@ -296,7 +289,7 @@ fn a_board_input_reaches_the_process_image() {
 fn persistence_survives_a_reset() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "35_persist.takt";
-    let options = Options { ticks: TICKS, fresh: false, bin: Bin::Takt, timed: false, hardware: None, rtos: false };
+    let options = Options { fresh: false, ..Options::fresh(TICKS) };
     let elf = board.build(&board::corpus_path(name), &options).unwrap_or_else(|e| panic!("{name}: {e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
     let end = last_output(&first, "count").unwrap_or_else(|| panic!("kein `count` im ersten Lauf:\n{first}"));

@@ -12,11 +12,11 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, TICKS, agreement, agreement_with, driver_edge_agrees, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine,
+    Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees, last_output,
+    long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
-use takt_conformance::board::{self, Bin, Board, CORPUS, Options};
+use takt_conformance::board::{self, Board, CORPUS, Options};
 
 /// Was der F401 nicht fasst: `45_journal_cut` haelt ein Flash-Modell mit
 /// zwei Sektoren im RAM, und `.bss` laeuft um gut 47 KiB ueber die 64 KiB
@@ -44,7 +44,7 @@ fn board() -> Option<(Stm32f401, std::sync::MutexGuard<'static, ()>)> {
 #[test]
 fn a_run_ended_after_a_delay_begins_the_next_after_it() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
+    let options = Options::timed(0);
     let program = board::root().join("crates/takt-conformance/tests/programs/deep_sleep.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
@@ -65,7 +65,7 @@ fn a_run_ended_after_a_delay_begins_the_next_after_it() {
 #[test]
 fn a_run_ended_now_begins_the_next_at_once() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
+    let options = Options::timed(0);
     let program = board::root().join("crates/takt-conformance/tests/programs/restart.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
@@ -104,7 +104,7 @@ fn an_overrun_faults_every_machine_in_the_next_tick() {
 #[test]
 fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
     let Some((mut board, _guard)) = board() else { return };
-    let options = Options { ticks: 0, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false };
+    let options = Options::timed(0);
     let program = board::root().join("crates/takt-conformance/tests/programs/watchdog.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
     let text = board.run_for(&elf, Duration::from_secs(10)).unwrap_or_else(|e| panic!("{e}"));
@@ -189,6 +189,22 @@ fn the_natives_agree_with_the_host() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = natives_agree(&mut board);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Eine verstellte FPU aendert nichts** (4.2, 12.11, M11 Schritt 6):
+/// `a_hostile_fpu_changes_nothing`.
+#[test]
+fn a_hostile_fpu_changes_nothing_on_the_board() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = a_hostile_fpu_changes_nothing(&mut board);
+    assert!(
+        failed.is_empty(),
+        "{}",
+        failed.join(
+            "
+"
+        )
+    );
 }
 
 /// **Der Treiberrand urteilt auf dem Board wie im Interpreter** (12.6, M10

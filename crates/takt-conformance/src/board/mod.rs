@@ -115,6 +115,7 @@ pub const CORPUS: &[&str] = &[
     "102_correct_math_f32.takt",
     "103_math_domains.takt",
     "104_linear_has.takt",
+    "105_subnormals_f32.takt",
     // 12.7: die Startmuster; ohne Plattformwerte die Plattform ohne Startstufe.
     "sim/12_7/program.takt",
     "sim/14_7/program.takt",
@@ -208,9 +209,10 @@ pub fn violations(trace: &str) -> Vec<Violation> {
 }
 
 /// Welches Programm des Bring-ups das Takt-Programm bindet.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Bin {
     /// `takt`: das Programm unter der Tickschleife, mit Trace.
+    #[default]
     Takt,
     /// `bench`: das Programm als Messkern von `takt bench` (13.8), mit
     /// einer C-Referenz, wenn eine genannt ist.
@@ -225,7 +227,7 @@ pub enum Bin {
 }
 
 /// Wie ein Programm auf das Board kommt.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Options {
     /// Nach so vielen Ticks endet der Lauf mit [`END`]; im Messprogramm
     /// die Zahl der Messungen.
@@ -248,12 +250,18 @@ pub struct Options {
     /// RTOS des Boards, mit Treiber-Aufgabe und Funk-ISR als Last. Ein
     /// Board ohne Bindung baut dann nicht.
     pub rtos: bool,
+    /// Vor dem Lauf die Fliesskomma-Umgebung verstellen, wie ein Wirt es
+    /// fuer seinen eigenen Code darf: Flush-to-Zero, Default-NaN, Rundung
+    /// gegen null (4.2, 12.11). Takt rechnet trotzdem wie der Interpreter,
+    /// und die Abschlusszeile nennt das Steuerregister danach. Ein Board
+    /// ohne FPU uebergeht es.
+    pub hostile_fpu: bool,
 }
 
 impl Options {
     /// Ein Konformitaetslauf ueber `ticks` Ticks mit leerem Journal.
     pub fn fresh(ticks: u64) -> Options {
-        Options { ticks, fresh: true, bin: Bin::Takt, timed: false, hardware: None, rtos: false }
+        Options { ticks, fresh: true, ..Options::default() }
     }
 
     /// Derselbe Lauf im Profil `shared` unter dem RTOS des Boards (12.8).
@@ -266,20 +274,25 @@ impl Options {
         Options { hardware: Some(path), ..self }
     }
 
+    /// Derselbe Lauf mit verstellter Fliesskomma-Umgebung ([`Options::hostile_fpu`]).
+    pub fn with_hostile_fpu(self) -> Options {
+        Options { hostile_fpu: true, ..self }
+    }
+
     /// Ein Lauf ueber `ticks` Ticks in Echtzeit, fuer das, was nur die
     /// Uhr zeigt: Tick-Jitter und Stack unter Last (13.8).
     pub fn timed(ticks: u64) -> Options {
-        Options { ticks, fresh: true, bin: Bin::Takt, timed: true, hardware: None, rtos: false }
+        Options { ticks, fresh: true, timed: true, ..Options::default() }
     }
 
     /// Ein Messkern mit `runs` Messungen und seiner C-Referenz.
     pub fn bench(runs: u64, reference: Option<PathBuf>) -> Options {
-        Options { ticks: runs, fresh: true, bin: Bin::Bench { reference }, timed: false, hardware: None, rtos: false }
+        Options { ticks: runs, fresh: true, bin: Bin::Bench { reference }, ..Options::default() }
     }
 
     /// Die Vektoren der kuratierten Natives.
     pub fn natives() -> Options {
-        Options { ticks: 0, fresh: false, bin: Bin::Natives, timed: false, hardware: None, rtos: false }
+        Options { bin: Bin::Natives, ..Options::default() }
     }
 }
 
@@ -387,7 +400,7 @@ impl Bringup {
     fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
         let mut h = DefaultHasher::new();
         std::fs::read(program).map_err(|e| format!("{}: {e}", program.display()))?.hash(&mut h);
-        (options.ticks, options.fresh, options.timed, options.rtos, self.triple).hash(&mut h);
+        (options.ticks, options.fresh, options.timed, options.rtos, options.hostile_fpu, self.triple).hash(&mut h);
         if let Some(hw) = &options.hardware {
             std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
         }
@@ -438,6 +451,11 @@ impl Bringup {
             cargo.env("TAKT_TIMED", "1");
         } else {
             cargo.env_remove("TAKT_TIMED");
+        }
+        if options.hostile_fpu {
+            cargo.env("TAKT_HOSTILE_FPU", "1");
+        } else {
+            cargo.env_remove("TAKT_HOSTILE_FPU");
         }
         if options.rtos {
             cargo.args(["--features", "rtos"]);

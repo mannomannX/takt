@@ -155,6 +155,78 @@ fn prologue(s: &mut String, p: &Program) {
     let _ = writeln!(s, "void takt_board_trace_u64(unsigned long long value);");
     let _ = writeln!(s, "void takt_board_trace_f64(double value);");
     let _ = writeln!(s, "void takt_board_trace_hex8(unsigned char value);\n");
+    s.push_str(FENV_C);
+}
+
+/// Die IEEE-Umgebung an jedem Einstieg (4.2, 12.11): sichern, die Vorgabe
+/// herstellen, beim Austritt zurueckgeben. Je FPU-Familie ihr Register;
+/// ohne FPU rechnet die Software ohnehin in der Vorgabe.
+///
+/// **Setzen statt pruefen.** Ein Wirt darf fuer seinen eigenen Code
+/// Flush-to-Zero oder einen anderen Rundungsmodus waehlen; ein Fault bei
+/// Abweichung machte Takt von fremdem Code abhaengig (plan/m11.md 2.10).
+/// Die Ausnahmeflags des Aufrufers kommen mit seinem Register zurueck.
+const FENV_C: &str = r#"/* 4.2, 12.11: Jeder Einstieg sichert die Fliesskomma-Umgebung des Aufrufers,
+   rechnet in der IEEE-Vorgabe (zur naechsten runden, kein Flush-to-Zero, keine
+   Default-NaN, keine Traps) und gibt beim Austritt die des Aufrufers zurueck.
+   Die Treiber, die er ruft, rechnen in derselben Umgebung. */
+#if defined(__aarch64__)
+typedef uint64_t takt_fenv;
+/* FPCR: AHP (26), DN (25), FZ (24), RMode (23:22), FZ16 (19), Trap-Freigaben (15, 12:8). */
+static inline takt_fenv takt_fenv_enter(void) {
+    takt_fenv saved;
+    __asm__ volatile("mrs %0, fpcr" : "=r"(saved));
+    __asm__ volatile("msr fpcr, %0" : : "r"(saved & ~(takt_fenv)0x07C89F00u) : "memory");
+    return saved;
+}
+static inline void takt_fenv_leave(takt_fenv saved) { __asm__ volatile("msr fpcr, %0" : : "r"(saved) : "memory"); }
+#elif defined(__ARM_FP)
+typedef uint32_t takt_fenv;
+/* FPSCR: AHP (26), DN (25), FZ (24), RMode (23:22), Trap-Freigaben (15, 12:8). */
+static inline takt_fenv takt_fenv_enter(void) {
+    takt_fenv saved;
+    __asm__ volatile("vmrs %0, fpscr" : "=r"(saved));
+    __asm__ volatile("vmsr fpscr, %0" : : "r"(saved & ~0x07C09F00u) : "memory");
+    return saved;
+}
+static inline void takt_fenv_leave(takt_fenv saved) { __asm__ volatile("vmsr fpscr, %0" : : "r"(saved) : "memory"); }
+#elif defined(__x86_64__) || defined(_M_X64)
+typedef uint32_t takt_fenv;
+/* MXCSR: FTZ (15), Rundung (14:13), Masken (12:7), DAZ (6); die Flags (5:0) bleiben. */
+static inline takt_fenv takt_fenv_enter(void) {
+    takt_fenv saved = __builtin_ia32_stmxcsr();
+    __builtin_ia32_ldmxcsr((saved & 0x3Fu) | 0x1F80u);
+    return saved;
+}
+static inline void takt_fenv_leave(takt_fenv saved) { __builtin_ia32_ldmxcsr(saved); }
+#elif defined(__riscv_flen)
+typedef uint32_t takt_fenv;
+/* frm: RISC-V kennt weder Flush-to-Zero noch Traps, nur den Rundungsmodus. */
+static inline takt_fenv takt_fenv_enter(void) {
+    takt_fenv saved;
+    __asm__ volatile("csrr %0, frm" : "=r"(saved));
+    __asm__ volatile("csrwi frm, 0" : : : "memory");
+    return saved;
+}
+static inline void takt_fenv_leave(takt_fenv saved) { __asm__ volatile("csrw frm, %0" : : "r"(saved) : "memory"); }
+#else
+typedef uint32_t takt_fenv;
+static inline takt_fenv takt_fenv_enter(void) { return 0; }
+static inline void takt_fenv_leave(takt_fenv saved) { (void)saved; }
+#endif
+
+"#;
+
+/// Die oeffentliche Huelle `P_<name>` um den Rumpf `takt_<name>`: Sie
+/// rechnet ihn in der IEEE-Umgebung (`FENV_C`).
+fn guarded(s: &mut String, x: &Prefix, ret: &str, name: &str, params: &str, args: &str) {
+    let call = format!("takt_{name}({args})");
+    let body = if ret == "void" {
+        format!("{call}; takt_fenv_leave(f);")
+    } else {
+        format!("{ret} r = {call}; takt_fenv_leave(f); return r;")
+    };
+    let _ = writeln!(s, "{ret} {x}_{name}({params}) {{ takt_fenv f = takt_fenv_enter(); {body} }}\n");
 }
 
 /// Die Laufzeitmonitore (13.3): alle Eigenschaften mit `monitor`, weil der
@@ -443,7 +515,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    return 1;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "/* Job-Kontext: rechnet den Auftrag, den die Hauptschleife gegeben hat. */");
-    let _ = writeln!(s, "void {x}_job_work(void) {{");
+    let _ = writeln!(s, "static void takt_job_work(void) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
     let _ = writeln!(s, "    int native;");
     let _ = writeln!(s, "    if (a->work_slot < 0 || a->work_finished) return;");
@@ -455,6 +527,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
     let _ = writeln!(s, "    a->work_finished = 1;");
     let _ = writeln!(s, "}}");
+    guarded(s, x, "void", "job_work", "void", "");
     let _ = writeln!(s, "/* 12.1: zu Tickbeginn. Ein fertiges Ergebnis wird sichtbar, wenn seine Dauer um ist. */");
     let _ = writeln!(s, "static void takt_jobs_poll(struct takt_arena *a) {{");
     let _ = writeln!(s, "    int i, b;");
@@ -500,9 +573,9 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
 /// `P_init`: einmal vor dem ersten Tick.
 fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
     let _ = writeln!(s, "/* Einmal vor dem ersten Tick (12.1, Schritt 1). */");
-    let _ = writeln!(s, "int32_t {x}_persist_restore(const void *in, int32_t len);");
+    let _ = writeln!(s, "static int32_t takt_persist_restore(const void *in, int32_t len);");
     let _ = writeln!(s, "static void takt_sample(struct takt_arena *a);");
-    let _ = writeln!(s, "int32_t {x}_init_with(void *user, const void *persist, int32_t persist_len) {{");
+    let _ = writeln!(s, "static int32_t takt_init_with(void *user, const void *persist, int32_t persist_len) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
     // 12.11: `init` beschreibt die ganze Arena und verlaesst sich nicht auf
     // genullten Speicher.
@@ -540,7 +613,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     for m in driven {
         let _ = writeln!(s, "    {x}_{0}_init_vars(a);", m.name);
     }
-    let _ = writeln!(s, "    int restored = {x}_persist_restore(persist, persist_len);");
+    let _ = writeln!(s, "    int restored = takt_persist_restore(persist, persist_len);");
     // 9.4: Auch Tick 0 beginnt mit `I_0 = sample()`; ein `enter:` des
     // Anfangszustands liest die Eingaenge wie im Interpreter (FB-316).
     let _ = writeln!(s, "    takt_sample(a);");
@@ -552,7 +625,15 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let _ = writeln!(s, "    {x}_monitor_{i}(a, 0);");
     }
     let _ = writeln!(s, "    return restored;");
-    let _ = writeln!(s, "}}\n");
+    let _ = writeln!(s, "}}");
+    guarded(
+        s,
+        x,
+        "int32_t",
+        "init_with",
+        "void *user, const void *persist, int32_t persist_len",
+        "user, persist, persist_len",
+    );
 }
 
 /// `P_tick`: ein Tick, von der Schleife gerufen.
@@ -575,7 +656,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     // 12.6 Zeile 6: Was der Commit an Treiberfehlern gesehen hat, wirkt im
     // naechsten Tick, wie ein Ueberlauf.
     let driven_out = driver_outputs(p, layout);
-    let _ = writeln!(s, "void {x}_tick(int64_t k) {{");
+    let _ = writeln!(s, "static void takt_tick(int64_t k) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
     let _ = writeln!(s, "    a->tick = k;");
     let _ = writeln!(s, "    a->done = k;");
@@ -632,7 +713,8 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "    {x}_monitor_{i}(a, k);");
     }
-    let _ = writeln!(s, "}}\n");
+    let _ = writeln!(s, "}}");
+    guarded(s, x, "void", "tick", "int64_t k", "k");
 
     sleep(s, p.config.tick, layout, p, driven, x);
     platform(s, p, layout, x);
@@ -677,7 +759,7 @@ fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     let _ = writeln!(s, "void {x}_end(void) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
     let _ = writeln!(s, "    static const char *const words[] = {{ {} }};", words.join(", "));
-    let _ = writeln!(s, "    long long delay;");
+    let _ = writeln!(s, "    int64_t delay;");
     let _ = writeln!(s, "    int c = {x}_next_run(&delay);");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(a->done);");
@@ -696,7 +778,7 @@ fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
 /// Jobs (4.5): Mit ihnen schlaeft das System nicht.
 fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
     let _ = writeln!(s, "/* Systemschlaf (9.9). */");
-    let _ = writeln!(s, "uint8_t {x}_idle(void) {{");
+    let _ = writeln!(s, "static uint8_t takt_idle(void) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
     if driven.is_empty() {
         let _ = writeln!(s, "    return 0;");
@@ -719,13 +801,14 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
         }
         let _ = writeln!(s, "    return 1;");
     }
-    let _ = writeln!(s, "}}\n");
+    let _ = writeln!(s, "}}");
+    guarded(s, x, "uint8_t", "idle", "void", "");
 
     // Die frueheste Frist ueber alle Maschinen, als absoluter Zeitpunkt in
     // Nanosekunden — so erwartet `Program::next_deadline` sie. Die
     // Maschinen rechnen in Ticks, weil `t_in_state` sie zaehlt; die
     // Umrechnung steht hier, wo `takt_now` ohnehin die Zeitquelle ist.
-    let _ = writeln!(s, "int64_t {x}_deadline(void) {{");
+    let _ = writeln!(s, "static int64_t takt_deadline(void) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
     let _ = writeln!(s, "    long long best = -1;");
     for m in driven {
@@ -736,26 +819,28 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     }
     let _ = writeln!(s, "    if (best < 0) return -1;");
     let _ = writeln!(s, "    return {x}_now(a) + best * {tick}LL;");
-    let _ = writeln!(s, "}}\n");
+    let _ = writeln!(s, "}}");
+    guarded(s, x, "int64_t", "deadline", "void", "");
 
     // 9.9: „fuer jede Maschine: time_in_state += n*T0". Ein
     // uebersprungener Tick ruft kein `_step`; ohne das feuerte jede
     // `after`-Frist um die geschlafenen Ticks zu spaet.
     let _ = writeln!(s, "void {x}_init(void *user) {{ (void){x}_init_with(user, 0, 0); }}\n");
-    let _ = writeln!(s, "void {x}_advance(int64_t n) {{");
+    let _ = writeln!(s, "static void takt_advance(int64_t n) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
     let _ = writeln!(s, "    a->tick += n;");
     for m in driven {
         let _ = writeln!(s, "    {x}_{0}_advance(a, n);", m.name);
     }
-    let _ = writeln!(s, "}}\n");
+    let _ = writeln!(s, "}}");
+    guarded(s, x, "void", "advance", "int64_t n", "n");
 
     // 5.9: Der Board-Treiber sieht nur Bytes. Snapshot reiht die Nutzlast
     // aller Maschinen, Restore verteilt sie; die Rueckgabe zaehlt die
     // uebernommenen Eintraege, der Rest ist PersistReset.
     let persisting: Vec<&takt_mir::machine::Machine> =
         driven.iter().copied().filter(|m| !m.persist.is_empty()).collect();
-    let _ = writeln!(s, "int32_t {x}_persist_snapshot(void *out, int32_t cap) {{");
+    let _ = writeln!(s, "static int32_t takt_persist_snapshot(void *out, int32_t cap) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
     let _ = writeln!(s, "    int n = 0;");
     for m in &persisting {
@@ -767,8 +852,9 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     }
     let _ = writeln!(s, "    (void)out; (void)cap;");
     let _ = writeln!(s, "    return n;");
-    let _ = writeln!(s, "}}\n");
-    let _ = writeln!(s, "int32_t {x}_persist_restore(const void *in, int32_t len) {{");
+    let _ = writeln!(s, "}}");
+    guarded(s, x, "int32_t", "persist_snapshot", "void *out, int32_t cap", "out, cap");
+    let _ = writeln!(s, "static int32_t takt_persist_restore(const void *in, int32_t len) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
     let _ = writeln!(s, "    int n = 0;");
     for m in &persisting {
@@ -776,7 +862,8 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     }
     let _ = writeln!(s, "    (void)in; (void)len;");
     let _ = writeln!(s, "    return n;");
-    let _ = writeln!(s, "}}\n");
+    let _ = writeln!(s, "}}");
+    guarded(s, x, "int32_t", "persist_restore", "const void *in, int32_t len", "in, len");
     let entries: usize = persisting.iter().map(|m| m.persist.len()).sum();
     let _ = writeln!(s, "const int32_t {x}_persist_entries = {entries};");
     let _ = writeln!(s, "const int32_t {x}_persist_bound = {};\n", takt_mir::persist::max_payload(p).unwrap_or(0));
@@ -975,7 +1062,7 @@ fn telemetry(
     let _ = writeln!(s, "    if (o->kind & 0x40) takt_board_trace_u64((unsigned long long)takt_load(o->kind, v));");
     let _ = writeln!(s, "    else takt_board_trace_i64(takt_load(o->kind, v));");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void {x}_dump(int32_t all) {{");
+    let _ = writeln!(s, "static void takt_dump(int32_t all) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
     let _ = writeln!(s, "    for (unsigned i = 0; i < {n}; i++) {{");
     let _ = writeln!(s, "        const struct takt_out *o = &g_outs[i];");
@@ -1001,7 +1088,8 @@ fn telemetry(
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    takt_stream_report(a, a->done);");
-    let _ = writeln!(s, "}}\n");
+    let _ = writeln!(s, "}}");
+    guarded(s, x, "void", "dump", "int32_t all", "all");
     program_counters(s, p, driven, x);
     sample(t, p, layout, x);
     commit(&mut t.code, p, layout, x);
@@ -1564,9 +1652,10 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         s,
         "\n/* Schritt 10: der Latch geht an die Geraete (12.1); was scheitert, faultet im naechsten Tick. */"
     );
-    let _ = writeln!(s, "void {x}_commit(void) {{");
+    let _ = writeln!(s, "static void takt_commit(void) {{");
     let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
-    let _ = writeln!(s, "    int64_t now = a->tick * {}LL;", p.config.tick);
+    // Die Grenze des gerechneten Ticks: Ein Schlaf (9.9) rueckt `tick` schon vor dem Commit vor.
+    let _ = writeln!(s, "    int64_t now = a->done * {}LL;", p.config.tick);
     for d in &devices {
         let _ = writeln!(
             s,
@@ -1594,7 +1683,8 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
             "    if (takt_edge_output(1, alive_{device}, {fname}(a->user, now), {cap})) a->driver_fault[{i}] = 1;"
         );
     }
-    let _ = writeln!(s, "}}\n");
+    let _ = writeln!(s, "}}");
+    guarded(s, x, "void", "commit", "void", "");
 }
 
 /// `P_output`: einen Ausgang lesen, nach Stellung.
