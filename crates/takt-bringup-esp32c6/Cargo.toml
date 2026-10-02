@@ -44,10 +44,13 @@ panic = "abort"
 codegen-units = 1
 debug = true
 lto = true
-# Gemessen: 20 % weniger Flash als `3`, `z` ist groesser als `s`. Auch die
-# korrekt gerundete Mathematik bleibt bei `s`: Der C6 fuehrt aus dem Flash
-# ueber einen Cache aus, und mit `3` wurde ihr teuerster Aufruf mit kaltem
-# Cache nicht schneller (`f64` 155 631 statt 158 188 Zyklen), in `f32`
-# langsamer (125 902 statt 82 126) — anders als auf dem F401 ohne Cache
-# (FB-344).
+# Gemessen: 20 % weniger Flash als `3`, `z` ist groesser als `s`.
 opt-level = "s"
+
+# Die korrekt gerundete Mathematik (4.2) laeuft aus dem RAM (`rwtext_hook.x`,
+# FB-357), und dort lohnt `3` wie auf dem F401: `f32_math` 232 statt 305,
+# `f64_math` 546 statt 745 Mikrosekunden je Aufruf (ungestreckt), jede
+# Funktion 25 bis 50 % weniger Zyklen (`takt bench`, 2026-10-02). Aus dem
+# Flash-Cache war `3` nicht schneller, weil der groessere Code oefter verfehlte.
+[profile.release.package.libtaktm]
+opt-level = 3

@@ -531,6 +531,9 @@ def tables():
     w("//! Erzeugt von `tools/libtaktm.py tables` aus Dezimalarithmetik mit")
     w(f"//! {PREC_TABLE} Stellen; jeder Wert ist auf 256 Bit Mantisse gerundet. Von")
     w("//! Hand nicht aendern — der Generator ist die Quelle.")
+    w("//!")
+    w("//! Als `static`, nicht `const`: So tragen sie einen Symbolnamen, und ein Ziel")
+    w("//! mit XIP-Flash legt sie samt dem Code ins RAM (12.3, `rwtext_hook.x` des C6).")
     w("")
     w("use crate::big::Const;")
     w("")
@@ -539,23 +542,23 @@ def tables():
         ln2 = Decimal(2).ln()
         p = pi(PREC_TABLE)
         w("/// ln 2.")
-        w(f"pub(crate) const LN2: Const = {rust_const(ln2)};")
+        w(f"pub(crate) static LN2: Const = {rust_const(ln2)};")
         w("/// 1 / ln 2.")
-        w(f"pub(crate) const INV_LN2: Const = {rust_const(1 / ln2)};")
+        w(f"pub(crate) static INV_LN2: Const = {rust_const(1 / ln2)};")
         w("/// pi.")
-        w(f"pub(crate) const PI: Const = {rust_const(p)};")
+        w(f"pub(crate) static PI: Const = {rust_const(p)};")
         w("")
         words = two_over_pi_words(23)
         w("/// Die ersten 1472 Nachkommabits von 2/pi, das hoechstwertige Wort zuerst")
         w("/// (Reduktion nach Payne und Hanek).")
-        w("pub(crate) const TWO_OVER_PI: [u64; 23] = [")
+        w("pub(crate) static TWO_OVER_PI: [u64; 23] = [")
         for i in range(0, 23, 4):
             w("    " + " ".join(f"0x{x:016x}," for x in words[i : i + 4]))
         w("];")
         w("")
         fact = 1
         w("/// 1 / n! fuer n = 0..=27.")
-        w("pub(crate) const INV_FACT: [Const; 28] = [")
+        w("pub(crate) static INV_FACT: [Const; 28] = [")
         for n in range(28):
             if n:
                 fact *= n
@@ -563,13 +566,13 @@ def tables():
         w("];")
         w("")
         w("/// 1 / (2m + 1) fuer m = 0..=18.")
-        w("pub(crate) const INV_ODD: [Const; 19] = [")
+        w("pub(crate) static INV_ODD: [Const; 19] = [")
         for m in range(19):
             w(f"    {rust_const(Fraction(1, 2 * m + 1))},")
         w("];")
         w("")
         w("/// sin(j / 64) fuer j = 0..=50.")
-        w("pub(crate) const SIN64: [Const; 51] = [")
+        w("pub(crate) static SIN64: [Const; 51] = [")
         cos_rows = []
         for j in range(51):
             s, co = taylor_sin_cos(Decimal(j) / 64, PREC_TABLE)
@@ -578,20 +581,20 @@ def tables():
         w("];")
         w("")
         w("/// cos(j / 64) fuer j = 0..=50.")
-        w("pub(crate) const COS64: [Const; 51] = [")
+        w("pub(crate) static COS64: [Const; 51] = [")
         for co in cos_rows:
             w(f"    {rust_const(co)},")
         w("];")
         w("")
         w("/// atan(j / 64) fuer j = 0..=64.")
-        w("pub(crate) const ATAN64: [Const; 65] = [")
+        w("pub(crate) static ATAN64: [Const; 65] = [")
         for j in range(65):
             a, _ = d_atan(Decimal(j) / 64, PREC_TABLE)
             w(f"    {rust_const(a)},")
         w("];")
         w("")
         w("/// ln(1 + j / 128) fuer j = -43..=43, Index j + 43.")
-        w("pub(crate) const LOG128: [Const; 87] = [")
+        w("pub(crate) static LOG128: [Const; 87] = [")
         for j in range(-43, 44):
             w(f"    {rust_const((1 + Decimal(j) / 128).ln())},")
         w("];")

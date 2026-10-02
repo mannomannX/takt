@@ -3,22 +3,25 @@
 //! Erzeugt von `tools/libtaktm.py tables` aus Dezimalarithmetik mit
 //! 130 Stellen; jeder Wert ist auf 256 Bit Mantisse gerundet. Von
 //! Hand nicht aendern — der Generator ist die Quelle.
+//!
+//! Als `static`, nicht `const`: So tragen sie einen Symbolnamen, und ein Ziel
+//! mit XIP-Flash legt sie samt dem Code ins RAM (12.3, `rwtext_hook.x` des C6).
 
 use crate::big::Const;
 
 /// ln 2.
-pub(crate) const LN2: Const =
+pub(crate) static LN2: Const =
     Const { neg: false, exp: 0, m: [0x8a0d175b8baafa2c, 0x40f343267298b62d, 0xc9e3b39803f2f6af, 0xb17217f7d1cf79ab] };
 /// 1 / ln 2.
-pub(crate) const INV_LN2: Const =
+pub(crate) static INV_LN2: Const =
     Const { neg: false, exp: 1, m: [0x8b25166cd1a13248, 0xeb577aa8dd695a58, 0xbe87fed0691d3e88, 0xb8aa3b295c17f0bb] };
 /// pi.
-pub(crate) const PI: Const =
+pub(crate) static PI: Const =
     Const { neg: false, exp: 2, m: [0x020bbea63b139b22, 0x29024e088a67cc74, 0xc4c6628b80dc1cd1, 0xc90fdaa22168c234] };
 
 /// Die ersten 1472 Nachkommabits von 2/pi, das hoechstwertige Wort zuerst
 /// (Reduktion nach Payne und Hanek).
-pub(crate) const TWO_OVER_PI: [u64; 23] = [
+pub(crate) static TWO_OVER_PI: [u64; 23] = [
     0xa2f9836e4e441529,
     0xfc2757d1f534ddc0,
     0xdb6295993c439041,
@@ -45,7 +48,7 @@ pub(crate) const TWO_OVER_PI: [u64; 23] = [
 ];
 
 /// 1 / n! fuer n = 0..=27.
-pub(crate) const INV_FACT: [Const; 28] = [
+pub(crate) static INV_FACT: [Const; 28] = [
     Const { neg: false, exp: 1, m: [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x8000000000000000] },
     Const { neg: false, exp: 1, m: [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x8000000000000000] },
     Const { neg: false, exp: 0, m: [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x8000000000000000] },
@@ -77,7 +80,7 @@ pub(crate) const INV_FACT: [Const; 28] = [
 ];
 
 /// 1 / (2m + 1) fuer m = 0..=18.
-pub(crate) const INV_ODD: [Const; 19] = [
+pub(crate) static INV_ODD: [Const; 19] = [
     Const { neg: false, exp: 1, m: [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x8000000000000000] },
     Const { neg: false, exp: -1, m: [0xaaaaaaaaaaaaaaab, 0xaaaaaaaaaaaaaaaa, 0xaaaaaaaaaaaaaaaa, 0xaaaaaaaaaaaaaaaa] },
     Const { neg: false, exp: -2, m: [0xcccccccccccccccd, 0xcccccccccccccccc, 0xcccccccccccccccc, 0xcccccccccccccccc] },
@@ -100,7 +103,7 @@ pub(crate) const INV_ODD: [Const; 19] = [
 ];
 
 /// sin(j / 64) fuer j = 0..=50.
-pub(crate) const SIN64: [Const; 51] = [
+pub(crate) static SIN64: [Const; 51] = [
     Const { neg: false, exp: 0, m: [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000] },
     Const { neg: false, exp: -6, m: [0xdfb06f6616c755a8, 0xb0607dfd58900901, 0xa4e32b07c44f7298, 0xfffd55577776a76a] },
     Const { neg: false, exp: -5, m: [0x8202b22b4fd7bcb6, 0xaf21a5d8c222278f, 0x7f209bb6a3c8cabc, 0xfff5557777437465] },
@@ -155,7 +158,7 @@ pub(crate) const SIN64: [Const; 51] = [
 ];
 
 /// cos(j / 64) fuer j = 0..=50.
-pub(crate) const COS64: [Const; 51] = [
+pub(crate) static COS64: [Const; 51] = [
     Const { neg: false, exp: 1, m: [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x8000000000000000] },
     Const { neg: false, exp: 0, m: [0x121a32356ac7f295, 0x104dd21b8d241e94, 0x4514074bde6ace45, 0xfff8000aaaa4fa51] },
     Const { neg: false, exp: 0, m: [0x79a38edb178307b5, 0x419c52ed4a661fc5, 0x576da4ec94946fb9, 0xffe000aaa93e9589] },
@@ -210,7 +213,7 @@ pub(crate) const COS64: [Const; 51] = [
 ];
 
 /// atan(j / 64) fuer j = 0..=64.
-pub(crate) const ATAN64: [Const; 65] = [
+pub(crate) static ATAN64: [Const; 65] = [
     Const { neg: false, exp: 0, m: [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000] },
     Const { neg: false, exp: -6, m: [0x695f80327561cba9, 0x20ef65c10deef460, 0xe78c564015f76048, 0xfffaaadddb94d5bb] },
     Const { neg: false, exp: -5, m: [0x47017db44d610607, 0x806d0294c0db8816, 0x779d776dda8c6213, 0xffeaaddd4bb12542] },
@@ -279,7 +282,7 @@ pub(crate) const ATAN64: [Const; 65] = [
 ];
 
 /// ln(1 + j / 128) fuer j = -43..=43, Index j + 43.
-pub(crate) const LOG128: [Const; 87] = [
+pub(crate) static LOG128: [Const; 87] = [
     Const { neg: true, exp: -1, m: [0x4f2d88b71fe93538, 0x4c8c16fdd66b9dcb, 0x7f9d79f51dcc7301, 0xd19a201127d3c645] },
     Const { neg: true, exp: -1, m: [0x7a35600cb48d653a, 0x928ba6e8974ec834, 0x2d7e9307c70c0667, 0xcb9d1a189ab56e76] },
     Const { neg: true, exp: -1, m: [0x409a9d17dc938962, 0xf2aae6cc3d9fb40e, 0x1a18fb8f9f9ef27f, 0xc5b1cd44596fa51e] },
