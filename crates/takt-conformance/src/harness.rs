@@ -136,6 +136,7 @@ fn build_inner(
     let arena = takt_llvm::arena::of(p);
     let mut s = String::new();
     let _ = writeln!(s, "/* Testrahmen (13.8); erzeugt von takt-conformance. */");
+    let _ = writeln!(s, "#include <stdint.h>");
     let _ = writeln!(s, "#include <stdio.h>");
     let _ = writeln!(s, "#include <string.h>");
     // 4.2: FTZ und DAZ aus, ausdruecklich und nicht als Annahme ueber den

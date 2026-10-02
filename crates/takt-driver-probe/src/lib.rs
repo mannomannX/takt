@@ -1,149 +1,110 @@
 //! Das Pruefgeraet des Treiberrands als Treiber-Crate (12.6, 13.8; M10
 //! Schritte 29c, 29d und 11).
 //!
-//! Ein Treiber-Crate stellt die Einstiege der nativen Treiberschnittstelle,
-//! die der MCU-Rahmen je gebundener Adresse ruft: `app_in_<adr>`,
-//! `app_poll_<adr>`, `app_out_<adr>`, `app_alive_<geraet>` (12.1, 12.6),
-//! je mit dem Wirtszeiger vorn — `app` ist das Praefix der eigenen
-//! Bring-ups (12.11). Den Tick liest es ueber den Wirtszeiger
-//! ([`takt_board_support::host::Host`]), nicht ueber den Rahmen.
-//! Dieses liefert die Folge aus `takt_board_support::edge_probe`: jeden
-//! Verstoss gegen den Treibervertrag einmal, dazu einen unbestaetigten
-//! Schreibvorgang und einen stillen Heartbeat, und die Kanaele, die
-//! `recorded.takt` nicht liest (8.2). Die Programme dazu stehen in
+//! Ein Treiber-Crate stellt Geraete: je Adresse einen Typ, der die
+//! Geraete-Traits aus `takt-embed` erfuellt. Welcher Typ welche Adresse
+//! bedient, steht in `takt-drivers.toml`; ein Pruefstand verdrahtet danach
+//! (`takt_frame::drivers::rust_rig`). Dieses liefert die Folge aus
+//! `takt_board_support::edge_probe`: jeden Verstoss gegen den
+//! Treibervertrag einmal, dazu einen unbestaetigten Schreibvorgang und
+//! einen stillen Heartbeat, und die Kanaele, die `recorded.takt` nicht
+//! liest (8.2). Die Programme dazu stehen in
 //! `takt-conformance/tests/programs/driver_edge.takt` und `recorded.takt`.
 //!
-//! Beide Bring-ups und das Wirts-Bring-up binden es; ein Programm, das
-//! diese Adressen nicht bindet, ruft keinen dieser Einstiege. Auf dem Wirt
-//! faehrt `takt driver-test --crate` es wie jedes andere Treiber-Crate.
+//! **Der Tick aus der Zeit.** Jede Methode bekommt die Tickgrenze `now`;
+//! das Pruefgeraet rechnet daraus die Nummer des Ticks, nach der seine
+//! Folge laeuft ([`edge_probe::TICK_NS`]).
+//!
+//! Beide Bring-ups und das Wirts-Bring-up binden es; auf dem Wirt faehrt
+//! `takt driver-test --crate` es wie jedes andere Treiber-Crate.
 
 #![no_std]
-#![allow(unsafe_code, reason = "C-ABI des Rahmens; 9.5 fuehrt Treiber in der TCB")]
-
-use core::ffi::c_void;
-use core::sync::atomic::{AtomicU32, Ordering};
 
 use takt_board_support::edge_probe;
-use takt_board_support::host::Host;
+use takt_embed::{Device, Input, Output, Piece, Quality, Sample, StreamInput};
 
-/// Der Tick, den der Rahmen gerade rechnet.
-///
-/// # Safety
-///
-/// `user` ist der Wirtszeiger der eigenen Bring-ups, ein [`Host`]
-/// (`takt-mcu-program`).
-unsafe fn edge_tick(user: *mut c_void) -> u64 {
-    // SAFETY: siehe oben; der Host lebt so lange wie das Programm.
-    unsafe { &*user.cast::<Host>() }.tick()
+/// Die Nummer des Ticks, dessen Grenze `now` ist.
+fn tick_of(now: i64) -> u64 {
+    u64::try_from(now / edge_probe::TICK_NS).unwrap_or(0)
 }
 
-/// Eine Abtastung des Pruefgeraets.
-///
-/// # Safety
-///
-/// Der Wirtszeiger der eigenen Bring-ups und drei gueltige Zeiger des Rahmens.
-unsafe fn edge_reading(
-    user: *mut c_void,
-    ch: edge_probe::Scalar,
-    value: *mut i64,
-    quality: *mut u8,
-    t: *mut i64,
-) -> bool {
-    // SAFETY: `user` ist der Wirtszeiger, den der Rahmen weiterreicht.
-    let Some((v, at)) = edge_probe::reading(ch, unsafe { edge_tick(user) }) else { return false };
-    unsafe {
-        *value = v;
-        *quality = 0;
-        if let Some(at) = at {
-            *t = at;
-        }
+/// Die Qualitaet einer Zahl des Pruefgeraets (3.5).
+fn quality(q: u8) -> Quality {
+    match q {
+        0 => Quality::Good,
+        1 => Quality::Suspect,
+        2 => Quality::Stale,
+        _ => Quality::Bad,
     }
-    true
 }
 
-/// Der Treiber fuer `edge_a/p`.
-///
-/// # Safety
-///
-/// Der Wirtszeiger der eigenen Bring-ups und drei gueltige Zeiger des Rahmens.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_edge_a_p(user: *mut c_void, value: *mut i64, quality: *mut u8, t: *mut i64) -> bool {
-    unsafe { edge_reading(user, edge_probe::Scalar::P, value, quality, t) }
+/// Eine Abtastung eines Skalars des Treiberrands.
+fn reading(channel: edge_probe::Scalar, now: i64) -> Option<Sample<i64>> {
+    let (v, at) = edge_probe::reading(channel, tick_of(now))?;
+    Some(Sample::good(v, at.unwrap_or(now)))
 }
 
-/// Der Treiber fuer `edge_a/q`.
-///
-/// # Safety
-///
-/// Der Wirtszeiger der eigenen Bring-ups und drei gueltige Zeiger des Rahmens.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_edge_a_q(user: *mut c_void, value: *mut i64, quality: *mut u8, t: *mut i64) -> bool {
-    unsafe { edge_reading(user, edge_probe::Scalar::Q, value, quality, t) }
+/// `edge_a/p`.
+#[derive(Debug, Default)]
+pub struct EdgeAP;
+
+impl Input<i64> for EdgeAP {
+    fn sample(&mut self, now: i64) -> Option<Sample<i64>> {
+        reading(edge_probe::Scalar::P, now)
+    }
 }
 
-/// Der Treiber fuer `edge_b/k`.
-///
-/// # Safety
-///
-/// Der Wirtszeiger der eigenen Bring-ups und drei gueltige Zeiger des Rahmens.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_edge_b_k(user: *mut c_void, value: *mut i64, quality: *mut u8, t: *mut i64) -> bool {
-    unsafe { edge_reading(user, edge_probe::Scalar::K, value, quality, t) }
+/// `edge_a/q`.
+#[derive(Debug, Default)]
+pub struct EdgeAQ;
+
+impl Input<i64> for EdgeAQ {
+    fn sample(&mut self, now: i64) -> Option<Sample<i64>> {
+        reading(edge_probe::Scalar::Q, now)
+    }
 }
 
-/// Je Strom der Tick und die Zahl der Elemente, die er darin schon geliefert hat.
-static EDGE_POLLS: [(AtomicU32, AtomicU32); 2] =
-    [(AtomicU32::new(u32::MAX), AtomicU32::new(0)), (AtomicU32::new(u32::MAX), AtomicU32::new(0))];
+/// `edge_b/k`.
+#[derive(Debug, Default)]
+pub struct EdgeBK;
 
-/// Wie oft die Stroeme des Pruefgeraets, die `recorded.takt` nicht liest,
-/// im laufenden Tick gefragt wurden.
-static UNREAD_POLLS: [(AtomicU32, AtomicU32); 3] = [
-    (AtomicU32::new(u32::MAX), AtomicU32::new(0)),
-    (AtomicU32::new(u32::MAX), AtomicU32::new(0)),
-    (AtomicU32::new(u32::MAX), AtomicU32::new(0)),
-];
+impl Input<i64> for EdgeBK {
+    fn sample(&mut self, now: i64) -> Option<Sample<i64>> {
+        reading(edge_probe::Scalar::K, now)
+    }
+}
 
 /// Ein Element des Pruefgeraets: Bytes, Zeitstempel und Folgenummer, wenn eigene.
 type ProbeElement = (&'static [u8], Option<i64>, Option<i64>);
 
-/// Das naechste Element einer Folge des Pruefgeraets: `element(tick, i)`
-/// liefert Bytes, Zeitstempel und Folgenummer, ohne Angabe die des Rahmens.
-///
-/// # Safety
-///
-/// `user` ist der Wirtszeiger der eigenen Bring-ups, `buf` zeigt auf `cap`
-/// schreibbare Bytes, die uebrigen auf je einen Platz.
-#[allow(clippy::too_many_arguments, reason = "Wirtszeiger, Zaehler, Folge und die fuenf Ausgaben der C-ABI")]
-unsafe fn probe_poll(
-    user: *mut c_void,
-    polls: &(AtomicU32, AtomicU32),
-    element: impl Fn(u64, usize) -> Option<ProbeElement>,
-    buf: *mut u8,
-    cap: i32,
-    len: *mut i32,
-    t: *mut i64,
-    seq: *mut i64,
-) -> bool {
-    let (tick_at, polled) = polls;
-    // SAFETY: `user` ist der Wirtszeiger, den der Rahmen weiterreicht.
-    let tick = unsafe { edge_tick(user) } as u32;
-    if tick_at.swap(tick, Ordering::Relaxed) != tick {
-        polled.store(0, Ordering::Relaxed);
-    }
-    let i = polled.fetch_add(1, Ordering::Relaxed) as usize;
-    let Some((bytes, at, s)) = element(u64::from(tick), i) else { return false };
-    let n = bytes.len().min(usize::try_from(cap).unwrap_or(0));
-    unsafe {
-        core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n);
-        *len = n as i32;
-        if let Some(at) = at {
-            *t = at;
+/// Wie oft ein Strom im laufenden Tick schon gefragt wurde.
+#[derive(Debug, Default)]
+struct Polls {
+    tick: Option<u64>,
+    polled: usize,
+}
+
+impl Polls {
+    /// Das naechste Element einer Folge: `element(tick, i)` liefert Bytes,
+    /// Zeitstempel und Folgenummer, ohne Angabe die des Rahmens.
+    fn next(
+        &mut self,
+        element: impl Fn(u64, usize) -> Option<ProbeElement>,
+        buf: &mut [u8],
+        now: i64,
+    ) -> Option<Piece> {
+        let tick = tick_of(now);
+        if self.tick != Some(tick) {
+            self.tick = Some(tick);
+            self.polled = 0;
         }
-        if let Some(s) = s {
-            *seq = s;
-        }
+        let i = self.polled;
+        self.polled += 1;
+        let (bytes, at, seq) = element(tick, i)?;
+        let len = bytes.len().min(buf.len());
+        buf[..len].copy_from_slice(&bytes[..len]);
+        Some(Piece { len, t: at.unwrap_or(now), seq })
     }
-    true
 }
 
 /// Ein Strom des Treiberrands: Bytes und Folgenummer, der Zeitstempel ist
@@ -152,207 +113,119 @@ fn edge_element(stream: edge_probe::Stream) -> impl Fn(u64, usize) -> Option<Pro
     move |tick, i| edge_probe::element(stream, tick, i).map(|(bytes, s)| (bytes, None, Some(s)))
 }
 
-/// Der Treiber fuer `edge_u/rx`.
-///
-/// # Safety
-///
-/// `user` ist der Wirtszeiger der eigenen Bring-ups, `buf` zeigt auf `cap`
-/// schreibbare Bytes, die uebrigen auf je einen Platz.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_poll_edge_u_rx(
-    user: *mut c_void,
-    buf: *mut u8,
-    cap: i32,
-    len: *mut i32,
-    t: *mut i64,
-    seq: *mut i64,
-) -> bool {
-    let stream = edge_probe::Stream::Lines;
-    unsafe { probe_poll(user, &EDGE_POLLS[stream as usize], edge_element(stream), buf, cap, len, t, seq) }
+/// `edge_u/rx`.
+#[derive(Debug, Default)]
+pub struct EdgeURx(Polls);
+
+impl StreamInput for EdgeURx {
+    fn poll(&mut self, buf: &mut [u8], now: i64) -> Option<Piece> {
+        self.0.next(edge_element(edge_probe::Stream::Lines), buf, now)
+    }
 }
 
-/// Der Treiber fuer `edge_c/rx`.
-///
-/// # Safety
-///
-/// `user` ist der Wirtszeiger der eigenen Bring-ups, `buf` zeigt auf `cap`
-/// schreibbare Bytes, die uebrigen auf je einen Platz.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_poll_edge_c_rx(
-    user: *mut c_void,
-    buf: *mut u8,
-    cap: i32,
-    len: *mut i32,
-    t: *mut i64,
-    seq: *mut i64,
-) -> bool {
-    let stream = edge_probe::Stream::Pairs;
-    unsafe { probe_poll(user, &EDGE_POLLS[stream as usize], edge_element(stream), buf, cap, len, t, seq) }
+/// `edge_c/rx`.
+#[derive(Debug, Default)]
+pub struct EdgeCRx(Polls);
+
+impl StreamInput for EdgeCRx {
+    fn poll(&mut self, buf: &mut [u8], now: i64) -> Option<Piece> {
+        self.0.next(edge_element(edge_probe::Stream::Pairs), buf, now)
+    }
 }
 
 /// Ein Strom, den `recorded.takt` nicht liest (8.2).
-///
-/// # Safety
-///
-/// `user` ist der Wirtszeiger der eigenen Bring-ups, `buf` zeigt auf `cap`
-/// schreibbare Bytes, die uebrigen auf je einen Platz.
-unsafe fn unread_poll(
-    user: *mut c_void,
-    stream: edge_probe::Unread,
-    buf: *mut u8,
-    cap: i32,
-    len: *mut i32,
-    t: *mut i64,
-    seq: *mut i64,
-) -> bool {
-    let element = move |tick, i| edge_probe::unread(stream, tick, i);
-    unsafe { probe_poll(user, &UNREAD_POLLS[stream as usize], element, buf, cap, len, t, seq) }
+fn unread(stream: edge_probe::Unread) -> impl Fn(u64, usize) -> Option<ProbeElement> {
+    move |tick, i| edge_probe::unread(stream, tick, i)
 }
 
-/// Der Treiber fuer `edge_r/frames`.
-///
-/// # Safety
-///
-/// `user` ist der Wirtszeiger der eigenen Bring-ups, `buf` zeigt auf `cap`
-/// schreibbare Bytes, die uebrigen auf je einen Platz.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_poll_edge_r_frames(
-    user: *mut c_void,
-    buf: *mut u8,
-    cap: i32,
-    len: *mut i32,
-    t: *mut i64,
-    seq: *mut i64,
-) -> bool {
-    unsafe { unread_poll(user, edge_probe::Unread::Frames, buf, cap, len, t, seq) }
+/// `edge_r/frames`.
+#[derive(Debug, Default)]
+pub struct EdgeRFrames(Polls);
+
+impl StreamInput for EdgeRFrames {
+    fn poll(&mut self, buf: &mut [u8], now: i64) -> Option<Piece> {
+        self.0.next(unread(edge_probe::Unread::Frames), buf, now)
+    }
 }
 
-/// Der Treiber fuer `edge_r/text`.
-///
-/// # Safety
-///
-/// `user` ist der Wirtszeiger der eigenen Bring-ups, `buf` zeigt auf `cap`
-/// schreibbare Bytes, die uebrigen auf je einen Platz.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_poll_edge_r_text(
-    user: *mut c_void,
-    buf: *mut u8,
-    cap: i32,
-    len: *mut i32,
-    t: *mut i64,
-    seq: *mut i64,
-) -> bool {
-    unsafe { unread_poll(user, edge_probe::Unread::Text, buf, cap, len, t, seq) }
+/// `edge_r/text`.
+#[derive(Debug, Default)]
+pub struct EdgeRText(Polls);
+
+impl StreamInput for EdgeRText {
+    fn poll(&mut self, buf: &mut [u8], now: i64) -> Option<Piece> {
+        self.0.next(unread(edge_probe::Unread::Text), buf, now)
+    }
 }
 
-/// Der Treiber fuer `edge_r/raw`.
-///
-/// # Safety
-///
-/// `user` ist der Wirtszeiger der eigenen Bring-ups, `buf` zeigt auf `cap`
-/// schreibbare Bytes, die uebrigen auf je einen Platz.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_poll_edge_r_raw(
-    user: *mut c_void,
-    buf: *mut u8,
-    cap: i32,
-    len: *mut i32,
-    t: *mut i64,
-    seq: *mut i64,
-) -> bool {
-    unsafe { unread_poll(user, edge_probe::Unread::Raw, buf, cap, len, t, seq) }
+/// `edge_r/raw`.
+#[derive(Debug, Default)]
+pub struct EdgeRRaw(Polls);
+
+impl StreamInput for EdgeRRaw {
+    fn poll(&mut self, buf: &mut [u8], now: i64) -> Option<Piece> {
+        self.0.next(unread(edge_probe::Unread::Raw), buf, now)
+    }
 }
 
 /// Der Ausgang `edge_o/o`: bestaetigt, ausser wenn das Pruefgeraet es nicht tut.
-///
-/// # Safety
-///
-/// `user` ist der Wirtszeiger der eigenen Bring-ups.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_out_edge_o_o(user: *mut c_void, _value: u8) -> bool {
-    // SAFETY: `user` ist der Wirtszeiger, den der Rahmen weiterreicht.
-    edge_probe::confirms(unsafe { edge_tick(user) })
-}
+#[derive(Debug, Default)]
+pub struct EdgeOO;
 
-/// Der Heartbeat des Geraets `edge_o`.
-///
-/// # Safety
-///
-/// `user` ist der Wirtszeiger der eigenen Bring-ups.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_alive_edge_o(user: *mut c_void) -> bool {
-    // SAFETY: `user` ist der Wirtszeiger, den der Rahmen weiterreicht.
-    edge_probe::alive(unsafe { edge_tick(user) })
-}
-
-/// Der Treiber fuer `edge_r/level`, einen Kanal, den `recorded.takt` nicht
-/// liest (8.2).
-///
-/// # Safety
-///
-/// Der Wirtszeiger der eigenen Bring-ups und drei gueltige Zeiger des Rahmens.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_edge_r_level(
-    user: *mut c_void,
-    value: *mut i32,
-    quality: *mut u8,
-    _t: *mut i64,
-) -> bool {
-    // SAFETY: `user` ist der Wirtszeiger, den der Rahmen weiterreicht.
-    let Some((v, q)) = edge_probe::level(unsafe { edge_tick(user) }) else { return false };
-    unsafe {
-        *value = v;
-        *quality = q;
+impl Output<bool> for EdgeOO {
+    fn write(&mut self, _value: bool, now: i64) -> bool {
+        edge_probe::confirms(tick_of(now))
     }
-    true
 }
 
-/// Der Treiber fuer `edge_r/temp`.
-///
-/// # Safety
-///
-/// Der Wirtszeiger der eigenen Bring-ups und drei gueltige Zeiger des Rahmens.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_edge_r_temp(
-    user: *mut c_void,
-    value: *mut f64,
-    _quality: *mut u8,
-    t: *mut i64,
-) -> bool {
-    // SAFETY: `user` ist der Wirtszeiger, den der Rahmen weiterreicht.
-    let (v, at) = edge_probe::temp(unsafe { edge_tick(user) });
-    unsafe {
-        *value = v;
-        if let Some(at) = at {
-            *t = at;
-        }
+/// Das Geraet `edge_o` mit seinem Heartbeat.
+#[derive(Debug, Default)]
+pub struct EdgeO;
+
+impl Device for EdgeO {
+    fn alive(&mut self, now: i64) -> bool {
+        edge_probe::alive(tick_of(now))
     }
-    true
 }
 
-/// Der Treiber fuer `edge_r/on`.
-///
-/// # Safety
-///
-/// Der Wirtszeiger der eigenen Bring-ups und drei gueltige Zeiger des Rahmens.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_edge_r_on(user: *mut c_void, value: *mut u8, _quality: *mut u8, _t: *mut i64) -> bool {
-    unsafe { *value = u8::from(edge_probe::on(edge_tick(user))) };
-    true
+/// `edge_r/level`, ein Kanal, den `recorded.takt` nicht liest (8.2).
+#[derive(Debug, Default)]
+pub struct EdgeRLevel;
+
+impl Input<i32> for EdgeRLevel {
+    fn sample(&mut self, now: i64) -> Option<Sample<i32>> {
+        let (value, q) = edge_probe::level(tick_of(now))?;
+        Some(Sample { value, quality: quality(q), t: now })
+    }
 }
 
-/// Der Treiber fuer `edge_r/mode`.
-///
-/// # Safety
-///
-/// Der Wirtszeiger der eigenen Bring-ups und drei gueltige Zeiger des Rahmens.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_edge_r_mode(
-    user: *mut c_void,
-    value: *mut u32,
-    _quality: *mut u8,
-    _t: *mut i64,
-) -> bool {
-    unsafe { *value = edge_probe::mode(edge_tick(user)) };
-    true
+/// `edge_r/temp`.
+#[derive(Debug, Default)]
+pub struct EdgeRTemp;
+
+impl Input<f64> for EdgeRTemp {
+    fn sample(&mut self, now: i64) -> Option<Sample<f64>> {
+        let (value, at) = edge_probe::temp(tick_of(now));
+        Some(Sample::good(value, at.unwrap_or(now)))
+    }
+}
+
+/// `edge_r/on`.
+#[derive(Debug, Default)]
+pub struct EdgeROn;
+
+impl Input<bool> for EdgeROn {
+    fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
+        Some(Sample::good(edge_probe::on(tick_of(now)), now))
+    }
+}
+
+/// `edge_r/mode`.
+#[derive(Debug, Default)]
+pub struct EdgeRMode;
+
+impl Input<u32> for EdgeRMode {
+    fn sample(&mut self, now: i64) -> Option<Sample<u32>> {
+        Some(Sample::good(edge_probe::mode(tick_of(now)), now))
+    }
 }

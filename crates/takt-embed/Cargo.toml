@@ -1,0 +1,10 @@
+[package]
+name = "takt-embed"
+version = "0.1.0"
+description = "Takt als Baustein in Rust: die Typen und Geraete-Traits der Treiber (12.6, 12.11)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

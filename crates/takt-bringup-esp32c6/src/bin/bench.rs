@@ -29,6 +29,11 @@ mod reference {
     include!(concat!(env!("OUT_DIR"), "/bench_reference.rs"));
 }
 
+/// Die Treiber des Messkerns: Stummel, ausdruecklich (`build.rs`).
+mod drivers {
+    include!(concat!(env!("OUT_DIR"), "/takt_drivers_bench.rs"));
+}
+
 unsafe extern "C" {
     /// Ein Durchlauf der C-Referenz, wie ein Tick des Kerns.
     fn takt_bench_reference();
@@ -81,7 +86,10 @@ fn main() -> ! {
     write_value(&mut uart, "core_hz", u64::from(CORE_HZ));
 
     let runs = RUNS.and_then(|r| r.parse().ok()).unwrap_or(1000);
-    let mut program = Generated::init(false);
+    let mut rig = drivers::Rig::default();
+    // SAFETY: Der Kleber in `drivers` ist fuer `Rig` erzeugt, und `rig` lebt
+    // bis zum Ende von `main`, das nicht zurueckkehrt.
+    let mut program = unsafe { Generated::init(false, core::ptr::from_mut(&mut rig).cast()) };
     let mut k = 0u64;
     for _ in 0..WARMUP {
         program.tick(k, tick_end(k, takt::TICK_NS));

@@ -4,24 +4,20 @@
 //! das erzeugte Programm hinter `Generated`, das `persist`-Journal in
 //! zwei Flash-Sektoren, Schlaf in `idle`-Zustaenden als virtuelle Ticks
 //! (9.9), der Trace ueber USB-Serial-JTAG. Welches Programm laeuft, sagt
-//! `takt.toml`. Hier steht nur, was das Board ist: Peripherie, Treiber
+//! `takt.toml`. Hier steht nur, was das Board ist: Peripherie, Geraete
 //! und die Telemetriefunktionen des Rahmens.
 #![no_std]
 #![no_main]
 #![allow(unsafe_code, reason = "C-ABI des Rahmens; 9.5 fuehrt Treiber in der TCB")]
 
-use core::ffi::c_void;
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use takt_board_esp32c6::{
     Button, CORE_HZ, FlashNvm, Generated, JobContext, Mwdt, Telemetry, Wire, Ws2812, platform, route_uart0,
 };
-// Das Pruefgeraet des Treiberrands (12.6): seine Einstiege stehen im
-// Treiber-Crate und ersetzen die schwachen Voreinstellungen des Rahmens.
-use takt_driver_probe as _;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock};
 use takt_rt_core::{Clock, Journal, Loaded, NextRun, Persist, Policy, Profile, Runtime};
 
@@ -134,18 +130,6 @@ pub extern "C" fn takt_board_trace_hex8(value: u8) {
     uart.write_hex8(value);
 }
 
-/// Der Output `ui_led` des Programms auf der RGB-LED.
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_ui_led(_user: *mut c_void, value: u8) -> bool {
-    let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return false };
-    if value != 0 {
-        led.on();
-    } else {
-        led.off();
-    }
-    true
-}
-
 /// Ein Pruefzugriff der TCB auf einen Waechter, zwischen zwei Ticks
 /// (12.3): 1 unter dem Hauptstack, 2 unter dem Job-Stack.
 ///
@@ -159,31 +143,11 @@ pub extern "C" fn app_out_ui_led(_user: *mut c_void, value: u8) -> bool {
 /// gesperrte lassen sich nicht je Tick umschalten.
 ///
 /// **Ein Pruefgeraet, kein Treiber.** Nur ein Programm, das `test/...`
-/// bindet, loest es aus; der Board-Test tut es.
+/// bindet, loest es aus (`devices::TestGuardWrite`); der Board-Test tut es.
 static PROBE: AtomicU8 = AtomicU8::new(0);
 
 /// Das untere Ende des Job-Stacks, 0 ohne Job-Kontext.
 static JOB_STACK: AtomicU32 = AtomicU32::new(0);
-
-/// `test/guard_write` (12.3): der naechste Leerlauf schreibt in den Waechter
-/// unter dem Hauptstack.
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_test_guard_write(_user: *mut c_void, value: u8) -> bool {
-    if value != 0 {
-        PROBE.store(1, Ordering::Relaxed);
-    }
-    true
-}
-
-/// `test/job_guard_write` (12.3): der naechste Leerlauf schreibt in den
-/// Waechter unter dem Job-Stack.
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_test_job_guard_write(_user: *mut c_void, value: u8) -> bool {
-    if value != 0 {
-        PROBE.store(2, Ordering::Relaxed);
-    }
-    true
-}
 
 /// Fuehrt einen angeforderten Pruefzugriff aus.
 fn probe() {
@@ -203,86 +167,141 @@ fn probe() {
     unsafe { target.write_volatile(0) };
 }
 
-/// Der Output `gpio/loop_out` auf GPIO7, ueber die Bruecke an GPIO17 (13.8).
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_gpio_loop_out(_user: *mut c_void, value: u8) -> bool {
-    let Some(w) = wire() else { return false };
-    w.write(value != 0);
-    true
-}
-
-/// Der Input `gpio/loop_in` an GPIO17, das Ende der Bruecke (13.8).
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
-/// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_gpio_loop_in(
-    _user: *mut c_void,
-    value: *mut u8,
-    quality: *mut u8,
-    _t: *mut i64,
-) -> bool {
-    let Some(w) = wire() else { return false };
-    let level = w.read();
-    unsafe {
-        *value = u8::from(level);
-        *quality = 0;
-    }
-    true
-}
-
 /// Wie der vorige Lauf endete (12.7), beim Start aus dem Plattformblock gelesen.
-static PREVIOUS_RUN: AtomicI32 = AtomicI32::new(0);
+static PREVIOUS_RUN: AtomicU32 = AtomicU32::new(0);
 
-/// Der Treiber fuer `input … @ hw("sys/previous_run")` (12.7).
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
-/// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_sys_previous_run(
-    _user: *mut c_void,
-    value: *mut i32,
-    quality: *mut u8,
-    _t: *mut i64,
-) -> bool {
-    unsafe {
-        *value = PREVIOUS_RUN.load(Ordering::Relaxed);
-        *quality = 0;
-    }
-    true
+/// Der Pruefstand des Programms (12.6): je Adresse das Geraet, das die
+/// Verdrahtung nennt, sonst ein Stummel (`build.rs`).
+mod drivers {
+    include!(concat!(env!("OUT_DIR"), "/takt_drivers.rs"));
 }
 
-/// Der Input `ui_button` aus dem BOOT-Taster an IO9 (12.1 Schritt 2).
-///
-/// Ein wackelnder Kontakt meldet `Suspect` statt `Good`: Der Wert ist da,
-/// aber noch nicht stabil (12.6). Ohne Treiber bliebe der Eintrag `Bad`,
-/// und das waere hier falsch — der Taster ist verdrahtet.
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
-/// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_ui_button(_user: *mut c_void, value: *mut u8, quality: *mut u8, _t: *mut i64) -> bool {
-    let Some(btn) = (unsafe { (&raw mut BTN).as_mut().and_then(Option::as_mut) }) else { return false };
-    let (level, stable) = btn.poll();
-    unsafe {
-        *value = u8::from(level);
-        *quality = if stable { 0 } else { 1 };
-    }
-    true
-}
+/// Die Geraete des Boards (12.6): je Adresse der Typ, den `takt-drivers.toml`
+/// nennt. `main` richtet die Peripherie ein; die Geraete erreichen sie ueber
+/// die Statics oben.
+#[allow(dead_code, reason = "ein Vorrat fuer jedes Programm; welche Geraete eines braucht, nennt sein Pruefstand")]
+mod devices {
+    use core::sync::atomic::Ordering;
 
-/// Das Pruefgeraet fuer 12.6 Zeile 7: streckt die Periode des Alarms um
-/// den geschriebenen Prozentsatz.
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_test_tick_stretch(_user: *mut c_void, percent: u8) -> bool {
-    takt_board_esp32c6::tick::stretch(u32::from(percent));
-    true
+    use takt_embed::{Device, Input, Output, Quality, Sample};
+
+    use super::{BTN, LED, PREVIOUS_RUN, PROBE, wire};
+
+    /// Ein Geraet, das fest am Board sitzt: Es lebt, solange das Board
+    /// laeuft (12.4).
+    #[derive(Debug, Default)]
+    pub struct Fixed;
+
+    impl Device for Fixed {
+        fn alive(&mut self, _now: i64) -> bool {
+            true
+        }
+    }
+
+    /// `ui/led`: die RGB-LED an IO8.
+    #[derive(Debug, Default)]
+    pub struct UiLed;
+
+    impl Output<bool> for UiLed {
+        fn write(&mut self, value: bool, _now: i64) -> bool {
+            // SAFETY: ein Faden; `main` setzt die LED vor dem ersten Tick.
+            let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return false };
+            if value {
+                led.on();
+            } else {
+                led.off();
+            }
+            true
+        }
+    }
+
+    /// `ui/button`: der BOOT-Taster an IO9 (12.1 Schritt 2).
+    ///
+    /// Ein wackelnder Kontakt meldet `Suspect` statt `Good`: Der Wert ist
+    /// da, aber noch nicht stabil (12.6).
+    #[derive(Debug, Default)]
+    pub struct UiButton;
+
+    impl Input<bool> for UiButton {
+        fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
+            // SAFETY: wie bei `UiLed`.
+            let button = unsafe { (&raw mut BTN).as_mut().and_then(Option::as_mut) }?;
+            let (value, stable) = button.poll();
+            Some(Sample { value, quality: if stable { Quality::Good } else { Quality::Suspect }, t: now })
+        }
+    }
+
+    /// `gpio/loop_out`: GPIO7, ueber die Bruecke an GPIO17 (13.8).
+    #[derive(Debug, Default)]
+    pub struct GpioLoopOut;
+
+    impl Output<bool> for GpioLoopOut {
+        fn write(&mut self, value: bool, _now: i64) -> bool {
+            let Some(w) = wire() else { return false };
+            w.write(value);
+            true
+        }
+    }
+
+    /// `gpio/loop_in`: GPIO17, das Ende der Bruecke (13.8).
+    #[derive(Debug, Default)]
+    pub struct GpioLoopIn;
+
+    impl Input<bool> for GpioLoopIn {
+        fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
+            Some(Sample::good(wire()?.read(), now))
+        }
+    }
+
+    /// `sys/previous_run` (12.7): wie der vorige Lauf endete.
+    #[derive(Debug, Default)]
+    pub struct SysPreviousRun;
+
+    impl Input<u32> for SysPreviousRun {
+        fn sample(&mut self, now: i64) -> Option<Sample<u32>> {
+            Some(Sample::good(PREVIOUS_RUN.load(Ordering::Relaxed), now))
+        }
+    }
+
+    /// `test/guard_write` (12.3): Der naechste Leerlauf schreibt in den
+    /// Waechter unter dem Hauptstack.
+    #[derive(Debug, Default)]
+    pub struct TestGuardWrite;
+
+    impl Output<bool> for TestGuardWrite {
+        fn write(&mut self, value: bool, _now: i64) -> bool {
+            if value {
+                PROBE.store(1, Ordering::Relaxed);
+            }
+            true
+        }
+    }
+
+    /// `test/job_guard_write` (12.3): Der naechste Leerlauf schreibt in den
+    /// Waechter unter dem Job-Stack.
+    #[derive(Debug, Default)]
+    pub struct TestJobGuardWrite;
+
+    impl Output<bool> for TestJobGuardWrite {
+        fn write(&mut self, value: bool, _now: i64) -> bool {
+            if value {
+                PROBE.store(2, Ordering::Relaxed);
+            }
+            true
+        }
+    }
+
+    /// `test/tick_stretch`, das Pruefgeraet fuer 12.6 Zeile 7: streckt die
+    /// Periode des Alarms um den geschriebenen Prozentsatz.
+    #[derive(Debug, Default)]
+    pub struct TestTickStretch;
+
+    impl Output<u8> for TestTickStretch {
+        fn write(&mut self, percent: u8, _now: i64) -> bool {
+            takt_board_esp32c6::tick::stretch(u32::from(percent));
+            true
+        }
+    }
 }
 
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
@@ -381,7 +400,10 @@ fn main() -> ! {
         }
         persist = Some(Persist::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), &mut current, &mut stored));
     }
-    let mut program = Generated::new(false);
+    let mut rig = drivers::Rig::default();
+    // SAFETY: Der Kleber in `drivers` ist fuer `Rig` erzeugt, und `rig` lebt
+    // bis zum Ende von `main`, das nicht zurueckkehrt.
+    let mut program = unsafe { Generated::new(false, core::ptr::from_mut(&mut rig).cast()) };
     let loaded = persist.as_mut().map(|p| p.load(&mut program));
     program.ensure_init();
     if let Some(u) = uart() {

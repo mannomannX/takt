@@ -4,10 +4,13 @@
 //! Heartbeat.
 //!
 //! Die Folge steht hier, damit Board und Wirt dieselbe haben: Das Board
-//! liefert sie ueber `takt_in_edge_*`, `takt_poll_edge_*`, `takt_out_edge_*`
-//! und `takt_alive_edge_*`; der Wirt macht daraus den Stimulus, mit dem der
-//! Interpreter denselben Lauf rechnet. Das Programm dazu steht in
-//! `takt-conformance/tests/programs/driver_edge.takt`, Tick 10 ms.
+//! liefert sie ueber die Geraete von `takt-driver-probe`; der Wirt macht
+//! daraus den Stimulus, mit dem der Interpreter denselben Lauf rechnet. Das
+//! Programm dazu steht in `takt-conformance/tests/programs/driver_edge.takt`.
+
+/// Der Tick der Pruefprogramme `driver_edge.takt` und `recorded.takt`: Die
+/// Folge laeuft nach der Nummer des Ticks.
+pub const TICK_NS: i64 = 10_000_000;
 
 /// Ein Skalar des Pruefgeraets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

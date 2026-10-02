@@ -57,7 +57,7 @@ fn registers() -> (&'static rcc::RegisterBlock, &'static pwr::RegisterBlock, &'s
 /// `sys/previous_run` (12.7) aus der Reset-Ursache in `RCC_CSR` und dem
 /// Wort im Backup-Register; loescht beide, sodass jeder Lauf nur seinen
 /// Vorgaenger sieht. Einmal beim Start zu rufen, nach [`continue_deep_sleep`].
-pub fn previous_run() -> i32 {
+pub fn previous_run() -> u32 {
     let (rcc, pwr, rtc) = registers();
     rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
     let csr = rcc.csr().read();

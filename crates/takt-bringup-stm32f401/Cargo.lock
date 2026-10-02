@@ -825,6 +825,7 @@ dependencies = [
  "takt-board-support",
  "takt-conformance",
  "takt-driver-probe",
+ "takt-embed",
  "takt-frame",
  "takt-llvm",
  "takt-mcu-program",
@@ -869,7 +870,12 @@ name = "takt-driver-probe"
 version = "0.1.0"
 dependencies = [
  "takt-board-support",
+ "takt-embed",
 ]
+
+[[package]]
+name = "takt-embed"
+version = "0.1.0"
 
 [[package]]
 name = "takt-frame"
@@ -919,7 +925,6 @@ version = "0.1.0"
 name = "takt-mcu-program"
 version = "0.1.0"
 dependencies = [
- "takt-board-support",
  "takt-native-abi",
  "takt-rt-baremetal",
  "takt-rt-core",

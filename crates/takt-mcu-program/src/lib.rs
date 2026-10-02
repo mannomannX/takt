@@ -17,8 +17,9 @@
 //! **Die Natives** ruft der erzeugte Code als `takt_native_*`; sie kommen
 //! aus `takt-native-abi`, derselben Rechnung wie im Interpreter (FB-293).
 //!
-//! **Der Wirtszeiger** ist ein [`Host`] mit dem Tick, den der Rahmen gerade
-//! rechnet; jeder Treiber bekommt ihn als erstes Argument (8.10).
+//! **Der Wirtszeiger** ist das Treiberobjekt des Bring-ups: Der Rahmen
+//! reicht ihn an jeden Treiber, und der erzeugte Kleber ruft darauf die
+//! Methode des Traits `Drivers` (12.6).
 //!
 //! **Die Gegenrichtung fehlt mit Absicht.** Der Rahmen ruft
 //! `takt_board_trace*`, um Traces auszugeben; die stellt das Programm, das
@@ -29,7 +30,6 @@
 
 use core::ffi::c_void;
 
-use takt_board_support::host::Host;
 use takt_native_abi as _;
 use takt_rt_baremetal::Traced;
 use takt_rt_core::{NextRun, Program, Tolerance};
@@ -47,7 +47,7 @@ unsafe extern "C" {
     fn app_pc();
     fn app_output(index: i32) -> i64;
     fn app_commit();
-    fn app_idle() -> bool;
+    fn app_idle() -> u8;
     fn app_deadline() -> i64;
     fn app_advance(n: i64);
     fn app_persist_snapshot(out: *mut c_void, cap: i32) -> i32;
@@ -94,31 +94,35 @@ pub mod jobs {
     }
 }
 
-/// Der Wirtszeiger, den der Rahmen an die Treiber reicht.
-static HOST: Host = Host::new();
-
-/// [`HOST`] als Zeiger der C-ABI; der Rahmen liest ihn nicht, er reicht ihn weiter.
-fn host() -> *mut c_void {
-    core::ptr::from_ref(&HOST).cast_mut().cast()
-}
-
 /// Das gebundene Programm.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct Generated {
     /// Nach jedem Tick die Ausgaenge ausgeben.
     pub trace: bool,
     initialized: bool,
+    /// Das Treiberobjekt, das der Rahmen an jeden Treiber reicht.
+    drivers: *mut c_void,
 }
 
 impl Generated {
     /// Ein Programm vor Tick 0: das Journal darf noch laden.
-    pub fn new(trace: bool) -> Generated {
-        Generated { trace, initialized: false }
+    ///
+    /// # Safety
+    ///
+    /// `drivers` zeigt auf das Treiberobjekt, fuer das der Kleber des
+    /// Programms erzeugt ist, und lebt so lange wie das Programm.
+    pub unsafe fn new(trace: bool, drivers: *mut c_void) -> Generated {
+        Generated { trace, initialized: false, drivers }
     }
 
     /// Initialisiert das Programm ohne Journal (Tick 0, 9.4).
-    pub fn init(trace: bool) -> Generated {
-        let mut p = Generated::new(trace);
+    ///
+    /// # Safety
+    ///
+    /// Wie [`Generated::new`].
+    pub unsafe fn init(trace: bool, drivers: *mut c_void) -> Generated {
+        // SAFETY: siehe oben.
+        let mut p = unsafe { Generated::new(trace, drivers) };
         p.ensure_init();
         p
     }
@@ -127,7 +131,7 @@ impl Generated {
     pub fn ensure_init(&mut self) {
         if !self.initialized {
             // SAFETY: einmal vor dem ersten Tick; der Rahmen haelt seinen Zustand statisch.
-            unsafe { app_init(host()) };
+            unsafe { app_init(self.drivers) };
             self.initialized = true;
         }
     }
@@ -183,7 +187,7 @@ impl Program for Generated {
 
     fn sleep_allowed(&self) -> bool {
         // SAFETY: liest nur den statischen Zustand des Rahmens.
-        unsafe { app_idle() }
+        unsafe { app_idle() != 0 }
     }
 
     fn next_deadline(&self) -> Option<i64> {
@@ -213,7 +217,7 @@ impl Program for Generated {
                 app_persist_restore(bytes.as_ptr().cast(), len)
             } else {
                 self.initialized = true;
-                app_init_with(host(), bytes.as_ptr().cast(), len)
+                app_init_with(self.drivers, bytes.as_ptr().cast(), len)
             }
         };
         usize::try_from(n).unwrap_or(0)
@@ -234,7 +238,6 @@ impl Program for Generated {
     fn tick(&mut self, k: u64, _now: i64) {
         // Die Schleife zaehlt ihre Schritte ab 0; Rahmen und Interpreter
         // nennen den ersten Tick nach dem Start `t=1` (Tick 0 ist der Start).
-        HOST.set_tick(k + 1);
         // SAFETY: ein Schritt des Rahmens, einmal je Tick aus der Schleife.
         unsafe { app_tick(k as i64 + 1) };
         if self.trace {

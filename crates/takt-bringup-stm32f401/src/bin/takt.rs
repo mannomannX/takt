@@ -36,9 +36,8 @@
 #![no_main]
 #![allow(unsafe_code, reason = "Interrupt-Handler und C-ABI; 9.5 fuehrt Treiber in der TCB")]
 
-use core::ffi::c_void;
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 #[cfg(not(feature = "rtos"))]
 use cortex_m_rt::entry;
@@ -47,9 +46,6 @@ use stm32f4::stm32f401::{Interrupt, NVIC, Peripherals, interrupt};
 use takt_board_stm32f401::{
     BAUD, Board, CORE_HZ, Generated, Iwdg, JobContext, Led, Mpu, Telemetry, Tim2Tick, Wire, cycles, mpu, platform, tick,
 };
-// Das Pruefgeraet des Treiberrands (12.6): seine Einstiege stehen im
-// Treiber-Crate und ersetzen die schwachen Voreinstellungen des Rahmens.
-use takt_driver_probe as _;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, Guarded, JournalStats, Stats, TimerClock};
 #[cfg(not(feature = "rtos"))]
 use takt_rt_baremetal::{LogicalClock, Sleep};
@@ -99,7 +95,7 @@ static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
 /// was in `main` liegt.
 static mut UART: Option<Telemetry> = None;
 
-/// Die LED, die der Treiber `app_out_ui_led` schaltet; aus demselben Grund.
+/// Die LED, die das Geraet `devices::UiLed` schaltet; aus demselben Grund.
 static mut LED: Option<Led> = None;
 
 /// Die Messschleife an PA0 und PA1, wenn das Programm sie bindet (13.8).
@@ -163,121 +159,177 @@ pub extern "C" fn takt_board_trace_hex8(value: u8) {
     uart.write_hex8(value);
 }
 
-/// Wie der vorige Lauf endete (12.7), beim Start aus dem Plattformblock gelesen.
-static PREVIOUS_RUN: AtomicI32 = AtomicI32::new(0);
-
-/// Der Treiber fuer `input … @ hw("sys/previous_run")` (12.7).
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
-/// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_sys_previous_run(
-    _user: *mut c_void,
-    value: *mut i32,
-    quality: *mut u8,
-    _t: *mut i64,
-) -> bool {
-    unsafe {
-        *value = PREVIOUS_RUN.load(Ordering::Relaxed);
-        *quality = 0;
-    }
-    true
-}
-
-/// Der Treiber fuer `output led : bool @ hw("ui/led")`.
-///
-/// Der Name ist die Adresse: Der Rahmen bildet `hw("ui/led")` auf
-/// `app_out_ui_led` ab und ruft es in Schritt 10 (12.1); wer es nicht
-/// stellt, bekommt einen Linkfehler mit diesem Namen (8.10). Die LED der
-/// Black Pill liegt an PC13 gegen 3V3 — was `true` elektrisch heisst,
-/// weiss nur diese Zeile.
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_ui_led(_user: *mut c_void, value: u8) -> bool {
-    let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return false };
-    if value != 0 {
-        led.on();
-    } else {
-        led.off();
-    }
-    true
-}
-
 /// Ein Pruefzugriff der TCB auf geschuetzten Speicher (12.3): zwischen zwei
 /// Ticks auf den Programmzustand (1), den Waechter unter dem Hauptstack (2)
 /// oder den unter dem Job-Stack (3), oder aus einer ISR, die den Commit
 /// unterbricht, auf den Programmzustand (4).
 ///
 /// **Ein Pruefgeraet, kein Treiber.** Die Outputs `test/...` tun, was ein
-/// fehlerhafter Treiber taete; nur ein Programm, das sie bindet, loest sie
-/// aus, und der Board-Test tut es, um zu zeigen, dass die MPU den Zugriff
-/// abweist und meldet.
+/// fehlerhafter Treiber taete (`devices::TestTcbWrite` und die folgenden);
+/// nur ein Programm, das sie bindet, loest sie aus, und der Board-Test tut
+/// es, um zu zeigen, dass die MPU den Zugriff abweist und meldet.
 static PROBE: AtomicU8 = AtomicU8::new(0);
 
-/// `test/tcb_write` (12.3): der naechste Leerlauf schreibt in den Programmzustand.
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_test_tcb_write(_user: *mut c_void, value: u8) -> bool {
-    if value != 0 {
-        PROBE.store(1, Ordering::Relaxed);
-    }
-    true
+/// Wie der vorige Lauf endete (12.7), beim Start aus dem Plattformblock gelesen.
+static PREVIOUS_RUN: AtomicU32 = AtomicU32::new(0);
+
+/// Der Pruefstand des Programms (12.6): je Adresse das Geraet, das die
+/// Verdrahtung nennt, sonst ein Stummel (`build.rs`).
+mod drivers {
+    include!(concat!(env!("OUT_DIR"), "/takt_drivers.rs"));
 }
 
-/// `test/guard_write` (12.3): der naechste Leerlauf schreibt in den Waechter.
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_test_guard_write(_user: *mut c_void, value: u8) -> bool {
-    if value != 0 {
-        PROBE.store(2, Ordering::Relaxed);
-    }
-    true
-}
+/// Die Geraete des Boards (12.6): je Adresse der Typ, den `takt-drivers.toml`
+/// nennt. `setup` richtet die Peripherie ein; die Geraete erreichen sie
+/// ueber die Statics oben.
+#[allow(dead_code, reason = "ein Vorrat fuer jedes Programm; welche Geraete eines braucht, nennt sein Pruefstand")]
+mod devices {
+    use core::sync::atomic::Ordering;
 
-/// `test/job_guard_write` (12.3): der naechste Leerlauf schreibt in den
-/// Waechter unter dem Job-Stack.
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_test_job_guard_write(_user: *mut c_void, value: u8) -> bool {
-    if value != 0 {
-        PROBE.store(3, Ordering::Relaxed);
-    }
-    true
-}
+    use stm32f4::stm32f401::{Interrupt, NVIC};
+    use takt_embed::{Device, Input, Output, Sample};
 
-/// `test/isr_write` (12.3): Im naechsten Programmschritt schreibt die
-/// Pruef-ISR in den Programmzustand (`test/in_step`).
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_test_isr_write(_user: *mut c_void, value: u8) -> bool {
-    if value != 0 {
-        PROBE.store(4, Ordering::Relaxed);
-    }
-    true
-}
+    use super::{LED, PREVIOUS_RUN, PROBE, wire};
 
-/// `test/in_step` (12.3): Gelesen wird im Programmschritt, bei offenem
-/// Programmzustand. Ist die Pruef-ISR angefordert, loest der Treiber sie
-/// hier aus, und sie unterbricht den Schritt.
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt gueltige Zeiger; den Zeitstempel belegt er mit
-/// der Tickgrenze vor, und dabei bleibt es.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_test_in_step(
-    _user: *mut c_void,
-    value: *mut u8,
-    quality: *mut u8,
-    _t: *mut i64,
-) -> bool {
-    if PROBE.load(Ordering::Relaxed) == 4 {
-        NVIC::pend(Interrupt::EXTI0);
-        cortex_m::asm::dsb();
-        cortex_m::asm::isb();
+    /// Ein Geraet, das fest am Board sitzt: Es lebt, solange das Board
+    /// laeuft (12.4).
+    #[derive(Debug, Default)]
+    pub struct Fixed;
+
+    impl Device for Fixed {
+        fn alive(&mut self, _now: i64) -> bool {
+            true
+        }
     }
-    unsafe {
-        *value = 0;
-        *quality = 0;
+
+    /// `ui/led`: die LED der Black Pill an PC13, gegen 3V3 — was `true`
+    /// elektrisch heisst, weiss nur dieses Geraet.
+    #[derive(Debug, Default)]
+    pub struct UiLed;
+
+    impl Output<bool> for UiLed {
+        fn write(&mut self, value: bool, _now: i64) -> bool {
+            // SAFETY: ein Faden; `setup` setzt die LED vor dem ersten Tick.
+            let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return false };
+            if value {
+                led.on();
+            } else {
+                led.off();
+            }
+            true
+        }
     }
-    true
+
+    /// `gpio/loop_out`: PA0, ueber die Bruecke an PA1 (13.8).
+    #[derive(Debug, Default)]
+    pub struct GpioLoopOut;
+
+    impl Output<bool> for GpioLoopOut {
+        fn write(&mut self, value: bool, _now: i64) -> bool {
+            let Some(w) = wire() else { return false };
+            w.write(value);
+            true
+        }
+    }
+
+    /// `gpio/loop_in`: PA1, das Ende der Bruecke (13.8).
+    #[derive(Debug, Default)]
+    pub struct GpioLoopIn;
+
+    impl Input<bool> for GpioLoopIn {
+        fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
+            Some(Sample::good(wire()?.read(), now))
+        }
+    }
+
+    /// `sys/previous_run` (12.7): wie der vorige Lauf endete.
+    #[derive(Debug, Default)]
+    pub struct SysPreviousRun;
+
+    impl Input<u32> for SysPreviousRun {
+        fn sample(&mut self, now: i64) -> Option<Sample<u32>> {
+            Some(Sample::good(PREVIOUS_RUN.load(Ordering::Relaxed), now))
+        }
+    }
+
+    /// Ein Ausgang, der einen Pruefzugriff anfordert: `true` setzt `probe`.
+    fn request(value: bool, probe: u8) -> bool {
+        if value {
+            PROBE.store(probe, Ordering::Relaxed);
+        }
+        true
+    }
+
+    /// `test/tcb_write` (12.3): Der naechste Leerlauf schreibt in den Programmzustand.
+    #[derive(Debug, Default)]
+    pub struct TestTcbWrite;
+
+    impl Output<bool> for TestTcbWrite {
+        fn write(&mut self, value: bool, _now: i64) -> bool {
+            request(value, 1)
+        }
+    }
+
+    /// `test/guard_write` (12.3): Der naechste Leerlauf schreibt in den Waechter.
+    #[derive(Debug, Default)]
+    pub struct TestGuardWrite;
+
+    impl Output<bool> for TestGuardWrite {
+        fn write(&mut self, value: bool, _now: i64) -> bool {
+            request(value, 2)
+        }
+    }
+
+    /// `test/job_guard_write` (12.3): Der naechste Leerlauf schreibt in den
+    /// Waechter unter dem Job-Stack.
+    #[derive(Debug, Default)]
+    pub struct TestJobGuardWrite;
+
+    impl Output<bool> for TestJobGuardWrite {
+        fn write(&mut self, value: bool, _now: i64) -> bool {
+            request(value, 3)
+        }
+    }
+
+    /// `test/isr_write` (12.3): Im naechsten Programmschritt schreibt die
+    /// Pruef-ISR in den Programmzustand (`test/in_step`).
+    #[derive(Debug, Default)]
+    pub struct TestIsrWrite;
+
+    impl Output<bool> for TestIsrWrite {
+        fn write(&mut self, value: bool, _now: i64) -> bool {
+            request(value, 4)
+        }
+    }
+
+    /// `test/in_step` (12.3): Gelesen wird im Programmschritt, bei offenem
+    /// Programmzustand. Ist die Pruef-ISR angefordert, loest das Geraet sie
+    /// hier aus, und sie unterbricht den Schritt.
+    #[derive(Debug, Default)]
+    pub struct TestInStep;
+
+    impl Input<bool> for TestInStep {
+        fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
+            if PROBE.load(Ordering::Relaxed) == 4 {
+                NVIC::pend(Interrupt::EXTI0);
+                cortex_m::asm::dsb();
+                cortex_m::asm::isb();
+            }
+            Some(Sample::good(false, now))
+        }
+    }
+
+    /// `test/tick_stretch`, das Pruefgeraet fuer 12.6 Zeile 7: streckt die
+    /// Periode von TIM2 um den geschriebenen Prozentsatz.
+    #[derive(Debug, Default)]
+    pub struct TestTickStretch;
+
+    impl Output<u8> for TestTickStretch {
+        fn write(&mut self, percent: u8, _now: i64) -> bool {
+            takt_board_stm32f401::tick::stretch(u32::from(percent));
+            true
+        }
+    }
 }
 
 /// Fuehrt einen angeforderten Pruefzugriff aus; ausserhalb des Ticks, wo
@@ -316,44 +368,6 @@ fn EXTI0() {
     });
 }
 
-/// Der Output `gpio/loop_out` auf PA0, ueber die Bruecke an PA1 (13.8).
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_gpio_loop_out(_user: *mut c_void, value: u8) -> bool {
-    let Some(w) = wire() else { return false };
-    w.write(value != 0);
-    true
-}
-
-/// Der Input `gpio/loop_in` an PA1, das Ende der Bruecke (13.8).
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild; den
-/// Zeitstempel belegt er mit der Tickgrenze vor, und dabei bleibt es.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_gpio_loop_in(
-    _user: *mut c_void,
-    value: *mut u8,
-    quality: *mut u8,
-    _t: *mut i64,
-) -> bool {
-    let Some(w) = wire() else { return false };
-    let level = w.read();
-    unsafe {
-        *value = u8::from(level);
-        *quality = 0;
-    }
-    true
-}
-
-/// Das Pruefgeraet fuer 12.6 Zeile 7: streckt die Periode von TIM2 um den
-/// geschriebenen Prozentsatz.
-#[unsafe(no_mangle)]
-pub extern "C" fn app_out_test_tick_stretch(_user: *mut c_void, percent: u8) -> bool {
-    takt_board_stm32f401::tick::stretch(u32::from(percent));
-    true
-}
-
 /// Die Tickgrenze (12.3): Zeitstempel fuer die Periode, Tickzaehler.
 fn on_tim2() {
     mpu::isr(|| {
@@ -390,13 +404,19 @@ fn limit() -> u64 {
 }
 
 /// Baut die Schleife unter `clock` im Profil `profile` (12.8).
-fn runtime<C: Clock>(clock: C, protection: Mpu, profile: Profile) -> Takt<C> {
+///
+/// # Safety
+///
+/// `rig` lebt, solange das Programm Treiber ruft: Der Rahmen haelt einen
+/// Zeiger auf ihn, den der Kleber in `drivers` als `Rig` liest.
+unsafe fn runtime<C: Clock>(clock: C, protection: Mpu, profile: Profile, rig: &mut drivers::Rig) -> Takt<C> {
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
     // Der Watchdog wacht im Betrieb (12.3); ein Konformitaetslauf wartet
     // auf die Leitung und ist kein Betrieb.
     let watchdog = (limit() == 0).then(|| Iwdg::arm(WATCHDOG_NS));
     // 12.3: Nach `init` ist der Programmzustand nur noch im Tick beschreibbar.
-    let program = Guarded::new(Generated::init(false), protection);
+    // SAFETY: siehe oben.
+    let program = Guarded::new(unsafe { Generated::init(false, core::ptr::from_mut(rig).cast()) }, protection);
     Runtime::new(program, clock, watchdog, (), profile, TICK_NS, policy)
 }
 
@@ -412,8 +432,9 @@ fn no_journal<'a>() -> Option<&'a mut Persist<'a, FakeNvm<0>>> {
 
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
 #[cfg(not(feature = "rtos"))]
-fn conduct(clock: impl Clock, protection: Mpu) {
-    let mut rt = runtime(clock, protection, Profile::BAREMETAL);
+fn conduct(clock: impl Clock, protection: Mpu, rig: &mut drivers::Rig) {
+    // SAFETY: `rig` kommt aus `main`, das nicht zurueckkehrt.
+    let mut rt = unsafe { runtime(clock, protection, Profile::BAREMETAL, rig) };
     let stats = takt_rt_baremetal::run(&mut rt, no_journal(), cadence(), uart);
     conclude(&rt, &stats);
 }
@@ -558,6 +579,7 @@ fn main() -> ! {
         }
     }
 
+    let mut rig = drivers::Rig::default();
     if LOGICAL {
         // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet
         // jeden Job zu Ende; dann steht die Uhr auf der Frist. In logischer
@@ -573,6 +595,7 @@ fn main() -> ! {
                 }
             }),
             protection,
+            &mut rig,
         );
     } else {
         // Zwischen den Ticks fuellt die Schleife die Leitung nach, sooft ein
@@ -588,6 +611,7 @@ fn main() -> ! {
                 }
             }),
             protection,
+            &mut rig,
         );
     }
     // Nach dem Lauf bleibt die Leitung offen: Der Host holt das Board mit
@@ -629,16 +653,19 @@ impl takt_rt_rtos::Boundary for TaskBoundary {
 /// offene Leitung wie auf dem blanken Board.
 #[cfg(feature = "rtos")]
 async fn conduct_rtos(timer: Tim2Tick, protection: Mpu, mut boundary: TaskBoundary) {
+    let mut rig = drivers::Rig::default();
     if LOGICAL {
         // In logischer Zeit ist jede Grenze eine Periode (13.8); die
         // Aufgaben darunter rechnen wie im Betrieb.
         let now = core::cell::Cell::new(0);
-        let mut rt = runtime(takt_rt_rtos::LogicalTime(&now), protection, Profile::SHARED);
+        // SAFETY: `rig` lebt bis zum Ende der Aufgabe, die nicht zurueckkehrt.
+        let mut rt = unsafe { runtime(takt_rt_rtos::LogicalTime(&now), protection, Profile::SHARED, &mut rig) };
         let mut logical = takt_rt_rtos::Logical::new(&mut boundary, &now, TICK_NS);
         let stats = takt_rt_rtos::run(&mut rt, no_journal(), cadence(), uart, &mut logical).await;
         conclude(&rt, &stats);
     } else {
-        let mut rt = runtime(TimerClock::new(timer, TICK_NS), protection, Profile::SHARED);
+        // SAFETY: wie oben.
+        let mut rt = unsafe { runtime(TimerClock::new(timer, TICK_NS), protection, Profile::SHARED, &mut rig) };
         let stats = takt_rt_rtos::run(&mut rt, no_journal(), cadence(), uart, &mut boundary).await;
         conclude(&rt, &stats);
     }

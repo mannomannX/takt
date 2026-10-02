@@ -8,10 +8,11 @@
 //! `takt-host/<crate>` im Zielverzeichnis, die Abbilder unter
 //! `takt-host-images` — wie bei den Boards je Stand der Quellen.
 //!
-//! Die Einstiege des Treiber-Crates ersetzen die schwachen Voreinstellungen
-//! des Rahmens, wie die des Bring-ups auf einem Board; ein Kanal, den das
-//! Crate nicht stellt, liefert nichts, und ein Ausgang ohne Treiber gilt als
-//! bestaetigt (12.1).
+//! **Der Pruefstand.** Das Bauskript des Programms erzeugt die Treiber
+//! (`bringup::drivers`): je Adresse das Geraet, das die Verdrahtung des
+//! Wirts-Bring-ups oder des Treiber-Crates nennt (`takt-drivers.toml`,
+//! 12.6). Eine Adresse ohne Geraet bekommt einen ausdruecklichen Stummel:
+//! Ein Eingang liefert nichts, ein Ausgang gilt als bestaetigt.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use super::{Bin, Board, END, Options, complete, hash_tree, root, run_bounded};
+use crate::bringup::WIRING;
 
 /// Wie lange ein Lauf auf dem Wirt hoechstens dauern darf.
 const RUN: Duration = Duration::from_secs(120);
@@ -48,30 +50,55 @@ impl Host {
     }
 
     /// Das Programm, das Wirts-Bring-up und Treiber-Crate bindet; liefert
-    /// sein Manifest.
+    /// sein Manifest. Ein Treiber-Crate ohne Verdrahtung ist ein Fehler:
+    /// Ohne sie stuende jede Adresse auf einem Stummel.
     fn wrapper(&self) -> Result<PathBuf, String> {
-        let bringup = root().join("crates/takt-bringup-host");
-        let (dir, dependency, import) = match &self.driver {
+        let canonical = |p: &Path| std::fs::canonicalize(p).map_err(|e| format!("{}: {e}", p.display()));
+        let bringup = canonical(&root().join("crates/takt-bringup-host"))?;
+        let mut wiring = vec![bringup.join(WIRING)];
+        let (dir, dependency) = match &self.driver {
             Some(driver) => {
                 let name = crate_name(driver)?;
-                let path = std::fs::canonicalize(driver).map_err(|e| format!("{}: {e}", driver.display()))?;
+                let path = canonical(driver)?;
+                if !path.join(WIRING).is_file() {
+                    return Err(format!("{}: keine Verdrahtung `{WIRING}` (12.6)", path.display()));
+                }
+                wiring.push(path.join(WIRING));
                 let dependency = format!("{name} = {{ path = {} }}\n", toml_path(&path));
-                (name.clone(), dependency, format!("use {} as _;\n\n", name.replace('-', "_")))
+                (name, dependency)
             }
-            None => ("ohne-treiber".to_string(), String::new(), String::new()),
+            None => ("ohne-treiber".to_string(), String::new()),
         };
         let dir = crate::target_dir().join("takt-host").join(dir);
         std::fs::create_dir_all(dir.join("src")).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let bringup = std::fs::canonicalize(&bringup).map_err(|e| format!("{}: {e}", bringup.display()))?;
+        let krate = |name: &str| canonical(&root().join("crates").join(name)).map(|p| toml_path(&p));
         let manifest = format!(
             "# Erzeugt von `takt-conformance::board::host`.\n[package]\nname = \"takt-host-run\"\nversion = \"0.0.0\"\n\
-             edition = \"2024\"\npublish = false\n\n[workspace]\n\n[dependencies]\ntakt-bringup-host = {{ path = {} }}\n\
-             {dependency}",
-            toml_path(&bringup)
+             edition = \"2024\"\npublish = false\n\n[workspace]\n\n[build-dependencies]\n\
+             takt-conformance = {{ path = {}, default-features = false }}\n\n[dependencies]\n\
+             takt-bringup-host = {{ path = {} }}\ntakt-embed = {{ path = {} }}\n{dependency}",
+            krate("takt-conformance")?,
+            toml_path(&bringup),
+            krate("takt-embed")?
         );
-        let main = format!("{import}fn main() -> std::process::ExitCode {{\n    takt_bringup_host::run()\n}}\n");
+        let files: String = wiring.iter().map(|p| format!("        Path::new({:?}),\n", plain(p))).collect();
+        let build = format!(
+            "// Erzeugt von `takt-conformance::board::host`.\n\nuse std::path::{{Path, PathBuf}};\n\n\
+             use takt_conformance::bringup;\n\nfn main() {{\n    println!(\"cargo:rerun-if-env-changed=TAKT_PROGRAM\");\n    \
+             let program = std::env::var(\"TAKT_PROGRAM\").expect(\"TAKT_PROGRAM\");\n    \
+             let Some(p) = bringup::compile(&program) else {{ panic!(\"{{program}}: uebersetzt nicht\") }};\n    \
+             let wiring = bringup::wiring(&[\n{files}    ]);\n    \
+             let out = PathBuf::from(std::env::var(\"OUT_DIR\").expect(\"OUT_DIR\"));\n    \
+             bringup::drivers(&p, &wiring, &out.join(\"takt_drivers.rs\"));\n}}\n"
+        );
+        let main = "// Erzeugt von `takt-conformance::board::host`.\n\n\
+                    mod drivers {\n    include!(concat!(env!(\"OUT_DIR\"), \"/takt_drivers.rs\"));\n}\n\n\
+                    fn main() -> std::process::ExitCode {\n    let mut rig = drivers::Rig::default();\n    \
+                    // SAFETY: Der Kleber in `drivers` ist fuer `Rig` erzeugt, und `rig` lebt bis zum Ende des Laufs.\n    \
+                    unsafe { takt_bringup_host::run(core::ptr::from_mut(&mut rig).cast()) }\n}\n";
         write_if_changed(&dir.join("Cargo.toml"), &manifest)?;
-        write_if_changed(&dir.join("src/main.rs"), &main)?;
+        write_if_changed(&dir.join("build.rs"), &build)?;
+        write_if_changed(&dir.join("src/main.rs"), main)?;
         // Dieselben Versionen wie im Workspace, und kein Netz.
         let lock = dir.join("Cargo.lock");
         if !lock.exists() {
@@ -81,7 +108,7 @@ impl Host {
     }
 
     /// Der Schluessel eines Abbilds: Profil, Programm, Konfiguration,
-    /// Treiber-Crate und die Quellen aller Crates.
+    /// Treiber-Crate und die Quellen und Verdrahtungen aller Crates.
     fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
         let mut h = DefaultHasher::new();
         cfg!(debug_assertions).hash(&mut h);
@@ -90,12 +117,13 @@ impl Host {
             std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
         }
         let crates = root().join("crates");
-        let mut trees: Vec<PathBuf> =
-            std::fs::read_dir(&crates).map_err(|e| e.to_string())?.flatten().map(|e| e.path().join("src")).collect();
-        trees.sort();
+        let mut dirs: Vec<PathBuf> =
+            std::fs::read_dir(&crates).map_err(|e| e.to_string())?.flatten().map(|e| e.path()).collect();
+        dirs.sort();
+        let mut trees: Vec<PathBuf> = dirs.iter().flat_map(|d| [d.join("src"), d.join(WIRING)]).collect();
         trees.push(root().join("crates/takt-bringup-host/build.rs"));
         if let Some(driver) = &self.driver {
-            trees.extend([driver.join("src"), driver.join("Cargo.toml")]);
+            trees.extend([driver.join("src"), driver.join("Cargo.toml"), driver.join(WIRING)]);
         }
         for path in &trees {
             if path.is_dir() {
@@ -188,9 +216,14 @@ fn crate_name(dir: &Path) -> Result<String, String> {
     Err(format!("{}: kein `name` unter `[package]`", manifest.display()))
 }
 
+/// Ein Pfad ohne das Praefix `\\?\`, das `canonicalize` unter Windows setzt.
+fn plain(path: &Path) -> String {
+    path.to_string_lossy().trim_start_matches(r"\\?\").to_string()
+}
+
 /// Ein Pfad als TOML-Zeichenkette, die Backslashes nicht deutet.
 fn toml_path(path: &Path) -> String {
-    format!("'{}'", path.to_string_lossy().trim_start_matches(r"\\?\"))
+    format!("'{}'", plain(path))
 }
 
 /// Schreibt nur, wenn sich der Inhalt aendert: Sonst baute Cargo jedes Mal neu.

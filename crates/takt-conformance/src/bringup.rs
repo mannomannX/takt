@@ -55,6 +55,40 @@ pub fn compile(path: &str) -> Option<takt_mir::Program> {
     checked.program
 }
 
+/// Der Name der Verdrahtung eines Treiber-Crates oder Bring-ups (12.6): je
+/// Adresse der Rust-Typ, der sie bedient ([`takt_frame::drivers::wiring`]).
+pub const WIRING: &str = "takt-drivers.toml";
+
+/// Liest die Verdrahtungen aus `files`, in ihrer Reihenfolge; nennen zwei
+/// dieselbe Adresse, gilt die erste.
+pub fn wiring(files: &[&Path]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for file in files {
+        println!("cargo:rerun-if-changed={}", file.display());
+        let text = fs::read_to_string(file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+        out.extend(takt_frame::drivers::wiring(&text).unwrap_or_else(|e| panic!("{}: {e}", file.display())));
+    }
+    out
+}
+
+/// Schreibt die Treiber des Programms fuer einen Pruefstand nach `file`
+/// (12.6): den Trait `Drivers`, den Pruefstand `Rig` nach `wiring` und den
+/// Kleber vom Rahmen zu ihm, mit dem Praefix der Bring-ups. Eine Adresse
+/// ohne Geraet bekommt einen ausdruecklichen Stummel, den die
+/// Dokumentation von `Rig` nennt.
+pub fn drivers(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) {
+    use takt_frame::drivers::{of, rust_glue, rust_rig, rust_trait};
+    let list = of(p, &takt_frame::layout::of(p));
+    let x = takt_llvm::symbols::Prefix::default();
+    let text = format!(
+        "// Erzeugt von `takt_conformance::bringup::drivers` (12.6).\n\n{}\n{}\n{}",
+        rust_trait(&list),
+        rust_rig(&list, "Rig", wiring),
+        rust_glue(&list, &x, "Rig")
+    );
+    fs::write(file, text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+}
+
 /// Ruft `takt build PROGRAMM --target ZIEL --build hw --prefix app` mit `extra`, etwa
 /// `--emit ir`, und schreibt nach `out`.
 ///

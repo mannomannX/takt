@@ -18,6 +18,11 @@
 //! **Welches Programm?** `takt.toml` neben `Cargo.toml` nennt den Pfad
 //! (FB-141); `TAKT_PROGRAM` sticht nur fuer einen einmaligen Versuch.
 //!
+//! **Die Treiber** (12.6) erzeugt `bringup::drivers` als Pruefstand: fuer
+//! `takt` nach der Verdrahtung des Boards und des Pruefgeraets, fuer
+//! `bench` ganz aus Stummeln — der Messkern misst den Tick, nicht die
+//! Peripherie.
+//!
 //! **Die C-Referenz fuer `takt bench`** (13.8) nennt `TAKT_BENCH_C`. Sie
 //! wird mit denselben Flags uebersetzt wie der erzeugte Code — das
 //! Verhaeltnis der Zeiten soll die Sprachen vergleichen, nicht die
@@ -85,11 +90,17 @@ fn build_takt_program(out: &Path) {
             hardware: bringup::hardware().as_ref(),
             protect: Some(protect),
             prefix: takt_llvm::symbols::Prefix::default(),
+            stubs: false,
         },
     );
     if let Err(e) = fs::write(&rahmen, frame.source) {
         panic!("Rahmen nicht schreibbar: {e}");
     }
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let wiring =
+        bringup::wiring(&[&here.join(bringup::WIRING), &here.join("../takt-driver-probe").join(bringup::WIRING)]);
+    bringup::drivers(&p, &wiring, &out.join("takt_drivers.rs"));
+    bringup::drivers(&p, &[], &out.join("takt_drivers_bench.rs"));
 
     let ir = out.join("takt_programm.ll");
     bringup::takt_build(&program, "thumbv7em", &["--emit", "ir"], &ir);

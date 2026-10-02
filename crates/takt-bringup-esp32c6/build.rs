@@ -7,6 +7,11 @@
 //! Konfigurationsdatei gilt nur, wenn `cargo` aus diesem Verzeichnis laeuft,
 //! und ein Bau von aussen erzeugte sonst still ein Binary ohne Speicherkarte.
 //!
+//! **Die Treiber** (12.6) erzeugt `bringup::drivers` als Pruefstand: fuer
+//! `takt` nach der Verdrahtung des Boards und des Pruefgeraets, fuer
+//! `bench` ganz aus Stummeln — der Messkern misst den Tick, nicht die
+//! Peripherie.
+//!
 //! **Die C-Referenz fuer `takt bench`** (13.8) nennt `TAKT_BENCH_C`, wie
 //! beim F401: dieselben Flags wie der erzeugte Code, dazu
 //! `-ffp-contract=off` und `-fno-math-errno`, und im Archiv, also mit ihm
@@ -79,11 +84,17 @@ fn build_takt_program(out: &Path) {
             hardware: bringup::hardware().as_ref(),
             protect: None,
             prefix: takt_llvm::symbols::Prefix::default(),
+            stubs: false,
         },
     );
     if let Err(e) = fs::write(&rahmen, frame.source) {
         panic!("Rahmen nicht schreibbar: {e}");
     }
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let wiring =
+        bringup::wiring(&[&here.join(bringup::WIRING), &here.join("../takt-driver-probe").join(bringup::WIRING)]);
+    bringup::drivers(&p, &wiring, &out.join("takt_drivers.rs"));
+    bringup::drivers(&p, &[], &out.join("takt_drivers_bench.rs"));
     // Wo der Tick in der Arena steht, als absolutes Symbol: Die Probe liest
     // ihn ueber JTAG, wenn die Konsole schweigt (`Esp32c6::tick_over_jtag`).
     println!("cargo:rustc-link-arg=--defsym=__takt_tick_at={}", frame.tick_at);

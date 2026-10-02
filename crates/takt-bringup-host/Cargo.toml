@@ -18,6 +18,8 @@ takt-frame = { path = "../takt-frame" }
 takt-llvm = { path = "../takt-llvm" }
 
 [dependencies]
+# Die Geraete-Traits (12.6): `PreviousRun` ist ein Geraet des Wirts.
+takt-embed = { path = "../takt-embed" }
 takt-mcu-program = { path = "../takt-mcu-program" }
 # Wie auf den Boards: jede kuratierte Native, die der erzeugte Code ruft.
 takt-native-abi = { path = "../takt-native-abi", features = ["ecdsa", "rsa", "aes-gcm"] }

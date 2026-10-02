@@ -2,12 +2,13 @@
 //! C-ABI und unter derselben Tickschleife wie auf den Boards, in logischer
 //! Zeit, mit dem Trace auf der Standardausgabe.
 //!
-//! **Wozu.** Ein Treiber-Crate in Rust stellt die Einstiege der nativen
-//! Treiberschnittstelle (`app_in_<adr>`, `app_poll_<adr>`,
-//! `app_out_<adr>`, `app_alive_<geraet>`). `takt driver-test --crate`
-//! bindet es mit diesem Crate zu einem Programm auf dem Wirt: Der Treiber
-//! laeuft gegen sein Hardwaremodell, und es urteilt derselbe Rand (12.6)
-//! wie auf dem Board — der Rahmen ist derselbe, nicht nachgebaut.
+//! **Wozu.** Ein Treiber-Crate in Rust stellt Geraete: Typen, die die
+//! Traits aus `takt-embed` erfuellen, und in `takt-drivers.toml` die
+//! Adressen, die sie bedienen. `takt driver-test --crate` bindet es mit
+//! diesem Crate zu einem Programm auf dem Wirt, dessen Pruefstand danach
+//! verdrahtet ist: Der Treiber laeuft gegen sein Hardwaremodell, und es
+//! urteilt derselbe Rand (12.6) wie auf dem Board — der Rahmen ist
+//! derselbe, nicht nachgebaut.
 //!
 //! **Was fehlt, mit Absicht.** Kein Speicherschutz, kein Watchdog, keine
 //! Echtzeit: Der Wirt prueft die Semantik und den Treibervertrag, nicht
@@ -25,6 +26,7 @@ use core::ffi::c_void;
 use std::io::{BufWriter, Stdout, Write as _};
 use std::process::ExitCode;
 
+use takt_embed::{Input, Sample};
 use takt_mcu_program::Generated;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Port, Telemetry};
 use takt_rt_core::{FakeNvm, Persist, Policy, Profile, Runtime};
@@ -112,24 +114,15 @@ pub extern "C" fn takt_board_trace_hex8(value: u8) {
     line.write_hex8(value);
 }
 
-/// Der Treiber fuer `input … @ hw("sys/previous_run")` (12.7): Ein Prozess
+/// Das Geraet hinter `input … @ hw("sys/previous_run")` (12.7): Ein Prozess
 /// beginnt wie ein frisch geschriebenes Board ohne vorigen Lauf (`NONE`).
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt gueltige Zeiger in sein Prozessabbild.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn app_in_sys_previous_run(
-    _user: *mut c_void,
-    value: *mut i32,
-    quality: *mut u8,
-    _t: *mut i64,
-) -> bool {
-    unsafe {
-        *value = 0;
-        *quality = 0;
+#[derive(Debug, Default)]
+pub struct PreviousRun;
+
+impl Input<i32> for PreviousRun {
+    fn sample(&mut self, now: i64) -> Option<Sample<i32>> {
+        Some(Sample::good(0, now))
     }
-    true
 }
 
 /// Kein Journal: Ein Lauf auf dem Wirt beginnt wie der Interpreter ohne
@@ -139,7 +132,13 @@ fn no_journal<'a>() -> Option<&'a mut Persist<'a, FakeNvm<0>>> {
 }
 
 /// Fuehrt das Programm aus, so viele Ticks, wie das erste Argument nennt.
-pub fn run() -> ExitCode {
+///
+/// # Safety
+///
+/// `drivers` zeigt auf das Treiberobjekt, fuer das der Kleber des Programms
+/// erzeugt ist (`takt_conformance::bringup::drivers`), und lebt bis zum
+/// Ende des Laufs.
+pub unsafe fn run(drivers: *mut c_void) -> ExitCode {
     let Some(ticks) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) else {
         eprintln!("Aufruf: <binary> TICKS");
         return ExitCode::FAILURE;
@@ -162,7 +161,8 @@ pub fn run() -> ExitCode {
             line.drain(DRAIN_ROUNDS);
         }
     });
-    let program = Generated::init(false);
+    // SAFETY: siehe oben.
+    let program = unsafe { Generated::init(false, drivers) };
     let mut rt = Runtime::new(program, clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
     let stats = takt_rt_baremetal::run(&mut rt, no_journal(), Cadence::of(ticks, 1, false), line);
     if let Some(line) = line() {

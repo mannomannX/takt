@@ -23,7 +23,6 @@ pub mod counter;
 pub mod cycles;
 pub mod edge_probe;
 pub mod fifo;
-pub mod host;
 pub mod mpu;
 pub mod platform;
 pub mod pll;

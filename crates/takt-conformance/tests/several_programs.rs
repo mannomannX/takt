@@ -35,7 +35,8 @@ void takt_board_trace_hex8(unsigned char v) { fprintf(out[current], "0x%02x", v)
 /// sein Praefix, seine Arena und seinen MCU-Rahmen; ein `main` startet beide
 /// und tickt sie abwechselnd, wie die Schleife der Boards es fuer eines tut.
 /// Fehlte einem externen Symbol das Praefix, linkte der Prozess nicht;
-/// teilten die Programme Zustand, saehe eines die Spuren des anderen.
+/// teilten die Programme Zustand, saehe eines die Spuren des anderen. Ihre
+/// Kanaele an Hardware bekommen ausdruecklich Stummel (12.6).
 #[test]
 fn two_programs_run_side_by_side_like_the_interpreter() {
     let Clang::At(clang) = find() else {
@@ -55,7 +56,8 @@ fn two_programs_run_side_by_side_like_the_interpreter() {
         let prefix = Prefix::new(name).expect("Praefix");
         let p = common::board::corpus(file);
         let ir = takt_llvm::lower::program(&p, host.triple, &prefix).ir;
-        let frame = takt_frame::mcu::build_with(&p, Frame { prefix: prefix.clone(), ..Default::default() }).source;
+        let frame =
+            takt_frame::mcu::build_with(&p, Frame { prefix: prefix.clone(), stubs: true, ..Default::default() }).source;
         let (ll, c) = (dir.join(format!("{name}.ll")), dir.join(format!("{name}.c")));
         std::fs::write(&ll, ir).expect("IR");
         std::fs::write(&c, frame).expect("Rahmen");

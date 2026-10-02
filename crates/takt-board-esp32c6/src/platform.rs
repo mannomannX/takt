@@ -36,7 +36,7 @@ static ENDED: AtomicU32 = AtomicU32::new(0);
 /// Der Watchdog der Runtime ist der MWDT. Den RTC-Watchdog nutzt nur die
 /// Neuanmeldung des Hosts, als Reset des ganzen Chips wie der EN-Pin: Der
 /// Lauf danach kennt keinen vorigen.
-pub fn previous_run() -> i32 {
+pub fn previous_run() -> u32 {
     let reason = reset_reason(Cpu::ProCpu);
     let watchdog = matches!(
         reason,

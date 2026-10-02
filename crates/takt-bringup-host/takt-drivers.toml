@@ -1,0 +1,5 @@
+# Die Verdrahtung des Wirts-Bring-ups (12.6): Was der Wirt selbst stellt.
+# Ein Treiber-Crate bringt seine eigene mit; `takt-conformance::board::host`
+# liest beide.
+
+"sys/previous_run" = "takt_bringup_host::PreviousRun"

@@ -36,6 +36,8 @@ takt-rt-core = { path = "../takt-rt-core" }
 takt-mcu-program = { path = "../takt-mcu-program" }
 # Das Pruefgeraet des Treiberrands (12.6, 13.8), wie auf dem Wirt.
 takt-driver-probe = { path = "../takt-driver-probe" }
+# Die Geraete-Traits, die die Geraete des Boards erfuellen (12.6).
+takt-embed = { path = "../takt-embed" }
 
 # `critical-section-single-core` liefert die Implementierung, die die PAC
 # fuer `Peripherals::take()` braucht: Auf einem Einkern-System ohne

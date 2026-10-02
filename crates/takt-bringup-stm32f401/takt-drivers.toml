@@ -1,0 +1,19 @@
+# Die Verdrahtung des F401-Bring-ups (12.6): je Adresse das Geraet in
+# `src/bin/takt.rs`. Das Pruefgeraet bringt seine eigene mit
+# (`takt-driver-probe/takt-drivers.toml`); das Bauskript liest beide.
+
+"ui/led" = "crate::devices::UiLed"
+"gpio/loop_out" = "crate::devices::GpioLoopOut"
+"gpio/loop_in" = "crate::devices::GpioLoopIn"
+"sys/previous_run" = "crate::devices::SysPreviousRun"
+"test/tcb_write" = "crate::devices::TestTcbWrite"
+"test/guard_write" = "crate::devices::TestGuardWrite"
+"test/job_guard_write" = "crate::devices::TestJobGuardWrite"
+"test/isr_write" = "crate::devices::TestIsrWrite"
+"test/in_step" = "crate::devices::TestInStep"
+"test/tick_stretch" = "crate::devices::TestTickStretch"
+
+# Geraete, die fest am Board sitzen (12.4).
+"ui" = "crate::devices::Fixed"
+"gpio" = "crate::devices::Fixed"
+"test" = "crate::devices::Fixed"

@@ -173,7 +173,7 @@ fn a_simulated_input_is_fed_before_tick_0() {
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
     let p = takt_sema::compile(src, &options).program.expect("Programm");
     let frame = takt_frame::mcu::build(&p).source;
-    let init = &frame[frame.find("int app_init_with(").expect("init")..];
+    let init = &frame[frame.find("int32_t app_init_with(").expect("init")..];
     let fed = init.find("/* p_sim -> p */").expect("die Speisung in init");
     let entered = init.find("_enter(").expect("der Eintritt");
     assert!(fed < entered, "die Speisung steht nach dem Eintritt:\n{init}");
@@ -190,7 +190,7 @@ fn the_harness_exports_what_the_loop_needs() {
     for name in ["app_init", "app_tick", "app_dump", "app_pc", "app_end"] {
         assert!(src.contains(&format!("void {name}")), "`{name}` fehlt im Rahmen");
     }
-    assert!(src.contains("int app_next_run(long long *delay)"), "`app_next_run` fehlt im Rahmen (12.7)");
+    assert!(src.contains("int32_t app_next_run(int64_t *delay)"), "`app_next_run` fehlt im Rahmen (12.7)");
 }
 
 /// Der Rahmen bedient jede Funktion, die der erzeugte Code ruft.
@@ -242,11 +242,11 @@ fn a_hardware_path_becomes_a_driver_call() {
     let src = takt_frame::mcu::build(&p).source;
 
     assert!(
-        src.contains("_Bool app_out_ui_led(void *user, unsigned char value);"),
+        src.contains("uint8_t app_out_ui_led(void *user, int64_t now, uint8_t value);"),
         "der Treiber ist deklariert:\n{src}"
     );
     assert!(
-        src.contains("takt_edge_output(app_out_ui_led(a->user, *(unsigned char *)(a->latch + 0)), alive_ui, -1, -1)"),
+        src.contains("takt_edge_output(app_out_ui_led(a->user, now, *(uint8_t *)(a->latch + 0)), alive_ui, -1, -1)"),
         "und wird gerufen, seine Bestaetigung geprueft (12.6 Zeile 6):\n{src}"
     );
     assert!(src.contains("void app_commit(void)"), "Schritt 10 hat einen Namen (12.1)");
@@ -269,9 +269,9 @@ fn an_unbound_output_needs_no_driver() {
             c.dir != takt_mir::program::Direction::Input && matches!(c.binding, takt_mir::program::Binding::Hw(_))
         })
         .count();
-    // Je gebundenem Ausgang eine Deklaration, ein schwacher Default (das
-    // Board ueberschreibt, was es verdrahtet hat) und ein Aufruf.
-    assert_eq!(calls, bound * 3, "nur gebundene Ausgaenge bekommen Treiber:\n{src}");
+    // Je gebundenem Ausgang eine Deklaration und ein Aufruf; einen
+    // Vorgabetreiber gibt es nicht (12.6).
+    assert_eq!(calls, bound * 2, "nur gebundene Ausgaenge bekommen Treiber:\n{src}");
 }
 
 /// **Die Adresse wird zu einem Bezeichner, der in C gueltig ist.**
@@ -433,8 +433,8 @@ fn every_observation_line_carries_its_tick() {
 fn the_harness_answers_the_sleep_condition() {
     let p = corpus("29_heartbeat.takt");
     let src = takt_frame::mcu::build(&p).source;
-    assert!(src.contains("_Bool app_idle(void)"), "die Bedingung hat einen Namen:\n{src}");
-    assert!(src.contains("long long app_deadline(void)"), "und die Frist auch");
+    assert!(src.contains("uint8_t app_idle(void)"), "die Bedingung hat einen Namen:\n{src}");
+    assert!(src.contains("int64_t app_deadline(void)"), "und die Frist auch");
     // Alle Maschinen muessen zustimmen: ein `return 0` je Maschine.
     assert!(src.contains("if (!app_heartbeat_idle(a)) return 0;"), "je Maschine eine Abfrage:\n{src}");
 }
@@ -518,26 +518,24 @@ fn a_multirate_deadline_counts_activations() {
 /// weil 12.6 Eingaenge degradieren laesst statt zu faulten — ohne den
 /// Rueckweg koennte er nur luegen oder schweigen.
 ///
-/// Antwortet er nicht, bleibt der Eintrag, wie `init` ihn setzte: `Bad`
-/// (3.5). Das ist die Voreinstellung der schwachen Bindung, und sie ist
-/// der Grund, warum ein fehlender Treiber nicht still durchgeht.
+/// Liefert er nichts, bleibt der Eintrag, wie `init` ihn setzte: `Bad`
+/// (3.5). Einen Vorgabetreiber gibt es nicht: Fehlt der Treiber, linkt das
+/// Abbild nicht, und der Name nennt die Adresse (12.6).
 #[test]
 fn a_bound_input_becomes_a_driver_symbol() {
     let src = takt_frame::mcu::build(&program(INPUTS)).source;
 
     assert!(
-        src.contains("_Bool app_in_ui_button(void *user, unsigned char *value, unsigned char *quality, long long *t);"),
+        src.contains(
+            "uint8_t app_in_ui_button(void *user, int64_t now, uint8_t *value, uint8_t *quality, int64_t *t);"
+        ),
         "{src}"
     );
     assert!(
-        src.contains("_Bool app_in_adc_temp(void *user, long long *value, unsigned char *quality, long long *t);"),
+        src.contains("uint8_t app_in_adc_temp(void *user, int64_t now, int64_t *value, uint8_t *quality, int64_t *t);"),
         "{src}"
     );
-    assert!(
-        src.contains("__attribute__((weak)) _Bool app_in_ui_button"),
-        "schwach gebunden:
-{src}"
-    );
+    assert!(!src.contains("__attribute__((weak))"), "stark gebunden (12.6):\n{src}");
 
     // Innerhalb des Ticks: Schritt 2 steht vor Schritt 3 (12.1).
     let at = src.find("void app_tick(").expect("Tickfunktion");
@@ -565,10 +563,10 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
     for symbol in [
         "void app_job_begin(",
         "void app_job_cancel(",
-        "int app_job_dispatch(void)",
+        "int32_t app_job_dispatch(void)",
         "void app_job_work(void)",
-        "int app_jobs_busy(void)",
-        "unsigned char *app_job_stack(unsigned int *size)",
+        "int32_t app_jobs_busy(void)",
+        "uint8_t *app_job_stack(uint32_t *size)",
     ] {
         assert!(
             src.contains(symbol),
@@ -586,12 +584,12 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
     let poll = tick.find("takt_jobs_poll(a);").expect("Jobs zu Tickbeginn");
     let sample = tick.find("takt_sample(a);").expect("Abtastung");
     assert!(poll < sample, "{tick}");
-    let at = src.find("_Bool app_idle(void)").expect("Schlafbedingung");
+    let at = src.find("uint8_t app_idle(void)").expect("Schlafbedingung");
     assert!(src[at..].contains("if (app_jobs_busy()) return 0;"), "{src}");
 
     // Ohne Jobs bleiben die Einstiege, und das Board ruft sie ohne Unterschied.
     let plain = takt_frame::mcu::build(&corpus("01_minimal.takt")).source;
-    assert!(plain.contains("int app_job_dispatch(void) { return 0; }"), "{plain}");
+    assert!(plain.contains("int32_t app_job_dispatch(void) { return 0; }"), "{plain}");
 }
 
 /// **Auch der Start tastet ab** (9.4, FB-316): Ein `enter:` des
@@ -600,7 +598,7 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
 #[test]
 fn the_start_samples_before_it_enters() {
     let src = takt_frame::mcu::build(&program(INPUTS)).source;
-    let at = src.find("int app_init_with(").expect("Startfunktion");
+    let at = src.find("int32_t app_init_with(").expect("Startfunktion");
     let init = &src[at..];
     let sample = init.find("takt_sample(a);").expect("Abtastung im Start");
     let enter = init.find("m_enter(").expect("Eintritt");
@@ -617,7 +615,6 @@ fn a_simulated_input_gets_no_driver_symbol() {
         "ein `sim`-Eingang braucht keinen Treiber:
 {src}"
     );
-    assert!(src.contains("kein Eingang ist an Hardware gebunden"), "{src}");
 }
 
 /// **Der Rahmen mit Eingaengen uebersetzt und bindet.** Ohne diesen Test
@@ -632,6 +629,65 @@ fn a_frame_with_inputs_compiles_and_links() {
     let p = program(INPUTS);
     let size = link_for(&clang, Target::RISCV32IMAC, &p, "inputs").unwrap_or_else(|e| panic!("{e}"));
     assert!(size > 0);
+}
+
+/// **Ein fehlender Treiber ist ein Link-Fehler, der ihn beim Namen nennt**
+/// (12.6). Der Rahmen deklariert jeden Treiber nur; ohne Treiber bindet das
+/// Programm nicht, und der Linker nennt `app_in_ui_button`. Mit
+/// ausdruecklich verlangten Stummeln (`Frame::stubs`) bindet es und laeuft
+/// einen Tick. Gebunden wird ein ganzes Programm fuer den Wirt: Die
+/// teilweise Bindung von [`link_for`] laesst offene Symbole stehen.
+#[test]
+fn a_missing_driver_fails_the_link_by_name() {
+    let Clang::At(clang) = takt_llvm::toolchain::find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-mcuh-strong-drivers");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let host = if cfg!(windows) { Target::X86_64_WINDOWS } else { Target::X86_64_LINUX };
+    let p = program(INPUTS);
+    let ll = dir.join("programm.ll");
+    std::fs::write(&ll, common::ir_for(&p, host.triple)).expect("IR");
+    let main = dir.join("main.c");
+    std::fs::write(
+        &main,
+        "void takt_board_trace(const char *line) { (void)line; }\n\
+         void takt_board_trace_i64(long long v) { (void)v; }\n\
+         void takt_board_trace_u64(unsigned long long v) { (void)v; }\n\
+         void takt_board_trace_f64(double v) { (void)v; }\n\
+         void takt_board_trace_hex8(unsigned char v) { (void)v; }\n\
+         void app_init(void *user);\nvoid app_tick(long long k);\nvoid app_commit(void);\n\
+         int main(void) { app_init(0); app_tick(1); app_commit(); return 0; }\n",
+    )
+    .expect("main");
+    let natives = takt_conformance::harness::native_library().expect("Natives");
+    let link = |stubs: bool| {
+        let frame = takt_frame::mcu::build_with(&p, takt_frame::mcu::Frame { stubs, ..Default::default() }).source;
+        let c = dir.join(format!("rahmen_{stubs}.c"));
+        std::fs::write(&c, frame).expect("Rahmen");
+        let exe = dir.join(format!("lauf_{stubs}{}", std::env::consts::EXE_SUFFIX));
+        let mut cmd = std::process::Command::new(&clang);
+        let out = Clang::deterministic(&mut cmd)
+            .args(["-Wno-override-module", "-O1"])
+            .args([&ll, &c, &main, &natives])
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .expect("clang");
+        (out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned(), exe)
+    };
+
+    let (linked, stderr, _) = link(false);
+    assert!(!linked, "ohne Treiber darf das Programm nicht binden");
+    for name in ["app_in_ui_button", "app_in_adc_temp", "app_out_ui_led", "app_alive_ui"] {
+        assert!(stderr.contains(name), "der Linker nennt `{name}` nicht:\n{stderr}");
+    }
+    let (linked, stderr, exe) = link(true);
+    assert!(linked, "mit Stummeln bindet es: {stderr}");
+    let run = std::process::Command::new(&exe).status().expect("Lauf");
+    assert!(run.success(), "der Lauf brach ab: {run}");
 }
 
 /// Ein Programm aus Quelltext, fuer die Rahmenpruefungen oben.
@@ -705,11 +761,11 @@ fn an_unread_input_is_read_for_the_recording() {
     let p = takt_sema::compile(&src, &options).program.expect("Programm");
     let frame = takt_frame::mcu::build(&p).source;
     for decl in [
-        "_Bool app_in_edge_r_level(void *user, int *value, unsigned char *quality, long long *t); /* rec edge_r_level */",
-        "_Bool app_in_edge_r_mode(void *user, unsigned int *value, unsigned char *quality, long long *t);",
-        "_Bool app_in_edge_r_on(void *user, unsigned char *value, unsigned char *quality, long long *t);",
-        "_Bool app_in_edge_r_quiet(void *user, unsigned char *value, unsigned char *quality, long long *t);",
-        "_Bool app_in_edge_r_temp(void *user, double *value, unsigned char *quality, long long *t);",
+        "uint8_t app_in_edge_r_level(void *user, int64_t now, int32_t *value, uint8_t *quality, int64_t *t);",
+        "uint8_t app_in_edge_r_mode(void *user, int64_t now, uint32_t *value, uint8_t *quality, int64_t *t);",
+        "uint8_t app_in_edge_r_on(void *user, int64_t now, uint8_t *value, uint8_t *quality, int64_t *t);",
+        "uint8_t app_in_edge_r_quiet(void *user, int64_t now, uint8_t *value, uint8_t *quality, int64_t *t);",
+        "uint8_t app_in_edge_r_temp(void *user, int64_t now, double *value, uint8_t *quality, int64_t *t);",
     ] {
         assert!(frame.contains(decl), "{decl}:\n{frame}");
     }
@@ -726,14 +782,17 @@ fn an_unread_input_is_read_for_the_recording() {
     // Element, `MAXPT + 1` Aufrufe je Tick (400 Hz bei 10 ms: 5).
     assert!(
         frame.contains(
-            "_Bool app_poll_edge_r_frames(void *user, unsigned char *buf, int cap, int *len, long long *t, long long *seq); \
-             /* rec edge_r_frames */"
+            "uint8_t app_poll_edge_r_frames(void *user, int64_t now, uint8_t *buf, int32_t cap, int32_t *len, int64_t *t, \
+             int64_t *seq);"
         ),
         "{frame}"
     );
-    assert!(frame.contains("if (!app_poll_edge_r_frames(a->user, a->rec_0, 3, &len, &t, &seq)) break;"), "{frame}");
-    assert!(frame.contains("if (!app_poll_edge_r_text(a->user, a->rec_7, 9, &len, &t, &seq)) break;"), "{frame}");
-    assert!(frame.contains("if (!app_poll_edge_r_raw(a->user, a->rec_5, 2, &len, &t, &seq)) break;"), "{frame}");
+    assert!(
+        frame.contains("if (!app_poll_edge_r_frames(a->user, now, a->rec_0, 3, &len, &t, &seq)) break;"),
+        "{frame}"
+    );
+    assert!(frame.contains("if (!app_poll_edge_r_text(a->user, now, a->rec_7, 9, &len, &t, &seq)) break;"), "{frame}");
+    assert!(frame.contains("if (!app_poll_edge_r_raw(a->user, now, a->rec_5, 2, &len, &t, &seq)) break;"), "{frame}");
     assert!(frame.contains("for (int i = 0; i < 5; i++) {"), "{frame}");
     let clang = takt_llvm::toolchain::find();
     if matches!(clang, Clang::Missing) {

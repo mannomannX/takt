@@ -1,0 +1,20 @@
+# Die Verdrahtung des Pruefgeraets (12.6): je Adresse, fuer einen
+# Heartbeat je Geraet, der Typ, der sie bedient. Ein Pruefstand liest sie
+# (`takt_frame::drivers::wiring`) und verdrahtet danach.
+
+"edge_a/p" = "takt_driver_probe::EdgeAP"
+"edge_a/q" = "takt_driver_probe::EdgeAQ"
+"edge_b/k" = "takt_driver_probe::EdgeBK"
+"edge_u/rx" = "takt_driver_probe::EdgeURx"
+"edge_c/rx" = "takt_driver_probe::EdgeCRx"
+"edge_o/o" = "takt_driver_probe::EdgeOO"
+"edge_o" = "takt_driver_probe::EdgeO"
+
+# Was `recorded.takt` nicht liest (8.2).
+"edge_r/level" = "takt_driver_probe::EdgeRLevel"
+"edge_r/temp" = "takt_driver_probe::EdgeRTemp"
+"edge_r/on" = "takt_driver_probe::EdgeROn"
+"edge_r/mode" = "takt_driver_probe::EdgeRMode"
+"edge_r/frames" = "takt_driver_probe::EdgeRFrames"
+"edge_r/text" = "takt_driver_probe::EdgeRText"
+"edge_r/raw" = "takt_driver_probe::EdgeRRaw"

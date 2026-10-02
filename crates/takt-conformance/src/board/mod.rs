@@ -359,8 +359,8 @@ impl Bringup {
         }
     }
 
-    /// Der Stand, gegen den gebaut wird: die Quellen aller Crates und die
-    /// Dateien des Bring-ups.
+    /// Der Stand, gegen den gebaut wird: die Quellen und Verdrahtungen aller
+    /// Crates und die Dateien des Bring-ups.
     fn sources(&self) -> Result<u64, String> {
         let mut h = DefaultHasher::new();
         let dir = root().join(self.dir);
@@ -368,11 +368,15 @@ impl Bringup {
             std::fs::read(dir.join(name)).unwrap_or_default().hash(&mut h);
         }
         let crates = root().join("crates");
-        let mut sources: Vec<PathBuf> =
-            std::fs::read_dir(&crates).map_err(|e| e.to_string())?.flatten().map(|e| e.path().join("src")).collect();
-        sources.sort();
-        for dir in sources.iter().filter(|d| d.is_dir()) {
-            hash_tree(dir, &mut h)?;
+        let mut dirs: Vec<PathBuf> =
+            std::fs::read_dir(&crates).map_err(|e| e.to_string())?.flatten().map(|e| e.path()).collect();
+        dirs.sort();
+        for dir in &dirs {
+            if dir.join("src").is_dir() {
+                hash_tree(&dir.join("src"), &mut h)?;
+            }
+            // Die Verdrahtung des Bring-ups und der Treiber-Crates (12.6).
+            std::fs::read(dir.join(crate::bringup::WIRING)).unwrap_or_default().hash(&mut h);
         }
         Ok(h.finish())
     }

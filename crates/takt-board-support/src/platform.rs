@@ -7,11 +7,11 @@
 pub mod previous_run {
     /// Kein voriger Lauf bekannt: erster Start, Einschalten, ein Reset,
     /// den die Plattform keinem Lauf zuordnet.
-    pub const NONE: i32 = 0;
+    pub const NONE: u32 = 0;
     /// Der vorige Lauf endete geordnet ueber `next_run`.
-    pub const ENDED: i32 = 1;
+    pub const ENDED: u32 = 1;
     /// Der Watchdog der Runtime brach den vorigen Lauf ab (12.3).
-    pub const WATCHDOG: i32 = 2;
+    pub const WATCHDOG: u32 = 2;
 }
 
 /// Was ein geordnet endender Lauf im Plattformblock hinterlaesst: Das Board
@@ -25,7 +25,7 @@ pub const RUNNING: u32 = 0;
 /// `sys/previous_run` (12.7) aus der Reset-Ursache und dem Wort, das der
 /// vorige Lauf im Plattformblock hinterliess. Der Watchdog geht vor: Er
 /// bricht einen Lauf ab, der vorher geordnet geendet haben kann.
-pub fn previous_run(watchdog_reset: bool, stored: u32) -> i32 {
+pub fn previous_run(watchdog_reset: bool, stored: u32) -> u32 {
     if watchdog_reset {
         previous_run::WATCHDOG
     } else if stored == ENDED_MARK {

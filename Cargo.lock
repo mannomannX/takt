@@ -584,6 +584,18 @@ name = "takt-diag"
 version = "0.1.0"
 
 [[package]]
+name = "takt-driver-probe"
+version = "0.1.0"
+dependencies = [
+ "takt-board-support",
+ "takt-embed",
+]
+
+[[package]]
+name = "takt-embed"
+version = "0.1.0"
+
+[[package]]
 name = "takt-flash-weact"
 version = "0.1.0"
 dependencies = [

@@ -28,6 +28,8 @@ takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 takt-rt-core = { path = "../takt-rt-core" }
 # Das Pruefgeraet des Treiberrands (12.6, 13.8), wie auf dem Wirt.
 takt-driver-probe = { path = "../takt-driver-probe" }
+# Die Geraete-Traits, die die Geraete des Boards erfuellen (12.6).
+takt-embed = { path = "../takt-embed" }
 
 # Start, Speicherkarte und Abbildformat des XIP-Chips (plan/esp32c6.md 2).
 esp-hal = { version = "1.2.1", features = ["esp32c6", "unstable"] }

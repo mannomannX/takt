@@ -1,0 +1,17 @@
+# Die Verdrahtung des ESP32-C6-Bring-ups (12.6): je Adresse das Geraet in
+# `src/bin/takt.rs`. Das Pruefgeraet bringt seine eigene mit
+# (`takt-driver-probe/takt-drivers.toml`); das Bauskript liest beide.
+
+"ui/led" = "crate::devices::UiLed"
+"ui/button" = "crate::devices::UiButton"
+"gpio/loop_out" = "crate::devices::GpioLoopOut"
+"gpio/loop_in" = "crate::devices::GpioLoopIn"
+"sys/previous_run" = "crate::devices::SysPreviousRun"
+"test/guard_write" = "crate::devices::TestGuardWrite"
+"test/job_guard_write" = "crate::devices::TestJobGuardWrite"
+"test/tick_stretch" = "crate::devices::TestTickStretch"
+
+# Geraete, die fest am Board sitzen (12.4).
+"ui" = "crate::devices::Fixed"
+"gpio" = "crate::devices::Fixed"
+"test" = "crate::devices::Fixed"

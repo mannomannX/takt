@@ -333,14 +333,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
-name = "takt-board-support"
-version = "0.1.0"
-
-[[package]]
 name = "takt-bringup-host"
 version = "0.1.0"
 dependencies = [
  "takt-conformance",
+ "takt-embed",
  "takt-frame",
  "takt-llvm",
  "takt-mcu-program",
@@ -376,6 +373,10 @@ dependencies = [
 
 [[package]]
 name = "takt-diag"
+version = "0.1.0"
+
+[[package]]
+name = "takt-embed"
 version = "0.1.0"
 
 [[package]]
@@ -426,7 +427,6 @@ version = "0.1.0"
 name = "takt-mcu-program"
 version = "0.1.0"
 dependencies = [
- "takt-board-support",
  "takt-native-abi",
  "takt-rt-baremetal",
  "takt-rt-core",

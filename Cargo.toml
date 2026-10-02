@@ -12,8 +12,6 @@ exclude = [
     "crates/takt-mcu-program",
     # Die C-Einstiege der kuratierten Natives fuer den erzeugten Code (FB-293).
     "crates/takt-native-abi",
-    # Das Pruefgeraet des Treiberrands als Treiber-Crate (12.6, 13.8).
-    "crates/takt-driver-probe",
     # Der MCU-Rahmen auf dem Wirt, fuer `takt driver-test --crate` (13.8).
     "crates/takt-bringup-host",
 ]
@@ -32,6 +30,8 @@ members = [
     "crates/takt-rt-baremetal",
     "crates/takt-rt-rtos",
     "crates/takt-board-support",
+    "crates/takt-embed",
+    "crates/takt-driver-probe",
     "crates/takt-llvm",
     "crates/takt-frame",
     "crates/takt-conformance",

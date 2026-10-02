@@ -292,7 +292,8 @@ fn driver_test_board(args: &Args) -> bool {
 
 /// `takt driver-test --crate VERZEICHNIS DATEI [--ticks N] [--hardware
 /// DATEI]` (13.8): das Treiber-Crate in `VERZEICHNIS` mit dem Programm
-/// `DATEI` auf dem Wirt, gegen sein Hardwaremodell. Es urteilt derselbe Rand
+/// `DATEI` auf dem Wirt, gegen sein Hardwaremodell; verdrahtet nach seiner
+/// `takt-drivers.toml` (12.6). Es urteilt derselbe Rand
 /// wie auf dem Board (12.6); jeder Verstoss steht mit seiner Zeile der
 /// Tabelle und der Zeile des Trace da, und einer genuegt zum Scheitern. Ohne
 /// `--ticks` laeuft das Programm 1000 Ticks.

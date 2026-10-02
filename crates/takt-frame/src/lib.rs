@@ -16,6 +16,7 @@
 //! `streams` und `edge` beschreiben Abbild, Stroeme und Rand; `text` fuegt
 //! den Rahmen um die Arena zusammen (12.11).
 
+pub mod drivers;
 pub mod edge;
 pub mod layout;
 pub mod mcu;
