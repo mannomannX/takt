@@ -5,7 +5,9 @@
  * deckt den Programmbereich vorn in der Arena, `__takt_state_size` Byte,
  * die `build.rs` aus der Arena rechnet (`takt_board_support::mpu::Region`);
  * der Rahmen fuellt den Programmbereich bis dorthin auf, die Runtime folgt
- * dahinter ungeschuetzt.
+ * dahinter ungeschuetzt. Ein Binary ohne Programm (`natives`, `blink`)
+ * bindet keine Arena; der Abschnitt reicht trotzdem bis ans Ende der
+ * Region, sonst laege `.data` darin.
  *
  * NOLOAD: `takt_mcu_init` beschreibt die ganze Arena, bevor sie gelesen
  * wird; der Startcode muss sie nicht nullen.
@@ -17,8 +19,8 @@ SECTIONS
     __takt_state_start = .;
     KEEP(*(.takt_state));
     __takt_state_end = __takt_state_start + __takt_state_size;
+    . = MAX(., __takt_state_end);
   } > RAM
 } INSERT BEFORE .data;
 
 ASSERT(__takt_state_start == ORIGIN(RAM), "die Arena muss am Anfang des RAM liegen");
-ASSERT(ADDR(.takt_state) + SIZEOF(.takt_state) >= __takt_state_end, "die Arena endet vor ihrer Schutzregion");
