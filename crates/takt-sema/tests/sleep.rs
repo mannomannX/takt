@@ -166,6 +166,32 @@ machine m:
     assert_eq!(awake, [false, false, true, true, true]);
 }
 
+/// Konjunkt 5: Ein laufender Job haelt das System wach (4.5, 9.9). Er
+/// startet in Tick 0 und lebt in der Maschine weiter, als sie in den
+/// `idle`-Zustand wechselt; seine Fertigstellung erscheint in Tick 3.
+#[test]
+fn a_running_job_keeps_the_system_awake() {
+    let p = compile(
+        "\
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 3 ms, total
+
+machine m:
+    var msg : bytes<64> = default
+    initial START
+
+    state START:
+        enter:
+            job v = sha256(msg)
+        when true: -> REST
+
+    state REST idle:
+        after 100 ms: -> START
+",
+    );
+    let awake = sleepy(&p, "", 5);
+    assert_eq!(awake, [false, false, true, true, true]);
+}
+
 /// Konjunkt 4: Ein Runtime-Fault, der hinter einem Abort wartet, bleibt
 /// vorgemerkt (5.4) und haelt das System wach, bis er zugestellt ist.
 #[test]

@@ -183,6 +183,79 @@ fn virtual_sleep_is_invisible() {
     assert!(slept > 0, "kein Programm hat geschlafen");
 }
 
+/// **Ein voller Wake-Strom haelt auch den erzeugten Code wach** (9.9
+/// Konjunkt 3, FB-334): Die Maschine laeuft alle 5 ms und schlaeft bis zu
+/// ihrer Frist in Tick 20. Die Glocke laeutet in Tick 3; der Rahmen
+/// schlaeft bis davor, bleibt dann wach, solange das Element im Fenster
+/// steht, und die Maschine sieht es in Tick 5 wie im Interpreter. Schliefe
+/// er trotz vollem Fenster, saehe sie es erst nach der Frist.
+#[test]
+fn a_full_wake_window_keeps_the_native_system_awake() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let src = "system:\n    language = 1\n    tick = 1 ms\n\n\
+               input  bell : stream<u8> @ hw(\"bus/bell\") with capacity = 8, max_rate = 200 Hz, wake = true\n\
+               output led  : bool @ hw(\"ui/led\") with safe = false\n\n\
+               machine m every 5 ms:\n    initial WAIT\n\n    state WAIT idle:\n        when bell as e: -> RUN\n\
+               \x20       after 20 ms: -> RUN\n\n    state RUN:\n        enter:\n            led = true\n\
+               \x20       after 1 ms: -> WAIT\n";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(src, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let stimulus = takt_interp::Trace::parse("t=3 in bell 7\n").expect("Stimulus");
+    let native = common::run_native_sleeping_with(&clang, &p, "wake_window", 30, &Stimulus::from_trace(&stimulus))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: 30, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+    assert!(interpreted.contains("t=5 out led true"), "{interpreted}");
+    assert!(native.contains("t=1 time took=0 drift=0 slept=1"), "bis vor die Lieferung geschlafen:\n{native}");
+    for tick in [3, 4] {
+        assert!(
+            !native.contains(&format!("t={tick} time took=0 drift=0 slept=")),
+            "wach mit vollem Fenster:\n{native}"
+        );
+    }
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
+/// **Ein laufender Job haelt auch den erzeugten Code wach** (9.9 Konjunkt
+/// 5, 4.5): Der Job startet in Tick 0 und laeuft weiter, als die Maschine
+/// in den `idle`-Zustand wechselt; fertig ist er in Tick 3. Sein Handle ist
+/// dort nicht mehr sichtbar (SC-22 verbietet eine Sequenz im `idle`), also
+/// zeigt sich das Konjunkt nur am Schlaf: keiner bis Tick 3, danach bis
+/// zur Frist.
+#[test]
+fn a_running_job_keeps_the_native_system_awake() {
+    let Clang::At(path) = find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let clang = Clang::At(path);
+    let src = "system:\n    language = 1\n    tick = 1 ms\n\n\
+               native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 3 ms, total\n\n\
+               output ready : bool @ hw(\"o/ready\") with safe = false\n\n\
+               machine m:\n    var msg : bytes<64> = default\n    initial START\n\n\
+               \x20   state START:\n        enter:\n            job v = sha256(msg)\n        when true: -> REST\n\n\
+               \x20   state REST idle:\n        after 20 ms: -> DONE\n\n\
+               \x20   state DONE:\n        enter:\n            ready = true\n";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(src, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let native = common::run_native_sleeping_with(&clang, &p, "running_job", 30, &[]).unwrap_or_else(|e| panic!("{e}"));
+    for tick in [1, 2] {
+        assert!(!native.contains(&format!("t={tick} time took=0 drift=0 slept=")), "wach mit laufendem Job:\n{native}");
+    }
+    assert!(native.contains("t=3 time took=0 drift=0 slept="), "nach dem Job geschlafen:\n{native}");
+    let options = takt_interp::RunOptions { ticks: 30, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
 /// **Die Abnahme.** Interpreter und erzeugter Code liefern dieselben
 /// Outputs (Satz 9.4.4).
 #[test]

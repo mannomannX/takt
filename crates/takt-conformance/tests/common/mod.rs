@@ -79,6 +79,18 @@ pub fn run_native_sleeping(clang: &Clang, p: &Program, name: &str, ticks: u64) -
     run_native_build(clang, p, name, ticks, harness::build_sleeping(p, ticks))
 }
 
+/// Wie [`run_native_sleeping`], mit Eingaben: geschlafen wird nie ueber
+/// einen Tick mit einer Lieferung.
+pub fn run_native_sleeping_with(
+    clang: &Clang,
+    p: &Program,
+    name: &str,
+    ticks: u64,
+    inputs: &[Stimulus],
+) -> Result<String, String> {
+    run_native_build(clang, p, name, ticks, harness::build_sleeping_with(p, ticks, inputs))
+}
+
 /// Alle Maschinen, mit einer Journal-Nutzlast beim Start (5.9).
 pub fn run_native_persist(
     clang: &Clang,

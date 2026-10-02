@@ -61,7 +61,15 @@ pub fn build_all(p: &Program, ticks: u64, inputs: &[Stimulus]) -> Harness {
 /// und der Pfad `_advance` des Codegens laeuft so auch auf dem Wirt
 /// (FB-268, FB-273).
 pub fn build_sleeping(p: &Program, ticks: u64) -> Harness {
-    build_inner(p, None, None, ticks, &[], &[], true)
+    build_sleeping_with(p, ticks, &[])
+}
+
+/// Wie [`build_sleeping`], mit Eingaben: Der Rahmen schlaeft nie ueber
+/// einen Tick, in dem der Stimulus liefert. So prueft der Wirt auch die
+/// Konjunkte aus 9.9, die an Eingaben haengen — ein voller Wake-Strom haelt
+/// das System wach (FB-334).
+pub fn build_sleeping_with(p: &Program, ticks: u64, inputs: &[Stimulus]) -> Harness {
+    build_inner(p, None, None, ticks, inputs, &[], true)
 }
 
 /// Baut den Rahmen mit einer Journal-Nutzlast (5.9).
@@ -357,7 +365,7 @@ fn build_inner(
     }
     platform_end(&mut s, p, &layout, "        ");
     if sleep {
-        virtual_sleep(&mut s, p, &driven, ticks);
+        virtual_sleep(&mut s, p, &driven, ticks, inputs);
     }
     let _ = writeln!(s, "    }}");
     if next_run_slot(p, &layout).is_some() {
@@ -1335,14 +1343,20 @@ pub(crate) fn commit_sequence(
 /// `idle`, rueckt der Rahmen bis vor die frueheste `after`-Frist, wie
 /// `Runtime::sleep` — `n = d / T0 - 1`, und der Tick an der Frist laeuft.
 /// Die Zeitzeile traegt `slept`, wie auf dem Board; der Vergleich liest
-/// sie nicht. Wake-Kommandos und Jobs gibt es in diesem Rahmen nicht
-/// (keine Eingaben); ausstehende geplante Ausgaben und ein Fault, der
-/// hinter einem Abort wartet (`g_pending`), verbieten den Schlaf.
-fn virtual_sleep(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], ticks: u64) {
+/// sie nicht. Ausstehende geplante Ausgaben, ein laufender Job und ein
+/// Fault, der hinter einem Abort wartet (`g_pending`), verbieten den
+/// Schlaf; ob ein Wake-Strom
+/// etwas im Fenster hat, sagt `_idle`. Ein Tick, in dem der Stimulus
+/// liefert, laeuft immer: Auf dem Board weckt ein Wake-Ereignis den Kern,
+/// hier kennt der Rahmen die Lieferungen im Voraus.
+fn virtual_sleep(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], ticks: u64, inputs: &[Stimulus]) {
     let _ = writeln!(s, "        {{");
     let _ = writeln!(s, "            _Bool idle = 1;");
     if !queued_outputs(p).is_empty() {
         let _ = writeln!(s, "            idle = !takt_sched_pending();");
+    }
+    if p.machines.iter().any(|m| !m.layout.job_slots.is_empty()) {
+        let _ = writeln!(s, "            idle = idle && !takt_jobs_active();");
     }
     let _ = writeln!(s, "            long long best = -1;");
     for m in driven {
@@ -1357,6 +1371,18 @@ fn virtual_sleep(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mach
     }
     let _ = writeln!(s, "            long long n = idle && best > 1 ? best - 1 : 0;");
     let _ = writeln!(s, "            if (g_tick + n > {ticks}LL) n = {ticks}LL - g_tick;");
+    let mut due: Vec<u64> = inputs.iter().map(Stimulus::tick).collect();
+    due.sort_unstable();
+    due.dedup();
+    if !due.is_empty() {
+        let list: Vec<String> = due.iter().map(|t| format!("{t}LL")).collect();
+        let _ = writeln!(s, "            static const long long due[] = {{ {} }};", list.join(", "));
+        let _ = writeln!(s, "            for (unsigned i = 0; i < sizeof due / sizeof due[0]; i++)");
+        let _ = writeln!(
+            s,
+            "                if (due[i] > g_tick) {{ if (g_tick + n >= due[i]) n = due[i] - g_tick - 1; break; }}"
+        );
+    }
     let _ = writeln!(s, "            if (n > 0) {{");
     for m in driven {
         let _ = writeln!(s, "                {0}_advance(state_{0}, n);", m.name);
@@ -1658,6 +1684,11 @@ fn jobs(s: &mut String, p: &Program) {
     let _ = writeln!(
         s,
         "static void takt_jobs_init(void) {{ int i; for (i = 0; i < {slots}; i++) takt_job_image(i, 0, 0, 2); }}"
+    );
+    // 9.9, Konjunkt 5: Solange ein Job laeuft, schlaeft das System nicht.
+    let _ = writeln!(
+        s,
+        "static _Bool takt_jobs_active(void) {{ int i; for (i = 0; i < {slots}; i++) if (g_jobs[i].active) return 1; return 0; }}"
     );
     let _ = writeln!(s);
 }
