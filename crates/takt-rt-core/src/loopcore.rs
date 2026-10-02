@@ -380,14 +380,14 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// Ist die naechste Tickgrenze erreicht, an der die Schleife etwas zu
     /// tun hat — den Watchdog bestaetigen oder den Tick rechnen?
     ///
-    /// Die Frage einer Schleife, die nicht selbst wartet (12.8 `rtos`): Dort
+    /// Die Frage einer Schleife, die nicht selbst wartet (12.8 `shared`): Dort
     /// wartet die Aufgabe auf eine Benachrichtigung des Timers, und waehrend
     /// sie wartet, rechnen die Aufgaben darunter.
     pub fn due(&self) -> bool {
         self.clock.now() >= self.beat_from
     }
 
-    /// Eine erreichte Tickgrenze (12.8 `rtos`, [`Runtime::due`]): vor der
+    /// Eine erreichte Tickgrenze (12.8 `shared`, [`Runtime::due`]): vor der
     /// Frist, nach virtuellen Ticks (9.9), bestaetigt sie nur den Watchdog;
     /// an der Frist laeuft der Tick wie in [`Runtime::step`].
     pub fn at_boundary(&mut self) -> Option<Tick> {

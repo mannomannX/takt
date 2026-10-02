@@ -53,7 +53,7 @@ fn statements_store_more_than_states_and_off_stores_nothing_extra() {
 fn the_default_follows_profile_and_target() {
     assert_eq!(Instrument::default_for(None, Target::X86_64_WINDOWS), Instrument::Statements);
     assert_eq!(Instrument::default_for(None, Target::THUMBV7EM), Instrument::States);
-    assert_eq!(Instrument::default_for(Some(RuntimeProfile::Rtos), Target::X86_64_WINDOWS), Instrument::States);
+    assert_eq!(Instrument::default_for(Some(RuntimeProfile::Shared), Target::X86_64_WINDOWS), Instrument::States);
     assert_eq!(Instrument::default_for(Some(RuntimeProfile::Baremetal), Target::X86_64_WINDOWS), Instrument::States);
     assert_eq!(Instrument::parse("states"), Some(Instrument::States));
     assert_eq!(Instrument::parse("alles"), None);

@@ -31,7 +31,7 @@ takt-board-support = { path = "../takt-board-support" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 # Fuer den `Program`-Trait, den die Tickschleife ruft.
 takt-rt-core = { path = "../takt-rt-core" }
-# Unter `rtos` gibt die Takt-Aufgabe Jobs aus und die Job-Aufgabe rechnet sie (4.5).
+# Unter RTIC (Profil `shared`) gibt die Takt-Aufgabe Jobs aus und die Job-Aufgabe rechnet sie (4.5).
 takt-mcu-program = { path = "../takt-mcu-program" }
 # Das Pruefgeraet des Treiberrands (12.6, 13.8), wie auf dem Wirt.
 takt-driver-probe = { path = "../takt-driver-probe" }
@@ -52,7 +52,7 @@ cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7", features = ["set-vtor"] }
 stm32f4 = { version = "0.16", features = ["stm32f401", "rt"] }
 
-# Profil `rtos` (12.8): Takt als hoechstpriore Aufgabe unter RTIC 2, mit
+# Profil `shared` unter RTIC 2 (12.8): Takt als hoechstpriore Aufgabe, mit
 # einer Treiber-Aufgabe und einer Funk-ISR als Last. Ohne das Feature ist
 # `takt` das Programm unter der Bare-Metal-Schleife.
 rtic = { version = "2.3", features = ["thumbv7-backend"], optional = true }

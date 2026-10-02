@@ -1,4 +1,4 @@
-//! Profilaufsatz `rtos` (12.8): Takt als hoechstpriore Aufgabe unter einem
+//! Profilaufsatz `shared` (12.8): Takt als hoechstpriore Aufgabe unter einem
 //! RTOS.
 //!
 //! **Was der Aufsatz vom RTOS braucht.** Eine Benachrichtigung je

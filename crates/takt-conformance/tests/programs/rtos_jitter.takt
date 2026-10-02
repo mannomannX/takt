@@ -2,7 +2,7 @@ system:
     language = 1
     tick     = 1 ms
 
-# 12.8: Ein Zaehler bei 1 ms Tick. Unter `rtos` sagt `drift` jedes Ticks,
+# 12.8: Ein Zaehler bei 1 ms Tick. Unter `shared` sagt `drift` jedes Ticks,
 # wie spaet die Takt-Aufgabe nach der Grenze beginnt — hinter der Funk-ISR
 # und den kritischen Abschnitten der Treiber-Aufgabe.
 

@@ -73,7 +73,12 @@ pub fn config_from(file: &ast::File, edition: u32, diags: &mut Vec<Diagnostic>) 
                     }
                 }
                 ast::SystemItem::Target(t) => {
-                    if RuntimeProfile::parse(&t.name).is_none() {
+                    if t.name == "rtos" {
+                        let d = Diagnostic::error(SC3, t.span, "das Profil `rtos` heisst jetzt `shared` (12.8)");
+                        diags.push(
+                            d.with_suggestion("`target = shared`, oder weglassen: dann gilt die Einbindung (12.11)"),
+                        );
+                    } else if RuntimeProfile::parse(&t.name).is_none() {
                         let known: Vec<&str> = RuntimeProfile::ALL.iter().map(|p| p.name()).collect();
                         diags.push(Diagnostic::error(
                             SC3,

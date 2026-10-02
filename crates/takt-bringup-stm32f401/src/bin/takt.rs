@@ -620,12 +620,12 @@ async fn conduct_rtos(timer: Tim2Tick, protection: Mpu, mut boundary: TaskBounda
         // In logischer Zeit ist jede Grenze eine Periode (13.8); die
         // Aufgaben darunter rechnen wie im Betrieb.
         let now = core::cell::Cell::new(0);
-        let mut rt = runtime(takt_rt_rtos::LogicalTime(&now), protection, Profile::RTOS);
+        let mut rt = runtime(takt_rt_rtos::LogicalTime(&now), protection, Profile::SHARED);
         let mut logical = takt_rt_rtos::Logical::new(&mut boundary, &now, TICK_NS);
         let stats = takt_rt_rtos::run(&mut rt, no_journal(), cadence(), uart, &mut logical).await;
         conclude(&rt, &stats);
     } else {
-        let mut rt = runtime(TimerClock::new(timer, TICK_NS), protection, Profile::RTOS);
+        let mut rt = runtime(TimerClock::new(timer, TICK_NS), protection, Profile::SHARED);
         let stats = takt_rt_rtos::run(&mut rt, no_journal(), cadence(), uart, &mut boundary).await;
         conclude(&rt, &stats);
     }
@@ -635,7 +635,7 @@ async fn conduct_rtos(timer: Tim2Tick, protection: Mpu, mut boundary: TaskBounda
     }
 }
 
-/// Die Last unter `rtos` (12.8, M10 Schritt 16): eine Funk-ISR, die alles
+/// Die Last unter RTIC (Profil `shared`, 12.8, M10 Schritt 16): eine Funk-ISR, die alles
 /// unterbricht, und eine Treiber-Aufgabe mit kritischen Abschnitten. Ihre
 /// Zahlen liegen in der Groessenordnung, die 12.8 nennt — die Takt-Aufgabe
 /// beginnt zweistellige Mikrosekunden nach der Grenze.
@@ -693,7 +693,7 @@ mod load {
     }
 }
 
-/// Profil `rtos` (12.8): Takt als hoechstpriore Aufgabe unter RTIC 2.
+/// Profil `shared` (12.8): Takt als hoechstpriore Aufgabe unter RTIC 2.
 ///
 /// **Prioritaeten, von oben.** Die Leitung (USART1, 6): Ihr Empfangsregister
 /// fasst ein Byte, bei 921 600 Baud kommt alle 10,9 us eines, und das Wort

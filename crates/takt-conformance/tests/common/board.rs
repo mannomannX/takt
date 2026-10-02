@@ -398,7 +398,7 @@ pub fn agreement(board: &mut dyn Board, names: &[&str], only: Option<&str>) -> V
 }
 
 /// Wie [`agreement`], mit anderen Optionen des Baus — etwa im Profil
-/// `rtos` (12.8).
+/// `shared` unter dem RTOS des Boards (12.8).
 pub fn agreement_with(board: &mut dyn Board, names: &[&str], only: Option<&str>, options: &Options) -> Vec<String> {
     let mut failed = Vec::new();
     for name in names.iter().filter(|n| only.is_none_or(|o| o == **n)) {

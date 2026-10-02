@@ -75,20 +75,21 @@ pub enum RuntimeProfile {
     LinuxRt,
     /// `no_std` auf einem MCU (12.3).
     Baremetal,
-    /// Takt als hoechstpriore Aufgabe unter einem RTOS.
-    Rtos,
+    /// Takt teilt den Kern mit fremdem Code, unter einem RTOS oder ohne
+    /// (12.8, 12.11).
+    Shared,
 }
 
 impl RuntimeProfile {
     /// Alle drei, in der Reihenfolge von 12.8.
-    pub const ALL: [RuntimeProfile; 3] = [RuntimeProfile::LinuxRt, RuntimeProfile::Baremetal, RuntimeProfile::Rtos];
+    pub const ALL: [RuntimeProfile; 3] = [RuntimeProfile::LinuxRt, RuntimeProfile::Baremetal, RuntimeProfile::Shared];
 
     /// Der Name in `system: target = …`.
     pub fn name(self) -> &'static str {
         match self {
             RuntimeProfile::LinuxRt => "linux_rt",
             RuntimeProfile::Baremetal => "baremetal",
-            RuntimeProfile::Rtos => "rtos",
+            RuntimeProfile::Shared => "shared",
         }
     }
 

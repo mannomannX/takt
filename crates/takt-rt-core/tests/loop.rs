@@ -242,12 +242,13 @@ fn a_deadline_in_the_next_tick_is_no_reason_to_sleep() {
 
 #[test]
 fn every_profile_of_the_reference_has_a_name() {
-    for name in ["linux_rt", "baremetal", "rtos"] {
+    for name in ["linux_rt", "baremetal", "shared"] {
         let p = Profile::by_name(name).unwrap_or_else(|| panic!("Profil `{name}` fehlt"));
         assert_eq!(p.name(), name, "der Name geht in den Lauf-Header (11.3)");
     }
     assert!(Profile::by_name("sim").is_none(), "`sim` ist ein Build, kein Laufzeitprofil");
     assert!(Profile::by_name("boot").is_none(), "kein Profil fuer Startprogramme (12.8)");
+    assert!(Profile::by_name("rtos").is_none(), "`rtos` heisst `shared` (12.8)");
 }
 
 // --- Die Ueberlaufmessung selbst ----------------------------------------
@@ -289,7 +290,7 @@ fn a_tick_without_sleep_carries_nothing_over() {
     assert_eq!(rt.program().advanced, 0);
 }
 
-/// Meldet die Tickgrenzen bis `ticks` von aussen (12.8 `rtos`): Die Uhr
+/// Meldet die Tickgrenzen bis `ticks` von aussen (12.8 `shared`): Die Uhr
 /// steht auf der Grenze, die Schleife arbeitet ab, was faellig ist.
 fn boundaries<P: Program, W: Watchdog, S: Sink>(
     rt: &mut Runtime<P, Shared<'_>, W, S>,

@@ -23,7 +23,7 @@ pub struct Profile {
 pub enum Kind {
     LinuxRt,
     Baremetal,
-    Rtos,
+    Shared,
 }
 
 impl Profile {
@@ -33,15 +33,15 @@ impl Profile {
     /// `baremetal` (12.3): `no_std` auf einer MCU, Budget statisch.
     pub const BAREMETAL: Profile = Profile { kind: Kind::Baremetal, may_sleep: true };
 
-    /// `rtos` (12.8): Takt als hoechstpriore Aufgabe.
-    pub const RTOS: Profile = Profile { kind: Kind::Rtos, may_sleep: true };
+    /// `shared` (12.8): Takt teilt den Kern mit fremdem Code.
+    pub const SHARED: Profile = Profile { kind: Kind::Shared, may_sleep: true };
 
     /// Das Profil zu seinem Namen im `system:`-Block.
     pub fn by_name(name: &str) -> Option<Profile> {
         match name {
             "linux_rt" => Some(Profile::LINUX_RT),
             "baremetal" => Some(Profile::BAREMETAL),
-            "rtos" => Some(Profile::RTOS),
+            "shared" => Some(Profile::SHARED),
             _ => None,
         }
     }
@@ -51,7 +51,7 @@ impl Profile {
         match self.kind {
             Kind::LinuxRt => "linux_rt",
             Kind::Baremetal => "baremetal",
-            Kind::Rtos => "rtos",
+            Kind::Shared => "shared",
         }
     }
 }

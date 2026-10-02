@@ -470,7 +470,7 @@ impl Lowerer<'_> {
     /// mit der kalibrierten Tabelle (13.8); bis dahin nennt der Lint die
     /// Stelle und den Ausweg.
     fn performance_lints(&mut self) {
-        // 12.8: `baremetal` laeuft auf MCUs. `linux_rt` und `rtos` sagen
+        // 12.8: `baremetal` laeuft auf MCUs. `linux_rt` und `shared` sagen
         // ueber die Breite nichts, also schweigt der Lint dort.
         let narrow_core = matches!(self.program.config.runtime_profile(), Some(RuntimeProfile::Baremetal));
         if !narrow_core {

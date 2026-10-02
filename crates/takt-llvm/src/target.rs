@@ -96,7 +96,7 @@ impl Instrument {
         use takt_mir::program::RuntimeProfile;
         match profile {
             Some(RuntimeProfile::LinuxRt) => Instrument::Statements,
-            Some(RuntimeProfile::Baremetal | RuntimeProfile::Rtos) => Instrument::States,
+            Some(RuntimeProfile::Baremetal | RuntimeProfile::Shared) => Instrument::States,
             None if target.is_bare_metal() => Instrument::States,
             None => Instrument::Statements,
         }

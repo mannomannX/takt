@@ -1,7 +1,7 @@
 [package]
 name = "takt-rt-rtos"
 version = "0.1.0"
-description = "Takt: Profilaufsatz `rtos` (Referenz 12.8)"
+description = "Takt: Profilaufsatz `shared` unter einem RTOS (Referenz 12.8)"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

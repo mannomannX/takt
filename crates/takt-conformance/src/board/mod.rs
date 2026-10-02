@@ -244,7 +244,7 @@ pub struct Options {
     /// Outputs ihr `guard` (7.5). Ohne sie rechnet das Board wie die
     /// Simulation.
     pub hardware: Option<PathBuf>,
-    /// Im Profil `rtos` (12.8): Takt als hoechstpriore Aufgabe unter dem
+    /// Im Profil `shared` (12.8): Takt als hoechstpriore Aufgabe unter dem
     /// RTOS des Boards, mit Treiber-Aufgabe und Funk-ISR als Last. Ein
     /// Board ohne Bindung baut dann nicht.
     pub rtos: bool,
@@ -256,7 +256,7 @@ impl Options {
         Options { ticks, fresh: true, bin: Bin::Takt, timed: false, hardware: None, rtos: false }
     }
 
-    /// Derselbe Lauf im Profil `rtos` (12.8).
+    /// Derselbe Lauf im Profil `shared` unter dem RTOS des Boards (12.8).
     pub fn under_rtos(self) -> Options {
         Options { rtos: true, ..self }
     }

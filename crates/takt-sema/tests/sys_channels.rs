@@ -96,7 +96,7 @@ fn the_channels_of_a_boot_stage_are_gone() {
 #[test]
 fn the_target_is_one_of_the_three_profiles() {
     let body = "machine m:\n    initial RUN\n    state RUN:\n        loop:\n            pass\n";
-    for name in ["linux_rt", "baremetal", "rtos"] {
+    for name in ["linux_rt", "baremetal", "shared"] {
         let p =
             compile(&format!("system:\n    language = 1\n    tick = 1 ms\n    target = {name}\n\n{body}")).expect(name);
         assert_eq!(p.config.runtime_profile().map(RuntimeProfile::name), Some(name));
@@ -106,6 +106,9 @@ fn the_target_is_one_of_the_three_profiles() {
             .expect_err("kein Profil");
         assert!(e.join("\n").contains(&format!("unbekanntes Laufzeitprofil `{name}`")), "{e:?}");
     }
+    let e = compile(&format!("system:\n    language = 1\n    tick = 1 ms\n    target = rtos\n\n{body}"))
+        .expect_err("alter Name");
+    assert!(e.join("\n").contains("heisst jetzt `shared`"), "{e:?}");
 }
 
 /// **Pruefung 60 warnt vor einem Ende, nach dem nichts weckt** (12.7).
