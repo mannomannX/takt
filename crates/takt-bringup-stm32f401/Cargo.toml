@@ -11,18 +11,15 @@ rust-version = "1.85"
 # laesst sich nicht lokal aufheben. Siehe `takt-board-stm32f401`.
 [workspace]
 
-# Der Bau uebersetzt das Takt-Programm mit: `takt-sema` macht die MIR,
-# `takt-llvm` die IR, `takt-conformance` den Rahmen. Sie laufen auf dem
-# *Wirt*, nicht auf dem Ziel — darum `build-dependencies` und nicht
-# `dependencies`.
+# Der Bau uebersetzt das Takt-Programm mit: `takt-conformance` erzeugt den
+# Rahmen und ruft `takt build` (`bringup`), `takt-llvm` nennt die Flags. Sie
+# laufen auf dem *Wirt*, nicht auf dem Ziel — darum `build-dependencies`
+# und nicht `dependencies`.
 [build-dependencies]
 # Die Groesse der MPU-Region fuer den Programmzustand (12.3).
 takt-board-support = { path = "../takt-board-support" }
 takt-conformance = { path = "../takt-conformance", default-features = false }
-takt-diag = { path = "../takt-diag" }
 takt-llvm = { path = "../takt-llvm" }
-takt-mir = { path = "../takt-mir" }
-takt-sema = { path = "../takt-sema" }
 
 [dependencies]
 # Fuer das Messprogramm `natives` (13.8): die kuratierten Natives und ihre
@@ -36,6 +33,8 @@ takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 takt-rt-core = { path = "../takt-rt-core" }
 # Unter `rtos` gibt die Takt-Aufgabe Jobs aus und die Job-Aufgabe rechnet sie (4.5).
 takt-mcu-program = { path = "../takt-mcu-program" }
+# Das Pruefgeraet des Treiberrands (12.6, 13.8), wie auf dem Wirt.
+takt-driver-probe = { path = "../takt-driver-probe" }
 
 # `critical-section-single-core` liefert die Implementierung, die die PAC
 # fuer `Peripherals::take()` braucht: Auf einem Einkern-System ohne

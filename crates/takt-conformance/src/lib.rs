@@ -24,6 +24,7 @@
 pub mod bench;
 #[cfg(feature = "board")]
 pub mod board;
+pub mod bringup;
 mod edge;
 pub mod harness;
 pub mod layout;

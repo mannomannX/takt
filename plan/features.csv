@@ -118,7 +118,7 @@ CG-13.4-Objektcode,Umsetzung,13.4,Objektcode gegen Quelle nachvollziehen (Zertif
 SEM-12.3,Semantik/Abschnitt,12.3,"MCU (Cortex-M, RISC-V; `no_std`)",,M10 (aus M5),teilweise,"RV32IMAC: Korpus auf dem ESP32-C6 mit 0 Abweichungen (2026-09-17, board_esp32c6.rs); Cortex-M offen (Board 1)"
 SEM-12.4,Semantik/Abschnitt,12.4,Sicherheitsmechanismen außerhalb der Sprache,,M10 (aus M5),teilweise,`takt check --hw-export` schreibt die `safe`-Werte (M10 Schritt 12); Heartbeat zu Geraeten braucht Treiber hinter dem Rand (FB-285)
 SEM-12.5,Semantik/Abschnitt,12.5,Recording und Replay,,M4 (Codegen),fertig,
-SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M10 (aus M5),teilweise,Adapter und Probe liegen vor (2026-09-25); Messung M10 Schritt 10/11
+SEM-12.6,Semantik/Abschnitt,12.6,Defensiver Treiberrand,,M10 (aus M5),teilweise,"Zeilen 1 bis 7 in allen Runtimes und auf beiden Boards (M10 Schritt 29, FB-285), `driver-test` fuer Treiber in Takt und in Rust (Schritt 11); offen: `malformed` im nativen Code (FB-361)"
 SEM-12.7,Semantik/Abschnitt,12.7,"Anfang und Ende eines Laufs (System-Channels, v1.1)",v1.1,M6,fertig,"M10 Schritt 33 (FB-360), 2026-10-02: `previous_run` und `next_run`; Board-Tests `a_run_ended_now_begins_the_next_at_once`, `a_run_ended_after_a_delay_begins_the_next_after_it`, `a_missed_kick_begins_the_next_run_after_the_watchdog` auf F401 und C6; Board-Korpus beider Boards ohne Abweichung (mit 32, 34, `sim/12_7`); Suiten F401 14 von 14, C6 21 von 21"
 SEM-12.8,Semantik/Abschnitt,12.8,Laufzeitprofile (v1.1),v1.1,M10 (aus M6),teilweise,"`system: target` als Enum, Instrumentierungs-Default aus Profil und Ziel (`takt build --instrument`); `rtos` unter RTIC 2 auf dem F401 (M10 Schritt 16); `boot` offen (Schritt 17)"
 SEM-12.9,Semantik/Abschnitt,12.9,"Verteilte Ausführung (v2): Regeln, die schon heute gelten",v2,M9 (v2),offen,
@@ -131,7 +131,7 @@ SEM-13.4-Anforderungen,Semantik/Abschnitt,13.4,"Anforderungsreferenzen im Report
 SEM-13.5,Semantik/Abschnitt,13.5,"Messwerte, Prüfungen ohne Abbruch, Verdikte",,M4 (Codegen),fertig,
 SEM-13.6,Semantik/Abschnitt,13.6,Szenarien (v1.1),v1.1,M6,fertig,
 SEM-13.7,Semantik/Abschnitt,13.7,Kampagnen (v1.1),v1.1,M6,fertig,
-SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M10 (aus M5),teilweise,"Kalibrierung und Referenzkerne auf beiden Boards zum Kostenmodell 2 (2026-10-01, `takt bench` fertig, M10 Schritt 10); Natives am Einstieg gemessen (FB-293); offen: FB-285 (Randkern ohne `std`, native Treiberschnittstelle, danach `driver-test`) und die Rest-Natives (Schritt 21)"
+SEM-13.8,Semantik/Abschnitt,13.8,Treiber- und Native-Konformität,,M10 (aus M5),teilweise,"Kalibrierung und Referenzkerne auf beiden Boards zum Kostenmodell 2 (2026-10-01, `takt bench`, Schritt 10), Natives kuratiert (Schritt 21, FB-293), `driver-test` in allen drei Modi (Schritt 11, 2026-10-02); offen: Zeile 5 im Bericht von `driver-test --crate` (FB-361)"
 SEM-13.9,Semantik/Abschnitt,13.9,Migration aus C: `takt import-c` und Orakel-Modus (v1.1),v1.1,M7 (Werkzeuge),offen,
 SEM-14.1,Semantik/Abschnitt,14.1,Zündablauf eines Triebwerksprüfstands mit Interlocks,,M4 (Codegen),fertig,
 SEM-14.2,Semantik/Abschnitt,14.2,Batterie-Thermozyklus mit Profil und Plant-Modell,,M4 (Codegen),fertig,
@@ -821,13 +821,13 @@ DIST-rule6,Regel,12.9,Verbindungsverlust.,v2,M9 (v2),offen,
 DIST-rule7,Regel,12.9,Jobs,v2,M9 (v2),offen,
 DIST-rule8,Regel,12.9,Aufzeichnung,v2,M9 (v2),offen,
 DIST-rule9,Regel,12.9,Simulation.,v2,M9 (v2),offen,
-RAND-1,Regel/Prüfung,12.6,"Zeitstempel innerhalb `(t_(k-1), t_k]`",,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
-RAND-2,Regel/Prüfung,12.6,"Zeitstempel und `seq` streng steigend, `seq` lückenlos, `len(D) <= MAXPT` je Stream, Qualitätsflags konsistent (`Bad` ohne Wert, Alter monoton)",,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
+RAND-1,Regel/Prüfung,12.6,"Zeitstempel innerhalb `(t_(k-1), t_k]`",,M10 (aus M5),fertig,"M10 Schritt 29 (Rand in allen Runtimes, FB-285) und 11c (`takt driver-test --crate`, 2026-10-02): auf beiden Boards und auf dem Wirt (`host_board.rs`) ohne Abweichung vom Interpreter"
+RAND-2,Regel/Prüfung,12.6,"Zeitstempel und `seq` streng steigend, `seq` lückenlos, `len(D) <= MAXPT` je Stream, Qualitätsflags konsistent (`Bad` ohne Wert, Alter monoton)",,M10 (aus M5),fertig,"M10 Schritt 29 (Rand in allen Runtimes, FB-285) und 11c (`takt driver-test --crate`, 2026-10-02): auf beiden Boards und auf dem Wirt (`host_board.rs`) ohne Abweichung vom Interpreter"
 RAND-3,Regel/Prüfung,12.6,Werte innerhalb deklarierter Ranges (3.5),,M4/M5 (Runtime),fertig,
 RAND-4,Regel/Prüfung,12.6,`max_slew` (3.5),,M4/M5 (Runtime),fertig,
-RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
-RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
-RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M10 (aus M5),teilweise,"FB-285: Randkern ohne `std` in allen Runtimes und native Treiberschnittstelle, danach `driver-test`"
+RAND-5,Regel/Prüfung,12.6,Record-Streams: `decode` erfolgreich (8.6),,M10 (aus M5),teilweise,"M10 Schritt 29 (Rand in allen Runtimes, FB-285) und 11c (`takt driver-test --crate`, 2026-10-02): auf beiden Boards und auf dem Wirt (`host_board.rs`) ohne Abweichung vom Interpreter; das Element wird nativ verworfen, aber nicht gezaehlt: `malformed` und die Zeile `stream` fehlen im nativen Code (FB-361, Schritt 34)"
+RAND-6,Regel/Prüfung,12.6,"Output-Seite: Schreibvorgang bestätigt, Heartbeat zum Gerät intakt, Sendepuffer vom Treiber nicht überfahren (`free[o] <= capacity`)",,M10 (aus M5),fertig,"M10 Schritt 29 (Rand in allen Runtimes, FB-285) und 11c (`takt driver-test --crate`, 2026-10-02): auf beiden Boards und auf dem Wirt (`host_board.rs`) ohne Abweichung vom Interpreter"
+RAND-7,Regel/Prüfung,12.6,Tick-Periode innerhalb `tick_tolerance` für die konfigurierte Zahl aufeinanderfolgender Ticks (7.1),,M10 (aus M5),fertig,"M10 Schritt 29 (Rand in allen Runtimes, FB-285) und 11c (`takt driver-test --crate`, 2026-10-02): auf beiden Boards und auf dem Wirt (`host_board.rs`) ohne Abweichung vom Interpreter"
 PROFIL-linux_rt,Profil/Eintrag,12.8,linux_rt,,M4 (Codegen),fertig,
 PROFIL-baremetal,Profil/Eintrag,12.8,baremetal,,M10 (aus M5),fertig,"Tick, Journal und Schlaf auf dem ESP32-C6 (plan/esp32c6.md); Watchdog auf beiden Boards (M10 Schritt 8), Eingaenge ueber `takt_in_*`, Jobs im eigenen Faden (Schritt 7), Speicherschutz (Schritt 18)"
 PROFIL-rtos,Profil/Eintrag,12.8,rtos,,M10 (aus M6),fertig,"M10 Schritt 16: `takt-rt-rtos` (Benachrichtigung je Tickgrenze, logische Zeit), Bindung RTIC 2 auf dem F401 mit Funk-ISR, Treiber-Aufgabe und Job-Aufgabe; Korpus 81/81 unter Last, Jitter 30 us bei 1 ms. Messung bei aktivem Funk: zweite Bindung, Nachzug (m10.md 2.14)"
@@ -884,7 +884,7 @@ CLI-timing,Werkzeug,11.1,takt timing,,M5 (Embedded),fertig,"die vier Kennzahlen 
 CLI-verify-trace,Werkzeug,11.1,takt verify-trace,,M6 (v1.1),fertig,"Hashkette h_k = H(h_{k-1} ‖ Zeilen des Ticks k) im Kopf der Aufzeichnung (`#! kette`), T6 in grammar/trace.md (A3)"
 CLI-test,Werkzeug,11.1,takt test,,M6 (v1.1),fertig,`--out DIR` schreibt je Szenario `NAME.trace` (FB-190)
 CLI-campaign,Werkzeug,11.1,takt campaign,,M6 (v1.1),fertig,
-CLI-driver-test,Werkzeug,11.1,takt driver-test,,M10 (aus M5),teilweise,"Wirtsmodus fuer Treiber in Takt fertig (Schritt 11a), Boardmodus auf beiden Boards gemessen (11b, F401 2026-10-02); offen: Treiber-Crates in Rust hinter dem Rand (FB-285)"
+CLI-driver-test,Werkzeug,11.1,takt driver-test,,M10 (aus M5),fertig,"Treiber in Takt gegen ihr Geraetemodell (11a), Messung ueber die Bruecke auf beiden Boards (11b), Treiber-Crates in Rust auf dem Wirt (11c, 2026-10-02); Zeile 5 erscheint im Bericht mit FB-361"
 CLI-prove,Werkzeug,11.1,takt prove,,M6 (v1.1),fertig,"`--export DATEI.smt2 --depth k`, sonst Solver (`--solver`, `TAKT_SOLVER`, `z3`/`cvc5`): Eigenschaften bewiesen/verletzt/unbewiesen, Pruefstellen bewiesen unerreichbar/erreichbar mit Pfad/unentschieden, Gegenbeispiele als Stimulus im Interpreter bestaetigt (`takt-prove/src/solve.rs`)"
 CLI-fmt,Werkzeug,11.1,takt fmt,,M0,fertig,
 CLI-build,Werkzeug,11.1,takt build,,M5 (Embedded),fertig,uebersetzt und assembliert je Ziel; bindet nicht — Startcode und Speicherkarte gehoeren zum Board (`--emit ir|obj|consts|consts-rs`)

@@ -31,6 +31,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use takt_conformance::bringup;
+
 fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     fs::write(out.join("memory.x"), include_bytes!("memory.x")).expect("memory.x schreiben");
@@ -73,13 +75,13 @@ fn build_takt_program(out: &Path) {
 
     // Der Rahmen (12.1) entsteht hier, weil er an der Speicherform in
     // `takt-conformance` haengt; `takt build` uebersetzt das Programm.
-    let Some(p) = compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
+    let Some(p) = bringup::compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let rahmen = out.join("takt_rahmen.c");
     let frame = takt_conformance::mcu::build_with(
         &p,
         takt_conformance::mcu::Frame {
             diagnostics: takt_llvm::Diagnostics::Ids,
-            hardware: hardware().as_ref(),
+            hardware: bringup::hardware().as_ref(),
             protected: true,
         },
     );
@@ -89,17 +91,14 @@ fn build_takt_program(out: &Path) {
     }
 
     let ir = out.join("takt_programm.ll");
-    run_takt_build(&program, &["--emit", "ir"], &ir);
-    run_takt_build(&program, &["--emit", "consts-rs"], &out.join("takt_consts.rs"));
+    bringup::takt_build(&program, "thumbv7em", &["--emit", "ir"], &ir);
+    bringup::takt_build(&program, "thumbv7em", &["--emit", "consts-rs"], &out.join("takt_consts.rs"));
     let (obj, obj_rahmen) = (out.join("takt_programm.o"), out.join("takt_rahmen.o"));
     translate(&ir, &obj, &[]);
     translate(&rahmen, &obj_rahmen, &[]);
     let reference = bench_reference(out);
-    archive(out, &[&obj, &obj_rahmen, &reference]);
+    bringup::archive(out, &[&obj, &obj_rahmen, &reference]);
     println!("cargo:rustc-link-arg=--icf=all");
-
-    println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-lib=static=taktprogramm");
 }
 
 /// Der Programmzustand als eigener Abschnitt am Anfang des RAM (12.3,
@@ -146,75 +145,6 @@ fn program_path() -> String {
         })
         .unwrap_or_else(|| panic!("{config}: kein `program = \"…\"`"));
     format!("{here}/{value}")
-}
-
-/// Die Hardware-Konfiguration aus `TAKT_HARDWARE` (8.10): Sie gibt jedem
-/// geplanten Output sein `guard` (7.5). Ohne sie ist es null wie in der
-/// Simulation — ein Konformitaetslauf vergleicht mit dem Interpreter.
-fn hardware() -> Option<takt_mir::hardware::Hardware> {
-    println!("cargo:rerun-if-env-changed=TAKT_HARDWARE");
-    let path = env::var("TAKT_HARDWARE").ok()?;
-    println!("cargo:rerun-if-changed={path}");
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    Some(takt_mir::hardware::parse(&text).unwrap_or_else(|e| panic!("{path}:{}: {}", e.line, e.message)))
-}
-
-/// Uebersetzt das Programm, um den Rahmen dazu bauen zu koennen.
-fn compile(path: &str) -> Option<takt_mir::Program> {
-    let src = fs::read_to_string(path).ok()?;
-    // 8.2: die Konfigurationen aus `import channels`, neben dem Programm.
-    let dir = Path::new(path).parent().unwrap_or(Path::new("."));
-    let channel_imports = takt_sema::channel_imports(&src)
-        .into_iter()
-        .filter_map(|file| {
-            let at = dir.join(&file);
-            println!("cargo:rerun-if-changed={}", at.display());
-            Some((file, fs::read_to_string(at).ok()?))
-        })
-        .collect();
-    let options = takt_sema::Options {
-        policy: takt_diag::Policy::default(),
-        build: takt_sema::Build::Hw,
-        profile: None,
-        channel_imports,
-    };
-    let checked = takt_sema::compile(&src, &options);
-    if checked.program.is_none() {
-        for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
-            println!("cargo:warning={path}: {d}");
-        }
-    }
-    checked.program
-}
-
-/// Ruft `takt build` — dasselbe Kommando, das ein Nutzer aufruft.
-///
-/// **Der Umweg ueber die Kommandozeile ist Absicht.** Eine `build.rs`,
-/// die `takt_llvm::lower` direkt ruft, uebersetzt anders als das
-/// Werkzeug — nicht heute, aber beim naechsten Schalter, den nur eines
-/// von beiden bekommt. FB-138 hielt fest, dass die Pipeline in ein
-/// Kommando gehoert; sie hier erneut zu schreiben hiesse, den Befund
-/// abzuhaken und die Ursache zu behalten.
-fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
-    let Some(takt) = find_takt() else {
-        let profile = env::var("PROFILE").unwrap_or_else(|_| "release".into());
-        panic!("Das Werkzeug takt fehlt; erst `cargo build -p takt-cli --{profile}`");
-    };
-    // **Auch das Werkzeug ist eine Quelle.** Ohne diese Zeile kennt Cargo
-    // nur die `.takt`-Datei und baut nicht neu, wenn sich der Compiler
-    // geaendert hat — das erzeugte Objekt bliebe aus dem vorigen Stand.
-    println!("cargo:rerun-if-changed={}", takt.display());
-    let status = Command::new(&takt)
-        .args(["build", program, "--target", "thumbv7em", "--build", "hw"])
-        .args(emit)
-        .arg("--out")
-        .arg(out)
-        .status();
-    match status {
-        Ok(s) if s.success() => {}
-        Ok(_) => panic!("takt build {} schlug fehl fuer {program}", emit.join(" ")),
-        Err(e) => panic!("takt nicht aufrufbar ({e}); ist `cargo build -p takt-cli` gelaufen?"),
-    }
 }
 
 /// Die C-Referenz fuer `takt bench` als Objekt: die Datei aus
@@ -267,8 +197,7 @@ fn math_vectors(out: &Path) {
 
 /// Uebersetzt eine Quelle (IR oder C) mit den Groessenflags des Ziels.
 fn translate(src: &Path, obj: &Path, extra: &[&str]) {
-    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Programm") };
-    let ok = Command::new(&clang)
+    let ok = Command::new(bringup::clang())
         .args(["-c", "-Wno-override-module", "-ffreestanding", "-nostdlib", "--target=thumbv7em-none-eabihf"])
         .args(takt_llvm::toolchain::object_flags("thumbv7em-none-eabihf"))
         .args(extra)
@@ -278,96 +207,4 @@ fn translate(src: &Path, obj: &Path, extra: &[&str]) {
         .status()
         .is_ok_and(|s| s.success());
     assert!(ok, "{}: uebersetzt nicht", src.display());
-}
-
-/// Bindet die Objekte zu einer statischen Bibliothek.
-fn archive(out: &Path, objs: &[&Path]) {
-    let lib = out.join("libtaktprogramm.a");
-    let _ = fs::remove_file(&lib);
-    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn auch kein llvm-ar") };
-    let ar = clang.with_file_name(if cfg!(windows) { "llvm-ar.exe" } else { "llvm-ar" });
-    let ok = Command::new(&ar).arg("crs").arg(&lib).args(objs).status().is_ok_and(|s| s.success());
-    assert!(ok, "llvm-ar schlug fehl; das Takt-Programm waere nicht gebunden");
-}
-
-/// Wo clang steckt — dieselbe Suche wie `takt-llvm::toolchain`.
-fn clang() -> Option<PathBuf> {
-    match takt_llvm::toolchain::find() {
-        takt_llvm::toolchain::Clang::At(p) => Some(p),
-        takt_llvm::toolchain::Clang::Missing => None,
-    }
-}
-
-/// Wo das Werkzeug `takt` liegt.
-///
-/// **Nicht ueber `CARGO_BIN_EXE_takt`**: Die Variable gibt es nur fuer
-/// Binaries desselben Crates, und `takt-cli` ist ein anderes. Und nicht
-/// ueber den PATH, weil dort ein fremdes `takt` stehen koennte — gesucht
-/// wird im Zielverzeichnis dieses Baus.
-///
-/// **Dasselbe Profil, nicht das erstbeste und nicht das neueste.** Zwei
-/// Fassungen lagen vorher daneben: Die erste probierte `debug` vor
-/// `release` und nahm ein veraltetes Werkzeug, das einen neuen Schalter
-/// nicht kannte. Die zweite nahm das juengste — und band den Bau damit an
-/// einen Zufall, denn welches Binary gerade juenger ist, entscheidet, wer
-/// zuletzt `cargo test` gerufen hat.
-///
-/// `PROFILE` beantwortet es ohne Raten: Ein Release-Bau uebersetzt mit dem
-/// Release-Werkzeug. Findet sich keines, bricht der Bau ab und sagt, was
-/// zu tun ist — besser als ein Objekt aus einem fremden Stand.
-fn find_takt() -> Option<PathBuf> {
-    let exe = if cfg!(windows) { "takt.exe" } else { "takt" };
-    // Dasselbe Profil wie dieser Bau: `PROFILE` ist `debug` oder `release`.
-    let profile = env::var("PROFILE").unwrap_or_else(|_| "release".into());
-    // `OUT_DIR` ist `<target>/<triple>/<profil>/build/<crate>-<hash>/out`;
-    // die CLI liegt fuer den *Wirt* gebaut, also ohne Triple daneben.
-    let out = PathBuf::from(env::var("OUT_DIR").ok()?);
-    let mut dir = out.as_path();
-    for _ in 0..6 {
-        let Some(parent) = dir.parent() else { break };
-        dir = parent;
-        let p = dir.join(&profile).join(exe);
-        if p.exists() {
-            assert_fresh(&p);
-            return Some(p);
-        }
-    }
-    None
-}
-
-/// Ein `takt`, das aelter ist als der Compiler, baut stillschweigend das
-/// Objekt von gestern (FB-193, auf dem C6 gefunden). Der Vergleich ist
-/// grob — Aenderungszeit gegen jede Quelle der Compiler-Crates —, aber er
-/// faellt genau dann, wenn es darauf ankommt.
-fn assert_fresh(takt: &Path) {
-    let Ok(built) = fs::metadata(takt).and_then(|m| m.modified()) else { return };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
-    for krate in ["takt-syntax", "takt-diag", "takt-mir", "takt-sema", "takt-interp", "takt-llvm", "takt-cli"] {
-        walk(&root.join("crates").join(krate).join("src"), &mut newest);
-    }
-    if let Some((t, file)) = newest
-        && t > built
-    {
-        panic!(
-            "{} ist aelter als {}; `cargo build -p takt-cli --release` vor dem Bring-up (FB-193)",
-            takt.display(),
-            file.display()
-        );
-    }
-}
-
-fn walk(dir: &Path, newest: &mut Option<(std::time::SystemTime, PathBuf)>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    for e in entries.flatten() {
-        let path = e.path();
-        if path.is_dir() {
-            walk(&path, newest);
-        } else if path.extension().is_some_and(|x| x == "rs")
-            && let Ok(t) = fs::metadata(&path).and_then(|m| m.modified())
-            && newest.as_ref().is_none_or(|(n, _)| t > *n)
-        {
-            *newest = Some((t, path));
-        }
-    }
 }

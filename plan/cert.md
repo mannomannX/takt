@@ -51,6 +51,8 @@ Workspace ohne Zeile, keine Zeile ohne Crate.
 | takt-native-abi | die C-Einstiege der kuratierten Natives (`takt_native_*`), die der erzeugte Code auf Wirt und Board ruft; gerechnet wird in `takt-native` und `takt-crypto` (4.5, FB-293) |
 | takt-bringup-esp32c6 | Treiberfunktionen `takt_out_*`/`takt_in_*` hinter der C-ABI, statische Peripherie |
 | takt-bringup-stm32f401 | dasselbe für die Black Pill; im Profil `rtos` dazu RTIC 2 und `rtic-sync` — das RTOS gehört dort zur TCB (12.8) |
+| takt-bringup-host | der MCU-Rahmen auf dem Wirt für `takt driver-test --crate` (13.8): `takt_board_trace*` hinter der C-ABI, die Leitung als statische Konsole |
+| takt-driver-probe | das Prüfgerät des Treiberrands als Treiber-Crate: `takt_in_*`, `takt_poll_*`, `takt_out_*`, `takt_alive_*` hinter der C-ABI (12.6); die Folge rechnet `takt-board-support` |
 
 **Rechnen außerhalb der TCB.** Was in einem Board-Crate keine
 Registerarbeit ist — Perioden in Timer-Schritte, Zyklen in Nanosekunden,

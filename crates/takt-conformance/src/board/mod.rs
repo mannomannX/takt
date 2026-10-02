@@ -12,8 +12,10 @@
 //! |---|---|---|
 //! | ESP32-C6 ([`esp32c6`]) | `probe-rs` ueber USB-Serial-JTAG | Chip-Reset auf RTC-Ebene, ueber JTAG oder Konsole (FB-264, FB-266) |
 //! | STM32F401 ([`stm32f401`]) | `dfu-util` ueber den DFU-Bootloader im ROM | `TAKT` auf der Trace-Leitung: Die Anwendung springt in den Bootloader (FB-275) |
+//! | Wirt ([`host`]) | ein Prozess, der MCU-Rahmen in logischer Zeit | entfaellt: Der Prozess endet |
 
 pub mod esp32c6;
+pub mod host;
 pub mod stm32f401;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -156,6 +158,53 @@ pub(crate) fn complete(text: String) -> Result<String, String> {
         (Some(_), None) => Err("Trace unvollstaendig: nach `takt trace` fehlt die Bilanz (FB-304)".into()),
         (None, Some(_)) => Err("Trace unvollstaendig: vor der Bilanz fehlt `takt trace` (FB-304)".into()),
     }
+}
+
+/// Ein Verstoss gegen den Treibervertrag im Trace eines Laufs (12.6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Violation {
+    /// Die Zeile der Tabelle in 12.6.
+    pub row: u8,
+    /// Die Zeile des Trace, die ihn zeigt.
+    pub line: String,
+}
+
+/// Die Verstoesse gegen den Treibervertrag, die ein Trace zeigt (12.6,
+/// `grammar/trace.md`): `warped` und `degraded window` (Zeile 1), jede
+/// andere Verletzung, die `degraded` nennt (Zeile 2), ein Strom, dessen
+/// `malformed` steigt (Zeile 5), `runtime Driver` (Zeile 6) und `runtime
+/// Hardware` (Zeile 7). `recovered` ist keiner. Die Zeilen 3 und 4 urteilen
+/// ueber den Wert, nicht ueber den Treiber: Sie zeigen sich in der
+/// Qualitaet, die das Programm liest.
+pub fn violations(trace: &str) -> Vec<Violation> {
+    let mut malformed: Vec<(&str, u64)> = Vec::new();
+    let mut found = Vec::new();
+    for line in trace.lines().map(str::trim_end) {
+        let Some((_, event)) = line.strip_prefix("t=").and_then(|r| r.split_once(' ')) else { continue };
+        let words: Vec<&str> = event.split_whitespace().collect();
+        let row = match words.as_slice() {
+            ["driver", _, "warped", ..] | ["driver", _, "degraded", "window"] => Some(1),
+            ["driver", _, "degraded", ..] => Some(2),
+            ["runtime", "Driver", ..] => Some(6),
+            ["runtime", "Hardware"] => Some(7),
+            ["stream", name, .., count] => {
+                let n = count.strip_prefix("malformed=").and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+                let before = match malformed.iter_mut().find(|(s, _)| s == name) {
+                    Some((_, m)) => std::mem::replace(m, n),
+                    None => {
+                        malformed.push((name, n));
+                        0
+                    }
+                };
+                (n > before).then_some(5)
+            }
+            _ => None,
+        };
+        if let Some(row) = row {
+            found.push(Violation { row, line: line.to_string() });
+        }
+    }
+    found
 }
 
 /// Welches Programm des Bring-ups das Takt-Programm bindet.
@@ -620,5 +669,19 @@ mod tests {
         assert!(complete(unmarked).is_err_and(|e| e.contains("fehlt `takt trace`")));
         let uncounted = run(body, 0, body.len()).replace("gesendet", "gesndet");
         assert!(complete(uncounted).is_err_and(|e| e.contains("fehlt die Bilanz")));
+    }
+
+    /// Jede Zeile des Rands faellt in ihre Zeile der Tabelle; Erholung,
+    /// Ausgaben und ein Strom, dessen `malformed` nicht steigt, sind keine
+    /// Verstoesse.
+    #[test]
+    fn every_edge_line_falls_into_its_row() {
+        let trace = "t=1 driver edge_a warped p\nt=2 driver edge_a degraded window\nt=3 driver edge_a recovered\n\
+                     t=4 runtime Driver o\nt=4 fault actor Runtime(Driver)\nt=5 driver edge_u degraded seq\n\
+                     t=6 stream pairs dropped=0 overflowed=0 malformed=1\nt=7 stream pairs dropped=1 overflowed=0 malformed=1\n\
+                     t=8 out up 1 \nt=9 runtime Hardware\n";
+        let found = violations(trace);
+        let rows: Vec<(u8, &str)> = found.iter().map(|v| (v.row, &v.line[..3])).collect();
+        assert_eq!(rows, [(1, "t=1"), (1, "t=2"), (6, "t=4"), (2, "t=5"), (5, "t=6"), (7, "t=9")]);
     }
 }

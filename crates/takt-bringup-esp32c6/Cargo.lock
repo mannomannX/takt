@@ -1519,16 +1519,13 @@ dependencies = [
  "esp-bootloader-esp-idf",
  "esp-hal",
  "takt-board-esp32c6",
- "takt-board-support",
  "takt-conformance",
- "takt-diag",
+ "takt-driver-probe",
  "takt-llvm",
- "takt-mir",
  "takt-native",
  "takt-native-abi",
  "takt-rt-baremetal",
  "takt-rt-core",
- "takt-sema",
 ]
 
 [[package]]
@@ -1558,6 +1555,13 @@ dependencies = [
 [[package]]
 name = "takt-diag"
 version = "0.1.0"
+
+[[package]]
+name = "takt-driver-probe"
+version = "0.1.0"
+dependencies = [
+ "takt-board-support",
+]
 
 [[package]]
 name = "takt-hal"

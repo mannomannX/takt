@@ -1,0 +1,30 @@
+[package]
+name = "takt-bringup-host"
+version = "0.1.0"
+description = "Takt: der MCU-Rahmen auf dem Wirt, in logischer Zeit (13.8)"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.86"
+
+# Eigener Workspace wie die Bring-ups der Boards: Die C-ABI des Rahmens
+# braucht `unsafe`, und `forbid` (13.4) laesst sich nicht lokal aufheben.
+[workspace]
+
+# Der Bau uebersetzt das Programm aus `TAKT_PROGRAM` und erzeugt den Rahmen
+# dazu, auf dem Wirt wie bei den Boards.
+[build-dependencies]
+takt-conformance = { path = "../takt-conformance", default-features = false }
+takt-llvm = { path = "../takt-llvm" }
+
+[dependencies]
+takt-mcu-program = { path = "../takt-mcu-program" }
+# Wie auf den Boards: jede kuratierte Native, die der erzeugte Code ruft.
+takt-native-abi = { path = "../takt-native-abi", features = ["ecdsa", "rsa", "aes-gcm"] }
+takt-rt-baremetal = { path = "../takt-rt-baremetal" }
+takt-rt-core = { path = "../takt-rt-core" }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"

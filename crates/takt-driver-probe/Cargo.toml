@@ -1,0 +1,22 @@
+[package]
+name = "takt-driver-probe"
+version = "0.1.0"
+description = "Takt: das Pruefgeraet des Treiberrands als Treiber-Crate (12.6, 13.8)"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.86"
+
+# Eigener Workspace wie `takt-mcu-program`: Die C-ABI eines Treibers braucht
+# `unsafe`, und `forbid` (13.4) laesst sich nicht lokal aufheben. 9.5 fuehrt
+# Treiber in der Trusted Computing Base.
+[workspace]
+
+[dependencies]
+# Die Folge des Pruefgeraets, die auch der Wirt fuer den Interpreter liest.
+takt-board-support = { path = "../takt-board-support" }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"

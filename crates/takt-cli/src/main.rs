@@ -10,6 +10,7 @@
 //! takt test  DATEI [--ticks N] [--params-profile P] [--scenario NAME] [--coverage OUT.csv] [--out DIR]
 //! takt driver-test DATEI [--ticks N] [--stim S.trace] [--params-profile P] [--scenario NAME] [--out DIR]
 //! takt driver-test --board stm32f401|esp32c6 [--hardware DATEI.hw]
+//! takt driver-test --crate VERZEICHNIS DATEI [--ticks N] [--hardware DATEI.hw]
 //! takt campaign DATEI [NAME] --ticks N [--stim S.trace] [--params-profile P] [--scenario NAME]
 //!                   [--out DIR] [--hardware DATEI.hw]
 //! takt tune  DATEI --ticks N --save PROFIL [--stim S.trace] [--params-profile P] [--out DATEI]
@@ -108,6 +109,7 @@ impl Args {
             "--tick",
             "--params-profile",
             "--board",
+            "--crate",
             "--runs",
             "--conformance",
         ];
@@ -285,6 +287,52 @@ fn driver_test_board(args: &Args) -> bool {
     }
     println!("  Konfiguration: {path}");
     true
+}
+
+/// `takt driver-test --crate VERZEICHNIS DATEI [--ticks N] [--hardware
+/// DATEI]` (13.8): das Treiber-Crate in `VERZEICHNIS` mit dem Programm
+/// `DATEI` auf dem Wirt, gegen sein Hardwaremodell. Es urteilt derselbe Rand
+/// wie auf dem Board (12.6); jeder Verstoss steht mit seiner Zeile der
+/// Tabelle und der Zeile des Trace da, und einer genuegt zum Scheitern. Ohne
+/// `--ticks` laeuft das Programm 1000 Ticks.
+fn driver_test_crate(args: &Args, dir: &str) -> bool {
+    use takt_conformance::board::{Board, Options, host::Host};
+    let Some(path) = args.files.first() else {
+        eprintln!("{USAGE}");
+        return false;
+    };
+    let ticks = match args.value("--ticks").map(str::parse::<u64>) {
+        None => 1000,
+        Some(Ok(n)) => n,
+        Some(Err(e)) => {
+            eprintln!("--ticks: {e}");
+            return false;
+        }
+    };
+    let mut options = Options::fresh(ticks);
+    if let Some(hw) = args.value("--hardware") {
+        options = options.with_hardware(hw.into());
+    }
+    let mut host = Host::with_driver(dir.into());
+    let text = match host.build(std::path::Path::new(path), &options).and_then(|exe| host.run(&exe, &options)) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("takt driver-test: {dir}: {e}");
+            return false;
+        }
+    };
+    let found = takt_conformance::board::violations(&text);
+    println!(
+        "{dir} mit {path}: {ticks} Ticks auf dem Wirt, {} Verstoesse gegen den Treibervertrag (12.6)",
+        found.len()
+    );
+    for v in &found {
+        println!("  Zeile {}  {}", v.row, v.line);
+    }
+    if !found.is_empty() {
+        println!("FAIL");
+    }
+    found.is_empty()
 }
 
 /// Pfad der Review-Datei; `--review` oder `natives.review` neben dem Programm.
@@ -1476,6 +1524,9 @@ fn driver_test(args: &Args) -> bool {
     use takt_interp::CoverKind;
     if args.value("--board").is_some() {
         return driver_test_board(args);
+    }
+    if let Some(dir) = args.value("--crate") {
+        return driver_test_crate(args, dir);
     }
     let Some(path) = args.files.first() else {
         eprintln!("{USAGE}");

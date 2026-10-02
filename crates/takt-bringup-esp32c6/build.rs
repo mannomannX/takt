@@ -17,6 +17,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use takt_conformance::bringup;
+
 fn main() {
     // `linkall.x` liefert `esp-hal`: Speicherkarte, Vektortabelle, Cache-Mapping.
     println!("cargo:rustc-link-arg=-Tlinkall.x");
@@ -68,11 +70,15 @@ fn build_takt_program(out: &Path) {
     if !Path::new(&program).exists() {
         panic!("Takt-Programm nicht gefunden: {program}");
     }
-    let Some(p) = compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
+    let Some(p) = bringup::compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let rahmen = out.join("takt_rahmen.c");
     let frame = takt_conformance::mcu::build_with(
         &p,
-        takt_conformance::mcu::Frame { diagnostics: diagnostics(), hardware: hardware().as_ref(), protected: false },
+        takt_conformance::mcu::Frame {
+            diagnostics: diagnostics(),
+            hardware: bringup::hardware().as_ref(),
+            protected: false,
+        },
     );
     if let Err(e) = fs::write(&rahmen, frame.source) {
         panic!("Rahmen nicht schreibbar: {e}");
@@ -92,10 +98,8 @@ fn build_takt_program(out: &Path) {
     let obj_mc = out.join("millicode.o");
     assemble(&millicode, &obj_mc);
     let reference = bench_reference(out);
-    archive(out, &[&obj, &obj_rahmen, &obj_mc, &reference]);
+    bringup::archive(out, &[&obj, &obj_rahmen, &obj_mc, &reference]);
     println!("cargo:rustc-link-arg=--icf=all");
-    println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-lib=static=taktprogramm");
 }
 
 /// Der Pfad des Programms aus `takt.toml`; `TAKT_PROGRAM` sticht fuer
@@ -119,70 +123,24 @@ fn program_path() -> String {
     format!("{here}/{value}")
 }
 
-/// Die Hardware-Konfiguration aus `TAKT_HARDWARE` (8.10): Sie gibt jedem
-/// geplanten Output sein `guard` (7.5). Ohne sie ist es null wie in der
-/// Simulation — ein Konformitaetslauf vergleicht mit dem Interpreter.
-fn hardware() -> Option<takt_mir::hardware::Hardware> {
-    println!("cargo:rerun-if-env-changed=TAKT_HARDWARE");
-    let path = env::var("TAKT_HARDWARE").ok()?;
-    println!("cargo:rerun-if-changed={path}");
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    Some(takt_mir::hardware::parse(&text).unwrap_or_else(|e| panic!("{path}:{}: {}", e.line, e.message)))
-}
-
-fn compile(path: &str) -> Option<takt_mir::Program> {
-    let src = fs::read_to_string(path).ok()?;
-    // 8.2: die Konfigurationen aus `import channels`, neben dem Programm.
-    let dir = Path::new(path).parent().unwrap_or(Path::new("."));
-    let channel_imports = takt_sema::channel_imports(&src)
-        .into_iter()
-        .filter_map(|file| {
-            let at = dir.join(&file);
-            println!("cargo:rerun-if-changed={}", at.display());
-            Some((file, fs::read_to_string(at).ok()?))
-        })
-        .collect();
-    let options = takt_sema::Options {
-        policy: takt_diag::Policy::default(),
-        build: takt_sema::Build::Hw,
-        profile: None,
-        channel_imports,
-    };
-    let checked = takt_sema::compile(&src, &options);
-    if checked.program.is_none() {
-        for d in checked.diagnostics.iter().filter(|d| d.is_error()) {
-            println!("cargo:warning={path}: {d}");
-        }
-    }
-    checked.program
-}
-
+/// `takt build` fuer `riscv32imac` mit `emit`, dazu Instrumentierung und
+/// Diagnosestufe aus der Umgebung (11.2) und die Konfiguration des Boards.
 fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
-    let Some(takt) = find_takt() else {
-        let profile = env::var("PROFILE").unwrap_or_else(|_| "release".into());
-        panic!("Das Werkzeug takt fehlt; erst `cargo build -p takt-cli --{profile}`");
-    };
-    println!("cargo:rerun-if-changed={}", takt.display());
-    let mut cmd = Command::new(&takt);
-    cmd.args(["build", program, "--target", "riscv32imac", "--build", "hw"]).args(emit).arg("--out").arg(out);
+    let mut extra: Vec<String> = emit.iter().map(|s| (*s).to_string()).collect();
     if let Ok(mode) = env::var("TAKT_INSTRUMENT") {
-        cmd.args(["--instrument", &mode]);
+        extra.extend(["--instrument".into(), mode]);
     }
     if let Ok(level) = env::var("TAKT_DIAGNOSTICS") {
-        cmd.args(["--diagnostics", &level]);
+        extra.extend(["--diagnostics".into(), level]);
     }
     // 8.10: Anschluesse und NVM-Zeiten des Boards, wenn die Konfiguration da ist.
     let hardware = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try/hw/esp32c6.hw");
     println!("cargo:rerun-if-changed={}", hardware.display());
     if hardware.exists() {
-        cmd.arg("--hardware").arg(&hardware);
+        extra.extend(["--hardware".into(), hardware.display().to_string()]);
     }
-    let status = cmd.status();
-    match status {
-        Ok(s) if s.success() => {}
-        Ok(_) => panic!("takt build {} schlug fehl fuer {program}", emit.join(" ")),
-        Err(e) => panic!("takt nicht aufrufbar ({e}); ist `cargo build -p takt-cli` gelaufen?"),
-    }
+    let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+    bringup::takt_build(program, "riscv32imac", &extra, out);
 }
 
 /// Die Vektoren der kuratierten Natives fuer das Messprogramm `natives`
@@ -235,8 +193,7 @@ fn bench_reference(out: &Path) -> PathBuf {
 }
 
 fn translate(src: &Path, obj: &Path, extra: &[&str]) {
-    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Programm") };
-    let ok = Command::new(&clang)
+    let ok = Command::new(bringup::clang())
         .args([
             "-c",
             "-Wno-override-module",
@@ -258,8 +215,7 @@ fn translate(src: &Path, obj: &Path, extra: &[&str]) {
 
 /// Uebersetzt die Millicode-Routinen fuer `-msave-restore`.
 fn assemble(src: &Path, obj: &Path) {
-    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn entsteht kein Millicode") };
-    let ok = Command::new(&clang)
+    let ok = Command::new(bringup::clang())
         .args(["-c", "--target=riscv32-unknown-none-elf", "-march=rv32imac", "-mabi=ilp32"])
         .arg(src)
         .arg("-o")
@@ -267,78 +223,6 @@ fn assemble(src: &Path, obj: &Path) {
         .status()
         .is_ok_and(|s| s.success());
     assert!(ok, "{}: uebersetzt nicht", src.display());
-}
-
-fn archive(out: &Path, objs: &[&Path]) {
-    let lib = out.join("libtaktprogramm.a");
-    let _ = fs::remove_file(&lib);
-    let Some(clang) = clang() else { panic!("clang fehlt; ohne ihn auch kein llvm-ar") };
-    let ar = clang.with_file_name(if cfg!(windows) { "llvm-ar.exe" } else { "llvm-ar" });
-    let ok = Command::new(&ar).arg("crs").arg(&lib).args(objs).status().is_ok_and(|s| s.success());
-    assert!(ok, "llvm-ar schlug fehl; das Takt-Programm waere nicht gebunden");
-}
-
-fn clang() -> Option<PathBuf> {
-    match takt_llvm::toolchain::find() {
-        takt_llvm::toolchain::Clang::At(p) => Some(p),
-        takt_llvm::toolchain::Clang::Missing => None,
-    }
-}
-
-/// Das `takt`-Werkzeug aus demselben Zielverzeichnis, in dem dieses
-/// Skript laeuft; ein paar Ebenen ueber `OUT_DIR`.
-fn find_takt() -> Option<PathBuf> {
-    let exe = if cfg!(windows) { "takt.exe" } else { "takt" };
-    let profile = env::var("PROFILE").unwrap_or_else(|_| "release".into());
-    let out = PathBuf::from(env::var("OUT_DIR").ok()?);
-    let mut dir = out.as_path();
-    for _ in 0..6 {
-        let Some(parent) = dir.parent() else { break };
-        dir = parent;
-        let p = dir.join(&profile).join(exe);
-        if p.exists() {
-            assert_fresh(&p);
-            return Some(p);
-        }
-    }
-    None
-}
-
-/// Ein `takt`, das aelter ist als der Compiler, baut stillschweigend das
-/// Objekt von gestern (FB-193). Der Vergleich ist grob — Aenderungszeit
-/// gegen jede Quelle der Compiler-Crates —, aber er faellt genau dann,
-/// wenn es darauf ankommt.
-fn assert_fresh(takt: &Path) {
-    let Ok(built) = fs::metadata(takt).and_then(|m| m.modified()) else { return };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
-    for krate in ["takt-syntax", "takt-diag", "takt-mir", "takt-sema", "takt-interp", "takt-llvm", "takt-cli"] {
-        walk(&root.join("crates").join(krate).join("src"), &mut newest);
-    }
-    if let Some((t, file)) = newest
-        && t > built
-    {
-        panic!(
-            "{} ist aelter als {}; `cargo build -p takt-cli --release` vor dem Bring-up (FB-193)",
-            takt.display(),
-            file.display()
-        );
-    }
-}
-
-fn walk(dir: &Path, newest: &mut Option<(std::time::SystemTime, PathBuf)>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    for e in entries.flatten() {
-        let path = e.path();
-        if path.is_dir() {
-            walk(&path, newest);
-        } else if path.extension().is_some_and(|x| x == "rs")
-            && let Ok(t) = fs::metadata(&path).and_then(|m| m.modified())
-            && newest.as_ref().is_none_or(|(n, _)| t > *n)
-        {
-            *newest = Some((t, path));
-        }
-    }
 }
 
 /// Die Diagnosestufe aus `TAKT_DIAGNOSTICS`; ohne Angabe `ids`.
