@@ -1,7 +1,7 @@
 //! Das erzeugte Programm hinter seiner C-ABI (12.1, 12.3), einmal fuer
 //! alle Boards.
 //!
-//! Der Rahmen aus `takt_conformance::mcu` liefert `takt_mcu_init_with`,
+//! Der Rahmen aus `takt_frame::mcu` liefert `takt_mcu_init_with`,
 //! `takt_mcu_tick` und die Schwestern; hier werden sie zum
 //! [`takt_rt_core::Program`] und [`takt_rt_baremetal::Traced`], die die
 //! Tickschleife kennt. Ein Board bringt nur noch Uhr, Leitung und

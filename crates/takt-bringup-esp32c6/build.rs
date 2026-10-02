@@ -1,7 +1,7 @@
 //! Baut das Takt-Programm fuer den ESP32-C6 und bindet es ein.
 //!
 //! Dieselbe Konstruktion wie beim F401-Bring-up: `takt build` erzeugt das
-//! Objekt fuer `riscv32imac`, `takt_conformance::mcu` den C-Rahmen, `clang`
+//! Objekt fuer `riscv32imac`, `takt_frame::mcu` den C-Rahmen, `clang`
 //! uebersetzt ihn fuer RV32IMAC, `llvm-ar` packt beides in ein Archiv.
 //! Die Linker-Argumente stehen hier und nicht in `.cargo/config.toml`: Die
 //! Konfigurationsdatei gilt nur, wenn `cargo` aus diesem Verzeichnis laeuft,
@@ -72,9 +72,9 @@ fn build_takt_program(out: &Path) {
     }
     let Some(p) = bringup::compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let rahmen = out.join("takt_rahmen.c");
-    let frame = takt_conformance::mcu::build_with(
+    let frame = takt_frame::mcu::build_with(
         &p,
-        takt_conformance::mcu::Frame {
+        takt_frame::mcu::Frame {
             diagnostics: diagnostics(),
             hardware: bringup::hardware().as_ref(),
             protected: false,

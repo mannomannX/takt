@@ -23,9 +23,9 @@ fn main() {
 
     let Some(p) = bringup::compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let hardware = bringup::hardware();
-    let frame = takt_conformance::mcu::build_with(
+    let frame = takt_frame::mcu::build_with(
         &p,
-        takt_conformance::mcu::Frame { hardware: hardware.as_ref(), ..Default::default() },
+        takt_frame::mcu::Frame { hardware: hardware.as_ref(), ..Default::default() },
     );
     let rahmen = out.join("takt_rahmen.c");
     fs::write(&rahmen, frame.source).unwrap_or_else(|e| panic!("Rahmen nicht schreibbar: {e}"));

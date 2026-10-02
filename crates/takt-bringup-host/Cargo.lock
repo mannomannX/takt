@@ -337,6 +337,7 @@ name = "takt-bringup-host"
 version = "0.1.0"
 dependencies = [
  "takt-conformance",
+ "takt-frame",
  "takt-llvm",
  "takt-mcu-program",
  "takt-native-abi",
@@ -350,6 +351,7 @@ version = "0.1.0"
 dependencies = [
  "takt-crypto",
  "takt-diag",
+ "takt-frame",
  "takt-hal",
  "takt-interp",
  "takt-llvm",
@@ -371,6 +373,17 @@ dependencies = [
 [[package]]
 name = "takt-diag"
 version = "0.1.0"
+
+[[package]]
+name = "takt-frame"
+version = "0.1.0"
+dependencies = [
+ "takt-hal",
+ "takt-interp",
+ "takt-llvm",
+ "takt-mir",
+ "takt-native",
+]
 
 [[package]]
 name = "takt-hal"

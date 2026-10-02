@@ -560,6 +560,7 @@ dependencies = [
  "takt-board-support",
  "takt-crypto",
  "takt-diag",
+ "takt-frame",
  "takt-hal",
  "takt-interp",
  "takt-llvm",
@@ -587,6 +588,17 @@ name = "takt-flash-weact"
 version = "0.1.0"
 dependencies = [
  "hidapi",
+]
+
+[[package]]
+name = "takt-frame"
+version = "0.1.0"
+dependencies = [
+ "takt-hal",
+ "takt-interp",
+ "takt-llvm",
+ "takt-mir",
+ "takt-native",
 ]
 
 [[package]]

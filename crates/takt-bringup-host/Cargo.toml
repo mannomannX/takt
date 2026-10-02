@@ -14,6 +14,7 @@ rust-version = "1.86"
 # dazu, auf dem Wirt wie bei den Boards.
 [build-dependencies]
 takt-conformance = { path = "../takt-conformance", default-features = false }
+takt-frame = { path = "../takt-frame" }
 takt-llvm = { path = "../takt-llvm" }
 
 [dependencies]

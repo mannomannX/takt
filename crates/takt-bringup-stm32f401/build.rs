@@ -77,9 +77,9 @@ fn build_takt_program(out: &Path) {
     // `takt-conformance` haengt; `takt build` uebersetzt das Programm.
     let Some(p) = bringup::compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
     let rahmen = out.join("takt_rahmen.c");
-    let frame = takt_conformance::mcu::build_with(
+    let frame = takt_frame::mcu::build_with(
         &p,
-        takt_conformance::mcu::Frame {
+        takt_frame::mcu::Frame {
             diagnostics: takt_llvm::Diagnostics::Ids,
             hardware: bringup::hardware().as_ref(),
             protected: true,

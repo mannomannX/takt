@@ -25,18 +25,15 @@ pub mod bench;
 #[cfg(feature = "board")]
 pub mod board;
 pub mod bringup;
-mod edge;
+mod deliveries;
 pub mod harness;
-pub mod layout;
 pub mod limits;
 pub mod math;
-pub mod mcu;
 pub mod natives;
 mod ports;
 pub mod report;
 pub mod run;
 pub mod stimulus;
-pub mod streams;
 pub mod wire;
 
 pub use harness::Harness;

@@ -8,6 +8,8 @@ rust-version.workspace = true
 
 [dependencies]
 takt-diag = { path = "../takt-diag" }
+# Der Rahmen der Boards und die Bausteine des Wirtsrahmens.
+takt-frame = { path = "../takt-frame" }
 # Treiber je Kanal und `MAXPT` fuer den Rand der Rahmen (12.6).
 takt-hal = { path = "../takt-hal" }
 takt-interp = { path = "../takt-interp" }

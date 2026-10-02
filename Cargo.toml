@@ -33,6 +33,7 @@ members = [
     "crates/takt-rt-rtos",
     "crates/takt-board-support",
     "crates/takt-llvm",
+    "crates/takt-frame",
     "crates/takt-conformance",
     "crates/takt-interp",
     "crates/takt-sema",

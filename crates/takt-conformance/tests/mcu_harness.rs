@@ -53,7 +53,7 @@ fn link_for(clang: &Clang, target: Target, p: &takt_mir::Program, name: &str) ->
     let linked = dir.join("zusammen.o");
 
     std::fs::write(&ll, common::ir_for(p, target.triple)).map_err(|e| e.to_string())?;
-    std::fs::write(&c, takt_conformance::mcu::build(p).source).map_err(|e| e.to_string())?;
+    std::fs::write(&c, takt_frame::mcu::build(p).source).map_err(|e| e.to_string())?;
 
     for (src, out) in [(&ll, &obj_ir), (&c, &obj_c)] {
         let mut cmd = std::process::Command::new(path);
@@ -127,14 +127,11 @@ fn a_scheduled_output_carries_its_guard() {
     };
     let p = takt_sema::compile(&src, &options).program.expect("Programm");
     let hw = takt_mir::hardware::parse("# takt-hw 9\n[channel gpio/loop_out]\nguard_ns = 4338\n").expect("lesbar");
-    let with = takt_conformance::mcu::build_with(
-        &p,
-        takt_conformance::mcu::Frame { hardware: Some(&hw), ..Default::default() },
-    )
-    .source;
+    let with =
+        takt_frame::mcu::build_with(&p, takt_frame::mcu::Frame { hardware: Some(&hw), ..Default::default() }).source;
     assert!(with.contains("static const long long g_guard[1] = { 4338LL };"), "{with}");
     assert!(with.contains("if (t <= g_tick * 1000000LL + g_guard[q]) return"), "{with}");
-    let without = takt_conformance::mcu::build(&p).source;
+    let without = takt_frame::mcu::build(&p).source;
     assert!(without.contains("static const long long g_guard[1] = { 0LL };"), "{without}");
 }
 
@@ -152,13 +149,10 @@ fn the_jitter_of_an_output_comes_from_the_configuration() {
     let hw =
         takt_mir::hardware::parse("# takt-hw 9\n[channel gpio/loop_out]\njitter_ns = 36563\ntick_granular = true\n")
             .expect("lesbar");
-    let with = takt_conformance::mcu::build_with(
-        &p,
-        takt_conformance::mcu::Frame { hardware: Some(&hw), ..Default::default() },
-    )
-    .source;
+    let with =
+        takt_frame::mcu::build_with(&p, takt_frame::mcu::Frame { hardware: Some(&hw), ..Default::default() }).source;
     assert!(with.contains("case 0: return 1036563LL; /* probe */"), "{with}");
-    let without = takt_conformance::mcu::build(&p).source;
+    let without = takt_frame::mcu::build(&p).source;
     assert!(without.contains("long long takt_jitter(int o) {\n    switch (o) {\n    default: return 0;"), "{without}");
 }
 
@@ -174,7 +168,7 @@ fn a_simulated_input_is_fed_before_tick_0() {
                machine m:\n    initial RUN\n    state RUN:\n        enter:\n            high = p > 5 bar\n";
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
     let p = takt_sema::compile(src, &options).program.expect("Programm");
-    let frame = takt_conformance::mcu::build(&p).source;
+    let frame = takt_frame::mcu::build(&p).source;
     let init = &frame[frame.find("int takt_mcu_init_with(").expect("init")..];
     let fed = init.find("/* p_sim -> p */").expect("die Speisung in init");
     let entered = init.find("_enter(").expect("der Eintritt");
@@ -188,7 +182,7 @@ fn a_simulated_input_is_fed_before_tick_0() {
 #[test]
 fn the_harness_exports_what_the_loop_needs() {
     let p = corpus("01_minimal.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
     for name in ["takt_mcu_init", "takt_mcu_tick", "takt_mcu_dump", "takt_mcu_pc", "takt_mcu_end"] {
         assert!(src.contains(&format!("void {name}")), "`{name}` fehlt im Rahmen");
     }
@@ -202,7 +196,7 @@ fn the_harness_exports_what_the_loop_needs() {
 #[test]
 fn the_harness_answers_the_whole_abi() {
     let p = corpus("19_faults.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
     for name in [
         "takt_now",
         "takt_alert",
@@ -227,7 +221,7 @@ fn the_harness_answers_the_whole_abi() {
 #[test]
 fn the_harness_is_freestanding() {
     let p = corpus("16_timing.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
     for forbidden in ["stdio.h", "printf", "malloc", "stdlib.h"] {
         assert!(!src.contains(forbidden), "`{forbidden}` gehoert nicht in einen MCU-Rahmen (12.3)");
     }
@@ -245,7 +239,7 @@ fn the_harness_is_freestanding() {
 #[test]
 fn a_hardware_path_becomes_a_driver_call() {
     let p = corpus("29_heartbeat.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
 
     assert!(src.contains("_Bool takt_out_ui_led(unsigned char value);"), "der Treiber ist deklariert:\n{src}");
     assert!(
@@ -263,7 +257,7 @@ fn a_hardware_path_becomes_a_driver_call() {
 #[test]
 fn an_unbound_output_needs_no_driver() {
     let p = corpus("01_minimal.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
     let calls = src.lines().filter(|l| l.contains("takt_out_")).count();
     let bound = p
         .channels
@@ -308,7 +302,7 @@ fn an_address_becomes_a_c_identifier() {
 fn every_abi_buffer_is_aligned() {
     for name in ["16_timing.takt", "19_faults.takt", "29_heartbeat.takt"] {
         let p = corpus(name);
-        let src = takt_conformance::mcu::build(&p).source;
+        let src = takt_frame::mcu::build(&p).source;
         // Byte-Puffer, die der erzeugte Code als Struktur liest; Felder
         // eines Struct-Typs richtet C von sich aus aus.
         for line in src.lines().filter(|l| l.starts_with("static") && l.contains("unsigned char") && l.contains('[')) {
@@ -329,7 +323,7 @@ fn every_abi_buffer_is_aligned() {
 #[test]
 fn the_mcu_trace_can_be_compared_with_the_interpreter() {
     let p = corpus("29_heartbeat.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
 
     assert!(src.contains(r#"takt_board_trace("t=")"#), "die Zeile beginnt mit der Tickzahl:\n{src}");
     assert!(src.contains("takt_board_trace_i64(g_tick)"), "und zwar mit dem laufenden Tick");
@@ -351,7 +345,7 @@ fn the_mcu_trace_can_be_compared_with_the_interpreter() {
 #[test]
 fn an_enum_output_carries_its_name() {
     let p = corpus("19_faults.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
     let has_enum_output = p.channels.iter().any(|c| {
         c.dir != takt_mir::program::Direction::Input
             && matches!(p.types.list.get(c.ty.index()), Some(takt_mir::types::Type::Enum(_)))
@@ -370,7 +364,7 @@ fn an_enum_output_carries_its_name() {
 #[test]
 fn a_record_output_is_in_the_table() {
     let p = corpus("96_record_outputs.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
     let rec = |name: &str| p.records.iter().position(|r| r.name == name).expect(name);
     let (status, limits) = (rec("Status"), rec("Limits"));
     assert!(src.contains(&format!("g_rec{status}[] = {{ {{ 0LL, \"Status\", g_rec{status}_f, 6 }} }}")), "{src}");
@@ -395,7 +389,7 @@ fn a_record_output_is_in_the_table() {
 fn the_harness_does_no_floating_point_arithmetic() {
     for name in ["19_faults.takt", "29_heartbeat.takt"] {
         let p = corpus(name);
-        let src = takt_conformance::mcu::build(&p).source;
+        let src = takt_frame::mcu::build(&p).source;
         for line in src.lines() {
             let computation = line.contains(" * ") || line.contains(" / ") || line.contains(" + ");
             assert!(
@@ -416,7 +410,7 @@ fn the_harness_does_no_floating_point_arithmetic() {
 #[test]
 fn every_observation_line_carries_its_tick() {
     let p = corpus("19_faults.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
     for kind in ["alert", "log", "abort", "verify", "verdict", "measure"] {
         let at = src.find(&format!("takt_board_trace(\"{kind} \")")).unwrap_or_else(|| {
             panic!("`{kind}` fehlt im Rahmen");
@@ -435,7 +429,7 @@ fn every_observation_line_carries_its_tick() {
 #[test]
 fn the_harness_answers_the_sleep_condition() {
     let p = corpus("29_heartbeat.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
     assert!(src.contains("_Bool takt_mcu_idle(void)"), "die Bedingung hat einen Namen:\n{src}");
     assert!(src.contains("long long takt_mcu_deadline(void)"), "und die Frist auch");
     // Alle Maschinen muessen zustimmen: ein `return 0` je Maschine.
@@ -488,7 +482,7 @@ fn an_idle_state_reports_its_deadline() {
 #[test]
 fn the_deadline_is_absolute_nanoseconds() {
     let p = corpus("30_idle.takt");
-    let src = takt_conformance::mcu::build(&p).source;
+    let src = takt_frame::mcu::build(&p).source;
     assert!(
         src.contains("return takt_now() + best * 10000000LL;"),
         "Ticks mal Periode, auf `takt_now` bezogen:\n{src}"
@@ -529,7 +523,7 @@ fn a_multirate_deadline_counts_activations() {
 /// der Grund, warum ein fehlender Treiber nicht still durchgeht.
 #[test]
 fn a_bound_input_becomes_a_driver_symbol() {
-    let src = takt_conformance::mcu::build(&program(INPUTS)).source;
+    let src = takt_frame::mcu::build(&program(INPUTS)).source;
 
     assert!(
         src.contains("_Bool takt_in_ui_button(unsigned char *value, unsigned char *quality, long long *t);"),
@@ -564,7 +558,7 @@ fn a_bound_input_becomes_a_driver_symbol() {
 /// einem Job, der laeuft, schlaeft das System nicht (9.9).
 #[test]
 fn a_job_runs_in_the_context_and_shows_after_its_duration() {
-    let src = takt_conformance::mcu::build(&corpus("40_jobs.takt")).source;
+    let src = takt_frame::mcu::build(&corpus("40_jobs.takt")).source;
     for symbol in [
         "void takt_job_begin(",
         "void takt_job_cancel(",
@@ -593,7 +587,7 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
     assert!(src[at..].contains("if (takt_mcu_jobs_busy()) return 0;"), "{src}");
 
     // Ohne Jobs bleiben die Einstiege, und das Board ruft sie ohne Unterschied.
-    let plain = takt_conformance::mcu::build(&corpus("01_minimal.takt")).source;
+    let plain = takt_frame::mcu::build(&corpus("01_minimal.takt")).source;
     assert!(plain.contains("int takt_mcu_job_dispatch(void) { return 0; }"), "{plain}");
 }
 
@@ -602,7 +596,7 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
 /// Abtastung saehe es `Bad` und faultete auf dem Board.
 #[test]
 fn the_start_samples_before_it_enters() {
-    let src = takt_conformance::mcu::build(&program(INPUTS)).source;
+    let src = takt_frame::mcu::build(&program(INPUTS)).source;
     let at = src.find("int takt_mcu_init_with(").expect("Startfunktion");
     let init = &src[at..];
     let sample = init.find("takt_mcu_sample();").expect("Abtastung im Start");
@@ -614,7 +608,7 @@ fn the_start_samples_before_it_enters() {
 /// ihn stellt das Modell im selben Tick (8.3).
 #[test]
 fn a_simulated_input_gets_no_driver_symbol() {
-    let src = takt_conformance::mcu::build(&program(SIM_INPUT)).source;
+    let src = takt_frame::mcu::build(&program(SIM_INPUT)).source;
     assert!(
         !src.contains("takt_in_"),
         "ein `sim`-Eingang braucht keinen Treiber:
@@ -706,7 +700,7 @@ fn an_unread_input_is_read_for_the_recording() {
     let hw = std::fs::read_to_string(format!("{dir}/recorded.hw")).expect("Konfiguration");
     options.channel_imports.insert("recorded.hw".to_string(), hw);
     let p = takt_sema::compile(&src, &options).program.expect("Programm");
-    let frame = takt_conformance::mcu::build(&p).source;
+    let frame = takt_frame::mcu::build(&p).source;
     for decl in [
         "_Bool takt_in_edge_r_level(int *value, unsigned char *quality, long long *t); /* rec edge_r_level */",
         "_Bool takt_in_edge_r_mode(unsigned int *value, unsigned char *quality, long long *t);",

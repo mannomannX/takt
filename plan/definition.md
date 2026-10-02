@@ -1824,7 +1824,7 @@ takt-board-support  die rechnende Hälfte der Board-Unterstützung ohne Register
 takt-board-esp32c6  Board-Unterstützung ESP32-C6: Alarm, Zyklenzähler, USB-Serial-JTAG, Treiber — TCB, eigener Workspace (9.5)
 takt-board-stm32f401  Board-Unterstützung STM32F401 (Black Pill): TIM2, DWT, USART1, IWDG, Treiber — TCB, eigener Workspace (9.5)
 takt-mcu-program    das erzeugte Programm hinter seiner C-ABI (12.1) — TCB, eigener Workspace
-takt-frame          (geplant, M11) der C-Rahmen um den erzeugten Code: Arena, Treiberaufrufe, Einstiege des Kerns (12.11)
+takt-frame          der C-Rahmen um den erzeugten Code: Prozessabbild, Ringe, Treiberrand, Tickschritt (12.1, 12.11)
 takt-embed          (geplant, M11) Einbettung in Rust: Bauhelfer für `build.rs`, sichere Hülle, Ports, Adapter, Testhilfe (12.11) — TCB, eigener Workspace
 takt-embed-c        (geplant, M11) Einbettung in C: SDK-Archiv je Ziel mit den C-Ports und dem CMake-Paket (12.11) — TCB, eigener Workspace
 takt-bringup-esp32c6  Bring-up-Programme des ESP32-C6: Takt-Programm, Messkerne, Natives — TCB, eigener Workspace
@@ -1834,7 +1834,7 @@ takt-driver-probe   das Prüfgerät des Treiberrands als Treiber-Crate (12.6) �
 takt-native         kuratierte native Funktionen (4.5): Prüfsummen, Hashes, MACs; Konformitätstests
 takt-native-abi     die C-Einstiege der kuratierten Natives für den erzeugten Code (4.5) — TCB, eigener Workspace
 takt-crypto         Kryptographie mit geprüfter Abhängigkeit (4.5): ECDSA P-256 über `p256`, hinter einem Feature, im TCB-Manifest
-takt-conformance    Testkorpus, Golden-Traces, C-Rahmen, Boards am Host, Kalibrierung (`c_target`, `guard`, `jitter`), `takt bench` (13.8)
+takt-conformance    Testkorpus, Golden-Traces, Wirtsrahmen des Differentials, Boards am Host, Kalibrierung (`c_target`, `guard`, `jitter`), `takt bench` (13.8)
 takt-trace-serial   Trace von einer seriellen Schnittstelle lesen und gegen den Interpreter halten
 takt-flash-weact    Flash-Werkzeug für den WeAct-HID-Bootloader (STM32)
 takt-import-c       (geplant, M7) C-Frontend mit Klassifikation, Abbildungsregeln und Orakel-Modus (13.9; v1.1)

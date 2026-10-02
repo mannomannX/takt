@@ -1,9 +1,11 @@
 //! Der Rahmen, der ein Takt-Programm auf einer MCU ausfuehrt (12.1, 12.3).
 //!
-//! **Dieselbe Konstruktion wie [`crate::harness`], ein anderes Ziel.** Der
+//! **Dieselbe Konstruktion wie der Wirtsrahmen, ein anderes Ziel.** Der
 //! erzeugte Code spricht die C-ABI, und der Workspace verbietet
-//! `extern "C"` (13.4) — also erzeugt auch dieser Rahmen C. Was ihn
-//! unterscheidet, sind drei Dinge, und jedes folgt aus 12.3:
+//! `extern "C"` (13.4) — also erzeugen beide Rahmen C, aus denselben
+//! Bausteinen ([`crate::parts`]). Was diesen Rahmen vom Wirtsrahmen des
+//! Differentials (`takt-conformance`) unterscheidet, sind drei Dinge, und
+//! jedes folgt aus 12.3:
 //!
 //! 1. **Keine `stdio`.** Auf der MCU gibt es keine libc; die Telemetrie
 //!    geht ueber USART, und das Board stellt die Funktion.
@@ -79,15 +81,15 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     let mut s = String::new();
     prologue(&mut s, p);
     runtime_abi(&mut s, p);
-    crate::harness::natives(&mut s, p);
+    crate::parts::natives(&mut s, p);
     // Die Stroeme wie im Linux-Rahmen, ohne Stimulus; ihre Trace-Zeilen
     // gehen an das Board.
     crate::streams::emit(&mut s, p, crate::streams::Trace::Board);
     let state_bytes = storage(&mut s, p, &layout, &driven, frame.protected);
     // 9.8: die geplanten Schreibvorgaenge, hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.
-    crate::harness::scheduled(&mut s, p, &layout, hw);
-    crate::harness::jitter(&mut s, p, hw);
+    crate::parts::scheduled(&mut s, p, &layout, hw);
+    crate::parts::jitter(&mut s, p, hw);
     jobs(&mut s, p);
     declarations(&mut s, p, &driven);
     // 12.6: der Treiberrand vor dem Abtasten, das ihn speist.
@@ -101,7 +103,7 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
 
 /// Kopf und Vorwaertsdeklarationen.
 fn prologue(s: &mut String, p: &Program) {
-    let _ = writeln!(s, "/* MCU-Rahmen (12.1, 12.3); erzeugt von takt-conformance. */");
+    let _ = writeln!(s, "/* MCU-Rahmen (12.1, 12.3); erzeugt von takt-frame. */");
     let _ = writeln!(s, "/* Tick: {} ns. Kein Heap, keine libc. */\n", p.config.tick);
     // Nur die Typen, nicht die Funktionen: `stdint.h` ist Teil der
     // freistehenden Umgebung und steht auch ohne libc zur Verfuegung.
@@ -138,10 +140,10 @@ fn runtime_abi(s: &mut String, p: &Program) {
     // Der zuletzt ausgefuehrte Tick: Im Schlaf rueckt `g_tick` vor (9.9),
     // die Ausgaben, die der Dump danach schreibt, gehoeren aber zu ihm.
     let _ = writeln!(s, "static long long g_done = 0;");
-    crate::harness::scope_flags(s, p);
+    crate::parts::scope_flags(s, p);
     let _ = writeln!(s, "unsigned int takt_fn_fault = 0;\n");
-    crate::harness::fault_names(s, p);
-    crate::harness::raised(s, p);
+    crate::parts::fault_names(s, p);
+    crate::parts::raised(s, p);
 
     // 3.3: `now` ist die Dauer seit dem Start — Tickzahl mal T0.
     let _ = writeln!(s, "long long takt_now(void) {{ return g_tick * {}LL; }}\n", p.config.tick);
@@ -149,7 +151,7 @@ fn runtime_abi(s: &mut String, p: &Program) {
     // Jede Beobachtungszeile traegt ihren Tick, wie beim Interpreter
     // (`grammar/trace.md`): Ohne ihn laesst sie sich keinem Tick zuordnen.
     // 5.6: nur die Flanken, mit dem Namen der Maschine wie im Interpreter.
-    crate::harness::alert_table(s, p);
+    crate::parts::alert_table(s, p);
     let _ = writeln!(s, "void takt_alert(int m, int slot, unsigned char on, unsigned char invalid) {{");
     let _ = writeln!(s, "    if (!takt_alert_edge(m, slot, on)) return;");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
@@ -300,7 +302,7 @@ fn storage(
 /// Die Signaturen des erzeugten Codes (11.2).
 fn declarations(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine]) {
     let _ = writeln!(s, "/* Der erzeugte Code (11.2). */");
-    crate::harness::machine_declarations(s, p, driven);
+    crate::parts::machine_declarations(s, p, driven);
     let _ = writeln!(s);
 }
 
@@ -334,7 +336,7 @@ const JOB_STACK_RESERVE: u32 = 1024;
 /// eine MPU-Region oder ein NAPOT-Watchpoint ihn genau abdeckt.
 fn jobs(s: &mut String, p: &Program) {
     let _ = writeln!(s, "/* Jobs (4.5): Slots der Hauptschleife, ein Auftrag fuer den Job-Kontext. */");
-    let Some((slots, out_max)) = crate::harness::job_tables(s, p) else {
+    let Some((slots, out_max)) = crate::parts::job_tables(s, p) else {
         let _ = writeln!(s, "int takt_mcu_job_dispatch(void) {{ return 0; }}");
         let _ = writeln!(s, "void takt_mcu_job_work(void) {{}}");
         let _ = writeln!(s, "int takt_mcu_jobs_busy(void) {{ return 0; }}");
@@ -342,7 +344,7 @@ fn jobs(s: &mut String, p: &Program) {
         return;
     };
     // So gross wie der Puffer, den der erzeugte Code fuer die Argumente anlegt.
-    let in_max = crate::harness::job_slots(p)
+    let in_max = crate::parts::job_slots(p)
         .iter()
         .map(|(_, _, n)| {
             let params = &p.natives[n.index()].params;
@@ -351,8 +353,8 @@ fn jobs(s: &mut String, p: &Program) {
         .max()
         .unwrap_or(0)
         .max(4);
-    let stack = crate::harness::job_slots(p).iter().map(|(_, _, n)| p.natives[n.index()].stack).max().unwrap_or(0);
-    let names: Vec<String> = crate::harness::job_slots(p)
+    let stack = crate::parts::job_slots(p).iter().map(|(_, _, n)| p.natives[n.index()].stack).max().unwrap_or(0);
+    let names: Vec<String> = crate::parts::job_slots(p)
         .iter()
         .map(|(mi, j, _)| {
             let m = &p.machines[*mi];
@@ -443,7 +445,7 @@ fn jobs(s: &mut String, p: &Program) {
     let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
     let _ = writeln!(s, "    native = g_work_native;");
     let _ = writeln!(s, "    {{");
-    crate::harness::job_call(s, p, "g_work_in", "g_work_in_len", "g_work_out", "g_work_out_len", "        ");
+    crate::parts::job_call(s, p, "g_work_in", "g_work_in_len", "g_work_out", "g_work_out_len", "        ");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
     let _ = writeln!(s, "    g_work_finished = 1;");
@@ -505,7 +507,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     // 3.5: Ein Input ohne Treiber ist `Bad`. Ein genullter Eintrag hiesse
     // `Good`, und das waere eine Zusage, die kein Treiber gegeben hat.
     for slot in &layout.inputs {
-        if let Some(entry) = crate::harness::quality_offset(p, &slot.name) {
+        if let Some(entry) = crate::parts::quality_offset(p, &slot.name) {
             let _ = writeln!(s, "    image[{entry}] = 3; /* {} ist Bad (3.5) */", slot.name);
         }
     }
@@ -513,17 +515,17 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     // Die Parameter stehen fuer den Lauf fest (8.4).
     for (i, slot) in layout.parameters.iter().enumerate() {
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let Some(value) = crate::harness::param_literal(p, i) else { continue };
+        let Some(value) = crate::parts::param_literal(p, i) else { continue };
         let _ = writeln!(s, "    *({ct} *)(params + {}) = {value}; /* {} */", slot.offset, slot.name);
     }
-    if !crate::harness::job_slots(p).is_empty() {
+    if !crate::parts::job_slots(p).is_empty() {
         let _ = writeln!(s, "    takt_jobs_init();");
     }
     // 9.4: Der Lauf beginnt mit den Outputs auf `safe`, vor jedem Init —
     // wie `Sim::new` und der Wirtsrahmen. Danach bindet die Simulation,
     // damit Tick 0 die `safe`-Werte eines Modells liest (8.3).
-    crate::harness::safe_outputs(s, p, layout);
-    crate::harness::sim_bindings(s, p, "    ");
+    crate::parts::safe_outputs(s, p, layout);
+    crate::parts::sim_bindings(s, p, "    ");
 
     // 5.9: Defaults, dann die geladenen Werte, dann erst enter: — wie
     // der Interpreter zwischen init_vars und machine::init laedt; nach
@@ -536,10 +538,10 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     // 9.4: Auch Tick 0 beginnt mit `I_0 = sample()`; ein `enter:` des
     // Anfangszustands liest die Eingaenge wie im Interpreter (FB-316).
     let _ = writeln!(s, "    takt_mcu_sample();");
-    crate::harness::enter_machines(s, p, layout, driven, "    ");
+    crate::parts::enter_machines(s, p, layout, driven, "    ");
     // Was `enter` und das erste `loop:` im Tick 0 senden, wird hier
     // sichtbar (FB-269).
-    crate::harness::commit_sequence(s, p, driven, "    ", "0");
+    crate::parts::commit_sequence(s, p, driven, "    ", "0");
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, 0);");
     }
@@ -612,17 +614,17 @@ fn tick(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let _ = writeln!(s, "        {pend}");
         let _ = writeln!(s, "    }}");
     }
-    crate::harness::aging(s, p, layout, "    ");
+    crate::parts::aging(s, p, layout, "    ");
     // 4.5: Was fertig und faellig ist, wird zu Tickbeginn sichtbar, wie
     // `poll_jobs` im Interpreter und im Wirtsrahmen.
-    if !crate::harness::job_slots(p).is_empty() {
+    if !crate::parts::job_slots(p).is_empty() {
         let _ = writeln!(s, "    takt_jobs_poll();");
     }
     let _ = writeln!(s, "    takt_mcu_sample();");
-    crate::harness::steps(s, p, layout, driven, "    ", "k");
-    crate::harness::abort_phase(s, p, driven, "    ", "k");
-    crate::harness::idle_drops(s, p, driven, "    ");
-    crate::harness::commit_sequence(s, p, driven, "    ", "k");
+    crate::parts::steps(s, p, layout, driven, "    ", "k");
+    crate::parts::abort_phase(s, p, driven, "    ", "k");
+    crate::parts::idle_drops(s, p, driven, "    ");
+    crate::parts::commit_sequence(s, p, driven, "    ", "k");
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "    takt_monitor_{i}(monitor_{i}, image, params, latch, k);");
     }
@@ -646,7 +648,7 @@ const NEXT_RUN_CODES: [takt_mir::sys::NextRun; 4] = [
 /// Wirtsrahmen — die Zeile `end`, dann alle Ausgaenge auf `safe`. Was
 /// zwischen zwei Laeufen geschieht, fuehrt das Board aus.
 fn platform(s: &mut String, p: &Program, layout: &Layout) {
-    let next = crate::harness::next_run_slot(p, layout);
+    let next = crate::parts::next_run_slot(p, layout);
     let _ = writeln!(s, "/* 12.7: 0 weiter, 1 NOW, 2 AFTER (`delay` in ns), 3 ON_WAKE, 4 ON_START. */");
     let _ = writeln!(s, "int takt_mcu_next_run(long long *delay) {{");
     let _ = writeln!(s, "    *delay = -1;");
@@ -674,7 +676,7 @@ fn platform(s: &mut String, p: &Program, layout: &Layout) {
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(g_done);");
     let _ = writeln!(s, "    if (c >= 1 && c <= {}) takt_board_trace(words[c - 1]);", NEXT_RUN_CODES.len());
-    crate::harness::safe_outputs(s, p, layout);
+    crate::parts::safe_outputs(s, p, layout);
     let _ = writeln!(s, "}}\n");
 }
 
@@ -699,7 +701,7 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
                 let _ = writeln!(s, "    if (image[{}]) return 0; /* {} weckt */", slot.offset, slot.name);
             }
         }
-        if !crate::harness::queued_outputs(p).is_empty() {
+        if !crate::parts::queued_outputs(p).is_empty() {
             let _ = writeln!(s, "    if (takt_sched_pending()) return 0;");
         }
         let _ = writeln!(s, "    if (takt_mcu_jobs_busy()) return 0;");
@@ -791,7 +793,7 @@ fn telemetry(
         return;
     }
     let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md); ohne `all` nur die geaenderten. */");
-    let _ = writeln!(s, "{}", crate::harness::DURATION_C);
+    let _ = writeln!(s, "{}", crate::parts::DURATION_C);
     let _ = writeln!(s, "{}", crate::layout::c_buffer("g_shown", layout.latch));
     let _ = writeln!(s, "struct takt_variant;");
     let _ = writeln!(
@@ -1458,7 +1460,7 @@ struct BoundScalar {
 /// derselben Adresse speist (8.3).
 fn bound_scalars(p: &Program, layout: &Layout) -> Vec<BoundScalar> {
     use takt_mir::types::Type;
-    let fed = crate::harness::sim_fed_inputs(p);
+    let fed = crate::parts::sim_fed_inputs(p);
     layout
         .inputs
         .iter()

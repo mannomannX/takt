@@ -1,0 +1,21 @@
+[package]
+name = "takt-frame"
+version = "0.1.0"
+description = "Takt: der C-Rahmen um den erzeugten Code — Prozessabbild, Ringe, Treiberrand, Tickschritt (Referenz 12.1, 12.11)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# `MAXPT` und die Gestalt der Lieferungen fuer den Rand (12.6).
+takt-hal = { path = "../takt-hal" }
+# Die Grenzen eines Kanals (Range, Steigung) aus derselben Quelle wie im
+# Interpreter: Der Rand urteilt nach denselben Zahlen (9.4.4).
+takt-interp = { path = "../takt-interp" }
+takt-llvm = { path = "../takt-llvm" }
+takt-mir = { path = "../takt-mir" }
+# Die Signaturen der kuratierten Natives fuer ihre Prototypen im Rahmen.
+takt-native = { path = "../takt-native" }
+
+[lints]
+workspace = true
