@@ -46,7 +46,7 @@ use stm32f4::stm32f401::{Interrupt, NVIC, Peripherals, interrupt};
 use takt_board_stm32f401::{
     BAUD, Board, CORE_HZ, Generated, Iwdg, JobContext, Led, Mpu, Telemetry, Tim2Tick, Wire, cycles, mpu, platform, tick,
 };
-use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, Guarded, JournalStats, Stats, TimerClock};
+use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, Guarded, JournalStats, Stats, TimerClock, Trace};
 #[cfg(not(feature = "rtos"))]
 use takt_rt_baremetal::{LogicalClock, Sleep};
 use takt_rt_core::{Clock, FakeNvm, NextRun, Persist, Policy, Profile, Runtime};
@@ -93,9 +93,6 @@ const HOSTILE_FPU: bool = option_env!("TAKT_HOSTILE_FPU").is_some();
 
 /// DN (25), FZ (24) und RMode = gegen null (23:22) in FPSCR und FPDSCR.
 const HOSTILE_FPSCR: u32 = 0x03C0_0000;
-
-/// `TAKT_INSTRUMENT=statements`: den Programmzaehler je Tick mitgeben (11.2).
-const TRACE_PC: bool = matches!(option_env!("TAKT_INSTRUMENT"), Some(m) if matches!(m.as_bytes(), b"statements"));
 
 static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
 
@@ -403,9 +400,12 @@ fn USART1() {
     mpu::isr(takt_board_stm32f401::uart::on_interrupt);
 }
 
+/// Die Leitung als Senke des Kerns (12.5).
+type Line = Trace<fn() -> Option<&'static mut Telemetry>, Telemetry>;
+
 /// Die Schleife ueber dem Programm: das Programm hinter dem
 /// Speicherschutz (12.3), der Watchdog im Betrieb.
-type Takt<C> = Runtime<Guarded<Generated, Mpu>, C, Option<Iwdg>, ()>;
+type Takt<C> = Runtime<Guarded<Generated, Mpu>, C, Option<Iwdg>, Line>;
 
 /// Nach so vielen Ticks endet ein Konformitaetslauf; 0 im Betrieb.
 fn limit() -> u64 {
@@ -425,13 +425,9 @@ unsafe fn runtime<C: Clock>(clock: C, protection: Mpu, profile: Profile, rig: &m
     let watchdog = (limit() == 0).then(|| Iwdg::arm(WATCHDOG_NS));
     // 12.3: Nach `init` ist der Programmzustand nur noch im Tick beschreibbar.
     // SAFETY: siehe oben.
-    let program = Guarded::new(unsafe { Generated::init(false, core::ptr::from_mut(rig).cast()) }, protection);
-    Runtime::new(program, clock, watchdog, (), profile, TICK_NS, policy)
-}
-
-/// Wie oft der Lauf ausgibt und wann er endet.
-fn cadence() -> Cadence {
-    Cadence::of(limit(), TRACE_EVERY, TRACE_PC)
+    let program = Guarded::new(unsafe { Generated::init(core::ptr::from_mut(rig).cast()) }, protection);
+    let line: Line = Trace::new(Cadence::of(limit(), TRACE_EVERY), TICK_NS, uart);
+    Runtime::new(program, clock, watchdog, line, profile, TICK_NS, policy)
 }
 
 /// Kein Journal: Das Board hat noch keinen `Nvm`-Treiber (5.9).
@@ -444,7 +440,7 @@ fn no_journal<'a>() -> Option<&'a mut Persist<'a, FakeNvm<0>>> {
 fn conduct(clock: impl Clock, protection: Mpu, rig: &mut drivers::Rig) {
     // SAFETY: `rig` kommt aus `main`, das nicht zurueckkehrt.
     let mut rt = unsafe { runtime(clock, protection, Profile::BAREMETAL, rig) };
-    let stats = takt_rt_baremetal::run(&mut rt, no_journal(), cadence(), uart);
+    let stats = takt_rt_baremetal::run(&mut rt, no_journal());
     conclude(&rt, &stats);
 }
 
@@ -688,12 +684,12 @@ async fn conduct_rtos(timer: Tim2Tick, protection: Mpu, mut boundary: TaskBounda
         // SAFETY: `rig` lebt bis zum Ende der Aufgabe, die nicht zurueckkehrt.
         let mut rt = unsafe { runtime(takt_rt_rtos::LogicalTime(&now), protection, Profile::SHARED, &mut rig) };
         let mut logical = takt_rt_rtos::Logical::new(&mut boundary, &now, TICK_NS);
-        let stats = takt_rt_rtos::run(&mut rt, no_journal(), cadence(), uart, &mut logical).await;
+        let stats = takt_rt_rtos::run(&mut rt, no_journal(), &mut logical).await;
         conclude(&rt, &stats);
     } else {
         // SAFETY: wie oben.
         let mut rt = unsafe { runtime(TimerClock::new(timer, TICK_NS), protection, Profile::SHARED, &mut rig) };
-        let stats = takt_rt_rtos::run(&mut rt, no_journal(), cadence(), uart, &mut boundary).await;
+        let stats = takt_rt_rtos::run(&mut rt, no_journal(), &mut boundary).await;
         conclude(&rt, &stats);
     }
     loop {

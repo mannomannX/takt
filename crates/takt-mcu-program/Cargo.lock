@@ -15,7 +15,6 @@ name = "takt-mcu-program"
 version = "0.1.0"
 dependencies = [
  "takt-native-abi",
- "takt-rt-baremetal",
  "takt-rt-core",
 ]
 
@@ -30,13 +29,6 @@ dependencies = [
  "libtaktm",
  "takt-hal",
  "takt-native",
-]
-
-[[package]]
-name = "takt-rt-baremetal"
-version = "0.1.0"
-dependencies = [
- "takt-rt-core",
 ]
 
 [[package]]

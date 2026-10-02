@@ -1,27 +1,14 @@
-//! Die Bring-up-Schleife ueber der Runtime (12.1, 12.3): ein Lauf, nicht
-//! einer je Board. Das Board liefert Uhr, Leitung und Journal; hier steht,
-//! was daraus ein Lauf macht — Ausgaenge im Takt der Leitung, ein Paket
-//! je Tick, am Ende die Bilanz.
+//! Der Port „eigener Kern“ (12.3, 12.11) und die Senke der Bring-ups: ein
+//! Lauf, nicht einer je Board. Das Board liefert Uhr, Leitung und Journal;
+//! hier steht, was daraus ein Lauf macht — Ausgaenge im Takt der Leitung,
+//! ein Paket je Tick, am Ende die Bilanz. Was ein Tick ist, rechnet der Kern
+//! ([`Runtime::service`]); dieser Port wartet nur auf jede Frist.
 
-use takt_rt_core::{Clock, NextRun, Nvm, Overrun, Persist, Program, Runtime, Sink, Tick, Watchdog};
+use core::marker::PhantomData;
+
+use takt_rt_core::{Clock, NextRun, Nvm, Outputs, Overrun, Persist, Program, Runtime, Sink, Tick, Watchdog};
 
 use crate::telemetry::{DRAIN_ROUNDS, Port, Telemetry};
-
-/// Das erzeugte Programm, soweit die Schleife es anspricht.
-pub trait Traced: Program {
-    /// Gibt den Latch an die Treiber (12.1, Schritt 10).
-    fn commit(&self);
-
-    /// Die Ausgaenge als Trace-Zeilen; ohne `all` nur die geaenderten (9.3).
-    fn dump(&self, all: bool);
-
-    /// Der Programmzaehler je Maschine (11.2).
-    fn pc(&self);
-
-    /// Das Programm beendet seinen Lauf (`next_run`, 12.7): die Zeile `end`
-    /// in den Trace, dann alle Ausgaenge auf `safe`.
-    fn end(&self);
-}
 
 /// Kein Hardware-Watchdog angebunden.
 pub struct NoWatchdog;
@@ -30,7 +17,7 @@ impl Watchdog for NoWatchdog {
     fn kick(&mut self) {}
 }
 
-/// Wie oft und wie lange die Schleife ausgibt.
+/// Wie oft und wie lange der Lauf ausgibt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cadence {
     /// Alle wie viele Ticks die Ausgaenge gehen. `1` ist der
@@ -39,14 +26,12 @@ pub struct Cadence {
     pub every: u64,
     /// Nach so vielen Ticks endet der Lauf; `0` heisst nie.
     pub limit: u64,
-    /// Den Programmzaehler mitgeben (11.2, `statements`).
-    pub pc: bool,
 }
 
 impl Cadence {
     /// Der Konformitaetslauf ueber `limit` Ticks, sonst alle `every` Ticks ein Abzug.
-    pub fn of(limit: u64, every: u64, pc: bool) -> Cadence {
-        Cadence { every: if limit > 0 { 1 } else { every.max(1) }, limit, pc }
+    pub fn of(limit: u64, every: u64) -> Cadence {
+        Cadence { every: if limit > 0 { 1 } else { every.max(1) }, limit }
     }
 
     fn conformance(self) -> bool {
@@ -81,147 +66,118 @@ pub struct JournalStats {
     pub program_ns: i64,
 }
 
-/// Was ein Lauf ueber die Ticks mitfuehrt (12.1): Ausgabe im Takt der
-/// Leitung, Ende des Laufs, Grenze, Bilanz. Die Bare-Metal-Schleife ([`run`])
-/// treibt ihn je Tick, und ebenso die Aufgabe unter einem RTOS (12.8,
-/// `takt-rt-rtos`), die nicht selbst wartet.
-#[derive(Debug)]
-pub struct Runner {
+/// Die Senke eines Bring-ups (12.5): die Ausgaenge im Takt der Leitung. Im
+/// Konformitaetslauf zeigt sie den Anfangszustand ganz und danach jeden
+/// Tick seine Aenderungen mit Zeitzeile, sonst alle `every` Ticks alles.
+///
+/// `telemetry` holt die Leitung je Aufruf, wie der erzeugte Rahmen sie
+/// ueber `takt_board_trace` holt — so gibt es nie zwei Griffe zugleich.
+pub struct Trace<F, L> {
     cadence: Cadence,
     /// Ab dieser Tickzahl gehen die Ausgaenge das naechste Mal.
     next: u64,
     /// Alle wie viele Ticks die Zeitzeile geht.
     time_every: u64,
-    /// Ob der Stand des letzten Ticks schon ausgegeben ist; im
-    /// Konformitaetslauf ist es jeder, auch der Anfangszustand.
-    shown: bool,
-    /// Die Grenze `cadence.limit` ist erreicht.
-    ended: bool,
-    /// Die Bilanz bis hierher.
-    pub stats: Stats,
+    telemetry: F,
+    /// Geschlafene Ticks (9.9).
+    slept: u64,
+    /// Ticks ueber der Periode (7.3).
+    overruns: u64,
+    line: PhantomData<L>,
 }
 
-impl Runner {
-    /// Beginnt einen Lauf; der Konformitaetslauf zeigt den Anfangszustand.
-    pub fn start<G: Traced>(program: &G, cadence: Cadence, tick_ns: i64) -> Runner {
-        if cadence.conformance() {
-            program.dump(true);
-        }
+impl<F, P, const R: usize> Trace<F, Telemetry<P, R>>
+where
+    F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+    P: Port + 'static,
+{
+    /// Eine Senke im Takt `cadence` fuer Ticks von `tick_ns`.
+    pub fn new(cadence: Cadence, tick_ns: i64, telemetry: F) -> Trace<F, Telemetry<P, R>> {
         // Unter einer Millisekunde Tick traegt die Leitung keine Zeile je
         // Tick (FB-271); die Zeitzeile ist Statistik und darf duenner werden.
         let time_every = (1_000_000 / tick_ns.max(1)).max(1) as u64;
-        Runner {
-            cadence,
-            next: cadence.every.max(1),
-            time_every,
-            shown: cadence.conformance(),
-            ended: false,
-            stats: Stats { next_run: program.next_run(), ..Stats::default() },
-        }
+        Trace { cadence, next: cadence.every.max(1), time_every, telemetry, slept: 0, overruns: 0, line: PhantomData }
     }
 
-    /// Laeuft der Lauf weiter? Nicht, wenn das Programm ihn beendet hat
-    /// (12.7), und nicht nach der Grenze.
-    pub fn running(&self) -> bool {
-        self.stats.next_run.is_none() && !self.ended
-    }
-
-    /// Nach einem Tick: der Latch an die Treiber, die Ausgabe, das Ende des
-    /// Laufs, die Grenze.
-    ///
-    /// `telemetry` holt die Leitung je Aufruf, wie der erzeugte Rahmen sie
-    /// ueber `takt_board_trace` holt — so gibt es nie zwei Griffe zugleich.
-    pub fn after<G, C, W, S, P, const R: usize>(
-        &mut self,
-        rt: &mut Runtime<G, C, W, S>,
-        tick: &Tick,
-        telemetry: &mut impl FnMut() -> Option<&'static mut Telemetry<P, R>>,
-    ) where
-        G: Traced,
-        C: Clock,
-        W: Watchdog,
-        S: Sink,
-        P: Port + 'static,
-    {
-        self.stats.slept += tick.slept;
-        self.stats.overruns += u64::from(tick.overrun);
-        rt.program.commit();
-        let conformance = self.cadence.conformance();
-        if conformance
-            && tick.k % self.time_every == 0
-            && let Some(t) = telemetry()
-        {
-            t.write_time(tick);
-        }
-        let k = rt.tick_number();
-        self.shown = k >= self.next;
-        if self.shown {
-            self.next = k + self.cadence.every.max(1);
-            rt.program.dump(!conformance);
-            if self.cadence.pc {
-                rt.program.pc();
-            }
-        }
-        if let Some(t) = telemetry() {
-            t.flush();
-        }
-        self.stats.next_run = rt.program.next_run();
-        self.ended = self.cadence.limit > 0 && k >= self.cadence.limit;
-    }
-
-    /// Beendet den Lauf. Das Journal schreibt synchron, und erst danach
-    /// gehen bei einem geordneten Ende alle Ausgaenge auf `safe` — auch wenn
-    /// schon der Anfangszustand `next_run` setzt.
-    pub fn finish<G, C, W, S, N>(mut self, rt: &mut Runtime<G, C, W, S>, persist: Option<&mut Persist<'_, N>>) -> Stats
-    where
-        G: Traced,
-        C: Clock,
-        W: Watchdog,
-        S: Sink,
-        N: Nvm,
-    {
-        self.stats.flushed = persist.is_some_and(|p| p.flush(&mut rt.program));
-        if self.stats.next_run.is_some() {
-            let conformance = self.cadence.conformance();
-            // Den Tick, der das Ende verlangt, zeigt auch ein freier Lauf,
-            // der sonst nur jeden `every`-ten ausgibt: Er erklaert das Ende.
-            if !self.shown {
-                rt.program.dump(!conformance);
-            }
-            rt.program.end();
-            rt.program.commit();
-            rt.program.dump(!conformance);
-        }
-        self.stats
+    /// Nach so vielen Ticks endet der Lauf; `0` heisst nie.
+    pub fn limit(&self) -> u64 {
+        self.cadence.limit
     }
 }
 
-/// Laeuft, bis `cadence.limit` erreicht ist oder das Programm seinen Lauf
-/// beendet (`next_run`, 12.7); die Schleife wartet selbst auf
-/// jeden Tick ([`Runtime::step`]).
-pub fn run<G, C, W, S, N, P, const R: usize>(
-    rt: &mut Runtime<G, C, W, S>,
+impl<F, P, const R: usize> Sink for Trace<F, Telemetry<P, R>>
+where
+    F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+    P: Port + 'static,
+{
+    fn outputs(&mut self, tick: Option<&Tick>) -> Outputs {
+        let conformance = self.cadence.conformance();
+        let Some(tick) = tick else { return if conformance { Outputs::All } else { Outputs::None } };
+        self.slept += tick.slept;
+        self.overruns += u64::from(tick.overrun);
+        if conformance
+            && tick.k % self.time_every == 0
+            && let Some(t) = (self.telemetry)()
+        {
+            t.write_time(tick);
+        }
+        let k = tick.k + 1 + tick.slept;
+        if k < self.next {
+            return Outputs::None;
+        }
+        self.next = k + self.cadence.every.max(1);
+        if conformance { Outputs::Changed } else { Outputs::All }
+    }
+
+    fn record(&mut self, _tick: &Tick) {
+        if let Some(t) = (self.telemetry)() {
+            t.flush();
+        }
+    }
+}
+
+/// Der Port „eigener Kern“ (12.3, 12.11): wartet auf jede Frist und laesst
+/// den Kern rechnen ([`Runtime::step`]), bis `cadence.limit` erreicht ist
+/// oder das Programm seinen Lauf beendet (`next_run`, 12.7). An der Grenze
+/// schreibt das Journal synchron.
+pub fn run<G, C, W, F, N, P, const R: usize>(
+    rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
     mut persist: Option<&mut Persist<'_, N>>,
-    cadence: Cadence,
-    mut telemetry: impl FnMut() -> Option<&'static mut Telemetry<P, R>>,
 ) -> Stats
 where
-    G: Traced,
+    G: Program,
     C: Clock,
     W: Watchdog,
-    S: Sink,
+    F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
     N: Nvm,
     P: Port + 'static,
 {
-    let mut runner = Runner::start(&rt.program, cadence, rt.tick_ns());
-    while runner.running() {
-        let tick = match persist.as_deref_mut() {
+    let limit = rt.sink.limit();
+    while rt.ended().is_none() && (limit == 0 || rt.tick_number() < limit) {
+        match persist.as_deref_mut() {
             Some(p) => rt.step_persisting(p),
             None => rt.step(),
         };
-        runner.after(rt, &tick, &mut telemetry);
     }
-    runner.finish(rt, persist)
+    stats(rt, persist)
+}
+
+/// Die Bilanz am Ende eines Laufs; das Journal schreibt dabei synchron, wenn
+/// der Kern es nicht schon am Ende des Programms getan hat.
+pub fn stats<G, C, W, F, N, P, const R: usize>(
+    rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
+    persist: Option<&mut Persist<'_, N>>,
+) -> Stats
+where
+    G: Program,
+    C: Clock,
+    W: Watchdog,
+    F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+    N: Nvm,
+    P: Port + 'static,
+{
+    let flushed = rt.finish(persist);
+    Stats { slept: rt.sink.slept, overruns: rt.sink.overruns, flushed, next_run: rt.ended() }
 }
 
 /// Die Bilanz als letzte Zeile, dann `takt end`; leert den Ring.
@@ -283,7 +239,7 @@ mod tests {
     use core::cell::Cell;
     use takt_rt_core::{FakeNvm, Policy, Profile};
 
-    use crate::{LogicalClock, Telemetry};
+    use crate::LogicalClock;
 
     /// Beendet ab Tick `at` den Lauf und merkt sich, was die Schleife tat.
     struct Ending {
@@ -305,23 +261,19 @@ mod tests {
         fn next_run(&self) -> Option<NextRun> {
             (self.ticks >= self.at).then_some(NextRun::OnStart)
         }
-    }
 
-    impl Traced for Ending {
-        fn commit(&self) {
+        fn commit(&mut self) {
             self.committed_after_end.set(self.ended.get());
         }
 
-        fn dump(&self, all: bool) {
-            if all && !self.ended.get() {
+        fn trace(&mut self, outputs: Outputs) {
+            if outputs == Outputs::All && !self.ended.get() {
                 self.shown.set(Some(self.ticks));
                 self.full_dumps.set(self.full_dumps.get() + 1);
             }
         }
 
-        fn pc(&self) {}
-
-        fn end(&self) {
+        fn end(&mut self) {
             self.ended.set(true);
         }
     }
@@ -335,7 +287,7 @@ mod tests {
     }
 
     fn run_until(at: u64) -> (Stats, Ending) {
-        run_with(at, Cadence::of(60, 1, false))
+        run_with(at, Cadence::of(60, 1))
     }
 
     fn run_with(at: u64, cadence: Cadence) -> (Stats, Ending) {
@@ -348,9 +300,9 @@ mod tests {
             full_dumps: Cell::new(0),
         };
         let clock = LogicalClock::new(|| {});
-        let mut rt = Runtime::new(program, clock, NoWatchdog, (), Profile::BAREMETAL, 1_000_000, Policy::Fault);
-        let stats =
-            run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, cadence, || None::<&'static mut Telemetry<NoLine, 8>>);
+        let trace = Trace::new(cadence, 1_000_000, || None::<&'static mut Telemetry<NoLine, 8>>);
+        let mut rt = Runtime::new(program, clock, NoWatchdog, trace, Profile::BAREMETAL, 1_000_000, Policy::Fault);
+        let stats = run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>);
         (stats, rt.program)
     }
 
@@ -370,7 +322,7 @@ mod tests {
     #[test]
     fn a_free_run_shows_the_tick_that_ends_it() {
         for at in [30, 100, 0] {
-            let (_, program) = run_with(at, Cadence::of(0, 100, false));
+            let (_, program) = run_with(at, Cadence::of(0, 100));
             assert_eq!((program.shown.get(), program.full_dumps.get()), (Some(at), 1), "Ende ab Tick {at}");
         }
     }
@@ -381,5 +333,14 @@ mod tests {
         let (stats, program) = run_until(0);
         assert_eq!(stats.next_run, Some(NextRun::OnStart));
         assert_eq!(program.ticks, 0);
+    }
+
+    /// Ein Konformitaetslauf endet nach `limit` Ticks, ohne dass das
+    /// Programm ihn beendet.
+    #[test]
+    fn a_conformance_run_ends_at_its_limit() {
+        let (stats, program) = run_with(u64::MAX, Cadence::of(60, 1));
+        assert_eq!((stats.next_run, program.ticks), (None, 60));
+        assert!(!program.ended.get());
     }
 }

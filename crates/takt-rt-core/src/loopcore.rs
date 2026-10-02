@@ -1,4 +1,12 @@
-//! Die Schleife aus 12.1.
+//! Die Schleife aus 12.1 als Kern ohne Warten (12.11).
+//!
+//! [`Runtime::service`] rechnet jede faellige Tickgrenze ganz — Schritt,
+//! Commit, Aufzeichnung, Watchdog, Schlaf, Journal, Ende des Laufs — und
+//! nennt die naechste Frist ([`Next`]); sie wartet nie. Wer zur Frist ruft,
+//! ist der Port: eine Timer-ISR, eine Hauptschleife, eine Aufgabe unter
+//! einem RTOS. [`Runtime::step`] ist der Port der Form „eigener Kern“
+//! (12.3): Er wartet selbst auf die Frist und bestaetigt dabei den
+//! Watchdog an jeder Tickgrenze, auch im Schlaf.
 
 use crate::overrun::{Overrun, Policy};
 use crate::profile::Profile;
@@ -51,20 +59,43 @@ impl<W: Watchdog> Watchdog for Option<W> {
     }
 }
 
-/// Telemetrie und Aufzeichnung (12.1: `record_and_telemeter()`).
+/// Telemetrie und Aufzeichnung (12.1: `record_and_telemeter()`; 12.5).
 ///
 /// 12.2 verlangt: „nie blockierend". Ein Sink, der wartet, verschiebt den
 /// naechsten Tick und erzeugt genau den Overrun, den er melden soll —
 /// darum ist `record` ohne Rueckgabe: Wer nicht mitkommt, verwirft und
 /// zaehlt, statt die Steuerung aufzuhalten.
+///
+/// Je Tick fragt der Kern zuerst [`Sink::outputs`], gibt dann die
+/// Ausgaenge in den Trace ([`Program::trace`]) und meldet zuletzt
+/// [`Sink::record`].
 pub trait Sink {
-    /// Nimmt die Zusammenfassung eines Ticks entgegen.
+    /// Welche Ausgaenge der Trace nach dem Tick `tick` zeigt (9.3); `None`
+    /// fragt nach dem Anfangszustand vor dem ersten Tick. Eine Senke, die
+    /// eine Zeitzeile schreibt, schreibt sie hier: vor den Ausgaben.
+    fn outputs(&mut self, _tick: Option<&Tick>) -> Outputs {
+        Outputs::None
+    }
+
+    /// Nimmt die Zusammenfassung eines Ticks entgegen, nach seinem Trace.
     fn record(&mut self, tick: &Tick);
 }
 
-/// Keine Telemetrie: Wer `step` ruft, bekommt den `Tick` ohnehin zurueck.
+/// Keine Telemetrie und kein Trace der Ausgaenge.
 impl Sink for () {
     fn record(&mut self, _: &Tick) {}
+}
+
+/// Welche Ausgaenge ein Tick in den Trace gibt (12.5, 9.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Outputs {
+    /// Keine.
+    #[default]
+    None,
+    /// Die, die sich seit der letzten Ausgabe geaendert haben.
+    Changed,
+    /// Alle.
+    All,
 }
 
 /// Wie weit ein begonnener NVM-Vorgang ist.
@@ -301,6 +332,35 @@ pub trait Program {
     fn next_run(&self) -> Option<NextRun> {
         None
     }
+
+    /// Gibt den Latch an die Treiber (12.1, Schritt 10).
+    fn commit(&mut self) {}
+
+    /// Gibt die Ausgaenge in den Trace (12.5, 9.3).
+    fn trace(&mut self, _outputs: Outputs) {}
+
+    /// Beendet den Lauf (12.7): die Zeile `end` in den Trace, dann alle
+    /// Ausgaenge auf `safe`.
+    fn end(&mut self) {}
+
+    /// Gibt dem Job-Kontext den aeltesten wartenden Job (4.5); wahr, wenn
+    /// er zu rechnen hat.
+    fn dispatch_job(&mut self) -> bool {
+        false
+    }
+}
+
+/// Was [`Runtime::service`] dem Port sagt (12.11).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Next {
+    /// Wann `service` wieder gerufen werden will, absolut in Nanosekunden:
+    /// die naechste Tickgrenze, mit erlaubtem Schlaf (9.9) die Frist des
+    /// Schlafs.
+    pub deadline: i64,
+    /// Ein Job wartet (4.5): Der Job-Kontext soll rechnen.
+    pub jobs: bool,
+    /// Der Lauf hat geendet (12.7): `next_run` als Befehl an den Wirt.
+    pub ended: Option<NextRun>,
 }
 
 /// Die Schleife.
@@ -332,6 +392,14 @@ pub struct Runtime<P, C, W, S> {
     pending_overrun: bool,
     /// Verletzungen der Periode in Folge (12.6 Zeile 7).
     period: takt_hal::contract::Period,
+    /// Der Anfangszustand ist im Trace, oder das Programm hat ihn beendet.
+    begun: bool,
+    /// Der zuletzt gerechnete Tick.
+    last: Tick,
+    /// Das Ende des Laufs, wenn das Programm ihn beendet hat (12.7).
+    ended: Option<NextRun>,
+    /// Das Journal am Ende des Laufs: geschrieben oder nicht.
+    flushed: Option<bool>,
 }
 
 impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
@@ -354,61 +422,124 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
             beat_from: start,
             pending_overrun: false,
             period: takt_hal::contract::Period::default(),
+            begun: false,
+            last: Tick::default(),
+            ended: None,
+            flushed: None,
         }
     }
 
-    /// Ein Durchlauf der Schleife aus 12.1.
+    /// Rechnet jede Tickgrenze bis jetzt nach 12.1 und nennt die naechste
+    /// Frist (12.11). Wartet nie; ist nichts faellig, rechnet sie nichts.
+    /// „Jetzt“ ist die Zeit beim Eintritt: Ein Tick, der laenger dauert als
+    /// die Periode, laesst die naechste Grenze fuer den naechsten Aufruf.
+    pub fn service(&mut self) -> Next {
+        self.serve(None::<&mut crate::journal::Persist<'_, crate::journal::FakeNvm<0>>>)
+    }
+
+    /// Wie [`Runtime::service`], mit Journal (5.9): nach jedem Tick in der
+    /// Wartezeit bis zur naechsten Frist, am Ende des Laufs synchron.
+    pub fn service_persisting<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) -> Next {
+        self.serve(Some(persist))
+    }
+
+    /// Die Form „eigener Kern“ (12.11, 12.3): wartet auf die Frist, rechnet
+    /// mit [`Runtime::service`] und liefert den zuletzt gerechneten Tick.
     ///
     /// Die Reihenfolge ist die der Referenz und nicht verhandelbar: Der
     /// Watchdog wird *nach* dem Schritt bestaetigt, nicht davor — sonst
     /// bestaetigte er einen Tick, der noch nicht durchgelaufen ist, und
     /// haette seinen Zweck verloren (12.4).
     pub fn step(&mut self) -> Tick {
-        // wait_for_tick_boundary(): Nach virtuellen Ticks (9.9) liegt die
-        // Frist mehrere Perioden voraus. Die Schleife wartet Periode fuer
-        // Periode und bestaetigt den Watchdog an jeder Grenze — er sieht
-        // auch im Schlaf, dass die Tickquelle lebt (12.3).
+        self.step_with(None::<&mut crate::journal::Persist<'_, crate::journal::FakeNvm<0>>>)
+    }
+
+    /// Wie [`Runtime::step`], mit Journal.
+    pub fn step_persisting<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) -> Tick {
+        self.step_with(Some(persist))
+    }
+
+    /// Der eigene Kern: ein Tick je Aufruf, an seiner Frist.
+    fn step_with<N: Nvm>(&mut self, mut persist: Option<&mut crate::journal::Persist<'_, N>>) -> Tick {
+        self.begin(persist.as_deref_mut());
+        if self.ended.is_none() {
+            self.wait();
+            self.tick_now(persist);
+        }
+        self.last
+    }
+
+    /// `wait_for_tick_boundary()`: Nach virtuellen Ticks (9.9) liegt die
+    /// Frist mehrere Perioden voraus. Der eigene Kern wartet Periode fuer
+    /// Periode und bestaetigt den Watchdog an jeder Grenze — er sieht auch
+    /// im Schlaf, dass die Tickquelle lebt (12.3).
+    fn wait(&mut self) {
         while self.beat_from < self.deadline {
             self.clock.wait_until(self.beat_from);
             self.watchdog.kick();
             self.beat_from = self.beat_from.saturating_add(self.tick_ns);
         }
         self.clock.wait_until(self.deadline);
-        self.tick_now()
     }
 
-    /// Ist die naechste Tickgrenze erreicht, an der die Schleife etwas zu
-    /// tun hat — den Watchdog bestaetigen oder den Tick rechnen?
-    ///
-    /// Die Frage einer Schleife, die nicht selbst wartet (12.8 `shared`): Dort
-    /// wartet die Aufgabe auf eine Benachrichtigung des Timers, und waehrend
-    /// sie wartet, rechnen die Aufgaben darunter.
-    pub fn due(&self) -> bool {
-        self.clock.now() >= self.beat_from
+    /// Beendet den Lauf an einer Grenze, die der Port setzt, etwa nach so
+    /// vielen Ticks eines Konformitaetslaufs: Das Journal schreibt synchron
+    /// (5.9). Hat das Programm den Lauf selbst beendet, ist das schon
+    /// geschehen; die Rueckgabe sagt, ob geschrieben wurde.
+    pub fn finish<N: Nvm>(&mut self, persist: Option<&mut crate::journal::Persist<'_, N>>) -> bool {
+        if let Some(flushed) = self.flushed {
+            return flushed;
+        }
+        let flushed = persist.is_some_and(|p| p.flush(&mut self.program));
+        self.flushed = Some(flushed);
+        flushed
     }
 
-    /// Eine erreichte Tickgrenze (12.8 `shared`, [`Runtime::due`]): vor der
-    /// Frist, nach virtuellen Ticks (9.9), bestaetigt sie nur den Watchdog;
-    /// an der Frist laeuft der Tick wie in [`Runtime::step`].
-    pub fn at_boundary(&mut self) -> Option<Tick> {
-        if self.beat_from < self.deadline {
+    /// Der Kern hinter [`Runtime::service`].
+    fn serve<N: Nvm>(&mut self, mut persist: Option<&mut crate::journal::Persist<'_, N>>) -> Next {
+        self.begin(persist.as_deref_mut());
+        let now = self.clock.now();
+        // 12.3: Eine Grenze im Schlaf (9.9) bestaetigt den Watchdog, auch
+        // ohne Tick; ein Port, der an jeder Grenze ruft, haelt ihn so wach.
+        while self.beat_from < self.deadline && self.beat_from <= now {
             self.watchdog.kick();
             self.beat_from = self.beat_from.saturating_add(self.tick_ns);
-            return None;
         }
-        Some(self.tick_now())
+        while self.ended.is_none() && self.deadline <= now {
+            self.tick_now(persist.as_deref_mut());
+        }
+        Next { deadline: self.deadline, jobs: self.program.dispatch_job(), ended: self.ended }
     }
 
-    /// Wie [`Runtime::at_boundary`], mit Journal wie in
-    /// [`Runtime::step_persisting`].
-    pub fn at_boundary_persisting<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) -> Option<Tick> {
-        let tick = self.at_boundary()?;
-        self.journal(&tick, persist);
-        Some(tick)
+    /// Vor dem ersten Tick: der Anfangszustand (Tick 0, 9.4) in den Trace;
+    /// setzt schon er `next_run`, endet der Lauf ohne Tick.
+    fn begin<N: Nvm>(&mut self, persist: Option<&mut crate::journal::Persist<'_, N>>) {
+        if core::mem::replace(&mut self.begun, true) {
+            return;
+        }
+        let shown = self.sink.outputs(None);
+        self.program.trace(shown);
+        if let Some(next) = self.program.next_run() {
+            self.end_run(next, shown, persist);
+        }
+    }
+
+    /// Das geordnete Ende (12.7): das Journal synchron, dann der Tick, der
+    /// das Ende verlangt, falls der Trace ihn noch nicht zeigt, dann `end`,
+    /// die `safe`-Werte an die Treiber und in den Trace.
+    fn end_run<N: Nvm>(&mut self, next: NextRun, shown: Outputs, persist: Option<&mut crate::journal::Persist<'_, N>>) {
+        self.ended = Some(next);
+        self.finish(persist);
+        if shown == Outputs::None {
+            self.program.trace(Outputs::All);
+        }
+        self.program.end();
+        self.program.commit();
+        self.program.trace(if shown == Outputs::Changed { Outputs::Changed } else { Outputs::All });
     }
 
     /// Der Tick an der Frist: ab `sample_inputs()` wie in 12.1.
-    fn tick_now(&mut self) -> Tick {
+    fn tick_now<N: Nvm>(&mut self, persist: Option<&mut crate::journal::Persist<'_, N>>) {
         let began = self.clock.now();
         let drift = began - self.deadline;
         self.overrun.observe_drift(drift, self.tick_ns);
@@ -429,9 +560,9 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         // sample_inputs() bis commit_outputs(): die Semantik.
         let now = tick_end(self.k, self.tick_ns);
         self.program.tick(self.k, now);
+        self.program.commit();
         let took = self.clock.now() - began;
 
-        // record_and_telemeter(): nie blockierend (12.2).
         let seen = self.overrun.observe(took, self.tick_ns);
         self.pending_overrun = seen.fault;
         let mut tick = Tick { k: self.k, now, took, drift, overrun: seen.over, slept: 0 };
@@ -439,12 +570,20 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         // kick_watchdog()
         self.watchdog.kick();
 
-        // maybe_sleep() (9.9)
-        tick.slept = self.sleep(now);
-        if tick.slept > 0 {
-            self.program.advance(tick.slept);
+        // maybe_sleep() (9.9); ein Lauf, der endet, schlaeft nicht mehr.
+        let ending = self.program.next_run();
+        if ending.is_none() {
+            tick.slept = self.sleep(now);
+            if tick.slept > 0 {
+                self.program.advance(tick.slept);
+            }
         }
+
+        // record_and_telemeter(): nie blockierend (12.2).
+        let shown = self.sink.outputs(Some(&tick));
+        self.program.trace(shown);
         self.sink.record(&tick);
+        self.last = tick;
 
         self.k = self.k.saturating_add(1).saturating_add(tick.slept);
         // Der naechste Tick beginnt eine Periode nach diesem — absolut
@@ -452,7 +591,15 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         // verschiebt (12.2). Der Tick wird nie uebersprungen (7.3).
         self.beat_from = self.deadline.saturating_add(self.tick_ns);
         self.deadline = self.deadline.saturating_add(self.tick_ns.saturating_mul(1 + tick.slept as i64));
-        tick
+
+        match ending {
+            Some(next) => self.end_run(next, shown, persist),
+            None => {
+                if let Some(p) = persist {
+                    self.journal(p);
+                }
+            }
+        }
     }
 
     /// Traegt den Satz der Tick-Grenze in das Programm ein (8.4) — vor
@@ -490,24 +637,15 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         }
     }
 
-    /// Ein Tick mit Journal (5.9, 12.1).
-    ///
-    /// Das Journal laeuft *nach* dem Schritt, in der Wartezeit bis zur
-    /// naechsten Frist. Ein Geraet, das in der Hardware weiterarbeitet,
-    /// wird jeden Tick gefragt; eines, das den Kern anhaelt (12.3), nur
-    /// wenn die Wartezeit den Vorgang deckt — nach einem Schlaf ist sie
-    /// lang, sonst ein Tick abzueglich des Schritts — oder wenn das
-    /// Programm Ueberlaeufe annimmt (`overrun = alert`, 7.3).
-    pub fn step_persisting<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) -> Tick {
-        let tick = self.step();
-        self.journal(&tick, persist);
-        tick
-    }
-
-    /// Das Journal nach dem Schritt (5.9, [`Runtime::step_persisting`]).
-    fn journal<N: Nvm>(&mut self, tick: &Tick, persist: &mut crate::journal::Persist<'_, N>) {
+    /// Das Journal nach dem Schritt (5.9), in der Wartezeit bis zur naechsten
+    /// Frist. Ein Geraet, das in der Hardware weiterarbeitet, wird jeden Tick
+    /// gefragt; eines, das den Kern anhaelt (12.3), nur wenn die Wartezeit
+    /// den Vorgang deckt — nach einem Schlaf ist sie lang, sonst ein Tick
+    /// abzueglich des Schritts — oder wenn das Programm Ueberlaeufe annimmt
+    /// (`overrun = alert`, 7.3).
+    fn journal<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) {
         if self.journal_may_run(persist.blocking_ns()) {
-            persist.poll(tick.now, &mut self.program);
+            persist.poll(self.last.now, &mut self.program);
             // Ein Vorgang ueber die Frist hinaus ist ein Ueberlauf (7.3),
             // auch wenn der Schritt selbst gepasst hat.
             let late = self.clock.now().saturating_sub(self.deadline);
@@ -529,6 +667,21 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         for _ in 0..n {
             self.step_persisting(persist);
         }
+    }
+
+    /// Die naechste Tickgrenze, an der `service` rechnet (12.11).
+    pub fn deadline(&self) -> i64 {
+        self.deadline
+    }
+
+    /// Das Ende des Laufs, wenn das Programm ihn beendet hat (12.7).
+    pub fn ended(&self) -> Option<NextRun> {
+        self.ended
+    }
+
+    /// Der zuletzt gerechnete Tick.
+    pub fn last(&self) -> Tick {
+        self.last
     }
 
     /// Die Ueberlauf- und Rueckstandszahlen des Laufs (7.3).

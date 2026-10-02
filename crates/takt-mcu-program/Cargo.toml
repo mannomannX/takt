@@ -14,7 +14,6 @@ rust-version = "1.86"
 [dependencies]
 # Die C-Einstiege der Natives, die der erzeugte Code ruft (4.5, FB-293).
 takt-native-abi = { path = "../takt-native-abi" }
-takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 takt-rt-core = { path = "../takt-rt-core" }
 
 [lints.rust]

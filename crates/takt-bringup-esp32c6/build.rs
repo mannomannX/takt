@@ -38,13 +38,10 @@ fn main() {
     if env::var("TAKT_FRESH_JOURNAL").is_ok() {
         println!("cargo:rustc-env=TAKT_FRESH_JOURNAL=1");
     }
-    // 11.2: `statements` fuellt `pc` je Maschine; Default auf `baremetal`
-    // ist `states`, also aus.
+    // 11.2: `statements` fuellt `pc` je Maschine (`takt build --instrument`);
+    // Default auf `baremetal` ist `states`, also aus.
     println!("cargo:rerun-if-env-changed=TAKT_INSTRUMENT");
     println!("cargo:rerun-if-env-changed=TAKT_DIAGNOSTICS");
-    if let Ok(mode) = env::var("TAKT_INSTRUMENT") {
-        println!("cargo:rustc-env=TAKT_INSTRUMENT={mode}");
-    }
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     ram_resident(&out);
     build_takt_program(&out);

@@ -28,7 +28,7 @@ use std::process::ExitCode;
 
 use takt_embed::{Input, Sample};
 use takt_mcu_program::Generated;
-use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Port, Telemetry};
+use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Port, Telemetry, Trace};
 use takt_rt_core::{FakeNvm, Persist, Policy, Profile, Runtime};
 
 mod takt {
@@ -119,8 +119,8 @@ pub extern "C" fn takt_board_trace_hex8(value: u8) {
 #[derive(Debug, Default)]
 pub struct PreviousRun;
 
-impl Input<i32> for PreviousRun {
-    fn sample(&mut self, now: i64) -> Option<Sample<i32>> {
+impl Input<u32> for PreviousRun {
+    fn sample(&mut self, now: i64) -> Option<Sample<u32>> {
         Some(Sample::good(0, now))
     }
 }
@@ -162,9 +162,10 @@ pub unsafe fn run(drivers: *mut c_void) -> ExitCode {
         }
     });
     // SAFETY: siehe oben.
-    let program = unsafe { Generated::init(false, drivers) };
-    let mut rt = Runtime::new(program, clock, NoWatchdog, (), Profile::BAREMETAL, TICK_NS, policy);
-    let stats = takt_rt_baremetal::run(&mut rt, no_journal(), Cadence::of(ticks, 1, false), line);
+    let program = unsafe { Generated::init(drivers) };
+    let trace = Trace::new(Cadence::of(ticks, 1), TICK_NS, line);
+    let mut rt = Runtime::new(program, clock, NoWatchdog, trace, Profile::BAREMETAL, TICK_NS, policy);
+    let stats = takt_rt_baremetal::run(&mut rt, no_journal());
     if let Some(line) = line() {
         takt_rt_baremetal::report(line, rt.overrun(), &stats, &JournalStats::default(), None);
         line.drain(DRAIN_ROUNDS);

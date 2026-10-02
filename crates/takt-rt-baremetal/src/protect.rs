@@ -9,9 +9,7 @@
 //! Maschinen zu. Die Verletzung selbst hat der Zugriff nicht angerichtet:
 //! Das Board uebergeht ihn, statt ihn nachzuholen.
 
-use takt_rt_core::{NextRun, Program, Tolerance};
-
-use crate::run::Traced;
+use takt_rt_core::{NextRun, Outputs, Program, Tolerance};
 
 /// Eine Region, deren Regel ein Zugriff verletzt hat.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,13 +61,6 @@ impl<P, M: Protection> Guarded<P, M> {
     pub fn new(program: P, protection: M) -> Self {
         protection.close();
         Guarded { program, protection, violations: 0, last: None }
-    }
-
-    fn open<R>(&self, f: impl FnOnce() -> R) -> R {
-        self.protection.open();
-        let r = f();
-        self.protection.close();
-        r
     }
 }
 
@@ -137,26 +128,27 @@ impl<P: Program, M: Protection> Program for Guarded<P, M> {
     fn next_run(&self) -> Option<NextRun> {
         self.program.next_run()
     }
-}
 
-/// Der Commit liest den Latch nur und gibt ihn an die Treiber (12.1): Er
-/// laeuft bei geschlossenem Programmzustand, und kein Output-Treiber kann
-/// ihn beschreiben.
-impl<P: Traced, M: Protection> Traced for Guarded<P, M> {
-    fn commit(&self) {
+    /// Der Commit liest den Latch nur und gibt ihn an die Treiber (12.1): Er
+    /// laeuft bei geschlossenem Programmzustand, und kein Output-Treiber kann
+    /// ihn beschreiben.
+    fn commit(&mut self) {
         self.program.commit();
     }
 
-    fn dump(&self, all: bool) {
-        self.program.dump(all);
+    fn trace(&mut self, outputs: Outputs) {
+        self.program.trace(outputs);
     }
 
-    fn pc(&self) {
-        self.program.pc();
+    /// Das Ende setzt die Ausgaenge auf `safe` und schreibt damit den Zustand.
+    fn end(&mut self) {
+        self.protection.open();
+        self.program.end();
+        self.protection.close();
     }
 
-    fn end(&self) {
-        self.open(|| self.program.end());
+    fn dispatch_job(&mut self) -> bool {
+        self.program.dispatch_job()
     }
 }
 
@@ -190,15 +182,9 @@ mod tests {
         fn tick_tolerance(&self) -> Option<Tolerance> {
             Some(Tolerance { ns: 7, runs: 3 })
         }
-    }
-
-    impl Traced for Recorder<'_> {
-        fn commit(&self) {
+        fn commit(&mut self) {
             self.note(if self.open.get() { b'C' } else { b'c' });
         }
-        fn dump(&self, _all: bool) {}
-        fn pc(&self) {}
-        fn end(&self) {}
     }
 
     struct Board<'a> {

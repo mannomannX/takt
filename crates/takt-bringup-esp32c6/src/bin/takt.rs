@@ -18,7 +18,7 @@ use esp_hal::main;
 use takt_board_esp32c6::{
     Button, CORE_HZ, FlashNvm, Generated, JobContext, Mwdt, Telemetry, Wire, Ws2812, platform, route_uart0,
 };
-use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock};
+use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock, Trace};
 use takt_rt_core::{Clock, Journal, Loaded, NextRun, Persist, Policy, Profile, Runtime};
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -56,9 +56,6 @@ const LOGICAL: bool = TICKS.is_some() && option_env!("TAKT_TIMED").is_none();
 /// `TAKT_FRESH_JOURNAL` beim Bau gesetzt: das Journal vor dem Lauf
 /// loeschen, damit der Lauf wie der Interpreter ohne Speicher beginnt.
 const FRESH_JOURNAL: bool = option_env!("TAKT_FRESH_JOURNAL").is_some();
-
-/// `TAKT_INSTRUMENT=statements`: den Programmzaehler je Tick mitgeben (11.2).
-const TRACE_PC: bool = matches!(option_env!("TAKT_INSTRUMENT"), Some(m) if matches!(m.as_bytes(), b"statements"));
 
 /// Das Journal: die `nvs`-Partition des ESP-IDF-Schemas, das `probe-rs`
 /// flasht (0x9000, 24 KiB, sonst leer); zwei Sektoren davon.
@@ -311,8 +308,9 @@ fn conduct(program: Generated, clock: impl Clock, persist: &mut Option<Persist<'
     // Der Watchdog wacht im Betrieb (12.3); ein Konformitaetslauf wartet
     // auf die Leitung und ist kein Betrieb.
     let watchdog = (limit == 0).then(|| Mwdt::arm(WATCHDOG_NS));
-    let mut rt = Runtime::new(program, clock, watchdog, (), Profile::BAREMETAL, TICK_NS, policy);
-    let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut(), Cadence::of(limit, TRACE_EVERY, TRACE_PC), uart);
+    let trace = Trace::new(Cadence::of(limit, TRACE_EVERY), TICK_NS, uart);
+    let mut rt = Runtime::new(program, clock, watchdog, trace, Profile::BAREMETAL, TICK_NS, policy);
+    let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut());
     if rt.watchdog.is_some() {
         Mwdt::arm(END_OF_RUN_NS);
     }
@@ -403,7 +401,7 @@ fn main() -> ! {
     let mut rig = drivers::Rig::default();
     // SAFETY: Der Kleber in `drivers` ist fuer `Rig` erzeugt, und `rig` lebt
     // bis zum Ende von `main`, das nicht zurueckkehrt.
-    let mut program = unsafe { Generated::new(false, core::ptr::from_mut(&mut rig).cast()) };
+    let mut program = unsafe { Generated::new(core::ptr::from_mut(&mut rig).cast()) };
     let loaded = persist.as_mut().map(|p| p.load(&mut program));
     program.ensure_init();
     if let Some(u) = uart() {

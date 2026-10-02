@@ -6,7 +6,7 @@
 //!
 //! | 12.1 | wer |
 //! |---|---|
-//! | `wait_for_tick_boundary()` | hier, ueber [`Clock`] |
+//! | `wait_for_tick_boundary()` | der Port; in der Form „eigener Kern“ hier, ueber [`Clock`] |
 //! | `sample_inputs()`, `validate_and_bound()` | `takt-hal` |
 //! | `deliver_streams()` bis `commit_outputs()` | die Semantik |
 //! | `record_and_telemeter()` | hier, ueber [`Sink`] |
@@ -34,8 +34,8 @@ pub mod stream;
 
 pub use journal::{FakeNvm, Journal, Loaded, Persist};
 pub use loopcore::{
-    Clock, JobState, Jobs, NextRun, Nvm, NvmState, Program, Runtime, Sink, Tick, Tolerance, Tunables, Watchdog,
-    tick_end,
+    Clock, JobState, Jobs, Next, NextRun, Nvm, NvmState, Outputs, Program, Runtime, Sink, Tick, Tolerance, Tunables,
+    Watchdog, tick_end,
 };
 pub use overrun::{Overrun, Policy, Seen};
 pub use profile::Profile;

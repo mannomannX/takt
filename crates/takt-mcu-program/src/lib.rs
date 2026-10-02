@@ -4,9 +4,8 @@
 //! Der Rahmen aus `takt_frame::mcu` liefert `app_init_with`, `app_tick`
 //! und die Schwestern — `app` ist das Praefix der eigenen Bring-ups
 //! (`takt_llvm::symbols::Prefix::default`, 12.11); hier werden sie zum
-//! [`takt_rt_core::Program`] und [`takt_rt_baremetal::Traced`], die die
-//! Tickschleife kennt. Ein Board bringt nur noch Uhr, Leitung und
-//! Treiber mit.
+//! [`takt_rt_core::Program`], das der Kern kennt. Ein Board bringt nur
+//! noch Uhr, Leitung und Treiber mit.
 //!
 //! **Laden vor dem Eintritt.** s0 enthaelt die geladenen `persist`-Werte
 //! (5.9), also muss das Journal *vor* dem ersten `enter` gelesen sein. Das
@@ -31,8 +30,7 @@
 use core::ffi::c_void;
 
 use takt_native_abi as _;
-use takt_rt_baremetal::Traced;
-use takt_rt_core::{NextRun, Program, Tolerance};
+use takt_rt_core::{NextRun, Outputs, Program, Tolerance};
 
 // TODO(M11 Schritt 10): Das erzeugte Rust-Modul der Lieferform ersetzt diese
 // Liste und das feste Praefix.
@@ -97,8 +95,6 @@ pub mod jobs {
 /// Das gebundene Programm.
 #[derive(Clone, Copy, Debug)]
 pub struct Generated {
-    /// Nach jedem Tick die Ausgaenge ausgeben.
-    pub trace: bool,
     initialized: bool,
     /// Das Treiberobjekt, das der Rahmen an jeden Treiber reicht.
     drivers: *mut c_void,
@@ -111,8 +107,8 @@ impl Generated {
     ///
     /// `drivers` zeigt auf das Treiberobjekt, fuer das der Kleber des
     /// Programms erzeugt ist, und lebt so lange wie das Programm.
-    pub unsafe fn new(trace: bool, drivers: *mut c_void) -> Generated {
-        Generated { trace, initialized: false, drivers }
+    pub unsafe fn new(drivers: *mut c_void) -> Generated {
+        Generated { initialized: false, drivers }
     }
 
     /// Initialisiert das Programm ohne Journal (Tick 0, 9.4).
@@ -120,9 +116,9 @@ impl Generated {
     /// # Safety
     ///
     /// Wie [`Generated::new`].
-    pub unsafe fn init(trace: bool, drivers: *mut c_void) -> Generated {
+    pub unsafe fn init(drivers: *mut c_void) -> Generated {
         // SAFETY: siehe oben.
-        let mut p = unsafe { Generated::new(trace, drivers) };
+        let mut p = unsafe { Generated::new(drivers) };
         p.ensure_init();
         p
     }
@@ -140,28 +136,6 @@ impl Generated {
     pub fn output(&self, index: i32) -> i64 {
         // SAFETY: liest einen Latch des Rahmens; ein fremder Index liefert 0.
         unsafe { app_output(index) }
-    }
-}
-
-impl Traced for Generated {
-    fn commit(&self) {
-        // SAFETY: schreibt die Latches des Rahmens; die Schleife ruft es einmal je Tick.
-        unsafe { app_commit() };
-    }
-
-    fn dump(&self, all: bool) {
-        // SAFETY: liest nur den statischen Zustand des Rahmens.
-        unsafe { app_dump(i32::from(all)) };
-    }
-
-    fn pc(&self) {
-        // SAFETY: liest nur den statischen Zustand des Rahmens.
-        unsafe { app_pc() };
-    }
-
-    fn end(&self) {
-        // SAFETY: schreibt die Zeile `end` und die `safe`-Werte in den Latch des Rahmens.
-        unsafe { app_end() };
     }
 }
 
@@ -240,8 +214,32 @@ impl Program for Generated {
         // nennen den ersten Tick nach dem Start `t=1` (Tick 0 ist der Start).
         // SAFETY: ein Schritt des Rahmens, einmal je Tick aus der Schleife.
         unsafe { app_tick(k as i64 + 1) };
-        if self.trace {
-            self.dump(true);
+    }
+
+    fn commit(&mut self) {
+        // SAFETY: gibt die Latches des Rahmens an die Treiber; der Kern ruft es einmal je Tick.
+        unsafe { app_commit() };
+    }
+
+    fn trace(&mut self, outputs: Outputs) {
+        let all = match outputs {
+            Outputs::None => return,
+            Outputs::Changed => 0,
+            Outputs::All => 1,
+        };
+        // SAFETY: liest den statischen Zustand des Rahmens und schreibt den Trace.
+        unsafe {
+            app_dump(all);
+            app_pc();
         }
+    }
+
+    fn end(&mut self) {
+        // SAFETY: schreibt die Zeile `end` und die `safe`-Werte in den Latch des Rahmens.
+        unsafe { app_end() };
+    }
+
+    fn dispatch_job(&mut self) -> bool {
+        jobs::dispatch()
     }
 }

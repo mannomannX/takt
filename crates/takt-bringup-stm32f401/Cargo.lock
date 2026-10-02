@@ -926,7 +926,6 @@ name = "takt-mcu-program"
 version = "0.1.0"
 dependencies = [
  "takt-native-abi",
- "takt-rt-baremetal",
  "takt-rt-core",
 ]
 

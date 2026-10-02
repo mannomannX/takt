@@ -43,6 +43,6 @@ pub mod tolerance;
 pub use board::{Sleep, TickSource};
 pub use clock::{LogicalClock, TimerClock};
 pub use protect::{Guarded, Protection, Unprotected, Violation};
-pub use run::{Cadence, JournalStats, NoWatchdog, Runner, Stats, Traced, report, run};
+pub use run::{Cadence, JournalStats, NoWatchdog, Stats, Trace, report, run, stats};
 pub use telemetry::{DRAIN_ROUNDS, Port, Telemetry};
 pub use tolerance::Period;

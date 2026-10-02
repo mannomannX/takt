@@ -7,13 +7,13 @@
 //! Mittel des RTOS selbst und stehen in der Bindung; hier stuenden sie nur
 //! als Namen fuer dasselbe.
 //!
-//! **Warum die Schleife nicht selbst wartet.** Auf dem blanken Board
-//! wartet sie in `Clock::wait_until` auf den Timer ([`takt_rt_baremetal::run`]).
-//! Unter einem RTOS hielte dasselbe Warten als hoechstpriore Aufgabe jede
-//! Aufgabe darunter an. Die Takt-Aufgabe wartet darum auf die
-//! Benachrichtigung und arbeitet dann ab, was faellig ist
-//! ([`Runtime::due`], [`Runtime::at_boundary`]) — denselben Tick, denselben
-//! Watchdog-Takt im Schlaf (9.9), dieselbe Ausgabe ([`Runner`]).
+//! **Ein Port ueber dem Kern ohne Warten** (12.11). Auf dem blanken Board
+//! wartet der eigene Kern in `Clock::wait_until` auf den Timer
+//! ([`takt_rt_baremetal::run`]). Unter einem RTOS hielte dasselbe Warten als
+//! hoechstpriore Aufgabe jede Aufgabe darunter an. Die Takt-Aufgabe wartet
+//! darum auf die Benachrichtigung und laesst den Kern rechnen, was faellig
+//! ist ([`Runtime::service`]) — denselben Tick, denselben Watchdog-Takt im
+//! Schlaf (9.9), dieselbe Ausgabe ([`Trace`]).
 //!
 //! **Die Zeitgarantie wird gemessen, nicht bewiesen** (12.8): Wie spaet die
 //! Aufgabe nach der Grenze beginnt, steht in `drift` jedes Ticks (7.3);
@@ -24,8 +24,8 @@
 use core::cell::Cell;
 use core::future::Future;
 
-use takt_rt_baremetal::{Cadence, Port, Runner, Stats, Telemetry, Traced};
-use takt_rt_core::{Clock, Nvm, Persist, Runtime, Sink, Watchdog};
+use takt_rt_baremetal::{Port, Stats, Telemetry, Trace};
+use takt_rt_core::{Clock, Nvm, Persist, Program, Runtime, Watchdog};
 
 /// Die Benachrichtigung je Tickgrenze, die die Timer-ISR der Takt-Aufgabe
 /// gibt.
@@ -87,39 +87,33 @@ impl Clock for LogicalTime<'_> {
     }
 }
 
-/// Laeuft als Takt-Aufgabe, bis `cadence.limit` erreicht ist oder das
-/// Programm der Plattform ein Kommando gibt (12.7) — wie
-/// [`takt_rt_baremetal::run`], nur dass die Grenzen gemeldet werden.
-pub async fn run<G, C, W, S, N, P, B, const R: usize>(
-    rt: &mut Runtime<G, C, W, S>,
+/// Die Takt-Aufgabe (12.8, 12.11): Auf jede gemeldete Grenze rechnet der
+/// Kern, was faellig ist, und bestaetigt im Schlaf den Watchdog; bis zur
+/// Grenze der Senke oder bis das Programm seinen Lauf beendet (12.7). An
+/// der Grenze schreibt das Journal synchron.
+pub async fn run<G, C, W, F, N, P, B, const R: usize>(
+    rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
     mut persist: Option<&mut Persist<'_, N>>,
-    cadence: Cadence,
-    mut telemetry: impl FnMut() -> Option<&'static mut Telemetry<P, R>>,
     boundary: &mut B,
 ) -> Stats
 where
-    G: Traced,
+    G: Program,
     C: Clock,
     W: Watchdog,
-    S: Sink,
+    F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
     N: Nvm,
     P: Port + 'static,
     B: Boundary,
 {
-    let mut runner = Runner::start(&rt.program, cadence, rt.tick_ns());
-    while runner.running() {
+    let limit = rt.sink.limit();
+    while rt.ended().is_none() && (limit == 0 || rt.tick_number() < limit) {
         boundary.reached().await;
-        while runner.running() && rt.due() {
-            let tick = match persist.as_deref_mut() {
-                Some(p) => rt.at_boundary_persisting(p),
-                None => rt.at_boundary(),
-            };
-            if let Some(tick) = tick {
-                runner.after(rt, &tick, &mut telemetry);
-            }
-        }
+        match persist.as_deref_mut() {
+            Some(p) => rt.service_persisting(p),
+            None => rt.service(),
+        };
     }
-    runner.finish(rt, persist)
+    takt_rt_baremetal::stats(rt, persist)
 }
 
 #[cfg(test)]
@@ -127,7 +121,8 @@ mod tests {
     use super::*;
     use core::pin::pin;
     use core::task::{Context, Poll};
-    use takt_rt_core::{FakeNvm, Policy, Profile, Program};
+    use takt_rt_baremetal::Cadence;
+    use takt_rt_core::{FakeNvm, Policy, Profile};
 
     extern crate std;
 
@@ -196,15 +191,10 @@ mod tests {
         fn next_deadline(&self) -> Option<i64> {
             self.sleep_until
         }
-    }
 
-    impl Traced for Counted {
-        fn commit(&self) {
+        fn commit(&mut self) {
             self.commits.set(self.commits.get() + 1);
         }
-        fn dump(&self, _all: bool) {}
-        fn pc(&self) {}
-        fn end(&self) {}
     }
 
     struct NoLine;
@@ -215,16 +205,18 @@ mod tests {
         }
     }
 
-    fn run_for(program: Counted, limit: u64) -> (Stats, Runtime<Counted, Timer<'static>, Kicks, ()>) {
+    /// Eine Senke ohne Leitung.
+    type Quiet = Trace<fn() -> Option<&'static mut Telemetry<NoLine, 8>>, Telemetry<NoLine, 8>>;
+
+    fn quiet(limit: u64) -> Quiet {
+        Trace::new(Cadence::of(limit, 1), T0, || None)
+    }
+
+    fn run_for(program: Counted, limit: u64) -> (Stats, Runtime<Counted, Timer<'static>, Kicks, Quiet>) {
         let now: &'static Cell<i64> = std::boxed::Box::leak(std::boxed::Box::new(Cell::new(0)));
-        let mut rt = Runtime::new(program, Timer(now), Kicks::default(), (), Profile::BAREMETAL, T0, Policy::Fault);
-        let stats = block_on(run(
-            &mut rt,
-            None::<&mut Persist<'_, FakeNvm<0>>>,
-            Cadence::of(limit, 1, false),
-            || None::<&'static mut Telemetry<NoLine, 8>>,
-            &mut Isr(now),
-        ));
+        let mut rt =
+            Runtime::new(program, Timer(now), Kicks::default(), quiet(limit), Profile::BAREMETAL, T0, Policy::Fault);
+        let stats = block_on(run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, &mut Isr(now)));
         (stats, rt)
     }
 
@@ -248,18 +240,13 @@ mod tests {
             Counted::default(),
             LogicalTime(&logical),
             Kicks::default(),
-            (),
+            quiet(4),
             Profile::BAREMETAL,
             T0,
             Policy::Fault,
         );
-        let stats = block_on(run(
-            &mut rt,
-            None::<&mut Persist<'_, FakeNvm<0>>>,
-            Cadence::of(4, 1, false),
-            || None::<&'static mut Telemetry<NoLine, 8>>,
-            &mut Logical::new(Isr(&wall), &logical, T0),
-        ));
+        let stats =
+            block_on(run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, &mut Logical::new(Isr(&wall), &logical, T0)));
         assert_eq!((rt.program.ticks, stats.overruns), (4, 0));
         assert_eq!(logical.get(), 3 * T0, "Tick k beginnt bei k * T0");
     }

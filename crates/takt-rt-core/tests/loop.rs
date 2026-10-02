@@ -2,7 +2,7 @@
 
 use core::cell::RefCell;
 
-use takt_rt_core::{Clock, Overrun, Policy, Profile, Program, Runtime, Sink, Tick, Watchdog};
+use takt_rt_core::{Clock, Outputs, Overrun, Policy, Profile, Program, Runtime, Sink, Tick, Watchdog};
 
 /// Eine Uhr, die nur tut, was der Test ihr sagt.
 #[derive(Default)]
@@ -290,24 +290,22 @@ fn a_tick_without_sleep_carries_nothing_over() {
     assert_eq!(rt.program().advanced, 0);
 }
 
-/// Meldet die Tickgrenzen bis `ticks` von aussen (12.8 `shared`): Die Uhr
-/// steht auf der Grenze, die Schleife arbeitet ab, was faellig ist.
-fn boundaries<P: Program, W: Watchdog, S: Sink>(
-    rt: &mut Runtime<P, Shared<'_>, W, S>,
+/// Meldet die Tickgrenzen bis `ticks` von aussen, wie ein Port unter einem
+/// RTOS (12.8 `shared`, 12.11): Die Uhr steht auf der Grenze, und `service`
+/// rechnet, was faellig ist. Liefert die gerechneten Ticks.
+fn boundaries<P: Program, W: Watchdog>(
+    rt: &mut Runtime<P, Shared<'_>, W, Log>,
     clock: &RefCell<Fake>,
     ticks: i64,
 ) -> Vec<Tick> {
-    let mut out = Vec::new();
     for b in 0..ticks {
         {
             let mut f = clock.borrow_mut();
             f.now = f.now.max(b * T0);
         }
-        while rt.due() {
-            out.extend(rt.at_boundary());
-        }
+        rt.service();
     }
-    out
+    rt.sink.0.clone()
 }
 
 /// **Gemeldete Grenzen rechnen dieselben Ticks** wie die Schleife, die
@@ -339,4 +337,164 @@ fn a_boundary_before_the_deadline_only_kicks_the_watchdog() {
     assert_eq!(ticks.len(), 2, "Tick 0 und der an der Frist: {ticks:?}");
     assert_eq!((ticks[0].slept, ticks[1].k), (8, 9));
     assert_eq!(rt.watchdog.0, 2 + 8, "je Tick einmal, dazu jede geschlafene Grenze");
+}
+
+// --- Kern ohne Warten (12.11) -------------------------------------------
+
+/// **`service` wartet nie und nennt die naechste Frist.** Ein Port ruft zur
+/// Frist; was dazwischen geschieht, ist seine Sache.
+#[test]
+fn service_never_waits_and_names_the_next_deadline() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    let next = rt.service();
+    assert_eq!((rt.program.ticks.len(), next.deadline, next.ended), (1, T0, None));
+    assert_eq!(rt.service(), next, "vor der Frist ist nichts faellig");
+    assert!(clock.borrow().waits.is_empty());
+}
+
+/// **Ein spaeter Aufruf rechnet jede Grenze bis jetzt**, in Reihenfolge und
+/// mit ihrer logischen Zeit (7.3: kein Tick wird uebersprungen).
+#[test]
+fn a_late_call_catches_up_every_boundary() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    clock.borrow_mut().now = 3 * T0 + T0 / 2;
+    let next = rt.service();
+    let want: Vec<(u64, i64)> = (0..4).map(|k| (k, (k as i64 + 1) * T0)).collect();
+    assert_eq!(rt.program.ticks, want);
+    assert_eq!(next.deadline, 4 * T0);
+    assert_eq!(rt.sink.0[3].drift, T0 / 2, "der Rueckstand steht in `drift`");
+}
+
+/// **„Jetzt“ ist die Zeit beim Eintritt.** Dauert jeder Tick laenger als die
+/// Periode, rechnet ein Aufruf nur die Grenzen, die bei seinem Eintritt
+/// faellig waren — sonst kaeme `service` nie zurueck.
+#[test]
+fn service_computes_only_what_was_due_when_it_was_called() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![5 * T0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    rt.service();
+    assert_eq!(rt.program.ticks.len(), 1);
+    rt.service();
+    assert_eq!(rt.program.ticks.len(), 1 + 5, "beim zweiten Eintritt waren fuenf Grenzen faellig");
+}
+
+/// **Mit erlaubtem Schlaf ist die Frist die des Schlafs** (9.9, 12.11).
+#[test]
+fn service_names_the_deadline_of_the_sleep() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    assert_eq!(rt.service().deadline, 9 * T0, "Tick 0, dann acht geschlafene; Tick 9 endet an der Frist");
+    assert_eq!(rt.program.advanced, 8);
+}
+
+/// Ein Programm, das mitschreibt, in welcher Reihenfolge der Kern es ruft.
+#[derive(Default)]
+struct Ordered {
+    log: Vec<&'static str>,
+    ends_after: Option<u64>,
+    ticks: u64,
+}
+
+impl Program for Ordered {
+    fn tick(&mut self, _k: u64, _now: i64) {
+        self.ticks += 1;
+        self.log.push("tick");
+    }
+
+    fn sleep_allowed(&self) -> bool {
+        true
+    }
+
+    fn next_deadline(&self) -> Option<i64> {
+        Some(10 * T0)
+    }
+
+    fn advance(&mut self, _ticks: u64) {
+        self.log.push("advance");
+    }
+
+    fn next_run(&self) -> Option<takt_rt_core::NextRun> {
+        self.ends_after.filter(|n| self.ticks >= *n).map(|_| takt_rt_core::NextRun::OnStart)
+    }
+
+    fn commit(&mut self) {
+        self.log.push("commit");
+    }
+
+    fn trace(&mut self, outputs: Outputs) {
+        if outputs != Outputs::None {
+            self.log.push("trace");
+        }
+    }
+
+    fn end(&mut self) {
+        self.log.push("end");
+    }
+}
+
+/// Zeigt jeden Tick seine Aenderungen, wie ein Konformitaetslauf.
+struct EveryTick;
+
+impl Sink for EveryTick {
+    fn outputs(&mut self, tick: Option<&Tick>) -> Outputs {
+        if tick.is_some() { Outputs::Changed } else { Outputs::All }
+    }
+
+    fn record(&mut self, _tick: &Tick) {}
+}
+
+/// **Der Latch geht vor dem Schlaf an die Treiber** (12.1 Schritt 10, 9.9;
+/// FB-371): Schritt, Commit, Schlaf, Trace — der Commit gehoert zum Tick,
+/// den er stellt.
+#[test]
+fn the_latch_is_committed_before_the_sleep() {
+    let mut rt = Runtime::new(
+        Ordered::default(),
+        Logical(0),
+        Kicks::default(),
+        EveryTick,
+        Profile::BAREMETAL,
+        T0,
+        Policy::Fault,
+    );
+    rt.service();
+    assert_eq!(rt.program.log, ["trace", "tick", "commit", "advance", "trace"]);
+}
+
+/// **Das geordnete Ende gehoert zum Kern** (12.7): Nach dem Tick, der
+/// `next_run` setzt, gehen die `safe`-Werte an die Treiber und in den Trace,
+/// `Next` nennt den Befehl, und kein weiterer Tick laeuft.
+#[test]
+fn the_end_of_a_run_is_part_of_the_service() {
+    let program = Ordered { ends_after: Some(1), ..Ordered::default() };
+    let mut rt = Runtime::new(program, Logical(0), Kicks::default(), EveryTick, Profile::BAREMETAL, T0, Policy::Fault);
+    let next = rt.service();
+    assert_eq!(next.ended, Some(takt_rt_core::NextRun::OnStart));
+    assert_eq!(rt.program.log, ["trace", "tick", "commit", "trace", "end", "commit", "trace"]);
+    rt.clock.0 = 100 * T0;
+    rt.service();
+    assert_eq!(rt.program.ticks, 1, "nach dem Ende rechnet der Kern nichts mehr");
+}
+
+/// Eine Uhr, die der Test stellt und die nie wartet.
+struct Logical(i64);
+
+impl Clock for Logical {
+    fn now(&self) -> i64 {
+        self.0
+    }
+
+    fn wait_until(&mut self, deadline: i64) {
+        self.0 = self.0.max(deadline);
+    }
 }

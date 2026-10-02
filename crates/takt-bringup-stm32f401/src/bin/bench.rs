@@ -110,7 +110,7 @@ fn main() -> ! {
     let mut rig = drivers::Rig::default();
     // SAFETY: Der Kleber in `drivers` ist fuer `Rig` erzeugt, und `rig` lebt
     // bis zum Ende von `main`, das nicht zurueckkehrt.
-    let mut program = unsafe { Generated::init(false, core::ptr::from_mut(&mut rig).cast()) };
+    let mut program = unsafe { Generated::init(core::ptr::from_mut(&mut rig).cast()) };
     let mut k = 0u64;
     for _ in 0..WARMUP {
         program.tick(k, tick_end(k, takt::TICK_NS));
