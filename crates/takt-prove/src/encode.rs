@@ -234,6 +234,13 @@ impl Cx<'_> {
     }
 }
 
+/// Wie viele Schleifendurchlaeufe die Kodierung eines Pfads ausrollt: des
+/// Starts einer Maschine oder ihres Ticks aus einem Blatt. Jeder Durchlauf
+/// vertieft die Terme der Variablen, die er schreibt, und Terme werden
+/// rekursiv gebaut, ausgewertet und abgebaut; ohne Grenze lief `takt prove`
+/// bei 1000 × 3000 Durchlaeufen ueber den Stack (FB-403).
+pub const UNROLL_LIMIT: i64 = 256;
+
 /// Der Kodierer.
 struct Enc<'p> {
     p: &'p Program,
@@ -252,6 +259,8 @@ struct Enc<'p> {
     /// Was die Typen ueber freie Ψ-Eingaben sagen.
     psi_assumptions: Vec<Term>,
     psi_seen: BTreeSet<String>,
+    /// Ausgerollte Schleifendurchlaeufe des laufenden Pfads ([`UNROLL_LIMIT`]).
+    unrolled: i64,
 }
 
 /// Kodiert ein Programm.
@@ -282,6 +291,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         scope,
         psi_assumptions: Vec::new(),
         psi_seen: BTreeSet::new(),
+        unrolled: 0,
     };
     enc.check_reach()?;
     let init = enc.init()?;
@@ -993,9 +1003,13 @@ impl Enc<'_> {
                     flow.alive = Term::or(vec![alive_out, remaining]);
                 }
                 StmtKind::ForRange { var, count, body } => {
-                    let n = self.const_int(count)?;
+                    let n = self.const_int(count)?.max(0);
+                    self.unrolled = self.unrolled.saturating_add(n);
+                    if self.unrolled > UNROLL_LIMIT {
+                        return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
+                    }
                     let loc = self.loc_var(m, *var);
-                    for i in 0..n.max(0) {
+                    for i in 0..n {
                         env.insert(loc.clone(), Term::int(i));
                         self.block(body, cx, env, flow)?;
                     }
@@ -1388,6 +1402,7 @@ impl Enc<'_> {
         for leaf in self.leaves(m) {
             let is = Term::and(vec![alive0.clone(), Term::eq(leaf_now.clone(), Term::int(self.code(m, leaf)))]);
             let cx = Cx { m: Some(m), leaf: Some(leaf), mode: Mode::Run, pre, active: actives, locals: None };
+            self.unrolled = 0;
             let mut env = base.clone();
             let mut flow = Flow::new(is.clone());
             self.block(&machine.loop_block, &cx, &mut env, &mut flow)?;
@@ -1603,6 +1618,7 @@ impl Enc<'_> {
             let machine = self.machine(m).clone();
             let pre = env.clone();
             let cx = Cx { m: Some(m), leaf: None, mode: Mode::Entry, pre: &pre, active: &actives, locals: None };
+            self.unrolled = 0;
             self.switch(&cx, None, Target::State(machine.initial), &mut env, 0, &Term::bool(true))?;
         }
         self.advance(&actives, &mut env);

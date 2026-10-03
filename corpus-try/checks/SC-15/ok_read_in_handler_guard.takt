@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-15: `limit` liest nur die Bedingung eines Handlers; das ist ein Lesen.
+
+input  rx        : stream<line<32>> @ hw("u/rx")    with max_rate = 100 Hz
+input  limit     : int in 0..999    @ hw("d/limit")
+output limit_sim : int in 0..999    @ sim("d/limit")
+output value     : int in 0..999    @ hw("o/value") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        on rx matches "set {v:int}" as e when e.v >= 0 and e.v < limit:
+            value = e.v

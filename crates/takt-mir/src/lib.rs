@@ -13,9 +13,29 @@
 //! gewollt (Zugriff ohne Indirektion).
 #![allow(clippy::large_enum_variant)]
 
+/// Ein Enum ohne Nutzlast mit der Liste aller Varianten (`ALL`, in der
+/// Ordnung der Deklaration). Die Liste entsteht aus der Deklaration: Eine
+/// neue Variante steht darin, ohne dass jemand sie nachfuehrt (Schritt 25;
+/// `Accessor::ALL` von Hand fehlten `peek` und `sent`).
+macro_rules! with_all {
+    ($(#[$m:meta])* $vis:vis enum $name:ident { $($(#[$vm:meta])* $v:ident),* $(,)? }) => {
+        $(#[$m])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        $vis enum $name {
+            $($(#[$vm])* $v),*
+        }
+
+        impl $name {
+            /// Alle Varianten, in der Ordnung der Deklaration.
+            pub const ALL: [$name; [$(stringify!($v)),*].len()] = [$($name::$v),*];
+        }
+    };
+}
+
 pub mod analysis;
 pub mod bytes;
 pub mod capability;
+pub mod census;
 pub mod desugar;
 pub mod dfa;
 pub mod dump;

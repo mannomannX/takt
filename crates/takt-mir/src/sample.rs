@@ -1,6 +1,7 @@
 //! Ein konstruiertes Programm mit jeder Knotenart, fuer den Roundtrip-Test
 //! des Formats (plan/mir.md, Abschnitt 4) und als Fixture spaeterer Stufen.
 //! Es ist typkorrekt im Sinne der Tabellen, aber kein sinnvolles Steuerprogramm.
+//! Dass es jede Konstruktion des Census enthaelt, prueft `tests/roundtrip.rs`.
 
 use takt_diag::Span;
 
@@ -535,6 +536,7 @@ pub fn full_program() -> Program {
         span: sp(27),
     });
     let bl_lowpass = BlockId(0);
+    let t_block = p.types.intern(Type::Handle(HandleKind::Block(bl_lowpass)));
     p.blocks.push(BlockDef {
         name: "lowpass[bar]".into(),
         params: vec![FnParam { name: "tau".into(), ty: t_dur_plain, inout: false, default: None, span: sp(28) }],
@@ -650,6 +652,31 @@ pub fn full_program() -> Program {
         repeat: 2,
         stop_on: StopOn::Fail,
         span: sp(31),
+    });
+
+    // Annahme, Registerport (12.10), aufgezeichneter Input (8.2)
+    p.properties.push(Property {
+        name: "fuel_is_present".into(),
+        assumption: true,
+        formula: TProp::Temporal { op: TemporalOp::Always, window: None, inner: Box::new(atom(ExprKind::Bool(true))) },
+        monitor: false,
+        span: sp(76),
+    });
+    let po_ctrl = PortId(0);
+    p.ports.push(Port {
+        name: "ctrl".into(),
+        record: r_frame,
+        ty: t_frame,
+        address: 0x4000_1000,
+        owner: Some(MachineId(0)),
+        span: sp(77),
+    });
+    p.recorded.push(Recorded {
+        name: "daq1_ai3".into(),
+        address: Address::simple("daq1/ai3"),
+        value: RecordedValue::Float(FloatWidth::F32),
+        unit: Some("bar".into()),
+        stream: None,
     });
 
     // Maschine mit allem
@@ -1119,14 +1146,14 @@ pub fn full_program() -> Program {
         span: sp(57),
     });
     run.handlers.push(Handler {
-        guard: None,
+        guard: Some(e(ExprKind::Bool(true), t_bool)),
         stream: StreamRef::Channel(ch_wave),
         pattern: None,
         binding: None,
         body: Block::default(),
         span: sp(58),
     });
-    let wide = vec![
+    let mut wide = vec![
         e(ExprKind::Lift(bx(input_p())), t_opt),
         e(ExprKind::Ok(bx(e(ExprKind::Var(v_frame), t_frame))), t_res),
         e(ExprKind::Err(bx(e(ExprKind::Variant { enum_id: e_err, variant: 0, fields: vec![] }, t_res))), t_res),
@@ -1317,11 +1344,75 @@ pub fn full_program() -> Program {
             },
             t_arr,
         ),
+        e(ExprKind::Armed(tr_cut), t_bool),
+        e(ExprKind::PortRead(po_ctrl), t_frame),
+        e(ExprKind::Format(msg("x")), t_str),
+        e(ExprKind::JobState { handle: v_job, field: JobField::Done }, t_bool),
+        e(ExprKind::JobState { handle: v_job, field: JobField::Result }, t_res),
+        e(ExprKind::Stream(st_q), t_stream_msg),
+        e(ExprKind::Var(v_filter), t_block),
     ];
+    // Jede Operation der Familien ohne eigene Struktur, aus ihren Listen.
+    for op in BinaryOp::ALL {
+        let (operand, ty) = match op {
+            BinaryOp::Or | BinaryOp::And => (t_bool, t_bool),
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Eq | BinaryOp::Ne => (t_int, t_bool),
+            BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::BitAnd
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Rem => (t_int, t_int),
+        };
+        let lhs = bx(e(ExprKind::Var(if operand == t_bool { v_done } else { v_i }), operand));
+        wide.push(e(ExprKind::Binary { op, lhs, rhs: bx(e(ExprKind::Var(v_i), operand)) }, ty));
+    }
+    for op in Intrinsic::ALL {
+        let arity = match op {
+            Intrinsic::Fma => 3,
+            Intrinsic::Min
+            | Intrinsic::Max
+            | Intrinsic::Atan2
+            | Intrinsic::Pow
+            | Intrinsic::Rotl
+            | Intrinsic::Rotr
+            | Intrinsic::WrappingAdd
+            | Intrinsic::WrappingSub
+            | Intrinsic::WrappingMul
+            | Intrinsic::SaturatingAdd
+            | Intrinsic::SaturatingSub
+            | Intrinsic::Interp => 2,
+            Intrinsic::Abs
+            | Intrinsic::Sqrt
+            | Intrinsic::Sin
+            | Intrinsic::Cos
+            | Intrinsic::Tan
+            | Intrinsic::Asin
+            | Intrinsic::Acos
+            | Intrinsic::Atan
+            | Intrinsic::Exp
+            | Intrinsic::Log
+            | Intrinsic::Round
+            | Intrinsic::Floor
+            | Intrinsic::Ceil => 1,
+        };
+        wide.push(e(ExprKind::Intrinsic { op, args: vec![e(ExprKind::Var(v_x), t_float); arity] }, t_float));
+    }
+    for accessor in Accessor::ALL {
+        wide.push(e(ExprKind::Accessor { base: bx(input_p()), accessor, args: vec![] }, t_int));
+    }
     for (i, w) in wide.into_iter().enumerate() {
         let target = if i % 2 == 0 { Place::Var(v_x) } else { Place::Var(v_i) };
         run.loop_block.stmts.push(stmt(StmtKind::Assign { target, value: w }));
     }
+    run.loop_block.stmts.push(stmt(StmtKind::Assign {
+        target: Place::Field(Box::new(Place::Port(po_ctrl)), 0),
+        value: e(ExprKind::Int(1), t_u16),
+    }));
     run.transitions.push(Transition {
         trigger: TransTrigger::When(Guard::Next { stream: StreamRef::Fired(tr_cut), binding: v_m }),
         actions: Block::new(vec![stmt(StmtKind::Assign {

@@ -166,25 +166,26 @@ pub enum StreamRef {
     Var(VarId),
 }
 
-/// Eingebaute Groessen (3.3, 5.3, 7.5).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Builtin {
-    /// `now`: Dauer seit Start.
-    Now,
-    /// `tick`: T₀.
-    Tick,
-    /// `time_in_state`.
-    TimeInState,
-    /// `last_fault` (Art, Nachricht, Position, Tick).
-    LastFault,
-    /// `event` im `then`-Teil eines Triggers.
-    Event,
+with_all! {
+    /// Eingebaute Groessen (3.3, 5.3, 7.5).
+    pub enum Builtin {
+        /// `now`: Dauer seit Start.
+        Now,
+        /// `tick`: T₀.
+        Tick,
+        /// `time_in_state`.
+        TimeInState,
+        /// `last_fault` (Art, Nachricht, Position, Tick).
+        LastFault,
+        /// `event` im `then`-Teil eines Triggers.
+        Event,
+    }
 }
 
 /// Reine Zugriffe ueber reservierte Membernamen (2.5), je Typ erlaubt.
 /// Mutierende Methoden stehen in `stmt::Method`, Konversionen in
 /// `ConvertKind`, Matrixoperationen in `MatOp`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(missing_docs)]
 pub enum Accessor {
     Valid,
@@ -297,7 +298,7 @@ impl Accessor {
     }
 
     /// Alle Zugriffe ohne Nutzlast (fuer Paritaetstests gegen 2.5).
-    pub const ALL: [Accessor; 41] = [
+    pub const ALL: [Accessor; 43] = [
         Accessor::Valid,
         Accessor::Suspect,
         Accessor::Stale,
@@ -339,70 +340,77 @@ impl Accessor {
         Accessor::Rate,
         Accessor::Remaining,
         Accessor::Truncated,
+        Accessor::Peek,
+        Accessor::Sent,
     ];
 }
 
-/// Einstellige Operatoren.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(missing_docs)]
-pub enum UnaryOp {
-    Neg,
-    Not,
-    BitNot,
+with_all! {
+    /// Einstellige Operatoren.
+    #[allow(missing_docs)]
+    pub enum UnaryOp {
+        Neg,
+        Not,
+        BitNot,
+    }
 }
 
-/// Zweistellige Operatoren (2.3), klassenweise total (4.1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(missing_docs)]
-pub enum BinaryOp {
-    Or,
-    And,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    Eq,
-    Ne,
-    BitOr,
-    BitXor,
-    BitAnd,
-    Shl,
-    Shr,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
+with_all! {
+    /// Zweistellige Operatoren (2.3), klassenweise total (4.1).
+    #[allow(missing_docs)]
+    pub enum BinaryOp {
+        Or,
+        And,
+        Lt,
+        Le,
+        Gt,
+        Ge,
+        Eq,
+        Ne,
+        BitOr,
+        BitXor,
+        BitAnd,
+        Shl,
+        Shr,
+        Add,
+        Sub,
+        Mul,
+        Div,
+        Rem,
+    }
 }
 
-/// Konversion zwischen Einheiten (3.2, 3.3).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConvertKind {
-    /// `x.to(U)`: gleiche Dimension; bei Integern nur ganzzahliger Faktor.
-    To,
-    /// `x.to_float(U)` fuer Integer mit Einheit.
-    ToFloat,
-    /// `d.as(U)`: Dauer in `float[U]`.
-    As,
+with_all! {
+    /// Konversion zwischen Einheiten (3.2, 3.3).
+    pub enum ConvertKind {
+        /// `x.to(U)`: gleiche Dimension; bei Integern nur ganzzahliger Faktor.
+        To,
+        /// `x.to_float(U)` fuer Integer mit Einheit.
+        ToFloat,
+        /// `d.as(U)`: Dauer in `float[U]`.
+        As,
+    }
 }
 
-/// Matrixoperationen (3.11).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(missing_docs)]
-pub enum MatOp {
-    Transpose,
-    Inv,
-    Det,
-    Solve,
-    Cholesky,
+with_all! {
+    /// Matrixoperationen (3.11).
+    #[allow(missing_docs)]
+    pub enum MatOp {
+        Transpose,
+        Inv,
+        Det,
+        Solve,
+        Cholesky,
+    }
 }
 
-/// `matches` oder `has` (8.7).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(missing_docs)]
-pub enum MatchKind {
-    Matches,
-    Has,
+with_all! {
+    /// `matches` oder `has` (8.7).
+    #[allow(missing_docs)]
+    pub enum MatchKind {
+        Matches,
+        Has,
+    }
 }
 
 /// Art einer eingefuegten Pruefung (M3, Warnung 4 in Referenz 10).
@@ -615,45 +623,46 @@ pub enum ExprKind {
     },
 }
 
-/// Eingebaute Primitive: total oder mit definiertem Fault (`Domain`, `RangeFault`,
-/// `NonFinite`); anders als Natives ohne Kostenvertrag, ihre Kosten zaehlt das
-/// Kostenmodell nach Klasse, die korrekt gerundete Mathematik mit eigenem
-/// Gewicht ([`Intrinsic::is_math`]). Polymorph ueber Breiten und Einheiten
-/// (`sqrt`: `U^2 → U`; `min`, `max`, `abs`: Einheit bleibt).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(missing_docs)]
-pub enum Intrinsic {
-    Abs,
-    Min,
-    Max,
-    Sqrt,
-    Sin,
-    Cos,
-    Tan,
-    Asin,
-    Acos,
-    Atan,
-    Atan2,
-    Exp,
-    /// Der natuerliche Logarithmus, im Quelltext `ln`: `log` leitet die
-    /// Anweisung ein (2.2).
-    Log,
-    Pow,
-    /// Korrekt gerundetes `a * b + c` (4.2).
-    Fma,
-    /// `float → int` mit Range-Pruefung (4.1).
-    Round,
-    Floor,
-    Ceil,
-    Rotl,
-    Rotr,
-    WrappingAdd,
-    WrappingSub,
-    WrappingMul,
-    SaturatingAdd,
-    SaturatingSub,
-    /// Stueckweise lineare Interpolation in einer Tabelle (3.9).
-    Interp,
+with_all! {
+    /// Eingebaute Primitive: total oder mit definiertem Fault (`Domain`, `RangeFault`,
+    /// `NonFinite`); anders als Natives ohne Kostenvertrag, ihre Kosten zaehlt das
+    /// Kostenmodell nach Klasse, die korrekt gerundete Mathematik mit eigenem
+    /// Gewicht ([`Intrinsic::is_math`]). Polymorph ueber Breiten und Einheiten
+    /// (`sqrt`: `U^2 → U`; `min`, `max`, `abs`: Einheit bleibt).
+    #[allow(missing_docs)]
+    pub enum Intrinsic {
+        Abs,
+        Min,
+        Max,
+        Sqrt,
+        Sin,
+        Cos,
+        Tan,
+        Asin,
+        Acos,
+        Atan,
+        Atan2,
+        Exp,
+        /// Der natuerliche Logarithmus, im Quelltext `ln`: `log` leitet die
+        /// Anweisung ein (2.2).
+        Log,
+        Pow,
+        /// Korrekt gerundetes `a * b + c` (4.2).
+        Fma,
+        /// `float → int` mit Range-Pruefung (4.1).
+        Round,
+        Floor,
+        Ceil,
+        Rotl,
+        Rotr,
+        WrappingAdd,
+        WrappingSub,
+        WrappingMul,
+        SaturatingAdd,
+        SaturatingSub,
+        /// Stueckweise lineare Interpolation in einer Tabelle (3.9).
+        Interp,
+    }
 }
 
 impl Intrinsic {
@@ -708,54 +717,25 @@ impl Intrinsic {
         )
     }
 
-    /// Alle Primitive.
-    pub const ALL: [Intrinsic; 26] = [
-        Intrinsic::Abs,
-        Intrinsic::Min,
-        Intrinsic::Max,
-        Intrinsic::Sqrt,
-        Intrinsic::Sin,
-        Intrinsic::Cos,
-        Intrinsic::Tan,
-        Intrinsic::Asin,
-        Intrinsic::Acos,
-        Intrinsic::Atan,
-        Intrinsic::Atan2,
-        Intrinsic::Exp,
-        Intrinsic::Log,
-        Intrinsic::Pow,
-        Intrinsic::Fma,
-        Intrinsic::Round,
-        Intrinsic::Floor,
-        Intrinsic::Ceil,
-        Intrinsic::Rotl,
-        Intrinsic::Rotr,
-        Intrinsic::WrappingAdd,
-        Intrinsic::WrappingSub,
-        Intrinsic::WrappingMul,
-        Intrinsic::SaturatingAdd,
-        Intrinsic::SaturatingSub,
-        Intrinsic::Interp,
-    ];
-
     /// Primitive zu einem Namen.
     pub fn from_name(name: &str) -> Option<Intrinsic> {
         Intrinsic::ALL.into_iter().find(|i| i.name() == name)
     }
 }
 
-/// Temporaloperator einer Eigenschaft (13.3).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(missing_docs)]
-pub enum TemporalOp {
-    Always,
-    Never,
-    /// `eventually[d]`
-    Eventually,
-    /// `stable[d]`
-    Stable,
-    /// `once[d]`
-    Once,
+with_all! {
+    /// Temporaloperator einer Eigenschaft (13.3).
+    #[allow(missing_docs)]
+    pub enum TemporalOp {
+        Always,
+        Never,
+        /// `eventually[d]`
+        Eventually,
+        /// `stable[d]`
+        Stable,
+        /// `once[d]`
+        Once,
+    }
 }
 
 /// Eigenschaft (13.3, Grammatik `tprop`): beschraenkte Temporallogik ueber

@@ -1,6 +1,7 @@
 //! Format `TAKT-MIR`: schreiben, lesen, gleich — fuer jede Knotenart; Kopf;
 //! Vorwaertskompatibilitaet (unbekannte Felder, fehlende Listen); Hashes.
 
+use takt_mir::census::{all, census};
 use takt_mir::format::codec::Field;
 use takt_mir::format::wire::{Node, Reader, Writer};
 use takt_mir::format::{FORMAT_VERSION, decode_body, encode_body, read_header, read_program, write_program};
@@ -24,90 +25,29 @@ fn full_program_round_trips() {
     assert_eq!(again, bytes, "Schreiben ist deterministisch");
 }
 
+/// Jede Konstruktion, die der Census kennt, steht im Beispielprogramm; der
+/// Roundtrip prueft sie also alle. Bis hierher stand eine Namensliste als
+/// Teilstring im Debug-Text, und 85 Konstruktionen fehlten unbemerkt
+/// (FB-404), darunter `Format`, `JobState`, `Stream` und jeder Zugriff
+/// ausser einem Dutzend.
 #[test]
 fn sample_covers_every_node_kind() {
     let p = full_program();
+    let used = census(&p);
+    let missing: Vec<String> = all().into_iter().filter(|c| !used.contains(c)).map(|c| format!("{c:?}")).collect();
+    assert!(missing.is_empty(), "fehlen im Beispielprogramm: {}", missing.join(" "));
+    // Was der Census nicht zaehlt, weil es keine Komponente ablehnen kann:
+    // Beobachtungen, Bindungen, Layouts, Puffer, Fault-Arten, Kampagnen.
     let text = format!("{p:#?}");
     let expected = [
-        "Bool",
-        "Int",
-        "Float",
-        "Duration",
-        "Enum",
-        "Record",
-        "Array",
-        "Bytes",
-        "Vec",
-        "Str",
-        "Line",
-        "Samples",
-        "Table",
-        "Mat",
-        "Map",
-        "Optional",
-        "Result",
-        "Stream",
-        "Capture",
-        "Handle",
-        "Variant",
-        "BlockInit",
-        "Published",
-        "StateOf",
-        "Signal",
-        "Builtin",
-        "Field",
-        "Index",
-        "Index2",
-        "Slice",
-        "Accessor",
-        "Unary",
-        "Binary",
-        "Cond",
-        "Cast",
-        "Convert",
-        "Matches",
-        "Call",
-        "NativeCall",
-        "MatOp",
-        "Decode",
-        "Checked",
-        "Assign",
-        "Check",
-        "Goto",
-        "Abort",
-        "If",
-        "ForRange",
-        "ForEach",
-        "Match",
-        "Return",
-        "Send",
-        "At",
-        "Cancel",
-        "Raise",
-        "Job",
-        "Every",
-        "Break",
-        "Observe",
-        "Arm",
-        "MethodCall",
-        "Pass",
         "Alert",
         "Log",
         "Measure",
         "Verify",
         "Verdict",
-        "Wait",
-        "Until",
-        "Expect",
-        "Repeat",
-        "Step",
-        "Temporal",
         "Implies",
         "Hw",
         "Sim",
-        "Template",
-        "Instance",
-        "Scenario",
         "Dimensioned",
         "Uniform",
         "LengthPrefixed",
@@ -115,27 +55,10 @@ fn sample_covers_every_node_kind() {
         "DropOldest",
         "Drop",
         "sweeps: [",
-        "Trigger",
-        "Property",
-        "Campaign",
-        "Node",
-        "Profile",
-        "Command",
-        "PersistVar",
-        "ScopedInstance",
         "Fired",
         "Internal",
-        "Wrap",
         "Runtime",
         "Arithmetic",
-        "Lift(",
-        "Ok(",
-        "Err(",
-        "Intrinsic {",
-        "Sqrt",
-        "Round",
-        "Fma",
-        "WrappingAdd",
     ];
     for name in expected {
         assert!(text.contains(name), "Knoten {name} fehlt im Beispielprogramm");

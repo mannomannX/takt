@@ -9,6 +9,7 @@ pub mod encode;
 pub mod eval;
 pub mod smt;
 pub mod solve;
+pub mod support;
 pub mod term;
 
 pub use encode::{CheckSite, ContractGoal, Goal, Model, StateVar, Unsupported, encode, encode_machine};

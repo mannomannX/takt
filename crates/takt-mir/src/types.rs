@@ -9,7 +9,7 @@ use takt_diag::Span;
 use crate::ids::{EnumId, RecordId, TypeId, UnitId};
 
 /// Breite eines Integer-Typs (3.1); `int` ist `I64`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(missing_docs)]
 pub enum IntWidth {
     I8,

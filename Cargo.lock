@@ -568,6 +568,7 @@ dependencies = [
  "takt-llvm",
  "takt-mir",
  "takt-native",
+ "takt-prove",
  "takt-sema",
  "takt-testkit",
 ]

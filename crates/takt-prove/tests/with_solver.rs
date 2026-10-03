@@ -35,6 +35,32 @@ fn solver() -> Option<Solver> {
     takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren")
 }
 
+/// Ein Programm, das `n` Durchlaeufe einer Schleife in `outer` Durchlaeufen ausrollt.
+fn nested_loops(outer: u32, n: u32) -> Program {
+    compile(&format!(
+        "system:\n    language = 1\n    tick     = 10 ms\n\n\
+         output total : int @ hw(\"total\") with safe = 0\n\n\
+         machine m:\n    var acc : int = 0\n    initial RUN\n\n    state RUN:\n        loop:\n\
+         \x20           for i in range({outer}):\n                for j in range({n}):\n\
+         \x20                   acc = (acc + 1) % 1000\n            total = acc\n"
+    ))
+}
+
+/// **Die Grenze des Ausrollens.** Eine Schleife ueber der Grenze ist
+/// ausser Reichweite, statt die Terme ohne Ende zu vertiefen: `takt prove`
+/// lief bei 1000 × 3000 Durchlaeufen ueber den Stack (FB-403). Darunter
+/// kodiert er weiter; der Test braucht keinen Solver.
+#[test]
+fn a_loop_beyond_the_unroll_limit_is_out_of_reach() {
+    let limit = u32::try_from(takt_prove::encode::UNROLL_LIMIT).expect("Grenze");
+    for (outer, n) in [(64, 64), (1, limit)] {
+        let e = encode(&nested_loops(outer, n)).expect_err("ueber der Grenze");
+        assert!(e.what.contains("Durchlaeufe"), "{}", e.what);
+    }
+    let r = encode(&nested_loops(1, limit - 1));
+    assert!(r.is_ok(), "an der Grenze: {:?}", r.err());
+}
+
 #[test]
 fn an_inductive_invariant_is_proven() {
     let Some(solver) = solver() else { return };

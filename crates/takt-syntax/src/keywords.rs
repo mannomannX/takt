@@ -281,6 +281,7 @@ pub const RESERVED_MEMBERS: &[&str] = &[
     "remove",
     "clear",
     "skip",
+    "peek",
     "starts_with",
     "contains",
     "armed",
@@ -291,6 +292,7 @@ pub const RESERVED_MEMBERS: &[&str] = &[
     "rate",
     "remaining",
     "truncated",
+    "sent",
     "reset",
 ];
 

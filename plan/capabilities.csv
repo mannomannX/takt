@@ -1,0 +1,276 @@
+Konstruktion,Codegen,Beweiser,Korpus
+Expr(Bool),ja,ja,ja
+Expr(Int),ja,ja,ja
+Expr(Float),ja,ja,ja
+Expr(Duration),ja,ja,ja
+Expr(Str),ja,nein: Text ist nicht kodiert,ja
+Expr(None),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Default),ja,ja,ja
+Expr(Variant),ja,teilweise: nur Varianten ohne Felder,ja
+Expr(Record),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Array),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Tuple),teilweise: nur als Stuetzstelle von `interp`,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(BlockInit),teilweise: nur als Anfangswert einer Blockinstanz,teilweise: Blockinstanzen nur ueber ihre Felder,ja
+Expr(Var),ja,ja,ja
+Expr(Param),ja,ja,ja
+Expr(Command),ja,ja,ja
+Expr(Input),ja,ja,ja
+Expr(Output),ja,ja,ja
+Expr(Published),ja,teilweise: nicht ueber ein Instanz-Array,ja
+Expr(StateOf),ja,teilweise: nicht ueber ein Instanz-Array,ja
+Expr(Signal),ja,teilweise: nicht ueber ein Instanz-Array,ja
+Expr(Builtin),ja,ja,ja
+Expr(Armed),ja,nein: Trigger und Registerports sind nicht kodiert,nein
+Expr(PortRead),ja,nein: Trigger und Registerports sind nicht kodiert,ja
+Expr(Field),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Index),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Index2),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Slice),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Accessor),ja,nein: Zugriffe sind nicht kodiert,ja
+Expr(Unary),ja,ja,ja
+Expr(Binary),ja,ja,ja
+Expr(Cond),ja,ja,ja
+Expr(Cast),ja,teilweise: nur zwischen Ganzzahl und Fliesskomma,ja
+Expr(Convert),ja,ja,ja
+Expr(Format),"teilweise: nur in Meldungen und `send`; kein `float`, kein zusammengesetzter Wert",nein: Text ist nicht kodiert,ja
+Expr(JobState),ja,"nein: Jobs, Stroeme und Muster sind nicht kodiert",ja
+Expr(Stream),teilweise: nur als Empfaenger eines Zugriffs,"nein: Jobs, Stroeme und Muster sind nicht kodiert",ja
+Expr(Matches),"teilweise: nur in Handlern, Guards und Bedingungen","nein: Jobs, Stroeme und Muster sind nicht kodiert",ja
+Expr(Call),ja,"teilweise: Funktionen mit Rueckgabe, ohne `inout`, aus kodierbaren Anweisungen",ja
+Expr(NativeCall),ja,nein: Natives und Matrizen sind nicht kodiert,ja
+Expr(MatOp),ja,nein: Natives und Matrizen sind nicht kodiert,ja
+Expr(Decode),ja,"nein: Jobs, Stroeme und Muster sind nicht kodiert",ja
+Expr(Checked),ja,ja,ja
+Expr(Lift),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Ok),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Err),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Intrinsic),ja,ja,ja
+Unary(Neg),ja,ja,ja
+Unary(Not),ja,ja,ja
+Unary(BitNot),ja,nein: `~` ist nicht kodiert,nein
+Binary(Or),ja,ja,ja
+Binary(And),ja,ja,ja
+Binary(Lt),ja,ja,ja
+Binary(Le),ja,ja,ja
+Binary(Gt),ja,ja,ja
+Binary(Ge),ja,ja,ja
+Binary(Eq),ja,ja,ja
+Binary(Ne),ja,ja,ja
+Binary(BitOr),ja,ja,ja
+Binary(BitXor),ja,ja,ja
+Binary(BitAnd),ja,ja,ja
+Binary(Shl),ja,ja,ja
+Binary(Shr),ja,ja,ja
+Binary(Add),ja,ja,ja
+Binary(Sub),ja,ja,ja
+Binary(Mul),ja,ja,ja
+Binary(Div),ja,ja,ja
+Binary(Rem),ja,teilweise: `%` nur auf Ganzzahlen,ja
+Convert(To),ja,nein: Einheitenumrechnung `.to`,ja
+Convert(ToFloat),ja,ja,ja
+Convert(As),teilweise: `as` nicht zwischen allen Typen,ja,ja
+Mat(Transpose),ja,nein: Matrizen sind nicht kodiert,ja
+Mat(Inv),ja,nein: Matrizen sind nicht kodiert,ja
+Mat(Det),ja,nein: Matrizen sind nicht kodiert,ja
+Mat(Solve),ja,nein: Matrizen sind nicht kodiert,ja
+Mat(Cholesky),ja,nein: Matrizen sind nicht kodiert,ja
+Builtin(Now),ja,ja,ja
+Builtin(Tick),ja,ja,ja
+Builtin(TimeInState),ja,teilweise: `time_in_state` nur in einem Zustand,nein
+Builtin(LastFault),"teilweise: `LastFault` nur in der Gestalt `str<128>`, `int`, `int`",nein: eingebaute Groesse ohne Modell,ja
+Builtin(Event),ja,nein: eingebaute Groesse ohne Modell,ja
+Check(DivZero),ja,ja,ja
+Check(Overflow),ja,"teilweise: angenommen, nicht modelliert: Ueberlauf und Schiebebetraege (FB-372, FB-386)",ja
+Check(NonFinite),ja,ja,ja
+Check(Domain),ja,"teilweise: angenommen, nicht modelliert: Definitionsbereich",ja
+Check(Index),ja,nein: Wrapper oder Index,ja
+Check(Range),ja,ja,ja
+Check(Convert),ja,"teilweise: angenommen, nicht modelliert: Ueberlauf und Schiebebetraege (FB-372, FB-386)",ja
+Check(Shift),ja,"teilweise: angenommen, nicht modelliert: Ueberlauf und Schiebebetraege (FB-372, FB-386)",ja
+Check(Valid),ja,teilweise: angenommen: Inputs gelten als gueltig (FB-372),ja
+Check(Missing),ja,nein: Wrapper oder Index,ja
+Intrinsic(Abs),ja,ja,ja
+Intrinsic(Min),ja,ja,ja
+Intrinsic(Max),ja,ja,ja
+Intrinsic(Sqrt),ja,teilweise: nur auf Fliesskomma,ja
+Intrinsic(Sin),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Cos),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Tan),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Asin),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Acos),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Atan),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Atan2),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Exp),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Log),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Pow),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Fma),ja,teilweise: nur auf Fliesskomma,ja
+Intrinsic(Round),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Floor),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Ceil),ja,nein: Primitive ohne Kodierung,nein
+Intrinsic(Rotl),ja,nein: Primitive ohne Kodierung,nein
+Intrinsic(Rotr),ja,nein: Primitive ohne Kodierung,nein
+Intrinsic(WrappingAdd),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(WrappingSub),ja,nein: Primitive ohne Kodierung,nein
+Intrinsic(WrappingMul),ja,nein: Primitive ohne Kodierung,nein
+Intrinsic(SaturatingAdd),ja,nein: Primitive ohne Kodierung,nein
+Intrinsic(SaturatingSub),ja,nein: Primitive ohne Kodierung,nein
+Intrinsic(Interp),teilweise: nur ueber eine Tabelle aus Literalen mit mindestens zwei Stuetzstellen,nein: Primitive ohne Kodierung,ja
+Accessor(Valid),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Suspect),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Stale),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Age),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Reason),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Or),teilweise: `.or` nur auf einem Channel oder Wrapper,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Ok),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Err),teilweise: `.err` nicht auf `T?`,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(T),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Seq),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Text),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Data),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Len),teilweise: `.len` nur auf Sammlungen,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Count),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Dropped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Malformed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Overflowed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Free),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Jitter),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(TimeWarped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Done),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Result),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Bit),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Bits),"teilweise: `.bits` nur mit konstanten, geordneten Grenzen","nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(WithBit),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Min),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Max),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Mean),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Rms),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Last),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Encode),teilweise: `encode` nur auf Records,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Get),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(StartsWith),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Contains),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Armed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Pre),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Post),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Samples),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Rate),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Remaining),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Truncated),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Peek),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Sent),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Wrap),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Match(Matches),ja,nein: Mustervergleich ist nicht kodiert,ja
+Match(Has),ja,nein: Mustervergleich ist nicht kodiert,ja
+Stmt(Assign),ja,ja,ja
+Stmt(Check),ja,teilweise: ohne `for` und `within`,ja
+Stmt(Goto),ja,ja,ja
+Stmt(Abort),ja,ja,ja
+Stmt(If),ja,ja,ja
+Stmt(ForRange),ja,teilweise: bis `UNROLL_LIMIT` Durchlaeufe auf einem Pfad (FB-403),ja
+Stmt(ForEach),ja,nein: `for … in` und `break` sind nicht kodiert,ja
+Stmt(Match),ja,teilweise: nur `case` auf Varianten ohne Felder,ja
+Stmt(Return),ja,ja,ja
+Stmt(Send),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
+Stmt(At),ja,nein: `at` und `every` sind nicht kodiert,ja
+Stmt(Cancel),ja,nein: Stroeme und Trigger sind nicht kodiert,nein
+Stmt(Skip),ja,nein: Stroeme und Trigger sind nicht kodiert,nein
+Stmt(Raise),ja,ja,ja
+Stmt(Job),ja,nein: Jobs sind nicht kodiert,ja
+Stmt(Every),ja,nein: `at` und `every` sind nicht kodiert,ja
+Stmt(Break),ja,nein: `for … in` und `break` sind nicht kodiert,ja
+Stmt(Observe),ja,ja,ja
+Stmt(Arm),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
+Stmt(MethodCall),"teilweise: Methoden je nach Ziel: `step`, `reset`, Blockmethoden, `insert`, `remove`",teilweise: nur `step` einer Blockinstanz,ja
+Stmt(Pass),ja,ja,ja
+Place(Var),ja,ja,ja
+Place(Output),ja,ja,ja
+Place(Port),ja,"nein: Zuweisung an Feld, Element oder Port",ja
+Place(Field),ja,"nein: Zuweisung an Feld, Element oder Port",ja
+Place(Index),ja,"nein: Zuweisung an Feld, Element oder Port",ja
+Place(Index2),ja,"nein: Zuweisung an Feld, Element oder Port",ja
+Type(Bool),ja,ja,ja
+Type(Int),ja,ja,ja
+Type(Float),ja,ja,ja
+Type(Duration),ja,ja,ja
+Type(Enum),ja,teilweise: nur Enums ohne Felder,ja
+Type(Record),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Array),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Bytes),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Vec),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Str),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Line),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Samples),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Table),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Mat),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Map),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Optional),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Result),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Stream),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Capture),ja,nein: Typ ohne Sorte im Modell,ja
+Type(HandleJob),ja,nein: Typ ohne Sorte im Modell,ja
+Type(HandleTrigger),ja,nein: Typ ohne Sorte im Modell,nein
+Type(HandleBlock),ja,teilweise: Blockinstanzen nur ueber ihre Felder,ja
+Seq(Stmt),ja,ja,nein
+Seq(Wait),ja,ja,nein
+Seq(Until),ja,teilweise: kein Timeout-Fault einer Sequenz,nein
+Seq(Expect),ja,ja,nein
+Seq(Repeat),ja,ja,nein
+Seq(Step),ja,ja,nein
+Temporal(Always),ja,ja,ja
+Temporal(Never),ja,ja,ja
+Temporal(Eventually),ja,nein: Zeitoperatoren sind nicht kodiert (FB-374),ja
+Temporal(Stable),ja,nein: Zeitoperatoren sind nicht kodiert (FB-374),ja
+Temporal(Once),ja,nein: Zeitoperatoren sind nicht kodiert (FB-374),ja
+Feature(Multirate),ja,ja,ja
+Feature(Phase),ja,ja,ja
+Feature(Follows),ja,ja,ja
+Feature(DriverMachine),ja,ja,ja
+Feature(Template),ja,ja,ja
+Feature(Instance),ja,ja,ja
+Feature(Scenario),ja,ja,ja
+Feature(Persist),ja,ja,ja
+Feature(Signal),ja,ja,ja
+Feature(FaultedTransition),ja,nein: Uebergaenge aus FAULTED sind nicht kodiert,ja
+Feature(MachineHandler),ja,nein: Handler und Stroeme sind nicht kodiert,nein
+Feature(ChildStates),ja,ja,ja
+Feature(Idle),ja,ja,ja
+Feature(Resume),ja,ja,ja
+Feature(Exit),ja,ja,ja
+Feature(Sequence),ja,ja,nein
+Feature(ScopedInstance),ja,nein: gescopte Instanzen sind nicht kodiert,ja
+Feature(StateHandler),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(StateFaultTarget),ja,ja,ja
+Feature(HandlerPattern),teilweise: kein `{x:float}` im Handler-Muster,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(HandlerGuard),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(After),ja,ja,ja
+Feature(GuardExpr),ja,ja,ja
+Feature(GuardMatch),ja,nein: Guards mit Muster sind nicht kodiert,ja
+Feature(GuardNext),ja,nein: Guards mit Muster sind nicht kodiert,ja
+Feature(TargetState),ja,ja,ja
+Feature(TargetFaulted),ja,ja,ja
+Feature(TargetFault),ja,ja,ja
+Feature(CheckConfirm),ja,nein: `check … for` und `within` sind nicht kodiert,ja
+Feature(CheckWithin),ja,nein: `check … for` und `within` sind nicht kodiert,ja
+Feature(Expect),ja,ja,ja
+Feature(ArmVariant),ja,ja,ja
+Feature(ArmValues),ja,nein: `case` mit Werten ist nicht kodiert,ja
+Feature(ArmWild),ja,ja,ja
+Feature(EnumWithFields),ja,teilweise: Varianten mit Feldern werden weder gebaut noch verglichen,ja
+Feature(Function),ja,ja,ja
+Feature(Block),ja,ja,ja
+Feature(Native),ja,ja,ja
+Feature(InputStream),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(OutputStream),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(InternalStream),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(Command),ja,ja,ja
+Feature(Param),ja,ja,ja
+Feature(Tunable),ja,teilweise: Tunables gelten als ihr Default (FB-372),ja
+Feature(Profile),ja,ja,ja
+Feature(Property),ja,ja,ja
+Feature(Assumption),ja,ja,ja
+Feature(Monitor),ja,ja,ja
+Feature(Trigger),ja,nein: Trigger und Registerports sind nicht kodiert,ja
+Feature(Port),ja,nein: Trigger und Registerports sind nicht kodiert,ja
+Feature(Recorded),ja,ja,ja
+Feature(Campaign),ja,ja,ja
+Feature(Node),ja,ja,nein

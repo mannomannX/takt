@@ -57,6 +57,7 @@ pub mod scope;
 pub mod step;
 pub mod stmt;
 pub mod stream;
+pub mod support;
 pub mod symbols;
 pub mod target;
 pub mod toolchain;

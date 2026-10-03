@@ -2,9 +2,17 @@
 //! in Sequenzen, Meldungen und Uebergangsbedingungen. Pruefungen der Sema
 //! und der Codegen fragen dieselben Stellen ab; ein zweiter Durchlauf
 //! koennte eine uebersehen, die der erste kennt.
+//!
+//! **Ohne Platzhalter** (FB-377): Jede Variante und jedes Feld, das einen
+//! Ausdruck oder Block tragen kann, steht hier beim Namen, auch in
+//! [`Machine`], [`State`] und [`Handler`]. Eine neue Variante oder ein neues
+//! Feld uebersetzt erst, wenn der Durchlauf sie kennt; vorher blieben ein
+//! `within:` eines `check` und die Bedingung eines Handlers ungelesen
+//! (FB-405).
 
 use crate::expr::{Builtin, Expr, ExprKind};
 use crate::machine::*;
+use crate::pattern::Pattern;
 use crate::stmt::*;
 
 /// Jede Anweisung einer Maschine (auch geschachtelte Bloecke).
@@ -27,21 +35,69 @@ pub fn for_each_stmt_ctx(m: &Machine, f: &mut impl FnMut(&Stmt, u32)) {
 /// Ein Handler-Rumpf ist gewoehnlicher Code (8.7): er schreibt Outputs und
 /// liest Channels wie jeder andere Block.
 pub fn for_each_block(m: &Machine, f: &mut impl FnMut(&Block)) {
-    f(&m.loop_block);
-    for h in &m.handlers {
+    let Machine {
+        name: _,
+        kind: _,
+        driver: _,
+        polling_unchecked: _,
+        fault_is_fail: _,
+        params: _,
+        period: _,
+        phase: _,
+        follows: _,
+        node: _,
+        vars: _,
+        persist: _,
+        signals: _,
+        fault_target: _,
+        states,
+        roots: _,
+        initial: _,
+        loop_block,
+        handlers,
+        faulted,
+        layout: _,
+        budget: _,
+        declared_budget: _,
+        meta: _,
+        span: _,
+    } = m;
+    f(loop_block);
+    for h in handlers {
         f(&h.body);
     }
-    for t in &m.faulted.transitions {
+    for t in &faulted.transitions {
         f(&t.actions);
     }
-    for s in &m.states {
-        f(&s.enter);
-        f(&s.exit);
-        f(&s.loop_block);
-        for h in &s.handlers {
+    for s in states {
+        let State {
+            name: _,
+            parent: _,
+            children: _,
+            initial: _,
+            idle: _,
+            resume: _,
+            vars: _,
+            enter,
+            exit,
+            loop_block,
+            handlers,
+            transitions,
+            fault_target: _,
+            sequence: _,
+            sequence_ticks: _,
+            instances: _,
+            step_name: _,
+            meta: _,
+            span: _,
+        } = s;
+        f(enter);
+        f(exit);
+        f(loop_block);
+        for h in handlers {
             f(&h.body);
         }
-        for t in &s.transitions {
+        for t in transitions {
             f(&t.actions);
         }
     }
@@ -58,7 +114,7 @@ pub fn walk_seq(items: &[SeqItem], f: &mut dyn FnMut(&Stmt, u32)) {
                 }
             }
             SeqItem::Repeat { body, .. } | SeqItem::Step { body, .. } => walk_seq(body, f),
-            _ => {}
+            SeqItem::Until { timeout: None, .. } | SeqItem::Wait(_) | SeqItem::Expect { .. } => {}
         }
     }
 }
@@ -79,7 +135,21 @@ pub fn walk_stmts(stmts: &[Stmt], depth: u32, f: &mut dyn FnMut(&Stmt, u32)) {
                     walk_stmts(&a.body.stmts, depth, f);
                 }
             }
-            _ => {}
+            StmtKind::Assign { .. }
+            | StmtKind::Check { .. }
+            | StmtKind::Goto(_)
+            | StmtKind::Abort { .. }
+            | StmtKind::Return(_)
+            | StmtKind::Send { .. }
+            | StmtKind::Cancel(_)
+            | StmtKind::Skip(_)
+            | StmtKind::Raise(_)
+            | StmtKind::Job { .. }
+            | StmtKind::Break
+            | StmtKind::Observe(_)
+            | StmtKind::Arm { .. }
+            | StmtKind::MethodCall { .. }
+            | StmtKind::Pass => {}
         }
     }
 }
@@ -106,6 +176,11 @@ pub fn for_each_expr_machine(m: &Machine, f: &mut impl FnMut(&Expr)) {
             walk_expr(init, f);
         }
     }
+    for prm in &m.params {
+        if let Some(d) = &prm.default {
+            walk_expr(d, f);
+        }
+    }
     for_each_stmt(m, &mut |s| stmt_exprs(s, &mut |e| walk_expr(e, f)));
     for s in &m.states {
         for t in &s.transitions {
@@ -118,14 +193,48 @@ pub fn for_each_expr_machine(m: &Machine, f: &mut impl FnMut(&Expr)) {
     for t in &m.faulted.transitions {
         trigger_exprs(&t.trigger, &mut |e| walk_expr(e, f));
     }
+    for h in m.handlers.iter().chain(m.states.iter().flat_map(|s| &s.handlers)) {
+        handler_exprs(h, &mut |e| walk_expr(e, f));
+    }
+}
+
+/// Muster und Bedingung eines Handlers; den Rumpf liefert [`for_each_stmt`].
+fn handler_exprs(h: &Handler, f: &mut impl FnMut(&Expr)) {
+    let Handler { stream: _, pattern, binding: _, guard, body: _, span: _ } = h;
+    if let Some((_, p)) = pattern {
+        pattern_exprs(p, f);
+    }
+    if let Some(g) = guard {
+        f(g);
+    }
+}
+
+fn pattern_exprs(p: &Pattern, f: &mut impl FnMut(&Expr)) {
+    match p {
+        Pattern::Text { pieces: _ } => {}
+        Pattern::Record { record: _, fields } => {
+            for (_, e) in fields {
+                f(e);
+            }
+        }
+    }
+}
+
+fn guard_exprs(g: &Guard, f: &mut impl FnMut(&Expr)) {
+    match g {
+        Guard::Expr(e) => f(e),
+        Guard::Match { subject, kind: _, pattern, binding: _ } => {
+            f(subject);
+            pattern_exprs(pattern, f);
+        }
+        Guard::Next { stream: _, binding: _ } => {}
+    }
 }
 
 fn trigger_exprs(t: &TransTrigger, f: &mut impl FnMut(&Expr)) {
     match t {
         TransTrigger::After(d) => f(d),
-        TransTrigger::When(Guard::Expr(e)) => f(e),
-        TransTrigger::When(Guard::Match { subject, .. }) => f(subject),
-        TransTrigger::When(Guard::Next { .. }) => {}
+        TransTrigger::When(g) => guard_exprs(g, f),
     }
 }
 
@@ -135,11 +244,7 @@ fn seq_exprs(items: &[SeqItem], f: &mut impl FnMut(&Expr)) {
             SeqItem::Stmt(s) => stmt_exprs(s, f),
             SeqItem::Wait(d) => f(d),
             SeqItem::Until { guard, timeout, .. } => {
-                match guard {
-                    Guard::Expr(e) => f(e),
-                    Guard::Match { subject, .. } => f(subject),
-                    Guard::Next { .. } => {}
-                }
+                guard_exprs(guard, f);
                 if let Some(t) = timeout {
                     f(&t.duration);
                 }
@@ -161,7 +266,7 @@ pub fn stmt_exprs(s: &Stmt, f: &mut impl FnMut(&Expr)) {
             place_exprs(target, f);
             f(value);
         }
-        StmtKind::Check { cond, message, confirm, .. } => {
+        StmtKind::Check { cond, message, confirm, within, target: _, req: _, kind: _ } => {
             f(cond);
             if let Some(m) = message {
                 format_exprs(m, f);
@@ -169,11 +274,15 @@ pub fn stmt_exprs(s: &Stmt, f: &mut impl FnMut(&Expr)) {
             if let Some(c) = confirm {
                 f(&c.duration);
             }
+            if let Some(w) = within {
+                f(w);
+            }
         }
         StmtKind::Abort { message: Some(m) } => format_exprs(m, f),
-        StmtKind::If { cond, .. } => f(cond),
-        StmtKind::ForRange { count, .. } => f(count),
-        StmtKind::ForEach { iter, .. } => f(iter),
+        StmtKind::Abort { message: None } => {}
+        StmtKind::If { cond, then: _, otherwise: _ } => f(cond),
+        StmtKind::ForRange { var: _, count, body: _ } => f(count),
+        StmtKind::ForEach { vars: _, iter, body: _ } => f(iter),
         StmtKind::Match { subject, arms } => {
             f(subject);
             for a in arms {
@@ -188,16 +297,16 @@ pub fn stmt_exprs(s: &Stmt, f: &mut impl FnMut(&Expr)) {
             }
         }
         StmtKind::Return(e) => f(e),
-        StmtKind::Send { value, .. } => f(value),
-        StmtKind::At { time, .. } => f(time),
-        StmtKind::Job { args, .. } => {
+        StmtKind::Send { stream: _, value, len_max: _ } => f(value),
+        StmtKind::At { time, body: _ } => f(time),
+        StmtKind::Job { handle: _, native: _, args } => {
             for a in args {
                 f(a);
             }
         }
-        StmtKind::Every { period, .. } => f(period),
+        StmtKind::Every { period, counter: _, body: _ } => f(period),
         StmtKind::Observe(o) => match o {
-            Observe::Alert { cond, message, confirm, .. } => {
+            Observe::Alert { cond, message, confirm, req: _ } => {
                 f(cond);
                 format_exprs(message, f);
                 if let Some(c) = confirm {
@@ -205,15 +314,15 @@ pub fn stmt_exprs(s: &Stmt, f: &mut impl FnMut(&Expr)) {
                 }
             }
             Observe::Log(m) => format_exprs(m, f),
-            Observe::Measure { value, .. } => f(value),
-            Observe::Verify { cond, message, .. } => {
+            Observe::Measure { name: _, value } => f(value),
+            Observe::Verify { cond, message, req: _ } => {
                 f(cond);
                 format_exprs(message, f);
             }
             Observe::Verdict { message: Some(m), .. } => format_exprs(m, f),
             Observe::Verdict { .. } => {}
         },
-        StmtKind::MethodCall { target, receiver, args, .. } => {
+        StmtKind::MethodCall { target, receiver, method: _, args } => {
             if let Some(t) = target {
                 place_exprs(t, f);
             }
@@ -222,7 +331,13 @@ pub fn stmt_exprs(s: &Stmt, f: &mut impl FnMut(&Expr)) {
                 f(a);
             }
         }
-        _ => {}
+        StmtKind::Goto(_)
+        | StmtKind::Cancel(_)
+        | StmtKind::Skip(_)
+        | StmtKind::Raise(_)
+        | StmtKind::Break
+        | StmtKind::Arm { .. }
+        | StmtKind::Pass => {}
     }
 }
 
@@ -255,18 +370,20 @@ pub fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
     f(e);
     let mut sub = |x: &Expr| walk_expr(x, f);
     match &e.kind {
-        ExprKind::Variant { fields, .. } | ExprKind::Record { fields, .. } => fields.iter().for_each(sub),
+        ExprKind::Variant { enum_id: _, variant: _, fields } | ExprKind::Record { record: _, fields } => {
+            fields.iter().for_each(sub);
+        }
         ExprKind::Array(items) => items.iter().for_each(sub),
         ExprKind::Tuple(a, b) => {
             sub(a);
             sub(b);
         }
-        ExprKind::BlockInit { args, .. }
-        | ExprKind::Call { args, .. }
-        | ExprKind::NativeCall { args, .. }
-        | ExprKind::MatOp { args, .. }
-        | ExprKind::Intrinsic { args, .. } => args.iter().for_each(sub),
-        ExprKind::Field { base, .. } => sub(base),
+        ExprKind::BlockInit { block: _, args, count: _ }
+        | ExprKind::Call { callee: _, args }
+        | ExprKind::NativeCall { native: _, args }
+        | ExprKind::MatOp { op: _, args }
+        | ExprKind::Intrinsic { op: _, args } => args.iter().for_each(sub),
+        ExprKind::Field { base, field: _ } => sub(base),
         ExprKind::Index { base, index } => {
             sub(base);
             sub(index);
@@ -281,14 +398,14 @@ pub fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
             sub(from);
             sub(to);
         }
-        ExprKind::Accessor { base, args, .. } => {
+        ExprKind::Accessor { base, accessor: _, args } => {
             sub(base);
             args.iter().for_each(sub);
         }
         ExprKind::Unary { expr, .. }
-        | ExprKind::Cast { expr, .. }
-        | ExprKind::Convert { expr, .. }
-        | ExprKind::Checked { expr, .. } => sub(expr),
+        | ExprKind::Cast { expr, to: _ }
+        | ExprKind::Convert { expr, kind: _, unit: _ }
+        | ExprKind::Checked { expr, kind: _ } => sub(expr),
         ExprKind::Lift(x) | ExprKind::Ok(x) | ExprKind::Err(x) => sub(x),
         ExprKind::Binary { lhs, rhs, .. } => {
             sub(lhs);
@@ -299,14 +416,33 @@ pub fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
             sub(then);
             sub(otherwise);
         }
-        ExprKind::Matches { subject, .. } => sub(subject),
-        ExprKind::Decode { bytes, .. } => sub(bytes),
-        ExprKind::Published { machine, .. } | ExprKind::StateOf(machine) | ExprKind::Signal { machine, .. } => {
+        ExprKind::Matches { subject, kind: _, pattern: _, binding: _ } => sub(subject),
+        ExprKind::Decode { record: _, bytes } => sub(bytes),
+        ExprKind::Format(m) => format_exprs(m, &mut sub),
+        ExprKind::Published { machine, var: _ }
+        | ExprKind::StateOf(machine)
+        | ExprKind::Signal { machine, signal: _ } => {
             if let Some(i) = &machine.index {
                 sub(i);
             }
         }
-        _ => {}
+        ExprKind::Bool(_)
+        | ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Duration(_)
+        | ExprKind::Str(_)
+        | ExprKind::None
+        | ExprKind::Default
+        | ExprKind::Var(_)
+        | ExprKind::Param(_)
+        | ExprKind::Command(_)
+        | ExprKind::Input { .. }
+        | ExprKind::Output(_)
+        | ExprKind::Builtin(_)
+        | ExprKind::Armed(_)
+        | ExprKind::PortRead(_)
+        | ExprKind::JobState { .. }
+        | ExprKind::Stream(_) => {}
     }
 }
 
