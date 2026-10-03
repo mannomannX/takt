@@ -37,6 +37,7 @@ members = [
     "crates/takt-llvm",
     "crates/takt-frame",
     "crates/takt-conformance",
+    "crates/takt-testkit",
     "crates/takt-interp",
     "crates/takt-sema",
     "crates/takt-prove",

@@ -2,7 +2,6 @@
 //! Verletzungen im selben Tick (plan/m6.md 2.8).
 
 use takt_conformance::stimulus::Stimulus;
-use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
 mod common;
@@ -49,11 +48,7 @@ fn the_monitors_lower_and_the_interpreter_finds_the_violations() {
 
 #[test]
 fn native_monitors_report_the_same_violations_in_the_same_tick() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus();
     let stimulus = takt_interp::Trace::parse(STIMULUS).expect("Stimulus");
     let inputs: Vec<Stimulus> = stimulus

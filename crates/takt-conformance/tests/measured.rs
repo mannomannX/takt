@@ -13,10 +13,9 @@
 //! M6) gegen ein echtes Ziel (M5) — hier entsteht das Werkzeug und der
 //! Vergleich der Groessenordnung.
 //!
-//! Die Tests ueberspringen sich ohne clang und ohne die Binutils.
+//! Ohne clang und die Binutils scheitern die Tests, es sei denn, `TAKT_ALLOW_MISSING` nennt sie.
 
-use takt_llvm::inspect::Binutils;
-use takt_llvm::toolchain::{Clang, find};
+use takt_llvm::toolchain::Clang;
 use takt_mir::analysis::size;
 use takt_mir::program::Program;
 
@@ -69,25 +68,15 @@ fn object(p: &Program, dir: &std::path::Path, clang: &std::path::Path) -> Option
 /// sein als der Abschnitt.
 #[test]
 fn the_dfa_tables_fit_into_rodata() {
-    let Clang::At(clang) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let tools = Binutils::host();
-    if !tools.available() {
-        eprintln!("uebersprungen: binutils nicht gefunden");
-        return;
-    }
+    let Some(clang) = common::clang_path() else { return };
+    let Some(tools) = common::binutils() else { return };
     let p = corpus(NAME);
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-measured-dfa");
     let _ = std::fs::remove_dir_all(&dir);
     let Some(obj) = object(&p, &dir, &clang) else {
         panic!("das Objekt liess sich nicht bauen");
     };
-    let Some(sections) = tools.sections(&obj) else {
-        eprintln!("uebersprungen: `size` liest dieses Format nicht");
-        return;
-    };
+    let sections = tools.sections(&obj).expect("`size` liest das Objekt des Wirts");
 
     let report = size::size(&p);
     let gerechnet = report
@@ -142,25 +131,15 @@ fn table_bytes(line: &str) -> Option<u64> {
 /// nehmen ist eine Entscheidung fuer M5, wo ein Ziel feststeht.
 #[test]
 fn the_flash_share_can_be_measured() {
-    let Clang::At(clang) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let tools = Binutils::host();
-    if !tools.available() {
-        eprintln!("uebersprungen: binutils nicht gefunden");
-        return;
-    }
+    let Some(clang) = common::clang_path() else { return };
+    let Some(tools) = common::binutils() else { return };
     let p = corpus(NAME);
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-measured-flash");
     let _ = std::fs::remove_dir_all(&dir);
     let Some(obj) = object(&p, &dir, &clang) else {
         panic!("das Objekt liess sich nicht bauen");
     };
-    let Some(sections) = tools.sections(&obj) else {
-        eprintln!("uebersprungen: `size` liest dieses Format nicht");
-        return;
-    };
+    let sections = tools.sections(&obj).expect("`size` liest das Objekt des Wirts");
 
     assert!(sections.text > 0, "ein Programm mit zwei Schrittfunktionen hat Code");
     assert!(sections.rodata > 0, "ein Programm mit Mustern hat Konstanten");
@@ -182,25 +161,15 @@ fn the_flash_share_can_be_measured() {
 /// statt sie dann erst zu bauen.
 #[test]
 fn the_step_function_has_a_measurable_frame() {
-    let Clang::At(clang) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let tools = Binutils::host();
-    if !tools.available() {
-        eprintln!("uebersprungen: binutils nicht gefunden");
-        return;
-    }
+    let Some(clang) = common::clang_path() else { return };
+    let Some(tools) = common::binutils() else { return };
     let p = corpus(NAME);
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-measured-stack");
     let _ = std::fs::remove_dir_all(&dir);
     let Some(obj) = object(&p, &dir, &clang) else {
         panic!("das Objekt liess sich nicht bauen");
     };
-    let Some(symbols) = tools.symbols(&obj) else {
-        eprintln!("uebersprungen: `nm` liest dieses Format nicht");
-        return;
-    };
+    let symbols = tools.symbols(&obj).expect("`nm` liest das Objekt des Wirts");
 
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     let step = takt_llvm::arena::entry_symbol(&takt_llvm::symbols::Prefix::default(), &machine, "step");
@@ -210,10 +179,7 @@ fn the_step_function_has_a_measurable_frame() {
         symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
     );
 
-    let Some(frame) = tools.stack_frame(&obj, &step) else {
-        eprintln!("uebersprungen: `objdump` liest dieses Format nicht");
-        return;
-    };
+    let frame = tools.stack_frame(&obj, &step).expect("`objdump` liest das Objekt des Wirts");
     eprintln!("{step}: Stackrahmen {frame} B");
     // Ein Rahmen von null hiesse, die Funktion kaeme mit Registern aus —
     // bei einer Schrittfunktion mit Fensterdurchlauf und Automat waere
@@ -234,15 +200,8 @@ fn the_step_function_has_a_measurable_frame() {
 /// „belastbar" eine Luege — und dass sie mit Objekt `gemessen` werden.
 #[test]
 fn the_report_takes_the_measurement() {
-    let Clang::At(clang) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let tools = Binutils::host();
-    if !tools.available() {
-        eprintln!("uebersprungen: binutils nicht gefunden");
-        return;
-    }
+    let Some(clang) = common::clang_path() else { return };
+    let Some(tools) = common::binutils() else { return };
     let p = corpus(NAME);
 
     // Ohne Objekt: beide Posten offen, und die Summe sagt es.
@@ -257,10 +216,7 @@ fn the_report_takes_the_measurement() {
     let Some(obj) = object(&p, &dir, &clang) else {
         panic!("das Objekt liess sich nicht bauen");
     };
-    let Some(sections) = tools.sections(&obj) else {
-        eprintln!("uebersprungen: `size` liest dieses Format nicht");
-        return;
-    };
+    let sections = tools.sections(&obj).expect("`size` liest das Objekt des Wirts");
 
     let symbols: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
     let frames: Vec<Option<u32>> =
@@ -288,15 +244,8 @@ fn the_report_takes_the_measurement() {
 /// andere Zahlen liefert, waere keiner.
 #[test]
 fn reading_all_frames_at_once_agrees_with_reading_them_singly() {
-    let Clang::At(clang) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let tools = Binutils::host();
-    if !tools.available() {
-        eprintln!("uebersprungen: binutils nicht gefunden");
-        return;
-    }
+    let Some(clang) = common::clang_path() else { return };
+    let Some(tools) = common::binutils() else { return };
     let p = corpus("02_units_and_data.takt");
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-measured-frames");
     let _ = std::fs::remove_dir_all(&dir);
@@ -305,10 +254,7 @@ fn reading_all_frames_at_once_agrees_with_reading_them_singly() {
     };
 
     let symbols: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
-    if symbols.is_empty() {
-        eprintln!("uebersprungen: das Programm hat keine Funktionen");
-        return;
-    }
+    assert!(!symbols.is_empty(), "02_units_and_data hat Funktionen; ohne sie prueft der Test nichts");
     let batch = tools.stack_frames(&obj, &symbols);
     for (i, sym) in symbols.iter().enumerate() {
         assert_eq!(batch[i], tools.stack_frame(&obj, sym), "`{sym}`: Stapel- und Einzelmessung weichen ab");

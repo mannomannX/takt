@@ -119,9 +119,13 @@ impl Sink for Conformance {
 ///
 /// Der Weg ist der eines Wirts: [`Runtime::service`] an jeder Frist, und
 /// zwischen den Ticks rechnet jeder Job zu Ende (4.5, 13.8).
-pub fn run<P: crate::Program>(program: P, tick_ns: i64, ticks: u64) -> String {
+///
+/// # Panics
+///
+/// Wenn der Griff des Job-Kontexts schon vergeben ist (`Program::jobs`).
+pub fn run<P: crate::Program>(mut program: P, tick_ns: i64, ticks: u64) -> String {
     take();
-    let jobs = program.jobs();
+    let mut jobs = program.jobs().expect("der Job-Kontext gehoert der Testhilfe");
     let mut rt =
         Runtime::new(program, Logical::default(), Quiet, Conformance, Profile::BAREMETAL, tick_ns, Policy::Fault);
     // Die Frist des letzten Ticks ist `(ticks - 1) * tick_ns`; ein Schlaf (9.9)

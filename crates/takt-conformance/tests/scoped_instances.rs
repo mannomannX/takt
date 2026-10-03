@@ -7,8 +7,6 @@
 
 mod common;
 
-use takt_llvm::toolchain::{Clang, find};
-
 const PROGRAM: &str = "corpus-try/64_scoped_exit.takt";
 
 fn corpus(name: &str) -> takt_mir::Program {
@@ -33,11 +31,7 @@ fn logs(trace: &str) -> Vec<String> {
 /// Interpreter und im erzeugten Code gleich oft.
 #[test]
 fn the_exit_blocks_of_a_scoped_instance_run_in_both() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus(PROGRAM);
     let ticks = 16;
 

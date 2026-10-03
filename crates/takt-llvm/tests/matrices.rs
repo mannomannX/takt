@@ -37,13 +37,12 @@ fn the_matrix_corpus_lowers_completely() {
 
 #[test]
 fn the_matrix_ir_assembles() {
-    let clang = match find() {
-        Clang::At(p) => Clang::At(p),
-        Clang::Missing => {
-            eprintln!("uebersprungen: clang nicht gefunden");
-            return;
-        }
+    let Some(path) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
+        return;
     };
+    let clang = Clang::At(path);
     let lowered =
         takt_llvm::lower::program(&corpus(), "x86_64-pc-windows-msvc", &takt_llvm::symbols::Prefix::default());
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-llvm-matrizen");

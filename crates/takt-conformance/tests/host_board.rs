@@ -13,10 +13,7 @@ use takt_conformance::board::{self, CORPUS, host::Host};
 
 /// Der Wirt mit dem Pruefgeraet; ohne clang keiner.
 fn probe() -> Option<Host> {
-    if matches!(takt_llvm::toolchain::find(), takt_llvm::toolchain::Clang::Missing) {
-        eprintln!("clang fehlt; uebersprungen");
-        return None;
-    }
+    common::clang_path()?;
     Some(Host::with_driver(board::root().join("crates/takt-driver-probe")))
 }
 
@@ -41,10 +38,11 @@ fn the_unread_channels_are_recorded_on_the_host() {
 /// **Der MCU-Rahmen rechnet den Korpus der Boards wie der Interpreter, auch
 /// ohne Board** (9.4.4): derselbe Vergleich wie auf F401 und C6, ohne
 /// Treiber-Crate. Der Bau kostet einige Sekunden je Programm, darum nur mit
-/// `TAKT_HOST_CORPUS`; `TAKT_HOST_ONLY=42_map.takt` fuer einen einzelnen Fall.
+/// `--ignored`; `TAKT_HOST_ONLY=42_map.takt` fuer einen einzelnen Fall.
 #[test]
+#[ignore = "langsam: der Korpus der Boards auf dem Wirt; mit --ignored"]
 fn the_host_board_agrees_with_the_interpreter() {
-    if std::env::var_os("TAKT_HOST_CORPUS").is_none() || probe().is_none() {
+    if probe().is_none() {
         return;
     }
     let only = std::env::var("TAKT_HOST_ONLY").ok();

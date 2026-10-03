@@ -10,7 +10,6 @@
 
 use takt_conformance::compare;
 use takt_conformance::stimulus::Stimulus;
-use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
 mod common;
@@ -148,11 +147,7 @@ fn run_interpreted(p: &Program) -> String {
 /// nicht erst auf dem Board geprueft wird (FB-268, FB-273).
 #[test]
 fn virtual_sleep_is_invisible() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let mut failed = Vec::new();
     let mut slept = 0;
     for name in KORPUS {
@@ -192,11 +187,7 @@ fn virtual_sleep_is_invisible() {
 /// er trotz vollem Fenster, saehe sie es erst nach der Frist.
 #[test]
 fn a_full_wake_window_keeps_the_native_system_awake() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let src = "system:\n    language = 1\n    tick = 1 ms\n\n\
                input  bell : stream<u8> @ hw(\"bus/bell\") with capacity = 8, max_rate = 200 Hz, wake = true\n\
                output led  : bool @ hw(\"ui/led\") with safe = false\n\n\
@@ -231,11 +222,7 @@ fn a_full_wake_window_keeps_the_native_system_awake() {
 /// zur Frist.
 #[test]
 fn a_running_job_keeps_the_native_system_awake() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let src = "system:\n    language = 1\n    tick = 1 ms\n\n\
                native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 3 ms, total\n\n\
                output ready : bool @ hw(\"o/ready\") with safe = false\n\n\
@@ -261,11 +248,7 @@ fn a_running_job_keeps_the_native_system_awake() {
 /// Outputs (Satz 9.4.4).
 #[test]
 fn the_interpreter_and_the_generated_code_agree() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let mut failed = Vec::new();
     for name in KORPUS {
         let p = corpus(name);
@@ -327,11 +310,7 @@ fn the_limits_of_the_acceptance_are_written_down() {
 /// (ein Puls, ein Byte, 8.5) — und die, die der Korpus benutzt.
 #[test]
 fn the_two_implementations_agree_on_recorded_inputs() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     // `16_timing` wartet auf `go` und faellt nach 200 ms zurueck; damit
     // laeuft jeder Uebergang mindestens einmal.
     let p = corpus("16_timing.takt");
@@ -391,11 +370,7 @@ t=40 cmd go
 /// nicht" ist im Trace sichtbar, sonst prueft der Test nichts.
 #[test]
 fn the_two_implementations_agree_on_stream_elements() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("23_patterns.takt");
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     // Vier Elemente: eines trifft `"READY"`, eines gar kein Muster, und
@@ -454,11 +429,7 @@ t=11 in rx_log Erasing sector 7
 /// der Interpreter.
 #[test]
 fn the_two_implementations_agree_on_has_and_send() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("24_send_has.takt");
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     // Vier Zeilen: `ERR` am Anfang, in der Mitte, am Ende, und gar nicht.
@@ -520,11 +491,7 @@ t=8 in rx all good
 /// laeuft. Jede Zeile des Stimulus trifft einen anderen Fall.
 #[test]
 fn the_product_automaton_dispatches_like_the_interpreter() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("100_dispatch.takt");
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     // 1: Guard haelt. 5: Guard faellt. 5: zwanzig Ziffern sind kein `int`.
@@ -591,11 +558,7 @@ t=20 in rx ERR 9999999999999999999
 /// ist als die Zahl.
 #[test]
 fn the_format_specs_produce_the_expected_text() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("25_format.takt");
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     let native = common::run_native_with(&clang, &p, "format", &machine, 8, &[]).unwrap_or_else(|e| panic!("{e}"));
@@ -618,11 +581,7 @@ fn the_format_specs_produce_the_expected_text() {
 /// ausserhalb der Range bleibt auf beiden Seiten ohne Wirkung.
 #[test]
 fn a_tunable_changes_the_parameter_vector_at_its_tick() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("41_tunables.takt");
     let stimulus = takt_interp::Trace::parse(
         "t=3 tune GAIN 5
@@ -666,11 +625,7 @@ t=8 tune GAIN 7
 /// Handler desselben Ticks das Element noch sehen.
 #[test]
 fn the_two_implementations_agree_on_record_elements_and_peek() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("49_record_streams.takt");
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     let stimulus = takt_interp::Trace::parse(
@@ -727,11 +682,7 @@ t=14 in edges Pulse(true, 1)
 /// geplante Ausgabe auf beiden Seiten zur selben Zeit steht.
 #[test]
 fn the_two_implementations_agree_on_triggers() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("65_trigger.takt");
     let stimulus = takt_interp::Trace::parse("t=2 in dut_log Erasing sector 7\n").expect("Stimulus");
     let inputs: Vec<Stimulus> = stimulus
@@ -771,11 +722,7 @@ fn the_two_implementations_agree_on_triggers() {
 /// keine Record-Ausgaenge (FB-312).
 #[test]
 fn a_duration_in_a_record_is_written_alike() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let src = "\
 system:
     language = 1
@@ -821,11 +768,7 @@ machine m:
 /// Seiten exakt; der Codegen fragt die Runtime (`takt_jitter`).
 #[test]
 fn the_jitter_of_an_output_is_zero_without_a_configuration() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let src = "system:
     language = 1
     tick     = 1 ms
@@ -883,11 +826,7 @@ fn qp_box_solves_a_two_by_two_problem() {
 /// **Capture-Fenster auf beiden Seiten** (8.9, Satz 9.4.4).
 #[test]
 fn the_two_implementations_agree_on_capture_windows() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("66_capture.takt");
     let stimulus =
         takt_interp::Trace::parse("t=2 in wave 20000000;2;2;1000.0;[1.0, 2.0, 0.5, 3.0]\n").expect("Stimulus");
@@ -930,11 +869,7 @@ fn the_two_implementations_agree_on_capture_windows() {
 /// ein Runtime-Fault ist nicht idempotent und eskaliert.
 #[test]
 fn faults_from_outside_arrive_alike() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("90_abort.takt");
     let stimulus = takt_interp::Trace::parse(
         "t=12 abort
@@ -987,11 +922,7 @@ fn crypto_line(fun: &str, nth: usize) -> Vec<String> {
 /// dieselbe Implementierung (FB-293); verglichen wird, was dazwischen liegt.
 #[test]
 fn the_new_natives_agree_with_the_interpreter() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let (rsa, good, bad) =
         (crypto_line("rsa3072_verify", 0), crypto_line("aes_gcm_decrypt", 1), crypto_line("aes_gcm_decrypt", 4));
     let src = format!(

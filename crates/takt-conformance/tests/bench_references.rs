@@ -4,8 +4,10 @@
 //! Lauf auf dem Board — und ein Unterschied dort liesse offen, ob die
 //! Referenz falsch rechnet oder der Codegen.
 
+mod common;
+
 use takt_conformance::bench::{KERNELS, kernel_path};
-use takt_llvm::toolchain::{Clang, find};
+use takt_llvm::toolchain::Clang;
 
 /// Ticks je Kern: mehrere Faults der Sequenz, das Einschwingen der
 /// Regelung und mehr als einmal um den Zeilenring.
@@ -100,11 +102,7 @@ fn native(clang: &Clang, name: &str) -> Result<Vec<u64>, String> {
 /// inklusive Pruefungen"), Tick fuer Tick.
 #[test]
 fn every_reference_computes_what_its_kernel_computes() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let mut failed = Vec::new();
     for name in KERNELS {
         let takt = interpreted(name);

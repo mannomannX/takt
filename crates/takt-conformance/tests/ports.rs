@@ -17,7 +17,6 @@
 use takt_conformance::compare;
 use takt_diag::Policy;
 use takt_interp::{RunOptions, Trace};
-use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
 mod common;
@@ -134,11 +133,7 @@ fn a_plain_field_under_a_port_goes_through_the_whole_record() {
 /// oben gilt auch fuer den uebersetzten Treiber.
 #[test]
 fn the_generated_code_maps_ports_like_the_interpreter() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let cases = [
         ("ports_in_order", three_writes(), 4, "out seen 3"),
         ("ports_w1c", w1c_write(), 4, "out seen 2"),

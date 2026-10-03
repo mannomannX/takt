@@ -30,7 +30,7 @@
 //! wie die uebrigen Werkzeugkettentests.
 
 use takt_llvm::Target;
-use takt_llvm::toolchain::{Clang, find};
+use takt_llvm::toolchain::Clang;
 use takt_mir::program::Program;
 
 mod common;
@@ -98,10 +98,7 @@ fn the_same_source_yields_the_same_ir() {
 /// zwei Dateinamen, wie `takt build` sie je Prozess vergibt (FB-308).
 #[test]
 fn the_same_ir_yields_the_same_object() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
+    let Some(path) = common::clang_path() else { return };
     let p = corpus(NAME);
     let ir = common::ir_of(&p);
 
@@ -152,10 +149,7 @@ fn the_same_ir_yields_the_same_object() {
 /// sichtbar wuerde.
 #[test]
 fn the_same_source_yields_the_same_binary() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
+    let Some(path) = common::clang_path() else { return };
     let p = corpus(NAME);
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     let ir = common::ir_of(&p);
@@ -227,18 +221,13 @@ fn the_same_source_yields_the_same_binary() {
 /// (Symbolordnung, Pfade, Linkerzustand); den Zeitstempel prueft Stufe 3
 /// auf dem Wirt, wo er auftreten kann.
 ///
-/// Der Test ueberspringt sich ohne die Cross-Kette; `tools/linux.sh`
-/// bringt sie mit.
+/// Der Test braucht die Cross-Kette und laeuft darum nur mit
+/// `--ignored`; `tools/linux.sh` bringt sie mit.
 #[test]
+#[ignore = "braucht die aarch64-Werkzeugkette (tools/Dockerfile.linux); mit --ignored"]
 fn every_target_builds_reproducibly() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    if !cross_available() {
-        eprintln!("uebersprungen: aarch64-Werkzeugkette fehlt (tools/Dockerfile.linux baut sie)");
-        return;
-    }
+    let Some(path) = common::clang_path() else { return };
+    assert!(cross_available(), "die aarch64-Werkzeugkette fehlt; tools/Dockerfile.linux baut sie");
     let p = corpus(NAME);
     let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     let harness = takt_conformance::harness::build(&p, &machine, 4).source;

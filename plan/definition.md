@@ -1836,6 +1836,7 @@ takt-native         kuratierte native Funktionen (4.5): Prüfsummen, Hashes, MAC
 takt-native-abi     die C-Einstiege der kuratierten Natives für den erzeugten Code (4.5) — TCB, eigener Workspace
 takt-crypto         Kryptographie mit geprüfter Abhängigkeit (4.5): ECDSA P-256 über `p256`, hinter einem Feature, im TCB-Manifest
 takt-conformance    Testkorpus, Golden-Traces, Wirtsrahmen des Differentials, Boards am Host, Kalibrierung (`c_target`, `guard`, `jitter`), `takt bench` (13.8)
+takt-testkit        was die Tests aller Crates teilen: die Werkzeug-Schranke (ein fehlendes Werkzeug ist ein Fehler, `TAKT_ALLOW_MISSING`) (13.8)
 takt-trace-serial   Trace von einer seriellen Schnittstelle lesen und gegen den Interpreter halten
 takt-flash-weact    Flash-Werkzeug für den WeAct-HID-Bootloader (STM32)
 takt-import-c       (geplant, M7) C-Frontend mit Klassifikation, Abbildungsregeln und Orakel-Modus (13.9; v1.1)

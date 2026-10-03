@@ -50,10 +50,8 @@ fn a_program_without_a_driver_is_refused() {
 /// clang uebersprungen.
 #[test]
 fn a_driver_crate_is_judged_by_the_edge_on_the_host() {
-    if matches!(takt_llvm::toolchain::find(), takt_llvm::toolchain::Clang::Missing) {
-        eprintln!("clang fehlt; uebersprungen");
-        return;
-    }
+    let found = takt_llvm::toolchain::find().path().cloned();
+    let Some(_) = takt_testkit::require("clang", found, "`TAKT_CLANG` setzen oder LLVM installieren") else { return };
     let program = "crates/takt-conformance/tests/programs/driver_edge.takt";
     let out = takt(&["driver-test", "--crate", "crates/takt-driver-probe", program, "--ticks", "16"]);
     let stdout = String::from_utf8_lossy(&out.stdout);

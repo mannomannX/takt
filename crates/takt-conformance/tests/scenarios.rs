@@ -4,7 +4,6 @@
 //! ueberein — auch das Verdikt kommt nativ.
 
 use takt_conformance::compare;
-use takt_llvm::toolchain::{Clang, find};
 use takt_mir::machine::MachineKind;
 use takt_mir::program::Program;
 
@@ -34,11 +33,7 @@ fn tick_of(line: &str) -> u64 {
 
 #[test]
 fn every_scenario_runs_natively_like_takt_test() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("38_scenarios.takt");
     let scenarios: Vec<String> =
         p.machines.iter().filter(|m| m.kind == MachineKind::Scenario).map(|m| m.name.clone()).collect();

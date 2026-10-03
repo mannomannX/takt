@@ -7,7 +7,7 @@
 mod common;
 
 use takt_interp::{RunOptions, Trace};
-use takt_llvm::toolchain::{Clang, find};
+use takt_llvm::toolchain::Clang;
 
 const HEAD: &str = "\
 system:
@@ -23,10 +23,7 @@ output y     : float         @ hw(\"y\")     with safe = 0.0
 /// Der Trace des Interpreters, wenn der erzeugte Code denselben liefert;
 /// `None` ohne clang.
 fn agree(body: &str, name: &str) -> Option<String> {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return None;
-    };
+    let path = common::clang_path()?;
     let src = format!("{HEAD}{body}");
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
     let out = takt_sema::compile(&src, &options);

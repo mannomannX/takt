@@ -9,7 +9,7 @@ use takt_conformance::run::compare;
 use takt_frame::mcu::Frame;
 use takt_llvm::inspect::Binutils;
 use takt_llvm::symbols::Prefix;
-use takt_llvm::toolchain::{Clang, find};
+use takt_llvm::toolchain::Clang;
 
 const TICKS: u64 = 60;
 
@@ -40,10 +40,7 @@ void takt_board_trace_hex8(unsigned char v) { fprintf(out[current], "0x%02x", v)
 /// (12.11). Die Kanaele an Hardware bekommen ausdruecklich Stummel (12.6).
 #[test]
 fn two_programs_run_side_by_side_like_the_interpreter() {
-    let Clang::At(clang) = find() else {
-        eprintln!("clang fehlt; uebersprungen");
-        return;
-    };
+    let Some(clang) = common::clang_path() else { return };
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-two-programs");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
@@ -122,16 +119,10 @@ fn two_programs_run_side_by_side_like_the_interpreter() {
 /// Bibliothek, die der Wirtsrahmen bindet.
 #[test]
 fn the_shared_libraries_hold_no_mutable_state() {
-    let Clang::At(_) = find() else {
-        eprintln!("clang fehlt; uebersprungen");
-        return;
-    };
+    let Some(_) = common::clang_path() else { return };
     let host = if cfg!(windows) { takt_llvm::Target::X86_64_WINDOWS } else { takt_llvm::Target::X86_64_LINUX };
     let lib = harness::native_library().expect("Natives");
-    let Some(symbols) = Binutils::best_for(host).symbols(&lib) else {
-        eprintln!("`nm` liest die Bibliothek nicht; uebersprungen");
-        return;
-    };
+    let symbols = Binutils::best_for(host).symbols(&lib).expect("`nm` liest die Bibliothek des Wirts");
     let shared = |name: &str| {
         ["libtaktm", "takt_native", "takt_hal", "takt_crypto", "takt_edge_", "takt_m_"].iter().any(|c| name.contains(c))
     };

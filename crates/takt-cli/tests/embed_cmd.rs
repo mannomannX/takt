@@ -34,13 +34,11 @@ const VALVE: &str = "examples/rust-host/takt/valve.takt";
 /// definiert genau das ABI-Symbol, das die Huelle liest, sodass eine Huelle
 /// anderer Version nicht bindet.
 #[test]
+#[cfg_attr(not(target_arch = "x86_64"), ignore = "das Tripel des Wirts ist hier x86-64")]
 fn one_call_delivers_library_header_module_and_manifest() {
-    if !cfg!(target_arch = "x86_64") {
-        eprintln!("uebersprungen: das Tripel des Wirts ist hier x86-64");
-        return;
-    }
-    let Clang::At(clang) = find() else {
-        eprintln!("uebersprungen: clang fehlt");
+    let Some(clang) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
         return;
     };
     let dir = scratch("takt-embed-delivery");

@@ -10,7 +10,6 @@ mod common;
 use takt_conformance::run::compare;
 use takt_interp::nvm::Nvm;
 use takt_interp::{RunOptions, Trace, Value, run};
-use takt_llvm::toolchain::{Clang, find};
 use takt_mir::Program;
 
 const TICKS: u64 = 40;
@@ -62,11 +61,7 @@ fn foreign_payload(p: &Program) -> Vec<u8> {
 
 #[test]
 fn the_snapshot_matches_the_interpreter_byte_for_byte() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = program();
     let native =
         common::run_native_persist(&clang, &p, "35_persist_snapshot", TICKS, &[]).unwrap_or_else(|e| panic!("{e}"));
@@ -79,11 +74,7 @@ fn the_snapshot_matches_the_interpreter_byte_for_byte() {
 
 #[test]
 fn a_restored_payload_drives_both_sides_to_the_same_outputs() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = program();
     let payload = foreign_payload(&p);
 
@@ -107,11 +98,7 @@ fn a_restored_payload_drives_both_sides_to_the_same_outputs() {
 fn a_payload_with_an_out_of_range_value_is_rejected_on_both_sides() {
     // 5.9: ungueltige Werte ergeben den Default. Der erzeugte Code prueft
     // die Range ebenso wie der Interpreter, sonst driftete s0 (9.4.4).
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = program();
     let m = p.machines.iter().find(|m| !m.persist.is_empty()).expect("persist");
     let pv = m.persist.iter().find(|pv| m.vars[pv.var.index()].name == "cycles").expect("cycles");
@@ -135,11 +122,7 @@ fn a_payload_with_an_out_of_range_value_is_rejected_on_both_sides() {
 /// Seiten.
 #[test]
 fn a_variant_with_fields_is_persisted_byte_for_byte() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("81_persist_variants.takt");
     let native = common::run_native_persist(&clang, &p, "81_snapshot", TICKS, &[]).unwrap_or_else(|e| panic!("{e}"));
     let interp = interpreted(&p, Nvm::new());
@@ -153,11 +136,7 @@ fn a_variant_with_fields_is_persisted_byte_for_byte() {
 /// der Schnappschuss danach ist wieder bytegleich.
 #[test]
 fn a_restored_variant_with_fields_drives_both_sides_the_same() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = corpus("81_persist_variants.takt");
     let m = p.machines.iter().find(|m| !m.persist.is_empty()).expect("persist");
     let by_name = |name: &str| {

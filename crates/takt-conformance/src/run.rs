@@ -140,14 +140,27 @@ pub fn widen_f32(trace: &str, outputs: &std::collections::BTreeSet<String>) -> S
 /// eines Laufs (12.7) —, zaehlt die Folge ihrer Aenderungen und nicht nur
 /// ihr letzter Wert; ein Wert gleich dem geltenden ist keine Aenderung,
 /// weil der Wirtsrahmen jeden Output je Abzug schreibt.
+///
+/// **Ein Vergleich besteht nicht leer** (FB-391). Zeigt nur eine Seite
+/// Beobachtbares — ein Lauf, der nicht startete, ein Interpreter, der
+/// abbrach —, ist das eine Abweichung, ebenso ein Ausgang, den nur eine
+/// Seite schreibt.
 pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
+    if observed(interpreter) != observed(native) {
+        return vec![Difference {
+            tick: 0,
+            output: "trace".into(),
+            interpreter: summary(interpreter),
+            native: summary(native),
+        }];
+    }
     let a = outputs(interpreter);
     let b = outputs(native);
+    let mut out = one_sided(&a, &b);
     let mut ticks: Vec<u64> = a.keys().chain(b.keys()).map(|(t, _)| *t).collect();
     ticks.sort_unstable();
     ticks.dedup();
     let (mut want, mut have) = (BTreeMap::new(), BTreeMap::new());
-    let mut out = Vec::new();
     for tick in ticks {
         let now_a: BTreeMap<&str, Vec<&str>> = at(&a, tick).collect();
         let now_b: BTreeMap<&str, Vec<&str>> = at(&b, tick).collect();
@@ -216,6 +229,47 @@ pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
             out.push(Difference { tick, output: "stream".into(), interpreter: render(x), native: render(y) });
         }
     }
+    out
+}
+
+/// Zeigt ein Trace etwas, das [`compare`] vergleicht: Ausgaenge, Faults,
+/// Alerts, Zaehler der Stroeme?
+fn observed(trace: &str) -> bool {
+    trace.lines().any(|l| {
+        let mut w = l.split_whitespace();
+        w.next().is_some_and(|t| t.strip_prefix("t=").is_some_and(|k| k.parse::<u64>().is_ok()))
+            && matches!(w.next(), Some("out" | "fault" | "alert" | "stream"))
+    })
+}
+
+/// Die erste Zeile eines Traces, fuer die Meldung einer leeren Seite.
+fn summary(trace: &str) -> String {
+    trace.lines().find(|l| !l.trim().is_empty()).map_or_else(|| "leer".to_string(), |l| l.chars().take(120).collect())
+}
+
+/// Die Ausgaenge, die nur eine Seite schreibt, je mit ihrem ersten Wert.
+fn one_sided(a: &BTreeMap<(u64, String), Vec<String>>, b: &BTreeMap<(u64, String), Vec<String>>) -> Vec<Difference> {
+    let first = |m: &BTreeMap<(u64, String), Vec<String>>| {
+        let mut f: BTreeMap<String, (u64, String)> = BTreeMap::new();
+        for ((tick, name), values) in m {
+            f.entry(name.clone()).or_insert_with(|| (*tick, values.first().cloned().unwrap_or_default()));
+        }
+        f
+    };
+    let (fa, fb) = (first(a), first(b));
+    let only = |x: &BTreeMap<String, (u64, String)>, y: &BTreeMap<String, (u64, String)>| {
+        x.iter().filter(|(n, _)| !y.contains_key(*n)).map(|(n, v)| (n.clone(), v.clone())).collect::<Vec<_>>()
+    };
+    let mut out: Vec<Difference> = only(&fa, &fb)
+        .into_iter()
+        .map(|(output, (tick, value))| Difference { tick, output, interpreter: value, native: "fehlt".into() })
+        .collect();
+    out.extend(only(&fb, &fa).into_iter().map(|(output, (tick, value))| Difference {
+        tick,
+        output,
+        interpreter: "fehlt".into(),
+        native: value,
+    }));
     out
 }
 
@@ -346,6 +400,15 @@ fn same_number(interpreter: &str, native: &str) -> bool {
     if a == b {
         return true;
     }
+    // `-0` ist eine Fliesskommazahl — eine Ganzzahl schreibt so niemand —
+    // und gegen `0` ein anderes Bit (4.2); als Ganzzahl gelesen waeren
+    // beide gleich.
+    let float = |s: &str| s == "-0" || s.contains(['.', 'e', 'E', 'n', 'N', 'i', 'I']);
+    if (float(a) || float(b))
+        && let (Ok(x), Ok(y)) = (a.parse::<f64>(), b.parse::<f64>())
+    {
+        return x.to_bits() == y.to_bits();
+    }
     // `true`/`false` gegen 1/0.
     let as_bool = |s: &str| match s {
         "true" => Some(1i64),
@@ -376,6 +439,33 @@ mod tests {
         let d = compare(&widen_f32(interp, &names), native);
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].output, "d");
+    }
+
+    /// **Ein Vergleich besteht nicht leer** (FB-391): Eine leere oder
+    /// abgebrochene Seite und ein Ausgang, den nur eine Seite schreibt, sind
+    /// Abweichungen; zwei Seiten ohne Beobachtbares gleichen sich.
+    #[test]
+    fn an_empty_or_one_sided_trace_is_a_difference() {
+        let want = "t=0 out a 1\nt=0 out b 2\n";
+        assert_eq!(compare(want, "")[0].output, "trace");
+        assert_eq!(compare("Trap: Bug\n", want)[0].output, "trace");
+        assert_eq!(compare(want, "out a 1\nout b 2\n")[0].output, "trace", "eine Zeile ohne `t=` kommt nicht an");
+        assert!(compare("t=0 state m RUN\n", "").is_empty());
+        let d = compare(want, "t=0 out a 1\n");
+        assert_eq!((d.len(), d[0].output.as_str(), d[0].native.as_str()), (1, "b", "fehlt"), "{d:?}");
+        let d = compare("t=0 out a 1\n", want);
+        assert_eq!((d.len(), d[0].output.as_str(), d[0].interpreter.as_str()), (1, "b", "fehlt"), "{d:?}");
+    }
+
+    /// Das Vorzeichen der Null zaehlt (4.2): `-0` gegen `0` ist ein anderes
+    /// Bit, auch wenn `widen_f32` ein `f32` ohne Dezimalpunkt schreibt.
+    #[test]
+    fn the_sign_of_zero_counts() {
+        let names: std::collections::BTreeSet<String> = ["s".to_string()].into();
+        assert_eq!(compare(&widen_f32("t=0 out s -0\n", &names), "t=0 out s 0\n").len(), 1);
+        assert_eq!(compare("t=0 out d -0.0\n", "t=0 out d 0\n").len(), 1);
+        assert!(compare("t=0 out d -0.0\n", "t=0 out d -0\n").is_empty());
+        assert!(compare("t=0 out n 0\n", "t=0 out n 0\n").is_empty());
     }
 
     /// Der Wert vor dem Ende eines Laufs zaehlt, auch wenn im selben Tick

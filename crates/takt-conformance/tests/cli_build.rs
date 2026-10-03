@@ -42,10 +42,7 @@ fn program() -> String {
 /// kein Build-Skript.
 #[test]
 fn every_target_builds_from_the_command_line() {
-    let Some(takt) = cli() else {
-        eprintln!("takt-CLI nicht gebaut; uebersprungen");
-        return;
-    };
+    let Some(takt) = takt_testkit::require("takt-cli", cli(), "`cargo build -p takt-cli`") else { return };
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-build");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
@@ -73,10 +70,7 @@ fn every_target_builds_from_the_command_line() {
 /// `--emit ir` liefert lesbare IR mit dem Triple des Ziels im Kopf.
 #[test]
 fn emitting_ir_carries_the_target_triple() {
-    let Some(takt) = cli() else {
-        eprintln!("takt-CLI nicht gebaut; uebersprungen");
-        return;
-    };
+    let Some(takt) = takt_testkit::require("takt-cli", cli(), "`cargo build -p takt-cli`") else { return };
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-build.ll");
     let result = Command::new(&takt)
         .args(["build", &program(), "--target", "thumbv7em", "--prefix", "timing", "--emit", "ir", "--out"])
@@ -98,10 +92,7 @@ fn emitting_ir_carries_the_target_triple() {
 /// anderen Namen zu waehlen.
 #[test]
 fn the_prefix_comes_from_the_file_name_or_the_option() {
-    let Some(takt) = cli() else {
-        eprintln!("takt-CLI nicht gebaut; uebersprungen");
-        return;
-    };
+    let Some(takt) = takt_testkit::require("takt-cli", cli(), "`cargo build -p takt-cli`") else { return };
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-prefix");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
@@ -133,10 +124,7 @@ fn the_prefix_comes_from_the_file_name_or_the_option() {
 /// Falle: Das Rust-Target heisst anders als das LLVM-Triple.
 #[test]
 fn an_unknown_target_is_named() {
-    let Some(takt) = cli() else {
-        eprintln!("takt-CLI nicht gebaut; uebersprungen");
-        return;
-    };
+    let Some(takt) = takt_testkit::require("takt-cli", cli(), "`cargo build -p takt-cli`") else { return };
     let result =
         Command::new(&takt).args(["build", &program(), "--target", "gibtsnicht"]).output().expect("takt build");
     assert!(!result.status.success(), "ein unbekanntes Ziel ist ein Fehler");
@@ -148,10 +136,7 @@ fn an_unknown_target_is_named() {
 /// Ein Programm mit Fehlern bricht ab, statt ein halbes Objekt zu lassen.
 #[test]
 fn a_broken_program_fails_the_build() {
-    let Some(takt) = cli() else {
-        eprintln!("takt-CLI nicht gebaut; uebersprungen");
-        return;
-    };
+    let Some(takt) = takt_testkit::require("takt-cli", cli(), "`cargo build -p takt-cli`") else { return };
     let src = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-kaputt.takt");
     std::fs::write(&src, "system:\n    language = 1\n\nmachine m:\n    initial FEHLT\n").expect("schreiben");
     let result = Command::new(&takt).arg("build").arg(&src).output().expect("takt build");

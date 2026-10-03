@@ -221,8 +221,9 @@ fn the_path_to_a_leaf_fits_into_the_configuration() {
 /// (FB-67).
 #[test]
 fn the_machines_of_the_corpus_compile_to_object_code() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
+    let Some(path) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
         return;
     };
     let clang = Clang::At(path);
@@ -613,8 +614,9 @@ fn every_label_in_the_generated_ir_is_unique() {
 /// assembliert, waere schlimmer als eine, die es nicht tut.
 #[test]
 fn everything_the_codegen_emits_assembles() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
+    let Some(path) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
         return;
     };
     let clang = Clang::At(path);

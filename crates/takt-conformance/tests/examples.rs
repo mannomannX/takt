@@ -17,7 +17,6 @@
 use takt_conformance::run::compare;
 use takt_diag::Policy;
 use takt_interp::{RunOptions, Trace, run};
-use takt_llvm::toolchain::{Clang, find};
 use takt_mir::Program;
 use takt_sema::{Build, Options};
 
@@ -27,6 +26,16 @@ mod common;
 /// Signaturpruefung von 14.8 ruft der Rahmen ueber `takt-native-abi`
 /// (FB-293).
 const EXAMPLES: [&str; 8] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6", "14_7", "14_8"];
+
+/// Bekannte Luecken des Wirtsrahmens: Beispiel, Ausgang, Grund. Jede muss
+/// noch auftreten — schliesst sich eine, scheitert der Test, bis sie hier
+/// verschwindet; eine neue Abweichung faellt nie hinein.
+const GAPS: &[(&str, &str, &str)] = &[(
+    "14_8",
+    "keys_sim",
+    "FB-402: Der Wirtsrahmen schreibt keinen Record-Ausgang mit `bytes`-Feld. \
+     TODO(M11 Schritt 9): mit dem Produktrahmen",
+)];
 
 /// Wie viele Ticks verglichen werden.
 ///
@@ -56,13 +65,10 @@ fn interpreted(p: &Program) -> String {
 /// erzeugten Code denselben Trace (Satz 9.4.4).
 #[test]
 fn the_reference_examples_agree_on_both_paths() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let mut failed = Vec::new();
     let mut checked = 0;
+    let mut gaps_seen = Vec::new();
     for name in EXAMPLES {
         let p = example(name);
         let native = match common::run_native_all(&clang, &p, name, TICKS) {
@@ -73,7 +79,10 @@ fn the_reference_examples_agree_on_both_paths() {
             }
         };
         let interpreted = interpreted(&p);
-        let diffs = compare(&interpreted, &native);
+        let (gaps, diffs): (Vec<_>, Vec<_>) = compare(&interpreted, &native).into_iter().partition(|d| {
+            GAPS.iter().any(|(example, output, _)| *example == name && d.output == *output && d.native == "fehlt")
+        });
+        gaps_seen.extend(gaps.iter().map(|d| (name, d.output.clone())));
         checked += 1;
         if !diffs.is_empty() {
             let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
@@ -88,4 +97,10 @@ fn the_reference_examples_agree_on_both_paths() {
     }
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
     assert_eq!(checked, EXAMPLES.len(), "es wurden nicht alle Beispiele geprueft");
+    for (example, output, why) in GAPS {
+        assert!(
+            gaps_seen.iter().any(|(n, o)| n == example && o == output),
+            "die Luecke {example} `{output}` ist geschlossen; den Eintrag in `GAPS` entfernen ({why})"
+        );
+    }
 }

@@ -28,14 +28,11 @@ fn corpus_with(name: &str, properties: &str) -> Program {
     compile(&format!("{src}\n{properties}\n"))
 }
 
+/// Der Solver; fehlt er, scheitert der Test, es sei denn,
+/// `TAKT_ALLOW_MISSING` erlaubt das Fehlen (FB-392).
 fn solver() -> Option<Solver> {
-    match find() {
-        Solver::Missing => {
-            eprintln!("uebersprungen: kein Solver (TAKT_SOLVER setzen oder z3/cvc5 installieren)");
-            None
-        }
-        s => Some(s),
-    }
+    let found = Some(find()).filter(|s| !matches!(s, Solver::Missing));
+    takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren")
 }
 
 #[test]

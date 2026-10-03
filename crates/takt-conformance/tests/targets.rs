@@ -143,11 +143,9 @@ fn run_for(target: Target, p: &takt_mir::Program, name: &str, machine: Option<&s
 /// **Die Abnahme von Schritt 11.** Dasselbe Programm liefert auf beiden
 /// Architekturen dieselben Outputs (Satz 9.4.4).
 #[test]
+#[ignore = "braucht die aarch64-Werkzeugkette (tools/Dockerfile.linux); mit --ignored"]
 fn x86_64_and_aarch64_agree() {
-    if !cross_available() {
-        eprintln!("uebersprungen: aarch64-Werkzeugkette fehlt (tools/Dockerfile.linux baut sie)");
-        return;
-    }
+    assert!(cross_available(), "die aarch64-Werkzeugkette fehlt; tools/Dockerfile.linux baut sie");
     let mut errors = Vec::new();
     let mut checked = 0;
     // Die Korpusprogramme: je eine Maschine, wie in `differential.rs`.

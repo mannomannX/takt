@@ -26,7 +26,6 @@
 use std::fmt::Write as _;
 
 use takt_conformance::compare;
-use takt_llvm::toolchain::{Clang, find};
 
 mod common;
 
@@ -150,11 +149,7 @@ const TICKS: u64 = 12;
 /// Implementierungen und liefern dieselben Outputs (Satz 9.4.4).
 #[test]
 fn generated_machines_agree() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     // Zwei Startwerte sind gelaufen: 0x2026_0914 fand FB-122 in Runde
     // 106, 0xDEAD_BEEF ueber 300 Runden nichts weiter. Der erste bleibt,
     // weil ein Fuzzer, der seinen Fund nicht mehr trifft, ihn nicht mehr

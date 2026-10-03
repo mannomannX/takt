@@ -17,8 +17,7 @@ use takt_llvm::target::Target;
 /// nicht die Ausnahme.
 #[test]
 fn the_llvm_tools_are_found_when_installed() {
-    let Some(tools) = Binutils::llvm() else {
-        eprintln!("llvm-tools fehlt; mit 'rustup component add llvm-tools' nachruesten");
+    let Some(tools) = takt_testkit::require("llvm-tools", Binutils::llvm(), "`rustup component add llvm-tools`") else {
         return;
     };
     assert!(tools.available(), "gefunden, aber nicht ausfuehrbar");

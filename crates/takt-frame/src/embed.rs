@@ -116,6 +116,7 @@ pub struct Program<'a> {{
     arena: *mut core::ffi::c_void,
     user: *mut core::ffi::c_void,
     initialized: bool,
+    jobs_taken: bool,
     borrow: {borrow},
 }}
 
@@ -127,7 +128,13 @@ impl<'a> Program<'a> {{
         // `{x}_abi_{ABI}` bindet das Programm nicht (12.11).
         // SAFETY: liest eine Konstante der Bibliothek.
         let _ = unsafe {{ core::ptr::read_volatile(&raw const ffi::{x}_abi_{ABI}) }};
-        Program {{ arena: core::ptr::from_mut(arena).cast(), user: {user}, initialized: false, borrow: core::marker::PhantomData }}
+        Program {{
+            arena: core::ptr::from_mut(arena).cast(),
+            user: {user},
+            initialized: false,
+            jobs_taken: false,
+            borrow: core::marker::PhantomData,
+        }}
     }}
 
     /// Das Programm nach Tick 0, ohne Journal (9.4).
@@ -147,39 +154,48 @@ impl<'a> Program<'a> {{
     }}
 
     /// Der Griff fuer den Job-Kontext (4.5): Er rechnet, was `service` als
-    /// `jobs` meldet.
-    pub fn jobs(&self) -> Jobs {{
-        Jobs(self.arena)
+    /// `jobs` meldet. Es gibt ihn einmal je Programm, damit nie zwei
+    /// Job-Kontexte dieselbe Arena rechnen; `None` beim zweiten Aufruf.
+    pub fn jobs(&mut self) -> Option<Jobs<'a>> {{
+        if core::mem::replace(&mut self.jobs_taken, true) {{
+            return None;
+        }}
+        Some(Jobs {{ arena: self.arena, borrow: core::marker::PhantomData }})
     }}
 }}
 
 /// Der Griff des Job-Kontexts auf die Arena (4.5): `work` rechnet den Auftrag,
-/// den `service` gegeben hat, und ist durch `service` unterbrechbar.
-#[derive(Clone, Copy, Debug)]
-pub struct Jobs(*mut core::ffi::c_void);
+/// den `service` gegeben hat, und ist durch `service` unterbrechbar. Er lebt
+/// nicht laenger als die Arena.
+#[derive(Debug)]
+pub struct Jobs<'a> {{
+    arena: *mut core::ffi::c_void,
+    borrow: core::marker::PhantomData<&'a mut Arena>,
+}}
 
 // SAFETY: Schrittkontext und Job-Kontext teilen die Arena nach dem Protokoll
 // des Rahmens: Den Auftrag schreibt `service` nur, solange der Kontext ruht.
-unsafe impl Send for Jobs {{}}
+// Den Griff gibt es nur einmal (`Program::jobs`).
+unsafe impl Send for Jobs<'_> {{}}
 
-impl Jobs {{
+impl Jobs<'_> {{
     /// Rechnet den Auftrag, nur im Job-Kontext.
-    pub fn work(self) {{
+    pub fn work(&mut self) {{
         // SAFETY: siehe `Send`.
-        unsafe {{ ffi::{x}_job_work(self.0) }}
+        unsafe {{ ffi::{x}_job_work(self.arena) }}
     }}
 }}
 
-impl takt_embed::Program for Program<'_> {{
-    type Jobs = Jobs;
+impl<'a> takt_embed::Program for Program<'a> {{
+    type Jobs = Jobs<'a>;
 
-    fn jobs(&self) -> Jobs {{
+    fn jobs(&mut self) -> Option<Jobs<'a>> {{
         Program::jobs(self)
     }}
 }}
 
-impl takt_embed::Jobs for Jobs {{
-    fn work(self) {{
+impl takt_embed::Jobs for Jobs<'_> {{
+    fn work(&mut self) {{
         Jobs::work(self)
     }}
 }}

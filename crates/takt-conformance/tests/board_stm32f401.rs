@@ -27,12 +27,10 @@ const TOO_BIG: &[&str] = &["45_journal_cut.takt"];
 /// und sein Port vertragen nur einen Lauf zugleich.
 static BOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Das Board, exklusiv; `None` ohne `TAKT_F401_PORT`.
+/// Das Board, exklusiv. Die Tests laufen nur mit `--ignored`; wer sie
+/// verlangt, verlangt das Board, und ohne `TAKT_F401_PORT` scheitern sie.
 fn board() -> Option<(Stm32f401, std::sync::MutexGuard<'static, ()>)> {
-    let Some(board) = Stm32f401::from_env() else {
-        eprintln!("uebersprungen: TAKT_F401_PORT nennt kein Board");
-        return None;
-    };
+    let board = Stm32f401::from_env().expect("TAKT_F401_PORT nennt kein Board");
     Some((board, BOARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
 }
 
@@ -42,6 +40,7 @@ fn board() -> Option<(Stm32f401, std::sync::MutexGuard<'static, ()>)> {
 /// beginnt mit `previous_run = ENDED` und zeigt es an `woke`. Ein freier Lauf
 /// in Echtzeit: Der Schlaf ist physisch und laesst sich nicht logisch zaehlen.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn a_run_ended_after_a_delay_begins_the_next_after_it() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(0);
@@ -63,6 +62,7 @@ fn a_run_ended_after_a_delay_begins_the_next_after_it() {
 /// Der erste kennt nach dem Flashen keinen vorigen Lauf. Ein freier Lauf in
 /// Echtzeit, wie beim Schlaf.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn a_run_ended_now_begins_the_next_at_once() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(0);
@@ -80,6 +80,7 @@ fn a_run_ended_now_begins_the_next_at_once() {
 /// 12.3, M10 Schritt 7): SHA-256 ueber 4096 Byte im Job-Faden, den jeder
 /// Tick unterbricht (`long_job_keeps_the_tick`).
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn a_long_job_runs_between_the_ticks() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = long_job_keeps_the_tick(&mut board);
@@ -89,6 +90,7 @@ fn a_long_job_runs_between_the_ticks() {
 /// **Ein Ueberlauf faultet im naechsten Tick jede Maschine** (7.3, 5.4,
 /// FB-332): `overrun_reaches_every_machine`.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn an_overrun_faults_every_machine_in_the_next_tick() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = overrun_reaches_every_machine(&mut board);
@@ -102,6 +104,7 @@ fn an_overrun_faults_every_machine_in_the_next_tick() {
 /// stehen. Dass jeder Lauf vor dem Reset `rested` zeigt, belegt den Schlaf:
 /// Die Schleife bestaetigt den Watchdog je geschlafenem Tick.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(0);
@@ -123,6 +126,7 @@ fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
 /// hintereinander, und der zweite braucht den Bootloader, den der erste
 /// auf `TAKT` freigibt.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_board_hands_itself_back_for_the_next_program() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "01_minimal.takt";
@@ -139,6 +143,7 @@ fn the_board_hands_itself_back_for_the_next_program() {
 }
 
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_board_agrees_with_the_interpreter() {
     let Some((mut board, _guard)) = board() else { return };
     // `TAKT_F401_ONLY=42_map.takt` fuer einen einzelnen Fall.
@@ -154,6 +159,7 @@ fn the_board_agrees_with_the_interpreter() {
 /// Die Semantik bleibt die des Programms; nur die Zeit wird gemessen statt
 /// bewiesen.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_board_agrees_with_the_interpreter_under_rtos() {
     let Some((mut board, _guard)) = board() else { return };
     let only = std::env::var("TAKT_F401_ONLY").ok();
@@ -170,6 +176,7 @@ fn the_board_agrees_with_the_interpreter_under_rtos() {
 /// Die Spanne vom Median zum spaetesten Tick ist der Jitter, den 12.8 zu
 /// messen verlangt.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_rtos_task_starts_within_tens_of_microseconds() {
     let Some((mut board, _guard)) = board() else { return };
     let program = board::root().join("crates/takt-conformance/tests/programs/rtos_jitter.takt");
@@ -185,6 +192,7 @@ fn the_rtos_task_starts_within_tens_of_microseconds() {
 }
 
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_natives_agree_with_the_host() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = natives_agree(&mut board);
@@ -194,6 +202,7 @@ fn the_natives_agree_with_the_host() {
 /// **Eine verstellte FPU aendert nichts** (4.2, 12.11, M11 Schritt 6):
 /// `a_hostile_fpu_changes_nothing`.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn a_hostile_fpu_changes_nothing_on_the_board() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = a_hostile_fpu_changes_nothing(&mut board);
@@ -210,6 +219,7 @@ fn a_hostile_fpu_changes_nothing_on_the_board() {
 /// **Der Treiberrand urteilt auf dem Board wie im Interpreter** (12.6, M10
 /// Schritt 29c): das Pruefgeraet des Bring-ups mit jedem Verstoss einmal.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_driver_edge_judges_like_the_interpreter() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = driver_edge_agrees(&mut board);
@@ -219,6 +229,7 @@ fn the_driver_edge_judges_like_the_interpreter() {
 /// **Ein Zeitgeber, der seine Periode verfehlt, ist `Runtime(Hardware)`**
 /// (12.6 Zeile 7, M10 Schritt 29c): das Pruefgeraet streckt die Periode.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn a_stretched_tick_is_runtime_hardware() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::a_stretched_tick_is_runtime_hardware(&mut board);
@@ -229,6 +240,7 @@ fn a_stretched_tick_is_runtime_hardware() {
 /// `a_schedule_inside_the_guard_is_a_timing_fault`, mit den Werten, die
 /// `takt driver-test --board stm32f401` an der Bruecke PA0-PA1 gemessen hat.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn a_schedule_inside_the_guard_is_a_timing_fault() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::a_schedule_inside_the_guard_is_a_timing_fault(&mut board);
@@ -238,6 +250,7 @@ fn a_schedule_inside_the_guard_is_a_timing_fault() {
 /// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,
 /// M10 Schritt 29d): das Pruefgeraet liefert Kanaele ohne Bindung.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_unread_channels_are_recorded() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::unread_channels_are_recorded(&mut board);
@@ -253,6 +266,7 @@ fn the_unread_channels_are_recorded() {
 /// `Runtime(Hardware)`; die Bilanz nennt die Region. Ohne Schutz haette
 /// ein Zugriff auf den Programmzustand das Abbild ueberschrieben.
 #[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_mpu_turns_a_write_of_the_tcb_into_runtime_hardware() {
     let Some((mut board, _guard)) = board() else { return };
     for (which, region, tick) in [

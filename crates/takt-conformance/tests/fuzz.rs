@@ -18,7 +18,6 @@
 //! bei den `libtaktm`-Vektoren.
 
 use takt_conformance::compare;
-use takt_llvm::toolchain::{Clang, find};
 
 /// xorshift64*, deterministisch.
 struct Rng(u64);
@@ -151,11 +150,7 @@ const TICKS: u64 = 5;
 /// Implementierungen und liefern dieselben Outputs.
 #[test]
 fn generated_programs_agree() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     // Mehrere Startwerte: Ein einzelner trifft immer dieselben Formen,
     // und die Formen sind das, was hier gesucht wird.
     let mut rng = Rng(0x2026_0912);

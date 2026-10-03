@@ -93,11 +93,7 @@ fn link_for(clang: &Clang, target: Target, p: &takt_mir::Program, name: &str) ->
 /// erzeugt, und stellt er bereit, was der Codegen ruft?
 #[test]
 fn the_harness_links_with_the_generated_code() {
-    let clang = takt_llvm::toolchain::find();
-    if matches!(clang, Clang::Missing) {
-        eprintln!("clang fehlt; uebersprungen");
-        return;
-    }
+    let Some(clang) = common::clang() else { return };
     let mut errors = Vec::new();
     for name in KORPUS {
         let p = corpus(name);
@@ -309,9 +305,13 @@ fn every_abi_buffer_is_aligned() {
     for name in ["16_timing.takt", "19_faults.takt", "29_heartbeat.takt"] {
         let p = corpus(name);
         let src = takt_frame::mcu::build(&p).source;
-        // Byte-Puffer, die der erzeugte Code als Struktur liest; Felder
-        // eines Struct-Typs richtet C von sich aus aus.
-        for line in src.lines().filter(|l| l.starts_with("static") && l.contains("unsigned char") && l.contains('[')) {
+        // Die Byte-Puffer der Arena, die der erzeugte Code als Struktur
+        // liest; Felder eines Struct-Typs richtet C von sich aus aus.
+        let start = src.find("struct app_arena {").expect("die Arena");
+        let arena = &src[start..start + src[start..].find("\n};").expect("Ende der Arena")];
+        let buffers: Vec<&str> = arena.lines().filter(|l| l.contains("unsigned char") && l.contains('[')).collect();
+        assert!(!buffers.is_empty(), "{name}: keine Puffer in der Arena gefunden; der Test prueft sonst nichts");
+        for line in buffers {
             assert!(line.contains("_Alignas(8)"), "{name}: unausgerichteter Puffer: {line}");
         }
     }
@@ -339,6 +339,7 @@ fn the_mcu_trace_can_be_compared_with_the_interpreter() {
     let want = "t=0 out led true\n";
     assert!(takt_conformance::run::compare(want, "t=0 out led 1\n").is_empty(), "true gegen 1 ist gleich (9.3)");
     assert!(!takt_conformance::run::compare(want, "t=0 out led 0\n").is_empty(), "true gegen 0 ist ein Unterschied");
+    assert!(!takt_conformance::run::compare(want, "out led 1\n").is_empty(), "eine Zeile ohne `t=` kommt nicht an");
 }
 
 /// Ein Enum-Ausgang traegt seinen Namen, nicht seine Diskriminante.
@@ -346,21 +347,21 @@ fn the_mcu_trace_can_be_compared_with_the_interpreter() {
 /// Der Interpreter schreibt den Variantennamen (9.3). `same_number`
 /// vergleicht Zahlen und gliche `CLOSED` gegen `0` nicht aus — der
 /// Unterschied waere einer der Schreibweise, und der Test faende ihn als
-/// Wertunterschied. Der Linux-Rahmen macht es seit je so; der MCU-Rahmen
-/// zog nach.
+/// Wertunterschied. Der MCU-Rahmen fuehrt dafuer je Enum-Ausgang eine
+/// Tabelle der Varianten mit Diskriminante und Namen.
 #[test]
 fn an_enum_output_carries_its_name() {
-    let p = corpus("19_faults.takt");
+    let p = corpus("33_enum_param.takt");
     let src = takt_frame::mcu::build(&p).source;
     let has_enum_output = p.channels.iter().any(|c| {
         c.dir != takt_mir::program::Direction::Input
             && matches!(p.types.list.get(c.ty.index()), Some(takt_mir::types::Type::Enum(_)))
     });
-    if !has_enum_output {
-        eprintln!("kein Enum-Ausgang in diesem Programm; uebersprungen");
-        return;
-    }
-    assert!(src.contains("switch (*"), "ein Enum-Ausgang wird verzweigt, nicht als Zahl geschrieben:\n{src}");
+    assert!(has_enum_output, "33_enum_param hat einen Enum-Ausgang; ohne ihn prueft der Test nichts");
+    assert!(
+        src.contains(r#"{ 0LL, "SLOW", 0, 0 }, { 1LL, "FAST", 0, 0 }"#),
+        "die Varianten des Ausgangs stehen mit Namen in der Tabelle:\n{src}"
+    );
 }
 
 /// Ein Record-Ausgang steht in der Tabelle (FB-312): als Variante mit dem
@@ -624,11 +625,7 @@ fn a_simulated_input_gets_no_driver_symbol() {
 /// pruefte der obige nur, wie der Text aussieht.
 #[test]
 fn a_frame_with_inputs_compiles_and_links() {
-    let clang = takt_llvm::toolchain::find();
-    if matches!(clang, Clang::Missing) {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    }
+    let Some(clang) = common::clang() else { return };
     let p = program(INPUTS);
     let size = link_for(&clang, Target::RISCV32IMAC, &p, "inputs").unwrap_or_else(|e| panic!("{e}"));
     assert!(size > 0);
@@ -642,10 +639,7 @@ fn a_frame_with_inputs_compiles_and_links() {
 /// teilweise Bindung von [`link_for`] laesst offene Symbole stehen.
 #[test]
 fn a_missing_driver_fails_the_link_by_name() {
-    let Clang::At(clang) = takt_llvm::toolchain::find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
+    let Some(clang) = common::clang_path() else { return };
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-mcuh-strong-drivers");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
@@ -703,10 +697,7 @@ fn a_missing_driver_fails_the_link_by_name() {
 /// Planung, Monitore, Schlaf.
 #[test]
 fn the_frame_compiles_where_int64_is_long() {
-    let Clang::At(clang) = takt_llvm::toolchain::find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
+    let Some(clang) = common::clang_path() else { return };
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-mcuh-lp64");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
@@ -750,10 +741,7 @@ fn the_frame_compiles_where_int64_is_long() {
 /// mit einem Programm, das Stroeme, Jobs, Journal und geplante Ausgaben hat.
 #[test]
 fn the_header_stands_alone_in_strict_c11() {
-    let Clang::At(clang) = takt_llvm::toolchain::find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
+    let Some(clang) = common::clang_path() else { return };
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-mcuh-header");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
@@ -790,10 +778,7 @@ fn the_header_stands_alone_in_strict_c11() {
 /// RISC-V mit F —, und ohne FPU keines.
 #[test]
 fn every_entry_computes_in_the_ieee_environment() {
-    let Clang::At(clang) = takt_llvm::toolchain::find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
+    let Some(clang) = common::clang_path() else { return };
     let src = takt_frame::mcu::build(&corpus("91_subnormals.takt")).source;
     for entry in
         ["init_with", "tick", "commit", "idle", "deadline", "advance", "persist_snapshot", "persist_restore", "dump"]
@@ -942,11 +927,7 @@ fn an_unread_input_is_read_for_the_recording() {
     assert!(frame.contains("if (!app_poll_edge_r_text(a->user, now, a->rec_7, 9, &len, &t, &seq)) break;"), "{frame}");
     assert!(frame.contains("if (!app_poll_edge_r_raw(a->user, now, a->rec_5, 2, &len, &t, &seq)) break;"), "{frame}");
     assert!(frame.contains("for (int i = 0; i < 5; i++) {"), "{frame}");
-    let clang = takt_llvm::toolchain::find();
-    if matches!(clang, Clang::Missing) {
-        eprintln!("clang fehlt; Bindung uebersprungen");
-        return;
-    }
+    let Some(clang) = common::clang() else { return };
     for target in [Target::THUMBV7EM, Target::RISCV32IMAC] {
         if let Err(e) = link_for(&clang, target, &p, "recorded.takt") {
             panic!("{}: {e}", target.name);

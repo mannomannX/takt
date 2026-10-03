@@ -10,7 +10,6 @@ mod common;
 use takt_conformance::harness;
 use takt_conformance::run::compare;
 use takt_conformance::stimulus::Stimulus;
-use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
 fn program_of(src: &str) -> Program {
@@ -105,11 +104,7 @@ fn a_stimulus_for_another_channel_is_ignored() {
 /// den Ueberlauf macht allein der Leser, der in `WAIT` nichts abholt.
 #[test]
 fn a_reader_that_falls_behind_overflows_the_ring() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     for policy in ["drop_oldest", "fault"] {
         let p = program_of(&format!(
             "system:\n    language = 1\n    tick     = 10 ms\n\n\
@@ -147,11 +142,7 @@ fn a_reader_that_falls_behind_overflows_the_ring() {
 /// Zeilen `stream`, und der Vergleich haelt sie gegeneinander.
 #[test]
 fn the_counters_of_a_stream_are_the_interpreters() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = program_of(
         "system:\n    language = 1\n    tick     = 10 ms\n\n\
          record Pair:\n    a : u8\n    b : u8\n\n\

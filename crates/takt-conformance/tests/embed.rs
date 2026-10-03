@@ -7,7 +7,7 @@ use takt_conformance::harness;
 use takt_conformance::run::{compare, f32_outputs, widen_f32};
 use takt_frame::mcu::Frame;
 use takt_llvm::symbols::Prefix;
-use takt_llvm::toolchain::{Clang, find};
+use takt_llvm::toolchain::Clang;
 
 /// Programme, deren Ergebnis an der Fliesskomma-Umgebung haengt:
 /// Subnormale in beiden Breiten (Flush-to-Zero, Denormals-are-Zero),
@@ -30,15 +30,9 @@ const HOSTILE: u32 = 0xFFC0;
 /// ruft die Einstiege des MCU-Rahmens; nach jedem muss MXCSR wieder sein
 /// eigenes sein, und der Trace gleicht dem des Interpreters bitgenau.
 #[test]
+#[cfg_attr(not(target_arch = "x86_64"), ignore = "die Pruefung setzt MXCSR, das es nur auf x86-64 gibt")]
 fn a_hostile_floating_point_environment_changes_nothing() {
-    if !cfg!(target_arch = "x86_64") {
-        eprintln!("uebersprungen: die Pruefung setzt MXCSR");
-        return;
-    }
-    let Clang::At(clang) = find() else {
-        eprintln!("uebersprungen: clang fehlt");
-        return;
-    };
+    let Some(clang) = common::clang_path() else { return };
     let host = if cfg!(windows) { takt_llvm::Target::X86_64_WINDOWS } else { takt_llvm::Target::X86_64_LINUX };
     let natives = harness::native_library().expect("Natives");
     let mut failed = Vec::new();
@@ -93,10 +87,7 @@ fn a_hostile_floating_point_environment_changes_nothing() {
 /// 9.9, Commit.
 #[test]
 fn an_output_driver_sees_the_tick_it_commits() {
-    let Clang::At(clang) = find() else {
-        eprintln!("uebersprungen: clang fehlt");
-        return;
-    };
+    let Some(clang) = common::clang_path() else { return };
     let host = if cfg!(windows) { takt_llvm::Target::X86_64_WINDOWS } else { takt_llvm::Target::X86_64_LINUX };
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-embed-commit-now");
     let _ = std::fs::remove_dir_all(&dir);

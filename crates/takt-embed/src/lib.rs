@@ -47,15 +47,17 @@ pub trait Program: rt::Program {
     /// Der Griff des Job-Kontexts.
     type Jobs: Jobs;
 
-    /// Der Griff fuer den Job-Kontext (4.5).
-    fn jobs(&self) -> Self::Jobs;
+    /// Der Griff fuer den Job-Kontext (4.5), einmal je Programm: `None`, wenn
+    /// ihn schon jemand hat.
+    fn jobs(&mut self) -> Option<Self::Jobs>;
 }
 
-/// Der Job-Kontext eines Programms (4.5).
-pub trait Jobs: Copy + Send {
+/// Der Job-Kontext eines Programms (4.5). Es gibt ihn einmal; er lebt nicht
+/// laenger als die Arena des Programms.
+pub trait Jobs: Send {
     /// Rechnet den Auftrag, den `service` gegeben hat; `service` darf ihn
-    /// unterbrechen, ein zweiter Job-Kontext nicht.
-    fn work(self);
+    /// unterbrechen.
+    fn work(&mut self);
 }
 
 /// Die Qualitaet einer Lieferung (3.5), in der Zahl des Prozessabbilds.

@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use takt_llvm::toolchain::{Clang, find, object_flags};
+use takt_llvm::toolchain::{find, object_flags};
 use takt_llvm::{Instrument, Target};
 
 const PROGRAMS: &[&str] = &[
@@ -80,8 +80,9 @@ fn read_baseline() -> Vec<(String, u64)> {
 
 #[test]
 fn the_objects_of_the_corpus_stay_within_the_baseline() {
-    let Clang::At(clang) = find() else {
-        eprintln!("clang fehlt; die Groessen-Baseline bleibt ungeprueft");
+    let Some(clang) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
         return;
     };
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-size-baseline");

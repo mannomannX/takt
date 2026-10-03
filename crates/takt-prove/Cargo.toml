@@ -13,6 +13,8 @@ takt-mir = { path = "../takt-mir" }
 takt-interp = { path = "../takt-interp" }
 
 [dev-dependencies]
+# Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).
+takt-testkit = { path = "../takt-testkit" }
 takt-sema = { path = "../takt-sema" }
 
 [lints]

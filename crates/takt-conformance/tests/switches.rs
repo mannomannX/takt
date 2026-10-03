@@ -11,7 +11,7 @@
 mod common;
 
 use takt_interp::{RunOptions, Trace};
-use takt_llvm::toolchain::{Clang, find};
+use takt_llvm::toolchain::Clang;
 
 const HEAD: &str = "\
 system:
@@ -24,10 +24,7 @@ output probe : int in 0..10000 @ hw(\"probe\") with safe = 0
 
 /// Beide Traces eines Programms; `None` ohne clang.
 fn both(body: &str, name: &str, ticks: u64) -> Option<(String, String)> {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return None;
-    };
+    let path = common::clang_path()?;
     let src = format!("{HEAD}{body}");
     let options = takt_sema::Options {
         policy: takt_diag::Policy::default(),

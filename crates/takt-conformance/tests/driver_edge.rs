@@ -8,7 +8,6 @@ mod common;
 use takt_conformance::run::compare;
 use takt_conformance::stimulus::Stimulus;
 use takt_interp::{RunOptions, Trace};
-use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
 
 const SRC: &str = "\
@@ -160,11 +159,7 @@ fn a_stimulus_without_timestamps_keeps_the_contract() {
 /// Interpreter.
 #[test]
 fn the_native_frame_judges_like_the_interpreter() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
-        return;
-    };
-    let clang = Clang::At(path);
+    let Some(clang) = common::clang() else { return };
     let p = program();
     let inputs = Stimulus::from_trace(&Trace::parse(STIMULUS).expect("Stimulus"));
     let native = common::run_native_all_with(&clang, &p, "treiberrand", 14, &inputs).unwrap_or_else(|e| panic!("{e}"));

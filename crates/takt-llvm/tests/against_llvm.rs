@@ -15,16 +15,16 @@ use takt_llvm::emit::{Module, float_literal};
 use takt_llvm::toolchain::{Clang, find};
 use takt_llvm::ty::LlvmType;
 
-/// Sucht `clang` oder meldet, dass der Test uebersprungen wird.
+/// Sucht `clang`; fehlt er, scheitert der Test, es sei denn,
+/// `TAKT_ALLOW_MISSING` erlaubt das Fehlen (FB-392).
 macro_rules! clang_or_skip {
     () => {{
-        match find() {
-            Clang::At(p) => Clang::At(p),
-            Clang::Missing => {
-                eprintln!("uebersprungen: clang nicht gefunden (TAKT_CLANG setzen oder LLVM installieren)");
-                return;
-            }
-        }
+        let Some(path) =
+            takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+        else {
+            return;
+        };
+        Clang::At(path)
     }};
 }
 

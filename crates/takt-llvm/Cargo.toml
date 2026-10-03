@@ -14,6 +14,8 @@ takt-mir = { path = "../takt-mir" }
 workspace = true
 
 [dev-dependencies]
+# Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).
+takt-testkit = { path = "../takt-testkit" }
 # Nur fuer die Tests: Sie uebersetzen echte Korpusprogramme, statt MIR zu
 # erfinden — ein Struct, der nur fuer Testdaten stimmt, ist kein Beleg.
 takt-sema = { path = "../takt-sema" }

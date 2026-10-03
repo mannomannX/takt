@@ -27,5 +27,9 @@ takt-prove = { path = "../takt-prove" }
 # Konformitaetsbericht (13.8).
 takt-conformance = { path = "../takt-conformance" }
 
+[dev-dependencies]
+# Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).
+takt-testkit = { path = "../takt-testkit" }
+
 [lints]
 workspace = true

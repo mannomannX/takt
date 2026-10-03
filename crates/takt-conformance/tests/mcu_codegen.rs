@@ -88,11 +88,7 @@ fn compile_for(clang: &Clang, target: Target, p: &takt_mir::Program, name: &str)
 /// gibt es nichts zu flashen.
 #[test]
 fn the_corpus_compiles_for_both_mcu_targets() {
-    let clang = takt_llvm::toolchain::find();
-    if matches!(clang, Clang::Missing) {
-        eprintln!("clang fehlt; uebersprungen");
-        return;
-    }
+    let Some(clang) = common::clang() else { return };
     let mut errors = Vec::new();
     for name in KORPUS {
         let p = corpus(name);
@@ -111,11 +107,7 @@ fn the_corpus_compiles_for_both_mcu_targets() {
 /// zur Messung belegt der Bau, dass der Codegen sie traegt.
 #[test]
 fn the_corpus_compiles_for_the_32_bit_class_with_f64() {
-    let clang = takt_llvm::toolchain::find();
-    if matches!(clang, Clang::Missing) {
-        eprintln!("clang fehlt; uebersprungen");
-        return;
-    }
+    let Some(clang) = common::clang() else { return };
     let target = Target::ARMV7_LINUX;
     assert_eq!(target.class, Class::Linux32F64);
     assert!(!target.is_bare_metal() && target.class.has_f64_hardware());
@@ -172,10 +164,7 @@ fn ports_differ_only_in_their_helpers() {
     assert!(!mcu.contains("@app_mmio_read("), "die MCU ruft keine Runtime:\n{mcu}");
     assert!(host.contains("call void @app_mmio_read(") && !host.contains("volatile"), "{host}");
 
-    let clang = takt_llvm::toolchain::find();
-    if matches!(clang, Clang::Missing) {
-        return;
-    }
+    let Some(clang) = common::clang() else { return };
     for target in [Target::THUMBV7EM, Target::RISCV32IMAC] {
         compile_for(&clang, target, &p, "68_uart_port.takt").unwrap_or_else(|e| panic!("{}: {e}", target.name));
     }

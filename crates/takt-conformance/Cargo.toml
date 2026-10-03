@@ -23,6 +23,8 @@ takt-sema = { path = "../takt-sema" }
 serialport = { version = "4", default-features = false, optional = true }
 
 [dev-dependencies]
+# Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).
+takt-testkit = { path = "../takt-testkit" }
 # Die Folge des Pruefgeraets, das der Bring-up fuer den Treiberrand stellt.
 takt-board-support = { path = "../takt-board-support" }
 

@@ -23,12 +23,10 @@ use takt_conformance::compare;
 /// und sein Port vertragen nur einen Lauf zugleich.
 static BOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Das Board, exklusiv; `None` ohne `TAKT_ESP32C6_PORT`.
+/// Das Board, exklusiv. Die Tests laufen nur mit `--ignored`; wer sie
+/// verlangt, verlangt das Board, und ohne `TAKT_ESP32C6_PORT` scheitern sie.
 fn board() -> Option<(Esp32c6, std::sync::MutexGuard<'static, ()>)> {
-    let Some(board) = Esp32c6::from_env() else {
-        eprintln!("uebersprungen: TAKT_ESP32C6_PORT nennt kein Board");
-        return None;
-    };
+    let board = Esp32c6::from_env().expect("TAKT_ESP32C6_PORT nennt kein Board");
     Some((board, BOARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
 }
 
@@ -73,6 +71,7 @@ fn slept(text: &str) -> Option<u64> {
 /// die Konsole den zweiten Lauf von seiner ersten Zeile an; nach dem
 /// Bus-Reset der Neuanmeldung blieb sie stumm (FB-311).
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn a_run_ended_after_a_delay_begins_the_next_after_it() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(0);
@@ -101,6 +100,7 @@ fn a_run_ended_after_a_delay_begins_the_next_after_it() {
 /// Der Neustart ist ein Software-Reset des HP-Systems: Der USB-Serial-JTAG
 /// bleibt angemeldet, und die Konsole traegt den zweiten Lauf.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn a_run_ended_now_begins_the_next_at_once() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(0);
@@ -118,6 +118,7 @@ fn a_run_ended_now_begins_the_next_at_once() {
 /// 12.3, M10 Schritt 7): SHA-256 ueber 4096 Byte im Job-Faden, den jeder
 /// Tick unterbricht (`long_job_keeps_the_tick`).
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn a_long_job_runs_between_the_ticks() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = long_job_keeps_the_tick(&mut board);
@@ -127,6 +128,7 @@ fn a_long_job_runs_between_the_ticks() {
 /// **Ein Ueberlauf faultet im naechsten Tick jede Maschine** (7.3, 5.4,
 /// FB-332): `overrun_reaches_every_machine`.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn an_overrun_faults_every_machine_in_the_next_tick() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = overrun_reaches_every_machine(&mut board);
@@ -143,6 +145,7 @@ fn an_overrun_faults_every_machine_in_the_next_tick() {
 /// Der MWDT setzt das HP-System zurueck wie ein Software-Reset; der
 /// USB-Serial-JTAG bleibt angemeldet, und die Konsole traegt beide Laeufe.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(0);
@@ -163,6 +166,7 @@ fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
 /// **`guard` aus der Konfiguration wirkt auf dem Board** (7.5, FB-331):
 /// `a_schedule_inside_the_guard_is_a_timing_fault`.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn a_schedule_inside_the_guard_is_a_timing_fault() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::a_schedule_inside_the_guard_is_a_timing_fault(&mut board);
@@ -187,11 +191,9 @@ fn a_schedule_inside_the_guard_is_a_timing_fault() {
 /// Schreibfolge vertauschte die Ziffern — jeder dieser Faelle faellt hier
 /// auf.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn a_driver_machine_writes_uart0_registers() {
-    let Ok(uart) = std::env::var("TAKT_ESP32C6_UART_PORT") else {
-        eprintln!("uebersprungen: TAKT_ESP32C6_UART_PORT nennt keinen UART-Anschluss");
-        return;
-    };
+    let uart = std::env::var("TAKT_ESP32C6_UART_PORT").expect("TAKT_ESP32C6_UART_PORT nennt keinen UART-Anschluss");
     let Some((board, _guard)) = board() else { return };
     // Zehn Ticks je Zeile, plus Rand: Der Lauf muss ueber `WANT` Zeilen
     // hinaus reichen, sonst haelt das Programm mittendrin. In Echtzeit,
@@ -262,6 +264,7 @@ fn a_driver_machine_writes_uart0_registers() {
 /// Eingang ist `Good` und `false` — nicht `Bad`. Ein `Bad` hiesse, dass
 /// der Treiber nicht gerufen wurde, und genau das war der Zustand vorher.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn a_board_input_reaches_the_process_image() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::fresh(40);
@@ -286,6 +289,7 @@ fn a_board_input_reaches_the_process_image() {
 /// Ende (`flush`). Ein zweiter Lauf desselben Abbilds nach einem Reset —
 /// ohne frisches Journal — muss mit dem letzten Stand des ersten beginnen.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn persistence_survives_a_reset() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "35_persist.takt";
@@ -310,6 +314,7 @@ fn persistence_survives_a_reset() {
 /// einziger Wake-Quelle; die Schleife zaehlt die Ticks dazwischen als
 /// virtuelle, und der Trace bleibt der des Interpreters.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn an_idle_state_sleeps_in_virtual_ticks() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "56_idle_timer.takt";
@@ -327,6 +332,7 @@ fn an_idle_state_sleeps_in_virtual_ticks() {
 /// `STANDBY` nicht (9.9) — den Schlaf belegt `56_idle_timer`. 12 500 Ticks
 /// in logischer Zeit, Tick fuer Tick gegen den Interpreter.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_battery_manager_of_14_7_runs_on_board_2() {
     const TICKS_14_7: u64 = 12_500;
     let Some((mut board, _guard)) = board() else { return };
@@ -357,6 +363,7 @@ fn the_battery_manager_of_14_7_runs_on_board_2() {
 /// weiterzurechnen. Eine Region, die den Programmzustand je Tick schuetzt,
 /// hat der C6 nicht (m10.md 2.12).
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_stack_guard_of_board_2_stops_a_write_of_the_tcb() {
     let Some((mut board, _guard)) = board() else { return };
     for (which, message) in [("guard", "stack's guard"), ("job_guard", "Breakpoint exception")] {
@@ -390,6 +397,7 @@ fn tail(text: &str) -> String {
 /// druckt die gemessenen Lösch- und Programmierzeiten: die Zahlen fuer
 /// `nvm_erase_ns` und `nvm_program_ns` in `corpus-try/hw/esp32c6.hw`.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_journal_costs_time_but_not_semantics() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "58_persist_alert.takt";
@@ -418,6 +426,7 @@ fn the_journal_costs_time_but_not_semantics() {
 /// (Satz 9.9.1). Braucht `nvm_blocking` und die Zeiten in
 /// `corpus-try/hw/esp32c6.hw`, sonst gilt das Geraet als asynchron.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_journal_writes_in_sleep_windows() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "59_persist_idle.takt";
@@ -434,6 +443,7 @@ fn the_journal_writes_in_sleep_windows() {
 /// `TAKT` in den Empfangspuffer, Reset ueber RTS — der Port geht und
 /// kommt, und JTAG antwortet danach, auch wenn es vorher stand.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_board_resets_on_console_request() {
     let Some((board, _guard)) = board() else { return };
     board.reenumerate_via_console().unwrap_or_else(|e| panic!("{e}"));
@@ -447,6 +457,7 @@ fn the_board_resets_on_console_request() {
 /// Tickzaehler ueber JTAG, der eine stumme Konsole von einem stehenden
 /// Programm unterscheidet.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_board_reenumerates_its_usb_on_request() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "01_minimal.takt";
@@ -464,6 +475,7 @@ fn the_board_reenumerates_its_usb_on_request() {
 }
 
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_board_agrees_with_the_interpreter() {
     let Some((mut board, _guard)) = board() else { return };
     // `TAKT_ESP32C6_ONLY=42_map.takt` fuer einen einzelnen Fall.
@@ -473,6 +485,7 @@ fn the_board_agrees_with_the_interpreter() {
 }
 
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_natives_agree_with_the_host() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = natives_agree(&mut board);
@@ -482,6 +495,7 @@ fn the_natives_agree_with_the_host() {
 /// **Der Treiberrand urteilt auf dem Board wie im Interpreter** (12.6, M10
 /// Schritt 29c): das Pruefgeraet des Bring-ups mit jedem Verstoss einmal.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_driver_edge_judges_like_the_interpreter() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = driver_edge_agrees(&mut board);
@@ -491,6 +505,7 @@ fn the_driver_edge_judges_like_the_interpreter() {
 /// **Ein Zeitgeber, der seine Periode verfehlt, ist `Runtime(Hardware)`**
 /// (12.6 Zeile 7, M10 Schritt 29c): das Pruefgeraet streckt die Periode.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn a_stretched_tick_is_runtime_hardware() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::a_stretched_tick_is_runtime_hardware(&mut board);
@@ -500,6 +515,7 @@ fn a_stretched_tick_is_runtime_hardware() {
 /// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,
 /// M10 Schritt 29d): das Pruefgeraet liefert Kanaele ohne Bindung.
 #[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_unread_channels_are_recorded() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::unread_channels_are_recorded(&mut board);

@@ -11,6 +11,28 @@ use takt_conformance::stimulus::Stimulus;
 use takt_llvm::toolchain::Clang;
 use takt_mir::program::Program;
 
+/// clang fuer einen Test: fehlt er, scheitert der Test, es sei denn,
+/// `TAKT_ALLOW_MISSING` erlaubt das Fehlen (FB-392).
+pub fn clang() -> Option<Clang> {
+    clang_path().map(Clang::At)
+}
+
+/// Die Binutils des Wirts (`size`, `nm`, `objdump`) fuer einen Test; wie
+/// [`clang`] ein Pflichtwerkzeug.
+pub fn binutils() -> Option<takt_llvm::inspect::Binutils> {
+    let tools = takt_llvm::inspect::Binutils::host();
+    takt_testkit::require("binutils", tools.available().then_some(tools), "`size`, `nm` und `objdump` auf den PATH")
+}
+
+/// Wie [`clang`], als Pfad.
+pub fn clang_path() -> Option<std::path::PathBuf> {
+    let found = match takt_llvm::toolchain::find() {
+        Clang::At(path) => Some(path),
+        Clang::Missing => None,
+    };
+    takt_testkit::require("clang", found, "`TAKT_CLANG` setzen oder LLVM installieren")
+}
+
 /// Erzeugt die IR eines Programms, so wie der Compiler sie erzeugt.
 pub fn ir_of(p: &Program) -> String {
     ir_for(p, "x86_64-pc-windows-msvc")

@@ -169,8 +169,9 @@ fn module_of(pattern_of: &[Pattern]) -> String {
 
 #[test]
 fn the_generated_matcher_agrees_with_takt_match() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
+    let Some(path) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
         return;
     };
     let clang = Clang::At(path.clone());

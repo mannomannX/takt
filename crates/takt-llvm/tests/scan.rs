@@ -9,7 +9,7 @@
 use std::fmt::Write as _;
 
 use takt_llvm::emit::Module;
-use takt_llvm::toolchain::{Clang, find};
+use takt_llvm::toolchain::find;
 use takt_mir::pattern::{CaptureKind, PatternPiece};
 use takt_mir::scan::Scan;
 
@@ -95,8 +95,9 @@ const LINES: usize = 60;
 
 #[test]
 fn the_generated_automaton_finds_what_the_rust_one_finds() {
-    let Clang::At(path) = find() else {
-        eprintln!("uebersprungen: clang nicht gefunden");
+    let Some(path) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
         return;
     };
     let mut rng = Rng(0x2026_1001_0351);
