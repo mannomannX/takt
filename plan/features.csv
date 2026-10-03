@@ -142,7 +142,7 @@ SEM-14.6,Semantik/Abschnitt,14.6,"Versorgungsunterbrechung mit Live-Log-Auswertu
 SEM-14.7,Semantik/Abschnitt,14.7,"Batteriemanagement mit Selbsttests (MCU; Persistenz, Schlaf, Bit-Operationen, Tabellen)",,M10 (aus M5),fertig,"14.7 auf Board 2 (M10 Schritt 23): Selbsttest, Betrieb, `IDLE_WAIT`, `STANDBY` und `persist`-Journal, 12 500 Ticks gegen den Interpreter; AFE und Ladegeraet als `sim`-Bindungen, das Modell rechnet auf dem Board mit (darum kein Systemschlaf in `STANDBY`, 9.9). Letzter Beleg: AFE-Platine"
 SEM-14.8,Semantik/Abschnitt,14.8,"Image-Auswahl und -Validierung beim Start (Startprofil; Chunk-Hash, Job, Kommando + Status, Persistenz)",,M6 (v1.1),fertig,Wortlaut in `corpus-try/sim/14_8/program.takt` mit den kuratierten Namen (FB-166); im Interpreter mit Flash-Modell und Signaturpruefung
 G-file,Grammatik,2.3,file,,M0 (Parser/MIR-Entwurf),fertig,
-G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),fertig,
+G-import,Grammatik,2.3,import,,M0 (Parser/MIR-Entwurf),teilweise,Testpruefung 2026-10-03: die Sema lehnt Module mit SC-2 ab (FB-400)
 G-system_decl,Grammatik,2.3,system_decl,,M0 (Parser/MIR-Entwurf),fertig,
 G-system_item,Grammatik,2.3,system_item,,M0 (Parser/MIR-Entwurf),fertig,
 G-type_decl,Grammatik,2.3,type_decl,,M0 (Parser/MIR-Entwurf),fertig,
@@ -299,7 +299,7 @@ Channel-Attribut-max_age,Channel-Attribut,2.3,"attr: ""max_age""",,M0 (Parser/MI
 Channel-Attribut-rate,Channel-Attribut,2.3,"attr: ""rate""",,M0 (Parser/MIR-Entwurf),fertig,
 Channel-Attribut-max_rate,Channel-Attribut,2.3,"attr: ""max_rate""",,M0 (Parser/MIR-Entwurf),fertig,
 Channel-Attribut-capacity,Channel-Attribut,2.3,"attr: ""capacity""",,M0 (Parser/MIR-Entwurf),fertig,
-Channel-Attribut-framing,Channel-Attribut,2.3,"attr: ""framing""",,M0 (Parser/MIR-Entwurf),fertig,
+Channel-Attribut-framing,Channel-Attribut,2.3,"attr: ""framing""",,M0 (Parser/MIR-Entwurf),teilweise,"Testpruefung 2026-10-03: Attribut ohne Leser in Interpreter, Runtime, HAL und Codegen (FB-400)"
 Channel-Attribut-overflow,Channel-Attribut,2.3,"attr: ""overflow""",,M0 (Parser/MIR-Entwurf),fertig,
 Channel-Attribut-fault,Channel-Attribut,2.3,"attr: ""fault""",,M0 (Parser/MIR-Entwurf),fertig,
 Channel-Attribut-drop_oldest,Channel-Attribut,2.3,"attr: ""drop_oldest""",,M0 (Parser/MIR-Entwurf),fertig,
@@ -360,9 +360,9 @@ Generics-Fähigkeit-integer,Generics-Fähigkeit,2.3,"capability: ""integer""",,M
 Generics-Fähigkeit-float,Generics-Fähigkeit,2.3,"capability: ""float""",,M0 (Parser/MIR-Entwurf),fertig,
 Rahmung-raw,Rahmung,2.3,"framing: ""raw""",,M0 (Parser/MIR-Entwurf),fertig,
 Rahmung-lines,Rahmung,2.3,"framing: ""lines""",,M0 (Parser/MIR-Entwurf),fertig,
-Rahmung-cobs,Rahmung,2.3,"framing: ""cobs""",,M0 (Parser/MIR-Entwurf),fertig,
-Rahmung-length_prefixed,Rahmung,2.3,"framing: ""length_prefixed""",,M0 (Parser/MIR-Entwurf),fertig,
-Rahmung-fixed,Rahmung,2.3,"framing: ""fixed""",,M0 (Parser/MIR-Entwurf),fertig,
+Rahmung-cobs,Rahmung,2.3,"framing: ""cobs""",,M0 (Parser/MIR-Entwurf),teilweise,"Testpruefung 2026-10-03: geparst und gesenkt, aber kein Bestandteil liest `framing` (FB-400)"
+Rahmung-length_prefixed,Rahmung,2.3,"framing: ""length_prefixed""",,M0 (Parser/MIR-Entwurf),teilweise,"Testpruefung 2026-10-03: geparst und gesenkt, aber kein Bestandteil liest `framing` (FB-400)"
+Rahmung-fixed,Rahmung,2.3,"framing: ""fixed""",,M0 (Parser/MIR-Entwurf),teilweise,"Testpruefung 2026-10-03: geparst und gesenkt, aber kein Bestandteil liest `framing` (FB-400)"
 Bindung-hw,Bindung,2.3,"binding: ""hw""",,M0 (Parser/MIR-Entwurf),fertig,
 Bindung-sim,Bindung,2.3,"binding: ""sim""",,M0 (Parser/MIR-Entwurf),fertig,
 Bindung-none,Bindung,2.3,"binding: ""none""",,M0 (Parser/MIR-Entwurf),fertig,
@@ -377,7 +377,7 @@ Kampagnen-Item-never,Kampagnen-Item,2.3,"campaign_item: ""never""",,M0 (Parser/M
 Generics-Klasse-type,Generics-Klasse,2.3,"gvar: ""type""",,M0 (Parser/MIR-Entwurf),fertig,
 Generics-Klasse-const,Generics-Klasse,2.3,"gvar: ""const""",,M0 (Parser/MIR-Entwurf),fertig,
 KW-system,Schlüsselwort,2.2,system,,M0 (Parser/MIR-Entwurf),fertig,
-KW-import,Schlüsselwort,2.2,import,,M0 (Parser/MIR-Entwurf),fertig,
+KW-import,Schlüsselwort,2.2,import,,M0 (Parser/MIR-Entwurf),teilweise,Testpruefung 2026-10-03: die Sema lehnt Module mit SC-2 ab (FB-400)
 KW-type,Schlüsselwort,2.2,type,,M0 (Parser/MIR-Entwurf),fertig,
 KW-enum,Schlüsselwort,2.2,enum,,M0 (Parser/MIR-Entwurf),fertig,
 KW-record,Schlüsselwort,2.2,record,,M0 (Parser/MIR-Entwurf),fertig,
@@ -558,16 +558,16 @@ MEM-remaining,Reservierter Membername,2.5,remaining,,M0 (Parser/MIR-Entwurf),fer
 MEM-truncated,Reservierter Membername,2.5,truncated,,M0 (Parser/MIR-Entwurf),fertig,
 MEM-reset,Reservierter Membername,2.5,reset,,M0 (Parser/MIR-Entwurf),fertig,
 SC-1,Statische Prüfung,10,"Tokenizer/Parser (Einrückung, Grammatik)",F,M3 (Gate),fertig,
-SC-2,Statische Prüfung,10,"Namensauflösung, Modul-Linking, Namenskonventionen",F / W,M3 (Gate),fertig,
+SC-2,Statische Prüfung,10,"Namensauflösung, Modul-Linking, Namenskonventionen",F / W,M3 (Gate),teilweise,"Testpruefung 2026-10-03: Modul-Linking nicht umgesetzt, `import` wird abgelehnt (FB-400)"
 SC-3,Statische Prüfung,10,"Typ- und Einheiteninferenz, affine Regeln, Duration-Regeln",F,M3 (Gate),fertig,
-SC-4,Statische Prüfung,10,"Intervallanalyse: Ranges, Division, Overflow, Index; implizite Prüfungen","W bei jeder eingefügten Laufzeitprüfung (außer i64-Overflow und `NonFinite`, die an fast jeder Rechnung ohne Range stehen); Zertifizierungsmodus: F für jede unbewiesene",M3 (Gate),fertig,
+SC-4,Statische Prüfung,10,"Intervallanalyse: Ranges, Division, Overflow, Index; implizite Prüfungen","W bei jeder eingefügten Laufzeitprüfung (außer i64-Overflow und `NonFinite`, die an fast jeder Rechnung ohne Range stehen); Zertifizierungsmodus: F für jede unbewiesene",M3 (Gate),teilweise,"Testpruefung 2026-10-03: der Code SC-4 wird nie gemeldet, kein eigener Schlechtfall (FB-399)"
 SC-5,Statische Prüfung,10,Validitäts-Dominanz für Channel-Lesen,— (impliziter Check ist Default),M3 (Gate),fertig,
 SC-6,Statische Prüfung,10,Definite Assignment,F,M3 (Gate),fertig,
 SC-7,Statische Prüfung,10,Single-Writer für Outputs und `pub var`; Channel-Richtung; jede `hw`-Adresse höchstens einmal gebunden,F,M3 (Gate),fertig,
 SC-8,Statische Prüfung,10,"Maschinen: eindeutige Zustandsnamen, `initial` vorhanden, Ziele existieren, Transitionsblöcke enden mit `->`, Aktionsblock-Einschränkungen (5.5); `break` nur in `for` (4.4)",F,M3 (Gate),fertig,FB-187
 SC-9,Statische Prüfung,10,Fault-Wald azyklisch; `FAULTED` erreichbar; Guards der Transitionen aus `FAULTED` ohne implizite Prüfungen,F,M3 (Gate),fertig,
-SC-10,Statische Prüfung,10,Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige,W,M3 (Gate),fertig,
-SC-11,Statische Prüfung,10,Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick,F,M3 (Gate),fertig,
+SC-10,Statische Prüfung,10,Erreichbarkeit von Zuständen; tote Transitionen (Guard statisch false); Zustände ohne Ausgang außer `FAULTED`/`DONE`-artige,W,M3 (Gate),teilweise,Testpruefung 2026-10-03: tote Transitionen (`when false:`) ohne Meldung (FB-399)
+SC-11,Statische Prüfung,10,Terminierung: `for`-Schranken konstant; Aufrufgraph azyklisch; Block-`step` ≤ 1 pro Instanz und Tick,F,M3 (Gate),teilweise,Testpruefung 2026-10-03: zwei `step` derselben Instanz im selben `loop:` ohne Meldung (FB-399)
 SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M10 (aus M5),fertig,"positiv `a_generous_wcet_passes`, negativ `a_declared_wcet_is_checked_against_the_calibration`, nicht entscheidbar `a_declared_wcet_learns_why_it_cannot_be_judged` (`calibrated.rs`, `analysis.rs`), Gate `the_gate_names_what_it_could_not_decide`; Kalibrierung beider Boards zum Kostenmodell 2 (FB-281, FB-293, FB-295 behoben)"
 SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle,F,M3 (Gate),fertig,
 SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),fertig,
@@ -602,7 +602,7 @@ SC-42,Statische Prüfung,10,"Lint: Matrizen über 16×16 (Kosten n³, Scratch n�
 SC-43,Statische Prüfung,10,Interne Streams: genau ein Schreiber; `send` nur aus dessen Maschine; Kapazitäten wie 17 mit MAXPT = statische Höchstzahl von `send` je Aktivierung des Schreibers (8.6),F,M3 (Gate),fertig,
 SC-44,Statische Prüfung,10,"Jobs: höchstens K_j je Maschine, Argumente fester Größe, Handle zustandslokal oder Maschinenvariable; `duration` deklariert (4.5)",F,M3 (Gate),fertig,
 SC-45,Statische Prüfung,10,"`T!E`: Dominanz durch `.ok` oder `check r.ok`; `match` über `OK`/`ERR` erschöpfend (3.8); ein früher Ausstieg unter `not x.valid` (`return`, `break`, `abort`) dominiert den Rest des Blocks (3.5)",F,M3 (Gate),fertig,FB-185
-SC-46,Statische Prüfung,10,"`layout`: Offsets überlappen nicht, Bitfelder innerhalb ihres Trägerfelds, Konstantenfelder passen zur Breite, Diskriminanten eindeutig (3.7)",F,M3 (Gate),fertig,
+SC-46,Statische Prüfung,10,"`layout`: Offsets überlappen nicht, Bitfelder innerhalb ihres Trägerfelds, Konstantenfelder passen zur Breite, Diskriminanten eindeutig (3.7)",F,M3 (Gate),teilweise,Testpruefung 2026-10-03: doppelte Diskriminanten werden angenommen (FB-394)
 SC-47,Statische Prüfung,10,"`inout`: kein Aliasing (ein Argument höchstens einmal, nicht zugleich als weiteres Argument); die Stelle trägt die Range des Parameters (3.4, 3.9)",F,M3 (Gate),fertig,
 SC-48,Statische Prüfung,10,`irreversible`-Outputs: Zuweisung nur in Sequenzen unmittelbar nach `expect`; Szenario-Abdeckung Pflicht (12.7),F,M3 (Gate),fertig,
 SC-49,Statische Prüfung,10,Edition fehlt (2.5),W (Zertifizierungsmodus: F),M3 (Gate),fertig,
@@ -710,7 +710,7 @@ PAR-8.3-Sim_Build,Absatz/Regel,8.3,Sim-Build:,,M2 (Ströme),fertig,
 PAR-8.3-Plant_Modelle,Absatz/Regel,8.3,Plant-Modelle,,M2 (Ströme),fertig,
 PAR-8.3-HIL_Umschaltung,Absatz/Regel,8.3,HIL-Umschaltung:,,M10 (aus M2),fertig,
 PAR-8.3-Sim_Ausführung,Absatz/Regel,8.3,Sim-Ausführung,,M2 (Ströme),fertig,
-PAR-8.4-Tunables_v1.1,Absatz/Regel,8.4,Tunables (v1.1),v1.1,M6,fertig,
+PAR-8.4-Tunables_v1.1,Absatz/Regel,8.4,Tunables (v1.1),v1.1,M6,teilweise,"Testpruefung 2026-10-03: nativ ohne Wirkung: `apply_tunables` ohne Aufrufer, `tune` nirgends umgesetzt (FB-389)"
 PAR-8.6-Motivation,Absatz/Regel,8.6,Motivation,,M2 (Ströme),fertig,
 PAR-8.6-Deklaration,Absatz/Regel,8.6,Deklaration,,M2 (Ströme),fertig,
 PAR-8.6-Semantik_ASCII_formal_in_9.6,Absatz/Regel,8.6,"Semantik (ASCII, formal in 9.6)",,M2 (Ströme),fertig,
@@ -1146,3 +1146,4 @@ TEST-Netz-Erzeugte_Eingaben,Abnahme,13.8,"Pruefnetz: Eingaben je Programm aus se
 TEST-Netz-Orakel,Abnahme,13.8,Pruefnetz: metamorphe Relationen ueber den erzeugten Eingaben und die Programme der Referenz als Korpus,,M11 (Einbettung),offen,M11 Schritt 29b; FB-382
 TEST-Netz-Solver,Abnahme,13.8,"Pruefnetz: Solver und Version im Bericht, z3 und cvc5 je entschiedenem Urteil gleich, Bewiesenes als Monitor in den erzeugten Laeufen",,M11 (Einbettung),offen,"M11 Schritte 26, 28, 30; FB-380"
 TEST-Netz-Mutationen,Abnahme,13.8,Pruefnetz: Mutationstests je Schritt auf dem Diff und vor dem Abschluss je Crate; ueberlebende Mutanten als Befund und Ratsche,,M11 (Einbettung),offen,M11 Schritt 30; FB-379
+SC-65,Statische Prüfung,10,"Beweisdatei (`.takt-proof`, 11.3): Der Programm-Hash der Datei stimmt mit der Quelle überein; nur dann entfallen die bewiesenen impliziten Prüfungen im erzeugten Code",F,M10,fertig,"`takt-sema/src/checks.rs` (SC65), `takt-sema/tests/analysis.rs`; nachgetragen 2026-10-03 (FB-400); der Schluessel einer Stelle ist mehrdeutig (FB-393)"
