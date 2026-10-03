@@ -36,6 +36,7 @@
 #![no_main]
 #![allow(unsafe_code, reason = "Interrupt-Handler und C-ABI; 9.5 fuehrt Treiber in der TCB")]
 
+use core::ffi::c_void;
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
@@ -178,6 +179,28 @@ static PROBE: AtomicU8 = AtomicU8::new(0);
 
 /// Wie der vorige Lauf endete (12.7), beim Start aus dem Plattformblock gelesen.
 static PREVIOUS_RUN: AtomicU32 = AtomicU32::new(0);
+
+/// Die Arena des Programms (12.11), so gross, wie der Rahmen sie fuer dieses
+/// Ziel verlangt (`build.rs`).
+mod arena {
+    include!(concat!(env!("OUT_DIR"), "/takt_arena.rs"));
+}
+
+/// Die Arena, am Anfang des RAM: Ihren Programmbereich schuetzt die MPU
+/// ausserhalb des Ticks (12.3, `takt_state.x`).
+#[unsafe(link_section = ".takt_state")]
+static mut ARENA: arena::Arena = arena::Arena::new();
+
+/// Die Arena als Zeiger der C-ABI; nur der Rahmen liest und schreibt sie.
+fn arena() -> *mut c_void {
+    (&raw mut ARENA).cast()
+}
+
+/// Die Jobs des Programms (4.5), fuer den Job-Kontext und die Job-Aufgabe.
+fn jobs() -> takt_mcu_program::jobs::Jobs {
+    // SAFETY: `ARENA` gehoert nur diesem Programm und lebt so lange wie es.
+    unsafe { takt_mcu_program::jobs::Jobs::new(arena()) }
+}
 
 /// Der Pruefstand des Programms (12.6): je Adresse das Geraet, das die
 /// Verdrahtung nennt, sonst ein Stummel (`build.rs`).
@@ -425,7 +448,7 @@ unsafe fn runtime<C: Clock>(clock: C, protection: Mpu, profile: Profile, rig: &m
     let watchdog = (limit() == 0).then(|| Iwdg::arm(WATCHDOG_NS));
     // 12.3: Nach `init` ist der Programmzustand nur noch im Tick beschreibbar.
     // SAFETY: siehe oben.
-    let program = Guarded::new(unsafe { Generated::init(core::ptr::from_mut(rig).cast()) }, protection);
+    let program = Guarded::new(unsafe { Generated::init(arena(), core::ptr::from_mut(rig).cast()) }, protection);
     let line: Line = Trace::new(Cadence::of(limit(), TRACE_EVERY), TICK_NS, uart);
     Runtime::new(program, clock, watchdog, line, profile, TICK_NS, policy)
 }
@@ -556,7 +579,7 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
 
     // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
     // der Tick holt den Kern zurueck.
-    let jobs = if cfg!(feature = "rtos") { None } else { JobContext::start() };
+    let jobs = if cfg!(feature = "rtos") { None } else { JobContext::start(jobs()) };
 
     #[cfg(not(feature = "rtos"))]
     let nvic = cp.NVIC;
@@ -662,7 +685,7 @@ struct TaskBoundary {
 #[cfg(feature = "rtos")]
 impl takt_rt_rtos::Boundary for TaskBoundary {
     async fn reached(&mut self) {
-        if takt_mcu_program::jobs::dispatch() {
+        if jobs().dispatch() {
             self.work.write(());
         }
         if let Some(u) = uart() {
@@ -855,7 +878,7 @@ mod app {
     async fn jobs(cx: jobs::Context) {
         loop {
             cx.local.work.wait().await;
-            takt_mcu_program::jobs::work();
+            super::jobs().work();
         }
     }
 }

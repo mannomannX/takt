@@ -35,8 +35,9 @@ void takt_board_trace_hex8(unsigned char v) { fprintf(out[current], "0x%02x", v)
 /// sein Praefix, seine Arena und seinen MCU-Rahmen; ein `main` startet beide
 /// und tickt sie abwechselnd, wie die Schleife der Boards es fuer eines tut.
 /// Fehlte einem externen Symbol das Praefix, linkte der Prozess nicht;
-/// teilten die Programme Zustand, saehe eines die Spuren des anderen. Ihre
-/// Kanaele an Hardware bekommen ausdruecklich Stummel (12.6).
+/// teilten die Programme Zustand, saehe eines die Spuren des anderen. Beide
+/// Koepfe stehen in derselben Uebersetzungseinheit, jede Arena hat ihren Typ
+/// (12.11). Die Kanaele an Hardware bekommen ausdruecklich Stummel (12.6).
 #[test]
 fn two_programs_run_side_by_side_like_the_interpreter() {
     let Clang::At(clang) = find() else {
@@ -49,6 +50,7 @@ fn two_programs_run_side_by_side_like_the_interpreter() {
 
     let host = if cfg!(windows) { takt_llvm::Target::X86_64_WINDOWS } else { takt_llvm::Target::X86_64_LINUX };
     let mut sources = Vec::new();
+    let mut heads = String::new();
     let mut main = String::from(BOARD);
     let mut calls = String::new();
     let mut programs = Vec::new();
@@ -57,27 +59,30 @@ fn two_programs_run_side_by_side_like_the_interpreter() {
         let p = common::board::corpus(file);
         let ir = takt_llvm::lower::program(&p, host.triple, &prefix).ir;
         let frame =
-            takt_frame::mcu::build_with(&p, Frame { prefix: prefix.clone(), stubs: true, ..Default::default() }).source;
+            takt_frame::mcu::build_with(&p, Frame { prefix: prefix.clone(), stubs: true, ..Default::default() });
         let (ll, c) = (dir.join(format!("{name}.ll")), dir.join(format!("{name}.c")));
         std::fs::write(&ll, ir).expect("IR");
-        std::fs::write(&c, frame).expect("Rahmen");
+        std::fs::write(&c, frame.source).expect("Rahmen");
+        std::fs::write(dir.join(format!("{name}.h")), frame.header).expect("Kopf");
         sources.extend([ll, c]);
-        main.push_str(&format!(
-            "void {name}_init(void *user);\nvoid {name}_tick(long long k);\nvoid {name}_commit(void);\nvoid {name}_dump(int all);\n"
+        heads.push_str(&format!("#include \"{name}.h\"\n"));
+        main.push_str(&format!("static struct {name}_arena {name}_arena;\n"));
+        calls.push_str(&format!(
+            "        current = {i}; {name}_tick(&{name}_arena, k); {name}_commit(&{name}_arena); \
+             {name}_dump(&{name}_arena, 0);\n"
         ));
-        calls.push_str(&format!("        current = {i}; {name}_tick(k); {name}_commit(); {name}_dump(0);\n"));
         programs.push((name, p, dir.join(format!("{name}.trace"))));
     }
     main.push_str("\nint main(void) {\n");
     for (i, (name, _, trace)) in programs.iter().enumerate() {
         let path = trace.display().to_string().replace('\\', "/");
         main.push_str(&format!("    out[{i}] = fopen(\"{path}\", \"w\");\n    if (!out[{i}]) return 1;\n"));
-        main.push_str(&format!("    current = {i}; {name}_init(0); {name}_dump(1);\n"));
+        main.push_str(&format!("    current = {i}; {name}_init(&{name}_arena, 0); {name}_dump(&{name}_arena, 1);\n"));
     }
     main.push_str(&format!("    for (long long k = 1; k <= {TICKS}; k++) {{\n{calls}    }}\n"));
     main.push_str("    fclose(out[0]);\n    fclose(out[1]);\n    return 0;\n}\n");
     let main_c = dir.join("main.c");
-    std::fs::write(&main_c, main).expect("main");
+    std::fs::write(&main_c, heads + &main).expect("main");
 
     let exe = dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" });
     let natives = harness::native_library().expect("Natives");

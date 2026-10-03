@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 
 use takt_frame::edge::{KIND_FLOAT, KIND_INT, KIND_NONE, double};
 use takt_frame::layout::{Layout, c_type};
+use takt_llvm::symbols::Prefix;
 use takt_mir::program::{Direction, Program};
 use takt_mir::types::Type;
 
@@ -23,7 +24,7 @@ use crate::stimulus::Stimulus;
 /// Rand (Zeile 5).
 ///
 /// Das Ergebnis ist die Zahl der Lieferungen im vollsten Tick.
-pub(crate) fn stimulus(s: &mut String, p: &Program, layout: &Layout, inputs: &[Stimulus]) -> usize {
+pub(crate) fn stimulus(s: &mut String, p: &Program, layout: &Layout, inputs: &[Stimulus], x: &Prefix) -> usize {
     use std::collections::BTreeMap;
     let tick_ns = p.config.tick;
     let mut ticks: BTreeMap<u64, (Vec<String>, Vec<String>)> = BTreeMap::new();
@@ -81,7 +82,7 @@ pub(crate) fn stimulus(s: &mut String, p: &Program, layout: &Layout, inputs: &[S
         entry.0.push(format!("{call} /* {channel} */"));
     }
     let _ = writeln!(s, "/* Die Lieferungen des Stimulus an den Treiberrand (12.6). */");
-    let _ = writeln!(s, "static void takt_edge_stimulus(struct takt_arena *a, long long tick) {{");
+    let _ = writeln!(s, "static void takt_edge_stimulus(struct {x}_arena *a, long long tick) {{");
     let _ = writeln!(s, "    switch (tick) {{");
     for (tick, (readings, elements)) in &ticks {
         let _ = writeln!(s, "    case {tick}:");

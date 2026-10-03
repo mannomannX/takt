@@ -9,13 +9,14 @@
 use std::fmt::Write as _;
 
 use takt_llvm::arena::Arena;
+use takt_llvm::symbols::Prefix;
 
 /// Ein Rahmen in drei Teilen.
 #[derive(Clone, Debug, Default)]
 pub struct Text {
     /// Typen und Konstanten, die die Felder der Arena brauchen.
     pub types: String,
-    /// Die Felder der Runtime in `struct takt_arena`, je mit Einrueckung und
+    /// Die Felder der Runtime in `struct P_arena`, je mit Einrueckung und
     /// Semikolon.
     pub fields: String,
     /// Funktionen und Tabellen.
@@ -23,9 +24,21 @@ pub struct Text {
 }
 
 impl Text {
-    /// Fuegt den Rahmen zusammen: `head`, die Typen, die Arena mit dem
-    /// Programmbereich vorn und den Feldern der Runtime dahinter, die
-    /// Pruefungen der Versaetze, dann der Code.
+    /// Fuegt den Rahmen zusammen: `head`, der Kopf ([`Text::header`]), dann
+    /// der Code.
+    pub fn assemble(self, head: &str, x: &Prefix, arena: &Arena, pad_to: Option<u64>) -> String {
+        let mut s = String::from(head);
+        s.push_str(&self.header(x, arena, pad_to));
+        s.push('\n');
+        s.push_str(&self.code);
+        s
+    }
+
+    /// Der Kopf: die Typen, die Arena `struct P_arena` mit dem Programmbereich
+    /// vorn und den Feldern der Runtime dahinter, die Pruefungen der
+    /// Versaetze. Ein Wirt in C bindet ihn und legt die Arena mit ihrem Typ
+    /// an; jeder Name darin traegt das Praefix oder gehoert der geteilten
+    /// Bibliothek (12.11).
     ///
     /// Mit `pad_to` reicht der Programmbereich bis zu dieser Groesse: So
     /// deckt eine Schutzregion ihn genau und die Runtime dahinter nicht
@@ -36,12 +49,11 @@ impl Text {
     /// Byte-Array allein haette in C Ausrichtung 1. Auf ARMv7-M ist `LDRD`
     /// ohne Wortausrichtung ein UsageFault, der zum HardFault eskaliert —
     /// gefunden auf dem STM32F401, wo `state_blink` auf 0x2000_0036 lag.
-    pub fn assemble(self, head: &str, arena: &Arena, pad_to: Option<u64>) -> String {
-        let mut s = String::from(head);
-        s.push_str(&self.types);
+    pub fn header(&self, x: &Prefix, arena: &Arena, pad_to: Option<u64>) -> String {
+        let mut s = self.types.clone();
         let _ = writeln!(s, "\n/* Die Arena (12.11): vorn der Programmbereich, den der erzeugte Code adressiert,");
         let _ = writeln!(s, "   dahinter die Runtime. Der Wirt stellt sie fuer die Lebensdauer des Programms. */");
-        let _ = writeln!(s, "struct takt_arena {{");
+        let _ = writeln!(s, "struct {x}_arena {{");
         for r in arena.regions() {
             let _ = writeln!(s, "    _Alignas(8) unsigned char {}[{}];", r.name, r.bytes);
         }
@@ -56,12 +68,10 @@ impl Text {
         for r in arena.regions() {
             let _ = writeln!(
                 s,
-                "_Static_assert(offsetof(struct takt_arena, {0}) == {1}, \"{0} liegt, wo der Codegen ihn sucht\");",
+                "_Static_assert(offsetof(struct {x}_arena, {0}) == {1}, \"{0} liegt, wo der Codegen ihn sucht\");",
                 r.name, r.offset
             );
         }
-        s.push('\n');
-        s.push_str(&self.code);
         s
     }
 }

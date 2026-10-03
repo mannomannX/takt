@@ -144,7 +144,7 @@ fn safe_payload(p: &Program, slot: &crate::layout::Slot, safe: &takt_mir::expr::
 /// der nur zu Tickbeginn geschrieben wird, um den Tick mehr (`tick_granular`);
 /// ohne Konfiguration null wie in der Simulation.
 pub fn jitter(s: &mut String, p: &Program, hw: Option<&takt_mir::hardware::Hardware>, x: &Prefix) {
-    let _ = writeln!(s, "long long {x}_jitter(struct takt_arena *a, int o) {{");
+    let _ = writeln!(s, "long long {x}_jitter(struct {x}_arena *a, int o) {{");
     let _ = writeln!(s, "    switch (o) {{");
     for (i, c) in p.channels.iter().enumerate() {
         let (takt_mir::program::Binding::Hw(a), Some(hw)) = (&c.binding, hw) else { continue };
@@ -159,6 +159,9 @@ pub fn jitter(s: &mut String, p: &Program, hw: Option<&takt_mir::hardware::Hardw
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
 }
+
+/// Die Plaetze je Warteschlange geplanter Ausgaben, `K_o` aus 7.5.
+const K_O: usize = 4;
 
 /// **Der Rahmen ist hier die Runtime.** 11.2 legt `sched` in den
 /// Runtime-Anteil des Outputs, und 9.8 gibt die Regeln vor: sortiert
@@ -180,10 +183,9 @@ pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mi
         return;
     }
     let n = queues.len();
-    // K_o aus 7.5; `takt size` rechnet mit derselben Zahl.
-    let _ = writeln!(t.types, "#define TAKT_K_O 4");
-    let _ = writeln!(t.types, "struct takt_sched {{ long long t; long long v; }};");
-    let _ = writeln!(t.fields, "    struct takt_sched sched[{n}][TAKT_K_O];");
+    let _ = writeln!(t.code, "#define TAKT_K_O {K_O}");
+    let _ = writeln!(t.types, "struct {x}_sched {{ long long t; long long v; }};");
+    let _ = writeln!(t.fields, "    struct {x}_sched sched[{n}][{K_O}];");
     let _ = writeln!(t.fields, "    int sched_n[{n}];");
     let s = &mut t.code;
     let guards: Vec<String> = queues
@@ -208,7 +210,7 @@ pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mi
     // Das Ergebnis ist null oder die Art des Faults (`abi::fault_code`).
     let timing = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Timing);
     let overflow = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::ScheduleOverflow);
-    let _ = writeln!(s, "int {x}_schedule(struct takt_arena *a, int o, long long t, long long v) {{");
+    let _ = writeln!(s, "int {x}_schedule(struct {x}_arena *a, int o, long long t, long long v) {{");
     let _ = writeln!(s, "    int q = takt_sched_slot(o);");
     let _ = writeln!(s, "    if (q < 0) return {overflow};");
     // 7.5, 9.8: `T <= now + guard(o)` ist ein `TimingFault`.
@@ -224,17 +226,17 @@ pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mi
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
-        "void {x}_cancel(struct takt_arena *a, int o) {{ int q = takt_sched_slot(o); if (q >= 0) a->sched_n[q] = 0; }}"
+        "void {x}_cancel(struct {x}_arena *a, int o) {{ int q = takt_sched_slot(o); if (q >= 0) a->sched_n[q] = 0; }}"
     );
     // 9.9: Schlaf nur, wenn alle `sched[o]` leer sind.
-    let _ = writeln!(s, "static _Bool takt_sched_pending(struct takt_arena *a) {{");
+    let _ = writeln!(s, "static _Bool takt_sched_pending(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    for (int q = 0; q < {n}; q++) if (a->sched_n[q]) return 1;");
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
 
     // `apply_scheduled(k)`: Was faellig ist, geht in den Latch. Sind
     // mehrere faellig, gewinnt der spaeteste Zeitpunkt (9.8).
-    let _ = writeln!(s, "static void takt_apply_scheduled(struct takt_arena *a, long long now) {{");
+    let _ = writeln!(s, "static void takt_apply_scheduled(struct {x}_arena *a, long long now) {{");
     let _ = writeln!(s, "    for (int q = 0; q < {n}; q++) {{");
     let _ = writeln!(s, "        long long best_t = -1; long long best_v = 0; int hit = 0;");
     let _ = writeln!(s, "        int k = 0;");
@@ -286,13 +288,13 @@ pub fn queued_outputs(p: &Program) -> Vec<takt_mir::ChannelId> {
 /// Runtime-Fault —, zugestellt zu Beginn des naechsten Schritts oder, wenn
 /// die Maschine nicht aktiv ist, in der Abort-Phase. Ein Abort verdraengt
 /// einen Runtime-Fault, nicht umgekehrt.
-pub fn raised(t: &mut Text, p: &Program) {
+pub fn raised(t: &mut Text, p: &Program, x: &Prefix) {
     let n = p.machines.len().max(1);
     let abort = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Abort);
     let _ = writeln!(t.fields, "    _Bool raised[{n}];");
     let _ = writeln!(t.fields, "    int pending[{n}];");
     let s = &mut t.code;
-    let _ = writeln!(s, "static void takt_pend(struct takt_arena *a, int m, int code) {{");
+    let _ = writeln!(s, "static void takt_pend(struct {x}_arena *a, int m, int code) {{");
     let _ = writeln!(s, "    if (a->pending[m] != {abort}) a->pending[m] = code;");
     let _ = writeln!(s, "}}");
 }
@@ -356,7 +358,7 @@ pub fn idle_drops(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mac
 /// Flanken"): ein Platz je Maschine, Alert-Stelle und Durchlauf der
 /// umgebenden Schleifen, wie `alert_edge` im Interpreter; geschrieben
 /// wird nur, was sich aendert.
-pub fn alert_table(t: &mut Text, p: &Program) {
+pub fn alert_table(t: &mut Text, p: &Program, x: &Prefix) {
     let mut bases = Vec::with_capacity(p.machines.len());
     let mut total = 0u32;
     for m in &p.machines {
@@ -368,7 +370,7 @@ pub fn alert_table(t: &mut Text, p: &Program) {
     let _ = writeln!(t.fields, "    _Bool alert[{}];", total.max(1));
     let s = &mut t.code;
     let _ = writeln!(s, "static const int g_alert_base[{}] = {{ {} }};", bases.len().max(1), bases.join(", "));
-    let _ = writeln!(s, "static _Bool takt_alert_edge(struct takt_arena *a, int m, int slot, unsigned char on) {{");
+    let _ = writeln!(s, "static _Bool takt_alert_edge(struct {x}_arena *a, int m, int slot, unsigned char on) {{");
     let _ = writeln!(s, "    _Bool *was = &a->alert[g_alert_base[m] + slot];");
     let _ = writeln!(s, "    if (*was == (on != 0)) return 0;");
     let _ = writeln!(s, "    *was = on != 0;");
@@ -511,8 +513,9 @@ pub fn sim_fed_inputs(p: &Program) -> Vec<usize> {
 pub fn machine_declarations(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
     for m in driven {
         for (suffix, shape) in takt_llvm::arena::entries(m, p) {
+            let arena = format!("struct {x}_arena *a");
             let params: Vec<&str> =
-                std::iter::once("struct takt_arena *a").chain(shape.extra.iter().map(|t| c_of(t))).collect();
+                std::iter::once(arena.as_str()).chain(shape.extra.iter().map(|t| c_of(t))).collect();
             let symbol = takt_llvm::arena::entry_symbol(x, &m.name, &suffix);
             let _ = writeln!(s, "{} {symbol}({});", c_of(shape.ret), params.join(", "));
         }
@@ -848,7 +851,7 @@ pub fn job_slots(p: &Program) -> Vec<(usize, usize, takt_mir::NativeId)> {
 /// Abbild, seine Dauer in Ticks, der erste Slot je Maschine und die Helfer
 /// aus `JOBS_C`. Gibt die Zahl der Slots und die groesste Ergebnislaenge
 /// zurueck; `None`, wenn das Programm keine Jobs startet.
-pub fn job_tables(s: &mut String, p: &Program) -> Option<(usize, u64)> {
+pub fn job_tables(s: &mut String, p: &Program, x: &Prefix) -> Option<(usize, u64)> {
     use takt_mir::fns::NativeKind;
     let slots = job_slots(p);
     if slots.is_empty() || !p.natives.iter().any(|n| n.kind == NativeKind::Job) {
@@ -883,6 +886,13 @@ pub fn job_tables(s: &mut String, p: &Program) -> Option<(usize, u64)> {
     let _ = writeln!(s, "static const int takt_job_ticks[{}] = {{ {} }};", slots.len(), ticks.join(", "));
     let _ = writeln!(s, "static const int takt_job_base[{}] = {{ {} }};", base.len().max(1), base.join(", "));
     s.push_str(JOBS_C);
+    let _ = writeln!(s, "static void takt_job_image(struct {x}_arena *a, int i, int done, int ok, int err) {{");
+    let _ = writeln!(s, "    unsigned char *e = a->image + takt_job_at[i];");
+    let _ = writeln!(
+        s,
+        "    e[0] = (unsigned char)done; e[1] = (unsigned char)ok; takt_job_put32(e + 4, (unsigned int)err);"
+    );
+    let _ = writeln!(s, "}}");
     Some((slots.len(), out_max))
 }
 
@@ -957,9 +967,6 @@ static unsigned int takt_job_le32(const unsigned char *b) {
 static void takt_job_put32(unsigned char *b, unsigned int v) {
     b[0] = (unsigned char)v; b[1] = (unsigned char)(v >> 8); b[2] = (unsigned char)(v >> 16); b[3] = (unsigned char)(v >> 24);
 }
-/* done, ok, err (Diskriminante von JobErr: CANCELLED 0, FAILED 1, PENDING 2) */
-static void takt_job_image(struct takt_arena *a, int i, int done, int ok, int err) {
-    unsigned char *e = a->image + takt_job_at[i];
-    e[0] = (unsigned char)done; e[1] = (unsigned char)ok; takt_job_put32(e + 4, (unsigned int)err);
-}
+/* `takt_job_image(a, i, done, ok, err)` folgt mit der Arena des Programms:
+   err ist die Diskriminante von JobErr (CANCELLED 0, FAILED 1, PENDING 2). */
 "#;

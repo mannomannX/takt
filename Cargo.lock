@@ -544,6 +544,7 @@ version = "0.1.0"
 dependencies = [
  "takt-conformance",
  "takt-diag",
+ "takt-frame",
  "takt-interp",
  "takt-llvm",
  "takt-mir",
@@ -594,6 +595,10 @@ dependencies = [
 [[package]]
 name = "takt-embed"
 version = "0.1.0"
+dependencies = [
+ "takt-native-abi",
+ "takt-rt-core",
+]
 
 [[package]]
 name = "takt-flash-weact"
@@ -660,6 +665,15 @@ dependencies = [
 [[package]]
 name = "takt-native"
 version = "0.1.0"
+
+[[package]]
+name = "takt-native-abi"
+version = "0.1.0"
+dependencies = [
+ "libtaktm",
+ "takt-hal",
+ "takt-native",
+]
 
 [[package]]
 name = "takt-prove"

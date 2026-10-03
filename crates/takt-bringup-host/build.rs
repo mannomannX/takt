@@ -26,7 +26,8 @@ fn main() {
     let frame =
         takt_frame::mcu::build_with(&p, takt_frame::mcu::Frame { hardware: hardware.as_ref(), ..Default::default() });
     let rahmen = out.join("takt_rahmen.c");
-    fs::write(&rahmen, frame.source).unwrap_or_else(|e| panic!("Rahmen nicht schreibbar: {e}"));
+    fs::write(&rahmen, &frame.source).unwrap_or_else(|e| panic!("Rahmen nicht schreibbar: {e}"));
+    bringup::arena(&frame, &triple, &[], &out.join("takt_arena.rs"));
 
     let ir = out.join("takt_programm.ll");
     bringup::takt_build(&program, target, &["--emit", "ir"], &ir);

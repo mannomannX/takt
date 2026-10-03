@@ -18,6 +18,8 @@ takt-interp = { path = "../takt-interp" }
 # Fuer `takt build`: die Uebersetzung nach LLVM-IR (11.2) und die
 # Zielliste (12.8).
 takt-llvm = { path = "../takt-llvm" }
+# Fuer `takt build --emit embed`: Rahmen, Kopf und Rust-Modul der Lieferform (12.11).
+takt-frame = { path = "../takt-frame" }
 takt-sema = { path = "../takt-sema" }
 # Fuer `takt prove`: Transitionssystem und SMT-LIB2-Export (13.3).
 takt-prove = { path = "../takt-prove" }

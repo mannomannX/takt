@@ -31,6 +31,12 @@ use takt_mcu_program::Generated;
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Port, Telemetry, Trace};
 use takt_rt_core::{FakeNvm, Persist, Policy, Profile, Runtime};
 
+/// Die Arena des Programms (12.11), so gross, wie der Rahmen sie fuer dieses
+/// Ziel verlangt (`build.rs`).
+mod arena {
+    include!(concat!(env!("OUT_DIR"), "/takt_arena.rs"));
+}
+
 mod takt {
     #![allow(dead_code, missing_docs)]
     include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
@@ -151,18 +157,23 @@ pub unsafe fn run(drivers: *mut c_void) -> ExitCode {
     head.mark();
 
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
+    // Auf dem Heap: Die Arena eines Programms mit Ringen und Pools ist fuer
+    // den Stack zu gross. `init` beschreibt sie ganz.
+    let mut arena = Box::<arena::Arena>::new_uninit();
+    // SAFETY: Die Arena gehoert nur diesem Programm und lebt bis zum Ende
+    // von `run`; zu `drivers` siehe oben.
+    let program = unsafe { Generated::init(arena.as_mut_ptr().cast(), drivers) };
+    let jobs = program.jobs();
     // Zwischen den Ticks rechnet jeder Job zu Ende und die Leitung leert
     // sich; dann steht die Uhr auf der Frist (4.5, 13.8).
     let clock = LogicalClock::new(|| {
-        while takt_mcu_program::jobs::dispatch() {
-            takt_mcu_program::jobs::work();
+        while jobs.dispatch() {
+            jobs.work();
         }
         if let Some(line) = line() {
             line.drain(DRAIN_ROUNDS);
         }
     });
-    // SAFETY: siehe oben.
-    let program = unsafe { Generated::init(drivers) };
     let trace = Trace::new(Cadence::of(ticks, 1), TICK_NS, line);
     let mut rt = Runtime::new(program, clock, NoWatchdog, trace, Profile::BAREMETAL, TICK_NS, policy);
     let stats = takt_rt_baremetal::run(&mut rt, no_journal());

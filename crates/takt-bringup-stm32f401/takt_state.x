@@ -9,8 +9,9 @@
  * bindet keine Arena; der Abschnitt reicht trotzdem bis ans Ende der
  * Region, sonst laege `.data` darin.
  *
- * NOLOAD: `takt_mcu_init` beschreibt die ganze Arena, bevor sie gelesen
- * wird; der Startcode muss sie nicht nullen.
+ * Die Arena legt das Bring-up hierher (`#[link_section]`). NOLOAD: `P_init`
+ * beschreibt die ganze Arena, bevor sie gelesen wird; der Startcode muss
+ * sie nicht nullen.
  */
 SECTIONS
 {

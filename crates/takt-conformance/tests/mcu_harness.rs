@@ -155,7 +155,7 @@ fn the_jitter_of_an_output_comes_from_the_configuration() {
     let without = takt_frame::mcu::build(&p).source;
     assert!(
         without
-            .contains("long long app_jitter(struct takt_arena *a, int o) {\n    switch (o) {\n    default: return 0;"),
+            .contains("long long app_jitter(struct app_arena *a, int o) {\n    switch (o) {\n    default: return 0;"),
         "{without}"
     );
 }
@@ -190,7 +190,10 @@ fn the_harness_exports_what_the_loop_needs() {
     for name in ["app_init", "app_tick", "app_dump", "app_pc", "app_end"] {
         assert!(src.contains(&format!("void {name}")), "`{name}` fehlt im Rahmen");
     }
-    assert!(src.contains("int32_t app_next_run(int64_t *delay)"), "`app_next_run` fehlt im Rahmen (12.7)");
+    assert!(
+        src.contains("int32_t app_next_run(struct app_arena *a, int64_t *delay)"),
+        "`app_next_run` fehlt im Rahmen (12.7)"
+    );
 }
 
 /// Der Rahmen bedient jede Funktion, die der erzeugte Code ruft.
@@ -207,7 +210,7 @@ fn the_harness_answers_the_whole_abi() {
         assert!(src.contains(name), "`{name}` fehlt im Rahmen — der erzeugte Code ruft es (abi.rs)");
     }
     assert!(
-        src.contains("offsetof(struct takt_arena, fault) == 0"),
+        src.contains("offsetof(struct app_arena, fault) == 0"),
         "die Ablagen eines Faults stehen nicht am Anfang der Arena (12.11)"
     );
 }
@@ -249,7 +252,7 @@ fn a_hardware_path_becomes_a_driver_call() {
         src.contains("takt_edge_output(app_out_ui_led(a->user, now, *(uint8_t *)(a->latch + 0)), alive_ui, -1, -1)"),
         "und wird gerufen, seine Bestaetigung geprueft (12.6 Zeile 6):\n{src}"
     );
-    assert!(src.contains("void app_commit(void)"), "Schritt 10 hat einen Namen (12.1)");
+    assert!(src.contains("void app_commit(struct app_arena *a)"), "Schritt 10 hat einen Namen (12.1)");
 }
 
 /// **Ein Ausgang ohne Hardware-Bindung bekommt keinen Treiberaufruf.**
@@ -433,8 +436,8 @@ fn every_observation_line_carries_its_tick() {
 fn the_harness_answers_the_sleep_condition() {
     let p = corpus("29_heartbeat.takt");
     let src = takt_frame::mcu::build(&p).source;
-    assert!(src.contains("uint8_t app_idle(void)"), "die Bedingung hat einen Namen:\n{src}");
-    assert!(src.contains("int64_t app_deadline(void)"), "und die Frist auch");
+    assert!(src.contains("uint8_t app_idle(struct app_arena *a)"), "die Bedingung hat einen Namen:\n{src}");
+    assert!(src.contains("int64_t app_deadline(struct app_arena *a)"), "und die Frist auch");
     // Alle Maschinen muessen zustimmen: ein `return 0` je Maschine.
     assert!(src.contains("if (!app_heartbeat_idle(a)) return 0;"), "je Maschine eine Abfrage:\n{src}");
 }
@@ -563,9 +566,9 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
     for symbol in [
         "void app_job_begin(",
         "void app_job_cancel(",
-        "int32_t app_job_dispatch(void)",
-        "void app_job_work(void)",
-        "int32_t app_jobs_busy(void)",
+        "int32_t app_job_dispatch(struct app_arena *a)",
+        "void app_job_work(struct app_arena *a)",
+        "int32_t app_jobs_busy(struct app_arena *a)",
         "uint8_t *app_job_stack(uint32_t *size)",
     ] {
         assert!(
@@ -584,12 +587,12 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
     let poll = tick.find("takt_jobs_poll(a);").expect("Jobs zu Tickbeginn");
     let sample = tick.find("takt_sample(a);").expect("Abtastung");
     assert!(poll < sample, "{tick}");
-    let at = src.find("static uint8_t takt_idle(void)").expect("Schlafbedingung");
-    assert!(src[at..].contains("if (app_jobs_busy()) return 0;"), "{src}");
+    let at = src.find("static uint8_t takt_idle(struct app_arena *a)").expect("Schlafbedingung");
+    assert!(src[at..].contains("if (app_jobs_busy(a)) return 0;"), "{src}");
 
     // Ohne Jobs bleiben die Einstiege, und das Board ruft sie ohne Unterschied.
     let plain = takt_frame::mcu::build(&corpus("01_minimal.takt")).source;
-    assert!(plain.contains("int32_t app_job_dispatch(void) { return 0; }"), "{plain}");
+    assert!(plain.contains("int32_t app_job_dispatch(struct app_arena *a) { (void)a; return 0; }"), "{plain}");
 }
 
 /// **Auch der Start tastet ab** (9.4, FB-316): Ein `enter:` des
@@ -650,16 +653,18 @@ fn a_missing_driver_fails_the_link_by_name() {
     let p = program(INPUTS);
     let ll = dir.join("programm.ll");
     std::fs::write(&ll, common::ir_for(&p, host.triple)).expect("IR");
+    std::fs::write(dir.join("app.h"), takt_frame::mcu::build(&p).header).expect("Kopf");
     let main = dir.join("main.c");
     std::fs::write(
         &main,
-        "void takt_board_trace(const char *line) { (void)line; }\n\
+        "#include \"app.h\"\n\
+         void takt_board_trace(const char *line) { (void)line; }\n\
          void takt_board_trace_i64(long long v) { (void)v; }\n\
          void takt_board_trace_u64(unsigned long long v) { (void)v; }\n\
          void takt_board_trace_f64(double v) { (void)v; }\n\
          void takt_board_trace_hex8(unsigned char v) { (void)v; }\n\
-         void app_init(void *user);\nvoid app_tick(long long k);\nvoid app_commit(void);\n\
-         int main(void) { app_init(0); app_tick(1); app_commit(); return 0; }\n",
+         static struct app_arena arena;\n\
+         int main(void) { app_init(&arena, 0); app_tick(&arena, 1); app_commit(&arena); return 0; }\n",
     )
     .expect("main");
     let natives = takt_conformance::harness::native_library().expect("Natives");
@@ -739,6 +744,44 @@ fn the_frame_compiles_where_int64_is_long() {
     );
 }
 
+/// **Der Kopf steht allein, in strengem C11** (12.11). Ein fremdes Projekt
+/// bindet `P.h` mit seinen eigenen Warnungen; der Kopf darf keine ausloesen
+/// und legt die Arena mit ihrem Typ an. Geprueft fuer den Wirt und den F401,
+/// mit einem Programm, das Stroeme, Jobs, Journal und geplante Ausgaben hat.
+#[test]
+fn the_header_stands_alone_in_strict_c11() {
+    let Clang::At(clang) = takt_llvm::toolchain::find() else {
+        eprintln!("uebersprungen: clang nicht gefunden");
+        return;
+    };
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-mcuh-header");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let c = dir.join("wirt.c");
+    std::fs::write(
+        &c,
+        "#include \"app.h\"\nstatic struct app_arena arena;\nstruct app_arena *instance(void) { return &arena; }\n",
+    )
+    .expect("Wirt");
+    let mut errors = Vec::new();
+    for name in ["13_framing.takt", "28_scheduled.takt", "35_persist.takt", "40_jobs.takt"] {
+        std::fs::write(dir.join("app.h"), takt_frame::mcu::build(&corpus(name)).header).expect("Kopf");
+        for target in [Target::X86_64_LINUX, Target::THUMBV7EM] {
+            let mut cmd = std::process::Command::new(&clang);
+            let out = Clang::deterministic(&mut cmd)
+                .args(["-fsyntax-only", "-ffreestanding", "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"])
+                .arg(format!("--target={}", target.triple))
+                .arg(&c)
+                .output()
+                .expect("clang");
+            if !out.status.success() {
+                errors.push(format!("{name} fuer {}: {}", target.name, String::from_utf8_lossy(&out.stderr)));
+            }
+        }
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+}
+
 /// **Jeder Einstieg rechnet in der IEEE-Umgebung, auf jeder FPU-Familie**
 /// (4.2, 12.11). Die Einstiege, die das Programm rechnen lassen, sind
 /// Huellen um ihren Rumpf: sichern, die Vorgabe herstellen, zurueckgeben.
@@ -752,25 +795,15 @@ fn every_entry_computes_in_the_ieee_environment() {
         return;
     };
     let src = takt_frame::mcu::build(&corpus("91_subnormals.takt")).source;
-    for entry in [
-        "init_with(",
-        "tick(int64_t k)",
-        "commit(void)",
-        "idle(void)",
-        "deadline(void)",
-        "advance(int64_t n)",
-        "persist_snapshot(",
-        "persist_restore(",
-        "dump(int32_t all)",
-    ] {
-        let at = src.find(&format!(" app_{entry}")).unwrap_or_else(|| {
-            panic!(
-                "`app_{entry}` fehlt:
-{src}"
-            )
+    for entry in
+        ["init_with", "tick", "commit", "idle", "deadline", "advance", "persist_snapshot", "persist_restore", "dump"]
+    {
+        let wrapped = src.lines().any(|l| {
+            l.contains(&format!(" app_{entry}(struct app_arena *a"))
+                && l.contains("takt_fenv_enter()")
+                && l.contains("takt_fenv_leave(f)")
         });
-        let line = src[at..].lines().next().unwrap_or_default();
-        assert!(line.contains("takt_fenv_enter()") && line.contains("takt_fenv_leave(f)"), "ohne Umgebung: {line}");
+        assert!(wrapped, "`app_{entry}` ohne Umgebung:\n{src}");
     }
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-mcuh-ieee");
     let _ = std::fs::remove_dir_all(&dir);

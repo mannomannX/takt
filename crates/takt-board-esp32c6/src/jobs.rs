@@ -21,6 +21,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use esp_hal::interrupt::{DirectBindableCpuInterrupt, Priority};
 use esp_hal::peripherals::{INTPRI, Interrupt};
+use takt_mcu_program::jobs::Jobs;
 
 /// Die Register eines Fadens, wie der Trap-Handler sie ablegt: `ra`, `sp`,
 /// `t0`–`t2`, `s0`, `s1`, `a0`–`a7`, `s2`–`s11`, `t3`–`t6`, `mepc`,
@@ -49,6 +50,10 @@ static mut JOB: Thread = [0; 31];
 
 /// Ob es einen Job-Faden gibt; ohne ihn bleibt der Tick-Interrupt, wie er war.
 static STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Die Jobs des Programms fuer den Faden des Jobs: vor `STARTED` gesetzt,
+/// danach nur gelesen.
+static mut JOBS: Option<Jobs> = None;
 
 /// `mstatus`: `MPIE` (nach `mret` Interrupts an) und `MPP` = Maschinenmodus.
 const MPIE: u32 = 1 << 7;
@@ -148,6 +153,7 @@ unsafe extern "C" {
 #[derive(Debug)]
 pub struct JobContext {
     bottom: u32,
+    jobs: Jobs,
 }
 
 /// Der Waechter unter dem Job-Stack (12.3): die 32 Byte, die der Rahmen am
@@ -182,7 +188,7 @@ impl JobContext {
     /// Legt den Faden des Jobs auf `stack` an und bindet die Umschaltung;
     /// der Faden beginnt in [`worker`], sobald die Hauptschleife ihn zum
     /// ersten Mal rechnen laesst.
-    fn on(stack: &'static mut [u8]) -> JobContext {
+    fn on(stack: &'static mut [u8], jobs: Jobs) -> JobContext {
         let bottom = stack.as_ptr() as u32;
         watch(bottom);
         let top = (stack.as_mut_ptr() as usize + stack.len()) & !15;
@@ -210,13 +216,17 @@ impl JobContext {
             takt_job_switch,
         );
         STARTED.store(true, Ordering::Release);
-        JobContext { bottom }
+        JobContext { bottom, jobs }
     }
 
     /// Der Job-Faden des Programms, auf dem Stack, den der Rahmen fuer ihn
     /// bemisst; `None`, wenn das Programm keine Jobs startet.
-    pub fn start() -> Option<JobContext> {
-        takt_mcu_program::jobs::stack().map(JobContext::on)
+    pub fn start(jobs: Jobs) -> Option<JobContext> {
+        let stack = takt_mcu_program::jobs::stack()?;
+        // SAFETY: einmal vor dem Faden, der es liest; `on` gibt ihn danach mit
+        // `STARTED` frei.
+        unsafe { JOBS = Some(jobs) };
+        Some(JobContext::on(stack, jobs))
     }
 
     /// Das untere Ende des Job-Stacks, wo der Waechter liegt (12.3).
@@ -227,7 +237,7 @@ impl JobContext {
     /// Rechnet, was ansteht, bis der Job abgibt oder der naechste Tick ihn
     /// unterbricht. Nur aus der Hauptschleife, in ihrer Wartezeit.
     pub fn run(&mut self) {
-        if takt_mcu_program::jobs::dispatch() {
+        if self.jobs.dispatch() {
             self.resume();
         }
     }
@@ -235,7 +245,7 @@ impl JobContext {
     /// Rechnet jeden Job zu Ende — in logischer Zeit, wo die Hauptschleife
     /// warten darf (13.8).
     pub fn finish(&mut self) {
-        while takt_mcu_program::jobs::dispatch() {
+        while self.jobs.dispatch() {
             self.resume();
         }
     }
@@ -279,8 +289,12 @@ fn raise() {
 /// Der Faden des Jobs: rechnet, was die Hauptschleife ihm gibt, und gibt
 /// den Kern zurueck.
 extern "C" fn worker() -> ! {
+    // SAFETY: `start` setzte es vor dem ersten Wechsel hierher.
+    let jobs = unsafe { JOBS };
     loop {
-        takt_mcu_program::jobs::work();
+        if let Some(jobs) = jobs {
+            jobs.work();
+        }
         switch_to(&raw mut MAIN);
     }
 }

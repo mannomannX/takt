@@ -876,6 +876,10 @@ dependencies = [
 [[package]]
 name = "takt-embed"
 version = "0.1.0"
+dependencies = [
+ "takt-native-abi",
+ "takt-rt-core",
+]
 
 [[package]]
 name = "takt-frame"

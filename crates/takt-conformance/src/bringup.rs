@@ -55,6 +55,17 @@ pub fn compile(path: &str) -> Option<takt_mir::Program> {
     checked.program
 }
 
+/// Schreibt die Arena des Programms als Rust-Typ nach `file` (12.11): so gross
+/// und so ausgerichtet, wie der Uebersetzer den Rahmen fuer das Ziel `triple`
+/// mit `flags` legt ([`takt_frame::mcu::arena_layout`]). Das Bring-up legt sie
+/// an und reicht sie jedem Einstieg.
+pub fn arena(frame: &takt_frame::mcu::McuHarness, triple: &str, flags: &[&str], file: &Path) {
+    let x = takt_llvm::symbols::Prefix::default();
+    let (bytes, align) =
+        takt_frame::mcu::arena_layout(frame, &x, triple, flags).unwrap_or_else(|e| panic!("Arena nicht bemessen: {e}"));
+    fs::write(file, takt_frame::mcu::rust_arena(bytes, align)).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+}
+
 /// Der Name der Verdrahtung eines Treiber-Crates oder Bring-ups (12.6): je
 /// Adresse der Rust-Typ, der sie bedient ([`takt_frame::drivers::wiring`]).
 pub const WIRING: &str = "takt-drivers.toml";

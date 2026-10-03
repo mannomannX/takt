@@ -22,8 +22,10 @@ use std::fmt::Write as _;
 
 use takt_llvm::symbols::Prefix;
 use takt_llvm::ty::LlvmType;
-use takt_mir::program::{Binding, Direction, Program, RecordedValue};
-use takt_mir::types::{FloatWidth, Type};
+use takt_mir::TypeId;
+use takt_mir::expr::{Expr, ExprKind};
+use takt_mir::program::{Binding, Channel, Direction, Program, RecordedValue};
+use takt_mir::types::{Const, FloatWidth, Range, Type};
 
 use crate::layout::Layout;
 
@@ -120,7 +122,7 @@ pub struct Driver {
     pub address: String,
     /// Der Wert eines Skalars.
     pub value: Option<Value>,
-    /// Der Kanal oder das Geraet, fuer die Dokumentation.
+    /// Der Kanal oder das Geraet mit seinem Vertrag, fuer die Dokumentation.
     pub doc: String,
 }
 
@@ -154,7 +156,7 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
             method: method(Kind::Input, &addr.ident()),
             address: addr.text(),
             value: Some(value),
-            doc: format!("Eingang `{}`", slot.name),
+            doc: format!("Eingang `{}`{}", slot.name, contract(p, &p.channels[channel])),
         });
     }
     for (channel, c) in p.channels.iter().enumerate() {
@@ -166,7 +168,7 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
                 method: method(Kind::Poll, &addr.ident()),
                 address: addr.text(),
                 value: None,
-                doc: format!("Eingabestrom `{}`", c.name),
+                doc: format!("Eingabestrom `{}`{}", c.name, contract(p, c)),
             });
         }
     }
@@ -188,7 +190,11 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
             method: method(Kind::Output, &addr.ident()),
             address: addr.text(),
             value: Some(value),
-            doc: format!("Ausgang `{}`", slot.name),
+            doc: format!(
+                "Ausgang `{}`{}",
+                slot.name,
+                p.channels.iter().find(|c| c.name == slot.name).map_or_else(String::new, |c| contract(p, c))
+            ),
         });
         if let Some(c) = p.channels.iter().find(|c| c.name == slot.name) {
             devices.push(takt_hal::edge::driver_of(c));
@@ -202,7 +208,7 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
                 method: method(Kind::Free, &addr.ident()),
                 address: addr.text(),
                 value: None,
-                doc: format!("Ausgabestrom `{}` (8.8)", c.name),
+                doc: format!("Ausgabestrom `{}` (8.8){}", c.name, contract(p, c)),
             });
             devices.push(takt_hal::edge::driver_of(c));
         }
@@ -220,6 +226,70 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
         });
     }
     out
+}
+
+/// Was ein Kanal zusagt, fuer Prototyp und Trait (12.11): Typ mit Range
+/// und Einheit, Abtastalter, Rate, Sprung, Entprellung, Kapazitaet und der
+/// Doc-Kommentar der Quelle; leer, wenn er nichts davon traegt.
+fn contract(p: &Program, c: &Channel) -> String {
+    let a = &c.attrs;
+    let parts: Vec<String> = [
+        type_text(p, c.ty),
+        a.max_age.map(|ns| format!("max_age {}", duration(ns))),
+        a.rate.as_ref().and_then(literal).map(|r| format!("rate {r} Hz")),
+        a.max_slew.as_ref().and_then(literal).map(|s| format!("max_slew {s}")),
+        a.debounce.map(|n| format!("debounce {n}")),
+        a.capacity.map(|n| format!("capacity {n}")),
+        c.meta.doc.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if parts.is_empty() { String::new() } else { format!(": {}", parts.join(", ")) }
+}
+
+/// Ein skalarer Typ, wie die Quelle ihn schreibt: `int in 0..99`,
+/// `float in 0..400 bar`, der Name eines Enums.
+fn type_text(p: &Program, ty: TypeId) -> Option<String> {
+    let unit = |u: Option<takt_mir::UnitId>| {
+        u.and_then(|u| p.units.get(u.index())).map_or_else(String::new, |u| format!(" {}", u.name))
+    };
+    let range =
+        |r: &Option<Range>| r.as_ref().map_or_else(String::new, |r| format!(" in {}..{}", konst(&r.lo), konst(&r.hi)));
+    Some(match p.types.list.get(ty.index())? {
+        Type::Bool => "bool".to_string(),
+        Type::Int { range: r, unit: u, .. } => format!("int{}{}", range(r), unit(*u)),
+        Type::Float { range: r, unit: u, .. } => format!("float{}{}", range(r), unit(*u)),
+        Type::Duration { range: r } => format!("duration{}", range(r)),
+        Type::Enum(e) => p.enums.get(e.index())?.name.clone(),
+        _ => return None,
+    })
+}
+
+fn konst(c: &Const) -> String {
+    match c {
+        Const::Int(n) => n.to_string(),
+        Const::Float(f) => format!("{f}"),
+        Const::Duration(ns) => duration(*ns),
+        Const::Bool(b) => b.to_string(),
+    }
+}
+
+/// Eine Dauer in der groessten Einheit, die sie ganz teilt.
+fn duration(ns: i64) -> String {
+    [(1_000_000_000, "s"), (1_000_000, "ms"), (1_000, "us")]
+        .into_iter()
+        .find(|(d, _)| ns != 0 && ns % d == 0)
+        .map_or_else(|| format!("{ns} ns"), |(d, u)| format!("{} {u}", ns / d))
+}
+
+/// Ein Literal als Zahl; `None` fuer einen Ausdruck.
+fn literal(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Int(n) => Some(n.to_string()),
+        ExprKind::Float(f) => Some(format!("{f}")),
+        _ => None,
+    }
 }
 
 /// Die Parameter eines Treibers in C, nach dem Zeiger des Wirts und `now`.

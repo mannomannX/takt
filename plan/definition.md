@@ -1826,7 +1826,7 @@ takt-board-esp32c6  Board-Unterstützung ESP32-C6: Alarm, Zyklenzähler, USB-Ser
 takt-board-stm32f401  Board-Unterstützung STM32F401 (Black Pill): TIM2, DWT, USART1, IWDG, Treiber — TCB, eigener Workspace (9.5)
 takt-mcu-program    das erzeugte Programm hinter seiner C-ABI (12.1) — TCB, eigener Workspace
 takt-frame          der C-Rahmen um den erzeugten Code: Prozessabbild, Ringe, Treiberrand, Tickschritt (12.1, 12.11)
-takt-embed          Einbettung in Rust (M11, im Aufbau): die Geräte-Traits der Treiber (12.6); Bauhelfer für `build.rs`, Ports, Adapter und Testhilfe folgen (12.11)
+takt-embed          Einbettung in Rust (M11, im Aufbau): die Geräte-Traits der Treiber (12.6), der Bauhelfer für `build.rs` und die Testhilfe gegen den Interpreter (12.11); Ports und Adapter folgen — TCB, eigener Workspace
 takt-embed-c        (geplant, M11) Einbettung in C: SDK-Archiv je Ziel mit den C-Ports und dem CMake-Paket (12.11) — TCB, eigener Workspace
 takt-bringup-esp32c6  Bring-up-Programme des ESP32-C6: Takt-Programm, Messkerne, Natives — TCB, eigener Workspace
 takt-bringup-stm32f401  Bring-up-Programme der Black Pill — TCB, eigener Workspace

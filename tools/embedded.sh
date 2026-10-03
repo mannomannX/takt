@@ -128,6 +128,16 @@ echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
     cargo clippy --features host,ecdsa "$@" -- -D warnings
 )
 cargo build --release --target riscv32imac-unknown-none-elf     --manifest-path crates/takt-bringup-esp32c6/Cargo.toml "$@"
+# Takt als Baustein in Rust (12.11): die Traits fuer beide Ziele, Bauhelfer
+# und Testhilfe auf dem Wirt mit ihren Tests.
+(
+    cd crates/takt-embed
+    for t in "${targets[@]}"; do
+        cargo clippy --target "$t" "$@" -- -D warnings
+    done
+    cargo clippy --all-targets --features build,testing "$@" -- -D warnings
+    cargo test --features build,testing "$@"
+)
 
 echo
 echo "== 5. Die rechnende Haelfte auf dem Wirt"

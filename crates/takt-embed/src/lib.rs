@@ -14,8 +14,49 @@
 //! Nanosekunden seit dem Start (3.3). Ein Eingang stempelt damit, was er
 //! nicht genauer weiss (12.6 Zeile 1); ein Geraet, das nach Zeit urteilt,
 //! braucht keine Uhr des Rahmens.
+//!
+//! **Die Lieferform** (12.11). `takt build --emit embed` schreibt je
+//! Programm eine Bibliothek und das Modul `P.rs`; der Bauhelfer
+//! ([`build::Program`], Merkmal `build`) ruft es aus `build.rs`. Die Huelle
+//! im Modul erfuellt [`rt::Program`] und laeuft unter dem Kern ohne Warten
+//! ([`rt::Runtime::service`]). Die Testhilfe ([`testing`], Merkmal
+//! `testing`) faehrt das Programm in logischer Zeit und vergleicht seinen
+//! Trace mit dem Interpreter (13.1).
 
 #![no_std]
+
+#[cfg(any(feature = "build", feature = "testing"))]
+extern crate std;
+
+#[cfg(feature = "build")]
+pub mod build;
+#[cfg(feature = "testing")]
+pub mod testing;
+
+/// Der Kern ohne Warten (12.11): `Runtime::service`, `Program`, die Senke.
+pub use takt_rt_core as rt;
+
+// Was der erzeugte Code ruft — Natives, korrekt gerundete Mathematik, der
+// Rand (4.5, 12.6) —, bindet jeder Wirt mit diesem Crate.
+use takt_native_abi as _;
+
+/// Ein Programm der Lieferform: die erzeugte Huelle `Program` in `P.rs`.
+/// Ein Port treibt es mit [`rt::Runtime::service`] und rechnet im
+/// Job-Kontext, was `service` als `jobs` meldet.
+pub trait Program: rt::Program {
+    /// Der Griff des Job-Kontexts.
+    type Jobs: Jobs;
+
+    /// Der Griff fuer den Job-Kontext (4.5).
+    fn jobs(&self) -> Self::Jobs;
+}
+
+/// Der Job-Kontext eines Programms (4.5).
+pub trait Jobs: Copy + Send {
+    /// Rechnet den Auftrag, den `service` gegeben hat; `service` darf ihn
+    /// unterbrechen, ein zweiter Job-Kontext nicht.
+    fn work(self);
+}
 
 /// Die Qualitaet einer Lieferung (3.5), in der Zahl des Prozessabbilds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

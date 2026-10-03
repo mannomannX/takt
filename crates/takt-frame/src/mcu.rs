@@ -12,9 +12,11 @@
 //! 2. **Kein `main`.** Die Tickschleife liegt in `takt-rt-baremetal`; der
 //!    Rahmen liefert ihr `P_init` und `P_tick` und nichts
 //!    weiter.
-//! 3. **Statischer Speicher.** Der ganze veraenderliche Zustand steht in
-//!    einer Arena `g_arena` (12.11), in `.bss` oder in `.takt_state`
-//!    (12.3: „Gesamter Zustand statisch; kein Heap").
+//! 3. **Die Arena des Wirts.** Der ganze veraenderliche Zustand steht in
+//!    einer Arena `struct P_arena` (12.11), die der Wirt anlegt und jedem
+//!    Einstieg reicht — statisch, in `.takt_state` oder wo er will (12.3:
+//!    „Gesamter Zustand statisch; kein Heap"). Ihren Typ und die Einstiege
+//!    nennt der Kopf ([`McuHarness::header`]).
 //!
 //! **Was der Rahmen nicht ist.** Er ist keine Runtime: Er hat keine Uhr
 //! (die kommt vom Timer), keine Treiber (die kommen vom Board) und keine
@@ -23,6 +25,9 @@
 //! Takt-Programm auf einer MCU zum ersten Mal laeuft.
 
 use std::fmt::Write as _;
+use std::io::Write as _;
+use std::process::{Command, Stdio};
+
 use takt_llvm::symbols::Prefix;
 
 use takt_mir::program::Program;
@@ -34,11 +39,14 @@ use crate::text::Text;
 pub struct McuHarness {
     /// Der C-Quelltext.
     pub source: String,
+    /// Der Kopf fuer den Wirt (`P.h`): die Arena `struct P_arena` mit ihren
+    /// Typen, die Einstiege, die Treiber und die Leitung des Boards.
+    pub header: String,
     /// Die Speicherform, die er erwartet.
     pub layout: Layout,
-    /// Wo in der Arena `g_arena` der Tick steht: als erstes Feld der Runtime,
-    /// direkt hinter dem Programmbereich. Ein Pruefgeraet liest ihn ueber
-    /// den Debugport, wenn die Konsole schweigt.
+    /// Wo in der Arena der Tick steht: als erstes Feld der Runtime, direkt
+    /// hinter dem Programmbereich. Ein Pruefgeraet liest ihn ueber den
+    /// Debugport, wenn die Konsole schweigt.
     pub tick_at: u64,
 }
 
@@ -59,10 +67,10 @@ pub struct Frame<'a> {
     /// Die Hardware-Konfiguration gibt jedem Output sein `guard` und
     /// `jitter` (7.5); ohne sie sind beide null wie in der Simulation.
     pub hardware: Option<&'a takt_mir::hardware::Hardware>,
-    /// Die Arena in einem eigenen Abschnitt `.takt_state`, ihr Programmbereich
-    /// auf diese Groesse aufgefuellt: So deckt die Region einer MPU, die ihn
-    /// ausserhalb des Ticks schreibschuetzt, genau ihn und nicht die Runtime
-    /// dahinter (12.3, 12.11). Ohne Schutz liegt die Arena in `.bss`.
+    /// Der Programmbereich der Arena, auf diese Groesse aufgefuellt: So
+    /// deckt die Region einer MPU, die ihn ausserhalb des Ticks
+    /// schreibschuetzt, genau ihn und nicht die Runtime dahinter (12.3,
+    /// 12.11). Den Abschnitt dafuer legt der Wirt an.
     pub protect: Option<u64>,
     /// Das Praefix jedes externen Namens, dasselbe wie im erzeugten Code
     /// (12.11); `takt build --prefix` nennt es.
@@ -98,13 +106,10 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     let arena = takt_llvm::arena::of(p);
     let tick_at = frame.protect.map_or(arena.bytes, |pad| pad.max(arena.bytes));
     let mut t = Text::default();
-    // Eine Arena fuer das eine Programm des Boards (12.11); ihre Einstiege
-    // `P_*` reichen sie an jede Funktion des Rahmens weiter.
-    let section = if frame.protect.is_some() { " __attribute__((section(\".takt_state\")))" } else { "" };
-    let _ = writeln!(t.code, "static struct takt_arena g_arena{section};");
+    // Die Arena stellt der Wirt (12.11); jeder Einstieg bekommt sie.
     let _ = writeln!(
         t.code,
-        "_Static_assert(offsetof(struct takt_arena, tick) == {tick_at}, \"der Tick fuehrt die Runtime an\");\n"
+        "_Static_assert(offsetof(struct {x}_arena, tick) == {tick_at}, \"der Tick fuehrt die Runtime an\");\n"
     );
     // Der Tick zuerst: `tick_at` sagt, wo er steht.
     runtime_abi(&mut t, p, x);
@@ -129,10 +134,148 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     init(&mut t.code, p, &layout, &driven, x);
     tick(&mut t, p, &layout, &driven, x);
     telemetry(&mut t, p, &layout, &driven, diagnostics, x);
+    // Fuer einen Wirt, der die Arena nicht in C anlegt (12.11, [`arena_layout`]).
+    let _ = writeln!(t.code, "const uint64_t {x}_arena_bytes = sizeof(struct {x}_arena);");
+    let _ = writeln!(t.code, "const uint64_t {x}_arena_align = _Alignof(struct {x}_arena);");
+    // Die Version der Schnittstelle: Die Huelle eines Wirts liest das Symbol,
+    // und passt sie nicht, bindet das Programm nicht (12.11).
+    let abi = crate::embed::ABI;
+    let _ = writeln!(t.code, "const uint8_t {x}_abi_{abi} = {abi};");
 
     let mut head = String::new();
     prologue(&mut head, p);
-    McuHarness { source: t.assemble(&head, &arena, frame.protect), layout, tick_at }
+    let arena_types = t.header(x, &arena, frame.protect);
+    let entries = entry_prototypes(x);
+    let source = format!("{head}{arena_types}\n{entries}\n{}", t.code);
+    let header = header(x, &arena_types, &entries, &crate::drivers::c_prototypes(&drivers, x));
+    McuHarness { source, header, layout, tick_at }
+}
+
+/// Die oeffentlichen Einstiege des Rahmens (12.11). Sie stehen im Kopf fuer
+/// den Wirt und im Rahmen selbst: So prueft der Uebersetzer jede Definition
+/// gegen ihre Deklaration.
+fn entry_prototypes(x: &Prefix) -> String {
+    let a = format!("struct {x}_arena *a");
+    let lines = [
+        format!("int32_t {x}_init_with({a}, void *user, const void *persist, int32_t persist_len);"),
+        format!("void {x}_init({a}, void *user);"),
+        format!("void {x}_tick({a}, int64_t k);"),
+        format!("void {x}_commit({a});"),
+        format!("uint8_t {x}_idle({a});"),
+        format!("int64_t {x}_deadline({a});"),
+        format!("void {x}_advance({a}, int64_t n);"),
+        format!("int32_t {x}_persist_snapshot({a}, void *out, int32_t cap);"),
+        format!("int32_t {x}_persist_restore({a}, const void *in, int32_t len);"),
+        format!("void {x}_dump({a}, int32_t all);"),
+        format!("void {x}_pc({a});"),
+        format!("int32_t {x}_next_run({a}, int64_t *delay);"),
+        format!("void {x}_end({a});"),
+        format!("int64_t {x}_output({a}, int32_t index);"),
+        format!("void {x}_overrun({a});"),
+        format!("void {x}_hardware({a});"),
+        format!("void {x}_tolerance(int64_t *ns, uint32_t *runs);"),
+        format!("int32_t {x}_job_dispatch({a});"),
+        format!("void {x}_job_work({a});"),
+        format!("int32_t {x}_jobs_busy({a});"),
+        format!("uint8_t *{x}_job_stack(uint32_t *size);"),
+        format!("extern const int32_t {x}_persist_entries;"),
+        format!("extern const int32_t {x}_persist_bound;"),
+        format!("extern const uint64_t {x}_arena_bytes;"),
+        format!("extern const uint64_t {x}_arena_align;"),
+        format!("extern const uint8_t {x}_abi_{};", crate::embed::ABI),
+    ];
+    let mut s = String::from("/* Die Einstiege (12.11): jeder bekommt die Arena des Wirts. */\n");
+    for line in lines {
+        let _ = writeln!(s, "{line}");
+    }
+    s
+}
+
+/// Der Kopf fuer einen Wirt in C (`P.h`, 12.11): die Arena mit ihren Typen,
+/// die Einstiege, die Treiber, die der Wirt stellt, und die Leitung des
+/// Boards. Jeder Name traegt das Praefix oder gehoert der geteilten
+/// Bibliothek und steht hinter einem Guard; so binden mehrere Programme
+/// ihre Koepfe in dieselbe Uebersetzungseinheit.
+fn header(x: &Prefix, arena_types: &str, entries: &str, drivers: &str) -> String {
+    let guard = format!("{}_TAKT_H", x.as_str().to_uppercase());
+    let mut s = String::new();
+    let _ = writeln!(s, "/* Der Kopf des Programms `{x}` (12.11); erzeugt von takt-frame. */");
+    let _ = writeln!(s, "#ifndef {guard}");
+    let _ = writeln!(s, "#define {guard}\n");
+    let _ = writeln!(s, "#include <stddef.h>");
+    let _ = writeln!(s, "#include <stdint.h>\n");
+    s.push_str(arena_types);
+    let _ = writeln!(s, "\n/* Die Leitung des Boards (12.5): stellt der Wirt, einmal fuer alle Programme. */");
+    let _ = writeln!(s, "#ifndef TAKT_BOARD_TRACE");
+    let _ = writeln!(s, "#define TAKT_BOARD_TRACE");
+    s.push_str(BOARD_TRACE_C);
+    let _ = writeln!(s, "#endif\n");
+    s.push_str(entries);
+    s.push('\n');
+    s.push_str(drivers);
+    let _ = writeln!(s, "\n#endif");
+    s
+}
+
+/// Die Leitung des Boards: Der Rahmen schreibt den Trace ueber sie (12.5).
+const BOARD_TRACE_C: &str = "void takt_board_trace(const char *line);
+void takt_board_trace_i64(long long value);
+void takt_board_trace_u64(unsigned long long value);
+void takt_board_trace_f64(double value);
+void takt_board_trace_hex8(unsigned char value);
+";
+
+/// Groesse und Ausrichtung der Arena auf dem Ziel `triple`, so wie der
+/// C-Uebersetzer sie legt (12.11): `P_arena_bytes` und `P_arena_align` aus
+/// dem IR des Rahmens. Ein Wirt in Rust braucht sie als Konstanten; ein
+/// zweites Layoutmodell neben dem Uebersetzer waere eine zweite Quelle.
+/// `flags` sind die des Ziels, etwa `-march`.
+pub fn arena_layout(h: &McuHarness, x: &Prefix, triple: &str, flags: &[&str]) -> Result<(u64, u64), String> {
+    let takt_llvm::toolchain::Clang::At(clang) = takt_llvm::toolchain::find() else {
+        return Err("clang fehlt; ohne ihn ist die Arena nicht zu bemessen".into());
+    };
+    let mut child = Command::new(&clang)
+        .args(["-x", "c", "-", "-S", "-emit-llvm", "-O0", "-ffreestanding", "-o", "-"])
+        .arg(format!("--target={triple}"))
+        .args(flags)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{}: {e}", clang.display()))?;
+    let mut stdin = child.stdin.take().ok_or("clang ohne Eingabe")?;
+    let source = h.source.clone();
+    // Schreiben und Lesen zugleich: Sonst fuellt das IR die Leitung, waehrend
+    // der Rahmen noch hineingeht.
+    let writer = std::thread::spawn(move || stdin.write_all(source.as_bytes()));
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    writer.join().map_err(|_| "Schreiben an clang brach ab".to_string())?.map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    let ir = String::from_utf8_lossy(&out.stdout);
+    let constant = |name: &str| -> Result<u64, String> {
+        let head = format!("@{x}_{name} = ");
+        ir.lines()
+            .find(|l| l.starts_with(&head))
+            .and_then(|l| l.split("constant i64 ").nth(1))
+            .and_then(|v| v.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| format!("`{x}_{name}` fehlt im IR des Rahmens"))
+    };
+    Ok((constant("arena_bytes")?, constant("arena_align")?))
+}
+
+/// Die Arena als Rust-Typ (12.11): Groesse und Ausrichtung aus
+/// [`arena_layout`]. `init` beschreibt sie ganz; vorher ist ihr Inhalt
+/// ohne Bedeutung.
+pub fn rust_arena(bytes: u64, align: u64) -> String {
+    format!(
+        "/// Die Arena des Programms (12.11): {bytes} Byte, ausgerichtet auf {align}, aus dem Rahmen fuer dieses \
+         Ziel.\n#[repr(C, align({align}))]\npub struct Arena(core::mem::MaybeUninit<[u8; {bytes}]>);\n\n\
+         impl Arena {{\n    /// Eine Arena vor `init`, das sie ganz beschreibt.\n    pub const fn new() -> Arena {{\n        \
+         Arena(core::mem::MaybeUninit::uninit())\n    }}\n}}\n"
+    )
 }
 
 /// Kopf und Vorwaertsdeklarationen.
@@ -150,11 +293,8 @@ fn prologue(s: &mut String, p: &Program) {
     let _ = writeln!(s, "void *memset(void *, int, size_t);");
     let _ = writeln!(s, "int memcmp(const void *, const void *, size_t);\n");
     // Das Board stellt sie bereit; der Rahmen ruft sie nur.
-    let _ = writeln!(s, "void takt_board_trace(const char *line);");
-    let _ = writeln!(s, "void takt_board_trace_i64(long long value);");
-    let _ = writeln!(s, "void takt_board_trace_u64(unsigned long long value);");
-    let _ = writeln!(s, "void takt_board_trace_f64(double value);");
-    let _ = writeln!(s, "void takt_board_trace_hex8(unsigned char value);\n");
+    s.push_str(BOARD_TRACE_C);
+    s.push('\n');
     s.push_str(FENV_C);
 }
 
@@ -217,9 +357,15 @@ static inline void takt_fenv_leave(takt_fenv saved) { (void)saved; }
 
 "#;
 
-/// Die oeffentliche Huelle `P_<name>` um den Rumpf `takt_<name>`: Sie
-/// rechnet ihn in der IEEE-Umgebung (`FENV_C`).
+/// Die oeffentliche Huelle `P_<name>(arena, ...)` um den Rumpf
+/// `takt_<name>`: Sie rechnet ihn in der IEEE-Umgebung (`FENV_C`). `params`
+/// und `args` sind die Parameter nach der Arena.
 fn guarded(s: &mut String, x: &Prefix, ret: &str, name: &str, params: &str, args: &str) {
+    let (params, args) = if params.is_empty() {
+        (format!("struct {x}_arena *a"), "a".to_string())
+    } else {
+        (format!("struct {x}_arena *a, {params}"), format!("a, {args}"))
+    };
     let call = format!("takt_{name}({args})");
     let body = if ret == "void" {
         format!("{call}; takt_fenv_leave(f);")
@@ -251,20 +397,18 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(t.fields, "    void *user;");
     crate::parts::scope_flags(t, p);
     crate::parts::fault_names(&mut t.code, p);
-    crate::parts::raised(t, p);
-    crate::parts::alert_table(t, p);
+    crate::parts::raised(t, p, x);
+    crate::parts::alert_table(t, p, x);
     let s = &mut t.code;
 
     // 3.3: `now` ist die Dauer seit dem Start — Tickzahl mal T0.
-    let _ = writeln!(s, "long long {x}_now(struct takt_arena *a) {{ return a->tick * {}LL; }}\n", p.config.tick);
+    let _ = writeln!(s, "long long {x}_now(struct {x}_arena *a) {{ return a->tick * {}LL; }}\n", p.config.tick);
 
     // Jede Beobachtungszeile traegt ihren Tick, wie beim Interpreter
     // (`grammar/trace.md`): Ohne ihn laesst sie sich keinem Tick zuordnen.
     // 5.6: nur die Flanken, mit dem Namen der Maschine wie im Interpreter.
-    let _ = writeln!(
-        s,
-        "void {x}_alert(struct takt_arena *a, int m, int slot, unsigned char on, unsigned char invalid) {{"
-    );
+    let _ =
+        writeln!(s, "void {x}_alert(struct {x}_arena *a, int m, int slot, unsigned char on, unsigned char invalid) {{");
     let _ = writeln!(s, "    if (!takt_alert_edge(a, m, slot, on)) return;");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
@@ -275,11 +419,11 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
     let _ = writeln!(s, "}}");
     for (name, args, kind, flags) in [
-        ("log", "struct takt_arena *a, int m, int site", "log", &[][..]),
-        ("verify", "struct takt_arena *a, int m, int site, unsigned char ok", "verify", &["ok"]),
-        ("verdict", "struct takt_arena *a, int m, int site, unsigned char pass", "verdict", &["pass"]),
+        ("log", "int m, int site", "log", &[][..]),
+        ("verify", "int m, int site, unsigned char ok", "verify", &["ok"]),
+        ("verdict", "int m, int site, unsigned char pass", "verdict", &["pass"]),
     ] {
-        let _ = writeln!(s, "void {x}_{name}({args}) {{");
+        let _ = writeln!(s, "void {x}_{name}(struct {x}_arena *a, {args}) {{");
         let _ = writeln!(s, "    takt_board_trace(\"t=\");");
         let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
         let _ = writeln!(s, "    takt_board_trace(\"{kind} \");");
@@ -294,7 +438,7 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
 
     // 5.4: `abort` merkt den Fault fuer alle Maschinen vor; die
     // Abort-Phase stellt ihn nach den Schritten zu.
-    let _ = writeln!(s, "void {x}_abort(struct takt_arena *a, int m, int site) {{");
+    let _ = writeln!(s, "void {x}_abort(struct {x}_arena *a, int m, int site) {{");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
     let _ = writeln!(s, "    takt_board_trace(\"abort \");");
@@ -306,7 +450,7 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
 
     // 5.3: der Fault-Uebergang mit Maschine und Art, wie der Interpreter
     // ihn schreibt.
-    let _ = writeln!(s, "void {x}_fault(struct takt_arena *a, int m, int from, int code) {{");
+    let _ = writeln!(s, "void {x}_fault(struct {x}_arena *a, int m, int from, int code) {{");
     let _ = writeln!(s, "    (void)from;");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
@@ -333,7 +477,7 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     // Verstoss gegen die Aliasing-Regeln von C, und ein Compiler darf ihn
     // wegoptimieren. Fuer acht Byte erzeugt jeder Compiler daraus einen
     // Registertausch.
-    let _ = writeln!(s, "void {x}_measure(struct takt_arena *a, int m, int site, double v, unsigned char invalid) {{");
+    let _ = writeln!(s, "void {x}_measure(struct {x}_arena *a, int m, int site, double v, unsigned char invalid) {{");
     let _ = writeln!(s, "    unsigned long long bits;");
     let _ = writeln!(s, "    __builtin_memcpy(&bits, &v, sizeof bits);");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
@@ -351,7 +495,7 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "}}\n");
 
     // 13.3: Ein Monitor meldet Index und Position, wie im Linux-Rahmen.
-    let _ = writeln!(s, "void {x}_property(struct takt_arena *a, int i, long long at) {{");
+    let _ = writeln!(s, "void {x}_property(struct {x}_arena *a, int i, long long at) {{");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
     let _ = writeln!(s, "    takt_board_trace(\"property \");");
@@ -360,7 +504,7 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
     let _ = writeln!(s, "}}\n");
     for (i, _) in monitors(p) {
-        let _ = writeln!(s, "void {x}_monitor_{i}(struct takt_arena *a, long long tick);");
+        let _ = writeln!(s, "void {x}_monitor_{i}(struct {x}_arena *a, long long tick);");
     }
 }
 
@@ -402,10 +546,10 @@ const JOB_STACK_RESERVE: u32 = 1024;
 fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let s = &mut t.code;
     let _ = writeln!(s, "/* Jobs (4.5): Slots der Hauptschleife, ein Auftrag fuer den Job-Kontext. */");
-    let Some((slots, out_max)) = crate::parts::job_tables(s, p) else {
-        let _ = writeln!(s, "int32_t {x}_job_dispatch(void) {{ return 0; }}");
-        let _ = writeln!(s, "void {x}_job_work(void) {{}}");
-        let _ = writeln!(s, "int32_t {x}_jobs_busy(void) {{ return 0; }}");
+    let Some((slots, out_max)) = crate::parts::job_tables(s, p, x) else {
+        let _ = writeln!(s, "int32_t {x}_job_dispatch(struct {x}_arena *a) {{ (void)a; return 0; }}");
+        let _ = writeln!(s, "void {x}_job_work(struct {x}_arena *a) {{ (void)a; }}");
+        let _ = writeln!(s, "int32_t {x}_jobs_busy(struct {x}_arena *a) {{ (void)a; return 0; }}");
         let _ = writeln!(s, "uint8_t *{x}_job_stack(uint32_t *size) {{ *size = 0; return 0; }}\n");
         return;
     };
@@ -429,7 +573,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
         })
         .collect();
 
-    let _ = writeln!(t.types, "enum {{ TAKT_JOB_FREE, TAKT_JOB_WAITING, TAKT_JOB_RUNNING, TAKT_JOB_DONE }};");
+    let _ = writeln!(t.code, "enum {{ TAKT_JOB_FREE, TAKT_JOB_WAITING, TAKT_JOB_RUNNING, TAKT_JOB_DONE }};");
     let _ = writeln!(
         t.types,
         "typedef struct {{ unsigned char state, gen; int native; long long due, order; int in_len, out_len; unsigned char in[{in_max}], out[{out_max}]; }} {x}_job;"
@@ -460,7 +604,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
 
     let _ = writeln!(
         s,
-        "void {x}_job_begin(struct takt_arena *a, int m, int slot, int native, const unsigned char *args, int len) {{"
+        "void {x}_job_begin(struct {x}_arena *a, int m, int slot, int native, const unsigned char *args, int len) {{"
     );
     let _ = writeln!(s, "    int i = takt_job_base[m] + slot; {x}_job *j = &a->jobs[i];");
     let _ = writeln!(s, "    if (len > (int)sizeof j->in) len = (int)sizeof j->in;");
@@ -469,7 +613,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    j->due = a->tick + takt_job_ticks[i];");
     let _ = writeln!(s, "    takt_job_image(a, i, 0, 0, 2); /* Err(PENDING) */");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void {x}_job_cancel(struct takt_arena *a, int m, int slot) {{");
+    let _ = writeln!(s, "void {x}_job_cancel(struct {x}_arena *a, int m, int slot) {{");
     let _ = writeln!(s, "    int i = takt_job_base[m] + slot;");
     let _ = writeln!(s, "    if (a->jobs[i].state == TAKT_JOB_FREE) return;");
     let _ = writeln!(s, "    a->jobs[i].state = TAKT_JOB_FREE; a->jobs[i].gen++;");
@@ -477,7 +621,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "}}");
 
     let _ = writeln!(s, "/* Hauptschleife: Ein fertiger Auftrag geht in seinen Slot, wenn der noch auf ihn wartet. */");
-    let _ = writeln!(s, "static void takt_jobs_collect(struct takt_arena *a) {{");
+    let _ = writeln!(s, "static void takt_jobs_collect(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    {x}_job *j;");
     let _ = writeln!(s, "    if (a->work_slot < 0 || !a->work_finished) return;");
     let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
@@ -496,8 +640,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
         s,
         "/* Hauptschleife: Der ruhende Kontext bekommt den aeltesten wartenden Job; wahr, wenn er zu rechnen hat. */"
     );
-    let _ = writeln!(s, "int32_t {x}_job_dispatch(void) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "int32_t {x}_job_dispatch(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    int i, next = -1;");
     let _ = writeln!(s, "    takt_jobs_collect(a);");
     let _ = writeln!(s, "    if (a->work_slot >= 0) return 1;");
@@ -515,8 +658,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    return 1;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "/* Job-Kontext: rechnet den Auftrag, den die Hauptschleife gegeben hat. */");
-    let _ = writeln!(s, "static void takt_job_work(void) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "static void takt_job_work(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    int native;");
     let _ = writeln!(s, "    if (a->work_slot < 0 || a->work_finished) return;");
     let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
@@ -527,9 +669,9 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
     let _ = writeln!(s, "    a->work_finished = 1;");
     let _ = writeln!(s, "}}");
-    guarded(s, x, "void", "job_work", "void", "");
+    guarded(s, x, "void", "job_work", "", "");
     let _ = writeln!(s, "/* 12.1: zu Tickbeginn. Ein fertiges Ergebnis wird sichtbar, wenn seine Dauer um ist. */");
-    let _ = writeln!(s, "static void takt_jobs_poll(struct takt_arena *a) {{");
+    let _ = writeln!(s, "static void takt_jobs_poll(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    int i, b;");
     let _ = writeln!(s, "    takt_jobs_collect(a);");
     let _ = writeln!(s, "    for (i = 0; i < {slots}; i++) {{");
@@ -554,13 +696,12 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
         s,
         "/* 9.9: Mit einem Job, der wartet, rechnet oder noch nicht sichtbar ist, schlaeft das System nicht. */"
     );
-    let _ = writeln!(s, "int32_t {x}_jobs_busy(void) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "int32_t {x}_jobs_busy(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    int i;");
     let _ = writeln!(s, "    for (i = 0; i < {slots}; i++) if (a->jobs[i].state != TAKT_JOB_FREE) return 1;");
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static void takt_jobs_init(struct takt_arena *a) {{");
+    let _ = writeln!(s, "static void takt_jobs_init(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    int i;");
     let _ = writeln!(
         s,
@@ -573,10 +714,12 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
 /// `P_init`: einmal vor dem ersten Tick.
 fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
     let _ = writeln!(s, "/* Einmal vor dem ersten Tick (12.1, Schritt 1). */");
-    let _ = writeln!(s, "static int32_t takt_persist_restore(const void *in, int32_t len);");
-    let _ = writeln!(s, "static void takt_sample(struct takt_arena *a);");
-    let _ = writeln!(s, "static int32_t takt_init_with(void *user, const void *persist, int32_t persist_len) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "static int32_t takt_persist_restore(struct {x}_arena *a, const void *in, int32_t len);");
+    let _ = writeln!(s, "static void takt_sample(struct {x}_arena *a);");
+    let _ = writeln!(
+        s,
+        "static int32_t takt_init_with(struct {x}_arena *a, void *user, const void *persist, int32_t persist_len) {{"
+    );
     // 12.11: `init` beschreibt die ganze Arena und verlaesst sich nicht auf
     // genullten Speicher.
     let _ = writeln!(s, "    memset(a, 0, sizeof *a);");
@@ -613,7 +756,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     for m in driven {
         let _ = writeln!(s, "    {x}_{0}_init_vars(a);", m.name);
     }
-    let _ = writeln!(s, "    int restored = takt_persist_restore(persist, persist_len);");
+    let _ = writeln!(s, "    int restored = takt_persist_restore(a, persist, persist_len);");
     // 9.4: Auch Tick 0 beginnt mit `I_0 = sample()`; ein `enter:` des
     // Anfangszustands liest die Eingaenge wie im Interpreter (FB-316).
     let _ = writeln!(s, "    takt_sample(a);");
@@ -642,22 +785,21 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     let _ = writeln!(t.fields, "    _Bool driver_fault[{}];", driver_outputs(p, layout).len().max(1));
     let s = &mut t.code;
     let _ = writeln!(s, "/* Ein Tick (12.1, Schritte 2 bis 10). */");
-    let _ = writeln!(s, "static void takt_sample(struct takt_arena *a);");
+    let _ = writeln!(s, "static void takt_sample(struct {x}_arena *a);");
     // 7.3: Die Schleife meldet einen Ueberlauf vor dem naechsten Tick
     // (`Program::raise_overrun`); er wirkt fuer alle Maschinen in diesem
     // Tick und steht als Zeile `runtime` im Trace, damit der Lauf sich
     // nachspielen laesst (12.5).
-    let _ = writeln!(s, "void {x}_overrun(void) {{ g_arena.overrun = 1; }}");
+    let _ = writeln!(s, "void {x}_overrun(struct {x}_arena *a) {{ a->overrun = 1; }}");
     // 12.3: Der Speicherschutz hat einen Zugriff der TCB abgewiesen.
-    let _ = writeln!(s, "void {x}_hardware(void) {{ g_arena.hardware = 1; }}");
+    let _ = writeln!(s, "void {x}_hardware(struct {x}_arena *a) {{ a->hardware = 1; }}");
     // 7.1, 12.6 Zeile 7: die Toleranz der Tickquelle fuer die Schleife.
     let (ns, runs) = p.config.tolerance();
     let _ = writeln!(s, "void {x}_tolerance(int64_t *ns, uint32_t *runs) {{ *ns = {ns}LL; *runs = {runs}u; }}");
     // 12.6 Zeile 6: Was der Commit an Treiberfehlern gesehen hat, wirkt im
     // naechsten Tick, wie ein Ueberlauf.
     let driven_out = driver_outputs(p, layout);
-    let _ = writeln!(s, "static void takt_tick(int64_t k) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "static void takt_tick(struct {x}_arena *a, int64_t k) {{");
     let _ = writeln!(s, "    a->tick = k;");
     let _ = writeln!(s, "    a->done = k;");
     let _ = writeln!(s, "    if (a->overrun) {{");
@@ -736,8 +878,7 @@ const NEXT_RUN_CODES: [takt_mir::sys::NextRun; 4] = [
 fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     let next = crate::parts::next_run_slot(p, layout);
     let _ = writeln!(s, "/* 12.7: 0 weiter, 1 NOW, 2 AFTER (`delay` in ns), 3 ON_WAKE, 4 ON_START. */");
-    let _ = writeln!(s, "int32_t {x}_next_run(int64_t *delay) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "int32_t {x}_next_run(struct {x}_arena *a, int64_t *delay) {{");
     let _ = writeln!(s, "    *delay = -1;");
     if let Some(n) = &next {
         let _ = writeln!(s, "    switch (*({} *)(a->latch + {})) {{", n.ct, n.slot.offset);
@@ -756,11 +897,10 @@ fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
     let words: Vec<String> = NEXT_RUN_CODES.iter().map(|c| format!("\"end {}\\n\"", c.word())).collect();
-    let _ = writeln!(s, "void {x}_end(void) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "void {x}_end(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    static const char *const words[] = {{ {} }};", words.join(", "));
     let _ = writeln!(s, "    int64_t delay;");
-    let _ = writeln!(s, "    int c = {x}_next_run(&delay);");
+    let _ = writeln!(s, "    int c = {x}_next_run(a, &delay);");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(a->done);");
     let _ = writeln!(s, "    if (c >= 1 && c <= {}) takt_board_trace(words[c - 1]);", NEXT_RUN_CODES.len());
@@ -778,8 +918,7 @@ fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
 /// Jobs (4.5): Mit ihnen schlaeft das System nicht.
 fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
     let _ = writeln!(s, "/* Systemschlaf (9.9). */");
-    let _ = writeln!(s, "static uint8_t takt_idle(void) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "static uint8_t takt_idle(struct {x}_arena *a) {{");
     if driven.is_empty() {
         let _ = writeln!(s, "    return 0;");
     } else {
@@ -793,7 +932,7 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
         if !crate::parts::queued_outputs(p).is_empty() {
             let _ = writeln!(s, "    if (takt_sched_pending(a)) return 0;");
         }
-        let _ = writeln!(s, "    if ({x}_jobs_busy()) return 0;");
+        let _ = writeln!(s, "    if ({x}_jobs_busy(a)) return 0;");
         for m in driven {
             let i = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
             let _ = writeln!(s, "    if (a->pending[{i}]) return 0;");
@@ -802,14 +941,13 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
         let _ = writeln!(s, "    return 1;");
     }
     let _ = writeln!(s, "}}");
-    guarded(s, x, "uint8_t", "idle", "void", "");
+    guarded(s, x, "uint8_t", "idle", "", "");
 
     // Die frueheste Frist ueber alle Maschinen, als absoluter Zeitpunkt in
     // Nanosekunden — so erwartet `Program::next_deadline` sie. Die
     // Maschinen rechnen in Ticks, weil `t_in_state` sie zaehlt; die
     // Umrechnung steht hier, wo `takt_now` ohnehin die Zeitquelle ist.
-    let _ = writeln!(s, "static int64_t takt_deadline(void) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "static int64_t takt_deadline(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    long long best = -1;");
     for m in driven {
         let _ = writeln!(s, "    {{");
@@ -820,14 +958,13 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     let _ = writeln!(s, "    if (best < 0) return -1;");
     let _ = writeln!(s, "    return {x}_now(a) + best * {tick}LL;");
     let _ = writeln!(s, "}}");
-    guarded(s, x, "int64_t", "deadline", "void", "");
+    guarded(s, x, "int64_t", "deadline", "", "");
 
     // 9.9: „fuer jede Maschine: time_in_state += n*T0". Ein
     // uebersprungener Tick ruft kein `_step`; ohne das feuerte jede
     // `after`-Frist um die geschlafenen Ticks zu spaet.
-    let _ = writeln!(s, "void {x}_init(void *user) {{ (void){x}_init_with(user, 0, 0); }}\n");
-    let _ = writeln!(s, "static void takt_advance(int64_t n) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "void {x}_init(struct {x}_arena *a, void *user) {{ (void){x}_init_with(a, user, 0, 0); }}\n");
+    let _ = writeln!(s, "static void takt_advance(struct {x}_arena *a, int64_t n) {{");
     let _ = writeln!(s, "    a->tick += n;");
     for m in driven {
         let _ = writeln!(s, "    {x}_{0}_advance(a, n);", m.name);
@@ -840,8 +977,7 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     // uebernommenen Eintraege, der Rest ist PersistReset.
     let persisting: Vec<&takt_mir::machine::Machine> =
         driven.iter().copied().filter(|m| !m.persist.is_empty()).collect();
-    let _ = writeln!(s, "static int32_t takt_persist_snapshot(void *out, int32_t cap) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "static int32_t takt_persist_snapshot(struct {x}_arena *a, void *out, int32_t cap) {{");
     let _ = writeln!(s, "    int n = 0;");
     for m in &persisting {
         let _ = writeln!(s, "    {{");
@@ -854,8 +990,7 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     let _ = writeln!(s, "    return n;");
     let _ = writeln!(s, "}}");
     guarded(s, x, "int32_t", "persist_snapshot", "void *out, int32_t cap", "out, cap");
-    let _ = writeln!(s, "static int32_t takt_persist_restore(const void *in, int32_t len) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "static int32_t takt_persist_restore(struct {x}_arena *a, const void *in, int32_t len) {{");
     let _ = writeln!(s, "    int n = 0;");
     for m in &persisting {
         let _ = writeln!(s, "    n += {x}_{0}_persist_restore(a, in, len);", m.name);
@@ -883,7 +1018,7 @@ fn telemetry(
     x: &Prefix,
 ) {
     if diagnostics == takt_llvm::Diagnostics::None {
-        let _ = writeln!(t.code, "void {x}_dump(int32_t all) {{ (void)all; }}\n");
+        let _ = writeln!(t.code, "void {x}_dump(struct {x}_arena *a, int32_t all) {{ (void)a; (void)all; }}\n");
         program_counters(&mut t.code, p, driven, x);
         sample(t, p, layout, x);
         commit(&mut t.code, p, layout, x);
@@ -1062,8 +1197,7 @@ fn telemetry(
     let _ = writeln!(s, "    if (o->kind & 0x40) takt_board_trace_u64((unsigned long long)takt_load(o->kind, v));");
     let _ = writeln!(s, "    else takt_board_trace_i64(takt_load(o->kind, v));");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static void takt_dump(int32_t all) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "static void takt_dump(struct {x}_arena *a, int32_t all) {{");
     let _ = writeln!(s, "    for (unsigned i = 0; i < {n}; i++) {{");
     let _ = writeln!(s, "        const struct takt_out *o = &g_outs[i];");
     let _ = writeln!(s, "        const unsigned char *v = a->latch + o->off;");
@@ -1100,8 +1234,7 @@ fn telemetry(
 /// `statements`). Ohne sie bleibt die Funktion leer.
 fn program_counters(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
     let _ = writeln!(s, "/* Der Programmzaehler je Maschine (11.2). */");
-    let _ = writeln!(s, "void {x}_pc(void) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "void {x}_pc(struct {x}_arena *a) {{");
     for m in driven {
         let Some(at) =
             takt_llvm::machine::state_struct(m, p).and_then(|st| st.byte_offset(takt_llvm::machine::Role::Pc, 0))
@@ -1309,7 +1442,7 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     record(s, p, x);
 
     let _ = writeln!(s, "\n/* Schritt 2: die Lieferungen an den Rand, der Rand ins Abbild (12.1, 12.6). */");
-    let _ = writeln!(s, "static void takt_sample(struct takt_arena *a) {{");
+    let _ = writeln!(s, "static void takt_sample(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    int64_t now = a->tick * {tick}LL;");
     for b in &scalars {
         let _ = writeln!(s, "    {{ /* {} */", b.name);
@@ -1361,7 +1494,7 @@ fn record(s: &mut String, p: &Program, x: &Prefix) {
         return;
     }
     let _ = writeln!(s, "\n/* Aufgezeichnete Inputs, die das Programm nicht liest (8.2, 12.5). */");
-    let _ = writeln!(s, "static void takt_record(struct takt_arena *a, int64_t now) {{");
+    let _ = writeln!(s, "static void takt_record(struct {x}_arena *a, int64_t now) {{");
     for (i, r) in p.recorded.iter().enumerate() {
         if let Some(st) = r.stream {
             record_stream(s, p, i, r, st, x);
@@ -1652,8 +1785,7 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         s,
         "\n/* Schritt 10: der Latch geht an die Geraete (12.1); was scheitert, faultet im naechsten Tick. */"
     );
-    let _ = writeln!(s, "static void takt_commit(void) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "static void takt_commit(struct {x}_arena *a) {{");
     // Die Grenze des gerechneten Ticks: Ein Schlaf (9.9) rueckt `tick` schon vor dem Commit vor.
     let _ = writeln!(s, "    int64_t now = a->done * {}LL;", p.config.tick);
     for d in &devices {
@@ -1684,7 +1816,7 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         );
     }
     let _ = writeln!(s, "}}");
-    guarded(s, x, "void", "commit", "void", "");
+    guarded(s, x, "void", "commit", "", "");
 }
 
 /// `P_output`: einen Ausgang lesen, nach Stellung.
@@ -1701,8 +1833,7 @@ fn outputs(s: &mut String, layout: &Layout, x: &Prefix) {
     for (i, slot) in layout.outputs.iter().enumerate() {
         let _ = writeln!(s, "/*   {i} = {} */", slot.name);
     }
-    let _ = writeln!(s, "int64_t {x}_output(int32_t index) {{");
-    let _ = writeln!(s, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(s, "int64_t {x}_output(struct {x}_arena *a, int32_t index) {{");
     let _ = writeln!(s, "    switch (index) {{");
     for (i, slot) in layout.outputs.iter().enumerate() {
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };

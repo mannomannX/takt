@@ -1,0 +1,19 @@
+[package]
+name = "rust-host"
+version = "0.1.0"
+description = "Takt als Baustein in einem Rust-Projekt: ein Programm, seine Treiber, sein Test gegen den Interpreter (12.11)"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Ein Projekt fuer sich, wie das eines Nutzers, nicht Teil des Workspace von Takt.
+[workspace]
+
+[dependencies]
+takt-embed = { path = "../../crates/takt-embed" }
+
+[build-dependencies]
+takt-embed = { path = "../../crates/takt-embed", features = ["build"] }
+
+[dev-dependencies]
+takt-embed = { path = "../../crates/takt-embed", features = ["testing"] }

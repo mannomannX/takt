@@ -266,6 +266,36 @@ impl Target {
         Target::KNOWN.into_iter().find(|t| t.triple == triple)
     }
 
+    /// Das Ziel zu dem Tripel, mit dem der Wirt baut (Cargo `TARGET`,
+    /// CMake-Toolchain; 12.11). Rust nennt die Erweiterungen von RISC-V im
+    /// Tripel, LLVM nicht; beides fuehrt zum selben Ziel.
+    ///
+    /// **Die Float-ABI gehoert zur Zielklasse.** Ein Tripel derselben
+    /// Architektur, das Fliesskomma in Software rechnet, wo die Klasse eine
+    /// FPU hat, ist ein Widerspruch: Still auf Soft-Float umzuschalten
+    /// aenderte die Kosten aller Fliesskomma-Operationen (9.4.3), und die
+    /// Meldung nennt Tripel und Klasse.
+    pub fn by_host_triple(triple: &str) -> Result<Target, String> {
+        if triple == "riscv32imac-unknown-none-elf" {
+            return Ok(Target::RISCV32IMAC);
+        }
+        if let Some(t) = Target::by_triple(triple) {
+            return Ok(t);
+        }
+        let soft = [("thumbv7em-none-eabi", Target::THUMBV7EM), ("armv7-unknown-linux-gnueabi", Target::ARMV7_LINUX)];
+        if let Some((_, t)) = soft.iter().find(|(s, _)| *s == triple) {
+            return Err(format!(
+                "`{triple}` rechnet Fliesskomma in Software, die Zielklasse `{}` ({}) mit ihrer FPU; das Tripel dazu \
+                 ist `{}`",
+                t.name,
+                t.class.name(),
+                t.triple
+            ));
+        }
+        let known: Vec<&str> = Target::KNOWN.iter().map(|t| t.triple).chain(["riscv32imac-unknown-none-elf"]).collect();
+        Err(format!("kein Ziel fuer das Tripel `{triple}`; bekannt: {}", known.join(", ")))
+    }
+
     /// Gehoeren zwei Ziele derselben Zielklasse an (12.8)?
     ///
     /// Innerhalb einer Klasse ist die IR dieselbe. Zwischen Klassen ist
@@ -285,5 +315,22 @@ impl Target {
     /// kennt mit Cortex-A7/A9 auch 32-Bit-Ziele *mit* Betriebssystem.
     pub fn is_bare_metal(self) -> bool {
         matches!(self.class, Class::Mcu32F32 | Class::Mcu32NoFpu)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Target;
+
+    /// Das Tripel des Wirts fuehrt zum Ziel, auch in der Schreibweise von
+    /// Rust; eine Float-ABI gegen die Klasse ist ein Fehler mit beiden Namen.
+    #[test]
+    fn a_host_triple_names_its_target_and_its_float_abi() {
+        assert_eq!(Target::by_host_triple("thumbv7em-none-eabihf"), Ok(Target::THUMBV7EM));
+        assert_eq!(Target::by_host_triple("riscv32imac-unknown-none-elf"), Ok(Target::RISCV32IMAC));
+        assert_eq!(Target::by_host_triple("x86_64-pc-windows-msvc"), Ok(Target::X86_64_WINDOWS));
+        let soft = Target::by_host_triple("thumbv7em-none-eabi").expect_err("Soft-Float gegen die FPU-Klasse");
+        assert!(soft.contains("thumbv7em-none-eabi") && soft.contains("32-Bit mit f32-FPU"), "{soft}");
+        assert!(Target::by_host_triple("mips-unknown-none").is_err());
     }
 }

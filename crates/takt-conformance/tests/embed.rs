@@ -55,8 +55,9 @@ fn a_hostile_floating_point_environment_changes_nothing() {
             dir.join(format!("lauf{}", std::env::consts::EXE_SUFFIX)),
         );
         std::fs::write(&ll, takt_llvm::lower::program(&p, host.triple, &Prefix::default()).ir).expect("IR");
-        std::fs::write(&c, takt_frame::mcu::build_with(&p, Frame { stubs: true, ..Default::default() }).source)
-            .expect("Rahmen");
+        let frame = takt_frame::mcu::build_with(&p, Frame { stubs: true, ..Default::default() });
+        std::fs::write(&c, frame.source).expect("Rahmen");
+        std::fs::write(dir.join("app.h"), frame.header).expect("Kopf");
         std::fs::write(&main, main_c(common::board::TICKS)).expect("main");
         let mut cmd = std::process::Command::new(&clang);
         let build = Clang::deterministic(&mut cmd)
@@ -109,12 +110,16 @@ fn an_output_driver_sees_the_tick_it_commits() {
         dir.join(format!("lauf{}", std::env::consts::EXE_SUFFIX)),
     );
     std::fs::write(&ll, takt_llvm::lower::program(&p, host.triple, &Prefix::default()).ir).expect("IR");
-    std::fs::write(&c, takt_frame::mcu::build(&p).source).expect("Rahmen");
+    let frame = takt_frame::mcu::build(&p);
+    std::fs::write(&c, frame.source).expect("Rahmen");
+    std::fs::write(dir.join("app.h"), frame.header).expect("Kopf");
     std::fs::write(
         &main,
         format!(
             r#"#include <stdint.h>
 #include <stdio.h>
+
+#include "app.h"
 
 #define T {tick}LL
 
@@ -128,25 +133,20 @@ static int64_t seen = -1;
 uint8_t app_out_ui_led(void *user, int64_t now, uint8_t value) {{ (void)user; (void)value; seen = now; return 1; }}
 uint8_t app_alive_ui(void *user, int64_t now) {{ (void)user; (void)now; return 1; }}
 
-void app_init(void *user);
-void app_tick(int64_t k);
-void app_commit(void);
-uint8_t app_idle(void);
-int64_t app_deadline(void);
-void app_advance(int64_t n);
+static struct app_arena arena;
 
 int main(void) {{
     int64_t k = 1, slept = 0;
-    app_init(0);
+    app_init(&arena, 0);
     while (k <= 300) {{
         int64_t n = 0;
-        app_tick(k);
-        if (app_idle()) {{
-            int64_t d = app_deadline() - (k + 1) * T;
+        app_tick(&arena, k);
+        if (app_idle(&arena)) {{
+            int64_t d = app_deadline(&arena) - (k + 1) * T;
             if (d > T) n = d / T - 1;
         }}
-        if (n > 0) {{ app_advance(n); slept += n; }}
-        app_commit();
+        if (n > 0) {{ app_advance(&arena, n); slept += n; }}
+        app_commit(&arena);
         if (seen != k * T) {{
             fprintf(stderr, "Tick %lld: der Treiber bekam now=%lld statt %lld\n", (long long)k, (long long)seen, (long long)(k * T));
             return 3;
@@ -185,16 +185,15 @@ fn main_c(ticks: u64) -> String {
 #include <stdlib.h>
 #include <xmmintrin.h>
 
+#include "app.h"
+
 void takt_board_trace(const char *line) {{ fputs(line, stdout); }}
 void takt_board_trace_i64(long long v) {{ printf("%lld ", v); }}
 void takt_board_trace_u64(unsigned long long v) {{ printf("%llu ", v); }}
 void takt_board_trace_f64(double v) {{ printf("%.17g ", v); }}
 void takt_board_trace_hex8(unsigned char v) {{ printf("0x%02x", v); }}
 
-void app_init(void *user);
-void app_tick(long long k);
-void app_commit(void);
-void app_dump(int all);
+static struct app_arena arena;
 
 /* Die Flags (5:0) darf jeder setzen; der Rest muss dem Wirt gehoeren. */
 static void unchanged(const char *entry) {{
@@ -207,12 +206,12 @@ static void unchanged(const char *entry) {{
 
 int main(void) {{
     _mm_setcsr({HOSTILE:#x}u);
-    app_init(0); unchanged("init");
-    app_dump(1); unchanged("dump");
+    app_init(&arena, 0); unchanged("init");
+    app_dump(&arena, 1); unchanged("dump");
     for (long long k = 1; k <= {ticks}; k++) {{
-        app_tick(k); unchanged("tick");
-        app_commit(); unchanged("commit");
-        app_dump(0); unchanged("dump");
+        app_tick(&arena, k); unchanged("tick");
+        app_commit(&arena); unchanged("commit");
+        app_dump(&arena, 0); unchanged("dump");
     }}
     fflush(stdout);
     return 0;

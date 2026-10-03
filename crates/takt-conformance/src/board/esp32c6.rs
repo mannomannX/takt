@@ -148,13 +148,13 @@ impl Esp32c6 {
     }
 
     /// Der Tickzaehler des Rahmens, ueber JTAG gelesen: in der Arena
-    /// `g_arena` an der Stelle, die das Bring-up als `__takt_tick_at` ablegt.
+    /// Die Arena `app_arena` des Bring-ups an der Stelle, die es als `__takt_tick_at` ablegt.
     pub fn tick_over_jtag(&self, elf: &Path) -> Result<u32, String> {
         let symbols = symbols(elf)?;
         let at = |name: &str| {
             symbols.iter().find(|s| s.name == name).map(|s| s.address).ok_or(format!("`{name}` fehlt im Abbild"))
         };
-        self.word_at(at("g_arena")? + at("__takt_tick_at")?)
+        self.word_at(at("app_arena")? + at("__takt_tick_at")?)
     }
 
     /// Ein Wort des laufenden Programms ueber JTAG, am ersten Symbol, auf

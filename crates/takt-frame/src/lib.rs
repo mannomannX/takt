@@ -14,10 +14,13 @@
 //! `takt-bringup-host` binden; `parts` sind seine Bausteine, die auch der
 //! Wirtsrahmen des Differentials in `takt-conformance` nutzt; `layout`,
 //! `streams` und `edge` beschreiben Abbild, Stroeme und Rand; `text` fuegt
-//! den Rahmen um die Arena zusammen (12.11).
+//! den Rahmen um die Arena zusammen (12.11). `drivers` nennt die Treiber eines
+//! Programms in jeder Form (12.6), `embed` schreibt das Rust-Modul der
+//! Lieferform (`P.rs`, 12.11).
 
 pub mod drivers;
 pub mod edge;
+pub mod embed;
 pub mod layout;
 pub mod mcu;
 pub mod parts;

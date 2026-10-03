@@ -35,6 +35,8 @@
 //! Exit-Code 1 bei Fehlern, nicht kanonischen Dateien (`fmt --check`), einem
 //! Golden-Unterschied oder dem Lauf-Verdikt FAIL (13.5).
 
+mod embed;
+
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
@@ -88,6 +90,8 @@ impl Args {
             "--emit",
             "--out",
             "--prefix",
+            "--form",
+            "--drivers",
             "--object",
             "--hardware",
             "--hw-export",
@@ -639,7 +643,8 @@ fn graph(args: &Args) -> bool {
 /// `takt build`: ein Programm fuer ein Ziel uebersetzen (11.2, 12.8).
 ///
 /// ```text
-/// takt build DATEI [--target NAME] [--emit ir|obj|consts|consts-rs] [--out PFAD]
+/// takt build DATEI [--target NAME|TRIPEL] [--emit ir|obj|consts|consts-rs|embed] [--out PFAD]
+/// takt build DATEI --emit embed --target TRIPEL --form FORM [--drivers TYP] [--hardware DATEI] --out VERZEICHNIS
 /// ```
 ///
 /// **Warum es dieses Kommando gibt.** Bis M5 endete jeder Weg aus einer
@@ -657,24 +662,38 @@ fn graph(args: &Args) -> bool {
 /// eigenen Flash-Versatz. Wer bindet, weiss das; wer uebersetzt, muss es
 /// nicht wissen.
 ///
-/// **Der Rahmen (12.1) gehoert nicht hierher.** Das C-Stueck, das
-/// Prozessabbild und Latch haelt und `<maschine>_step` ruft, steht in
-/// `takt-conformance::mcu` — zusammen mit der Speicherform, die es
-/// braucht. Ihn hier zu erzeugen hiesse, die halbe Abnahmesuite in das
-/// CLI zu ziehen; wer ihn braucht, erzeugt ihn dort. Das ist die
-/// unbequemere, aber ehrlichere Trennung: `takt build` uebersetzt ein
-/// Programm, es baut keine Runtime.
+/// **Der Rahmen (12.1) nur in der Lieferform.** `--emit ir` und `obj`
+/// uebersetzen das Programm allein. `--emit embed` legt den Rahmen aus
+/// `takt-frame` dazu, weil ein Wirt beides als eine Bibliothek bindet, und
+/// schreibt Kopf, Rust-Modul und Manifest daneben (12.11); die Runtime
+/// bleibt beim Wirt (`takt-rt-core`).
 fn build(args: &Args) -> bool {
     let Some(path) = args.files.first() else {
         eprintln!("{USAGE}");
         return false;
     };
+    // Ein Takt-Ziel beim Namen oder das Tripel des Wirts (12.11).
     let target_name = args.value("--target").unwrap_or("x86_64");
-    let Some(target) = takt_llvm::Target::by_name(target_name) else {
-        eprintln!("Unbekanntes Ziel `{target_name}`. Bekannt: x86_64, aarch64, thumbv7em, riscv32imac");
-        return false;
+    let (target, triple) = match takt_llvm::Target::by_name(target_name) {
+        Some(t) => (t, t.triple),
+        None => match takt_llvm::Target::by_host_triple(target_name) {
+            Ok(t) => (t, target_name),
+            Err(e) => {
+                eprintln!("--target: {e}; oder ein Ziel beim Namen: x86_64, aarch64, thumbv7em, riscv32imac");
+                return false;
+            }
+        },
     };
     let Some(program) = compile_file(path, args) else { return false };
+    // 12.11: Die Form der Lieferform legt das Profil fest, wenn das Programm keines nennt.
+    let form = match args.value("--form").map(embed::Form::parse).transpose() {
+        Ok(form) => form,
+        Err(e) => {
+            eprintln!("{e}");
+            return false;
+        }
+    };
+    let profile = program.config.runtime_profile().or_else(|| form.and_then(embed::Form::profile));
 
     let instrument = match args.value("--instrument") {
         Some(name) => match takt_llvm::Instrument::parse(name) {
@@ -684,7 +703,7 @@ fn build(args: &Args) -> bool {
                 return false;
             }
         },
-        None => takt_llvm::Instrument::default_for(program.config.runtime_profile(), target),
+        None => takt_llvm::Instrument::default_for(profile, target),
     };
     println!("Instrumentierung: {} (11.2)", instrument.name());
     let diagnostics = match args.value("--diagnostics") {
@@ -764,8 +783,42 @@ fn build(args: &Args) -> bool {
                 }
             }
         }
+        "embed" => {
+            let Some(out) = args.value("--out") else {
+                eprintln!("--emit embed schreibt in ein Verzeichnis; `--out VERZEICHNIS` fehlt");
+                return false;
+            };
+            let Some(form) = form else {
+                eprintln!("--emit embed: `--form` fehlt; sie sagt, wer `service` ruft (12.11)");
+                return false;
+            };
+            let hw = hardware(args);
+            let nvm_blocking_ns =
+                hw.as_ref().and_then(|_| calibration(args)).and_then(|t| t.nvm?.blocking_phase_ns()).unwrap_or(0);
+            let e = embed::Embed {
+                program: &program,
+                ir: &lowered.ir,
+                target,
+                triple,
+                prefix: &prefix,
+                diagnostics,
+                hardware: hw.as_ref(),
+                form,
+                drivers_type: args.value("--drivers"),
+                nvm_blocking_ns,
+                consts_rs: constants_rust(&program, hw.as_ref(), nvm_blocking_ns),
+                out: std::path::PathBuf::from(out),
+            };
+            match embed::embed(&e) {
+                Ok(()) => lowered.complete(),
+                Err(err) => {
+                    eprintln!("takt build --emit embed: {err}");
+                    false
+                }
+            }
+        }
         other => {
-            eprintln!("Unbekannte Ausgabeart `{other}`. Bekannt: ir, obj, consts, consts-rs");
+            eprintln!("Unbekannte Ausgabeart `{other}`. Bekannt: ir, obj, consts, consts-rs, embed");
             false
         }
     }
@@ -838,6 +891,21 @@ fn ports(p: &takt_mir::Program, hw: &takt_mir::hardware::Hardware) -> Vec<(Strin
 /// braucht einen Index, und ein handgeschriebener Index ist dieselbe
 /// Fehlerquelle in kleiner: Er stimmt, bis jemand einen Ausgang davor
 /// einfuegt.
+/// Die Ausgaenge, die `P_output` des Rahmens kennt, in seiner Reihenfolge,
+/// als Bezeichner in Grossbuchstaben.
+pub(crate) fn output_names(p: &takt_mir::Program) -> Vec<String> {
+    p.channels
+        .iter()
+        .enumerate()
+        .filter(|(i, c)| {
+            c.dir != takt_mir::program::Direction::Input
+                && takt_llvm::image::latch_offset(takt_mir::ChannelId(*i as u32), p).is_some()
+                && takt_llvm::ty::lower(c.ty, p).is_some()
+        })
+        .map(|(_, c)| c.name.to_uppercase().replace(|ch: char| !ch.is_ascii_alphanumeric(), "_"))
+        .collect()
+}
+
 fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardware>, nvm_blocking_ns: i64) -> String {
     let mut s = String::new();
     // Regulaere Kommentare, keine `//!`: Die Datei wird per `include!` in
@@ -855,20 +923,11 @@ fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardwar
     ));
 
     s.push_str("/// Die Ausgaenge in der Reihenfolge, die `P_output` des Rahmens erwartet.\n");
-    let mut index = 0;
-    for (i, c) in p.channels.iter().enumerate() {
-        let id = takt_mir::ChannelId(i as u32);
-        if c.dir == takt_mir::program::Direction::Input {
-            continue;
-        }
-        if takt_llvm::image::latch_offset(id, p).is_none() || takt_llvm::ty::lower(c.ty, p).is_none() {
-            continue;
-        }
-        let name = c.name.to_uppercase().replace(|ch: char| !ch.is_ascii_alphanumeric(), "_");
+    let outputs = output_names(p);
+    for (index, name) in outputs.iter().enumerate() {
         s.push_str(&format!("pub const OUT_{name}: i32 = {index};\n"));
-        index += 1;
     }
-    s.push_str(&format!("\n/// Wie viele Ausgaenge das Programm hat.\npub const OUTPUTS: i32 = {index};\n"));
+    s.push_str(&format!("\n/// Wie viele Ausgaenge das Programm hat.\npub const OUTPUTS: i32 = {};\n", outputs.len()));
     // 5.9, 12.3: Das Journal traegt den Logik-Hash als Schluessel; die Runtime
     // braucht dazu die Nutzlastgrenze und das engste `min_interval`.
     s.push_str("\n/// Die ersten acht Byte des Logik-Hashes (9.4.4), Schluessel des `persist`-Journals (5.9).\n");
@@ -1275,10 +1334,12 @@ fn calibration(args: &Args) -> Option<takt_mir::hardware::Target> {
     }
 }
 
-/// Build aus `--build sim|hw` (Default `sim`).
+/// Build aus `--build sim|hw`; Default `sim`, fuer die Lieferform `hw`.
 fn build_of(args: &Args) -> takt_sema::Build {
     match args.value("--build") {
         Some("hw") => takt_sema::Build::Hw,
+        // Die Lieferform geht auf ein Ziel (8.1, 12.11).
+        None if args.value("--emit") == Some("embed") => takt_sema::Build::Hw,
         _ => takt_sema::Build::Sim,
     }
 }

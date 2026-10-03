@@ -63,7 +63,10 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
     let delivers = p.channels.iter().any(|c| c.dir == Direction::Input);
 
     let ty = &mut t.types;
-    let _ = writeln!(ty, "/* Treiberrand (12.6): Zustand je Kanal und Treiber, das Urteil im Kern (`takt-hal`). */");
+    let _ = writeln!(ty, "/* Treiberrand (12.6): Zustand je Kanal und Treiber, das Urteil im Kern (`takt-hal`). Die");
+    let _ = writeln!(ty, "   Typen gehoeren der geteilten Bibliothek und sind in jedem Programm dieselben. */");
+    let _ = writeln!(ty, "#ifndef TAKT_EDGE_TYPES");
+    let _ = writeln!(ty, "#define TAKT_EDGE_TYPES");
     let _ = writeln!(ty, "struct takt_track {{ long long last_t, last_seq, last_measured; unsigned maxpt, count; }};");
     let _ = writeln!(ty, "struct takt_device {{ _Bool degraded, delivered; unsigned char broken; }};");
     let _ = writeln!(
@@ -84,6 +87,7 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
         "struct takt_edge_value {{ unsigned char value[8]; unsigned char kind, quality, reason; _Bool has_value; \
          long long i; double f; long long age; const unsigned char *bytes; int len; }};"
     );
+    let _ = writeln!(ty, "#endif");
     let f = &mut t.fields;
     let _ = writeln!(f, "    struct takt_track edge_tracks[{n}];");
     let _ = writeln!(f, "    struct takt_device edge_devices[{devices}];");
@@ -115,7 +119,7 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
         })
         .collect();
     let _ = writeln!(s, "static const struct takt_track g_edge_track0[{n}] = {{ {} }};", or_zero(tracks));
-    let _ = writeln!(s, "static void takt_edge_init(struct takt_arena *a) {{");
+    let _ = writeln!(s, "static void takt_edge_init(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    memcpy(a->edge_tracks, g_edge_track0, sizeof a->edge_tracks);");
     let _ = writeln!(s, "}}");
     let _ = writeln!(
@@ -151,14 +155,14 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
     let _ = writeln!(s, "static const char *const g_edge_what[{}] = {{ {} }};", WHAT.len(), what.join(", "));
 
     if delivers {
-        deliveries(s, max);
+        deliveries(s, max, x);
     }
-    report(s, trace);
-    degrade(s, p, layout);
+    report(s, trace, x);
+    degrade(s, p, layout, x);
     apply(s, p, layout, driven, delivers, x);
 
     let tick = p.config.tick;
-    let _ = writeln!(s, "static void takt_edge_commit(struct takt_arena *a, long long tick) {{");
+    let _ = writeln!(s, "static void takt_edge_commit(struct {x}_arena *a, long long tick) {{");
     let _ = writeln!(s, "    struct takt_window w = {{ tick * {tick}LL - {tick}LL, tick * {tick}LL, {tick}LL }};");
     let _ = writeln!(s, "    struct takt_event ev[{}];", max + devices);
     let _ = writeln!(
@@ -177,10 +181,10 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
 /// Die Lieferungen eines Treibers an den Rand: ein Wert (`takt_edge_reading`)
 /// oder ein Element eines Stroms (`takt_edge_element`), hoechstens `max` je
 /// Tick.
-fn deliveries(s: &mut String, max: usize) {
+fn deliveries(s: &mut String, max: usize, x: &Prefix) {
     let _ = writeln!(
         s,
-        "static void takt_edge_reading(struct takt_arena *a, unsigned c, const void *value, int size, unsigned char kind, long long i, double f, \
+        "static void takt_edge_reading(struct {x}_arena *a, unsigned c, const void *value, int size, unsigned char kind, long long i, double f, \
          unsigned char quality, unsigned char reason, _Bool has_value, long long t, long long age) {{"
     );
     let _ = writeln!(s, "    if (a->edge_n >= {max}) return;");
@@ -195,7 +199,7 @@ fn deliveries(s: &mut String, max: usize) {
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
-        "static void takt_edge_element(struct takt_arena *a, unsigned c, const unsigned char *bytes, int len, long long t, long long seq) {{"
+        "static void takt_edge_element(struct {x}_arena *a, unsigned c, const unsigned char *bytes, int len, long long t, long long seq) {{"
     );
     let _ = writeln!(s, "    if (a->edge_n >= {max}) return;");
     let _ = writeln!(s, "    struct takt_delivery *d = &a->edge_d[a->edge_n];");
@@ -208,11 +212,9 @@ fn deliveries(s: &mut String, max: usize) {
 }
 
 /// Eine Meldung des Rands als Trace-Zeile `driver` (`grammar/trace.md`).
-fn report(s: &mut String, trace: Trace) {
-    let _ = writeln!(
-        s,
-        "static void takt_edge_report(struct takt_arena *a, long long tick, const struct takt_event *e) {{"
-    );
+fn report(s: &mut String, trace: Trace, x: &Prefix) {
+    let _ =
+        writeln!(s, "static void takt_edge_report(struct {x}_arena *a, long long tick, const struct takt_event *e) {{");
     let _ = writeln!(s, "    const char *device, *rest, *word;");
     let _ = writeln!(s, "    switch (e->kind) {{");
     let _ = writeln!(
@@ -250,8 +252,8 @@ fn report(s: &mut String, trace: Trace) {
 
 /// Zeile 2: Die Inputs eines degradierten Treibers sind `Bad` mit Grund
 /// `Driver`, der Bezugspunkt faellt weg (`Image::degrade`).
-fn degrade(s: &mut String, p: &Program, layout: &Layout) {
-    let _ = writeln!(s, "static void takt_edge_degrade(struct takt_arena *a) {{");
+fn degrade(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
+    let _ = writeln!(s, "static void takt_edge_degrade(struct {x}_arena *a) {{");
     for slot in &layout.inputs {
         let Some((c, e)) = gate_of(p, &slot.name) else { continue };
         let _ = writeln!(
@@ -270,10 +272,10 @@ fn degrade(s: &mut String, p: &Program, layout: &Layout) {
 /// Eingaenge gibt es keine Lieferung.
 fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine], delivers: bool, x: &Prefix) {
     if !delivers {
-        let _ = writeln!(s, "static void takt_edge_apply(struct takt_arena *a, unsigned j) {{ (void)a; (void)j; }}");
+        let _ = writeln!(s, "static void takt_edge_apply(struct {x}_arena *a, unsigned j) {{ (void)a; (void)j; }}");
         return;
     }
-    let _ = writeln!(s, "static void takt_edge_apply(struct takt_arena *a, unsigned j) {{");
+    let _ = writeln!(s, "static void takt_edge_apply(struct {x}_arena *a, unsigned j) {{");
     let _ = writeln!(s, "    const struct takt_delivery *d = &a->edge_d[j];");
     let _ = writeln!(s, "    const struct takt_edge_value *v = &a->edge_v[j];");
     let _ = writeln!(s, "    switch (d->channel) {{");

@@ -132,7 +132,14 @@ fn code(v: Verdict) -> u32 {
 ///
 /// `gate` und `bounds` zeigen auf je einen Eintrag oder sind null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_edge_gate(gate: *mut Gate, bounds: *const Bounds, int: bool, i: i64, f: f64, t: i64) -> u32 {
+pub unsafe extern "C" fn takt_edge_gate(
+    gate: *mut Gate,
+    bounds: *const Bounds,
+    int: bool,
+    i: i64,
+    f: f64,
+    t: i64,
+) -> u32 {
     // SAFETY: vom Aufrufer zugesagt.
     let (Some(gate), Some(b)) = (unsafe { gate.as_mut() }, unsafe { bounds.as_ref() }) else { return 0 };
     let limits = Limits {

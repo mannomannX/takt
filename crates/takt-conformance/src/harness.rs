@@ -150,9 +150,9 @@ fn build_inner(
     let head = s;
     let mut t = Text::default();
     // Die eine Arena des Laufs (12.11); `main` reicht sie an jede Funktion.
-    let _ = writeln!(t.code, "static struct takt_arena g_arena;");
-    let _ = writeln!(t.code, "static void takt_tx_commit(struct takt_arena *a, long long);");
-    let _ = writeln!(t.code, "static void takt_int_commit(struct takt_arena *a);");
+    let _ = writeln!(t.code, "static struct {x}_arena g_arena;");
+    let _ = writeln!(t.code, "static void takt_tx_commit(struct {x}_arena *a, long long);");
+    let _ = writeln!(t.code, "static void takt_int_commit(struct {x}_arena *a);");
 
     // Die Runtime-Aufrufe (`takt-llvm/src/abi.rs`). Sie schreiben in den
     // Trace, damit der Vergleich sie sieht.
@@ -160,10 +160,10 @@ fn build_inner(
     let _ = writeln!(t.code, "{DURATION_C}");
     scope_flags(&mut t, p);
     fault_names(&mut t.code, p);
-    alert_table(&mut t, p);
+    alert_table(&mut t, p, x);
     let _ = writeln!(
         t.code,
-        "void {x}_alert(struct takt_arena *a, int m, int slot, unsigned char on, unsigned char invalid) {{"
+        "void {x}_alert(struct {x}_arena *a, int m, int slot, unsigned char on, unsigned char invalid) {{"
     );
     let _ = writeln!(t.code, "    if (!takt_alert_edge(a, m, slot, on)) return;");
     let _ = writeln!(
@@ -173,11 +173,11 @@ fn build_inner(
     let _ = writeln!(t.code, "}}");
     let _ = writeln!(
         t.code,
-        "void {x}_log(struct takt_arena *a, int m, int site) {{ printf(\"t=%lld log %d %d\\n\", a->tick, m, site); }}"
+        "void {x}_log(struct {x}_arena *a, int m, int site) {{ printf(\"t=%lld log %d %d\\n\", a->tick, m, site); }}"
     );
     // 5.3: der Fault-Uebergang mit Maschine und Art, wie der Interpreter
     // ihn schreibt; der verlassene Zustand steht nicht in dessen Zeile.
-    let _ = writeln!(t.code, "void {x}_fault(struct takt_arena *a, int m, int from, int code) {{");
+    let _ = writeln!(t.code, "void {x}_fault(struct {x}_arena *a, int m, int from, int code) {{");
     let _ = writeln!(t.code, "    (void)from;");
     let _ = writeln!(
         t.code,
@@ -187,28 +187,28 @@ fn build_inner(
     // 3.3: `now` ist die Dauer seit dem Start des Laufs — die Tickzahl
     // mal T0, wie im Interpreter. Die Runtime fuehrt sie, weil alle
     // Maschinen dieselbe Uhr lesen (12.1).
-    let _ = writeln!(t.code, "long long {x}_now(struct takt_arena *a) {{ return a->tick * {}LL; }}", p.config.tick);
+    let _ = writeln!(t.code, "long long {x}_now(struct {x}_arena *a) {{ return a->tick * {}LL; }}", p.config.tick);
     let _ =
-        writeln!(t.code, "void {x}_measure(struct takt_arena *a, int m, int site, double v, unsigned char invalid) {{");
+        writeln!(t.code, "void {x}_measure(struct {x}_arena *a, int m, int site, double v, unsigned char invalid) {{");
     let _ = writeln!(t.code, "    if (invalid) printf(\"t=%lld measure %d %d <invalid>\\n\", a->tick, m, site);");
     let _ = writeln!(t.code, "    else printf(\"t=%lld measure %d %d %.17g\\n\", a->tick, m, site, v);");
     let _ = writeln!(t.code, "}}");
-    let _ = writeln!(t.code, "void {x}_verify(struct takt_arena *a, int m, int site, unsigned char ok) {{");
+    let _ = writeln!(t.code, "void {x}_verify(struct {x}_arena *a, int m, int site, unsigned char ok) {{");
     let _ = writeln!(t.code, "    printf(\"t=%lld verify %d %d %d\\n\", a->tick, m, site, ok ? 1 : 0);");
     let _ = writeln!(t.code, "}}");
     // 5.4: `abort` merkt den Fault fuer alle Maschinen vor; die
     // Abort-Phase stellt ihn nach den Schritten zu (`abort_phase`).
-    raised(&mut t, p);
-    let _ = writeln!(t.code, "void {x}_abort(struct takt_arena *a, int m, int site) {{");
+    raised(&mut t, p, x);
+    let _ = writeln!(t.code, "void {x}_abort(struct {x}_arena *a, int m, int site) {{");
     let _ = writeln!(t.code, "    printf(\"t=%lld abort %d %d\\n\", a->tick, m, site);");
     let _ = writeln!(t.code, "    memset(a->raised, 1, sizeof a->raised);");
     let _ = writeln!(t.code, "}}");
-    let _ = writeln!(t.code, "void {x}_verdict(struct takt_arena *a, int m, int site, unsigned char pass) {{");
+    let _ = writeln!(t.code, "void {x}_verdict(struct {x}_arena *a, int m, int site, unsigned char pass) {{");
     let _ = writeln!(t.code, "    printf(\"t=%lld verdict %d %d %d\\n\", a->tick, m, site, pass ? 1 : 0);");
     let _ = writeln!(t.code, "}}");
     // 13.3: Ein Monitor meldet Index und Position; der Vergleich bildet
     // den Namen aus dem Programm.
-    let _ = writeln!(t.code, "void {x}_property(struct takt_arena *a, int i, long long at) {{");
+    let _ = writeln!(t.code, "void {x}_property(struct {x}_arena *a, int i, long long at) {{");
     let _ = writeln!(t.code, "    printf(\"t=%lld property %d %lld\\n\", a->tick, i, at);");
     let _ = writeln!(t.code, "}}\n");
 
@@ -225,7 +225,7 @@ fn build_inner(
         Some(_) => Vec::new(),
     };
     for (i, _) in &monitors {
-        let _ = writeln!(t.code, "void {x}_monitor_{i}(struct takt_arena *a, long long tick);");
+        let _ = writeln!(t.code, "void {x}_monitor_{i}(struct {x}_arena *a, long long tick);");
     }
     let _ = writeln!(t.code);
     let persisting: Vec<&takt_mir::machine::Machine> =
@@ -260,12 +260,12 @@ fn build_inner(
     // 12.6: Der Treiberrand schreibt ins Abbild und in die Ringe; der
     // Stimulus liefert, was auf einem Board die Treiber liefern.
     let mut feed = String::new();
-    let most = crate::deliveries::stimulus(&mut feed, p, &layout, inputs);
+    let most = crate::deliveries::stimulus(&mut feed, p, &layout, inputs, x);
     takt_frame::edge::emit(&mut t, p, &layout, &driven, most, takt_frame::streams::Trace::Stdio, x);
     t.code.push_str(&feed);
 
     let _ = writeln!(t.code, "int main(void) {{");
-    let _ = writeln!(t.code, "    struct takt_arena *const a = &g_arena;");
+    let _ = writeln!(t.code, "    struct {x}_arena *const a = &g_arena;");
     let _ = writeln!(t.code, "    TAKT_IEEE_MODE();");
     let _ = writeln!(t.code, "    memset(a, 0, sizeof *a);");
     let _ = writeln!(t.code, "    takt_edge_init(a);");
@@ -399,7 +399,7 @@ fn build_inner(
     // `dump` steht hinter `main`, damit die Deklaration oben genuegt.
     // T2: Eine Dauer steht in ihrer groessten ganzzahligen Einheit.
     let mut dump = String::new();
-    let _ = writeln!(dump, "\nstatic void dump(struct takt_arena *a, long long t) {{");
+    let _ = writeln!(dump, "\nstatic void dump(struct {x}_arena *a, long long t) {{");
     for slot in &layout.outputs {
         // Ein Array als Liste, wie der Interpreter ihn schreibt (T2).
         if let takt_llvm::ty::LlvmType::Array(elem, n) = &slot.ty {
@@ -459,10 +459,10 @@ fn build_inner(
     let _ = writeln!(dump, "}}");
     // Die Vorwaertsdeklaration muss vor `main` stehen.
     let at = t.code.find("int main(void)").unwrap_or(0);
-    t.code.insert_str(at, "static void dump(struct takt_arena *a, long long t);\n\n");
+    t.code.insert_str(at, &format!("static void dump(struct {x}_arena *a, long long t);\n\n"));
     t.code.push_str(&dump);
 
-    Harness { source: t.assemble(&head, &arena, None), layout }
+    Harness { source: t.assemble(&head, x, &arena, None), layout }
 }
 
 /// Ist der Ausgang eine Dauer (3.3)?
@@ -781,7 +781,7 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 /// fest; der Slot im Abbild wird `done`, sobald `duration` in Ticks
 /// vergangen ist — wie das Modell des Interpreters.
 fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
-    let Some((slots, out_max)) = job_tables(&mut t.code, p) else { return };
+    let Some((slots, out_max)) = job_tables(&mut t.code, p, x) else { return };
     let _ = writeln!(
         t.types,
         "typedef struct {{ int active; long long due; int out_len; unsigned char out[{out_max}]; }} takt_job;"
@@ -790,21 +790,21 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let s = &mut t.code;
     let _ = writeln!(
         s,
-        "void {x}_job_begin(struct takt_arena *a, int m, int slot, int native, const unsigned char *args, int len) {{"
+        "void {x}_job_begin(struct {x}_arena *a, int m, int slot, int native, const unsigned char *args, int len) {{"
     );
     let _ = writeln!(s, "    int i = takt_job_base[m] + slot; takt_job *j = &a->jobs[i];");
     job_call(s, p, "args", "len", "j->out", "j->out_len", "    ");
     let _ = writeln!(s, "    j->active = 1; j->due = a->tick + takt_job_ticks[i];");
     let _ = writeln!(s, "    takt_job_image(a, i, 0, 0, 2); /* Err(PENDING) */");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void {x}_job_cancel(struct takt_arena *a, int m, int slot) {{");
+    let _ = writeln!(s, "void {x}_job_cancel(struct {x}_arena *a, int m, int slot) {{");
     let _ = writeln!(s, "    int i = takt_job_base[m] + slot;");
     let _ = writeln!(
         s,
         "    if (a->jobs[i].active) {{ a->jobs[i].active = 0; takt_job_image(a, i, 1, 0, 0); /* Err(CANCELLED) */ }}"
     );
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static void takt_jobs_poll(struct takt_arena *a) {{");
+    let _ = writeln!(s, "static void takt_jobs_poll(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    int i, b;");
     let _ = writeln!(s, "    for (i = 0; i < {slots}; i++) {{");
     let _ = writeln!(s, "        if (!a->jobs[i].active || a->jobs[i].due > a->tick) continue;");
@@ -822,12 +822,12 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
-        "static void takt_jobs_init(struct takt_arena *a) {{ int i; for (i = 0; i < {slots}; i++) takt_job_image(a, i, 0, 0, 2); }}"
+        "static void takt_jobs_init(struct {x}_arena *a) {{ int i; for (i = 0; i < {slots}; i++) takt_job_image(a, i, 0, 0, 2); }}"
     );
     // 9.9, Konjunkt 5: Solange ein Job laeuft, schlaeft das System nicht.
     let _ = writeln!(
         s,
-        "static _Bool takt_jobs_active(struct takt_arena *a) {{ int i; for (i = 0; i < {slots}; i++) if (a->jobs[i].active) return 1; return 0; }}"
+        "static _Bool takt_jobs_active(struct {x}_arena *a) {{ int i; for (i = 0; i < {slots}; i++) if (a->jobs[i].active) return 1; return 0; }}"
     );
     let _ = writeln!(s);
 }

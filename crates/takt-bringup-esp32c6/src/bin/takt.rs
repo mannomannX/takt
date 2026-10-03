@@ -167,6 +167,17 @@ fn probe() {
 /// Wie der vorige Lauf endete (12.7), beim Start aus dem Plattformblock gelesen.
 static PREVIOUS_RUN: AtomicU32 = AtomicU32::new(0);
 
+/// Die Arena des Programms (12.11), so gross, wie der Rahmen sie fuer dieses
+/// Ziel verlangt (`build.rs`).
+mod arena {
+    include!(concat!(env!("OUT_DIR"), "/takt_arena.rs"));
+}
+
+/// Die Arena, statisch. Unter ihrem Namen liest der Host ueber JTAG den Tick,
+/// wenn die Konsole schweigt (`__takt_tick_at`).
+#[unsafe(export_name = "app_arena")]
+static mut ARENA: arena::Arena = arena::Arena::new();
+
 /// Der Pruefstand des Programms (12.6): je Adresse das Geraet, das die
 /// Verdrahtung nennt, sonst ein Stummel (`build.rs`).
 mod drivers {
@@ -399,9 +410,10 @@ fn main() -> ! {
         persist = Some(Persist::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), &mut current, &mut stored));
     }
     let mut rig = drivers::Rig::default();
-    // SAFETY: Der Kleber in `drivers` ist fuer `Rig` erzeugt, und `rig` lebt
-    // bis zum Ende von `main`, das nicht zurueckkehrt.
-    let mut program = unsafe { Generated::new(core::ptr::from_mut(&mut rig).cast()) };
+    // SAFETY: `ARENA` gehoert nur diesem Programm; der Kleber in `drivers`
+    // ist fuer `Rig` erzeugt, und `rig` lebt bis zum Ende von `main`, das
+    // nicht zurueckkehrt.
+    let mut program = unsafe { Generated::new((&raw mut ARENA).cast(), core::ptr::from_mut(&mut rig).cast()) };
     let loaded = persist.as_mut().map(|p| p.load(&mut program));
     program.ensure_init();
     if let Some(u) = uart() {
@@ -417,7 +429,7 @@ fn main() -> ! {
 
     // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
     // der Tick holt den Kern zurueck.
-    let mut jobs = JobContext::start();
+    let mut jobs = JobContext::start(program.jobs());
     JOB_STACK.store(jobs.as_ref().map_or(0, JobContext::bottom), Ordering::Relaxed);
     if LOGICAL {
         // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet

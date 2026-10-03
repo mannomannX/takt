@@ -14,6 +14,9 @@ exclude = [
     "crates/takt-native-abi",
     # Der MCU-Rahmen auf dem Wirt, fuer `takt driver-test --crate` (13.8).
     "crates/takt-bringup-host",
+    # Takt als Baustein in Rust (12.11): Die Testhilfe stellt die Leitung
+    # des Rahmens als C-Funktionen.
+    "crates/takt-embed",
 ]
 
 members = [
@@ -30,7 +33,6 @@ members = [
     "crates/takt-rt-baremetal",
     "crates/takt-rt-rtos",
     "crates/takt-board-support",
-    "crates/takt-embed",
     "crates/takt-driver-probe",
     "crates/takt-llvm",
     "crates/takt-frame",

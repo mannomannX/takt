@@ -35,46 +35,70 @@ use takt_rt_core::{NextRun, Outputs, Program, Tolerance};
 // TODO(M11 Schritt 10): Das erzeugte Rust-Modul der Lieferform ersetzt diese
 // Liste und das feste Praefix.
 unsafe extern "C" {
-    fn app_init(user: *mut c_void);
-    fn app_init_with(user: *mut c_void, persist: *const c_void, len: i32) -> i32;
-    fn app_tick(k: i64);
-    fn app_overrun();
-    fn app_hardware();
+    fn app_init(arena: *mut c_void, user: *mut c_void);
+    fn app_init_with(arena: *mut c_void, user: *mut c_void, persist: *const c_void, len: i32) -> i32;
+    fn app_tick(arena: *mut c_void, k: i64);
+    fn app_overrun(arena: *mut c_void);
+    fn app_hardware(arena: *mut c_void);
     fn app_tolerance(ns: *mut i64, runs: *mut u32);
-    fn app_dump(all: i32);
-    fn app_pc();
-    fn app_output(index: i32) -> i64;
-    fn app_commit();
-    fn app_idle() -> u8;
-    fn app_deadline() -> i64;
-    fn app_advance(n: i64);
-    fn app_persist_snapshot(out: *mut c_void, cap: i32) -> i32;
-    fn app_persist_restore(bytes: *const c_void, len: i32) -> i32;
-    fn app_next_run(delay: *mut i64) -> i32;
-    fn app_end();
-    fn app_job_dispatch() -> i32;
-    fn app_job_work();
+    fn app_dump(arena: *mut c_void, all: i32);
+    fn app_pc(arena: *mut c_void);
+    fn app_output(arena: *mut c_void, index: i32) -> i64;
+    fn app_commit(arena: *mut c_void);
+    fn app_idle(arena: *mut c_void) -> u8;
+    fn app_deadline(arena: *mut c_void) -> i64;
+    fn app_advance(arena: *mut c_void, n: i64);
+    fn app_persist_snapshot(arena: *mut c_void, out: *mut c_void, cap: i32) -> i32;
+    fn app_persist_restore(arena: *mut c_void, bytes: *const c_void, len: i32) -> i32;
+    fn app_next_run(arena: *mut c_void, delay: *mut i64) -> i32;
+    fn app_end(arena: *mut c_void);
+    fn app_job_dispatch(arena: *mut c_void) -> i32;
+    fn app_job_work(arena: *mut c_void);
     fn app_job_stack(size: *mut u32) -> *mut u8;
 }
 
 /// Die Jobs des Rahmens (4.5) fuer den Job-Kontext eines Boards: Die
 /// Hauptschleife gibt Auftraege, der Kontext rechnet sie.
 pub mod jobs {
+    use core::ffi::c_void;
     use core::sync::atomic::{AtomicBool, Ordering};
 
-    /// Gibt dem ruhenden Job-Kontext den aeltesten wartenden Job; wahr,
-    /// wenn er etwas zu rechnen hat. Nur aus der Hauptschleife.
-    pub fn dispatch() -> bool {
-        // SAFETY: Slots und Auftrag liegen statisch im Rahmen; die
-        // Hauptschleife schreibt den Auftrag nur, solange der Kontext ruht.
-        unsafe { super::app_job_dispatch() != 0 }
+    /// Die Jobs eines Programms: der Griff auf seine Arena, in der Slots und
+    /// Auftrag liegen. Kopierbar, damit der Job-Kontext ihn mitnimmt.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Jobs {
+        arena: *mut c_void,
     }
 
-    /// Rechnet den Auftrag. Nur im Job-Kontext.
-    pub fn work() {
-        // SAFETY: Den Auftrag fasst die Hauptschleife nicht an, bis der
-        // Kontext ihn als fertig meldet.
-        unsafe { super::app_job_work() }
+    // SAFETY: Hauptschleife und Job-Kontext teilen die Arena nach dem Protokoll
+    // des Rahmens: Den Auftrag schreibt die Hauptschleife nur, solange der
+    // Kontext ruht, und liest ihn erst, wenn er fertig gemeldet ist.
+    unsafe impl Send for Jobs {}
+
+    impl Jobs {
+        /// Die Jobs des Programms auf `arena`, fuer einen Job-Kontext, der vor
+        /// dem Programm entsteht.
+        ///
+        /// # Safety
+        ///
+        /// Wie [`super::Generated::new`]: `arena` ist die Arena des Programms
+        /// und lebt so lange wie es.
+        pub unsafe fn new(arena: *mut c_void) -> Jobs {
+            Jobs { arena }
+        }
+
+        /// Gibt dem ruhenden Job-Kontext den aeltesten wartenden Job; wahr,
+        /// wenn er etwas zu rechnen hat. Nur aus der Hauptschleife.
+        pub fn dispatch(self) -> bool {
+            // SAFETY: siehe `Send`; die Arena lebt so lange wie das Programm.
+            unsafe { super::app_job_dispatch(self.arena) != 0 }
+        }
+
+        /// Rechnet den Auftrag. Nur im Job-Kontext.
+        pub fn work(self) {
+            // SAFETY: wie oben.
+            unsafe { super::app_job_work(self.arena) }
+        }
     }
 
     /// Der Stack des Job-Kontexts: so gross wie der groesste `stack`-Vertrag
@@ -96,6 +120,8 @@ pub mod jobs {
 #[derive(Clone, Copy, Debug)]
 pub struct Generated {
     initialized: bool,
+    /// Die Arena des Programms (12.11), die das Bring-up anlegt.
+    arena: *mut c_void,
     /// Das Treiberobjekt, das der Rahmen an jeden Treiber reicht.
     drivers: *mut c_void,
 }
@@ -105,10 +131,13 @@ impl Generated {
     ///
     /// # Safety
     ///
+    /// `arena` zeigt auf die Arena des Programms, so gross und ausgerichtet,
+    /// wie der Rahmen sie verlangt, und wird nach `init` nicht bewegt;
     /// `drivers` zeigt auf das Treiberobjekt, fuer das der Kleber des
-    /// Programms erzeugt ist, und lebt so lange wie das Programm.
-    pub unsafe fn new(drivers: *mut c_void) -> Generated {
-        Generated { initialized: false, drivers }
+    /// Programms erzeugt ist. Beide leben so lange wie das Programm, und
+    /// niemand sonst greift auf die Arena zu.
+    pub unsafe fn new(arena: *mut c_void, drivers: *mut c_void) -> Generated {
+        Generated { initialized: false, arena, drivers }
     }
 
     /// Initialisiert das Programm ohne Journal (Tick 0, 9.4).
@@ -116,9 +145,9 @@ impl Generated {
     /// # Safety
     ///
     /// Wie [`Generated::new`].
-    pub unsafe fn init(drivers: *mut c_void) -> Generated {
+    pub unsafe fn init(arena: *mut c_void, drivers: *mut c_void) -> Generated {
         // SAFETY: siehe oben.
-        let mut p = unsafe { Generated::new(drivers) };
+        let mut p = unsafe { Generated::new(arena, drivers) };
         p.ensure_init();
         p
     }
@@ -126,16 +155,22 @@ impl Generated {
     /// Tick 0 ohne geladene Werte, wenn das Journal keine hatte.
     pub fn ensure_init(&mut self) {
         if !self.initialized {
-            // SAFETY: einmal vor dem ersten Tick; der Rahmen haelt seinen Zustand statisch.
-            unsafe { app_init(self.drivers) };
+            // SAFETY: einmal vor dem ersten Tick, auf der Arena aus `new`.
+            unsafe { app_init(self.arena, self.drivers) };
             self.initialized = true;
         }
     }
 
     /// Der Wert eines Outputs, als Bitmuster.
     pub fn output(&self, index: i32) -> i64 {
-        // SAFETY: liest einen Latch des Rahmens; ein fremder Index liefert 0.
-        unsafe { app_output(index) }
+        // SAFETY: liest einen Latch der Arena; ein fremder Index liefert 0.
+        unsafe { app_output(self.arena, index) }
+    }
+
+    /// Die Jobs des Programms, fuer den Job-Kontext des Boards (4.5).
+    pub fn jobs(&self) -> jobs::Jobs {
+        // SAFETY: die Arena aus `new`, mit derselben Lebensdauer.
+        unsafe { jobs::Jobs::new(self.arena) }
     }
 }
 
@@ -143,13 +178,13 @@ impl Program for Generated {
     fn raise_overrun(&mut self) {
         // SAFETY: setzt ein Flag des Rahmens; der naechste Tick stellt den
         // Fault zu (7.3).
-        unsafe { app_overrun() };
+        unsafe { app_overrun(self.arena) };
     }
 
     fn raise_hardware(&mut self) {
         // SAFETY: setzt ein Flag des Rahmens; der naechste Tick stellt den
         // Fault zu (12.3).
-        unsafe { app_hardware() };
+        unsafe { app_hardware(self.arena) };
     }
 
     fn tick_tolerance(&self) -> Option<Tolerance> {
@@ -160,25 +195,25 @@ impl Program for Generated {
     }
 
     fn sleep_allowed(&self) -> bool {
-        // SAFETY: liest nur den statischen Zustand des Rahmens.
-        unsafe { app_idle() != 0 }
+        // SAFETY: liest nur die Arena.
+        unsafe { app_idle(self.arena) != 0 }
     }
 
     fn next_deadline(&self) -> Option<i64> {
-        // SAFETY: liest nur den statischen Zustand des Rahmens.
-        let ns = unsafe { app_deadline() };
+        // SAFETY: liest nur die Arena.
+        let ns = unsafe { app_deadline(self.arena) };
         (ns >= 0).then_some(ns)
     }
 
     fn advance(&mut self, ticks: u64) {
         // SAFETY: der Rahmen rueckt seine Uhr vor; die Schleife ruft es nur im Schlaf.
-        unsafe { app_advance(ticks as i64) };
+        unsafe { app_advance(self.arena, ticks as i64) };
     }
 
     fn persist_snapshot(&mut self, out: &mut [u8]) -> usize {
         let cap = i32::try_from(out.len()).unwrap_or(i32::MAX);
         // SAFETY: der Rahmen schreibt hoechstens `cap` Byte an `out`.
-        let n = unsafe { app_persist_snapshot(out.as_mut_ptr().cast(), cap) };
+        let n = unsafe { app_persist_snapshot(self.arena, out.as_mut_ptr().cast(), cap) };
         usize::try_from(n).unwrap_or(0)
     }
 
@@ -188,10 +223,10 @@ impl Program for Generated {
         // initialisiert er sich damit, danach ersetzt er nur die Werte.
         let n = unsafe {
             if self.initialized {
-                app_persist_restore(bytes.as_ptr().cast(), len)
+                app_persist_restore(self.arena, bytes.as_ptr().cast(), len)
             } else {
                 self.initialized = true;
-                app_init_with(self.drivers, bytes.as_ptr().cast(), len)
+                app_init_with(self.arena, self.drivers, bytes.as_ptr().cast(), len)
             }
         };
         usize::try_from(n).unwrap_or(0)
@@ -199,8 +234,8 @@ impl Program for Generated {
 
     fn next_run(&self) -> Option<NextRun> {
         let mut delay = 0i64;
-        // SAFETY: liest nur den statischen Zustand des Rahmens und schreibt `delay`.
-        match unsafe { app_next_run(&mut delay) } {
+        // SAFETY: liest nur die Arena und schreibt `delay`.
+        match unsafe { app_next_run(self.arena, &mut delay) } {
             1 => Some(NextRun::Now),
             2 => Some(NextRun::After(delay)),
             3 => Some(NextRun::OnWake),
@@ -213,12 +248,12 @@ impl Program for Generated {
         // Die Schleife zaehlt ihre Schritte ab 0; Rahmen und Interpreter
         // nennen den ersten Tick nach dem Start `t=1` (Tick 0 ist der Start).
         // SAFETY: ein Schritt des Rahmens, einmal je Tick aus der Schleife.
-        unsafe { app_tick(k as i64 + 1) };
+        unsafe { app_tick(self.arena, k as i64 + 1) };
     }
 
     fn commit(&mut self) {
         // SAFETY: gibt die Latches des Rahmens an die Treiber; der Kern ruft es einmal je Tick.
-        unsafe { app_commit() };
+        unsafe { app_commit(self.arena) };
     }
 
     fn trace(&mut self, outputs: Outputs) {
@@ -227,19 +262,19 @@ impl Program for Generated {
             Outputs::Changed => 0,
             Outputs::All => 1,
         };
-        // SAFETY: liest den statischen Zustand des Rahmens und schreibt den Trace.
+        // SAFETY: liest die Arena und schreibt den Trace.
         unsafe {
-            app_dump(all);
-            app_pc();
+            app_dump(self.arena, all);
+            app_pc(self.arena);
         }
     }
 
     fn end(&mut self) {
         // SAFETY: schreibt die Zeile `end` und die `safe`-Werte in den Latch des Rahmens.
-        unsafe { app_end() };
+        unsafe { app_end(self.arena) };
     }
 
     fn dispatch_job(&mut self) -> bool {
-        jobs::dispatch()
+        self.jobs().dispatch()
     }
 }

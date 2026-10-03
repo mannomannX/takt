@@ -52,6 +52,7 @@ Workspace ohne Zeile, keine Zeile ohne Crate.
 | takt-bringup-esp32c6 | der erzeugte Kleber der Treiber (`app_in_*`, `app_out_*`, …) zum Prüfstand, Geräte über statische Peripherie, `takt_board_trace*` hinter der C-ABI |
 | takt-bringup-stm32f401 | dasselbe für die Black Pill; im Profil `shared` dazu RTIC 2 und `rtic-sync` — das RTOS gehört dort zur TCB (12.8) |
 | takt-bringup-host | der MCU-Rahmen auf dem Wirt für `takt driver-test --crate` (13.8): `takt_board_trace*` hinter der C-ABI, die Leitung als statische Konsole; den Kleber zum Prüfstand erzeugt `takt-conformance::board::host` |
+| takt-embed | Takt als Baustein in Rust (12.11): in der Testhilfe `takt_board_trace*` hinter der C-ABI, die Leitung je Faden; die Geräte-Traits und der Bauhelfer stehen unter `deny(unsafe_code)` |
 
 **Rechnen außerhalb der TCB.** Was in einem Board-Crate keine
 Registerarbeit ist — Perioden in Timer-Schritte, Zyklen in Nanosekunden,

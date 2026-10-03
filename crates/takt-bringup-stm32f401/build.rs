@@ -100,7 +100,7 @@ fn build_takt_program(out: &Path) {
             stubs: false,
         },
     );
-    if let Err(e) = fs::write(&rahmen, frame.source) {
+    if let Err(e) = fs::write(&rahmen, &frame.source) {
         panic!("Rahmen nicht schreibbar: {e}");
     }
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -108,6 +108,7 @@ fn build_takt_program(out: &Path) {
         bringup::wiring(&[&here.join(bringup::WIRING), &here.join("../takt-driver-probe").join(bringup::WIRING)]);
     bringup::drivers(&p, &wiring, &out.join("takt_drivers.rs"));
     bringup::drivers(&p, &[], &out.join("takt_drivers_bench.rs"));
+    bringup::arena(&frame, "thumbv7em-none-eabihf", &[], &out.join("takt_arena.rs"));
 
     let ir = out.join("takt_programm.ll");
     bringup::takt_build(&program, "thumbv7em", &["--emit", "ir"], &ir);

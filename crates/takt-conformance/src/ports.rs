@@ -163,13 +163,13 @@ pub(crate) fn emit(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "    return -1;");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static void takt_port_current(struct takt_arena *a, int i, unsigned char *whole) {{");
+    let _ = writeln!(s, "static void takt_port_current(struct {x}_arena *a, int i, unsigned char *whole) {{");
     let _ = writeln!(s, "    switch (i) {{");
     let _ = write!(s, "{current}");
     let _ = writeln!(s, "    default: memset(whole, 0, (size_t)g_port_size[i]); return;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "void {x}_mmio_read(struct takt_arena *a, long long addr, void *dst, int n) {{");
+    let _ = writeln!(s, "void {x}_mmio_read(struct {x}_arena *a, long long addr, void *dst, int n) {{");
     let _ = writeln!(s, "    unsigned char whole[{most}];");
     let _ = writeln!(s, "    int off = 0, i = takt_port_of(addr, n, &off);");
     let _ = writeln!(s, "    if (i < 0) {{ memset(dst, 0, (size_t)n); return; }}");
@@ -178,7 +178,7 @@ pub(crate) fn emit(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "}}");
     // Ein Feld unter dem Port hat keinen eigenen Speicher: Der ganze Record
     // wird gelesen, veraendert und als ein Element geschrieben.
-    let _ = writeln!(s, "void {x}_mmio_write(struct takt_arena *a, long long addr, const void *src, int n) {{");
+    let _ = writeln!(s, "void {x}_mmio_write(struct {x}_arena *a, long long addr, const void *src, int n) {{");
     let _ = writeln!(s, "    unsigned char whole[{most}], out[{widest}];");
     let _ = writeln!(s, "    int off = 0, i = takt_port_of(addr, n, &off);");
     let _ = writeln!(s, "    if (i < 0) return;");

@@ -1,10 +1,41 @@
 [package]
 name = "takt-embed"
 version = "0.1.0"
-description = "Takt als Baustein in Rust: die Typen und Geraete-Traits der Treiber (12.6, 12.11)"
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
+description = "Takt als Baustein in Rust: Geraete-Traits, Bauhelfer und Testhilfe der Lieferform (12.6, 12.11)"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.86"
 
-[lints]
-workspace = true
+# Eigener Workspace wie die Bring-ups: Die Testhilfe stellt die Leitung des
+# Rahmens als C-Funktionen (`takt_board_trace*`), und das braucht `unsafe`;
+# `forbid` (13.4) laesst sich nicht lokal aufheben. Alles andere steht
+# unter `deny(unsafe_code)`.
+[workspace]
+
+[features]
+# Der Bauhelfer fuer `build.rs`: ruft `takt build --emit embed` (12.11).
+build = []
+# Die Testhilfe: das Programm in logischer Zeit, sein Trace gegen den
+# Interpreter (13.1).
+testing = ["dep:takt-sema", "dep:takt-interp", "dep:takt-diag", "dep:takt-conformance"]
+# Die Jobs aus `takt-crypto` (4.5), fuer Programme, die sie rufen.
+ecdsa = ["takt-native-abi/ecdsa"]
+rsa = ["takt-native-abi/rsa"]
+aes-gcm = ["takt-native-abi/aes-gcm"]
+
+[dependencies]
+# Der Kern ohne Warten (12.11): Die erzeugte Huelle erfuellt sein `Program`.
+takt-rt-core = { path = "../takt-rt-core" }
+# Was der erzeugte Code ruft: Natives, korrekt gerundete Mathematik, Rand (4.5, 12.6).
+takt-native-abi = { path = "../takt-native-abi" }
+takt-sema = { path = "../takt-sema", optional = true }
+takt-interp = { path = "../takt-interp", optional = true }
+takt-diag = { path = "../takt-diag", optional = true }
+takt-conformance = { path = "../takt-conformance", default-features = false, optional = true }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"

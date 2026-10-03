@@ -33,6 +33,14 @@ mod reference {
     include!(concat!(env!("OUT_DIR"), "/bench_reference.rs"));
 }
 
+/// Die Arena des Programms (12.11), so gross, wie der Rahmen sie fuer dieses
+/// Ziel verlangt (`build.rs`).
+mod arena {
+    include!(concat!(env!("OUT_DIR"), "/takt_arena.rs"));
+}
+
+static mut ARENA: arena::Arena = arena::Arena::new();
+
 /// Die Treiber des Messkerns: Stummel, ausdruecklich (`build.rs`).
 mod drivers {
     include!(concat!(env!("OUT_DIR"), "/takt_drivers_bench.rs"));
@@ -108,9 +116,10 @@ fn main() -> ! {
 
     let runs = RUNS.and_then(|r| r.parse().ok()).unwrap_or(1000);
     let mut rig = drivers::Rig::default();
-    // SAFETY: Der Kleber in `drivers` ist fuer `Rig` erzeugt, und `rig` lebt
-    // bis zum Ende von `main`, das nicht zurueckkehrt.
-    let mut program = unsafe { Generated::init(core::ptr::from_mut(&mut rig).cast()) };
+    // SAFETY: `ARENA` gehoert nur diesem Programm; der Kleber in `drivers`
+    // ist fuer `Rig` erzeugt, und `rig` lebt bis zum Ende von `main`, das
+    // nicht zurueckkehrt.
+    let mut program = unsafe { Generated::init((&raw mut ARENA).cast(), core::ptr::from_mut(&mut rig).cast()) };
     let mut k = 0u64;
     for _ in 0..WARMUP {
         program.tick(k, tick_end(k, takt::TICK_NS));
