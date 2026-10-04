@@ -337,7 +337,7 @@ impl Lowerer<'_> {
         }
         for h in &decl.body.handlers {
             if let Some(handler) = self.handler(h) {
-                self.mctx.as_mut().expect("Maschine").machine.states[id.index()].handlers.push(handler);
+                self.mctx.as_mut().expect("Maschine").machine.handlers.push(handler);
             }
         }
         // Zustaende

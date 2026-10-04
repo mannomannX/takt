@@ -15,7 +15,7 @@ use takt_mir::program::Program;
 mod common;
 
 /// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 91] = [
+const KORPUS: [&str; 92] = [
     "01_minimal.takt",
     "20_native.takt",
     "19_faults.takt",
@@ -104,6 +104,7 @@ const KORPUS: [&str; 91] = [
     "103_math_domains.takt",
     "104_linear_has.takt",
     "105_subnormals_f32.takt",
+    "106_machine_handler.takt",
     "11_foc_drive.takt",
     "sim/12_7/program.takt",
     "sim/14_7/program.takt",

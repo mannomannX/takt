@@ -1,0 +1,27 @@
+(system
+  (language 1)
+  (tick 1ms))
+(stream q :u8 capacity=16)
+(output n :int in 0..999 @sim("o/n"))
+(output phase :int in 0..9 @sim("o/phase"))
+(machine producer
+  (var k :int in 0..255 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (% (+ k 1) 256))
+      (send q (as k u8)))))
+(machine counter
+  (var seen :int in 0..999 0)
+  (initial A)
+  (on q as e
+    (= seen (% (+ seen 1) 1000))
+    (= n seen))
+  (state A
+    (enter
+      (= phase 1))
+    (after 3ms -> B))
+  (state B
+    (enter
+      (= phase 2))
+    (after 1s -> B)))

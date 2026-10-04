@@ -231,7 +231,7 @@ Feature(Scenario),ja,ja,ja
 Feature(Persist),ja,ja,ja
 Feature(Signal),ja,ja,ja
 Feature(FaultedTransition),ja,nein: Uebergaenge aus FAULTED sind nicht kodiert,ja
-Feature(MachineHandler),ja,nein: Handler und Stroeme sind nicht kodiert,nein
+Feature(MachineHandler),ja,nein: Handler und Stroeme sind nicht kodiert,ja
 Feature(ChildStates),ja,ja,ja
 Feature(Idle),ja,ja,ja
 Feature(Resume),ja,ja,ja

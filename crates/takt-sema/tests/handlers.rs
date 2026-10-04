@@ -720,3 +720,49 @@ machine watch:
     assert!(trace.contains("t=1 out hi true\n"), "`0x6869` ist der Text `hi`: {trace}");
     assert!(trace.contains("t=1 out got 2\n"), "`0x0102` sind zwei Bytes: {trace}");
 }
+
+/// Ein Leser an zweiter Stelle mit einem Handler auf Maschinenebene; `states`
+/// sind die Zustaende hinter `initial`.
+fn machine_level_reader(states: &str) -> String {
+    format!(
+        "\
+stream<u8> q with capacity = 16
+
+output n : int in 0..999 @ hw(\"o/n\") with safe = 0
+
+machine writer:
+    initial RUN
+    state RUN:
+        loop:
+            send q, 1
+
+machine reader:
+    var seen : int in 0..999 = 0
+    initial A
+    on q as e:
+        seen = seen + 1
+        n = seen
+{states}"
+    )
+}
+
+/// **Ein Handler auf Maschinenebene gilt in jedem Zustand** (8.7, FB-411).
+/// Die Sema legte ihn in den Zustand mit dem Index der Maschine: Der Leser
+/// an zweiter Stelle hoerte nur im zweiten Zustand.
+#[test]
+fn a_machine_level_handler_listens_in_every_state() {
+    let trace = simulate(
+        &machine_level_reader("    state A:\n        after 2 ms: -> B\n    state B:\n        after 1 s: -> B\n"),
+        5,
+    );
+    assert!(trace.contains("t=1 out n 1\n"), "im Zustand A: {trace}");
+    assert!(trace.contains("t=5 out n 5\n"), "und im Zustand B: {trace}");
+}
+
+/// Hat die Maschine weniger Zustaende, als ihre Nummer zaehlt, stuerzte die
+/// Sema mit einem Indexfehler ab (FB-411).
+#[test]
+fn a_machine_level_handler_in_a_machine_with_one_state_compiles() {
+    let trace = simulate(&machine_level_reader("    state A:\n        after 1 s: -> A\n"), 2);
+    assert!(trace.contains("t=2 out n 2\n"), "{trace}");
+}
