@@ -18,7 +18,8 @@
 //! uebrigen bleiben bei festen Plaetzen.
 //!
 //! **`decode` faultet nie** (3.7). Ein zu kurzer Puffer, ein verletztes
-//! Konstantenfeld oder ein Wert ausserhalb der Range machen es zu `none`
+//! Konstantenfeld, eine unbekannte Diskriminante oder ein Wert ausserhalb
+//! der Range machen es zu `none`, wie im Interpreter (FB-425)
 //! — das Programm entscheidet mit `match`, was das bedeutet. Ein Fault
 //! waere hier falsch: Ein fremder Rahmen auf dem Bus ist ein
 //! Betriebszustand, kein Programmfehler.
@@ -93,8 +94,17 @@ struct Field {
     ty: LlvmType,
 }
 
-/// Liest ein Feld aus dem Puffer (3.7).
-fn read_field(buf: Reg, at: u32, ty: TypeId, endian: Endian, p: &Program, m: &mut Module) -> Result<Field, NotYet> {
+/// Liest ein Feld aus dem Puffer (3.7). Was der Wert erfuellen muss, damit
+/// `decode` ihn annimmt, kommt nach `valid`.
+fn read_field(
+    buf: Reg,
+    at: u32,
+    ty: TypeId,
+    endian: Endian,
+    p: &Program,
+    m: &mut Module,
+    valid: &mut Vec<String>,
+) -> Result<Field, NotYet> {
     let width = field_size(ty, p).ok_or(NotYet { what: "Feldgroesse" })?;
     let target = ty::lower(ty, p).ok_or(NotYet { what: "Feldtyp" })?;
     match p.types.list.get(ty.index()) {
@@ -120,11 +130,17 @@ fn read_field(buf: Reg, at: u32, ty: TypeId, endian: Endian, p: &Program, m: &mu
             ));
             Ok(Field { value: as_float.to_string(), ty: target })
         }
-        // Ein Enum im Draht ist seine Diskriminante; ob sie eine
-        // deklarierte trifft, prueft `validate_enum`.
-        Some(Type::Enum(_)) => {
+        // Ein Enum im Draht ist seine Diskriminante; sie muss eine
+        // deklarierte treffen.
+        Some(Type::Enum(e)) => {
             let raw = load_int(buf, at, width, endian, m);
             let wide = widen(raw.to_string(), width * 8, 32, m);
+            let mut hit = "false".to_string();
+            for v in &p.enums.get(e.index()).ok_or(NotYet { what: "Enum" })?.variants {
+                let eq = m.inst(&format!("icmp eq i32 {wide}, {}", v.discriminant));
+                hit = m.inst(&format!("or i1 {hit}, {eq}")).to_string();
+            }
+            valid.push(hit);
             Ok(Field { value: wide, ty: LlvmType::Int(32) })
         }
         // Ein Array fester Laenge liegt elementweise hintereinander (3.7).
@@ -132,7 +148,7 @@ fn read_field(buf: Reg, at: u32, ty: TypeId, endian: Endian, p: &Program, m: &mu
             let w = field_size(*elem, p).ok_or(NotYet { what: "Feldgroesse" })?;
             let mut cur = "undef".to_string();
             for i in 0..*len {
-                let item = read_field(buf, at + i * w, *elem, endian, p, m)?;
+                let item = read_field(buf, at + i * w, *elem, endian, p, m, valid)?;
                 cur = m.inst(&format!("insertvalue {target} {cur}, {} {}, {i}", item.ty, item.value)).to_string();
             }
             Ok(Field { value: cur, ty: target })
@@ -249,6 +265,7 @@ pub fn decode(
     let mut checks: Vec<(String, String)> = Vec::new();
     let mut shift = "0".to_string();
     let mut read: Vec<Field> = Vec::with_capacity(def.fields.len());
+    let mut valid: Vec<String> = Vec::new();
     for (i, f) in def.fields.iter().enumerate() {
         let at = f.offset.ok_or(NotYet { what: "Feld ohne Versatz" })?;
         let field = match f.len_field {
@@ -259,10 +276,10 @@ pub fn decode(
                 shift = next;
                 field
             }
-            None if shift == "0" => read_field(buf, at, f.ty, layout.endian, p, m)?,
+            None if shift == "0" => read_field(buf, at, f.ty, layout.endian, p, m, &mut valid)?,
             None => {
                 let ptr = field_ptr(buf, at, &shift, m);
-                read_field(ptr, 0, f.ty, layout.endian, p, m)?
+                read_field(ptr, 0, f.ty, layout.endian, p, m, &mut valid)?
             }
         };
         // Ein Konstantenfeld muss den deklarierten Wert tragen (3.7).
@@ -270,6 +287,13 @@ pub fn decode(
             let expected = const_operand(want).ok_or(NotYet { what: "Konstantenfeld dieses Typs" })?;
             let ok = m.inst(&format!("icmp eq {} {}, {expected}", field.ty, field.value));
             checks.push((ok.to_string(), m.block().to_string()));
+        }
+        // Eine Range-Verletzung macht `decode` zu `none` (3.7).
+        if let Some(ok) = in_range(&field, f.ty, p, m)? {
+            valid.push(ok);
+        }
+        for ok in valid.drain(..) {
+            checks.push((ok, m.block().to_string()));
         }
         value = m.inst(&format!("insertvalue {inner} {value}, {} {}, {i}", field.ty, field.value)).to_string();
         read.push(field);
@@ -394,6 +418,32 @@ pub fn encode(
     m.void_inst(&format!("store i32 {length}, ptr {len_ptr}"));
     let loaded = m.inst(&format!("load {want}, ptr {buf}"));
     Ok(crate::expr::Lowered { value: loaded.to_string(), ty: want.clone() })
+}
+
+/// Liegt ein gelesenes Feld in der Range seines Typs (3.7)? `None`, wenn
+/// der Typ keine traegt.
+fn in_range(field: &Field, ty: TypeId, p: &Program, m: &mut Module) -> Result<Option<String>, NotYet> {
+    let (lo, hi, signed) = match p.types.list.get(ty.index()) {
+        Some(Type::Int { range: Some(r), width, .. }) => match (r.lo, r.hi) {
+            (Const::Int(lo), Const::Int(hi)) => (lo.to_string(), hi.to_string(), Some(width.signed())),
+            _ => return Err(NotYet { what: "Range eines Ganzzahlfelds" }),
+        },
+        Some(Type::Float { range: Some(r), .. }) => match (r.lo, r.hi) {
+            (Const::Float(lo), Const::Float(hi)) => {
+                (crate::emit::float_literal(lo, &field.ty), crate::emit::float_literal(hi, &field.ty), None)
+            }
+            _ => return Err(NotYet { what: "Range eines Gleitkommafelds" }),
+        },
+        _ => return Ok(None),
+    };
+    let (ge, le) = match signed {
+        Some(true) => ("icmp sge", "icmp sle"),
+        Some(false) => ("icmp uge", "icmp ule"),
+        None => ("fcmp oge", "fcmp ole"),
+    };
+    let above = m.inst(&format!("{ge} {} {}, {lo}", field.ty, field.value));
+    let below = m.inst(&format!("{le} {} {}, {hi}", field.ty, field.value));
+    Ok(Some(m.inst(&format!("and i1 {above}, {below}")).to_string()))
 }
 
 /// Was die Felder variabler Laenge eines Records fuer seinen Plan

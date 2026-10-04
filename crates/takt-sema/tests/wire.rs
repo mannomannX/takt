@@ -446,7 +446,8 @@ machine m:
 /// das Laengenfeld sagt, die Felder danach ruecken nach; `decode` liefert
 /// `none` ueber der Obergrenze und bei zu kurzem Puffer, `encode` setzt die
 /// Laenge aus dem Wert und kuerzt die Ausgabe.
-const TLV: &str = "record Tlv layout little:
+const TLV: &str = "\
+record Tlv layout little:
     kind  : u8
     n     : u8
     value : bytes<8> with len = n
@@ -504,36 +505,10 @@ machine m:
 #[test]
 fn a_length_prefixed_field_is_as_long_as_its_length_field_says() {
     let trace = simulate(TLV, 0);
-    for want in [
-        "out len_out 3
-",
-        "out tail_out 85
-",
-        "out over false
-",
-        "out short false
-",
-    ] {
-        assert!(
-            trace.contains(want),
-            "decode: `{}` fehlt:
-{trace}",
-            want.trim()
-        );
+    for want in ["out len_out 3\n", "out tail_out 85\n", "out over false\n", "out short false\n"] {
+        assert!(trace.contains(want), "decode: `{}` fehlt:\n{trace}", want.trim());
     }
-    for want in [
-        "out size_out 5
-",
-        "out n_out 2
-",
-        "out after_out 9
-",
-    ] {
-        assert!(
-            trace.contains(want),
-            "encode: `{}` fehlt:
-{trace}",
-            want.trim()
-        );
+    for want in ["out size_out 5\n", "out n_out 2\n", "out after_out 9\n"] {
+        assert!(trace.contains(want), "encode: `{}` fehlt:\n{trace}", want.trim());
     }
 }
