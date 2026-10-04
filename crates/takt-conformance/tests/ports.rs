@@ -56,15 +56,20 @@ input w : stream<Ctrl> @ sim(\"mmio/0x50000000/w\") with capacity = 16, overflow
 output seen : int in 0..9 @ hw(\"o/seen\") with safe = 0
 ";
 
+/// Ein Register ohne `w1c`: Es darf als Ganzes geschrieben werden (3.7).
 fn three_writes() -> String {
     format!(
         "{KOPF}\n\
+         record Data layout little:\n    value : u8\n\n\
+         port dat : Data @ mmio(0x50000010)\n\n\
+         input wd : stream<Data> @ sim(\"mmio/0x50000010/w\") with capacity = 16, overflow = fault, \
+         max_rate = 400 Hz\n\n\
          output last : int in 0..9 @ hw(\"o/last\") with safe = 0\n\n\
          driver machine d:\n    var n : int in 0..9 = 0\n\n    initial RUN\n\n    \
          state RUN:\n        loop:\n            if now == 0 s:\n                \
-         reg = Ctrl(flags = 1)\n                reg = Ctrl(flags = 2)\n                \
-         reg = Ctrl(flags = 3)\n\n        on w as e:\n            n = n + 1\n            \
-         seen = n\n            last = e.data.flags as int\n\n        after 1 s: -> RUN\n"
+         dat = Data(value = 1)\n                dat = Data(value = 2)\n                \
+         dat = Data(value = 3)\n\n        on wd as e:\n            n = n + 1\n            \
+         seen = n\n            last = e.data.value as int\n\n        after 1 s: -> RUN\n"
     )
 }
 
@@ -122,10 +127,11 @@ fn field_write() -> String {
 #[test]
 fn a_plain_field_under_a_port_goes_through_the_whole_record() {
     let trace = run(&field_write(), 5);
-    // Gelesen wurde 0x83, Bit 0 geloescht, Bit 1 ist `w1c` und bleibt beim
-    // Schreiben des ganzen Traegers stehen: 0x82 = 130. Ohne das Lesen
-    // stuende hier 0 — das Feld hat keinen eigenen Speicher.
-    assert!(trace.contains("out got 130"), "{trace}");
+    // Gelesen wurde 0x83, Bit 0 geloescht. Bit 1 ist `w1c` und geht als 0
+    // hinaus, sonst loeschte das Schreiben von `a` ein ungesehenes Ereignis
+    // (3.7, FB-410): 0x80 = 128. Ohne das Lesen stuende hier 0 — das Feld
+    // hat keinen eigenen Speicher.
+    assert!(trace.contains("out got 128"), "{trace}");
 }
 
 /// **Nativ wie im Interpreter** (Satz 9.4.4, FB-261): Der Rahmen bildet
@@ -137,7 +143,7 @@ fn the_generated_code_maps_ports_like_the_interpreter() {
     let cases = [
         ("ports_in_order", three_writes(), 4, "out seen 3"),
         ("ports_w1c", w1c_write(), 4, "out seen 2"),
-        ("ports_field", field_write(), 5, "out got 130"),
+        ("ports_field", field_write(), 5, "out got 128"),
     ];
     for (name, src, ticks, want) in cases {
         let native =

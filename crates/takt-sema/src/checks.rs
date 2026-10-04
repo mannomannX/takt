@@ -1821,7 +1821,7 @@ fn writes_port(s: &StmtKind) -> bool {
 }
 
 /// Liegt der Platz in einem Port?
-fn on_port(p: &Place) -> bool {
+pub(crate) fn on_port(p: &Place) -> bool {
     match p {
         Place::Port(_) => true,
         Place::Field(base, _) | Place::Index(base, _) | Place::Index2(base, ..) => on_port(base),

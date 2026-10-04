@@ -1,0 +1,26 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46: Ein Port, dessen Record einen Traeger mit `w1c` enthaelt, wird
+# nicht als Ganzes geschrieben — sonst ginge ein Bit des Traegers mit, und
+# das Lesen und Zurueckschreiben des Records loeschte ungesehene Ereignisse
+# (3.7, FB-410). Einzelne Felder zuweisen.
+
+record Ctrl layout little:
+    flags : u8 with bits:
+        a : bool at 0
+        b : bool at 1 w1c
+
+port reg : Ctrl @ mmio(0x50000000)
+
+output v : bool @ hw("o/v") with safe = false
+
+driver machine d:
+    initial RUN
+
+    state RUN:
+        loop:
+            reg = Ctrl(flags = 1)  # ~ SC-46
+            reg.flags.a = true
+            v = reg.flags.b

@@ -441,6 +441,21 @@ impl Lowerer<'_> {
         }
         let place = self.place(target)?;
         let ty = self.place_type(&place, target.span)?;
+        // Ebenso ein Port, dessen Record einen solchen Traeger enthaelt: Ein
+        // Register wird dort feldweise geschrieben (FB-410).
+        if crate::checks::on_port(&place)
+            && let Some(name) = self.clear_only_in(ty)
+        {
+            self.error_hint(
+                crate::checks::SC46,
+                span,
+                format!(
+                    "der Port traegt `{name}` mit `w1c`- oder `w0c`-Feldern und wird nicht als Ganzes geschrieben (3.7)"
+                ),
+                "einzelne Felder zuweisen; ein Schreiben des ganzen Registers loeschte ungesehene Ereignisse",
+            );
+            return None;
+        }
         if kind == BlockKind::At && !matches!(place, Place::Output(_)) {
             self.error(SC8, span, "`at`-Bloecke enthalten nur Zuweisungen an Outputs (5.5)");
             return None;
@@ -662,6 +677,11 @@ impl Lowerer<'_> {
                 self.insert_bits(base, rhs, lo, hi, cty, span)?
             } else {
                 let old = self.place_expr(&place, cty, target.span);
+                // Im Register gehen `w1c`-Bits als 0 und `w0c`-Bits als 1
+                // zurueck: Das Lesen und Zurueckschreiben loescht sonst ein
+                // Ereignis, das niemand gesehen hat (3.7, FB-410).
+                let old =
+                    if crate::checks::on_port(&place) { self.neutral_clear_bits(old, carrier, cty, span) } else { old };
                 self.insert_bits(old, rhs, lo, hi, cty, span)?
             };
             Some(Stmt::new(StmtKind::Assign { target: place, value: new }, span))
@@ -670,15 +690,41 @@ impl Lowerer<'_> {
 
     /// Die Namen der Bitfelder eines Traegerfelds (3.7), falls es welche hat.
     fn bitfield_names_at(&mut self, carrier: &ast::Expr) -> Option<Vec<String>> {
+        let bits = self.carrier_bits(carrier)?;
+        (!bits.is_empty()).then(|| bits.iter().map(|x| x.name.clone()).collect())
+    }
+
+    /// Die Bitfelder eines Traegerfelds (3.7).
+    fn carrier_bits(&mut self, carrier: &ast::Expr) -> Option<Vec<takt_mir::types::BitfieldDef>> {
         let ast::ExprKind::Member { base, name, args: None } = &carrier.kind else { return None };
         let b = self.place(base)?;
         let bty = self.place_type(&b, base.span)?;
         let Type::Record(r) = self.ty(bty).clone() else { return None };
         let def = self.program.records[r.index()].fields.iter().find(|f| f.name == name.name)?;
-        if def.bits.is_empty() {
-            return None;
-        }
-        Some(def.bits.iter().map(|x| x.name.clone()).collect())
+        Some(def.bits.clone())
+    }
+
+    /// `(alt & !w1c) | w0c`: der gelesene Traeger, wie ein
+    /// Lese-Modifiziere-Schreibe ihn zurueckschreiben darf (3.7, FB-410).
+    fn neutral_clear_bits(&mut self, old: Expr, carrier: &ast::Expr, cty: TypeId, span: Span) -> Expr {
+        let Some(bits) = self.carrier_bits(carrier) else { return old };
+        let mask = |access: Access| {
+            bits.iter().filter(|b| b.access == access).fold(0u64, |m, b| {
+                let width = u32::from(b.hi - b.lo) + 1;
+                m | if width >= 64 { !0u64 } else { ((1u64 << width) - 1) << b.lo }
+            })
+        };
+        let (w1c, w0c) = (mask(Access::W1c), mask(Access::W0c));
+        let full = match self.ty(cty) {
+            Type::Int { width, .. } if width.bits() < 64 => (1u64 << width.bits()) - 1,
+            _ => !0u64,
+        };
+        let lit = |v: u64| Expr::new(ExprKind::Int(v as i64), cty, span);
+        let bin = |op: BinaryOp, a: Expr, b: Expr| {
+            Expr::new(ExprKind::Binary { op, lhs: Box::new(a), rhs: Box::new(b) }, cty, span)
+        };
+        let kept = if w1c == 0 { old } else { bin(BinaryOp::BitAnd, old, lit(!w1c & full)) };
+        if w0c == 0 { kept } else { bin(BinaryOp::BitOr, kept, lit(w0c)) }
     }
 
     /// Positionen und Typ eines Bitfelds, wenn `carrier` das Traegerfeld
@@ -1585,6 +1631,15 @@ impl Lowerer<'_> {
 }
 
 impl Lowerer<'_> {
+    /// Der Name des ersten Traegerfelds mit `w1c`- oder `w0c`-Bitfeldern in
+    /// einem Record, auch in einem verschachtelten (3.7).
+    fn clear_only_in(&self, ty: TypeId) -> Option<String> {
+        let Type::Record(r) = self.ty(ty) else { return None };
+        self.program.records[r.index()].fields.iter().find_map(|f| {
+            if f.bits.iter().any(|b| b.access.clear_only()) { Some(f.name.clone()) } else { self.clear_only_in(f.ty) }
+        })
+    }
+
     /// Der Name eines Traegerfelds, das `w1c`- oder `w0c`-Bitfelder
     /// traegt (3.7); `None`, wenn das Ziel keins ist.
     fn clear_only_carrier(&mut self, target: &ast::Expr) -> Option<String> {
