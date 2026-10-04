@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: `raise` nennt ein deklariertes Signal (5.8) (SEM1-059).
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial A
+
+    state A:
+        loop:
+            raise done  # ~ SC-8

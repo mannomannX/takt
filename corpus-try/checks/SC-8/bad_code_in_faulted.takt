@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: `state FAULTED` traegt nur Uebergaenge, keinen Nutzercode (5.3, FB-399).
+
+output v : bool @ hw("o/v") with safe = false
+command reset
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = true
+        when reset: -> RUN
+
+    state FAULTED:  # ~ SC-8
+        loop:
+            v = false
+        when reset: -> RUN

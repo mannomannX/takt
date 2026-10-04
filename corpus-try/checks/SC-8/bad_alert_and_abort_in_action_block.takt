@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: Auch `alert` und `abort` sind in Aktionsbloecken verboten (5.5,
+# FB-399); `expect` und `wait` stehen nur in Sequenzen und scheitern
+# ausserhalb schon am Parser.
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial A
+
+    state A:
+        enter:
+            alert v, "warm"  # ~ SC-8
+        when go:
+            abort "nein"  # ~ SC-8
+            -> B
+
+    state B:
+        when go: -> A

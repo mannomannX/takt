@@ -1,0 +1,31 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-10: Eine Transition, deren Bedingung immer falsch ist, ist tot
+# (FB-399); auch ein konstanter Ausdruck zaehlt. Sie zaehlt nicht fuer die
+# Erreichbarkeit: SPARE erreicht nur sie. Eine Bedingung ueber einen
+# Parameter ist nicht tot: Ein Profil kann ihn setzen.
+
+const LIMIT = 3
+
+output v : bool @ hw("o/v") with safe = false
+param THRESHOLD : int in 0..9 = 0
+command go
+
+machine m:
+    initial IDLE
+
+    state IDLE:
+        when false: -> SPARE    # ~ SC-10
+        when LIMIT > 5: -> RUN  # ~ SC-10
+        when THRESHOLD > 5: -> RUN
+        when go: -> RUN
+
+    state RUN:
+        loop:
+            v = true
+        when go: -> IDLE
+
+    state SPARE:  # ~ SC-10
+        when go: -> IDLE

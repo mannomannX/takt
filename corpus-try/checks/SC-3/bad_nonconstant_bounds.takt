@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-3: Die Schranke von `range(N)` und die Breite eines Konstantenfelds
+# sind Regeln der Konstantenauswertung und Typisierung, nicht eigener
+# Pruefungen (Tabelle 10, Zeilen 11 und 46; Anhang A).
+
+record Head layout little:
+    magic : u8 = 0x1FF  # ~ SC-3
+
+output v : int in 0..99 @ hw("o/v") with safe = 0
+
+machine m:
+    var n : int in 0..9 = 3
+    initial RUN
+
+    state RUN:
+        loop:
+            for i in range(n):  # ~ SC-3
+                v = i

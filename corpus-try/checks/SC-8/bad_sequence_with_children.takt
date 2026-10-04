@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: ein Zustand hat eine Sequenz oder Kindzustaende, nicht beides (6.2) (SEM1-059).
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial A
+
+    state A:  # ~ SC-8
+        initial B
+        sequence:
+            v = true
+            wait 1 ms
+
+        state B:
+            when go: -> A

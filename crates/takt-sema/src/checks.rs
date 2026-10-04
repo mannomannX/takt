@@ -166,6 +166,7 @@ impl Lowerer<'_> {
         self.check_idle_states();
         self.check_resume_states();
         self.check_triggers();
+        self.check_driver_ports();
         self.check_persist();
         self.check_alert_polarity();
         self.check_profile_completeness();
@@ -175,6 +176,29 @@ impl Lowerer<'_> {
         self.check_unbound();
         self.check_unused();
         self.check_definite_assignment();
+    }
+
+    /// Pruefung 64 (12.10): Eine `driver machine`, die keinen Port liest
+    /// oder schreibt, ist eine Warnung; die Treiberstufe eines Programms
+    /// soll an seinen Koepfen ablesbar sein.
+    fn check_driver_ports(&mut self) {
+        let mut diags = Vec::new();
+        for m in self.program.machines.iter().filter(|m| m.driver) {
+            let mut touches = false;
+            visit::for_each_expr_machine(m, &mut |e| touches |= matches!(e.kind, ExprKind::PortRead(_)));
+            visit::for_each_stmt(m, &mut |s| touches |= writes_port(&s.kind));
+            if !touches {
+                diags.push(
+                    Diagnostic::warning(
+                        SC64,
+                        m.span,
+                        format!("`driver machine {}` fasst keinen Port an (12.10)", m.name),
+                    )
+                    .with_suggestion("`machine` ohne `driver`, oder die Register hier ansprechen"),
+                );
+            }
+        }
+        self.diags.extend(diags);
     }
 
     /// Pruefung 33 (7.2): `follows` azyklisch; dazu die zwei Warnungen aus
@@ -1377,7 +1401,7 @@ impl Lowerer<'_> {
                     stack.push(p);
                 }
                 let mut targets = Vec::new();
-                collect_targets(m, s, &mut targets);
+                collect_targets(&self.program, m, s, &mut targets);
                 stack.extend(targets);
             }
             for (i, s) in m.states.iter().enumerate() {
@@ -1389,7 +1413,7 @@ impl Lowerer<'_> {
                     );
                 }
                 let mut targets = Vec::new();
-                collect_targets(m, id, &mut targets);
+                collect_targets(&self.program, m, id, &mut targets);
                 let leaf = s.children.is_empty();
                 if leaf
                     && targets.is_empty()
@@ -1400,6 +1424,16 @@ impl Lowerer<'_> {
                     diags.push(
                         Diagnostic::warning(SC10, s.span, format!("Zustand `{}` hat keinen Ausgang", s.name))
                             .with_suggestion("`when`/`after` ergaenzen, wenn er nicht endgueltig ist"),
+                    );
+                }
+            }
+            for t in m.states.iter().flat_map(|s| &s.transitions).chain(&m.faulted.transitions) {
+                if let TransTrigger::When(Guard::Expr(e)) = &t.trigger
+                    && statically_false(&self.program, e)
+                {
+                    diags.push(
+                        Diagnostic::warning(SC10, t.span, "die Bedingung ist immer falsch: der Uebergang ist tot")
+                            .with_suggestion("Bedingung pruefen oder Uebergang entfernen"),
                     );
                 }
             }
@@ -1459,6 +1493,18 @@ impl Lowerer<'_> {
                 diags.push(Diagnostic::error(SC11, span, "`step` in einer Schleife".to_string()).with_suggestion(
                     "jede Instanz steppt hoechstens einmal je Tick; Arrays von Instanzen verwenden (5.7)",
                 ));
+            }
+            let arrays: HashSet<VarId> =
+                m.layout.block_instances.iter().filter(|b| b.count > 1).map(|b| b.var).collect();
+            let mut twice = Vec::new();
+            for_each_block(m, &mut |b| count_steps(&b.stmts, &arrays, &mut HashMap::new(), &mut twice));
+            for span in twice {
+                diags.push(
+                    Diagnostic::error(SC11, span, "zweiter `step` derselben Instanz in einer Aktivierung")
+                        .with_suggestion(
+                            "jede Instanz steppt hoechstens einmal je Tick (5.7); Ergebnis zwischenspeichern",
+                        ),
+                );
             }
         }
         self.diags.extend(diags);
@@ -1613,6 +1659,81 @@ impl Lowerer<'_> {
 /// immer haelt. Das ist Absicht: SC-25 prueft die Reihenfolge der
 /// Segmente (6.2) — ob ein Wert auf *jedem* Pfad entsteht, ist die Frage
 /// der Flussanalyse (3.4) und hat ihre eigene Pruefung.
+/// Pruefung 11 (5.7): Wie oft eine Anweisungsfolge jede Instanz steppt,
+/// hintereinander gezaehlt, ueber Zweige das Maximum; jeder `step` ueber
+/// einem schon gesteppten Zaehler kommt nach `twice`. Schleifen meldet
+/// `check_termination` selbst, Instanz-Arrays steppen je Element.
+fn count_steps(stmts: &[Stmt], arrays: &HashSet<VarId>, counts: &mut HashMap<VarId, u32>, twice: &mut Vec<Span>) {
+    for s in stmts {
+        match &s.kind {
+            StmtKind::MethodCall { receiver: Place::Var(v), method: Method::Step, .. } if !arrays.contains(v) => {
+                let n = counts.entry(*v).or_default();
+                *n += 1;
+                if *n > 1 {
+                    twice.push(s.span);
+                }
+            }
+            StmtKind::If { then, otherwise, .. } => {
+                let branches = [&then.stmts, &otherwise.stmts];
+                *counts = branches
+                    .into_iter()
+                    .map(|b| {
+                        let mut c = counts.clone();
+                        count_steps(b, arrays, &mut c, twice);
+                        c
+                    })
+                    .fold(counts.clone(), max_counts);
+            }
+            StmtKind::Match { arms, .. } => {
+                *counts = arms
+                    .iter()
+                    .map(|a| {
+                        let mut c = counts.clone();
+                        count_steps(&a.body.stmts, arrays, &mut c, twice);
+                        c
+                    })
+                    .fold(counts.clone(), max_counts);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Je Instanz das Maximum zweier Zaehlungen.
+fn max_counts(mut a: HashMap<VarId, u32>, b: HashMap<VarId, u32>) -> HashMap<VarId, u32> {
+    for (v, n) in b {
+        let e = a.entry(v).or_default();
+        *e = (*e).max(n);
+    }
+    a
+}
+
+/// Ist die Bedingung statisch falsch (Pruefung 10)? Nur ohne Parameter:
+/// Ein Profil kann ihn setzen, und `eval_const` setzte seinen Vorgabewert ein.
+fn statically_false(p: &Program, e: &Expr) -> bool {
+    let mut param = false;
+    walk_expr(e, &mut |x| param |= matches!(x.kind, ExprKind::Param(_)));
+    !param && matches!(takt_interp::eval_const(p, e), Ok(takt_interp::Value::Bool(false)))
+}
+
+/// Schreibt die Anweisung einen Port oder ein Feld darin?
+fn writes_port(s: &StmtKind) -> bool {
+    match s {
+        StmtKind::Assign { target, .. } => on_port(target),
+        StmtKind::MethodCall { target, receiver, .. } => on_port(receiver) || target.as_ref().is_some_and(on_port),
+        _ => false,
+    }
+}
+
+/// Liegt der Platz in einem Port?
+fn on_port(p: &Place) -> bool {
+    match p {
+        Place::Port(_) => true,
+        Place::Field(base, _) | Place::Index(base, _) | Place::Index2(base, ..) => on_port(base),
+        Place::Var(_) | Place::Output(_) => false,
+    }
+}
+
 fn check_stmt(
     s: &Stmt,
     assigned: &mut HashSet<VarId>,
@@ -1750,10 +1871,12 @@ pub fn fault_target_of(m: &Machine, s: StateId) -> FaultTarget {
     m.fault_target_of(s)
 }
 
-fn collect_targets(m: &Machine, s: StateId, out: &mut Vec<StateId>) {
+/// Die Ziele eines Zustands; eine tote Transition fuehrt nirgendwohin.
+fn collect_targets(p: &Program, m: &Machine, s: StateId, out: &mut Vec<StateId>) {
     let state = &m.states[s.index()];
     for t in &state.transitions {
-        if let Target::State(x) = t.target {
+        let dead = matches!(&t.trigger, TransTrigger::When(Guard::Expr(e)) if statically_false(p, e));
+        if let (Target::State(x), false) = (t.target, dead) {
             out.push(x);
         }
     }
@@ -1772,7 +1895,6 @@ fn collect_targets(m: &Machine, s: StateId, out: &mut Vec<StateId>) {
     if let Some(seq) = &state.sequence {
         collect_seq_targets(&seq.items, out);
     }
-    let _ = m;
 }
 
 fn collect_seq_targets(items: &[SeqItem], out: &mut Vec<StateId>) {

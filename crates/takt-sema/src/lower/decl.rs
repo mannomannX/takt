@@ -208,6 +208,21 @@ impl Lowerer<'_> {
                 self.error(SC2, v.name.span, format!("Variante `{}` doppelt", v.name.name));
                 continue;
             }
+            // 3.7: Die Diskriminante bestimmt die Variante beim Dekodieren.
+            if let Some(other) = variants.iter().find(|x: &&VariantDef| x.discriminant == discriminant) {
+                let text = format!("Diskriminante {discriminant} traegt schon `{}`", other.name);
+                self.error(crate::checks::SC46, v.span, text);
+                continue;
+            }
+            if let Some(width) = self.program.enums[id.index()].layout {
+                let (lo, hi) = takt_interp::arith::bounds(width);
+                if !(lo..=hi).contains(&i128::from(discriminant)) {
+                    let text =
+                        format!("Diskriminante {discriminant} passt nicht in `{}`", takt_interp::arith::name(width));
+                    self.error(crate::checks::SC46, v.span, text);
+                    continue;
+                }
+            }
             let fields = self.fields(&v.fields);
             variants.push(VariantDef { name: v.name.name.clone(), discriminant, fields, span: v.span });
         }

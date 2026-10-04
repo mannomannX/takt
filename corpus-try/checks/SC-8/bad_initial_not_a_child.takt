@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: `initial` eines Zustands nennt eines seiner Kinder (5.1) (SEM1-059).
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial A
+
+    state A:
+        initial B  # ~ SC-8
+
+        state C:
+            when go: -> B
+
+    state B:
+        when go: -> A

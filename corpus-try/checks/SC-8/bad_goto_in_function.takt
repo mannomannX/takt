@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: `->` steht nur in `loop:`, Uebergaengen und Sequenzen (5.2) (SEM1-059).
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+fn f(x: bool) -> bool:
+    if x:
+        -> A  # ~ SC-8
+    return x
+
+machine m:
+    initial A
+
+    state A:
+        loop:
+            v = f(true)

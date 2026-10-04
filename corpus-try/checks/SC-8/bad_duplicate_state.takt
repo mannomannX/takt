@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: zwei Zustaende mit demselben Namen (5.1, FB-399).
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = true
+        when go: -> RUN
+
+    state RUN:  # ~ SC-8
+        loop:
+            v = false
+        when go: -> RUN

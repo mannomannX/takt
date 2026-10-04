@@ -1,0 +1,22 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: ein Zustand mit Kindern braucht `initial` (5.2, FB-399).
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial OUTER
+
+    state OUTER:  # ~ SC-8
+        state A:
+            loop:
+                v = true
+            when go: -> B
+
+        state B:
+            loop:
+                v = false
+            when go: -> A

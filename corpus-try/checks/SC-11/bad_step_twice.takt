@@ -1,0 +1,43 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-11: Eine Blockinstanz steppt hoechstens einmal je Tick (5.7, 9.4.2,
+# FB-399): zweimal hintereinander und in einer Schleife ist ein Fehler,
+# einmal je Zweig nicht.
+
+block counter():
+    var n : int in 0..99 = 0
+    step() -> int:
+        n = (n + 1) % 100
+        return n
+
+output v  : int in 0..99 @ hw("o/v")  with safe = 0
+output v2 : int in 0..99 @ hw("o/v2") with safe = 0
+command fast
+
+machine m:
+    var c = counter()
+    initial RUN
+
+    state RUN:
+        loop:
+            v = c.step()
+            v = c.step()  # ~ SC-11
+            if fast:
+                v = c.step()  # ~ SC-11
+            else:
+                pass
+            for i in range(2):
+                v = c.step()  # ~ SC-11
+
+machine branches:
+    var d = counter()
+    initial RUN
+
+    state RUN:
+        loop:
+            if fast:
+                v2 = d.step()
+            else:
+                v2 = d.step()

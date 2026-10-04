@@ -39,7 +39,12 @@ use crate::stmt::{Block, Method, Observe, Place, Stmt, StmtKind};
 use crate::types::{Range, RangeOrigin, Type};
 use crate::{FnId, Program, TypeId};
 
-/// Code der Warnungen ueber implizite Pruefungen (Pruefung 24).
+/// Code der Pruefung 4: Ranges, Division, Ueberlauf, Array-Index und
+/// Endlichkeit als implizite Pruefungen.
+pub const SC4: &str = "SC-4";
+
+/// Code der Pruefung 24: Schiebebetraege, `as`-Konversionen, `vec`-Indizes
+/// und Slices als implizite Pruefungen.
 pub const SC24: &str = "SC-24";
 
 /// Code der Pruefung 9: Guards aus `FAULTED` ohne implizite Pruefung.
@@ -147,10 +152,10 @@ pub fn analyze(program: &mut Program, external: &[(u32, u8)], certification: boo
         let (what, fix) = describe(c.cause);
         if certification {
             let text = format!("{what} bleibt stehen; die Zertifizierung verlangt einen Beweis (3.4)");
-            diags.push(Diagnostic::error(SC24, c.span, text).with_suggestion(fix));
+            diags.push(Diagnostic::error(c.code, c.span, text).with_suggestion(fix));
         } else if c.warns {
             let text = format!("{what} in einer Schleife oder einem Aktionsblock");
-            diags.push(Diagnostic::warning(SC24, c.span, text).with_suggestion(fix));
+            diags.push(Diagnostic::warning(c.code, c.span, text).with_suggestion(fix));
         }
     }
     report.sites = seen.values().copied().collect();

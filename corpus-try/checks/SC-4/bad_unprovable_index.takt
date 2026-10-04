@@ -3,7 +3,8 @@ system:
     tick     = 1 ms
 
 # SC-4: Wo die Analyse nichts beweist, bleibt die Pruefung stehen — und in
-# einer Schleife warnt sie (3.4, Warnpolitik; die Warnung traegt SC-24).
+# einer Schleife warnt sie (3.4, Warnpolitik). Ranges, Division, Ueberlauf
+# und Array-Index gehoeren zu Pruefung 4, der Rest zu 24 (FB-399).
 
 output n : int in 0..99 @ hw("o/n") with safe = 0
 
@@ -14,4 +15,4 @@ machine reader:
     state RUN:
         loop:
             for i in range(3):
-                n = wide  # ~ SC-24
+                n = wide  # ~ SC-4

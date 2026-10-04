@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46: Unter `layout u8` passt jede Diskriminante in `u8`, auch die
+# gezaehlte Fortsetzung (3.7, KOR-021): `Y` ist 255, `Z` waere 256.
+
+enum Kind layout u8: APP = 0x01, BOOT = 0x300  # ~ SC-46
+enum Last layout u8: X = 254, Y, Z             # ~ SC-46
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            pass

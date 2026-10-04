@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-64 (12.10): Eine `driver machine`, die keinen Port liest oder
+# schreibt, ist eine Warnung; die Treiberstufe soll an den Koepfen
+# ablesbar sein (FB-399).
+
+output busy : bool @ hw("o/busy") with safe = false
+
+driver machine idle_driver:  # ~ SC-64
+    initial RUN
+
+    state RUN:
+        loop:
+            busy = false
+
+        after 1 s: -> RUN

@@ -35,8 +35,7 @@ use takt_testkit::expect;
 /// Pruefungen, die ihren Code nie melden, mit Grund: Ihre `bad_`-Dateien
 /// koennen ihn nicht anmerken. Jede muss noch auftreten — meldet die
 /// Pruefung ihren Code, scheitert der Test, bis sie hier verschwindet.
-const SILENT: &[(&str, &str)] =
-    &[("SC-4", "FB-399: die Warnung der Pruefung 4 traegt den Code SC-24. TODO(M11 Schritt 31)")];
+const SILENT: &[(&str, &str)] = &[];
 
 fn root() -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/checks"))

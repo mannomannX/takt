@@ -3,7 +3,7 @@ system:
     tick     = 1 ms
 
 # SC-46: Offsets ueberlappen nicht, Bitfelder liegen im Traegerfeld,
-# Konstantenfelder passen zur Breite, Diskriminanten sind eindeutig.
+# Diskriminanten sind eindeutig und passen in die Drahtbreite.
 
 enum ImageType layout u8: APP = 0x00, DATA = 0x01, BOOT = 0x02
 

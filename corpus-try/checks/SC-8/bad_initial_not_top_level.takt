@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: `initial` der Maschine nennt einen Zustand der obersten Ebene (5.1) (SEM1-059).
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial INNER  # ~ SC-8
+
+    state OUTER:
+        initial INNER
+
+        state INNER:
+            when go: -> OUTER

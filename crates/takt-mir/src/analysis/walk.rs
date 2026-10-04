@@ -75,6 +75,8 @@ pub struct ImplicitCheck {
     pub relational: bool,
     /// Die Art als Schluessel ([`tag`]).
     pub tag: u8,
+    /// Die Pruefung der Tabelle 10, die sie meldet ([`code`]).
+    pub code: &'static str,
 }
 
 /// Der Zustand eines Durchlaufs.
@@ -690,8 +692,9 @@ impl<'p> Walk<'p> {
             let wide = matches!(kind, CheckedKind::NonFinite | CheckedKind::Domain)
                 || matches!(kind, CheckedKind::Overflow) && self.width_of(node.ty).is_none_or(|w| w.bits() == 64);
             let warns = !wide && (self.loop_depth > 0 || self.in_action);
-            self.checks.push(ImplicitCheck { cause, span: node.span, warns, relational, tag: tag(kind) });
-            self.kept.push((node.span, tag(kind)));
+            let (span, key) = (node.span, tag(kind));
+            self.checks.push(ImplicitCheck { cause, span, warns, relational, tag: key, code: code(kind) });
+            self.kept.push((span, key));
         }
         result
     }
@@ -738,6 +741,22 @@ pub fn tag(kind: &CheckedKind) -> u8 {
         CheckedKind::Shift => 7,
         CheckedKind::Valid => 8,
         CheckedKind::Missing => 9,
+    }
+}
+
+/// Die Pruefung der Tabelle 10 zu einer Art: 24 fuer Schiebebetraege,
+/// `as`-Konversionen sowie `vec`- und Slice-Indizes (Laenge 0), sonst 4.
+pub fn code(kind: &CheckedKind) -> &'static str {
+    match kind {
+        CheckedKind::Shift | CheckedKind::Convert | CheckedKind::Index { len: 0 } => super::SC24,
+        CheckedKind::DivZero
+        | CheckedKind::Overflow
+        | CheckedKind::NonFinite
+        | CheckedKind::Domain
+        | CheckedKind::Index { .. }
+        | CheckedKind::Range(_)
+        | CheckedKind::Valid
+        | CheckedKind::Missing => super::SC4,
     }
 }
 

@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-8: ein Aktionsblock deklariert keine Variablen (5.5, FB-399).
+# Die Folgefehler der abgelehnten Deklaration sind mit angemerkt (FB-407).
+
+output v : bool @ hw("o/v") with safe = false
+command go
+
+machine m:
+    initial A
+
+    state A:
+        when go:
+            var x : int in 0..9 = 1  # ~ SC-8
+            v = x > 0                # ~ SC-2
+            -> B
+
+    state B:
+        when go: -> A

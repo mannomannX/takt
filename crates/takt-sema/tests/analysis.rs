@@ -263,7 +263,7 @@ machine m:
     assert!(errors(unproven, &lenient).is_empty(), "ohne Zertifizierung eine Information");
     let found = errors(unproven, &strict);
     assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("SC-24") && found[0].contains("Range-Check") && found[0].contains("clamp"), "{found:?}");
+    assert!(found[0].contains("[SC-4]") && found[0].contains("Range-Check") && found[0].contains("clamp"), "{found:?}");
     let proven = "\
 machine m:
     initial RUN
@@ -338,7 +338,7 @@ machine m:
 ",
     );
     assert_eq!(outside.warned, 0, "ausserhalb einer Schleife wird nicht gewarnt");
-    assert!(!w_outside.iter().any(|w| w.contains("SC-24")), "{w_outside:?}");
+    assert!(!w_outside.iter().any(|w| w.contains("[SC-4]")), "{w_outside:?}");
 
     let (_, inside, w_inside) = compile(
         "\
@@ -352,7 +352,7 @@ machine m:
 ",
     );
     assert_eq!(inside.warned, 1, "in der Schleife wird gewarnt");
-    assert!(w_inside.iter().any(|w| w.contains("SC-24")), "{w_inside:?}");
+    assert!(w_inside.iter().any(|w| w.contains("[SC-4]")), "{w_inside:?}");
 }
 
 #[test]
@@ -380,7 +380,7 @@ machine m:
 ",
     );
     assert_eq!(r.warned, 4, "je Aktionsblock eine Warnung: {:?}", r.checks);
-    assert_eq!(w.iter().filter(|w| w.contains("SC-24")).count(), 4, "{w:?}");
+    assert_eq!(w.iter().filter(|w| w.contains("[SC-4]")).count(), 4, "{w:?}");
 }
 
 #[test]
@@ -402,7 +402,7 @@ machine m:
     );
     assert_eq!(r.warned, 0, "die Schleife ist bewiesen: {:?}", r.checks);
     assert_eq!(count(&r, "Declared"), 1, "eine Pruefung an der Zwischengroesse: {:?}", r.checks);
-    assert!(!w.iter().any(|w| w.contains("SC-24")), "{w:?}");
+    assert!(!w.iter().any(|w| w.contains("[SC-4]")), "{w:?}");
 }
 
 #[test]
@@ -1410,7 +1410,7 @@ fn an_overflow_is_checked_in_narrow_types_and_never_warned_in_wide_ones() {
 ",
     );
     assert_eq!(count(&narrow, "Arith"), 1, "u8 + 1 kann ueberlaufen: {:?}", narrow.checks);
-    assert!(w_narrow.iter().any(|w| w.contains("SC-24")), "in der Schleife warnt es: {w_narrow:?}");
+    assert!(w_narrow.iter().any(|w| w.contains("[SC-4]")), "in der Schleife warnt es: {w_narrow:?}");
     let (_, wide, w_wide) = compile(
         "machine m:
     var t : Duration = 0 s
@@ -1423,7 +1423,7 @@ fn an_overflow_is_checked_in_narrow_types_and_never_warned_in_wide_ones() {
 ",
     );
     assert_eq!(count(&wide, "Arith"), 1, "eine Dauer ist i64 und kann ueberlaufen: {:?}", wide.checks);
-    assert!(!w_wide.iter().any(|w| w.contains("SC-24")), "i64-Ueberlauf warnt nicht (Pruefung 4): {w_wide:?}");
+    assert!(!w_wide.iter().any(|w| w.contains("[SC-4]")), "i64-Ueberlauf warnt nicht (Pruefung 4): {w_wide:?}");
 }
 
 #[test]
@@ -1530,7 +1530,7 @@ machine m:
     );
     assert_eq!(count(&r, "NonFinite"), 1, "die Multiplikation kann unendlich werden: {:?}", r.checks);
     assert_eq!(count(&r, "Arith"), 0, "kein Ganzzahlfall: {:?}", r.checks);
-    assert!(!w.iter().any(|w| w.contains("SC-24")), "Gleitkomma warnt nicht (Pruefung 4): {w:?}");
+    assert!(!w.iter().any(|w| w.contains("[SC-4]")), "Gleitkomma warnt nicht (Pruefung 4): {w:?}");
 }
 
 /// 3.4 (Differenzschranken): `if i >= b.len: break` traegt `i < b.len` bis
