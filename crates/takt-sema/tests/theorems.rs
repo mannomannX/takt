@@ -663,3 +663,44 @@ machine m:
     );
     assert!(e.contains("SC-60") && e.contains("ist am Geraet `sys` ein Output"), "{e}");
 }
+
+/// Satz 9.4.5 rechnet den Fault-Pfad ab dem tatsaechlichen Ziel einer
+/// Stelle: Ein `check … -> X` geht nach X, nicht zum Fault-Ziel seines
+/// Zustands, und die Kette folgt auch dort jedem Ziel, das erneut
+/// scheitert (FB-419). Hier RUN -> X -> Y -> SAFE -> FAULTED: vier
+/// Wechsel, wo das Fault-Ziel von RUN allein zwei ergaebe.
+#[test]
+fn the_latency_of_a_check_follows_its_own_target() {
+    let p = compile(
+        "\
+output valve : bool @ hw(\"o/valve\") with safe = false
+command ok
+
+machine m:
+    fault -> SAFE
+    initial RUN
+
+    state RUN:
+        loop:
+            valve = true
+            check ok, \"a\" -> X
+
+    state X:
+        fault -> Y
+        loop:
+            check ok, \"x\"
+
+    state Y:
+        loop:
+            check ok, \"y\"
+
+    state SAFE:
+        loop:
+            valve = false
+",
+    );
+    let run = p.machines[0].state_named("RUN");
+    let l = takt_mir::analysis::latency::latency(&p);
+    let site = l.sites.iter().find(|s| s.state == run).expect("die Stelle in RUN");
+    assert_eq!(site.fault, 4, "RUN -> X -> Y -> SAFE -> FAULTED: {site:?}");
+}

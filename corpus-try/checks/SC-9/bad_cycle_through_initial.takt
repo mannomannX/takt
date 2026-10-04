@@ -1,0 +1,28 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-9: Ein Fault-Pfad betritt einen zusammengesetzten Zustand ueber sein
+# `initial` (5.3, FB-419): L geht nach T, also nach L2, und L2 zurueck nach
+# L. Ein Graph nur aus den Fault-Zielen saehe keinen Zyklus.
+
+output v : int in 0..9 @ hw("o/v") with safe = 0
+command ok
+
+machine m:
+    initial L
+
+    state L:  # ~ SC-9
+        fault -> T
+        loop:
+            v = 1
+            check ok, "l"
+
+    state T:
+        initial L2
+
+        state L2:
+            fault -> L
+            loop:
+                v = 2
+                check ok, "l2"

@@ -2,7 +2,8 @@ system:
     language = 1
     tick     = 1 ms
 
-# SC-9: die Fault-Ziele bilden einen Zyklus, FAULTED ist unerreichbar.
+# SC-9: die Fault-Ziele bilden einen Zyklus, FAULTED ist unerreichbar. Er
+# wird einmal gemeldet, am ersten Zustand, mit allen seinen (FB-419).
 
 output v : bool @ hw("o/v") with safe = false
 
@@ -19,7 +20,7 @@ machine m:
         loop:
             v = true
 
-    state B:  # ~ SC-9
+    state B:
         fault -> A
         loop:
             v = false

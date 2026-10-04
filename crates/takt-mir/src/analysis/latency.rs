@@ -12,8 +12,10 @@
 //!                                 dass die Bedingung kurz nach der
 //!                                 Aktivierung von m wahr wird (1.3)
 //! D_confirm = ceil(d / P_m)       nur bei `check … for d` (5.6)
-//! D_fault   = depth(q)            Ticks im Fault-Wald bis zu einem
-//!                                 stabilen Ziel (5.3)
+//! D_fault   = Fault-Wechsel ab    Ticks im Fault-Wald bis zu einem
+//!             dem Ziel der Stelle stabilen Ziel, ueber Fault-Ziele und
+//!                                 `check … -> X` (5.3,
+//!                                 `Machine::fault_switches`)
 //! D_commit  = 0 bei `asap`        die Entry-Tick-Regel prueft vor dem
 //!             1 bei `boundary`    Commit; der unsichere Wert wird nie
 //!                                 committet (5.2, Punkt 4)
@@ -36,7 +38,7 @@ use std::collections::BTreeMap;
 use takt_diag::Span;
 
 use crate::expr::ExprKind;
-use crate::machine::{FaultTarget, Machine, MachineKind};
+use crate::machine::{FaultTarget, Machine, MachineKind, Target};
 use crate::program::OutputTiming;
 use crate::stmt::{Block, CheckKind, Stmt, StmtKind};
 use crate::{ChannelId, MachineId, Program, StateId};
@@ -231,16 +233,15 @@ fn collect(p: &Program, id: MachineId, m: &Machine, out: &mut Vec<Site>) {
     let period_ns = i128::from(period) * i128::from(p.config.tick);
 
     // Der maschinenweite `loop:` gehoert keinem Zustand; sein Fault-Ziel
-    // ist das der Maschine.
-    let machine_depth = depth(m, m.fault_target);
-    walk(&m.loop_block, &mut |kind, confirm, within, span| {
+    // ist das der Maschine. Ein `check … -> X` geht nach X (5.3, FB-419).
+    walk(&m.loop_block, &mut |kind, confirm, within, target, span| {
         out.push(Site {
             machine: id,
             state: None,
             kind,
             detect: period,
             confirm: confirm_ticks(confirm, period_ns),
-            fault: machine_depth,
+            fault: m.fault_switches(None, own_target(target, m.fault_target)),
             within,
             span,
         });
@@ -248,15 +249,14 @@ fn collect(p: &Program, id: MachineId, m: &Machine, out: &mut Vec<Site>) {
 
     for (s, state) in m.states.iter().enumerate() {
         let sid = StateId(s as u32);
-        let d = depth(m, m.fault_target_of(sid));
-        let mut push = |kind, confirm, within, span| {
+        let mut push = |kind, confirm, within, target, span| {
             out.push(Site {
                 machine: id,
                 state: Some(sid),
                 kind,
                 detect: period,
                 confirm: confirm_ticks(confirm, period_ns),
-                fault: d,
+                fault: m.fault_switches(Some(sid), own_target(target, m.fault_target_of(sid))),
                 within,
                 span,
             });
@@ -273,30 +273,14 @@ fn collect(p: &Program, id: MachineId, m: &Machine, out: &mut Vec<Site>) {
     }
 }
 
-/// Ticks im Fault-Wald von einem Ziel bis zu einem stabilen Zustand (5.3).
-///
-/// Jeder Schritt ist ein Tick: Das Fault-Ziel wird im Entry-Modus
-/// ausgefuehrt, und scheitert sein Koerper erneut, folgt der naechste
-/// Fault — „spaetestens `FAULTED`". Pruefung 9 haelt den Wald azyklisch,
-/// der Durchlauf terminiert also; die Schranke `states.len()` faengt eine
-/// MIR ab, die das nicht erfuellt.
-fn depth(m: &Machine, from: FaultTarget) -> u64 {
-    let mut cur = from;
-    let mut steps = 0;
-    for _ in 0..=m.states.len() {
-        match cur {
-            FaultTarget::Faulted => return steps + 1,
-            FaultTarget::State(s) => {
-                steps += 1;
-                let next = m.fault_target_of(s);
-                if next == FaultTarget::State(s) {
-                    return steps;
-                }
-                cur = next;
-            }
-        }
+/// Das Ziel einer Stelle: das eigene eines `check … -> X`, sonst das
+/// Fault-Ziel `inherited` ihres Ortes (5.3).
+fn own_target(target: Option<Target>, inherited: FaultTarget) -> FaultTarget {
+    match target {
+        Some(Target::State(s)) => FaultTarget::State(s),
+        Some(Target::Faulted) => FaultTarget::Faulted,
+        Some(Target::Fault(_)) | None => inherited,
     }
-    steps
 }
 
 /// `ceil(d / P_m)` in Ticks. Eine Bestaetigungszeit, die kein Literal ist,
@@ -314,15 +298,17 @@ fn confirm_ticks(confirm: Option<i64>, period_ns: i128) -> u64 {
 
 /// Ruft `f` fuer jede Fault-Stelle eines Blocks, auch in geschachtelten
 /// Anweisungen. `alert` ist keine: Es kann nie einen Fault ausloesen (5.6).
-fn walk(b: &Block, f: &mut impl FnMut(SiteKind, Option<i64>, Option<i64>, Span)) {
+/// Die Fault-Stellen eines Blocks: Art, Bestaetigungszeit, `within`, das
+/// eigene Ziel eines `check` und die Stelle.
+fn walk(b: &Block, f: &mut impl FnMut(SiteKind, Option<i64>, Option<i64>, Option<Target>, Span)) {
     for s in &b.stmts {
         walk_stmt(s, f);
     }
 }
 
-fn walk_stmt(s: &Stmt, f: &mut impl FnMut(SiteKind, Option<i64>, Option<i64>, Span)) {
+fn walk_stmt(s: &Stmt, f: &mut impl FnMut(SiteKind, Option<i64>, Option<i64>, Option<Target>, Span)) {
     match &s.kind {
-        StmtKind::Check { confirm, within, kind, .. } => {
+        StmtKind::Check { confirm, within, kind, target, .. } => {
             let ns = |e: &crate::expr::Expr| match e.kind {
                 ExprKind::Duration(ns) => Some(ns),
                 _ => None,
@@ -333,9 +319,9 @@ fn walk_stmt(s: &Stmt, f: &mut impl FnMut(SiteKind, Option<i64>, Option<i64>, Sp
                 CheckKind::Check => SiteKind::Check,
                 CheckKind::Expect => SiteKind::Expect,
             };
-            f(k, d, w, s.span);
+            f(k, d, w, *target, s.span);
         }
-        StmtKind::Abort { .. } => f(SiteKind::Abort, None, None, s.span),
+        StmtKind::Abort { .. } => f(SiteKind::Abort, None, None, None, s.span),
         StmtKind::If { then, otherwise, .. } => {
             walk(then, f);
             walk(otherwise, f);

@@ -246,43 +246,10 @@ pub fn descend(m: &Machine, s: StateId) -> Vec<StateId> {
     out
 }
 
-/// Fault-Ziel φ(s) nach 5.3; der als Fault-Ziel der Maschine deklarierte
-/// Zustand erbt nicht von ihr.
+/// Fault-Ziel φ(s) nach 5.3, ohne aktiven Zustand das der Maschine; die
+/// Rechnung steht in der MIR (`Machine::fault_target_of`).
 pub fn fault_target(m: &Machine, s: Option<StateId>) -> FaultTarget {
-    let Some(s) = s else { return m.fault_target };
-    let mut cur = Some(s);
-    while let Some(id) = cur {
-        if let Some(t) = m.states[id.index()].fault_target {
-            return t;
-        }
-        cur = m.states[id.index()].parent;
-    }
-    if m.fault_target == FaultTarget::State(s) { FaultTarget::Faulted } else { m.fault_target }
-}
-
-/// Tiefe des Fault-Waldes ab einem Zustand (Lemma 9.3.1).
-pub fn fault_depth(m: &Machine) -> u32 {
-    let mut worst = 0;
-    for i in 0..m.states.len() {
-        let mut depth = 0;
-        let mut cur = Some(StateId(i as u32));
-        let mut seen = 0;
-        while let Some(s) = cur {
-            match fault_target(m, Some(s)) {
-                FaultTarget::Faulted => break,
-                FaultTarget::State(next) => {
-                    depth += 1;
-                    seen += 1;
-                    if seen > m.states.len() {
-                        break;
-                    }
-                    cur = Some(next);
-                }
-            }
-        }
-        worst = worst.max(depth);
-    }
-    worst as u32
+    s.map_or(m.fault_target, |s| m.fault_target_of(s))
 }
 
 /// Ein Schritt der Maschine (9.3, `step_m`).
@@ -617,7 +584,7 @@ pub fn resolve_m(
     first: Result<Out, Trap>,
     tick: u64,
 ) -> Result<(), Trap> {
-    let limit = 1 + fault_depth(env.machine(loaded)) + 1;
+    let limit = 1 + env.machine(loaded).fault_depth() + 1;
     let mut steps = 0;
     let mut out = first;
     loop {

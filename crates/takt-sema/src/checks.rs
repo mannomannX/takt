@@ -1329,41 +1329,22 @@ impl Lowerer<'_> {
             }
             // 5.3: damit `FAULTED` nie scheitern kann, duerfen die Guards
             // seiner Transitionen keine impliziten Pruefungen enthalten.
-            for (i, s) in m.states.iter().enumerate() {
-                let id = StateId(i as u32);
-                let mut seen = HashSet::new();
-                let mut cur = id;
-                loop {
-                    if !seen.insert(cur) {
-                        diags.push(
-                            Diagnostic::error(
-                                SC9,
-                                m.states[cur.index()].span,
-                                format!("Fault-Wald hat einen Zyklus ueber `{}`", m.states[cur.index()].name),
-                            )
-                            .with_suggestion("`fault -> X` so waehlen, dass jeder Pfad bei `FAULTED` endet (5.3)"),
-                        );
-                        break;
+            // 5.3: azyklisch ueber Fault-Ziele, `initial` und `check … -> X`;
+            // jeder Zyklus einmal, mit allen seinen Zustaenden (FB-419).
+            for cycle in m.fault_cycles() {
+                let name = |s: &StateId| m.states[s.index()].name.clone();
+                let first = &m.states[cycle[0].index()];
+                let text = match cycle.as_slice() {
+                    [only] => format!("`{}` ist sein eigenes Fault-Ziel", name(only)),
+                    _ => {
+                        let path: Vec<String> = cycle.iter().chain([&cycle[0]]).map(name).collect();
+                        format!("Fault-Wald hat einen Zyklus: {}", path.join(" -> "))
                     }
-                    match fault_target_of(m, cur) {
-                        FaultTarget::Faulted => break,
-                        FaultTarget::State(next) => {
-                            if next == cur {
-                                diags.push(
-                                    Diagnostic::error(
-                                        SC9,
-                                        m.states[cur.index()].span,
-                                        format!("`{}` ist sein eigenes Fault-Ziel", m.states[cur.index()].name),
-                                    )
-                                    .with_suggestion("φ(s) ≠ s (5.3)"),
-                                );
-                                break;
-                            }
-                            cur = next;
-                        }
-                    }
-                }
-                let _ = s;
+                };
+                diags.push(Diagnostic::error(SC9, first.span, text).with_suggestion(
+                    "Fault-Ziele, `initial` und `check … -> X` so waehlen, dass jeder Fault-Pfad bei `FAULTED` \
+                     endet (5.3)",
+                ));
             }
         }
         self.diags.extend(diags);

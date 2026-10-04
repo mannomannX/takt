@@ -24,7 +24,7 @@ use takt_testkit::expect;
 
 /// Meldestellen in Sema und MIR, die kein Programm des Korpus ausloest.
 /// Die Zahl sinkt nur; der Test nennt die Stellen.
-const UNTRIGGERED: usize = 354;
+const UNTRIGGERED: usize = 353;
 
 /// Pruefungen der Tabelle 10 ohne Verzeichnis unter `corpus-try/checks/`,
 /// mit Grund. Die Liste schrumpft nur.

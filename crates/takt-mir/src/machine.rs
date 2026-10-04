@@ -7,7 +7,7 @@ use crate::expr::{Expr, MatchKind, StreamRef};
 use crate::ids::*;
 use crate::pattern::Pattern;
 use crate::program::Meta;
-use crate::stmt::{Block, Stmt};
+use crate::stmt::{Block, Stmt, StmtKind};
 use crate::types::IntWidth;
 
 /// Sichtbereich einer Variablen.
@@ -644,20 +644,118 @@ impl Machine {
         id
     }
 
-    /// Fault-Ziel φ(s) nach 5.3: explizit, sonst geerbt vom Elternzustand,
-    /// sonst von der Maschine — mit der Ausnahme, dass der als Fault-Ziel
+    /// Fault-Ziel φ(s) nach 5.3: explizit, sonst φ des Elternzustands,
+    /// sonst das der Maschine — mit der Ausnahme, dass der als Fault-Ziel
     /// der Maschine deklarierte Zustand nicht von ihr erbt, sondern
-    /// `FAULTED` bekommt. Sonst faende sich der Fault-Wald in einer
-    /// Schleife der Laenge eins wieder.
+    /// `FAULTED` bekommt, und mit ihm jedes Kind, das von ihm erbt. Sonst
+    /// faende sich der Fault-Wald in einer Schleife wieder (FB-419).
     pub fn fault_target_of(&self, s: StateId) -> FaultTarget {
-        let mut cur = Some(s);
-        while let Some(id) = cur {
-            if let Some(t) = self.states[id.index()].fault_target {
+        let mut cur = s;
+        loop {
+            let state = &self.states[cur.index()];
+            if let Some(t) = state.fault_target {
                 return t;
             }
+            match state.parent {
+                Some(p) => cur = p,
+                None if self.fault_target == FaultTarget::State(cur) => return FaultTarget::Faulted,
+                None => return self.fault_target,
+            }
+        }
+    }
+
+    /// Die Zyklen der Fault-Pfade (5.3), je einer als Folge seiner Ziele,
+    /// beginnend beim kleinsten Zustand. Leer heisst: Jeder Fault-Pfad
+    /// endet, spaetestens bei `FAULTED`.
+    pub fn fault_cycles(&self) -> Vec<Vec<StateId>> {
+        let graph = FaultGraph::of(self);
+        let mut color = vec![0u8; graph.nodes.len()];
+        let mut cycles: Vec<Vec<StateId>> = Vec::new();
+        for start in 0..graph.nodes.len() {
+            if color[start] != 0 {
+                continue;
+            }
+            // Tiefensuche ohne Rekursion: je Knoten auf dem Pfad die Kante,
+            // ueber die er erreicht wurde, und die noch offenen Kanten.
+            let mut path: Vec<(usize, Option<StateId>)> = vec![(start, None)];
+            let mut open = vec![graph.edges[start].clone()];
+            color[start] = 1;
+            while let Some(edges) = open.last_mut() {
+                let Some((next, via)) = edges.pop() else {
+                    let (done, _) = path.pop().expect("Pfad");
+                    color[done] = 2;
+                    open.pop();
+                    continue;
+                };
+                match color[next] {
+                    0 => {
+                        color[next] = 1;
+                        path.push((next, Some(via)));
+                        open.push(graph.edges[next].clone());
+                    }
+                    1 => {
+                        let from = path.iter().position(|(n, _)| *n == next).expect("auf dem Pfad");
+                        let mut cycle: Vec<StateId> = path[from + 1..].iter().filter_map(|(_, v)| *v).collect();
+                        cycle.push(via);
+                        let low = cycle.iter().enumerate().min_by_key(|(_, s)| **s).map_or(0, |(i, _)| i);
+                        cycle.rotate_left(low);
+                        if !cycles.contains(&cycle) {
+                            cycles.push(cycle);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        cycles
+    }
+
+    /// Die laengste Folge von Fault-Wechseln in einem Tick (Lemma 9.3.1).
+    /// Ein Zyklus zaehlt nicht weiter; Pruefung 9 lehnt ihn ab.
+    pub fn fault_depth(&self) -> u32 {
+        FaultGraph::of(self).longest().into_iter().max().unwrap_or(0)
+    }
+
+    /// Wie viele Fault-Wechsel ein Fault aus `at` (einem Zustand der
+    /// aktiven Kette, `None`: der maschinenweite `loop:`) nach `to` im
+    /// schlimmsten Fall nimmt, bis `FAULTED`: den ersten, dann einen je
+    /// Ziel, das im Entry-Modus erneut scheitert (9.4.5). Gezaehlt wird
+    /// ueber jedes Blatt unter `at`.
+    pub fn fault_switches(&self, at: Option<StateId>, to: FaultTarget) -> u64 {
+        let FaultTarget::State(to) = to else { return 1 };
+        let starts: Vec<FaultNode> = (0..self.states.len())
+            .map(|i| StateId(i as u32))
+            .filter(|l| self.states[l.index()].children.is_empty())
+            .filter(|l| at.is_none_or(|a| self.chain_to(Some(*l)).contains(&a)))
+            .flat_map(|l| FaultGraph::switch(self, &self.chain_to(Some(l)), to))
+            .collect();
+        let graph = FaultGraph::build(self, starts.clone());
+        let longest = graph.longest();
+        starts.iter().map(|n| 2 + u64::from(longest[graph.index[n]])).max().unwrap_or(1)
+    }
+
+    /// Die Kette von der Wurzel zu `s`, ohne Zustand leer.
+    fn chain_to(&self, s: Option<StateId>) -> Vec<StateId> {
+        let mut out = Vec::new();
+        let mut cur = s;
+        while let Some(id) = cur {
+            out.push(id);
             cur = self.states[id.index()].parent;
         }
-        if self.fault_target == FaultTarget::State(s) { FaultTarget::Faulted } else { self.fault_target }
+        out.reverse();
+        out
+    }
+
+    /// Die Konfiguration, die ein Fault-Wechsel nach `s` betritt: `s` samt
+    /// Vorfahren und `initial` abwaerts, nie ein gespeicherter Pfad (5.12).
+    fn fault_entry(&self, s: StateId) -> Vec<StateId> {
+        let mut out = self.chain_to(Some(s));
+        let mut cur = s;
+        while let Some(i) = self.states[cur.index()].initial {
+            out.push(i);
+            cur = i;
+        }
+        out
     }
 
     /// Zustand mit diesem Namen.
@@ -668,6 +766,148 @@ impl Machine {
     /// Kern-MIR: keine Sequenz-Oberflaeche mehr (6.2).
     pub fn is_core(&self) -> bool {
         self.states.iter().all(|s| s.sequence.is_none())
+    }
+}
+
+/// Die Fault-Pfade einer Maschine als Graph (5.3, 9.3, Lemma 9.3.1).
+///
+/// Ein Knoten ist eine Lage in `resolve_m`: der innerste aktive Zustand,
+/// die Zustaende, deren `loop:` danach noch laufen, und ob es der
+/// Run-Modus ist (maschinenweiter `loop:` und Handler laufen mit). Eine
+/// Kante ist ein Fault-Wechsel, beschriftet mit seinem Ziel: das Fault-Ziel
+/// des innersten Zustands oder das eigene Ziel eines `check … -> X`, der
+/// dort laeuft. Ein Vorfahr, den der Wechsel nicht verlaesst, laeuft im
+/// Entry-Modus nicht erneut; ein Fault in `exit:` setzt beim kleinsten
+/// gemeinsamen Vorfahren fort. Ein Graph allein ueber Zustaende saehe
+/// weder den Abstieg ueber `initial` noch den Unterschied, ob ein Vorfahr
+/// neu betreten wird (FB-419).
+struct FaultGraph {
+    nodes: Vec<FaultNode>,
+    edges: Vec<Vec<(usize, StateId)>>,
+    index: std::collections::HashMap<FaultNode, usize>,
+}
+
+/// Eine Lage in `resolve_m`, siehe [`FaultGraph`].
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct FaultNode {
+    at: Option<StateId>,
+    running: Vec<StateId>,
+    run: bool,
+}
+
+impl FaultGraph {
+    /// Alle Lagen, die ein Fault im Run-Modus eines Blatts erreicht.
+    fn of(m: &Machine) -> FaultGraph {
+        let starts = (0..m.states.len())
+            .map(|i| StateId(i as u32))
+            .filter(|s| m.states[s.index()].children.is_empty())
+            .map(|leaf| FaultNode { at: Some(leaf), running: m.chain_to(Some(leaf)), run: true })
+            .collect();
+        FaultGraph::build(m, starts)
+    }
+
+    /// Alle Lagen, die Fault-Wechsel ab `starts` erreichen.
+    fn build(m: &Machine, starts: Vec<FaultNode>) -> FaultGraph {
+        let mut graph = FaultGraph { nodes: Vec::new(), edges: Vec::new(), index: Default::default() };
+        let mut todo = Vec::new();
+        for n in starts {
+            graph.add(n, &mut todo);
+        }
+        while let Some(from) = todo.pop() {
+            for (via, next) in FaultGraph::steps(m, &graph.nodes[from].clone()) {
+                let to = graph.add(next, &mut todo);
+                if !graph.edges[from].contains(&(to, via)) {
+                    graph.edges[from].push((to, via));
+                }
+            }
+        }
+        graph
+    }
+
+    /// Der Index einer Lage; eine neue kommt in `todo`.
+    fn add(&mut self, n: FaultNode, todo: &mut Vec<usize>) -> usize {
+        if let Some(i) = self.index.get(&n) {
+            return *i;
+        }
+        let i = self.nodes.len();
+        self.index.insert(n.clone(), i);
+        self.nodes.push(n);
+        self.edges.push(Vec::new());
+        todo.push(i);
+        i
+    }
+
+    /// Je Lage die Zahl der Kanten des laengsten Pfads, der dort beginnt.
+    fn longest(&self) -> Vec<u32> {
+        fn depth(g: &FaultGraph, n: usize, memo: &mut [Option<u32>], open: &mut [bool]) -> u32 {
+            if let Some(d) = memo[n] {
+                return d;
+            }
+            if open[n] {
+                return 0;
+            }
+            open[n] = true;
+            let d = g.edges[n].iter().map(|(t, _)| 1 + depth(g, *t, memo, open)).max().unwrap_or(0);
+            open[n] = false;
+            memo[n] = Some(d);
+            d
+        }
+        let mut memo = vec![None; self.nodes.len()];
+        let mut open = vec![false; self.nodes.len()];
+        (0..self.nodes.len()).map(|n| depth(self, n, &mut memo, &mut open)).collect()
+    }
+
+    /// Die Fault-Wechsel aus einer Lage, mit ihrem Ziel.
+    fn steps(m: &Machine, n: &FaultNode) -> Vec<(StateId, FaultNode)> {
+        let mut targets = vec![match n.at {
+            Some(s) => m.fault_target_of(s),
+            None => m.fault_target,
+        }];
+        let mut push = |st: &Stmt, _: u32| {
+            if let StmtKind::Check { target: Some(Target::State(x)), .. } = &st.kind {
+                targets.push(FaultTarget::State(*x));
+            }
+        };
+        for s in &n.running {
+            let state = &m.states[s.index()];
+            crate::visit::walk_stmts(&state.loop_block.stmts, 0, &mut push);
+            if n.run {
+                state.handlers.iter().for_each(|h| crate::visit::walk_stmts(&h.body.stmts, 0, &mut push));
+            }
+            // Vor dem Entzuckern stehen Checks noch in der Sequenz ihres Zustands.
+            if let Some(seq) = &state.sequence {
+                crate::visit::walk_seq(&seq.items, &mut push);
+            }
+        }
+        if n.run {
+            crate::visit::walk_stmts(&m.loop_block.stmts, 0, &mut push);
+            m.handlers.iter().for_each(|h| crate::visit::walk_stmts(&h.body.stmts, 0, &mut push));
+        }
+        let mut out = Vec::new();
+        let old = m.chain_to(n.at);
+        for t in targets {
+            let FaultTarget::State(to) = t else { continue };
+            for next in FaultGraph::switch(m, &old, to) {
+                if !out.contains(&(to, next.clone())) {
+                    out.push((to, next));
+                }
+            }
+        }
+        out
+    }
+
+    /// Die Lagen nach einem Fault-Wechsel von der Kette `old` nach `to`:
+    /// betreten bis zum Blatt, oder — scheitert ein `exit:` — beim
+    /// kleinsten gemeinsamen Vorfahren (9.3).
+    fn switch(m: &Machine, old: &[StateId], to: StateId) -> Vec<FaultNode> {
+        let new = m.fault_entry(to);
+        let depth = m.chain_to(Some(to)).len();
+        let common = old.iter().zip(&new).take_while(|(a, b)| a == b).count().min(depth - 1);
+        let mut out = vec![FaultNode { at: new.last().copied(), running: new[common..].to_vec(), run: false }];
+        if old[common..].iter().any(|s| !m.states[s.index()].exit.stmts.is_empty()) {
+            out.push(FaultNode { at: common.checked_sub(1).map(|i| old[i]), running: Vec::new(), run: false });
+        }
+        out
     }
 }
 

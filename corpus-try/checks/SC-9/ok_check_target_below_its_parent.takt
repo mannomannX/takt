@@ -1,0 +1,28 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-9: Kein Zyklus (5.3, FB-419): Der Check in P fuehrt nach X, X ueber
+# sein Fault-Ziel nach L. P bleibt dabei aktiv und laeuft im Entry-Modus
+# nicht erneut; scheitert der Check wieder, dann erst im naechsten Tick.
+# Ein Graph allein ueber Zustaende saehe hier P -> X -> L -> P.
+
+output v : int in 0..9 @ hw("o/v") with safe = 0
+command ok
+
+machine m:
+    initial P
+
+    state P:
+        initial L
+        loop:
+            check ok, "p" -> X
+
+        state L:
+            loop:
+                v = 1
+
+        state X:
+            fault -> L
+            loop:
+                v = 2

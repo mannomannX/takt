@@ -638,3 +638,71 @@ machine m:
     };
     assert_eq!(probe_at(&trace, 2), "500", "nach OTHER, nicht nach SAFE:\n{trace}");
 }
+
+#[test]
+fn a_chain_of_check_targets_runs_to_its_end() {
+    // Lemma 9.3.1: Die Schranke von `resolve_m` ist der laengste Pfad im
+    // Fault-Wald samt `check ... -> X`; mit den Fault-Zielen allein war sie
+    // 2, und der Interpreter brach die Kette ab (FB-419).
+    let Some(trace) = agree(
+        "
+command ok
+machine m:
+    initial A
+    state A:
+        loop:
+            probe = 1
+            check ok, \"a\" -> B
+    state B:
+        loop:
+            probe = 2
+            check ok, \"b\" -> C
+    state C:
+        loop:
+            probe = 3
+            check ok, \"c\" -> D
+    state D:
+        loop:
+            probe = 4
+            check ok, \"d\" -> E
+    state E:
+        loop:
+            probe = 5
+",
+        "check_chain",
+        2,
+    ) else {
+        return;
+    };
+    assert_eq!(probe_at(&trace, 0), "5", "die Kette endet in E:\n{trace}");
+}
+
+#[test]
+fn a_child_of_the_machine_fault_target_inherits_faulted() {
+    // 5.3: φ(s) ist explizit, sonst φ des Elternzustands. Der Fault-Ziel-
+    // zustand der Maschine hat φ = FAULTED, sein Kind erbt das. Vorher
+    // zeigte das Kind zurueck auf SAFE, und ein Fault dort kreiste.
+    let Some(trace) = agree(
+        "
+command ok
+machine m:
+    fault -> SAFE
+    initial RUN
+    state RUN:
+        loop:
+            probe = 1
+            check ok, \"run\"
+    state SAFE:
+        initial HOLD
+        state HOLD:
+            loop:
+                probe = 2
+                check ok, \"hold\"
+",
+        "phi_child_of_safe",
+        2,
+    ) else {
+        return;
+    };
+    assert!(trace.contains("t=0 state m FAULTED"), "HOLD faultet nach FAULTED:\n{trace}");
+}

@@ -1,0 +1,24 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-9: Der Fault-Wald umfasst die Kanten aus `check ... -> X` (5.3,
+# FB-419): A geht ueber seinen Check nach B, B ueber sein Fault-Ziel
+# zurueck nach A.
+
+output v : bool @ hw("o/v") with safe = false
+command ok
+
+machine m:
+    initial A
+
+    state A:  # ~ SC-9
+        loop:
+            v = true
+            check ok, "a" -> B
+
+    state B:
+        fault -> A
+        loop:
+            v = false
+            check ok, "b"
