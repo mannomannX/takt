@@ -159,10 +159,7 @@ pub(crate) fn element_shape(p: &Program, elem: TypeId) -> Option<Vec<u8>> {
 /// Die Gestalten der Elementtypen aller Eingabestroeme, die ein `decode`
 /// brauchen, als `g_shape_<kanal>`, und der Leser der TCB dazu.
 fn shapes(s: &mut String, p: &Program) {
-    let _ = writeln!(
-        s,
-        "_Bool takt_edge_decodes(const unsigned char *, unsigned, const unsigned char *, unsigned, _Bool);"
-    );
+    let _ = writeln!(s, "{}", crate::edge::DECODES);
     for (c, ch) in p.channels.iter().enumerate() {
         let Some(Type::Stream(elem)) = p.types.list.get(ch.ty.index()) else { continue };
         if ch.dir != Direction::Input {

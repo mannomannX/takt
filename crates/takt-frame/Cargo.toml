@@ -16,6 +16,8 @@ takt-llvm = { path = "../takt-llvm" }
 takt-mir = { path = "../takt-mir" }
 # Die Signaturen der kuratierten Natives fuer ihre Prototypen im Rahmen.
 takt-native = { path = "../takt-native" }
+# Die Nummern von `P_next_run`, die jede Huelle zuruecklesen kann (12.7).
+takt-rt-core = { path = "../takt-rt-core" }
 
 [lints]
 workspace = true

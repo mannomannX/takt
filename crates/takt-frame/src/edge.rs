@@ -14,6 +14,9 @@
 //! Interpreter —, dann `takt_edge_commit(tick)`.
 
 use std::fmt::Write as _;
+use takt_hal::CLayout;
+use takt_hal::contract::{Delivery, Device, Event, Track, Window};
+use takt_hal::quality::{Bounds, Gate};
 use takt_llvm::symbols::Prefix;
 
 use takt_mir::machine::Machine;
@@ -23,6 +26,38 @@ use takt_mir::types::Type;
 use crate::layout::{Layout, c_type};
 use crate::streams::Trace;
 use crate::text::Text;
+
+/// Was der Rahmen mit dem Randkern teilt, aus der Rust-Deklaration in
+/// `takt-hal` (FB-397): die Deklaration und ihr Layout, das der C-Compiler
+/// mit `_Static_assert` bestaetigt.
+const SHARED: [(&str, CLayout); 7] = [
+    (Track::C_DECL, Track::C_LAYOUT),
+    (Device::C_DECL, Device::C_LAYOUT),
+    (Delivery::C_DECL, Delivery::C_LAYOUT),
+    (Window::C_DECL, Window::C_LAYOUT),
+    (Event::C_DECL, Event::C_LAYOUT),
+    (Gate::C_DECL, Gate::C_LAYOUT),
+    (Bounds::C_DECL, Bounds::C_LAYOUT),
+];
+
+/// `takt_edge_settle` aus `takt-native-abi`, wie der Rahmen ihn deklariert.
+pub const SETTLE: &str = "unsigned takt_edge_settle(struct takt_track *, unsigned, struct takt_device *, unsigned, \
+                          const unsigned *, struct takt_delivery *, unsigned, struct takt_window, struct takt_event *, \
+                          unsigned);";
+/// `takt_edge_gate`.
+pub const GATE: &str =
+    "unsigned takt_edge_gate(struct takt_gate *, const struct takt_bounds *, _Bool, long long, double, long long);";
+/// `takt_edge_driver_bad`.
+pub const DRIVER_BAD: &str = "void takt_edge_driver_bad(struct takt_gate *);";
+/// `takt_edge_output`.
+pub const OUTPUT: &str = "_Bool takt_edge_output(_Bool, _Bool, int, int);";
+/// `takt_edge_decodes`.
+pub const DECODES: &str =
+    "_Bool takt_edge_decodes(const unsigned char *, unsigned, const unsigned char *, unsigned, _Bool);";
+/// Jeder Einstieg des Randkerns, den der Rahmen ruft. Der Linker sieht keine
+/// Typen; `tests/edge_abi.rs` haelt die Liste gegen die `extern "C"`-Signaturen
+/// in `takt-native-abi`.
+pub const PROTOTYPES: [&str; 5] = [SETTLE, GATE, DRIVER_BAD, OUTPUT, DECODES];
 
 /// Ein Wert ohne Range und Steigung (`bool`, Enum): Das Tor laesst ihn durch.
 pub const KIND_NONE: u8 = 0;
@@ -67,19 +102,11 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
     let _ = writeln!(ty, "   Typen gehoeren der geteilten Bibliothek und sind in jedem Programm dieselben. */");
     let _ = writeln!(ty, "#ifndef TAKT_EDGE_TYPES");
     let _ = writeln!(ty, "#define TAKT_EDGE_TYPES");
-    let _ = writeln!(ty, "struct takt_track {{ long long last_t, last_seq, last_measured; unsigned maxpt, count; }};");
-    let _ = writeln!(ty, "struct takt_device {{ _Bool degraded, delivered; unsigned char broken; }};");
-    let _ = writeln!(
-        ty,
-        "struct takt_delivery {{ unsigned channel; _Bool element, bad_with_value; long long t, age, seq, at; }};"
-    );
-    let _ = writeln!(ty, "struct takt_window {{ long long lo, hi, tolerance; }};");
-    let _ = writeln!(ty, "struct takt_event {{ unsigned char kind, what; unsigned index; }};");
-    let _ = writeln!(ty, "struct takt_gate {{ double good; long long good_t; _Bool has_good; unsigned strikes; }};");
-    let _ = writeln!(
-        ty,
-        "struct takt_bounds {{ _Bool has_range; double lo, hi; _Bool has_slew; double slew; unsigned debounce; }};"
-    );
+    let _ = writeln!(ty, "#include <stddef.h>");
+    for (decl, layout) in SHARED {
+        let _ = writeln!(ty, "{decl}");
+        let _ = layout.static_asserts(ty);
+    }
     // Die Lieferungen eines Ticks, je mit dem, was der Kern nicht braucht:
     // der Wert fuers Abbild, die Bytes fuer den Ring.
     let _ = writeln!(
@@ -100,16 +127,9 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
     }
     let _ = writeln!(f, "    unsigned edge_n;");
     let s = &mut t.code;
-    let _ = writeln!(
-        s,
-        "unsigned takt_edge_settle(struct takt_track *, unsigned, struct takt_device *, unsigned, const unsigned *, \
-         struct takt_delivery *, unsigned, struct takt_window, struct takt_event *, unsigned);"
-    );
-    let _ = writeln!(
-        s,
-        "unsigned takt_edge_gate(struct takt_gate *, const struct takt_bounds *, _Bool, long long, double, long long);"
-    );
-    let _ = writeln!(s, "void takt_edge_driver_bad(struct takt_gate *);");
+    for proto in [SETTLE, GATE, DRIVER_BAD] {
+        let _ = writeln!(s, "{proto}");
+    }
 
     let tracks: Vec<String> = p
         .channels

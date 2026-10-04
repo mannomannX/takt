@@ -66,17 +66,18 @@ impl Contract {
     }
 }
 
-/// Das Zeitfenster eines Ticks (12.6, Zeile 1): `(lo, hi]` in
-/// Nanosekunden, dazu die Toleranz, innerhalb derer geklemmt wird.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Window {
-    /// `t_(k-1)`, ausschliesslich.
-    pub lo: i64,
-    /// `t_k`, einschliesslich.
-    pub hi: i64,
-    /// Klemmtoleranz (Konfiguration, Default ein Tick).
-    pub tolerance: i64,
+shared_with_c! {
+    /// Das Zeitfenster eines Ticks (12.6, Zeile 1): `(lo, hi]` in
+    /// Nanosekunden, dazu die Toleranz, innerhalb derer geklemmt wird.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Window as "takt_window" {
+        /// `t_(k-1)`, ausschliesslich.
+        pub lo: i64,
+        /// `t_k`, einschliesslich.
+        pub hi: i64,
+        /// Klemmtoleranz (Konfiguration, Default ein Tick).
+        pub tolerance: i64,
+    }
 }
 
 /// Wo ein Zeitstempel zum Fenster liegt.
@@ -119,20 +120,21 @@ impl Window {
     }
 }
 
-/// Was der Rand je Kanal zwischen den Ticks weiss (12.6, Zeilen 1 und 2).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Track {
-    /// Letzter gelieferter Zeitstempel; [`NONE`] vor der ersten Lieferung.
-    pub last_t: i64,
-    /// Letzte Folgenummer eines Stroms; [`NONE`] vor dem ersten Element.
-    pub last_seq: i64,
-    /// Letzter Messzeitpunkt `t - age` eines Skalars; [`NONE`] zu Beginn.
-    pub last_measured: i64,
-    /// `MAXPT` eines Stroms (8.6); 0 heisst ohne Schranke.
-    pub maxpt: u32,
-    /// Elemente im laufenden Stapel.
-    pub count: u32,
+shared_with_c! {
+    /// Was der Rand je Kanal zwischen den Ticks weiss (12.6, Zeilen 1 und 2).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Track as "takt_track" {
+        /// Letzter gelieferter Zeitstempel; [`NONE`] vor der ersten Lieferung.
+        pub last_t: i64,
+        /// Letzte Folgenummer eines Stroms; [`NONE`] vor dem ersten Element.
+        pub last_seq: i64,
+        /// Letzter Messzeitpunkt `t - age` eines Skalars; [`NONE`] zu Beginn.
+        pub last_measured: i64,
+        /// `MAXPT` eines Stroms (8.6); 0 heisst ohne Schranke.
+        pub maxpt: u32,
+        /// Elemente im laufenden Stapel.
+        pub count: u32,
+    }
 }
 
 impl Default for Track {
@@ -209,17 +211,18 @@ pub enum Turn {
     Recovered,
 }
 
-/// Der Zustand eines Treibers zwischen den Ticks.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Device {
-    /// Laeuft er gerade degradiert?
-    pub degraded: bool,
-    /// Hat er in diesem Tick geliefert? Arbeitsstand von [`settle`].
-    pub delivered: bool,
-    /// Die erste Verletzung dieses Ticks ([`Contract::code`], null keine).
-    /// Arbeitsstand von [`settle`].
-    pub broken: u8,
+shared_with_c! {
+    /// Der Zustand eines Treibers zwischen den Ticks.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct Device as "takt_device" {
+        /// Laeuft er gerade degradiert?
+        pub degraded: bool,
+        /// Hat er in diesem Tick geliefert? Arbeitsstand von [`settle`].
+        pub delivered: bool,
+        /// Die erste Verletzung dieses Ticks ([`Contract::code`], null keine).
+        /// Arbeitsstand von [`settle`].
+        pub broken: u8,
+    }
 }
 
 impl Device {
@@ -241,26 +244,27 @@ impl Device {
     }
 }
 
-/// Eine Lieferung eines Ticks, wie der Rand sie prueft und beantwortet
-/// (Zeilen 1, 2).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Delivery {
-    /// Index des Kanals.
-    pub channel: u32,
-    /// Ein Stromelement; sonst ein Skalar.
-    pub element: bool,
-    /// Ein Skalar, der `Bad` meldet und doch einen Wert traegt.
-    pub bad_with_value: bool,
-    /// Zeitstempel in Nanosekunden.
-    pub t: i64,
-    /// Alter des Werts eines Skalars.
-    pub age: i64,
-    /// Folgenummer eines Elements.
-    pub seq: i64,
-    /// Antwort: der Zeitpunkt, mit dem die Lieferung weitergeht; [`NONE`],
-    /// wenn ihr Treiber den Vertrag verletzt hat.
-    pub at: i64,
+shared_with_c! {
+    /// Eine Lieferung eines Ticks, wie der Rand sie prueft und beantwortet
+    /// (Zeilen 1, 2).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Delivery as "takt_delivery" {
+        /// Index des Kanals.
+        pub channel: u32,
+        /// Ein Stromelement; sonst ein Skalar.
+        pub element: bool,
+        /// Ein Skalar, der `Bad` meldet und doch einen Wert traegt.
+        pub bad_with_value: bool,
+        /// Zeitstempel in Nanosekunden.
+        pub t: i64,
+        /// Alter des Werts eines Skalars.
+        pub age: i64,
+        /// Folgenummer eines Elements.
+        pub seq: i64,
+        /// Antwort: der Zeitpunkt, mit dem die Lieferung weitergeht; [`NONE`],
+        /// wenn ihr Treiber den Vertrag verletzt hat.
+        pub at: i64,
+    }
 }
 
 /// Ein Treiber haelt seinen Vertrag nicht mehr ([`Event::what`] nennt die
@@ -271,17 +275,18 @@ pub const RECOVERED: u8 = 2;
 /// Ein Zeitstempel wurde in der Toleranz geklemmt (Zeile 1).
 pub const WARPED: u8 = 3;
 
-/// Was der Rand ueber einen Tick meldet.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Event {
-    /// [`DEGRADED`], [`RECOVERED`] oder [`WARPED`].
-    pub kind: u8,
-    /// Bei [`DEGRADED`] die Verletzung ([`Contract::code`]).
-    pub what: u8,
-    /// Der Treiber bei [`DEGRADED`] und [`RECOVERED`], die Lieferung bei
-    /// [`WARPED`].
-    pub index: u32,
+shared_with_c! {
+    /// Was der Rand ueber einen Tick meldet.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct Event as "takt_event" {
+        /// [`DEGRADED`], [`RECOVERED`] oder [`WARPED`].
+        pub kind: u8,
+        /// Bei [`DEGRADED`] die Verletzung ([`Contract::code`]).
+        pub what: u8,
+        /// Der Treiber bei [`DEGRADED`] und [`RECOVERED`], die Lieferung bei
+        /// [`WARPED`].
+        pub index: u32,
+    }
 }
 
 /// Die Zeilen 1 und 2 fuer alle Lieferungen eines Ticks (12.1:

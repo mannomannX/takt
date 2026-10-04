@@ -65,6 +65,83 @@ fn sample_covers_every_node_kind() {
     }
 }
 
+/// Was nicht in den Logik-Hash eingeht (11.3), mit Grund. Ein Feld, das
+/// versehentlich `meta` heisst, faellt aus dem Hash, und zwei verschiedene
+/// Programme teilen ihn; ein neues `meta` im Schema scheitert hier, bis es
+/// einen Grund hat (SYN-028).
+const OUTSIDE_THE_LOGIC_HASH: &[(&str, &str)] = &[
+    ("span", "Position im Quelltext"),
+    ("meta", "Bezeichnung, Dokumentation, Anforderung"),
+    ("binding", "die Adresse eines Channels: gleiche Logik, andere Verdrahtung (8.3, 11.3)"),
+    ("target", "das Ziel des Builds"),
+    ("tick_source", "die Quelle des Ticks in der Hardware"),
+    ("overrun", "die Reaktion der Runtime auf einen Ueberlauf (7.3), kein Logikanteil"),
+    ("tcb_reviewed", "eine Politik der TCB beim Uebersetzen (4.5), aendert keinen Schritt"),
+    ("polling_unchecked", "gibt Pruefung 59 frei, aendert keinen Schritt"),
+    ("sources", "Quelltextzeilen fuer Meldungen"),
+    ("recorded", "die Aufzeichnung ungebundener Kanaele (8.2), ausserhalb der Semantik"),
+];
+
+/// **Jedes Feld ausserhalb des Logik-Hashes hat einen Grund.** Gelesen aus
+/// dem Schema selbst (`N meta feld`, `metaopt`, `metarep`).
+#[test]
+fn every_field_outside_the_logic_hash_has_a_reason() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/format/schema.rs");
+    let schema = std::fs::read_to_string(path).expect("Schema lesbar");
+    let tokens: Vec<&str> =
+        schema.split(|c: char| c.is_whitespace() || "{}(),".contains(c)).filter(|t| !t.is_empty()).collect();
+    let found: std::collections::BTreeSet<&str> = tokens
+        .windows(3)
+        .filter(|w| w[0].chars().all(|c| c.is_ascii_digit()) && w[1].starts_with("meta"))
+        .map(|w| w[2])
+        .collect();
+    let reasoned: std::collections::BTreeSet<&str> = OUTSIDE_THE_LOGIC_HASH.iter().map(|(f, _)| *f).collect();
+    assert!(found.len() >= 8, "nur {} meta-Felder im Schema gefunden", found.len());
+    assert_eq!(found, reasoned, "meta-Felder im Schema (links) gegen die begruendete Liste (rechts)");
+}
+
+/// **Die Hashes eines festen Programms sind festgeschrieben** (SYN-030).
+/// Ein anderer Wert heisst: Die Kodierung hat sich geaendert, und jede
+/// Beweisdatei, jede Aufzeichnung und jeder `persist`-Stand passt nicht mehr
+/// (5.9: nach einem Update faellt jeder Wert auf seinen Default). Neue Werte
+/// gehoeren zu einem Formatsprung mit Eintrag in grammar/mir-format.md —
+/// oder zu einer Aenderung des Beispielprogramms, dann nur Logik- und
+/// Programm-Hash.
+#[test]
+fn the_hashes_of_a_fixed_program_are_pinned() {
+    let p = full_program();
+    let types: String = (0..p.types.list.len())
+        .map(|i| {
+            let hash = takt_mir::persist::type_hash(&p, "hotfire", "", "v", TypeId(i as u32));
+            format!("{i}:{hash:016x}\n")
+        })
+        .collect();
+    let pinned = [
+        ("Logik-Hash", logic_hash(&p).to_string(), "895a2c47cf27e081efd8f2e313ea67aa70493ebc99fa94a06fd83aaa43469e11"),
+        (
+            "Programm-Hash",
+            program_hash(&p).to_string(),
+            "5cfe0c9a102921a57879d0334e60604d107b5db890ba791d17fd7f093304d386",
+        ),
+        (
+            "Typ-Hashes",
+            takt_mir::hash::sha256(types.as_bytes()).to_string(),
+            "446bed6fccce38a01074f9d8d32af59fe145e34350436d550e6346f6ba0da3a2",
+        ),
+    ];
+    let changed: Vec<String> =
+        pinned.iter().filter(|(_, got, want)| got != want).map(|(what, got, _)| format!("{what}: {got}")).collect();
+    assert!(
+        changed.is_empty(),
+        "geaendert:
+{}",
+        changed.join(
+            "
+"
+        )
+    );
+}
+
 #[test]
 fn header_is_checked() {
     let p = full_program();

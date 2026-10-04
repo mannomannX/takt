@@ -9,7 +9,7 @@
 use core::slice;
 
 use takt_hal::contract::{self, Delivery, Device, Event, Track, Window};
-use takt_hal::quality::{Gate, Limits, Quality, Reason, Scalar, Verdict};
+use takt_hal::quality::{Bounds, Gate, Quality, Reason, Scalar, Verdict};
 
 /// Ein Feld des Rahmens als Slice; leer, wenn es keines gibt.
 ///
@@ -68,24 +68,6 @@ pub unsafe extern "C" fn takt_edge_settle(
     k as u32
 }
 
-/// Die Grenzen eines Kanals in der Form des Rahmens (3.4, 3.5).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Bounds {
-    /// Hat der Kanal eine Range?
-    pub has_range: bool,
-    /// Ihre untere Grenze.
-    pub lo: f64,
-    /// Ihre obere Grenze.
-    pub hi: f64,
-    /// Hat er `max_slew`?
-    pub has_slew: bool,
-    /// `max_slew` in Einheiten je Sekunde.
-    pub slew: f64,
-    /// `debounce`.
-    pub debounce: u32,
-}
-
 /// Ein Wert des Rahmens: eine Ganzzahl oder eine Fliesskommazahl, so wie
 /// `Value` im Interpreter `Scalar` ist.
 struct Number {
@@ -142,12 +124,7 @@ pub unsafe extern "C" fn takt_edge_gate(
 ) -> u32 {
     // SAFETY: vom Aufrufer zugesagt.
     let (Some(gate), Some(b)) = (unsafe { gate.as_mut() }, unsafe { bounds.as_ref() }) else { return 0 };
-    let limits = Limits {
-        range: b.has_range.then_some((b.lo, b.hi)),
-        max_slew: b.has_slew.then_some(b.slew),
-        debounce: b.debounce,
-    };
-    code(gate.check(&Number { int, i, f }, t, &limits))
+    code(gate.check(&Number { int, i, f }, t, &b.limits()))
 }
 
 /// Der Treiber eines Kanals ist degradiert (Zeile 2): Der Bezugspunkt

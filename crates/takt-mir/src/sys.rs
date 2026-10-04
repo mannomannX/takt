@@ -69,18 +69,19 @@ pub fn is_sys(address: &str) -> bool {
     address.starts_with("sys/")
 }
 
-/// Was eine Variante von `NextRun` ausser `NONE` verlangt (12.7).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NextRun {
-    /// `NOW`: der naechste Lauf beginnt sofort.
-    Now,
-    /// `AFTER(delay)`: nach der Dauer im ersten Feld, oder frueher, wenn
-    /// eine Wake-Quelle weckt.
-    After,
-    /// `ON_WAKE`: wenn eine Wake-Quelle weckt.
-    OnWake,
-    /// `ON_START`: mit dem naechsten Start der Plattform.
-    OnStart,
+with_all! {
+    /// Was eine Variante von `NextRun` ausser `NONE` verlangt (12.7).
+    pub enum NextRun {
+        /// `NOW`: der naechste Lauf beginnt sofort.
+        Now,
+        /// `AFTER(delay)`: nach der Dauer im ersten Feld, oder frueher, wenn
+        /// eine Wake-Quelle weckt.
+        After,
+        /// `ON_WAKE`: wenn eine Wake-Quelle weckt.
+        OnWake,
+        /// `ON_START`: mit dem naechsten Start der Plattform.
+        OnStart,
+    }
 }
 
 impl NextRun {

@@ -77,10 +77,29 @@ fn one_call_delivers_library_header_module_and_manifest() {
         assert!(manifest.lines().any(|l| l == line), "`{line}` fehlt im Manifest:\n{manifest}");
     }
 
+    // Die Arena aus einer Quelle (GEN-034): Groesse und Ausrichtung, die das
+    // Manifest nennt, hat der Kopf fuer den C-Compiler und der Rust-Typ.
+    let number = |key: &str| -> u64 {
+        let line = manifest.lines().find_map(|l| l.strip_prefix(key)).unwrap_or_else(|| panic!("{key} fehlt"));
+        line.trim().parse().unwrap_or_else(|_| panic!("{key} keine Zahl: {line}"))
+    };
+    let (bytes, align) = (number("arena_bytes = "), number("arena_align = "));
+    let module = std::fs::read_to_string(dir.join("valve.rs")).expect("Modul");
+    for part in [format!("#[repr(C, align({align}))]"), format!("MaybeUninit<[u8; {bytes}]>")] {
+        assert!(module.contains(&part), "`{part}` fehlt in valve.rs:\n{module}");
+    }
+
     let header = dir.join("valve.h");
     let c = dir.join("uses_header.c");
-    std::fs::write(&c, "#include \"valve.h\"\nstatic struct valve_arena arena;\nvoid *use(void) { return &arena; }\n")
-        .expect("Quelle");
+    std::fs::write(
+        &c,
+        format!(
+            "#include \"valve.h\"\nstatic struct valve_arena arena;\nvoid *use(void) {{ return &arena; }}\n\
+             _Static_assert(sizeof(struct valve_arena) == {bytes}, \"Groesse wie im Manifest\");\n\
+             _Static_assert(_Alignof(struct valve_arena) == {align}, \"Ausrichtung wie im Manifest\");\n"
+        ),
+    )
+    .expect("Quelle");
     let mut cmd = Command::new(&clang);
     let strict = Clang::deterministic(&mut cmd)
         .args(["-fsyntax-only", "-std=c11", "-Wall", "-Wextra", "-pedantic", "-Werror", "-I"])
@@ -92,7 +111,6 @@ fn one_call_delivers_library_header_module_and_manifest() {
     let text = std::fs::read_to_string(&header).expect("Kopf");
     assert!(text.contains("#define VALVE_TICK_NS 10000000LL"), "{text}");
 
-    let module = std::fs::read_to_string(dir.join("valve.rs")).expect("Modul");
     assert!(module.contains("ffi::valve_abi_1"), "die Huelle liest das ABI-Symbol nicht");
     let nm = clang.with_file_name(if cfg!(windows) { "llvm-nm.exe" } else { "llvm-nm" });
     let symbols = Command::new(&nm).arg("--defined-only").arg(&lib).output().expect("llvm-nm");

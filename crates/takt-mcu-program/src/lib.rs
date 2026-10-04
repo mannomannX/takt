@@ -235,13 +235,8 @@ impl Program for Generated {
     fn next_run(&self) -> Option<NextRun> {
         let mut delay = 0i64;
         // SAFETY: liest nur die Arena und schreibt `delay`.
-        match unsafe { app_next_run(self.arena, &mut delay) } {
-            1 => Some(NextRun::Now),
-            2 => Some(NextRun::After(delay)),
-            3 => Some(NextRun::OnWake),
-            4 => Some(NextRun::OnStart),
-            _ => None,
-        }
+        let code = unsafe { app_next_run(self.arena, &mut delay) };
+        NextRun::from_code(code, delay)
     }
 
     fn tick(&mut self, k: u64, _now: i64) {

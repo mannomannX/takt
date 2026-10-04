@@ -66,26 +66,27 @@ fn integral(x: f64) -> bool {
     x == (x as i64) as f64
 }
 
-/// Zustand der Qualitaetsmaschine eines Inputs zwischen den Lieferungen.
-///
-/// Der letzte gute Wert traegt den Wert, den `debounce` haelt, und zugleich den
-/// Bezugspunkt fuer `max_slew` — 3.5 nennt beide denselben: „gegenueber dem
-/// letzten guten Wert", und „der erste Wert nach Start oder nach `Bad` gilt
-/// als gut".
-///
-/// `repr(C)` und ohne `Option`, weil der erzeugte C-Rahmen den Zustand je
-/// Kanal in seinem eigenen Speicher haelt; lauter Nullen ist der Anfang.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Gate {
-    /// Letzter guter Wert.
-    good: f64,
-    /// Sein Zeitpunkt in Nanosekunden.
-    good_t: i64,
-    /// Gibt es einen letzten guten Wert?
-    has_good: bool,
-    /// Wie viele Lieferungen in Folge bereits verletzt haben.
-    strikes: u32,
+shared_with_c! {
+    /// Zustand der Qualitaetsmaschine eines Inputs zwischen den Lieferungen.
+    ///
+    /// Der letzte gute Wert traegt den Wert, den `debounce` haelt, und zugleich den
+    /// Bezugspunkt fuer `max_slew` — 3.5 nennt beide denselben: „gegenueber dem
+    /// letzten guten Wert", und „der erste Wert nach Start oder nach `Bad` gilt
+    /// als gut".
+    ///
+    /// `repr(C)` und ohne `Option`, weil der erzeugte C-Rahmen den Zustand je
+    /// Kanal in seinem eigenen Speicher haelt; lauter Nullen ist der Anfang.
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct Gate as "takt_gate" {
+        /// Letzter guter Wert.
+        good: f64,
+        /// Sein Zeitpunkt in Nanosekunden.
+        good_t: i64,
+        /// Gibt es einen letzten guten Wert?
+        has_good: bool,
+        /// Wie viele Lieferungen in Folge bereits verletzt haben.
+        strikes: u32,
+    }
 }
 
 /// Ergebnis einer Pruefung: Qualitaet und Grund, plus ob der letzte gute
@@ -195,4 +196,35 @@ pub struct Limits {
     pub max_slew: Option<f64>,
     /// `debounce`: so viele Verletzungen in Folge bleiben `Suspect` (3.5).
     pub debounce: u32,
+}
+
+shared_with_c! {
+    /// [`Limits`] in der Form des C-Rahmens: ohne `Option`, weil der Rahmen
+    /// sie als Konstante je Kanal haelt.
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct Bounds as "takt_bounds" {
+        /// Hat der Kanal eine Range?
+        pub has_range: bool,
+        /// Ihre untere Grenze.
+        pub lo: f64,
+        /// Ihre obere Grenze.
+        pub hi: f64,
+        /// Hat er `max_slew`?
+        pub has_slew: bool,
+        /// `max_slew` in Einheiten je Sekunde.
+        pub slew: f64,
+        /// `debounce`.
+        pub debounce: u32,
+    }
+}
+
+impl Bounds {
+    /// Die Grenzen, wie der Kern sie prueft.
+    pub fn limits(&self) -> Limits {
+        Limits {
+            range: self.has_range.then_some((self.lo, self.hi)),
+            max_slew: self.has_slew.then_some(self.slew),
+            debounce: self.debounce,
+        }
+    }
 }

@@ -498,3 +498,19 @@ impl Clock for Logical {
         self.0 = self.0.max(deadline);
     }
 }
+
+/// **Die Nummern von `P_next_run` laufen ab 1 ohne Luecke und kommen
+/// zurueck** (12.7, GEN-029): Der Rahmen schreibt `NextRun::code`, jede
+/// Huelle liest mit `NextRun::from_code`; die Zeile `end` im Rahmen
+/// waehlt ihr Wort ueber `code - 1`.
+#[test]
+fn every_end_of_a_run_comes_back_from_its_code() {
+    use takt_rt_core::NextRun;
+    let ends = [NextRun::Now, NextRun::After(5), NextRun::OnWake, NextRun::OnStart];
+    for (i, end) in ends.into_iter().enumerate() {
+        assert_eq!(end.code(), i as i32 + 1, "{end:?}");
+        assert_eq!(NextRun::from_code(end.code(), 5), Some(end));
+    }
+    assert_eq!(NextRun::from_code(0, 5), None, "0 heisst weiter");
+    assert_eq!(NextRun::from_code(5, 5), None);
+}

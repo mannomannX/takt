@@ -862,15 +862,20 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     platform(s, p, layout, x);
 }
 
-/// Wie `P_next_run` das Ende eines Laufs meldet: die Nummer ist die
-/// Stelle plus eins, 0 heisst weiter. `takt-mcu-program` liest dieselbe
-/// Folge.
-const NEXT_RUN_CODES: [takt_mir::sys::NextRun; 4] = [
-    takt_mir::sys::NextRun::Now,
-    takt_mir::sys::NextRun::After,
-    takt_mir::sys::NextRun::OnWake,
-    takt_mir::sys::NextRun::OnStart,
-];
+/// Die Nummer, mit der `P_next_run` ein Ende meldet: die von
+/// `takt-rt-core`, deren `NextRun::from_code` jede Huelle zuruecklesen
+/// laesst (GEN-029).
+fn next_run_code(end: takt_mir::sys::NextRun) -> i32 {
+    use takt_mir::sys::NextRun as Mir;
+    use takt_rt_core::NextRun as Rt;
+    match end {
+        Mir::Now => Rt::Now,
+        Mir::After => Rt::After(0),
+        Mir::OnWake => Rt::OnWake,
+        Mir::OnStart => Rt::OnStart,
+    }
+    .code()
+}
 
 /// `P_next_run` und `P_end`: das Ende des Laufs (12.7), wie im
 /// Wirtsrahmen — die Zeile `end`, dann alle Ausgaenge auf `safe`. Was
@@ -883,7 +888,7 @@ fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     if let Some(n) = &next {
         let _ = writeln!(s, "    switch (*({} *)(a->latch + {})) {{", n.ct, n.slot.offset);
         for (d, end) in &n.ends {
-            let code = NEXT_RUN_CODES.iter().position(|c| c == end).unwrap_or(0) + 1;
+            let code = next_run_code(*end);
             // `AFTER(delay)`: die Dauer im ersten Fach hinter der Diskriminante (11.2).
             let delay = match end {
                 takt_mir::sys::NextRun::After => format!("*delay = *(long long *)(a->latch + {}); ", n.slot.offset + 8),
@@ -896,14 +901,16 @@ fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     }
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
-    let words: Vec<String> = NEXT_RUN_CODES.iter().map(|c| format!("\"end {}\\n\"", c.word())).collect();
+    let mut ends = takt_mir::sys::NextRun::ALL;
+    ends.sort_by_key(|e| next_run_code(*e));
+    let words: Vec<String> = ends.iter().map(|c| format!("\"end {}\\n\"", c.word())).collect();
     let _ = writeln!(s, "void {x}_end(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    static const char *const words[] = {{ {} }};", words.join(", "));
     let _ = writeln!(s, "    int64_t delay;");
     let _ = writeln!(s, "    int c = {x}_next_run(a, &delay);");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(a->done);");
-    let _ = writeln!(s, "    if (c >= 1 && c <= {}) takt_board_trace(words[c - 1]);", NEXT_RUN_CODES.len());
+    let _ = writeln!(s, "    if (c >= 1 && c <= {}) takt_board_trace(words[c - 1]);", ends.len());
     crate::parts::safe_outputs(s, p, layout);
     let _ = writeln!(s, "}}\n");
 }
@@ -1779,7 +1786,7 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     devices.dedup();
     let alive = |d: &str| format!("{x}_alive_{}", takt_mir::pattern::Address::simple(d).ident());
 
-    let _ = writeln!(s, "_Bool takt_edge_output(_Bool confirmed, _Bool alive, int free, int capacity);");
+    let _ = writeln!(s, "{}", crate::edge::OUTPUT);
 
     let _ = writeln!(
         s,

@@ -250,6 +250,26 @@ pub enum NextRun {
     OnStart,
 }
 
+impl NextRun {
+    /// Die Nummer, mit der `P_next_run` des Rahmens dieses Ende meldet
+    /// (12.7); 0 heisst weiter. Der Rahmen schreibt sie, jede Huelle liest
+    /// sie mit [`NextRun::from_code`] zurueck: eine Zuordnung statt dreier
+    /// Fassungen von Hand (GEN-029).
+    pub const fn code(self) -> i32 {
+        match self {
+            NextRun::Now => 1,
+            NextRun::After(_) => 2,
+            NextRun::OnWake => 3,
+            NextRun::OnStart => 4,
+        }
+    }
+
+    /// Das Ende zu einer Nummer von `P_next_run`; `delay` gilt fuer `AFTER`.
+    pub fn from_code(code: i32, delay: i64) -> Option<NextRun> {
+        [NextRun::Now, NextRun::After(delay), NextRun::OnWake, NextRun::OnStart].into_iter().find(|n| n.code() == code)
+    }
+}
+
 /// Das Programm, das die Schleife ausfuehrt.
 ///
 /// Die Semantik liegt hinter diesem Trait: Der Interpreter fuehrt sie ueber

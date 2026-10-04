@@ -266,13 +266,8 @@ impl takt_embed::rt::Program for Program<'_> {{
     fn next_run(&self) -> Option<takt_embed::rt::NextRun> {{
         let mut delay = 0i64;
         // SAFETY: liest die Arena und schreibt `delay`.
-        match unsafe {{ ffi::{x}_next_run(self.arena, &mut delay) }} {{
-            1 => Some(takt_embed::rt::NextRun::Now),
-            2 => Some(takt_embed::rt::NextRun::After(delay)),
-            3 => Some(takt_embed::rt::NextRun::OnWake),
-            4 => Some(takt_embed::rt::NextRun::OnStart),
-            _ => None,
-        }}
+        let code = unsafe {{ ffi::{x}_next_run(self.arena, &mut delay) }};
+        takt_embed::rt::NextRun::from_code(code, delay)
     }}
 
     fn commit(&mut self) {{
