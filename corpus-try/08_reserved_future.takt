@@ -8,7 +8,7 @@ system:
     language = 1
     tick     = 1 ms
 
-node io1 @ hw("ethercat/1") with tick = 1 ms
+node io1 @ hw("ethercat/1") with tick = 1 ms  # ~ SC-3
 
 enum Cmd open: NOP, GO, STOP
 enum Level: LOW, MID, HIGH
@@ -43,14 +43,14 @@ trigger cut_on_sector node io1:
     then at event.t + 250 us: vbus_en = false
     bound 20 us
 
-machine motor_ctrl node io1 every 250 us:
+machine motor_ctrl node io1 every 250 us:  # ~ SC-3
     initial RUN
 
     state RUN:
         loop:
             beacon = trip_in
 
-machine supervisor node io1 every 10 ms:
+machine supervisor node io1 every 10 ms:  # ~ SC-3
     fault -> HALTED
     initial STARTING
 
@@ -92,7 +92,7 @@ machine lamp(index: int in 0..7) every 100 ms:
         loop:
             pass
 
-driver machine uart_tx node io1 every 50 us:
+driver machine uart_tx node io1 every 50 us:  # ~ SC-3
     initial SEND
 
     state SEND:

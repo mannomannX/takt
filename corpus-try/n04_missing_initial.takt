@@ -10,6 +10,11 @@ output led : bool @ hw("gpio/led") with safe = false
 machine no_initial:
     var counter : int in 0..10 = 0
 
-    state RUN:
-        loop:
+    state RUN:  # ~ P
+        loop:  # ~ P
             led = true
+
+# Der Parser findet nach dem ersten Fehler nicht zurueck und meldet
+# die folgenden Bloecke mit (FB-408); die Deklaration danach traegt
+# die letzte dieser Meldungen.
+command reset  # ~ P

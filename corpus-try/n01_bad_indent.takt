@@ -11,5 +11,5 @@ machine bad_indent:
     initial RUN
 
     state RUN:
-      loop:
-	led = true
+      loop:  # ~ E_INDENT
+	led = true  # ~ E_TAB, P

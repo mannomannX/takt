@@ -1,5 +1,6 @@
 # SC-50: reservierte Membernamen als Feld-, Bitfeld- und Capture-Namen
 # (reservierte Woerter: bad_reserved.takt).
+# Die zweite Meldung derselben Ursache ist mit angemerkt (FB-408).
 
 system:
     language = 1
@@ -22,5 +23,5 @@ machine names:
     initial RUN
 
     state RUN:
-        on rx matches "OK {t:int}":  # ~ SC-50
+        on rx matches "OK {t:int}":  # ~ SC-50, SC-18
             led = true

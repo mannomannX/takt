@@ -3,6 +3,7 @@ system:
     tick     = 1 ms
 
 # SC-7: dieselbe `hw`-Adresse ist zweimal gebunden.
+# Die Folgefehler der abgelehnten Deklaration sind mit angemerkt (FB-407).
 
 output a : bool @ hw("o/a") with safe = false
 output b : bool @ hw("o/a") with safe = false  # ~ SC-7
@@ -13,4 +14,4 @@ machine m:
     state RUN:
         loop:
             a = true
-            b = true
+            b = true  # ~ SC-2

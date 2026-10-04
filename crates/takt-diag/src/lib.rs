@@ -7,6 +7,7 @@
 //! Pruefung.
 
 use std::fmt;
+use std::panic::Location;
 
 /// Schwere einer Diagnose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -89,20 +90,36 @@ pub struct Diagnostic {
     pub notes: Vec<(Span, String)>,
     /// Konstrukt einer spaeteren Stufe („ab v1.1").
     pub stage: Option<Stage>,
+    /// Die Stelle im Quelltext des Compilers, an der die Diagnose entstand
+    /// (`#[track_caller]`): Der Diagnosekatalog haelt jede Meldestelle
+    /// gegen einen Fall im Korpus (13.8).
+    pub origin: &'static Location<'static>,
 }
 
 impl Diagnostic {
     /// Neue Diagnose der angegebenen Schwere.
+    #[track_caller]
     pub fn new(severity: Severity, code: &'static str, span: Span, message: impl Into<String>) -> Self {
-        Diagnostic { severity, code, message: message.into(), span, suggestion: None, notes: Vec::new(), stage: None }
+        Diagnostic {
+            severity,
+            code,
+            message: message.into(),
+            span,
+            suggestion: None,
+            notes: Vec::new(),
+            stage: None,
+            origin: Location::caller(),
+        }
     }
 
     /// Fehler.
+    #[track_caller]
     pub fn error(code: &'static str, span: Span, message: impl Into<String>) -> Self {
         Self::new(Severity::Error, code, span, message)
     }
 
     /// Warnung.
+    #[track_caller]
     pub fn warning(code: &'static str, span: Span, message: impl Into<String>) -> Self {
         Self::new(Severity::Warning, code, span, message)
     }

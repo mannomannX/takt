@@ -1066,6 +1066,7 @@ fn collect_state_names(states: &[ast::StateDecl], out: &mut Vec<(String, Span)>)
 }
 
 /// Erzeugt eine Diagnose fuer doppelte Namen in Maschinen.
+#[track_caller]
 pub fn duplicate(name: &str, span: Span) -> Diagnostic {
     Diagnostic::error(SC2, span, format!("`{name}` ist schon definiert"))
 }

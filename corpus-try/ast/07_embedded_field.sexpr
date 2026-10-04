@@ -19,7 +19,7 @@
 (input button :stream<Edge> @hw("gpio/btn") max_rate=50[Hz] wake=true)
 (input chg_status :u8 @hw("i2c1/0x6B/0x0B") max_age=500ms)
 (input flash_status :FlashStatus @hw("flash/status") max_age=10ms)
-(input flash_rx :stream<bytes<256>> @hw("flash/rx") max_rate=200[Hz] capacity=2)
+(input flash_rx :stream<bytes<256>> @hw("flash/rx") max_rate=200[Hz] capacity=20)
 (input on_trial :bool @hw("ota/trial") max_age=1s)
 (output flash_cmd :FlashCmd @hw("flash/cmd") safe=NONE)
 (output fet_chg :bool @hw("gpio/fet_chg") safe=false)

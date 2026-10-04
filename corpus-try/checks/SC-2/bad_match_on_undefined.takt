@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-2: ein unbestimmbares Subjekt meldet nur, dass der Name fehlt; die
+# Pruefung offener Enums (51) und der Vollstaendigkeit (19) schweigen.
+
+output led : bool @ hw("gpio/led") with safe = false
+
+machine dispatch:
+    initial RUN
+
+    state RUN:
+        loop:
+            match unknown_source():  # ~ SC-2
+                case FOO:
+                    led = true

@@ -172,7 +172,7 @@ Stmt(Match),ja,teilweise: nur `case` auf Varianten ohne Felder,ja
 Stmt(Return),ja,ja,ja
 Stmt(Send),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
 Stmt(At),ja,nein: `at` und `every` sind nicht kodiert,ja
-Stmt(Cancel),ja,nein: Stroeme und Trigger sind nicht kodiert,nein
+Stmt(Cancel),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
 Stmt(Skip),ja,nein: Stroeme und Trigger sind nicht kodiert,nein
 Stmt(Raise),ja,ja,ja
 Stmt(Job),ja,nein: Jobs sind nicht kodiert,ja

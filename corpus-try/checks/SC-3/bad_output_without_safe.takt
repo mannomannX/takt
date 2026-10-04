@@ -1,6 +1,7 @@
 # Ein Output braucht `safe` (8.1): Die Runtime schreibt ihn bei `FAULTED`,
 # beim Anhalten und bei Heartbeat-Verlust. Ein `sim`-Output speist nur die
 # Simulation und ein Ausgabestrom hat keinen Pegel; beide brauchen keinen.
+# Die Folgefehler der abgelehnten Deklaration sind mit angemerkt (FB-407).
 
 system:
     language = 1
@@ -14,6 +15,6 @@ machine m:
     initial RUN
     state RUN:
         loop:
-            v = true
+            v = true  # ~ SC-2
             v_sim = true
             ok = true

@@ -1,10 +1,13 @@
 //! Testrahmen der Pruefungen (plan/sema-m0.md, Abschnitt 4.2): je Pruefung ein
-//! Verzeichnis `corpus-try/checks/SC-n/` mit `ok_*.takt` (keine Diagnose dieses
-//! Codes) und `bad_*.takt` mit Zeilenanmerkungen `#~ SC-n` (dieselbe Zeile) oder
-//! `#~^ SC-n` (die Zeile davor). Andere Codes werden nicht bewertet.
+//! Verzeichnis `corpus-try/checks/SC-n/` mit `ok_*.takt` und `bad_*.takt`.
 //!
-//! Der Formatter normiert `#Text` zu `# Text` (F7), aus `#~` wird also `# ~`;
-//! beide Schreibweisen gelten, damit die Korpusdateien kanonisch bleiben.
+//! - `ok_` uebersetzt ohne Fehler und ohne eine Diagnose des eigenen Codes.
+//! - `bad_` erwartet mindestens eine Diagnose des eigenen Codes; die
+//!   Anmerkungen (`#~ SC-n`, `takt_testkit::expect`) nennen jede Diagnose
+//!   des eigenen Codes, jeden Fehler und jede angemerkte Warnung, mit Zeile
+//!   und auf Wunsch Spalte. Ein Fehler, den niemand anmerkt, scheitert:
+//!   Eine Datei soll an ihrer Pruefung scheitern, nicht an etwas anderem.
+//!   Warnungen anderer Codes bleiben unbewertet.
 //!
 //! Eine Datei `bad_stage.takt` ist der Sonderfall aus plan/m3.md 1.4: Die
 //! Pruefung ist erst moeglich, wenn ihr Konstrukt existiert. Bis dahin ist
@@ -27,33 +30,16 @@ use std::path::{Path, PathBuf};
 
 use takt_diag::{Policy, SourceMap};
 use takt_sema::{Build, Options};
+use takt_testkit::expect;
+
+/// Pruefungen, die ihren Code nie melden, mit Grund: Ihre `bad_`-Dateien
+/// koennen ihn nicht anmerken. Jede muss noch auftreten — meldet die
+/// Pruefung ihren Code, scheitert der Test, bis sie hier verschwindet.
+const SILENT: &[(&str, &str)] =
+    &[("SC-4", "FB-399: die Warnung der Pruefung 4 traegt den Code SC-24. TODO(M11 Schritt 31)")];
 
 fn root() -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/checks"))
-}
-
-/// Erwartete (Zeile, Code) aus den Anmerkungen.
-fn expectations(src: &str, code: &str) -> BTreeSet<u32> {
-    let mut out = BTreeSet::new();
-    for (i, line) in src.lines().enumerate() {
-        let (pos, skip) = match (line.find("#~"), line.find("# ~")) {
-            (Some(a), Some(b)) if b < a => (b, 3),
-            (Some(a), _) => (a, 2),
-            (None, Some(b)) => (b, 3),
-            (None, None) => continue,
-        };
-        let rest = line[pos + skip..].trim();
-        let (up, rest) = match rest.strip_prefix('^') {
-            Some(r) => (true, r.trim()),
-            None => (false, rest),
-        };
-        for want in rest.split(',').map(str::trim) {
-            if want == code {
-                out.insert(if up { i as u32 } else { i as u32 + 1 });
-            }
-        }
-    }
-    out
 }
 
 /// Die Hardware-Konfiguration eines Pruefverzeichnisses, falls es eine hat.
@@ -62,7 +48,7 @@ fn hardware(dir: &Path) -> Option<takt_mir::hardware::Hardware> {
     Some(takt_mir::hardware::parse(&text).expect("hardware.hw lesbar"))
 }
 
-fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>) {
+fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>, silent_seen: &mut Vec<String>) {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -82,12 +68,12 @@ fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>) {
         if let (Some(hw), Some(program)) = (&hw, &checked.program) {
             diagnostics.extend(takt_sema::calibrated::polling(program, hw, hw.targets.values().next()));
         }
-        let actual: BTreeSet<u32> =
-            diagnostics.iter().filter(|d| d.code == code).map(|d| map.line_col(d.span).0).collect();
         if name.starts_with("ok_") {
             seen_ok = true;
-            if !actual.is_empty() {
-                failures.push(format!("{code}/{name}: unerwartet {code} in Zeilen {actual:?}"));
+            let wrong: Vec<String> =
+                diagnostics.iter().filter(|d| d.is_error() || d.code == code).map(|d| map.render_line(d)).collect();
+            if !wrong.is_empty() {
+                failures.push(format!("{code}/{name}: muss fehlerfrei uebersetzen\n  {}", wrong.join("\n  ")));
             }
         } else if name == "bad_stage.takt" {
             seen_bad = true;
@@ -101,14 +87,27 @@ fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>) {
             }
         } else if name.starts_with("bad_") {
             seen_bad = true;
-            let expected = expectations(&src, code);
-            if expected != actual {
-                let rendered: Vec<String> =
-                    checked.diagnostics.iter().filter(|d| d.code == code).map(|d| map.render_line(d)).collect();
-                failures.push(format!(
-                    "{code}/{name}: erwartet Zeilen {expected:?}, erhalten {actual:?}\n  {}",
-                    rendered.join("\n  ")
-                ));
+            let expected = expect::expectations(&src);
+            if !expected.iter().any(|e| e.code == code) {
+                if SILENT.iter().any(|(c, _)| *c == code) {
+                    silent_seen.push(code.to_string());
+                } else {
+                    failures.push(format!("{code}/{name}: keine Anmerkung `#~ {code}`"));
+                }
+            }
+            let annotated: BTreeSet<&str> = expected.iter().map(|e| e.code.as_str()).collect();
+            let actual: Vec<expect::Actual> = diagnostics
+                .iter()
+                .filter(|d| d.is_error() || d.code == code || annotated.contains(d.code))
+                .map(|d| {
+                    let (line, col) = map.line_col(d.span);
+                    expect::Actual { line, col, code: d.code.to_string() }
+                })
+                .collect();
+            let wrong = expect::mismatches(&expected, &actual);
+            if !wrong.is_empty() {
+                let rendered: Vec<String> = diagnostics.iter().map(|d| map.render_line(d)).collect();
+                failures.push(format!("{code}/{name}: {}\n  {}", wrong.join("; "), rendered.join("\n  ")));
             }
         } else {
             failures.push(format!("{code}/{name}: Datei heisst weder ok_ noch bad_"));
@@ -129,9 +128,15 @@ fn every_check_directory_passes() {
     dirs.sort();
     assert!(dirs.len() >= 12, "zu wenige Pruefverzeichnisse: {}", dirs.len());
     let mut failures = Vec::new();
+    let mut silent_seen = Vec::new();
     for dir in dirs {
         let code = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
-        check_dir(&dir, &code, &mut failures);
+        check_dir(&dir, &code, &mut failures, &mut silent_seen);
+    }
+    for (code, why) in SILENT {
+        if !silent_seen.iter().any(|c| c == code) {
+            failures.push(format!("{code} meldet sich jetzt ({why}); aus `SILENT` streichen"));
+        }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

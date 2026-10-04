@@ -416,6 +416,7 @@ impl<'a> Lowerer<'a> {
     // ------------------------------------------------------------ Diagnosen
 
     /// Fehler.
+    #[track_caller]
     pub fn error(&mut self, code: &'static str, span: Span, msg: impl Into<String>) -> Diagnostic {
         let d = Diagnostic::error(code, span, msg);
         self.diags.push(d.clone());
@@ -423,22 +424,26 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Fehler mit Vorschlag.
+    #[track_caller]
     pub fn error_hint(&mut self, code: &'static str, span: Span, msg: impl Into<String>, hint: impl Into<String>) {
         let d = Diagnostic::error(code, span, msg).with_suggestion(hint);
         self.diags.push(d);
     }
 
     /// Warnung.
+    #[track_caller]
     pub fn warn(&mut self, code: &'static str, span: Span, msg: impl Into<String>) {
         self.diags.push(Diagnostic::warning(code, span, msg));
     }
 
     /// Warnung mit Vorschlag.
+    #[track_caller]
     pub fn warn_hint(&mut self, code: &'static str, span: Span, msg: impl Into<String>, hint: impl Into<String>) {
         self.diags.push(Diagnostic::warning(code, span, msg).with_suggestion(hint));
     }
 
     /// Konstrukt einer spaeteren Stufe.
+    #[track_caller]
     pub fn stage(&mut self, span: Span, what: &str, stage: Stage) {
         self.diags.push(
             Diagnostic::error(SC3, span, format!("{what} wird erst ab {} unterstuetzt", stage.as_str()))

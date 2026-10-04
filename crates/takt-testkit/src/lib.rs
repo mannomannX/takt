@@ -9,6 +9,11 @@
 //! fuer alle). Was es bewusst nur auf manchen Rechnern gibt — Boards, eine
 //! zweite Werkzeugkette —, gehoert nicht hierher, sondern in Tests mit
 //! `#[ignore = "…"]`: Die stehen im Ergebnis als `ignored`.
+//!
+//! **Erwartete Diagnosen je Datei** liest [`expect`], ein Leser fuer alle
+//! Korpora.
+
+pub mod expect;
 
 /// Die Umgebungsvariable, die das Fehlen von Werkzeugen erlaubt.
 pub const ALLOW_MISSING: &str = "TAKT_ALLOW_MISSING";

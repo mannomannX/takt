@@ -22,10 +22,11 @@
   (payload_len: u8)
   (payload: bytes<64> len=payload_len))
 (stream tx_queue :Frame capacity=8)
-(input rx_log :stream<line<256>> @hw("uart0/rx") max_rate=2000[Hz] framing=lines overflow=fault expect_len=80)
+(input rx_log :stream<line<256>> @hw("uart0/rx") max_rate=2000[Hz] framing=lines overflow=fault expect_len=80 capacity_bytes=512)
 (input rx_bus :stream<bytes<72>> @hw("can0/rx") max_rate=5000[Hz] capacity=64)
 (input edges :stream<Edge> @hw("gpio/cap0") max_rate=1[kHz])
 (output tx_uart :stream<u8> @hw("uart0/tx") max_rate=11520[Hz] capacity=256)
+(output tx_link :stream<u8> @hw("uart1/tx") max_rate=11520[Hz] capacity=256)
 (output dut_pwr :bool @hw("psu/enable") safe=false jitter=5us)
 (command start)
 (param CUT_DELAY :Duration in 1ms..2s 25ms)
@@ -90,4 +91,4 @@
   (initial RUN)
   (state RUN
     (on tx_queue as fr
-      (send tx_uart (.encode (.head (.data fr)))))))
+      (send tx_link (.encode (.head (.data fr)))))))

@@ -1,5 +1,6 @@
 # N03 — Reserviertes Wort als Bezeichner und reservierter Membername als Feld.
 # Erwartet: zwei Fehler aus 2.5 (Pruefung 50).
+# `region` meldet Pruefung 50 und der Parser (FB-408).
 
 system:
     language = 1
@@ -7,13 +8,13 @@ system:
 
 record Reading:
     valid : bool
-    state : int in 0..3
+    state : int in 0..3  # ~ P
 
-output region : bool @ hw("gpio/do0") with safe = false
+output region : bool @ hw("gpio/do0") with safe = false  # ~ SC-50, P
 
 machine names:
     initial RUN
 
     state RUN:
         loop:
-            region = true
+            region = true  # ~ SC-50, P

@@ -25,10 +25,11 @@ record Frame layout little:
 
 stream<Frame> tx_queue with capacity = 8
 
-input  rx_log  : stream<line<256>> @ hw("uart0/rx")   with max_rate = 2000 Hz, framing = lines, overflow = fault, expect_len = 80
+input  rx_log  : stream<line<256>> @ hw("uart0/rx")   with max_rate = 2000 Hz, framing = lines, overflow = fault, expect_len = 80, capacity_bytes = 512
 input  rx_bus  : stream<bytes<72>> @ hw("can0/rx")    with max_rate = 5000 Hz, capacity = 64
 input  edges   : stream<Edge>      @ hw("gpio/cap0")  with max_rate = 1 kHz
 output tx_uart : stream<u8>        @ hw("uart0/tx")   with max_rate = 11520 Hz, capacity = 256
+output tx_link : stream<u8>        @ hw("uart1/tx")   with max_rate = 11520 Hz, capacity = 256
 output dut_pwr : bool              @ hw("psu/enable") with safe = false, jitter = 5 us
 
 command start
@@ -108,4 +109,4 @@ machine sender follows link every 5 ms:
 
     state RUN:
         on tx_queue as fr:
-            send tx_uart, fr.data.head.encode()
+            send tx_link, fr.data.head.encode()

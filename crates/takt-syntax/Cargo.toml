@@ -9,5 +9,9 @@ rust-version.workspace = true
 [dependencies]
 takt-diag = { path = "../takt-diag" }
 
+[dev-dependencies]
+# Erwartete Diagnosen je Datei, ein Leser fuer alle Korpora (Schritt 25).
+takt-testkit = { path = "../takt-testkit" }
+
 [lints]
 workspace = true

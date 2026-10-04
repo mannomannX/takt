@@ -13,7 +13,7 @@ machine no_goto:
 
     state IDLE:
         when go:
-            led = true
+            led = true  # ~ P
 
     state RUN:
         loop:

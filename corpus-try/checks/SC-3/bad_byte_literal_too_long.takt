@@ -2,6 +2,8 @@ system:
     language = 1
     tick     = 1 ms
 
+# Die Folgefehler der abgelehnten Deklaration sind mit angemerkt (FB-407).
+
 output n : int @ hw("o/n") with safe = 0
 
 machine m:
@@ -9,4 +11,4 @@ machine m:
     initial RUN
     state RUN:
         loop:
-            n = cmd.len as int
+            n = cmd.len as int  # ~ SC-2

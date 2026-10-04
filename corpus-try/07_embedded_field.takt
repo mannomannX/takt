@@ -30,7 +30,7 @@ input  charger      : bool                        @ hw("gpio/vbus")      with wa
 input  button       : stream<Edge>                @ hw("gpio/btn")       with max_rate = 50 Hz, wake = true
 input  chg_status   : u8                          @ hw("i2c1/0x6B/0x0B") with max_age = 500 ms
 input  flash_status : FlashStatus                 @ hw("flash/status")   with max_age = 10 ms
-input  flash_rx     : stream<bytes<256>>          @ hw("flash/rx")       with max_rate = 200 Hz, capacity = 2
+input  flash_rx     : stream<bytes<256>>          @ hw("flash/rx")       with max_rate = 200 Hz, capacity = 20
 input  on_trial     : bool                        @ hw("ota/trial")      with max_age = 1 s
 output flash_cmd    : FlashCmd                    @ hw("flash/cmd")      with safe = NONE
 output fet_chg      : bool                        @ hw("gpio/fet_chg")   with safe = false

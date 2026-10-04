@@ -1,5 +1,5 @@
-# SC-51: offene Enums mit case _, geschlossene Enums ohne (Pruefung 19 ist M3),
-# unbestimmbares Subjekt ohne Meldung.
+# SC-51: offene Enums mit case _, geschlossene Enums vollstaendig ohne case _.
+# Ein unbestimmbares Subjekt steht in SC-2/bad_match_on_undefined.takt.
 
 system:
     language = 1
@@ -34,6 +34,5 @@ machine dispatch:
                     led = false
                 case MID:
                     led = true
-            match unknown_source():
-                case FOO:
+                case HIGH:
                     led = true

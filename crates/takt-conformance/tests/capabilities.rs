@@ -94,7 +94,6 @@ const UNUSED: &[(&str, &[&str])] = &[
             "Accessor(Contains)",
             "Accessor(Rate)",
             "Accessor(Truncated)",
-            "Stmt(Cancel)",
             "Stmt(Skip)",
             "Feature(MachineHandler)",
             "Feature(Node)",
