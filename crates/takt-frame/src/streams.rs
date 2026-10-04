@@ -445,12 +445,13 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], x: &Prefix) {
     // 8.6, `Buffer::push`: Ein Element vom Rand ist sofort sichtbar. Passt
     // es nicht, verdraengt es mit `drop_oldest` die aeltesten (1), sonst
     // ist es ein Ueberlauf (2) — ebenso, wenn es allein die Byteschranke
-    // sprengt.
+    // sprengt; dann verdraengt es nichts (FB-387).
     let _ = writeln!(
         s,
         "static int takt_int_deliver(struct {x}_arena *a, int k, const unsigned char *b, int n, long long at, _Bool drop_oldest) {{"
     );
     let _ = writeln!(s, "    int dropped = 0;");
+    let _ = writeln!(s, "    if (n > g_int_capb[k] || g_int_cap[k] == 0) {{ a->int_overflowed[k]++; return 2; }}");
     let _ = writeln!(
         s,
         "    while (drop_oldest && a->int_n[k] > 0 && (a->int_n[k] >= g_int_cap[k] || a->int_bused[k] + n > g_int_capb[k])) {{"

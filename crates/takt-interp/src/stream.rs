@@ -77,9 +77,11 @@ impl Buffer {
             self.append(t, value, bytes);
             return Delivery::Ok;
         }
-        if !drop_oldest {
-            // Das ueberzaehlige Element wird verworfen; der Fault trifft die
-            // Konsumenten bei ihrer naechsten Aktivierung (9.6).
+        // Das ueberzaehlige Element wird verworfen; der Fault trifft die
+        // Konsumenten bei ihrer naechsten Aktivierung (9.6). Ein Element,
+        // das allein die Byteschranke sprengt, passt auch in einen geleerten
+        // Puffer nicht: Es ist ein Ueberlauf und verdraengt nichts (FB-387).
+        if !drop_oldest || bytes > self.cap_bytes || self.cap == 0 {
             self.overflowed += 1;
             return Delivery::Overflow;
         }
@@ -90,12 +92,6 @@ impl Buffer {
             n += 1;
         }
         self.dropped += n;
-        // Ein Element, das allein die Byteschranke sprengt, passt auch in
-        // den geleerten Puffer nicht; es ist ein Ueberlauf, kein Verwerfen.
-        if bytes > self.cap_bytes || self.cap == 0 {
-            self.overflowed += 1;
-            return Delivery::Overflow;
-        }
         self.append(t, value, bytes);
         Delivery::Dropped(n)
     }

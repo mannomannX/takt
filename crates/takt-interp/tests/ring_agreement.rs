@@ -151,3 +151,43 @@ fn a_long_mixed_run_agrees_at_every_step() {
         same(&b, &r, cursor, &format!("Schritt {step_of}"));
     }
 }
+
+/// 8.6, FB-387: Ein Element, das allein groesser ist als `capacity_bytes`,
+/// passt in keinen Ring. Es ist ein Ueberlauf und verdraengt nichts, auch
+/// unter `drop_oldest` — sonst verloere der Puffer alles fuer ein Element,
+/// das er danach doch nicht aufnimmt.
+#[test]
+fn an_element_larger_than_the_byte_ring_overflows_without_dropping() {
+    let (mut b, (mut d, mut by)) = pair(4, 8);
+    let mut r = Ring::new(&mut d[..4], &mut by[..8]);
+    for k in 0..3u8 {
+        let a = b.push(i64::from(k), Value::UInt(u64::from(k)), 2, true);
+        let c = r.push(i64::from(k), &[k, k], true);
+        assert_eq!(a == IDelivery::Ok, c == RDelivery::Ok, "Schritt {k}");
+    }
+    let a = b.push(9, Value::Bytes(vec![0; 10]), 10, true);
+    let c = r.push(9, &[0; 10], true);
+    assert_eq!(a, IDelivery::Overflow, "Interpreter: ein Ueberlauf");
+    assert_eq!(c, RDelivery::Overflow, "Ring: ein Ueberlauf");
+    same(&b, &r, 0, "nach dem zu grossen Element");
+    assert_eq!(b.items.len(), 3, "nichts verdraengt");
+}
+
+/// 8.6: `drop_oldest` mit Elementen verschiedener Laenge verdraengt, bis
+/// das neue Element in die Byteschranke passt — beide gleich weit.
+#[test]
+fn drop_oldest_with_variable_lengths_agrees() {
+    let (mut b, (mut d, mut by)) = pair(8, 8);
+    let mut r = Ring::new(&mut d[..8], &mut by[..8]);
+    for (k, len) in [3usize, 1, 2, 4, 3, 5].into_iter().enumerate() {
+        let data = vec![k as u8; len];
+        let a = b.push(k as i64, Value::Bytes(data.clone()), len as u32, true);
+        let c = r.push(k as i64, &data, true);
+        assert_eq!(
+            matches!(a, IDelivery::Dropped(_)),
+            matches!(c, RDelivery::Dropped(_)),
+            "Schritt {k}: das Verdraengen weicht ab"
+        );
+        same(&b, &r, 0, &format!("nach Element {k}"));
+    }
+}
