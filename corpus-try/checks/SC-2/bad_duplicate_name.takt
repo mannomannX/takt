@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-2: Ein Name ist in seinem Bereich einmal vergeben (2.5); die zweite
+# Deklaration nennt die erste.
+
+const LIMIT = 3
+const LIMIT = 4  # ~ SC-2
+
+output v : int in 0..9 @ hw("o/v") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = LIMIT

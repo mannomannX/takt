@@ -66,7 +66,11 @@ impl Lowerer<'_> {
                 ast::Item::Const(c) => self.const_decl(c),
                 ast::Item::Param(p) => self.param_decl(p),
                 ast::Item::Profile(_) => {}
-                ast::Item::Channel(c) => self.channel_decl(c),
+                ast::Item::Channel(c) => {
+                    let errors = self.error_count();
+                    self.channel_decl(c);
+                    self.reject_unless_declared(&c.name, errors);
+                }
                 ast::Item::Command(c) => self.command_decl(c),
                 ast::Item::Fn(f) => {
                     if f.generics.is_empty() {
@@ -206,6 +210,8 @@ impl Lowerer<'_> {
                     format!("`{from}` scopet sich selbst (5.11)"),
                     format!("der Instanziierungsgraph bleibt azyklisch; Pfad: {path}"),
                 );
+                let on_cycle = |m: &String| reaches(&edges, &from, m).is_some() && reaches(&edges, m, &from).is_some();
+                self.scope_cycle = edges.iter().map(|(_, b, _)| b.clone()).filter(on_cycle).collect();
                 return;
             }
         }

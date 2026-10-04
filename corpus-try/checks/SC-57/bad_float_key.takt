@@ -2,7 +2,6 @@ system:
     language = 1
 
 # Pruefung 57 (3.9): Schluessel sind POD mit Gleichheit — kein Fliesskomma.
-# Die Folgefehler der abgelehnten Deklaration sind mit angemerkt (FB-407).
 output n : int in 0..8 @ hw("o/n") with safe = 0
 
 machine m:
@@ -10,4 +9,4 @@ machine m:
     initial RUN
     state RUN:
         loop:
-            n = by_temp.len  # ~ SC-2
+            n = by_temp.len

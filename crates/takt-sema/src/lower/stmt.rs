@@ -840,6 +840,13 @@ impl Lowerer<'_> {
 
     /// `var x [: T] = e`: Variable im aktuellen Bereich plus Zuweisung.
     fn var_stmt(&mut self, decl: &ast::VarDecl, kind: BlockKind) -> Option<StmtKind> {
+        let errors = self.error_count();
+        let stmt = self.var_stmt_body(decl, kind);
+        self.reject_unless_declared(&decl.name, errors);
+        stmt
+    }
+
+    fn var_stmt_body(&mut self, decl: &ast::VarDecl, kind: BlockKind) -> Option<StmtKind> {
         if kind.is_action() && kind != BlockKind::Else {
             self.error(SC8, decl.span, "`var` in einem Aktionsblock (5.5)");
             return None;

@@ -302,6 +302,10 @@ pub struct Lowerer<'a> {
     pub pending_scoped: Vec<(MachineId, StateId, takt_syntax::ast::InstanceDecl)>,
     /// Vorlagen, deren gescopte Instanzen gerade gesenkt werden (5.11 (c)).
     pub scope_stack: Vec<String>,
+    /// Die Maschinen eines Zyklus gescopter Instanzen, den Pruefung 53
+    /// gemeldet hat; ihre gescopten Instanzen werden nicht gesenkt, sonst
+    /// folgten der Meldung nur ihre Echos (FB-407).
+    pub scope_cycle: Vec<String>,
     /// Typ von `event` im `then`-Teil eines Triggers (7.5): der
     /// Bindungsrecord des Guards, also Captures und `.t`. Ausserhalb
     /// eines Triggers `None` — dort ist `event` nicht erklaert.
@@ -383,6 +387,7 @@ impl<'a> Lowerer<'a> {
             memo_stack: Vec::new(),
             pending_scoped: Vec::new(),
             scope_stack: Vec::new(),
+            scope_cycle: Vec::new(),
             event_ty: None,
             env: Env::default(),
             fn_ctx: Vec::new(),
@@ -507,7 +512,12 @@ impl<'a> Lowerer<'a> {
             return None;
         }
         match self.scopes.lookup(&name.name) {
+            // Die Ablehnung ist schon gemeldet; jede Verwendung waere nur ihr
+            // Echo (FB-407).
+            Some(Symbol { entity: Entity::Rejected, .. }) => None,
             Some(s) => Some(s.entity.clone()),
+            // Ein reserviertes Wort meldet der Tokenizer (FB-408).
+            None if self.edition.is_reserved(&name.name) => None,
             None => {
                 let hint = crate::symbols::suggestion(&name.name, self.scopes.visible()).map(str::to_string);
                 let mut d = Diagnostic::error(SC2, name.span, format!("`{}` ist nicht definiert", name.name));
@@ -520,9 +530,23 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Sucht ohne Meldung.
+    /// Sucht ohne Meldung; eine abgelehnte Deklaration gilt als fehlend.
     pub fn peek(&self, name: &str) -> Option<&Entity> {
-        self.scopes.lookup(name).map(|s| &s.entity)
+        self.scopes.lookup(name).map(|s| &s.entity).filter(|e| !matches!(e, Entity::Rejected))
+    }
+
+    /// Traegt `name` als abgelehnt ein, wenn seine Deklaration Fehler
+    /// brachte, seit `errors` gezaehlt wurde, und ihn nicht eintrug: Jede
+    /// Verwendung waere sonst ein zweites `nicht definiert` (FB-407).
+    pub fn reject_unless_declared(&mut self, name: &ast::Ident, errors: usize) {
+        if self.error_count() > errors && self.scopes.lookup(&name.name).is_none() {
+            self.declare(name, Entity::Rejected);
+        }
+    }
+
+    /// Wie viele Fehler bisher gemeldet sind.
+    pub fn error_count(&self) -> usize {
+        self.diags.iter().filter(|d| d.is_error()).count()
     }
 
     // ------------------------------------------------------------ Variablen

@@ -437,6 +437,12 @@ impl<'t, 's> Parser<'t, 's> {
     }
 
     fn ident(&mut self) -> PResult<Ident> {
+        // Ein reserviertes Wort hat der Tokenizer schon gemeldet; als Name
+        // genommen, folgt ihm kein zweiter Fehler an derselben Stelle (FB-408).
+        if self.at(TokenKind::Reserved) {
+            let t = self.bump();
+            return Ok(self.ident_of(t));
+        }
         let t = self.expect(TokenKind::Ident, "einen Namen in snake_case")?;
         Ok(self.ident_of(t))
     }

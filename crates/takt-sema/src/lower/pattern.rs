@@ -118,13 +118,9 @@ impl Lowerer<'_> {
         let mut ok = true;
         for piece in pieces {
             let PatternPiece::Capture { name, kind } = piece else { continue };
+            // Einen reservierten Capture-Namen meldet Pruefung 50 (names.rs,
+            // FB-408); er wird nur kein Capture.
             if RESERVED.contains(&name.as_str()) {
-                self.error_hint(
-                    SC18,
-                    span,
-                    format!("`{name}` ist als Capture-Name reserviert"),
-                    "eine Bindung traegt `t`, `seq`, `text` und `data` bereits (2.5)",
-                );
                 ok = false;
             }
             if out.iter().any(|(n, _)| n == name) {

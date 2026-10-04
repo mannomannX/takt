@@ -306,7 +306,7 @@ impl<'t, 's> Parser<'t, 's> {
                 }
                 _ => return Err(self.error_here("einen Ausdruck")),
             },
-            TokenKind::Ident => {
+            TokenKind::Ident | TokenKind::Reserved => {
                 let callee = self.ident()?;
                 let generics =
                     if self.at_op("[") && self.generic_args_ahead() { self.parse_generic_args()? } else { Vec::new() };

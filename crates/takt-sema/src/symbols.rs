@@ -63,6 +63,9 @@ pub enum Entity {
     Builtin(Builtin),
     /// Primitive (`abs`, `sqrt`, `fma`, …).
     Intrinsic(takt_mir::expr::Intrinsic),
+    /// Eine Deklaration, die mit einem Fehler abgelehnt wurde: Der Name ist
+    /// bekannt, eine Verwendung meldet nichts mehr (FB-407).
+    Rejected,
 }
 
 /// Ein Symbol mit Herkunft.

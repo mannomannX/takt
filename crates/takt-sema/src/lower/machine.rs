@@ -370,7 +370,9 @@ impl Lowerer<'_> {
     /// deklarieren, darum bis zur Leere.
     fn drain_scoped(&mut self) {
         while let Some((owner, scope, decl)) = self.pending_scoped.pop() {
-            self.scoped_instance(owner, scope, &decl);
+            if !self.scope_cycle.contains(&decl.template.name) {
+                self.scoped_instance(owner, scope, &decl);
+            }
         }
     }
 
@@ -408,6 +410,13 @@ impl Lowerer<'_> {
 
     /// Variable der Maschine oder eines Zustands (Initialwert bei Eintritt).
     fn machine_var(&mut self, v: &ast::VarDecl, scope: VarScope) -> Option<VarId> {
+        let errors = self.error_count();
+        let id = self.machine_var_body(v, scope);
+        self.reject_unless_declared(&v.name, errors);
+        id
+    }
+
+    fn machine_var_body(&mut self, v: &ast::VarDecl, scope: VarScope) -> Option<VarId> {
         let (ty, init) = self.var_init(v)?;
         let init = self.range_checked(init, ty, v.span);
         if let ExprKind::BlockInit { block, count, .. } = &init.kind {
