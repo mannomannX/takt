@@ -11,6 +11,12 @@
 //! was 11.5 fuer den Stack annimmt: keine Laufvariable, kein Index, keine
 //! Schranke, die jemand pruefen muesste.
 //!
+//! **Felder mit `len`** (FB-413). Ein `bytes<N> with len = n` ist im Draht
+//! `n` Byte lang; die Felder danach liegen um die Luecke `N - n` frueher
+//! als im Plan, der jedes Feld mit seiner Obergrenze rechnet. Nur fuer
+//! solche Records rechnet der Code die Luecke zur Laufzeit mit; die
+//! uebrigen bleiben bei festen Plaetzen.
+//!
 //! **`decode` faultet nie** (3.7). Ein zu kurzer Puffer, ein verletztes
 //! Konstantenfeld oder ein Wert ausserhalb der Range machen es zu `none`
 //! — das Programm entscheidet mit `match`, was das bedeutet. Ein Fault
@@ -215,20 +221,50 @@ pub fn decode(
     let size = def.wire_size.ok_or(NotYet { what: "Record ohne Drahtgroesse" })?;
     let LlvmType::Struct(wrapper) = want else { return Err(NotYet { what: "`decode` ohne `R?`" }) };
     let inner = wrapper.first().cloned().ok_or(NotYet { what: "Record-Typ" })?;
+    let gaps = Gaps::of(def, p)?;
 
     let end_at = format!("decode{label}_ende");
     let zu_kurz = format!("decode{label}_kurz");
-    // 3.7: zu kurzer Puffer ergibt `none`.
-    let long_enough = m.inst(&format!("icmp uge i32 {len}, {size}"));
+    // 3.7: zu kurzer Puffer ergibt `none` — mit Feldern variabler Laenge
+    // zuerst gegen die kleinste Laenge, am Ende gegen die tatsaechliche.
+    let long_enough = m.inst(&format!("icmp uge i32 {len}, {}", gaps.least(size)));
     let go_on = format!("decode{label}_felder");
     m.void_inst(&format!("br i1 {long_enough}, label %{go_on}, label %{zu_kurz}"));
     m.label(&go_on);
+    // Kein Feld liest ueber den Puffer hinaus: Mit Feldern variabler Laenge
+    // liegt er in einer genullten Kopie der groessten Laenge.
+    let buf = if gaps.variable() {
+        let copy = m.alloca(&format!("[{size} x i8]"));
+        m.void_inst(&format!("call void @llvm.memset.p0.i64(ptr {copy}, i8 0, i64 {size}, i1 false)"));
+        let have = m.inst(&format!("zext i32 {len} to i64"));
+        let fits = m.inst(&format!("icmp ult i64 {have}, {size}"));
+        let n = m.inst(&format!("select i1 {fits}, i64 {have}, i64 {size}"));
+        m.void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {copy}, ptr {buf}, i64 {n}, i1 false)"));
+        copy
+    } else {
+        buf
+    };
 
     let mut value = "undef".to_string();
     let mut checks: Vec<(String, String)> = Vec::new();
+    let mut shift = "0".to_string();
+    let mut read: Vec<Field> = Vec::with_capacity(def.fields.len());
     for (i, f) in def.fields.iter().enumerate() {
         let at = f.offset.ok_or(NotYet { what: "Feld ohne Versatz" })?;
-        let field = read_field(buf, at, f.ty, layout.endian, p, m)?;
+        let field = match f.len_field {
+            Some(j) => {
+                let n = read.get(j as usize).ok_or(NotYet { what: "Laengenfeld" })?;
+                let (field, ok, next) = read_counted(buf, at, &shift, n, f.ty, p, m)?;
+                checks.push((ok, m.block().to_string()));
+                shift = next;
+                field
+            }
+            None if shift == "0" => read_field(buf, at, f.ty, layout.endian, p, m)?,
+            None => {
+                let ptr = field_ptr(buf, at, &shift, m);
+                read_field(ptr, 0, f.ty, layout.endian, p, m)?
+            }
+        };
         // Ein Konstantenfeld muss den deklarierten Wert tragen (3.7).
         if let Some(want) = &f.const_value {
             let expected = const_operand(want).ok_or(NotYet { what: "Konstantenfeld dieses Typs" })?;
@@ -236,6 +272,13 @@ pub fn decode(
             checks.push((ok.to_string(), m.block().to_string()));
         }
         value = m.inst(&format!("insertvalue {inner} {value}, {} {}, {i}", field.ty, field.value)).to_string();
+        read.push(field);
+    }
+    if gaps.variable() {
+        let have = m.inst(&format!("zext i32 {len} to i64"));
+        let need = gaps.length(&shift, m);
+        let ok = m.inst(&format!("icmp uge i64 {have}, {need}"));
+        checks.push((ok.to_string(), m.block().to_string()));
     }
 
     // Die Pruefungen werden zu einem Flag verknuepft; ein `and` je
@@ -282,24 +325,170 @@ pub fn encode(
     let def = p.records.get(record.index()).ok_or(NotYet { what: "Record" })?;
     let layout = def.layout.as_ref().ok_or(NotYet { what: "Record ohne `layout`" })?;
     let size = def.wire_size.ok_or(NotYet { what: "Record ohne Drahtgroesse" })?;
+    let gaps = Gaps::of(def, p)?;
     // Das Ergebnis ist ein `bytes<SIZE>`: Laenge und Daten (3.9).
     let buf = m.alloca(want);
     let len_ptr = m.inst(&format!("getelementptr inbounds {want}, ptr {buf}, i32 0, i32 0"));
-    m.void_inst(&format!("store i32 {size}, ptr {len_ptr}"));
     let data = m.inst(&format!("getelementptr inbounds {want}, ptr {buf}, i32 0, i32 1"));
+    if gaps.variable() {
+        m.void_inst(&format!("call void @llvm.memset.p0.i64(ptr {data}, i8 0, i64 {size}, i1 false)"));
+    }
+    // Die Laenge jedes Feldes mit `len` steht vorab fest; `encode` setzt
+    // damit sein Laengenfeld (3.7).
+    let mut counted: Vec<(usize, u32, String, Reg)> = Vec::new();
+    for (i, f) in def.fields.iter().enumerate() {
+        if let Some(j) = f.len_field {
+            let field_ty = ty::lower(f.ty, p).ok_or(NotYet { what: "Feldtyp" })?;
+            let Some(Type::Bytes { cap }) = p.types.list.get(f.ty.index()) else {
+                return Err(NotYet { what: "`len` an einem Feld ohne `bytes<N>`" });
+            };
+            let operand = m.inst(&format!("extractvalue {} {}, {i}", value.ty, value.value));
+            let tmp = m.alloca(&field_ty);
+            m.write(&field_ty, &operand.to_string(), &tmp.to_string());
+            let at = m.inst(&format!("getelementptr inbounds {field_ty}, ptr {tmp}, i32 0, i32 0"));
+            let len = m.inst(&format!("load i32, ptr {at}"));
+            let wide = m.inst(&format!("zext i32 {len} to i64"));
+            let short = m.inst(&format!("icmp ult i64 {wide}, {cap}"));
+            let n = m.inst(&format!("select i1 {short}, i64 {wide}, i64 {cap}"));
+            counted.push((j as usize, *cap, n.to_string(), tmp));
+        }
+    }
+    let mut shift = "0".to_string();
+    let mut next = counted.iter();
     for (i, f) in def.fields.iter().enumerate() {
         let at = f.offset.ok_or(NotYet { what: "Feld ohne Versatz" })?;
         let field_ty = ty::lower(f.ty, p).ok_or(NotYet { what: "Feldtyp" })?;
-        // Ein Konstantenfeld traegt seinen deklarierten Wert, nicht den
-        // des Records (3.7).
-        let operand = match &f.const_value {
-            Some(c) => const_operand(c).ok_or(NotYet { what: "Konstantenfeld dieses Typs" })?,
-            None => m.inst(&format!("extractvalue {} {}, {i}", value.ty, value.value)).to_string(),
+        let (base, at) = match shift.as_str() {
+            "0" => (data, at),
+            _ => (field_ptr(data, at, &shift, m), 0),
         };
-        write_field(data, at, f.ty, &operand, &field_ty, layout.endian, p, m)?;
+        if f.len_field.is_some() {
+            let (_, cap, n, tmp) = next.next().ok_or(NotYet { what: "Feld mit `len`" })?;
+            let src = m.inst(&format!("getelementptr inbounds {field_ty}, ptr {tmp}, i32 0, i32 1"));
+            let dst = m.inst(&format!("getelementptr inbounds i8, ptr {base}, i64 {at}"));
+            m.void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {src}, i64 {n}, i1 false)"));
+            let gap = m.inst(&format!("sub i64 {cap}, {n}"));
+            shift = m.inst(&format!("add i64 {shift}, {gap}")).to_string();
+            continue;
+        }
+        // Ein Konstantenfeld traegt seinen deklarierten Wert, ein
+        // Laengenfeld die Laenge seines Feldes, nicht den des Records (3.7).
+        let operand = match (&f.const_value, counted.iter().find(|(j, ..)| *j == i)) {
+            (Some(c), _) => const_operand(c).ok_or(NotYet { what: "Konstantenfeld dieses Typs" })?,
+            (None, Some((_, _, n, _))) => match &field_ty {
+                LlvmType::Int(64) => n.clone(),
+                LlvmType::Int(bits) => m.inst(&format!("trunc i64 {n} to i{bits}")).to_string(),
+                _ => return Err(NotYet { what: "Laengenfeld ohne Ganzzahltyp" }),
+            },
+            (None, None) => m.inst(&format!("extractvalue {} {}, {i}", value.ty, value.value)).to_string(),
+        };
+        write_field(base, at, f.ty, &operand, &field_ty, layout.endian, p, m)?;
     }
+    let length = match gaps.variable() {
+        true => {
+            let total = gaps.length(&shift, m);
+            m.inst(&format!("trunc i64 {total} to i32")).to_string()
+        }
+        false => size.to_string(),
+    };
+    m.void_inst(&format!("store i32 {length}, ptr {len_ptr}"));
     let loaded = m.inst(&format!("load {want}, ptr {buf}"));
     Ok(crate::expr::Lowered { value: loaded.to_string(), ty: want.clone() })
+}
+
+/// Was die Felder variabler Laenge eines Records fuer seinen Plan
+/// bedeuten (3.7, FB-413).
+struct Gaps {
+    /// Das Ende des letzten Feldes im Plan, vor `align`.
+    end: u32,
+    /// Die Summe der Obergrenzen aller Felder mit `len`.
+    caps: u32,
+    /// `align` des Layouts.
+    align: Option<u32>,
+}
+
+impl Gaps {
+    fn of(def: &takt_mir::types::RecordDef, p: &Program) -> Result<Gaps, NotYet> {
+        let (mut end, mut caps) = (0, 0);
+        for f in &def.fields {
+            let size = field_size(f.ty, p).ok_or(NotYet { what: "Feldgroesse" })?;
+            end = end.max(f.offset.ok_or(NotYet { what: "Feld ohne Versatz" })? + size);
+            if f.len_field.is_some() {
+                caps += size;
+            }
+        }
+        Ok(Gaps { end, caps, align: def.layout.as_ref().and_then(|l| l.align) })
+    }
+
+    fn variable(&self) -> bool {
+        self.caps > 0
+    }
+
+    /// Die kleinste Laenge eines Rahmens: jedes Feld mit `len` leer.
+    fn least(&self, size: u32) -> u32 {
+        if self.variable() { self.end - self.caps } else { size }
+    }
+
+    /// Die Laenge eines Rahmens hinter einer Luecke `shift`: das Ende des
+    /// letzten Feldes, nach `align` aufgerundet.
+    fn length(&self, shift: &str, m: &mut Module) -> String {
+        let end = m.inst(&format!("sub i64 {}, {shift}", self.end));
+        match self.align {
+            Some(a) if a > 1 => {
+                let up = m.inst(&format!("add i64 {end}, {}", a - 1));
+                m.inst(&format!("and i64 {up}, {}", -i64::from(a))).to_string()
+            }
+            _ => end.to_string(),
+        }
+    }
+}
+
+/// Der Platz eines Feldes, dessen Plan-Versatz `at` ist, hinter einer
+/// Luecke `shift` der Felder variabler Laenge davor.
+fn field_ptr(buf: Reg, at: u32, shift: &str, m: &mut Module) -> Reg {
+    if shift == "0" {
+        return m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {at}"));
+    }
+    let place = m.inst(&format!("sub i64 {at}, {shift}"));
+    m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {place}"))
+}
+
+/// Liest ein `bytes<N> with len = n` (FB-413): `n` aus dem schon gelesenen
+/// Laengenfeld, hoechstens N, sonst ist der Rahmen fremd. Ergibt das Feld,
+/// die Pruefung `n <= N` und die neue Luecke.
+fn read_counted(
+    buf: Reg,
+    at: u32,
+    shift: &str,
+    count: &Field,
+    ty: TypeId,
+    p: &Program,
+    m: &mut Module,
+) -> Result<(Field, String, String), NotYet> {
+    let Some(Type::Bytes { cap }) = p.types.list.get(ty.index()) else {
+        return Err(NotYet { what: "`len` an einem Feld ohne `bytes<N>`" });
+    };
+    let target = ty::lower(ty, p).ok_or(NotYet { what: "Feldtyp" })?;
+    let LlvmType::Int(bits) = count.ty else { return Err(NotYet { what: "Laengenfeld ohne Ganzzahltyp" }) };
+    // Eine negative Laenge wird gross und faellt durch die Pruefung.
+    let n = match bits {
+        64 => count.value.clone(),
+        _ => m.inst(&format!("sext i{bits} {} to i64", count.value)).to_string(),
+    };
+    let ok = m.inst(&format!("icmp ule i64 {n}, {cap}"));
+    let n = m.inst(&format!("select i1 {ok}, i64 {n}, i64 0"));
+    let from = field_ptr(buf, at, shift, m);
+    let tmp = m.alloca(&target);
+    m.write(&target, "zeroinitializer", &tmp.to_string());
+    let len_at = m.inst(&format!("getelementptr inbounds {target}, ptr {tmp}, i32 0, i32 0"));
+    let len = m.inst(&format!("trunc i64 {n} to i32"));
+    m.void_inst(&format!("store i32 {len}, ptr {len_at}"));
+    let data = m.inst(&format!("getelementptr inbounds {target}, ptr {tmp}, i32 0, i32 1"));
+    m.void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {data}, ptr {from}, i64 {n}, i1 false)"));
+    let value = m.inst(&format!("load {target}, ptr {tmp}"));
+    let gap = m.inst(&format!("sub i64 {cap}, {n}"));
+    let next = m.inst(&format!("add i64 {shift}, {gap}"));
+    Ok((Field { value: value.to_string(), ty: target }, ok.to_string(), next.to_string()))
 }
 
 /// Ein Feldwert als Zahl seiner Drahtbreite.

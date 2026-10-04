@@ -7,13 +7,17 @@
 //! und ist danach die einzige Quelle fuer Interpreter und Codegen
 //! (plan/m2.md 1.8). Die Pruefung 46 faellt bei der Berechnung an: die
 //! Ueberlappungspruefung *ist* die Planberechnung.
+//!
+//! Ein Feld `bytes<N> with len = n` steht im Plan mit seiner Obergrenze N;
+//! im Draht ist es `n` Byte lang, und die Felder dahinter ruecken um die
+//! Luecke nach. `wire_size` ist darum die groesste Laenge (FB-413).
 
 use takt_diag::Span;
 use takt_mir::types::{FieldDef, Type};
 use takt_mir::{RecordId, TypeId};
 
 use super::Lowerer;
-use crate::checks::SC46;
+use crate::checks::{SC37, SC46};
 
 impl Lowerer<'_> {
     /// Rechnet den Byteplan eines Records mit `layout` und prueft ihn (46).
@@ -26,8 +30,21 @@ impl Lowerer<'_> {
         let (fields, align, span) = (record.fields.clone(), record.layout.as_ref().and_then(|l| l.align), record.span);
         let mut cursor = 0u32;
         let mut placed: Vec<(u32, u32, String)> = Vec::new();
+        let mut variable: Option<&str> = None;
         let mut out = fields.clone();
         for (i, f) in fields.iter().enumerate() {
+            // Hinter einem Feld variabler Laenge haengt jede Position von ihr ab.
+            if let (Some(name), Some(_)) = (variable, f.offset) {
+                self.error_hint(
+                    SC37,
+                    f.span,
+                    format!("`offset` an `{}` hinter `{name}` mit `len`", f.name),
+                    "die Position folgt aus der Laenge davor; `offset` weglassen oder vor das Feld setzen (3.7)",
+                );
+            }
+            if f.len_field.is_some() {
+                variable = variable.or(Some(&f.name));
+            }
             let Some(size) = self.wire_size(f.ty, f.span) else { continue };
             // `offset = N` setzt die Position absolut, sonst laeuft sie fort.
             let at = f.offset.unwrap_or(cursor);
@@ -120,6 +137,16 @@ impl Lowerer<'_> {
             Type::Enum(e) => {
                 // `enum … layout u8` gibt die Breite vor; sonst ein Byte.
                 Some(self.program.enums[e.index()].layout.map_or(1, |w| w.bits() / 8))
+            }
+            Type::Record(r) if self.program.records[r.index()].fields.iter().any(|f| f.len_field.is_some()) => {
+                let name = self.program.records[r.index()].name.clone();
+                self.error_hint(
+                    SC37,
+                    span,
+                    format!("`{name}` hat ein Feld variabler Laenge und keine feste Groesse"),
+                    "den Record nicht verschachteln, seine Felder hier einsetzen (3.7)",
+                );
+                None
             }
             Type::Record(r) => {
                 let size = self.program.records[r.index()].wire_size;

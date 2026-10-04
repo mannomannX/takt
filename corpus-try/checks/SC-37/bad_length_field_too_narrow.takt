@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-37: Das Laengenfeld fasst jede Laenge von 0 bis zur Obergrenze, sonst
+# koennte `encode` einen Wert nicht beschreiben (3.7, FB-413).
+
+record Short layout little:
+    n     : u8 in 0..4
+    value : bytes<8> with len = n  # ~ SC-37
+
+record Long layout little:
+    n     : u8
+    value : bytes<300> with len = n  # ~ SC-37
+
+output o : int in 0..99 @ hw("o/o") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            o = 1

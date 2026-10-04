@@ -441,3 +441,99 @@ machine m:
     );
     assert!(nested.contains("nur als Anweisung"), "keine Verschachtelung (4.4): {nested}");
 }
+
+/// TLV mit Laengenfeld (3.7, FB-413): Das Feld ist im Draht so lang, wie
+/// das Laengenfeld sagt, die Felder danach ruecken nach; `decode` liefert
+/// `none` ueber der Obergrenze und bei zu kurzem Puffer, `encode` setzt die
+/// Laenge aus dem Wert und kuerzt die Ausgabe.
+const TLV: &str = "record Tlv layout little:
+    kind  : u8
+    n     : u8
+    value : bytes<8> with len = n
+    tail  : u8
+
+output len_out  : int in 0..99  @ hw(\"o/len\")  with safe = 0
+output tail_out : u8            @ hw(\"o/tail\") with safe = 0
+output size_out : int in 0..99  @ hw(\"o/size\") with safe = 0
+output n_out    : u8            @ hw(\"o/n\")    with safe = 0
+output after_out : u8           @ hw(\"o/after\") with safe = 0
+output over     : bool          @ hw(\"o/over\") with safe = true
+output short    : bool          @ hw(\"o/short\") with safe = true
+
+machine m:
+    var b : bytes<16> = default
+    var c : bytes<16> = default
+    var d : bytes<4> = default
+    var t : Tlv = default
+    var ok : bool = false
+    initial RUN
+
+    state RUN:
+        enter:
+            ok = b.push(7)
+            ok = b.push(3)
+            ok = b.push(97)
+            ok = b.push(98)
+            ok = b.push(99)
+            ok = b.push(85)
+            ok = c.push(7)
+            ok = c.push(9)
+            for i in range(12):
+                ok = c.push(0)
+            ok = d.push(7)
+            ok = d.push(3)
+            ok = d.push(97)
+            ok = d.push(98)
+            t.kind = 1
+            t.tail = 9
+            ok = t.value.push(120)
+            ok = t.value.push(121)
+        loop:
+            var got = Tlv.decode(b)
+            len_out = got.or(default).value.len
+            tail_out = got.or(default).tail
+            over = Tlv.decode(c).valid
+            short = Tlv.decode(d).valid
+            var e = t.encode()
+            size_out = e.len
+            var back = Tlv.decode(e)
+            n_out = back.or(default).n
+            after_out = back.or(default).tail
+";
+
+#[test]
+fn a_length_prefixed_field_is_as_long_as_its_length_field_says() {
+    let trace = simulate(TLV, 0);
+    for want in [
+        "out len_out 3
+",
+        "out tail_out 85
+",
+        "out over false
+",
+        "out short false
+",
+    ] {
+        assert!(
+            trace.contains(want),
+            "decode: `{}` fehlt:
+{trace}",
+            want.trim()
+        );
+    }
+    for want in [
+        "out size_out 5
+",
+        "out n_out 2
+",
+        "out after_out 9
+",
+    ] {
+        assert!(
+            trace.contains(want),
+            "encode: `{}` fehlt:
+{trace}",
+            want.trim()
+        );
+    }
+}

@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-37: Hinter einem Feld mit `len` haengt jede Position von der Laenge
+# ab; ein festes `offset` gibt es dort nicht (3.7, FB-413).
+
+record Tlv layout little:
+    n     : u8
+    value : bytes<8> with len = n
+    tail  : u8 offset = 12  # ~ SC-37
+
+output o : int in 0..99 @ hw("o/o") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            o = 1

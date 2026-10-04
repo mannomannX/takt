@@ -316,7 +316,7 @@ impl Lowerer<'_> {
             };
             let offset = f.offset.as_ref().and_then(|o| o.text.replace('_', "").parse().ok());
             let known: Vec<FieldDef> = before.iter().chain(out.iter()).cloned().collect();
-            let len_field = f.len_field.as_ref().and_then(|lf| self.len_field_index(&known, lf, f.span));
+            let len_field = f.len_field.as_ref().and_then(|lf| self.len_field_index(&known, lf, ty, f));
             out.push(FieldDef {
                 name: f.name.name.clone(),
                 ty,
@@ -333,7 +333,10 @@ impl Lowerer<'_> {
     /// Pruefung 37 (3.7): `len = len_field` verweist auf ein *vorangehendes*
     /// Integer-Feld. Ein Verweis nach vorn waere beim Dekodieren nicht
     /// lesbar, ein Verweis auf ein Nicht-Integer nicht als Laenge deutbar.
-    fn len_field_index(&mut self, done: &[FieldDef], name: &ast::Ident, span: Span) -> Option<u32> {
+    /// Die Laenge traegt nur ein `bytes<N>`, und das Laengenfeld fasst jede
+    /// Laenge von 0 bis N — sonst koennte `encode` einen Wert nicht
+    /// beschreiben (FB-413).
+    fn len_field_index(&mut self, done: &[FieldDef], name: &ast::Ident, ty: TypeId, f: &ast::Field) -> Option<u32> {
         let Some(i) = done.iter().position(|x| x.name == name.name) else {
             self.error_hint(
                 crate::checks::SC37,
@@ -353,7 +356,33 @@ impl Lowerer<'_> {
             );
             return None;
         }
-        let _ = span;
+        let Type::Bytes { cap } = *self.ty(ty) else {
+            let t = self.type_name(ty);
+            self.error_hint(
+                crate::checks::SC37,
+                f.span,
+                format!("`with len` an `{}` vom Typ `{t}`", f.name.name),
+                "eine Laenge aus einem Feld traegt nur ein `bytes<N>` (3.7)",
+            );
+            return None;
+        };
+        let holds = match (self.ty(done[i].ty).clone(), self.range_of(done[i].ty)) {
+            (_, Some(r)) => matches!(
+                (r.lo, r.hi),
+                (takt_mir::types::Const::Int(lo), takt_mir::types::Const::Int(hi)) if lo <= 0 && hi >= i64::from(cap)
+            ),
+            (Type::Int { width, .. }, None) => takt_interp::arith::bounds(width).1 >= i128::from(cap),
+            _ => false,
+        };
+        if !holds {
+            self.error_hint(
+                crate::checks::SC37,
+                f.span,
+                format!("`{}` fasst nicht jede Laenge 0..{cap} von `{}`", name.name, f.name.name),
+                "dem Laengenfeld einen Typ oder eine Range geben, die bis zur Obergrenze reicht (3.7)",
+            );
+            return None;
+        }
         Some(i as u32)
     }
 

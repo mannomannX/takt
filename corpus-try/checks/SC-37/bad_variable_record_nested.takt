@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-37: Ein Record mit einem Feld variabler Laenge hat keine feste Groesse
+# und steht darum in keinem anderen Record (3.7, FB-413).
+
+record Inner layout little:
+    n     : u8
+    value : bytes<8> with len = n
+
+record Outer layout little:
+    head  : u8
+    inner : Inner  # ~ SC-37
+
+output o : int in 0..99 @ hw("o/o") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            o = 1

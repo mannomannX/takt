@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-37: Eine Laenge aus einem Feld traegt nur ein `bytes<N>` (3.7, FB-413).
+
+record Arr layout little:
+    n      : u8
+    values : [4] u8 with len = n  # ~ SC-37
+
+output o : int in 0..99 @ hw("o/o") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            o = 1

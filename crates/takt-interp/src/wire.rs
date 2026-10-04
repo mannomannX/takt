@@ -15,19 +15,31 @@ use crate::loaded::Loaded;
 use crate::value::Value;
 
 /// `R.decode(b)`: `Some(record)` oder `None` (3.7).
+///
+/// Ein Feld `bytes<N> with len = n` ist im Draht `n` Byte lang; die Felder
+/// danach liegen um die Luecke `N - n` frueher als im Plan, der jedes Feld
+/// mit seiner Obergrenze rechnet (FB-413).
 pub fn decode(loaded: &Loaded<'_>, record: RecordId, bytes: &[u8]) -> Option<Value> {
     let def = &loaded.program.records[record.index()];
     let endian = def.layout.as_ref()?.endian;
-    let size = def.wire_size? as usize;
-    if bytes.len() < size {
-        return None;
-    }
-    let mut fields = Vec::with_capacity(def.fields.len());
+    let mut shift = 0usize;
+    let mut fields: Vec<Value> = Vec::with_capacity(def.fields.len());
     for f in &def.fields {
-        let at = f.offset? as usize;
+        let at = f.offset? as usize - shift;
         let width = field_size(loaded, f.ty)? as usize;
-        let raw = bytes.get(at..at + width)?;
-        let value = read(loaded, f.ty, raw, endian)?;
+        let value = match f.len_field {
+            Some(j) => {
+                // Die Laenge steht im schon gelesenen Laengenfeld; ueber der
+                // Obergrenze ist der Rahmen fremd (3.7).
+                let n = count(fields.get(j as usize)?)?;
+                if n > width {
+                    return None;
+                }
+                shift += width - n;
+                Value::Bytes(bytes.get(at..at + n)?.to_vec())
+            }
+            None => read(loaded, f.ty, bytes.get(at..at + width)?, endian)?,
+        };
         // Ein Konstantenfeld muss den deklarierten Wert tragen (3.7).
         if let Some(want) = &f.const_value {
             if !same_const(&value, want) {
@@ -42,28 +54,76 @@ pub fn decode(loaded: &Loaded<'_>, record: RecordId, bytes: &[u8]) -> Option<Val
         }
         fields.push(value);
     }
+    if bytes.len() < length(loaded, record, shift)? {
+        return None;
+    }
     Some(Value::Record(fields))
 }
 
-/// `f.encode()`: der Record als Bytes seiner deklarierten Laenge (3.7).
-/// Konstantenfelder werden dabei gesetzt.
+/// `f.encode()`: der Record als Bytes seiner Laenge (3.7). Konstantenfelder
+/// werden dabei gesetzt, Laengenfelder aus der Laenge ihres Werts.
 pub fn encode(loaded: &Loaded<'_>, record: RecordId, value: &Value) -> Option<Vec<u8>> {
     let def = &loaded.program.records[record.index()];
     let endian = def.layout.as_ref()?.endian;
     let size = def.wire_size? as usize;
     let Value::Record(fields) = value else { return None };
-    let mut out = vec![0u8; size];
+    // Die Laenge jedes Feldes mit `len`, unter seinem Laengenfeld.
+    let mut lens: Vec<(usize, usize)> = Vec::new();
     for (i, f) in def.fields.iter().enumerate() {
-        let at = f.offset? as usize;
+        if let (Some(j), Some(Value::Bytes(b))) = (f.len_field, fields.get(i)) {
+            lens.push((j as usize, b.len().min(field_size(loaded, f.ty)? as usize)));
+        }
+    }
+    let mut out = vec![0u8; size];
+    let mut shift = 0usize;
+    for (i, f) in def.fields.iter().enumerate() {
+        let at = f.offset? as usize - shift;
         let width = field_size(loaded, f.ty)? as usize;
-        let v = match &f.const_value {
-            Some(c) => const_value(c),
-            None => fields.get(i)?.clone(),
+        let v = match (&f.const_value, lens.iter().find(|(j, _)| *j == i)) {
+            (Some(c), _) => const_value(c),
+            (None, Some((_, n))) => Value::UInt(*n as u64),
+            (None, None) => fields.get(i)?.clone(),
         };
+        if f.len_field.is_some() {
+            let Value::Bytes(b) = &v else { return None };
+            let n = b.len().min(width);
+            out.get_mut(at..at + n)?.copy_from_slice(&b[..n]);
+            shift += width - n;
+            continue;
+        }
         let slot = out.get_mut(at..at + width)?;
         write(loaded, f.ty, &v, endian, slot)?;
     }
+    out.truncate(length(loaded, record, shift)?);
     Some(out)
+}
+
+/// Die Laenge eines Rahmens, dessen variable Felder zusammen `shift` Byte
+/// unter ihrer Obergrenze bleiben: das Ende des letzten Feldes, nach
+/// `align` aufgerundet (3.7).
+fn length(loaded: &Loaded<'_>, record: RecordId, shift: usize) -> Option<usize> {
+    let def = &loaded.program.records[record.index()];
+    if shift == 0 {
+        return def.wire_size.map(|n| n as usize);
+    }
+    let mut end = 0usize;
+    for f in &def.fields {
+        end = end.max(f.offset? as usize + field_size(loaded, f.ty)? as usize);
+    }
+    let end = end - shift;
+    Some(match def.layout.as_ref()?.align {
+        Some(a) if a > 1 => end.div_ceil(a as usize) * a as usize,
+        _ => end,
+    })
+}
+
+/// Ein ganzzahliger Feldwert als Laenge.
+fn count(v: &Value) -> Option<usize> {
+    match v {
+        Value::Int(i) => usize::try_from(*i).ok(),
+        Value::UInt(u) => usize::try_from(*u).ok(),
+        _ => None,
+    }
 }
 
 /// Groesse eines Feldtyps in Bytes; dieselbe Rechnung wie im Sema.
