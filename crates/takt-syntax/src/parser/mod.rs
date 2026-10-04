@@ -231,6 +231,45 @@ impl<'t, 's> Parser<'t, 's> {
         self.depth -= 1;
     }
 
+    /// `inner` eine Ebene tiefer (Rekursion ohne `parse_expr`: `not`,
+    /// Vorzeichen).
+    fn deeper<T>(&mut self, inner: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
+        self.enter()?;
+        let result = inner(self);
+        self.leave();
+        result
+    }
+
+    /// Eine linksassoziative Kette `first { op next }`. Jedes Glied ist eine
+    /// Ebene des Baums und zaehlt gegen `MAX_DEPTH` (2.1): Eine lange Kette
+    /// baute sonst einen Baum, an dem rekursive Werkzeuge scheitern.
+    fn chain<O>(
+        &mut self,
+        first: impl FnOnce(&mut Self) -> PResult<Expr>,
+        mut op: impl FnMut(&mut Self) -> Option<O>,
+        mut next: impl FnMut(&mut Self) -> PResult<Expr>,
+        join: impl Fn(&Self, usize, O, Expr, Expr) -> Expr,
+    ) -> PResult<Expr> {
+        let start = self.pos;
+        let mut lhs = first(self)?;
+        let mut links = 0;
+        let result = loop {
+            let Some(o) = op(self) else { break Ok(lhs) };
+            if let Err(e) = self.enter() {
+                break Err(e);
+            }
+            links += 1;
+            match next(self) {
+                Ok(rhs) => lhs = join(self, start, o, lhs, rhs),
+                Err(e) => break Err(e),
+            }
+        };
+        for _ in 0..links {
+            self.leave();
+        }
+        result
+    }
+
     /// `"<" … ">"` eines Typs; innen ist `>` kein Vergleich.
     fn in_angles<T>(&mut self, inner: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
         self.expect_op("<")?;

@@ -509,7 +509,7 @@ fn duration_ns(number: &str, factor: i128) -> Option<i64> {
     }
     let mut value: i128 = digits.parse().ok()?;
     value = value.checked_mul(factor)?;
-    let scale = exponent - frac_part.len() as i32;
+    let scale = exponent.checked_sub(i32::try_from(frac_part.len()).ok()?)?;
     if scale > 40 {
         return None;
     }
@@ -518,7 +518,9 @@ fn duration_ns(number: &str, factor: i128) -> Option<i64> {
             value = value.checked_mul(10)?;
         }
     } else {
-        for _ in 0..-scale {
+        // Endet nach hoechstens so vielen Schritten, wie `value` Ziffern hat:
+        // Ein Wert ungleich null hat irgendwann keine Null mehr am Ende.
+        for _ in 0..scale.unsigned_abs() {
             if value % 10 != 0 {
                 return None;
             }

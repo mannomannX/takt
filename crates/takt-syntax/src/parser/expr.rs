@@ -40,31 +40,24 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `or_expr := and_expr { "or" and_expr }`
     pub(super) fn parse_or_expr(&mut self) -> PResult<Expr> {
-        let start = self.pos;
-        let mut lhs = self.parse_and_expr()?;
-        while self.eat_kw("or") {
-            let rhs = self.parse_and_expr()?;
-            lhs = self.binary(start, BinaryOp::Or, lhs, rhs);
-        }
-        Ok(lhs)
+        self.chain(Self::parse_and_expr, |p| p.eat_kw("or").then_some(BinaryOp::Or), Self::parse_and_expr, Self::binary)
     }
 
     /// `and_expr := not_expr { "and" not_expr }`
     fn parse_and_expr(&mut self) -> PResult<Expr> {
-        let start = self.pos;
-        let mut lhs = self.parse_not_expr()?;
-        while self.eat_kw("and") {
-            let rhs = self.parse_not_expr()?;
-            lhs = self.binary(start, BinaryOp::And, lhs, rhs);
-        }
-        Ok(lhs)
+        self.chain(
+            Self::parse_not_expr,
+            |p| p.eat_kw("and").then_some(BinaryOp::And),
+            Self::parse_not_expr,
+            Self::binary,
+        )
     }
 
     /// `not_expr := "not" not_expr | cmp_expr`
     fn parse_not_expr(&mut self) -> PResult<Expr> {
         let start = self.pos;
         if self.eat_kw("not") {
-            let inner = self.parse_not_expr()?;
+            let inner = self.deeper(Self::parse_not_expr)?;
             return Ok(Expr {
                 kind: ExprKind::Unary { op: UnaryOp::Not, expr: Box::new(inner) },
                 span: self.span_from(start),
@@ -123,96 +116,71 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `bitor_expr := bitxor_expr { "|" bitxor_expr }`
     fn parse_bitor_expr(&mut self) -> PResult<Expr> {
-        let start = self.pos;
-        let mut lhs = self.parse_bitxor_expr()?;
-        while self.eat_op("|") {
-            let rhs = self.parse_bitxor_expr()?;
-            lhs = self.binary(start, BinaryOp::BitOr, lhs, rhs);
-        }
-        Ok(lhs)
+        let op = |p: &mut Self| p.eat_op("|").then_some(BinaryOp::BitOr);
+        self.chain(Self::parse_bitxor_expr, op, Self::parse_bitxor_expr, Self::binary)
     }
 
     /// `bitxor_expr := bitand_expr { "^" bitand_expr }`
     fn parse_bitxor_expr(&mut self) -> PResult<Expr> {
-        let start = self.pos;
-        let mut lhs = self.parse_bitand_expr()?;
-        while self.eat_op("^") {
-            let rhs = self.parse_bitand_expr()?;
-            lhs = self.binary(start, BinaryOp::BitXor, lhs, rhs);
-        }
-        Ok(lhs)
+        let op = |p: &mut Self| p.eat_op("^").then_some(BinaryOp::BitXor);
+        self.chain(Self::parse_bitand_expr, op, Self::parse_bitand_expr, Self::binary)
     }
 
     /// `bitand_expr := shift_expr { "&" shift_expr }`
     fn parse_bitand_expr(&mut self) -> PResult<Expr> {
-        let start = self.pos;
-        let mut lhs = self.parse_shift_expr()?;
-        while self.eat_op("&") {
-            let rhs = self.parse_shift_expr()?;
-            lhs = self.binary(start, BinaryOp::BitAnd, lhs, rhs);
-        }
-        Ok(lhs)
+        let op = |p: &mut Self| p.eat_op("&").then_some(BinaryOp::BitAnd);
+        self.chain(Self::parse_shift_expr, op, Self::parse_shift_expr, Self::binary)
     }
 
     /// `shift_expr := add_expr { ( "<<" | ">>" ) add_expr }`; `>>` sind zwei anliegende `>`.
     fn parse_shift_expr(&mut self) -> PResult<Expr> {
-        let start = self.pos;
-        let mut lhs = self.parse_add_expr()?;
-        loop {
-            let op = if self.at_op("<<") {
-                self.bump();
-                BinaryOp::Shl
-            } else if self.angle == 0 && self.at_shift_right() {
-                self.bump();
-                self.bump();
-                BinaryOp::Shr
+        let op = |p: &mut Self| {
+            if p.at_op("<<") {
+                p.bump();
+                Some(BinaryOp::Shl)
+            } else if p.angle == 0 && p.at_shift_right() {
+                p.bump();
+                p.bump();
+                Some(BinaryOp::Shr)
             } else {
-                break;
-            };
-            let rhs = self.parse_add_expr()?;
-            lhs = self.binary(start, op, lhs, rhs);
-        }
-        Ok(lhs)
+                None
+            }
+        };
+        self.chain(Self::parse_add_expr, op, Self::parse_add_expr, Self::binary)
     }
 
     /// `add_expr := mul_expr { ( "+" | "-" ) mul_expr }`
     fn parse_add_expr(&mut self) -> PResult<Expr> {
-        let start = self.pos;
-        let mut lhs = self.parse_mul_expr()?;
-        loop {
-            let op = if self.at_op("+") {
+        let op = |p: &mut Self| {
+            let op = if p.at_op("+") {
                 BinaryOp::Add
-            } else if self.at_op("-") {
+            } else if p.at_op("-") {
                 BinaryOp::Sub
             } else {
-                break;
+                return None;
             };
-            self.bump();
-            let rhs = self.parse_mul_expr()?;
-            lhs = self.binary(start, op, lhs, rhs);
-        }
-        Ok(lhs)
+            p.bump();
+            Some(op)
+        };
+        self.chain(Self::parse_mul_expr, op, Self::parse_mul_expr, Self::binary)
     }
 
     /// `mul_expr := unary { ( "*" | "/" | "%" ) unary }`
     fn parse_mul_expr(&mut self) -> PResult<Expr> {
-        let start = self.pos;
-        let mut lhs = self.parse_unary()?;
-        loop {
-            let op = if self.at_op("*") {
+        let op = |p: &mut Self| {
+            let op = if p.at_op("*") {
                 BinaryOp::Mul
-            } else if self.at_op("/") {
+            } else if p.at_op("/") {
                 BinaryOp::Div
-            } else if self.at_op("%") {
+            } else if p.at_op("%") {
                 BinaryOp::Rem
             } else {
-                break;
+                return None;
             };
-            self.bump();
-            let rhs = self.parse_unary()?;
-            lhs = self.binary(start, op, lhs, rhs);
-        }
-        Ok(lhs)
+            p.bump();
+            Some(op)
+        };
+        self.chain(Self::parse_unary, op, Self::parse_unary, Self::binary)
     }
 
     /// `unary := "-" unary | "~" unary | cast_expr`
@@ -227,7 +195,7 @@ impl<'t, 's> Parser<'t, 's> {
         };
         if let Some(op) = op {
             self.bump();
-            let inner = self.parse_unary()?;
+            let inner = self.deeper(Self::parse_unary)?;
             return Ok(Expr { kind: ExprKind::Unary { op, expr: Box::new(inner) }, span: self.span_from(start) });
         }
         self.parse_cast_expr()
@@ -251,9 +219,24 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `postfix := primary { "." member [ "(" [ args ] ")" ] | "[" expr [ ".." expr ] "]" | "[" expr "," expr "]" }`
     pub(super) fn parse_postfix(&mut self) -> PResult<Expr> {
+        let mut links = 0;
+        let result = self.postfix_links(&mut links);
+        for _ in 0..links {
+            self.leave();
+        }
+        result
+    }
+
+    /// Die Glieder von [`Self::parse_postfix`]; jedes ist eine Ebene des
+    /// Baums und zaehlt gegen `MAX_DEPTH` (2.1).
+    fn postfix_links(&mut self, links: &mut u32) -> PResult<Expr> {
         let start = self.pos;
         let mut expr = self.parse_primary()?;
         loop {
+            if self.at_op(".") || self.at_op("[") {
+                self.enter()?;
+                *links += 1;
+            }
             if self.eat_op(".") {
                 let name = self.parse_member()?;
                 let args = if self.at_op("(") { Some(self.parse_arg_list()?) } else { None };
@@ -475,16 +458,11 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `tprop_implies := tprop_or { "implies" tprop_or }`
     fn parse_tprop_implies(&mut self) -> PResult<Expr> {
-        let start = self.pos;
-        let mut lhs = self.parse_tprop_or()?;
-        while self.eat_kw("implies") {
-            let rhs = self.parse_tprop_or()?;
-            lhs = Expr {
-                kind: ExprKind::Implies { lhs: Box::new(lhs), rhs: Box::new(rhs) },
-                span: self.span_from(start),
-            };
-        }
-        Ok(lhs)
+        let join = |p: &Self, start, (), lhs, rhs| Expr {
+            kind: ExprKind::Implies { lhs: Box::new(lhs), rhs: Box::new(rhs) },
+            span: p.span_from(start),
+        };
+        self.chain(Self::parse_tprop_or, |p| p.eat_kw("implies").then_some(()), Self::parse_tprop_or, join)
     }
 
     /// `tprop_or`, `tprop_and`, `tprop_not`: mit gesetztem `temporal` sind Temporal-
