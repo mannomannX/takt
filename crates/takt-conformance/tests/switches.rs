@@ -565,3 +565,76 @@ machine ctrl:
     assert_eq!(log_ticks(&interpreted), ["t=4", "t=11"], "{interpreted}");
     assert_eq!(log_ticks(&interpreted), log_ticks(&native), "{interpreted}\n--- nativ ---\n{native}");
 }
+
+#[test]
+fn a_check_with_its_own_target_goes_there_from_a_leaf() {
+    // 5.3: `check e -> X` ueberschreibt das Fault-Ziel fuer genau diesen
+    // Check; der Codegen nahm immer das des Zustands (FB-412).
+    let Some(trace) = agree(
+        "
+machine m:
+    fault -> SAFE
+    var k : int in 0..100 = 0
+    initial RUN
+    state RUN:
+        loop:
+            k = k + 1
+            probe = k
+            check k < 3, \"zu gross\" -> OTHER
+    state SAFE:
+        enter:
+            probe = 900
+        after 1 s: -> RUN
+    state OTHER:
+        enter:
+            probe = 500
+        after 1 s: -> RUN
+",
+        "check_target_leaf",
+        4,
+    ) else {
+        return;
+    };
+    assert_eq!(probe_at(&trace, 2), "500", "nach OTHER, nicht nach SAFE:\n{trace}");
+}
+
+#[test]
+fn a_check_with_its_own_target_goes_there_from_a_shared_level() {
+    // Der Check steht im `loop:` des Elternzustands, den zwei Blaetter
+    // teilen: Der Codegen kennt das Blatt erst zur Laufzeit.
+    let Some(trace) = agree(
+        "
+command flip
+machine m:
+    fault -> SAFE
+    var k : int in 0..100 = 0
+    initial P
+    state P:
+        initial A
+        loop:
+            k = k + 1
+            check k < 3, \"zu gross\" -> OTHER
+        state A:
+            loop:
+                probe = k
+            when flip: -> B
+        state B:
+            loop:
+                probe = k + 10
+            when flip: -> A
+    state SAFE:
+        enter:
+            probe = 900
+        after 1 s: -> P
+    state OTHER:
+        enter:
+            probe = 500
+        after 1 s: -> P
+",
+        "check_target_shared",
+        4,
+    ) else {
+        return;
+    };
+    assert_eq!(probe_at(&trace, 2), "500", "nach OTHER, nicht nach SAFE:\n{trace}");
+}

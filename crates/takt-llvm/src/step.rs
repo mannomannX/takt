@@ -2375,7 +2375,9 @@ fn fault_paths(ctx: &mut Ctx<'_>, m: &mut Module, end: &str) -> Result<(), NotYe
             // Blatt, ab einem Vorfahren dessen `initial` — dorthin fuehrt
             // der Interpreter den gespeicherten Pfad abwaerts.
             let value = |from: FaultFrom| match from {
-                FaultFrom::State(s) => machine::initial_leaf(md, s).unwrap_or(s).index().to_string(),
+                FaultFrom::State(s) | FaultFrom::Redirected(s, _) => {
+                    machine::initial_leaf(md, s).unwrap_or(s).index().to_string()
+                }
                 FaultFrom::Root | FaultFrom::Faulted => "-1".to_string(),
             };
             let mut arms = Vec::new();
@@ -2403,19 +2405,22 @@ type FaultKey = (Goal, Vec<StateId>, Vec<StateId>);
 /// keiner.
 fn active(from: FaultFrom) -> Option<StateId> {
     match from {
-        FaultFrom::State(s) => Some(s),
+        FaultFrom::State(s) | FaultFrom::Redirected(s, _) => Some(s),
         FaultFrom::Root | FaultFrom::Faulted => None,
     }
 }
 
-/// Wohin ein Fault ab `from` fuehrt (5.3): zum Fault-Ziel des Zustands,
-/// ohne aktiven Zustand zu dem der Maschine, dort `initial` abwaerts — nie
-/// der gespeicherte Pfad (5.12). `FAULTED` ist die Senke des Fault-Walds:
-/// Ein Fault dort, etwa in einem `exit:` auf dem Weg hinein, fuehrt nach
-/// `FAULTED` zurueck.
+/// Wohin ein Fault ab `from` fuehrt (5.3): zum Fault-Ziel des Zustands
+/// oder zum eigenen Ziel des `check`, ohne aktiven Zustand zu dem der
+/// Maschine, dort `initial` abwaerts — nie der gespeicherte Pfad (5.12).
+/// `FAULTED` ist die Senke des Fault-Walds: Ein Fault dort, etwa in einem
+/// `exit:` auf dem Weg hinein, fuehrt nach `FAULTED` zurueck.
 fn fault_goal(m: &Machine, from: FaultFrom) -> Result<Goal, NotYet> {
     let target = match from {
         FaultFrom::State(s) => m.fault_target_of(s),
+        FaultFrom::Redirected(_, to) => {
+            to.map_or(takt_mir::machine::FaultTarget::Faulted, takt_mir::machine::FaultTarget::State)
+        }
         FaultFrom::Root => m.fault_target,
         FaultFrom::Faulted => takt_mir::machine::FaultTarget::Faulted,
     };
@@ -2468,7 +2473,7 @@ fn fault_body(from: FaultFrom, from_val: &str, ctx: &mut Ctx<'_>, m: &mut Module
         m.void_inst(&format!("call void @{}(ptr %arena, i32 {})", m.runtime(crate::abi::Abi::CANCEL), o.0));
     }
     let source = match from {
-        FaultFrom::State(s) => Source::Leaf(s, from_val),
+        FaultFrom::State(s) | FaultFrom::Redirected(s, _) => Source::Leaf(s, from_val),
         FaultFrom::Root => Source::Root,
         FaultFrom::Faulted => Source::Faulted,
     };

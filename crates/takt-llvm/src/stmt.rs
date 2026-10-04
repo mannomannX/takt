@@ -221,6 +221,9 @@ impl<'a> Ctx<'a> {
             FaultFrom::State(s) => s.index().to_string(),
             FaultFrom::Root => "wurzel".to_string(),
             FaultFrom::Faulted => "faulted".to_string(),
+            FaultFrom::Redirected(s, to) => {
+                format!("{}_x{}", s.index(), to.map_or("f".to_string(), |t| t.index().to_string()))
+            }
         };
         format!("fault_{}_{at}{}{}", self.machine.name, self.tag, self.fault_suffix)
     }
@@ -237,6 +240,9 @@ pub enum FaultFrom {
     Root,
     /// `FAULTED`, die Senke des Fault-Walds.
     Faulted,
+    /// Ein `check … -> X` im Blatt: Der Fault fuehrt nach `X` statt zum
+    /// Fault-Ziel des Zustands, mit `None` nach `FAULTED` (5.3, FB-412).
+    Redirected(takt_mir::StateId, Option<takt_mir::StateId>),
 }
 
 impl FaultFrom {
@@ -530,8 +536,10 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
 fn stmt_here(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     match &s.kind {
         StmtKind::Assign { target, value } => assign(target, value, ctx, m),
-        StmtKind::Check { cond, kind, confirm, message, .. } => {
-            check(cond, *kind, confirm.as_ref(), message.as_ref(), ctx, m)
+        // `within` gilt der Latenzanalyse (9.4.5), `req` dem Bericht (13.4);
+        // zur Laufzeit wirken beide nicht.
+        StmtKind::Check { cond, kind, confirm, message, target, within: _, req: _ } => {
+            check(cond, *kind, confirm.as_ref(), message.as_ref(), target.as_ref(), ctx, m)
         }
         StmtKind::If { cond, then, otherwise } => branch(cond, then, otherwise, ctx, m),
         StmtKind::Observe(o) => observe(o, s.span, ctx, m),
@@ -1241,11 +1249,13 @@ fn roots_in_port(p: &Place) -> bool {
 /// `p < LIMIT` gilt. Der Sprung geht also bei `false` in den Trampolin —
 /// und der `weiter`-Block ist der heisse Pfad, was 11.2 mit „die
 /// Fault-Pfade sind `cold`" meint.
+#[allow(clippy::too_many_arguments)]
 fn check(
     cond: &Expr,
     kind: takt_mir::stmt::CheckKind,
     confirm: Option<&takt_mir::stmt::Confirm>,
     message: Option<&takt_mir::pattern::Format>,
+    target: Option<&takt_mir::machine::Target>,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
@@ -1275,14 +1285,45 @@ fn check(
         }
     };
     let go_on = format!("weiter{}_{}", m.next_label(), ctx.machine.name);
-    let fault = ctx.trampoline_for(
-        match kind {
-            takt_mir::stmt::CheckKind::Check => takt_mir::machine::FaultKind::CheckFailed,
-            takt_mir::stmt::CheckKind::Expect => takt_mir::machine::FaultKind::Expect,
-        },
-        m,
-    );
+    let fault_kind = match kind {
+        takt_mir::stmt::CheckKind::Check => takt_mir::machine::FaultKind::CheckFailed,
+        takt_mir::stmt::CheckKind::Expect => takt_mir::machine::FaultKind::Expect,
+    };
+    let code = crate::abi::fault_code(fault_kind);
+    // 5.3: `check e -> X` fuehrt nach `X` statt zum Fault-Ziel; ueber
+    // mehreren Blaettern entscheidet das Blatt zur Laufzeit, wie bei `->`.
+    let to = match target {
+        None => None,
+        Some(takt_mir::machine::Target::State(s)) => Some(Some(*s)),
+        Some(takt_mir::machine::Target::Faulted) => Some(None),
+        Some(takt_mir::machine::Target::Fault(_)) => return Err(NotYet { what: "Fault-Art als Ziel eines `check`" }),
+    };
+    let (fault, shared) = match (to, ctx.leaf) {
+        (None, _) => (ctx.trampoline_for(fault_kind, m), None),
+        (Some(to), Some(leaf)) => {
+            let path = ctx.fault_path(FaultFrom::Redirected(leaf, to));
+            (m.fault_to(&path, code), None)
+        }
+        (Some(to), None) => {
+            let shared = format!("abweichung{}_{}", m.next_label(), ctx.machine.name);
+            (m.fault_to(&shared, code), Some((shared, to)))
+        }
+    };
     branch_or_fault(&holds, &go_on, &fault, message, "check verletzt", ctx, m)?;
+    if let Some((shared, to)) = shared {
+        let leaf_reg = ctx.leaf_reg.ok_or(NotYet { what: "`check -> X` ausserhalb eines Blattzweigs" })?;
+        let leaves = crate::machine::leaves(ctx.machine);
+        let mut arms = Vec::new();
+        for leaf in ctx.region.clone() {
+            let i = leaves.iter().position(|l| *l == leaf).ok_or(NotYet { what: "Blatt" })?;
+            arms.push(format!("i8 {i}, label %{}", ctx.fault_path(FaultFrom::Redirected(leaf, to))));
+        }
+        m.label(&shared);
+        let none = format!("{shared}_kein_blatt");
+        m.void_inst(&format!("switch i8 {leaf_reg}, label %{none} [ {} ]", arms.join(" ")));
+        m.label(&none);
+        m.void_inst("unreachable");
+    }
     m.label(&go_on);
     Ok(())
 }
