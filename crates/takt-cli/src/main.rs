@@ -427,8 +427,11 @@ fn read(path: &str) -> Option<String> {
 
 /// `takt check`: Diagnosen aller Schichten mit Quellauszug.
 fn check(args: &Args) -> bool {
-    let policy =
-        Policy { warnings_as_errors: args.has("--warnings-as-errors"), certification: args.has("--certification") };
+    let policy = Policy {
+        warnings_as_errors: args.has("--warnings-as-errors"),
+        certification: args.has("--certification"),
+        tested: false,
+    };
     let line_format = args.value("--format") == Some("line");
     let mut ok = true;
     for path in &args.files {
@@ -582,8 +585,11 @@ fn requirement_lines(
 
 /// `takt latency`: Safe-State-Latenz je Output (9.4.5).
 fn latency(args: &Args) -> bool {
-    let policy =
-        Policy { warnings_as_errors: args.has("--warnings-as-errors"), certification: args.has("--certification") };
+    let policy = Policy {
+        warnings_as_errors: args.has("--warnings-as-errors"),
+        certification: args.has("--certification"),
+        tested: false,
+    };
     let mut ok = true;
     for path in &args.files {
         let Some(src) = read(path) else {
@@ -614,8 +620,11 @@ fn latency(args: &Args) -> bool {
 /// Ausgegeben wird Text, damit die Ausgabe in einen Bericht passt und
 /// sich mit `diff` vergleichen laesst.
 fn graph(args: &Args) -> bool {
-    let policy =
-        Policy { warnings_as_errors: args.has("--warnings-as-errors"), certification: args.has("--certification") };
+    let policy = Policy {
+        warnings_as_errors: args.has("--warnings-as-errors"),
+        certification: args.has("--certification"),
+        tested: false,
+    };
     let mut ok = true;
     for path in &args.files {
         let Some(src) = read(path) else {
@@ -1017,8 +1026,11 @@ fn emit_object(ir: &str, target: takt_llvm::Target, out: &str) -> bool {
 /// `cost` ueber die Kalibrierung, ohne die aus Operationen keine Zeit
 /// wird (13.8).
 fn cost(args: &Args) -> bool {
-    let policy =
-        Policy { warnings_as_errors: args.has("--warnings-as-errors"), certification: args.has("--certification") };
+    let policy = Policy {
+        warnings_as_errors: args.has("--warnings-as-errors"),
+        certification: args.has("--certification"),
+        tested: false,
+    };
     let mut ok = true;
     for path in &args.files {
         let Some(src) = read(path) else {
@@ -1045,8 +1057,11 @@ fn cost(args: &Args) -> bool {
 
 /// `takt size`: das Speicherbudget eines Programms (11.5).
 fn size(args: &Args) -> bool {
-    let policy =
-        Policy { warnings_as_errors: args.has("--warnings-as-errors"), certification: args.has("--certification") };
+    let policy = Policy {
+        warnings_as_errors: args.has("--warnings-as-errors"),
+        certification: args.has("--certification"),
+        tested: false,
+    };
     let mut ok = true;
     for path in &args.files {
         let Some(src) = read(path) else {
@@ -1411,9 +1426,14 @@ fn sema_options(path: &str, src: &str, policy: Policy, args: &Args) -> takt_sema
 }
 
 fn compile_file(path: &str, args: &Args) -> Option<takt_mir::Program> {
+    compile_file_with(path, args, Policy::default())
+}
+
+/// [`compile_file`] unter einer Politik.
+fn compile_file_with(path: &str, args: &Args, policy: Policy) -> Option<takt_mir::Program> {
     let src = read(path)?;
     let map = takt_sema::source_map(path, src.as_str());
-    let options = sema_options(path, &src, Policy::default(), args);
+    let options = sema_options(path, &src, policy, args);
     let proof = proof_of(args)?;
     let out = takt_sema::compile_with(&src, &options, proof.as_ref());
     for d in &out.diagnostics {
@@ -1601,7 +1621,9 @@ fn test(args: &Args) -> bool {
         eprintln!("{USAGE}");
         return false;
     };
-    let Some(program) = compile_file(path, args) else { return false };
+    let Some(program) = compile_file_with(path, args, Policy { tested: true, ..Policy::default() }) else {
+        return false;
+    };
     scenarios(path, &program, args, &Trace::default()).is_some_and(|(ok, _)| ok)
 }
 
@@ -1686,6 +1708,7 @@ fn scenarios(
     // 13.4: je Pruefstelle die Szenarien, die sie durchliefen.
     let mut by_scenario: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut ok = true;
+    let mut inconclusive = 0;
     for name in &scenarios {
         let options =
             RunOptions { ticks, profile: profile_of(args), scenario: Some(name.clone()), ..Default::default() };
@@ -1710,7 +1733,9 @@ fn scenarios(
                 return None;
             }
         }
-        ok &= result.verdict != Verdict::Fail;
+        // 13.5: Ein Lauf ohne Aussage gilt nie als bestanden.
+        ok &= result.verdict == Verdict::Pass;
+        inconclusive += usize::from(result.verdict == Verdict::Inconclusive);
         for (kind, machine, key) in result.coverage.hits.keys() {
             if *kind == takt_interp::CoverKind::Check {
                 by_scenario.entry((machine.clone(), key.clone())).or_default().push(name.clone());
@@ -1733,6 +1758,9 @@ fn scenarios(
     let index = takt_mir::requirements::index(program);
     for line in requirement_lines(&index, &map, Some(&by_scenario)) {
         println!("{line}");
+    }
+    if inconclusive > 0 {
+        println!("FAIL: {inconclusive} Szenarien ohne Aussage (INCONCLUSIVE gilt nicht als bestanden, 13.5)");
     }
     for c in program.channels.iter().filter(|c| c.attrs.irreversible) {
         let covered = coverage.hits.keys().any(|(k, _, n)| *k == takt_interp::CoverKind::Irreversible && *n == c.name);

@@ -38,7 +38,46 @@ fn a_single_scenario_can_be_chosen() {
 
 #[test]
 fn a_program_without_scenarios_is_refused() {
-    let out = takt(&["test", "corpus-try/01_minimal.takt"]);
+    // Ohne Inputs, sonst lehnt schon Pruefung 13 ab (FB-409).
+    let out = takt(&["test", "corpus-try/106_machine_handler.takt"]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("kein Szenario"));
+}
+
+/// **Ein Lauf ohne Aussage gilt nie als bestanden** (13.5, FB-395): Mit
+/// einem Tick erreicht keines der Szenarien ein Verdikt.
+#[test]
+fn an_inconclusive_scenario_fails_the_run() {
+    let out = takt(&["test", "corpus-try/38_scenarios.takt", "--ticks", "1"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("INCONCLUSIVE"), "{stdout}");
+    assert!(!out.status.success(), "INCONCLUSIVE bestand:\n{stdout}");
+    assert!(stdout.contains("ohne Aussage"), "{stdout}");
+}
+
+/// **Unter `takt test` ist ein Input ohne `sim`-Quelle ein Fehler**
+/// (Festlegung 6, 8.3, FB-409): Kein Szenario und kein Stimulus treibt ihn.
+/// `takt sim` warnt nur, weil dort ein Stimulus ihn treiben darf.
+#[test]
+fn an_unsimulated_input_is_an_error_under_test_and_a_warning_under_sim() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-test-unsimulated");
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let file = dir.join("unsimulated.takt");
+    std::fs::write(
+        &file,
+        "system:\n    language = 1\n    tick     = 10 ms\n\n\
+         input  p   : int in 0..9 @ hw(\"d/p\")\n\
+         output led : bool        @ hw(\"o/led\") with safe = false\n\n\
+         machine m:\n    initial RUN\n\n    state RUN:\n        loop:\n            led = p > 3\n\n\
+         scenario \"idle\":\n    initial WAIT\n\n    state WAIT:\n        after 20 ms: -> DONE\n\n    state DONE:\n        enter:\n            verdict pass\n",
+    )
+    .expect("Programm");
+    let path = file.to_str().expect("Pfad");
+    let test = takt(&["test", path]);
+    let stderr = String::from_utf8_lossy(&test.stderr);
+    assert!(!test.status.success(), "takt test bestand:\n{stderr}");
+    assert!(stderr.contains("error[SC-13]"), "{stderr}");
+    let sim = takt(&["sim", path, "--ticks", "2"]);
+    let stderr = String::from_utf8_lossy(&sim.stderr);
+    assert!(stderr.contains("warning[SC-13]") && !stderr.contains("error[SC-13]"), "{stderr}");
 }

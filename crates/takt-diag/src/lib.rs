@@ -177,13 +177,19 @@ pub struct Policy {
     /// und jede unbewiesene implizite Pruefung (SC-24, 3.4) — die meldet
     /// die Analyse selbst, weil nur sie die Stellen des Nutzers kennt.
     pub certification: bool,
+    /// Abnahme durch Szenarien (`takt test`): Ein `hw`-Input ohne
+    /// `sim`-Quelle (SC-13) ist ein Fehler, weil kein Stimulus ihn treibt
+    /// (8.3, Festlegung 6).
+    pub tested: bool,
 }
 
 impl Policy {
     /// Wendet die Politik auf eine Diagnose an.
     pub fn apply(&self, mut diag: Diagnostic) -> Diagnostic {
         let escalate = diag.severity == Severity::Warning
-            && (self.warnings_as_errors || (self.certification && diag.code == "SC-49"));
+            && (self.warnings_as_errors
+                || (self.certification && diag.code == "SC-49")
+                || (self.tested && diag.code == "SC-13"));
         if escalate {
             diag.severity = Severity::Error;
         }
