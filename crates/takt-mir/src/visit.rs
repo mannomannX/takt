@@ -35,6 +35,12 @@ pub fn for_each_stmt_ctx(m: &Machine, f: &mut impl FnMut(&Stmt, u32)) {
 /// Ein Handler-Rumpf ist gewoehnlicher Code (8.7): er schreibt Outputs und
 /// liest Channels wie jeder andere Block.
 pub fn for_each_block(m: &Machine, f: &mut impl FnMut(&Block)) {
+    for_each_block_in(m, &mut |b, _| f(b));
+}
+
+/// Wie `for_each_block`, mit der Angabe, ob der Block ein Handler-Rumpf
+/// ist: Er laeuft je Element des Fensters, also mehrmals je Tick (8.7, 9.7).
+pub fn for_each_block_in(m: &Machine, f: &mut impl FnMut(&Block, bool)) {
     let Machine {
         name: _,
         kind: _,
@@ -62,12 +68,12 @@ pub fn for_each_block(m: &Machine, f: &mut impl FnMut(&Block)) {
         meta: _,
         span: _,
     } = m;
-    f(loop_block);
+    f(loop_block, false);
     for h in handlers {
-        f(&h.body);
+        f(&h.body, true);
     }
     for t in &faulted.transitions {
-        f(&t.actions);
+        f(&t.actions, false);
     }
     for s in states {
         let State {
@@ -91,14 +97,14 @@ pub fn for_each_block(m: &Machine, f: &mut impl FnMut(&Block)) {
             meta: _,
             span: _,
         } = s;
-        f(enter);
-        f(exit);
-        f(loop_block);
+        f(enter, false);
+        f(exit, false);
+        f(loop_block, false);
         for h in handlers {
-            f(&h.body);
+            f(&h.body, true);
         }
         for t in transitions {
-            f(&t.actions);
+            f(&t.actions, false);
         }
     }
 }

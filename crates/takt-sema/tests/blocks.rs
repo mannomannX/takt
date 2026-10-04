@@ -243,3 +243,96 @@ machine m:
     .expect_err("Instanz als Wert");
     assert!(!err.is_empty());
 }
+
+/// Ein Zaehler je Element; `step` liefert den neuen Stand.
+const COUNTER: &str = "
+block counter():
+    var k : int in 0..99 = 0
+    step() -> int:
+        k = (k + 1) % 100
+        return k
+";
+
+#[test]
+fn every_element_of_an_instance_array_steps_once_per_tick() {
+    // 5.7, FB-423: Das Flag eines Elements ging nie zurueck; der zweite
+    // Tick brach mit „step zweimal in einer Aktivierung" ab.
+    let trace = simulate(
+        &format!(
+            "{COUNTER}
+output a : int in 0..99 @ sim(\"o/a\")
+output b : int in 0..99 @ sim(\"o/b\")
+
+machine m:
+    var cs = [2] counter()
+    initial RUN
+    state RUN:
+        loop:
+            a = cs[0].step()
+            b = cs[1].step()
+"
+        ),
+        "",
+        3,
+    );
+    assert!(trace.contains("t=2 out a 3"), "drei Schritte von cs[0]:\n{trace}");
+    assert!(trace.contains("t=2 out b 3"), "drei Schritte von cs[1]:\n{trace}");
+}
+
+#[test]
+fn an_instance_array_steps_in_a_for_loop_over_its_index() {
+    // 5.7: kein `step` in `for`-Schleifen, „ausser ueber Arrays von
+    // Instanzen"; die Ausnahme galt nur fuer eine Variable als Empfaenger,
+    // nie fuer `cs[i]` (FB-423).
+    let trace = simulate(
+        &format!(
+            "{COUNTER}
+output a : int in 0..999 @ sim(\"o/a\")
+
+machine m:
+    var cs = [2] counter()
+    var sum : int in 0..999 = 0
+    initial RUN
+    state RUN:
+        loop:
+            for i in range(2):
+                var x : int in 0..99 = cs[i].step()
+                sum = (sum + x) % 1000
+            a = sum
+"
+        ),
+        "",
+        3,
+    );
+    assert!(trace.contains("t=2 out a 12"), "1+1, 2+2, 3+3:\n{trace}");
+}
+
+#[test]
+fn a_step_in_a_handler_is_rejected_like_one_in_a_loop() {
+    // 8.7: Ein Handler laeuft je Element des Fensters, ein `step` darin
+    // also mehrmals je Tick (FB-423).
+    let err = compile(&format!(
+        "{COUNTER}
+stream<u8> q with capacity = 4
+output v : int in 0..99 @ sim(\"o/v\")
+
+machine producer:
+    initial RUN
+    state RUN:
+        loop:
+            send q, 1
+            send q, 2
+
+machine consumer:
+    var c = counter()
+    initial RUN
+    on q as e:
+        v = c.step()
+    state RUN:
+        loop:
+            pass
+"
+    ))
+    .expect_err("step im Handler");
+    assert!(err.iter().any(|e| e.contains("SC-11") && e.contains("Handler")), "{err:?}");
+}

@@ -1474,30 +1474,28 @@ impl Lowerer<'_> {
             if matches!(m.kind, MachineKind::Template) {
                 continue;
             }
-            let mut in_loop = Vec::new();
-            for_each_stmt_ctx(m, &mut |s, depth| {
-                if let StmtKind::MethodCall { receiver, method: Method::Step, .. } = &s.kind {
-                    if depth > 0 {
-                        if let Place::Var(v) = receiver {
-                            let array = m.layout.block_instances.iter().any(|b| b.var == *v && b.count > 1);
-                            if !array {
-                                in_loop.push(s.span);
-                            }
-                        } else {
-                            in_loop.push(s.span);
-                        }
-                    }
-                }
+            let mut repeated = Vec::new();
+            for_each_block_in(m, &mut |b, handler| {
+                let ctx = if handler { Repeats::Many("in einem Handler") } else { Repeats::Once };
+                repeated_steps(&b.stmts, ctx, &mut repeated);
             });
-            for span in in_loop {
-                diags.push(Diagnostic::error(SC11, span, "`step` in einer Schleife".to_string()).with_suggestion(
-                    "jede Instanz steppt hoechstens einmal je Tick; Arrays von Instanzen verwenden (5.7)",
+            for s in &m.states {
+                if let Some(seq) = &s.sequence {
+                    repeated_steps_seq(&seq.items, &mut repeated);
+                }
+            }
+            for (span, place) in repeated {
+                diags.push(Diagnostic::error(SC11, span, format!("`step` {place}")).with_suggestion(
+                    "er liefe mehrmals je Tick; jede Instanz steppt hoechstens einmal, ein Instanz-Array \
+                     ueber seinen Index in `for i in range(n)` (5.7, 8.7)",
                 ));
             }
-            let arrays: HashSet<VarId> =
-                m.layout.block_instances.iter().filter(|b| b.count > 1).map(|b| b.var).collect();
             let mut twice = Vec::new();
-            for_each_block(m, &mut |b| count_steps(&b.stmts, &arrays, &mut HashMap::new(), &mut twice));
+            for_each_block_in(m, &mut |b, handler| {
+                if !handler {
+                    count_steps(&b.stmts, None, &mut HashMap::new(), &mut twice);
+                }
+            });
             for span in twice {
                 diags.push(
                     Diagnostic::error(SC11, span, "zweiter `step` derselben Instanz in einer Aktivierung")
@@ -1659,48 +1657,164 @@ impl Lowerer<'_> {
 /// immer haelt. Das ist Absicht: SC-25 prueft die Reihenfolge der
 /// Segmente (6.2) — ob ein Wert auf *jedem* Pfad entsteht, ist die Frage
 /// der Flussanalyse (3.4) und hat ihre eigene Pruefung.
-/// Pruefung 11 (5.7): Wie oft eine Anweisungsfolge jede Instanz steppt,
-/// hintereinander gezaehlt, ueber Zweige das Maximum; jeder `step` ueber
-/// einem schon gesteppten Zaehler kommt nach `twice`. Schleifen meldet
-/// `check_termination` selbst, Instanz-Arrays steppen je Element.
-fn count_steps(stmts: &[Stmt], arrays: &HashSet<VarId>, counts: &mut HashMap<VarId, u32>, twice: &mut Vec<Span>) {
+/// Wie oft eine Stelle je Tick laufen kann (Pruefung 11).
+#[derive(Clone, Copy)]
+enum Repeats {
+    /// Hoechstens einmal.
+    Once,
+    /// Einmal je Durchlauf genau einer `for i in range(n)`: Ein
+    /// Instanz-Array darf hier ueber `i` steppen (5.7).
+    Index(VarId),
+    /// Mehrmals; der Text nennt die Stelle.
+    Many(&'static str),
+}
+
+/// Pruefung 11 (5.7, 8.7): `step` in einer Schleife oder einem Handler
+/// laeuft mehrmals je Tick; ausgenommen `cs[i]` direkt in `for i in range(n)`.
+fn repeated_steps(stmts: &[Stmt], ctx: Repeats, out: &mut Vec<(Span, &'static str)>) {
+    let inner = |ctx: Repeats, var: Option<VarId>| match (ctx, var) {
+        (Repeats::Once, Some(v)) => Repeats::Index(v),
+        (Repeats::Many(place), _) => Repeats::Many(place),
+        (Repeats::Once | Repeats::Index(_), _) => Repeats::Many("in einer Schleife"),
+    };
     for s in stmts {
         match &s.kind {
-            StmtKind::MethodCall { receiver: Place::Var(v), method: Method::Step, .. } if !arrays.contains(v) => {
-                let n = counts.entry(*v).or_default();
-                *n += 1;
-                if *n > 1 {
-                    twice.push(s.span);
+            StmtKind::MethodCall { receiver, method: Method::Step, .. } => match ctx {
+                Repeats::Once => {}
+                Repeats::Index(i) if indexes_by(receiver, i) => {}
+                Repeats::Index(_) => out.push((s.span, "in einer Schleife")),
+                Repeats::Many(place) => out.push((s.span, place)),
+            },
+            StmtKind::ForRange { var, body, .. } => repeated_steps(&body.stmts, inner(ctx, Some(*var)), out),
+            StmtKind::ForEach { body, .. } => repeated_steps(&body.stmts, inner(ctx, None), out),
+            StmtKind::If { then, otherwise, .. } => {
+                repeated_steps(&then.stmts, ctx, out);
+                repeated_steps(&otherwise.stmts, ctx, out);
+            }
+            StmtKind::Match { arms, .. } => {
+                for a in arms {
+                    repeated_steps(&a.body.stmts, ctx, out);
+                }
+            }
+            StmtKind::Every { body, .. } | StmtKind::At { body, .. } => repeated_steps(&body.stmts, ctx, out),
+            _ => {}
+        }
+    }
+}
+
+/// Wie `repeated_steps` fuer eine Sequenz; jede Wiederholung von `repeat`
+/// kostet mindestens einen Tick (6.2).
+fn repeated_steps_seq(items: &[SeqItem], out: &mut Vec<(Span, &'static str)>) {
+    for item in items {
+        match item {
+            SeqItem::Stmt(s) => repeated_steps(std::slice::from_ref(s), Repeats::Once, out),
+            SeqItem::Until { timeout: Some(t), .. } => {
+                if let TimeoutAction::Else(b) = &t.action {
+                    repeated_steps(&b.stmts, Repeats::Once, out);
+                }
+            }
+            SeqItem::Repeat { body, .. } | SeqItem::Step { body, .. } => repeated_steps_seq(body, out),
+            SeqItem::Until { timeout: None, .. } | SeqItem::Wait(_) | SeqItem::Expect { .. } => {}
+        }
+    }
+}
+
+/// Ist der Empfaenger `cs[i]`, ein Element ueber die Laufvariable?
+fn indexes_by(receiver: &Place, i: VarId) -> bool {
+    let Place::Index(base, index) = receiver else { return false };
+    let mut e = index;
+    while let ExprKind::Checked { expr, .. } = &e.kind {
+        e = expr;
+    }
+    matches!(**base, Place::Var(_)) && matches!(e.kind, ExprKind::Var(v) if v == i)
+}
+
+/// Eine Instanz oder ein Element eines Instanz-Arrays; `None` ist die
+/// Instanz selbst oder jedes Element einmal (`cs[i]` in `for`).
+type StepKey = (VarId, Option<i64>);
+
+/// Pruefung 11 (5.7): Wie oft eine Anweisungsfolge jede Instanz steppt,
+/// hintereinander gezaehlt, ueber Zweige das Maximum; `reset()` gibt die
+/// Instanz wieder frei. Jeder `step` ueber einem schon gesteppten Zaehler
+/// kommt nach `twice`. In einer Schleife zaehlt nur `cs[i]` ueber ihre
+/// Laufvariable `index`; die uebrigen meldet `repeated_steps`.
+fn count_steps(stmts: &[Stmt], index: Option<VarId>, counts: &mut HashMap<StepKey, u32>, twice: &mut Vec<Span>) {
+    for s in stmts {
+        match &s.kind {
+            StmtKind::MethodCall { receiver, method: Method::Step, .. } => {
+                if let Some(key) = step_key(receiver, index) {
+                    if stepped(counts, key) {
+                        twice.push(s.span);
+                    }
+                    *counts.entry(key).or_default() += 1;
+                }
+            }
+            StmtKind::MethodCall { receiver, method: Method::Reset, .. } if index.is_none() => {
+                if let Some((v, e)) = step_key(receiver, None) {
+                    counts.retain(|(w, f), _| *w != v || (e.is_some() && *f != e));
                 }
             }
             StmtKind::If { then, otherwise, .. } => {
-                let branches = [&then.stmts, &otherwise.stmts];
-                *counts = branches
-                    .into_iter()
-                    .map(|b| {
-                        let mut c = counts.clone();
-                        count_steps(b, arrays, &mut c, twice);
-                        c
-                    })
-                    .fold(counts.clone(), max_counts);
+                count_branches(&[&then.stmts, &otherwise.stmts], index, counts, twice);
             }
             StmtKind::Match { arms, .. } => {
-                *counts = arms
-                    .iter()
-                    .map(|a| {
-                        let mut c = counts.clone();
-                        count_steps(&a.body.stmts, arrays, &mut c, twice);
-                        c
-                    })
-                    .fold(counts.clone(), max_counts);
+                let bodies: Vec<&[Stmt]> = arms.iter().map(|a| a.body.stmts.as_slice()).collect();
+                count_branches(&bodies, index, counts, twice);
+            }
+            StmtKind::Every { body, .. } => count_branches(&[&body.stmts, &[]], index, counts, twice),
+            StmtKind::ForRange { var, body, .. } if index.is_none() => {
+                count_steps(&body.stmts, Some(*var), counts, twice);
             }
             _ => {}
         }
     }
 }
 
-/// Je Instanz das Maximum zweier Zaehlungen.
-fn max_counts(mut a: HashMap<VarId, u32>, b: HashMap<VarId, u32>) -> HashMap<VarId, u32> {
+/// Zaehlt Zweige, von denen einer laeuft: je Zaehler das Maximum.
+fn count_branches(blocks: &[&[Stmt]], index: Option<VarId>, counts: &mut HashMap<StepKey, u32>, twice: &mut Vec<Span>) {
+    *counts = blocks
+        .iter()
+        .map(|b| {
+            let mut c = counts.clone();
+            count_steps(b, index, &mut c, twice);
+            c
+        })
+        .fold(counts.clone(), max_counts);
+}
+
+/// Der Zaehler eines Empfaengers: die Instanz, ein Element mit konstantem
+/// Index oder, in einer Schleife, `cs[i]` ueber ihre Laufvariable. Ein
+/// anderer Index nennt kein bestimmtes Element.
+fn step_key(receiver: &Place, index: Option<VarId>) -> Option<StepKey> {
+    match (receiver, index) {
+        (Place::Var(v), None) => Some((*v, None)),
+        (Place::Index(base, at), _) => {
+            let Place::Var(v) = **base else { return None };
+            let mut e = at;
+            while let ExprKind::Checked { expr, .. } = &e.kind {
+                e = expr;
+            }
+            match (&e.kind, index) {
+                (ExprKind::Int(k), None) => Some((v, Some(*k))),
+                (ExprKind::Var(x), Some(i)) if *x == i => Some((v, None)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Steppte die Folge den Zaehler schon? Ein Element zaehlt mit dem ganzen
+/// Array, das ganze Array mit jedem Element.
+fn stepped(counts: &HashMap<StepKey, u32>, (v, e): StepKey) -> bool {
+    match e {
+        None => counts.iter().any(|((w, _), n)| *w == v && *n > 0),
+        Some(_) => [(v, e), (v, None)].iter().any(|k| counts.get(k).is_some_and(|n| *n > 0)),
+    }
+}
+
+/// Je Zaehler das Maximum zweier Zaehlungen.
+fn max_counts(mut a: HashMap<StepKey, u32>, b: HashMap<StepKey, u32>) -> HashMap<StepKey, u32> {
     for (v, n) in b {
         let e = a.entry(v).or_default();
         *e = (*e).max(n);

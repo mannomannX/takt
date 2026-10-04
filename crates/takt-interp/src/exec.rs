@@ -402,15 +402,22 @@ impl Ctx<'_, '_> {
                     }
                 };
                 let result = match method {
+                    // 5.7: Eine Instanz hat je Aktivierung ein Ergebnis; ein
+                    // zweiter Aufruf liefert es, ohne zu schreiten (FB-423).
                     Method::Step => {
                         let def = &program.blocks[instance.block.index()];
-                        match def.step {
-                            Some(step) if !instance.stepped => {
-                                instance.stepped = true;
-                                self.call_block_method(&mut instance, step, args, span)
+                        match (def.step, instance.stepped.clone()) {
+                            (Some(_), Some(first)) => first.map_err(Trap::Fault),
+                            (Some(step), None) => {
+                                let result = self.call_block_method(&mut instance, step, args, span);
+                                instance.stepped = match &result {
+                                    Ok(v) => Some(Ok(v.clone())),
+                                    Err(Trap::Fault(f)) => Some(Err(f.clone())),
+                                    Err(Trap::Bug(_)) => None,
+                                };
+                                result
                             }
-                            Some(_) => bug(format!("`{}`: step zweimal in einer Aktivierung", def.name)),
-                            None => bug(format!("`{}` hat kein step", def.name)),
+                            (None, _) => bug(format!("`{}` hat kein step", def.name)),
                         }
                     }
                     Method::Reset => {

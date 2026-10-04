@@ -2,9 +2,10 @@ system:
     language = 1
     tick     = 1 ms
 
-# SC-11: Eine Blockinstanz steppt hoechstens einmal je Tick (5.7, 9.4.2,
-# FB-399): zweimal hintereinander und in einer Schleife ist ein Fehler,
-# einmal je Zweig nicht.
+# SC-11: Was ein Block zeigt, steppt eine Instanz hoechstens einmal (5.7,
+# FB-399, FB-423): zweimal hintereinander, auch dasselbe Element eines
+# Instanz-Arrays, in einer Schleife oder in einem Handler, der je Element
+# des Fensters laeuft, ist ein Fehler; einmal je Zweig nicht.
 
 block counter():
     var n : int in 0..99 = 0
@@ -12,8 +13,12 @@ block counter():
         n = (n + 1) % 100
         return n
 
+stream<u8> q with capacity = 4
+
 output v  : int in 0..99 @ hw("o/v")  with safe = 0
 output v2 : int in 0..99 @ hw("o/v2") with safe = 0
+output v3 : int in 0..99 @ hw("o/v3") with safe = 0
+output v4 : int in 0..99 @ hw("o/v4") with safe = 0
 command fast
 
 machine m:
@@ -41,3 +46,33 @@ machine branches:
                 v2 = d.step()
             else:
                 v2 = d.step()
+
+machine elements:
+    var cs = [2] counter()
+    initial RUN
+
+    state RUN:
+        loop:
+            v3 = cs[0].step()
+            v3 = cs[1].step()
+            v3 = cs[0].step()  # ~ SC-11
+            for i in range(2):
+                v3 = cs[0].step()  # ~ SC-11
+
+machine producer:
+    initial RUN
+
+    state RUN:
+        loop:
+            send q, 1
+
+machine consumer:
+    var e = counter()
+    initial RUN
+
+    on q as x:
+        v4 = e.step()  # ~ SC-11
+
+    state RUN:
+        loop:
+            pass

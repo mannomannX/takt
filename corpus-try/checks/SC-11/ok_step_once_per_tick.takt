@@ -1,0 +1,38 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-11: Erlaubt ist, was je Tick ein Ergebnis je Instanz laesst (5.7,
+# FB-423): `reset()` gibt eine Instanz frei, ein Instanz-Array steppt in
+# `for` ueber seinen Index. Ein zweiter Aufruf in einem anderen Block
+# desselben Ticks — der Selbstuebergang laesst den `loop:` im Entry-Modus
+# erneut laufen, der Fault-Pfad betritt SAFE — liefert den ersten Wert.
+
+block counter():
+    var n : int in 0..99 = 0
+    step() -> int:
+        n = (n + 1) % 100
+        return n
+
+output v : int in 0..99 @ hw("o/v") with safe = 0
+output w : int in 0..99 @ hw("o/w") with safe = 0
+
+machine m:
+    fault -> SAFE
+    var c  = counter()
+    var cs = [3] counter()
+    initial RUN
+
+    state RUN:
+        loop:
+            v = c.step()
+            c.reset()
+            v = c.step()
+            for i in range(3):
+                w = cs[i].step()
+        after 5 ms: -> RUN
+
+    state SAFE:
+        loop:
+            v = c.step()
+        after 1 s: -> RUN

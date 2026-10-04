@@ -62,10 +62,25 @@ pub fn step_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Mo
     }
 }
 
-/// 5.7: `step` hoechstens einmal je Aktivierung — die Flags aller
+/// 5.7: Eine Instanz hat je Aktivierung ein Ergebnis — die Flags aller
 /// Instanzen gehen zu Beginn zurueck, wie `clear_stepped` im Interpreter.
+/// Ausgenommen ist die Zustellung in der Abort-Phase an eine Maschine, die
+/// in diesem Tick schon geschritten ist: Sie gehoert zu derselben
+/// Aktivierung (5.4, FB-423).
 fn clear_stepped(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    if m.layout.block_instances.is_empty() {
+        return Ok(());
+    }
     let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
+    let deliver = st.index_of(Role::Deliver, 0).ok_or(NotYet { what: "`deliver` im Zustand" })?;
+    let at = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {deliver}"));
+    let value = module.inst(&format!("load i32, ptr {at}"));
+    let same = DELIVER_PHASE | DELIVER_ACTIVE;
+    let bits = module.inst(&format!("and i32 {value}, {same}"));
+    let keep = module.inst(&format!("icmp eq i32 {bits}, {same}"));
+    let (fresh, kept) = (format!("schritte_frisch_{}", m.name), format!("schritte_behalten_{}", m.name));
+    module.void_inst(&format!("br i1 {keep}, label %{kept}, label %{fresh}"));
+    module.label(&fresh);
     for bi in &m.layout.block_instances {
         let def = p.blocks.get(bi.block.index()).ok_or(NotYet { what: "Block" })?;
         let inst = crate::block::instance_of(def, p).ok_or(NotYet { what: "Blockinstanz" })?;
@@ -75,6 +90,7 @@ fn clear_stepped(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module
             module.inst(&format!("getelementptr inbounds {}, ptr {field}, i32 0, i32 {}", inst.llvm(), inst.stepped()));
         module.void_inst(&format!("store i1 false, ptr {flag}"));
     }
+    module.label(&kept);
     Ok(())
 }
 

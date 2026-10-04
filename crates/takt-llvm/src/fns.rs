@@ -271,7 +271,7 @@ impl BlockVars {
     pub fn of_instance(instance: Reg, inst: &crate::block::Instance, exit: String) -> BlockVars {
         BlockVars {
             exit,
-            instance_fields: inst.fields[..inst.fields.len() - 1].to_vec(),
+            instance_fields: inst.fields[..inst.vars].to_vec(),
             instance,
             instance_ty: inst.llvm(),
             params: Vec::new(),
@@ -387,7 +387,7 @@ fn block_body(
     }
     let vars = BlockVars {
         exit: format!("fn_fault_{}", sanitized(&f.name)),
-        instance_fields: inst.fields[..inst.fields.len() - 1].to_vec(),
+        instance_fields: inst.fields[..inst.vars].to_vec(),
         instance,
         instance_ty: inst.llvm(),
         params,

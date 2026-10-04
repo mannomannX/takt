@@ -1123,7 +1123,7 @@ fn decode(
 /// sie ueber seinen Ausgang weiter. Das Flag wird dabei geloescht: Bliebe
 /// es stehen, faultete der naechste Aufruf, auch in einer anderen
 /// Maschine desselben Ticks (FB-337).
-fn propagate_fault(m: &mut Module, vars: &dyn Vars) -> Result<(), NotYet> {
+pub(crate) fn propagate_fault(m: &mut Module, vars: &dyn Vars) -> Result<(), NotYet> {
     let Some(target) = vars.fault_label() else {
         return Err(NotYet { what: "Aufruf ohne Fault-Pfad" });
     };

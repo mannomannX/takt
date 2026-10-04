@@ -827,11 +827,14 @@ fn cancel_jobs(env: &mut MachineEnv<'_, '_>) {
     env.state.armed.fill(false);
 }
 
-/// Setzt das `step`-Flag jeder Blockinstanz zurueck (5.1).
-fn clear_stepped(vars: &mut [Value]) {
+/// Vergisst das Ergebnis des letzten `step` jeder Blockinstanz, auch in
+/// Instanz-Arrays (5.1, 5.7; FB-423).
+pub(crate) fn clear_stepped(vars: &mut [Value]) {
     for v in vars {
-        if let Value::Block(b) = v {
-            b.stepped = false;
+        match v {
+            Value::Block(b) => b.stepped = None,
+            Value::Array(items) => clear_stepped(items),
+            _ => {}
         }
     }
 }

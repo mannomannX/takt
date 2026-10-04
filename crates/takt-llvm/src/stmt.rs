@@ -1866,14 +1866,14 @@ fn fn_stmt<V: Slots>(s: &Stmt, ctx: &mut FnCtx<'_, V>, m: &mut Module) -> Result
     }
 }
 
-/// `i.step(...)` oder `i.reset()` einer Blockinstanz (5.7).
+/// `i.step(...)`, `i.reset()` oder eine weitere Methode einer Blockinstanz
+/// (5.7).
 ///
-/// 5.7: „Jede Instanz darf pro Aktivierungs-Tick hoechstens einmal `step`
-/// ausfuehren." Die Pruefung ist statisch (Pruefung 52), aber das Flag im
-/// Zustand ist die Absicherung: Ein Aufruf in zwei Zweigen desselben
-/// Ticks ist statisch nicht immer auszuschliessen, und ein Filter, der
-/// zweimal laeuft, hat einen Tick uebersprungen, ohne dass es jemand
-/// saehe.
+/// Eine Instanz hat je Aktivierung genau ein Ergebnis: Der erste `step`
+/// schreitet und legt Wert und Fault-Art in der Instanz ab, jeder weitere
+/// liefert sie, ohne zu schreiten (FB-423), wie `exec` im Interpreter. Ein
+/// Fault der Methode steht danach im Flag der Arena und nimmt den
+/// Fault-Pfad der Maschine (4.1, FB-424).
 fn block_method_call(
     target: Option<&Place>,
     var: takt_mir::VarId,
@@ -1913,38 +1913,48 @@ fn block_method_call(
         Some(t) => ty::lower(t, ctx.program).ok_or(NotYet { what: "Rueckgabetyp" })?,
         None => LlvmType::Void,
     };
-    // 5.7: `step` hoechstens einmal je Aktivierung. Der Zweig ueberspringt
-    // den zweiten Aufruf, statt ihn zu wiederholen.
-    let once = method == Method::Step;
-    let label = m.next_label();
-    let end_at = format!("step{label}_ende");
-    if once {
-        let flag = m.inst(&format!(
-            "getelementptr inbounds {}, ptr {ptr}, i32 0, i32 {}",
-            LlvmType::Struct(inst.fields.clone()),
-            inst.stepped()
-        ));
-        let done = m.inst(&format!("load i1, ptr {flag}"));
-        let go_on = format!("step{label}");
-        m.void_inst(&format!("br i1 {done}, label %{end_at}, label %{go_on}"));
-        m.label(&go_on);
-        m.void_inst(&format!("store i1 true, ptr {flag}"));
-    }
     let symbol = crate::block::method_symbol(def, &f.name);
     ops.push(format!("ptr {}", crate::arena::PARAM));
-    let call = if ret == LlvmType::Void {
-        m.void_inst(&format!("call void @{symbol}({})", ops.join(", ")));
-        None
-    } else {
-        Some(m.inst(&format!("call {ret} @{symbol}({})", ops.join(", "))))
-    };
-    if let (Some(t), Some(v)) = (target, call) {
-        let (dst, _) = place(t, ctx, m)?;
-        m.void_inst(&format!("store {ret} {v}, ptr {dst}"));
+    let call = format!("call {ret} @{symbol}({})", ops.join(", "));
+    if method != Method::Step {
+        let value = if ret == LlvmType::Void {
+            m.void_inst(&call);
+            None
+        } else {
+            Some(m.inst(&call))
+        };
+        crate::expr::propagate_fault(m, &vars)?;
+        if let (Some(t), Some(v)) = (target, value) {
+            let (dst, _) = place(t, ctx, m)?;
+            m.write(&ret, &v.to_string(), &dst.to_string());
+        }
+        return Ok(());
     }
-    if once {
-        m.void_inst(&format!("br label %{end_at}"));
-        m.label(&end_at);
+    let (result, fault) = inst.memo().ok_or(NotYet { what: "Ergebnis von `step`" })?;
+    let struct_ty = inst.llvm();
+    let field =
+        |i: u32, m: &mut Module| m.inst(&format!("getelementptr inbounds {struct_ty}, ptr {ptr}, i32 0, i32 {i}"));
+    let (flag, result_at, fault_at) = (field(inst.stepped(), m), field(result, m), field(fault, m));
+    let flag_at = crate::arena::at(crate::arena::fault::FLAG, m);
+    let done = m.inst(&format!("load i1, ptr {flag}"));
+    let label = m.next_label();
+    let (go_on, end_at) = (format!("step{label}"), format!("step{label}_ende"));
+    m.void_inst(&format!("br i1 {done}, label %{end_at}, label %{go_on}"));
+    m.label(&go_on);
+    m.void_inst(&format!("store i1 true, ptr {flag}"));
+    let value = m.inst(&call);
+    m.write(&ret, &value.to_string(), &result_at.to_string());
+    let code = m.inst(&format!("load i32, ptr {flag_at}"));
+    m.void_inst(&format!("store i32 {code}, ptr {fault_at}"));
+    m.void_inst(&format!("br label %{end_at}"));
+    // Der erste wie jeder weitere Aufruf liest das Ergebnis der Aktivierung.
+    m.label(&end_at);
+    let code = m.inst(&format!("load i32, ptr {fault_at}"));
+    m.void_inst(&format!("store i32 {code}, ptr {flag_at}"));
+    crate::expr::propagate_fault(m, &vars)?;
+    if let Some(t) = target {
+        let (dst, _) = place(t, ctx, m)?;
+        m.copy(&ret, &result_at.to_string(), &dst.to_string());
     }
     Ok(())
 }

@@ -1476,6 +1476,12 @@ impl<'p> Sim<'p> {
                 _ => None,
             };
             let Some(f) = raised.or(pending) else { continue };
+            // Eine in diesem Tick inaktive Maschine fuehrt hier ihre eigene
+            // Aktivierung aus; die Ergebnisse ihrer Schritte stammen aus der
+            // letzten (5.7, FB-423).
+            if !active.contains(&id) {
+                machine::clear_stepped(&mut self.states[id.index()].vars);
+            }
             let mut out = Vec::new();
             let mut env =
                 MachineEnv::new(&self.loaded, id, &mut self.states[id.index()], &mut self.image, &mut out, tick_ns);

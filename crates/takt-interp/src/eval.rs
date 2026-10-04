@@ -884,7 +884,7 @@ impl<'p, 'o> Ctx<'p, 'o> {
             }
         }
         let frame = self.frames.pop().expect("Rahmen");
-        Ok(BlockState { block, vars: frame.vars, stepped: false })
+        Ok(BlockState { block, vars: frame.vars, stepped: None })
     }
 
     /// Ort einer Zuweisung als veraenderliche Referenz; Indizes werden vor dem

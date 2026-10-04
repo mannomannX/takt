@@ -608,10 +608,13 @@ fn block_instances_keep_state_between_steps() {
     };
     assert_eq!(ctx.exec(&step(5), Mode::Run), Ok(Out::Normal));
     assert_eq!(ctx.outer.var(VarId(1)), Ok(&Value::Int(15)));
-    // step zweimal in einer Aktivierung ist ein Fehler des Verifiers (SC-11), kein Fault
-    assert!(matches!(ctx.exec(&step(1), Mode::Run), Err(Trap::Bug(_))));
+    // Ein zweiter `step` derselben Aktivierung liefert das erste Ergebnis,
+    // ohne zu schreiten (5.7, FB-423).
+    *ctx.outer.var_mut(VarId(1)).unwrap() = Value::Int(0);
+    assert_eq!(ctx.exec(&step(1), Mode::Run), Ok(Out::Normal));
+    assert_eq!(ctx.outer.var(VarId(1)), Ok(&Value::Int(15)));
     if let Value::Block(b) = ctx.outer.var_mut(VarId(0)).unwrap() {
-        b.stepped = false;
+        b.stepped = None;
     }
     assert_eq!(ctx.exec(&step(7), Mode::Run), Ok(Out::Normal));
     assert_eq!(ctx.outer.var(VarId(1)), Ok(&Value::Int(22)));
@@ -622,7 +625,7 @@ fn block_instances_keep_state_between_steps() {
     assert_eq!(ctx.exec(&reset, Mode::Run), Ok(Out::Normal));
     if let Value::Block(b) = ctx.outer.var_mut(VarId(0)).unwrap() {
         assert_eq!(b.vars, vec![Value::Int(10), Value::Int(10)]);
-        assert!(!b.stepped);
+        assert!(b.stepped.is_none());
     }
 }
 

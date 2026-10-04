@@ -98,8 +98,9 @@ pub struct BlockState {
     pub block: BlockId,
     /// Parameter und Zustandsvariablen.
     pub vars: Vec<Value>,
-    /// `step` in dieser Aktivierung schon ausgefuehrt (5.7).
-    pub stepped: bool,
+    /// Das Ergebnis des `step` dieser Aktivierung, Wert oder Fault: Ein
+    /// zweiter Aufruf schreitet nicht, sondern liefert es erneut (5.7).
+    pub stepped: Option<Result<Value, Fault>>,
 }
 
 /// Ein Wert.
