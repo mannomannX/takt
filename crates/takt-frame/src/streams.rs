@@ -419,6 +419,15 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], x: &Prefix) {
     let _ = writeln!(s, "    takt_int_read(a, k, e->off, p + 4, len);");
     let _ = writeln!(s, "    return takt_int_seq_at(a, k, first + i);");
     let _ = writeln!(s, "}}");
+    // Das aelteste Element verlassen: Verdraengen und Raeumen (9.6).
+    let _ = writeln!(s, "static void takt_int_pop(struct {x}_arena *a, int k) {{");
+    let _ = writeln!(s, "    int len = takt_int_desc(a, k, 0)->len;");
+    let _ = writeln!(s, "    a->int_bhead[k] += len;");
+    let _ = writeln!(s, "    if (a->int_bhead[k] >= g_int_capb[k]) a->int_bhead[k] -= g_int_capb[k];");
+    let _ = writeln!(s, "    a->int_bused[k] -= len;");
+    let _ = writeln!(s, "    if (++a->int_head[k] == g_int_cap[k]) a->int_head[k] = 0;");
+    let _ = writeln!(s, "    a->int_n[k]--;");
+    let _ = writeln!(s, "}}");
     // 8.6: Zwei Schranken, Elemente und Bytes — wie `Buffer::push`. Ob
     // ein volles `send` faultet oder verwirft, entscheidet der erzeugte
     // Code an der Politik des Stroms.
@@ -456,12 +465,7 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], x: &Prefix) {
         s,
         "    while (drop_oldest && a->int_n[k] > 0 && (a->int_n[k] >= g_int_cap[k] || a->int_bused[k] + n > g_int_capb[k])) {{"
     );
-    let _ = writeln!(s, "        int len = takt_int_desc(a, k, 0)->len;");
-    let _ = writeln!(s, "        a->int_bhead[k] += len;");
-    let _ = writeln!(s, "        if (a->int_bhead[k] >= g_int_capb[k]) a->int_bhead[k] -= g_int_capb[k];");
-    let _ = writeln!(s, "        a->int_bused[k] -= len;");
-    let _ = writeln!(s, "        if (++a->int_head[k] == g_int_cap[k]) a->int_head[k] = 0;");
-    let _ = writeln!(s, "        a->int_n[k]--;");
+    let _ = writeln!(s, "        takt_int_pop(a, k);");
     let _ = writeln!(s, "        a->int_dropped[k]++;");
     let _ = writeln!(s, "        dropped = 1;");
     let _ = writeln!(s, "    }}");
@@ -475,24 +479,23 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], x: &Prefix) {
     let _ = writeln!(s, "    if (seq + 1 > a->int_ex[k][m]) a->int_ex[k][m] = seq + 1;");
     let _ = writeln!(s, "}}");
     // 9.6, `advance_cursors()`: frei wird, was unter dem kleinsten Cursor
-    // aller Leser liegt, von vorn; ein Strom ohne Leser behaelt nichts.
+    // aller Leser liegt, von vorn. Ein Strom ohne Leser behaelt nichts, was
+    // in diesem Tick sichtbar war (das Minimum ueber keinen Leser); was
+    // dieser Tick gesendet hat, wird erst danach sichtbar (FB-426).
     let _ = writeln!(s, "static void takt_int_commit(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    for (int k = 0; k < TAKT_INT_STREAMS; k++) {{");
+    let _ = writeln!(s, "        if (g_int_reader_n[k] == 0) {{");
+    let _ = writeln!(s, "            while (a->int_n[k] > a->int_new[k]) takt_int_pop(a, k);");
+    let _ = writeln!(s, "            a->int_new[k] = 0;");
+    let _ = writeln!(s, "            continue;");
+    let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "        a->int_new[k] = 0;");
-    let _ = writeln!(s, "        if (g_int_reader_n[k] == 0) {{ a->int_n[k] = 0; a->int_bused[k] = 0; continue; }}");
     let _ = writeln!(s, "        long long min = a->int_ex[k][g_int_readers[k][0]];");
     let _ = writeln!(s, "        for (int r = 1; r < g_int_reader_n[k]; r++) {{");
     let _ = writeln!(s, "            long long c = a->int_ex[k][g_int_readers[k][r]];");
     let _ = writeln!(s, "            if (c < min) min = c;");
     let _ = writeln!(s, "        }}");
-    let _ = writeln!(s, "        while (a->int_n[k] > 0 && takt_int_seq_at(a, k, 0) < min) {{");
-    let _ = writeln!(s, "            int len = takt_int_desc(a, k, 0)->len;");
-    let _ = writeln!(s, "            a->int_bhead[k] += len;");
-    let _ = writeln!(s, "            if (a->int_bhead[k] >= g_int_capb[k]) a->int_bhead[k] -= g_int_capb[k];");
-    let _ = writeln!(s, "            a->int_bused[k] -= len;");
-    let _ = writeln!(s, "            if (++a->int_head[k] == g_int_cap[k]) a->int_head[k] = 0;");
-    let _ = writeln!(s, "            a->int_n[k]--;");
-    let _ = writeln!(s, "        }}");
+    let _ = writeln!(s, "        while (a->int_n[k] > 0 && takt_int_seq_at(a, k, 0) < min) takt_int_pop(a, k);");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}\n");
 }

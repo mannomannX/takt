@@ -185,3 +185,31 @@ fn the_counters_of_a_stream_are_the_interpreters() {
         diffs.len()
     );
 }
+
+/// 8.6, 9.6, FB-426: `s.count` ohne Handler zaehlt den Puffer ab seinem
+/// Anfang, ohne zu konsumieren — der Leser hat keinen Cursor. Ein Strom ohne
+/// Konsumenten behaelt nichts, was in einem Tick sichtbar war: Was in Tick k
+/// gesendet wird, sieht der Zaehler in Tick k + 1 und danach nicht mehr.
+/// Nativ fehlte der Cursor-Platz, und die Maschine fiel aus; der Interpreter
+/// raeumte einen Strom ohne Konsumenten nie, der Rahmen zu frueh.
+#[test]
+fn count_without_a_handler_reads_the_whole_buffer() {
+    let Some(clang) = common::clang() else { return };
+    let p = program_of(
+        "system:\n    language = 1\n    tick     = 10 ms\n\n\
+         stream<u8> q with capacity = 4\n\n\
+         output pending : int in 0..9 @ sim(\"o/pending\")\n\n\
+         machine producer:\n    var k : int in 0..9 = 0\n    initial RUN\n\n    state RUN:\n        loop:\n\
+         \x20           if k < 2:\n                send q, 1\n\
+         \x20           k = min(k + 1, 9)\n\n\
+         machine m:\n    initial WAIT\n\n    state WAIT:\n        loop:\n            pending = q.count\n",
+    );
+    let native = common::run_native_all(&clang, &p, "zaehlen", 4).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: 4, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    for line in ["t=1 out pending 1", "t=3 out pending 0"] {
+        assert!(interpreted.contains(line), "`{line}` fehlt:\n{interpreted}");
+    }
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}

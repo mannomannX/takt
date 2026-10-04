@@ -345,11 +345,12 @@ machine reader every 3 ms:
 ",
         7,
     );
-    // Ohne Handler wird nichts konsumiert, das Fenster waechst.
-    // Ohne Handler konsumiert niemand; das Fenster waechst um ein Element je
-    // Tick, sichtbar mit einem Tick Verzoegerung.
-    assert!(trace.contains("t=3 out n 3\n"), "{trace}");
-    assert!(trace.contains("t=6 out n 6\n"), "nichts konsumiert: {trace}");
+    // Ohne Handler konsumiert niemand, und ein Strom ohne Konsumenten
+    // behaelt nichts, was in einem Tick sichtbar war (9.6, FB-426): Der
+    // Zaehler sieht das Element, das in diesem Tick ankam, und nicht mehr.
+    // `count` selbst konsumiert nichts, sonst stuende hier 0.
+    assert!(trace.contains("t=3 out n 1\n"), "{trace}");
+    assert!(!trace.contains("out n 2\n"), "nichts sammelt sich an: {trace}");
 }
 
 #[test]

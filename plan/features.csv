@@ -571,7 +571,7 @@ SC-11,Statische Prüfung,10,"Terminierung: Aufrufgraph azyklisch; Block-`step` n
 SC-12,Statische Prüfung,10,Kostenbudget je Maschine (9.4.3) und Schedulability (7.2); Stack-Schranke,F mit Vorschlag,M10 (aus M5),fertig,"positiv `a_generous_wcet_passes`, negativ `a_declared_wcet_is_checked_against_the_calibration`, nicht entscheidbar `a_declared_wcet_learns_why_it_cannot_be_judged` (`calibrated.rs`, `analysis.rs`), Gate `the_gate_names_what_it_could_not_decide`; Kalibrierung beider Boards zum Kostenmodell 2 (FB-281, FB-293, FB-295 behoben)",crates/takt-sema/tests/calibrated.rs::a_declared_wcet_is_checked_against_the_calibration; crates/takt-sema/tests/analysis.rs::without_a_declared_wcet_check_twelve_stays_quiet
 SC-13,Statische Prüfung,10,Simulation: jeder `hw`-Input hat im Sim-Build eine `sim`-Quelle,F,M3 (Gate),fertig,,abgeleitet
 SC-14,Statische Prüfung,10,Zeit: `after`/`wait` nicht Vielfaches der Periode; `until` ohne Timeout,W,M3 (Gate),fertig,,abgeleitet
-SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden",W,M3 (Gate),fertig,,abgeleitet
+SC-15,Statische Prüfung,10,"Outputs ohne Schreiber in irgendeinem Zustand; Inputs, die nie gelesen werden; interne Ströme ohne Konsumenten (9.6)",W,M3 (Gate),fertig,,abgeleitet
 SC-16,Statische Prüfung,10,"Format-Strings: Platzhalter existieren, Typen formatierbar, Puffergröße",F,M3 (Gate),fertig,,abgeleitet
 SC-17,Statische Prüfung,10,Streams: `MAXPT * n_m <= CAP` je Konsument; Konsumentenmenge statisch; Elementtyp zulässig; `wake`-Attribute,F,M3 (Gate),fertig,,abgeleitet
 SC-18,Statische Prüfung,10,"Muster: Wohlgeformtheit, Mehrdeutigkeitsregel (8.7), Capture-Typen; Record-Muster nur mit konstanten Feldwerten",F,M3 (Gate),fertig,,abgeleitet

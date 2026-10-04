@@ -2143,8 +2143,12 @@ fn stream_count(base: &Expr, want: &LlvmType, m: &mut Module, vars: &dyn Vars) -
         _ => return Err(NotYet { what: "`count` ohne festen Strom" }),
     };
     let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
-    let (cur_ptr, _) = vars.stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
-    let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
+    // Ein Leser ohne Handler hat keinen Cursor: Sein Fenster beginnt am
+    // Anfang des Puffers, wie `cursor_of` im Interpreter (FB-426).
+    let cur = match vars.stream_slots(stream, m) {
+        Some((cur_ptr, _)) => m.inst(&format!("load i64, ptr {cur_ptr}")).to_string(),
+        None => "0".to_string(),
+    };
     let n =
         m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
     let wide = m.inst(&format!("sext i32 {n} to {want}"));

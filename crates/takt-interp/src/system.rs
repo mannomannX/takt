@@ -1115,7 +1115,9 @@ impl<'p> Sim<'p> {
                 ));
             }
         }
-        // Eviction: das Minimum ueber alle Konsumenten je Stream.
+        // Eviction: das Minimum ueber alle Konsumenten je Stream. Ohne
+        // Konsumenten ist es das Minimum ueber keinen, und der Strom behaelt
+        // nichts, was in diesem Tick sichtbar war (9.6, FB-426).
         let mut min_channel: HashMap<ChannelId, i64> = HashMap::new();
         let mut min_stream: Vec<Option<i64>> = vec![None; program.streams.len()];
         for id in &self.order {
@@ -1136,15 +1138,13 @@ impl<'p> Sim<'p> {
                 }
             }
         }
-        for (c, min) in min_channel {
-            if let Some(buf) = self.image.channel_bufs.get_mut(&c) {
-                buf.evict(min);
-            }
+        for (c, buf) in self.image.channel_bufs.iter_mut() {
+            let min = min_channel.get(c).copied().unwrap_or_else(|| buf.end());
+            buf.evict(min);
         }
-        for (i, min) in min_stream.iter().enumerate() {
-            if let Some(min) = min {
-                self.image.stream_bufs[i].evict(*min);
-            }
+        for (buf, min) in self.image.stream_bufs.iter_mut().zip(&min_stream) {
+            let min = min.unwrap_or_else(|| buf.end());
+            buf.evict(min);
         }
     }
 

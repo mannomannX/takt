@@ -1568,6 +1568,21 @@ impl Lowerer<'_> {
                 _ => {}
             }
         }
+        // Ein interner Strom ohne Konsumenten behaelt nichts ueber einen
+        // Tick hinaus (9.6, FB-426); `s.count` allein konsumiert nicht.
+        for s in self.program.streams.iter().filter(|s| s.readers.is_empty()) {
+            diags.push(
+                Diagnostic::warning(
+                    SC15,
+                    s.span,
+                    format!(
+                        "Stream `{}` hat keinen Konsumenten; was gesendet wird, geht nach einem Tick verloren",
+                        s.name
+                    ),
+                )
+                .with_suggestion(format!("einen Handler `on {} as e:` ergaenzen oder den Strom entfernen", s.name)),
+            );
+        }
         self.diags.extend(diags);
     }
 
